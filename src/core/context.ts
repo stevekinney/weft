@@ -167,6 +167,7 @@ const ACTIVITY_CALL_OPTION_KEYS = new Set<string>([
   'retry',
   'idempotencyKey',
   'sticky',
+  'visibilityTimeout',
 ]);
 
 /** Detect whether a value is an {@link ActivityCallOptions} object. */

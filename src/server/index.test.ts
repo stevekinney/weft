@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { decode, encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
 import { TokenEvent } from '../core/events.ts';
 import type { WorkflowContext } from '../core/types.ts';
+import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import type { WeftServer } from './index.ts';
 import { serve } from './index.ts';
@@ -1615,5 +1617,217 @@ describe('task assignment deduplication', () => {
 
     ws.close();
     await Bun.sleep(50);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Visibility timeout persistence
+// ---------------------------------------------------------------------------
+
+describe('visibility timeout persistence', () => {
+  let engine: Engine;
+  let server: WeftServer;
+  let storage: MemoryStorage;
+
+  afterEach(() => {
+    server?.stop();
+    engine?.[Symbol.dispose]();
+  });
+
+  function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
+    const s = new MemoryStorage();
+    const e = new Engine({ storage: s });
+    e.register('echo', async function* (_ctx: WorkflowContext, input: unknown) {
+      return input;
+    });
+    return { engine: e, storage: s };
+  }
+
+  async function connectWorker(wsServer: WeftServer): Promise<WebSocket> {
+    const wsUrl = wsServer.url.replace('http://', 'ws://');
+    const ws = new WebSocket(`${wsUrl}/v1/tasks/default/stream`);
+    await new Promise<void>((resolve, reject) => {
+      ws.addEventListener('open', () => resolve());
+      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
+    });
+    return ws;
+  }
+
+  async function registerWorker(
+    ws: WebSocket,
+    options: { workerId: string; activities: string[]; concurrency?: number },
+  ): Promise<void> {
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        workerId: options.workerId,
+        activities: options.activities,
+        concurrency: options.concurrency ?? 10,
+      }),
+    );
+    await Bun.sleep(50);
+  }
+
+  it('persists in-flight record to storage on dispatch', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    server.dispatchTask({ operationId: 'vt-op-1', activityName: 'charge', input: { amount: 100 } });
+    await Bun.sleep(50);
+
+    const key = KEYS.operationInflight('vt-op-1');
+    const raw = await storage.get(key);
+    expect(raw).not.toBeNull();
+
+    const record = decode(raw!) as { operationId: string; workerId: string; deadline: number };
+    expect(record.operationId).toBe('vt-op-1');
+    expect(record.workerId).toBe('w1');
+    expect(record.deadline).toBeGreaterThan(Date.now());
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('removes in-flight record from storage on task completion', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+
+    // Auto-respond to tasks with a completed result
+    ws.addEventListener('message', (event) => {
+      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      if (msg.type === 'task') {
+        ws.send(
+          JSON.stringify({
+            type: 'taskResult',
+            operationId: msg.operationId,
+            status: 'completed',
+            value: 42,
+          }),
+        );
+      }
+    });
+
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    server.dispatchTask({ operationId: 'vt-op-2', activityName: 'charge', input: null });
+    await Bun.sleep(100);
+
+    const key = KEYS.operationInflight('vt-op-2');
+    const raw = await storage.get(key);
+    expect(raw).toBeNull();
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('uses custom visibility timeout from TaskDispatch', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    const customTimeout = 120_000; // 2 minutes
+    server.dispatchTask({
+      operationId: 'vt-op-3',
+      activityName: 'charge',
+      input: null,
+      visibilityTimeout: customTimeout,
+    });
+    await Bun.sleep(50);
+
+    const key = KEYS.operationInflight('vt-op-3');
+    const raw = await storage.get(key);
+    expect(raw).not.toBeNull();
+
+    const record = decode(raw!) as {
+      operationId: string;
+      visibilityTimeout: number;
+      deadline: number;
+    };
+    expect(record.visibilityTimeout).toBe(customTimeout);
+    // Deadline should be roughly now + 120s (within a generous margin)
+    expect(record.deadline).toBeGreaterThan(Date.now() + 100_000);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('defaults visibility timeout to 30 seconds when not specified', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    server.dispatchTask({ operationId: 'vt-op-4', activityName: 'charge', input: null });
+    await Bun.sleep(50);
+
+    const key = KEYS.operationInflight('vt-op-4');
+    const raw = await storage.get(key);
+    expect(raw).not.toBeNull();
+
+    const record = decode(raw!) as { visibilityTimeout: number; deadline: number };
+    expect(record.visibilityTimeout).toBe(30_000);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('restores in-flight tasks from storage on server restart', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+
+    // Pre-populate storage with an in-flight record that hasn't expired
+    const deadline = Date.now() + 60_000;
+    const inflightRecord = {
+      operationId: 'restored-op',
+      workerId: 'old-worker',
+      deadline,
+      activityName: 'charge',
+      queue: 'default',
+      input: null,
+      attempt: 1,
+      visibilityTimeout: 60_000,
+    };
+    await storage.put(KEYS.operationInflight('restored-op'), encode(inflightRecord));
+
+    // Start the server — it should restore the in-flight record
+    server = serve({ engine, port: 0 });
+    await Bun.sleep(100); // Allow async restore to complete
+
+    // The registry should now track the restored task
+    expect(server.registry.isAssigned('restored-op')).toBe(true);
+  });
+
+  it('cleans up expired in-flight records from storage on restart', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+
+    // Pre-populate storage with an expired in-flight record
+    const expiredRecord = {
+      operationId: 'expired-op',
+      workerId: 'old-worker',
+      deadline: Date.now() - 5000, // Already expired 5s ago
+      activityName: 'charge',
+      queue: 'default',
+      input: null,
+      attempt: 1,
+      visibilityTimeout: 30_000,
+    };
+    await storage.put(KEYS.operationInflight('expired-op'), encode(expiredRecord));
+
+    server = serve({ engine, port: 0 });
+    await Bun.sleep(100);
+
+    // The expired record should be removed from storage
+    const raw = await storage.get(KEYS.operationInflight('expired-op'));
+    expect(raw).toBeNull();
+
+    // And not tracked in the registry
+    expect(server.registry.isAssigned('expired-op')).toBe(false);
   });
 });

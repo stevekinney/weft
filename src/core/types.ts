@@ -88,6 +88,8 @@ export interface OperationRequest {
   scheduledAt: number;
   timeout?: Duration;
   idempotencyKey?: string;
+  /** Visibility timeout in milliseconds. Defaults to 30 000. */
+  visibilityTimeout?: number;
 }
 
 export type OperationOutcome =
@@ -197,6 +199,8 @@ export interface ActivityCallOptions {
   retry?: Partial<RetryPolicy>;
   idempotencyKey?: string;
   sticky?: boolean;
+  /** Override the default visibility timeout for this invocation. */
+  visibilityTimeout?: Duration;
 }
 
 // ---------------------------------------------------------------------------
@@ -210,6 +214,8 @@ export interface ActivityDefinition<TInput = unknown, TOutput = unknown> {
   timeout?: Duration;
   queue?: string;
   idempotent?: boolean;
+  /** Visibility timeout for this activity. Defaults to 30 seconds. */
+  visibilityTimeout?: Duration;
 }
 
 // ---------------------------------------------------------------------------

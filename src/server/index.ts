@@ -59,6 +59,8 @@ export interface TaskDispatch {
   workflowId?: string;
   /** When true, prefer the worker that last handled a task for this workflow. Requires `workflowId`. */
   sticky?: boolean;
+  /** Visibility timeout in milliseconds. Defaults to `DEFAULT_VISIBILITY_TIMEOUT` (30 000). */
+  visibilityTimeout?: number;
 }
 
 export interface WeftServer extends Disposable {
@@ -504,6 +506,8 @@ export function serve(options: ServeOptions): WeftServer {
             if (typeof operationId === 'string') {
               // Remove in-flight tracking and decrement the worker's counter.
               registry.completeTask(operationId);
+              // Remove persisted in-flight record from storage.
+              void options.engine.storage.delete(KEYS.operationInflight(operationId));
             } else {
               // Fallback: decrement counter by worker ID when operationId is missing.
               const workerId = ws.data.workerId;
@@ -543,8 +547,37 @@ export function serve(options: ServeOptions): WeftServer {
     throw error;
   }
 
+  // Restore persisted in-flight records from storage so visibility timeout
+  // tracking survives server restarts. Records whose deadline has already
+  // passed are removed from storage (the task will be retried by the engine).
+  void (async () => {
+    try {
+      for await (const [key, value] of options.engine.storage.scan('op:inflight:')) {
+        const record = decode(value) as {
+          operationId: string;
+          workerId: string;
+          deadline: number;
+          visibilityTimeout?: number;
+        };
+        const now = Date.now();
+        if (record.deadline <= now) {
+          // Expired while the server was down — remove from storage.
+          void options.engine.storage.delete(key);
+        } else {
+          // Still within the visibility window — seed the registry with the
+          // remaining time so `checkExpiredTasks` can track it.
+          const remaining = record.deadline - now;
+          registry.assignTask(record.workerId, record.operationId, remaining);
+        }
+      }
+    } catch (error) {
+      console.error('[weft] Failed to restore in-flight tasks from storage:', error);
+    }
+  })();
+
   function dispatchTaskImpl(task: TaskDispatch): boolean {
     const queue = task.queue ?? 'default';
+    const visibilityTimeout = task.visibilityTimeout ?? DEFAULT_VISIBILITY_TIMEOUT;
 
     // Each task assigned to exactly one worker — reject duplicates.
     if (registry.isAssigned(task.operationId) || taskQueue.isTracked(task.operationId)) {
@@ -573,7 +606,22 @@ export function serve(options: ServeOptions): WeftServer {
             attempt: task.attempt ?? 1,
           }),
         );
-        registry.assignTask(worker.id, task.operationId, DEFAULT_VISIBILITY_TIMEOUT);
+        registry.assignTask(worker.id, task.operationId, visibilityTimeout);
+
+        // Persist in-flight record to storage so it survives server restart.
+        const deadline = Date.now() + visibilityTimeout;
+        const inflightKey = KEYS.operationInflight(task.operationId);
+        const inflightRecord = {
+          operationId: task.operationId,
+          workerId: worker.id,
+          deadline,
+          activityName: task.activityName,
+          queue,
+          input: task.input,
+          attempt: task.attempt ?? 1,
+          visibilityTimeout,
+        };
+        void options.engine.storage.put(inflightKey, encode(inflightRecord));
 
         // Record affinity for future sticky routing.
         if (task.workflowId) {

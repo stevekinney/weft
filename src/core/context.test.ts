@@ -174,6 +174,16 @@ describe('Context', () => {
       expect(request.options).toEqual({ queue: 'gpu', sticky: true });
     });
 
+    it('accepts visibilityTimeout as an ActivityCallOption', () => {
+      const context = createContext();
+
+      const generator = context.run(greet, 'Alice', { visibilityTimeout: 60_000 });
+      const request = expectRequest(generator.next(), 'activity');
+
+      expect(request.args).toEqual(['Alice']);
+      expect(request.options).toEqual({ visibilityTimeout: 60_000 });
+    });
+
     it('defaults queue to "default" in explain mode when no queue option is provided', () => {
       const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
       const context = createContext();

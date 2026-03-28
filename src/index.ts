@@ -11,6 +11,7 @@ export {
   DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD,
   DEFAULT_MAX_NESTING_DEPTH,
   DEFAULT_RETRY_POLICY,
+  DEFAULT_VISIBILITY_TIMEOUT_MS,
 } from './core/types';
 export type {
   ActivityCallOptions,
