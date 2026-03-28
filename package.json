@@ -27,6 +27,16 @@
       "types": "./dist/server/handler.d.ts",
       "import": "./dist/server/handler.js",
       "default": "./dist/server/handler.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "import": "./dist/client/index.js",
+      "default": "./dist/client/index.js"
+    },
+    "./client/local": {
+      "types": "./dist/client/local.d.ts",
+      "import": "./dist/client/local.js",
+      "default": "./dist/client/local.js"
     }
   },
   "main": "./dist/index.js",

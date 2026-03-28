@@ -259,6 +259,12 @@ export { RemoteWorker } from './worker/index';
 export { LongPollWorker } from './worker/long-poll';
 export { WorkerRegistry } from './worker/registry';
 
+// Client
+export { HttpClient, HttpClientError } from './client/index';
+export type { HttpClientOptions } from './client/index';
+export type { ClientHandle, UpdateResult, WeftClient } from './client/interface';
+export { LocalClient } from './client/local';
+
 // Diagnostics
 export { collectDiagnostics } from './diagnostics/doctor';
 export {
