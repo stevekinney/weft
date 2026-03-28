@@ -1483,4 +1483,238 @@ describe('handleRequest', () => {
       expect(reviewAfter).toBeNull();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // GET /v1/workflows/:id/query/:name — query workflow state
+  // -------------------------------------------------------------------------
+
+  describe('GET /v1/workflows/:id/query/:name', () => {
+    it('returns query result for a running workflow with exposed accessor', async () => {
+      const storage = new MemoryStorage();
+      engine = new Engine({ storage });
+
+      engine.register(
+        'queryable',
+        async function* (ctx: import('../core/types.ts').WorkflowContext) {
+          const context = ctx as import('../core/context.ts').Context;
+          let counter = 42;
+          context.expose({ counter: () => counter });
+          yield* context.waitForSignal('done');
+          return counter;
+        },
+      );
+
+      const handle = await engine.start('queryable', null);
+      await flush();
+
+      const response = await handleRequest(
+        request('GET', `/v1/workflows/${handle.id}/query/counter`),
+        engine,
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await json(response)) as { result: unknown };
+      expect(body.result).toBe(42);
+    });
+
+    it('returns null result when query name does not exist', async () => {
+      const storage = new MemoryStorage();
+      engine = new Engine({ storage });
+
+      engine.register(
+        'queryable',
+        async function* (ctx: import('../core/types.ts').WorkflowContext) {
+          const context = ctx as import('../core/context.ts').Context;
+          context.expose({ counter: () => 1 });
+          yield* context.waitForSignal('done');
+          return 0;
+        },
+      );
+
+      const handle = await engine.start('queryable', null);
+      await flush();
+
+      const response = await handleRequest(
+        request('GET', `/v1/workflows/${handle.id}/query/nonexistent`),
+        engine,
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await json(response)) as { result: unknown };
+      expect(body.result).toBeUndefined();
+    });
+
+    it('returns null result when workflow context is not available', async () => {
+      engine = createEngine();
+
+      const response = await handleRequest(
+        request('GET', '/v1/workflows/no-such-workflow/query/counter'),
+        engine,
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await json(response)) as { result: unknown };
+      expect(body.result).toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /v1/workflows/:id/resume — resume workflow from checkpoint
+  // -------------------------------------------------------------------------
+
+  describe('POST /v1/workflows/:id/resume', () => {
+    it('returns 404 when workflow does not exist', async () => {
+      engine = createEngine();
+
+      const response = await handleRequest(
+        request('POST', '/v1/workflows/nonexistent/resume'),
+        engine,
+      );
+
+      expect(response.status).toBe(404);
+    });
+
+    it('returns 409 when workflow is not in running status', async () => {
+      engine = createEngine();
+
+      // Start and complete a workflow
+      const startResponse = await handleRequest(
+        request('POST', '/v1/workflows', { type: 'echo', input: 'done' }),
+        engine,
+      );
+      const { id } = (await json(startResponse)) as { id: string };
+      await flush();
+
+      const response = await handleRequest(request('POST', `/v1/workflows/${id}/resume`), engine);
+
+      expect(response.status).toBe(409);
+      const body = (await json(response)) as { error: string };
+      expect(body.error).toContain('status');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /v1/recover — recover all running workflows
+  // -------------------------------------------------------------------------
+
+  describe('POST /v1/recover', () => {
+    it('returns recovered workflow ids (empty when none running)', async () => {
+      engine = createEngine();
+
+      const response = await handleRequest(request('POST', '/v1/recover'), engine);
+
+      expect(response.status).toBe(200);
+      const body = (await json(response)) as { recovered: string[] };
+      expect(body.recovered).toEqual([]);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // POST /v1/workflows/:id/timeout — force timeout a workflow
+  // -------------------------------------------------------------------------
+
+  describe('POST /v1/workflows/:id/timeout', () => {
+    it('times out a running workflow and returns 204', async () => {
+      const storage = new MemoryStorage();
+      engine = new Engine({ storage });
+
+      engine.register('echo', async function* (_ctx: WorkflowContext, input: unknown) {
+        return input;
+      });
+
+      engine.register(
+        'long-running',
+        async function* (ctx: import('../core/types.ts').WorkflowContext) {
+          yield* (ctx as import('../core/context.ts').Context).waitForSignal('never');
+          return 'done';
+        },
+      );
+
+      const handle = await engine.start('long-running', null);
+      const resultPromise = handle.result().catch(() => {});
+      await flush();
+
+      const response = await handleRequest(
+        request('POST', `/v1/workflows/${handle.id}/timeout`),
+        engine,
+      );
+
+      expect(response.status).toBe(204);
+      await resultPromise;
+      await flush();
+
+      // Verify the workflow is now timed-out
+      const stateResponse = await handleRequest(
+        request('GET', `/v1/workflows/${handle.id}`),
+        engine,
+      );
+      const state = (await json(stateResponse)) as { status: string };
+      expect(state.status).toBe('timed-out');
+    });
+
+    it('returns 204 even for non-existent workflow (idempotent)', async () => {
+      engine = createEngine();
+
+      const response = await handleRequest(
+        request('POST', '/v1/workflows/nonexistent/timeout'),
+        engine,
+      );
+
+      // timeout() is idempotent — terminateWorkflow returns silently if state not found
+      expect(response.status).toBe(204);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // PUT /v1/budget-policy — set AI budget policy
+  // -------------------------------------------------------------------------
+
+  describe('PUT /v1/budget-policy', () => {
+    it('sets a budget policy and returns ok', async () => {
+      engine = createEngine();
+
+      const response = await handleRequest(
+        request('PUT', '/v1/budget-policy', {
+          namespace: 'org-1',
+          daily: { maxCost: 100 },
+          monthly: { maxCost: 2000 },
+        }),
+        engine,
+      );
+
+      expect(response.status).toBe(200);
+      const body = (await json(response)) as { ok: boolean };
+      expect(body.ok).toBe(true);
+    });
+
+    it('returns 400 when namespace is missing', async () => {
+      engine = createEngine();
+
+      const response = await handleRequest(
+        request('PUT', '/v1/budget-policy', {
+          daily: { maxCost: 100 },
+        }),
+        engine,
+      );
+
+      expect(response.status).toBe(400);
+      const body = (await json(response)) as { error: string };
+      expect(body.error).toContain('namespace');
+    });
+
+    it('returns 400 for invalid JSON body', async () => {
+      engine = createEngine();
+
+      const response = await handleRequest(
+        new Request('http://localhost/v1/budget-policy', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: 'not valid json',
+        }),
+        engine,
+      );
+
+      expect(response.status).toBe(400);
+    });
+  });
 });

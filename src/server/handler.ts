@@ -8,6 +8,7 @@
  * @module server/handler
  */
 
+import type { BudgetPolicyOptions } from '../ai/budget-policy.ts';
 import { encode } from '../core/codec.ts';
 import type { Engine } from '../core/engine.ts';
 import type {
@@ -52,6 +53,36 @@ const ROUTE_PATTERNS: Array<{
     pattern: /^\/v1\/workflows$/,
     handler: 'listWorkflows',
     paramNames: [],
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/recover$/,
+    handler: 'recoverAll',
+    paramNames: [],
+  },
+  {
+    method: 'PUT',
+    pattern: /^\/v1\/budget-policy$/,
+    handler: 'setBudgetPolicy',
+    paramNames: [],
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/workflows\/([^/]+)\/query\/([^/]+)$/,
+    handler: 'queryWorkflow',
+    paramNames: ['id', 'name'],
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/workflows\/([^/]+)\/resume$/,
+    handler: 'resumeWorkflow',
+    paramNames: ['id'],
+  },
+  {
+    method: 'POST',
+    pattern: /^\/v1\/workflows\/([^/]+)\/timeout$/,
+    handler: 'timeoutWorkflow',
+    paramNames: ['id'],
   },
   {
     method: 'GET',
@@ -590,6 +621,112 @@ async function handleSubmitReviewDecision(
 }
 
 // ---------------------------------------------------------------------------
+// Query route — engine.query()
+// ---------------------------------------------------------------------------
+
+async function handleQueryWorkflow(
+  engine: Engine,
+  workflowId: string,
+  queryName: string,
+): Promise<Response> {
+  try {
+    const result = await engine.query(workflowId, queryName);
+    return jsonResponse({ result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('not supported')) {
+      return errorResponse(message, 501);
+    }
+    return errorResponse(message, 500);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Resume route — engine.resume()
+// ---------------------------------------------------------------------------
+
+async function handleResumeWorkflow(engine: Engine, workflowId: string): Promise<Response> {
+  try {
+    const handle = await engine.resume(workflowId);
+    return jsonResponse({ id: handle.id });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('not found')) {
+      return errorResponse(message, 404);
+    }
+    if (message.includes('Cannot resume')) {
+      return errorResponse(message, 409);
+    }
+    return errorResponse(message, 500);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Recover all route — engine.recoverAll()
+// ---------------------------------------------------------------------------
+
+async function handleRecoverAll(engine: Engine): Promise<Response> {
+  const handles = await engine.recoverAll();
+  return jsonResponse({ recovered: handles.map((h) => h.id) });
+}
+
+// ---------------------------------------------------------------------------
+// Timeout route — engine.timeout()
+// ---------------------------------------------------------------------------
+
+async function handleTimeoutWorkflow(engine: Engine, workflowId: string): Promise<Response> {
+  try {
+    await engine.timeout(workflowId);
+    return new Response(null, { status: 204 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('not found')) {
+      return errorResponse(message, 404);
+    }
+    return errorResponse(message, 500);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Budget policy route — engine.setBudgetPolicy()
+// ---------------------------------------------------------------------------
+
+async function handleSetBudgetPolicy(request: Request, engine: Engine): Promise<Response> {
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('Invalid JSON body', 400);
+  }
+
+  if (typeof body !== 'object' || body === null) {
+    return errorResponse('Request body must be a JSON object', 400);
+  }
+
+  const { namespace, daily, monthly } = body as Record<string, unknown>;
+
+  if (typeof namespace !== 'string' || namespace.length === 0) {
+    return errorResponse('Missing required field: namespace', 400);
+  }
+
+  const options: BudgetPolicyOptions = { namespace };
+  if (daily !== undefined && typeof daily === 'object' && daily !== null) {
+    options.daily = daily as { maxCost: number };
+  }
+  if (monthly !== undefined && typeof monthly === 'object' && monthly !== null) {
+    options.monthly = monthly as { maxCost: number };
+  }
+
+  try {
+    await engine.setBudgetPolicy(options);
+    return jsonResponse({ ok: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return errorResponse(message, 500);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Metrics route
 // ---------------------------------------------------------------------------
 
@@ -664,6 +801,21 @@ export async function handleRequest(request: Request, engine: Engine): Promise<R
 
       case 'setAttributes':
         return handleSetAttributes(request, engine, param('id'));
+
+      case 'queryWorkflow':
+        return handleQueryWorkflow(engine, param('id'), param('name'));
+
+      case 'resumeWorkflow':
+        return handleResumeWorkflow(engine, param('id'));
+
+      case 'recoverAll':
+        return handleRecoverAll(engine);
+
+      case 'timeoutWorkflow':
+        return handleTimeoutWorkflow(engine, param('id'));
+
+      case 'setBudgetPolicy':
+        return handleSetBudgetPolicy(request, engine);
 
       case 'getMetrics':
         return handleGetMetrics();
