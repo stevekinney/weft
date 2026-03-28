@@ -234,6 +234,7 @@ export {
   initializeActivityWorkerMessageLoop,
 } from './workers/activity-worker-entry';
 export { WorkerPool } from './workers/pool';
+export type { WorkerPoolOptions } from './workers/pool';
 
 // Remote Worker
 export { HeartbeatManager } from './worker/heartbeat';

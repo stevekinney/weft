@@ -367,6 +367,67 @@ describe('WorkerPool', () => {
       expect(worker).toBeDefined();
       pool.release(worker);
     });
+
+    it('creates functional workers with smol: true that can process messages', async () => {
+      pool = new WorkerPool({ concurrency: 1, workerUrl, smol: true });
+
+      const worker = await pool.acquire();
+
+      const response = await new Promise<{ echo: string }>((resolve) => {
+        worker.addEventListener('message', (event: MessageEvent) => {
+          resolve(event.data);
+        });
+        worker.postMessage('smol-test');
+      });
+
+      expect(response).toEqual({ echo: 'smol-test' });
+
+      pool.release(worker);
+    });
+
+    it('manages multiple smol workers at concurrency limits', async () => {
+      pool = new WorkerPool({ concurrency: 2, workerUrl, smol: true });
+
+      const worker1 = await pool.acquire();
+      const worker2 = await pool.acquire();
+
+      expect(pool.totalCount).toBe(2);
+
+      // Both workers should process messages independently
+      const [response1, response2] = await Promise.all([
+        new Promise<{ echo: string }>((resolve) => {
+          worker1.addEventListener('message', (event: MessageEvent) => {
+            resolve(event.data);
+          });
+          worker1.postMessage('first');
+        }),
+        new Promise<{ echo: string }>((resolve) => {
+          worker2.addEventListener('message', (event: MessageEvent) => {
+            resolve(event.data);
+          });
+          worker2.postMessage('second');
+        }),
+      ]);
+
+      expect(response1).toEqual({ echo: 'first' });
+      expect(response2).toEqual({ echo: 'second' });
+
+      pool.release(worker1);
+      pool.release(worker2);
+    });
+
+    it('reuses smol workers after release', async () => {
+      pool = new WorkerPool({ concurrency: 1, workerUrl, smol: true });
+
+      const worker1 = await pool.acquire();
+      pool.release(worker1);
+
+      const worker2 = await pool.acquire();
+      expect(worker2).toBe(worker1);
+      expect(pool.totalCount).toBe(1);
+
+      pool.release(worker2);
+    });
   });
 
   // ---------------------------------------------------------------------------
