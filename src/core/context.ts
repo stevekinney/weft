@@ -18,7 +18,12 @@ import type { AgentHooks } from '../ai/hooks.ts';
 import type { ModelRouter } from '../ai/model-router.ts';
 import type { LLMProvider } from '../ai/providers/interface.ts';
 import { parseDuration } from './scheduler.ts';
-import type { Duration, SearchAttributeValue, WorkflowContext } from './types.ts';
+import type {
+  ActivityCallOptions,
+  Duration,
+  SearchAttributeValue,
+  WorkflowContext,
+} from './types.ts';
 
 // ---------------------------------------------------------------------------
 // Offload reference — returned by ctx.offload(), consumed by ctx.load()
@@ -153,6 +158,25 @@ export type ContextOperationRequest =
     };
 
 // ---------------------------------------------------------------------------
+// ActivityCallOptions detection
+// ---------------------------------------------------------------------------
+
+const ACTIVITY_CALL_OPTION_KEYS = new Set<string>([
+  'timeout',
+  'queue',
+  'retry',
+  'idempotencyKey',
+  'sticky',
+]);
+
+/** Detect whether a value is an {@link ActivityCallOptions} object. */
+function isActivityCallOptions(value: unknown): value is ActivityCallOptions {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const keys = Object.keys(value as Record<string, unknown>);
+  return keys.length > 0 && keys.every((key) => ACTIVITY_CALL_OPTION_KEYS.has(key));
+}
+
+// ---------------------------------------------------------------------------
 // Context options
 // ---------------------------------------------------------------------------
 
@@ -268,8 +292,15 @@ export class Context implements WorkflowContext {
 
   *run<TResult>(
     fn: (...args: unknown[]) => Promise<TResult> | TResult,
-    ...args: unknown[]
+    ...rest: unknown[]
   ): Generator<ContextOperationRequest, TResult, unknown> {
+    // Extract ActivityCallOptions from the last argument when present.
+    let options: ActivityCallOptions | undefined;
+    if (rest.length > 0 && isActivityCallOptions(rest[rest.length - 1])) {
+      options = rest.pop() as ActivityCallOptions;
+    }
+    const args = rest;
+
     const step = this.#stepIndex++;
 
     if (this.#accumulatedResults.has(step)) {
@@ -281,10 +312,12 @@ export class Context implements WorkflowContext {
       return this.#accumulatedResults.get(step) as TResult;
     }
 
+    const queue = options?.queue ?? 'default';
+
     if (this.#explainMode) {
       console.log(`[weft] ctx.run(${fn.name || 'anonymous'}, ${JSON.stringify(args)})`);
       console.log(`  → Creating checkpoint at step ${step}`);
-      console.log(`  → Dispatching activity "${fn.name || 'anonymous'}" to queue "default"`);
+      console.log(`  → Dispatching activity "${fn.name || 'anonymous'}" to queue "${queue}"`);
     }
 
     const operationId = crypto.randomUUID();
@@ -296,6 +329,7 @@ export class Context implements WorkflowContext {
       fn,
       args,
       callerStack,
+      ...(options !== undefined ? { options: options as Record<string, unknown> } : {}),
     };
 
     this.#accumulatedResults.set(step, result);

@@ -102,6 +102,83 @@ describe('Context', () => {
 
       expect(request.activityName).toBe('sendEmail');
     });
+
+    it('accepts ActivityCallOptions as the last argument with queue', () => {
+      const context = createContext();
+
+      const generator = context.run(greet, 'Alice', { queue: 'gpu' });
+      const request = expectRequest(generator.next(), 'activity');
+
+      expect(request.activityName).toBe('greet');
+      expect(request.args).toEqual(['Alice']);
+      expect(request.options).toEqual({ queue: 'gpu' });
+    });
+
+    it('accepts ActivityCallOptions with no function arguments', () => {
+      const context = createContext();
+
+      const generator = context.run(task, { queue: 'billing' });
+      const request = expectRequest(generator.next(), 'activity');
+
+      expect(request.activityName).toBe('task');
+      expect(request.args).toEqual([]);
+      expect(request.options).toEqual({ queue: 'billing' });
+    });
+
+    it('accepts ActivityCallOptions with multiple options', () => {
+      const context = createContext();
+
+      const generator = context.run(greet, 'Alice', { queue: 'gpu', timeout: 5000 });
+      const request = expectRequest(generator.next(), 'activity');
+
+      expect(request.args).toEqual(['Alice']);
+      expect(request.options).toEqual({ queue: 'gpu', timeout: 5000 });
+    });
+
+    it('does not include options when none are provided', () => {
+      const context = createContext();
+
+      const generator = context.run(greet, 'Alice');
+      const request = expectRequest(generator.next(), 'activity');
+
+      expect(request.options).toBeUndefined();
+    });
+
+    it('does not treat a plain object argument as options if it has unknown keys', () => {
+      const context = createContext();
+
+      const generator = context.run(greet, { name: 'Alice', queue: 'not-options' });
+      const request = expectRequest(generator.next(), 'activity');
+
+      expect(request.args).toEqual([{ name: 'Alice', queue: 'not-options' }]);
+      expect(request.options).toBeUndefined();
+    });
+
+    it('defaults queue to "default" in explain mode when no queue option is provided', () => {
+      const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+      const context = createContext();
+      context.explain(true);
+
+      const generator = context.run(greet, 'Alice');
+      generator.next();
+
+      const calls = consoleSpy.mock.calls.flat().join(' ');
+      expect(calls).toContain('queue "default"');
+      consoleSpy.mockRestore();
+    });
+
+    it('logs the specified queue in explain mode', () => {
+      const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+      const context = createContext();
+      context.explain(true);
+
+      const generator = context.run(greet, 'Alice', { queue: 'gpu' });
+      generator.next();
+
+      const calls = consoleSpy.mock.calls.flat().join(' ');
+      expect(calls).toContain('queue "gpu"');
+      consoleSpy.mockRestore();
+    });
   });
 
   describe('ctx.sleep', () => {
@@ -149,6 +226,22 @@ describe('Context', () => {
       expect(request.operations).toHaveLength(2);
       expect(request.operations[0]!.type).toBe('activity');
       expect(request.operations[1]!.type).toBe('activity');
+    });
+
+    it('preserves queue options on parallel sub-operations', () => {
+      const context = createContext();
+
+      const generator = context.all([
+        context.run(taskA, { queue: 'gpu' }),
+        context.run(taskB, { queue: 'cpu' }),
+      ]);
+      const request = expectRequest(generator.next(), 'parallel');
+
+      expect(request.operations).toHaveLength(2);
+      const op0 = request.operations[0] as Extract<ContextOperationRequest, { type: 'activity' }>;
+      const op1 = request.operations[1] as Extract<ContextOperationRequest, { type: 'activity' }>;
+      expect(op0.options).toEqual({ queue: 'gpu' });
+      expect(op1.options).toEqual({ queue: 'cpu' });
     });
   });
 
