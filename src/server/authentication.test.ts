@@ -645,21 +645,21 @@ describe('serve() with authentication', () => {
     const authResponse = await fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=50`, {
       headers: { Authorization: `Bearer ${TEST_API_KEY}` },
     });
-    expect(authResponse.status).toBe(200);
+    expect(authResponse.status).toBe(204);
   });
 
-  it('authenticates task completion endpoints', async () => {
+  it('authenticates task result endpoints', async () => {
     engine = createEngine();
     server = serve({ engine, port: 0, auth: { apiKeys: [TEST_API_KEY] } });
 
-    const noAuthResponse = await fetch(`${server.url}/v1/tasks/default/complete`, {
+    const noAuthResponse = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ operationId: 'op-1', status: 'completed', value: 42 }),
     });
     expect(noAuthResponse.status).toBe(401);
 
-    const authResponse = await fetch(`${server.url}/v1/tasks/default/complete`, {
+    const authResponse = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

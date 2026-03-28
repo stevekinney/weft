@@ -6,7 +6,7 @@ import { LongPollWorker } from './long-poll.ts';
 // ---------------------------------------------------------------------------
 
 const POLL_PATH_RE = /^\/v1\/tasks\/([\w-]+)$/;
-const COMPLETE_PATH_RE = /^\/v1\/tasks\/([\w-]+)\/complete$/;
+const RESULT_PATH_RE = /^\/v1\/tasks\/([\w-]+)\/result$/;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -146,10 +146,10 @@ describe('LongPollWorker', () => {
               input: { orderId: 42 },
             });
           }
-          return Response.json(null);
+          return new Response(null, { status: 204 });
         }
 
-        if (COMPLETE_PATH_RE.test(url.pathname) && request.method === 'POST') {
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
           const body = await request.json();
           completedTasks.push(body);
           return Response.json({ ok: true });
@@ -177,7 +177,7 @@ describe('LongPollWorker', () => {
     expect(taskCompletion.value).toEqual({ processed: true, orderId: 42 });
   });
 
-  it('sends completion to POST /v1/tasks/:queue/complete when activity throws', async () => {
+  it('sends completion to POST /v1/tasks/:queue/result when activity throws', async () => {
     const completedTasks: any[] = [];
     let pollCount = 0;
 
@@ -195,10 +195,10 @@ describe('LongPollWorker', () => {
               input: null,
             });
           }
-          return Response.json(null);
+          return new Response(null, { status: 204 });
         }
 
-        if (COMPLETE_PATH_RE.test(url.pathname) && request.method === 'POST') {
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
           const body = await request.json();
           completedTasks.push(body);
           return Response.json({ ok: true });
@@ -277,10 +277,10 @@ describe('LongPollWorker', () => {
               input: null,
             });
           }
-          return Response.json(null);
+          return new Response(null, { status: 204 });
         }
 
-        if (COMPLETE_PATH_RE.test(url.pathname) && request.method === 'POST') {
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
           const body = await request.json();
           completedTasks.push(body);
           return Response.json({ ok: true });
@@ -323,10 +323,10 @@ describe('LongPollWorker', () => {
               input: null,
             });
           }
-          return Response.json(null);
+          return new Response(null, { status: 204 });
         }
 
-        if (COMPLETE_PATH_RE.test(url.pathname) && request.method === 'POST') {
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
           // Make the completion endpoint fail too
           return new Response('Server Error', { status: 500 });
         }
@@ -370,10 +370,10 @@ describe('LongPollWorker', () => {
               input: null,
             });
           }
-          return Response.json(null);
+          return new Response(null, { status: 204 });
         }
 
-        if (COMPLETE_PATH_RE.test(url.pathname) && request.method === 'POST') {
+        if (RESULT_PATH_RE.test(url.pathname) && request.method === 'POST') {
           const body = await request.json();
           completedTasks.push(body);
           return Response.json({ ok: true });
@@ -410,7 +410,7 @@ describe('LongPollWorker', () => {
       fetch(request) {
         const url = new URL(request.url);
         capturedPath = url.pathname;
-        return Response.json(null);
+        return new Response(null, { status: 204 });
       },
     });
 

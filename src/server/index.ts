@@ -111,7 +111,7 @@ const WORKER_STREAM_RE = /^\/v1\/tasks\/([\w-]+)\/stream$/;
 const WORKFLOW_STREAM_RE = /^\/v1\/workflows\/([\w-]+)\/stream$/;
 const WORKFLOW_WATCH_RE = /^\/v1\/workflows\/([\w-]+)\/watch$/;
 const TASK_POLL_RE = /^\/v1\/tasks\/([\w-]+)$/;
-const TASK_COMPLETE_RE = /^\/v1\/tasks\/([\w-]+)\/complete$/;
+const TASK_RESULT_RE = /^\/v1\/tasks\/([\w-]+)\/result$/;
 
 const MAX_POLL_TIMEOUT = 60_000;
 const DEFAULT_POLL_TIMEOUT = 30_000;
@@ -452,12 +452,16 @@ export function serve(options: ServeOptions): WeftServer {
             );
           }
 
+          if (task === null) {
+            return new Response(null, { status: 204 });
+          }
+
           return Response.json(task);
         }
       }
 
       if (request.method === 'POST') {
-        const completeMatch = TASK_COMPLETE_RE.exec(url.pathname);
+        const completeMatch = TASK_RESULT_RE.exec(url.pathname);
         if (completeMatch?.[1]) {
           let body: Record<string, unknown>;
           try {

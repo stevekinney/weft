@@ -90,15 +90,15 @@ export class LongPollWorker implements Disposable {
     return `${this.#options.serverUrl}/v1/tasks/${encodeURIComponent(queue)}?${params.toString()}`;
   }
 
-  /** Build the task completion URL. */
-  #buildCompleteUrl(): string {
+  /** Build the task result URL. */
+  #buildResultUrl(): string {
     const queue = this.#options.queue ?? DEFAULT_QUEUE;
-    return `${this.#options.serverUrl}/v1/tasks/${encodeURIComponent(queue)}/complete`;
+    return `${this.#options.serverUrl}/v1/tasks/${encodeURIComponent(queue)}/result`;
   }
 
   async #pollLoop(): Promise<void> {
     const pollUrl = this.#buildPollUrl();
-    const completeUrl = this.#buildCompleteUrl();
+    const resultUrl = this.#buildResultUrl();
 
     while (this.#running) {
       // Only poll when we have capacity
@@ -112,6 +112,11 @@ export class LongPollWorker implements Disposable {
           signal: this.#abortController.signal,
         });
 
+        // 204 No Content means no task available — poll again
+        if (response.status === 204) {
+          continue;
+        }
+
         if (!response.ok) {
           await Bun.sleep(1000);
           continue;
@@ -121,11 +126,9 @@ export class LongPollWorker implements Disposable {
           operationId: string;
           activityName: string;
           input: unknown;
-        } | null;
+        };
 
-        if (task !== null) {
-          void this.#executeTask(task, completeUrl);
-        }
+        void this.#executeTask(task, resultUrl);
       } catch {
         // Abort errors are expected during shutdown; network errors trigger a backoff
         if (this.#running) {
@@ -137,7 +140,7 @@ export class LongPollWorker implements Disposable {
 
   async #executeTask(
     task: { operationId: string; activityName: string; input: unknown },
-    completeUrl: string,
+    resultUrl: string,
   ): Promise<void> {
     const activityFunction = this.#options.activities[task.activityName];
     if (activityFunction === undefined) {
@@ -149,7 +152,7 @@ export class LongPollWorker implements Disposable {
     try {
       const result = await activityFunction(task.input);
 
-      await fetch(completeUrl, {
+      await fetch(resultUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -161,7 +164,7 @@ export class LongPollWorker implements Disposable {
       });
     } catch (error) {
       try {
-        await fetch(completeUrl, {
+        await fetch(resultUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

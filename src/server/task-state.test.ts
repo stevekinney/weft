@@ -375,7 +375,7 @@ describe('task state invariant (server integration)', () => {
     await Bun.sleep(50);
 
     // Complete via POST → resolved
-    await fetch(`${server.url}/v1/tasks/default/complete`, {
+    await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

@@ -1179,7 +1179,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 // Long-poll HTTP endpoints
 // ---------------------------------------------------------------------------
 
-describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/complete)', () => {
+describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/result)', () => {
   let engine: Engine;
   let server: WeftServer;
 
@@ -1188,15 +1188,13 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/compl
     engine?.[Symbol.dispose]();
   });
 
-  it('returns null when no task is available within timeout', async () => {
+  it('returns 204 when no task is available within timeout', async () => {
     engine = createEngine();
     server = serve({ engine, port: 0 });
 
     const response = await fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=50`);
 
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body).toBeNull();
+    expect(response.status).toBe(204);
   });
 
   it('returns 400 when no activity query parameter is provided', async () => {
@@ -1264,9 +1262,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/compl
     // Poll for 'charge' only — should not match
     const response = await fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=50`);
 
-    expect(response.status).toBe(200);
-    const body = await response.json();
-    expect(body).toBeNull();
+    expect(response.status).toBe(204);
 
     // The 'ship' task should still be in the queue
     expect(server.taskQueue.pendingCount('default')).toBe(1);
@@ -1276,7 +1272,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/compl
     engine = createEngine();
     server = serve({ engine, port: 0 });
 
-    const response = await fetch(`${server.url}/v1/tasks/default/complete`, {
+    const response = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -1295,7 +1291,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/compl
     engine = createEngine();
     server = serve({ engine, port: 0 });
 
-    const response = await fetch(`${server.url}/v1/tasks/default/complete`, {
+    const response = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ status: 'completed' }),
@@ -1308,7 +1304,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/compl
     engine = createEngine();
     server = serve({ engine, port: 0 });
 
-    const response = await fetch(`${server.url}/v1/tasks/default/complete`, {
+    const response = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
       headers: { 'Content-Type': 'text/plain' },
       body: 'not json',
@@ -1331,7 +1327,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/compl
     );
 
     // Complete via HTTP
-    await fetch(`${server.url}/v1/tasks/default/complete`, {
+    await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
