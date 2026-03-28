@@ -55,6 +55,10 @@ export interface TaskDispatch {
   attempt?: number;
   /** Queue to dispatch the task to. Defaults to `'default'`. */
   queue?: string;
+  /** Workflow ID. Required for sticky routing to track worker affinity. */
+  workflowId?: string;
+  /** When true, prefer the worker that last handled a task for this workflow. Requires `workflowId`. */
+  sticky?: boolean;
 }
 
 export interface WeftServer extends Disposable {
@@ -321,6 +325,8 @@ export function serve(options: ServeOptions): WeftServer {
   const registry = new WorkerRegistry();
   const taskQueue = new TaskQueue();
   const workerSockets = new Map<string, ServerWebSocket<WebSocketData>>();
+  /** Tracks per-workflow worker affinity for sticky routing. Maps workflowId → workerId. */
+  const workerAffinity = new Map<string, string>();
 
   /**
    * Send existing token events from storage as replay messages to a newly
@@ -545,8 +551,16 @@ export function serve(options: ServeOptions): WeftServer {
       return false;
     }
 
+    // Resolve sticky preference: look up the last worker for this workflow.
+    let stickyWorkerId: string | undefined;
+    if (task.sticky && task.workflowId) {
+      stickyWorkerId = workerAffinity.get(task.workflowId);
+    }
+
     // Try WebSocket workers first (lowest latency)
-    const worker = registry.findWorker(task.activityName, { queue });
+    const routingOptions =
+      stickyWorkerId !== undefined ? { queue, sticky: stickyWorkerId } : { queue };
+    const worker = registry.findWorker(task.activityName, routingOptions);
     if (worker) {
       const ws = workerSockets.get(worker.id);
       if (ws) {
@@ -560,6 +574,12 @@ export function serve(options: ServeOptions): WeftServer {
           }),
         );
         registry.assignTask(worker.id, task.operationId, DEFAULT_VISIBILITY_TIMEOUT);
+
+        // Record affinity for future sticky routing.
+        if (task.workflowId) {
+          workerAffinity.set(task.workflowId, worker.id);
+        }
+
         return true;
       }
     }

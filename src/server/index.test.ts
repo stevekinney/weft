@@ -641,6 +641,136 @@ describe('worker WebSocket protocol', () => {
     // Worker should be unregistered after disconnect
     expect(server.registry.size).toBe(0);
   });
+
+  // -------------------------------------------------------------------------
+  // Sticky routing
+  // -------------------------------------------------------------------------
+
+  it('sticky dispatch prefers the worker that last handled a task for the same workflow', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws1 = await connectWorker(server);
+    const ws2 = await connectWorker(server);
+    const received1: Array<{ type: string; operationId?: string }> = [];
+    const received2: Array<{ type: string; operationId?: string }> = [];
+
+    ws1.addEventListener('message', (event) => {
+      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      received1.push(msg);
+      if (msg.type === 'task') {
+        ws1.send(JSON.stringify({ type: 'taskResult', operationId: msg.operationId }));
+      }
+    });
+    ws2.addEventListener('message', (event) => {
+      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      received2.push(msg);
+      if (msg.type === 'task') {
+        ws2.send(JSON.stringify({ type: 'taskResult', operationId: msg.operationId }));
+      }
+    });
+
+    await registerWorker(ws1, { workerId: 'sticky-w1', activities: ['compute'], concurrency: 5 });
+    await registerWorker(ws2, { workerId: 'sticky-w2', activities: ['compute'], concurrency: 5 });
+
+    // First dispatch with workflowId — goes to whichever worker (least-loaded, both at 0).
+    server.dispatchTask({
+      operationId: 'sticky-op-1',
+      activityName: 'compute',
+      input: null,
+      workflowId: 'wf-sticky-1',
+    });
+    await Bun.sleep(100);
+
+    // Determine which worker handled the first task.
+    const firstWorker = received1.some((m) => m.operationId === 'sticky-op-1')
+      ? 'sticky-w1'
+      : 'sticky-w2';
+    const firstReceived = firstWorker === 'sticky-w1' ? received1 : received2;
+
+    // Second dispatch with sticky: true — should prefer the same worker.
+    server.dispatchTask({
+      operationId: 'sticky-op-2',
+      activityName: 'compute',
+      input: null,
+      workflowId: 'wf-sticky-1',
+      sticky: true,
+    });
+    await Bun.sleep(100);
+
+    // The same worker that handled op-1 should also get op-2.
+    expect(firstReceived.some((m) => m.operationId === 'sticky-op-2')).toBe(true);
+
+    ws1.close();
+    ws2.close();
+    await Bun.sleep(50);
+  });
+
+  it('sticky dispatch falls back to least-loaded when preferred worker is at capacity', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws1 = await connectWorker(server);
+    const ws2 = await connectWorker(server);
+    const received2: Array<{ type: string; operationId?: string }> = [];
+
+    // Worker 1 does NOT auto-complete tasks (stays at capacity)
+    ws2.addEventListener('message', (event) => {
+      received2.push(JSON.parse(String(event.data)) as { type: string; operationId?: string });
+    });
+
+    await registerWorker(ws1, { workerId: 'cap-w1', activities: ['compute'], concurrency: 1 });
+    await registerWorker(ws2, { workerId: 'cap-w2', activities: ['compute'], concurrency: 5 });
+
+    // First dispatch establishes affinity with w1.
+    server.dispatchTask({
+      operationId: 'cap-op-1',
+      activityName: 'compute',
+      input: null,
+      workflowId: 'wf-cap',
+    });
+    await Bun.sleep(50);
+
+    // w1 is now at capacity (1/1). Sticky dispatch should fall back to w2.
+    server.dispatchTask({
+      operationId: 'cap-op-2',
+      activityName: 'compute',
+      input: null,
+      workflowId: 'wf-cap',
+      sticky: true,
+    });
+    await Bun.sleep(50);
+
+    expect(received2.some((m) => m.operationId === 'cap-op-2')).toBe(true);
+
+    ws1.close();
+    ws2.close();
+    await Bun.sleep(50);
+  });
+
+  it('sticky dispatch without workflowId uses normal least-loaded routing', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws1 = await connectWorker(server);
+    const ws2 = await connectWorker(server);
+
+    await registerWorker(ws1, { workerId: 'noid-w1', activities: ['compute'], concurrency: 5 });
+    await registerWorker(ws2, { workerId: 'noid-w2', activities: ['compute'], concurrency: 5 });
+
+    // Dispatch with sticky: true but no workflowId — should not crash, just use normal routing.
+    const dispatched = server.dispatchTask({
+      operationId: 'noid-op-1',
+      activityName: 'compute',
+      input: null,
+      sticky: true,
+    });
+    expect(dispatched).toBe(true);
+
+    ws1.close();
+    ws2.close();
+    await Bun.sleep(50);
+  });
 });
 
 // ---------------------------------------------------------------------------

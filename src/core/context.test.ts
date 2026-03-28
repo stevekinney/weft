@@ -154,6 +154,26 @@ describe('Context', () => {
       expect(request.options).toBeUndefined();
     });
 
+    it('accepts sticky: true as an ActivityCallOption', () => {
+      const context = createContext();
+
+      const generator = context.run(greet, 'Alice', { sticky: true });
+      const request = expectRequest(generator.next(), 'activity');
+
+      expect(request.args).toEqual(['Alice']);
+      expect(request.options).toEqual({ sticky: true });
+    });
+
+    it('accepts sticky: true combined with queue option', () => {
+      const context = createContext();
+
+      const generator = context.run(greet, 'Alice', { queue: 'gpu', sticky: true });
+      const request = expectRequest(generator.next(), 'activity');
+
+      expect(request.args).toEqual(['Alice']);
+      expect(request.options).toEqual({ queue: 'gpu', sticky: true });
+    });
+
     it('defaults queue to "default" in explain mode when no queue option is provided', () => {
       const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
       const context = createContext();
