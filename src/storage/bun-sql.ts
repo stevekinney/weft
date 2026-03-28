@@ -11,6 +11,9 @@ export class BunSQLiteStorage implements Storage {
     this.#database.exec('PRAGMA journal_mode = WAL');
     this.#database.exec('PRAGMA synchronous = NORMAL');
     this.#database.exec('PRAGMA cache_size = -64000');
+    this.#database.exec('PRAGMA mmap_size = 268435456');
+    this.#database.exec('PRAGMA temp_store = MEMORY');
+    this.#database.exec('PRAGMA wal_autocheckpoint = 10000');
 
     this.#database.exec(`
       CREATE TABLE IF NOT EXISTS kv (
