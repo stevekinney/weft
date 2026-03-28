@@ -33,6 +33,13 @@ import { buildTLSOptions, createAuthenticator, validateAuthConfig } from './auth
 import { handleRequest } from './handler.ts';
 import type { TaskResult } from './task-queue.ts';
 import { TaskQueue } from './task-queue.ts';
+import type { InflightRecord, QueuedRecord } from './task-state.ts';
+import {
+  markQueued,
+  transitionInflightToQueued,
+  transitionInflightToResolved,
+  transitionQueuedToInflight,
+} from './task-state.ts';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -425,6 +432,26 @@ export function serve(options: ServeOptions): WeftServer {
               : DEFAULT_POLL_TIMEOUT;
 
           const task = await taskQueue.poll(queue, activities, timeout);
+
+          // Transition queued → inflight when a long-poll worker claims a task.
+          if (task) {
+            const inflightRecord: InflightRecord = {
+              operationId: task.operationId,
+              workerId: `longpoll-${crypto.randomUUID().slice(0, 8)}`,
+              deadline: Date.now() + DEFAULT_VISIBILITY_TIMEOUT,
+              activityName: task.activityName,
+              queue,
+              input: task.input,
+              attempt: task.attempt ?? 1,
+              visibilityTimeout: DEFAULT_VISIBILITY_TIMEOUT,
+            };
+            void transitionQueuedToInflight(
+              options.engine.storage,
+              task.operationId,
+              inflightRecord,
+            );
+          }
+
           return Response.json(task);
         }
       }
@@ -455,6 +482,10 @@ export function serve(options: ServeOptions): WeftServer {
             value: body['value'],
             error: typeof body['error'] === 'string' ? body['error'] : undefined,
           });
+
+          // Transition inflight → resolved in durable storage.
+          const resolvedStatus = status === 'failed' ? 'failed' : ('completed' as const);
+          void transitionInflightToResolved(options.engine.storage, operationId, resolvedStatus);
 
           return Response.json({ ok: true });
         }
@@ -509,11 +540,17 @@ export function serve(options: ServeOptions): WeftServer {
           }
           case 'taskResult': {
             const operationId = parsed['operationId'];
+            const resultStatus = parsed['status'];
             if (typeof operationId === 'string') {
               // Remove in-flight tracking and decrement the worker's counter.
               registry.completeTask(operationId);
-              // Remove persisted in-flight record from storage.
-              void options.engine.storage.delete(KEYS.operationInflight(operationId));
+              // Atomically transition inflight → resolved in storage.
+              const resolvedStatus = resultStatus === 'failed' ? 'failed' : ('completed' as const);
+              void transitionInflightToResolved(
+                options.engine.storage,
+                operationId,
+                resolvedStatus,
+              );
             } else {
               // Fallback: decrement counter by worker ID when operationId is missing.
               const workerId = ws.data.workerId;
@@ -568,7 +605,6 @@ export function serve(options: ServeOptions): WeftServer {
               try {
                 const inflightKey = KEYS.operationInflight(task.operationId);
                 const existing = await options.engine.storage.get(inflightKey);
-                await options.engine.storage.delete(inflightKey);
 
                 if (existing) {
                   const record = decode(existing) as {
@@ -586,8 +622,31 @@ export function serve(options: ServeOptions): WeftServer {
 
                   // Check maxAttempts — if exceeded, the task permanently fails (no re-dispatch).
                   if (policy && nextAttempt > policy.maxAttempts) {
+                    // Transition to resolved (permanent failure).
+                    await transitionInflightToResolved(
+                      options.engine.storage,
+                      task.operationId,
+                      'failed',
+                    );
                     return;
                   }
+
+                  // Atomically transition inflight → queued before re-dispatch.
+                  const queuedRecord: QueuedRecord = {
+                    operationId: record.operationId,
+                    activityName: record.activityName,
+                    input: record.input,
+                    queue: record.queue,
+                    attempt: nextAttempt,
+                    visibilityTimeout: record.visibilityTimeout,
+                    retryPolicy: policy,
+                    queuedAt: Date.now(),
+                  };
+                  await transitionInflightToQueued(
+                    options.engine.storage,
+                    task.operationId,
+                    queuedRecord,
+                  );
 
                   const taskDispatch: TaskDispatch = {
                     operationId: record.operationId,
@@ -606,6 +665,9 @@ export function serve(options: ServeOptions): WeftServer {
                   } else {
                     dispatchTaskImpl(taskDispatch);
                   }
+                } else {
+                  // No inflight record in storage — clean up the inflight key just in case.
+                  await options.engine.storage.delete(inflightKey);
                 }
               } catch (error) {
                 console.error(
@@ -670,7 +732,7 @@ export function serve(options: ServeOptions): WeftServer {
     try {
       const now = Date.now();
 
-      for await (const [key, value] of options.engine.storage.scan('op:inflight:')) {
+      for await (const [, value] of options.engine.storage.scan('op:inflight:')) {
         const record = decode(value) as {
           operationId: string;
           workerId: string;
@@ -685,17 +747,31 @@ export function serve(options: ServeOptions): WeftServer {
 
         if (record.deadline > now) continue;
 
-        // Expired — remove from registry and storage.
+        // Expired — remove from registry.
         registry.completeTask(record.operationId);
-        await options.engine.storage.delete(key);
 
         const nextAttempt = (record.attempt ?? 1) + 1;
         const policy = record.retryPolicy;
 
         // Check maxAttempts — if exceeded, the task permanently fails (no re-dispatch).
         if (policy && nextAttempt > policy.maxAttempts) {
+          // Atomically transition inflight → resolved (permanent failure).
+          await transitionInflightToResolved(options.engine.storage, record.operationId, 'failed');
           continue;
         }
+
+        // Atomically transition inflight → queued before re-dispatch.
+        const queuedRecord: QueuedRecord = {
+          operationId: record.operationId,
+          activityName: record.activityName,
+          input: record.input,
+          queue: record.queue,
+          attempt: nextAttempt,
+          visibilityTimeout: record.visibilityTimeout,
+          retryPolicy: policy,
+          queuedAt: Date.now(),
+        };
+        await transitionInflightToQueued(options.engine.storage, record.operationId, queuedRecord);
 
         const taskDispatch: TaskDispatch = {
           operationId: record.operationId,
@@ -758,9 +834,9 @@ export function serve(options: ServeOptions): WeftServer {
         registry.assignTask(worker.id, task.operationId, visibilityTimeout);
 
         // Persist in-flight record to storage so it survives server restart.
+        // Uses a batch to atomically remove any stale queued record and write the inflight record.
         const deadline = Date.now() + visibilityTimeout;
-        const inflightKey = KEYS.operationInflight(task.operationId);
-        const inflightRecord = {
+        const inflightRecord: InflightRecord = {
           operationId: task.operationId,
           workerId: worker.id,
           deadline,
@@ -771,7 +847,14 @@ export function serve(options: ServeOptions): WeftServer {
           visibilityTimeout,
           retryPolicy: task.retryPolicy,
         };
-        void options.engine.storage.put(inflightKey, encode(inflightRecord));
+        void options.engine.storage.batch([
+          { type: 'delete', key: KEYS.operationQueued(task.operationId) },
+          {
+            type: 'put',
+            key: KEYS.operationInflight(task.operationId),
+            value: encode(inflightRecord),
+          },
+        ]);
 
         // Record affinity for future sticky routing.
         if (task.workflowId) {
@@ -782,7 +865,20 @@ export function serve(options: ServeOptions): WeftServer {
       }
     }
 
-    // Fall back to long-poll task queue
+    // Fall back to long-poll task queue.
+    // Persist a durable queued record so the task survives server restart.
+    const queuedRecord: QueuedRecord = {
+      operationId: task.operationId,
+      activityName: task.activityName,
+      input: task.input,
+      queue,
+      attempt: task.attempt ?? 1,
+      visibilityTimeout,
+      retryPolicy: task.retryPolicy,
+      queuedAt: Date.now(),
+    };
+    void markQueued(options.engine.storage, queuedRecord);
+
     return taskQueue.enqueue(queue, {
       operationId: task.operationId,
       activityName: task.activityName,

@@ -224,9 +224,11 @@ async function collectQueueStatistics(storage: Storage): Promise<QueueStatistics
   const queueMap = new Map<string, { pending: number; inflight: number }>();
 
   // Count pending operations: op:{queue}:{timestamp}:{id}
-  // Skip op:inflight:{id}
+  // Skip state-tracking keys (inflight, queued, resolved)
   for await (const [key] of storage.scan('op:')) {
     if (key.startsWith('op:inflight:')) continue;
+    if (key.startsWith('op:queued:')) continue;
+    if (key.startsWith('op:resolved:')) continue;
 
     const parts = key.split(':');
     const queueName = parts[1] ?? '';
