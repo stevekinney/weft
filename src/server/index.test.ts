@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { decode, encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
 import { TokenEvent } from '../core/events.ts';
-import type { WorkflowContext } from '../core/types.ts';
+import type { RetryPolicy, WorkflowContext } from '../core/types.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import type { WeftServer } from './index.ts';
@@ -2377,6 +2377,376 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     const taskMessages = received.filter((m) => m.type === 'task' && m.operationId === 'orphan-op');
     expect(taskMessages.length).toBe(1);
     expect(taskMessages[0]?.attempt).toBe(2);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Retry policy respected on reassignment
+// ---------------------------------------------------------------------------
+
+describe('retry policy respected on reassignment', () => {
+  let engine: Engine;
+  let server: WeftServer;
+  let storage: MemoryStorage;
+
+  afterEach(() => {
+    server?.stop();
+    engine?.[Symbol.dispose]();
+  });
+
+  function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
+    const s = new MemoryStorage();
+    const e = new Engine({ storage: s });
+    e.register('echo', async function* (_ctx: WorkflowContext, input: unknown) {
+      return input;
+    });
+    return { engine: e, storage: s };
+  }
+
+  async function connectWorker(
+    wsServer: WeftServer,
+    path = '/v1/tasks/default/stream',
+  ): Promise<WebSocket> {
+    const wsUrl = wsServer.url.replace('http://', 'ws://');
+    const ws = new WebSocket(`${wsUrl}${path}`);
+    await new Promise<void>((resolve, reject) => {
+      ws.addEventListener('open', () => resolve());
+      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
+    });
+    return ws;
+  }
+
+  async function registerWorker(
+    ws: WebSocket,
+    options: { workerId: string; activities: string[]; concurrency?: number },
+  ): Promise<void> {
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        workerId: options.workerId,
+        activities: options.activities,
+        concurrency: options.concurrency ?? 10,
+      }),
+    );
+    await Bun.sleep(50);
+  }
+
+  const testRetryPolicy: RetryPolicy = {
+    maxAttempts: 2,
+    initialBackoff: 100,
+    backoffMultiplier: 2,
+    maxBackoff: 5000,
+  };
+
+  it('does not re-dispatch when maxAttempts exceeded on visibility timeout expiry', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+
+    const ws = await connectWorker(server);
+    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
+    ws.addEventListener('message', (event) => {
+      received.push(JSON.parse(String(event.data)));
+    });
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    // Dispatch a task already at maxAttempts with a short visibility timeout
+    server.dispatchTask({
+      operationId: 'max-attempt-expiry-op',
+      activityName: 'charge',
+      input: { amount: 42 },
+      attempt: 2,
+      visibilityTimeout: 100,
+      retryPolicy: testRetryPolicy, // maxAttempts = 2, already at attempt 2
+    });
+    await Bun.sleep(50);
+
+    expect(server.registry.isAssigned('max-attempt-expiry-op')).toBe(true);
+
+    // Wait for the visibility timeout to expire and the scanner to run
+    await Bun.sleep(300);
+
+    // The task should NOT be re-dispatched — only the initial dispatch should exist
+    const taskMessages = received.filter(
+      (m) => m.type === 'task' && m.operationId === 'max-attempt-expiry-op',
+    );
+    expect(taskMessages.length).toBe(1);
+    expect(taskMessages[0]?.attempt).toBe(2);
+
+    // In-flight record should be cleaned up
+    const inflightKey = KEYS.operationInflight('max-attempt-expiry-op');
+    const record = await storage.get(inflightKey);
+    expect(record).toBeNull();
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('does not re-dispatch when maxAttempts exceeded on worker disconnect', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0 });
+
+    const ws1 = await connectWorker(server);
+    const ws2 = await connectWorker(server);
+
+    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
+    ws2.addEventListener('message', (event) => {
+      received.push(JSON.parse(String(event.data)));
+    });
+
+    await registerWorker(ws1, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+    await registerWorker(ws2, { workerId: 'w2', activities: ['charge'], concurrency: 5 });
+
+    // Dispatch a task already at maxAttempts
+    server.dispatchTask({
+      operationId: 'max-attempt-disconnect-op',
+      activityName: 'charge',
+      input: { amount: 42 },
+      attempt: 2,
+      retryPolicy: testRetryPolicy, // maxAttempts = 2, already at attempt 2
+    });
+    await Bun.sleep(50);
+
+    // Disconnect w1 — task should NOT be reassigned to w2 since maxAttempts reached
+    ws1.close();
+    await Bun.sleep(200);
+
+    const taskMessages = received.filter(
+      (m) => m.type === 'task' && m.operationId === 'max-attempt-disconnect-op',
+    );
+    expect(taskMessages.length).toBe(0);
+
+    // In-flight record should be cleaned up
+    const inflightKey = KEYS.operationInflight('max-attempt-disconnect-op');
+    const record = await storage.get(inflightKey);
+    expect(record).toBeNull();
+
+    ws2.close();
+    await Bun.sleep(50);
+  });
+
+  it('re-dispatches when within maxAttempts on visibility timeout expiry', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+
+    const ws = await connectWorker(server);
+    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
+    ws.addEventListener('message', (event) => {
+      const msg = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attempt?: number;
+      };
+      received.push(msg);
+      // Complete on attempt 2 to stop reassignment cycle
+      if (msg.type === 'task' && (msg.attempt ?? 1) >= 2) {
+        ws.send(
+          JSON.stringify({
+            type: 'taskResult',
+            operationId: msg.operationId,
+            status: 'completed',
+            value: null,
+          }),
+        );
+      }
+    });
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    // maxAttempts = 3, starting at attempt 1 — should allow reassignment
+    server.dispatchTask({
+      operationId: 'within-limit-expiry-op',
+      activityName: 'charge',
+      input: null,
+      visibilityTimeout: 100,
+      retryPolicy: { ...testRetryPolicy, maxAttempts: 3 },
+    });
+    await Bun.sleep(50);
+
+    // Wait for the visibility timeout to expire and the scanner to re-dispatch
+    await Bun.sleep(300);
+
+    const taskMessages = received.filter(
+      (m) => m.type === 'task' && m.operationId === 'within-limit-expiry-op',
+    );
+    expect(taskMessages.length).toBeGreaterThanOrEqual(2);
+    expect(taskMessages[0]?.attempt).toBe(1);
+    expect(taskMessages[1]?.attempt).toBe(2);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('applies backoff delay before re-dispatch on visibility timeout expiry', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+
+    const ws = await connectWorker(server);
+    const timestamps: number[] = [];
+    ws.addEventListener('message', (event) => {
+      const msg = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attempt?: number;
+      };
+      if (msg.type === 'task' && msg.operationId === 'backoff-expiry-op') {
+        timestamps.push(Date.now());
+        // Complete on attempt 2 to stop the cycle
+        if ((msg.attempt ?? 1) >= 2) {
+          ws.send(
+            JSON.stringify({
+              type: 'taskResult',
+              operationId: msg.operationId,
+              status: 'completed',
+              value: null,
+            }),
+          );
+        }
+      }
+    });
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    // initialBackoff = 100ms
+    server.dispatchTask({
+      operationId: 'backoff-expiry-op',
+      activityName: 'charge',
+      input: null,
+      visibilityTimeout: 80,
+      retryPolicy: { ...testRetryPolicy, maxAttempts: 3, initialBackoff: 100 },
+    });
+
+    // Wait long enough for: visibility timeout (80ms) + backoff (100ms) + scanner intervals
+    await Bun.sleep(500);
+
+    // Should have received both dispatches
+    expect(timestamps.length).toBeGreaterThanOrEqual(2);
+
+    // The gap between dispatch 1 and dispatch 2 should be at least ~80ms (visibility) + ~100ms (backoff)
+    // We use a conservative lower bound to account for timing variability
+    const gap = timestamps[1]! - timestamps[0]!;
+    expect(gap).toBeGreaterThanOrEqual(150);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('applies backoff delay before re-dispatch on worker disconnect', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0 });
+
+    const ws1 = await connectWorker(server);
+    const ws2 = await connectWorker(server);
+
+    const timestamps: number[] = [];
+    ws2.addEventListener('message', (event) => {
+      const msg = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attempt?: number;
+      };
+      if (msg.type === 'task' && msg.operationId === 'backoff-disconnect-op') {
+        timestamps.push(Date.now());
+      }
+    });
+
+    await registerWorker(ws1, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+    await registerWorker(ws2, { workerId: 'w2', activities: ['charge'], concurrency: 5 });
+
+    const dispatchTime = Date.now();
+    // initialBackoff = 150ms, attempt 1 → backoff for attempt 2 = 150ms
+    server.dispatchTask({
+      operationId: 'backoff-disconnect-op',
+      activityName: 'charge',
+      input: null,
+      retryPolicy: { ...testRetryPolicy, maxAttempts: 3, initialBackoff: 150 },
+    });
+    await Bun.sleep(50);
+
+    // Disconnect w1 — should apply backoff before re-dispatching to w2
+    ws1.close();
+
+    // Wait for the backoff delay to complete
+    await Bun.sleep(400);
+
+    expect(timestamps.length).toBe(1);
+    // The re-dispatch should have been delayed by at least the backoff (150ms)
+    const gap = timestamps[0]! - dispatchTime;
+    expect(gap).toBeGreaterThanOrEqual(150);
+
+    ws2.close();
+    await Bun.sleep(50);
+  });
+
+  it('stores retryPolicy in the inflight record for use during reassignment', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    server.dispatchTask({
+      operationId: 'policy-stored-op',
+      activityName: 'charge',
+      input: null,
+      retryPolicy: testRetryPolicy,
+    });
+    await Bun.sleep(50);
+
+    const inflightKey = KEYS.operationInflight('policy-stored-op');
+    const raw = await storage.get(inflightKey);
+    expect(raw).not.toBeNull();
+
+    const record = decode(raw!) as { retryPolicy: RetryPolicy };
+    expect(record.retryPolicy).toEqual(testRetryPolicy);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('defaults to no maxAttempts limit when retryPolicy is not provided', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+
+    const ws = await connectWorker(server);
+    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
+    ws.addEventListener('message', (event) => {
+      const msg = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attempt?: number;
+      };
+      received.push(msg);
+      // Complete on attempt 2 to stop the cycle
+      if (msg.type === 'task' && (msg.attempt ?? 1) >= 2) {
+        ws.send(
+          JSON.stringify({
+            type: 'taskResult',
+            operationId: msg.operationId,
+            status: 'completed',
+            value: null,
+          }),
+        );
+      }
+    });
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    // No retryPolicy — should still re-dispatch (backwards compatible)
+    server.dispatchTask({
+      operationId: 'no-policy-op',
+      activityName: 'charge',
+      input: null,
+      visibilityTimeout: 100,
+    });
+    await Bun.sleep(50);
+
+    // Wait for visibility timeout expiry + scanner
+    await Bun.sleep(300);
+
+    const taskMessages = received.filter(
+      (m) => m.type === 'task' && m.operationId === 'no-policy-op',
+    );
+    expect(taskMessages.length).toBeGreaterThanOrEqual(2);
 
     ws.close();
     await Bun.sleep(50);

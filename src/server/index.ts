@@ -24,6 +24,8 @@ import {
   WorkflowStartedEvent,
   WorkflowTimedOutEvent,
 } from '../core/events.ts';
+import { calculateBackoff } from '../core/scheduler.ts';
+import type { RetryPolicy } from '../core/types.ts';
 import { KEYS } from '../storage/interface.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
 import type { AuthConfig, Authenticator } from './authentication.ts';
@@ -63,6 +65,8 @@ export interface TaskDispatch {
   sticky?: boolean;
   /** Visibility timeout in milliseconds. Defaults to `DEFAULT_VISIBILITY_TIMEOUT` (30 000). */
   visibilityTimeout?: number;
+  /** Retry policy governing maxAttempts and backoff between reassignment attempts. */
+  retryPolicy?: RetryPolicy;
 }
 
 export interface WeftServer extends Disposable {
@@ -558,7 +562,7 @@ export function serve(options: ServeOptions): WeftServer {
           registry.unregister(workerId);
           workerSockets.delete(workerId);
 
-          // Requeue each in-flight task with incremented attempt.
+          // Requeue each in-flight task with incremented attempt, respecting retry policy.
           for (const task of inFlightTasks) {
             void (async () => {
               try {
@@ -574,16 +578,34 @@ export function serve(options: ServeOptions): WeftServer {
                     queue: string;
                     attempt: number;
                     visibilityTimeout: number;
+                    retryPolicy?: RetryPolicy;
                   };
 
-                  dispatchTaskImpl({
+                  const nextAttempt = (record.attempt ?? 1) + 1;
+                  const policy = record.retryPolicy;
+
+                  // Check maxAttempts — if exceeded, the task permanently fails (no re-dispatch).
+                  if (policy && nextAttempt > policy.maxAttempts) {
+                    return;
+                  }
+
+                  const taskDispatch: TaskDispatch = {
                     operationId: record.operationId,
                     activityName: record.activityName,
                     input: record.input,
                     queue: record.queue,
-                    attempt: (record.attempt ?? 1) + 1,
+                    attempt: nextAttempt,
                     visibilityTimeout: record.visibilityTimeout,
-                  });
+                    ...(policy ? { retryPolicy: policy } : {}),
+                  };
+
+                  // Apply backoff delay before re-dispatching.
+                  if (policy) {
+                    const delay = calculateBackoff(record.attempt ?? 1, policy);
+                    setTimeout(() => dispatchTaskImpl(taskDispatch), delay);
+                  } else {
+                    dispatchTaskImpl(taskDispatch);
+                  }
                 }
               } catch (error) {
                 console.error(
@@ -658,22 +680,40 @@ export function serve(options: ServeOptions): WeftServer {
           input: unknown;
           attempt: number;
           visibilityTimeout: number;
+          retryPolicy?: RetryPolicy;
         };
 
         if (record.deadline > now) continue;
 
-        // Expired — remove from registry and storage, then re-dispatch.
+        // Expired — remove from registry and storage.
         registry.completeTask(record.operationId);
         await options.engine.storage.delete(key);
 
-        dispatchTaskImpl({
+        const nextAttempt = (record.attempt ?? 1) + 1;
+        const policy = record.retryPolicy;
+
+        // Check maxAttempts — if exceeded, the task permanently fails (no re-dispatch).
+        if (policy && nextAttempt > policy.maxAttempts) {
+          continue;
+        }
+
+        const taskDispatch: TaskDispatch = {
           operationId: record.operationId,
           activityName: record.activityName,
           input: record.input,
           queue: record.queue,
-          attempt: (record.attempt ?? 1) + 1,
+          attempt: nextAttempt,
           visibilityTimeout: record.visibilityTimeout,
-        });
+          ...(policy ? { retryPolicy: policy } : {}),
+        };
+
+        // Apply backoff delay before re-dispatching.
+        if (policy) {
+          const delay = calculateBackoff(record.attempt ?? 1, policy);
+          setTimeout(() => dispatchTaskImpl(taskDispatch), delay);
+        } else {
+          dispatchTaskImpl(taskDispatch);
+        }
       }
     } catch (error) {
       console.error('[weft] Visibility timeout scanner error:', error);
@@ -729,6 +769,7 @@ export function serve(options: ServeOptions): WeftServer {
           input: task.input,
           attempt: task.attempt ?? 1,
           visibilityTimeout,
+          retryPolicy: task.retryPolicy,
         };
         void options.engine.storage.put(inflightKey, encode(inflightRecord));
 
