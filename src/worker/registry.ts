@@ -21,6 +21,7 @@ export interface InFlightTask {
   operationId: string;
   workerId: string;
   deadline: number; // absolute timestamp
+  visibilityTimeout: number; // original timeout duration in ms
 }
 
 export class WorkerRegistry {
@@ -119,6 +120,7 @@ export class WorkerRegistry {
       operationId,
       workerId,
       deadline,
+      visibilityTimeout,
     });
 
     this.taskAssigned(workerId);
@@ -143,6 +145,17 @@ export class WorkerRegistry {
     if (task !== undefined) {
       task.deadline = Date.now() + extension;
     }
+  }
+
+  /** Return all in-flight tasks assigned to a given worker. */
+  getWorkerTasks(workerId: string): InFlightTask[] {
+    const tasks: InFlightTask[] = [];
+    for (const task of this.#inFlightTasks.values()) {
+      if (task.workerId === workerId) {
+        tasks.push(task);
+      }
+    }
+    return tasks;
   }
 
   /** Check whether an operation is currently assigned to a worker. */

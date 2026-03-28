@@ -521,6 +521,22 @@ export function serve(options: ServeOptions): WeftServer {
             const workerId = ws.data.workerId;
             if (workerId) {
               registry.heartbeat(workerId);
+
+              // Extend visibility deadline for all in-flight tasks assigned to this worker.
+              for (const task of registry.getWorkerTasks(workerId)) {
+                registry.extendVisibility(task.operationId, task.visibilityTimeout);
+
+                // Update persisted storage record with the new deadline.
+                void (async () => {
+                  const inflightKey = KEYS.operationInflight(task.operationId);
+                  const existing = await options.engine.storage.get(inflightKey);
+                  if (existing) {
+                    const record = decode(existing) as Record<string, unknown>;
+                    record['deadline'] = Date.now() + task.visibilityTimeout;
+                    await options.engine.storage.put(inflightKey, encode(record));
+                  }
+                })();
+              }
             }
             break;
           }
