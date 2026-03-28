@@ -545,8 +545,52 @@ export function serve(options: ServeOptions): WeftServer {
       close(ws) {
         const workerId = ws.data.workerId;
         if (workerId) {
+          // Capture in-flight tasks before cleanup so they can be reassigned.
+          const inFlightTasks = registry.getWorkerTasks(workerId);
+
+          // Remove in-flight tracking synchronously to allow re-dispatch.
+          for (const task of inFlightTasks) {
+            registry.completeTask(task.operationId);
+          }
+
           registry.unregister(workerId);
           workerSockets.delete(workerId);
+
+          // Requeue each in-flight task with incremented attempt.
+          for (const task of inFlightTasks) {
+            void (async () => {
+              try {
+                const inflightKey = KEYS.operationInflight(task.operationId);
+                const existing = await options.engine.storage.get(inflightKey);
+                await options.engine.storage.delete(inflightKey);
+
+                if (existing) {
+                  const record = decode(existing) as {
+                    operationId: string;
+                    activityName: string;
+                    input: unknown;
+                    queue: string;
+                    attempt: number;
+                    visibilityTimeout: number;
+                  };
+
+                  dispatchTaskImpl({
+                    operationId: record.operationId,
+                    activityName: record.activityName,
+                    input: record.input,
+                    queue: record.queue,
+                    attempt: (record.attempt ?? 1) + 1,
+                    visibilityTimeout: record.visibilityTimeout,
+                  });
+                }
+              } catch (error) {
+                console.error(
+                  `[weft] Failed to reassign task "${task.operationId}" after worker "${workerId}" disconnected:`,
+                  error,
+                );
+              }
+            })();
+          }
         }
       },
     },

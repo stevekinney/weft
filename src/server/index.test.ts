@@ -1831,3 +1831,238 @@ describe('visibility timeout persistence', () => {
     expect(server.registry.isAssigned('expired-op')).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Worker disconnection triggers task reassignment
+// ---------------------------------------------------------------------------
+
+describe('worker disconnection triggers task reassignment', () => {
+  let engine: Engine;
+  let server: WeftServer;
+  let storage: MemoryStorage;
+
+  afterEach(() => {
+    server?.stop();
+    engine?.[Symbol.dispose]();
+  });
+
+  function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
+    const s = new MemoryStorage();
+    const e = new Engine({ storage: s });
+    e.register('echo', async function* (_ctx: WorkflowContext, input: unknown) {
+      return input;
+    });
+    return { engine: e, storage: s };
+  }
+
+  async function connectWorker(
+    wsServer: WeftServer,
+    path = '/v1/tasks/default/stream',
+  ): Promise<WebSocket> {
+    const wsUrl = wsServer.url.replace('http://', 'ws://');
+    const ws = new WebSocket(`${wsUrl}${path}`);
+    await new Promise<void>((resolve, reject) => {
+      ws.addEventListener('open', () => resolve());
+      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
+    });
+    return ws;
+  }
+
+  async function registerWorker(
+    ws: WebSocket,
+    options: { workerId: string; activities: string[]; concurrency?: number },
+  ): Promise<void> {
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        workerId: options.workerId,
+        activities: options.activities,
+        concurrency: options.concurrency ?? 10,
+      }),
+    );
+    await Bun.sleep(50);
+  }
+
+  it('requeues in-flight tasks to another worker on disconnect', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0 });
+
+    // Connect two workers
+    const ws1 = await connectWorker(server);
+    const ws2 = await connectWorker(server);
+
+    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
+    ws2.addEventListener('message', (event) => {
+      received.push(JSON.parse(String(event.data)));
+    });
+
+    await registerWorker(ws1, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+    await registerWorker(ws2, { workerId: 'w2', activities: ['charge'], concurrency: 5 });
+
+    // Dispatch a task — goes to w1 (least-loaded, both at 0 but w1 registered first)
+    server.dispatchTask({
+      operationId: 'requeue-op-1',
+      activityName: 'charge',
+      input: { amount: 42 },
+    });
+    await Bun.sleep(50);
+
+    expect(server.registry.isAssigned('requeue-op-1')).toBe(true);
+
+    // Disconnect w1 — its in-flight task should be reassigned to w2
+    ws1.close();
+    await Bun.sleep(200);
+
+    const taskMessages = received.filter((m) => m.type === 'task');
+    expect(taskMessages.length).toBe(1);
+    expect(taskMessages[0]?.operationId).toBe('requeue-op-1');
+
+    ws2.close();
+    await Bun.sleep(50);
+  });
+
+  it('increments attempt count on reassigned tasks', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0 });
+
+    const ws1 = await connectWorker(server);
+    const ws2 = await connectWorker(server);
+
+    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
+    ws2.addEventListener('message', (event) => {
+      received.push(JSON.parse(String(event.data)));
+    });
+
+    await registerWorker(ws1, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+    await registerWorker(ws2, { workerId: 'w2', activities: ['charge'], concurrency: 5 });
+
+    server.dispatchTask({
+      operationId: 'attempt-op',
+      activityName: 'charge',
+      input: null,
+      attempt: 2, // Already on attempt 2
+    });
+    await Bun.sleep(50);
+
+    // Disconnect w1 — task should be re-dispatched with attempt 3
+    ws1.close();
+    await Bun.sleep(200);
+
+    const taskMessages = received.filter((m) => m.type === 'task');
+    expect(taskMessages.length).toBe(1);
+    expect(taskMessages[0]?.attempt).toBe(3);
+
+    ws2.close();
+    await Bun.sleep(50);
+  });
+
+  it('cleans up in-flight storage record on disconnect and reassignment', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0 });
+
+    const ws1 = await connectWorker(server);
+    const ws2 = await connectWorker(server);
+
+    await registerWorker(ws1, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+    await registerWorker(ws2, { workerId: 'w2', activities: ['charge'], concurrency: 5 });
+
+    server.dispatchTask({
+      operationId: 'cleanup-op',
+      activityName: 'charge',
+      input: null,
+    });
+    await Bun.sleep(50);
+
+    // Verify the original in-flight record exists
+    const keyBefore = KEYS.operationInflight('cleanup-op');
+    expect(await storage.get(keyBefore)).not.toBeNull();
+
+    // Disconnect w1
+    ws1.close();
+    await Bun.sleep(200);
+
+    // The old in-flight record should be deleted (a new one is created for w2)
+    // The task should now be assigned in the registry (to w2)
+    expect(server.registry.isAssigned('cleanup-op')).toBe(true);
+
+    ws2.close();
+    await Bun.sleep(50);
+  });
+
+  it('requeues to long-poll queue when no other WebSocket worker is available', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    server.dispatchTask({
+      operationId: 'fallback-op',
+      activityName: 'charge',
+      input: { amount: 99 },
+    });
+    await Bun.sleep(50);
+
+    expect(server.registry.isAssigned('fallback-op')).toBe(true);
+
+    // Disconnect the only worker — task should go to long-poll queue
+    ws.close();
+    await Bun.sleep(200);
+
+    // The task should be available via long-poll
+    expect(server.taskQueue.pendingCount('default')).toBe(1);
+  });
+
+  it('reassigns multiple in-flight tasks when a worker disconnects', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0 });
+
+    const ws1 = await connectWorker(server);
+    const ws2 = await connectWorker(server);
+
+    const received: Array<{ type: string; operationId?: string }> = [];
+    ws2.addEventListener('message', (event) => {
+      received.push(JSON.parse(String(event.data)));
+    });
+
+    await registerWorker(ws1, { workerId: 'w1', activities: ['charge', 'ship'], concurrency: 10 });
+    await registerWorker(ws2, { workerId: 'w2', activities: ['charge', 'ship'], concurrency: 10 });
+
+    // Dispatch multiple tasks to w1
+    server.dispatchTask({ operationId: 'multi-op-1', activityName: 'charge', input: null });
+    server.dispatchTask({ operationId: 'multi-op-2', activityName: 'ship', input: null });
+    server.dispatchTask({ operationId: 'multi-op-3', activityName: 'charge', input: null });
+    await Bun.sleep(50);
+
+    // Disconnect w1 — all three tasks should be reassigned to w2
+    ws1.close();
+    await Bun.sleep(200);
+
+    const taskMessages = received.filter((m) => m.type === 'task');
+    const reassignedIds = taskMessages
+      .map((m) => m.operationId)
+      .toSorted((a = '', b = '') => (a < b ? -1 : a > b ? 1 : 0));
+    expect(reassignedIds).toEqual(['multi-op-1', 'multi-op-2', 'multi-op-3']);
+
+    ws2.close();
+    await Bun.sleep(50);
+  });
+
+  it('does nothing when a worker with no in-flight tasks disconnects', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    expect(server.registry.size).toBe(1);
+
+    // Disconnect without any dispatched tasks
+    ws.close();
+    await Bun.sleep(100);
+
+    // Worker should be unregistered, no tasks in queue
+    expect(server.registry.size).toBe(0);
+    expect(server.taskQueue.pendingCount('default')).toBe(0);
+  });
+});
