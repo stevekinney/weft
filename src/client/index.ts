@@ -347,6 +347,23 @@ export class HttpClient implements WeftClient {
     });
   }
 
+  async getBudgetPolicy(namespace: string): Promise<BudgetPolicyOptions | null> {
+    return request<BudgetPolicyOptions | null>(
+      this.baseUrl,
+      `/budget-policy/${encodeURIComponent(namespace)}`,
+      this.headers,
+    );
+  }
+
+  async getStreamChunks(workflowId: string, key: string): Promise<unknown[]> {
+    const response = await request<{ chunks: unknown[] }>(
+      this.baseUrl,
+      `/workflows/${encodeURIComponent(workflowId)}/streams/${encodeURIComponent(key)}`,
+      this.headers,
+    );
+    return response.chunks;
+  }
+
   async submitCoordinatedUpdate(
     id: string,
     name: string,

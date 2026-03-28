@@ -59,6 +59,8 @@ describe('HttpClient', () => {
     expect(client.listReviews).toBeFunction();
     expect(client.submitReview).toBeFunction();
     expect(client.setBudgetPolicy).toBeFunction();
+    expect(client.getBudgetPolicy).toBeFunction();
+    expect(client.getStreamChunks).toBeFunction();
     expect(client.submitCoordinatedUpdate).toBeFunction();
     expect(client.getUpdateResult).toBeFunction();
   });
@@ -201,6 +203,8 @@ describe('HttpClient', () => {
         'listReviews',
         'submitReview',
         'setBudgetPolicy',
+        'getBudgetPolicy',
+        'getStreamChunks',
         'submitCoordinatedUpdate',
         'getUpdateResult',
       ] as const;

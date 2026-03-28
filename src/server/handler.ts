@@ -68,6 +68,18 @@ const ROUTE_PATTERNS: Array<{
   },
   {
     method: 'GET',
+    pattern: /^\/v1\/budget-policy\/([^/]+)$/,
+    handler: 'getBudgetPolicy',
+    paramNames: ['namespace'],
+  },
+  {
+    method: 'GET',
+    pattern: /^\/v1\/workflows\/([^/]+)\/streams\/([^/]+)$/,
+    handler: 'getStreamChunks',
+    paramNames: ['id', 'key'],
+  },
+  {
+    method: 'GET',
     pattern: /^\/v1\/workflows\/([^/]+)\/query\/([^/]+)$/,
     handler: 'queryWorkflow',
     paramNames: ['id', 'name'],
@@ -727,6 +739,31 @@ async function handleSetBudgetPolicy(request: Request, engine: Engine): Promise<
 }
 
 // ---------------------------------------------------------------------------
+// Budget policy read route — engine.getBudgetPolicy()
+// ---------------------------------------------------------------------------
+
+async function handleGetBudgetPolicy(engine: Engine, namespace: string): Promise<Response> {
+  const policy = await engine.getBudgetPolicy(namespace);
+  if (policy === null) {
+    return errorResponse(`Budget policy for namespace "${namespace}" not found`, 404);
+  }
+  return jsonResponse(policy);
+}
+
+// ---------------------------------------------------------------------------
+// Stream chunks route — engine.getStreamChunks()
+// ---------------------------------------------------------------------------
+
+async function handleGetStreamChunks(
+  engine: Engine,
+  workflowId: string,
+  key: string,
+): Promise<Response> {
+  const chunks = await engine.getStreamChunks(workflowId, key);
+  return jsonResponse({ chunks });
+}
+
+// ---------------------------------------------------------------------------
 // Metrics route
 // ---------------------------------------------------------------------------
 
@@ -816,6 +853,12 @@ export async function handleRequest(request: Request, engine: Engine): Promise<R
 
       case 'setBudgetPolicy':
         return handleSetBudgetPolicy(request, engine);
+
+      case 'getBudgetPolicy':
+        return handleGetBudgetPolicy(engine, param('namespace'));
+
+      case 'getStreamChunks':
+        return handleGetStreamChunks(engine, param('id'), param('key'));
 
       case 'getMetrics':
         return handleGetMetrics();

@@ -913,6 +913,32 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     this.#budgetPolicyEnforcer.setPolicy(options);
   }
 
+  /** Retrieve the budget policy for a namespace, or `null` if none is set. */
+  async getBudgetPolicy(
+    namespace: string,
+  ): Promise<import('../ai/budget-policy.ts').BudgetPolicyOptions | null> {
+    if (!this.#budgetPolicyEnforcer) return null;
+    return this.#budgetPolicyEnforcer.policies.get(namespace) ?? null;
+  }
+
+  /** Read stream chunks back from storage for a completed stream operation. */
+  async getStreamChunks(workflowId: string, key: string): Promise<unknown[]> {
+    const metadataBytes = await this.#storage.get(KEYS.streamMetadata(workflowId, key));
+    if (!metadataBytes) return [];
+
+    const metadata = decode(metadataBytes) as StreamReference;
+    const chunks: unknown[] = [];
+
+    for (let i = 0; i < metadata.chunkCount; i++) {
+      const chunkBytes = await this.#storage.get(KEYS.streamChunk(workflowId, key, i));
+      if (chunkBytes) {
+        chunks.push(decode(chunkBytes));
+      }
+    }
+
+    return chunks;
+  }
+
   // -------------------------------------------------------------------------
   // Resume / Recovery
   // -------------------------------------------------------------------------

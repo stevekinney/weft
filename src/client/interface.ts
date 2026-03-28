@@ -122,6 +122,12 @@ export interface WeftClient {
   /** Set an organization-level budget policy. */
   setBudgetPolicy(options: BudgetPolicyOptions): Promise<void>;
 
+  /** Retrieve the budget policy for a namespace, or `null` if none is set. */
+  getBudgetPolicy(namespace: string): Promise<BudgetPolicyOptions | null>;
+
+  /** Read stream chunks back from storage for a completed stream operation. */
+  getStreamChunks(workflowId: string, key: string): Promise<unknown[]>;
+
   /** Submit a coordinated update and wait for the result. */
   submitCoordinatedUpdate(
     id: string,

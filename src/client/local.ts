@@ -159,6 +159,14 @@ export class LocalClient implements WeftClient {
     return this.#engine.setBudgetPolicy(options);
   }
 
+  async getBudgetPolicy(namespace: string): Promise<BudgetPolicyOptions | null> {
+    return this.#engine.getBudgetPolicy(namespace);
+  }
+
+  async getStreamChunks(workflowId: string, key: string): Promise<unknown[]> {
+    return this.#engine.getStreamChunks(workflowId, key);
+  }
+
   async submitCoordinatedUpdate(
     id: string,
     name: string,
