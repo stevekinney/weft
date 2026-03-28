@@ -27,6 +27,8 @@ import {
 import { KEYS } from '../storage/interface.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
 import { handleRequest } from './handler.ts';
+import type { TaskResult } from './task-queue.ts';
+import { TaskQueue } from './task-queue.ts';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -54,6 +56,7 @@ export interface WeftServer extends Disposable {
   readonly hostname: string;
   readonly url: string;
   readonly registry: WorkerRegistry;
+  readonly taskQueue: TaskQueue;
   stop(): void;
   /** Dispatch a task to the best available worker. Returns true if dispatched. */
   dispatchTask(task: TaskDispatch): boolean;
@@ -80,6 +83,11 @@ interface WebSocketData {
 const WORKER_STREAM_RE = /^\/v1\/tasks\/([\w-]+)\/stream$/;
 const WORKFLOW_STREAM_RE = /^\/v1\/workflows\/([\w-]+)\/stream$/;
 const WORKFLOW_WATCH_RE = /^\/v1\/workflows\/([\w-]+)\/watch$/;
+const TASK_POLL_RE = /^\/v1\/tasks\/([\w-]+)$/;
+const TASK_COMPLETE_RE = /^\/v1\/tasks\/([\w-]+)\/complete$/;
+
+const MAX_POLL_TIMEOUT = 60_000;
+const DEFAULT_POLL_TIMEOUT = 30_000;
 
 function isWorkerConnection(pathname: string): boolean {
   return WORKER_STREAM_RE.test(pathname);
@@ -288,6 +296,7 @@ export function serve(options: ServeOptions): WeftServer {
   const dashboard = options.dashboard ?? null;
 
   const registry = new WorkerRegistry();
+  const taskQueue = new TaskQueue();
   const workerSockets = new Map<string, ServerWebSocket<WebSocketData>>();
 
   /**
@@ -340,6 +349,62 @@ export function serve(options: ServeOptions): WeftServer {
         });
         if (upgraded) return undefined;
         return new Response('WebSocket upgrade failed', { status: 400 });
+      }
+
+      // Long-poll task endpoints (handled here because they need task queue access)
+      if (request.method === 'GET') {
+        const pollMatch = TASK_POLL_RE.exec(url.pathname);
+        if (pollMatch?.[1]) {
+          const queue = decodeURIComponent(pollMatch[1]);
+          const activities = url.searchParams.getAll('activity');
+
+          if (activities.length === 0) {
+            return Response.json(
+              { error: 'At least one "activity" query parameter is required' },
+              { status: 400 },
+            );
+          }
+
+          const rawTimeout = url.searchParams.get('timeout');
+          const timeout =
+            rawTimeout !== null
+              ? Math.min(Math.max(0, Number(rawTimeout)), MAX_POLL_TIMEOUT)
+              : DEFAULT_POLL_TIMEOUT;
+
+          const task = await taskQueue.poll(queue, activities, timeout);
+          return Response.json(task);
+        }
+      }
+
+      if (request.method === 'POST') {
+        const completeMatch = TASK_COMPLETE_RE.exec(url.pathname);
+        if (completeMatch?.[1]) {
+          let body: Record<string, unknown>;
+          try {
+            body = (await request.json()) as Record<string, unknown>;
+          } catch {
+            return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
+          }
+
+          const operationId = body['operationId'];
+          const status = body['status'];
+
+          if (typeof operationId !== 'string' || typeof status !== 'string') {
+            return Response.json(
+              { error: 'Missing required fields: operationId, status' },
+              { status: 400 },
+            );
+          }
+
+          taskQueue.complete({
+            operationId,
+            status: status as TaskResult['status'],
+            value: body['value'],
+            error: typeof body['error'] === 'string' ? body['error'] : undefined,
+          });
+
+          return Response.json({ ok: true });
+        }
       }
 
       // API routes via existing platform-agnostic handler
@@ -426,24 +491,32 @@ export function serve(options: ServeOptions): WeftServer {
   }
 
   function dispatchTaskImpl(task: TaskDispatch): boolean {
+    // Try WebSocket workers first (lowest latency)
     const worker = registry.findWorker(task.activityName);
-    if (!worker) return false;
+    if (worker) {
+      const ws = workerSockets.get(worker.id);
+      if (ws) {
+        ws.send(
+          JSON.stringify({
+            type: 'task',
+            operationId: task.operationId,
+            activityName: task.activityName,
+            input: task.input,
+            attempt: task.attempt ?? 1,
+          }),
+        );
+        registry.taskAssigned(worker.id);
+        return true;
+      }
+    }
 
-    const ws = workerSockets.get(worker.id);
-    if (!ws) return false;
-
-    ws.send(
-      JSON.stringify({
-        type: 'task',
-        operationId: task.operationId,
-        activityName: task.activityName,
-        input: task.input,
-        attempt: task.attempt ?? 1,
-      }),
-    );
-
-    registry.taskAssigned(worker.id);
-    return true;
+    // Fall back to long-poll task queue
+    return taskQueue.enqueue('default', {
+      operationId: task.operationId,
+      activityName: task.activityName,
+      input: task.input,
+      attempt: task.attempt,
+    });
   }
 
   const resolvedPort = server.port ?? port;
@@ -454,6 +527,7 @@ export function serve(options: ServeOptions): WeftServer {
     hostname: resolvedHostname,
     url: `http://${resolvedHostname}:${resolvedPort}`,
     registry,
+    taskQueue,
     stop() {
       cleanupBroadcasting();
       void server.stop();

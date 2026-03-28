@@ -5,11 +5,8 @@ import { LongPollWorker } from './long-poll.ts';
 // Helpers
 // ---------------------------------------------------------------------------
 
-const originalFetch = globalThis.fetch;
-
-afterEach(() => {
-  globalThis.fetch = originalFetch;
-});
+const POLL_PATH_RE = /^\/v1\/tasks\/([\w-]+)$/;
+const COMPLETE_PATH_RE = /^\/v1\/tasks\/([\w-]+)\/complete$/;
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -126,7 +123,7 @@ describe('LongPollWorker', () => {
     expect(worker.running).toBe(false);
   });
 
-  it('polls a server for tasks and executes them', async () => {
+  it('polls GET /v1/tasks/:queue for tasks and executes them', async () => {
     const completedTasks: any[] = [];
     let pollCount = 0;
 
@@ -135,26 +132,27 @@ describe('LongPollWorker', () => {
       async fetch(request) {
         const url = new URL(request.url);
 
-        if (url.pathname === '/poll' && request.method === 'POST') {
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
+          // Verify query parameters
+          expect(url.searchParams.getAll('activity')).toContain('processOrder');
+          expect(url.searchParams.get('timeout')).toBeDefined();
+
           // Return a task on the first poll, null on subsequent polls
           if (pollCount === 1) {
-            return new Response(
-              JSON.stringify({
-                operationId: 'op-1',
-                activityName: 'processOrder',
-                input: { orderId: 42 },
-              }),
-              { status: 200 },
-            );
+            return Response.json({
+              operationId: 'op-1',
+              activityName: 'processOrder',
+              input: { orderId: 42 },
+            });
           }
-          return new Response(JSON.stringify(null), { status: 200 });
+          return Response.json(null);
         }
 
-        if (url.pathname === '/complete' && request.method === 'POST') {
+        if (COMPLETE_PATH_RE.test(url.pathname) && request.method === 'POST') {
           const body = await request.json();
           completedTasks.push(body);
-          return new Response('ok', { status: 200 });
+          return Response.json({ ok: true });
         }
 
         return new Response('not found', { status: 404 });
@@ -179,7 +177,7 @@ describe('LongPollWorker', () => {
     expect(taskCompletion.value).toEqual({ processed: true, orderId: 42 });
   });
 
-  it('sends error completion when activity throws', async () => {
+  it('sends completion to POST /v1/tasks/:queue/complete when activity throws', async () => {
     const completedTasks: any[] = [];
     let pollCount = 0;
 
@@ -188,25 +186,22 @@ describe('LongPollWorker', () => {
       async fetch(request) {
         const url = new URL(request.url);
 
-        if (url.pathname === '/poll' && request.method === 'POST') {
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
           if (pollCount === 1) {
-            return new Response(
-              JSON.stringify({
-                operationId: 'op-err-1',
-                activityName: 'failingActivity',
-                input: null,
-              }),
-              { status: 200 },
-            );
+            return Response.json({
+              operationId: 'op-err-1',
+              activityName: 'failingActivity',
+              input: null,
+            });
           }
-          return new Response(JSON.stringify(null), { status: 200 });
+          return Response.json(null);
         }
 
-        if (url.pathname === '/complete' && request.method === 'POST') {
+        if (COMPLETE_PATH_RE.test(url.pathname) && request.method === 'POST') {
           const body = await request.json();
           completedTasks.push(body);
-          return new Response('ok', { status: 200 });
+          return Response.json({ ok: true });
         }
 
         return new Response('not found', { status: 404 });
@@ -240,7 +235,7 @@ describe('LongPollWorker', () => {
       fetch(request) {
         const url = new URL(request.url);
 
-        if (url.pathname === '/poll') {
+        if (POLL_PATH_RE.test(url.pathname)) {
           pollCount++;
           return new Response('Server Error', { status: 500 });
         }
@@ -273,25 +268,22 @@ describe('LongPollWorker', () => {
       async fetch(request) {
         const url = new URL(request.url);
 
-        if (url.pathname === '/poll' && request.method === 'POST') {
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
           if (pollCount === 1) {
-            return new Response(
-              JSON.stringify({
-                operationId: 'op-unknown',
-                activityName: 'nonExistent',
-                input: null,
-              }),
-              { status: 200 },
-            );
+            return Response.json({
+              operationId: 'op-unknown',
+              activityName: 'nonExistent',
+              input: null,
+            });
           }
-          return new Response(JSON.stringify(null), { status: 200 });
+          return Response.json(null);
         }
 
-        if (url.pathname === '/complete' && request.method === 'POST') {
+        if (COMPLETE_PATH_RE.test(url.pathname) && request.method === 'POST') {
           const body = await request.json();
           completedTasks.push(body);
-          return new Response('ok', { status: 200 });
+          return Response.json({ ok: true });
         }
 
         return new Response('not found', { status: 404 });
@@ -316,30 +308,25 @@ describe('LongPollWorker', () => {
 
   it('handles error completion fetch failure gracefully', async () => {
     let pollCount = 0;
-    let completeCallCount = 0;
 
     server = Bun.serve({
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
 
-        if (url.pathname === '/poll' && request.method === 'POST') {
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
           if (pollCount === 1) {
-            return new Response(
-              JSON.stringify({
-                operationId: 'op-double-fail',
-                activityName: 'failingActivity',
-                input: null,
-              }),
-              { status: 200 },
-            );
+            return Response.json({
+              operationId: 'op-double-fail',
+              activityName: 'failingActivity',
+              input: null,
+            });
           }
-          return new Response(JSON.stringify(null), { status: 200 });
+          return Response.json(null);
         }
 
-        if (url.pathname === '/complete' && request.method === 'POST') {
-          completeCallCount++;
+        if (COMPLETE_PATH_RE.test(url.pathname) && request.method === 'POST') {
           // Make the completion endpoint fail too
           return new Response('Server Error', { status: 500 });
         }
@@ -374,25 +361,22 @@ describe('LongPollWorker', () => {
       async fetch(request) {
         const url = new URL(request.url);
 
-        if (url.pathname === '/poll' && request.method === 'POST') {
+        if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
           if (pollCount === 1) {
-            return new Response(
-              JSON.stringify({
-                operationId: 'op-string-throw',
-                activityName: 'stringThrow',
-                input: null,
-              }),
-              { status: 200 },
-            );
+            return Response.json({
+              operationId: 'op-string-throw',
+              activityName: 'stringThrow',
+              input: null,
+            });
           }
-          return new Response(JSON.stringify(null), { status: 200 });
+          return Response.json(null);
         }
 
-        if (url.pathname === '/complete' && request.method === 'POST') {
+        if (COMPLETE_PATH_RE.test(url.pathname) && request.method === 'POST') {
           const body = await request.json();
           completedTasks.push(body);
-          return new Response('ok', { status: 200 });
+          return Response.json({ ok: true });
         }
 
         return new Response('not found', { status: 404 });
@@ -416,5 +400,32 @@ describe('LongPollWorker', () => {
     expect(errorCompletion).toBeDefined();
     expect(errorCompletion.status).toBe('failed');
     expect(errorCompletion.error).toBe('string error value');
+  });
+
+  it('includes the queue name in the poll URL path', async () => {
+    let capturedPath = '';
+
+    server = Bun.serve({
+      port: 0,
+      fetch(request) {
+        const url = new URL(request.url);
+        capturedPath = url.pathname;
+        return Response.json(null);
+      },
+    });
+
+    const worker = new LongPollWorker({
+      serverUrl: `http://localhost:${server.port}`,
+      queue: 'billing',
+      activities: {
+        charge: async (input) => input,
+      },
+    });
+
+    worker.start();
+    await Bun.sleep(200);
+    await worker.stop();
+
+    expect(capturedPath).toBe('/v1/tasks/billing');
   });
 });

@@ -79,7 +79,27 @@ export class LongPollWorker implements Disposable {
   // Internal
   // ---------------------------------------------------------------------------
 
+  /** Build the poll URL with activity and timeout query parameters. */
+  #buildPollUrl(): string {
+    const queue = this.#options.queue ?? DEFAULT_QUEUE;
+    const params = new URLSearchParams();
+    params.set('timeout', String(this.#options.pollTimeout ?? DEFAULT_POLL_TIMEOUT));
+    for (const activity of Object.keys(this.#options.activities)) {
+      params.append('activity', activity);
+    }
+    return `${this.#options.serverUrl}/v1/tasks/${encodeURIComponent(queue)}?${params.toString()}`;
+  }
+
+  /** Build the task completion URL. */
+  #buildCompleteUrl(): string {
+    const queue = this.#options.queue ?? DEFAULT_QUEUE;
+    return `${this.#options.serverUrl}/v1/tasks/${encodeURIComponent(queue)}/complete`;
+  }
+
   async #pollLoop(): Promise<void> {
+    const pollUrl = this.#buildPollUrl();
+    const completeUrl = this.#buildCompleteUrl();
+
     while (this.#running) {
       // Only poll when we have capacity
       if (this.#inFlight >= (this.#options.concurrency ?? DEFAULT_CONCURRENCY)) {
@@ -88,14 +108,7 @@ export class LongPollWorker implements Disposable {
       }
 
       try {
-        const response = await fetch(`${this.#options.serverUrl}/poll`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            activities: Object.keys(this.#options.activities),
-            queue: this.#options.queue,
-            timeout: this.#options.pollTimeout,
-          }),
+        const response = await fetch(pollUrl, {
           signal: this.#abortController.signal,
         });
 
@@ -111,7 +124,7 @@ export class LongPollWorker implements Disposable {
         } | null;
 
         if (task !== null) {
-          void this.#executeTask(task);
+          void this.#executeTask(task, completeUrl);
         }
       } catch {
         // Abort errors are expected during shutdown; network errors trigger a backoff
@@ -122,11 +135,10 @@ export class LongPollWorker implements Disposable {
     }
   }
 
-  async #executeTask(task: {
-    operationId: string;
-    activityName: string;
-    input: unknown;
-  }): Promise<void> {
+  async #executeTask(
+    task: { operationId: string; activityName: string; input: unknown },
+    completeUrl: string,
+  ): Promise<void> {
     const activityFunction = this.#options.activities[task.activityName];
     if (activityFunction === undefined) {
       return;
@@ -137,7 +149,7 @@ export class LongPollWorker implements Disposable {
     try {
       const result = await activityFunction(task.input);
 
-      await fetch(`${this.#options.serverUrl}/complete`, {
+      await fetch(completeUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -149,7 +161,7 @@ export class LongPollWorker implements Disposable {
       });
     } catch (error) {
       try {
-        await fetch(`${this.#options.serverUrl}/complete`, {
+        await fetch(completeUrl, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

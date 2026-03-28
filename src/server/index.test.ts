@@ -355,7 +355,7 @@ describe('worker WebSocket protocol', () => {
     await Bun.sleep(50);
   });
 
-  it('returns false when no worker can handle the task', () => {
+  it('queues task for long-poll workers when no WebSocket worker is available', () => {
     engine = createEngine();
     server = serve({ engine, port: 0 });
 
@@ -365,7 +365,9 @@ describe('worker WebSocket protocol', () => {
       input: null,
     });
 
-    expect(dispatched).toBe(false);
+    // With the long-poll fallback, tasks are queued instead of rejected
+    expect(dispatched).toBe(true);
+    expect(server.taskQueue.pendingCount('default')).toBe(1);
   });
 
   it('increments in-flight count on dispatch and decrements on task result', async () => {
@@ -702,5 +704,213 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     ws1.close();
     ws2.close();
     await Bun.sleep(50);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Long-poll HTTP endpoints
+// ---------------------------------------------------------------------------
+
+describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/complete)', () => {
+  let engine: Engine;
+  let server: WeftServer;
+
+  afterEach(() => {
+    server?.stop();
+    engine?.[Symbol.dispose]();
+  });
+
+  it('returns null when no task is available within timeout', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const response = await fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=50`);
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toBeNull();
+  });
+
+  it('returns 400 when no activity query parameter is provided', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const response = await fetch(`${server.url}/v1/tasks/default?timeout=50`);
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toContain('activity');
+  });
+
+  it('returns a queued task immediately', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    // Dispatch a task with no WebSocket workers — goes to task queue
+    server.dispatchTask({
+      operationId: 'op-poll-1',
+      activityName: 'charge',
+      input: { amount: 100 },
+    });
+
+    const response = await fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=1000`);
+
+    expect(response.status).toBe(200);
+    const task = (await response.json()) as { operationId: string; activityName: string };
+    expect(task.operationId).toBe('op-poll-1');
+    expect(task.activityName).toBe('charge');
+  });
+
+  it('blocks until a task arrives within the timeout', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    // Start a poll that will block
+    const pollPromise = fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=5000`);
+
+    // Wait a bit, then enqueue a task
+    await Bun.sleep(100);
+    server.dispatchTask({
+      operationId: 'op-delayed',
+      activityName: 'charge',
+      input: { amount: 50 },
+    });
+
+    const response = await pollPromise;
+    expect(response.status).toBe(200);
+    const task = (await response.json()) as { operationId: string };
+    expect(task.operationId).toBe('op-delayed');
+  });
+
+  it('filters tasks by activity name', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    // Queue a 'ship' task
+    server.dispatchTask({
+      operationId: 'op-ship',
+      activityName: 'ship',
+      input: null,
+    });
+
+    // Poll for 'charge' only — should not match
+    const response = await fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=50`);
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    expect(body).toBeNull();
+
+    // The 'ship' task should still be in the queue
+    expect(server.taskQueue.pendingCount('default')).toBe(1);
+  });
+
+  it('accepts task completion via POST', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const response = await fetch(`${server.url}/v1/tasks/default/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operationId: 'op-complete-1',
+        status: 'completed',
+        value: { result: 42 },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { ok: boolean };
+    expect(body.ok).toBe(true);
+  });
+
+  it('returns 400 for invalid completion body', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const response = await fetch(`${server.url}/v1/tasks/default/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'completed' }),
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('returns 400 for non-JSON completion body', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const response = await fetch(`${server.url}/v1/tasks/default/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain' },
+      body: 'not json',
+    });
+
+    expect(response.status).toBe(400);
+  });
+
+  it('invokes the completion callback when task is completed', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const results: Array<{ operationId: string; status: string }> = [];
+
+    // Enqueue with a callback
+    server.taskQueue.enqueue(
+      'default',
+      { operationId: 'op-cb', activityName: 'charge', input: null },
+      (result) => results.push(result),
+    );
+
+    // Complete via HTTP
+    await fetch(`${server.url}/v1/tasks/default/complete`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        operationId: 'op-cb',
+        status: 'completed',
+        value: 'done',
+      }),
+    });
+
+    expect(results).toHaveLength(1);
+    expect(results[0]?.operationId).toBe('op-cb');
+    expect(results[0]?.status).toBe('completed');
+  });
+
+  it('integrates with LongPollWorker end-to-end', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const { LongPollWorker } = await import('../worker/long-poll.ts');
+
+    const worker = new LongPollWorker({
+      serverUrl: server.url,
+      activities: {
+        greet: async (input: unknown) => `Hello, ${String(input)}!`,
+      },
+      concurrency: 3,
+      pollTimeout: 5000,
+    });
+
+    worker.start();
+    await Bun.sleep(100);
+
+    // Dispatch a task — no WebSocket workers, so it goes to the queue
+    server.dispatchTask({
+      operationId: 'e2e-lp-1',
+      activityName: 'greet',
+      input: 'World',
+    });
+
+    // Wait for the worker to poll, execute, and complete
+    await Bun.sleep(500);
+
+    // Worker should be running with no in-flight tasks
+    expect(worker.running).toBe(true);
+    expect(worker.inFlight).toBe(0);
+
+    await worker.stop();
+    expect(worker.running).toBe(false);
   });
 });
