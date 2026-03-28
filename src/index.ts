@@ -227,6 +227,12 @@ export {
 
 // Workers
 export { executeActivity } from './workers/activity-runner';
+export type { ActivityExecutionRequest, ActivityExecutionResult } from './workers/activity-runner';
+export { ActivityWorkerDispatcher } from './workers/activity-worker-dispatcher';
+export {
+  createActivityWorkerEntryUrl,
+  initializeActivityWorkerMessageLoop,
+} from './workers/activity-worker-entry';
 export { WorkerPool } from './workers/pool';
 
 // Remote Worker

@@ -142,13 +142,28 @@ export interface EngineOptions {
   /**
    * Enable worker-based execution. When provided, workflows run in isolated
    * Web Workers instead of inline on the main thread. Activities are still
-   * executed on the main thread via the activity registry.
+   * executed on the main thread via the activity registry (unless
+   * `activityExecution` is also configured).
    */
   workerExecution?: {
     /** URL of the worker script (created via `createWorkerEntryUrl`). */
     workerUrl: string | URL;
     /** Maximum number of concurrent workers. Default: 4. */
     concurrency?: number;
+    /** Use Bun's `smol` worker option for smaller memory footprint. */
+    smol?: boolean;
+  };
+
+  /**
+   * Enable worker-based activity execution. When provided, activity functions
+   * run in isolated Web Workers instead of on the main thread. Activities must
+   * be pre-registered in the worker via `createActivityWorkerEntryUrl`.
+   */
+  activityExecution?: {
+    /** URL of the activity worker script (created via `createActivityWorkerEntryUrl`). */
+    workerUrl: string | URL;
+    /** Maximum number of concurrent activity workers. Default: 4. */
+    poolSize?: number;
     /** Use Bun's `smol` worker option for smaller memory footprint. */
     smol?: boolean;
   };

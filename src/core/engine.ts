@@ -13,6 +13,7 @@
 import type { Storage as WeftStorage } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { ActivityWorkerDispatcher } from '../workers/activity-worker-dispatcher.ts';
 import { WorkerPool } from '../workers/pool.ts';
 import {
   advanceCheckpoint,
@@ -309,6 +310,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
   #composedActivityInterceptor: ComposedActivityInterceptor | null;
   #updateCoordinator: UpdateCoordinator;
   #activityRegistrations: Map<string, (...arguments_: unknown[]) => unknown>;
+  #activityWorkerDispatcher: ActivityWorkerDispatcher | null;
   #checkpoints: Map<string, Checkpoint>;
   #broadcastChannel: BroadcastChannel | null;
   #pendingNestingDepth: number | undefined;
@@ -335,6 +337,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     this.#composedActivityInterceptor = null;
     this.#updateCoordinator = new UpdateCoordinator(storage);
     this.#activityRegistrations = new Map();
+    this.#activityWorkerDispatcher = null;
     this.#checkpoints = new Map();
     this.#broadcastChannel = null;
     this.#pendingNestingDepth = undefined;
@@ -386,6 +389,16 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     }
 
     this.#budgetPolicyEnforcer = null;
+
+    // Create the activity worker pool (optional)
+    if (options?.activityExecution) {
+      const activityPool = new WorkerPool({
+        workerUrl: options.activityExecution.workerUrl,
+        concurrency: options.activityExecution.poolSize ?? 4,
+        smol: options.activityExecution.smol ?? false,
+      });
+      this.#activityWorkerDispatcher = new ActivityWorkerDispatcher(activityPool);
+    }
 
     // Wire up the strategy message handler
     this.#strategy.onMessage((message) => this.#handleStrategyMessage(message));
@@ -1082,6 +1095,8 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     this.#abortController.abort();
     this.#scheduler[Symbol.dispose]();
     this.#strategy[Symbol.dispose]();
+    this.#activityWorkerDispatcher?.[Symbol.dispose]();
+    this.#activityWorkerDispatcher = null;
     this.#inlineStrategy = null;
     this.#handleCache.clear();
     this.#resultResolvers.clear();
@@ -2021,12 +2036,34 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     );
   }
 
+  /**
+   * Execute an activity function, dispatching to a Web Worker pool when
+   * `activityExecution` is configured, or running inline on the main thread.
+   */
   async #executeActivity(
     _workflowId: string,
     operation: Extract<ContextOperationRequest, { type: 'activity' }>,
   ): Promise<unknown> {
-    const activityFunction = this.#resolveActivityFunction(operation);
     const activityArguments = operation.args ?? [];
+
+    // Build the leaf executor: either dispatch to a worker or call inline.
+    const invokeActivity = this.#activityWorkerDispatcher
+      ? async (name: string, args: unknown[]) => {
+          const result = await this.#activityWorkerDispatcher!.execute({
+            operationId: operation.operationId,
+            activityName: name,
+            input: args.length === 1 ? args[0] : args,
+            attempt: 1,
+          });
+          if (result.status === 'failed') {
+            throw new Error(result.error);
+          }
+          return result.value;
+        }
+      : (_name: string, args: unknown[]) => {
+          const activityFunction = this.#resolveActivityFunction(operation);
+          return callActivityFunction(activityFunction, args);
+        };
 
     // If there are activity interceptors, use cached composition
     const composedActivity = this.#getComposedActivityInterceptor();
@@ -2042,7 +2079,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
           const args = Array.isArray(interception.input)
             ? interception.input
             : [interception.input];
-          return callActivityFunction(activityFunction, args);
+          return invokeActivity(operation.activityName, args);
         },
       );
     }
@@ -2058,7 +2095,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
       };
 
       function* execute(): Generator<unknown, unknown, unknown> {
-        const result = callActivityFunction(activityFunction, activityArguments);
+        const result = invokeActivity(operation.activityName, activityArguments);
         yield result;
         return result;
       }
@@ -2071,7 +2108,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
       return current.value;
     }
 
-    return callActivityFunction(activityFunction, activityArguments);
+    return invokeActivity(operation.activityName, activityArguments);
   }
 
   // -------------------------------------------------------------------------
