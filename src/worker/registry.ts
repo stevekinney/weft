@@ -77,33 +77,38 @@ export class WorkerRegistry {
     }
   }
 
-  /** Find the best worker for a task using least-loaded routing. */
+  /**
+   * Find the best worker for a task using least-loaded routing.
+   *
+   * Default strategy: pick the worker with the lowest `inFlight` count
+   * among those that support the requested activity and have spare capacity
+   * (`inFlight < concurrency`). When a sticky preference is provided and
+   * that worker qualifies, it wins regardless of load.
+   */
   findWorker(activityName: string, options?: RoutingOptions): WorkerInfo | undefined {
-    const candidates: WorkerInfo[] = [];
     const queue = options?.queue;
+    const stickyId = options?.sticky;
+
+    let best: WorkerInfo | undefined;
+    let stickyCandidate: WorkerInfo | undefined;
 
     for (const worker of this.#workers.values()) {
       if (queue !== undefined && worker.queue !== queue) continue;
-      if (worker.activities.includes(activityName) && worker.inFlight < worker.concurrency) {
-        candidates.push(worker);
+      if (!worker.activities.includes(activityName)) continue;
+      if (worker.inFlight >= worker.concurrency) continue;
+
+      // Track sticky candidate separately so we can prefer it when available.
+      if (stickyId !== undefined && worker.id === stickyId) {
+        stickyCandidate = worker;
+      }
+
+      // Least-loaded: keep the worker with the lowest inFlight count.
+      if (best === undefined || worker.inFlight < best.inFlight) {
+        best = worker;
       }
     }
 
-    if (candidates.length === 0) {
-      return undefined;
-    }
-
-    // If a sticky preference is provided and that worker has capacity, use it.
-    if (options?.sticky !== undefined) {
-      const sticky = candidates.find((worker) => worker.id === options.sticky);
-      if (sticky !== undefined) {
-        return sticky;
-      }
-    }
-
-    // Return the least-loaded worker (lowest inFlight count).
-    candidates.sort((a, b) => a.inFlight - b.inFlight);
-    return candidates[0];
+    return stickyCandidate ?? best;
   }
 
   /** Track a task assignment with a visibility timeout deadline. */

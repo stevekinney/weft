@@ -411,6 +411,68 @@ describe('WorkerRegistry', () => {
     expect(found!.concurrency - found!.inFlight).toBe(4);
   });
 
+  it('picks the lowest inFlight worker among 3+ candidates with varying loads', () => {
+    const registry = new WorkerRegistry();
+
+    registry.register({
+      id: 'heavy',
+      queue: 'default',
+      activities: ['compute'],
+      concurrency: 10,
+    });
+
+    registry.register({
+      id: 'medium',
+      queue: 'default',
+      activities: ['compute'],
+      concurrency: 10,
+    });
+
+    registry.register({
+      id: 'light',
+      queue: 'default',
+      activities: ['compute'],
+      concurrency: 10,
+    });
+
+    // heavy: 7 in-flight, medium: 4, light: 1
+    for (let i = 0; i < 7; i++) registry.taskAssigned('heavy');
+    for (let i = 0; i < 4; i++) registry.taskAssigned('medium');
+    registry.taskAssigned('light');
+
+    const found = registry.findWorker('compute');
+    expect(found).toBeDefined();
+    expect(found!.id).toBe('light');
+  });
+
+  it('default routing uses least-loaded when no options are provided', () => {
+    const registry = new WorkerRegistry();
+
+    registry.register({
+      id: 'worker-a',
+      queue: 'default',
+      activities: ['process'],
+      concurrency: 5,
+    });
+
+    registry.register({
+      id: 'worker-b',
+      queue: 'default',
+      activities: ['process'],
+      concurrency: 5,
+    });
+
+    // Load worker-a more heavily
+    registry.taskAssigned('worker-a');
+    registry.taskAssigned('worker-a');
+
+    // Call findWorker with no options — should use least-loaded by default
+    const found = registry.findWorker('process');
+    expect(found).toBeDefined();
+    expect(found!.id).toBe('worker-b');
+    expect(found!.inFlight).toBe(0);
+  });
+
   // -------------------------------------------------------------------------
   // Queue-based filtering
   // -------------------------------------------------------------------------
