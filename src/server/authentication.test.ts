@@ -531,8 +531,8 @@ describe('serve() with authentication', () => {
   let engine: Engine;
   let server: WeftServer;
 
-  afterEach(() => {
-    server?.stop();
+  afterEach(async () => {
+    await server?.stop();
     engine?.[Symbol.dispose]();
   });
 

@@ -37,8 +37,8 @@ describe('serve', () => {
   let engine: Engine;
   let server: WeftServer;
 
-  afterEach(() => {
-    server?.stop();
+  afterEach(async () => {
+    await server?.stop();
     engine?.[Symbol.dispose]();
   });
 
@@ -85,7 +85,7 @@ describe('serve', () => {
     const response = await fetch(`${url}/v1/health`);
     expect(response.status).toBe(200);
 
-    server.stop();
+    await server.stop();
 
     // After stopping, fetch should fail
     try {
@@ -98,7 +98,24 @@ describe('serve', () => {
     }
   });
 
-  it('stops via Symbol.dispose', async () => {
+  it('stop() returns a Promise', () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const result = server.stop();
+    expect(result).toBeInstanceOf(Promise);
+  });
+
+  it('stop() is idempotent', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    await server.stop();
+    // Second call should not throw — AsyncDisposableStack handles double-dispose.
+    await server.stop();
+  });
+
+  it('stops via Symbol.asyncDispose', async () => {
     engine = createEngine();
     server = serve({ engine, port: 0 });
     const { url } = server;
@@ -107,7 +124,7 @@ describe('serve', () => {
     const response = await fetch(`${url}/v1/health`);
     expect(response.status).toBe(200);
 
-    server[Symbol.dispose]();
+    await server[Symbol.asyncDispose]();
 
     try {
       await fetch(`${url}/v1/health`);
@@ -226,8 +243,8 @@ describe('worker WebSocket protocol', () => {
   let engine: Engine;
   let server: WeftServer;
 
-  afterEach(() => {
-    server?.stop();
+  afterEach(async () => {
+    await server?.stop();
     engine?.[Symbol.dispose]();
   });
 
@@ -783,8 +800,8 @@ describe('queue-aware worker stream', () => {
   let engine: Engine;
   let server: WeftServer;
 
-  afterEach(() => {
-    server?.stop();
+  afterEach(async () => {
+    await server?.stop();
     engine?.[Symbol.dispose]();
   });
 
@@ -1006,8 +1023,8 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
   let engine: Engine;
   let server: WeftServer;
 
-  afterEach(() => {
-    server?.stop();
+  afterEach(async () => {
+    await server?.stop();
     engine?.[Symbol.dispose]();
   });
 
@@ -1183,8 +1200,8 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
   let engine: Engine;
   let server: WeftServer;
 
-  afterEach(() => {
-    server?.stop();
+  afterEach(async () => {
+    await server?.stop();
     engine?.[Symbol.dispose]();
   });
 
@@ -1387,8 +1404,8 @@ describe('task assignment deduplication', () => {
   let engine: Engine;
   let server: WeftServer;
 
-  afterEach(() => {
-    server?.stop();
+  afterEach(async () => {
+    await server?.stop();
     engine?.[Symbol.dispose]();
   });
 
@@ -1625,8 +1642,8 @@ describe('visibility timeout persistence', () => {
   let server: WeftServer;
   let storage: MemoryStorage;
 
-  afterEach(() => {
-    server?.stop();
+  afterEach(async () => {
+    await server?.stop();
     engine?.[Symbol.dispose]();
   });
 
@@ -1837,8 +1854,8 @@ describe('worker disconnection triggers task reassignment', () => {
   let server: WeftServer;
   let storage: MemoryStorage;
 
-  afterEach(() => {
-    server?.stop();
+  afterEach(async () => {
+    await server?.stop();
     engine?.[Symbol.dispose]();
   });
 
@@ -2072,8 +2089,8 @@ describe('visibility timeout expiry triggers task reassignment', () => {
   let server: WeftServer;
   let storage: MemoryStorage;
 
-  afterEach(() => {
-    server?.stop();
+  afterEach(async () => {
+    await server?.stop();
     engine?.[Symbol.dispose]();
   });
 
@@ -2388,8 +2405,8 @@ describe('retry policy respected on reassignment', () => {
   let server: WeftServer;
   let storage: MemoryStorage;
 
-  afterEach(() => {
-    server?.stop();
+  afterEach(async () => {
+    await server?.stop();
     engine?.[Symbol.dispose]();
   });
 

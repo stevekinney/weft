@@ -290,15 +290,17 @@ if (isDirectExecution) {
 
     process.on('SIGINT', () => {
       console.log('\nShutting down...');
-      server.stop();
-      storage[Symbol.dispose]();
-      process.exit(0);
+      void server.stop().then(() => {
+        storage[Symbol.dispose]();
+        process.exit(0);
+      });
     });
 
     process.on('SIGTERM', () => {
-      server.stop();
-      storage[Symbol.dispose]();
-      process.exit(0);
+      void server.stop().then(() => {
+        storage[Symbol.dispose]();
+        process.exit(0);
+      });
     });
   } else if (parsed.command === 'doctor') {
     if (parsed.help) {

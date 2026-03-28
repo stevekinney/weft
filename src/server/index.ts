@@ -76,13 +76,13 @@ export interface TaskDispatch {
   retryPolicy?: RetryPolicy;
 }
 
-export interface WeftServer extends Disposable {
+export interface WeftServer extends AsyncDisposable {
   readonly port: number;
   readonly hostname: string;
   readonly url: string;
   readonly registry: WorkerRegistry;
   readonly taskQueue: TaskQueue;
-  stop(): void;
+  stop(): Promise<void>;
   /** Dispatch a task to the best available worker. Returns true if dispatched. */
   dispatchTask(task: TaskDispatch): boolean;
 }
@@ -686,16 +686,27 @@ export function serve(options: ServeOptions): WeftServer {
     },
   });
 
+  // AsyncDisposableStack manages all server resources and disposes them in
+  // reverse registration order on shutdown: interval → broadcasting → server.
+  const stack = new AsyncDisposableStack();
+
+  // Register the HTTP server first — it is disposed last.
+  // Force-close active connections to avoid hanging on drain.
+  stack.defer(() => server.stop(true));
+
   // Wire up engine events → WebSocket broadcasting.
-  // If wiring throws after the server is already listening, clean up both
-  // the server and listeners before propagating the error.
+  // If wiring throws after the server is already listening, dispose the
+  // stack (which stops the server) before propagating the error.
   let cleanupBroadcasting: () => void;
   try {
     cleanupBroadcasting = wireEventBroadcasting(options.engine, server);
   } catch (error) {
-    void server.stop();
+    void stack[Symbol.asyncDispose]();
     throw error;
   }
+
+  // Registered second — disposed second-to-last.
+  stack.defer(cleanupBroadcasting);
 
   // Restore persisted in-flight records from storage so visibility timeout
   // tracking survives server restarts. Records whose deadline has already
@@ -804,6 +815,11 @@ export function serve(options: ServeOptions): WeftServer {
     void scanExpiredTasks();
   }, visibilityPollMs);
 
+  // Registered last — disposed first (reverse order).
+  stack.defer(() => {
+    clearInterval(visibilityPollHandle);
+  });
+
   function dispatchTaskImpl(task: TaskDispatch): boolean {
     const queue = task.queue ?? 'default';
     const visibilityTimeout = task.visibilityTimeout ?? DEFAULT_VISIBILITY_TIMEOUT;
@@ -901,16 +917,12 @@ export function serve(options: ServeOptions): WeftServer {
     url: `${scheme}://${resolvedHostname}:${resolvedPort}`,
     registry,
     taskQueue,
-    stop() {
-      clearInterval(visibilityPollHandle);
-      cleanupBroadcasting();
-      void server.stop();
+    async stop() {
+      await stack[Symbol.asyncDispose]();
     },
     dispatchTask: dispatchTaskImpl,
-    [Symbol.dispose]() {
-      clearInterval(visibilityPollHandle);
-      cleanupBroadcasting();
-      void server.stop();
+    [Symbol.asyncDispose]() {
+      return stack[Symbol.asyncDispose]();
     },
   };
 }
