@@ -55,6 +55,7 @@ import { WorkflowTimeoutError } from './timeouts.ts';
 import type {
   AttributeFilter,
   Checkpoint,
+  CoordinatedUpdateResult,
   EngineOptions,
   ListFilter,
   OperationOutcome,
@@ -62,7 +63,9 @@ import type {
   SearchAttributeValue,
   StartOptions,
   StepWorkflowFunction,
+  SubmitReviewOptions,
   WorkerOutboundMessage,
+  WorkflowEvent,
   WorkflowFunction,
   WorkflowRegistration,
   WorkflowState,
@@ -1085,6 +1088,166 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
       );
       this.#resultResolvers.delete(workflowId);
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // State retrieval (public API for HTTP handlers and clients)
+  // -------------------------------------------------------------------------
+
+  /** Retrieve the current state of a workflow by ID. */
+  async get(workflowId: string): Promise<WorkflowState | null> {
+    return this.#loadWorkflowState(workflowId);
+  }
+
+  /** Retrieve search attributes for a workflow. */
+  async getAttributes(workflowId: string): Promise<Record<string, SearchAttributeValue> | null> {
+    const bytes = await this.#storage.get(KEYS.attribute(workflowId));
+    if (!bytes) return null;
+    return decode(bytes) as Record<string, SearchAttributeValue>;
+  }
+
+  /** Merge search attributes into a workflow's existing attributes, updating the index. */
+  async setAttributes(
+    workflowId: string,
+    attributes: Record<string, SearchAttributeValue>,
+  ): Promise<void> {
+    const existingBytes = await this.#storage.get(KEYS.attribute(workflowId));
+    const existing: Record<string, SearchAttributeValue> = existingBytes
+      ? (decode(existingBytes) as Record<string, SearchAttributeValue>)
+      : {};
+
+    const merged: Record<string, SearchAttributeValue> = { ...existing, ...attributes };
+
+    const indexOperations = buildIndexOperations(workflowId, existing, merged);
+
+    const operations: import('../storage/interface.ts').BatchOperation[] = [
+      { type: 'put', key: KEYS.attribute(workflowId), value: encode(merged) },
+      ...indexOperations,
+    ];
+
+    await this.#storage.batch(operations);
+  }
+
+  /** Retrieve the event history for a workflow. */
+  async getEvents(workflowId: string): Promise<WorkflowEvent[]> {
+    const events: WorkflowEvent[] = [];
+    const prefix = `ev:${workflowId}:`;
+
+    for await (const [, value] of this.#storage.scan(prefix)) {
+      const event = decode(value) as Record<string, unknown>;
+      events.push({
+        type: (event['type'] as string) ?? 'unknown',
+        timestamp: (event['timestamp'] as number) ?? 0,
+        data: (event['data'] as Record<string, unknown>) ?? {},
+      });
+    }
+
+    return events;
+  }
+
+  /** List all pending reviews. */
+  async listReviews(): Promise<Array<Record<string, unknown>>> {
+    const reviews: Array<Record<string, unknown>> = [];
+
+    for await (const [, value] of this.#storage.scan('review:')) {
+      reviews.push(decode(value) as Record<string, unknown>);
+    }
+
+    return reviews;
+  }
+
+  /** Submit a decision for a pending review. Stores the decision and removes the pending review. */
+  async submitReview(reviewId: string, options: SubmitReviewOptions): Promise<void> {
+    const { decision, reviewer, feedback, workflowId } = options;
+
+    // Look up the review by direct key when workflowId is provided (O(1)),
+    // otherwise fall back to scanning all review entries (O(n)).
+    let reviewKey: string | null = null;
+
+    if (workflowId !== undefined) {
+      const directKey = KEYS.review(workflowId, reviewId);
+      const existing = await this.#storage.get(directKey);
+      if (existing !== null) {
+        reviewKey = directKey;
+      }
+    } else {
+      for await (const [key, value] of this.#storage.scan('review:')) {
+        const review = decode(value) as Record<string, unknown>;
+        if (review['reviewId'] === reviewId) {
+          reviewKey = key;
+          break;
+        }
+      }
+    }
+
+    if (reviewKey === null) {
+      throw new Error(`Review "${reviewId}" not found`);
+    }
+
+    const decisionData = {
+      reviewId,
+      decision,
+      reviewer,
+      feedback,
+      timestamp: Date.now(),
+    };
+
+    await this.#storage.batch([
+      { type: 'put', key: `review-decision:${reviewId}`, value: encode(decisionData) },
+      { type: 'delete', key: reviewKey },
+    ]);
+  }
+
+  /** Retrieve the result of a coordinated update by its ID. */
+  async getUpdateResult(updateId: string): Promise<import('./updates.ts').UpdateResponse | null> {
+    return this.#updateCoordinator.getResponse(updateId);
+  }
+
+  /**
+   * Submit a coordinated update request. Handles idempotency checking,
+   * creates the request, and waits for a response within the timeout.
+   */
+  async submitCoordinatedUpdate(
+    workflowId: string,
+    name: string,
+    payload?: unknown,
+    options?: { timeout?: number; idempotencyKey?: string },
+  ): Promise<CoordinatedUpdateResult> {
+    const timeout = options?.timeout ?? 30_000;
+    const idempotencyKey = options?.idempotencyKey;
+
+    // Check idempotency
+    if (idempotencyKey !== undefined) {
+      const existing = await this.#updateCoordinator.checkIdempotency(workflowId, idempotencyKey);
+      if (existing !== null) {
+        return { updateId: existing.updateId, result: existing.result };
+      }
+    }
+
+    const requestOptions: { timeout: number; idempotencyKey?: string } = { timeout };
+    if (idempotencyKey !== undefined) {
+      requestOptions.idempotencyKey = idempotencyKey;
+    }
+
+    const updateId = await this.#updateCoordinator.createRequest(
+      workflowId,
+      name,
+      payload,
+      requestOptions,
+    );
+
+    const response = await this.#updateCoordinator.waitForResponse(updateId, timeout);
+
+    const result: CoordinatedUpdateResult = {
+      updateId: response.updateId,
+      result: response.result,
+    };
+
+    if (response.error !== undefined) {
+      result.error = response.error;
+    }
+
+    return result;
   }
 
   // -------------------------------------------------------------------------

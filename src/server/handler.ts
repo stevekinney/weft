@@ -2,23 +2,23 @@
  * Platform-agnostic HTTP request handler for the workflow REST API.
  * Maps Request to Response with no Bun-specific dependencies.
  *
+ * Every route delegates to an {@link Engine} method — the handler is a
+ * thin translation layer between HTTP and the Engine public API.
+ *
  * @module server/handler
  */
 
-import { decode, encode } from '../core/codec.ts';
+import { encode } from '../core/codec.ts';
 import type { Engine } from '../core/engine.ts';
-import { buildIndexOperations } from '../core/search-attributes.ts';
 import type {
   AttributeFilter,
   ListFilter,
+  ReviewDecision,
   SearchAttributeValue,
-  WorkflowState,
   WorkflowStatus,
 } from '../core/types.ts';
-import { UpdateCoordinator, UpdateTimeoutError } from '../core/updates.ts';
+import { UpdateTimeoutError } from '../core/updates.ts';
 import { METRICS } from '../observability/metrics.ts';
-import type { BatchOperation } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
 
 // ---------------------------------------------------------------------------
 // Route matching
@@ -180,7 +180,7 @@ function errorResponse(message: string, status: number): Response {
 }
 
 // ---------------------------------------------------------------------------
-// Route handlers
+// Route handlers — each delegates to an Engine method
 // ---------------------------------------------------------------------------
 
 async function handleStartWorkflow(request: Request, engine: Engine): Promise<Response> {
@@ -313,12 +313,11 @@ async function handleListWorkflows(request: Request, engine: Engine): Promise<Re
 }
 
 async function handleGetWorkflow(engine: Engine, workflowId: string): Promise<Response> {
-  const bytes = await engine.storage.get(KEYS.workflow(workflowId));
-  if (bytes === null) {
+  const state = await engine.get(workflowId);
+  if (state === null) {
     return errorResponse(`Workflow "${workflowId}" not found`, 404);
   }
 
-  const state = decode(bytes) as WorkflowState;
   return jsonResponse(state);
 }
 
@@ -364,13 +363,10 @@ async function handleSignalWorkflow(
 }
 
 async function handleGetWorkflowResult(engine: Engine, workflowId: string): Promise<Response> {
-  // First check if the workflow exists
-  const bytes = await engine.storage.get(KEYS.workflow(workflowId));
-  if (bytes === null) {
+  const state = await engine.get(workflowId);
+  if (state === null) {
     return errorResponse(`Workflow "${workflowId}" not found`, 404);
   }
-
-  const state = decode(bytes) as WorkflowState;
 
   if (state.status === 'completed') {
     return jsonResponse({ result: state.result });
@@ -412,7 +408,7 @@ async function handleGetWorkflowResult(engine: Engine, workflowId: string): Prom
 }
 
 // ---------------------------------------------------------------------------
-// Update routes
+// Update routes — engine.submitCoordinatedUpdate() / engine.getUpdateResult()
 // ---------------------------------------------------------------------------
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 30_000;
@@ -440,34 +436,24 @@ async function handleUpdateWorkflow(
     // No body or invalid JSON — payload stays undefined
   }
 
-  const coordinator = new UpdateCoordinator(engine.storage);
-
-  // Check idempotency
+  const updateOptions: { timeout?: number; idempotencyKey?: string } = { timeout };
   if (idempotencyKey !== undefined) {
-    const existing = await coordinator.checkIdempotency(workflowId, idempotencyKey);
-    if (existing !== null) {
-      return jsonResponse({ updateId: existing.updateId, result: existing.result });
-    }
-  }
-
-  const requestOptions: { timeout: number; idempotencyKey?: string } = { timeout };
-  if (idempotencyKey !== undefined) {
-    requestOptions.idempotencyKey = idempotencyKey;
+    updateOptions.idempotencyKey = idempotencyKey;
   }
 
   try {
-    const updateId = await coordinator.createRequest(
+    const result = await engine.submitCoordinatedUpdate(
       workflowId,
       updateName,
       payload,
-      requestOptions,
+      updateOptions,
     );
 
-    const response = await coordinator.waitForResponse(updateId, timeout);
-    if (response.error !== undefined) {
-      return errorResponse(response.error, 422);
+    if (result.error !== undefined) {
+      return errorResponse(result.error, 422);
     }
-    return jsonResponse({ updateId: response.updateId, result: response.result });
+
+    return jsonResponse({ updateId: result.updateId, result: result.result });
   } catch (error) {
     if (error instanceof UpdateTimeoutError) {
       return errorResponse(error.message, 408);
@@ -478,8 +464,7 @@ async function handleUpdateWorkflow(
 }
 
 async function handleGetUpdateResult(engine: Engine, updateId: string): Promise<Response> {
-  const coordinator = new UpdateCoordinator(engine.storage);
-  const response = await coordinator.getResponse(updateId);
+  const response = await engine.getUpdateResult(updateId);
 
   if (response === null) {
     return jsonResponse({ status: 'pending' }, 202);
@@ -493,16 +478,15 @@ async function handleGetUpdateResult(engine: Engine, updateId: string): Promise<
 }
 
 // ---------------------------------------------------------------------------
-// Attributes routes
+// Attributes routes — engine.getAttributes() / engine.setAttributes()
 // ---------------------------------------------------------------------------
 
 async function handleGetAttributes(engine: Engine, workflowId: string): Promise<Response> {
-  const bytes = await engine.storage.get(KEYS.attribute(workflowId));
-  if (bytes === null) {
+  const attributes = await engine.getAttributes(workflowId);
+  if (attributes === null) {
     return errorResponse(`Attributes for workflow "${workflowId}" not found`, 404);
   }
 
-  const attributes = decode(bytes);
   return jsonResponse(attributes);
 }
 
@@ -519,70 +503,35 @@ async function handleSetAttributes(
     return errorResponse('Invalid JSON body', 400);
   }
 
-  // Read existing attributes and merge
-  const existingBytes = await engine.storage.get(KEYS.attribute(workflowId));
-  const existing: Record<string, SearchAttributeValue> = existingBytes
-    ? (decode(existingBytes) as Record<string, SearchAttributeValue>)
-    : {};
-
-  const merged: Record<string, SearchAttributeValue> = {
-    ...existing,
-    ...(incoming as Record<string, SearchAttributeValue>),
-  };
-
-  // Build diff-based index operations
-  const indexOperations = buildIndexOperations(workflowId, existing, merged);
-
-  const operations: BatchOperation[] = [
-    { type: 'put', key: KEYS.attribute(workflowId), value: encode(merged) },
-    ...indexOperations,
-  ];
-
-  await engine.storage.batch(operations);
+  await engine.setAttributes(workflowId, incoming as Record<string, SearchAttributeValue>);
 
   return jsonResponse({ ok: true });
 }
 
 // ---------------------------------------------------------------------------
-// Events route
+// Events route — engine.getEvents()
 // ---------------------------------------------------------------------------
 
 async function handleGetWorkflowEvents(engine: Engine, workflowId: string): Promise<Response> {
-  // Check workflow exists
-  const bytes = await engine.storage.get(KEYS.workflow(workflowId));
-  if (bytes === null) {
+  const state = await engine.get(workflowId);
+  if (state === null) {
     return errorResponse(`Workflow "${workflowId}" not found`, 404);
   }
 
-  const events: Array<{ type: string; timestamp: number; data: Record<string, unknown> }> = [];
-  const prefix = `ev:${workflowId}:`;
-
-  for await (const [_key, value] of engine.storage.scan(prefix)) {
-    const event = decode(value) as Record<string, unknown>;
-    events.push({
-      type: (event['type'] as string) ?? 'unknown',
-      timestamp: (event['timestamp'] as number) ?? 0,
-      data: (event['data'] as Record<string, unknown>) ?? {},
-    });
-  }
-
+  const events = await engine.getEvents(workflowId);
   return jsonResponse({ events });
 }
 
 // ---------------------------------------------------------------------------
-// Reviews routes
+// Reviews routes — engine.listReviews() / engine.submitReview()
 // ---------------------------------------------------------------------------
 
 async function handleListReviews(engine: Engine): Promise<Response> {
-  const reviews: Array<Record<string, unknown>> = [];
-
-  for await (const [_key, value] of engine.storage.scan('review:')) {
-    const review = decode(value) as Record<string, unknown>;
-    reviews.push(review);
-  }
-
+  const reviews = await engine.listReviews();
   return jsonResponse({ items: reviews });
 }
+
+const VALID_DECISIONS = ['approved', 'rejected', 'needs-changes'] as const;
 
 async function handleSubmitReviewDecision(
   request: Request,
@@ -599,17 +548,15 @@ async function handleSubmitReviewDecision(
   const decision = body['decision'];
   const reviewer = body['reviewer'];
   const feedback = body['feedback'];
-
   const workflowId = body['workflowId'];
 
   if (typeof decision !== 'string' || typeof reviewer !== 'string') {
     return errorResponse('Missing required fields: decision, reviewer', 400);
   }
 
-  const validDecisions = ['approved', 'rejected', 'needs-changes'] as const;
-  if (!validDecisions.includes(decision as (typeof validDecisions)[number])) {
+  if (!VALID_DECISIONS.includes(decision as (typeof VALID_DECISIONS)[number])) {
     return errorResponse(
-      `Invalid decision "${decision}". Must be one of: ${validDecisions.join(', ')}`,
+      `Invalid decision "${decision}". Must be one of: ${VALID_DECISIONS.join(', ')}`,
       400,
     );
   }
@@ -618,46 +565,28 @@ async function handleSubmitReviewDecision(
     return errorResponse('Field "feedback" must be a string when provided', 400);
   }
 
-  // Look up the review by direct key when workflowId is provided (O(1)),
-  // otherwise fall back to scanning all review entries (O(n)).
-  let reviewKey: string | null = null;
-
-  if (typeof workflowId === 'string') {
-    const directKey = KEYS.review(workflowId, reviewId);
-    const existing = await engine.storage.get(directKey);
-    if (existing !== null) {
-      reviewKey = directKey;
+  try {
+    const reviewOptions: import('../core/types.ts').SubmitReviewOptions = {
+      decision: decision as ReviewDecision,
+      reviewer,
+    };
+    if (typeof feedback === 'string') {
+      reviewOptions.feedback = feedback;
     }
-  } else {
-    for await (const [key, value] of engine.storage.scan('review:')) {
-      const review = decode(value) as Record<string, unknown>;
-      if (review['reviewId'] === reviewId) {
-        reviewKey = key;
-        break;
-      }
+    if (typeof workflowId === 'string') {
+      reviewOptions.workflowId = workflowId;
     }
+
+    await engine.submitReview(reviewId, reviewOptions);
+
+    return jsonResponse({ ok: true });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('not found')) {
+      return errorResponse(message, 404);
+    }
+    return errorResponse(message, 500);
   }
-
-  if (reviewKey === null) {
-    return errorResponse(`Review "${reviewId}" not found`, 404);
-  }
-
-  // Store the decision and remove the pending review.
-  // The workflow is expected to poll the review-decision key to unblock itself.
-  const decisionData = {
-    reviewId,
-    decision,
-    reviewer,
-    feedback,
-    timestamp: Date.now(),
-  };
-
-  await engine.storage.batch([
-    { type: 'put', key: `review-decision:${reviewId}`, value: encode(decisionData) },
-    { type: 'delete', key: reviewKey },
-  ]);
-
-  return jsonResponse({ ok: true });
 }
 
 // ---------------------------------------------------------------------------

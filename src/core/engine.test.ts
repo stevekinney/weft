@@ -1765,4 +1765,324 @@ describe('Engine', () => {
     }
     engine[Symbol.dispose]();
   });
+
+  // ---------------------------------------------------------------------------
+  // engine.get() — retrieve workflow state
+  // ---------------------------------------------------------------------------
+
+  it('engine.get() returns workflow state for an existing workflow', async () => {
+    const engine = new Engine();
+    engine.register('echo', async function* (_ctx: WorkflowContext, input: unknown) {
+      return input;
+    });
+
+    const handle = await engine.start('echo', 42);
+    await handle.result();
+
+    const state = await engine.get(handle.id);
+    expect(state).not.toBeNull();
+    expect(state!.id).toBe(handle.id);
+    expect(state!.type).toBe('echo');
+    expect(state!.status).toBe('completed');
+    expect(state!.result).toBe(42);
+    engine[Symbol.dispose]();
+  });
+
+  it('engine.get() returns null for a non-existent workflow', async () => {
+    const engine = new Engine();
+    const state = await engine.get('nonexistent-id');
+    expect(state).toBeNull();
+    engine[Symbol.dispose]();
+  });
+
+  // ---------------------------------------------------------------------------
+  // engine.getAttributes() / engine.setAttributes()
+  // ---------------------------------------------------------------------------
+
+  it('engine.getAttributes() returns null when no attributes exist', async () => {
+    const engine = new Engine();
+    const attributes = await engine.getAttributes('nonexistent');
+    expect(attributes).toBeNull();
+    engine[Symbol.dispose]();
+  });
+
+  it('engine.setAttributes() writes attributes and engine.getAttributes() reads them', async () => {
+    const engine = new Engine();
+    await engine.setAttributes('wf-1', { color: 'blue', count: 42 });
+
+    const attributes = await engine.getAttributes('wf-1');
+    expect(attributes).not.toBeNull();
+    expect(attributes!['color']).toBe('blue');
+    expect(attributes!['count']).toBe(42);
+    engine[Symbol.dispose]();
+  });
+
+  it('engine.setAttributes() merges with existing attributes', async () => {
+    const engine = new Engine();
+    await engine.setAttributes('wf-2', { color: 'red', size: 'large' });
+    await engine.setAttributes('wf-2', { color: 'blue', weight: 10 });
+
+    const attributes = await engine.getAttributes('wf-2');
+    expect(attributes).not.toBeNull();
+    expect(attributes!['color']).toBe('blue');
+    expect(attributes!['size']).toBe('large');
+    expect(attributes!['weight']).toBe(10);
+    engine[Symbol.dispose]();
+  });
+
+  // ---------------------------------------------------------------------------
+  // engine.getEvents()
+  // ---------------------------------------------------------------------------
+
+  it('engine.getEvents() returns empty array when no events exist', async () => {
+    const engine = new Engine();
+    const events = await engine.getEvents('nonexistent');
+    expect(events).toEqual([]);
+    engine[Symbol.dispose]();
+  });
+
+  it('engine.getEvents() returns stored events in order', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const { encode: encodeValue } = await import('./codec.ts');
+
+    const workflowId = 'ev-test';
+    const eventData = [
+      { type: 'workflow:started', timestamp: 1000, data: { workflowId } },
+      { type: 'activity:started', timestamp: 1500, data: { workflowId } },
+      { type: 'workflow:completed', timestamp: 2000, data: { workflowId } },
+    ];
+
+    for (let i = 0; i < eventData.length; i++) {
+      await storage.put(KEYS.event(workflowId, i), encodeValue(eventData[i]!));
+    }
+
+    const events = await engine.getEvents(workflowId);
+    expect(events).toHaveLength(3);
+    expect(events[0]!.type).toBe('workflow:started');
+    expect(events[1]!.type).toBe('activity:started');
+    expect(events[2]!.type).toBe('workflow:completed');
+    expect(events[0]!.timestamp).toBe(1000);
+    expect(events[2]!.timestamp).toBe(2000);
+    engine[Symbol.dispose]();
+  });
+
+  // ---------------------------------------------------------------------------
+  // engine.listReviews()
+  // ---------------------------------------------------------------------------
+
+  it('engine.listReviews() returns empty array when no reviews exist', async () => {
+    const engine = new Engine();
+    const reviews = await engine.listReviews();
+    expect(reviews).toEqual([]);
+    engine[Symbol.dispose]();
+  });
+
+  it('engine.listReviews() returns stored reviews', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const { encode: encodeValue } = await import('./codec.ts');
+
+    const review = {
+      reviewId: 'rev-1',
+      workflowId: 'wf-1',
+      artifact: { text: 'review me' },
+      createdAt: Date.now(),
+    };
+    await storage.put(KEYS.review('wf-1', 'rev-1'), encodeValue(review));
+
+    const reviews = await engine.listReviews();
+    expect(reviews).toHaveLength(1);
+    expect(reviews[0]!['reviewId']).toBe('rev-1');
+    engine[Symbol.dispose]();
+  });
+
+  // ---------------------------------------------------------------------------
+  // engine.submitReview()
+  // ---------------------------------------------------------------------------
+
+  it('engine.submitReview() stores decision and removes pending review', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const { encode: encodeValue } = await import('./codec.ts');
+
+    const review = {
+      reviewId: 'rev-submit-1',
+      workflowId: 'wf-submit-1',
+      artifact: { text: 'approve me' },
+      createdAt: Date.now(),
+    };
+    await storage.put(KEYS.review('wf-submit-1', 'rev-submit-1'), encodeValue(review));
+
+    await engine.submitReview('rev-submit-1', {
+      decision: 'approved',
+      reviewer: 'alice',
+      workflowId: 'wf-submit-1',
+    });
+
+    // Review should be removed
+    const reviewAfter = await storage.get(KEYS.review('wf-submit-1', 'rev-submit-1'));
+    expect(reviewAfter).toBeNull();
+
+    // Decision should be stored
+    const decisionBytes = await storage.get('review-decision:rev-submit-1');
+    expect(decisionBytes).not.toBeNull();
+    const decisionData = decode(decisionBytes!) as { decision: string; reviewer: string };
+    expect(decisionData.decision).toBe('approved');
+    expect(decisionData.reviewer).toBe('alice');
+    engine[Symbol.dispose]();
+  });
+
+  it('engine.submitReview() finds review by scan when workflowId is not provided', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const { encode: encodeValue } = await import('./codec.ts');
+
+    const review = {
+      reviewId: 'rev-scan-1',
+      workflowId: 'wf-scan-1',
+      artifact: { text: 'reject me' },
+      createdAt: Date.now(),
+    };
+    await storage.put(KEYS.review('wf-scan-1', 'rev-scan-1'), encodeValue(review));
+
+    await engine.submitReview('rev-scan-1', {
+      decision: 'rejected',
+      reviewer: 'bob',
+    });
+
+    const reviewAfter = await storage.get(KEYS.review('wf-scan-1', 'rev-scan-1'));
+    expect(reviewAfter).toBeNull();
+    engine[Symbol.dispose]();
+  });
+
+  it('engine.submitReview() throws for non-existent review', async () => {
+    const engine = new Engine();
+    try {
+      await engine.submitReview('nonexistent', {
+        decision: 'approved',
+        reviewer: 'alice',
+      });
+      expect.unreachable('should have thrown');
+    } catch (error) {
+      expect((error as Error).message).toContain('not found');
+    }
+    engine[Symbol.dispose]();
+  });
+
+  // ---------------------------------------------------------------------------
+  // engine.getUpdateResult()
+  // ---------------------------------------------------------------------------
+
+  it('engine.getUpdateResult() returns null for non-existent update', async () => {
+    const engine = new Engine();
+    const result = await engine.getUpdateResult('nonexistent-update-id');
+    expect(result).toBeNull();
+    engine[Symbol.dispose]();
+  });
+
+  it('engine.getUpdateResult() returns stored update response', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+
+    // Use the UpdateCoordinator to create a request and response
+    const { UpdateCoordinator } = await import('./updates.ts');
+    const coordinator = new UpdateCoordinator(storage);
+    const updateId = await coordinator.createRequest('wf-poll', 'setName', { name: 'Alice' });
+    const operations = coordinator.buildResponseOperations(updateId, 'wf-poll', { accepted: true });
+    await storage.batch(operations);
+
+    const result = await engine.getUpdateResult(updateId);
+    expect(result).not.toBeNull();
+    expect(result!.updateId).toBe(updateId);
+    expect(result!.result).toEqual({ accepted: true });
+    engine[Symbol.dispose]();
+  });
+
+  // ---------------------------------------------------------------------------
+  // engine.submitCoordinatedUpdate()
+  // ---------------------------------------------------------------------------
+
+  it('engine.submitCoordinatedUpdate() creates and waits for response', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    engine.register('echo', async function* (_ctx: WorkflowContext, input: unknown) {
+      return input;
+    });
+
+    const { UpdateCoordinator } = await import('./updates.ts');
+    const coordinator = new UpdateCoordinator(storage);
+
+    // Background poller that resolves updates
+    const control = { active: true };
+    const poller = (async () => {
+      while (control.active) {
+        const pending = await coordinator.getPendingUpdates('upd-wf');
+        for (const updateRequest of pending) {
+          const operations = coordinator.buildResponseOperations(updateRequest.updateId, 'upd-wf', {
+            processed: true,
+          });
+          await storage.batch(operations);
+        }
+        await Bun.sleep(10);
+      }
+    })();
+
+    const result = await engine.submitCoordinatedUpdate(
+      'upd-wf',
+      'setName',
+      { name: 'test' },
+      {
+        timeout: 2000,
+      },
+    );
+
+    control.active = false;
+    await poller;
+
+    expect(result.updateId).toBeDefined();
+    expect(result.result).toEqual({ processed: true });
+    expect(result.error).toBeUndefined();
+    engine[Symbol.dispose]();
+  });
+
+  it('engine.submitCoordinatedUpdate() returns cached result for duplicate idempotency key', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+
+    const { UpdateCoordinator } = await import('./updates.ts');
+    const coordinator = new UpdateCoordinator(storage);
+
+    // Set up a completed update with an idempotency key
+    const updateId = await coordinator.createRequest(
+      'idem-wf',
+      'setName',
+      { name: 'Alice' },
+      {
+        idempotencyKey: 'unique-key',
+      },
+    );
+    const operations = coordinator.buildResponseOperations(
+      updateId,
+      'idem-wf',
+      { accepted: true },
+      undefined,
+      'unique-key',
+    );
+    await storage.batch(operations);
+
+    // Call with same idempotency key — should return cached result
+    const result = await engine.submitCoordinatedUpdate(
+      'idem-wf',
+      'setName',
+      { name: 'Alice' },
+      {
+        idempotencyKey: 'unique-key',
+      },
+    );
+
+    expect(result.updateId).toBe(updateId);
+    expect(result.result).toEqual({ accepted: true });
+    engine[Symbol.dispose]();
+  });
 });

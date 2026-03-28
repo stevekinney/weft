@@ -351,6 +351,40 @@ export interface WorkflowSummary {
 }
 
 // ---------------------------------------------------------------------------
+// Workflow event (returned by engine.getEvents)
+// ---------------------------------------------------------------------------
+
+export interface WorkflowEvent {
+  type: string;
+  timestamp: number;
+  data: Record<string, unknown>;
+}
+
+// ---------------------------------------------------------------------------
+// Review decision types (for engine.submitReview)
+// ---------------------------------------------------------------------------
+
+export type ReviewDecision = 'approved' | 'rejected' | 'needs-changes';
+
+export interface SubmitReviewOptions {
+  decision: ReviewDecision;
+  reviewer: string;
+  feedback?: string;
+  /** When provided, enables O(1) direct key lookup instead of scanning. */
+  workflowId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Coordinated update result (for engine.submitCoordinatedUpdate)
+// ---------------------------------------------------------------------------
+
+export interface CoordinatedUpdateResult {
+  updateId: string;
+  result?: unknown;
+  error?: string;
+}
+
+// ---------------------------------------------------------------------------
 // Default constants
 // ---------------------------------------------------------------------------
 
