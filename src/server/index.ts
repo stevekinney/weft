@@ -4,6 +4,8 @@
  * @module server
  */
 
+import type { ServerWebSocket } from 'bun';
+
 import { encode } from '../core/codec.ts';
 import type { Engine } from '../core/engine.ts';
 import {
@@ -23,6 +25,7 @@ import {
   WorkflowTimedOutEvent,
 } from '../core/events.ts';
 import { KEYS } from '../storage/interface.ts';
+import { WorkerRegistry } from '../worker/registry.ts';
 import { handleRequest } from './handler.ts';
 
 // ---------------------------------------------------------------------------
@@ -39,11 +42,21 @@ export interface ServeOptions {
   dashboard?: unknown;
 }
 
+export interface TaskDispatch {
+  operationId: string;
+  activityName: string;
+  input: unknown;
+  attempt?: number;
+}
+
 export interface WeftServer extends Disposable {
   readonly port: number;
   readonly hostname: string;
   readonly url: string;
+  readonly registry: WorkerRegistry;
   stop(): void;
+  /** Dispatch a task to the best available worker. Returns true if dispatched. */
+  dispatchTask(task: TaskDispatch): boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -52,6 +65,17 @@ export interface WeftServer extends Disposable {
 
 interface WebSocketData {
   pathname: string;
+  workerId?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Worker stream helpers
+// ---------------------------------------------------------------------------
+
+const WORKER_STREAM_RE = /^\/v1\/tasks\/([\w-]+)\/stream$/;
+
+function isWorkerConnection(pathname: string): boolean {
+  return WORKER_STREAM_RE.test(pathname);
 }
 
 // ---------------------------------------------------------------------------
@@ -235,6 +259,9 @@ export function serve(options: ServeOptions): WeftServer {
   // with HMR in dev mode and cached assets in production mode.
   const dashboard = options.dashboard ?? null;
 
+  const registry = new WorkerRegistry();
+  const workerSockets = new Map<string, ServerWebSocket<WebSocketData>>();
+
   const routes: Record<string, unknown> = {};
   if (dashboard !== null) {
     routes['/ui'] = dashboard;
@@ -266,11 +293,59 @@ export function serve(options: ServeOptions): WeftServer {
           ws.subscribe(pathname);
         }
       },
-      message(_ws, _message) {
-        // Client messages not currently used
+      message(ws, rawMessage) {
+        if (!isWorkerConnection(ws.data.pathname)) return;
+
+        const text =
+          typeof rawMessage === 'string' ? rawMessage : new TextDecoder().decode(rawMessage);
+
+        let parsed: { type: string; [key: string]: unknown };
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          return;
+        }
+
+        switch (parsed.type) {
+          case 'register': {
+            const rawWorkerId = parsed['workerId'];
+            const workerId = typeof rawWorkerId === 'string' ? rawWorkerId : '';
+            if (!workerId) return;
+
+            const activities = parsed['activities'];
+            const concurrency = parsed['concurrency'];
+
+            ws.data.workerId = workerId;
+            registry.register({
+              id: workerId,
+              activities: Array.isArray(activities) ? (activities as string[]) : [],
+              concurrency: typeof concurrency === 'number' ? concurrency : 10,
+            });
+            workerSockets.set(workerId, ws);
+            break;
+          }
+          case 'taskResult': {
+            const workerId = ws.data.workerId;
+            if (workerId) {
+              registry.taskCompleted(workerId);
+            }
+            break;
+          }
+          case 'heartbeat': {
+            const workerId = ws.data.workerId;
+            if (workerId) {
+              registry.heartbeat(workerId);
+            }
+            break;
+          }
+        }
       },
-      close(_ws) {
-        // Subscriptions cleaned up automatically by Bun
+      close(ws) {
+        const workerId = ws.data.workerId;
+        if (workerId) {
+          registry.unregister(workerId);
+          workerSockets.delete(workerId);
+        }
       },
     },
   });
@@ -286,6 +361,27 @@ export function serve(options: ServeOptions): WeftServer {
     throw error;
   }
 
+  function dispatchTaskImpl(task: TaskDispatch): boolean {
+    const worker = registry.findWorker(task.activityName);
+    if (!worker) return false;
+
+    const ws = workerSockets.get(worker.id);
+    if (!ws) return false;
+
+    ws.send(
+      JSON.stringify({
+        type: 'task',
+        operationId: task.operationId,
+        activityName: task.activityName,
+        input: task.input,
+        attempt: task.attempt ?? 1,
+      }),
+    );
+
+    registry.taskAssigned(worker.id);
+    return true;
+  }
+
   const resolvedPort = server.port ?? port;
   const resolvedHostname = server.hostname ?? hostname;
 
@@ -293,10 +389,12 @@ export function serve(options: ServeOptions): WeftServer {
     port: resolvedPort,
     hostname: resolvedHostname,
     url: `http://${resolvedHostname}:${resolvedPort}`,
+    registry,
     stop() {
       cleanupBroadcasting();
       void server.stop();
     },
+    dispatchTask: dispatchTaskImpl,
     [Symbol.dispose]() {
       cleanupBroadcasting();
       void server.stop();
