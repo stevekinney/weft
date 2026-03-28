@@ -65,6 +65,8 @@ export { KEYS } from './storage/interface';
 export type { BatchOperation, ScanOptions, Storage } from './storage/interface';
 export { LMDBStorage } from './storage/lmdb';
 export { MemoryStorage } from './storage/memory';
+export { TursoStorage } from './storage/turso';
+export type { TursoStorageOptions } from './storage/turso';
 
 // Codec
 export { decode, encode, validateCloneable } from './core/codec';
