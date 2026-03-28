@@ -201,6 +201,59 @@ export interface CommandOutput {
   stderr?: string;
 }
 
+type ShutdownSignal = 'SIGINT' | 'SIGTERM';
+
+interface ServeResources {
+  storage: Disposable;
+  engine: Disposable;
+  server: Disposable;
+}
+
+function registerResource(resourceStack: AsyncDisposableStack, resource: Disposable): void {
+  resourceStack.adopt(resource, async (value) => {
+    const asyncDispose = Reflect.get(value, Symbol.asyncDispose);
+    if (typeof asyncDispose === 'function') {
+      await asyncDispose.call(value);
+      return;
+    }
+
+    value[Symbol.dispose]();
+  });
+}
+
+export function waitForShutdownSignal(): Promise<ShutdownSignal> {
+  return new Promise((resolve) => {
+    const onSignal = (signal: ShutdownSignal): void => {
+      process.off('SIGINT', onSigint);
+      process.off('SIGTERM', onSigterm);
+      resolve(signal);
+    };
+
+    const onSigint = (): void => {
+      onSignal('SIGINT');
+    };
+
+    const onSigterm = (): void => {
+      onSignal('SIGTERM');
+    };
+
+    process.on('SIGINT', onSigint);
+    process.on('SIGTERM', onSigterm);
+  });
+}
+
+export async function shutdownServeResources(
+  resources: ServeResources,
+  waitForSignal: () => Promise<ShutdownSignal> = waitForShutdownSignal,
+): Promise<ShutdownSignal> {
+  await using resourceStack = new AsyncDisposableStack();
+  registerResource(resourceStack, resources.storage);
+  registerResource(resourceStack, resources.engine);
+  registerResource(resourceStack, resources.server);
+  const signal = await waitForSignal();
+  return signal;
+}
+
 export async function executeDoctor(options: {
   database: string;
   json: boolean;
@@ -288,18 +341,11 @@ if (isDirectExecution) {
     }
     console.log(`Database: ${parsed.database}`);
 
-    process.on('SIGINT', () => {
+    const signal = await shutdownServeResources({ storage, engine, server });
+    if (signal === 'SIGINT') {
       console.log('\nShutting down...');
-      server.stop();
-      storage[Symbol.dispose]();
-      process.exit(0);
-    });
-
-    process.on('SIGTERM', () => {
-      server.stop();
-      storage[Symbol.dispose]();
-      process.exit(0);
-    });
+    }
+    process.exit(0);
   } else if (parsed.command === 'doctor') {
     if (parsed.help) {
       console.log(DOCTOR_HELP_TEXT);

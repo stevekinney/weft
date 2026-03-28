@@ -8,6 +8,7 @@ import {
   executeDoctor,
   executeVersionCheck,
   parseCliArguments,
+  shutdownServeResources,
 } from './cli.ts';
 
 type ServeCommand = Extract<CliCommand, { command: 'serve' }>;
@@ -361,6 +362,42 @@ describe('executeVersionCheck', () => {
     });
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('--workflows');
+  });
+});
+
+describe('shutdownServeResources', () => {
+  it('disposes server resources in reverse registration order on shutdown', async () => {
+    const disposeOrder: string[] = [];
+
+    const storage: Disposable = {
+      [Symbol.dispose](): void {
+        disposeOrder.push('storage');
+      },
+    };
+
+    const engine: Disposable = {
+      [Symbol.dispose](): void {
+        disposeOrder.push('engine');
+      },
+    };
+
+    const server: Disposable = {
+      [Symbol.dispose](): void {
+        disposeOrder.push('server');
+      },
+    };
+
+    const signal = await shutdownServeResources(
+      {
+        storage,
+        engine,
+        server,
+      },
+      async () => 'SIGTERM',
+    );
+
+    expect(signal).toBe('SIGTERM');
+    expect(disposeOrder).toEqual(['server', 'engine', 'storage']);
   });
 });
 
