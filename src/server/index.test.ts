@@ -484,6 +484,119 @@ describe('worker WebSocket protocol', () => {
     await Bun.sleep(50);
   });
 
+  it('falls back to long-poll queue when WebSocket workers are at capacity', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    await registerWorker(ws, { workerId: 'w-cap', activities: ['compute'], concurrency: 1 });
+
+    // First dispatch should go to the WebSocket worker
+    const first = server.dispatchTask({
+      operationId: 'cap-1',
+      activityName: 'compute',
+      input: null,
+    });
+    expect(first).toBe(true);
+    expect(server.registry.getWorker('w-cap')?.inFlight).toBe(1);
+
+    // Second dispatch — worker is at capacity (1/1), should fall to long-poll queue
+    const second = server.dispatchTask({
+      operationId: 'cap-2',
+      activityName: 'compute',
+      input: null,
+    });
+    expect(second).toBe(true);
+    expect(server.taskQueue.pendingCount('default')).toBe(1);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('worker capacity recovers after task completion and accepts new tasks', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    const received: Array<{ type: string; operationId?: string }> = [];
+
+    ws.addEventListener('message', (event) => {
+      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      received.push(msg);
+      // Complete tasks immediately
+      if (msg.type === 'task') {
+        ws.send(
+          JSON.stringify({
+            type: 'taskResult',
+            operationId: msg.operationId,
+            status: 'completed',
+            value: null,
+          }),
+        );
+      }
+    });
+
+    await registerWorker(ws, { workerId: 'w-recover', activities: ['compute'], concurrency: 1 });
+
+    // Dispatch first task
+    server.dispatchTask({ operationId: 'r-1', activityName: 'compute', input: null });
+    expect(server.registry.getWorker('w-recover')?.inFlight).toBe(1);
+
+    // Wait for task result to arrive and decrement inFlight
+    await Bun.sleep(100);
+    expect(server.registry.getWorker('w-recover')?.inFlight).toBe(0);
+
+    // Dispatch second task — worker should accept it since capacity recovered
+    server.dispatchTask({ operationId: 'r-2', activityName: 'compute', input: null });
+    expect(server.registry.getWorker('w-recover')?.inFlight).toBe(1);
+
+    await Bun.sleep(100);
+    expect(server.registry.getWorker('w-recover')?.inFlight).toBe(0);
+
+    // Both tasks were dispatched directly to the WebSocket worker (not queued)
+    const taskMessages = received.filter((m) => m.type === 'task');
+    expect(taskMessages.length).toBe(2);
+    expect(server.taskQueue.pendingCount('default')).toBe(0);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('tracks available capacity as concurrency minus inFlight through dispatch cycle', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    await registerWorker(ws, { workerId: 'w-track', activities: ['compute'], concurrency: 3 });
+
+    const worker = () => server.registry.getWorker('w-track')!;
+
+    // Initial: full capacity
+    expect(worker().concurrency - worker().inFlight).toBe(3);
+
+    // Dispatch 2 tasks
+    server.dispatchTask({ operationId: 't-1', activityName: 'compute', input: null });
+    server.dispatchTask({ operationId: 't-2', activityName: 'compute', input: null });
+    expect(worker().concurrency - worker().inFlight).toBe(1);
+
+    // Complete one task
+    ws.send(
+      JSON.stringify({ type: 'taskResult', operationId: 't-1', status: 'completed', value: null }),
+    );
+    await Bun.sleep(50);
+    expect(worker().concurrency - worker().inFlight).toBe(2);
+
+    // Complete the other
+    ws.send(
+      JSON.stringify({ type: 'taskResult', operationId: 't-2', status: 'completed', value: null }),
+    );
+    await Bun.sleep(50);
+    expect(worker().concurrency - worker().inFlight).toBe(3);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
   it('integrates with RemoteWorker end-to-end', async () => {
     engine = createEngine();
     server = serve({ engine, port: 0 });

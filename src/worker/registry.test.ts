@@ -282,6 +282,136 @@ describe('WorkerRegistry', () => {
   });
 
   // -------------------------------------------------------------------------
+  // getWorker
+  // -------------------------------------------------------------------------
+
+  it('getWorker returns info for a registered worker', () => {
+    const registry = new WorkerRegistry();
+
+    registry.register({
+      id: 'worker-1',
+      queue: 'default',
+      activities: ['processOrder'],
+      concurrency: 5,
+    });
+
+    const worker = registry.getWorker('worker-1');
+    expect(worker).toBeDefined();
+    expect(worker!.id).toBe('worker-1');
+    expect(worker!.concurrency).toBe(5);
+    expect(worker!.inFlight).toBe(0);
+  });
+
+  it('getWorker returns undefined for unknown worker', () => {
+    const registry = new WorkerRegistry();
+    expect(registry.getWorker('nonexistent')).toBeUndefined();
+  });
+
+  // -------------------------------------------------------------------------
+  // Capacity tracking: concurrency - inFlight
+  // -------------------------------------------------------------------------
+
+  it('available capacity is concurrency minus inFlight', () => {
+    const registry = new WorkerRegistry();
+
+    registry.register({
+      id: 'worker-1',
+      queue: 'default',
+      activities: ['processOrder'],
+      concurrency: 3,
+    });
+
+    const before = registry.getWorker('worker-1')!;
+    expect(before.concurrency - before.inFlight).toBe(3);
+
+    registry.taskAssigned('worker-1');
+    registry.taskAssigned('worker-1');
+
+    const after = registry.getWorker('worker-1')!;
+    expect(after.concurrency - after.inFlight).toBe(1);
+  });
+
+  it('worker becomes eligible again after completing tasks', () => {
+    const registry = new WorkerRegistry();
+
+    registry.register({
+      id: 'worker-1',
+      queue: 'default',
+      activities: ['processOrder'],
+      concurrency: 1,
+    });
+
+    // Fill to capacity — should not be findable
+    registry.taskAssigned('worker-1');
+    expect(registry.findWorker('processOrder')).toBeUndefined();
+
+    // Complete the task — should be findable again
+    registry.taskCompleted('worker-1');
+    const found = registry.findWorker('processOrder');
+    expect(found).toBeDefined();
+    expect(found!.id).toBe('worker-1');
+  });
+
+  it('tasks are routed away from full workers to available ones', () => {
+    const registry = new WorkerRegistry();
+
+    registry.register({
+      id: 'worker-1',
+      queue: 'default',
+      activities: ['compute'],
+      concurrency: 2,
+    });
+
+    registry.register({
+      id: 'worker-2',
+      queue: 'default',
+      activities: ['compute'],
+      concurrency: 2,
+    });
+
+    // Fill worker-1 to capacity
+    registry.taskAssigned('worker-1');
+    registry.taskAssigned('worker-1');
+
+    // Should route to worker-2 (worker-1 is full)
+    const found = registry.findWorker('compute');
+    expect(found).toBeDefined();
+    expect(found!.id).toBe('worker-2');
+  });
+
+  it('distributes tasks evenly across workers by least-loaded', () => {
+    const registry = new WorkerRegistry();
+
+    registry.register({
+      id: 'worker-1',
+      queue: 'default',
+      activities: ['compute'],
+      concurrency: 5,
+    });
+
+    registry.register({
+      id: 'worker-2',
+      queue: 'default',
+      activities: ['compute'],
+      concurrency: 5,
+    });
+
+    // Assign 3 to worker-1
+    registry.taskAssigned('worker-1');
+    registry.taskAssigned('worker-1');
+    registry.taskAssigned('worker-1');
+
+    // Assign 1 to worker-2
+    registry.taskAssigned('worker-2');
+
+    // worker-2 has lower inFlight (1 vs 3), so it should be chosen
+    const found = registry.findWorker('compute');
+    expect(found).toBeDefined();
+    expect(found!.id).toBe('worker-2');
+    expect(found!.concurrency - found!.inFlight).toBe(4);
+  });
+
+  // -------------------------------------------------------------------------
   // Queue-based filtering
   // -------------------------------------------------------------------------
 

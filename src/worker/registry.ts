@@ -140,6 +140,11 @@ export class WorkerRegistry {
     }
   }
 
+  /** Look up a worker by ID. */
+  getWorker(workerId: string): WorkerInfo | undefined {
+    return this.#workers.get(workerId);
+  }
+
   /** Get all registered workers. */
   getAll(): WorkerInfo[] {
     return [...this.#workers.values()];
