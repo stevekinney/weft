@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { Engine } from '../core/engine.ts';
+import { WorkflowCompletedEvent, WorkflowFailedEvent } from '../core/events.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import type { WeftClient } from './interface.ts';
@@ -180,6 +181,111 @@ describe('LocalClient', () => {
     it('returns null for an unknown update', async () => {
       const result = await client.getUpdateResult('nonexistent');
       expect(result).toBeNull();
+    });
+  });
+
+  describe('event observation', () => {
+    it('handle.addEventListener receives workflow:completed events', async () => {
+      const handle = await client.start('echo', 'hello');
+      const received: WorkflowCompletedEvent[] = [];
+
+      handle.addEventListener(WorkflowCompletedEvent.type, ((event: WorkflowCompletedEvent) => {
+        received.push(event);
+      }) as EventListener);
+
+      await handle.result();
+
+      expect(received).toHaveLength(1);
+      expect(received[0]!.workflowId).toBe(handle.id);
+      expect(received[0]!.result).toBe('hello');
+      expect(received[0]!.type).toBe('workflow:completed');
+    });
+
+    it('handle.addEventListener receives workflow:failed events', async () => {
+      const handle = await client.start('failing', null);
+      const received: WorkflowFailedEvent[] = [];
+
+      handle.addEventListener(WorkflowFailedEvent.type, ((event: WorkflowFailedEvent) => {
+        received.push(event);
+      }) as EventListener);
+
+      await handle.result().catch(() => {});
+
+      expect(received).toHaveLength(1);
+      expect(received[0]!.workflowId).toBe(handle.id);
+      expect(received[0]!.error).toBeInstanceOf(Error);
+      expect(received[0]!.error.message).toBe('intentional failure');
+    });
+
+    it('handle.removeEventListener stops receiving events', async () => {
+      const handle = await client.start('echo', 42);
+      let callCount = 0;
+
+      const listener = (() => {
+        callCount++;
+      }) as EventListener;
+
+      handle.addEventListener(WorkflowCompletedEvent.type, listener);
+      handle.removeEventListener(WorkflowCompletedEvent.type, listener);
+
+      await handle.result();
+
+      expect(callCount).toBe(0);
+    });
+
+    it('supports AbortSignal for automatic listener cleanup', async () => {
+      const handle = await client.start('echo', 'signal-test');
+      const controller = new AbortController();
+      let callCount = 0;
+
+      handle.addEventListener(
+        WorkflowCompletedEvent.type,
+        (() => {
+          callCount++;
+        }) as EventListener,
+        { signal: controller.signal },
+      );
+
+      controller.abort();
+      await handle.result();
+
+      expect(callCount).toBe(0);
+    });
+
+    it('delivers typed event properties through the handle', async () => {
+      const handle = await client.start('echo', { nested: true });
+
+      const { promise, resolve } = Promise.withResolvers<WorkflowCompletedEvent>();
+      handle.addEventListener(WorkflowCompletedEvent.type, ((event: WorkflowCompletedEvent) => {
+        resolve(event);
+      }) as EventListener);
+
+      await handle.result();
+      const event = await promise;
+
+      expect(event).toBeInstanceOf(WorkflowCompletedEvent);
+      expect(event.workflowId).toBe(handle.id);
+      expect(event.result).toEqual({ nested: true });
+      expect(event.duration).toBeGreaterThanOrEqual(0);
+    });
+
+    it('multiple listeners on the same handle each receive the event', async () => {
+      const handle = await client.start('echo', 'multi');
+      const results: string[] = [];
+
+      handle.addEventListener(WorkflowCompletedEvent.type, (() => {
+        results.push('listener-a');
+      }) as EventListener);
+
+      handle.addEventListener(WorkflowCompletedEvent.type, (() => {
+        results.push('listener-b');
+      }) as EventListener);
+
+      await handle.result();
+
+      expect(results).toContain('listener-a');
+      expect(results).toContain('listener-b');
+      expect(results).toHaveLength(2);
     });
   });
 });

@@ -246,7 +246,7 @@ export class DevelopmentWarningEvent extends Event {
   }
 }
 
-export interface WeftEventMap extends WeftAgentEventMap {
+export type WeftEventMap = WeftAgentEventMap & {
   'workflow:started': WorkflowStartedEvent;
   'workflow:completed': WorkflowCompletedEvent;
   'workflow:failed': WorkflowFailedEvent;
@@ -264,7 +264,7 @@ export interface WeftEventMap extends WeftAgentEventMap {
   'update:completed': UpdateCompletedEvent;
   'checkpoint:size-warning': CheckpointSizeWarningEvent;
   'development:warning': DevelopmentWarningEvent;
-}
+};
 
 export interface TypedEventTarget<TEventMap extends Record<string, Event>> {
   addEventListener<K extends keyof TEventMap & string>(

@@ -300,7 +300,7 @@ export class HumanReviewCompletedEvent extends Event {
   }
 }
 
-export interface WeftAgentEventMap {
+export type WeftAgentEventMap = {
   'agent:turn:started': AgentTurnStartedEvent;
   'agent:turn:completed': AgentTurnCompletedEvent;
   'agent:tool:called': AgentToolCalledEvent;
@@ -312,4 +312,4 @@ export interface WeftAgentEventMap {
   'agent:provider:circuit-open': AgentProviderCircuitOpenEvent;
   'human-review:requested': HumanReviewRequestedEvent;
   'human-review:completed': HumanReviewCompletedEvent;
-}
+};

@@ -108,6 +108,7 @@ async function request<T>(
 class HttpHandle implements ClientHandle {
   readonly id: string;
   readonly #client: HttpClient;
+  readonly #events = new EventTarget();
 
   constructor(id: string, client: HttpClient) {
     this.id = id;
@@ -137,6 +138,22 @@ class HttpHandle implements ClientHandle {
 
   async query(name: string): Promise<unknown> {
     return this.#client.query(this.id, name);
+  }
+
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    this.#events.addEventListener(type, listener, options);
+  }
+
+  removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | EventListenerOptions,
+  ): void {
+    this.#events.removeEventListener(type, listener, options);
   }
 }
 

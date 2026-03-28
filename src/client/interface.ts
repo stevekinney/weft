@@ -7,6 +7,7 @@
  */
 
 import type { BudgetPolicyOptions } from '../ai/budget-policy.ts';
+import type { TypedEventTarget, WeftEventMap } from '../core/events.ts';
 import type {
   CoordinatedUpdateResult,
   ListFilter,
@@ -23,8 +24,15 @@ import type {
 // Client handle — lightweight reference to a running workflow
 // ---------------------------------------------------------------------------
 
-/** A reference to a workflow that provides convenience methods. */
-export interface ClientHandle {
+/**
+ * A reference to a workflow that provides convenience methods.
+ *
+ * Extends {@link TypedEventTarget} so callers can observe workflow lifecycle
+ * events with the same `addEventListener` / `removeEventListener` API in both
+ * library mode (events flow through `EventTarget` directly) and server mode
+ * (events are bridged over WebSocket).
+ */
+export interface ClientHandle extends TypedEventTarget<WeftEventMap> {
   /** The workflow's unique identifier. */
   readonly id: string;
 

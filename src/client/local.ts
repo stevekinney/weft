@@ -57,6 +57,22 @@ class LocalHandle implements ClientHandle {
   async query(name: string): Promise<unknown> {
     return this.#client.query(this.id, name);
   }
+
+  addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    this.#handle.addEventListener(type, listener, options);
+  }
+
+  removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject,
+    options?: boolean | EventListenerOptions,
+  ): void {
+    this.#handle.removeEventListener(type, listener, options);
+  }
 }
 
 // ---------------------------------------------------------------------------
