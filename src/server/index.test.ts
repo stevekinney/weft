@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../core/engine.ts';
+import { TokenEvent } from '../core/events.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import type { WeftServer } from './index.ts';
@@ -524,5 +525,182 @@ describe('worker WebSocket protocol', () => {
 
     // Worker should be unregistered after disconnect
     expect(server.registry.size).toBe(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Token streaming WebSocket
+// ---------------------------------------------------------------------------
+
+describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
+  let engine: Engine;
+  let server: WeftServer;
+
+  afterEach(() => {
+    server?.stop();
+    engine?.[Symbol.dispose]();
+  });
+
+  /** Open a WebSocket to the token stream endpoint and wait for the connection. */
+  async function connectStream(wsServer: WeftServer, workflowId: string): Promise<WebSocket> {
+    const wsUrl = wsServer.url.replace('http://', 'ws://');
+    const ws = new WebSocket(`${wsUrl}/v1/workflows/${workflowId}/stream`);
+
+    await new Promise<void>((resolve, reject) => {
+      ws.addEventListener('open', () => resolve());
+      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
+    });
+
+    return ws;
+  }
+
+  /** Collect messages received on a WebSocket. */
+  function collectMessages(ws: WebSocket): Array<{ type: string; [key: string]: unknown }> {
+    const messages: Array<{ type: string; [key: string]: unknown }> = [];
+    ws.addEventListener('message', (event) => {
+      messages.push(JSON.parse(String(event.data)));
+    });
+    return messages;
+  }
+
+  it('accepts a WebSocket connection on /v1/workflows/:id/stream', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectStream(server, 'test-wf');
+    expect(ws.readyState).toBe(WebSocket.OPEN);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('receives live token events through the stream connection', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    // Start a workflow so events have a target
+    const startResponse = await fetch(`${server.url}/v1/workflows`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'echo', input: 'hello' }),
+    });
+    const { id } = (await startResponse.json()) as { id: string };
+    await flush();
+
+    const ws = await connectStream(server, id);
+    const messages = collectMessages(ws);
+    await Bun.sleep(50);
+
+    // Dispatch token events directly on the engine
+    engine.dispatchEvent(new TokenEvent(id, 'Hello', 'gpt-4'));
+    engine.dispatchEvent(new TokenEvent(id, ' world', 'gpt-4'));
+    await Bun.sleep(200);
+
+    // Should have received the two token events
+    const tokenMessages = messages.filter((m) => m.type === TokenEvent.type);
+    expect(tokenMessages.length).toBe(2);
+    expect(tokenMessages[0]?.['data']).toMatchObject({ token: 'Hello', model: 'gpt-4' });
+    expect(tokenMessages[1]?.['data']).toMatchObject({ token: ' world', model: 'gpt-4' });
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('only receives token events for the subscribed workflow', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectStream(server, 'wf-a');
+    const messages = collectMessages(ws);
+    await Bun.sleep(50);
+
+    // Dispatch token events for two different workflows
+    engine.dispatchEvent(new TokenEvent('wf-a', 'for-a', 'gpt-4'));
+    engine.dispatchEvent(new TokenEvent('wf-b', 'for-b', 'gpt-4'));
+    await Bun.sleep(200);
+
+    // Should only see the event for wf-a
+    const tokenMessages = messages.filter((m) => m.type === TokenEvent.type);
+    expect(tokenMessages.length).toBe(1);
+    expect(tokenMessages[0]?.['data']).toMatchObject({ token: 'for-a' });
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('replays existing token events on connect', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    // Dispatch token events before a client connects
+    engine.dispatchEvent(new TokenEvent('wf-replay', 'first', 'gpt-4'));
+    engine.dispatchEvent(new TokenEvent('wf-replay', 'second', 'gpt-4'));
+    await Bun.sleep(200);
+
+    // Now connect — client should receive replay of existing token events
+    const ws = await connectStream(server, 'wf-replay');
+    const messages = collectMessages(ws);
+    await Bun.sleep(200);
+
+    const replayMessages = messages.filter((m) => m.type === 'replay');
+    expect(replayMessages.length).toBeGreaterThanOrEqual(1);
+
+    // Replayed content should include the tokens
+    const replayedTokens = replayMessages.map(
+      (m) => (m['data'] as Record<string, unknown>)?.['token'],
+    );
+    expect(replayedTokens).toContain('first');
+    expect(replayedTokens).toContain('second');
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('does not process worker protocol messages on stream connections', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectStream(server, 'test-wf');
+
+    // Send a worker register message — should be ignored
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        workerId: 'rogue',
+        activities: ['charge'],
+        concurrency: 5,
+      }),
+    );
+    await Bun.sleep(50);
+
+    // Registry should be empty — register messages are only for worker paths
+    expect(server.registry.size).toBe(0);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('supports multiple concurrent stream clients for the same workflow', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws1 = await connectStream(server, 'wf-multi');
+    const ws2 = await connectStream(server, 'wf-multi');
+    const messages1 = collectMessages(ws1);
+    const messages2 = collectMessages(ws2);
+    await Bun.sleep(50);
+
+    engine.dispatchEvent(new TokenEvent('wf-multi', 'shared-token', 'gpt-4'));
+    await Bun.sleep(200);
+
+    // Both clients should receive the token event
+    const tokens1 = messages1.filter((m) => m.type === TokenEvent.type);
+    const tokens2 = messages2.filter((m) => m.type === TokenEvent.type);
+    expect(tokens1.length).toBe(1);
+    expect(tokens2.length).toBe(1);
+
+    ws1.close();
+    ws2.close();
+    await Bun.sleep(50);
   });
 });

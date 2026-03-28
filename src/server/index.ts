@@ -6,7 +6,7 @@
 
 import type { ServerWebSocket } from 'bun';
 
-import { encode } from '../core/codec.ts';
+import { decode, encode } from '../core/codec.ts';
 import type { Engine } from '../core/engine.ts';
 import {
   ActivityCompletedEvent,
@@ -63,8 +63,13 @@ export interface WeftServer extends Disposable {
 // Internal types
 // ---------------------------------------------------------------------------
 
+type ConnectionType = 'worker' | 'stream' | 'watch' | 'generic';
+
 interface WebSocketData {
   pathname: string;
+  connectionType: ConnectionType;
+  /** Workflow ID extracted from the URL for stream/watch connections. */
+  workflowId?: string;
   workerId?: string;
 }
 
@@ -73,9 +78,32 @@ interface WebSocketData {
 // ---------------------------------------------------------------------------
 
 const WORKER_STREAM_RE = /^\/v1\/tasks\/([\w-]+)\/stream$/;
+const WORKFLOW_STREAM_RE = /^\/v1\/workflows\/([\w-]+)\/stream$/;
+const WORKFLOW_WATCH_RE = /^\/v1\/workflows\/([\w-]+)\/watch$/;
 
 function isWorkerConnection(pathname: string): boolean {
   return WORKER_STREAM_RE.test(pathname);
+}
+
+/** Classify a WebSocket pathname and extract relevant parameters. */
+function classifyConnection(
+  pathname: string,
+): Pick<WebSocketData, 'connectionType' | 'workflowId'> {
+  const streamMatch = WORKFLOW_STREAM_RE.exec(pathname);
+  if (streamMatch?.[1]) {
+    return { connectionType: 'stream', workflowId: decodeURIComponent(streamMatch[1]) };
+  }
+
+  const watchMatch = WORKFLOW_WATCH_RE.exec(pathname);
+  if (watchMatch?.[1]) {
+    return { connectionType: 'watch', workflowId: decodeURIComponent(watchMatch[1]) };
+  }
+
+  if (WORKER_STREAM_RE.test(pathname)) {
+    return { connectionType: 'worker' };
+  }
+
+  return { connectionType: 'generic' };
 }
 
 // ---------------------------------------------------------------------------
@@ -262,6 +290,34 @@ export function serve(options: ServeOptions): WeftServer {
   const registry = new WorkerRegistry();
   const workerSockets = new Map<string, ServerWebSocket<WebSocketData>>();
 
+  /**
+   * Send existing token events from storage as replay messages to a newly
+   * connected stream client, so it can catch up on tokens emitted before
+   * the connection was established.
+   */
+  async function replayTokenEvents(
+    ws: ServerWebSocket<WebSocketData>,
+    workflowId: string,
+  ): Promise<void> {
+    const prefix = `ev:${workflowId}:`;
+    try {
+      for await (const [, value] of options.engine.storage.scan(prefix)) {
+        const event = decode(value) as { type: string; data: Record<string, unknown> };
+        if (event.type !== TokenEvent.type) continue;
+
+        ws.send(
+          JSON.stringify({
+            type: 'replay',
+            timestamp: Date.now(),
+            data: event.data,
+          }),
+        );
+      }
+    } catch (error) {
+      console.error(`[weft] Failed to replay token events for workflow "${workflowId}":`, error);
+    }
+  }
+
   const routes: Record<string, unknown> = {};
   if (dashboard !== null) {
     routes['/ui'] = dashboard;
@@ -278,7 +334,10 @@ export function serve(options: ServeOptions): WeftServer {
 
       // WebSocket upgrade
       if (request.headers.get('upgrade') === 'websocket') {
-        const upgraded = server.upgrade(request, { data: { pathname: url.pathname } });
+        const classification = classifyConnection(url.pathname);
+        const upgraded = server.upgrade(request, {
+          data: { pathname: url.pathname, ...classification },
+        });
         if (upgraded) return undefined;
         return new Response('WebSocket upgrade failed', { status: 400 });
       }
@@ -288,9 +347,14 @@ export function serve(options: ServeOptions): WeftServer {
     },
     websocket: {
       open(ws) {
-        const { pathname } = ws.data;
+        const { pathname, connectionType, workflowId } = ws.data;
         if (pathname) {
           ws.subscribe(pathname);
+        }
+
+        // For stream connections, replay existing token events from storage
+        if (connectionType === 'stream' && workflowId) {
+          void replayTokenEvents(ws, workflowId);
         }
       },
       message(ws, rawMessage) {
