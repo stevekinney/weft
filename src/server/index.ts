@@ -46,6 +46,8 @@ export interface ServeOptions {
   dashboard?: unknown;
   /** Authentication configuration. When provided, all non-public endpoints require valid credentials. */
   auth?: AuthConfig;
+  /** How often (in ms) the server scans `op:inflight:*` for expired visibility deadlines. Defaults to 5 000. */
+  visibilityPollIntervalMs?: number;
 }
 
 export interface TaskDispatch {
@@ -635,6 +637,53 @@ export function serve(options: ServeOptions): WeftServer {
     }
   })();
 
+  // ---------------------------------------------------------------------------
+  // Visibility timeout expiry scanner
+  // ---------------------------------------------------------------------------
+
+  const visibilityPollMs = options.visibilityPollIntervalMs ?? 5_000;
+
+  /** Scan `op:inflight:*` in storage for expired deadlines and reassign tasks. */
+  async function scanExpiredTasks(): Promise<void> {
+    try {
+      const now = Date.now();
+
+      for await (const [key, value] of options.engine.storage.scan('op:inflight:')) {
+        const record = decode(value) as {
+          operationId: string;
+          workerId: string;
+          deadline: number;
+          activityName: string;
+          queue: string;
+          input: unknown;
+          attempt: number;
+          visibilityTimeout: number;
+        };
+
+        if (record.deadline > now) continue;
+
+        // Expired — remove from registry and storage, then re-dispatch.
+        registry.completeTask(record.operationId);
+        await options.engine.storage.delete(key);
+
+        dispatchTaskImpl({
+          operationId: record.operationId,
+          activityName: record.activityName,
+          input: record.input,
+          queue: record.queue,
+          attempt: (record.attempt ?? 1) + 1,
+          visibilityTimeout: record.visibilityTimeout,
+        });
+      }
+    } catch (error) {
+      console.error('[weft] Visibility timeout scanner error:', error);
+    }
+  }
+
+  const visibilityPollHandle = setInterval(() => {
+    void scanExpiredTasks();
+  }, visibilityPollMs);
+
   function dispatchTaskImpl(task: TaskDispatch): boolean {
     const queue = task.queue ?? 'default';
     const visibilityTimeout = task.visibilityTimeout ?? DEFAULT_VISIBILITY_TIMEOUT;
@@ -712,11 +761,13 @@ export function serve(options: ServeOptions): WeftServer {
     registry,
     taskQueue,
     stop() {
+      clearInterval(visibilityPollHandle);
       cleanupBroadcasting();
       void server.stop();
     },
     dispatchTask: dispatchTaskImpl,
     [Symbol.dispose]() {
+      clearInterval(visibilityPollHandle);
       cleanupBroadcasting();
       void server.stop();
     },

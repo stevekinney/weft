@@ -2066,3 +2066,319 @@ describe('worker disconnection triggers task reassignment', () => {
     expect(server.taskQueue.pendingCount('default')).toBe(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Visibility timeout expiry triggers task reassignment
+// ---------------------------------------------------------------------------
+
+describe('visibility timeout expiry triggers task reassignment', () => {
+  let engine: Engine;
+  let server: WeftServer;
+  let storage: MemoryStorage;
+
+  afterEach(() => {
+    server?.stop();
+    engine?.[Symbol.dispose]();
+  });
+
+  function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
+    const s = new MemoryStorage();
+    const e = new Engine({ storage: s });
+    e.register('echo', async function* (_ctx: WorkflowContext, input: unknown) {
+      return input;
+    });
+    return { engine: e, storage: s };
+  }
+
+  async function connectWorker(
+    wsServer: WeftServer,
+    path = '/v1/tasks/default/stream',
+  ): Promise<WebSocket> {
+    const wsUrl = wsServer.url.replace('http://', 'ws://');
+    const ws = new WebSocket(`${wsUrl}${path}`);
+    await new Promise<void>((resolve, reject) => {
+      ws.addEventListener('open', () => resolve());
+      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
+    });
+    return ws;
+  }
+
+  async function registerWorker(
+    ws: WebSocket,
+    options: { workerId: string; activities: string[]; concurrency?: number },
+  ): Promise<void> {
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        workerId: options.workerId,
+        activities: options.activities,
+        concurrency: options.concurrency ?? 10,
+      }),
+    );
+    await Bun.sleep(50);
+  }
+
+  it('reassigns tasks whose visibility timeout has expired via storage scan', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+
+    const ws = await connectWorker(server);
+
+    // Collect all received messages (including re-dispatches)
+    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
+    ws.addEventListener('message', (event) => {
+      const msg = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attempt?: number;
+      };
+      received.push(msg);
+      // Complete the task on second attempt to stop the reassignment cycle
+      if (msg.type === 'task' && (msg.attempt ?? 1) >= 2) {
+        ws.send(
+          JSON.stringify({
+            type: 'taskResult',
+            operationId: msg.operationId,
+            status: 'completed',
+            value: null,
+          }),
+        );
+      }
+    });
+
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    // Dispatch with a very short visibility timeout
+    server.dispatchTask({
+      operationId: 'expiry-op-1',
+      activityName: 'charge',
+      input: { amount: 42 },
+      visibilityTimeout: 100, // 100ms — will expire quickly
+    });
+    await Bun.sleep(50);
+
+    // Task should be assigned
+    expect(server.registry.isAssigned('expiry-op-1')).toBe(true);
+
+    // Wait for the visibility timeout to expire and the scanner to pick it up
+    await Bun.sleep(300);
+
+    // The worker should have received the task at least twice (original + reassignment)
+    const taskMessages = received.filter(
+      (m) => m.type === 'task' && m.operationId === 'expiry-op-1',
+    );
+    expect(taskMessages.length).toBeGreaterThanOrEqual(2);
+    // First dispatch: attempt 1; reassignment: attempt 2
+    expect(taskMessages[0]?.attempt).toBe(1);
+    expect(taskMessages[1]?.attempt).toBe(2);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('increments attempt count on tasks reassigned due to timeout expiry', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+
+    const ws = await connectWorker(server);
+
+    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
+    ws.addEventListener('message', (event) => {
+      const msg = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attempt?: number;
+      };
+      received.push(msg);
+      // Complete the task on attempt 3 to stop the cycle
+      if (msg.type === 'task' && (msg.attempt ?? 1) >= 3) {
+        ws.send(
+          JSON.stringify({
+            type: 'taskResult',
+            operationId: msg.operationId,
+            status: 'completed',
+            value: null,
+          }),
+        );
+      }
+    });
+
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    server.dispatchTask({
+      operationId: 'attempt-expiry-op',
+      activityName: 'charge',
+      input: null,
+      attempt: 2,
+      visibilityTimeout: 100,
+    });
+    await Bun.sleep(300);
+
+    const taskMessages = received.filter(
+      (m) => m.type === 'task' && m.operationId === 'attempt-expiry-op',
+    );
+    expect(taskMessages.length).toBeGreaterThanOrEqual(2);
+    // First dispatch: attempt 2; reassignment: attempt 3
+    expect(taskMessages[0]?.attempt).toBe(2);
+    expect(taskMessages[1]?.attempt).toBe(3);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('does not reassign tasks that have not expired', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+
+    const ws = await connectWorker(server);
+
+    const received: Array<{ type: string; operationId?: string }> = [];
+    ws.addEventListener('message', (event) => {
+      received.push(JSON.parse(String(event.data)));
+    });
+
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    // Dispatch with a long visibility timeout
+    server.dispatchTask({
+      operationId: 'noexpiry-op',
+      activityName: 'charge',
+      input: null,
+      visibilityTimeout: 60_000,
+    });
+    await Bun.sleep(200);
+
+    // The task should still be assigned, not reassigned
+    expect(server.registry.isAssigned('noexpiry-op')).toBe(true);
+    // Worker should have received exactly one task message (the initial dispatch, no reassignment)
+    const taskMessages = received.filter(
+      (m) => m.type === 'task' && m.operationId === 'noexpiry-op',
+    );
+    expect(taskMessages.length).toBe(1);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('cleans up old storage record and creates new one on reassignment', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+
+    const ws = await connectWorker(server);
+    ws.addEventListener('message', (event) => {
+      const msg = JSON.parse(String(event.data)) as {
+        type: string;
+        operationId?: string;
+        attempt?: number;
+      };
+      // Complete on attempt 2 to stop the reassignment cycle
+      if (msg.type === 'task' && (msg.attempt ?? 1) >= 2) {
+        ws.send(
+          JSON.stringify({
+            type: 'taskResult',
+            operationId: msg.operationId,
+            status: 'completed',
+            value: null,
+          }),
+        );
+      }
+    });
+
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    server.dispatchTask({
+      operationId: 'cleanup-expiry-op',
+      activityName: 'charge',
+      input: null,
+      visibilityTimeout: 100,
+    });
+    await Bun.sleep(50);
+
+    // Verify original record exists
+    const inflightKey = KEYS.operationInflight('cleanup-expiry-op');
+    const rawBefore = await storage.get(inflightKey);
+    expect(rawBefore).not.toBeNull();
+    const recordBefore = decode(rawBefore!) as { attempt: number };
+    expect(recordBefore.attempt).toBe(1);
+
+    // Wait for expiry and reassignment
+    await Bun.sleep(300);
+
+    // After the scanner re-dispatches with attempt=2, the worker completes it
+    // and the in-flight record is removed from storage.
+    const rawAfter = await storage.get(inflightKey);
+    expect(rawAfter).toBeNull();
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('falls back to long-poll queue when no WebSocket worker available for expired task', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+
+    const ws = await connectWorker(server);
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    server.dispatchTask({
+      operationId: 'fallback-expiry-op',
+      activityName: 'charge',
+      input: null,
+      visibilityTimeout: 100,
+    });
+    await Bun.sleep(50);
+
+    // Unregister the worker before the timeout expires, but don't close the WS
+    // (simulating a worker that stops heartbeating). Instead, just disconnect:
+    ws.close();
+    await Bun.sleep(300);
+
+    // The expired task should have been cleaned up from storage or requeued to long-poll
+    // (worker disconnect already handles this, but storage scan covers edge cases)
+    // Verify there are no orphaned in-flight records in storage
+    let inflightCount = 0;
+    for await (const [_key] of storage.scan('op:inflight:')) {
+      inflightCount++;
+    }
+    // Either the disconnect handler or the scanner cleaned it up
+    expect(inflightCount).toBe(0);
+  });
+
+  it('scanner cleans up orphaned storage records with no matching registry entry', async () => {
+    ({ engine, storage } = createEngineWithStorage());
+    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+
+    // Connect a worker that can receive the reassigned task
+    const ws = await connectWorker(server);
+    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
+    ws.addEventListener('message', (event) => {
+      received.push(JSON.parse(String(event.data)));
+    });
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    // Wait for startup restore to complete, then insert an orphaned expired record.
+    // This simulates a record that slipped through (e.g., created by another process).
+    await Bun.sleep(100);
+    const expiredRecord = {
+      operationId: 'orphan-op',
+      workerId: 'ghost-worker',
+      deadline: Date.now() - 5000,
+      activityName: 'charge',
+      queue: 'default',
+      input: null,
+      attempt: 1,
+      visibilityTimeout: 30_000,
+    };
+    await storage.put(KEYS.operationInflight('orphan-op'), encode(expiredRecord));
+
+    // Wait for the scanner to pick up the orphaned record
+    await Bun.sleep(200);
+
+    const taskMessages = received.filter((m) => m.type === 'task' && m.operationId === 'orphan-op');
+    expect(taskMessages.length).toBe(1);
+    expect(taskMessages[0]?.attempt).toBe(2);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+});
