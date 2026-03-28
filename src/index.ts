@@ -150,6 +150,19 @@ export { handleRequest } from './server/handler';
 export { serve } from './server/index';
 export type { ServeOptions, WeftServer } from './server/index';
 
+// Server Authentication
+export { createAuthenticator, validateAuthConfig } from './server/authentication';
+export type {
+  AuthConfig,
+  AuthMethod,
+  AuthResult,
+  Authenticator,
+  JWTAlgorithm,
+  JWTConfig,
+  JWTPayload,
+  MTLSConfig,
+} from './server/authentication';
+
 // Testing
 export { ActivityMockRegistry } from './testing/mocks';
 export type { MockCall, MockHandle } from './testing/mocks';

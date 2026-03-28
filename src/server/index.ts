@@ -26,6 +26,8 @@ import {
 } from '../core/events.ts';
 import { KEYS } from '../storage/interface.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
+import type { AuthConfig, Authenticator } from './authentication.ts';
+import { buildTLSOptions, createAuthenticator, validateAuthConfig } from './authentication.ts';
 import { handleRequest } from './handler.ts';
 import type { TaskResult } from './task-queue.ts';
 import { TaskQueue } from './task-queue.ts';
@@ -42,6 +44,8 @@ export interface ServeOptions {
   development?: boolean;
   /** Dashboard HTML import for Bun's static route handler (e.g., `import dashboard from './index.html'`). */
   dashboard?: unknown;
+  /** Authentication configuration. When provided, all non-public endpoints require valid credentials. */
+  auth?: AuthConfig;
 }
 
 export interface TaskDispatch {
@@ -290,6 +294,19 @@ export function serve(options: ServeOptions): WeftServer {
   const hostname = options.hostname ?? '0.0.0.0';
   const development = options.development ?? false;
 
+  // Validate auth config synchronously so misconfigurations fail fast.
+  if (options.auth) {
+    validateAuthConfig(options.auth);
+  }
+
+  // The authenticator is initialized asynchronously (key import) but the
+  // promise is created eagerly and resolved before the first request completes.
+  const authenticatorPromise: Promise<Authenticator> | null = options.auth
+    ? createAuthenticator(options.auth)
+    : null;
+
+  const tlsOptions = buildTLSOptions(options.auth);
+
   // The dashboard HTML is passed in via options or loaded dynamically.
   // When available, Bun's static route handler bundles and serves it
   // with HMR in dev mode and cached assets in production mode.
@@ -338,8 +355,24 @@ export function serve(options: ServeOptions): WeftServer {
     hostname,
     development,
     routes,
+    ...(tlsOptions ? { tls: tlsOptions } : {}),
     async fetch(request) {
       const url = new URL(request.url);
+
+      // Authenticate all requests (HTTP and WebSocket upgrades) when auth is configured.
+      if (authenticatorPromise) {
+        const authenticator = await authenticatorPromise;
+        const authResult = await authenticator(request);
+        if (!authResult.authenticated) {
+          return new Response(JSON.stringify({ error: authResult.error }), {
+            status: 401,
+            headers: {
+              'Content-Type': 'application/json',
+              'WWW-Authenticate': 'Bearer',
+            },
+          });
+        }
+      }
 
       // WebSocket upgrade
       if (request.headers.get('upgrade') === 'websocket') {
@@ -521,11 +554,12 @@ export function serve(options: ServeOptions): WeftServer {
 
   const resolvedPort = server.port ?? port;
   const resolvedHostname = server.hostname ?? hostname;
+  const scheme = tlsOptions ? 'https' : 'http';
 
   return {
     port: resolvedPort,
     hostname: resolvedHostname,
-    url: `http://${resolvedHostname}:${resolvedPort}`,
+    url: `${scheme}://${resolvedHostname}:${resolvedPort}`,
     registry,
     taskQueue,
     stop() {
