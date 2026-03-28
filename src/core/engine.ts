@@ -319,6 +319,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
   #pendingNestingDepth: number | undefined;
   #workflowNestingDepths: Map<string, number>;
   #budgetPolicyEnforcer: import('../ai/budget-policy.ts').BudgetPolicyEnforcer | null;
+  #heartbeatDetails: Map<string, unknown>;
 
   constructor(options?: Partial<EngineOptions> & { getNow?: () => number }) {
     super();
@@ -392,6 +393,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     }
 
     this.#budgetPolicyEnforcer = null;
+    this.#heartbeatDetails = new Map();
 
     // Create the activity worker pool (optional)
     if (options?.activityExecution) {
@@ -889,6 +891,11 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
   }
 
   async query(workflowId: string, name: string): Promise<unknown> {
+    // Built-in query: return latest heartbeat details for this workflow
+    if (name === 'activityProgress') {
+      return this.#heartbeatDetails.get(workflowId);
+    }
+
     if (!this.#inlineStrategy) {
       throw new Error(
         'Workflow queries are not supported when using the worker execution strategy.',
@@ -1744,8 +1751,8 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
 
       case 'stream': {
         const sink: StreamSink = {
-          heartbeat(_details?: unknown) {
-            // Future: emit heartbeat event for observability
+          heartbeat: (details?: unknown) => {
+            this.#heartbeatDetails.set(workflowId, details);
           },
         };
 
@@ -2110,6 +2117,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     await this.#scheduler.cancel(`deadline:${workflowId}`, workflowId);
 
     this.#checkpoints.delete(workflowId);
+    this.#heartbeatDetails.delete(workflowId);
     this.#cleanupWaiters(workflowId);
 
     const event = new WorkflowCompletedEvent(workflowId, result, duration);
@@ -2140,6 +2148,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     await this.#scheduler.cancel(`deadline:${workflowId}`, workflowId);
 
     this.#checkpoints.delete(workflowId);
+    this.#heartbeatDetails.delete(workflowId);
     this.#cleanupWaiters(workflowId);
 
     const event = new WorkflowFailedEvent(workflowId, error);
@@ -2230,10 +2239,19 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
    * `activityExecution` is configured, or running inline on the main thread.
    */
   async #executeActivity(
-    _workflowId: string,
+    workflowId: string,
     operation: Extract<ContextOperationRequest, { type: 'activity' }>,
   ): Promise<unknown> {
     const activityArguments = operation.args ?? [];
+
+    // Build an ActivityContext so the activity function can send heartbeats.
+    const abortController = this.#inlineStrategy?.getAbortController(workflowId);
+    const activityContext: import('./types.ts').ActivityContext = {
+      signal: abortController?.signal ?? new AbortController().signal,
+      heartbeat: (details?: unknown) => {
+        this.#heartbeatDetails.set(workflowId, details);
+      },
+    };
 
     // Build the leaf executor: either dispatch to a worker or call inline.
     const invokeActivity = this.#activityWorkerDispatcher
@@ -2251,7 +2269,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
         }
       : (_name: string, args: unknown[]) => {
           const activityFunction = this.#resolveActivityFunction(operation);
-          return callActivityFunction(activityFunction, args);
+          return callActivityFunction(activityFunction, [...args, activityContext]);
         };
 
     // If there are activity interceptors, use cached composition

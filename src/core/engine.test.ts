@@ -2085,4 +2085,73 @@ describe('Engine', () => {
     expect(result.result).toEqual({ accepted: true });
     engine[Symbol.dispose]();
   });
+
+  // ---------------------------------------------------------------------------
+  // Heartbeat details queryable via activityProgress
+  // ---------------------------------------------------------------------------
+
+  describe('activityProgress query', () => {
+    it('returns heartbeat details via handle.query("activityProgress")', async () => {
+      const engine = new Engine();
+
+      // Gate to keep the activity alive while we query
+      const { promise: gate, resolve: releaseGate } = Promise.withResolvers<void>();
+
+      async function longRunningActivity(
+        _input: unknown,
+        activityContext?: import('./types.ts').ActivityContext,
+      ): Promise<string> {
+        activityContext?.heartbeat({ percent: 25 });
+        activityContext?.heartbeat({ percent: 50 });
+        await gate;
+        return 'done';
+      }
+
+      engine.register('progress-workflow', async function* (ctx: WorkflowContext) {
+        const context = ctx as Context;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const result = yield* context.run(longRunningActivity as any, 'input');
+        return result;
+      });
+
+      const handle = await engine.start('progress-workflow', null);
+
+      // Let the activity start and heartbeats fire
+      await flush();
+
+      const progress = await handle.query('activityProgress');
+      expect(progress).toEqual({ percent: 50 });
+
+      // Release the activity so the workflow completes
+      releaseGate();
+      const result = await handle.result();
+      expect(result).toBe('done');
+
+      // After completion, progress should be cleared
+      const postProgress = await handle.query('activityProgress');
+      expect(postProgress).toBeUndefined();
+
+      engine[Symbol.dispose]();
+    });
+
+    it('returns undefined when no heartbeat has been sent', async () => {
+      const engine = new Engine();
+
+      engine.register('no-heartbeat-workflow', async function* (ctx: WorkflowContext) {
+        const context = ctx as Context;
+        yield* context.waitForSignal('done');
+        return 'ok';
+      });
+
+      const handle = await engine.start('no-heartbeat-workflow', null);
+      await flush();
+
+      const progress = await handle.query('activityProgress');
+      expect(progress).toBeUndefined();
+
+      await engine.signal(handle.id, 'done');
+      await handle.result();
+      engine[Symbol.dispose]();
+    });
+  });
 });
