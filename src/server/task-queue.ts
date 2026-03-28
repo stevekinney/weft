@@ -40,12 +40,20 @@ export class TaskQueue {
   #pending = new Map<string, PendingTask[]>();
   #waiters = new Map<string, Waiter[]>();
   #completionCallbacks = new Map<string, CompletionCallback>();
+  #dispatched = new Set<string>();
 
   /**
    * Enqueue a task. If a matching waiter exists, dispatch immediately.
    * Returns true if the task was dispatched to a waiter or queued.
    */
   enqueue(queue: string, task: PendingTask, onComplete?: CompletionCallback): boolean {
+    // Reject duplicate operationIds — each task assigned to exactly one worker.
+    if (this.#dispatched.has(task.operationId)) {
+      return false;
+    }
+
+    this.#dispatched.add(task.operationId);
+
     if (onComplete) {
       this.#completionCallbacks.set(task.operationId, onComplete);
     }
@@ -135,6 +143,8 @@ export class TaskQueue {
    * during enqueue (if any). Returns true if a callback was found.
    */
   complete(result: TaskResult): boolean {
+    this.#dispatched.delete(result.operationId);
+
     const callback = this.#completionCallbacks.get(result.operationId);
     if (callback) {
       this.#completionCallbacks.delete(result.operationId);
@@ -142,6 +152,11 @@ export class TaskQueue {
       return true;
     }
     return false;
+  }
+
+  /** Check whether an operationId is currently tracked (pending or dispatched). */
+  isTracked(operationId: string): boolean {
+    return this.#dispatched.has(operationId);
   }
 
   /** Check if any waiter in the queue can handle the given activity. */

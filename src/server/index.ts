@@ -96,6 +96,7 @@ const TASK_COMPLETE_RE = /^\/v1\/tasks\/([\w-]+)\/complete$/;
 
 const MAX_POLL_TIMEOUT = 60_000;
 const DEFAULT_POLL_TIMEOUT = 30_000;
+const DEFAULT_VISIBILITY_TIMEOUT = 30_000;
 
 function isWorkerConnection(pathname: string): boolean {
   return WORKER_STREAM_RE.test(pathname);
@@ -493,9 +494,16 @@ export function serve(options: ServeOptions): WeftServer {
             break;
           }
           case 'taskResult': {
-            const workerId = ws.data.workerId;
-            if (workerId) {
-              registry.taskCompleted(workerId);
+            const operationId = parsed['operationId'];
+            if (typeof operationId === 'string') {
+              // Remove in-flight tracking and decrement the worker's counter.
+              registry.completeTask(operationId);
+            } else {
+              // Fallback: decrement counter by worker ID when operationId is missing.
+              const workerId = ws.data.workerId;
+              if (workerId) {
+                registry.taskCompleted(workerId);
+              }
             }
             break;
           }
@@ -532,6 +540,11 @@ export function serve(options: ServeOptions): WeftServer {
   function dispatchTaskImpl(task: TaskDispatch): boolean {
     const queue = task.queue ?? 'default';
 
+    // Each task assigned to exactly one worker — reject duplicates.
+    if (registry.isAssigned(task.operationId) || taskQueue.isTracked(task.operationId)) {
+      return false;
+    }
+
     // Try WebSocket workers first (lowest latency)
     const worker = registry.findWorker(task.activityName, { queue });
     if (worker) {
@@ -546,7 +559,7 @@ export function serve(options: ServeOptions): WeftServer {
             attempt: task.attempt ?? 1,
           }),
         );
-        registry.taskAssigned(worker.id);
+        registry.assignTask(worker.id, task.operationId, DEFAULT_VISIBILITY_TIMEOUT);
         return true;
       }
     }

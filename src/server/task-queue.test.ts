@@ -262,6 +262,70 @@ describe('TaskQueue', () => {
     });
   });
 
+  describe('deduplication', () => {
+    it('rejects a second enqueue with the same operationId', () => {
+      const queue = new TaskQueue();
+
+      const first = queue.enqueue('default', makeTask({ operationId: 'op-1' }));
+      const second = queue.enqueue('default', makeTask({ operationId: 'op-1' }));
+
+      expect(first).toBe(true);
+      expect(second).toBe(false);
+      expect(queue.pendingCount('default')).toBe(1);
+    });
+
+    it('rejects duplicate even when first was dispatched to a waiter', async () => {
+      const queue = new TaskQueue();
+
+      // Start a poll that will block
+      const pollPromise = queue.poll('default', ['charge'], 5000);
+
+      // Enqueue — dispatched directly to waiter
+      const first = queue.enqueue(
+        'default',
+        makeTask({ operationId: 'dup-1', activityName: 'charge' }),
+      );
+      expect(first).toBe(true);
+      await pollPromise;
+
+      // Second enqueue with same operationId should be rejected
+      const second = queue.enqueue(
+        'default',
+        makeTask({ operationId: 'dup-1', activityName: 'charge' }),
+      );
+      expect(second).toBe(false);
+    });
+
+    it('allows re-enqueue after completion', () => {
+      const queue = new TaskQueue();
+
+      queue.enqueue('default', makeTask({ operationId: 'op-reuse' }), () => {});
+      queue.complete({ operationId: 'op-reuse', status: 'completed', value: null });
+
+      // After completion the operationId should be available again
+      const result = queue.enqueue('default', makeTask({ operationId: 'op-reuse' }));
+      expect(result).toBe(true);
+    });
+
+    it('isTracked returns true for pending tasks', () => {
+      const queue = new TaskQueue();
+
+      expect(queue.isTracked('op-1')).toBe(false);
+
+      queue.enqueue('default', makeTask({ operationId: 'op-1' }));
+      expect(queue.isTracked('op-1')).toBe(true);
+    });
+
+    it('isTracked returns false after task is completed', () => {
+      const queue = new TaskQueue();
+
+      queue.enqueue('default', makeTask({ operationId: 'op-1' }), () => {});
+      queue.complete({ operationId: 'op-1', status: 'completed' });
+
+      expect(queue.isTracked('op-1')).toBe(false);
+    });
+  });
+
   describe('pendingCount', () => {
     it('tracks the number of pending tasks', () => {
       const queue = new TaskQueue();

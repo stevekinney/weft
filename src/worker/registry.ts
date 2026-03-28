@@ -140,6 +140,21 @@ export class WorkerRegistry {
     }
   }
 
+  /** Check whether an operation is currently assigned to a worker. */
+  isAssigned(operationId: string): boolean {
+    return this.#inFlightTasks.has(operationId);
+  }
+
+  /** Complete an in-flight task: remove tracking and decrement the worker's counter. */
+  completeTask(operationId: string): InFlightTask | undefined {
+    const task = this.#inFlightTasks.get(operationId);
+    if (task === undefined) return undefined;
+
+    this.#inFlightTasks.delete(operationId);
+    this.taskCompleted(task.workerId);
+    return task;
+  }
+
   /** Look up a worker by ID. */
   getWorker(workerId: string): WorkerInfo | undefined {
     return this.#workers.get(workerId);

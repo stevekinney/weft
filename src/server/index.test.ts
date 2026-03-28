@@ -1250,3 +1250,240 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/compl
     expect(worker.running).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Task assignment deduplication
+// ---------------------------------------------------------------------------
+
+describe('task assignment deduplication', () => {
+  let engine: Engine;
+  let server: WeftServer;
+
+  afterEach(() => {
+    server?.stop();
+    engine?.[Symbol.dispose]();
+  });
+
+  async function connectWorker(
+    wsServer: WeftServer,
+    path = '/v1/tasks/default/stream',
+  ): Promise<WebSocket> {
+    const wsUrl = wsServer.url.replace('http://', 'ws://');
+    const ws = new WebSocket(`${wsUrl}${path}`);
+
+    await new Promise<void>((resolve, reject) => {
+      ws.addEventListener('open', () => resolve());
+      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
+    });
+
+    return ws;
+  }
+
+  async function registerWorker(
+    ws: WebSocket,
+    options: { workerId: string; activities: string[]; concurrency?: number },
+  ): Promise<void> {
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        workerId: options.workerId,
+        activities: options.activities,
+        concurrency: options.concurrency ?? 10,
+      }),
+    );
+    await Bun.sleep(50);
+  }
+
+  it('rejects duplicate dispatch of the same operationId to WebSocket workers', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    const received: Array<{ type: string; operationId?: string }> = [];
+
+    ws.addEventListener('message', (event) => {
+      received.push(JSON.parse(String(event.data)));
+    });
+
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    const first = server.dispatchTask({
+      operationId: 'dup-op',
+      activityName: 'charge',
+      input: null,
+    });
+    const second = server.dispatchTask({
+      operationId: 'dup-op',
+      activityName: 'charge',
+      input: null,
+    });
+
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+
+    await Bun.sleep(50);
+
+    // Worker should receive exactly one task
+    expect(received.length).toBe(1);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('rejects duplicate dispatch when the first went to the long-poll queue', () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    // No WebSocket workers — tasks go to long-poll queue
+    const first = server.dispatchTask({
+      operationId: 'dup-lp',
+      activityName: 'charge',
+      input: null,
+    });
+    const second = server.dispatchTask({
+      operationId: 'dup-lp',
+      activityName: 'charge',
+      input: null,
+    });
+
+    expect(first).toBe(true);
+    expect(second).toBe(false);
+    expect(server.taskQueue.pendingCount('default')).toBe(1);
+  });
+
+  it('rejects duplicate across WebSocket and long-poll paths', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 1 });
+
+    // First dispatch goes to WebSocket worker
+    const first = server.dispatchTask({
+      operationId: 'cross-dup',
+      activityName: 'charge',
+      input: null,
+    });
+    expect(first).toBe(true);
+
+    // Worker is now at capacity (1/1), so second dispatch would normally go to long-poll.
+    // But the operationId is already assigned, so it should be rejected.
+    const second = server.dispatchTask({
+      operationId: 'cross-dup',
+      activityName: 'charge',
+      input: null,
+    });
+    expect(second).toBe(false);
+    expect(server.taskQueue.pendingCount('default')).toBe(0);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('uses assignTask for WebSocket dispatch so in-flight tasks are tracked', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    server.dispatchTask({
+      operationId: 'tracked-op',
+      activityName: 'charge',
+      input: null,
+    });
+
+    // The operationId should be tracked in the registry's in-flight tasks
+    expect(server.registry.isAssigned('tracked-op')).toBe(true);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('clears in-flight tracking when worker sends taskResult with operationId', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+
+    // Auto-respond with operationId in the result
+    ws.addEventListener('message', (event) => {
+      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      if (msg.type === 'task') {
+        ws.send(
+          JSON.stringify({
+            type: 'taskResult',
+            operationId: msg.operationId,
+            status: 'completed',
+            value: 42,
+          }),
+        );
+      }
+    });
+
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    server.dispatchTask({
+      operationId: 'clear-op',
+      activityName: 'charge',
+      input: null,
+    });
+
+    expect(server.registry.isAssigned('clear-op')).toBe(true);
+
+    await Bun.sleep(100);
+
+    // After the result arrives, the task should no longer be tracked
+    expect(server.registry.isAssigned('clear-op')).toBe(false);
+    expect(server.registry.getWorker('w1')?.inFlight).toBe(0);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('allows re-dispatch of an operationId after completion', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server);
+    const received: Array<{ type: string; operationId?: string }> = [];
+
+    ws.addEventListener('message', (event) => {
+      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
+      received.push(msg);
+      if (msg.type === 'task') {
+        ws.send(
+          JSON.stringify({
+            type: 'taskResult',
+            operationId: msg.operationId,
+            status: 'completed',
+            value: null,
+          }),
+        );
+      }
+    });
+
+    await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+
+    // First dispatch
+    server.dispatchTask({ operationId: 'reuse-op', activityName: 'charge', input: null });
+    await Bun.sleep(100);
+
+    // After completion, dispatch the same operationId again
+    const second = server.dispatchTask({
+      operationId: 'reuse-op',
+      activityName: 'charge',
+      input: null,
+    });
+    expect(second).toBe(true);
+
+    await Bun.sleep(50);
+
+    // Worker should have received two tasks
+    const taskMessages = received.filter((m) => m.type === 'task');
+    expect(taskMessages.length).toBe(2);
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+});

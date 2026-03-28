@@ -559,4 +559,90 @@ describe('WorkerRegistry', () => {
       expect(worker.inFlight).toBe(1);
     });
   });
+
+  // -------------------------------------------------------------------------
+  // isAssigned — check whether an operation is already in-flight
+  // -------------------------------------------------------------------------
+
+  describe('isAssigned', () => {
+    it('returns false for an unknown operationId', () => {
+      const registry = new WorkerRegistry();
+      expect(registry.isAssigned('nonexistent')).toBe(false);
+    });
+
+    it('returns true after assignTask', () => {
+      const registry = new WorkerRegistry();
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+
+      registry.assignTask('w1', 'op-1', 30_000);
+
+      expect(registry.isAssigned('op-1')).toBe(true);
+    });
+
+    it('returns false after the task is completed via completeTask', () => {
+      const registry = new WorkerRegistry();
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+
+      registry.assignTask('w1', 'op-1', 30_000);
+      registry.completeTask('op-1');
+
+      expect(registry.isAssigned('op-1')).toBe(false);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // completeTask — remove in-flight task and decrement worker counter
+  // -------------------------------------------------------------------------
+
+  describe('completeTask', () => {
+    it('removes the in-flight task and decrements worker inFlight', () => {
+      const registry = new WorkerRegistry();
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+
+      registry.assignTask('w1', 'op-1', 30_000);
+      expect(registry.getWorker('w1')!.inFlight).toBe(1);
+
+      const removed = registry.completeTask('op-1');
+
+      expect(removed).toBeDefined();
+      expect(removed!.operationId).toBe('op-1');
+      expect(removed!.workerId).toBe('w1');
+      expect(registry.getWorker('w1')!.inFlight).toBe(0);
+    });
+
+    it('returns undefined for unknown operationId', () => {
+      const registry = new WorkerRegistry();
+      expect(registry.completeTask('nonexistent')).toBeUndefined();
+    });
+
+    it('does not decrement below zero if worker was already unregistered', () => {
+      const registry = new WorkerRegistry();
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+
+      registry.assignTask('w1', 'op-1', 30_000);
+      registry.unregister('w1');
+
+      // Worker is gone, but in-flight task record still exists
+      const removed = registry.completeTask('op-1');
+      expect(removed).toBeDefined();
+      expect(removed!.operationId).toBe('op-1');
+    });
+
+    it('handles multiple tasks completing independently', () => {
+      const registry = new WorkerRegistry();
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+
+      registry.assignTask('w1', 'op-1', 30_000);
+      registry.assignTask('w1', 'op-2', 30_000);
+      expect(registry.getWorker('w1')!.inFlight).toBe(2);
+
+      registry.completeTask('op-1');
+      expect(registry.getWorker('w1')!.inFlight).toBe(1);
+      expect(registry.isAssigned('op-1')).toBe(false);
+      expect(registry.isAssigned('op-2')).toBe(true);
+
+      registry.completeTask('op-2');
+      expect(registry.getWorker('w1')!.inFlight).toBe(0);
+    });
+  });
 });
