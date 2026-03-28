@@ -53,6 +53,8 @@ export interface TaskDispatch {
   activityName: string;
   input: unknown;
   attempt?: number;
+  /** Queue to dispatch the task to. Defaults to `'default'`. */
+  queue?: string;
 }
 
 export interface WeftServer extends Disposable {
@@ -77,6 +79,8 @@ interface WebSocketData {
   connectionType: ConnectionType;
   /** Workflow ID extracted from the URL for stream/watch connections. */
   workflowId?: string;
+  /** Queue name extracted from the URL for worker connections. */
+  queue?: string;
   workerId?: string;
 }
 
@@ -100,7 +104,7 @@ function isWorkerConnection(pathname: string): boolean {
 /** Classify a WebSocket pathname and extract relevant parameters. */
 function classifyConnection(
   pathname: string,
-): Pick<WebSocketData, 'connectionType' | 'workflowId'> {
+): Pick<WebSocketData, 'connectionType' | 'workflowId' | 'queue'> {
   const streamMatch = WORKFLOW_STREAM_RE.exec(pathname);
   if (streamMatch?.[1]) {
     return { connectionType: 'stream', workflowId: decodeURIComponent(streamMatch[1]) };
@@ -111,8 +115,9 @@ function classifyConnection(
     return { connectionType: 'watch', workflowId: decodeURIComponent(watchMatch[1]) };
   }
 
-  if (WORKER_STREAM_RE.test(pathname)) {
-    return { connectionType: 'worker' };
+  const workerMatch = WORKER_STREAM_RE.exec(pathname);
+  if (workerMatch?.[1]) {
+    return { connectionType: 'worker', queue: decodeURIComponent(workerMatch[1]) };
   }
 
   return { connectionType: 'generic' };
@@ -480,6 +485,7 @@ export function serve(options: ServeOptions): WeftServer {
             ws.data.workerId = workerId;
             registry.register({
               id: workerId,
+              queue: ws.data.queue ?? 'default',
               activities: Array.isArray(activities) ? (activities as string[]) : [],
               concurrency: typeof concurrency === 'number' ? concurrency : 10,
             });
@@ -524,8 +530,10 @@ export function serve(options: ServeOptions): WeftServer {
   }
 
   function dispatchTaskImpl(task: TaskDispatch): boolean {
+    const queue = task.queue ?? 'default';
+
     // Try WebSocket workers first (lowest latency)
-    const worker = registry.findWorker(task.activityName);
+    const worker = registry.findWorker(task.activityName, { queue });
     if (worker) {
       const ws = workerSockets.get(worker.id);
       if (ws) {
@@ -544,7 +552,7 @@ export function serve(options: ServeOptions): WeftServer {
     }
 
     // Fall back to long-poll task queue
-    return taskQueue.enqueue('default', {
+    return taskQueue.enqueue(queue, {
       operationId: task.operationId,
       activityName: task.activityName,
       input: task.input,

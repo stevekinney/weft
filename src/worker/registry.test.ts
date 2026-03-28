@@ -7,6 +7,7 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-1',
+      queue: 'default',
       activities: ['processOrder', 'sendEmail'],
       concurrency: 5,
     });
@@ -19,6 +20,7 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-1',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 5,
     });
@@ -41,6 +43,7 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-1',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 5,
     });
@@ -65,6 +68,7 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-1',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 5,
     });
@@ -81,6 +85,7 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-1',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 5,
     });
@@ -98,6 +103,7 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-1',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 5,
     });
@@ -113,12 +119,14 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-1',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 5,
     });
 
     registry.register({
       id: 'worker-2',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 5,
     });
@@ -139,12 +147,14 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-1',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 5,
     });
 
     registry.register({
       id: 'worker-2',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 5,
     });
@@ -160,12 +170,14 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-1',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 2,
     });
 
     registry.register({
       id: 'worker-2',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 2,
     });
@@ -190,6 +202,7 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-1',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 1,
     });
@@ -206,6 +219,7 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-1',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 5,
     });
@@ -214,6 +228,7 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-2',
+      queue: 'default',
       activities: ['sendEmail'],
       concurrency: 3,
     });
@@ -229,12 +244,14 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-1',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 5,
     });
 
     registry.register({
       id: 'worker-2',
+      queue: 'default',
       activities: ['sendEmail'],
       concurrency: 3,
     });
@@ -253,6 +270,7 @@ describe('WorkerRegistry', () => {
 
     registry.register({
       id: 'worker-1',
+      queue: 'default',
       activities: ['processOrder'],
       concurrency: 5,
     });
@@ -264,13 +282,86 @@ describe('WorkerRegistry', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Queue-based filtering
+  // -------------------------------------------------------------------------
+
+  it('findWorker filters by queue when specified', () => {
+    const registry = new WorkerRegistry();
+
+    registry.register({
+      id: 'billing-worker',
+      queue: 'billing',
+      activities: ['charge'],
+      concurrency: 5,
+    });
+
+    registry.register({
+      id: 'shipping-worker',
+      queue: 'shipping',
+      activities: ['charge'],
+      concurrency: 5,
+    });
+
+    const billing = registry.findWorker('charge', { queue: 'billing' });
+    expect(billing).toBeDefined();
+    expect(billing!.id).toBe('billing-worker');
+
+    const shipping = registry.findWorker('charge', { queue: 'shipping' });
+    expect(shipping).toBeDefined();
+    expect(shipping!.id).toBe('shipping-worker');
+  });
+
+  it('findWorker returns undefined when no worker exists on the specified queue', () => {
+    const registry = new WorkerRegistry();
+
+    registry.register({
+      id: 'billing-worker',
+      queue: 'billing',
+      activities: ['charge'],
+      concurrency: 5,
+    });
+
+    const result = registry.findWorker('charge', { queue: 'shipping' });
+    expect(result).toBeUndefined();
+  });
+
+  it('findWorker matches all queues when queue is not specified', () => {
+    const registry = new WorkerRegistry();
+
+    registry.register({
+      id: 'billing-worker',
+      queue: 'billing',
+      activities: ['charge'],
+      concurrency: 5,
+    });
+
+    const result = registry.findWorker('charge');
+    expect(result).toBeDefined();
+    expect(result!.id).toBe('billing-worker');
+  });
+
+  it('registered workers store their queue', () => {
+    const registry = new WorkerRegistry();
+
+    registry.register({
+      id: 'worker-1',
+      queue: 'billing',
+      activities: ['charge'],
+      concurrency: 5,
+    });
+
+    const worker = registry.getAll()[0]!;
+    expect(worker.queue).toBe('billing');
+  });
+
+  // -------------------------------------------------------------------------
   // Visibility timeout tracking
   // -------------------------------------------------------------------------
 
   describe('visibility timeout', () => {
     it('assignTask tracks in-flight task with deadline', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', activities: ['doWork'], concurrency: 5 });
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
       const now = Date.now();
       registry.assignTask('w1', 'op-1', 30_000);
@@ -282,7 +373,7 @@ describe('WorkerRegistry', () => {
 
     it('checkExpiredTasks returns overdue tasks', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', activities: ['doWork'], concurrency: 5 });
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
       registry.assignTask('w1', 'op-1', 500);
 
@@ -295,7 +386,7 @@ describe('WorkerRegistry', () => {
 
     it('extendVisibility extends the deadline', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', activities: ['doWork'], concurrency: 5 });
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
       registry.assignTask('w1', 'op-1', 500);
 
@@ -310,8 +401,8 @@ describe('WorkerRegistry', () => {
 
     it('non-expired tasks are not returned by checkExpiredTasks', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', activities: ['doWork'], concurrency: 5 });
-      registry.register({ id: 'w2', activities: ['doWork'], concurrency: 5 });
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.register({ id: 'w2', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
       registry.assignTask('w1', 'op-1', 60_000); // expires in 60s
       registry.assignTask('w2', 'op-2', 100); // expires in 100ms
@@ -330,7 +421,7 @@ describe('WorkerRegistry', () => {
 
     it('assignTask also increments worker inFlight count', () => {
       const registry = new WorkerRegistry();
-      registry.register({ id: 'w1', activities: ['doWork'], concurrency: 5 });
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
 
       registry.assignTask('w1', 'op-1', 30_000);
 

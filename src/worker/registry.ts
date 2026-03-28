@@ -4,6 +4,7 @@
 
 export interface WorkerInfo {
   id: string;
+  queue: string;
   activities: string[];
   concurrency: number;
   inFlight: number;
@@ -79,8 +80,10 @@ export class WorkerRegistry {
   /** Find the best worker for a task using least-loaded routing. */
   findWorker(activityName: string, options?: RoutingOptions): WorkerInfo | undefined {
     const candidates: WorkerInfo[] = [];
+    const queue = options?.queue;
 
     for (const worker of this.#workers.values()) {
+      if (queue !== undefined && worker.queue !== queue) continue;
       if (worker.activities.includes(activityName) && worker.inFlight < worker.concurrency) {
         candidates.push(worker);
       }

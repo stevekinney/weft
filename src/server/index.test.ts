@@ -531,6 +531,229 @@ describe('worker WebSocket protocol', () => {
 });
 
 // ---------------------------------------------------------------------------
+// Queue-aware worker stream (WS /v1/tasks/:queue/stream)
+// ---------------------------------------------------------------------------
+
+describe('queue-aware worker stream', () => {
+  let engine: Engine;
+  let server: WeftServer;
+
+  afterEach(() => {
+    server?.stop();
+    engine?.[Symbol.dispose]();
+  });
+
+  /** Open a WebSocket to a specific queue's worker stream endpoint. */
+  async function connectWorker(wsServer: WeftServer, queue: string): Promise<WebSocket> {
+    const wsUrl = wsServer.url.replace('http://', 'ws://');
+    const ws = new WebSocket(`${wsUrl}/v1/tasks/${encodeURIComponent(queue)}/stream`);
+
+    await new Promise<void>((resolve, reject) => {
+      ws.addEventListener('open', () => resolve());
+      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
+    });
+
+    return ws;
+  }
+
+  /** Send a register message and wait for it to be processed. */
+  async function registerWorker(
+    ws: WebSocket,
+    options: { workerId: string; activities: string[]; concurrency?: number },
+  ): Promise<void> {
+    ws.send(
+      JSON.stringify({
+        type: 'register',
+        workerId: options.workerId,
+        activities: options.activities,
+        concurrency: options.concurrency ?? 10,
+      }),
+    );
+    await Bun.sleep(50);
+  }
+
+  it('extracts queue name from the connection URL', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server, 'billing');
+    await registerWorker(ws, { workerId: 'billing-w1', activities: ['charge'] });
+
+    const worker = server.registry.getAll()[0]!;
+    expect(worker.queue).toBe('billing');
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('dispatches tasks only to workers on the matching queue', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const billingWs = await connectWorker(server, 'billing');
+    const shippingWs = await connectWorker(server, 'shipping');
+
+    const billingReceived: Array<{ type: string; operationId?: string }> = [];
+    const shippingReceived: Array<{ type: string; operationId?: string }> = [];
+
+    billingWs.addEventListener('message', (event) => {
+      billingReceived.push(JSON.parse(String(event.data)));
+    });
+    shippingWs.addEventListener('message', (event) => {
+      shippingReceived.push(JSON.parse(String(event.data)));
+    });
+
+    await registerWorker(billingWs, { workerId: 'billing-w1', activities: ['charge'] });
+    await registerWorker(shippingWs, { workerId: 'shipping-w1', activities: ['charge'] });
+
+    // Dispatch to billing queue
+    server.dispatchTask({
+      operationId: 'billing-op',
+      activityName: 'charge',
+      input: { amount: 100 },
+      queue: 'billing',
+    });
+
+    await Bun.sleep(50);
+
+    // Only the billing worker should receive the task
+    expect(billingReceived.length).toBe(1);
+    expect(billingReceived[0]?.operationId).toBe('billing-op');
+    expect(shippingReceived.length).toBe(0);
+
+    billingWs.close();
+    shippingWs.close();
+    await Bun.sleep(50);
+  });
+
+  it('falls back to long-poll queue with the correct queue name', () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    // Dispatch to a specific queue with no WebSocket workers
+    server.dispatchTask({
+      operationId: 'queued-op',
+      activityName: 'charge',
+      input: null,
+      queue: 'billing',
+    });
+
+    // Task should be in the 'billing' queue, not 'default'
+    expect(server.taskQueue.pendingCount('billing')).toBe(1);
+    expect(server.taskQueue.pendingCount('default')).toBe(0);
+  });
+
+  it('defaults to the "default" queue when no queue is specified in dispatch', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const ws = await connectWorker(server, 'default');
+    const received: Array<{ type: string; operationId?: string }> = [];
+
+    ws.addEventListener('message', (event) => {
+      received.push(JSON.parse(String(event.data)));
+    });
+
+    await registerWorker(ws, { workerId: 'default-w1', activities: ['charge'] });
+
+    // Dispatch without specifying queue — should default to 'default'
+    server.dispatchTask({
+      operationId: 'default-op',
+      activityName: 'charge',
+      input: null,
+    });
+
+    await Bun.sleep(50);
+
+    expect(received.length).toBe(1);
+    expect(received[0]?.operationId).toBe('default-op');
+
+    ws.close();
+    await Bun.sleep(50);
+  });
+
+  it('workers on different queues are isolated from each other', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const billingWs = await connectWorker(server, 'billing');
+    const defaultWs = await connectWorker(server, 'default');
+
+    const billingReceived: Array<{ type: string }> = [];
+    const defaultReceived: Array<{ type: string }> = [];
+
+    billingWs.addEventListener('message', (event) => {
+      billingReceived.push(JSON.parse(String(event.data)));
+    });
+    defaultWs.addEventListener('message', (event) => {
+      defaultReceived.push(JSON.parse(String(event.data)));
+    });
+
+    await registerWorker(billingWs, { workerId: 'billing-w1', activities: ['charge'] });
+    await registerWorker(defaultWs, { workerId: 'default-w1', activities: ['charge'] });
+
+    // Dispatch to default queue — should not reach billing worker
+    server.dispatchTask({
+      operationId: 'default-only',
+      activityName: 'charge',
+      input: null,
+    });
+
+    await Bun.sleep(50);
+
+    expect(defaultReceived.length).toBe(1);
+    expect(billingReceived.length).toBe(0);
+
+    billingWs.close();
+    defaultWs.close();
+    await Bun.sleep(50);
+  });
+
+  it('integrates with RemoteWorker on a custom queue', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    const { RemoteWorker } = await import('../worker/index.ts');
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}/v1/tasks/billing/stream`,
+      workerId: 'billing-remote',
+      activities: {
+        charge: async (input: unknown) => ({ charged: input }),
+      },
+      concurrency: 3,
+      queue: 'billing',
+    });
+
+    await worker.connect();
+    await Bun.sleep(50);
+
+    // Worker should be registered on the billing queue
+    expect(server.registry.size).toBe(1);
+    const registered = server.registry.getAll()[0]!;
+    expect(registered.id).toBe('billing-remote');
+    expect(registered.queue).toBe('billing');
+
+    // Dispatch to the billing queue
+    const dispatched = server.dispatchTask({
+      operationId: 'billing-e2e',
+      activityName: 'charge',
+      input: 42,
+      queue: 'billing',
+    });
+    expect(dispatched).toBe(true);
+
+    await Bun.sleep(200);
+
+    // Task should be completed
+    expect(registered.inFlight).toBe(0);
+
+    await worker.disconnect();
+    await Bun.sleep(50);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Token streaming WebSocket
 // ---------------------------------------------------------------------------
 
