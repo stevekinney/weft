@@ -12,7 +12,7 @@ import { describe, expect, it } from 'bun:test';
 import { MemoryStorage } from '../../storage/memory.ts';
 import type { Context } from '../context.ts';
 import { Engine } from '../engine.ts';
-import type { ActivityDefinition, WorkflowContext } from '../types.ts';
+import type { ActivityContext, ActivityDefinition, WorkflowContext } from '../types.ts';
 
 /** Drain microtasks so fire-and-forget engine work completes. */
 async function flush(): Promise<void> {
@@ -441,6 +441,45 @@ describe('ctx.saga()', () => {
 
     // The activity must have received the full object, not undefined.
     expect(receivedInput).toEqual({ queue: 'orders' });
+
+    engine[Symbol.dispose]();
+  });
+
+  // ---------------------------------------------------------------------------
+  // 10. ActivityContext is forwarded to the execute wrapper — regression for
+  //     the zero-arg wrapper that dropped the engine-injected context.
+  //
+  //     When the engine calls an activity it appends the ActivityContext as the
+  //     last positional argument. A wrapper that ignores all args silently
+  //     discards that context, preventing activities from sending heartbeats or
+  //     checking the abort signal. The execute wrapper must forward the context.
+  // ---------------------------------------------------------------------------
+
+  it('forwards ActivityContext to execute so heartbeat and signal are available', async () => {
+    const engine = new Engine();
+    let receivedContext: ActivityContext | undefined;
+
+    const activity: ActivityDefinition<string, string> = {
+      name: 'context-capturing',
+      execute: async (input: string, context?: ActivityContext) => {
+        receivedContext = context;
+        return `done:${input}`;
+      },
+    };
+
+    engine.register('context-forwarding-saga', async function* (ctx: WorkflowContext) {
+      const c = ctx as Context;
+      yield* c.saga([{ definition: activity, input: 'hello' }]);
+    });
+
+    const handle = await engine.start('context-forwarding-saga', null);
+    await handle.result();
+
+    // The activity must have received an ActivityContext (not undefined).
+    // Without context forwarding in the execute wrapper, this would be undefined.
+    expect(receivedContext).toBeDefined();
+    expect(typeof receivedContext?.signal).toBe('object');
+    expect(typeof receivedContext?.heartbeat).toBe('function');
 
     engine[Symbol.dispose]();
   });

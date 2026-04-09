@@ -31,6 +31,7 @@ import { validateAttributeType } from './search-attributes.ts';
 import { isAsyncGeneratorFunction, isGeneratorFunction } from './step-context.ts';
 import type {
   ActivityCallOptions,
+  ActivityContext,
   ActivityDefinition,
   Duration,
   SearchAttributeSchema,
@@ -927,10 +928,19 @@ export class Context implements WorkflowContext {
         // positional argument to ctx.run(). If we passed it as a separate arg,
         // the isActivityCallOptions heuristic could silently strip it when the
         // input object happens to look like ActivityCallOptions (e.g.
-        // { queue: 'orders' }).  A zero-argument wrapper avoids the ambiguity
-        // entirely and is always passed to the activity as its sole argument.
+        // { queue: 'orders' }).  The wrapper accepts the ActivityContext the
+        // engine injects as its only positional arg (args=[], so the engine
+        // appends context at position 0) and forwards it to execute so that
+        // activities running inside a saga still receive cancellation signals
+        // and can send heartbeats.
         const capturedInput = step.input;
-        const executeActivity = () => stepDefinition.execute(capturedInput);
+        // ctx.run() expects fn: (...args: unknown[]) => ... so the wrapper must
+        // accept a rest-args signature. The engine appends ActivityContext after
+        // operation.args (which is empty for a saga step), so injected[0] is the
+        // ActivityContext. Casting here is safe by construction — the engine only
+        // ever appends ActivityContext values.
+        const executeActivity = (...injected: unknown[]) =>
+          stepDefinition.execute(capturedInput, injected[0] as ActivityContext | undefined);
 
         // Give the wrapper a stable name so ctx.run() derives a meaningful
         // activityName (fn.name || 'anonymous'). Without this, every saga
