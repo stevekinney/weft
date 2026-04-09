@@ -824,7 +824,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
    * Avoids a storage.get() in the checkpoint hot path by keeping the latest
    * sequence number and hash in memory. Cleared when a workflow is cleaned up.
    */
-  #eventLogHeads: Map<string, EventHeadRecord> = new Map();
+  #eventLogHeads: Map<string, Readonly<EventHeadRecord>> = new Map();
 
   constructor(options?: EngineConstructorOptions) {
     super();

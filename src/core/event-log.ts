@@ -64,8 +64,12 @@ export interface EventHeadRecord {
 /**
  * The head state for a workflow with no committed entries.
  * Used as the starting point when appending the first event.
+ * Frozen to prevent accidental mutation of the shared genesis sentinel.
  */
-export const EMPTY_EVENT_HEAD: EventHeadRecord = { sequence: -1, lastHash: GENESIS_HASH };
+export const EMPTY_EVENT_HEAD: Readonly<EventHeadRecord> = Object.freeze({
+  sequence: -1,
+  lastHash: GENESIS_HASH,
+});
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -134,27 +138,12 @@ export class EventLog {
   appendToBatch(
     event: { type: string; payload: unknown },
     batchOperations: BatchOperation[],
-    head: EventHeadRecord,
+    head: Readonly<EventHeadRecord>,
   ): EventHeadRecord {
-    const sequence = head.sequence + 1;
-    const prevHash = head.lastHash;
-
-    const entry: WorkflowLogEntry = {
-      type: event.type,
-      workflowId: this.#workflowId,
-      sequence,
-      prevHash,
-      payload: event.payload,
-      timestamp: Date.now(),
-    };
-
-    const encoded = encode(entry);
-    const hash = hashBytes(encoded);
-
-    const newHead: EventHeadRecord = { sequence, lastHash: hash };
+    const { encoded, newHead } = this.#buildEntry(event, head);
 
     batchOperations.push(
-      { type: 'put', key: KEYS.event(this.#workflowId, sequence), value: encoded },
+      { type: 'put', key: KEYS.event(this.#workflowId, newHead.sequence), value: encoded },
       { type: 'put', key: KEYS.eventHead(this.#workflowId), value: encode(newHead) },
     );
 
@@ -180,27 +169,11 @@ export class EventLog {
     batchOperations?: BatchOperation[],
   ): Promise<{ sequence: number; hash: string; newHead: EventHeadRecord }> {
     const head = await this.#readHead();
-
-    const sequence = head.sequence + 1;
-    const prevHash = head.lastHash;
-
-    const entry: WorkflowLogEntry = {
-      type: event.type,
-      workflowId: this.#workflowId,
-      sequence,
-      prevHash,
-      payload: event.payload,
-      timestamp: Date.now(),
-    };
-
-    const encoded = encode(entry);
-    const hash = hashBytes(encoded);
-
-    const newHead: EventHeadRecord = { sequence, lastHash: hash };
+    const { encoded, hash, newHead } = this.#buildEntry(event, head);
 
     const entryPut: BatchOperation = {
       type: 'put',
-      key: KEYS.event(this.#workflowId, sequence),
+      key: KEYS.event(this.#workflowId, newHead.sequence),
       value: encoded,
     };
 
@@ -216,7 +189,7 @@ export class EventLog {
       await this.#storage.batch([entryPut, headPut]);
     }
 
-    return { sequence, hash, newHead };
+    return { sequence: newHead.sequence, hash, newHead };
   }
 
   // -------------------------------------------------------------------------
@@ -304,6 +277,36 @@ export class EventLog {
   // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
+
+  /**
+   * Construct a new log entry from an event and the current head state.
+   *
+   * Returns the encoded bytes, the hash of those bytes, and the updated head
+   * record. Both {@link appendToBatch} and {@link append} delegate here to
+   * avoid duplicating the entry-construction logic.
+   */
+  #buildEntry(
+    event: { type: string; payload: unknown },
+    head: Readonly<EventHeadRecord>,
+  ): { entry: WorkflowLogEntry; encoded: Uint8Array; hash: string; newHead: EventHeadRecord } {
+    const sequence = head.sequence + 1;
+    const prevHash = head.lastHash;
+
+    const entry: WorkflowLogEntry = {
+      type: event.type,
+      workflowId: this.#workflowId,
+      sequence,
+      prevHash,
+      payload: event.payload,
+      timestamp: Date.now(),
+    };
+
+    const encoded = encode(entry);
+    const hash = hashBytes(encoded);
+    const newHead: EventHeadRecord = { sequence, lastHash: hash };
+
+    return { entry, encoded, hash, newHead };
+  }
 
   /**
    * Read the current head record from storage.

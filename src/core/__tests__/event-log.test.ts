@@ -96,7 +96,11 @@ describe('EventLog.append()', () => {
     const log = makeLog(storage);
 
     const operations: import('../../storage/interface.ts').BatchOperation[] = [];
-    await log.append({ type: 'batched', payload: 'yes' }, operations);
+    const { newHead } = await log.append({ type: 'batched', payload: 'yes' }, operations);
+
+    // newHead reflects the in-flight state even before the batch flushes.
+    expect(newHead.sequence).toBe(0);
+    expect(newHead.lastHash).toHaveLength(16);
 
     // Nothing written to storage yet — the batch was not flushed.
     const entries = await collectScan(log);
@@ -157,6 +161,16 @@ describe('EventLog.scan()', () => {
     const entries = await collectScan(log);
     // Only one typed entry, not two (no head record leaking through).
     expect(entries).toHaveLength(1);
+  });
+
+  it('returns an empty iterable when fromSequence is beyond the last entry', async () => {
+    const storage = makeStorage();
+    const log = makeLog(storage);
+
+    await log.append({ type: 'only', payload: null });
+
+    const entries = await collectScan(log, { fromSequence: 99 });
+    expect(entries).toHaveLength(0);
   });
 });
 
@@ -272,9 +286,9 @@ describe('EventLog.verify()', () => {
 
     const result = await log.verify();
     expect(result.valid).toBe(false);
-    // The tampered entry itself (sequence 1) or the entry that follows it
-    // (sequence 2, whose prevHash no longer matches) should be flagged.
-    expect(typeof result.firstInvalidSequence).toBe('number');
+    // Entry 1 carries prevHash='0000000000000000' (genesis) but the verifier
+    // expects it to match hash(entry0_bytes). That mismatch is detected first.
+    expect(result.firstInvalidSequence).toBe(1);
   });
 });
 
