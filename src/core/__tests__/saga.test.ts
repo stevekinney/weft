@@ -362,4 +362,86 @@ describe('ctx.saga()', () => {
 
     engine[Symbol.dispose]();
   });
+
+  // ---------------------------------------------------------------------------
+  // 8. Execute wrapper is named — regression for anonymous-step observability bug.
+  //
+  //    ctx.run() derives activityName from fn.name || 'anonymous'. Without an
+  //    explicit Object.defineProperty on the execute wrapper, every saga step
+  //    would appear as 'anonymous' in the operation request, breaking
+  //    observability, logging, and interceptor differentiation by activity name.
+  // ---------------------------------------------------------------------------
+
+  it('execute wrapper carries the activity definition name', async () => {
+    const engine = new Engine();
+    const capturedNames: string[] = [];
+
+    // Intercept the raw activity function name by wrapping the inner execute.
+    // We do this by defining a custom activity whose execute fn captures what
+    // name ctx.run received from the wrapper.
+    const activity = makeActivity({
+      name: 'named-activity',
+      execute: (_input: string) => 'done',
+    });
+
+    engine.register('name-check-saga', async function* (ctx: WorkflowContext) {
+      const c = ctx as Context;
+
+      // Patch ctx.run to record the function name it receives.
+      const originalRun = c.run.bind(c);
+      c.run = function* (fn: (...args: unknown[]) => unknown, ...rest: unknown[]) {
+        capturedNames.push(fn.name);
+        return yield* originalRun(fn, ...rest);
+      } as typeof c.run;
+
+      yield* c.saga([{ definition: activity, input: 'test' }]);
+    });
+
+    const handle = await engine.start('name-check-saga', null);
+    await handle.result();
+
+    // The execute wrapper must carry the activity's definition name, not 'anonymous'.
+    expect(capturedNames[0]).toBe('named-activity');
+
+    engine[Symbol.dispose]();
+  });
+
+  // ---------------------------------------------------------------------------
+  // 9. Input that looks like ActivityCallOptions is not silently swallowed.
+  //
+  //    ctx.run() applies an isActivityCallOptions heuristic to the last
+  //    positional argument. If saga passes step.input as a second arg,
+  //    an input like { queue: 'orders' } would be stripped and treated as
+  //    scheduling options rather than activity data. The execute wrapper must
+  //    close over step.input so it is never exposed as a positional argument.
+  // ---------------------------------------------------------------------------
+
+  it('delivers input that looks like ActivityCallOptions unchanged to the activity', async () => {
+    const engine = new Engine();
+    let receivedInput: unknown;
+
+    const activity = makeActivity({
+      name: 'options-like-input',
+      execute: (input: { queue: string }) => {
+        receivedInput = input;
+        return 'captured';
+      },
+    });
+
+    engine.register('options-like-saga', async function* (ctx: WorkflowContext) {
+      const c = ctx as Context;
+      // This input has a 'queue' key, which is a DISCRIMINATOR_KEYS member.
+      // If passed as a positional arg to ctx.run(), isActivityCallOptions
+      // would classify it as ActivityCallOptions and strip it from args.
+      yield* c.saga([{ definition: activity as ActivityDefinition, input: { queue: 'orders' } }]);
+    });
+
+    const handle = await engine.start('options-like-saga', null);
+    await handle.result();
+
+    // The activity must have received the full object, not undefined.
+    expect(receivedInput).toEqual({ queue: 'orders' });
+
+    engine[Symbol.dispose]();
+  });
 });

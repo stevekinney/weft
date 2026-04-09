@@ -923,14 +923,24 @@ export class Context implements WorkflowContext {
     for (const step of steps) {
       const stepDefinition = step.definition;
       try {
-        // Call execute as a method on the definition object (obj.method form)
-        // so that any `this` binding is preserved. We wrap in an arrow function
-        // because ctx.run() expects a plain function reference, not a bound
-        // method reference, and the wrapper satisfies both concerns.
-        const output = yield* this.run(
-          (...args: unknown[]) => stepDefinition.execute(...args),
-          step.input,
-        );
+        // Close step.input inside the wrapper so it is never passed as a
+        // positional argument to ctx.run(). If we passed it as a separate arg,
+        // the isActivityCallOptions heuristic could silently strip it when the
+        // input object happens to look like ActivityCallOptions (e.g.
+        // { queue: 'orders' }).  A zero-argument wrapper avoids the ambiguity
+        // entirely and is always passed to the activity as its sole argument.
+        const capturedInput = step.input;
+        const executeActivity = () => stepDefinition.execute(capturedInput);
+
+        // Give the wrapper a stable name so ctx.run() derives a meaningful
+        // activityName (fn.name || 'anonymous'). Without this, every saga
+        // step appears as 'anonymous' in logs and interceptors.
+        Object.defineProperty(executeActivity, 'name', {
+          value: stepDefinition.name,
+          configurable: true,
+        });
+
+        const output = yield* this.run(executeActivity);
         completed.push({ definition: stepDefinition, input: step.input, output });
         lastOutput = output;
       } catch (stepError) {
