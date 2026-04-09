@@ -2052,6 +2052,13 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     // Store checkpoint for future persistence
     this.#checkpoints.set(workflowId, resumeCheckpoint);
 
+    // Restore the event log head from storage so that the next appendToBatch()
+    // call uses the correct sequence number and prevHash rather than falling
+    // back to EMPTY_EVENT_HEAD (sequence -1) and overwriting existing entries.
+    const eventLog = new EventLog(this.#storage, workflowId);
+    const restoredHead = await eventLog.loadHead();
+    this.#eventLogHeads.set(workflowId, restoredHead);
+
     // Create result promise and handle
     const { promise, resolve, reject } = Promise.withResolvers<unknown>();
     this.#resultResolvers.set(workflowId, { resolve, reject });

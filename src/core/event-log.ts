@@ -275,6 +275,25 @@ export class EventLog {
   }
 
   // -------------------------------------------------------------------------
+  // Public: loadHead
+  // -------------------------------------------------------------------------
+
+  /**
+   * Read the current head record from storage and return it.
+   *
+   * This is the async counterpart to the synchronous cache lookup in the
+   * engine. Call it when resuming a workflow after an engine restart so that
+   * the in-memory `#eventLogHeads` cache can be re-seeded before the next
+   * {@link appendToBatch} call.
+   *
+   * Returns `EMPTY_EVENT_HEAD` (sequence -1) when no head record exists
+   * (i.e., the log is empty or this workflow has never written an event).
+   */
+  async loadHead(): Promise<EventHeadRecord> {
+    return this.#readHead();
+  }
+
+  // -------------------------------------------------------------------------
   // Private helpers
   // -------------------------------------------------------------------------
 

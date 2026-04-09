@@ -467,6 +467,62 @@ describe('crash recovery', () => {
     engine[Symbol.dispose]();
   });
 
+  it('restores event log head on resume so the next checkpoint does not overwrite prior entries', async () => {
+    const storage = new MemoryStorage();
+
+    // Workflow that blocks on a signal so we can inspect the event log mid-run.
+    function makeWorkflow() {
+      return async function* (ctx: WorkflowContext) {
+        const c = ctx as Context;
+        // Run one activity so a checkpoint is written before we crash.
+        yield* c.run(async () => 'step-one');
+        // Block here to simulate the engine crashing while still running.
+        yield* c.waitForSignal<string>('resume-signal');
+        return 'done';
+      };
+    }
+
+    // --- Engine 1: start the workflow, let step-one checkpoint flush, then crash ---
+    const engine1 = new Engine({ storage });
+    engine1.register('event-log-resume', makeWorkflow());
+    await engine1.start('event-log-resume', null, { id: 'wf-el-resume' });
+    await flush();
+    engine1[Symbol.dispose]();
+
+    // Read the event log head that engine1 wrote.
+    const { EventLog: EventLogClass } = await import('./event-log.ts');
+    const logBeforeRestart = new EventLogClass(storage, 'wf-el-resume');
+    const headBeforeRestart = await logBeforeRestart.loadHead();
+
+    // There must be at least one event from engine1's checkpoint write.
+    expect(headBeforeRestart.sequence).toBeGreaterThanOrEqual(0);
+
+    // --- Engine 2: resume the same workflow ---
+    const engine2 = new Engine({ storage });
+    engine2.register('event-log-resume', makeWorkflow());
+    const handles = await engine2.recoverAll();
+    expect(handles).toHaveLength(1);
+    await flush();
+
+    // Send the signal so the workflow runs to completion (writing another checkpoint).
+    await engine2.signal('wf-el-resume', 'resume-signal', 'go');
+    await flush();
+
+    // Read the event log head after engine2 wrote its checkpoint.
+    const logAfterResume = new EventLogClass(storage, 'wf-el-resume');
+    const headAfterResume = await logAfterResume.loadHead();
+
+    // The sequence must have advanced beyond what engine1 left behind.
+    // Before the fix, engine2 would reset to sequence 0, overwriting entry 0.
+    expect(headAfterResume.sequence).toBeGreaterThan(headBeforeRestart.sequence);
+
+    // The hash chain must be intact across the restart boundary.
+    const verifyResult = await logAfterResume.verify();
+    expect(verifyResult.valid).toBe(true);
+
+    engine2[Symbol.dispose]();
+  });
+
   it('resume uses BunSQLiteStorage as backend', async () => {
     const { BunSQLiteStorage } = await import('../storage/bun-sql.ts');
 
