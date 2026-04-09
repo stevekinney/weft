@@ -45,12 +45,11 @@ import type {
 /**
  * A single step in a saga: an activity definition and the input to pass to it.
  *
- * `TInput` and `TOutput` are inferred from the definition when using the
- * {@link sagaStep} factory so that `compensate` receives correctly-typed
- * arguments at the definition site. At the array boundary inside `ctx.saga`,
- * types are erased to `unknown` — the implementation guarantees that the input
- * passed to `execute` and `compensate` always matches what was supplied in the
- * original step object.
+ * `TInput` and `TOutput` are inferred from the definition so that `compensate`
+ * receives correctly-typed arguments at the definition site. At the array
+ * boundary inside `ctx.saga`, types are erased to `unknown` — the
+ * implementation guarantees that the input passed to `execute` and `compensate`
+ * always matches what was supplied in the original step object.
  */
 export interface SagaStep<TInput = unknown, TOutput = unknown> {
   definition: ActivityDefinition<TInput, TOutput>;

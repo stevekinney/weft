@@ -298,4 +298,68 @@ describe('ctx.saga()', () => {
 
     engine[Symbol.dispose]();
   });
+
+  // ---------------------------------------------------------------------------
+  // 6. Compensator failure isolation.
+  //
+  //    When a compensator itself throws, that failure must not mask the original
+  //    saga error. The original error propagates to the caller unchanged.
+  // ---------------------------------------------------------------------------
+
+  it('propagates the original error even when a compensator throws', async () => {
+    const engine = new Engine();
+
+    const passing = makeActivity({
+      name: 'passing-for-isolation',
+      execute: (_input: string) => 'ok',
+      compensate: (_input, _output) => {
+        throw new Error('compensator exploded');
+      },
+    });
+
+    const failing = makeActivity({
+      name: 'failing-for-isolation',
+      execute: (_input: string): string => {
+        throw new Error('original saga error');
+      },
+    });
+
+    engine.register('compensator-failure-saga', async function* (ctx: WorkflowContext) {
+      const c = ctx as Context;
+      yield* c.saga([
+        { definition: passing, input: 'x' },
+        { definition: failing, input: 'y' },
+      ]);
+    });
+
+    const handle = await engine.start('compensator-failure-saga', null);
+    // The original error — not the compensator error — must surface to the caller.
+    await expect(handle.result()).rejects.toThrow('original saga error');
+
+    engine[Symbol.dispose]();
+  });
+
+  // ---------------------------------------------------------------------------
+  // 7. Empty steps array.
+  //
+  //    saga([]) with no steps should complete successfully, returning undefined,
+  //    without throwing or calling any compensators.
+  // ---------------------------------------------------------------------------
+
+  it('completes successfully with no steps and returns undefined', async () => {
+    const engine = new Engine();
+
+    engine.register('empty-saga', async function* (ctx: WorkflowContext) {
+      const c = ctx as Context;
+      const result = yield* c.saga([]);
+      return result;
+    });
+
+    const handle = await engine.start('empty-saga', null);
+    const result = await handle.result();
+
+    expect(result).toBeUndefined();
+
+    engine[Symbol.dispose]();
+  });
 });

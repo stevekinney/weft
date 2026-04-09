@@ -156,6 +156,7 @@ export type {
   ContextOperationRequest,
   ContextOptions,
   OffloadReference,
+  SagaStep,
   StreamReference,
   StreamSink,
 } from './core/context';
