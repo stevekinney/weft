@@ -1393,16 +1393,15 @@ describe('handleRequest', () => {
       const { id } = (await json(startResponse)) as { id: string };
       await flush();
 
-      // Insert events into storage so the endpoint has data to return.
-      // Event types use colon-delimited names to match the engine's convention.
-      const events = [
-        { type: 'workflow:started', timestamp: 1000, data: { workflowId: id } },
-        { type: 'activity:started', timestamp: 1500, data: { workflowId: id } },
-        { type: 'workflow:completed', timestamp: 2000, data: { workflowId: id } },
-      ];
-      for (let i = 0; i < events.length; i++) {
-        await storage.put(KEYS.event(id, i), encode(events[i]!));
-      }
+      // Insert events into storage using EventLog so they are written in the
+      // correct WorkflowLogEntry format (with workflowId, sequence, prevHash).
+      // The old approach wrote raw objects that the new EventLog.scan() guard
+      // correctly filters out, causing the endpoint to return an empty list.
+      const { EventLog } = await import('../core/event-log.ts');
+      const log = new EventLog(storage, id);
+      await log.append({ type: 'workflow:started', payload: { workflowId: id } });
+      await log.append({ type: 'activity:started', payload: { workflowId: id } });
+      await log.append({ type: 'workflow:completed', payload: { workflowId: id } });
 
       const response = await handleRequest(request('GET', `/v1/workflows/${id}/events`), engine);
 
@@ -1417,7 +1416,7 @@ describe('handleRequest', () => {
       expect(types).toContain('workflow:started');
       expect(types).toContain('workflow:completed');
 
-      // Events should be in chronological order
+      // Events should be in chronological order (timestamps are assigned at append time)
       for (let i = 1; i < body.events.length; i++) {
         expect(body.events[i]!.timestamp).toBeGreaterThanOrEqual(body.events[i - 1]!.timestamp);
       }

@@ -2667,26 +2667,41 @@ describe('Engine', () => {
   it('engine.getEvents() returns stored events in order', async () => {
     const storage = new MemoryStorage();
     const engine = new Engine({ storage });
-    const { encode: encodeValue } = await import('./codec.ts');
+    const { EventLog } = await import('./event-log.ts');
 
     const workflowId = 'ev-test';
-    const eventData = [
-      { type: 'workflow:started', timestamp: 1000, data: { workflowId } },
-      { type: 'activity:started', timestamp: 1500, data: { workflowId } },
-      { type: 'workflow:completed', timestamp: 2000, data: { workflowId } },
-    ];
-
-    for (let i = 0; i < eventData.length; i++) {
-      await storage.put(KEYS.event(workflowId, i), encodeValue(eventData[i]!));
-    }
+    const log = new EventLog(storage, workflowId);
+    await log.append({ type: 'workflow:started', payload: { workflowId } });
+    await log.append({ type: 'activity:started', payload: { workflowId } });
+    await log.append({ type: 'workflow:completed', payload: { workflowId } });
 
     const events = await engine.getEvents(workflowId);
     expect(events).toHaveLength(3);
     expect(events[0]!.type).toBe('workflow:started');
     expect(events[1]!.type).toBe('activity:started');
     expect(events[2]!.type).toBe('workflow:completed');
-    expect(events[0]!.timestamp).toBe(1000);
-    expect(events[2]!.timestamp).toBe(2000);
+    engine[Symbol.dispose]();
+  });
+
+  it('engine.getEvents() does not return the head record as a spurious event', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const { EventLog } = await import('./event-log.ts');
+    const { KEYS: EventKeys } = await import('../storage/interface.ts');
+
+    const workflowId = 'ev-head-filter';
+    const log = new EventLog(storage, workflowId);
+    await log.append({ type: 'workflow:checkpoint', payload: { step: 1 } });
+
+    // Verify the head record exists in storage under the ev: prefix.
+    const headBytes = await storage.get(EventKeys.eventHead(workflowId));
+    expect(headBytes).not.toBeNull();
+
+    // getEvents() must return only the real entry — not the head record.
+    const events = await engine.getEvents(workflowId);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.type).toBe('workflow:checkpoint');
+
     engine[Symbol.dispose]();
   });
 

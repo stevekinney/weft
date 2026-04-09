@@ -2275,14 +2275,17 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
   /** Retrieve the event history for a workflow. */
   async getEvents(workflowId: string): Promise<WorkflowEvent[]> {
     const events: WorkflowEvent[] = [];
-    const prefix = `ev:${workflowId}:`;
+    const eventLog = new EventLog(this.#storage, workflowId);
 
-    for await (const [, value] of this.#storage.scan(prefix)) {
-      const event = decode(value) as Record<string, unknown>;
+    // Use EventLog.scan() instead of scanning the raw prefix so that the head
+    // record (ev:{workflowId}:head) is filtered out by the isWorkflowLogEntry
+    // guard inside scan(). Previously this method scanned the raw prefix and
+    // returned a spurious entry for the head record on every checkpointed workflow.
+    for await (const entry of eventLog.scan()) {
       events.push({
-        type: (event['type'] as string) ?? 'unknown',
-        timestamp: (event['timestamp'] as number) ?? 0,
-        data: (event['data'] as Record<string, unknown>) ?? {},
+        type: entry.type,
+        timestamp: entry.timestamp,
+        data: (entry.payload as Record<string, unknown>) ?? {},
       });
     }
 
