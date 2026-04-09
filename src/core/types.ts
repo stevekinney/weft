@@ -250,6 +250,26 @@ export interface ActivityDefinition<TInput = unknown, TOutput = unknown> {
   idempotent?: boolean;
   /** Visibility timeout for this activity. Defaults to 30 seconds. */
   visibilityTimeout?: Duration;
+  /**
+   * Optional compensation function. When defined and a saga step that ran this
+   * activity needs to be rolled back, the engine calls `compensate(input, output)`
+   * in reverse order for every step that completed before the failure.
+   *
+   * `input` is the original input passed to `execute`.
+   * `output` is the value returned by `execute` for that invocation.
+   */
+  compensate?: (input: TInput, output: TOutput) => Promise<void> | void;
+  /**
+   * Optional function that returns a resource scope string for this activity.
+   * Used for resource-level locking or throttling; the returned string is
+   * treated as an opaque identifier by the engine.
+   */
+  resourceScope?: (input: TInput) => string;
+  /**
+   * Optional function that returns an idempotency key specific to an
+   * invocation. Takes precedence over `ActivityCallOptions.idempotencyKey`.
+   */
+  idempotencyKey?: (input: TInput) => string;
 }
 
 // ---------------------------------------------------------------------------
