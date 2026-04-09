@@ -41,6 +41,7 @@ export const KEYS = {
   operationResolved: (id: string) => `op:resolved:${id}`,
   event: (workflowId: string, sequence: number) =>
     `ev:${workflowId}:${String(sequence).padStart(10, '0')}`,
+  eventHead: (workflowId: string) => `ev:${workflowId}:head`,
   signal: (workflowId: string, name: string, id: string) => `sig:${workflowId}:${name}:${id}`,
   deadline: (deadline: number, workflowId: string) =>
     `wf-deadline:${String(deadline).padStart(16, '0')}:${workflowId}`,

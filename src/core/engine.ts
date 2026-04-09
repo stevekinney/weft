@@ -47,6 +47,8 @@ import {
   createHandleCacheFinalizer,
   executeRunAllBranches,
 } from './engine-helpers.ts';
+import type { EventHeadRecord } from './event-log.ts';
+import { EMPTY_EVENT_HEAD, EventLog } from './event-log.ts';
 import {
   AttributesChangedEvent,
   CheckpointSizeWarningEvent,
@@ -817,6 +819,12 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
   #alertManager: AlertManager | null;
   /** Tracks workflow IDs that belong to agent-typed workflows for optimization. */
   #agentWorkflowIds = new Set<string>();
+  /**
+   * In-memory cache of the event log head for each workflow.
+   * Avoids a storage.get() in the checkpoint hot path by keeping the latest
+   * sequence number and hash in memory. Cleared when a workflow is cleaned up.
+   */
+  #eventLogHeads: Map<string, EventHeadRecord> = new Map();
 
   constructor(options?: EngineConstructorOptions) {
     super();
@@ -2475,6 +2483,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     this.#chargedAgentOperations.clear();
     this.#chargedAgentOperationsByWorkflow.clear();
     this.#agentWorkflowIds.clear();
+    this.#eventLogHeads.clear();
     this.#broadcastChannel?.close();
     this.#broadcastChannel = null;
   }
@@ -2563,8 +2572,18 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
         );
       }
 
+      // Co-write event log entry in the same batch so checkpoint and log never diverge.
+      // appendToBatch() is synchronous — no storage reads, no extra await.
+      const eventLog = new EventLog(this.#storage, workflowId);
+      const newHead = eventLog.appendToBatch(
+        { type: 'workflow:checkpoint', payload: { step: advanced.step } },
+        operations,
+        this.#eventLogHeads.get(workflowId) ?? EMPTY_EVENT_HEAD,
+      );
+
       await this.#storage.batch(operations);
       this.#checkpoints.set(workflowId, advanced);
+      this.#eventLogHeads.set(workflowId, newHead);
 
       if (hasPendingAttributeChanges) {
         this.dispatchEvent(
@@ -2594,8 +2613,18 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
         });
       }
 
+      // Co-write event log entry in the same batch so checkpoint and log never diverge.
+      // appendToBatch() is synchronous — no storage reads, no extra await.
+      const eventLog = new EventLog(this.#storage, workflowId);
+      const newHead = eventLog.appendToBatch(
+        { type: 'workflow:checkpoint', payload: { step: checkpoint.step } },
+        operations,
+        this.#eventLogHeads.get(workflowId) ?? EMPTY_EVENT_HEAD,
+      );
+
       await this.#storage.batch(operations);
       this.#checkpoints.set(workflowId, checkpoint);
+      this.#eventLogHeads.set(workflowId, newHead);
     }
   }
 
@@ -3846,6 +3875,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     this.#checkpoints.delete(workflowId);
     this.#heartbeatDetails.delete(workflowId);
     this.#agentWorkflowIds.delete(workflowId);
+    this.#eventLogHeads.delete(workflowId);
     this.#cleanupWaiters(workflowId);
 
     // Release the workflow's agent operation dedup entries via the reverse
