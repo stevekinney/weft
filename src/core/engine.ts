@@ -91,6 +91,7 @@ import type {
   Checkpoint,
   CoordinatedUpdateResult,
   EngineOptions,
+  FailureCategory,
   ListFilter,
   OperationOutcome,
   PaginatedResult,
@@ -2686,7 +2687,11 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
         if (message.errorStack) {
           failedError.stack = message.errorStack;
         }
-        await this.#failWorkflow(message.workflowId, failedError);
+        await this.#failWorkflow(
+          message.workflowId,
+          failedError,
+          message.failureCategory ?? 'system',
+        );
         break;
       }
 
@@ -4146,19 +4151,29 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     }
   }
 
-  async #failWorkflow(workflowId: string, error: Error): Promise<void> {
+  async #failWorkflow(
+    workflowId: string,
+    error: Error,
+    failureCategory: FailureCategory = 'system',
+  ): Promise<void> {
     const stateUpdate: Partial<WorkflowState> = {
       status: 'failed',
       error: error.message,
+      failureCategory,
     };
     if (error.stack !== undefined) {
       stateUpdate.errorStack = error.stack;
     }
     await this.#updateWorkflowState(workflowId, stateUpdate);
 
-    // Clean up attribute indexes and deadline timer
+    // Clean up user-set attribute indexes and deadline timer
     await this.#cleanupAttributeIndex(workflowId);
     await this.#scheduler.cancel(`deadline:${workflowId}`, workflowId);
+
+    // Write the failureCategory search attribute so it is queryable via
+    // engine.list({ attributes: [{ key: 'failureCategory', value: '...' }] }).
+    // This must happen AFTER #cleanupAttributeIndex so the entry survives.
+    await this.#writeFailureCategoryAttribute(workflowId, failureCategory);
 
     // Drop in-memory state, release charged operations, and delete durable
     // workflow-keyed records (reviews, pending signals, per-workflow dedup).
@@ -4175,6 +4190,24 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
       resolver.reject(error);
       this.#resultResolvers.delete(workflowId);
     }
+  }
+
+  /**
+   * Write the `failureCategory` search attribute and its index entry after a
+   * workflow fails. Called after `#cleanupAttributeIndex` so this entry is not
+   * immediately swept away by the cleanup, and survives for
+   * `engine.list({ attributes: [{ key: 'failureCategory', ... }] })` queries.
+   */
+  async #writeFailureCategoryAttribute(
+    workflowId: string,
+    failureCategory: FailureCategory,
+  ): Promise<void> {
+    const attributes: Record<string, SearchAttributeValue> = { failureCategory };
+    const indexOperations = buildIndexOperations(workflowId, {}, attributes);
+    await this.#storage.batch([
+      { type: 'put', key: KEYS.attribute(workflowId), value: encode(attributes) },
+      ...indexOperations,
+    ]);
   }
 
   async #updateWorkflowState(workflowId: string, updates: Partial<WorkflowState>): Promise<void> {

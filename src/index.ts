@@ -61,6 +61,7 @@ export type {
   CoordinatedUpdateResult,
   Duration,
   EngineOptions,
+  FailureCategory,
   ListFilter,
   PaginatedResult,
   RetryPolicy,

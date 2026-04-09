@@ -11,6 +11,23 @@ export type WorkflowId = string;
 export type OperationId = string;
 
 // ---------------------------------------------------------------------------
+// Failure category — populated on all failed workflows
+// ---------------------------------------------------------------------------
+
+/**
+ * Classifies why a workflow failed. Populated automatically by the engine on
+ * failure so operators can query e.g. "all planning failures in the last hour"
+ * via `engine.list({ attributes: [{ key: 'failureCategory', value: 'planning' }] })`.
+ *
+ * - `'memory'`    — context window exceeded (LLM / agent)
+ * - `'reflection'` — reserved for future use (complex to detect automatically)
+ * - `'planning'`  — LLM produced an invalid tool call or schema violation
+ * - `'action'`    — an agent tool execution threw
+ * - `'system'`    — any other failure (default for non-agent errors, storage errors, etc.)
+ */
+export type FailureCategory = 'memory' | 'reflection' | 'planning' | 'action' | 'system';
+
+// ---------------------------------------------------------------------------
 // Workflow status state machine
 // ---------------------------------------------------------------------------
 
@@ -34,6 +51,15 @@ export interface WorkflowState {
   result?: unknown;
   error?: string;
   errorStack?: string;
+  /**
+   * Classifies why this workflow failed. Populated automatically on failure;
+   * absent (`undefined`) on workflows that have not failed. `null` indicates
+   * a failure occurred but the category could not be determined.
+   *
+   * Also indexed as a search attribute so callers can query via:
+   * `engine.list({ attributes: [{ key: 'failureCategory', value: 'planning' }] })`
+   */
+  failureCategory?: FailureCategory | null;
   version: string;
   createdAt: number;
   updatedAt: number;
@@ -321,7 +347,14 @@ export type WorkerOutboundMessage =
       operationRequest: OperationRequest;
     }
   | { type: 'completed'; workflowId: WorkflowId; result: unknown }
-  | { type: 'failed'; workflowId: WorkflowId; error: string; errorStack?: string };
+  | {
+      type: 'failed';
+      workflowId: WorkflowId;
+      error: string;
+      errorStack?: string;
+      /** Populated when the inline strategy can classify the failure cause. */
+      failureCategory?: FailureCategory;
+    };
 
 // ---------------------------------------------------------------------------
 // Workflow function signature

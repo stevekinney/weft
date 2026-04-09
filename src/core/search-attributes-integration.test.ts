@@ -201,7 +201,7 @@ for (const backend of storageBackends) {
       expect(attributeBytes).toBeNull();
     });
 
-    it('index entries are cleaned up on workflow failure', async () => {
+    it('user-set index entries are cleaned up on workflow failure; failureCategory index entry survives', async () => {
       const result = backend.factory();
       cleanup = result.cleanup;
       engine = new Engine({ storage: result.storage });
@@ -223,12 +223,17 @@ for (const backend of storageBackends) {
 
       await flush();
 
-      // Verify index entries are cleaned up
+      // The user-set "status" index entry is cleaned up, but the engine-managed
+      // "failureCategory" index entry survives so engine.list({ attributes: ... }) works.
       const indexKeys = await collectKeys(result.storage, 'idx:');
-      expect(indexKeys.length).toBe(0);
+      expect(indexKeys.length).toBe(1);
+      expect(indexKeys[0]).toContain('failureCategory');
 
+      // The attr: record survives (contains failureCategory)
       const attributeBytes = await result.storage.get(KEYS.attribute('wf-fail-cleanup'));
-      expect(attributeBytes).toBeNull();
+      expect(attributeBytes).not.toBeNull();
+      const attributes = decode(attributeBytes!) as Record<string, unknown>;
+      expect(attributes['failureCategory']).toBe('system');
     });
 
     it('index entries are cleaned up on workflow cancellation', async () => {

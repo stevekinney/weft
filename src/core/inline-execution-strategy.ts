@@ -15,6 +15,7 @@ import { Context } from './context.ts';
 import type { ExecutionStrategy } from './execution-strategy.ts';
 import type { TenantContext } from './tenant.ts';
 import type {
+  FailureCategory,
   OperationOutcome,
   SearchAttributeSchema,
   WorkerOutboundMessage,
@@ -36,6 +37,38 @@ export interface InlineExecutionDependencies {
   getNow: () => number;
   maxNestingDepth: number;
   development?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Error classification
+// ---------------------------------------------------------------------------
+
+/**
+ * Classify an error into a {@link FailureCategory} without importing the
+ * concrete error classes (avoids cross-module circular imports). Uses `.name`
+ * for class-based discrimination and falls back to `'system'`.
+ *
+ * Error names that map to specific categories:
+ * - `'ToolSchemaValidationError'` → `'planning'` (LLM produced an invalid tool call)
+ * - `'ToolCallReplayConflictError'` → `'action'` (tool replay conflict; execution-phase)
+ * - `'MCPServerUnavailableError'`, `'MCPToolTimeoutError'` → `'action'` (tool execution)
+ * - everything else → `'system'`
+ */
+function classifyErrorAsFailureCategory(error: unknown): FailureCategory {
+  if (!(error instanceof Error)) {
+    return 'system';
+  }
+
+  switch (error.name) {
+    case 'ToolSchemaValidationError':
+      return 'planning';
+    case 'ToolCallReplayConflictError':
+    case 'MCPServerUnavailableError':
+    case 'MCPToolTimeoutError':
+      return 'action';
+    default:
+      return 'system';
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +293,7 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
         type: 'failed',
         workflowId,
         error: error instanceof Error ? error.message : String(error),
+        failureCategory: classifyErrorAsFailureCategory(error),
       };
       if (error instanceof Error && error.stack !== undefined) {
         failedMessage.errorStack = error.stack;
@@ -299,6 +333,7 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
         type: 'failed',
         workflowId,
         error: innerError instanceof Error ? innerError.message : String(innerError),
+        failureCategory: classifyErrorAsFailureCategory(innerError),
       };
       if (innerError instanceof Error && innerError.stack !== undefined) {
         failedMessage.errorStack = innerError.stack;
