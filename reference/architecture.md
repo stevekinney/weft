@@ -5771,14 +5771,14 @@ Each track produces verifiable artifacts. Each item below is a checkbox a review
 - [x] `AgentToolDefinition` in `src/ai/declaration.ts` has an optional `identity: (input) => { semanticHash: string; intentCriticalFields: string[] }` field.
 - [x] `executeAgentLoop` in `src/ai/agent.ts` consults the effect log before every tool call and short-circuits on `committed` matches.
 - [x] `bun test src/ai/tool-effect-log.test.ts` passes tests that crash mid-tool-call, restore, and assert the tool ran exactly once (mock call count verified).
-- [ ] `src/core/event-log.ts` exists, exports `EventLog` with `append(event)`, `scan(workflowId)`, `replay(workflowId, toStep)`.
-- [ ] Event log entries are written in the same `storage.batch()` call as the checkpoint they correspond to (assertable by reading the storage backend's write log).
-- [ ] Each event entry contains `prevHash: string` chained from the previous entry; `weft verify <workflowId>` exits 0 on unmodified logs and non-zero on tampered logs.
-- [ ] `bun test src/core/__tests__/event-log.test.ts` passes a test that reconstructs state by replaying events and asserts deep equality with the live checkpoint.
+- [x] `src/core/event-log.ts` exists, exports `EventLog` with `append(event)`, `scan(workflowId)`, `replay(workflowId, toStep)`.
+- [x] Event log entries are written in the same `storage.batch()` call as the checkpoint they correspond to (assertable by reading the storage backend's write log).
+- [x] Each event entry contains `prevHash: string` chained from the previous entry; `weft verify <workflowId>` exits 0 on unmodified logs and non-zero on tampered logs.
+- [x] `bun test src/core/__tests__/event-log.test.ts` passes a test that reconstructs state by replaying events and asserts deep equality with the live checkpoint.
 - [x] `src/core/activity.ts` supports `{ run, compensate, resourceScope, idempotencyKey }` activity definitions; `compensate` is optional but, if present, is registered.
 - [x] `src/core/context.ts` exposes `ctx.saga(steps)` that runs activities in order and, on failure, runs `compensate` in reverse for every successfully-completed step.
 - [x] `bun test src/core/__tests__/saga.test.ts` passes a 3-step saga test where step 3 fails and compensators for step 1 and step 2 run exactly once each, verified across an engine restart.
-- [ ] `bun typecheck` and `bun test` both exit 0 after Track 1 lands.
+- [x] `bun typecheck` and `bun test` both exit 0 after Track 1 lands.
 
 ### Track 2 — Testing and diagnosis
 
