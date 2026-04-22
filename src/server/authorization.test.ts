@@ -250,6 +250,83 @@ describe('evaluateAccess', () => {
   });
 });
 
+describe('evaluateAccess defensive default', () => {
+  it('throws when handed a malformed AccessPolicy at runtime', () => {
+    // Construct a malformed policy that violates the type — what would happen
+    // if a JSON-parsed payload reached evaluateAccess without validation. The
+    // function MUST throw rather than silently return undefined and
+    // implicitly grant access.
+    const malformed = { kind: 'made-up' } as unknown as AccessPolicy;
+    expect(() => evaluateAccess(malformed, anonymousPrincipal())).toThrow(/unknown kind: made-up/);
+  });
+
+  it('throws on a malformed nested ScopeRequirement (closes silent-grant exploit)', () => {
+    // Without a defensive default in checkScopeRequirement, this exact shape
+    // would silently grant: { kind: 'made-up', scopes: [] } falls into the
+    // implicit allOf branch, missing.length === 0, returns { allowed: true }.
+    const exploit = {
+      kind: 'scoped',
+      scopes: { kind: 'made-up', scopes: [] },
+    } as unknown as AccessPolicy;
+    const authenticated = principalFromApiKey({ subject: 'k', scopes: ['workflows:read'] });
+    expect(() => evaluateAccess(exploit, authenticated)).toThrow(/unknown kind: made-up/);
+  });
+
+  it('throws on runtime-empty allOf scopes (closes empty-array silent-grant exploit)', () => {
+    // The non-empty tuple type prevents this at compile time. At runtime
+    // (e.g. JSON-deserialized policy), an empty `scopes` array would
+    // satisfy `missing.length === 0` and silently downgrade a scoped
+    // policy to "any authenticated principal allowed."
+    const exploit = {
+      kind: 'scoped',
+      scopes: { kind: 'allOf', scopes: [] },
+    } as unknown as AccessPolicy;
+    const authenticated = principalFromApiKey({ subject: 'k', scopes: ['workflows:read'] });
+    expect(() => evaluateAccess(exploit, authenticated)).toThrow(/empty scopes array/);
+  });
+
+  it('throws on runtime-empty allOf scopes from optionalAuth path too', () => {
+    const exploit = {
+      kind: 'optionalAuth',
+      authenticatedScopes: { kind: 'allOf', scopes: [] },
+    } as unknown as AccessPolicy;
+    const authenticated = principalFromApiKey({ subject: 'k', scopes: ['workflows:read'] });
+    expect(() => evaluateAccess(exploit, authenticated)).toThrow(/empty scopes array/);
+  });
+
+  it('runtime-empty anyOf scopes safely denies (no guard needed)', () => {
+    // anyOf with [] correctly fails the `.some()` check and returns
+    // forbidden — the asymmetry with allOf is intentional, not a bug.
+    const policy = {
+      kind: 'scoped',
+      scopes: { kind: 'anyOf', scopes: [] },
+    } as unknown as AccessPolicy;
+    const authenticated = principalFromApiKey({ subject: 'k', scopes: ['workflows:read'] });
+    const result = evaluateAccess(policy, authenticated);
+    expect(result).toMatchObject({ allowed: false, classification: 'forbidden' });
+  });
+
+  it('throws when anyOf scopes is a poisoned non-array object (closes prototype-trick exploit)', () => {
+    // Without an Array.isArray guard, an attacker could supply
+    // { some: () => true } and force allowed: true through the .some() call.
+    const exploit = {
+      kind: 'scoped',
+      scopes: { kind: 'anyOf', scopes: { some: () => true, join: () => 'x' } },
+    } as unknown as AccessPolicy;
+    const authenticated = principalFromApiKey({ subject: 'k', scopes: ['workflows:read'] });
+    expect(() => evaluateAccess(exploit, authenticated)).toThrow(/scopes is not an array/);
+  });
+
+  it('throws when allOf scopes is a poisoned non-array object', () => {
+    const exploit = {
+      kind: 'scoped',
+      scopes: { kind: 'allOf', scopes: { length: 1, filter: () => [] } },
+    } as unknown as AccessPolicy;
+    const authenticated = principalFromApiKey({ subject: 'k', scopes: ['workflows:read'] });
+    expect(() => evaluateAccess(exploit, authenticated)).toThrow(/scopes is not an array/);
+  });
+});
+
 describe('JWT principals integrate with evaluateAccess', () => {
   it('jwt principal with the right scope passes a scoped access check', () => {
     const principal = principalFromJwtClaims({ scope: 'workflows:write', sub: 's' });
