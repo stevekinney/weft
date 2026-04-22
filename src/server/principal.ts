@@ -3,7 +3,16 @@
  *
  * Principals are the transport-neutral representation of "who made this call."
  * Every transport edge (REST, JSON-RPC HTTP, JSON-RPC WS upgrade, stdio
- * admission) validates credentials and produces exactly one of these shapes.
+ * admission) validates credentials and produces exactly one of these shapes
+ * before any operation pipeline runs.
+ *
+ * Credential *validation* (signature verification, expiry, revocation, format
+ * checks) is the transport edge's responsibility — these factories assume the
+ * inputs they receive describe a credential that has already been accepted.
+ *
+ * The discriminator string for API keys is `'api-key'` (kebab-case) to match
+ * the existing `AuthMethod` literal in `authentication.ts`. Keep them aligned;
+ * the bridge from `AuthResult` to `Principal` relies on byte-identical strings.
  *
  * See Track 8 design decisions 3 and 10.
  */
@@ -18,9 +27,13 @@ import {
  *  access is type-guarded at read sites. */
 export type JwtClaims = Record<string, unknown>;
 
-/** An authenticated caller — JWT, API key, mTLS, or a local stdio session. */
+/**
+ * An authenticated caller — JWT, API key, mTLS, or a local stdio session.
+ * Carries the granted scope set and a `hasScope` accessor; downstream code
+ * should narrow to this shape via `isAuthenticated` before calling `hasScope`.
+ */
 export type AuthenticatedPrincipal = {
-  readonly method: 'jwt' | 'apiKey' | 'mtls' | 'stdio-local';
+  readonly method: 'jwt' | 'api-key' | 'mtls' | 'stdio-local';
   readonly scopes: ReadonlySet<AuthorizationScope>;
   readonly claims: JwtClaims | undefined;
   readonly tenantId: string | undefined;
@@ -28,7 +41,11 @@ export type AuthenticatedPrincipal = {
   hasScope(scope: AuthorizationScope): boolean;
 };
 
-/** An unauthenticated caller. Has no scopes and no `hasScope` method. */
+/**
+ * An unauthenticated caller. Has no scopes and no `hasScope` method —
+ * deliberate, so callers MUST narrow via `isAuthenticated` before any
+ * scope-bearing access.
+ */
 export type UnauthenticatedPrincipal = {
   readonly method: 'unauthenticated';
 };
@@ -62,7 +79,7 @@ export function principalFromApiKey(options: {
 }): AuthenticatedPrincipal {
   const scopes = new Set<AuthorizationScope>(options.scopes);
   return {
-    method: 'apiKey',
+    method: 'api-key',
     scopes,
     claims: undefined,
     tenantId: options.tenantId,
@@ -92,7 +109,19 @@ export function principalFromMutualTls(options: {
   };
 }
 
-/** Build the privileged local stdio principal (every scope). */
+/**
+ * Build the privileged local stdio principal — every authorization scope.
+ *
+ * **Privileged by design.** This principal grants every scope including
+ * `system:admin`. It is reachable only when the `weft rpc-stdio` CLI subcommand
+ * has explicitly enabled local admin via `--startup-token` (with first-frame
+ * authenticate) OR `--allow-unauthenticated-local-admin` (which logs a loud
+ * warning at startup). Never call this from request-bearing transports;
+ * admission MUST be enforced by the CLI gate before this is invoked.
+ *
+ * `tenantId` is intentionally undefined — stdio sits above tenant boundaries
+ * and operations that scope by tenant must reject `undefined` tenantId.
+ */
 export function principalFromStdioLocal(): AuthenticatedPrincipal {
   const scopes = new Set<AuthorizationScope>(AUTHORIZATION_SCOPES);
   return {

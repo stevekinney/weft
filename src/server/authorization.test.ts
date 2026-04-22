@@ -28,21 +28,61 @@ describe('extractScopesFromClaims', () => {
     expect(scopes.has('workflows:write')).toBe(true);
   });
 
-  it('extracts from `scp` claim when `scope` absent', () => {
+  it('extracts from `scp` claim', () => {
     const scopes = extractScopesFromClaims({ scp: 'schedules:read' });
     expect(scopes.has('schedules:read')).toBe(true);
   });
 
-  it('prefers `scope` over `scp` when both are present', () => {
-    const scopes = extractScopesFromClaims({ scope: 'workflows:read', scp: 'schedules:read' });
+  it('merges scopes across `scope`, `scp`, and `permissions`', () => {
+    const scopes = extractScopesFromClaims({
+      scope: 'workflows:read',
+      scp: 'schedules:read',
+      permissions: ['reviews:read'],
+    });
     expect(scopes.has('workflows:read')).toBe(true);
-    expect(scopes.has('schedules:read')).toBe(false);
+    expect(scopes.has('schedules:read')).toBe(true);
+    expect(scopes.has('reviews:read')).toBe(true);
+    expect(scopes.size).toBe(3);
   });
 
-  it('extracts from `permissions` array when neither `scope` nor `scp` is set', () => {
-    const scopes = extractScopesFromClaims({ permissions: ['reviews:read', 'reviews:write'] });
+  it('merges weft scopes from `permissions` even when `scope` carries only OIDC tokens', () => {
+    // Real-world shape: IdP puts OIDC scopes in `scope`, custom scopes in `permissions`.
+    // A short-circuit on `scope` would silently drop the weft scope.
+    const scopes = extractScopesFromClaims({
+      scope: 'openid profile email',
+      permissions: ['workflows:read'],
+    });
+    expect(scopes.has('workflows:read')).toBe(true);
+    expect(scopes.size).toBe(1);
+  });
+
+  it('falls through to `scp` when `scope` is an empty string', () => {
+    const scopes = extractScopesFromClaims({ scope: '', scp: 'schedules:read' });
+    expect(scopes.has('schedules:read')).toBe(true);
+  });
+
+  it('falls through when `scope` is whitespace-only (prevents downgrade attack)', () => {
+    const scopes = extractScopesFromClaims({
+      scope: '   ',
+      scp: 'workflows:admin',
+    });
+    expect(scopes.has('workflows:admin')).toBe(true);
+  });
+
+  it('falls through to `permissions` when `scp` is whitespace-only', () => {
+    const scopes = extractScopesFromClaims({
+      scp: '\t  \n',
+      permissions: ['reviews:read'],
+    });
     expect(scopes.has('reviews:read')).toBe(true);
-    expect(scopes.has('reviews:write')).toBe(true);
+  });
+
+  it('ignores non-string entries in `permissions` array', () => {
+    const scopes = extractScopesFromClaims({
+      permissions: ['workflows:read', 42, null, true, { oops: 'x' }, 'nonsense-scope'],
+    });
+    expect(scopes.has('workflows:read')).toBe(true);
+    expect(scopes.size).toBe(1);
   });
 
   it('silently drops unknown scope strings', () => {
@@ -60,6 +100,15 @@ describe('extractScopesFromClaims', () => {
     const scopes = extractScopesFromClaims({ scope: '   workflows:read    workflows:write  ' });
     expect(scopes.has('workflows:read')).toBe(true);
     expect(scopes.has('workflows:write')).toBe(true);
+  });
+
+  it('ignores non-string claim values', () => {
+    const scopes = extractScopesFromClaims({
+      scope: 42,
+      scp: { weird: true },
+      permissions: 'oops',
+    });
+    expect(scopes.size).toBe(0);
   });
 });
 
@@ -120,12 +169,28 @@ describe('evaluateAccess', () => {
     expect(evaluateAccess(policy, withReadWrite)).toEqual({ allowed: true });
   });
 
-  it('scoped allOf: requires every scope', () => {
+  it('scoped anyOf denial reason names the required scopes', () => {
+    const policy: AccessPolicy = {
+      kind: 'scoped',
+      scopes: { kind: 'anyOf', scopes: ['workflows:write', 'workflows:admin'] },
+    };
+    const result = evaluateAccess(policy, authNoScopes);
+    if (result.allowed) throw new Error('expected denial');
+    expect(result.reason).toContain('workflows:write');
+    expect(result.reason).toContain('workflows:admin');
+  });
+
+  it('scoped allOf: requires every scope (including unauthenticated guard)', () => {
     const policy: AccessPolicy = {
       kind: 'scoped',
       scopes: { kind: 'allOf', scopes: ['workflows:read', 'workflows:write'] },
     };
 
+    // Unauthenticated must short-circuit to `unauthorized`, not `forbidden`.
+    expect(evaluateAccess(policy, unauth)).toMatchObject({
+      allowed: false,
+      classification: 'unauthorized',
+    });
     expect(evaluateAccess(policy, withReadOnly)).toMatchObject({
       allowed: false,
       classification: 'forbidden',
@@ -133,7 +198,7 @@ describe('evaluateAccess', () => {
     expect(evaluateAccess(policy, withReadWrite)).toEqual({ allowed: true });
   });
 
-  it('optionalAuth: unauthenticated proceeds; authenticated must satisfy scopes', () => {
+  it('optionalAuth anyOf: unauthenticated proceeds; authenticated must satisfy scopes', () => {
     const policy: AccessPolicy = {
       kind: 'optionalAuth',
       authenticatedScopes: { kind: 'anyOf', scopes: ['workflows:read'] },
@@ -142,6 +207,19 @@ describe('evaluateAccess', () => {
     expect(evaluateAccess(policy, unauth)).toEqual({ allowed: true });
     expect(evaluateAccess(policy, withReadOnly)).toEqual({ allowed: true });
     expect(evaluateAccess(policy, authNoScopes)).toMatchObject({
+      allowed: false,
+      classification: 'forbidden',
+    });
+  });
+
+  it('optionalAuth allOf: unauthenticated proceeds; authenticated must satisfy every scope', () => {
+    const policy: AccessPolicy = {
+      kind: 'optionalAuth',
+      authenticatedScopes: { kind: 'allOf', scopes: ['workflows:read', 'workflows:write'] },
+    };
+    expect(evaluateAccess(policy, unauth)).toEqual({ allowed: true });
+    expect(evaluateAccess(policy, withReadWrite)).toEqual({ allowed: true });
+    expect(evaluateAccess(policy, withReadOnly)).toMatchObject({
       allowed: false,
       classification: 'forbidden',
     });

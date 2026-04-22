@@ -7,13 +7,13 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { AUTHORIZATION_SCOPES } from './authorization-scope.ts';
 import {
   anonymousPrincipal,
   principalFromApiKey,
   principalFromJwtClaims,
   principalFromMutualTls,
   principalFromStdioLocal,
-  type AuthenticatedPrincipal,
   type Principal,
 } from './principal.ts';
 
@@ -34,11 +34,13 @@ describe('principalFromJwtClaims', () => {
     expect(principal.hasScope('schedules:read')).toBe(true);
   });
 
-  it('derives scopes from `permissions` array when neither `scope` nor `scp` is set', () => {
+  it('merges scopes from `permissions` array with scopes from the string claims', () => {
     const principal = principalFromJwtClaims({
+      scope: 'workflows:read',
       permissions: ['reviews:read', 'reviews:write'],
       sub: 'reviewer',
     });
+    expect(principal.hasScope('workflows:read')).toBe(true);
     expect(principal.hasScope('reviews:read')).toBe(true);
     expect(principal.hasScope('reviews:write')).toBe(true);
   });
@@ -63,6 +65,34 @@ describe('principalFromJwtClaims', () => {
     expect(none.tenantId).toBeUndefined();
   });
 
+  it('prefers `tenantId` when all three tenant fields are set', () => {
+    const principal = principalFromJwtClaims({
+      tenantId: 'wins',
+      tenant_id: 'loses',
+      tenant: 'also-loses',
+      sub: 's',
+    });
+    expect(principal.tenantId).toBe('wins');
+  });
+
+  it('falls through to `tenant_id` when `tenantId` is missing', () => {
+    const principal = principalFromJwtClaims({
+      tenant_id: 'second',
+      tenant: 'third',
+      sub: 's',
+    });
+    expect(principal.tenantId).toBe('second');
+  });
+
+  it('skips empty-string `tenantId` and falls through to `tenant_id`', () => {
+    const principal = principalFromJwtClaims({
+      tenantId: '',
+      tenant_id: 'real-tenant',
+      sub: 's',
+    });
+    expect(principal.tenantId).toBe('real-tenant');
+  });
+
   it('exposes the raw claims as-is and reads `subject` from `sub`', () => {
     const claims = { sub: 'abc', scope: 'workflows:read' };
     const principal = principalFromJwtClaims(claims);
@@ -74,7 +104,7 @@ describe('principalFromJwtClaims', () => {
     const principal = principalFromJwtClaims({
       scope: 42,
       scp: { weird: true },
-      permissions: 'oops' as unknown,
+      permissions: 'oops',
       sub: 's',
     });
     expect(principal.scopes.size).toBe(0);
@@ -82,15 +112,21 @@ describe('principalFromJwtClaims', () => {
 });
 
 describe('principalFromApiKey', () => {
-  it('produces an apiKey principal with the supplied scope set', () => {
+  it('produces an api-key principal with the supplied scope set', () => {
     const principal = principalFromApiKey({
       subject: 'key-42',
       scopes: ['workflows:read', 'workflows:write'],
     });
-    expect(principal.method).toBe('apiKey');
+    expect(principal.method).toBe('api-key');
     expect(principal.subject).toBe('key-42');
     expect(principal.hasScope('workflows:read')).toBe(true);
     expect(principal.claims).toBeUndefined();
+  });
+
+  it('accepts an empty scope list and reports an empty scope set', () => {
+    const principal = principalFromApiKey({ subject: 'key-0', scopes: [] });
+    expect(principal.scopes.size).toBe(0);
+    expect(principal.hasScope('workflows:read')).toBe(false);
   });
 });
 
@@ -106,12 +142,18 @@ describe('principalFromMutualTls', () => {
 });
 
 describe('principalFromStdioLocal', () => {
-  it('produces a stdio-local principal with every authorization scope', () => {
+  it('produces a stdio-local principal that holds every authorization scope', () => {
     const principal = principalFromStdioLocal();
     expect(principal.method).toBe('stdio-local');
-    expect(principal.hasScope('workflows:read')).toBe(true);
-    expect(principal.hasScope('workflows:write')).toBe(true);
-    expect(principal.hasScope('system:admin')).toBe(true);
+    expect(principal.scopes.size).toBe(AUTHORIZATION_SCOPES.length);
+    for (const scope of AUTHORIZATION_SCOPES) {
+      expect(principal.hasScope(scope)).toBe(true);
+    }
+  });
+
+  it('has no tenantId — stdio sits above tenant boundaries', () => {
+    const principal = principalFromStdioLocal();
+    expect(principal.tenantId).toBeUndefined();
   });
 });
 
@@ -121,8 +163,8 @@ describe('anonymousPrincipal', () => {
     expect(principal.method).toBe('unauthenticated');
   });
 
-  it('does not satisfy any scope check via the AuthenticatedPrincipal shape', () => {
+  it('does not carry a hasScope method', () => {
     const principal: Principal = anonymousPrincipal();
-    expect((principal as unknown as AuthenticatedPrincipal).hasScope).toBeUndefined();
+    expect('hasScope' in principal).toBe(false);
   });
 });
