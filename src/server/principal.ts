@@ -17,23 +17,25 @@
  * See Track 8 design decisions 3 and 10.
  */
 
-import {
-  AUTHORIZATION_SCOPES,
-  extractScopesFromClaims,
-  type AuthorizationScope,
-} from './authorization-scope.ts';
+import { extractScopesFromClaims, type AuthorizationScope } from './authorization-scope.ts';
 
 /** A claims object extracted from a JWT. Intentionally loose — individual claim
  *  access is type-guarded at read sites. */
 export type JwtClaims = Record<string, unknown>;
 
 /**
- * An authenticated caller — JWT, API key, mTLS, or a local stdio session.
- * Carries the granted scope set and a `hasScope` accessor; downstream code
- * should narrow to this shape via `isAuthenticated` before calling `hasScope`.
+ * An authenticated caller — JWT, API key, or mTLS. Carries the granted scope
+ * set and a `hasScope` accessor; downstream code should narrow to this shape
+ * via `isAuthenticated` before calling `hasScope`.
+ *
+ * The privileged `'stdio-local'` principal is deferred to the Phase 13 CLI
+ * admission module (see plan design decision 11). That module will extend
+ * this union with its own `method` literal when it lands, co-located with
+ * the admission check so no transport adapter can mint the privileged
+ * principal out-of-band. No factory for stdio-local exists in this PR.
  */
 export type AuthenticatedPrincipal = {
-  readonly method: 'jwt' | 'api-key' | 'mtls' | 'stdio-local';
+  readonly method: 'jwt' | 'api-key' | 'mtls';
   readonly scopes: ReadonlySet<AuthorizationScope>;
   readonly claims: JwtClaims | undefined;
   readonly tenantId: string | undefined;
@@ -103,33 +105,6 @@ export function principalFromMutualTls(options: {
     claims: undefined,
     tenantId: options.tenantId,
     subject: options.subject,
-    hasScope(scope) {
-      return scopes.has(scope);
-    },
-  };
-}
-
-/**
- * Build the privileged local stdio principal — every authorization scope.
- *
- * **Privileged by design.** This principal grants every scope including
- * `system:admin`. It is reachable only when the `weft rpc-stdio` CLI subcommand
- * has explicitly enabled local admin via `--startup-token` (with first-frame
- * authenticate) OR `--allow-unauthenticated-local-admin` (which logs a loud
- * warning at startup). Never call this from request-bearing transports;
- * admission MUST be enforced by the CLI gate before this is invoked.
- *
- * `tenantId` is intentionally undefined — stdio sits above tenant boundaries
- * and operations that scope by tenant must reject `undefined` tenantId.
- */
-export function principalFromStdioLocal(): AuthenticatedPrincipal {
-  const scopes = new Set<AuthorizationScope>(AUTHORIZATION_SCOPES);
-  return {
-    method: 'stdio-local',
-    scopes,
-    claims: undefined,
-    tenantId: undefined,
-    subject: 'stdio-local',
     hasScope(scope) {
       return scopes.has(scope);
     },

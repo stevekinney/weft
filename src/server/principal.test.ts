@@ -7,13 +7,11 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { AUTHORIZATION_SCOPES } from './authorization-scope.ts';
 import {
   anonymousPrincipal,
   principalFromApiKey,
   principalFromJwtClaims,
   principalFromMutualTls,
-  principalFromStdioLocal,
   type Principal,
 } from './principal.ts';
 
@@ -93,6 +91,16 @@ describe('principalFromJwtClaims', () => {
     expect(principal.tenantId).toBe('real-tenant');
   });
 
+  it('skips empty-string `tenant_id` and falls through to `tenant`', () => {
+    const principal = principalFromJwtClaims({
+      tenantId: '',
+      tenant_id: '',
+      tenant: 'last-resort',
+      sub: 's',
+    });
+    expect(principal.tenantId).toBe('last-resort');
+  });
+
   it('exposes the raw claims as-is and reads `subject` from `sub`', () => {
     const claims = { sub: 'abc', scope: 'workflows:read' };
     const principal = principalFromJwtClaims(claims);
@@ -138,22 +146,6 @@ describe('principalFromMutualTls', () => {
     });
     expect(principal.method).toBe('mtls');
     expect(principal.hasScope('system:read')).toBe(true);
-  });
-});
-
-describe('principalFromStdioLocal', () => {
-  it('produces a stdio-local principal that holds every authorization scope', () => {
-    const principal = principalFromStdioLocal();
-    expect(principal.method).toBe('stdio-local');
-    expect(principal.scopes.size).toBe(AUTHORIZATION_SCOPES.length);
-    for (const scope of AUTHORIZATION_SCOPES) {
-      expect(principal.hasScope(scope)).toBe(true);
-    }
-  });
-
-  it('has no tenantId — stdio sits above tenant boundaries', () => {
-    const principal = principalFromStdioLocal();
-    expect(principal.tenantId).toBeUndefined();
   });
 });
 

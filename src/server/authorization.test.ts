@@ -56,6 +56,16 @@ describe('extractScopesFromClaims', () => {
     expect(scopes.size).toBe(1);
   });
 
+  it('deduplicates the same scope appearing in multiple sources', () => {
+    const scopes = extractScopesFromClaims({
+      scope: 'workflows:read',
+      scp: 'workflows:read',
+      permissions: ['workflows:read'],
+    });
+    expect(scopes.has('workflows:read')).toBe(true);
+    expect(scopes.size).toBe(1);
+  });
+
   it('falls through to `scp` when `scope` is an empty string', () => {
     const scopes = extractScopesFromClaims({ scope: '', scp: 'schedules:read' });
     expect(scopes.has('schedules:read')).toBe(true);
