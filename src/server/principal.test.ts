@@ -101,6 +101,21 @@ describe('principalFromJwtClaims', () => {
     expect(principal.tenantId).toBe('last-resort');
   });
 
+  it('skips whitespace-only tenant claims and falls through (consistent with scope claims)', () => {
+    const principal = principalFromJwtClaims({
+      tenantId: '   ',
+      tenant_id: '\t\n',
+      tenant: 'real-tenant',
+      sub: 's',
+    });
+    expect(principal.tenantId).toBe('real-tenant');
+  });
+
+  it('trims surrounding whitespace from an accepted tenantId', () => {
+    const principal = principalFromJwtClaims({ tenantId: '  tenant-a  ', sub: 's' });
+    expect(principal.tenantId).toBe('tenant-a');
+  });
+
   it('exposes the raw claims as-is and reads `subject` from `sub`', () => {
     const claims = { sub: 'abc', scope: 'workflows:read' };
     const principal = principalFromJwtClaims(claims);

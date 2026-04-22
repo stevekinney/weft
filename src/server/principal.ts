@@ -19,8 +19,13 @@
 
 import { extractScopesFromClaims, type AuthorizationScope } from './authorization-scope.ts';
 
-/** A claims object extracted from a JWT. Intentionally loose — individual claim
- *  access is type-guarded at read sites. */
+/**
+ * Raw JWT payload — intentionally loose; individual claim access is
+ * type-guarded at read sites. **Non-authoritative for authorization
+ * decisions.** Use `principal.tenantId`, `principal.subject`, and
+ * `principal.scopes` (all derived and normalized at construction time)
+ * instead. The `claims` bag is preserved for debugging and pass-through.
+ */
 export type JwtClaims = Record<string, unknown>;
 
 /**
@@ -126,9 +131,13 @@ export function isAuthenticated(principal: Principal): principal is Authenticate
 function extractTenantId(claims: JwtClaims): string | undefined {
   for (const key of ['tenantId', 'tenant_id', 'tenant'] as const) {
     const value = claims[key];
-    if (typeof value === 'string' && value.length > 0) {
-      return value;
-    }
+    if (typeof value !== 'string') continue;
+    // Treat whitespace-only as absent so downstream tenant-isolation logic
+    // never receives a blank tenantId that silently passes string checks.
+    // Consistent with `addStringClaimScopes` in `authorization-scope.ts`.
+    const trimmed = value.trim();
+    if (trimmed.length === 0) continue;
+    return trimmed;
   }
   return undefined;
 }
