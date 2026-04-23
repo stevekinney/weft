@@ -147,6 +147,18 @@ export function createOperationRegistry(
         `operation "${operation.name}" inputSchema must be a z.ZodObject (got ${operation.inputSchema.constructor.name}); wrappers like .optional() / transforms hide the top-level shape from the unknown-key policy check`,
       );
     }
+    // Declared shape keys named `__proto__` / `constructor` / `prototype`
+    // bypass the runtime UNSAFE_PROTOTYPE_KEYS filter (which only inspects
+    // unknown keys) and would land on the input object as legitimate
+    // properties. Reject them at registration so the schema author cannot
+    // accidentally open a prototype-pollution vector via the declared shape.
+    const declaredKeys = Object.keys(operation.inputSchema.shape);
+    const unsafeDeclared = declaredKeys.filter((key) => UNSAFE_PROTOTYPE_KEYS.has(key));
+    if (unsafeDeclared.length > 0) {
+      throw new Error(
+        `operation "${operation.name}" inputSchema declares unsafe top-level keys: ${unsafeDeclared.join(', ')}. Names that match a prototype-pollution vector (__proto__, constructor, prototype) are forbidden as schema keys.`,
+      );
+    }
     // Shallow-freeze the operation reference so a later caller cannot mutate
     // `access`, `transports`, or `invoke` after the construction-time
     // duplicate / schema checks. `Object.freeze` is shallow but the fields
@@ -292,12 +304,31 @@ function parseAndApplyUnknownKeyPolicy(
   policyKey: keyof UnknownKeyPolicy,
 ): { kind: 'ok'; input: unknown } | { kind: 'failure'; fault: OperationFault } {
   const policy = operation.unknownKeyPolicy[policyKey];
-  const knownKeys = extractTopLevelObjectKeys(operation.inputSchema);
+
+  // The registry asserts inputSchema is a `z.ZodObject` at construction
+  // time, but a defensive try/catch keeps any future relaxation of that
+  // invariant from leaking an uncaught error to the transport edge.
+  let knownKeys: ReadonlySet<string>;
+  try {
+    knownKeys = extractTopLevelObjectKeys(operation.inputSchema);
+  } catch {
+    return {
+      kind: 'failure',
+      fault: { code: 'EngineFailure', message: 'internal error', data: {} },
+    };
+  }
 
   let preParseInput: unknown = rawInput;
   let passthroughExtras: ReadonlyArray<readonly [string, unknown]> = [];
 
-  if (rawInput !== null && typeof rawInput === 'object') {
+  // Arrays satisfy `typeof === 'object'` but are not the `params` shape this
+  // pipeline supports — fall straight through to `safeParse` so the schema
+  // produces a clean shape error instead of pretending each numeric index
+  // is an "unrecognized top-level key" or coercing the array to an object.
+  const isPlainObject =
+    rawInput !== null && typeof rawInput === 'object' && !Array.isArray(rawInput);
+
+  if (isPlainObject) {
     const unknownTopLevel = Object.keys(rawInput as Record<string, unknown>).filter(
       (key) => !knownKeys.has(key),
     );
@@ -320,19 +351,27 @@ function parseAndApplyUnknownKeyPolicy(
           },
         };
       }
+      // For BOTH `strip` and `passthrough` policies, we hand only the known
+      // top-level keys to the schema. If we let unknown keys reach
+      // `safeParse`, a schema declared `.strict()` would reject them and
+      // override the catalog's policy — making the catalog non-authoritative.
+      // The catalog's policy MUST win at the top level, so we strip first
+      // (always) and re-attach passthrough extras after the parse succeeds.
       // `__proto__` / `prototype` / `constructor` are filtered by
-      // `sanitizeTopLevel`, so the prototype chain cannot be polluted
-      // via passthrough re-attachment.
+      // `sanitizeTopLevel`, so the prototype chain cannot be polluted via
+      // passthrough re-attachment.
       const sanitized = sanitizeTopLevel(
         rawInput as Record<string, unknown>,
         knownKeys,
-        policy === 'passthrough' ? unknownTopLevel : [],
+        // Empty passthrough list — always strip at parse time.
+        [],
       );
       preParseInput = sanitized;
       if (policy === 'passthrough') {
+        const rawRecord = rawInput as Record<string, unknown>;
         passthroughExtras = unknownTopLevel
           .filter((key) => !UNSAFE_PROTOTYPE_KEYS.has(key))
-          .map((key) => [key, sanitized[key]] as const);
+          .map((key) => [key, rawRecord[key]] as const);
       }
     }
   }
@@ -362,13 +401,19 @@ function parseAndApplyUnknownKeyPolicy(
   if (passthroughExtras.length === 0) return { kind: 'ok', input: parsed };
 
   // Fresh null-prototype object so we don't mutate zod's output and so
-  // downstream code cannot observe a polluted prototype chain.
+  // downstream code cannot observe a polluted prototype chain via
+  // passthrough re-attachment.
   const merged: Record<string, unknown> = Object.create(null);
   for (const [key, value] of Object.entries(parsed)) {
     if (UNSAFE_PROTOTYPE_KEYS.has(key)) continue;
     merged[key] = value;
   }
+  // Parsed output wins over passthrough extras when names collide. The
+  // registry rejects pipes/transforms at construction time, so this can
+  // only happen if a future relaxation allows them — but the precedence
+  // matters either way: the parse is the source of truth for known keys.
   for (const [key, value] of passthroughExtras) {
+    if (key in merged) continue;
     merged[key] = value;
   }
   return { kind: 'ok', input: merged };

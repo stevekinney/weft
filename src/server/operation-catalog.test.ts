@@ -290,6 +290,102 @@ describe('executeOperation — step 5: unknown-key policy', () => {
     const value = result.value as { receivedKeys: string[] };
     expect(value.receivedKeys.toSorted()).toEqual(['extra', 'id']);
   });
+
+  it('passthrough policy is authoritative even when schema is .strict()', async () => {
+    // Regression: previously, the `passthrough` policy fed unknown keys
+    // straight to `safeParse`, so a schema declared with `.strict()` would
+    // reject them and override the catalog's directive. The catalog's
+    // policy MUST win at the top level — strip extras before parsing,
+    // re-attach them after a successful parse.
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.passthroughstrict',
+        inputSchema: z.object({ id: z.string() }).strict(),
+        outputSchema: z.object({ receivedKeys: z.array(z.string()) }),
+        invoke: async ({ input }) => ({
+          receivedKeys: Object.keys(input as object).toSorted(),
+        }),
+        unknownKeyPolicy: { http: 'passthrough', jsonRpc: 'reject' },
+      }),
+    ]);
+    const result = await executeOperation(
+      'weft.test.passthroughstrict',
+      { id: 'x', extra: 'snuck-in' },
+      {
+        principal: anonymousPrincipal(),
+        engine: fakeEngine,
+        transport: 'http-rest',
+        registry,
+      },
+    );
+    if (!result.ok) throw new Error('expected ok');
+    const value = result.value as { receivedKeys: string[] };
+    expect(value.receivedKeys.toSorted()).toEqual(['extra', 'id']);
+  });
+
+  it('array input is handed straight to the schema (not coerced to object)', async () => {
+    // Arrays satisfy `typeof === 'object'` but are not the `params` shape
+    // we support. Without an `Array.isArray` guard, the unknown-key
+    // pre-pass would treat the enumerable extra property as "unrecognized
+    // key" (under `reject`) or coerce the array to a stripped null-
+    // prototype object (under `strip`/`passthrough`). Either path is
+    // wrong — let the schema produce its native shape error.
+    //
+    // The array is decorated with an enumerable own property to give the
+    // (broken) pre-pass an actual unknown key to choke on; this proves
+    // the guard fires, not that the array happens to have no extras.
+    const arrayWithExtra = Object.assign([1, 2, 3], { snuckIn: 'extra' });
+    const result = await executeOperation(
+      'weft.test.unknownKey',
+      arrayWithExtra as unknown as Record<string, unknown>,
+      {
+        principal: anonymousPrincipal(),
+        engine: fakeEngine,
+        transport: 'http-rest',
+        registry: regWithPolicy('reject'),
+      },
+    );
+    if (result.ok) throw new Error('expected fault');
+    expect(result.fault.code).toBe('InvalidParams');
+    if (result.fault.code !== 'InvalidParams') throw new Error('shape');
+    // The Zod-native shape error wins (issue code is `invalid_type` for
+    // an array fed to an object schema). The synthetic
+    // `unrecognized_keys` code MUST NOT appear — that would mean the
+    // pre-pass swallowed the array.
+    const codes = result.fault.data.issues.map((issue) => issue.code);
+    expect(codes).toContain('invalid_type');
+    expect(codes).not.toContain('unrecognized_keys');
+  });
+
+  it('strip policy is authoritative even when schema is .strict()', async () => {
+    // Mirror regression: `strip` must also short-circuit `.strict()` since
+    // the catalog policy is the single authoritative source for top-level
+    // unknown-key disposition. Without the early sanitize, `.strict()`
+    // would reject the call before strip could take effect.
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.stripstrict',
+        inputSchema: z.object({ id: z.string() }).strict(),
+        outputSchema: z.object({ receivedKeys: z.array(z.string()) }),
+        invoke: async ({ input }) => ({
+          receivedKeys: Object.keys(input as object).toSorted(),
+        }),
+        unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
+      }),
+    ]);
+    const result = await executeOperation(
+      'weft.test.stripstrict',
+      { id: 'x', extra: 'snuck-in' },
+      {
+        principal: anonymousPrincipal(),
+        engine: fakeEngine,
+        transport: 'http-rest',
+        registry,
+      },
+    );
+    if (!result.ok) throw new Error('expected ok');
+    expect(result.value).toEqual({ receivedKeys: ['id'] });
+  });
 });
 
 describe('executeOperation — step 6: authorize hook', () => {
@@ -774,6 +870,22 @@ describe('createOperationRegistry', () => {
       invoke: async () => ({}),
     });
     expect(() => createOperationRegistry([op])).toThrow(/must be a z\.ZodObject/);
+  });
+
+  it('rejects operations whose inputSchema declares unsafe top-level keys', () => {
+    // The runtime UNSAFE_PROTOTYPE_KEYS filter only inspects UNKNOWN keys
+    // (the unknown-key-policy step). A schema author could otherwise
+    // declare `__proto__` as a legitimate field and bypass that filter.
+    // The registry must reject such schemas at construction time.
+    for (const unsafe of ['__proto__', 'constructor', 'prototype']) {
+      const op = makeOp({
+        name: `weft.test.unsafe.${unsafe.replace(/[^a-z]/g, '')}`,
+        inputSchema: z.object({ [unsafe]: z.string() }),
+        outputSchema: z.object({}),
+        invoke: async () => ({}),
+      });
+      expect(() => createOperationRegistry([op])).toThrow(/unsafe top-level keys/);
+    }
   });
 
   it('list returns all operations in registration order', () => {
