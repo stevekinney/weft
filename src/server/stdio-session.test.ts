@@ -413,16 +413,31 @@ describe('runStdioSession — dispatch', () => {
     expect(JSON.parse(lines[1]!).id).toBe(2);
   });
 
-  it('main loop: emits -32600 and keeps reading when a chunk without a newline exceeds maxFrameBytes', async () => {
+  it('main loop: on oversize frame, discards attacker-chosen framing and resyncs on next newline', async () => {
+    // The first chunk is a 700-byte unterminated blob — overflow
+    // fires, buffer is cleared, the loop enters discard-until-newline
+    // mode. The attacker then sends a chunk that starts with a
+    // continuation of the oversized frame plus a valid-looking
+    // injected JSON, THEN a real newline, THEN a legit call. Only the
+    // legit call after the real newline is allowed to produce a
+    // response; the attacker-injected id=99 must be swallowed.
     const encoder = new TextEncoder();
-    const oversized = 'x'.repeat(700);
-    const follow =
-      JSON.stringify({ jsonrpc: '2.0', method: 'weft.test.echo', params: { v: 'z' }, id: 2 }) +
+    const oversizedPart1 = 'x'.repeat(700);
+    const attackerContinuation =
+      'yyy' +
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.test.echo',
+        params: { v: 'attacker-injected' },
+        id: 99,
+      }) +
+      '\n' +
+      JSON.stringify({ jsonrpc: '2.0', method: 'weft.test.echo', params: { v: 'legit' }, id: 2 }) +
       '\n';
     const input = new ReadableStream<Uint8Array>({
       start(controller) {
-        controller.enqueue(encoder.encode(oversized));
-        controller.enqueue(encoder.encode(follow));
+        controller.enqueue(encoder.encode(oversizedPart1));
+        controller.enqueue(encoder.encode(attackerContinuation));
         controller.close();
       },
     });
@@ -446,16 +461,44 @@ describe('runStdioSession — dispatch', () => {
     });
     expect(result.exitCode).toBe(0);
     const lines = output.lines();
-    // First response: the -32600 for the oversized pre-newline chunk.
-    // Second response: the follow-up echo, proving the loop did not
-    // get stuck after the overflow.
+    // Exactly two responses: the -32600 for the oversize, and the
+    // legit follow-up echo. The attacker-injected frame must NOT
+    // produce a response — its JSON payload was swallowed in the
+    // resync window before the next real newline.
     expect(lines).toHaveLength(2);
     const overflowResponse = JSON.parse(lines[0]!);
     expect(overflowResponse.error.code).toBe(-32600);
     expect(overflowResponse.error.message).toMatch(/maxFrameBytes/i);
     const echoResponse = JSON.parse(lines[1]!);
     expect(echoResponse.id).toBe(2);
-    expect(echoResponse.result.v).toBe('z');
+    expect(echoResponse.result.v).toBe('legit');
+    for (const line of lines) {
+      const payload = JSON.parse(line);
+      expect(payload.id).not.toBe(99);
+    }
+  });
+
+  it('main loop: emits ParseError when stream closes with an unterminated partial frame', async () => {
+    const partial = JSON.stringify({ jsonrpc: '2.0', method: 'weft.test.ping', id: 1 }); // no trailing \n
+    const input = readableFromLines([partial]);
+    const output = collectingWritable();
+    const result = await runStdioSession({
+      input,
+      output: output.stream,
+      admission: { kind: 'allow-unauthenticated-local-admin' },
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+    });
+    expect(result.exitCode).toBe(0);
+    const lines = output.lines();
+    // Exactly one response: a parse error explaining the unterminated
+    // frame. The session exits cleanly (exitCode 0) — the violation
+    // was at the protocol layer, not an admission failure.
+    expect(lines).toHaveLength(1);
+    const response = JSON.parse(lines[0]!);
+    expect(response.error.code).toBe(-32700);
+    expect(response.error.message).toMatch(/unterminated/i);
   });
 
   it('processes a pipelined auth+call chunk without waiting for more input', async () => {

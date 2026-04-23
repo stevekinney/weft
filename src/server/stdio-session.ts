@@ -283,14 +283,49 @@ async function runMainReadLoop(
   io: SessionIO,
 ): Promise<string> {
   let buffer = initialBuffer;
+  // After emitting an overflow fault, we cannot trust that the byte
+  // stream's next frame boundary is real — the attacker could have
+  // crafted the oversized payload so a synthetic `\n` + fresh JSON
+  // appears later in the same logical frame. Discard bytes until we
+  // see a newline *in the continuation*, then resume normal framing
+  // on whatever follows.
+  let discardingOversize = false;
   while (true) {
     const result = await reader.read();
-    if (result.done) return buffer;
+    if (result.done) {
+      if (buffer.trim().length > 0) {
+        // A partial frame without a trailing newline is a framing
+        // violation on a stream whose contract is newline-delimited.
+        // Emit a parse-error before the `finally` closes the writer,
+        // so the client sees why the last call never got a response.
+        await io.writeFrame({
+          jsonrpc: JSON_RPC_VERSION,
+          error: {
+            code: JSON_RPC_ERROR_CODES.PARSE_ERROR,
+            message: 'unterminated frame at stream close',
+          },
+          id: null,
+        });
+      }
+      return '';
+    }
     buffer += decoder.decode(result.value, { stream: true });
+    if (discardingOversize) {
+      const resumeIndex = buffer.indexOf('\n');
+      if (resumeIndex === -1) {
+        buffer = '';
+        continue;
+      }
+      buffer = buffer.slice(resumeIndex + 1);
+      discardingOversize = false;
+    }
     if (buffer.length > maxFrameBytes && buffer.indexOf('\n') === -1) {
       // A frame with no newline has exceeded the size cap. Emit a
-      // single InvalidRequest and discard the buffer so we don't keep
-      // accumulating.
+      // single InvalidRequest, discard the oversized prefix, and
+      // ignore everything up to the next newline boundary — we can't
+      // trust that the next frame start is where the client says it
+      // is, so resynchronize on the next delimiter rather than
+      // letting the attacker pick where framing resumes.
       await io.writeFrame({
         jsonrpc: JSON_RPC_VERSION,
         error: {
@@ -301,6 +336,7 @@ async function runMainReadLoop(
         id: null,
       });
       buffer = '';
+      discardingOversize = true;
       continue;
     }
     const framed = splitNewlineDelimitedBuffer(buffer, '');
