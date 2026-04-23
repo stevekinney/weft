@@ -62,6 +62,38 @@ describe('splitNewlineDelimitedBuffer', () => {
     expect(buffer).toBe('');
   });
 
+  it('reassembles \\r\\n split across chunk boundaries', () => {
+    // The adversarial case Phase 6's `chunked` e2e test only exercises
+    // implicitly via byte-by-byte writes: the `\r` and `\n` of a CRLF
+    // terminator land in different chunks. The concatenation + split
+    // sequence must still recognize the newline and trim the leading
+    // `\r` from the emitted line. Explicit unit coverage locks this in.
+    const first = splitNewlineDelimitedBuffer('', 'hello\r');
+    expect(first.lines).toEqual([]);
+    expect(first.buffer).toBe('hello\r');
+
+    const second = splitNewlineDelimitedBuffer(first.buffer, '\nworld\r\n');
+    expect(second.lines).toEqual(['hello', 'world']);
+    expect(second.buffer).toBe('');
+  });
+
+  it('returns empty lines and empty buffer for the cold-start identity case', () => {
+    // Documents the `('', '')` identity so a future refactor cannot
+    // accidentally emit a sentinel empty line for this input.
+    const result = splitNewlineDelimitedBuffer('', '');
+    expect(result.lines).toEqual([]);
+    expect(result.buffer).toBe('');
+  });
+
+  it('handles multibyte UTF-8 content without corruption', () => {
+    // Upstream `TextDecoder({ stream: true })` guarantees the chunks
+    // this helper sees are well-formed UTF-8. Still worth pinning that
+    // the string-level operations preserve multibyte content intact.
+    const result = splitNewlineDelimitedBuffer('', '{"msg":"héllo 🌍"}\n');
+    expect(result.lines).toEqual(['{"msg":"héllo 🌍"}']);
+    expect(result.buffer).toBe('');
+  });
+
   it('trims CRLF (\\r\\n) line endings to just the content', () => {
     // The reader splits on `\n`; the trailing `\r` is part of the line
     // content before the split, so it must be trimmed. Otherwise

@@ -22,6 +22,16 @@
  *
  * Pure: no I/O, no allocations beyond the returned arrays/string, no
  * state. Safe to call from any context.
+ *
+ * **No built-in buffer bound.** A peer that never emits a newline can
+ * force the returned `buffer` to grow unboundedly across calls. The
+ * helper is deliberately primitive here — callers that cannot trust
+ * the peer (the Phase 13 runtime stdio session; any future network-
+ * facing consumer) MUST enforce their own max-frame cap and drop /
+ * fault the connection when the buffer exceeds it. The MCP stdio
+ * transport (`src/ai/mcp/transport-stdio.ts`) talks only to a locally
+ * spawned child process and the operator has direct control of that
+ * binary, so no cap is needed there.
  */
 
 export type FramingResult = {
