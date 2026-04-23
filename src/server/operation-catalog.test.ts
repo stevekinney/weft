@@ -275,6 +275,40 @@ describe('executeOperation — step 5: unknown-key policy', () => {
     expect(result.value).toEqual({ receivedKeys: ['id'] });
   });
 
+  it('passthrough -> input has stable null-prototype shape with OR without extras', async () => {
+    // Regression: the input object handed to `invoke` under `passthrough`
+    // policy must have the SAME prototype regardless of whether the
+    // caller sent extras. Previously, the no-extras path returned zod's
+    // output (Object.prototype) and the with-extras path returned a
+    // null-prototype object, so an `invoke` calling `input.hasOwnProperty`
+    // would crash intermittently. Both paths now return a null-prototype
+    // object so the shape is stable.
+    let prototypes: (object | null)[] = [];
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.passthroughshape',
+        inputSchema: z.object({ id: z.string() }),
+        outputSchema: z.object({}),
+        invoke: async ({ input }) => {
+          prototypes.push(Object.getPrototypeOf(input as object));
+          return {};
+        },
+        unknownKeyPolicy: { http: 'passthrough', jsonRpc: 'reject' },
+      }),
+    ]);
+    const ctx = {
+      principal: anonymousPrincipal(),
+      engine: fakeEngine,
+      transport: 'http-rest' as const,
+      registry,
+    };
+    await executeOperation('weft.test.passthroughshape', { id: 'x' }, ctx);
+    await executeOperation('weft.test.passthroughshape', { id: 'x', extra: 'y' }, ctx);
+    expect(prototypes).toHaveLength(2);
+    expect(prototypes[0]).toBe(null);
+    expect(prototypes[1]).toBe(null);
+  });
+
   it('passthrough -> unknown keys preserved into invoke', async () => {
     const result = await executeOperation(
       'weft.test.unknownKey',
@@ -573,6 +607,26 @@ describe('classifyEngineError', () => {
     // malformed fault and fall through to EngineFailure.
     const fault = classifyEngineError({ code: 'NotFound', message: 'no data' });
     expect(fault.code).toBe('EngineFailure');
+  });
+
+  it('classifies an Error subclass with a throwing message getter as EngineFailure', () => {
+    // Defense against an `Error` subclass that overrides `message` with a
+    // throwing accessor. Without try/catch around `error.message`, the
+    // throw would escape `executeOperation` and break its contract of
+    // always returning a `DispatchResult`.
+    class HostileError extends Error {
+      constructor() {
+        super('initial');
+        Object.defineProperty(this, 'message', {
+          get() {
+            throw new Error('secret detail');
+          },
+        });
+      }
+    }
+    const fault = classifyEngineError(new HostileError());
+    expect(fault.code).toBe('EngineFailure');
+    expect(fault.message).toBe('internal error');
   });
 
   it('rejects a fault-shaped object whose `data` is an array', () => {

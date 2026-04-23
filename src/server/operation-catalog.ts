@@ -398,11 +398,18 @@ function parseAndApplyUnknownKeyPolicy(
   }
 
   const parsed = parseResult.data as Record<string, unknown>;
-  if (passthroughExtras.length === 0) return { kind: 'ok', input: parsed };
+  // For non-passthrough policies, return zod's parsed output directly —
+  // its prototype chain is `Object.prototype`, which is what `invoke`
+  // implementations expect.
+  if (policy !== 'passthrough') return { kind: 'ok', input: parsed };
 
-  // Fresh null-prototype object so we don't mutate zod's output and so
-  // downstream code cannot observe a polluted prototype chain via
-  // passthrough re-attachment.
+  // For `passthrough`, ALWAYS rebuild on a null-prototype object — even
+  // when there are no extras to re-attach. This keeps the shape of
+  // `input` consistent across calls to the same operation: `invoke`
+  // implementations under `passthrough` policy can rely on a stable
+  // null-prototype container regardless of whether the caller sent
+  // extras. Without this, an operation that uses `input.hasOwnProperty`
+  // would intermittently fail when extras happened to be present.
   const merged: Record<string, unknown> = Object.create(null);
   for (const [key, value] of Object.entries(parsed)) {
     if (UNSAFE_PROTOTYPE_KEYS.has(key)) continue;
@@ -579,7 +586,20 @@ export function classifyEngineError(error: unknown): OperationFault {
     return error;
   }
   if (error instanceof Error) {
-    const message = error.message.toLowerCase();
+    // Guard against an `Error` subclass that overrides `message` with a
+    // throwing getter (e.g. via `Object.defineProperty`) — without this
+    // try/catch the throw escapes `executeOperation`, breaking its
+    // contract of always returning a `DispatchResult`.
+    let rawMessage: unknown;
+    try {
+      rawMessage = error.message;
+    } catch {
+      return { code: 'EngineFailure', message: 'internal error', data: {} };
+    }
+    if (typeof rawMessage !== 'string') {
+      return { code: 'EngineFailure', message: 'internal error', data: {} };
+    }
+    const message = rawMessage.toLowerCase();
     if (message.includes('not found')) {
       return {
         code: 'NotFound',
