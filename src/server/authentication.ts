@@ -415,7 +415,10 @@ function immutableScopeSet(
         set: ReadonlySet<AuthorizationScope>,
       ) => void,
       thisArg?: unknown,
-    ) => inner.forEach((v, v2) => callback.call(thisArg, v, v2, guarded as never)),
+    ) =>
+      inner.forEach((v, v2) =>
+        callback.call(thisArg, v, v2, guarded as unknown as ReadonlySet<AuthorizationScope>),
+      ),
     keys: () => inner.keys(),
     values: () => inner.values(),
     entries: () => inner.entries(),
@@ -430,12 +433,26 @@ function immutableScopeSet(
 }
 
 /**
+ * Deep-clone an optional JWT claims object so the admitted principal
+ * retains an independent copy. API-key principals rarely carry claims
+ * (JWT is a separate method), but a resolver may populate them for
+ * auditing — `structuredClone` gives a correct deep copy for any
+ * JSON-serializable shape without dragging in a third-party dep.
+ * Returns `undefined` when no claims are attached.
+ */
+function cloneClaims(claims: JWTPayload | undefined): JWTPayload | undefined {
+  if (claims === undefined) return undefined;
+  return structuredClone(claims);
+}
+
+/**
  * Deep-freeze an API-key principal for admission. Returns a new
  * principal whose scope set throws on mutation attempts, whose
- * `hasScope` delegates to the guarded set, and whose outer object is
- * `Object.freeze`d. Caller mutations on the original principal cannot
- * leak into the returned principal, and downstream code attempting to
- * mutate the admitted principal fails loudly.
+ * `hasScope` delegates to the guarded set, whose `claims` is a
+ * structured clone (so caller-side mutations don't leak), and whose
+ * outer object is `Object.freeze`d. Caller mutations on the original
+ * principal cannot leak into the returned principal, and downstream
+ * code attempting to mutate the admitted principal fails loudly.
  *
  * Preconditions: caller must have already run
  * `validateApiKeyPrincipalMethod(principal) === true`.
@@ -445,7 +462,7 @@ function deepFreezeApiKeyPrincipal(principal: AuthenticatedPrincipal): Authentic
   const frozen: AuthenticatedPrincipal = {
     method: 'api-key',
     scopes: guardedScopes,
-    claims: principal.claims,
+    claims: cloneClaims(principal.claims),
     tenantId: principal.tenantId,
     subject: principal.subject,
     hasScope(scope) {
@@ -559,15 +576,23 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
         // key space it is configured for.
         return { authenticated: false, error: 'No valid credentials provided' };
       } else if (apiKeySet?.has(presentedKey)) {
-        // `principalFromApiKey` always returns method: 'api-key', so
-        // the method guard is guaranteed to pass. Skipping it here is
-        // safe because we control both sides of the call.
+        // Apply the same guard as the resolver path to keep the
+        // method-check invariant symmetric across admission paths.
+        // `principalFromApiKey` is guaranteed to return method:'api-key'
+        // today, but running the check catches future changes to the
+        // factory that would otherwise silently skip validation.
         const principal = principalFromApiKey({
           subject: 'api-key-caller',
           scopes: defaultApiKeyScopes,
         });
-        const admitted = deepFreezeApiKeyPrincipal(principal);
-        return { authenticated: true, method: 'api-key', principal: admitted };
+        if (validateApiKeyPrincipalMethod(principal)) {
+          const admitted = deepFreezeApiKeyPrincipal(principal);
+          return { authenticated: true, method: 'api-key', principal: admitted };
+        }
+        // Unreachable today — see the comment above. Keeping the
+        // explicit rejection keeps the invariant loud if the factory
+        // ever produces a non-api-key principal.
+        return { authenticated: false, error: 'No valid credentials provided' };
       }
     }
 

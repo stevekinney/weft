@@ -267,6 +267,37 @@ describe('API-key admission — resolver present', () => {
     expect(result.principal.hasScope('workflows:read')).toBe(true);
     expect(result.principal.hasScope('workflows:write')).toBe(false);
   });
+
+  it('admitted principal claims are deep-cloned so caller mutation does not leak', async () => {
+    // Claims are a nested mutable JSON object. Object.freeze + Set
+    // guards protect scopes, but a resolver that returns and retains a
+    // principal with a mutable claims object could later mutate it and
+    // affect admitted state. The deep-clone at admission isolates it.
+    const originalClaims = { permissions: ['initial'] };
+    type ClaimsShape = { permissions: string[] };
+    const config: AuthConfig = {
+      resolveApiKeyPrincipal: async () => ({
+        method: 'api-key',
+        scopes: new Set<AuthorizationScope>(['workflows:read']),
+        claims: originalClaims,
+        tenantId: undefined,
+        subject: 'claims-isolation-test',
+        hasScope: () => false,
+      }),
+    };
+    const auth = await createAuthenticator(config);
+    const result = await auth(requestWithKey('any-key'));
+
+    expect(result.authenticated).toBe(true);
+    if (!result.authenticated) throw new Error('unreachable');
+    if (result.principal === undefined) throw new Error('expected principal');
+
+    // Caller mutates the original claims object. The admitted
+    // principal's claims must not reflect the mutation.
+    originalClaims.permissions.push('mutated-after-admission');
+    const admittedClaims = result.principal.claims as ClaimsShape | undefined;
+    expect(admittedClaims?.permissions).toEqual(['initial']);
+  });
 });
 
 describe('validateAuthConfig — resolver-only admission', () => {
