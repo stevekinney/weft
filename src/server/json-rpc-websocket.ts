@@ -16,7 +16,12 @@
  */
 
 import { dispatchJsonRpc } from './json-rpc-dispatch.ts';
-import { JSON_RPC_ERROR_CODES, JSON_RPC_VERSION, type JsonRpcId } from './json-rpc-protocol.ts';
+import {
+  JSON_RPC_ERROR_CODES,
+  JSON_RPC_VERSION,
+  isValidJsonRpcId,
+  type JsonRpcId,
+} from './json-rpc-protocol.ts';
 import type { OperationRegistry } from './operation-catalog.ts';
 import type { Principal } from './principal.ts';
 import type {
@@ -37,7 +42,24 @@ export type JsonRpcWebSocketSessionOptions = {
   readonly principal: Principal;
   readonly emitter: JsonRpcWebSocketEmitter;
   readonly feed: WorkflowEventFeed;
+  /**
+   * Maximum concurrent subscriptions per session. Default 100 — a
+   * well-behaved client should never need more. Rejected `subscribe`
+   * requests above the cap return `InvalidRequest (-32600)` so clients
+   * can distinguish resource exhaustion from other failures.
+   */
+  readonly maxSubscriptions?: number;
+  /**
+   * Maximum size of a single incoming frame in bytes. Default 1 MB.
+   * Frames exceeding the limit are rejected with a parse error before
+   * `JSON.parse` touches the payload — a runaway producer cannot force
+   * an unbounded allocation inside the adapter.
+   */
+  readonly maxFrameBytes?: number;
 };
+
+const DEFAULT_MAX_SUBSCRIPTIONS = 100;
+const DEFAULT_MAX_FRAME_BYTES = 1 * 1024 * 1024;
 
 export type JsonRpcWebSocketSession = {
   /** Process one incoming WS frame (UTF-8 text). */
@@ -65,22 +87,42 @@ const SESSION_METHODS = {
   TERMINATED: 'weft.events.terminated',
 } as const;
 
-let nextSubscriptionSequence = 0;
-function generateSubscriptionId(): string {
-  nextSubscriptionSequence += 1;
-  return `sub_${Date.now().toString(36)}_${nextSubscriptionSequence.toString(36)}`;
-}
-
 export function createJsonRpcWebSocketSession(
   options: JsonRpcWebSocketSessionOptions,
 ): JsonRpcWebSocketSession {
   const { registry, engine, principal, emitter, feed } = options;
+  const maxSubscriptions = options.maxSubscriptions ?? DEFAULT_MAX_SUBSCRIPTIONS;
+  const maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
   const subscriptions = new Map<string, ActiveSubscription>();
   let closed = false;
 
-  function emit(message: object): void {
+  // Session-scoped monotonic counter. Scoping to the session (rather
+  // than a module-level global) keeps IDs unique within a connection,
+  // eliminates cross-session ID collision possibilities, and avoids
+  // test pollution — each session starts fresh.
+  let subscriptionSequence = 0;
+  function generateSubscriptionId(): string {
+    subscriptionSequence += 1;
+    return `sub_${Date.now().toString(36)}_${subscriptionSequence.toString(36)}`;
+  }
+
+  /**
+   * Send a frame on the wire. Guards against emitter failures: a
+   * thrown `JSON.stringify` (circular reference) or a thrown
+   * `emitter.send` (closed socket) cannot bubble into background
+   * subscription pumps as an unhandled rejection — swallowed here
+   * after the `closed` flip so the session transitions cleanly.
+   */
+  function emit(message: Record<string, unknown>): void {
     if (closed) return;
-    emitter.send(JSON.stringify(message));
+    try {
+      emitter.send(JSON.stringify(message));
+    } catch {
+      // Emitter unusable — mark closed so background pumps stop. The
+      // transport layer will clean up the socket independently; we
+      // just stop producing frames.
+      closed = true;
+    }
   }
 
   async function handleSubscribe(
@@ -132,6 +174,23 @@ export function createJsonRpcWebSocketSession(
       fromCursor = rawFromCursor;
     }
 
+    if (subscriptions.size >= maxSubscriptions) {
+      emit({
+        jsonrpc: JSON_RPC_VERSION,
+        error: {
+          code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
+          message: `maximum concurrent subscriptions per session (${maxSubscriptions}) exceeded`,
+          data: {
+            weftCode: 'Unprocessable',
+            httpStatus: 422,
+            reason: 'per-session subscription cap exceeded',
+          },
+        },
+        id: id ?? null,
+      });
+      return;
+    }
+
     const subscriptionId = generateSubscriptionId();
     const controller = new AbortController();
     const startingCursor: Cursor = fromCursor ?? '0';
@@ -170,14 +229,21 @@ export function createJsonRpcWebSocketSession(
         if (signal.aborted) break;
         deliver(subscriptionId, envelope);
       }
-      // Natural termination (feed closed normally — buffer overflow
-      // or abort — we only emit terminated for the overflow path
-      // since the consumer already asked for abort or shutdown).
+      // Natural termination path. The feed closes the iterable for
+      // three reasons: abort (client unsubscribed — handled via the
+      // abort path), buffer overflow, or workflow terminal-state
+      // cleanup. Today the feed does not distinguish those two
+      // non-abort cases at its API surface, so we report a generic
+      // `server-closed` reason without claiming it was overflow —
+      // the client can reopen with its last cursor and replay missed
+      // events either way. When the feed gains an explicit
+      // terminal-reason signal (a planned future refinement) this
+      // can carry it through to `workflow-terminal` / `overflow`.
       if (!signal.aborted && !closed) {
         emit({
           jsonrpc: JSON_RPC_VERSION,
           method: SESSION_METHODS.TERMINATED,
-          params: { subscriptionId, reason: 'overflow' },
+          params: { subscriptionId, reason: 'server-closed' },
         });
       }
     } catch (error) {
@@ -261,6 +327,21 @@ export function createJsonRpcWebSocketSession(
   async function handleMessage(frame: string): Promise<void> {
     if (closed) return;
 
+    // Reject frames over the size cap before `JSON.parse` touches the
+    // payload. A runaway producer otherwise forces an unbounded parse
+    // allocation inside the adapter.
+    if (frame.length > maxFrameBytes) {
+      emit({
+        jsonrpc: JSON_RPC_VERSION,
+        error: {
+          code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
+          message: `frame size exceeds limit of ${maxFrameBytes} bytes`,
+        },
+        id: null,
+      });
+      return;
+    }
+
     // Quick peek at the parsed shape to route subscribe/unsubscribe
     // before the dispatcher would classify them as "unknown method".
     let parsed: unknown;
@@ -299,19 +380,23 @@ export function createJsonRpcWebSocketSession(
       return;
     }
 
+    // Narrow id via the runtime guard rather than an `as` cast —
+    // invalid ids (booleans, objects, NaN) become `undefined` instead
+    // of silently flowing through as garbage.
+    const rawId = parsed['id'];
+    const narrowedId: JsonRpcId | undefined = isValidJsonRpcId(rawId) ? rawId : undefined;
+    const rawParams = parsed['params'];
+    const narrowedParams: Record<string, unknown> | undefined = isPlainObject(rawParams)
+      ? rawParams
+      : undefined;
+
     const method = parsed['method'];
     if (method === SESSION_METHODS.SUBSCRIBE) {
-      await handleSubscribe(
-        parsed['id'] as JsonRpcId | undefined,
-        parsed['params'] as Record<string, unknown> | undefined,
-      );
+      await handleSubscribe(narrowedId, narrowedParams);
       return;
     }
     if (method === SESSION_METHODS.UNSUBSCRIBE) {
-      handleUnsubscribe(
-        parsed['id'] as JsonRpcId | undefined,
-        parsed['params'] as Record<string, unknown> | undefined,
-      );
+      handleUnsubscribe(narrowedId, narrowedParams);
       return;
     }
 

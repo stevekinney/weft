@@ -356,6 +356,125 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     await session.close();
   });
 
+  it('rejects subscribe with non-string workflowId (-32602 InvalidParams)', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: anonymousPrincipal(),
+      emitter,
+      feed,
+    });
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: 42, selector: 'events' },
+        id: 's1',
+      }),
+    );
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.error.code).toBe(-32602);
+    await session.close();
+  });
+
+  it('rejects subscribe with invalid selector (-32602 InvalidParams)', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: anonymousPrincipal(),
+      emitter,
+      feed,
+    });
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: 'wf-1', selector: 'bogus' },
+        id: 's1',
+      }),
+    );
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.error.code).toBe(-32602);
+    await session.close();
+  });
+
+  it('rejects subscribe with non-string fromCursor (-32602 InvalidParams)', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: anonymousPrincipal(),
+      emitter,
+      feed,
+    });
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: 'wf-1', selector: 'events', fromCursor: 42 },
+        id: 's1',
+      }),
+    );
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.error.code).toBe(-32602);
+    await session.close();
+  });
+
+  it('rejects subscribe when per-session subscription cap is exceeded', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: anonymousPrincipal(),
+      emitter,
+      feed,
+      maxSubscriptions: 2,
+    });
+    for (let index = 0; index < 3; index += 1) {
+      await session.handleMessage(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'weft.workflows.subscribe',
+          params: { workflowId: `wf-${index}`, selector: 'events' },
+          id: `s${index}`,
+        }),
+      );
+    }
+    await Bun.sleep(10);
+    const responses = emitter.sent.map((s) => JSON.parse(s));
+    // Third subscribe should come back as an error response.
+    const third = responses.find((m) => m.id === 's2');
+    expect(third?.error?.code).toBe(-32600);
+    expect(third?.error?.message).toMatch(/subscriptions/i);
+    await session.close();
+  });
+
+  it('rejects frames larger than maxFrameBytes before parsing', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: anonymousPrincipal(),
+      emitter,
+      feed,
+      maxFrameBytes: 100,
+    });
+    // 200-byte frame exceeds 100-byte cap.
+    await session.handleMessage('x'.repeat(200));
+    expect(emitter.sent).toHaveLength(1);
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.error.code).toBe(-32600);
+    expect(response.error.message).toMatch(/frame size/i);
+    await session.close();
+  });
+
   it('two concurrent subscriptions on one session deliver to correct correlation IDs', async () => {
     const emitter = makeEmitter();
     const backend = createInMemoryEventBackend();
