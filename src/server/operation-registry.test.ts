@@ -35,8 +35,29 @@ describe('validateOperationName', () => {
     expect(() => validateOperationName('myapp.workflows.start')).toThrow(/operation name/);
   });
 
-  it('rejects names with no dots after weft (single segment under prefix)', () => {
+  it('rejects names with only one segment after the weft prefix', () => {
+    // Both `weft.workflows` and `weft.start` lack the second segment
+    // required by `(?:\.[a-z][a-z0-9]*)+`. The earlier wording of this
+    // test ("no dots after weft") was factually wrong — there IS a dot,
+    // just not enough segments.
     expect(() => validateOperationName('weft.workflows')).toThrow(/operation name/);
+    expect(() => validateOperationName('weft.start')).toThrow(/operation name/);
+  });
+
+  it('accepts segments with trailing digits and single-letter segments', () => {
+    // Segments may continue with lowercase ASCII letters or digits after
+    // the first character. Single-letter segments are allowed because
+    // the regex requires at least one letter, not at least two.
+    expect(() => validateOperationName('weft.workflows.list2')).not.toThrow();
+    expect(() => validateOperationName('weft.workflows.signal2.start')).not.toThrow();
+    expect(() => validateOperationName('weft.w.start')).not.toThrow();
+  });
+
+  it('rejects segments that start with a digit', () => {
+    // The character class is `[a-z][a-z0-9]*` — the first character of
+    // each segment MUST be a lowercase letter.
+    expect(() => validateOperationName('weft.2start.action')).toThrow(/operation name/);
+    expect(() => validateOperationName('weft.workflows.2start')).toThrow(/operation name/);
   });
 
   it('rejects uppercase, dashes, or underscores', () => {

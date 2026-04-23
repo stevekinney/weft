@@ -28,13 +28,21 @@ import {
 } from './operation-catalog.ts';
 
 // Re-exported so callers that import the typed builder also get the name
-// validators from the same module surface.
+// validators from the same module surface. Both import paths are
+// supported, but the canonical source of truth is `operation-catalog.ts`
+// — prefer importing from there for validator-only use, and from this
+// module when also using `defineOperation`.
 export { isValidOperationName, validateOperationName } from './operation-catalog.ts';
 
 /**
  * Input shape for `defineOperation`. Mirrors `OperationDefinition` but
  * makes `tags` optional (default `[]`) so individual operation modules
  * stay terse.
+ *
+ * `authorize` is optional. When absent, the operation's `access` policy
+ * is the sole authorization gate — `invoke` runs as soon as the policy
+ * passes. When present, BOTH `access` AND `authorize` must permit the
+ * call: the policy runs first, then the parameter-aware hook.
  */
 export type OperationDefinitionInput<Input, Output> = {
   readonly name: string;
@@ -51,10 +59,22 @@ export type OperationDefinitionInput<Input, Output> = {
 
 /**
  * Typed builder for a single operation. Validates the name at construction
- * (so registration-time errors point at the offending source line, not the
- * eventual registry assembly) and returns a fully-typed
- * `OperationDefinition<Input, Output>` — caller-side `Input`/`Output`
- * types flow through to `authorize` / `invoke` without an `as` cast.
+ * — registration-time errors then point at the offending source line, not
+ * at the eventual registry assembly. Defensively shallow-copies every
+ * mutable container in the input (`tags`, `access`, `transports`,
+ * `unknownKeyPolicy`) so that a caller mutating their original references
+ * after this call cannot change the returned definition. The registry
+ * deep-freezes these again at insertion as defense in depth.
+ *
+ * Returns a fully-typed `OperationDefinition<Input, Output>` so caller-
+ * side `Input`/`Output` types flow through to `authorize` / `invoke`
+ * without an `as` cast.
+ *
+ * Note: the registry re-validates `name` at assembly time. The
+ * duplication is deliberate — the registry accepts any
+ * `RegistrableOperation` (including hand-rolled object literals), and
+ * the assembly check is the trust boundary that OpenRPC discovery and
+ * JSON-RPC dispatch rely on.
  */
 export function defineOperation<Input, Output>(
   input: OperationDefinitionInput<Input, Output>,
@@ -63,15 +83,16 @@ export function defineOperation<Input, Output>(
   return {
     name: input.name,
     summary: input.summary,
-    // Shallow-copy the tags array so a later mutation of the caller's array
-    // can't change a registered operation's metadata (defensive against
-    // external aliasing).
     tags: [...(input.tags ?? [])],
     inputSchema: input.inputSchema,
     outputSchema: input.outputSchema,
-    access: input.access,
-    transports: input.transports,
-    unknownKeyPolicy: input.unknownKeyPolicy,
+    // Shallow-copy each policy container. `access`'s nested
+    // `ScopeRequirement.scopes` array is left to the registry's
+    // `freezeAccessPolicy` to deep-handle — a builder-side recursive
+    // copy would duplicate that work.
+    access: { ...input.access },
+    transports: { ...input.transports },
+    unknownKeyPolicy: { ...input.unknownKeyPolicy },
     ...(input.authorize === undefined ? {} : { authorize: input.authorize }),
     invoke: input.invoke,
   };

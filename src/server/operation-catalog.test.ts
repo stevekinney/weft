@@ -924,6 +924,86 @@ describe('executeOperation — additional coverage', () => {
     expect(Object.isFrozen(stored.transports)).toBe(true);
     expect(Object.isFrozen(stored.unknownKeyPolicy)).toBe(true);
   });
+
+  it('registry isolates the stored operation from caller-side mutations', () => {
+    // The aliasing risk the comment on `createOperationRegistry`'s
+    // freeze block describes: a caller mutates the original literal
+    // they handed in, expecting that to change the registered op. The
+    // registry must store COPIES, not the same references — so mutation
+    // of the caller's object is invisible to the registry.
+    const transports = {
+      http: true,
+      jsonRpcHttp: true,
+      jsonRpcWebSocket: true,
+      jsonRpcStdio: false,
+    };
+    const op = makeOp({
+      name: 'weft.test.aliasing',
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      invoke: async () => ({}),
+      transports,
+    });
+    const registry = createOperationRegistry([op]);
+    const stored = registry.get('weft.test.aliasing');
+    if (!stored) throw new Error('expected stored op');
+
+    // Mutate the caller's reference AFTER registration.
+    transports.jsonRpcStdio = true;
+
+    // The stored op must reflect the value at registration time, not
+    // the post-mutation value — proving the registry copied the object.
+    expect(stored.transports.jsonRpcStdio).toBe(false);
+    expect(stored.transports).not.toBe(transports);
+  });
+
+  it('registry deep-freezes the nested ScopeRequirement.scopes array on scoped policies', () => {
+    // The `scoped` AccessPolicy variant nests a `ScopeRequirement` whose
+    // `scopes` array is mutable on entry. A shallow freeze of `access`
+    // would leave that array aliased to the caller's reference — a
+    // mutation there would silently change which scopes are required.
+    // `freezeAccessPolicy` must recursively freeze it.
+    const callerScopes = ['workflows:read'] as const;
+    const op = makeOp({
+      name: 'weft.test.scopedfreeze',
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      invoke: async () => ({}),
+      access: {
+        kind: 'scoped',
+        scopes: { kind: 'anyOf', scopes: [...callerScopes] },
+      },
+    });
+    const registry = createOperationRegistry([op]);
+    const stored = registry.get('weft.test.scopedfreeze');
+    if (!stored) throw new Error('expected stored op');
+    if (stored.access.kind !== 'scoped') throw new Error('expected scoped access');
+    expect(Object.isFrozen(stored.access)).toBe(true);
+    expect(Object.isFrozen(stored.access.scopes)).toBe(true);
+    expect(Object.isFrozen(stored.access.scopes.scopes)).toBe(true);
+  });
+
+  it('registry deep-freezes the nested authenticatedScopes.scopes array on optionalAuth policies', () => {
+    // Mirror coverage for the `optionalAuth` variant — its
+    // `authenticatedScopes` is structurally the same as `scoped.scopes`
+    // and the freeze must reach the inner array there too.
+    const op = makeOp({
+      name: 'weft.test.optauthfreeze',
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      invoke: async () => ({}),
+      access: {
+        kind: 'optionalAuth',
+        authenticatedScopes: { kind: 'allOf', scopes: ['workflows:write'] },
+      },
+    });
+    const registry = createOperationRegistry([op]);
+    const stored = registry.get('weft.test.optauthfreeze');
+    if (!stored) throw new Error('expected stored op');
+    if (stored.access.kind !== 'optionalAuth') throw new Error('expected optionalAuth access');
+    expect(Object.isFrozen(stored.access.authenticatedScopes)).toBe(true);
+    expect(Object.isFrozen(stored.access.authenticatedScopes.scopes)).toBe(true);
+  });
 });
 
 describe('createOperationRegistry', () => {

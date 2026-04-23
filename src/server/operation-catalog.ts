@@ -39,8 +39,10 @@ import { type Principal } from './principal.ts';
 
 /**
  * Regex for the canonical `weft.<segment>(.<segment>)+` operation-name form.
- * Lowercase ASCII segments only; mandatory `weft.` prefix; at least one dot
- * after the prefix. The OpenRPC generator and JSON-RPC dispatcher both
+ * Mandatory `weft.` prefix and at least one additional dot-separated segment.
+ * Each segment starts with a lowercase ASCII letter and may continue with
+ * lowercase ASCII letters or digits — uppercase, dashes, underscores, and
+ * unicode are rejected. The OpenRPC generator and JSON-RPC dispatcher both
  * treat this as the single source of truth for naming.
  */
 const OPERATION_NAME_PATTERN = /^weft\.[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/;
@@ -49,7 +51,7 @@ const OPERATION_NAME_PATTERN = /^weft\.[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/;
 export function validateOperationName(name: string): void {
   if (!OPERATION_NAME_PATTERN.test(name)) {
     throw new Error(
-      `invalid operation name "${name}" — must match weft.<segment>(.<segment>)+ where each segment is lowercase ASCII (e.g., "weft.workflows.start")`,
+      `invalid operation name "${name}" — must match weft.<segment>(.<segment>)+ where each segment starts with a lowercase ASCII letter and may contain lowercase ASCII letters or digits (e.g., "weft.workflows.start", "weft.workflows.list2")`,
     );
   }
 }
@@ -170,6 +172,37 @@ export type RegistrableOperation = {
 };
 
 /**
+ * Recursively freeze an `AccessPolicy`. The `scoped` and `optionalAuth`
+ * variants nest a `ScopeRequirement` whose `scopes` array is itself
+ * mutable — a shallow freeze of the policy alone would leave the scope
+ * list aliased to the caller's reference. A mutation there would silently
+ * change which scopes are required for the operation, so the array must
+ * be copied and frozen too.
+ */
+function freezeAccessPolicy(policy: AccessPolicy): AccessPolicy {
+  if (policy.kind === 'scoped') {
+    return Object.freeze({
+      kind: 'scoped',
+      scopes: Object.freeze({
+        kind: policy.scopes.kind,
+        scopes: Object.freeze([...policy.scopes.scopes]),
+      }),
+    }) as AccessPolicy;
+  }
+  if (policy.kind === 'optionalAuth') {
+    return Object.freeze({
+      kind: 'optionalAuth',
+      authenticatedScopes: Object.freeze({
+        kind: policy.authenticatedScopes.kind,
+        scopes: Object.freeze([...policy.authenticatedScopes.scopes]),
+      }),
+    }) as AccessPolicy;
+  }
+  // `public` and `authenticated` carry no nested mutable state.
+  return Object.freeze({ ...policy });
+}
+
+/**
  * Build an immutable registry. Throws on:
  *   - duplicate operation names (config bug),
  *   - operation names that violate the `weft.<segment>(.<segment>)+` form,
@@ -226,6 +259,12 @@ export function createOperationRegistry(
     // and `unknownKeyPolicy` all flow into authorization / dispatch
     // decisions, so this aliasing path is a logic-corruption risk.
     //
+    // `access` requires recursive freezing because `scoped` and
+    // `optionalAuth` variants nest a `ScopeRequirement` whose `scopes`
+    // array is itself mutable — a shallow freeze of `access` alone would
+    // leave the scope list aliased to the caller's reference, and a
+    // mutation there directly changes who has access to the operation.
+    //
     // Type-erasure cast: `RegistrableOperation`'s callbacks accept
     // `OperationContext<never>` (variance trick to admit any concrete
     // `Input` typing), but storage uses `ErasedOperation`
@@ -237,7 +276,7 @@ export function createOperationRegistry(
       Object.freeze({
         ...operation,
         tags: Object.freeze([...operation.tags]),
-        access: Object.freeze({ ...operation.access }),
+        access: freezeAccessPolicy(operation.access),
         transports: Object.freeze({ ...operation.transports }),
         unknownKeyPolicy: Object.freeze({ ...operation.unknownKeyPolicy }),
       }) as ErasedOperation,
