@@ -208,14 +208,20 @@ describe('dispatchJsonRpc — batch', () => {
   });
 
   it('dispatches batch items SEQUENTIALLY (side-effect order matches request order)', async () => {
-    // Track 8 decision 13 — batches are not concurrent.
+    // Track 8 decision 13 — batches are not concurrent. Use staggered
+    // delays (first-slowest) so that a parallel `Promise.all`-style
+    // implementation would produce the reversed order ['third',
+    // 'second', 'first']. Only a sequential `for await` loop blocks
+    // long enough for the delays to be observed in request order.
     const callOrder: string[] = [];
+    const delays: Record<string, number> = { first: 30, second: 20, third: 10 };
     const registry = createOperationRegistry([
       makeOp({
         name: 'weft.test.seq',
         inputSchema: z.object({ id: z.string() }),
         outputSchema: z.object({}),
         invoke: async ({ input }) => {
+          await Bun.sleep(delays[input.id] ?? 0);
           callOrder.push(input.id);
           return {};
         },
@@ -228,6 +234,95 @@ describe('dispatchJsonRpc — batch', () => {
     ]);
     await dispatchJsonRpc(body, { ...baseContext(), registry });
     expect(callOrder).toEqual(['first', 'second', 'third']);
+  });
+
+  it('returns kind=batch with all error responses when every item is invalid', async () => {
+    // All items are invalid-request (missing jsonrpc). The dispatcher
+    // must return `batch` (not `notification-batch`) because every
+    // error response IS a response — notifications have no id AND
+    // the item is a successful parse. Invalid-request items always
+    // produce an error response, echoing the requestor's id (or
+    // `null` if the id was invalid / absent).
+    const registry = createOperationRegistry([]);
+    const body = JSON.stringify([
+      { method: 'no-version', id: 1 },
+      { method: 'also-no-version', id: 2 },
+    ]);
+    const result = await dispatchJsonRpc(body, { ...baseContext(), registry });
+    if (result.kind !== 'batch') throw new Error(`expected batch, got ${result.kind}`);
+    expect(result.responses).toHaveLength(2);
+    const first = result.responses[0];
+    const second = result.responses[1];
+    if (!first || !('error' in first)) throw new Error('expected error on first');
+    if (!second || !('error' in second)) throw new Error('expected error on second');
+    expect(first.error.code).toBe(-32600);
+    expect(second.error.code).toBe(-32600);
+    expect(first.id).toBe(1);
+    expect(second.id).toBe(2);
+  });
+
+  it('includes id:null error responses for invalid items with no parseable id (not dropped like notifications)', async () => {
+    // Distinguishes an invalid-item-with-null-id (which IS in the
+    // response array) from a valid notification (which is DROPPED).
+    // Both can produce responses lacking a correlatable id, but only
+    // the invalid item appears on the wire.
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.ok',
+        inputSchema: z.object({}),
+        outputSchema: z.object({ tag: z.string() }),
+        invoke: async () => ({ tag: 'ok' }),
+      }),
+    ]);
+    const body = JSON.stringify([
+      { jsonrpc: '2.0', method: 'weft.test.ok', id: 1 },
+      { method: 'no-version' }, // invalid + no id
+    ]);
+    const result = await dispatchJsonRpc(body, { ...baseContext(), registry });
+    if (result.kind !== 'batch') throw new Error(`expected batch, got ${result.kind}`);
+    expect(result.responses).toHaveLength(2);
+    const second = result.responses[1];
+    if (!second || !('error' in second)) throw new Error('expected error on second');
+    expect(second.id).toBeNull();
+    expect(second.error.code).toBe(-32600);
+  });
+
+  it('classifies invoke throws as EngineFailure (no uncaught exception escapes)', async () => {
+    // `executeOperation` catches all invoke exceptions via
+    // `classifyEngineError`. The dispatcher has no try/catch of its
+    // own — if executeOperation ever regresses and lets a throw
+    // escape, this test would fail with an uncaught rejection rather
+    // than a clean error response.
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.panic',
+        inputSchema: z.object({}),
+        outputSchema: z.object({}),
+        invoke: async () => {
+          throw new Error('unexpected internal detail');
+        },
+      }),
+    ]);
+    const body = JSON.stringify({ jsonrpc: '2.0', method: 'weft.test.panic', id: 1 });
+    const result = await dispatchJsonRpc(body, { ...baseContext(), registry });
+    if (result.kind !== 'single') throw new Error('shape');
+    if (!('error' in result.response)) throw new Error('expected error response');
+    expect(result.response.error.code).toBe(-32099);
+    expect(result.response.id).toBe(1);
+  });
+
+  it('rejects a batch that exceeds MAX_JSON_RPC_BATCH_ITEMS', async () => {
+    const registry = createOperationRegistry([]);
+    const items = Array.from({ length: 101 }, (_, index) => ({
+      jsonrpc: '2.0' as const,
+      method: 'weft.test.x',
+      id: index,
+    }));
+    const result = await dispatchJsonRpc(JSON.stringify(items), { ...baseContext(), registry });
+    if (result.kind !== 'single') throw new Error('shape');
+    if (!('error' in result.response)) throw new Error('expected error');
+    expect(result.response.error.code).toBe(-32600);
+    expect(result.response.error.message).toMatch(/batch size/i);
   });
 
   it('drops notifications from the response array (mixed batch)', async () => {

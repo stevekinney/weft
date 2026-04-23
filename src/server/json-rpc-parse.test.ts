@@ -97,6 +97,13 @@ describe('parseJsonRpcRequest — single request', () => {
     expect(result.kind).toBe('invalid-request');
   });
 
+  it('rejects empty-string method field', () => {
+    const result = parseJsonRpcRequest('{"jsonrpc":"2.0","method":"","id":1}');
+    expect(result.kind).toBe('invalid-request');
+    if (result.kind !== 'invalid-request') throw new Error('shape');
+    expect(result.id).toBe(1);
+  });
+
   it('rejects array-form positional params (named-params-only policy)', () => {
     const result = parseJsonRpcRequest('{"jsonrpc":"2.0","method":"x","params":[1,2,3],"id":1}');
     expect(result.kind).toBe('invalid-request');
@@ -188,6 +195,31 @@ describe('parseJsonRpcRequest — batch', () => {
     const result = parseJsonRpcRequest('[{"jsonrpc":"2.0","method":"a","id":1},"not-an-object"]');
     if (result.kind !== 'batch') throw new Error('shape');
     expect(result.items[1]?.kind).toBe('invalid');
+  });
+
+  it('rejects a batch whose size exceeds MAX_JSON_RPC_BATCH_ITEMS', async () => {
+    const { MAX_JSON_RPC_BATCH_ITEMS } = await import('./json-rpc-parse.ts');
+    const items = Array.from({ length: MAX_JSON_RPC_BATCH_ITEMS + 1 }, (_, index) => ({
+      jsonrpc: '2.0' as const,
+      method: 'weft.test.x',
+      id: index,
+    }));
+    const result = parseJsonRpcRequest(items);
+    expect(result.kind).toBe('invalid-request');
+    if (result.kind !== 'invalid-request') throw new Error('shape');
+    expect(result.id).toBeNull();
+    expect(result.message).toMatch(/batch size/i);
+  });
+
+  it('accepts a batch at exactly MAX_JSON_RPC_BATCH_ITEMS', async () => {
+    const { MAX_JSON_RPC_BATCH_ITEMS } = await import('./json-rpc-parse.ts');
+    const items = Array.from({ length: MAX_JSON_RPC_BATCH_ITEMS }, (_, index) => ({
+      jsonrpc: '2.0' as const,
+      method: 'weft.test.x',
+      id: index,
+    }));
+    const result = parseJsonRpcRequest(items);
+    expect(result.kind).toBe('batch');
   });
 });
 

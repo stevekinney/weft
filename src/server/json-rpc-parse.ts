@@ -74,6 +74,15 @@ export type ParsedBatchItem =
  * Parse a raw body into a transport-neutral `ParseResult`. Accepts
  * either a string (will be JSON.parse'd) or an already-parsed value.
  */
+/**
+ * Hard upper bound on batch size. A well-behaved client will stay well
+ * below this; the limit exists to make a hostile client's first attempt
+ * at memory/CPU exhaustion cheap to fail. Transport adapters (Phase 11
+ * HTTP, Phase 12 WebSocket, Phase 13 stdio) SHOULD enforce their own
+ * body/frame byte limits in addition to this item cap.
+ */
+export const MAX_JSON_RPC_BATCH_ITEMS = 100;
+
 export function parseJsonRpcRequest(body: unknown): ParseResult {
   let parsed: unknown;
   if (typeof body === 'string') {
@@ -95,7 +104,15 @@ export function parseJsonRpcRequest(body: unknown): ParseResult {
       return {
         kind: 'invalid-request',
         code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
-        message: 'Batch must contain at least one request',
+        message: 'Invalid Request',
+        id: null,
+      };
+    }
+    if (parsed.length > MAX_JSON_RPC_BATCH_ITEMS) {
+      return {
+        kind: 'invalid-request',
+        code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
+        message: `Invalid Request: batch size ${parsed.length} exceeds limit ${MAX_JSON_RPC_BATCH_ITEMS}`,
         id: null,
       };
     }
@@ -198,6 +215,15 @@ function parseSingleObject(
         id: idForError,
       };
     }
+    // `params` is passed through verbatim. Prototype-pollution keys
+    // (`__proto__` / `constructor` / `prototype`) are NOT stripped
+    // here — the authoritative defense is `executeOperation`'s
+    // `UNSAFE_PROTOTYPE_KEYS` filter plus the registry-time rejection
+    // of schema-declared unsafe keys. Sanitizing at the parse layer
+    // would duplicate that policy and force the transport-neutral
+    // parser to know about operation-catalog internals. The security
+    // boundary is the pipeline, not the parser — this comment exists
+    // so a future reviewer sees the decision is deliberate.
     params = rawParams;
   }
 
