@@ -78,13 +78,22 @@ export function generateOpenRpcDocument(options: OpenRpcOptions): Record<string,
   const version = options.version ?? '0.0.1';
 
   const methods: OpenRpcMethod[] = [];
+  let registryProvidesDiscover = false;
 
   if (options.jsonRpc.enabled) {
     for (const operation of options.registry.list()) {
       if (!isOperationLiveOnJsonRpc(operation, options.jsonRpc.transports)) continue;
+      if (operation.name === DISCOVER_METHOD_NAME) {
+        // Consumers may register their own `rpc.discover` operation —
+        // use theirs verbatim and skip the synthetic one so we never
+        // emit duplicate method names.
+        registryProvidesDiscover = true;
+      }
       methods.push(buildMethod(operation));
     }
-    methods.push(buildDiscoverMethod());
+    if (!registryProvidesDiscover) {
+      methods.push(buildDiscoverMethod());
+    }
   }
 
   const document: Record<string, unknown> = {
@@ -97,6 +106,8 @@ export function generateOpenRpcDocument(options: OpenRpcOptions): Record<string,
   }
   return document;
 }
+
+const DISCOVER_METHOD_NAME = 'rpc.discover';
 
 function isOperationLiveOnJsonRpc(
   operation: ErasedOperation,
@@ -112,7 +123,17 @@ function isOperationLiveOnJsonRpc(
 }
 
 function buildMethod(operation: ErasedOperation): OpenRpcMethod {
-  const inputSchema = operation.inputSchema as z.ZodObject;
+  // The registry's `createOperationRegistry` enforces that every
+  // `inputSchema` is a `z.ZodObject` at construction; this cast is
+  // safe by construction. Fail fast if something downstream ever
+  // violates that invariant — a silent `params: []` would produce a
+  // misleading discovery document.
+  if (!(operation.inputSchema instanceof z.ZodObject)) {
+    throw new Error(
+      `openrpc: operation ${operation.name} has non-object inputSchema; generator requires z.ZodObject`,
+    );
+  }
+  const inputSchema = operation.inputSchema;
   const paramsSchema = zodObjectToJsonSchema(inputSchema, operation.unknownKeyPolicy.jsonRpc);
   const descriptors = buildContentDescriptors(paramsSchema);
   const resultSchema = zodToJsonSchema(operation.outputSchema);
@@ -188,10 +209,17 @@ function byString(a: string, b: string): number {
 function buildContentDescriptors(paramsSchema: Record<string, unknown>): ContentDescriptor[] {
   const properties = (paramsSchema['properties'] ?? {}) as Record<string, Record<string, unknown>>;
   const requiredList = new Set((paramsSchema['required'] ?? []) as string[]);
+  // If the parent schema carries `$defs` (zod emits this for reused or
+  // recursive nested types), propagate it onto every descriptor so
+  // `$ref` pointers inside the property schema resolve locally. Without
+  // this, a property whose JSON Schema is `{ $ref: '#/$defs/X' }` would
+  // be emitted as a dangling reference under `params[].schema` while
+  // only the sibling `x-weft-paramsSchema` extension remained valid.
+  const defs = paramsSchema['$defs'] as Record<string, unknown> | undefined;
   const names = Object.keys(properties).toSorted(byString);
-  return names.map((name) => ({
-    name,
-    schema: properties[name] ?? {},
-    required: requiredList.has(name),
-  }));
+  return names.map((name) => {
+    const baseSchema = properties[name] ?? {};
+    const schema = defs ? { ...baseSchema, $defs: defs } : baseSchema;
+    return { name, schema, required: requiredList.has(name) };
+  });
 }
