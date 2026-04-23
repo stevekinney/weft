@@ -51,6 +51,7 @@ import {
   principalFromApiKey,
   principalFromJwtClaims,
   principalFromMutualTls,
+  type AuthenticatedPrincipal,
   type Principal,
 } from './principal.ts';
 import { bindingPathMatches } from './rest-binding.ts';
@@ -74,6 +75,14 @@ interface RouteMatch {
 type AuthenticatedRequestContext = {
   method: AuthMethod;
   claims?: JWTPayload;
+  /**
+   * Optional principal forwarded from the authenticator. Set when
+   * `resolveApiKeyPrincipal` admits a key with a custom principal, or
+   * when static API-key admission produces one from
+   * `defaultApiKeyScopes`. Takes precedence over `method`-based
+   * reconstruction in `authContextToPrincipal`.
+   */
+  principal?: AuthenticatedPrincipal;
 };
 
 class MalformedRouteParameterError extends Error {
@@ -1987,6 +1996,13 @@ export interface HandlerOptions {
   authContext?: {
     method: AuthMethod;
     claims?: JWTPayload;
+    /**
+     * Optional fully-shaped principal forwarded by the authenticator
+     * (e.g. via `resolveApiKeyPrincipal`). When present, the pipeline
+     * uses it verbatim instead of rebuilding a principal from method +
+     * claims.
+     */
+    principal?: AuthenticatedPrincipal;
   };
   /**
    * Optional {@link PrometheusExporter} used to produce the body of
@@ -2094,6 +2110,11 @@ async function dispatchViaExecuteOperation(
  */
 function authContextToPrincipal(authContext: AuthenticatedRequestContext | undefined): Principal {
   if (authContext === undefined) return anonymousPrincipal();
+  // Forwarded principal from the authenticator (e.g. from
+  // `resolveApiKeyPrincipal` or static api-key admission with
+  // `defaultApiKeyScopes`) takes precedence over method-based
+  // reconstruction.
+  if (authContext.principal !== undefined) return authContext.principal;
   switch (authContext.method) {
     case 'jwt': {
       if (authContext.claims === undefined) {

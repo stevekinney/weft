@@ -214,6 +214,48 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
     expect(response.status).toBe(500);
   });
 
+  it('forwarded principal on authContext takes precedence over method reconstruction', async () => {
+    // authContext.principal is set when the authenticator already
+    // constructed a principal (e.g., via resolveApiKeyPrincipal). The
+    // pipeline must use that forwarded principal directly — never
+    // rebuild one from method+claims when the authenticator already
+    // decided the answer.
+    const engine = createEngine();
+    const handle = await engine.start('hold', {}, {});
+    await waitForRunning(engine, handle.id);
+
+    const { registry, bindings, captured } = buildPrincipalSpy();
+    const forwardedPrincipal = {
+      method: 'api-key' as const,
+      scopes: new Set(['schedules:write' as const]),
+      claims: undefined,
+      tenantId: 'tenant-42',
+      subject: 'forwarded-subject',
+      hasScope(scope: string) {
+        return this.scopes.has(scope as never);
+      },
+    };
+
+    const request = new Request(`http://localhost/v1/test/principalspy/${handle.id}`, {
+      method: 'GET',
+    });
+    const response = await handleRequest(request, engine, {
+      restDispatchMode: 'via-execute-operation',
+      operationRegistry: registry,
+      restBindings: bindings,
+      authContext: { method: 'api-key', principal: forwardedPrincipal },
+    });
+    expect(response.status).toBe(200);
+    expect(captured.principal).toBe(forwardedPrincipal);
+    expect(captured.principal?.method).toBe('api-key');
+    // The sentinel tenantId proves this principal is the one we
+    // forwarded, not a rebuilt one that would have defaulted to
+    // `{ subject: 'api-key-caller', scopes: [] }` with no tenant.
+    if (captured.principal?.method !== 'unauthenticated') {
+      expect(captured.principal?.tenantId).toBe('tenant-42');
+    }
+  });
+
   it('mtls authContext → principalFromMutualTls (method "mtls")', async () => {
     const engine = createEngine();
     const handle = await engine.start('hold', {}, {});

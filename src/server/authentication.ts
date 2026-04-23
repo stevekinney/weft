@@ -9,6 +9,9 @@
  * @module server/authentication
  */
 
+import type { AuthorizationScope } from './authorization-scope.ts';
+import { principalFromApiKey, type AuthenticatedPrincipal } from './principal.ts';
+
 // ---------------------------------------------------------------------------
 // JWT algorithm types
 // ---------------------------------------------------------------------------
@@ -58,6 +61,26 @@ export type AuthConfig = {
   mtls?: MTLSConfig;
   /** Paths that bypass authentication. Defaults to `['/v1/health', '/v1/metrics']`. */
   publicPaths?: string[];
+  /**
+   * Optional resolver that maps a presented API key to a fully-shaped
+   * `AuthenticatedPrincipal`. When configured, the resolver is
+   * authoritative for the entire API-key space:
+   *   - returns a principal → admitted with that principal entirely
+   *     (scopes authoritative; `defaultApiKeyScopes` IGNORED).
+   *   - returns `null` → key rejected; static `apiKeys` is NOT
+   *     consulted as a fallback.
+   *   - throws → treated as `null` (rejected); server log records the
+   *     throw detail, wire error stays generic.
+   * When not configured, static `apiKeys` admits and the admitted
+   * principal's scopes come from `defaultApiKeyScopes ?? []`.
+   */
+  resolveApiKeyPrincipal?: (key: string) => Promise<AuthenticatedPrincipal | null>;
+  /**
+   * Scopes granted to principals admitted via static `apiKeys`. Ignored
+   * when `resolveApiKeyPrincipal` is configured (the resolver's scopes
+   * are authoritative for keys it admits). Defaults to `[]`.
+   */
+  defaultApiKeyScopes?: ReadonlyArray<AuthorizationScope>;
 };
 
 // ---------------------------------------------------------------------------
@@ -67,7 +90,18 @@ export type AuthConfig = {
 export type AuthMethod = 'api-key' | 'jwt' | 'mtls' | 'public';
 
 export type AuthResult =
-  | { authenticated: true; method: AuthMethod; claims?: JWTPayload }
+  | {
+      authenticated: true;
+      method: AuthMethod;
+      claims?: JWTPayload;
+      /**
+       * Optional fully-shaped principal. Set when `resolveApiKeyPrincipal`
+       * admits a key with a custom principal, or when static API-key
+       * admission builds one from `defaultApiKeyScopes`. REST / JSON-RPC
+       * adapters prefer this over constructing a principal downstream.
+       */
+      principal?: AuthenticatedPrincipal;
+    }
   | { authenticated: false; error: string };
 
 export type JWTPayload = Record<string, unknown>;
@@ -332,10 +366,12 @@ export function validateAuthConfig(config: AuthConfig): void {
   const hasMethod =
     (config.apiKeys && config.apiKeys.length > 0) ||
     config.jwt !== undefined ||
-    config.mtls !== undefined;
+    config.mtls !== undefined ||
+    config.resolveApiKeyPrincipal !== undefined;
   if (!hasMethod) {
     throw new Error(
-      'AuthConfig must specify at least one authentication method (apiKeys, jwt, or mtls)',
+      'AuthConfig must specify at least one authentication method ' +
+        '(apiKeys, resolveApiKeyPrincipal, jwt, or mtls)',
     );
   }
 }
@@ -353,6 +389,8 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
   validateAuthConfig(config);
 
   const apiKeySet = config.apiKeys?.length ? new Set(config.apiKeys) : null;
+  const resolver = config.resolveApiKeyPrincipal;
+  const defaultApiKeyScopes = config.defaultApiKeyScopes ?? [];
   const jwtKey = config.jwt ? await importJWTKey(config.jwt) : null;
   const publicPaths = new Set(config.publicPaths ?? DEFAULT_PUBLIC_PATHS);
 
@@ -368,14 +406,37 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
     // If credentials were provided but invalid, do not fall through to mTLS.
     let explicitAuthAttempted = false;
 
-    // Try API key via X-API-Key header or Bearer token
-    if (apiKeySet) {
-      const key = extractApiKey(request);
-      if (key) {
-        explicitAuthAttempted = true;
-        if (apiKeySet.has(key)) {
-          return { authenticated: true, method: 'api-key' };
+    // API-key admission precedence (single ordered rule per Track 8 plan):
+    //   1. resolver configured + returns principal → use that principal.
+    //   2. resolver configured + returns null → rejected (NO fallback).
+    //   3. resolver absent → static apiKeys admits; scopes = defaultApiKeyScopes.
+    const presentedKey = extractApiKey(request);
+    if (presentedKey) {
+      explicitAuthAttempted = true;
+      if (resolver !== undefined) {
+        let resolved: AuthenticatedPrincipal | null;
+        try {
+          resolved = await resolver(presentedKey);
+        } catch (error) {
+          // Resolver throw: log server-side, reject client. Never leak the
+          // thrown error's message to the wire — it may contain DB queries,
+          // secrets, or other sensitive context.
+          console.warn(
+            'resolveApiKeyPrincipal threw:',
+            error instanceof Error ? error.message : error,
+          );
+          resolved = null;
         }
+        if (resolved !== null) {
+          return { authenticated: true, method: 'api-key', principal: resolved };
+        }
+        // Resolver said no — do NOT fall through to static apiKeys.
+      } else if (apiKeySet?.has(presentedKey)) {
+        const principal = principalFromApiKey({
+          subject: 'api-key-caller',
+          scopes: defaultApiKeyScopes,
+        });
+        return { authenticated: true, method: 'api-key', principal };
       }
     }
 

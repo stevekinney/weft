@@ -34,6 +34,7 @@ import type { AuthConfig, AuthMethod, Authenticator, JWTPayload } from './authen
 import { buildTLSOptions, createAuthenticator, validateAuthConfig } from './authentication.ts';
 import { DeadlineTracker } from './deadline-tracker.ts';
 import { handleRequest } from './handler.ts';
+import type { AuthenticatedPrincipal } from './principal.ts';
 import { REST_BINDINGS, createLiveOperationRegistry } from './rest-bindings.ts';
 import type { RestDispatchModeConfig } from './rest-dispatch-mode.ts';
 import {
@@ -909,7 +910,11 @@ export function serve(options: ServeOptions): WeftServer {
   const liveOperationRegistry = createLiveOperationRegistry();
 
   async function authenticateRequest(request: Request): Promise<{
-    authContext?: { method: AuthMethod; claims?: JWTPayload };
+    authContext?: {
+      method: AuthMethod;
+      claims?: JWTPayload;
+      principal?: AuthenticatedPrincipal;
+    };
     response: Response | null;
   }> {
     if (!authenticatorPromise) {
@@ -927,6 +932,7 @@ export function serve(options: ServeOptions): WeftServer {
         authContext: {
           method: authResult.method,
           ...(authResult.claims !== undefined ? { claims: authResult.claims } : {}),
+          ...(authResult.principal !== undefined ? { principal: authResult.principal } : {}),
         },
         response: null,
       };
