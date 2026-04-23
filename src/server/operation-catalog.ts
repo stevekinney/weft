@@ -655,6 +655,13 @@ function isOperationFault(value: unknown): value is OperationFault {
     typeof message === 'string' &&
     typeof data === 'object' &&
     data !== null &&
+    // Every `OperationFault` variant declares `data` as a plain object
+    // (or `{}`). Arrays satisfy `typeof === 'object'` but downstream
+    // serializers destructure `data.issues`, `data.transport`, etc. and
+    // would crash on an array shape. Reject arrays here so a thrown
+    // value like `{ code: 'InvalidParams', message: 'x', data: [] }`
+    // falls through to `EngineFailure` instead of reaching the wire.
+    !Array.isArray(data) &&
     Object.hasOwn(FAULT_CODES, code)
   );
 }

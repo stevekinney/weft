@@ -575,6 +575,16 @@ describe('classifyEngineError', () => {
     expect(fault.code).toBe('EngineFailure');
   });
 
+  it('rejects a fault-shaped object whose `data` is an array', () => {
+    // Arrays satisfy `typeof === 'object' && !== null`, but every
+    // `OperationFault` variant declares `data` as a plain object. A
+    // thrown `{ code: 'InvalidParams', message: 'x', data: [] }` would
+    // crash downstream serializers (e.g. `data.issues.map(...)`). The
+    // guard must reject it.
+    const fault = classifyEngineError({ code: 'InvalidParams', message: 'x', data: [] });
+    expect(fault.code).toBe('EngineFailure');
+  });
+
   it('rejects a fault-shaped value with a poisoned getter', () => {
     const poisoned = new Proxy(
       {},
