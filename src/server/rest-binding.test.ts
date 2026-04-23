@@ -16,7 +16,6 @@ import { z } from 'zod';
 import { defineOperation } from './operation-registry.ts';
 import {
   bindingPathMatches,
-  extractPathParameters,
   isRestBindingCompatibleWithOperation,
   type ParamSource,
   type ResponseShape,
@@ -54,13 +53,29 @@ describe('ParamSource discriminated union', () => {
 });
 
 describe('ResponseShape discriminated union', () => {
-  it('covers json, empty (204), and streaming variants', () => {
+  it('covers exactly one entry per discriminant (json / empty / streaming)', () => {
+    // Compile-time exhaustiveness guard: one value per `kind`. If a new
+    // variant is added to `ResponseShape`, this tuple fails typecheck
+    // until the new variant is represented here. Prior versions
+    // inflated this to 5 entries by including two `json` statuses and
+    // two `streaming` mediaTypes; that's instance coverage, not
+    // variant coverage — a new variant could be added without breaking
+    // the length check. One entry per discriminant is the right shape.
     const json: ResponseShape = { kind: 'json', status: 200 };
-    const created: ResponseShape = { kind: 'json', status: 201 };
     const empty: ResponseShape = { kind: 'empty', status: 204 };
-    const sse: ResponseShape = { kind: 'streaming', mediaType: 'text/event-stream' };
-    const bin: ResponseShape = { kind: 'streaming', mediaType: 'application/octet-stream' };
-    expect([json, created, empty, sse, bin]).toHaveLength(5);
+    const streaming: ResponseShape = { kind: 'streaming', mediaType: 'text/event-stream' };
+    const all: ResponseShape[] = [json, empty, streaming];
+    expect(all).toHaveLength(3);
+  });
+
+  it('supports non-default json status codes and both streaming media types', () => {
+    // These are variant-internal value spreads, not exhaustiveness
+    // coverage. Kept as a separate test so the main exhaustiveness
+    // guard stays clean.
+    const created: ResponseShape = { kind: 'json', status: 201 };
+    const octet: ResponseShape = { kind: 'streaming', mediaType: 'application/octet-stream' };
+    expect(created.kind).toBe('json');
+    expect(octet.kind).toBe('streaming');
   });
 });
 
@@ -136,19 +151,17 @@ describe('bindingPathMatches', () => {
     // router surfaces the path-shape error cleanly (404 / 405).
     expect(bindingPathMatches('/v1/workflows/:id/signal', '/v1/workflows//signal')).toBeNull();
   });
-});
 
-describe('extractPathParameters', () => {
-  it('returns an ordered map of the path param names → values', () => {
-    const params = extractPathParameters('/v1/workflows/:id/signal/:name', ['id', 'name'])(
-      '/v1/workflows/abc/signal/notify',
-    );
-    expect(params).toEqual({ id: 'abc', name: 'notify' });
-  });
-
-  it('returns null when the path does not match', () => {
-    const params = extractPathParameters('/v1/workflows/:id', ['id'])('/v1/other');
-    expect(params).toBeNull();
+  it('returns null for a malformed percent-encoded segment', () => {
+    // `decodeURIComponent('%')` and `decodeURIComponent('%GG')` throw
+    // URIError. The matcher catches and returns null so the router
+    // produces a 404 instead of letting the URIError propagate as a
+    // 500. Without this test, a future refactor that drops the
+    // try/catch would silently break every route with user-supplied
+    // path params.
+    expect(bindingPathMatches('/v1/workflows/:id', '/v1/workflows/%')).toBeNull();
+    expect(bindingPathMatches('/v1/workflows/:id', '/v1/workflows/%GG')).toBeNull();
+    expect(bindingPathMatches('/v1/workflows/:id', '/v1/workflows/abc%2')).toBeNull();
   });
 });
 

@@ -60,11 +60,14 @@ export type RestBinding<Input, Output> = {
   /** Operation-catalog name this binding dispatches to. */
   readonly operationName: string;
   /**
-   * Declarative map from each top-level `Input` field to its REST
-   * source. Used by the OpenAPI generator to emit schema; the runtime
-   * `extractInput` is the source of truth for actual extraction.
+   * Declarative map from top-level `Input` field names to their REST
+   * source. Fields omitted from this map are not extracted from the
+   * request by the OpenAPI generator's schema emission — `extractInput`
+   * remains the authoritative runtime source. Keys are constrained to
+   * string-typed keys of `Input` so a typo becomes a compile error
+   * rather than a silent no-op at generator time.
    */
-  readonly inputSources: Partial<Record<string, ParamSource>>;
+  readonly inputSources: Partial<Record<Extract<keyof Input, string>, ParamSource>>;
   /**
    * Read the REST request and produce the operation's typed `Input`.
    * Called before `executeOperation`; the returned value is what the
@@ -109,6 +112,11 @@ export function bindingPathMatches(
       try {
         params[name] = decodeURIComponent(actualSegment);
       } catch {
+        // Malformed percent-encoding (e.g. `%` or `%GG`) — treat as
+        // no match so the router returns 404 rather than letting a
+        // `URIError` propagate. Letting it bubble would force every
+        // caller to wrap the matcher in try/catch; a clean non-match
+        // result is the right API contract here.
         return null;
       }
     } else if (patternSegment !== actualSegment) {
@@ -116,17 +124,6 @@ export function bindingPathMatches(
     }
   }
   return params;
-}
-
-/**
- * Build a closure that extracts path parameters for a specific pattern
- * + param-name list. Returns null when the input path does not match.
- */
-export function extractPathParameters(
-  pattern: string,
-  _paramNames: ReadonlyArray<string>,
-): (actualPath: string) => Record<string, string> | null {
-  return (actualPath) => bindingPathMatches(pattern, actualPath);
 }
 
 /**
