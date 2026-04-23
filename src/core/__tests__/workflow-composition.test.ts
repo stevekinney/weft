@@ -378,16 +378,16 @@ describe('workflow composition operators', () => {
 
     engine.register('echo-stage', echoStage);
     engine.register('first-parent', async function* (ctx: WorkflowContext) {
-      return yield* ctx.pipe(
-        [{ type: echoStage, options: { id: 'shared-child' } }],
-        { alpha: 1, beta: 2 },
-      );
+      return yield* ctx.pipe([{ type: echoStage, options: { id: 'shared-child' } }], {
+        alpha: 1,
+        beta: 2,
+      });
     });
     engine.register('second-parent', async function* (ctx: WorkflowContext) {
-      return yield* ctx.pipe(
-        [{ type: echoStage, options: { id: 'shared-child' } }],
-        { beta: 2, alpha: 1 },
-      );
+      return yield* ctx.pipe([{ type: echoStage, options: { id: 'shared-child' } }], {
+        beta: 2,
+        alpha: 1,
+      });
     });
 
     const firstHandle = await engine.start('first-parent', null);

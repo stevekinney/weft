@@ -54,9 +54,9 @@ describe('weft', () => {
 
     try {
       await engine.start('duplicate-id', null, { id: 'duplicate-id' });
-      await expect(engine.start('duplicate-id', null, { id: 'duplicate-id' })).rejects.toBeInstanceOf(
-        WorkflowAlreadyExistsError,
-      );
+      await expect(
+        engine.start('duplicate-id', null, { id: 'duplicate-id' }),
+      ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
     } finally {
       await engine[Symbol.asyncDispose]();
     }

@@ -60,8 +60,12 @@ describe('encodeCursor / decodeCursor', () => {
   it('returns null for a malformed cursor (never throws)', () => {
     expect(decodeCursor('garbage')).toBeNull();
     expect(decodeCursor('')).toBeNull();
-    expect(decodeCursor('-1')).toBeNull();
+    expect(decodeCursor('-2')).toBeNull();
     expect(decodeCursor('1.5')).toBeNull();
+  });
+
+  it('decodes the initial cursor sentinel as before the first sequence', () => {
+    expect(decodeCursor('-1')).toBe(-1);
   });
 
   it('encodeCursor returns a stable string for the same input', () => {

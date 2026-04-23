@@ -2,10 +2,10 @@ import { describe, expect, it } from 'bun:test';
 
 import type { LLMProvider } from '../../ai/providers/interface.ts';
 import type { ChatResponse } from '../../ai/providers/types.ts';
-import { encode } from '../codec.ts';
 import type { BatchOperation, ScanOptions } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { encode } from '../codec.ts';
 import type { Context } from '../context.ts';
 import { Engine } from '../engine.ts';
 import type { AttributeFilter, WorkflowContext } from '../types.ts';

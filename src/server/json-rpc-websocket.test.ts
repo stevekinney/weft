@@ -224,7 +224,131 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const response = JSON.parse(emitter.sent[0]!);
     expect(response.id).toBe('sub-1');
     expect(response.result.subscriptionId).toMatch(/^sub_/);
-    expect(typeof response.result.cursor).toBe('string');
+    expect(response.result.cursor).toBe('-1');
+    await session.close();
+  });
+
+  it('initial subscribe cursor does not skip sequence 0 on reconnect', async () => {
+    // Bugbot regression: previously the cursor defaulted to `'0'`,
+    // which decodes to `afterSequence: 0` and SKIPS the envelope at
+    // sequence 0. A client reconnecting with that cursor before any
+    // deliveries would silently lose seq 0. Fix: use the `-1`
+    // sentinel — `decodeCursor('-1')` returns -1, so seq 0 flows
+    // through as expected.
+    const backend = createInMemoryEventBackend();
+    await backend.append(makeEnvelope(0));
+    const feed = createWorkflowEventFeed(backend);
+
+    // Session 1: subscribe without a cursor, capture the initial cursor.
+    const emitter1 = makeEmitter();
+    const session1 = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: anonymousPrincipal(),
+      emitter: emitter1,
+      feed,
+    });
+    await session1.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: 'wf-1', selector: 'events' },
+        id: 'initial',
+      }),
+    );
+    const initial = JSON.parse(emitter1.sent[0]!);
+    const reconnectCursor = initial.result.cursor;
+    expect(reconnectCursor).toBe('-1');
+    await session1.close();
+
+    // Session 2: reconnect with the cursor before receiving any deliveries.
+    const emitter2 = makeEmitter();
+    const session2 = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: anonymousPrincipal(),
+      emitter: emitter2,
+      feed,
+    });
+    await session2.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: {
+          workflowId: 'wf-1',
+          selector: 'events',
+          fromCursor: reconnectCursor,
+        },
+        id: 'resume',
+      }),
+    );
+    await Bun.sleep(10);
+    const sequences = emitter2.sent
+      .slice(1)
+      .map((s) => JSON.parse(s))
+      .filter((m) => m.method === 'weft.events.deliver')
+      .map((m) => m.params.envelope.sequence);
+    expect(sequences).toContain(0);
+    await session2.close();
+  });
+
+  it('subscribe echoes fromCursor verbatim when the client supplied one', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: anonymousPrincipal(),
+      emitter,
+      feed,
+    });
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: 'wf-1', selector: 'events', fromCursor: '5' },
+        id: 'sub-resume',
+      }),
+    );
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.result.cursor).toBe('5');
+    await session.close();
+  });
+
+  it('rejects subscribe / unsubscribe frames missing jsonrpc: "2.0"', async () => {
+    // Bugbot regression: session primitives bypassed the version
+    // check other methods route through. Every frame must carry
+    // `jsonrpc: "2.0"` or be rejected with InvalidRequest.
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: anonymousPrincipal(),
+      emitter,
+      feed,
+    });
+    // Missing jsonrpc field.
+    await session.handleMessage(
+      JSON.stringify({
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: 'wf-1', selector: 'events' },
+        id: 1,
+      }),
+    );
+    const r1 = JSON.parse(emitter.sent[0]!);
+    expect(r1.error.code).toBe(-32600);
+    // Wrong jsonrpc version.
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '1.0',
+        method: 'weft.workflows.unsubscribe',
+        params: { subscriptionId: 'sub_x' },
+        id: 2,
+      }),
+    );
+    const r2 = JSON.parse(emitter.sent[1]!);
+    expect(r2.error.code).toBe(-32600);
     await session.close();
   });
 

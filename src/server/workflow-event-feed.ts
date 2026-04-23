@@ -37,7 +37,7 @@ type WeftEventKind = keyof WeftEventMap;
 /** Opaque cursor. Only `encodeCursor` / `decodeCursor` know the format. */
 export type Cursor = string;
 
-const CURSOR_PATTERN = /^\d+$/;
+const CURSOR_PATTERN = /^-?\d+$/;
 
 /**
  * Encode a non-negative integer sequence as an opaque cursor. The
@@ -55,11 +55,14 @@ export function encodeCursor(sequence: number): Cursor {
   return String(sequence);
 }
 
-/** Decode an opaque cursor back to its sequence. Returns null on malformed input. */
+/**
+ * Decode an opaque cursor back to its sequence. `-1` is the initial
+ * sentinel for "before the first event"; malformed input returns null.
+ */
 export function decodeCursor(cursor: Cursor): number | null {
   if (!CURSOR_PATTERN.test(cursor)) return null;
   const value = Number(cursor);
-  if (!Number.isSafeInteger(value) || value < 0) return null;
+  if (!Number.isSafeInteger(value) || value < -1) return null;
   return value;
 }
 

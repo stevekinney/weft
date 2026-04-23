@@ -294,7 +294,11 @@ function decodeTenantActiveWorkflowIds(bytes: Uint8Array | null): string[] {
     return [];
   }
 
-  return [...new Set(decoded['workflowIds'].filter((value): value is string => typeof value === 'string'))];
+  return [
+    ...new Set(
+      decoded['workflowIds'].filter((value): value is string => typeof value === 'string'),
+    ),
+  ];
 }
 
 function decodeWorkflowTenantRecord(bytes: Uint8Array): DecodedWorkflowTenantRecord | null {
@@ -660,7 +664,10 @@ export class TenantQuotaManager {
       }
 
       if (
-        await storageConditionalBatch(this.#storage, conditions, [...operations, ...quotaOperations])
+        await storageConditionalBatch(this.#storage, conditions, [
+          ...operations,
+          ...quotaOperations,
+        ])
       ) {
         return;
       }
@@ -705,7 +712,9 @@ export class TenantQuotaManager {
 
     if (tenantWorkflowIds.size > 0) {
       for (const workflowId of tenantWorkflowIds) {
-        for await (const [key, value] of this.#storage.scan(resolveNestedWorkflowPrefix(workflowId))) {
+        for await (const [key, value] of this.#storage.scan(
+          resolveNestedWorkflowPrefix(workflowId),
+        )) {
           storageBytes += measureStoredRecordBytes(key, value);
         }
       }

@@ -60,6 +60,7 @@ export type JsonRpcWebSocketSessionOptions = {
 
 const DEFAULT_MAX_SUBSCRIPTIONS = 100;
 const DEFAULT_MAX_FRAME_BYTES = 1 * 1024 * 1024;
+const INITIAL_SUBSCRIPTION_CURSOR: Cursor = '-1';
 
 export type JsonRpcWebSocketSession = {
   /** Process one incoming WS frame (UTF-8 text). */
@@ -204,7 +205,13 @@ export function createJsonRpcWebSocketSession(
 
     const subscriptionId = generateSubscriptionId();
     const controller = new AbortController();
-    const startingCursor: Cursor = fromCursor ?? '0';
+
+    // The `cursor` field is the "resume here" value a client may pass
+    // back as `fromCursor` on reconnect. A fresh subscription starts
+    // before sequence 0, not at sequence 0: replay uses strict
+    // greater-than semantics, so returning `'0'` would skip the first
+    // event if a client reconnects before receiving any deliveries.
+    const startingCursor: Cursor = fromCursor ?? INITIAL_SUBSCRIPTION_CURSOR;
 
     emit({
       jsonrpc: JSON_RPC_VERSION,
@@ -404,12 +411,28 @@ export function createJsonRpcWebSocketSession(
       : undefined;
 
     const method = parsed['method'];
-    if (method === SESSION_METHODS.SUBSCRIBE) {
-      await handleSubscribe(narrowedId, narrowedParams);
-      return;
-    }
-    if (method === SESSION_METHODS.UNSUBSCRIBE) {
-      handleUnsubscribe(narrowedId, narrowedParams);
+    // Session-primitive routing shares the same jsonrpc-version
+    // validation the standard dispatcher enforces — otherwise
+    // subscribe/unsubscribe would silently accept frames missing or
+    // with the wrong `jsonrpc` field while every other method
+    // rejects them as InvalidRequest.
+    if (method === SESSION_METHODS.SUBSCRIBE || method === SESSION_METHODS.UNSUBSCRIBE) {
+      if (parsed['jsonrpc'] !== JSON_RPC_VERSION) {
+        emit({
+          jsonrpc: JSON_RPC_VERSION,
+          error: {
+            code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
+            message: `jsonrpc field must be exactly "${JSON_RPC_VERSION}"`,
+          },
+          id: narrowedId ?? null,
+        });
+        return;
+      }
+      if (method === SESSION_METHODS.SUBSCRIBE) {
+        await handleSubscribe(narrowedId, narrowedParams);
+      } else {
+        handleUnsubscribe(narrowedId, narrowedParams);
+      }
       return;
     }
 

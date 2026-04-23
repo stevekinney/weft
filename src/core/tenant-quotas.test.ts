@@ -152,7 +152,9 @@ class TerminalTransitionBarrierStorage extends MemoryStorage {
     if (
       this.#armed &&
       !this.#blockedTransitionSeen &&
-      operations.some((operation) => operation.type === 'put' && operation.key === this.#workflowKey)
+      operations.some(
+        (operation) => operation.type === 'put' && operation.key === this.#workflowKey,
+      )
     ) {
       this.#blockedTransitionSeen = true;
       this.#blockingTransitionWrite = true;
@@ -424,7 +426,10 @@ describe('tenant resource quotas', () => {
       status: 'pending',
       tenant: { id: 'acme' },
     });
-    const estimatedStorageBytes = measureStoredRecordBytes(KEYS.workflow(workflowId), workflowState);
+    const estimatedStorageBytes = measureStoredRecordBytes(
+      KEYS.workflow(workflowId),
+      workflowState,
+    );
     const initialStorageBytes = 128;
 
     await storage.put(
@@ -524,7 +529,10 @@ describe('tenant resource quotas', () => {
       maxStorageBytes: 1024,
     });
 
-    await storage.put(KEYS.quotaStorage('acme'), encode({ bytes: 256 } satisfies { bytes: number }));
+    await storage.put(
+      KEYS.quotaStorage('acme'),
+      encode({ bytes: 256 } satisfies { bytes: number }),
+    );
     await storage.put(
       KEYS.quotaWorkflowStorage('acme', 'wf-storage-release'),
       encode({ bytes: 256 } satisfies { bytes: number }),
