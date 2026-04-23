@@ -102,3 +102,4 @@ repomix-output.xml
 .env.*.local
 /.claude/worktrees
 tmp/
+.claude/
