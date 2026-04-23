@@ -57,6 +57,18 @@ export type StdioSessionResult = {
 };
 
 const AUTHENTICATE_METHOD = 'weft.authenticate';
+const DEFAULT_MAX_FRAME_BYTES = 1_048_576;
+
+type SessionIO = {
+  readonly writer: WritableStreamDefaultWriter<Uint8Array>;
+  readonly writeFrame: (message: Record<string, unknown>) => Promise<void>;
+  readonly emitter: JsonRpcWebSocketEmitter;
+  readonly drainWrites: () => Promise<void>;
+};
+
+type AdmissionOutcome =
+  | { kind: 'ok'; remainder: string }
+  | { kind: 'fail'; result: StdioSessionResult };
 
 export async function runStdioSession(options: StdioSessionOptions): Promise<StdioSessionResult> {
   if (options.admission.kind === 'require-one') {
@@ -67,82 +79,27 @@ export async function runStdioSession(options: StdioSessionOptions): Promise<Std
     };
   }
 
-  const writer = options.output.getWriter();
-  const encoder = new TextEncoder();
-
-  async function writeFrame(message: Record<string, unknown>): Promise<void> {
-    await writer.write(encoder.encode(JSON.stringify(message) + '\n'));
-  }
-
-  const emitter: JsonRpcWebSocketEmitter = {
-    send(message: string): void {
-      void writer.write(encoder.encode(message + '\n'));
-    },
-  };
-
+  const maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
+  const io = createSessionIO(options.output);
   const reader = options.input.getReader();
   const decoder = new TextDecoder('utf-8');
   let buffer = '';
 
-  // For startup-token: the first frame MUST be weft.authenticate with
-  // the matching token. Everything else is rejected with exit 2.
   if (options.admission.kind === 'startup-token') {
-    const first = await readOneFrame(reader, decoder, buffer);
-    if (first === null) {
-      writer.releaseLock();
-      return { exitCode: 2, reason: 'stdio session closed before authenticate frame' };
+    const outcome = await runStartupTokenAdmission(
+      reader,
+      decoder,
+      buffer,
+      maxFrameBytes,
+      options.admission.token,
+      io,
+    );
+    if (outcome.kind === 'fail') {
+      await io.drainWrites();
+      await closeWriterSilent(io.writer);
+      return outcome.result;
     }
-    buffer = first.buffer;
-    const frame = first.line;
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(frame);
-    } catch {
-      await writeFrame({
-        jsonrpc: JSON_RPC_VERSION,
-        error: { code: JSON_RPC_ERROR_CODES.PARSE_ERROR, message: 'Parse error' },
-        id: null,
-      });
-      await writer.close();
-      return { exitCode: 2, reason: 'first frame was not valid JSON' };
-    }
-    if (
-      !isPlainObject(parsed) ||
-      parsed['jsonrpc'] !== JSON_RPC_VERSION ||
-      parsed['method'] !== AUTHENTICATE_METHOD
-    ) {
-      const id: JsonRpcId = isPlainObject(parsed) ? asId(parsed['id']) : null;
-      await writeFrame({
-        jsonrpc: JSON_RPC_VERSION,
-        error: {
-          code: JSON_RPC_ERROR_CODES.UNAUTHORIZED,
-          message: 'first frame must be weft.authenticate',
-          data: { weftCode: 'Unauthorized', httpStatus: 401 },
-        },
-        id,
-      });
-      await writer.close();
-      return { exitCode: 2, reason: 'first frame was not weft.authenticate' };
-    }
-    const params = parsed['params'];
-    const providedToken = isPlainObject(params) ? params['token'] : undefined;
-    if (typeof providedToken !== 'string' || providedToken !== options.admission.token) {
-      const id = asId(parsed['id']);
-      await writeFrame({
-        jsonrpc: JSON_RPC_VERSION,
-        error: {
-          code: JSON_RPC_ERROR_CODES.UNAUTHORIZED,
-          message: 'startup token mismatch',
-          data: { weftCode: 'Unauthorized', httpStatus: 401 },
-        },
-        id,
-      });
-      await writer.close();
-      return { exitCode: 2, reason: 'startup token mismatch' };
-    }
-    // Success — acknowledge the authenticate call.
-    const id = asId(parsed['id']);
-    await writeFrame({ jsonrpc: JSON_RPC_VERSION, result: {}, id });
+    buffer = outcome.remainder;
   }
 
   const principal: Principal = principalFromStdioLocal();
@@ -150,7 +107,7 @@ export async function runStdioSession(options: StdioSessionOptions): Promise<Std
     registry: options.registry,
     engine: options.engine,
     principal,
-    emitter,
+    emitter: io.emitter,
     feed: options.feed,
     ...(options.maxFrameBytes !== undefined ? { maxFrameBytes: options.maxFrameBytes } : {}),
     ...(options.maxSubscriptions !== undefined
@@ -159,48 +116,263 @@ export async function runStdioSession(options: StdioSessionOptions): Promise<Std
   });
 
   try {
-    while (true) {
-      const result = await reader.read();
-      if (result.done) break;
-      buffer += decoder.decode(result.value, { stream: true });
-      const framed = splitNewlineDelimitedBuffer(buffer, '');
-      buffer = framed.buffer;
-      for (const line of framed.lines) {
-        await session.handleMessage(line);
-      }
-    }
+    // Drain any complete frames already in the buffer before the next
+    // read — without this, a client that pipelined the auth frame and
+    // the first call frame in one chunk would see the call frame sit
+    // in `buffer` until either another chunk arrives or EOF.
+    buffer = await drainCompleteFramesFromBuffer(buffer, session);
+    buffer = await runMainReadLoop(reader, decoder, buffer, maxFrameBytes, session, io);
   } finally {
     await session.close();
-    try {
-      await writer.close();
-    } catch {
-      // writer may already be closed by the time we get here.
-    }
+    await io.drainWrites();
+    await closeWriterSilent(io.writer);
   }
 
   return { exitCode: 0 };
 }
 
+/**
+ * Build the writer + ordered write-chain + emitter bundle. Every write
+ * (admission frames, dispatcher results, subscription notifications)
+ * goes through the same serialized chain so ordering is preserved and
+ * `drainWrites()` before close waits for pending frames.
+ */
+function createSessionIO(output: WritableStream<Uint8Array>): SessionIO {
+  const writer = output.getWriter();
+  const encoder = new TextEncoder();
+  let writeChain: Promise<void> = Promise.resolve();
+
+  function enqueueWrite(text: string): Promise<void> {
+    const next = writeChain.then(() => writer.write(encoder.encode(text)));
+    writeChain = next.catch(() => {
+      // Swallow here so the chain keeps advancing; callers that
+      // specifically want to know a write failed can await the
+      // returned promise directly.
+    });
+    return next;
+  }
+
+  return {
+    writer,
+    writeFrame: (message) => enqueueWrite(JSON.stringify(message) + '\n'),
+    emitter: {
+      send(message: string): void {
+        // Fire-and-forget at the call site, but the write lands in the
+        // serialized queue so ordering is preserved and the final
+        // `drainWrites()` before `writer.close()` awaits every pending
+        // frame.
+        void enqueueWrite(message + '\n');
+      },
+    },
+    drainWrites: async () => {
+      try {
+        await writeChain;
+      } catch {
+        // Already surfaced to the originating caller via the returned
+        // promise from `enqueueWrite`.
+      }
+    },
+  };
+}
+
+async function runStartupTokenAdmission(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  decoder: TextDecoder,
+  initialBuffer: string,
+  maxFrameBytes: number,
+  expectedToken: string,
+  io: SessionIO,
+): Promise<AdmissionOutcome> {
+  const first = await readOneFrame(reader, decoder, initialBuffer, maxFrameBytes);
+  if (first.kind === 'closed') {
+    return {
+      kind: 'fail',
+      result: { exitCode: 2, reason: 'stdio session closed before authenticate frame' },
+    };
+  }
+  if (first.kind === 'overflow') {
+    await io.writeFrame({
+      jsonrpc: JSON_RPC_VERSION,
+      error: {
+        code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
+        message: 'authenticate frame exceeds maxFrameBytes',
+        data: { weftCode: 'InvalidParams', httpStatus: 400 },
+      },
+      id: null,
+    });
+    return {
+      kind: 'fail',
+      result: { exitCode: 2, reason: 'authenticate frame exceeds maxFrameBytes' },
+    };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(first.line);
+  } catch {
+    await io.writeFrame({
+      jsonrpc: JSON_RPC_VERSION,
+      error: { code: JSON_RPC_ERROR_CODES.PARSE_ERROR, message: 'Parse error' },
+      id: null,
+    });
+    return {
+      kind: 'fail',
+      result: { exitCode: 2, reason: 'first frame was not valid JSON' },
+    };
+  }
+
+  const shapeFault = classifyAuthenticateShape(parsed);
+  if (shapeFault) {
+    await io.writeFrame(shapeFault.frame);
+    return { kind: 'fail', result: shapeFault.result };
+  }
+
+  const asObject = parsed as Record<string, unknown>;
+  const params = asObject['params'];
+  const providedToken = isPlainObject(params) ? params['token'] : undefined;
+  if (typeof providedToken !== 'string' || !constantTimeStringEqual(providedToken, expectedToken)) {
+    const id = asId(asObject['id']);
+    await io.writeFrame({
+      jsonrpc: JSON_RPC_VERSION,
+      error: {
+        code: JSON_RPC_ERROR_CODES.UNAUTHORIZED,
+        message: 'startup token mismatch',
+        data: { weftCode: 'Unauthorized', httpStatus: 401 },
+      },
+      id,
+    });
+    return { kind: 'fail', result: { exitCode: 2, reason: 'startup token mismatch' } };
+  }
+
+  const id = asId(asObject['id']);
+  await io.writeFrame({ jsonrpc: JSON_RPC_VERSION, result: {}, id });
+  return { kind: 'ok', remainder: first.remainder };
+}
+
+function classifyAuthenticateShape(
+  parsed: unknown,
+): { frame: Record<string, unknown>; result: StdioSessionResult } | null {
+  if (
+    isPlainObject(parsed) &&
+    parsed['jsonrpc'] === JSON_RPC_VERSION &&
+    parsed['method'] === AUTHENTICATE_METHOD
+  ) {
+    return null;
+  }
+  const id: JsonRpcId = isPlainObject(parsed) ? asId(parsed['id']) : null;
+  return {
+    frame: {
+      jsonrpc: JSON_RPC_VERSION,
+      error: {
+        code: JSON_RPC_ERROR_CODES.UNAUTHORIZED,
+        message: 'first frame must be weft.authenticate',
+        data: { weftCode: 'Unauthorized', httpStatus: 401 },
+      },
+      id,
+    },
+    result: { exitCode: 2, reason: 'first frame was not weft.authenticate' },
+  };
+}
+
+async function runMainReadLoop(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  decoder: TextDecoder,
+  initialBuffer: string,
+  maxFrameBytes: number,
+  session: { handleMessage(line: string): Promise<void> },
+  io: SessionIO,
+): Promise<string> {
+  let buffer = initialBuffer;
+  while (true) {
+    const result = await reader.read();
+    if (result.done) return buffer;
+    buffer += decoder.decode(result.value, { stream: true });
+    if (buffer.length > maxFrameBytes && buffer.indexOf('\n') === -1) {
+      // A frame with no newline has exceeded the size cap. Emit a
+      // single InvalidRequest and discard the buffer so we don't keep
+      // accumulating.
+      await io.writeFrame({
+        jsonrpc: JSON_RPC_VERSION,
+        error: {
+          code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
+          message: 'frame exceeds maxFrameBytes',
+          data: { weftCode: 'InvalidParams', httpStatus: 400 },
+        },
+        id: null,
+      });
+      buffer = '';
+      continue;
+    }
+    const framed = splitNewlineDelimitedBuffer(buffer, '');
+    buffer = framed.buffer;
+    for (const line of framed.lines) {
+      await session.handleMessage(line);
+    }
+  }
+}
+
+type ReadOneFrameResult =
+  | { kind: 'ok'; line: string; remainder: string }
+  | { kind: 'closed' }
+  | { kind: 'overflow' };
+
+/**
+ * Read exactly one complete newline-terminated frame from `reader`,
+ * starting from `initialBuffer`. Enforces `maxFrameBytes` so an
+ * attacker cannot force unbounded memory growth before admission
+ * completes. The remainder is the raw slice of the buffer after the
+ * first newline — no lossy reconstruction.
+ */
 async function readOneFrame(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   decoder: TextDecoder,
   initialBuffer: string,
-): Promise<{ line: string; buffer: string } | null> {
+  maxFrameBytes: number,
+): Promise<ReadOneFrameResult> {
   let buffer = initialBuffer;
   while (true) {
-    const framed = splitNewlineDelimitedBuffer(buffer, '');
-    if (framed.lines.length > 0) {
-      const [line, ...rest] = framed.lines;
-      const remainder =
-        rest.length > 0
-          ? rest.join('\n') + (framed.buffer ? '\n' + framed.buffer : '')
-          : framed.buffer;
-      return { line: line!, buffer: remainder };
+    const newlineIndex = buffer.indexOf('\n');
+    if (newlineIndex !== -1) {
+      if (newlineIndex > maxFrameBytes) return { kind: 'overflow' };
+      const line = buffer.slice(0, newlineIndex).trim();
+      const remainder = buffer.slice(newlineIndex + 1);
+      if (line.length === 0) {
+        // Blank framing artifact — keep reading for a real frame.
+        buffer = remainder;
+        continue;
+      }
+      return { kind: 'ok', line, remainder };
     }
-    buffer = framed.buffer;
+    if (buffer.length > maxFrameBytes) return { kind: 'overflow' };
     const result = await reader.read();
-    if (result.done) return null;
+    if (result.done) return { kind: 'closed' };
     buffer += decoder.decode(result.value, { stream: true });
+  }
+}
+
+/**
+ * Drain any complete frames already present in `buffer` (no new
+ * reads) through `session.handleMessage`. Returns the leftover
+ * partial-frame buffer. Used immediately after admission so a
+ * pipelined auth+call chunk is processed without waiting for more
+ * input.
+ */
+async function drainCompleteFramesFromBuffer(
+  buffer: string,
+  session: { handleMessage(line: string): Promise<void> },
+): Promise<string> {
+  const framed = splitNewlineDelimitedBuffer(buffer, '');
+  for (const line of framed.lines) {
+    await session.handleMessage(line);
+  }
+  return framed.buffer;
+}
+
+async function closeWriterSilent(writer: WritableStreamDefaultWriter<Uint8Array>): Promise<void> {
+  try {
+    await writer.close();
+  } catch {
+    // Writer may already be closed/errored; nothing to do.
   }
 }
 
@@ -213,4 +385,21 @@ function asId(value: unknown): JsonRpcId {
   if (typeof value === 'string') return value;
   if (typeof value === 'number' && Number.isFinite(value)) return value;
   return null;
+}
+
+/**
+ * Constant-time string comparison. Length leak is intentional and
+ * acceptable here (tokens are fixed-size hex in the intended
+ * deployment) — the goal is to prevent a per-character timing oracle
+ * on same-length candidates. For startup-token mode the attacker
+ * would need to already control the stdin side, so this is
+ * defense-in-depth rather than a load-bearing mitigation.
+ */
+function constantTimeStringEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
 }

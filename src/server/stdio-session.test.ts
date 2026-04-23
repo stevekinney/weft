@@ -206,6 +206,112 @@ describe('runStdioSession — admission', () => {
       feed: createWorkflowEventFeed(createInMemoryEventBackend()),
     });
     expect(result.exitCode).toBe(2);
+    expect(result.reason).toMatch(/authenticate/i);
+    const response = JSON.parse(output.lines()[0]!);
+    expect(response.error.code).toBe(-32010);
+    expect(response.error.data.weftCode).toBe('Unauthorized');
+  });
+
+  it('startup-token gate: rejects when the first frame is not valid JSON', async () => {
+    const input = readableFromLines(['not json at all\n']);
+    const output = collectingWritable();
+    const result = await runStdioSession({
+      input,
+      output: output.stream,
+      admission: { kind: 'startup-token', token: 'correct' },
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+    });
+    expect(result.exitCode).toBe(2);
+    expect(result.reason).toMatch(/json/i);
+    const response = JSON.parse(output.lines()[0]!);
+    expect(response.error.code).toBe(-32700);
+  });
+
+  it('startup-token gate: rejects when stdin closes before any frame arrives', async () => {
+    const input = readableFromLines([]);
+    const output = collectingWritable();
+    const result = await runStdioSession({
+      input,
+      output: output.stream,
+      admission: { kind: 'startup-token', token: 'correct' },
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+    });
+    expect(result.exitCode).toBe(2);
+    expect(result.reason).toMatch(/closed before/i);
+  });
+
+  it('startup-token gate: rejects when params.token is missing', async () => {
+    const input = readableFromLines([
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.authenticate',
+        params: {},
+        id: 'auth',
+      }) + '\n',
+    ]);
+    const output = collectingWritable();
+    const result = await runStdioSession({
+      input,
+      output: output.stream,
+      admission: { kind: 'startup-token', token: 'correct' },
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+    });
+    expect(result.exitCode).toBe(2);
+    expect(result.reason).toMatch(/token/i);
+  });
+
+  it('startup-token gate: rejects when params.token is not a string', async () => {
+    const input = readableFromLines([
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.authenticate',
+        params: { token: 42 },
+        id: 'auth',
+      }) + '\n',
+    ]);
+    const output = collectingWritable();
+    const result = await runStdioSession({
+      input,
+      output: output.stream,
+      admission: { kind: 'startup-token', token: 'correct' },
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+    });
+    expect(result.exitCode).toBe(2);
+    expect(result.reason).toMatch(/token/i);
+  });
+
+  it('startup-token gate: rejects an oversize authenticate frame before admission', async () => {
+    const huge = 'x'.repeat(2000);
+    const input = readableFromLines([
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.authenticate',
+        params: { token: 'correct', padding: huge },
+        id: 'auth',
+      }) + '\n',
+    ]);
+    const output = collectingWritable();
+    const result = await runStdioSession({
+      input,
+      output: output.stream,
+      admission: { kind: 'startup-token', token: 'correct' },
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+      maxFrameBytes: 500,
+    });
+    expect(result.exitCode).toBe(2);
+    expect(result.reason).toMatch(/maxFrameBytes/i);
+    const response = JSON.parse(output.lines()[0]!);
+    expect(response.error.code).toBe(-32600);
   });
 });
 
@@ -271,5 +377,75 @@ describe('runStdioSession — dispatch', () => {
       feed: createWorkflowEventFeed(createInMemoryEventBackend()),
     });
     expect(result.exitCode).toBe(0);
+  });
+
+  it('handles two frames delivered in a single chunk', async () => {
+    const combined =
+      JSON.stringify({ jsonrpc: '2.0', method: 'weft.test.echo', params: { v: 'a' }, id: 1 }) +
+      '\n' +
+      JSON.stringify({ jsonrpc: '2.0', method: 'weft.test.echo', params: { v: 'b' }, id: 2 }) +
+      '\n';
+    const input = readableFromLines([combined]);
+    const output = collectingWritable();
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.echo',
+        inputSchema: z.object({ v: z.string() }),
+        outputSchema: z.object({ v: z.string() }),
+        invoke: async ({ input: i }) => ({ v: i.v }),
+      }),
+    ]);
+    const result = await runStdioSession({
+      input,
+      output: output.stream,
+      admission: { kind: 'allow-unauthenticated-local-admin' },
+      registry,
+      engine: fakeEngine,
+      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+    });
+    expect(result.exitCode).toBe(0);
+    const lines = output.lines();
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]!).id).toBe(1);
+    expect(JSON.parse(lines[1]!).id).toBe(2);
+  });
+
+  it('processes a pipelined auth+call chunk without waiting for more input', async () => {
+    const token = 'abc123';
+    const combined =
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.authenticate',
+        params: { token },
+        id: 'auth',
+      }) +
+      '\n' +
+      JSON.stringify({ jsonrpc: '2.0', method: 'weft.test.ping', id: 1 }) +
+      '\n';
+    const input = readableFromLines([combined]);
+    const output = collectingWritable();
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.ping',
+        inputSchema: z.object({}),
+        outputSchema: z.object({ ok: z.boolean() }),
+        invoke: async () => ({ ok: true }),
+      }),
+    ]);
+    const result = await runStdioSession({
+      input,
+      output: output.stream,
+      admission: { kind: 'startup-token', token },
+      registry,
+      engine: fakeEngine,
+      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+    });
+    expect(result.exitCode).toBe(0);
+    const lines = output.lines();
+    // Auth ack, then the ping response. Both must land even though the
+    // stream closes immediately after the single chunk.
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]!).id).toBe('auth');
+    expect(JSON.parse(lines[1]!).result.ok).toBe(true);
   });
 });
