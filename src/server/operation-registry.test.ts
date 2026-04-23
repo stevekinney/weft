@@ -214,4 +214,57 @@ describe('defineOperation (typed builder)', () => {
     });
     expect(typeof op.authorize).toBe('function');
   });
+
+  it('deep-copies the access policy so nested scopes array is isolated', () => {
+    // Bugbot regression: `{ ...input.access }` was shallow, leaving
+    // `scoped`/`optionalAuth` policies with their nested ScopeRequirement
+    // object AND scopes array aliased to the caller's reference. A
+    // mutation of the caller's array between builder return and registry
+    // insertion would silently change the operation's authorization
+    // requirements.
+    const callerScopes: [string, ...string[]] = ['workflows:read'];
+    const op = defineOperation({
+      name: 'weft.test.scopedcopy',
+      summary: 's',
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      access: {
+        kind: 'scoped',
+        scopes: { kind: 'anyOf', scopes: callerScopes as ['workflows:read'] },
+      },
+      transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
+      unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
+      invoke: async () => ({}),
+    });
+    callerScopes.push('workflows:write');
+    if (op.access.kind !== 'scoped') throw new Error('expected scoped');
+    expect(op.access.scopes.scopes).toEqual(['workflows:read']);
+    expect(op.access.scopes.scopes).not.toBe(callerScopes);
+  });
+
+  it('deep-copies optionalAuth authenticatedScopes too', () => {
+    // Mirror coverage for the `optionalAuth` variant — same aliasing
+    // risk, same fix.
+    const callerScopes: [string, ...string[]] = ['workflows:write'];
+    const op = defineOperation({
+      name: 'weft.test.optauthcopy',
+      summary: 's',
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      access: {
+        kind: 'optionalAuth',
+        authenticatedScopes: {
+          kind: 'allOf',
+          scopes: callerScopes as ['workflows:write'],
+        },
+      },
+      transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
+      unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
+      invoke: async () => ({}),
+    });
+    callerScopes.push('schedules:write');
+    if (op.access.kind !== 'optionalAuth') throw new Error('expected optionalAuth');
+    expect(op.access.authenticatedScopes.scopes).toEqual(['workflows:write']);
+    expect(op.access.authenticatedScopes.scopes).not.toBe(callerScopes);
+  });
 });

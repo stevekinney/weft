@@ -86,14 +86,51 @@ export function defineOperation<Input, Output>(
     tags: [...(input.tags ?? [])],
     inputSchema: input.inputSchema,
     outputSchema: input.outputSchema,
-    // Shallow-copy each policy container. `access`'s nested
-    // `ScopeRequirement.scopes` array is left to the registry's
-    // `freezeAccessPolicy` to deep-handle — a builder-side recursive
-    // copy would duplicate that work.
-    access: { ...input.access },
+    // Deep-copy `access` so `scoped` and `optionalAuth` variants don't
+    // leak aliasing through their nested `ScopeRequirement` object and
+    // `scopes` array. Without this, a caller mutating the nested scope
+    // list between `defineOperation` returning and the registry running
+    // `freezeAccessPolicy` could silently change the operation's
+    // authorization requirements — the JSDoc's isolation promise must
+    // hold from the moment the builder returns.
+    access: copyAccessPolicy(input.access),
     transports: { ...input.transports },
     unknownKeyPolicy: { ...input.unknownKeyPolicy },
     ...(input.authorize === undefined ? {} : { authorize: input.authorize }),
     invoke: input.invoke,
   };
+}
+
+/**
+ * Deep-copy an `AccessPolicy`. For `scoped` and `optionalAuth` variants,
+ * copies the nested `ScopeRequirement` object AND its `scopes` array.
+ * Mirrors `freezeAccessPolicy` in `operation-catalog.ts` but returns
+ * mutable structures (the registry applies the freeze at insertion).
+ */
+function copyAccessPolicy(policy: AccessPolicy): AccessPolicy {
+  if (policy.kind === 'scoped') {
+    return {
+      kind: 'scoped',
+      scopes: {
+        kind: policy.scopes.kind,
+        scopes: [...policy.scopes.scopes] as [
+          (typeof policy.scopes.scopes)[number],
+          ...(typeof policy.scopes.scopes)[number][],
+        ],
+      },
+    };
+  }
+  if (policy.kind === 'optionalAuth') {
+    return {
+      kind: 'optionalAuth',
+      authenticatedScopes: {
+        kind: policy.authenticatedScopes.kind,
+        scopes: [...policy.authenticatedScopes.scopes] as [
+          (typeof policy.authenticatedScopes.scopes)[number],
+          ...(typeof policy.authenticatedScopes.scopes)[number][],
+        ],
+      },
+    };
+  }
+  return { ...policy };
 }
