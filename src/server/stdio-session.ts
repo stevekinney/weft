@@ -109,6 +109,12 @@ export async function runStdioSession(options: StdioSessionOptions): Promise<Std
     principal,
     emitter: io.emitter,
     feed: options.feed,
+    // Dispatch operations as `jsonRpcStdio`, not `jsonRpcWebSocket`,
+    // so the transport-availability check in `executeOperation`
+    // evaluates the right flag for this session. Operations
+    // configured with `jsonRpcStdio: false` must be rejected on
+    // stdio even if their WS flag is true, and vice versa.
+    transport: 'jsonRpcStdio',
     ...(options.maxFrameBytes !== undefined ? { maxFrameBytes: options.maxFrameBytes } : {}),
     ...(options.maxSubscriptions !== undefined
       ? { maxSubscriptions: options.maxSubscriptions }

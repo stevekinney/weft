@@ -56,6 +56,15 @@ export type JsonRpcWebSocketSessionOptions = {
    * an unbounded allocation inside the adapter.
    */
   readonly maxFrameBytes?: number;
+  /**
+   * Transport identity for the dispatcher's transport-availability
+   * check. Defaults to `'jsonRpcWebSocket'`. The stdio session reuses
+   * this factory but must pass `'jsonRpcStdio'` so operations with
+   * `transports.jsonRpcStdio: false` are rejected on stdio and,
+   * conversely, operations that are stdio-only aren't rejected just
+   * because they haven't been enabled for WS.
+   */
+  readonly transport?: 'jsonRpcHttp' | 'jsonRpcWebSocket' | 'jsonRpcStdio';
 };
 
 const DEFAULT_MAX_SUBSCRIPTIONS = 100;
@@ -100,6 +109,7 @@ export function createJsonRpcWebSocketSession(
   const { registry, engine, principal, emitter, feed } = options;
   const maxSubscriptions = options.maxSubscriptions ?? DEFAULT_MAX_SUBSCRIPTIONS;
   const maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
+  const transport = options.transport ?? 'jsonRpcWebSocket';
   const subscriptions = new Map<string, ActiveSubscription>();
   // `emitterBroken` tracks the emitter's liveness — set to `true` only
   // when `emitter.send` (or `JSON.stringify`) throws. `disposed`
@@ -470,7 +480,7 @@ export function createJsonRpcWebSocketSession(
       registry,
       engine,
       principal,
-      transport: 'jsonRpcWebSocket',
+      transport,
     });
 
     if (result.kind === 'single') {

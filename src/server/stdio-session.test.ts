@@ -501,6 +501,81 @@ describe('runStdioSession — dispatch', () => {
     expect(response.error.message).toMatch(/unterminated/i);
   });
 
+  it('dispatches with transport identity jsonRpcStdio (Bugbot regression)', async () => {
+    // Regression for Bugbot finding on PR #127: the stdio session
+    // reuses `createJsonRpcWebSocketSession`, which previously
+    // hard-coded `transport: 'jsonRpcWebSocket'` inside
+    // `dispatchJsonRpc`. An operation with `jsonRpcStdio: true` but
+    // `jsonRpcWebSocket: false` would be incorrectly rejected as
+    // `UnsupportedTransport` over stdio. This test pins the fix —
+    // the session now passes `transport: 'jsonRpcStdio'` through.
+    const input = readableFromLines([
+      JSON.stringify({ jsonrpc: '2.0', method: 'weft.stdio.only', id: 1 }) + '\n',
+    ]);
+    const output = collectingWritable();
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.stdio.only',
+        inputSchema: z.object({}),
+        outputSchema: z.object({ ok: z.boolean() }),
+        transports: {
+          http: false,
+          jsonRpcHttp: false,
+          jsonRpcWebSocket: false,
+          jsonRpcStdio: true,
+        },
+        invoke: async () => ({ ok: true }),
+      }),
+    ]);
+    const result = await runStdioSession({
+      input,
+      output: output.stream,
+      admission: { kind: 'allow-unauthenticated-local-admin' },
+      registry,
+      engine: fakeEngine,
+      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+    });
+    expect(result.exitCode).toBe(0);
+    const response = JSON.parse(output.lines()[0]!);
+    expect(response.error).toBeUndefined();
+    expect(response.result.ok).toBe(true);
+  });
+
+  it('rejects WS-only operations over stdio with UnsupportedTransport', async () => {
+    // Complementary regression: a ws-only operation must be rejected
+    // over stdio, proving the transport identity is consulted.
+    const input = readableFromLines([
+      JSON.stringify({ jsonrpc: '2.0', method: 'weft.ws.only', id: 1 }) + '\n',
+    ]);
+    const output = collectingWritable();
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.ws.only',
+        inputSchema: z.object({}),
+        outputSchema: z.object({}),
+        transports: {
+          http: false,
+          jsonRpcHttp: false,
+          jsonRpcWebSocket: true,
+          jsonRpcStdio: false,
+        },
+        invoke: async () => ({}),
+      }),
+    ]);
+    const result = await runStdioSession({
+      input,
+      output: output.stream,
+      admission: { kind: 'allow-unauthenticated-local-admin' },
+      registry,
+      engine: fakeEngine,
+      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+    });
+    expect(result.exitCode).toBe(0);
+    const response = JSON.parse(output.lines()[0]!);
+    expect(response.error.code).toBe(-32030);
+    expect(response.error.data.weftCode).toBe('UnsupportedTransport');
+  });
+
   it('processes a pipelined auth+call chunk without waiting for more input', async () => {
     const token = 'abc123';
     const combined =
