@@ -113,10 +113,22 @@ export type WorkflowEventFeedBackend = {
   snapshotTailSequence(workflowId: string, selector: EventSelector): Promise<number>;
 
   /**
-   * Register a live listener. Returns an unsubscribe function. The
-   * listener is invoked synchronously from the event-emitter context
-   * — the feed's listener buffers envelopes off the fast path and
-   * handles async delivery.
+   * Register a live listener. Returns an unsubscribe function.
+   *
+   * Contract:
+   *   - Envelopes MUST be delivered in monotonically increasing
+   *     sequence order. The feed's live-buffer drain relies on this
+   *     for its dedupe logic — an out-of-order emission would cause
+   *     the feed to advance `lastDelivered` past a later-arriving
+   *     lower-sequence event and silently drop it.
+   *   - The listener SHOULD be invoked synchronously from the
+   *     event-emitter context. Backends that defer to a microtask
+   *     (or later) still work correctly because the feed's listener
+   *     buffers envelopes off the fast path, but synchronous delivery
+   *     minimizes handoff latency.
+   *   - Listener exceptions MUST NOT propagate to the backend's
+   *     event-emitter; the in-memory implementation wraps each
+   *     invocation in try/catch. Production backends should match.
    */
   subscribeLive(
     workflowId: string,
@@ -245,40 +257,21 @@ export function createWorkflowEventFeed(
 
         // Step 3: replay from `requestedAfter` up to `snapshot`.
         if (snapshot > requestedAfter) {
-          for await (const envelope of backend.replay({
-            workflowId: args.workflowId,
-            selector: args.selector,
-            afterSequence: requestedAfter,
-          })) {
-            if (envelope.sequence > snapshot) break;
-            if (args.signal?.aborted) return;
-            yield envelope;
-          }
+          yield* replayUpTo(backend, args, requestedAfter, snapshot);
+          if (args.signal?.aborted) return;
         }
 
-        // Step 4 + 5: drain buffer (dropping sequence <= snapshot),
-        // then continue live.
-        let lastDelivered = snapshot;
-        while (true) {
-          if (args.signal?.aborted) return;
-          if (bufferOverflowed) {
-            // Overflow — terminate the iterable. Consumers observe
-            // this as a clean `done: true` and reopen with their
-            // last cursor.
-            return;
-          }
-          if (buffer.length > 0) {
-            const next = buffer.shift()!;
-            if (next.sequence <= lastDelivered) continue; // dedupe.
-            yield next;
-            lastDelivered = next.sequence;
-            continue;
-          }
-          // Nothing buffered; wait for the next live event or abort.
-          await new Promise<void>((resolve) => {
-            waker = resolve;
-          });
-        }
+        // Step 4 + 5: drain buffer (sequence <= snapshot dropped),
+        // then continue live-tail.
+        yield* drainLive(
+          buffer,
+          snapshot,
+          args.signal,
+          () => bufferOverflowed,
+          (w) => {
+            waker = w;
+          },
+        );
       } finally {
         args.signal?.removeEventListener('abort', onAbort);
         unsubscribe();
@@ -319,6 +312,69 @@ export type InMemoryEventBackend = WorkflowEventFeedBackend & {
  * highest `sequence` seen so far. Live listeners are invoked
  * synchronously when `emitLive` or `append` is called.
  */
+/**
+ * Storage-replay generator up to `snapshot` inclusive. Extracted so
+ * `subscribe`'s body stays under the complexity limit.
+ */
+async function* replayUpTo(
+  backend: WorkflowEventFeedBackend,
+  args: { workflowId: string; selector: EventSelector; signal?: AbortSignal },
+  afterSequence: number,
+  snapshot: number,
+): AsyncIterable<EventEnvelope> {
+  for await (const envelope of backend.replay({
+    workflowId: args.workflowId,
+    selector: args.selector,
+    afterSequence,
+  })) {
+    if (envelope.sequence > snapshot) break;
+    if (args.signal?.aborted) return;
+    yield envelope;
+  }
+}
+
+/**
+ * Live-drain loop:
+ *   - Yields any buffered envelope with sequence > snapshot (dedupes
+ *     any event that was also replayed from storage).
+ *   - Trusts the `subscribeLive` in-order delivery contract: a lower
+ *     sequence arriving after a higher one would be dropped by the
+ *     `<= lastDelivered` check.
+ *   - Guards the wait loop against a lost-wakeup race: after
+ *     assigning the waker callback, re-checks buffer / overflow /
+ *     abort state BEFORE awaiting. An event that arrives in the
+ *     window between buffer-empty check and waker assignment would
+ *     otherwise hang the consumer forever.
+ */
+async function* drainLive(
+  buffer: EventEnvelope[],
+  snapshot: number,
+  signal: AbortSignal | undefined,
+  overflowed: () => boolean,
+  installWaker: (fn: (() => void) | null) => void,
+): AsyncIterable<EventEnvelope> {
+  let lastDelivered = snapshot;
+  while (true) {
+    if (signal?.aborted) return;
+    if (overflowed()) return;
+    const head = buffer.shift();
+    if (head !== undefined) {
+      if (head.sequence <= lastDelivered) continue;
+      yield head;
+      lastDelivered = head.sequence;
+      continue;
+    }
+    const armed = new Promise<void>((resolve) => {
+      installWaker(resolve);
+    });
+    if (buffer.length > 0 || overflowed() || signal?.aborted) {
+      installWaker(null);
+      continue;
+    }
+    await armed;
+  }
+}
+
 function bucketKey(workflowId: string, selector: EventSelector): string {
   return `${workflowId}:${selector}`;
 }

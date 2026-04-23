@@ -237,17 +237,156 @@ describe('WorkflowEventFeed — subscribe (live + replay)', () => {
       await backend.emitLive(makeEnvelope({ sequence: seq }));
     }
 
-    // Now drain — the first couple succeed, then an overflow ends the
-    // iterable. Collect what arrives; assert eventual done.
+    // Drain — the first two succeed, then an overflow ends the
+    // iterable. The `sawDone` flag is critical: without it a
+    // silent-drop regression would still pass the length check.
     const received: number[] = [];
+    let sawDone = false;
     for (let attempt = 0; attempt < 20; attempt += 1) {
       const next = await iterator.next();
-      if (next.done) break;
+      if (next.done) {
+        sawDone = true;
+        break;
+      }
       received.push(next.value.sequence);
     }
-    // We should have seen the first buffer-full of events, then the
-    // iterator terminated.
+    expect(sawDone).toBe(true);
     expect(received.length).toBeLessThanOrEqual(2);
+  });
+
+  it('captures live-only events emitted between subscribeLive and snapshotTailSequence', async () => {
+    // This is the actual race the atomic-handoff sequence exists to
+    // close: a backend can fire a live event AFTER the listener is
+    // registered (step 1) but BEFORE the snapshot resolves (step 2).
+    // If the feed registered the listener inside the async generator
+    // body (lazy), the event would fall into the gap. With eager
+    // registration the listener captures it; the drain step then
+    // delivers it alongside the replayed events.
+    //
+    // Intercepted backend injects a live-only event during the
+    // snapshot call — single-threaded JS makes this deterministic.
+    const real = createInMemoryEventBackend();
+    await real.append(makeEnvelope({ sequence: 0 }));
+
+    let liveInjected = false;
+    const backend: WorkflowEventFeedBackend = {
+      replay: real.replay.bind(real),
+      subscribeLive: real.subscribeLive.bind(real),
+      async snapshotTailSequence(workflowId, selector) {
+        if (!liveInjected) {
+          liveInjected = true;
+          // seq=1 fires live but is NOT in storage — only the buffer
+          // can capture it. Must appear in the subscriber's output.
+          await real.emitLive(makeEnvelope({ sequence: 1 }));
+        }
+        return real.snapshotTailSequence(workflowId, selector);
+      },
+    };
+
+    const feed = createWorkflowEventFeed(backend);
+    const received: number[] = [];
+    for await (const envelope of feed.subscribe({ workflowId: 'wf-1', selector: 'events' })) {
+      received.push(envelope.sequence);
+      if (envelope.sequence >= 1) break;
+    }
+    expect(received).toEqual([0, 1]);
+  });
+
+  it('serves two concurrent subscribers independently', async () => {
+    // Two subscribers on the same workflow: both must receive every
+    // event, neither's buffer should interfere with the other's.
+    const backend = createInMemoryEventBackend();
+    const feed = createWorkflowEventFeed(backend);
+
+    const controllerA = new AbortController();
+    const controllerB = new AbortController();
+    const receivedA: number[] = [];
+    const receivedB: number[] = [];
+
+    const pumpA = (async () => {
+      for await (const envelope of feed.subscribe({
+        workflowId: 'wf-1',
+        selector: 'events',
+        signal: controllerA.signal,
+      })) {
+        receivedA.push(envelope.sequence);
+        if (receivedA.length >= 3) controllerA.abort();
+      }
+    })();
+
+    const pumpB = (async () => {
+      for await (const envelope of feed.subscribe({
+        workflowId: 'wf-1',
+        selector: 'events',
+        signal: controllerB.signal,
+      })) {
+        receivedB.push(envelope.sequence);
+        if (receivedB.length >= 3) controllerB.abort();
+      }
+    })();
+
+    // Let both subscribers register their listeners before emitting.
+    await Bun.sleep(0);
+    for (let seq = 0; seq < 3; seq += 1) {
+      await backend.emitLive(makeEnvelope({ sequence: seq }));
+    }
+
+    await pumpA;
+    await pumpB;
+    expect(receivedA).toEqual([0, 1, 2]);
+    expect(receivedB).toEqual([0, 1, 2]);
+  });
+
+  it('resume-after-overflow: reopening with last cursor replays the missed events from storage', async () => {
+    // Primary recovery story: buffer overflows → iterable closes →
+    // caller reopens with its last delivered cursor → missed events
+    // replay cleanly. Without this test the overflow contract is
+    // undocumented at the behavioral level.
+    const backend = createInMemoryEventBackend();
+    const feed = createWorkflowEventFeed(backend, { liveBufferSize: 2 });
+
+    // Session 1: overflow after consuming one event.
+    await backend.append(makeEnvelope({ sequence: 0 }));
+    const session1 = feed.subscribe({ workflowId: 'wf-1', selector: 'events' });
+    const iter1 = session1[Symbol.asyncIterator]();
+    const firstPull = await iter1.next();
+    if (firstPull.done) throw new Error('expected replayed seq 0');
+    const lastDeliveredCursor = firstPull.value.cursor;
+
+    // Fill and overflow.
+    for (let seq = 1; seq <= 5; seq += 1) {
+      await backend.append(makeEnvelope({ sequence: seq }));
+      await backend.emitLive(makeEnvelope({ sequence: seq }));
+    }
+    // Drain until done.
+    let sawDone1 = false;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const next = await iter1.next();
+      if (next.done) {
+        sawDone1 = true;
+        break;
+      }
+    }
+    expect(sawDone1).toBe(true);
+
+    // Session 2: resubscribe with the last cursor; missed events must
+    // replay from storage.
+    const received: number[] = [];
+    const session2 = feed.subscribe({
+      workflowId: 'wf-1',
+      selector: 'events',
+      fromCursor: lastDeliveredCursor,
+    });
+    const iter2 = session2[Symbol.asyncIterator]();
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      const next = await iter2.next();
+      if (next.done) break;
+      received.push(next.value.sequence);
+      if (received.length >= 5) break;
+    }
+    await iter2.return?.();
+    // Events after seq 0 (the last delivered) should all appear.
+    expect(received).toEqual([1, 2, 3, 4, 5]);
   });
 
   it('AbortSignal.abort() stops the subscription cleanly', async () => {
