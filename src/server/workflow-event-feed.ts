@@ -37,7 +37,7 @@ type WeftEventKind = keyof WeftEventMap;
 /** Opaque cursor. Only `encodeCursor` / `decodeCursor` know the format. */
 export type Cursor = string;
 
-const CURSOR_PATTERN = /^-?\d+$/;
+const CURSOR_PATTERN = /^(?:-1|\d+)$/;
 
 /**
  * Encode a non-negative integer sequence as an opaque cursor. The

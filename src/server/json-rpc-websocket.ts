@@ -73,6 +73,12 @@ type ActiveSubscription = {
   readonly id: string;
   readonly controller: AbortController;
   readonly pump: Promise<void>;
+  isTerminating: boolean;
+};
+
+type SessionRequest = {
+  readonly id: JsonRpcId | undefined;
+  readonly expectsResponse: boolean;
 };
 
 /**
@@ -137,34 +143,38 @@ export function createJsonRpcWebSocketSession(
     return disposed || emitterBroken;
   }
 
+  function emitResponse(request: SessionRequest, message: Record<string, unknown>): void {
+    if (request.expectsResponse) emit(message);
+  }
+
   async function handleSubscribe(
-    id: JsonRpcId | undefined,
+    request: SessionRequest,
     params: Record<string, unknown> | undefined,
   ): Promise<void> {
     const workflowId = params?.['workflowId'];
     const rawSelector = params?.['selector'];
     const rawFromCursor = params?.['fromCursor'];
     if (typeof workflowId !== 'string' || workflowId.length === 0) {
-      emit({
+      emitResponse(request, {
         jsonrpc: JSON_RPC_VERSION,
         error: {
           code: JSON_RPC_ERROR_CODES.INVALID_PARAMS,
           message: 'params.workflowId must be a non-empty string',
           data: { weftCode: 'InvalidParams', httpStatus: 400 },
         },
-        id: id ?? null,
+        id: request.id ?? null,
       });
       return;
     }
     if (rawSelector !== 'events' && rawSelector !== 'tokens') {
-      emit({
+      emitResponse(request, {
         jsonrpc: JSON_RPC_VERSION,
         error: {
           code: JSON_RPC_ERROR_CODES.INVALID_PARAMS,
           message: "params.selector must be 'events' or 'tokens'",
           data: { weftCode: 'InvalidParams', httpStatus: 400 },
         },
-        id: id ?? null,
+        id: request.id ?? null,
       });
       return;
     }
@@ -172,14 +182,14 @@ export function createJsonRpcWebSocketSession(
     let fromCursor: Cursor | undefined;
     if (rawFromCursor !== undefined) {
       if (typeof rawFromCursor !== 'string') {
-        emit({
+        emitResponse(request, {
           jsonrpc: JSON_RPC_VERSION,
           error: {
             code: JSON_RPC_ERROR_CODES.INVALID_PARAMS,
             message: 'params.fromCursor must be a string when present',
             data: { weftCode: 'InvalidParams', httpStatus: 400 },
           },
-          id: id ?? null,
+          id: request.id ?? null,
         });
         return;
       }
@@ -187,7 +197,7 @@ export function createJsonRpcWebSocketSession(
     }
 
     if (subscriptions.size >= maxSubscriptions) {
-      emit({
+      emitResponse(request, {
         jsonrpc: JSON_RPC_VERSION,
         error: {
           code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
@@ -198,7 +208,7 @@ export function createJsonRpcWebSocketSession(
             reason: 'per-session subscription cap exceeded',
           },
         },
-        id: id ?? null,
+        id: request.id ?? null,
       });
       return;
     }
@@ -213,10 +223,10 @@ export function createJsonRpcWebSocketSession(
     // event if a client reconnects before receiving any deliveries.
     const startingCursor: Cursor = fromCursor ?? INITIAL_SUBSCRIPTION_CURSOR;
 
-    emit({
+    emitResponse(request, {
       jsonrpc: JSON_RPC_VERSION,
       result: { subscriptionId, cursor: startingCursor },
-      id: id ?? null,
+      id: request.id ?? null,
     });
 
     const pump = pumpSubscription(
@@ -226,7 +236,12 @@ export function createJsonRpcWebSocketSession(
       fromCursor,
       controller.signal,
     );
-    subscriptions.set(subscriptionId, { id: subscriptionId, controller, pump });
+    subscriptions.set(subscriptionId, {
+      id: subscriptionId,
+      controller,
+      pump,
+      isTerminating: false,
+    });
   }
 
   async function pumpSubscription(
@@ -295,25 +310,25 @@ export function createJsonRpcWebSocketSession(
   }
 
   function handleUnsubscribe(
-    id: JsonRpcId | undefined,
+    request: SessionRequest,
     params: Record<string, unknown> | undefined,
   ): void {
     const subscriptionId = params?.['subscriptionId'];
     if (typeof subscriptionId !== 'string') {
-      emit({
+      emitResponse(request, {
         jsonrpc: JSON_RPC_VERSION,
         error: {
           code: JSON_RPC_ERROR_CODES.INVALID_PARAMS,
           message: 'params.subscriptionId must be a string',
           data: { weftCode: 'InvalidParams', httpStatus: 400 },
         },
-        id: id ?? null,
+        id: request.id ?? null,
       });
       return;
     }
     const active = subscriptions.get(subscriptionId);
-    if (!active) {
-      emit({
+    if (!active || active.isTerminating) {
+      emitResponse(request, {
         jsonrpc: JSON_RPC_VERSION,
         error: {
           code: JSON_RPC_ERROR_CODES.NOT_FOUND,
@@ -325,15 +340,15 @@ export function createJsonRpcWebSocketSession(
             identifier: subscriptionId,
           },
         },
-        id: id ?? null,
+        id: request.id ?? null,
       });
       return;
     }
+    active.isTerminating = true;
     active.controller.abort();
-    subscriptions.delete(subscriptionId);
     // Success response (empty result per spec — the side-effect IS
     // the termination notification that follows).
-    emit({ jsonrpc: JSON_RPC_VERSION, result: {}, id: id ?? null });
+    emitResponse(request, { jsonrpc: JSON_RPC_VERSION, result: {}, id: request.id ?? null });
     emit({
       jsonrpc: JSON_RPC_VERSION,
       method: SESSION_METHODS.TERMINATED,
@@ -404,6 +419,7 @@ export function createJsonRpcWebSocketSession(
     // invalid ids (booleans, objects, NaN) become `undefined` instead
     // of silently flowing through as garbage.
     const rawId = parsed['id'];
+    const hasRequestId = Object.hasOwn(parsed, 'id');
     const narrowedId: JsonRpcId | undefined = isValidJsonRpcId(rawId) ? rawId : undefined;
     const rawParams = parsed['params'];
     const narrowedParams: Record<string, unknown> | undefined = isPlainObject(rawParams)
@@ -428,10 +444,22 @@ export function createJsonRpcWebSocketSession(
         });
         return;
       }
+      if (hasRequestId && !isValidJsonRpcId(rawId)) {
+        emit({
+          jsonrpc: JSON_RPC_VERSION,
+          error: {
+            code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
+            message: 'id must be a string, number, null, or absent',
+          },
+          id: null,
+        });
+        return;
+      }
+      const request: SessionRequest = { id: narrowedId, expectsResponse: hasRequestId };
       if (method === SESSION_METHODS.SUBSCRIBE) {
-        await handleSubscribe(narrowedId, narrowedParams);
+        await handleSubscribe(request, narrowedParams);
       } else {
-        handleUnsubscribe(narrowedId, narrowedParams);
+        handleUnsubscribe(request, narrowedParams);
       }
       return;
     }

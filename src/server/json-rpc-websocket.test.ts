@@ -29,6 +29,7 @@ import {
   createInMemoryEventBackend,
   createWorkflowEventFeed,
   encodeCursor,
+  type WorkflowEventFeed,
 } from './workflow-event-feed.ts';
 
 const fakeEngine = {} as unknown;
@@ -352,6 +353,57 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     await session.close();
   });
 
+  it('does not send direct responses for subscribe / unsubscribe notifications', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: anonymousPrincipal(),
+      emitter,
+      feed,
+    });
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: 'wf-1', selector: 'events' },
+      }),
+    );
+    await Bun.sleep(10);
+    expect(emitter.sent).toHaveLength(0);
+
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: 'wf-1', selector: 'events' },
+        id: 'sub-1',
+      }),
+    );
+    await Bun.sleep(10);
+    const subscribeResponse = JSON.parse(emitter.sent[0]!);
+    const subscriptionId = subscribeResponse.result.subscriptionId;
+
+    const messageCountBeforeNotification = emitter.sent.length;
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.unsubscribe',
+        params: { subscriptionId },
+      }),
+    );
+    await Bun.sleep(10);
+    const notificationMessages = emitter.sent
+      .slice(messageCountBeforeNotification)
+      .map((message) => JSON.parse(message));
+    expect(notificationMessages.some((message) => Object.hasOwn(message, 'id'))).toBe(false);
+    expect(notificationMessages.map((message) => message.method)).toContain(
+      'weft.events.terminated',
+    );
+    await session.close();
+  });
+
   it('delivers live envelopes as weft.events.deliver notifications', async () => {
     const emitter = makeEmitter();
     const backend = createInMemoryEventBackend();
@@ -424,6 +476,82 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     expect(terminated.params.subscriptionId).toBe(subscriptionId);
     expect(terminated.params.reason).toBe('client-unsubscribed');
     await session.close();
+  });
+
+  it('close() awaits pump cleanup after unsubscribe starts termination', async () => {
+    let releaseCleanup: () => void = () => {};
+    const cleanupCanFinish = new Promise<void>((resolve) => {
+      releaseCleanup = resolve;
+    });
+    let cleanupStarted: () => void = () => {};
+    const cleanupDidStart = new Promise<void>((resolve) => {
+      cleanupStarted = resolve;
+    });
+    let cleanupFinished = false;
+
+    const feed: WorkflowEventFeed = {
+      replay: createWorkflowEventFeed(createInMemoryEventBackend()).replay,
+      subscribe(options) {
+        async function* subscription(): AsyncIterable<ReturnType<typeof makeEnvelope>> {
+          try {
+            await new Promise<void>((resolve) => {
+              if (options.signal?.aborted) {
+                resolve();
+                return;
+              }
+              options.signal?.addEventListener('abort', () => resolve(), { once: true });
+            });
+          } finally {
+            cleanupStarted();
+            await cleanupCanFinish;
+            cleanupFinished = true;
+          }
+        }
+        return subscription();
+      },
+      dispose() {},
+    };
+
+    const emitter = makeEmitter();
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: anonymousPrincipal(),
+      emitter,
+      feed,
+    });
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: 'wf-1', selector: 'events' },
+        id: 'sub-1',
+      }),
+    );
+    await Bun.sleep(10);
+    const subscribeResponse = JSON.parse(emitter.sent[0]!);
+    const subscriptionId = subscribeResponse.result.subscriptionId;
+
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.unsubscribe',
+        params: { subscriptionId },
+        id: 'unsub-1',
+      }),
+    );
+    await cleanupDidStart;
+
+    let closeSettled = false;
+    const closePromise = session.close().then(() => {
+      closeSettled = true;
+    });
+    await Bun.sleep(10);
+    expect(closeSettled).toBe(false);
+
+    releaseCleanup();
+    await closePromise;
+    expect(cleanupFinished).toBe(true);
   });
 
   it('close() terminates all active subscriptions', async () => {

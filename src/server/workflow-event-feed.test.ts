@@ -68,6 +68,10 @@ describe('encodeCursor / decodeCursor', () => {
     expect(decodeCursor('-1')).toBe(-1);
   });
 
+  it('treats negative zero as malformed instead of sequence zero', () => {
+    expect(decodeCursor('-0')).toBeNull();
+  });
+
   it('encodeCursor returns a stable string for the same input', () => {
     expect(encodeCursor(42)).toBe(encodeCursor(42));
   });
@@ -155,6 +159,23 @@ describe('WorkflowEventFeed — replay', () => {
       workflowId: 'wf-1',
       selector: 'events',
       fromCursor: 'not-a-cursor',
+    })) {
+      received.push(envelope.sequence);
+    }
+    expect(received).toEqual([0, 1, 2]);
+  });
+
+  it('does not skip sequence 0 when fromCursor is negative zero', async () => {
+    const backend = createInMemoryEventBackend();
+    for (let seq = 0; seq < 3; seq += 1) {
+      await backend.append(makeEnvelope({ sequence: seq }));
+    }
+    const feed = createWorkflowEventFeed(backend);
+    const received: number[] = [];
+    for await (const envelope of feed.replay({
+      workflowId: 'wf-1',
+      selector: 'events',
+      fromCursor: '-0',
     })) {
       received.push(envelope.sequence);
     }
