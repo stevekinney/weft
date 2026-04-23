@@ -2077,9 +2077,15 @@ async function dispatchViaExecuteOperation(
  * authenticator (`serve()`) only reports method + optional claims; this
  * shim bridges that into the richer `Principal` the pipeline expects.
  * Returns `anonymousPrincipal()` when no context is provided (public
- * request) or when the context has no claims/identity.
+ * request).
  *
  * JWT: claims → `principalFromJwtClaims` (scope/tenant extraction).
+ *   JWT without claims is an authenticator contract violation — the
+ *   production authenticator always populates claims, and silently
+ *   degrading to anonymous here would let a caller with `authContext:
+ *   { method: 'jwt' }` (no claims) bypass `optionalAuth` scope checks
+ *   by appearing unauthenticated. We throw instead so the bug surfaces
+ *   loudly rather than as a silent security downgrade.
  * API key / mTLS: identity details are not carried on `authContext`
  * yet — this shim produces a minimal authenticated principal with no
  * scopes. Milestone 2 expands authContext to carry full principal info;
@@ -2088,18 +2094,25 @@ async function dispatchViaExecuteOperation(
  */
 function authContextToPrincipal(authContext: AuthenticatedRequestContext | undefined): Principal {
   if (authContext === undefined) return anonymousPrincipal();
-  if (authContext.method === 'jwt' && authContext.claims !== undefined) {
-    return principalFromJwtClaims(authContext.claims);
+  switch (authContext.method) {
+    case 'jwt': {
+      if (authContext.claims === undefined) {
+        throw new Error(
+          'authContextToPrincipal: jwt authContext reached the pipeline without claims — ' +
+            'authenticator contract violation',
+        );
+      }
+      return principalFromJwtClaims(authContext.claims);
+    }
+    case 'api-key':
+      return principalFromApiKey({ subject: 'api-key-caller', scopes: [] });
+    case 'mtls':
+      return principalFromMutualTls({ subject: 'mtls-caller', scopes: [] });
+    case 'public':
+      // serve() short-circuits public requests before reaching here; if
+      // a direct caller still passes method: 'public', treat as anonymous.
+      return anonymousPrincipal();
   }
-  if (authContext.method === 'api-key') {
-    return principalFromApiKey({ subject: 'api-key-caller', scopes: [] });
-  }
-  if (authContext.method === 'mtls') {
-    return principalFromMutualTls({ subject: 'mtls-caller', scopes: [] });
-  }
-  // 'public' or any other method (should be filtered out before
-  // reaching here; serve() returns early when method === 'public').
-  return anonymousPrincipal();
 }
 
 function defaultShapeSuccess(value: unknown, shape: UnknownRestBinding['success']): Response {

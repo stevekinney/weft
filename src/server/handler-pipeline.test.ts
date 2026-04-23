@@ -191,6 +191,29 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
     expect(captured.principal?.method).toBe('api-key');
   });
 
+  it('jwt authContext without claims throws (authenticator contract violation)', async () => {
+    const engine = createEngine();
+    const handle = await engine.start('hold', {}, {});
+    await waitForRunning(engine, handle.id);
+
+    const { registry, bindings } = buildPrincipalSpy();
+    const request = new Request(`http://localhost/v1/test/principalspy/${handle.id}`, {
+      method: 'GET',
+    });
+    // Authenticator always populates claims for jwt in production; a
+    // missing claims field indicates the caller bypassed the authenticator
+    // (a real security concern for `optionalAuth` operations). The pipeline
+    // must throw rather than silently downgrade to anonymous.
+    const response = await handleRequest(request, engine, {
+      restDispatchMode: 'via-execute-operation',
+      operationRegistry: registry,
+      restBindings: bindings,
+      authContext: { method: 'jwt' }, // claims intentionally omitted
+    });
+    // handleRequest wraps the throw in the outer try/catch → 500.
+    expect(response.status).toBe(500);
+  });
+
   it('mtls authContext → principalFromMutualTls (method "mtls")', async () => {
     const engine = createEngine();
     const handle = await engine.start('hold', {}, {});
