@@ -42,7 +42,7 @@ import {
   type MetricsCollector,
   type PrometheusExporter,
 } from '../observability/metrics.ts';
-import type { AuthMethod, JWTPayload } from './authentication.ts';
+import type { AuthContext, JWTPayload } from './authentication.ts';
 import { faultToHttpResponse } from './fault-to-http.ts';
 import { generateOpenApiDocument } from './openapi.ts';
 import { executeOperation, type OperationRegistry } from './operation-catalog.ts';
@@ -51,7 +51,6 @@ import {
   principalFromApiKey,
   principalFromJwtClaims,
   principalFromMutualTls,
-  type AuthenticatedPrincipal,
   type Principal,
 } from './principal.ts';
 import { bindingPathMatches } from './rest-binding.ts';
@@ -72,18 +71,8 @@ interface RouteMatch {
   params: Record<string, string>;
 }
 
-type AuthenticatedRequestContext = {
-  method: AuthMethod;
-  claims?: JWTPayload;
-  /**
-   * Optional principal forwarded from the authenticator. Set when
-   * `resolveApiKeyPrincipal` admits a key with a custom principal, or
-   * when static API-key admission produces one from
-   * `defaultApiKeyScopes`. Takes precedence over `method`-based
-   * reconstruction in `authContextToPrincipal`.
-   */
-  principal?: AuthenticatedPrincipal;
-};
+/** Alias for `AuthContext` — kept local so handler-internal code reads naturally. */
+type AuthenticatedRequestContext = AuthContext;
 
 class MalformedRouteParameterError extends Error {
   constructor() {
@@ -1992,18 +1981,11 @@ const ROUTE_EXECUTORS: Record<HandlerName, RouteExecutor> = {
 // ---------------------------------------------------------------------------
 
 export interface HandlerOptions {
-  /** Optional authenticated caller context injected by the HTTP server wrapper. */
-  authContext?: {
-    method: AuthMethod;
-    claims?: JWTPayload;
-    /**
-     * Optional fully-shaped principal forwarded by the authenticator
-     * (e.g. via `resolveApiKeyPrincipal`). When present, the pipeline
-     * uses it verbatim instead of rebuilding a principal from method +
-     * claims.
-     */
-    principal?: AuthenticatedPrincipal;
-  };
+  /**
+   * Optional authenticated caller context injected by the HTTP server
+   * wrapper. See `AuthContext` in `authentication.ts` for field docs.
+   */
+  authContext?: AuthContext;
   /**
    * Optional {@link PrometheusExporter} used to produce the body of
    * `/v1/metrics`. When set, it takes precedence over `metricsCollector` —

@@ -30,11 +30,10 @@ import type { MetricsCollector, PrometheusExporter } from '../observability/metr
 import { KEYS } from '../storage/interface.ts';
 import type { RoutingOptions, RoutingPolicy } from '../worker/registry.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
-import type { AuthConfig, AuthMethod, Authenticator, JWTPayload } from './authentication.ts';
+import type { AuthConfig, AuthContext, Authenticator } from './authentication.ts';
 import { buildTLSOptions, createAuthenticator, validateAuthConfig } from './authentication.ts';
 import { DeadlineTracker } from './deadline-tracker.ts';
 import { handleRequest } from './handler.ts';
-import type { AuthenticatedPrincipal } from './principal.ts';
 import { REST_BINDINGS, createLiveOperationRegistry } from './rest-bindings.ts';
 import type { RestDispatchModeConfig } from './rest-dispatch-mode.ts';
 import {
@@ -910,11 +909,7 @@ export function serve(options: ServeOptions): WeftServer {
   const liveOperationRegistry = createLiveOperationRegistry();
 
   async function authenticateRequest(request: Request): Promise<{
-    authContext?: {
-      method: AuthMethod;
-      claims?: JWTPayload;
-      principal?: AuthenticatedPrincipal;
-    };
+    authContext?: AuthContext;
     response: Response | null;
   }> {
     if (!authenticatorPromise) {

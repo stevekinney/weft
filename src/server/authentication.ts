@@ -89,19 +89,29 @@ export type AuthConfig = {
 
 export type AuthMethod = 'api-key' | 'jwt' | 'mtls' | 'public';
 
+/**
+ * Shared context carried from the authenticator through the request
+ * pipeline. Single source of truth for the `{ method, claims?,
+ * principal? }` shape — re-used by `AuthResult`,
+ * `HandlerOptions.authContext`, and the handler's internal
+ * `AuthenticatedRequestContext`.
+ *
+ *   - `method`: which admission path succeeded.
+ *   - `claims`: JWT payload when `method === 'jwt'`.
+ *   - `principal`: fully-shaped principal forwarded from the
+ *     authenticator (resolver admission, or static API-key admission
+ *     with `defaultApiKeyScopes`). Downstream pipeline code uses this
+ *     verbatim; when absent, `authContextToPrincipal` reconstructs a
+ *     minimal principal from `method` + `claims`.
+ */
+export type AuthContext = {
+  method: AuthMethod;
+  claims?: JWTPayload;
+  principal?: AuthenticatedPrincipal;
+};
+
 export type AuthResult =
-  | {
-      authenticated: true;
-      method: AuthMethod;
-      claims?: JWTPayload;
-      /**
-       * Optional fully-shaped principal. Set when `resolveApiKeyPrincipal`
-       * admits a key with a custom principal, or when static API-key
-       * admission builds one from `defaultApiKeyScopes`. REST / JSON-RPC
-       * adapters prefer this over constructing a principal downstream.
-       */
-      principal?: AuthenticatedPrincipal;
-    }
+  | ({ authenticated: true } & AuthContext)
   | { authenticated: false; error: string };
 
 export type JWTPayload = Record<string, unknown>;
@@ -344,6 +354,51 @@ function extractApiKey(request: Request): string | null {
   return extractBearerToken(request);
 }
 
+/**
+ * Defensive copy + freeze for a principal admitted via the API-key
+ * path. Solves three independent concerns at the trust boundary:
+ *
+ *   1. **Method mismatch guard**: a resolver can return a principal
+ *      with any `method` string. Admitting under `method: 'api-key'`
+ *      while the principal declares `method: 'jwt'` creates
+ *      contradictory auth state. We reject here and the caller
+ *      surfaces a generic auth failure.
+ *   2. **Mutation isolation**: principals carry a mutable `Set<AuthorizationScope>`.
+ *      Without a copy, a resolver that caches principals per key leaks
+ *      mutable state across requests — a later request could observe
+ *      or modify an earlier caller's scopes.
+ *   3. **Freeze**: calling `Object.freeze` on the returned principal
+ *      plus the scope set catches downstream mutation attempts with a
+ *      clear error (in strict mode) instead of silent corruption.
+ *
+ * Returns `null` if the principal's declared method is not 'api-key'
+ * — caller treats null like a resolver rejection.
+ */
+function freezeApiKeyPrincipal(principal: AuthenticatedPrincipal): AuthenticatedPrincipal | null {
+  if (principal.method !== 'api-key') {
+    console.warn(
+      `resolveApiKeyPrincipal returned principal with method "${principal.method}"; expected "api-key". Rejecting.`,
+    );
+    return null;
+  }
+  // Deep-copy the scope set so mutations on the caller's reference
+  // cannot leak into the admitted principal, and vice versa.
+  const frozenScopes: ReadonlySet<AuthorizationScope> = Object.freeze(
+    new Set(principal.scopes),
+  ) as ReadonlySet<AuthorizationScope>;
+  const frozen: AuthenticatedPrincipal = {
+    method: 'api-key',
+    scopes: frozenScopes,
+    claims: principal.claims,
+    tenantId: principal.tenantId,
+    subject: principal.subject,
+    hasScope(scope) {
+      return frozenScopes.has(scope);
+    },
+  };
+  return Object.freeze(frozen);
+}
+
 // ---------------------------------------------------------------------------
 // Authenticator factory
 // ---------------------------------------------------------------------------
@@ -408,8 +463,15 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
 
     // API-key admission precedence (single ordered rule per Track 8 plan):
     //   1. resolver configured + returns principal → use that principal.
-    //   2. resolver configured + returns null → rejected (NO fallback).
+    //   2. resolver configured + returns null/throws → rejected. Terminal:
+    //      do NOT fall through to static apiKeys or to JWT (the same
+    //      Bearer token the resolver refused must not be re-tried as a
+    //      JWT — that would let a rejected token get admitted by a
+    //      different code path).
     //   3. resolver absent → static apiKeys admits; scopes = defaultApiKeyScopes.
+    //      If the key is not in the static set, fall through to the JWT
+    //      block so Bearer JWT tokens (which look like api keys to
+    //      extractApiKey but are actually JWTs) can be verified there.
     const presentedKey = extractApiKey(request);
     if (presentedKey) {
       explicitAuthAttempted = true;
@@ -428,15 +490,30 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
           resolved = null;
         }
         if (resolved !== null) {
-          return { authenticated: true, method: 'api-key', principal: resolved };
+          const admittedPrincipal = freezeApiKeyPrincipal(resolved);
+          if (admittedPrincipal !== null) {
+            return { authenticated: true, method: 'api-key', principal: admittedPrincipal };
+          }
+          // Principal failed the method-mismatch guard. Fall through to
+          // the terminal rejection below — must NOT admit under a
+          // contradictory method claim.
         }
-        // Resolver said no — do NOT fall through to static apiKeys.
+        // Resolver said no (or returned an invalid-shape principal):
+        // terminal. Neither static apiKeys nor JWT verification may
+        // admit this request — the resolver is authoritative for any
+        // key space it is configured for.
+        return { authenticated: false, error: 'No valid credentials provided' };
       } else if (apiKeySet?.has(presentedKey)) {
+        // `principalFromApiKey` always returns method: 'api-key', so
+        // the freeze helper's method guard will never reject here. The
+        // `?? principal` fallback keeps the return type sound without
+        // branching on an impossible null.
         const principal = principalFromApiKey({
           subject: 'api-key-caller',
           scopes: defaultApiKeyScopes,
         });
-        return { authenticated: true, method: 'api-key', principal };
+        const frozen = freezeApiKeyPrincipal(principal) ?? principal;
+        return { authenticated: true, method: 'api-key', principal: frozen };
       }
     }
 
