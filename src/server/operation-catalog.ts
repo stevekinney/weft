@@ -360,12 +360,7 @@ function parseAndApplyUnknownKeyPolicy(
       // `__proto__` / `prototype` / `constructor` are filtered by
       // `sanitizeTopLevel`, so the prototype chain cannot be polluted via
       // passthrough re-attachment.
-      const sanitized = sanitizeTopLevel(
-        rawInput as Record<string, unknown>,
-        knownKeys,
-        // Empty passthrough list — always strip at parse time.
-        [],
-      );
+      const sanitized = sanitizeTopLevel(rawInput as Record<string, unknown>, knownKeys);
       preParseInput = sanitized;
       if (policy === 'passthrough') {
         const rawRecord = rawInput as Record<string, unknown>;
@@ -493,24 +488,28 @@ function extractTopLevelObjectKeys(schema: z.ZodType): ReadonlySet<string> {
 }
 
 /**
- * Build a prototype-safe shallow projection of `rawInput`. Only the keys in
- * `knownKeys` plus the explicit `passthroughKeys` are copied, and any name
- * matching `__proto__` / `prototype` / `constructor` is filtered out so the
- * passthrough policy cannot pollute the prototype chain of the parsed input.
+ * Build a prototype-safe shallow projection of `rawInput` containing only
+ * keys present in `knownKeys`. Names matching `__proto__` / `prototype` /
+ * `constructor` are filtered out even if they appear in `knownKeys` (the
+ * registry already rejects schemas declaring those names, but the filter
+ * is defense in depth).
  *
- * Uses `Object.create(null)` for a null-prototype container — even if a key
- * named `__proto__` somehow slipped through, it would be set as an own
- * property without mutating the prototype chain.
+ * Uses `Object.create(null)` for a null-prototype container — even if an
+ * unsafe key name somehow slipped past the filter, it would be set as an
+ * own property without mutating the prototype chain.
+ *
+ * Passthrough extras are NOT handled here. The caller computes them
+ * separately from `rawInput` (post-parse) and merges them after the
+ * schema parse succeeds, so they are never fed to `safeParse`.
  */
 function sanitizeTopLevel(
   rawInput: Record<string, unknown>,
   knownKeys: ReadonlySet<string>,
-  passthroughKeys: ReadonlyArray<string>,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = Object.create(null);
   for (const key of Object.keys(rawInput)) {
     if (UNSAFE_PROTOTYPE_KEYS.has(key)) continue;
-    if (knownKeys.has(key) || passthroughKeys.includes(key)) {
+    if (knownKeys.has(key)) {
       out[key] = rawInput[key];
     }
   }
