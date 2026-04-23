@@ -171,11 +171,14 @@ describe('runStdioSession — admission', () => {
   });
 
   it('startup-token gate: rejects when the first frame has the wrong token', async () => {
+    // Same-length candidate so the constant-time comparison's XOR loop
+    // runs end-to-end rather than short-circuiting on the length
+    // mismatch guard.
     const input = readableFromLines([
       JSON.stringify({
         jsonrpc: '2.0',
         method: 'weft.authenticate',
-        params: { token: 'wrong' },
+        params: { token: 'wrongXX' },
         id: 'auth',
       }) + '\n',
     ]);
@@ -408,6 +411,51 @@ describe('runStdioSession — dispatch', () => {
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[0]!).id).toBe(1);
     expect(JSON.parse(lines[1]!).id).toBe(2);
+  });
+
+  it('main loop: emits -32600 and keeps reading when a chunk without a newline exceeds maxFrameBytes', async () => {
+    const encoder = new TextEncoder();
+    const oversized = 'x'.repeat(700);
+    const follow =
+      JSON.stringify({ jsonrpc: '2.0', method: 'weft.test.echo', params: { v: 'z' }, id: 2 }) +
+      '\n';
+    const input = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(oversized));
+        controller.enqueue(encoder.encode(follow));
+        controller.close();
+      },
+    });
+    const output = collectingWritable();
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.echo',
+        inputSchema: z.object({ v: z.string() }),
+        outputSchema: z.object({ v: z.string() }),
+        invoke: async ({ input: i }) => ({ v: i.v }),
+      }),
+    ]);
+    const result = await runStdioSession({
+      input,
+      output: output.stream,
+      admission: { kind: 'allow-unauthenticated-local-admin' },
+      registry,
+      engine: fakeEngine,
+      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+      maxFrameBytes: 500,
+    });
+    expect(result.exitCode).toBe(0);
+    const lines = output.lines();
+    // First response: the -32600 for the oversized pre-newline chunk.
+    // Second response: the follow-up echo, proving the loop did not
+    // get stuck after the overflow.
+    expect(lines).toHaveLength(2);
+    const overflowResponse = JSON.parse(lines[0]!);
+    expect(overflowResponse.error.code).toBe(-32600);
+    expect(overflowResponse.error.message).toMatch(/maxFrameBytes/i);
+    const echoResponse = JSON.parse(lines[1]!);
+    expect(echoResponse.id).toBe(2);
+    expect(echoResponse.result.v).toBe('z');
   });
 
   it('processes a pipelined auth+call chunk without waiting for more input', async () => {
