@@ -14,7 +14,17 @@ import { StdioTransport } from './transport-stdio';
  * and writes JSON-RPC responses to stdout. Returns the script path.
  */
 async function createMockServer(
-  behavior: 'echo' | 'slow' | 'crash' | 'health' | 'malformed',
+  behavior:
+    | 'echo'
+    | 'slow'
+    | 'crash'
+    | 'health'
+    | 'malformed'
+    | 'crlf'
+    | 'chunked'
+    | 'empty-lines'
+    | 'no-trailing-newline'
+    | 'oversize',
 ): Promise<string> {
   const scripts: Record<string, string> = {
     // Echoes back the method and params as the result
@@ -65,6 +75,86 @@ async function createMockServer(
           } else {
             process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { echo: msg.params } }) + '\\n');
           }
+        } catch {}
+      });
+    `,
+    // Framing regression: emits responses with CRLF line endings instead
+    // of LF. The reader splits only on '\\n' — the '\\r' should be
+    // trimmed as whitespace by the .trim() call, not rejected.
+    crlf: `
+      const reader = require('readline').createInterface({ input: process.stdin });
+      reader.on('line', (line) => {
+        try {
+          const msg = JSON.parse(line);
+          // Explicitly emit CRLF (\\r\\n) — if the reader rejects the \\r,
+          // the client will time out.
+          process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: 'crlf-ok' }) + '\\r\\n');
+        } catch {}
+      });
+    `,
+    // Framing regression: splits the response across multiple small
+    // writes so the buffer must accumulate partial lines across reads.
+    // Writes the response byte-by-byte with microtask gaps.
+    chunked: `
+      const reader = require('readline').createInterface({ input: process.stdin });
+      reader.on('line', async (line) => {
+        try {
+          const msg = JSON.parse(line);
+          const response = JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: 'chunked-ok' }) + '\\n';
+          // Write one byte at a time with setImmediate delays so the
+          // reader receives partial chunks.
+          for (const ch of response) {
+            process.stdout.write(ch);
+            await new Promise((r) => setImmediate(r));
+          }
+        } catch {}
+      });
+    `,
+    // Framing regression: emits blank lines between responses. The
+    // reader must skip empty lines (after trim) rather than logging
+    // them as malformed JSON warnings.
+    'empty-lines': `
+      const reader = require('readline').createInterface({ input: process.stdin });
+      reader.on('line', (line) => {
+        try {
+          const msg = JSON.parse(line);
+          // Write a blank line, a whitespace-only line, then the real
+          // response. All three trail a '\\n' so the reader loop splits
+          // them as distinct frames.
+          process.stdout.write('\\n');
+          process.stdout.write('   \\n');
+          process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: 'empty-lines-ok' }) + '\\n');
+        } catch {}
+      });
+    `,
+    // Framing regression: emits a valid response WITHOUT a trailing
+    // newline, then exits. The buffered line is never delivered to the
+    // client (this is the known limitation — the test asserts it).
+    'no-trailing-newline': `
+      const reader = require('readline').createInterface({ input: process.stdin });
+      reader.on('line', (line) => {
+        try {
+          const msg = JSON.parse(line);
+          // No trailing newline — the reader buffer will hold the whole
+          // response forever because '\\n' never appears.
+          process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: 'no-newline' }));
+          // Keep the process alive so the client's timeout fires first.
+        } catch {}
+      });
+      setInterval(() => {}, 60000); // prevent exit
+    `,
+    // Framing regression: emits a very large (multi-MB) single-frame
+    // response to confirm the buffer can absorb oversize frames without
+    // corruption. Exact size is bounded so the test completes in time.
+    oversize: `
+      const reader = require('readline').createInterface({ input: process.stdin });
+      reader.on('line', (line) => {
+        try {
+          const msg = JSON.parse(line);
+          // 1 MB of padding inside the result field — well above any
+          // realistic JSON-RPC payload but small enough for a unit test.
+          const padding = 'x'.repeat(1024 * 1024);
+          process.stdout.write(JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { padding } }) + '\\n');
         } catch {}
       });
     `,
@@ -340,6 +430,83 @@ describe('StdioTransport', () => {
       spawnSpy.mockRestore();
       warnSpy.mockRestore();
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // Framing regression gate (Track 8 — Phase 6)
+  //
+  // These tests lock in the current newline-delimited framing behavior of
+  // `StdioTransport.#startReadLoop` against a character-table of
+  // tricky-but-legal input patterns. They exist so that when Phase 7
+  // deduplicates `splitNewlineDelimitedBuffer` into a shared
+  // `json-rpc-framing.ts` helper consumed by both MCP stdio and the new
+  // runtime-stdio subcommand, any drift from the pre-extraction contract
+  // breaks tests here BEFORE it reaches production.
+  //
+  // The input patterns covered:
+  //   - CRLF line endings instead of bare LF (current behavior: `\r`
+  //     survives into `JSON.parse` if the trim() call doesn't catch it)
+  //   - Response split across multiple chunk boundaries (buffer must
+  //     accumulate partial lines across reads)
+  //   - Interleaved blank / whitespace-only lines (must be skipped, not
+  //     logged as malformed JSON)
+  //   - Response without a trailing newline (known limitation: the
+  //     buffered frame is never delivered until a newline appears)
+  //   - Oversize single frame (~1 MB — confirm the buffer absorbs it
+  //     without corruption)
+  // ---------------------------------------------------------------------------
+  describe('framing regression gate', () => {
+    it('accepts CRLF-terminated responses (trim() handles the trailing \\r)', async () => {
+      const script = await createMockServer('crlf');
+      const transport = track(new StdioTransport({ command: 'bun', args: [script] }));
+      const response = await transport.send({ method: 'test' });
+      expect(response.result).toBe('crlf-ok');
+    });
+
+    it('reassembles responses split across many chunk boundaries', async () => {
+      const script = await createMockServer('chunked');
+      const transport = track(new StdioTransport({ command: 'bun', args: [script] }));
+      const response = await transport.send({ method: 'test' });
+      expect(response.result).toBe('chunked-ok');
+    });
+
+    it('skips blank and whitespace-only lines without logging malformed-JSON warnings', async () => {
+      const script = await createMockServer('empty-lines');
+      const transport = track(new StdioTransport({ command: 'bun', args: [script] }));
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {});
+      try {
+        const response = await transport.send({ method: 'test' });
+        expect(response.result).toBe('empty-lines-ok');
+        // Empty / whitespace-only lines must be dropped silently — they
+        // are not malformed JSON, they are framing artifacts.
+        expect(warnSpy).not.toHaveBeenCalledWith(
+          expect.stringContaining('[weft:mcp:stdio] Ignoring malformed JSON'),
+        );
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it('buffers a response with no trailing newline indefinitely (known framing limitation)', async () => {
+      const script = await createMockServer('no-trailing-newline');
+      const transport = track(new StdioTransport({ command: 'bun', args: [script], timeout: 300 }));
+      // The response bytes arrive on stdout but the reader splits on
+      // '\n' — so without a trailing newline the frame sits in the
+      // buffer and the client times out. This asserts the existing
+      // contract so any future change (e.g. flush on stream close) is
+      // an intentional behavior change, not accidental.
+      await expect(transport.send({ method: 'test' })).rejects.toThrow(MCPTransportError);
+    });
+
+    it('absorbs an oversize single-frame response (~1 MB padding)', async () => {
+      const script = await createMockServer('oversize');
+      const transport = track(
+        new StdioTransport({ command: 'bun', args: [script], timeout: 5000 }),
+      );
+      const response = await transport.send({ method: 'test' });
+      const result = response.result as { padding: string } | undefined;
+      expect(result?.padding.length).toBe(1024 * 1024);
+    });
   });
 
   describe('healthCheck', () => {
