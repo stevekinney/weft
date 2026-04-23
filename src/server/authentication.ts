@@ -355,45 +355,101 @@ function extractApiKey(request: Request): string | null {
 }
 
 /**
- * Defensive copy + freeze for a principal admitted via the API-key
- * path. Solves three independent concerns at the trust boundary:
- *
- *   1. **Method mismatch guard**: a resolver can return a principal
- *      with any `method` string. Admitting under `method: 'api-key'`
- *      while the principal declares `method: 'jwt'` creates
- *      contradictory auth state. We reject here and the caller
- *      surfaces a generic auth failure.
- *   2. **Mutation isolation**: principals carry a mutable `Set<AuthorizationScope>`.
- *      Without a copy, a resolver that caches principals per key leaks
- *      mutable state across requests — a later request could observe
- *      or modify an earlier caller's scopes.
- *   3. **Freeze**: calling `Object.freeze` on the returned principal
- *      plus the scope set catches downstream mutation attempts with a
- *      clear error (in strict mode) instead of silent corruption.
- *
- * Returns `null` if the principal's declared method is not 'api-key'
- * — caller treats null like a resolver rejection.
+ * Method-mismatch guard. A resolver can return a principal with any
+ * `method` string; admitting under `method: 'api-key'` while the
+ * principal declares `method: 'jwt'` creates contradictory auth state.
+ * Returns `true` when the principal passes (method === 'api-key');
+ * logs + returns `false` otherwise. Separated from `deepFreezeApiKeyPrincipal`
+ * so each function has one responsibility — guard or copy/freeze.
  */
-function freezeApiKeyPrincipal(principal: AuthenticatedPrincipal): AuthenticatedPrincipal | null {
+function validateApiKeyPrincipalMethod(principal: AuthenticatedPrincipal): boolean {
   if (principal.method !== 'api-key') {
     console.warn(
       `resolveApiKeyPrincipal returned principal with method "${principal.method}"; expected "api-key". Rejecting.`,
     );
-    return null;
+    return false;
   }
-  // Deep-copy the scope set so mutations on the caller's reference
-  // cannot leak into the admitted principal, and vice versa.
-  const frozenScopes: ReadonlySet<AuthorizationScope> = Object.freeze(
-    new Set(principal.scopes),
-  ) as ReadonlySet<AuthorizationScope>;
+  return true;
+}
+
+/**
+ * Throws when a guarded scope set sees a mutation attempt. Named at
+ * module scope so the function is allocated once, not per-set.
+ */
+function rejectScopeSetMutation(name: string): () => never {
+  return () => {
+    throw new TypeError(`Cannot mutate scope set on admitted principal (attempted ${name})`);
+  };
+}
+
+/**
+ * Wrap a scope set so mutation attempts THROW at call time.
+ * `Object.freeze(new Set(...))` only freezes the wrapper object —
+ * `.add`, `.delete`, `.clear` from `Set.prototype` still mutate the
+ * contents. This returns a new frozen object that implements the
+ * `ReadonlySet` read contract (`has`, `size`, iterators) by
+ * delegating to an internal set, while rejecting mutation calls with
+ * a `TypeError` so leaks into admitted auth state fail loudly.
+ *
+ * Implementation note: Set's internal-slot methods (e.g., `size`
+ * getter, `has`) cannot be safely called through a Proxy because they
+ * require the Set brand check against `this`. We build a plain object
+ * that delegates reads to the bound methods of the internal set — no
+ * branded-slot surprises. The final cast to `ReadonlySet` is
+ * structurally safe: the object exposes every member the `ReadonlySet`
+ * interface requires and rejects the mutating methods at call time.
+ */
+function immutableScopeSet(
+  source: ReadonlySet<AuthorizationScope>,
+): ReadonlySet<AuthorizationScope> {
+  const inner = new Set<AuthorizationScope>(source);
+  const guarded = {
+    has: (scope: AuthorizationScope) => inner.has(scope),
+    get size() {
+      return inner.size;
+    },
+    forEach: (
+      callback: (
+        value: AuthorizationScope,
+        value2: AuthorizationScope,
+        set: ReadonlySet<AuthorizationScope>,
+      ) => void,
+      thisArg?: unknown,
+    ) => inner.forEach((v, v2) => callback.call(thisArg, v, v2, guarded as never)),
+    keys: () => inner.keys(),
+    values: () => inner.values(),
+    entries: () => inner.entries(),
+    [Symbol.iterator]: () => inner[Symbol.iterator](),
+    // Mutation surface — exposed only so downstream leaks hit a loud
+    // error rather than silently succeeding against an unfrozen Set.
+    add: rejectScopeSetMutation('add'),
+    delete: rejectScopeSetMutation('delete'),
+    clear: rejectScopeSetMutation('clear'),
+  };
+  return Object.freeze(guarded) as unknown as ReadonlySet<AuthorizationScope>;
+}
+
+/**
+ * Deep-freeze an API-key principal for admission. Returns a new
+ * principal whose scope set throws on mutation attempts, whose
+ * `hasScope` delegates to the guarded set, and whose outer object is
+ * `Object.freeze`d. Caller mutations on the original principal cannot
+ * leak into the returned principal, and downstream code attempting to
+ * mutate the admitted principal fails loudly.
+ *
+ * Preconditions: caller must have already run
+ * `validateApiKeyPrincipalMethod(principal) === true`.
+ */
+function deepFreezeApiKeyPrincipal(principal: AuthenticatedPrincipal): AuthenticatedPrincipal {
+  const guardedScopes = immutableScopeSet(principal.scopes);
   const frozen: AuthenticatedPrincipal = {
     method: 'api-key',
-    scopes: frozenScopes,
+    scopes: guardedScopes,
     claims: principal.claims,
     tenantId: principal.tenantId,
     subject: principal.subject,
     hasScope(scope) {
-      return frozenScopes.has(scope);
+      return guardedScopes.has(scope);
     },
   };
   return Object.freeze(frozen);
@@ -489,15 +545,14 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
           );
           resolved = null;
         }
-        if (resolved !== null) {
-          const admittedPrincipal = freezeApiKeyPrincipal(resolved);
-          if (admittedPrincipal !== null) {
-            return { authenticated: true, method: 'api-key', principal: admittedPrincipal };
-          }
-          // Principal failed the method-mismatch guard. Fall through to
-          // the terminal rejection below — must NOT admit under a
-          // contradictory method claim.
+        if (resolved !== null && validateApiKeyPrincipalMethod(resolved)) {
+          const admitted = deepFreezeApiKeyPrincipal(resolved);
+          return { authenticated: true, method: 'api-key', principal: admitted };
         }
+        // Resolver returned null, threw, or produced a method-mismatched
+        // principal. Fall through to the terminal rejection below — must
+        // NOT admit under a contradictory method claim or consult static
+        // apiKeys as a fallback (the resolver is authoritative).
         // Resolver said no (or returned an invalid-shape principal):
         // terminal. Neither static apiKeys nor JWT verification may
         // admit this request — the resolver is authoritative for any
@@ -505,15 +560,14 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
         return { authenticated: false, error: 'No valid credentials provided' };
       } else if (apiKeySet?.has(presentedKey)) {
         // `principalFromApiKey` always returns method: 'api-key', so
-        // the freeze helper's method guard will never reject here. The
-        // `?? principal` fallback keeps the return type sound without
-        // branching on an impossible null.
+        // the method guard is guaranteed to pass. Skipping it here is
+        // safe because we control both sides of the call.
         const principal = principalFromApiKey({
           subject: 'api-key-caller',
           scopes: defaultApiKeyScopes,
         });
-        const frozen = freezeApiKeyPrincipal(principal) ?? principal;
-        return { authenticated: true, method: 'api-key', principal: frozen };
+        const admitted = deepFreezeApiKeyPrincipal(principal);
+        return { authenticated: true, method: 'api-key', principal: admitted };
       }
     }
 

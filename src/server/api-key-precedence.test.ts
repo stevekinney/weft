@@ -17,7 +17,12 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { createAuthenticator, validateAuthConfig, type AuthConfig } from './authentication.ts';
+import {
+  createAuthenticator,
+  signJWT,
+  validateAuthConfig,
+  type AuthConfig,
+} from './authentication.ts';
 import type { AuthorizationScope } from './authorization-scope.ts';
 import { principalFromApiKey } from './principal.ts';
 
@@ -169,19 +174,27 @@ describe('API-key admission — resolver present', () => {
   it('resolver rejection is terminal: no fallthrough to JWT even when JWT is configured', async () => {
     // Regression test for the fallthrough bug: a Bearer token the
     // resolver explicitly refused must not be re-tried as a JWT by the
-    // next block. Configuring JWT + resolver + a Bearer token exercises
-    // the exact path that would leak admission.
+    // next block. This test uses a cryptographically VALID JWT signed
+    // with the configured secret — if a broken fallthrough reached the
+    // JWT verifier, it would succeed, and this test would see
+    // authenticated:true. The resolver's null must make the test fail.
+    const sharedSecret = 'shared-secret-for-fallthrough-test';
     const config: AuthConfig = {
       resolveApiKeyPrincipal: async () => null,
-      jwt: { algorithm: 'HS256', secret: 'shared-secret' },
+      jwt: { algorithm: 'HS256', secret: sharedSecret },
     };
     const auth = await createAuthenticator(config);
-    // Present a JWT-shaped token (contains dots) via Bearer. A naive
-    // implementation might pass this to extractApiKey → resolver null →
-    // fall through to JWT verification. The resolver's null must be
-    // terminal: the request is rejected without the JWT block running.
-    const jwtShapedToken = 'header.payload.signature';
-    const result = await auth(requestWithBearer(jwtShapedToken));
+
+    // Sign a VALID JWT with the same secret the authenticator uses.
+    // Without the fallthrough guard, this token would be admitted by
+    // JWT verification even though the resolver explicitly rejected it
+    // as an API key. The resolver's null must take priority.
+    const validJwt = await signJWT(
+      { sub: 'fallthrough-test', iat: Math.floor(Date.now() / 1000) },
+      sharedSecret,
+      'HS256',
+    );
+    const result = await auth(requestWithBearer(validJwt));
 
     expect(result.authenticated).toBe(false);
   });
@@ -210,11 +223,9 @@ describe('API-key admission — resolver present', () => {
   });
 
   it('admitted principal is frozen (defensive copy prevents mutation leaks across requests)', async () => {
-    // Hand the authenticator a principal with a mutable Set. If the
-    // authenticator forwards by reference, later mutations on the
-    // caller's copy would leak into auth state. The freeze at the
-    // trust boundary means the admitted principal has its OWN scope
-    // set, independent of what the resolver returned.
+    // Two-part mutation safety: neither the caller's original scope
+    // reference NOR a later mutation attempt on the admitted
+    // principal's own scope set may leak into auth state.
     const originalScopes = new Set<AuthorizationScope>(['workflows:read']);
     const config: AuthConfig = {
       resolveApiKeyPrincipal: async () => {
@@ -231,13 +242,30 @@ describe('API-key admission — resolver present', () => {
     expect(result.authenticated).toBe(true);
     if (!result.authenticated) throw new Error('unreachable');
     if (result.principal === undefined) throw new Error('expected principal');
-    // Mutating the caller's "original" set must not affect the admitted
-    // principal. Direct mutation attempts on the frozen set would throw
-    // under strict mode; we exercise the defensive-copy guarantee by
-    // showing the admitted principal's scope set is independent.
+
+    // Part 1: mutating the caller's pre-admission set must NOT flow
+    // into the admitted principal (defensive copy at the boundary).
     originalScopes.add('workflows:write');
     expect(result.principal.hasScope('workflows:write')).toBe(false);
     expect(result.principal.hasScope('workflows:read')).toBe(true);
+
+    // Part 2: the admitted principal's own scope set must THROW on
+    // mutation attempts. `Object.freeze(new Set())` only freezes the
+    // wrapper — the guarded Proxy must reject `add`, `delete`, `clear`
+    // from Set.prototype. If these silently mutate, auth state leaks
+    // across requests.
+    const scopes = result.principal.scopes as Set<AuthorizationScope>;
+    expect(() => scopes.add('workflows:write' as AuthorizationScope)).toThrow(
+      /Cannot mutate scope set/,
+    );
+    expect(() => scopes.delete('workflows:read' as AuthorizationScope)).toThrow(
+      /Cannot mutate scope set/,
+    );
+    expect(() => scopes.clear()).toThrow(/Cannot mutate scope set/);
+
+    // Contents unchanged after the failed mutation attempts.
+    expect(result.principal.hasScope('workflows:read')).toBe(true);
+    expect(result.principal.hasScope('workflows:write')).toBe(false);
   });
 });
 
