@@ -338,6 +338,80 @@ describe('generateOpenRpcDocument — info and servers', () => {
   });
 });
 
+describe('generateOpenRpcDocument — result, tags, nested shapes', () => {
+  it('emits a result ContentDescriptor with name, required, and schema', () => {
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.workflows.get',
+        inputSchema: z.object({ id: z.string() }),
+        outputSchema: z.object({ id: z.string(), status: z.string() }),
+      }),
+    ]);
+    const document = generateOpenRpcDocument({
+      registry,
+      jsonRpc: { enabled: true, transports: ['http'] },
+    });
+    const method = (document['methods'] as Array<Record<string, unknown>>).find(
+      (m) => m['name'] === 'weft.workflows.get',
+    )!;
+    const result = method['result'] as Record<string, unknown>;
+    expect(result['name']).toBe('result');
+    expect(result['required']).toBe(true);
+    const schema = result['schema'] as Record<string, unknown>;
+    expect(schema['type']).toBe('object');
+    expect(typeof schema['properties']).toBe('object');
+  });
+
+  it('sorts tags alphabetically on the emitted method', () => {
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.tagged.op',
+        tags: ['zebra', 'alpha', 'mango'],
+        inputSchema: z.object({}),
+        outputSchema: z.object({}),
+      }),
+    ]);
+    const document = generateOpenRpcDocument({
+      registry,
+      jsonRpc: { enabled: true, transports: ['http'] },
+    });
+    const method = (document['methods'] as Array<Record<string, unknown>>).find(
+      (m) => m['name'] === 'weft.tagged.op',
+    )!;
+    const tags = method['tags'] as Array<{ name: string }>;
+    expect(tags.map((t) => t.name)).toEqual(['alpha', 'mango', 'zebra']);
+  });
+
+  it('preserves nested .strict() additionalProperties=false in x-weft-paramsSchema.properties', () => {
+    // The generator's contract: nested objects retain whatever
+    // `additionalProperties` zod emits from their own strict / strip /
+    // passthrough mode. The top-level `additionalProperties` is
+    // stamped by `unknownKeyPolicy.jsonRpc`; nested behavior is the
+    // schema's own responsibility.
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.nested.strict',
+        inputSchema: z.object({
+          sub: z.strictObject({ x: z.string() }),
+        }),
+        outputSchema: z.object({}),
+      }),
+    ]);
+    const document = generateOpenRpcDocument({
+      registry,
+      jsonRpc: { enabled: true, transports: ['http'] },
+    });
+    const method = (document['methods'] as Array<Record<string, unknown>>).find(
+      (m) => m['name'] === 'weft.nested.strict',
+    )!;
+    const paramsSchema = method['x-weft-paramsSchema'] as Record<string, unknown>;
+    const properties = paramsSchema['properties'] as Record<string, Record<string, unknown>>;
+    const sub = properties['sub']!;
+    expect(sub['type']).toBe('object');
+    expect(sub['additionalProperties']).toBe(false);
+  });
+});
+
 describe('generateOpenRpcDocument — Codex regressions', () => {
   it('propagates $defs onto each ContentDescriptor so $ref resolves', () => {
     // A nested object schema reused between two fields causes zod to

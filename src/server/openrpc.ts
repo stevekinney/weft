@@ -115,11 +115,29 @@ function isOperationLiveOnJsonRpc(
 ): boolean {
   const available = operation.transports;
   for (const transport of transports) {
-    if (transport === 'http' && available.jsonRpcHttp) return true;
-    if (transport === 'websocket' && available.jsonRpcWebSocket) return true;
-    if (transport === 'stdio' && available.jsonRpcStdio) return true;
+    if (transportIsAvailable(transport, available)) return true;
   }
   return false;
+}
+
+function transportIsAvailable(
+  transport: OpenRpcTransport,
+  available: ErasedOperation['transports'],
+): boolean {
+  switch (transport) {
+    case 'http':
+      return available.jsonRpcHttp;
+    case 'websocket':
+      return available.jsonRpcWebSocket;
+    case 'stdio':
+      return available.jsonRpcStdio;
+    default:
+      // Exhaustiveness check: a new `OpenRpcTransport` literal will
+      // cause a compile error here instead of silently being
+      // blackholed as "unavailable" for every operation.
+      transport satisfies never;
+      return false;
+  }
 }
 
 function buildMethod(operation: ErasedOperation): OpenRpcMethod {
@@ -207,19 +225,39 @@ function byString(a: string, b: string): number {
 }
 
 function buildContentDescriptors(paramsSchema: Record<string, unknown>): ContentDescriptor[] {
-  const properties = (paramsSchema['properties'] ?? {}) as Record<string, Record<string, unknown>>;
-  const requiredList = new Set((paramsSchema['required'] ?? []) as string[]);
+  const properties = asPlainObject(paramsSchema['properties']);
+  const requiredList = asStringArray(paramsSchema['required']);
   // If the parent schema carries `$defs` (zod emits this for reused or
   // recursive nested types), propagate it onto every descriptor so
   // `$ref` pointers inside the property schema resolve locally. Without
   // this, a property whose JSON Schema is `{ $ref: '#/$defs/X' }` would
   // be emitted as a dangling reference under `params[].schema` while
   // only the sibling `x-weft-paramsSchema` extension remained valid.
-  const defs = paramsSchema['$defs'] as Record<string, unknown> | undefined;
+  const defs = asPlainObjectOrUndefined(paramsSchema['$defs']);
   const names = Object.keys(properties).toSorted(byString);
+  const requiredSet = new Set(requiredList);
   return names.map((name) => {
-    const baseSchema = properties[name] ?? {};
+    const baseSchema = asPlainObject(properties[name]);
     const schema = defs ? { ...baseSchema, $defs: defs } : baseSchema;
-    return { name, schema, required: requiredList.has(name) };
+    return { name, schema, required: requiredSet.has(name) };
   });
+}
+
+function asPlainObject(value: unknown): Record<string, unknown> {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return {};
+}
+
+function asPlainObjectOrUndefined(value: unknown): Record<string, unknown> | undefined {
+  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+    return value as Record<string, unknown>;
+  }
+  return undefined;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((entry): entry is string => typeof entry === 'string');
 }
