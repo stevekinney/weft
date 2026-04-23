@@ -46,7 +46,14 @@ import type { AuthMethod, JWTPayload } from './authentication.ts';
 import { faultToHttpResponse } from './fault-to-http.ts';
 import { generateOpenApiDocument } from './openapi.ts';
 import { executeOperation, type OperationRegistry } from './operation-catalog.ts';
-import { anonymousPrincipal } from './principal.ts';
+import {
+  anonymousPrincipal,
+  principalFromApiKey,
+  principalFromJwtClaims,
+  principalFromMutualTls,
+  type Principal,
+} from './principal.ts';
+import { bindingPathMatches } from './rest-binding.ts';
 import type { UnknownRestBinding } from './rest-bindings.ts';
 import { resolveRestDispatchMode, type RestDispatchModeConfig } from './rest-dispatch-mode.ts';
 import { ROUTES, toRegex } from './route-model.ts';
@@ -2013,7 +2020,9 @@ export interface HandlerOptions {
 /**
  * Find a REST binding that matches the request's method and path.
  * Returns null if no binding matches (caller falls back to legacy
- * dispatch).
+ * dispatch). Delegates path resolution to the canonical
+ * `bindingPathMatches` helper — single source of truth for
+ * segment-and-param matching across router and OpenAPI generator.
  */
 function matchRestBinding(
   method: string,
@@ -2023,40 +2032,10 @@ function matchRestBinding(
   if (bindings === undefined) return null;
   for (const binding of bindings) {
     if (binding.method !== method) continue;
-    const params = bindingPathParamsIfMatch(binding.path, pathname);
+    const params = bindingPathMatches(binding.path, pathname);
     if (params !== null) return { binding, pathParams: params };
   }
   return null;
-}
-
-/**
- * Minimal inline matcher (doesn't import `bindingPathMatches` because
- * we want the handler's no-throw contract — `decodeURIComponent`
- * wrapped in try/catch). Mirrors the logic there.
- */
-function bindingPathParamsIfMatch(
-  pattern: string,
-  actualPath: string,
-): Record<string, string> | null {
-  const patternSegments = pattern.split('/');
-  const actualSegments = actualPath.split('/');
-  if (patternSegments.length !== actualSegments.length) return null;
-  const params: Record<string, string> = {};
-  for (let index = 0; index < patternSegments.length; index += 1) {
-    const p = patternSegments[index] ?? '';
-    const a = actualSegments[index] ?? '';
-    if (p.startsWith(':')) {
-      if (a.length === 0) return null;
-      try {
-        params[p.slice(1)] = decodeURIComponent(a);
-      } catch {
-        return null;
-      }
-    } else if (p !== a) {
-      return null;
-    }
-  }
-  return params;
 }
 
 /**
@@ -2070,6 +2049,7 @@ async function dispatchViaExecuteOperation(
   binding: UnknownRestBinding,
   pathParams: Record<string, string>,
   registry: OperationRegistry,
+  principal: Principal,
 ): Promise<Response> {
   let input: unknown;
   try {
@@ -2079,7 +2059,7 @@ async function dispatchViaExecuteOperation(
     return errorResponse(message, 400);
   }
   const result = await executeOperation(binding.operationName, input, {
-    principal: anonymousPrincipal(),
+    principal,
     engine,
     transport: 'http-rest',
     registry,
@@ -2090,6 +2070,36 @@ async function dispatchViaExecuteOperation(
       : defaultShapeSuccess(result.value, binding.success);
   }
   return binding.shapeFault ? binding.shapeFault(result.fault) : faultToHttpResponse(result.fault);
+}
+
+/**
+ * Convert the REST transport's `authContext` into a `Principal`. The
+ * authenticator (`serve()`) only reports method + optional claims; this
+ * shim bridges that into the richer `Principal` the pipeline expects.
+ * Returns `anonymousPrincipal()` when no context is provided (public
+ * request) or when the context has no claims/identity.
+ *
+ * JWT: claims → `principalFromJwtClaims` (scope/tenant extraction).
+ * API key / mTLS: identity details are not carried on `authContext`
+ * yet — this shim produces a minimal authenticated principal with no
+ * scopes. Milestone 2 expands authContext to carry full principal info;
+ * until then, scope-protected REST ops run on legacy dispatch per the
+ * per-operation restDispatchMode flag.
+ */
+function authContextToPrincipal(authContext: AuthenticatedRequestContext | undefined): Principal {
+  if (authContext === undefined) return anonymousPrincipal();
+  if (authContext.method === 'jwt' && authContext.claims !== undefined) {
+    return principalFromJwtClaims(authContext.claims);
+  }
+  if (authContext.method === 'api-key') {
+    return principalFromApiKey({ subject: 'api-key-caller', scopes: [] });
+  }
+  if (authContext.method === 'mtls') {
+    return principalFromMutualTls({ subject: 'mtls-caller', scopes: [] });
+  }
+  // 'public' or any other method (should be filtered out before
+  // reaching here; serve() returns early when method === 'public').
+  return anonymousPrincipal();
 }
 
 function defaultShapeSuccess(value: unknown, shape: UnknownRestBinding['success']): Response {
@@ -2128,6 +2138,7 @@ export async function handleRequest(
           bindingMatch.binding,
           bindingMatch.pathParams,
           options.operationRegistry,
+          authContextToPrincipal(options.authContext),
         );
       } catch (error) {
         console.error('Unhandled error in dispatchViaExecuteOperation', {

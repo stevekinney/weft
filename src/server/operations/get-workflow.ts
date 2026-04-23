@@ -23,7 +23,7 @@ import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
 import type { WorkflowState } from '../../core/types.ts';
-import type { OperationFault } from '../operation-fault.ts';
+import { FAULT_CODE_TO_HTTP_STATUS, type OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 
@@ -32,10 +32,14 @@ const getWorkflowInput = z.object({
 });
 
 /**
- * Output schema is the `WorkflowState` shape (kept loose as
- * `z.unknown()` — the state comes from the engine and is already
- * typed there, so we don't re-validate structure at the operation
- * boundary).
+ * Output schema is intentionally permissive (`z.unknown()`): the state
+ * comes from the engine and is already typed at its source via
+ * `WorkflowState`. Re-validating the shape here would require mirroring
+ * `WorkflowState`'s schema in a second source of truth (drift risk) for
+ * no runtime benefit — `invoke` trusts the engine's return value.
+ *
+ * The cast on `outputSchema` below reattaches the concrete
+ * `WorkflowState` type for `defineOperation`'s generic inference.
  */
 const getWorkflowOutput = z.unknown();
 
@@ -55,6 +59,9 @@ export const getWorkflowOperation = defineOperation<GetWorkflowInput, GetWorkflo
   // applies to the path-param + query-string derived input.
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<WorkflowState> => {
+    // The catalog stores `engine: unknown` so the pipeline is transport-
+    // neutral; per `operation-catalog.ts`'s JSDoc the concrete adapter
+    // (here: REST via serve()) is responsible for passing an `Engine`.
     const e = engine as Engine;
     const state = await e.get(input.workflowId);
     if (state === null) {
@@ -88,7 +95,9 @@ function shapeGetWorkflowSuccess(state: WorkflowState): Response {
  * Legacy-matching fault mapper. The only fault this operation emits
  * under normal conditions is `NotFound`; other codes fall through
  * to a generic `{ error: <message> }` shape at the matching HTTP
- * status.
+ * status. Status lookup reuses the canonical
+ * `FAULT_CODE_TO_HTTP_STATUS` map so fault→status stays single-
+ * sourced across the REST and JSON-RPC adapters.
  */
 function shapeGetWorkflowFault(fault: OperationFault): Response {
   if (fault.code === 'EngineFailure') {
@@ -98,40 +107,9 @@ function shapeGetWorkflowFault(fault: OperationFault): Response {
     });
   }
   return new Response(JSON.stringify({ error: fault.message }), {
-    status: faultStatusForLegacy(fault.code),
+    status: FAULT_CODE_TO_HTTP_STATUS[fault.code],
     headers: { 'Content-Type': 'application/json' },
   });
-}
-
-function faultStatusForLegacy(code: OperationFault['code']): number {
-  switch (code) {
-    case 'NotFound':
-      return 404;
-    case 'Unauthorized':
-      return 401;
-    case 'Forbidden':
-      return 403;
-    case 'InvalidParams':
-      return 400;
-    case 'Conflict':
-      return 409;
-    case 'Unprocessable':
-      return 422;
-    case 'Timeout':
-      return 408;
-    case 'RateLimited':
-      return 429;
-    case 'NotImplemented':
-      return 501;
-    case 'UnsupportedTransport':
-      return 501;
-    case 'SubscriptionOverflow':
-      return 500;
-    case 'MethodNotFound':
-      return 404;
-    case 'EngineFailure':
-      return 500;
-  }
 }
 
 /**
@@ -157,6 +135,10 @@ export const getWorkflowRestBinding: UnknownRestBinding = {
   },
   extractInput: async (_request, pathParams) => ({ workflowId: pathParams['id'] ?? '' }),
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output) => shapeGetWorkflowSuccess(output as WorkflowState),
+  // The cast converts the binding-level `any` back to `WorkflowState`
+  // for the shaping function below. `UnknownRestBinding` storage is
+  // `RestBinding<any, any>`, so `output` here is typed `any`; the cast
+  // is a no-op but communicates the concrete shape expected.
+  shapeSuccess: (output: WorkflowState) => shapeGetWorkflowSuccess(output),
   shapeFault: shapeGetWorkflowFault,
 };

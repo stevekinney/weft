@@ -28,17 +28,39 @@ import type { UnknownRestBinding } from './rest-bindings.ts';
  * Structural snapshot of a `Response`. The body is read into a string
  * so comparison is exact byte equality; for binary responses the
  * caller should capture and compare headers + bytes separately.
+ *
+ * `headers` is a full normalized header map (lowercase names → values)
+ * so parity tests catch divergence on ANY header — not just
+ * `content-type`. Without this, a binding that silently drops
+ * `retry-after` or `cache-control` passes the parity test while
+ * breaking the HTTP contract.
  */
 export type ResponseFingerprint = {
   readonly status: number;
   readonly contentType: string | null;
+  readonly headers: Readonly<Record<string, string>>;
   readonly body: string;
 };
+
+/**
+ * Normalize the response's headers into a plain object keyed by
+ * lowercase name. Fetch/Bun `Headers` already lowercase names, but
+ * we materialize into a Record so the fingerprint is JSON-serializable
+ * and comparable via `Object.entries` without iteration-order surprises.
+ */
+function normalizeHeaders(headers: Headers): Record<string, string> {
+  const normalized: Record<string, string> = {};
+  headers.forEach((value, name) => {
+    normalized[name.toLowerCase()] = value;
+  });
+  return normalized;
+}
 
 export async function responseFingerprint(response: Response): Promise<ResponseFingerprint> {
   return {
     status: response.status,
     contentType: response.headers.get('content-type'),
+    headers: normalizeHeaders(response.headers),
     body: await response.text(),
   };
 }
@@ -97,10 +119,9 @@ export function assertFingerprintsMatch(
   if (actual.status !== expected.status) {
     mismatches.push(`status: ${actual.status} ≠ ${expected.status}`);
   }
-  if (actual.contentType !== expected.contentType) {
-    mismatches.push(
-      `content-type: ${String(actual.contentType)} ≠ ${String(expected.contentType)}`,
-    );
+  const headerDiff = diffHeaders(actual.headers, expected.headers);
+  if (headerDiff.length > 0) {
+    mismatches.push(`headers:\n    ${headerDiff.join('\n    ')}`);
   }
   if (actual.body !== expected.body) {
     mismatches.push(`body:\n  actual:   ${actual.body}\n  expected: ${expected.body}`);
@@ -108,4 +129,38 @@ export function assertFingerprintsMatch(
   if (mismatches.length > 0) {
     throw new Error(`${context} mismatch:\n  - ${mismatches.join('\n  - ')}`);
   }
+}
+
+/**
+ * Produce a list of header-level mismatch strings. Returns an empty
+ * array when both header maps are equivalent. Reports:
+ *   - "only-in-actual" headers (present in actual, absent in expected)
+ *   - "only-in-expected" headers (absent in actual, present in expected)
+ *   - value mismatches for headers present in both
+ *
+ * Headers like `date` that legitimately vary per request are NOT
+ * filtered here — migrations whose legacy and pipeline paths produce
+ * different `date` values by running sequentially should capture both
+ * responses at the same moment or strip volatile headers before
+ * comparing.
+ */
+function diffHeaders(
+  actual: Readonly<Record<string, string>>,
+  expected: Readonly<Record<string, string>>,
+): string[] {
+  const diffs: string[] = [];
+  const allKeys = new Set([...Object.keys(actual), ...Object.keys(expected)]);
+  const sortedKeys = [...allKeys].toSorted();
+  for (const key of sortedKeys) {
+    const a = actual[key];
+    const e = expected[key];
+    if (a === undefined && e !== undefined) {
+      diffs.push(`only-in-expected: ${key}: ${e}`);
+    } else if (e === undefined && a !== undefined) {
+      diffs.push(`only-in-actual: ${key}: ${a}`);
+    } else if (a !== e) {
+      diffs.push(`${key}: ${String(a)} ≠ ${String(e)}`);
+    }
+  }
+  return diffs;
 }

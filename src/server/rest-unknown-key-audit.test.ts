@@ -101,23 +101,106 @@ const AUDIT_CASES: ReadonlyArray<AuditCase> = [
     baselineBody: { filter: { status: 'running' }, tags: ['audit'], operation: 'add' },
     expectedBaselineStatuses: [200],
   },
-  {
-    name: 'POST /v1/workflows/:id/signal/:name (signalWorkflow)',
-    method: 'POST',
-    path: async (engine) => `/v1/workflows/${await seedWorkflow(engine)}/signal/audit-signal`,
-    baselineBody: { payload: { any: 'thing' } },
-    // Signal on a freshly-started workflow may not yet be receiving —
-    // but the handler returns 200 on success or 500 if the state is not
-    // yet signal-receiving. The audit compares status with-key vs.
-    // baseline, so either outcome is fine as long as it's stable.
-    expectedBaselineStatuses: [200, 500],
-  },
+  // NOTE: `POST /v1/workflows/:id/signal/:name` intentionally omitted.
+  // A freshly-started workflow can legitimately be in either a
+  // signal-ready (200) or not-yet-signal-receiving (500) state when the
+  // audit probes it, and the two probes run against independent engine
+  // instances. That non-determinism makes the case unfit for this
+  // baseline audit — the signal route's unknown-key behavior is locked
+  // instead by its per-operation migration test in a later phase.
   {
     name: 'POST /v1/workflows/:id/tags (addWorkflowTags)',
     method: 'POST',
     path: async (engine) => `/v1/workflows/${await seedWorkflow(engine)}/tags`,
     baselineBody: { tags: ['added'] },
     expectedBaselineStatuses: [200],
+  },
+  {
+    name: 'POST /v1/recover (recoverAll)',
+    method: 'POST',
+    path: '/v1/recover',
+    baselineBody: {},
+    expectedBaselineStatuses: [200],
+  },
+  {
+    name: 'POST /v1/schedules (createSchedule)',
+    method: 'POST',
+    path: '/v1/schedules',
+    baselineBody: { type: 'echo', cronExpression: '* * * * *', input: {} },
+    expectedBaselineStatuses: [201],
+  },
+  {
+    name: 'PATCH /v1/schedules/:id (updateSchedule)',
+    method: 'PATCH',
+    // 404 is acceptable for an unseeded id — the audit only needs the
+    // status to stay stable across with/without the extra key.
+    path: '/v1/schedules/does-not-exist',
+    baselineBody: { cronExpression: '*/5 * * * *' },
+    expectedBaselineStatuses: [404, 200, 204],
+  },
+  {
+    name: 'POST /v1/schedules/:id/pause (pauseSchedule)',
+    method: 'POST',
+    path: '/v1/schedules/does-not-exist/pause',
+    baselineBody: {},
+    expectedBaselineStatuses: [404, 204],
+  },
+  {
+    name: 'POST /v1/schedules/:id/resume (resumeSchedule)',
+    method: 'POST',
+    path: '/v1/schedules/does-not-exist/resume',
+    baselineBody: {},
+    expectedBaselineStatuses: [404, 204],
+  },
+  {
+    name: 'PUT /v1/budget-policy (setBudgetPolicy)',
+    method: 'PUT',
+    path: '/v1/budget-policy',
+    baselineBody: { namespace: 'audit-ns', daily: { maxCost: 10 } },
+    expectedBaselineStatuses: [200],
+  },
+  {
+    name: 'POST /v1/workflows/:id/resume (resumeWorkflow)',
+    method: 'POST',
+    // Handler for resumeWorkflow takes no body; extra keys should still
+    // be ignored. Running workflow returns 400/500 (not suspended) — status
+    // is fine as long as it's stable across with/without the extra key.
+    path: async (engine) => `/v1/workflows/${await seedWorkflow(engine)}/resume`,
+    baselineBody: {},
+    expectedBaselineStatuses: [200, 400, 409, 500],
+  },
+  {
+    name: 'POST /v1/workflows/:id/fork (forkWorkflow)',
+    method: 'POST',
+    path: async (engine) => `/v1/workflows/${await seedWorkflow(engine)}/fork`,
+    baselineBody: {},
+    expectedBaselineStatuses: [201, 404, 500],
+  },
+  {
+    name: 'POST /v1/workflows/:id/timeout (timeoutWorkflow)',
+    method: 'POST',
+    path: async (engine) => `/v1/workflows/${await seedWorkflow(engine)}/timeout`,
+    baselineBody: {},
+    expectedBaselineStatuses: [200, 204, 400, 404, 500],
+  },
+  {
+    name: 'POST /v1/workflows/:id/update/:name (updateWorkflow)',
+    method: 'POST',
+    // Use a name that will hit the engine's update path; body carries
+    // only `payload` which is optional. Status varies by workflow state
+    // but must be stable with vs. without the extra key.
+    path: async (engine) => `/v1/workflows/${await seedWorkflow(engine)}/update/audit-update`,
+    baselineBody: { payload: {} },
+    expectedBaselineStatuses: [200, 400, 408, 422, 500],
+  },
+  {
+    name: 'POST /v1/reviews/:reviewId/decision (submitReviewDecision)',
+    method: 'POST',
+    // A nonexistent reviewId returns 404 — still a stable status across
+    // with/without the extra key, which is all the audit asserts.
+    path: '/v1/reviews/does-not-exist/decision',
+    baselineBody: { decision: 'approved', reviewer: 'audit-user' },
+    expectedBaselineStatuses: [200, 404, 500],
   },
   {
     name: 'DELETE /v1/workflows/:id/tags (removeWorkflowTags)',

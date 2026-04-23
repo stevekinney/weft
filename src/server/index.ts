@@ -34,6 +34,7 @@ import type { AuthConfig, AuthMethod, Authenticator, JWTPayload } from './authen
 import { buildTLSOptions, createAuthenticator, validateAuthConfig } from './authentication.ts';
 import { DeadlineTracker } from './deadline-tracker.ts';
 import { handleRequest } from './handler.ts';
+import { REST_BINDINGS, createLiveOperationRegistry } from './rest-bindings.ts';
 import type { RestDispatchModeConfig } from './rest-dispatch-mode.ts';
 import {
   claimNextSequence,
@@ -901,6 +902,12 @@ export function serve(options: ServeOptions): WeftServer {
     routes['/ui/*'] = dashboard;
   }
 
+  // One operation registry per serve() instance — held for the server's
+  // lifetime so `executeOperation` sees the same resolution table
+  // across requests. Registry contents are immutable after creation,
+  // so sharing across concurrent requests is safe.
+  const liveOperationRegistry = createLiveOperationRegistry();
+
   async function authenticateRequest(request: Request): Promise<{
     authContext?: { method: AuthMethod; claims?: JWTPayload };
     response: Response | null;
@@ -1123,6 +1130,11 @@ export function serve(options: ServeOptions): WeftServer {
         ...(options.metricsCollector !== undefined
           ? { metricsCollector: options.metricsCollector }
           : {}),
+        ...(options.restDispatchMode !== undefined
+          ? { restDispatchMode: options.restDispatchMode }
+          : {}),
+        operationRegistry: liveOperationRegistry,
+        restBindings: REST_BINDINGS,
       });
     },
     websocket: {

@@ -23,7 +23,7 @@ import { describe, expect, it } from 'bun:test';
 
 import type { Context } from '../../core/context.ts';
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
+import type { WorkflowContext, WorkflowState } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
@@ -87,6 +87,27 @@ describe('weft.workflows.get — REST parity diff (Phase 15c)', () => {
     expect(JSON.parse(legacy.body)).toEqual({ error: 'Workflow "does-not-exist" not found' });
   });
 
+  it('falls through to legacy when restBindings is set but operationRegistry is absent', async () => {
+    const engine = createEngine();
+    const handle = await engine.start('hold', {}, {});
+    await waitForStatus(engine, handle.id, 'running');
+
+    // Without the operation registry the dispatcher cannot take the
+    // pipeline path even though the binding matches AND the mode says
+    // 'via-execute-operation'. Assertion: the legacy handler serves
+    // the request (200 with the same state shape as elsewhere).
+    const request = new Request(`http://localhost/v1/workflows/${handle.id}`, { method: 'GET' });
+    const response = await handleRequest(request, engine, {
+      restDispatchMode: 'via-execute-operation',
+      restBindings: [getWorkflowRestBinding],
+      // operationRegistry intentionally omitted.
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as { id?: string };
+    expect(body.id).toBe(handle.id);
+  });
+
   it('pipeline path is active: operation invoke is actually called under via-execute-operation', async () => {
     const engine = createEngine();
     const handle = await engine.start('hold', {}, {});
@@ -100,7 +121,12 @@ describe('weft.workflows.get — REST parity diff (Phase 15c)', () => {
       ...getWorkflowOperation,
       invoke: async ({ input }: { input: { workflowId: string } }) => {
         spyCalled = true;
-        return { id: input.workflowId, status: 'spy-sentinel' } as never;
+        // The real operation returns `WorkflowState`. For the spy,
+        // `unknown as WorkflowState` is the most honest cast — the
+        // object is NOT a valid workflow state, but we only need the
+        // `status` field to leak through to the response body for the
+        // test to observe that the pipeline ran.
+        return { id: input.workflowId, status: 'spy-sentinel' } as unknown as WorkflowState;
       },
     };
     const spyRegistry = createOperationRegistry([spyOperation]);

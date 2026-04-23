@@ -18,6 +18,12 @@
  * @module server/rest-bindings
  */
 
+import {
+  createOperationRegistry,
+  type ErasedOperation,
+  type OperationRegistry,
+} from './operation-catalog.ts';
+import { getWorkflowOperation, getWorkflowRestBinding } from './operations/get-workflow.ts';
 import type { RestBinding } from './rest-binding.ts';
 
 /**
@@ -37,8 +43,25 @@ import type { RestBinding } from './rest-binding.ts';
 export type UnknownRestBinding = RestBinding<any, any>;
 
 /**
- * Live binding set. Empty during Milestone 1; each migrated operation
- * adds a typed entry. Exported `readonly` so the router cannot mutate
- * it at runtime.
+ * Live REST binding set. Each migrated operation contributes exactly
+ * one entry. The router (handleRequest) matches against this array in
+ * order when `ServeOptions.restDispatchMode` selects
+ * `'via-execute-operation'` for the matching operation; a miss falls
+ * through to the legacy `ROUTES`/`ROUTE_EXECUTORS` table.
+ *
+ * Exported `readonly` so the router cannot mutate it at runtime.
  */
-export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [];
+export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [getWorkflowRestBinding];
+
+/**
+ * Live operation registry — populated with every operation that has a
+ * `RestBinding`, a JSON-RPC mount, or an stdio mount. Exposed via a
+ * factory so tests can spin up a fresh registry without inheriting
+ * the live one's state.
+ */
+export function createLiveOperationRegistry(): OperationRegistry {
+  const operations: ReadonlyArray<ErasedOperation> = [
+    getWorkflowOperation as unknown as ErasedOperation,
+  ];
+  return createOperationRegistry(operations);
+}

@@ -41,17 +41,20 @@ async function waitForRunning(engine: Engine, workflowId: string): Promise<void>
 }
 
 describe('responseFingerprint', () => {
-  it('captures status, content-type, and body', async () => {
+  it('captures status, content-type, headers, and body', async () => {
     const response = new Response(JSON.stringify({ ok: true }), {
       status: 201,
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Custom-Header': 'value' },
     });
     const fp = await responseFingerprint(response);
-    expect(fp).toEqual({
-      status: 201,
-      contentType: 'application/json',
-      body: '{"ok":true}',
-    });
+    expect(fp.status).toBe(201);
+    expect(fp.contentType).toBe('application/json');
+    expect(fp.body).toBe('{"ok":true}');
+    // Headers are normalized to lowercase keys. Additional headers
+    // beyond content-type (like Bun's defaults) are allowed — the
+    // fingerprint must merely include the ones we set.
+    expect(fp.headers['content-type']).toBe('application/json');
+    expect(fp.headers['x-custom-header']).toBe('value');
   });
 
   it('captures null content-type when the header is absent', async () => {
@@ -72,6 +75,7 @@ describe('assertFingerprintsMatch', () => {
   const baseline: ResponseFingerprint = {
     status: 200,
     contentType: 'application/json',
+    headers: { 'content-type': 'application/json' },
     body: '{"a":1}',
   };
 
@@ -83,9 +87,27 @@ describe('assertFingerprintsMatch', () => {
     expect(() => assertFingerprintsMatch({ ...baseline, status: 500 }, baseline)).toThrow(/status/);
   });
 
-  it('throws listing the diverging content-type', () => {
+  it('throws listing diverging headers (only-in-actual)', () => {
     expect(() =>
-      assertFingerprintsMatch({ ...baseline, contentType: 'text/plain' }, baseline),
+      assertFingerprintsMatch(
+        { ...baseline, headers: { ...baseline.headers, 'retry-after': '5' } },
+        baseline,
+      ),
+    ).toThrow(/only-in-actual: retry-after/);
+  });
+
+  it('throws listing diverging headers (only-in-expected)', () => {
+    expect(() =>
+      assertFingerprintsMatch(baseline, {
+        ...baseline,
+        headers: { ...baseline.headers, 'cache-control': 'no-store' },
+      }),
+    ).toThrow(/only-in-expected: cache-control/);
+  });
+
+  it('throws listing a value mismatch on a shared header', () => {
+    expect(() =>
+      assertFingerprintsMatch({ ...baseline, headers: { 'content-type': 'text/plain' } }, baseline),
     ).toThrow(/content-type/);
   });
 
@@ -96,16 +118,15 @@ describe('assertFingerprintsMatch', () => {
   });
 
   it('lists every mismatch in a single error message', () => {
-    const drifted = { status: 500, contentType: 'text/plain', body: 'oops' };
-    try {
-      assertFingerprintsMatch(drifted, baseline);
-      throw new Error('expected assertFingerprintsMatch to throw');
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      expect(message).toMatch(/status/);
-      expect(message).toMatch(/content-type/);
-      expect(message).toMatch(/body/);
-    }
+    const drifted: ResponseFingerprint = {
+      status: 500,
+      contentType: 'text/plain',
+      headers: { 'content-type': 'text/plain' },
+      body: 'oops',
+    };
+    expect(() => assertFingerprintsMatch(drifted, baseline)).toThrow(/status/);
+    expect(() => assertFingerprintsMatch(drifted, baseline)).toThrow(/headers/);
+    expect(() => assertFingerprintsMatch(drifted, baseline)).toThrow(/body/);
   });
 
   it('honors a custom context string', () => {
