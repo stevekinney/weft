@@ -104,7 +104,7 @@ describe('executeOperation — step 2: transport availability', () => {
   it('transport not in availability -> UnsupportedTransport fault', async () => {
     const registry = createOperationRegistry([
       makeOp({
-        name: 'weft.test.subscribeOnly',
+        name: 'weft.test.subscribeonly',
         inputSchema: z.object({}),
         outputSchema: z.object({}),
         invoke: async () => ({}),
@@ -112,7 +112,7 @@ describe('executeOperation — step 2: transport availability', () => {
       }),
     ]);
     const result = await executeOperation(
-      'weft.test.subscribeOnly',
+      'weft.test.subscribeonly',
       {},
       {
         principal: anonymousPrincipal(),
@@ -231,7 +231,7 @@ describe('executeOperation — step 5: unknown-key policy', () => {
   function regWithPolicy(http: 'reject' | 'strip' | 'passthrough') {
     return createOperationRegistry([
       makeOp({
-        name: 'weft.test.unknownKey',
+        name: 'weft.test.unknownkey',
         inputSchema: z.object({ id: z.string() }),
         outputSchema: z.object({ receivedKeys: z.array(z.string()) }),
         invoke: async ({ input }) => ({
@@ -244,7 +244,7 @@ describe('executeOperation — step 5: unknown-key policy', () => {
 
   it('reject -> InvalidParams with unrecognized_keys', async () => {
     const result = await executeOperation(
-      'weft.test.unknownKey',
+      'weft.test.unknownkey',
       { id: 'x', extra: 'snuck-in' },
       {
         principal: anonymousPrincipal(),
@@ -262,7 +262,7 @@ describe('executeOperation — step 5: unknown-key policy', () => {
 
   it('strip -> unknown keys dropped, invoke sees only schema fields', async () => {
     const result = await executeOperation(
-      'weft.test.unknownKey',
+      'weft.test.unknownkey',
       { id: 'x', extra: 'snuck-in' },
       {
         principal: anonymousPrincipal(),
@@ -311,7 +311,7 @@ describe('executeOperation — step 5: unknown-key policy', () => {
 
   it('passthrough -> unknown keys preserved into invoke', async () => {
     const result = await executeOperation(
-      'weft.test.unknownKey',
+      'weft.test.unknownkey',
       { id: 'x', extra: 'snuck-in' },
       {
         principal: anonymousPrincipal(),
@@ -370,7 +370,7 @@ describe('executeOperation — step 5: unknown-key policy', () => {
     // the guard fires, not that the array happens to have no extras.
     const arrayWithExtra = Object.assign([1, 2, 3], { snuckIn: 'extra' });
     const result = await executeOperation(
-      'weft.test.unknownKey',
+      'weft.test.unknownkey',
       arrayWithExtra as unknown as Record<string, unknown>,
       {
         principal: anonymousPrincipal(),
@@ -462,7 +462,7 @@ describe('executeOperation — step 6: authorize hook', () => {
   it('hook throw -> EngineFailure (no internal detail leaked)', async () => {
     const registry = createOperationRegistry([
       makeOp({
-        name: 'weft.test.hookThrows',
+        name: 'weft.test.hookthrows',
         inputSchema: z.object({}),
         outputSchema: z.object({}),
         invoke: async () => ({}),
@@ -473,7 +473,7 @@ describe('executeOperation — step 6: authorize hook', () => {
       }),
     ]);
     const result = await executeOperation(
-      'weft.test.hookThrows',
+      'weft.test.hookthrows',
       {},
       {
         principal: principalFromApiKey({ subject: 'k', scopes: [] }),
@@ -517,7 +517,7 @@ describe('executeOperation — step 7+8: invoke + classify', () => {
   it('invoke throws an OperationFault -> passed through unchanged', async () => {
     const registry = createOperationRegistry([
       makeOp({
-        name: 'weft.test.notFoundThrow',
+        name: 'weft.test.notfoundthrow',
         inputSchema: z.object({}),
         outputSchema: z.object({}),
         invoke: async () => {
@@ -530,7 +530,7 @@ describe('executeOperation — step 7+8: invoke + classify', () => {
       }),
     ]);
     const result = await executeOperation(
-      'weft.test.notFoundThrow',
+      'weft.test.notfoundthrow',
       {},
       {
         principal: anonymousPrincipal(),
@@ -689,7 +689,7 @@ describe('executeOperation — security regressions', () => {
     const seen: Record<string, unknown> = {};
     const registry = createOperationRegistry([
       makeOp({
-        name: 'weft.test.protoPollution',
+        name: 'weft.test.protopollution',
         inputSchema: z.object({ id: z.string() }),
         outputSchema: z.object({}),
         invoke: async ({ input }) => {
@@ -707,7 +707,7 @@ describe('executeOperation — security regressions', () => {
     // JSON.parse hard-codes the __proto__ key as a literal own property, which
     // is the canonical attack shape for prototype pollution.
     const malicious = JSON.parse('{"id":"x","__proto__":{"polluted":true}}');
-    const result = await executeOperation('weft.test.protoPollution', malicious, {
+    const result = await executeOperation('weft.test.protopollution', malicious, {
       principal: anonymousPrincipal(),
       engine: fakeEngine,
       transport: 'http-rest',
@@ -728,14 +728,14 @@ describe('executeOperation — security regressions', () => {
     });
     const registry = createOperationRegistry([
       makeOp({
-        name: 'weft.test.schemaThrows',
+        name: 'weft.test.schemathrows',
         inputSchema: throwingSchema as unknown as z.ZodType,
         outputSchema: z.object({}),
         invoke: async () => ({}),
       }),
     ]);
     const result = await executeOperation(
-      'weft.test.schemaThrows',
+      'weft.test.schemathrows',
       { id: 'boom' },
       {
         principal: anonymousPrincipal(),
@@ -755,7 +755,7 @@ describe('executeOperation — security regressions', () => {
     // contravariance under exactOptionalPropertyTypes.
     const op = {
       ...makeOp({
-        name: 'weft.test.badHook',
+        name: 'weft.test.badhook',
         inputSchema: z.object({}),
         outputSchema: z.object({}),
         invoke: async () => ({}),
@@ -765,7 +765,7 @@ describe('executeOperation — security regressions', () => {
     } as unknown as ErasedOperation;
     const registry = createOperationRegistry([op]);
     const result = await executeOperation(
-      'weft.test.badHook',
+      'weft.test.badhook',
       {},
       {
         principal: principalFromApiKey({ subject: 'k', scopes: [] }),
@@ -781,14 +781,14 @@ describe('executeOperation — security regressions', () => {
   it('output that violates outputSchema does not leak secret fields', async () => {
     const registry = createOperationRegistry([
       makeOp({
-        name: 'weft.test.badOutput',
+        name: 'weft.test.badoutput',
         inputSchema: z.object({}),
         outputSchema: z.object({ public: z.string() }).strict(),
         invoke: async () => ({ public: 'ok', secret: 'hunter2' }) as unknown as { public: string },
       }),
     ]);
     const result = await executeOperation(
-      'weft.test.badOutput',
+      'weft.test.badoutput',
       {},
       {
         principal: anonymousPrincipal(),
@@ -806,7 +806,7 @@ describe('executeOperation — security regressions', () => {
   it('hook-throw secret-leak invariant covers the entire fault, not just message', async () => {
     const registry = createOperationRegistry([
       makeOp({
-        name: 'weft.test.hookSecretLeak',
+        name: 'weft.test.hooksecretleak',
         inputSchema: z.object({}),
         outputSchema: z.object({}),
         invoke: async () => ({}),
@@ -817,7 +817,7 @@ describe('executeOperation — security regressions', () => {
       }),
     ]);
     const result = await executeOperation(
-      'weft.test.hookSecretLeak',
+      'weft.test.hooksecretleak',
       {},
       {
         principal: principalFromApiKey({ subject: 'k', scopes: [] }),
@@ -836,7 +836,7 @@ describe('executeOperation — additional coverage', () => {
   it('authenticated access policy with anonymous principal returns Unauthorized', async () => {
     const registry = createOperationRegistry([
       makeOp({
-        name: 'weft.test.authOnly',
+        name: 'weft.test.authonly',
         inputSchema: z.object({}),
         outputSchema: z.object({}),
         invoke: async () => ({}),
@@ -844,7 +844,7 @@ describe('executeOperation — additional coverage', () => {
       }),
     ]);
     const result = await executeOperation(
-      'weft.test.authOnly',
+      'weft.test.authonly',
       {},
       {
         principal: anonymousPrincipal(),
@@ -860,7 +860,7 @@ describe('executeOperation — additional coverage', () => {
   it('http-rest transport rejection works (not just jsonRpcHttp)', async () => {
     const registry = createOperationRegistry([
       makeOp({
-        name: 'weft.test.noHttp',
+        name: 'weft.test.nohttp',
         inputSchema: z.object({}),
         outputSchema: z.object({}),
         invoke: async () => ({}),
@@ -873,7 +873,7 @@ describe('executeOperation — additional coverage', () => {
       }),
     ]);
     const result = await executeOperation(
-      'weft.test.noHttp',
+      'weft.test.nohttp',
       {},
       {
         principal: anonymousPrincipal(),
@@ -901,18 +901,41 @@ describe('executeOperation — additional coverage', () => {
     expect(list1).toBe(list2);
     expect(Object.isFrozen(list1)).toBe(true);
   });
+
+  it('registry deep-freezes load-bearing nested policy objects', () => {
+    // Without nested freezes, a caller that built a shared `transports` /
+    // `access` / `unknownKeyPolicy` literal could mutate it post-
+    // registration and silently change the registered operation's
+    // authorization or dispatch behavior. Each of these fields flows into
+    // a security-relevant decision and must be frozen at the registry
+    // boundary regardless of how the caller constructed them.
+    const op = makeOp({
+      name: 'weft.test.deepfrozen',
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      invoke: async () => ({}),
+    });
+    const registry = createOperationRegistry([op]);
+    const stored = registry.get('weft.test.deepfrozen');
+    if (!stored) throw new Error('expected stored op');
+    expect(Object.isFrozen(stored)).toBe(true);
+    expect(Object.isFrozen(stored.tags)).toBe(true);
+    expect(Object.isFrozen(stored.access)).toBe(true);
+    expect(Object.isFrozen(stored.transports)).toBe(true);
+    expect(Object.isFrozen(stored.unknownKeyPolicy)).toBe(true);
+  });
 });
 
 describe('createOperationRegistry', () => {
   it('rejects duplicate operation names at construction time', () => {
     const op1 = makeOp({
-      name: 'weft.dup',
+      name: 'weft.test.dup',
       inputSchema: z.object({}),
       outputSchema: z.object({}),
       invoke: async () => ({}),
     });
     const op2 = makeOp({
-      name: 'weft.dup',
+      name: 'weft.test.dup',
       inputSchema: z.object({}),
       outputSchema: z.object({}),
       invoke: async () => ({}),
@@ -927,7 +950,7 @@ describe('createOperationRegistry', () => {
 
   it('rejects operations whose inputSchema is not a z.ZodObject', () => {
     const op = makeOp({
-      name: 'weft.test.notObject',
+      name: 'weft.test.notobject',
       // A string schema isn't an object — unknown-key policy can't apply.
       inputSchema: z.string() as unknown as z.ZodType,
       outputSchema: z.object({}),
@@ -954,18 +977,18 @@ describe('createOperationRegistry', () => {
 
   it('list returns all operations in registration order', () => {
     const op1 = makeOp({
-      name: 'weft.a',
+      name: 'weft.test.a',
       inputSchema: z.object({}),
       outputSchema: z.object({}),
       invoke: async () => ({}),
     });
     const op2 = makeOp({
-      name: 'weft.b',
+      name: 'weft.test.b',
       inputSchema: z.object({}),
       outputSchema: z.object({}),
       invoke: async () => ({}),
     });
     const registry = createOperationRegistry([op1, op2]);
-    expect(registry.list().map((op) => op.name)).toEqual(['weft.a', 'weft.b']);
+    expect(registry.list().map((op) => op.name)).toEqual(['weft.test.a', 'weft.test.b']);
   });
 });

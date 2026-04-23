@@ -38,6 +38,28 @@ import {
 import { type Principal } from './principal.ts';
 
 /**
+ * Regex for the canonical `weft.<segment>(.<segment>)+` operation-name form.
+ * Lowercase ASCII segments only; mandatory `weft.` prefix; at least one dot
+ * after the prefix. The OpenRPC generator and JSON-RPC dispatcher both
+ * treat this as the single source of truth for naming.
+ */
+const OPERATION_NAME_PATTERN = /^weft\.[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+$/;
+
+/** Throws if `name` does not match the canonical operation-name pattern. */
+export function validateOperationName(name: string): void {
+  if (!OPERATION_NAME_PATTERN.test(name)) {
+    throw new Error(
+      `invalid operation name "${name}" — must match weft.<segment>(.<segment>)+ where each segment is lowercase ASCII (e.g., "weft.workflows.start")`,
+    );
+  }
+}
+
+/** Non-throwing variant of `validateOperationName`. */
+export function isValidOperationName(name: string): boolean {
+  return OPERATION_NAME_PATTERN.test(name);
+}
+
+/**
  * Per-operation transport availability flags. A `false` entry means callers
  * on that transport receive `UnsupportedTransport`, not `MethodNotFound` —
  * the method exists, just not on this protocol.
@@ -118,30 +140,65 @@ export type OperationRegistry = {
 };
 
 /**
+ * Erased operation shape accepted by `createOperationRegistry`. Splits the
+ * `Input`/`Output` type parameters per-position so assignability is sound
+ * under `strictFunctionTypes`:
+ *   - `inputSchema` and `outputSchema` are covariant in their `T` parameter
+ *     (zod's `ZodType<T>.parse` returns `T`), so they accept the broadest
+ *     type, `unknown`.
+ *   - `authorize` and `invoke` are contravariant in their `Input` parameter,
+ *     so they accept the narrowest type, `never`.
+ * Together this lets a concrete `OperationDefinition<I, O>` produced by
+ * `defineOperation` flow into the registry without per-element erasure.
+ *
+ * Defined as a fully-specified shape (not via `Omit`) so the assignability
+ * check evaluates each field independently — an `Omit`-derived alias would
+ * over-constrain via `OperationDefinition<never, unknown>`'s covariant
+ * `inputSchema` slot.
+ */
+export type RegistrableOperation = {
+  readonly name: string;
+  readonly summary: string;
+  readonly tags: ReadonlyArray<string>;
+  readonly inputSchema: z.ZodType;
+  readonly outputSchema: z.ZodType;
+  readonly access: AccessPolicy;
+  readonly transports: TransportAvailability;
+  readonly unknownKeyPolicy: UnknownKeyPolicy;
+  readonly authorize?: (context: OperationContext<never>) => Promise<AuthorizationDecision>;
+  readonly invoke: (context: OperationContext<never>) => Promise<unknown>;
+};
+
+/**
  * Build an immutable registry. Throws on:
  *   - duplicate operation names (config bug),
+ *   - operation names that violate the `weft.<segment>(.<segment>)+` form,
  *   - non-object input schemas — `inputSchema` MUST be a `z.ZodObject` so the
  *     unknown-key policy check in `executeOperation` step 5 has a defined
  *     set of top-level keys to compare against. Wrapping the object schema
  *     in `.optional()`, `.nullable()`, or transforms hides the shape from the
- *     pipeline and is rejected at registration to avoid silent misbehavior.
+ *     pipeline and is rejected at registration to avoid silent misbehavior,
+ *   - schemas declaring unsafe top-level shape keys (`__proto__` /
+ *     `constructor` / `prototype`).
  *
  * Accepts an array of differently-typed operations. Each operation's
  * `Input`/`Output` type parameters are erased on the way into the registry —
  * the dispatcher reconstructs the right shape via the schema parse step.
- * The cast at storage is type-erasure only: the `OperationDefinition`
- * structure is identical for every type-parameterization, only the variance
- * of the contravariant `Input` position prevents direct assignability under
- * `exactOptionalPropertyTypes`.
  */
 export function createOperationRegistry(
-  operations: ReadonlyArray<ErasedOperation>,
+  operations: ReadonlyArray<RegistrableOperation>,
 ): OperationRegistry {
   const byName = new Map<string, ErasedOperation>();
   for (const operation of operations) {
     if (byName.has(operation.name)) {
       throw new Error(`duplicate operation name in registry: ${operation.name}`);
     }
+    // Validate the name shape at registry assembly. `defineOperation` already
+    // runs this check at construction, but the registry accepts any
+    // `RegistrableOperation` — including ones built from object literals or
+    // other sources that bypass the builder. This guarantees OpenRPC discovery
+    // and JSON-RPC dispatch never see a name that violates the convention.
+    validateOperationName(operation.name);
     if (!(operation.inputSchema instanceof z.ZodObject)) {
       throw new Error(
         `operation "${operation.name}" inputSchema must be a z.ZodObject (got ${operation.inputSchema.constructor.name}); wrappers like .optional() / transforms hide the top-level shape from the unknown-key policy check`,
@@ -159,12 +216,32 @@ export function createOperationRegistry(
         `operation "${operation.name}" inputSchema declares unsafe top-level keys: ${unsafeDeclared.join(', ')}. Names that match a prototype-pollution vector (__proto__, constructor, prototype) are forbidden as schema keys.`,
       );
     }
-    // Shallow-freeze the operation reference so a later caller cannot mutate
-    // `access`, `transports`, or `invoke` after the construction-time
-    // duplicate / schema checks. `Object.freeze` is shallow but the fields
-    // we care about (access, transports, unknownKeyPolicy) are themselves
-    // already plain object literals supplied at registration.
-    byName.set(operation.name, Object.freeze({ ...operation }));
+    // Freeze the operation AND each load-bearing nested policy object so
+    // the caller's references cannot be mutated post-registration. Without
+    // the inner freezes, `Object.freeze({ ...operation })` is shallow:
+    // a caller that did `const transports = { http: true, ... }` then
+    // `defineOperation({ transports })` and later `transports.http = false`
+    // would silently change the registered operation's behavior because
+    // the spread aliases the same nested objects. `access`, `transports`,
+    // and `unknownKeyPolicy` all flow into authorization / dispatch
+    // decisions, so this aliasing path is a logic-corruption risk.
+    //
+    // Type-erasure cast: `RegistrableOperation`'s callbacks accept
+    // `OperationContext<never>` (variance trick to admit any concrete
+    // `Input` typing), but storage uses `ErasedOperation`
+    // (`OperationDefinition<unknown, unknown>`) so the dispatcher can
+    // iterate uniformly. The runtime invariant — each operation only
+    // receives inputs validated by its own schema — is preserved.
+    byName.set(
+      operation.name,
+      Object.freeze({
+        ...operation,
+        tags: Object.freeze([...operation.tags]),
+        access: Object.freeze({ ...operation.access }),
+        transports: Object.freeze({ ...operation.transports }),
+        unknownKeyPolicy: Object.freeze({ ...operation.unknownKeyPolicy }),
+      }) as ErasedOperation,
+    );
   }
   const ordered = Object.freeze([...byName.values()]);
   return {
