@@ -77,35 +77,18 @@ export type ParityRunResult = {
 
 /**
  * Dispatch the same request through both paths and return both
- * fingerprints. The caller is responsible for constructing the
- * request, seeding the engine, and asserting equivalence (typically
- * via `assertFingerprintsMatch`).
+ * fingerprints. Caller constructs the request, seeds the engine, and
+ * asserts equivalence (typically via `assertFingerprintsMatch`). The
+ * request is cloned before each dispatch so POST/PATCH/PUT body
+ * streams stay fresh across both calls.
  *
- * The request is cloned before each dispatch so the body stream is
- * fresh — without this, the second dispatch reads an already-consumed
- * body and the parity assertion would always fail on POST/PATCH/PUT.
- *
- * ⚠ Engine-isolation caveat: both passes share the same `engine`
- * instance. The legacy dispatch runs first; if it mutates workflow
- * state (start/signal/update/cancel/bulk/tags/attributes), the
- * pipeline pass observes the post-mutation state and parity can
- * legitimately diverge from the "ran against the same initial state"
- * contract. The harness is safe today for:
- *   - pure reads (GET /workflows/:id, list, events, etc.)
- *   - idempotent writes whose repeated application returns the same
- *     response (e.g., "add tag X" when X already exists)
- *   - 404 / 4xx fast-exit cases (the engine is never touched)
- *
- * Mutating-POST/PATCH/DELETE migrations MUST either:
- *   - construct two separately-seeded engines and run one dispatch
- *     per engine, comparing fingerprints afterwards;
- *   - add a snapshot/reset step between passes;
- *   - design the operation's `invoke` to be idempotent at the engine
- *     level so duplicate dispatch does not change state.
- *
- * This limitation is documented here rather than enforced by the API
- * because the right isolation strategy varies per operation. The
- * per-operation parity diff test is the place to make that choice.
+ * ⚠ Engine isolation: both passes share the same `engine` instance.
+ * The legacy dispatch runs first; mutating operations (start/signal/
+ * cancel/etc.) see post-mutation state on the second pass and parity
+ * will break. Safe for pure reads, idempotent writes, and 4xx
+ * fast-exits. Mutating migrations should construct separate engines
+ * per dispatch or make the operation idempotent — the right choice
+ * lives in the per-operation migration test, not here.
  */
 export async function runParity(
   engine: Engine,
