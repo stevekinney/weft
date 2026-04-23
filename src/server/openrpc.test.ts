@@ -2,8 +2,10 @@
  * Tests for the OpenRPC 1.3.2 document generator.
  *
  * `generateOpenRpcDocument` intersects the `OperationRegistry` with the
- * live JSON-RPC transport availability (from `ServeOptions.jsonRpc`) so
- * a document always describes the actually-running server:
+ * live JSON-RPC transport availability (passed in via
+ * `OpenRpcOptions.jsonRpc`; a later phase forwards this from
+ * `ServeOptions.jsonRpc`) so a document always describes the
+ * actually-running server:
  *   - `jsonRpc.enabled: false` → zero methods.
  *   - `jsonRpc.transports: ['http']` → WS-only subscribe methods are omitted.
  *   - Every listed method carries `paramStructure: 'by-name'` plus both the

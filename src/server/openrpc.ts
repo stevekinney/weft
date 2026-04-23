@@ -3,8 +3,10 @@
  * `OperationRegistry`. Produces a JSON-serializable OpenRPC document
  * that reflects exactly the operations that the running server will
  * dispatch over JSON-RPC — intersected with the live
- * `ServeOptions.jsonRpc` flag AND each operation's transport
- * availability.
+ * `OpenRpcOptions.jsonRpc` runtime state (see `OpenRpcJsonRpcRuntime`)
+ * AND each operation's transport availability. A later Track 8 phase
+ * will wire this runtime state through `ServeOptions.jsonRpc`; until
+ * then, callers pass it explicitly to `generateOpenRpcDocument`.
  *
  * Track 8 design decisions 8, 9, and "OpenAPI / OpenRPC generation":
  *
@@ -32,7 +34,7 @@ import { z } from 'zod';
 
 import type { ErasedOperation, OperationRegistry } from './operation-catalog.ts';
 
-/** Transports that MAY be enabled in `ServeOptions.jsonRpc.transports`. */
+/** Transports that MAY be enabled in `OpenRpcOptions.jsonRpc.transports` (a later phase will forward this from `ServeOptions.jsonRpc.transports`). */
 export type OpenRpcTransport = 'http' | 'websocket' | 'stdio';
 
 export type OpenRpcJsonRpcRuntime = {
