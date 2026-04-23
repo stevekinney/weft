@@ -55,31 +55,40 @@ export async function handleJsonRpcHttpRequest(
 
   const maxBytes = context.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
 
-  // Cheap pre-read guard: if content-length is present and over the
-  // limit, reject without allocating the buffer.
+  // Pre-read guard: validate `content-length` as a canonical
+  // non-negative base-10 integer. Invalid, negative, fractional, or
+  // non-finite values are rejected as 400 — they indicate a malformed
+  // request. A valid-but-oversized declaration short-circuits with
+  // 413 before we allocate the body buffer.
   const contentLengthHeader = request.headers.get('content-length');
   if (contentLengthHeader !== null) {
+    if (!CONTENT_LENGTH_PATTERN.test(contentLengthHeader)) {
+      return new Response('Bad Request', { status: 400 });
+    }
     const declared = Number(contentLengthHeader);
-    if (Number.isFinite(declared) && declared > maxBytes) {
+    if (!Number.isSafeInteger(declared) || declared < 0) {
+      return new Response('Bad Request', { status: 400 });
+    }
+    if (declared > maxBytes) {
       return new Response('Payload Too Large', { status: 413 });
     }
   }
 
-  let bodyText: string;
+  // Stream-bounded body read. `request.bytes()` (a Web-standard API
+  // backed by Bun) surfaces the raw byte stream. We pull chunks and
+  // enforce `maxBytes + 1` as the hard ceiling so a lying or missing
+  // content-length header cannot force an unbounded allocation.
+  let bodyBytes: Uint8Array;
   try {
-    bodyText = await request.text();
-  } catch {
+    bodyBytes = await readBodyBounded(request, maxBytes);
+  } catch (error) {
+    if (error instanceof BodyTooLargeError) {
+      return new Response('Payload Too Large', { status: 413 });
+    }
     // Stream error reading the body — treat as transport-level failure.
     return new Response('Bad Request', { status: 400 });
   }
-
-  // Backstop check: clients can lie about content-length (or omit
-  // it entirely for chunked encoding), so always verify the actual
-  // byte length after reading.
-  const byteLength = new TextEncoder().encode(bodyText).length;
-  if (byteLength > maxBytes) {
-    return new Response('Payload Too Large', { status: 413 });
-  }
+  const bodyText = new TextDecoder('utf-8').decode(bodyBytes);
 
   const dispatchContext: DispatchJsonRpcContext = {
     registry: context.registry,
@@ -90,20 +99,29 @@ export async function handleJsonRpcHttpRequest(
 
   const result = await dispatchJsonRpc(bodyText, dispatchContext);
 
+  // `Cache-Control: no-store` keeps intermediaries and clients from
+  // caching JSON-RPC responses, which may contain workflow state,
+  // scoped principal output, or error envelopes. The JSON-RPC
+  // contract is request-response, not cacheable — force that.
+  const responseHeaders = { 'cache-control': 'no-store' } as const;
+
   switch (result.kind) {
     case 'notification':
     case 'notification-batch':
-      return new Response(null, { status: 204 });
+      return new Response(null, { status: 204, headers: responseHeaders });
     case 'single':
-      return Response.json(result.response, { status: 200 });
+      return Response.json(result.response, { status: 200, headers: responseHeaders });
     case 'batch':
-      return Response.json(result.responses, { status: 200 });
-    default: {
-      const exhaustive: never = result;
-      return exhaustive;
-    }
+      return Response.json(result.responses, { status: 200, headers: responseHeaders });
   }
 }
+
+/**
+ * Canonical base-10 non-negative integer. Rejects empty strings,
+ * leading zeros on multi-digit values, signs, decimal points, and
+ * scientific notation.
+ */
+const CONTENT_LENGTH_PATTERN = /^(0|[1-9]\d*)$/;
 
 /**
  * Accepts `application/json` and `application/json; charset=...`
@@ -116,4 +134,52 @@ function isJsonContentType(contentType: string): boolean {
   const lowered = contentType.trim().toLowerCase();
   const [type = ''] = lowered.split(';');
   return type.trim() === 'application/json';
+}
+
+class BodyTooLargeError extends Error {
+  constructor() {
+    super('body exceeds max bytes');
+    this.name = 'BodyTooLargeError';
+  }
+}
+
+/**
+ * Read the request body in chunks and enforce `maxBytes + 1` as a
+ * hard ceiling BEFORE the full body is buffered. This prevents a
+ * lying / missing `content-length` header from forcing an unbounded
+ * allocation via `request.text()`.
+ *
+ * Returns the concatenated bytes; caller decodes with `TextDecoder`.
+ * Throws `BodyTooLargeError` on overflow — caller maps to 413.
+ */
+async function readBodyBounded(request: Request, maxBytes: number): Promise<Uint8Array> {
+  const body = request.body;
+  if (body === null) return new Uint8Array(0);
+  const reader = body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        // Abort the stream as soon as we exceed the limit.
+        await reader.cancel();
+        throw new BodyTooLargeError();
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  // Concatenate.
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    out.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return out;
 }

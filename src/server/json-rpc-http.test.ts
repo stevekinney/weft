@@ -166,6 +166,58 @@ describe('handleJsonRpcHttpRequest — body-size limit', () => {
     );
     expect(response.status).toBe(413);
   });
+
+  it('returns 400 for a malformed content-length header (non-canonical integer)', async () => {
+    // Negative, fractional, non-numeric, scientific-notation, or
+    // leading-zero content-length values are all malformed per
+    // RFC 7230 § 3.3.3. The adapter rejects them with 400 rather
+    // than silently coercing to `Number()` and potentially
+    // bypassing the pre-read size guard.
+    // Note: Fetch's Request constructor normalizes whitespace and
+    // strips empty-string headers, so those two variants can't be
+    // tested through the Request API. The adapter still rejects them
+    // per the regex — regression-tested here via representative
+    // non-canonical values that the Request constructor preserves.
+    for (const bad of ['-1', '1.5', 'abc', '1e3']) {
+      const response = await handleJsonRpcHttpRequest(
+        new Request('http://localhost/jsonrpc', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'content-length': bad,
+          },
+          body: '{}',
+        }),
+        baseContext(),
+      );
+      expect(response.status).toBe(400);
+    }
+  });
+
+  it('rejects oversize bodies that omit content-length (streaming upload)', async () => {
+    // The pre-read guard only fires when `content-length` is
+    // present. For clients that use chunked encoding (no
+    // content-length), the bounded stream reader must enforce the
+    // cap during the read itself, aborting as soon as the limit is
+    // exceeded. This prevents a lying or absent content-length from
+    // forcing an unbounded allocation.
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        // 2 MB of 'x' against a 1 MB limit.
+        controller.enqueue(new TextEncoder().encode('x'.repeat(2 * 1024 * 1024)));
+        controller.close();
+      },
+    });
+    const response = await handleJsonRpcHttpRequest(
+      new Request('http://localhost/jsonrpc', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: stream,
+      }),
+      { ...baseContext(), maxBodyBytes: 1024 * 1024 },
+    );
+    expect(response.status).toBe(413);
+  });
 });
 
 describe('handleJsonRpcHttpRequest — single request dispatch', () => {
@@ -235,6 +287,42 @@ describe('handleJsonRpcHttpRequest — single request dispatch', () => {
     const json = (await response.json()) as { error: { code: number }; id: null };
     expect(json.error.code).toBe(-32700);
     expect(json.id).toBeNull();
+  });
+
+  it('returns 200 with parse-error envelope for an empty body (POST with no data)', async () => {
+    // Common real-world mistake (`curl` without `-d`, SDK bug). The
+    // JSON-RPC spec-mandated response is HTTP 200 with the error
+    // envelope + `id: null` — NOT 400. Test pins that convention.
+    const response = await handleJsonRpcHttpRequest(
+      new Request('http://localhost/jsonrpc', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '',
+      }),
+      baseContext(),
+    );
+    expect(response.status).toBe(200);
+    const json = (await response.json()) as { error: { code: number }; id: null };
+    expect(json.error.code).toBe(-32700);
+    expect(json.id).toBeNull();
+  });
+
+  it('sets Cache-Control: no-store on all responses', async () => {
+    const body = JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'weft.test.echo',
+      params: { value: 'hi' },
+      id: 1,
+    });
+    const response = await handleJsonRpcHttpRequest(
+      new Request('http://localhost/jsonrpc', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+      }),
+      baseContext(),
+    );
+    expect(response.headers.get('cache-control')).toBe('no-store');
   });
 });
 
