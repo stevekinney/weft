@@ -22,11 +22,7 @@ import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { handleRequest } from './handler.ts';
-import {
-  createOperationRegistry,
-  type ErasedOperation,
-  type OperationRegistry,
-} from './operation-catalog.ts';
+import { createOperationRegistry, type OperationRegistry } from './operation-catalog.ts';
 import { defineOperation } from './operation-registry.ts';
 import type { Principal } from './principal.ts';
 import type { RestBinding } from './rest-binding.ts';
@@ -84,7 +80,7 @@ function buildPrincipalSpy(): {
     extractInput: async (_request, pathParams) => ({ workflowId: pathParams['id'] ?? '' }),
     success: { kind: 'json', status: 200 },
   };
-  const registry = createOperationRegistry([operation as unknown as ErasedOperation]);
+  const registry = createOperationRegistry([operation]);
   // Typed strict at the factory, widen at the router boundary.
   return { registry, bindings: [binding as UnknownRestBinding], captured };
 }
@@ -116,7 +112,7 @@ describe('handler pipeline — streaming binding guard', () => {
       // shapeSuccess intentionally omitted — defaultShapeSuccess must
       // throw, and the outer handler must convert that to a 500.
     };
-    const registry = createOperationRegistry([operation as unknown as ErasedOperation]);
+    const registry = createOperationRegistry([operation]);
 
     const request = new Request(`http://localhost/v1/test/streamnoshape/${handle.id}`, {
       method: 'GET',

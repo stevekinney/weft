@@ -124,9 +124,22 @@ describe('assertFingerprintsMatch', () => {
       headers: { 'content-type': 'text/plain' },
       body: 'oops',
     };
-    expect(() => assertFingerprintsMatch(drifted, baseline)).toThrow(/status/);
-    expect(() => assertFingerprintsMatch(drifted, baseline)).toThrow(/headers/);
-    expect(() => assertFingerprintsMatch(drifted, baseline)).toThrow(/body/);
+    // Capture the single thrown error so we can verify all three axes
+    // appear in the SAME message. A naive three-independent-throw
+    // version would pass even if the implementation early-exited after
+    // the first mismatch — each independent call would hit that first
+    // mismatch and the per-regex assertion would succeed trivially.
+    let caught: unknown;
+    try {
+      assertFingerprintsMatch(drifted, baseline);
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(Error);
+    const message = (caught as Error).message;
+    expect(message).toMatch(/status/);
+    expect(message).toMatch(/headers/);
+    expect(message).toMatch(/body/);
   });
 
   it('honors a custom context string', () => {
