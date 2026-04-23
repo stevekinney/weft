@@ -14,6 +14,17 @@ async function readBody(response: Response): Promise<unknown> {
 }
 
 describe('faultToHttpResponse', () => {
+  it('NotFound without identifier omits the identifier key from data (no undefined leak)', async () => {
+    const response = faultToHttpResponse({
+      code: 'NotFound',
+      message: 'workflow not found',
+      data: { resource: 'workflow' },
+    });
+    const body = (await readBody(response)) as { error: { data: Record<string, unknown> } };
+    expect(body.error.data).toEqual({ resource: 'workflow' });
+    expect('identifier' in body.error.data).toBe(false);
+  });
+
   it('NotFound -> 404 with structured body', async () => {
     const fault: OperationFault = {
       code: 'NotFound',
@@ -94,6 +105,16 @@ describe('faultToHttpResponse', () => {
     expect(response.status).toBe(408);
   });
 
+  it('Timeout with operationName present includes it in the body data field', async () => {
+    const response = faultToHttpResponse({
+      code: 'Timeout',
+      message: 'operation timed out',
+      data: { operationName: 'weft.workflows.update' },
+    });
+    const body = (await readBody(response)) as { error: { data: { operationName: string } } };
+    expect(body.error.data).toEqual({ operationName: 'weft.workflows.update' });
+  });
+
   it('RateLimited -> 429 and includes Retry-After header when retryAfterMs is set', async () => {
     const response = faultToHttpResponse({
       code: 'RateLimited',
@@ -102,6 +123,17 @@ describe('faultToHttpResponse', () => {
     });
     expect(response.status).toBe(429);
     expect(response.headers.get('retry-after')).toBe('5');
+    const body = (await readBody(response)) as { error: { data: { retryAfterMs: number } } };
+    expect(body.error.data).toEqual({ retryAfterMs: 5000 });
+  });
+
+  it('RateLimited rounds retryAfterMs up to the nearest second (Math.ceil)', () => {
+    const response = faultToHttpResponse({
+      code: 'RateLimited',
+      message: 'rate limited',
+      data: { retryAfterMs: 1001 },
+    });
+    expect(response.headers.get('retry-after')).toBe('2');
   });
 
   it('RateLimited without retryAfterMs omits Retry-After header', async () => {
@@ -167,13 +199,15 @@ describe('faultToHttpResponse', () => {
     expect(body.error.data).toBeUndefined();
   });
 
-  it('RateLimited with NaN retryAfterMs omits Retry-After header (invalid value rejected)', () => {
+  it('RateLimited with NaN retryAfterMs omits both the header and the body field', async () => {
     const response = faultToHttpResponse({
       code: 'RateLimited',
       message: 'rate limited',
       data: { retryAfterMs: Number.NaN },
     });
     expect(response.headers.get('retry-after')).toBeNull();
+    const body = (await readBody(response)) as { error: { data?: unknown } };
+    expect(body.error.data).toBeUndefined();
   });
 
   it('RateLimited with Infinity retryAfterMs omits Retry-After header', () => {

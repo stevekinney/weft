@@ -50,13 +50,24 @@ function shapeErrorBody(fault: OperationFault): ErrorBody {
   if (fault.code === 'EngineFailure' || fault.code === 'NotImplemented') {
     return base;
   }
-  if (fault.code === 'RateLimited' || fault.code === 'Timeout') {
-    // Check for defined values rather than key presence. A caller may
-    // construct `{ operationName: undefined }` (valid per the type) —
-    // `Object.keys` would report the key even though `JSON.stringify`
-    // drops it, which would emit `"data": {}` to the wire. Filter first.
+  if (fault.code === 'RateLimited') {
+    // Only include retryAfterMs in the body when it's a finite positive
+    // number — NaN/Infinity would JSON-serialize to `null` and violate the
+    // typed-as-number contract.
+    const ms = fault.data.retryAfterMs;
+    if (typeof ms === 'number' && Number.isFinite(ms) && ms > 0) {
+      return { ...base, data: { retryAfterMs: ms } };
+    }
+    return base;
+  }
+  if (fault.code === 'Timeout') {
     const defined = filterDefined(fault.data);
     return Object.keys(defined).length === 0 ? base : { ...base, data: defined };
+  }
+  if (fault.code === 'NotFound') {
+    return fault.data.identifier === undefined
+      ? { ...base, data: { resource: fault.data.resource } }
+      : { ...base, data: fault.data };
   }
   return { ...base, data: fault.data };
 }

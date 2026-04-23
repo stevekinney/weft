@@ -70,7 +70,7 @@ export type OperationFault =
   | {
       code: 'NotFound';
       message: string;
-      data: { resource: string; identifier?: string };
+      data: { resource: string; identifier?: string | undefined };
     }
   | { code: 'Conflict'; message: string; data: { reason: string } }
   | { code: 'Unprocessable'; message: string; data: { reason: string } }
@@ -105,7 +105,7 @@ export type OperationFault =
  * `UnsupportedTransport` map to 501 because the caller asked for something
  * the server cannot fulfill.
  */
-export const FAULT_CODE_TO_HTTP_STATUS: Record<FaultCode, number> = {
+export const FAULT_CODE_TO_HTTP_STATUS: Readonly<Record<FaultCode, number>> = Object.freeze({
   Unauthorized: 401,
   Forbidden: 403,
   NotFound: 404,
@@ -119,14 +119,14 @@ export const FAULT_CODE_TO_HTTP_STATUS: Record<FaultCode, number> = {
   InvalidParams: 400,
   MethodNotFound: 404,
   EngineFailure: 500,
-};
+});
 
 /**
  * JSON-RPC error code for each fault. Reserved codes (-32700..-32603) keep
  * the spec meanings (`InvalidParams`, `MethodNotFound`); Weft domain codes
  * live in -32010..-32099 documented per design decision 4.
  */
-export const FAULT_CODE_TO_JSON_RPC_CODE: Record<FaultCode, number> = {
+export const FAULT_CODE_TO_JSON_RPC_CODE: Readonly<Record<FaultCode, number>> = Object.freeze({
   Unauthorized: -32010,
   Forbidden: -32011,
   NotFound: -32020,
@@ -140,4 +140,4 @@ export const FAULT_CODE_TO_JSON_RPC_CODE: Record<FaultCode, number> = {
   EngineFailure: -32099,
   InvalidParams: -32602,
   MethodNotFound: -32601,
-};
+});

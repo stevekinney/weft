@@ -30,10 +30,12 @@ export type JsonRpcError = {
 export function faultToJsonRpcError(fault: OperationFault): JsonRpcError {
   const code = FAULT_CODE_TO_JSON_RPC_CODE[fault.code];
   const httpStatus = FAULT_CODE_TO_HTTP_STATUS[fault.code];
+  // Envelope keys are written LAST so a future payload field accidentally
+  // named `weftCode` or `httpStatus` cannot overwrite the canonical metadata.
   const data: Record<string, unknown> = {
+    ...extractFaultDataPayload(fault),
     weftCode: fault.code,
     httpStatus,
-    ...extractFaultDataPayload(fault),
   };
   return { code, message: fault.message, data };
 }
@@ -57,13 +59,22 @@ function extractFaultDataPayload(fault: OperationFault): Record<string, unknown>
     case 'Unprocessable':
       return { reason: fault.data.reason };
     case 'NotFound':
-      return { resource: fault.data.resource, identifier: fault.data.identifier };
+      return fault.data.identifier === undefined
+        ? { resource: fault.data.resource }
+        : { resource: fault.data.resource, identifier: fault.data.identifier };
     case 'Timeout':
       return fault.data.operationName === undefined
         ? {}
         : { operationName: fault.data.operationName };
     case 'RateLimited':
-      return fault.data.retryAfterMs === undefined ? {} : { retryAfterMs: fault.data.retryAfterMs };
+      // Only expose retryAfterMs when it's a finite positive number — NaN /
+      // Infinity would JSON-serialize to `null` and leave clients with a
+      // typed-as-number field whose wire value violates the type contract.
+      return typeof fault.data.retryAfterMs === 'number' &&
+        Number.isFinite(fault.data.retryAfterMs) &&
+        fault.data.retryAfterMs > 0
+        ? { retryAfterMs: fault.data.retryAfterMs }
+        : {};
     case 'UnsupportedTransport':
       return { transport: fault.data.transport, supported: [...fault.data.supported] };
     case 'SubscriptionOverflow':

@@ -74,11 +74,22 @@ describe('FaultCode mapping tables', () => {
     expect(FAULT_CODE_TO_JSON_RPC_CODE.MethodNotFound).toBe(-32601);
   });
 
-  it('every Weft domain code is unique inside the -32010..-32099 band', () => {
+  it('every non-reserved FaultCode lives inside the -32010..-32099 Weft domain band', () => {
+    // Reserved JSON-RPC spec codes are exempt; everything else MUST be in the band.
+    const reserved: FaultCode[] = ['InvalidParams', 'MethodNotFound'];
     const weftCodes = (Object.keys(FAULT_CODE_TO_JSON_RPC_CODE) as FaultCode[])
-      .map((code) => FAULT_CODE_TO_JSON_RPC_CODE[code])
-      .filter((value) => value <= -32000 && value > -32100);
+      .filter((code) => !reserved.includes(code))
+      .map((code) => FAULT_CODE_TO_JSON_RPC_CODE[code]);
+    for (const value of weftCodes) {
+      expect(value).toBeLessThanOrEqual(-32010);
+      expect(value).toBeGreaterThanOrEqual(-32099);
+    }
     expect(new Set(weftCodes).size).toBe(weftCodes.length);
+  });
+
+  it('mapping tables are frozen (cannot be mutated by importers)', () => {
+    expect(Object.isFrozen(FAULT_CODE_TO_HTTP_STATUS)).toBe(true);
+    expect(Object.isFrozen(FAULT_CODE_TO_JSON_RPC_CODE)).toBe(true);
   });
 });
 
