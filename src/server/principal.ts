@@ -17,7 +17,11 @@
  * See Track 8 design decisions 3 and 10.
  */
 
-import { extractScopesFromClaims, type AuthorizationScope } from './authorization-scope.ts';
+import {
+  AUTHORIZATION_SCOPES,
+  extractScopesFromClaims,
+  type AuthorizationScope,
+} from './authorization-scope.ts';
 
 /**
  * Raw JWT payload — intentionally loose; individual claim access is
@@ -40,7 +44,7 @@ export type JwtClaims = Record<string, unknown>;
  * principal out-of-band. No factory for stdio-local exists in this PR.
  */
 export type AuthenticatedPrincipal = {
-  readonly method: 'jwt' | 'api-key' | 'mtls';
+  readonly method: 'jwt' | 'api-key' | 'mtls' | 'stdio-local';
   readonly scopes: ReadonlySet<AuthorizationScope>;
   readonly claims: JwtClaims | undefined;
   readonly tenantId: string | undefined;
@@ -119,6 +123,27 @@ export function principalFromMutualTls(options: {
 /** The single unauthenticated principal. */
 export function anonymousPrincipal(): UnauthenticatedPrincipal {
   return ANONYMOUS;
+}
+
+/**
+ * Build the privileged `stdio-local` principal for the Phase 13
+ * runtime stdio subcommand. Admission is gated at the CLI boundary
+ * (`--startup-token <hex>` or `--allow-unauthenticated-local-admin`);
+ * once admitted, the session has every scope because it's running as
+ * a local process that can already invoke the binary directly.
+ */
+export function principalFromStdioLocal(): AuthenticatedPrincipal {
+  const scopes = new Set<AuthorizationScope>(AUTHORIZATION_SCOPES);
+  return {
+    method: 'stdio-local',
+    scopes,
+    claims: undefined,
+    tenantId: undefined,
+    subject: 'stdio-local',
+    hasScope(scope) {
+      return scopes.has(scope);
+    },
+  };
 }
 
 const ANONYMOUS: UnauthenticatedPrincipal = { method: 'unauthenticated' };
