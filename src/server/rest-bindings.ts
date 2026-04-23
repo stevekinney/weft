@@ -18,11 +18,7 @@
  * @module server/rest-bindings
  */
 
-import {
-  createOperationRegistry,
-  type ErasedOperation,
-  type OperationRegistry,
-} from './operation-catalog.ts';
+import { createOperationRegistry, type OperationRegistry } from './operation-catalog.ts';
 import { getWorkflowOperation, getWorkflowRestBinding } from './operations/get-workflow.ts';
 import type { RestBinding } from './rest-binding.ts';
 
@@ -58,10 +54,11 @@ export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [getWorkflowRest
  * `RestBinding`, a JSON-RPC mount, or an stdio mount. Exposed via a
  * factory so tests can spin up a fresh registry without inheriting
  * the live one's state.
+ *
+ * Concrete `OperationDefinition<Input, Output>` values are directly
+ * assignable to `RegistrableOperation` by the variance design in
+ * `operation-catalog.ts` — no `as ErasedOperation` cast is needed.
  */
 export function createLiveOperationRegistry(): OperationRegistry {
-  const operations: ReadonlyArray<ErasedOperation> = [
-    getWorkflowOperation as unknown as ErasedOperation,
-  ];
-  return createOperationRegistry(operations);
+  return createOperationRegistry([getWorkflowOperation]);
 }
