@@ -17,12 +17,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import {
-  createAuthenticator,
-  signJWT,
-  validateAuthConfig,
-  type AuthConfig,
-} from './authentication.ts';
+import { createAuthenticator, validateAuthConfig, type AuthConfig } from './authentication.ts';
 import type { AuthorizationScope } from './authorization-scope.ts';
 import { principalFromApiKey } from './principal.ts';
 
@@ -171,32 +166,19 @@ describe('API-key admission — resolver present', () => {
     expect(result.principal?.subject).toBe('bearer-subject');
   });
 
-  it('resolver rejection is terminal: no fallthrough to JWT even when JWT is configured', async () => {
-    // Regression test for the fallthrough bug: a Bearer token the
-    // resolver explicitly refused must not be re-tried as a JWT by the
-    // next block. This test uses a cryptographically VALID JWT signed
-    // with the configured secret — if a broken fallthrough reached the
-    // JWT verifier, it would succeed, and this test would see
-    // authenticated:true. The resolver's null must make the test fail.
-    const sharedSecret = 'shared-secret-for-fallthrough-test';
+  it('resolver + jwt combination is rejected at config time (unreachable JWT would be silent footgun)', async () => {
+    // extractApiKey consumes every Bearer token before the JWT block
+    // runs, and resolver rejection is terminal (no fallthrough). With
+    // both configured, JWT verification can never run — we reject the
+    // combination at config validation to make the conflict visible
+    // rather than silently making JWT unreachable.
     const config: AuthConfig = {
       resolveApiKeyPrincipal: async () => null,
-      jwt: { algorithm: 'HS256', secret: sharedSecret },
+      jwt: { algorithm: 'HS256', secret: 'shared-secret' },
     };
-    const auth = await createAuthenticator(config);
-
-    // Sign a VALID JWT with the same secret the authenticator uses.
-    // Without the fallthrough guard, this token would be admitted by
-    // JWT verification even though the resolver explicitly rejected it
-    // as an API key. The resolver's null must take priority.
-    const validJwt = await signJWT(
-      { sub: 'fallthrough-test', iat: Math.floor(Date.now() / 1000) },
-      sharedSecret,
-      'HS256',
+    expect(() => validateAuthConfig(config)).toThrow(
+      /cannot combine resolveApiKeyPrincipal with jwt/,
     );
-    const result = await auth(requestWithBearer(validJwt));
-
-    expect(result.authenticated).toBe(false);
   });
 
   it('resolver returns principal with wrong method → rejected (guards against contradictory auth state)', async () => {
@@ -296,6 +278,12 @@ describe('API-key admission — resolver present', () => {
     // principal's claims must not reflect the mutation.
     originalClaims.permissions.push('mutated-after-admission');
     const admittedClaims = result.principal.claims as ClaimsShape | undefined;
+    expect(admittedClaims?.permissions).toEqual(['initial']);
+
+    // Downstream handlers must not be able to mutate the admitted
+    // claims either. deepFreeze on the clone seals nested arrays and
+    // objects, so .push() throws in strict mode.
+    expect(() => admittedClaims?.permissions.push('downstream-mutation')).toThrow();
     expect(admittedClaims?.permissions).toEqual(['initial']);
   });
 });

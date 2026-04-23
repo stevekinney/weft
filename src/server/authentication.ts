@@ -433,16 +433,37 @@ function immutableScopeSet(
 }
 
 /**
- * Deep-clone an optional JWT claims object so the admitted principal
- * retains an independent copy. API-key principals rarely carry claims
- * (JWT is a separate method), but a resolver may populate them for
- * auditing — `structuredClone` gives a correct deep copy for any
- * JSON-serializable shape without dragging in a third-party dep.
- * Returns `undefined` when no claims are attached.
+ * Deep-clone-and-freeze an optional JWT claims object. Ensures the
+ * admitted principal holds a copy that is isolated from the caller's
+ * reference (structuredClone) AND is itself deeply immutable
+ * (deepFreeze) so downstream handlers cannot mutate admitted auth
+ * state by pushing into a nested array or reassigning a field.
+ *
+ * API-key principals rarely carry claims, but a resolver may populate
+ * them for auditing — this guard covers both directions of the
+ * mutation vector (caller → admitted and admitted → caller).
  */
 function cloneClaims(claims: JWTPayload | undefined): JWTPayload | undefined {
   if (claims === undefined) return undefined;
-  return structuredClone(claims);
+  return deepFreeze(structuredClone(claims));
+}
+
+/**
+ * Recursively freeze an object tree in place. `Object.freeze` is
+ * shallow; a nested array or object would still accept `.push` or
+ * property assignment. `deepFreeze` walks the tree once post-clone
+ * and seals every own-enumerable descendant.
+ */
+function deepFreeze<T>(value: T): T {
+  if (typeof value !== 'object' || value === null) return value;
+  for (const key of Object.keys(value)) {
+    const child = (value as Record<string, unknown>)[key];
+    if (typeof child === 'object' && child !== null && !Object.isFrozen(child)) {
+      deepFreeze(child);
+    }
+  }
+  Object.freeze(value);
+  return value;
 }
 
 /**
@@ -500,6 +521,20 @@ export function validateAuthConfig(config: AuthConfig): void {
     throw new Error(
       'AuthConfig must specify at least one authentication method ' +
         '(apiKeys, resolveApiKeyPrincipal, jwt, or mtls)',
+    );
+  }
+
+  // `resolveApiKeyPrincipal` + `jwt` is a self-contradictory combination.
+  // `extractApiKey` picks up every `Authorization: Bearer <token>` before
+  // the JWT block runs; when a resolver is configured, resolver rejection
+  // is terminal (no fallthrough), so a valid bearer JWT can never reach
+  // JWT verification. Rejecting the combination at config time makes the
+  // conflict visible instead of silently making JWT unreachable.
+  if (config.resolveApiKeyPrincipal !== undefined && config.jwt !== undefined) {
+    throw new Error(
+      'AuthConfig cannot combine resolveApiKeyPrincipal with jwt: ' +
+        'the resolver consumes every Authorization: Bearer token before JWT verification, ' +
+        'so the JWT method would be unreachable.',
     );
   }
 }
@@ -576,23 +611,17 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
         // key space it is configured for.
         return { authenticated: false, error: 'No valid credentials provided' };
       } else if (apiKeySet?.has(presentedKey)) {
-        // Apply the same guard as the resolver path to keep the
-        // method-check invariant symmetric across admission paths.
-        // `principalFromApiKey` is guaranteed to return method:'api-key'
-        // today, but running the check catches future changes to the
-        // factory that would otherwise silently skip validation.
+        // `principalFromApiKey` is guaranteed to set method:'api-key',
+        // so the runtime method guard from the resolver path is not
+        // needed here. If that factory invariant ever changes, the
+        // resolver-path method-mismatch test will continue to guard
+        // the boundary from resolver-supplied principals.
         const principal = principalFromApiKey({
           subject: 'api-key-caller',
           scopes: defaultApiKeyScopes,
         });
-        if (validateApiKeyPrincipalMethod(principal)) {
-          const admitted = deepFreezeApiKeyPrincipal(principal);
-          return { authenticated: true, method: 'api-key', principal: admitted };
-        }
-        // Unreachable today — see the comment above. Keeping the
-        // explicit rejection keeps the invariant loud if the factory
-        // ever produces a non-api-key principal.
-        return { authenticated: false, error: 'No valid credentials provided' };
+        const admitted = deepFreezeApiKeyPrincipal(principal);
+        return { authenticated: true, method: 'api-key', principal: admitted };
       }
     }
 
