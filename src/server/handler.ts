@@ -43,7 +43,12 @@ import {
   type PrometheusExporter,
 } from '../observability/metrics.ts';
 import type { AuthMethod, JWTPayload } from './authentication.ts';
+import { faultToHttpResponse } from './fault-to-http.ts';
 import { generateOpenApiDocument } from './openapi.ts';
+import { executeOperation, type OperationRegistry } from './operation-catalog.ts';
+import { anonymousPrincipal } from './principal.ts';
+import type { UnknownRestBinding } from './rest-bindings.ts';
+import { resolveRestDispatchMode, type RestDispatchModeConfig } from './rest-dispatch-mode.ts';
 import { ROUTES, toRegex } from './route-model.ts';
 import { parseOptionalSequenceCursor } from './sequence-cursor.ts';
 
@@ -1993,6 +1998,109 @@ export interface HandlerOptions {
    * path and has lower precedence if both are set.
    */
   metricsCollector?: MetricsCollector;
+  /**
+   * Per-operation REST dispatch-mode config. Controls whether each
+   * operation's REST mount runs through the legacy `handleXxx`
+   * executor or through the `executeOperation` pipeline.
+   */
+  restDispatchMode?: RestDispatchModeConfig;
+  /** Optional operation registry. Required when `restDispatchMode` resolves to 'via-execute-operation' for any route. */
+  operationRegistry?: OperationRegistry;
+  /** Optional list of REST bindings. Required when the registry is passed — the router matches against these first. */
+  restBindings?: ReadonlyArray<UnknownRestBinding>;
+}
+
+/**
+ * Find a REST binding that matches the request's method and path.
+ * Returns null if no binding matches (caller falls back to legacy
+ * dispatch).
+ */
+function matchRestBinding(
+  method: string,
+  pathname: string,
+  bindings: ReadonlyArray<UnknownRestBinding> | undefined,
+): { readonly binding: UnknownRestBinding; readonly pathParams: Record<string, string> } | null {
+  if (bindings === undefined) return null;
+  for (const binding of bindings) {
+    if (binding.method !== method) continue;
+    const params = bindingPathParamsIfMatch(binding.path, pathname);
+    if (params !== null) return { binding, pathParams: params };
+  }
+  return null;
+}
+
+/**
+ * Minimal inline matcher (doesn't import `bindingPathMatches` because
+ * we want the handler's no-throw contract — `decodeURIComponent`
+ * wrapped in try/catch). Mirrors the logic there.
+ */
+function bindingPathParamsIfMatch(
+  pattern: string,
+  actualPath: string,
+): Record<string, string> | null {
+  const patternSegments = pattern.split('/');
+  const actualSegments = actualPath.split('/');
+  if (patternSegments.length !== actualSegments.length) return null;
+  const params: Record<string, string> = {};
+  for (let index = 0; index < patternSegments.length; index += 1) {
+    const p = patternSegments[index] ?? '';
+    const a = actualSegments[index] ?? '';
+    if (p.startsWith(':')) {
+      if (a.length === 0) return null;
+      try {
+        params[p.slice(1)] = decodeURIComponent(a);
+      } catch {
+        return null;
+      }
+    } else if (p !== a) {
+      return null;
+    }
+  }
+  return params;
+}
+
+/**
+ * Dispatch a request through the `executeOperation` pipeline using a
+ * matched `RestBinding`. Returns the shaped response (via
+ * `shapeSuccess` / `shapeFault` overrides, or defaults).
+ */
+async function dispatchViaExecuteOperation(
+  request: Request,
+  engine: Engine,
+  binding: UnknownRestBinding,
+  pathParams: Record<string, string>,
+  registry: OperationRegistry,
+): Promise<Response> {
+  let input: unknown;
+  try {
+    input = await binding.extractInput(request, pathParams);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    return errorResponse(message, 400);
+  }
+  const result = await executeOperation(binding.operationName, input, {
+    principal: anonymousPrincipal(),
+    engine,
+    transport: 'http-rest',
+    registry,
+  });
+  if (result.ok) {
+    return binding.shapeSuccess
+      ? binding.shapeSuccess(result.value)
+      : defaultShapeSuccess(result.value, binding.success);
+  }
+  return binding.shapeFault ? binding.shapeFault(result.fault) : faultToHttpResponse(result.fault);
+}
+
+function defaultShapeSuccess(value: unknown, shape: UnknownRestBinding['success']): Response {
+  if (shape.kind === 'empty') return new Response(null, { status: shape.status });
+  if (shape.kind === 'streaming') {
+    // Streaming responses must supply their own `shapeSuccess` — a
+    // default here would bundle the async iterable into a JSON body
+    // and silently break SSE/binary output. Fail loudly instead.
+    throw new Error('streaming RestBinding must provide shapeSuccess');
+  }
+  return jsonResponse(value, shape.status);
 }
 
 /** Pure HTTP request handler. Maps Request to Response. */
@@ -2002,6 +2110,36 @@ export async function handleRequest(
   options?: HandlerOptions,
 ): Promise<Response> {
   const url = new URL(request.url);
+
+  // Try the `RestBinding` path first when bindings + registry are
+  // configured. A binding whose operation resolves to 'legacy' falls
+  // through to the legacy route matcher below.
+  const bindingMatch = matchRestBinding(request.method, url.pathname, options?.restBindings);
+  if (bindingMatch !== null && options?.operationRegistry !== undefined) {
+    const mode = resolveRestDispatchMode(
+      options.restDispatchMode,
+      bindingMatch.binding.operationName,
+    );
+    if (mode === 'via-execute-operation') {
+      try {
+        return await dispatchViaExecuteOperation(
+          request,
+          engine,
+          bindingMatch.binding,
+          bindingMatch.pathParams,
+          options.operationRegistry,
+        );
+      } catch (error) {
+        console.error('Unhandled error in dispatchViaExecuteOperation', {
+          method: request.method,
+          path: url.pathname,
+          error,
+        });
+        return errorResponse('Internal server error', 500);
+      }
+    }
+  }
+
   let route: RouteMatch | null;
   try {
     route = matchRoute(request.method, url.pathname);

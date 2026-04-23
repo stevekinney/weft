@@ -21,13 +21,20 @@
 import type { RestBinding } from './rest-binding.ts';
 
 /**
- * An `unknown`-typed `RestBinding` suitable for storing in a
- * heterogeneous registry. Each binding's real `Input`/`Output` pair is
- * verified at construction via `defineOperation` + its typed binding
- * factory; the registry itself only needs the runtime-facing surface
- * (`method`, `path`, `operationName`, `extractInput`, `shapeSuccess`).
+ * The router stores heterogeneous bindings whose `Input`/`Output` pairs
+ * all differ. `RestBinding<Input, Output>` is strictly-typed at the
+ * author boundary (so `defineOperation` + binding factories catch
+ * mistakes), but at the router level those generics are irrelevant —
+ * every binding produces a `Response` regardless of its output type.
+ *
+ * `RestBinding<any, any>` is the idiomatic way to express "a binding
+ * with SOME Input/Output pair the router doesn't care about." A stricter
+ * `unknown, unknown` form fails under `exactOptionalPropertyTypes`
+ * because `shapeSuccess: (Output) => Response` cannot be safely widened
+ * to `(unknown) => Response` (function parameters are contravariant).
  */
-export type UnknownRestBinding = RestBinding<unknown, unknown>;
+// oxlint-disable-next-line typescript/no-explicit-any -- heterogeneous registry requires `any` at the storage boundary; individual bindings stay strictly typed at their definition site.
+export type UnknownRestBinding = RestBinding<any, any>;
 
 /**
  * Live binding set. Empty during Milestone 1; each migrated operation

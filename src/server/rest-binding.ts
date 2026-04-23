@@ -17,6 +17,7 @@
  * OpenAPI generator picking per-operation which source to read from.
  */
 
+import type { OperationFault } from './operation-fault.ts';
 import type { HttpMethod } from './route-model.ts';
 
 /**
@@ -83,6 +84,18 @@ export type RestBinding<Input, Output> = {
    * when the wire representation differs from `output` verbatim.
    */
   readonly shapeSuccess?: (output: Output) => Response;
+  /**
+   * Optional override for fault → HTTP response mapping. When absent,
+   * the transport adapter falls back to `faultToHttpResponse` (the
+   * canonical `{ error: { code, message, data? } }` shape).
+   *
+   * During Milestone 1, bindings for REST operations that already exist
+   * with a different legacy error shape MUST provide this so their
+   * parity diff test passes byte-for-byte against the legacy handler.
+   * Milestone 2 drops the per-binding override and all REST endpoints
+   * move to the canonical fault shape.
+   */
+  readonly shapeFault?: (fault: OperationFault) => Response;
 };
 
 /**
