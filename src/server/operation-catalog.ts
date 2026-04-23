@@ -560,24 +560,26 @@ export function classifyEngineError(error: unknown): OperationFault {
   return { code: 'EngineFailure', message: 'internal error', data: {} };
 }
 
-// `satisfies` enforces that every entry is a valid FaultCode at compile time
-// AND that adding a new FaultCode in operation-fault.ts forces a corresponding
-// update here (the runtime guard would otherwise silently reject the new code).
-const FAULT_CODES = [
-  'Unauthorized',
-  'Forbidden',
-  'NotFound',
-  'Conflict',
-  'Unprocessable',
-  'Timeout',
-  'RateLimited',
-  'NotImplemented',
-  'UnsupportedTransport',
-  'SubscriptionOverflow',
-  'InvalidParams',
-  'MethodNotFound',
-  'EngineFailure',
-] as const satisfies ReadonlyArray<OperationFault['code']>;
+// `Record<FaultCode, true>` enforces exhaustiveness at compile time: adding a
+// new `FaultCode` to the union in operation-fault.ts forces a corresponding
+// entry here. A plain `satisfies ReadonlyArray<...>` only validates each
+// existing element, not completeness, so a new code would compile silently
+// and `isOperationFault` would then reject otherwise-valid faults.
+const FAULT_CODES = {
+  Unauthorized: true,
+  Forbidden: true,
+  NotFound: true,
+  Conflict: true,
+  Unprocessable: true,
+  Timeout: true,
+  RateLimited: true,
+  NotImplemented: true,
+  UnsupportedTransport: true,
+  SubscriptionOverflow: true,
+  InvalidParams: true,
+  MethodNotFound: true,
+  EngineFailure: true,
+} as const satisfies Readonly<Record<OperationFault['code'], true>>;
 
 /**
  * Total runtime guard for `OperationFault`. A thrown value that LOOKS like
@@ -608,7 +610,7 @@ function isOperationFault(value: unknown): value is OperationFault {
     typeof message === 'string' &&
     typeof data === 'object' &&
     data !== null &&
-    (FAULT_CODES as ReadonlyArray<string>).includes(code)
+    Object.hasOwn(FAULT_CODES, code)
   );
 }
 

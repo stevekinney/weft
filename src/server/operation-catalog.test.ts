@@ -27,6 +27,7 @@ import {
   type ErasedOperation,
   type OperationDefinition,
 } from './operation-catalog.ts';
+import type { OperationFault } from './operation-fault.ts';
 import { anonymousPrincipal, principalFromApiKey } from './principal.ts';
 
 // A trivial fake engine — these tests never need real workflow state.
@@ -490,6 +491,36 @@ describe('classifyEngineError', () => {
     );
     const fault = classifyEngineError(poisoned);
     expect(fault.code).toBe('EngineFailure');
+  });
+
+  it('passes through every FaultCode variant (runtime smoke check)', () => {
+    // The compile-time `Record<FaultCode, true>` constraint on the internal
+    // `FAULT_CODES` table is the actual exhaustiveness guard — a missing
+    // union member would fail to typecheck. This test is a runtime smoke
+    // check over the variants currently known to the test file: it catches
+    // accidents like the runtime check being reverted from `Object.hasOwn`
+    // back to a partial array, or the classifier silently mishandling a
+    // specific existing code. Adding a new `FaultCode` will not auto-extend
+    // this list, so the compile-time `Record` remains the source of truth.
+    const allCodes: OperationFault['code'][] = [
+      'Unauthorized',
+      'Forbidden',
+      'NotFound',
+      'Conflict',
+      'Unprocessable',
+      'Timeout',
+      'RateLimited',
+      'NotImplemented',
+      'UnsupportedTransport',
+      'SubscriptionOverflow',
+      'InvalidParams',
+      'MethodNotFound',
+      'EngineFailure',
+    ];
+    for (const code of allCodes) {
+      const fault = classifyEngineError({ code, message: 'm', data: {} });
+      expect(fault.code).toBe(code);
+    }
   });
 });
 
