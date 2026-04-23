@@ -464,6 +464,252 @@ describe('classifyEngineError', () => {
     expect(classifyEngineError(null).code).toBe('EngineFailure');
     expect(classifyEngineError(undefined).code).toBe('EngineFailure');
   });
+
+  it('classifies "timed out" substring (separate from "timeout") as Timeout with generic message', () => {
+    const fault = classifyEngineError(new Error('database call timed out after 30 seconds'));
+    expect(fault.code).toBe('Timeout');
+    expect(fault.message).toBe('operation timed out');
+  });
+
+  it('rejects a fault-shaped object with no `data` field', () => {
+    // Without `data`, downstream serializers would crash. Treat as a
+    // malformed fault and fall through to EngineFailure.
+    const fault = classifyEngineError({ code: 'NotFound', message: 'no data' });
+    expect(fault.code).toBe('EngineFailure');
+  });
+
+  it('rejects a fault-shaped value with a poisoned getter', () => {
+    const poisoned = new Proxy(
+      {},
+      {
+        get(_target, prop) {
+          if (prop === 'code') throw new Error('secret');
+          return undefined;
+        },
+      },
+    );
+    const fault = classifyEngineError(poisoned);
+    expect(fault.code).toBe('EngineFailure');
+  });
+});
+
+describe('executeOperation — security regressions', () => {
+  it('rejects __proto__ in passthrough mode (prevents prototype pollution)', async () => {
+    const seen: Record<string, unknown> = {};
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.protoPollution',
+        inputSchema: z.object({ id: z.string() }),
+        outputSchema: z.object({}),
+        invoke: async ({ input }) => {
+          // The pipeline must filter __proto__ from passthrough re-attachment
+          // so the input's prototype chain is not polluted.
+          seen['hasProtoOwn'] = Object.prototype.hasOwnProperty.call(input, '__proto__');
+          // And the parsed input must not have inherited the malicious value
+          // (a sentinel attacker tried to inject).
+          seen['inheritedPolluted'] = (input as Record<string, unknown>)['polluted'];
+          return {};
+        },
+        unknownKeyPolicy: { http: 'passthrough', jsonRpc: 'passthrough' },
+      }),
+    ]);
+    // JSON.parse hard-codes the __proto__ key as a literal own property, which
+    // is the canonical attack shape for prototype pollution.
+    const malicious = JSON.parse('{"id":"x","__proto__":{"polluted":true}}');
+    const result = await executeOperation('weft.test.protoPollution', malicious, {
+      principal: anonymousPrincipal(),
+      engine: fakeEngine,
+      transport: 'http-rest',
+      registry,
+    });
+    expect(result.ok).toBe(true);
+    // __proto__ MUST NOT survive as a passthrough extra.
+    expect(seen['hasProtoOwn']).toBe(false);
+    expect(seen['inheritedPolluted']).toBeUndefined();
+    // And the global Object.prototype must not have been polluted.
+    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
+  });
+
+  it('catches schema refinements/transforms that throw', async () => {
+    const throwingSchema = z.object({ id: z.string() }).refine((input) => {
+      if (input.id === 'boom') throw new Error('refinement secret detail');
+      return true;
+    });
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.schemaThrows',
+        inputSchema: throwingSchema as unknown as z.ZodType,
+        outputSchema: z.object({}),
+        invoke: async () => ({}),
+      }),
+    ]);
+    const result = await executeOperation(
+      'weft.test.schemaThrows',
+      { id: 'boom' },
+      {
+        principal: anonymousPrincipal(),
+        engine: fakeEngine,
+        transport: 'http-rest',
+        registry,
+      },
+    );
+    if (result.ok) throw new Error('expected fault');
+    expect(result.fault.code).toBe('EngineFailure');
+    expect(JSON.stringify(result.fault)).not.toContain('refinement secret');
+  });
+
+  it('rejects malformed authorize hook return values', async () => {
+    // Operation that returns undefined from its hook (simulating a buggy
+    // implementation). Spread separately to dodge optional-property
+    // contravariance under exactOptionalPropertyTypes.
+    const op = {
+      ...makeOp({
+        name: 'weft.test.badHook',
+        inputSchema: z.object({}),
+        outputSchema: z.object({}),
+        invoke: async () => ({}),
+        access: { kind: 'authenticated' },
+      }),
+      authorize: async () => undefined,
+    } as unknown as ErasedOperation;
+    const registry = createOperationRegistry([op]);
+    const result = await executeOperation(
+      'weft.test.badHook',
+      {},
+      {
+        principal: principalFromApiKey({ subject: 'k', scopes: [] }),
+        engine: fakeEngine,
+        transport: 'http-rest',
+        registry,
+      },
+    );
+    if (result.ok) throw new Error('expected fault');
+    expect(result.fault.code).toBe('EngineFailure');
+  });
+
+  it('output that violates outputSchema does not leak secret fields', async () => {
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.badOutput',
+        inputSchema: z.object({}),
+        outputSchema: z.object({ public: z.string() }).strict(),
+        invoke: async () => ({ public: 'ok', secret: 'hunter2' }) as unknown as { public: string },
+      }),
+    ]);
+    const result = await executeOperation(
+      'weft.test.badOutput',
+      {},
+      {
+        principal: anonymousPrincipal(),
+        engine: fakeEngine,
+        transport: 'http-rest',
+        registry,
+      },
+    );
+    // Either the strict schema rejects (fault) or strips (ok with no secret).
+    // Both paths must not leak the secret.
+    const serialized = JSON.stringify(result.ok ? result.value : result.fault);
+    expect(serialized).not.toContain('hunter2');
+  });
+
+  it('hook-throw secret-leak invariant covers the entire fault, not just message', async () => {
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.hookSecretLeak',
+        inputSchema: z.object({}),
+        outputSchema: z.object({}),
+        invoke: async () => ({}),
+        access: { kind: 'authenticated' },
+        authorize: async () => {
+          throw new Error('database password: hunter2');
+        },
+      }),
+    ]);
+    const result = await executeOperation(
+      'weft.test.hookSecretLeak',
+      {},
+      {
+        principal: principalFromApiKey({ subject: 'k', scopes: [] }),
+        engine: fakeEngine,
+        transport: 'http-rest',
+        registry,
+      },
+    );
+    if (result.ok) throw new Error('expected fault');
+    expect(result.fault.code).toBe('EngineFailure');
+    expect(JSON.stringify(result.fault)).not.toContain('hunter2');
+  });
+});
+
+describe('executeOperation — additional coverage', () => {
+  it('authenticated access policy with anonymous principal returns Unauthorized', async () => {
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.authOnly',
+        inputSchema: z.object({}),
+        outputSchema: z.object({}),
+        invoke: async () => ({}),
+        access: { kind: 'authenticated' },
+      }),
+    ]);
+    const result = await executeOperation(
+      'weft.test.authOnly',
+      {},
+      {
+        principal: anonymousPrincipal(),
+        engine: fakeEngine,
+        transport: 'http-rest',
+        registry,
+      },
+    );
+    if (result.ok) throw new Error('expected fault');
+    expect(result.fault.code).toBe('Unauthorized');
+  });
+
+  it('http-rest transport rejection works (not just jsonRpcHttp)', async () => {
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.noHttp',
+        inputSchema: z.object({}),
+        outputSchema: z.object({}),
+        invoke: async () => ({}),
+        transports: {
+          http: false,
+          jsonRpcHttp: true,
+          jsonRpcWebSocket: true,
+          jsonRpcStdio: true,
+        },
+      }),
+    ]);
+    const result = await executeOperation(
+      'weft.test.noHttp',
+      {},
+      {
+        principal: anonymousPrincipal(),
+        engine: fakeEngine,
+        transport: 'http-rest',
+        registry,
+      },
+    );
+    if (result.ok) throw new Error('expected fault');
+    expect(result.fault.code).toBe('UnsupportedTransport');
+    if (result.fault.code !== 'UnsupportedTransport') throw new Error('shape');
+    expect(result.fault.data.transport).toBe('http-rest');
+  });
+
+  it('registry list() is frozen and returns a stable reference', () => {
+    const op = makeOp({
+      name: 'weft.test.frozen',
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      invoke: async () => ({}),
+    });
+    const registry = createOperationRegistry([op]);
+    const list1 = registry.list();
+    const list2 = registry.list();
+    expect(list1).toBe(list2);
+    expect(Object.isFrozen(list1)).toBe(true);
+  });
 });
 
 describe('createOperationRegistry', () => {

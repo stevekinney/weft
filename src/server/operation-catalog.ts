@@ -74,18 +74,12 @@ export type UnknownKeyPolicy = {
 export type AuthorizationDecision = { allowed: true } | { allowed: false; reason: string };
 
 /**
- * Context passed to the `authorize` hook. `input` is the validated and
- * unknown-key-policy-applied param object, identical to what `invoke` will
- * receive.
+ * Context passed to both the `authorize` hook and `invoke`. `input` is the
+ * unknown-key-policy-applied + zod-validated param object. Both callbacks
+ * receive identical context — keeping a single type makes that contract
+ * explicit and forces both to evolve together if context fields are added.
  */
-export type AuthorizationContext<Input> = {
-  readonly input: Input;
-  readonly principal: Principal;
-  readonly engine: unknown;
-  readonly transport: TransportKind;
-};
-
-export type InvocationContext<Input> = {
+export type OperationContext<Input> = {
   readonly input: Input;
   readonly principal: Principal;
   readonly engine: unknown;
@@ -101,8 +95,8 @@ export type OperationDefinition<Input, Output> = {
   readonly access: AccessPolicy;
   readonly transports: TransportAvailability;
   readonly unknownKeyPolicy: UnknownKeyPolicy;
-  readonly authorize?: (context: AuthorizationContext<Input>) => Promise<AuthorizationDecision>;
-  readonly invoke: (context: InvocationContext<Input>) => Promise<Output>;
+  readonly authorize?: (context: OperationContext<Input>) => Promise<AuthorizationDecision>;
+  readonly invoke: (context: OperationContext<Input>) => Promise<Output>;
 };
 
 /**
@@ -153,9 +147,14 @@ export function createOperationRegistry(
         `operation "${operation.name}" inputSchema must be a z.ZodObject (got ${operation.inputSchema.constructor.name}); wrappers like .optional() / transforms hide the top-level shape from the unknown-key policy check`,
       );
     }
-    byName.set(operation.name, operation);
+    // Shallow-freeze the operation reference so a later caller cannot mutate
+    // `access`, `transports`, or `invoke` after the construction-time
+    // duplicate / schema checks. `Object.freeze` is shallow but the fields
+    // we care about (access, transports, unknownKeyPolicy) are themselves
+    // already plain object literals supplied at registration.
+    byName.set(operation.name, Object.freeze({ ...operation }));
   }
-  const ordered = [...operations];
+  const ordered = Object.freeze([...byName.values()]);
   return {
     get(name) {
       return byName.get(name);
@@ -227,59 +226,18 @@ export async function executeOperation<Output>(
     });
   }
 
-  // Step 4: zod parse (shape only).
-  const parseResult = operation.inputSchema.safeParse(rawInput);
-  if (!parseResult.success) {
-    return failure({
-      code: 'InvalidParams',
-      message: 'invalid params',
-      data: { issues: flattenZodIssues(parseResult.error.issues) },
-    });
-  }
-  const parsedInput = parseResult.data as Record<string, unknown>;
-
-  // Step 5: unknown-key policy. Top-level only — nested unknown-key behavior
-  // is enforced by the zod schema in step 4. The registry guarantees
-  // inputSchema is a z.ZodObject, so knownKeys is always defined.
-  const policy = operation.unknownKeyPolicy[transportToPolicyKey(context.transport)];
-  const knownKeys = extractTopLevelObjectKeys(operation.inputSchema);
-  if (rawInput !== null && typeof rawInput === 'object') {
-    const incomingKeys = Object.keys(rawInput as Record<string, unknown>);
-    const unknown = incomingKeys.filter((key) => !knownKeys.has(key));
-    if (unknown.length > 0) {
-      if (policy === 'reject') {
-        return failure({
-          code: 'InvalidParams',
-          message: 'unrecognized top-level keys',
-          data: {
-            issues: [
-              {
-                path: [],
-                message: `unrecognized top-level keys: ${unknown.join(', ')}`,
-                code: 'unrecognized_keys',
-              },
-            ],
-          },
-        });
-      }
-      if (policy === 'passthrough') {
-        // Re-attach the unknown keys (zod's default for passthrough already
-        // includes them, but we explicitly preserve them here for clarity).
-        for (const key of unknown) {
-          parsedInput[key] = (rawInput as Record<string, unknown>)[key];
-        }
-      }
-      // 'strip' is the implicit zod default — nothing to do; unknown keys
-      // were already dropped by safeParse.
-    }
-  }
-
-  // Cast: at this point parsedInput conforms to Input by construction.
-  const input = parsedInput as Parameters<typeof operation.invoke>[0]['input'];
+  // Steps 4 + 5: unknown-key policy + zod parse, extracted for complexity.
+  const parseOutcome = parseAndApplyUnknownKeyPolicy(
+    operation,
+    rawInput,
+    transportToPolicyKey(context.transport),
+  );
+  if (parseOutcome.kind === 'failure') return failure(parseOutcome.fault);
+  const input = parseOutcome.input;
 
   // Step 6: authorize hook.
   if (operation.authorize !== undefined) {
-    let decision: AuthorizationDecision;
+    let decision: unknown;
     try {
       decision = await operation.authorize({
         input,
@@ -291,11 +249,13 @@ export async function executeOperation<Output>(
       // Hook threw — classify as EngineFailure so we never leak the hook's
       // error message to the wire (might contain DB queries, secrets, etc.).
       // The transport adapter's logger logs the original error server-side.
-      return failure({
-        code: 'EngineFailure',
-        message: 'internal error',
-        data: {},
-      });
+      return failure({ code: 'EngineFailure', message: 'internal error', data: {} });
+    }
+    if (!isAuthorizationDecision(decision)) {
+      // Hook returned a malformed value (undefined, wrong shape). Treat as
+      // an internal contract violation — never construct a wire fault from
+      // attacker-controlled or buggy intermediate state.
+      return failure({ code: 'EngineFailure', message: 'internal error', data: {} });
     }
     if (!decision.allowed) {
       return failure({
@@ -306,18 +266,134 @@ export async function executeOperation<Output>(
     }
   }
 
-  // Step 7: invoke. Step 8 lives in the catch arm.
+  // Step 7 + 7b: invoke + output validation. Step 8 lives in the catch arm.
+  let output: unknown;
   try {
-    const output = await operation.invoke({
+    output = await operation.invoke({
       input,
       principal: context.principal,
       engine: context.engine,
       transport: context.transport,
     });
-    return { ok: true, value: output as Output };
   } catch (error) {
     return failure(classifyEngineError(error));
   }
+  return validateAndReturnOutput<Output>(operation.outputSchema, output);
+}
+
+/**
+ * Input parsing stage: apply the catalog's top-level unknown-key policy,
+ * run the schema's `safeParse`, and re-attach passthrough extras onto a
+ * prototype-safe null-prototype object.
+ */
+function parseAndApplyUnknownKeyPolicy(
+  operation: ErasedOperation,
+  rawInput: unknown,
+  policyKey: keyof UnknownKeyPolicy,
+): { kind: 'ok'; input: unknown } | { kind: 'failure'; fault: OperationFault } {
+  const policy = operation.unknownKeyPolicy[policyKey];
+  const knownKeys = extractTopLevelObjectKeys(operation.inputSchema);
+
+  let preParseInput: unknown = rawInput;
+  let passthroughExtras: ReadonlyArray<readonly [string, unknown]> = [];
+
+  if (rawInput !== null && typeof rawInput === 'object') {
+    const unknownTopLevel = Object.keys(rawInput as Record<string, unknown>).filter(
+      (key) => !knownKeys.has(key),
+    );
+    if (unknownTopLevel.length > 0) {
+      if (policy === 'reject') {
+        return {
+          kind: 'failure',
+          fault: {
+            code: 'InvalidParams',
+            message: 'unrecognized top-level keys',
+            data: {
+              issues: [
+                {
+                  path: [],
+                  message: `unrecognized top-level keys: ${unknownTopLevel.join(', ')}`,
+                  code: 'unrecognized_keys',
+                },
+              ],
+            },
+          },
+        };
+      }
+      // `__proto__` / `prototype` / `constructor` are filtered by
+      // `sanitizeTopLevel`, so the prototype chain cannot be polluted
+      // via passthrough re-attachment.
+      const sanitized = sanitizeTopLevel(
+        rawInput as Record<string, unknown>,
+        knownKeys,
+        policy === 'passthrough' ? unknownTopLevel : [],
+      );
+      preParseInput = sanitized;
+      if (policy === 'passthrough') {
+        passthroughExtras = unknownTopLevel
+          .filter((key) => !UNSAFE_PROTOTYPE_KEYS.has(key))
+          .map((key) => [key, sanitized[key]] as const);
+      }
+    }
+  }
+
+  let parseResult: ReturnType<typeof operation.inputSchema.safeParse>;
+  try {
+    parseResult = operation.inputSchema.safeParse(preParseInput);
+  } catch {
+    // A zod refinement/transform threw arbitrary exception — never leak.
+    return {
+      kind: 'failure',
+      fault: { code: 'EngineFailure', message: 'internal error', data: {} },
+    };
+  }
+  if (!parseResult.success) {
+    return {
+      kind: 'failure',
+      fault: {
+        code: 'InvalidParams',
+        message: 'invalid params',
+        data: { issues: flattenZodIssues(parseResult.error.issues) },
+      },
+    };
+  }
+
+  const parsed = parseResult.data as Record<string, unknown>;
+  if (passthroughExtras.length === 0) return { kind: 'ok', input: parsed };
+
+  // Fresh null-prototype object so we don't mutate zod's output and so
+  // downstream code cannot observe a polluted prototype chain.
+  const merged: Record<string, unknown> = Object.create(null);
+  for (const [key, value] of Object.entries(parsed)) {
+    if (UNSAFE_PROTOTYPE_KEYS.has(key)) continue;
+    merged[key] = value;
+  }
+  for (const [key, value] of passthroughExtras) {
+    merged[key] = value;
+  }
+  return { kind: 'ok', input: merged };
+}
+
+/**
+ * Output validation stage: run the declared `outputSchema` against the
+ * operation's return value. A mismatch is an internal contract violation
+ * (the operation author's bug) and becomes `EngineFailure` — never the
+ * original output, which might contain secret fields the schema forbids.
+ */
+function validateAndReturnOutput<Output>(
+  outputSchema: z.ZodType,
+  output: unknown,
+): DispatchResult<Output> {
+  let outputParse: ReturnType<typeof outputSchema.safeParse>;
+  try {
+    outputParse = outputSchema.safeParse(output);
+  } catch {
+    return failure({ code: 'EngineFailure', message: 'internal error', data: {} });
+  }
+  if (!outputParse.success) {
+    return failure({ code: 'EngineFailure', message: 'internal error', data: {} });
+  }
+  return { ok: true, value: outputParse.data as Output };
 }
 
 const SUPPORTED_TRANSPORTS: ReadonlyArray<TransportKind> = [
@@ -357,7 +433,68 @@ function extractTopLevelObjectKeys(schema: z.ZodType): ReadonlySet<string> {
       'extractTopLevelObjectKeys called with a non-object schema — the operation registry should have rejected this at construction',
     );
   }
-  return new Set(Object.keys(schema.shape));
+  // Filter unsafe prototype keys defensively. A schema author cannot name a
+  // field `__proto__` / `prototype` / `constructor` as the top-level
+  // unknown-key policy would treat them as known and bypass the
+  // prototype-pollution guard in `sanitizeTopLevel`.
+  return new Set(Object.keys(schema.shape).filter((key) => !UNSAFE_PROTOTYPE_KEYS.has(key)));
+}
+
+/**
+ * Build a prototype-safe shallow projection of `rawInput`. Only the keys in
+ * `knownKeys` plus the explicit `passthroughKeys` are copied, and any name
+ * matching `__proto__` / `prototype` / `constructor` is filtered out so the
+ * passthrough policy cannot pollute the prototype chain of the parsed input.
+ *
+ * Uses `Object.create(null)` for a null-prototype container — even if a key
+ * named `__proto__` somehow slipped through, it would be set as an own
+ * property without mutating the prototype chain.
+ */
+function sanitizeTopLevel(
+  rawInput: Record<string, unknown>,
+  knownKeys: ReadonlySet<string>,
+  passthroughKeys: ReadonlyArray<string>,
+): Record<string, unknown> {
+  const out: Record<string, unknown> = Object.create(null);
+  for (const key of Object.keys(rawInput)) {
+    if (UNSAFE_PROTOTYPE_KEYS.has(key)) continue;
+    if (knownKeys.has(key) || passthroughKeys.includes(key)) {
+      out[key] = rawInput[key];
+    }
+  }
+  return out;
+}
+
+const UNSAFE_PROTOTYPE_KEYS: ReadonlySet<string> = new Set([
+  '__proto__',
+  'prototype',
+  'constructor',
+]);
+
+/**
+ * Total runtime guard for `AuthorizationDecision`. A buggy or malicious
+ * authorize hook can return `undefined`, the wrong shape, or values whose
+ * property accesses throw. Misshaped returns are rejected — the pipeline
+ * surfaces an `EngineFailure` rather than constructing a wire fault from
+ * untrusted intermediate state.
+ */
+function isAuthorizationDecision(value: unknown): value is AuthorizationDecision {
+  if (typeof value !== 'object' || value === null) return false;
+  let allowed: unknown;
+  try {
+    allowed = (value as { allowed?: unknown }).allowed;
+  } catch {
+    return false;
+  }
+  if (allowed === true) return true;
+  if (allowed !== false) return false;
+  let reason: unknown;
+  try {
+    reason = (value as { reason?: unknown }).reason;
+  } catch {
+    return false;
+  }
+  return typeof reason === 'string';
 }
 
 function flattenZodIssues(
@@ -423,7 +560,10 @@ export function classifyEngineError(error: unknown): OperationFault {
   return { code: 'EngineFailure', message: 'internal error', data: {} };
 }
 
-const FAULT_CODES: ReadonlyArray<OperationFault['code']> = [
+// `satisfies` enforces that every entry is a valid FaultCode at compile time
+// AND that adding a new FaultCode in operation-fault.ts forces a corresponding
+// update here (the runtime guard would otherwise silently reject the new code).
+const FAULT_CODES = [
   'Unauthorized',
   'Forbidden',
   'NotFound',
@@ -437,15 +577,38 @@ const FAULT_CODES: ReadonlyArray<OperationFault['code']> = [
   'InvalidParams',
   'MethodNotFound',
   'EngineFailure',
-];
+] as const satisfies ReadonlyArray<OperationFault['code']>;
 
+/**
+ * Total runtime guard for `OperationFault`. A thrown value that LOOKS like
+ * a fault can pass through unchanged into transport serializers, so this
+ * guard must reject anything malformed rather than letting a partially-
+ * shaped object reach the wire.
+ *
+ * - Property reads are wrapped in try/catch so a thrown value with a
+ *   poisoned getter (Proxy, throwing accessor) cannot escape `executeOperation`.
+ * - `data` MUST be a non-null object — every fault variant in the union
+ *   carries a `data` field (NotImplemented and EngineFailure use `{}`),
+ *   and downstream serializers always destructure it.
+ */
 function isOperationFault(value: unknown): value is OperationFault {
   if (typeof value !== 'object' || value === null) return false;
-  const candidate = value as { code?: unknown; message?: unknown };
+  let code: unknown;
+  let message: unknown;
+  let data: unknown;
+  try {
+    code = (value as { code?: unknown }).code;
+    message = (value as { message?: unknown }).message;
+    data = (value as { data?: unknown }).data;
+  } catch {
+    return false;
+  }
   return (
-    typeof candidate.code === 'string' &&
-    typeof candidate.message === 'string' &&
-    (FAULT_CODES as ReadonlyArray<string>).includes(candidate.code)
+    typeof code === 'string' &&
+    typeof message === 'string' &&
+    typeof data === 'object' &&
+    data !== null &&
+    (FAULT_CODES as ReadonlyArray<string>).includes(code)
   );
 }
 
