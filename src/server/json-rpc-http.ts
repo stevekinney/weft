@@ -36,21 +36,33 @@ export type JsonRpcHttpContext = {
   readonly maxBodyBytes?: number;
 };
 
+/**
+ * `Cache-Control: no-store` is applied to EVERY response from this
+ * adapter — including 4xx transport-level rejections — because any
+ * cached `/jsonrpc` response is a correctness hazard. The JSON-RPC
+ * contract is strictly request-response, and a cached 413 or 415
+ * served to a different client could mask a legitimate request.
+ */
+const CACHE_CONTROL_HEADERS = { 'cache-control': 'no-store' } as const;
+
+function textResponse(body: string, status: number, extra?: HeadersInit): Response {
+  const headers = new Headers(extra);
+  headers.set('cache-control', 'no-store');
+  return new Response(body, { status, headers });
+}
+
 /** Handle a POST `/jsonrpc` request end-to-end. */
 export async function handleJsonRpcHttpRequest(
   request: Request,
   context: JsonRpcHttpContext,
 ): Promise<Response> {
   if (request.method !== 'POST') {
-    return new Response('Method Not Allowed', {
-      status: 405,
-      headers: { allow: 'POST' },
-    });
+    return textResponse('Method Not Allowed', 405, { allow: 'POST' });
   }
 
   const contentType = request.headers.get('content-type') ?? '';
   if (!isJsonContentType(contentType)) {
-    return new Response('Unsupported Media Type', { status: 415 });
+    return textResponse('Unsupported Media Type', 415);
   }
 
   const maxBytes = context.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
@@ -63,30 +75,29 @@ export async function handleJsonRpcHttpRequest(
   const contentLengthHeader = request.headers.get('content-length');
   if (contentLengthHeader !== null) {
     if (!CONTENT_LENGTH_PATTERN.test(contentLengthHeader)) {
-      return new Response('Bad Request', { status: 400 });
+      return textResponse('Bad Request', 400);
     }
     const declared = Number(contentLengthHeader);
     if (!Number.isSafeInteger(declared) || declared < 0) {
-      return new Response('Bad Request', { status: 400 });
+      return textResponse('Bad Request', 400);
     }
     if (declared > maxBytes) {
-      return new Response('Payload Too Large', { status: 413 });
+      return textResponse('Payload Too Large', 413);
     }
   }
 
-  // Stream-bounded body read. `request.bytes()` (a Web-standard API
-  // backed by Bun) surfaces the raw byte stream. We pull chunks and
-  // enforce `maxBytes + 1` as the hard ceiling so a lying or missing
-  // content-length header cannot force an unbounded allocation.
+  // Stream-bounded body read. Pulls chunks and enforces `maxBytes`
+  // as the hard ceiling so a lying or missing content-length header
+  // cannot force an unbounded allocation.
   let bodyBytes: Uint8Array;
   try {
     bodyBytes = await readBodyBounded(request, maxBytes);
   } catch (error) {
     if (error instanceof BodyTooLargeError) {
-      return new Response('Payload Too Large', { status: 413 });
+      return textResponse('Payload Too Large', 413);
     }
     // Stream error reading the body — treat as transport-level failure.
-    return new Response('Bad Request', { status: 400 });
+    return textResponse('Bad Request', 400);
   }
   const bodyText = new TextDecoder('utf-8').decode(bodyBytes);
 
@@ -99,20 +110,14 @@ export async function handleJsonRpcHttpRequest(
 
   const result = await dispatchJsonRpc(bodyText, dispatchContext);
 
-  // `Cache-Control: no-store` keeps intermediaries and clients from
-  // caching JSON-RPC responses, which may contain workflow state,
-  // scoped principal output, or error envelopes. The JSON-RPC
-  // contract is request-response, not cacheable — force that.
-  const responseHeaders = { 'cache-control': 'no-store' } as const;
-
   switch (result.kind) {
     case 'notification':
     case 'notification-batch':
-      return new Response(null, { status: 204, headers: responseHeaders });
+      return new Response(null, { status: 204, headers: CACHE_CONTROL_HEADERS });
     case 'single':
-      return Response.json(result.response, { status: 200, headers: responseHeaders });
+      return Response.json(result.response, { status: 200, headers: CACHE_CONTROL_HEADERS });
     case 'batch':
-      return Response.json(result.responses, { status: 200, headers: responseHeaders });
+      return Response.json(result.responses, { status: 200, headers: CACHE_CONTROL_HEADERS });
   }
 }
 

@@ -307,7 +307,7 @@ describe('handleJsonRpcHttpRequest — single request dispatch', () => {
     expect(json.id).toBeNull();
   });
 
-  it('sets Cache-Control: no-store on all responses', async () => {
+  it('sets Cache-Control: no-store on successful dispatch responses', async () => {
     const body = JSON.stringify({
       jsonrpc: '2.0',
       method: 'weft.test.echo',
@@ -323,6 +323,61 @@ describe('handleJsonRpcHttpRequest — single request dispatch', () => {
       baseContext(),
     );
     expect(response.headers.get('cache-control')).toBe('no-store');
+  });
+
+  it('sets Cache-Control: no-store on EVERY transport-level error response', async () => {
+    // Bugbot regression: cache-control was only applied to dispatch-
+    // path responses. 4xx transport rejects (method, content-type,
+    // body-too-large, malformed content-length) also need the header
+    // — otherwise a 413 or 415 cached by an intermediary and served
+    // to a different client would mask a legitimate request.
+
+    // 405 (wrong method)
+    const r405 = await handleJsonRpcHttpRequest(
+      new Request('http://localhost/jsonrpc', { method: 'GET' }),
+      baseContext(),
+    );
+    expect(r405.status).toBe(405);
+    expect(r405.headers.get('cache-control')).toBe('no-store');
+
+    // 415 (wrong content-type)
+    const r415 = await handleJsonRpcHttpRequest(
+      new Request('http://localhost/jsonrpc', {
+        method: 'POST',
+        headers: { 'content-type': 'text/plain' },
+        body: 'x',
+      }),
+      baseContext(),
+    );
+    expect(r415.status).toBe(415);
+    expect(r415.headers.get('cache-control')).toBe('no-store');
+
+    // 400 (malformed content-length)
+    const r400 = await handleJsonRpcHttpRequest(
+      new Request('http://localhost/jsonrpc', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'content-length': '-1' },
+        body: '{}',
+      }),
+      baseContext(),
+    );
+    expect(r400.status).toBe(400);
+    expect(r400.headers.get('cache-control')).toBe('no-store');
+
+    // 413 (content-length over limit)
+    const r413 = await handleJsonRpcHttpRequest(
+      new Request('http://localhost/jsonrpc', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': String(10 * 1024 * 1024),
+        },
+        body: '{}',
+      }),
+      { ...baseContext(), maxBodyBytes: 1024 * 1024 },
+    );
+    expect(r413.status).toBe(413);
+    expect(r413.headers.get('cache-control')).toBe('no-store');
   });
 });
 
