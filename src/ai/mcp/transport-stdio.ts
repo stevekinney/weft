@@ -8,6 +8,7 @@
 
 import type { MCPRequest, MCPResponse, MCPTransport } from './transport';
 
+import { splitNewlineDelimitedBuffer } from '../../server/json-rpc-framing.ts';
 import { MCPTransportError } from './transport';
 
 // ---------------------------------------------------------------------------
@@ -226,16 +227,13 @@ export class StdioTransport implements MCPTransport {
         const { done, value } = await reader.read();
         if (done) break;
 
-        this.#buffer += decoder.decode(value, { stream: true });
+        const framed = splitNewlineDelimitedBuffer(
+          this.#buffer,
+          decoder.decode(value, { stream: true }),
+        );
+        this.#buffer = framed.buffer;
 
-        // Process complete lines
-        let newlineIndex: number;
-        while ((newlineIndex = this.#buffer.indexOf('\n')) !== -1) {
-          const line = this.#buffer.slice(0, newlineIndex).trim();
-          this.#buffer = this.#buffer.slice(newlineIndex + 1);
-
-          if (line.length === 0) continue;
-
+        for (const line of framed.lines) {
           try {
             const message = JSON.parse(line) as {
               id?: number;
