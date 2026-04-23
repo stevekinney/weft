@@ -34,6 +34,7 @@ import type { AuthConfig, AuthMethod, Authenticator, JWTPayload } from './authen
 import { buildTLSOptions, createAuthenticator, validateAuthConfig } from './authentication.ts';
 import { DeadlineTracker } from './deadline-tracker.ts';
 import { handleRequest } from './handler.ts';
+import type { RestDispatchModeConfig } from './rest-dispatch-mode.ts';
 import {
   claimNextSequence,
   evictOldestAffinityEntries,
@@ -119,6 +120,18 @@ export interface ServeOptions {
    * path and has lower precedence if both are set.
    */
   metricsCollector?: MetricsCollector;
+  /**
+   * Per-operation dispatch mode for REST. Controls whether each
+   * operation runs through the hand-rolled legacy executor in
+   * `handler.ts` or through the transport-neutral `executeOperation`
+   * pipeline with its `RestBinding`. Defaults to `'legacy'` everywhere
+   * during Milestone 1 of Track 8.
+   *
+   * Accepts three shapes: omit (all legacy), a bare
+   * `'legacy' | 'via-execute-operation'` (applies to every operation),
+   * or `{ default?, operations? }` for per-operation override.
+   */
+  restDispatchMode?: RestDispatchModeConfig;
 }
 
 export interface TaskDispatch {
