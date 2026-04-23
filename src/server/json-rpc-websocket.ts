@@ -94,7 +94,14 @@ export function createJsonRpcWebSocketSession(
   const maxSubscriptions = options.maxSubscriptions ?? DEFAULT_MAX_SUBSCRIPTIONS;
   const maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
   const subscriptions = new Map<string, ActiveSubscription>();
-  let closed = false;
+  // `emitterBroken` tracks the emitter's liveness — set to `true` only
+  // when `emitter.send` (or `JSON.stringify`) throws. `disposed`
+  // tracks whether `close()` ran — drives subscription teardown.
+  // Keeping them separate means a broken emitter does NOT skip the
+  // cleanup path in `close()`; background pumps would otherwise leak
+  // feed listeners indefinitely, spinning `deliver` → no-op `emit`.
+  let emitterBroken = false;
+  let disposed = false;
 
   // Session-scoped monotonic counter. Scoping to the session (rather
   // than a module-level global) keeps IDs unique within a connection,
@@ -111,18 +118,22 @@ export function createJsonRpcWebSocketSession(
    * thrown `JSON.stringify` (circular reference) or a thrown
    * `emitter.send` (closed socket) cannot bubble into background
    * subscription pumps as an unhandled rejection — swallowed here
-   * after the `closed` flip so the session transitions cleanly.
+   * with `emitterBroken` set so subsequent emits are silent no-ops.
+   * Critically this does NOT set `disposed`: `close()` must still run
+   * its cleanup path to abort active subscriptions; otherwise the
+   * pumps leak feed listeners indefinitely.
    */
   function emit(message: Record<string, unknown>): void {
-    if (closed) return;
+    if (disposed || emitterBroken) return;
     try {
       emitter.send(JSON.stringify(message));
     } catch {
-      // Emitter unusable — mark closed so background pumps stop. The
-      // transport layer will clean up the socket independently; we
-      // just stop producing frames.
-      closed = true;
+      emitterBroken = true;
     }
+  }
+
+  function shouldSuppressOutput(): boolean {
+    return disposed || emitterBroken;
   }
 
   async function handleSubscribe(
@@ -239,28 +250,27 @@ export function createJsonRpcWebSocketSession(
       // events either way. When the feed gains an explicit
       // terminal-reason signal (a planned future refinement) this
       // can carry it through to `workflow-terminal` / `overflow`.
-      if (!signal.aborted && !closed) {
+      if (!signal.aborted && !shouldSuppressOutput()) {
         emit({
           jsonrpc: JSON_RPC_VERSION,
           method: SESSION_METHODS.TERMINATED,
           params: { subscriptionId, reason: 'server-closed' },
         });
       }
-    } catch (error) {
+    } catch {
       // Unexpected error in the subscription pump — surface a
-      // server-closed terminated notification, then fall through.
-      if (!closed) {
+      // server-closed terminated notification with a generic public
+      // message, then fall through. Error detail is the logger's
+      // domain; the wire must not carry potentially-sensitive data
+      // from a thrown value of unknown origin.
+      if (!shouldSuppressOutput()) {
         emit({
           jsonrpc: JSON_RPC_VERSION,
           method: SESSION_METHODS.TERMINATED,
           params: {
             subscriptionId,
             reason: 'server-closed',
-            fault: {
-              code: 'EngineFailure',
-              message: error instanceof Error ? 'internal error' : 'internal error',
-              data: {},
-            },
+            fault: { code: 'EngineFailure', message: 'internal error', data: {} },
           },
         });
       }
@@ -325,12 +335,15 @@ export function createJsonRpcWebSocketSession(
   }
 
   async function handleMessage(frame: string): Promise<void> {
-    if (closed) return;
+    if (disposed || emitterBroken) return;
 
     // Reject frames over the size cap before `JSON.parse` touches the
     // payload. A runaway producer otherwise forces an unbounded parse
-    // allocation inside the adapter.
-    if (frame.length > maxFrameBytes) {
+    // allocation inside the adapter. Measure UTF-8 BYTE length, not
+    // string length (`frame.length` counts UTF-16 code units, so a
+    // multi-byte unicode payload could slip past the cap).
+    const frameByteLength = Buffer.byteLength(frame, 'utf8');
+    if (frameByteLength > maxFrameBytes) {
       emit({
         jsonrpc: JSON_RPC_VERSION,
         error: {
@@ -418,8 +431,8 @@ export function createJsonRpcWebSocketSession(
   }
 
   async function close(): Promise<void> {
-    if (closed) return;
-    closed = true;
+    if (disposed) return;
+    disposed = true;
     const pending: Promise<void>[] = [];
     for (const sub of subscriptions.values()) {
       sub.controller.abort();

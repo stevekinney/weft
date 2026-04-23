@@ -475,6 +475,81 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     await session.close();
   });
 
+  it('close() still tears down subscriptions after emitter fails mid-session', async () => {
+    // Bugbot regression: an emitter throw flips the adapter's
+    // internal "emitter broken" flag. Previously that flag was
+    // reused for `close()`'s early-return guard, so a broken
+    // emitter would make `close()` a no-op and the background
+    // pump would keep iterating the feed indefinitely. Fix split
+    // the concerns: `emitterBroken` suppresses output; `disposed`
+    // gates `close()`'s teardown.
+    const backend = createInMemoryEventBackend();
+    const feed = createWorkflowEventFeed(backend);
+    let sendThrew = false;
+    const emitter: JsonRpcWebSocketEmitter = {
+      send() {
+        // First send OK, second throws.
+        if (sendThrew) throw new Error('socket closed');
+        sendThrew = true;
+      },
+    };
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: anonymousPrincipal(),
+      emitter,
+      feed,
+    });
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: 'wf-1', selector: 'events' },
+        id: 'sub-1',
+      }),
+    );
+    await Bun.sleep(10);
+    // Trigger an emit failure by appending an envelope (deliver throws).
+    await backend.append(makeEnvelope(0));
+    await Bun.sleep(10);
+    // `close()` must still abort the subscription pump even though
+    // the emitter is broken.
+    await session.close();
+    // Appending more events after close must be a no-op (pump gone).
+    await backend.append(makeEnvelope(1));
+    // No assertion beyond: close() did not hang and no unhandled
+    // rejection surfaced. Implicit pass.
+  });
+
+  it('rejects frames whose UTF-8 byte length exceeds maxFrameBytes (not string length)', async () => {
+    // Bugbot regression: `frame.length` counts UTF-16 code units,
+    // not bytes. A multi-byte payload (emoji, CJK) could previously
+    // slip past a byte-cap configured via `maxFrameBytes`.
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: anonymousPrincipal(),
+      emitter,
+      feed,
+      maxFrameBytes: 100,
+    });
+    // `🌍` is 4 bytes in UTF-8 but 2 UTF-16 code units. 30 copies
+    // plus wrapping = 120+ bytes but string length is ~60 — would
+    // have slipped past the old `frame.length` check.
+    const payload = '🌍'.repeat(30);
+    const frame = JSON.stringify({ jsonrpc: '2.0', method: 'x', params: { v: payload }, id: 1 });
+    expect(Buffer.byteLength(frame, 'utf8')).toBeGreaterThan(100);
+    expect(frame.length).toBeLessThan(120); // UTF-16 code units — previously passed the cap.
+    await session.handleMessage(frame);
+    expect(emitter.sent).toHaveLength(1);
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.error.code).toBe(-32600);
+    expect(response.error.message).toMatch(/frame size/i);
+    await session.close();
+  });
+
   it('two concurrent subscriptions on one session deliver to correct correlation IDs', async () => {
     const emitter = makeEmitter();
     const backend = createInMemoryEventBackend();
