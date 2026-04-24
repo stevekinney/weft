@@ -33,7 +33,8 @@ import { WorkerRegistry } from '../worker/registry.ts';
 import type { AuthConfig, AuthContext, Authenticator } from './authentication.ts';
 import { buildTLSOptions, createAuthenticator, validateAuthConfig } from './authentication.ts';
 import { DeadlineTracker } from './deadline-tracker.ts';
-import { handleRequest } from './handler.ts';
+import { authContextToPrincipal, handleRequest } from './handler.ts';
+import { handleJsonRpcHttpRequest } from './json-rpc-http.ts';
 import { REST_BINDINGS, createLiveOperationRegistry } from './rest-bindings.ts';
 import {
   claimNextSequence,
@@ -1102,6 +1103,17 @@ export function serve(options: ServeOptions): WeftServer {
       const taskResultResponse = await handleTaskResultRequest(request, url);
       if (taskResultResponse !== null) {
         return taskResultResponse;
+      }
+
+      // JSON-RPC HTTP endpoint. Claimed here so `handleRequest` doesn't
+      // see `/jsonrpc` and return 404 from its REST route table. The
+      // adapter enforces method (POST only) and content-type internally.
+      if (url.pathname === '/jsonrpc') {
+        return handleJsonRpcHttpRequest(request, {
+          registry: liveOperationRegistry,
+          engine: options.engine,
+          principal: authContextToPrincipal(authentication.authContext),
+        });
       }
 
       // API routes via existing platform-agnostic handler. Under

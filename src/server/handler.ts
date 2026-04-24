@@ -2080,7 +2080,9 @@ async function dispatchViaExecuteOperation(
  * `authenticateRequest` in `authentication.ts`, which adds scopes via
  * `resolveApiKeyPrincipal` / `defaultApiKeyScopes` when configured.
  */
-function authContextToPrincipal(authContext: AuthenticatedRequestContext | undefined): Principal {
+export function authContextToPrincipal(
+  authContext: AuthenticatedRequestContext | undefined,
+): Principal {
   if (authContext === undefined) return anonymousPrincipal();
   // Forwarded principal from the authenticator (e.g. from
   // `resolveApiKeyPrincipal` or static api-key admission with
