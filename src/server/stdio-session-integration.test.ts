@@ -282,7 +282,13 @@ describe('runStdioSession — engine-backed integration', () => {
       // to-deliver wiring would not actually be exercised.
       function highestDeliveredSequence(): number {
         let max = -1;
-        for (const parsed of output.lines() as any[]) {
+        for (const line of output.lines()) {
+          let parsed: any;
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            continue;
+          }
           if (
             parsed?.method === 'weft.events.deliver' &&
             parsed?.params?.subscriptionId === subscriptionId &&
@@ -425,19 +431,26 @@ describe('runStdioSession — engine-backed integration', () => {
 
       // Primary assertion: scan every line written AFTER the
       // unsubscribe index. None should be a deliver for our
-      // subscriptionId, AND in particular none should have a
-      // sequence greater than the baseline (any such delivery
-      // would prove the listener is still wired post-unsubscribe).
+      // subscriptionId. `output.lines()` returns raw JSON strings,
+      // so each line must be parsed before predicate checks —
+      // calling `.find` on raw strings would always return
+      // undefined and the assertion would pass vacuously.
       function findPostUnsubscribeDeliver(): unknown {
-        return output
-          .lines()
-          .slice(lineCountAfterUnsubscribe)
-          .find((parsed: any) => {
-            return (
-              parsed?.method === 'weft.events.deliver' &&
-              parsed?.params?.subscriptionId === subscriptionId
-            );
-          });
+        for (const line of output.lines().slice(lineCountAfterUnsubscribe)) {
+          let parsed: any;
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (
+            parsed?.method === 'weft.events.deliver' &&
+            parsed?.params?.subscriptionId === subscriptionId
+          ) {
+            return parsed;
+          }
+        }
+        return undefined;
       }
       expect(findPostUnsubscribeDeliver()).toBeUndefined();
 
@@ -561,16 +574,24 @@ describe('runStdioSession — engine-backed integration', () => {
       await new Promise<void>((resolve) => setImmediate(resolve));
       await new Promise<void>((resolve) => setImmediate(resolve));
 
-      const postCloseDeliver = output
-        .lines()
-        .slice(lineCountAfterClose)
-        .find((parsed: any) => {
-          return (
+      function findPostCloseDeliver(): unknown {
+        for (const line of output.lines().slice(lineCountAfterClose)) {
+          let parsed: any;
+          try {
+            parsed = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (
             parsed?.method === 'weft.events.deliver' &&
             parsed?.params?.subscriptionId === subscriptionId
-          );
-        });
-      expect(postCloseDeliver).toBeUndefined();
+          ) {
+            return parsed;
+          }
+        }
+        return undefined;
+      }
+      expect(findPostCloseDeliver()).toBeUndefined();
     } finally {
       input.close();
       await sessionPromise.catch(() => {});
