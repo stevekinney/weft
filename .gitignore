@@ -103,3 +103,8 @@ repomix-output.xml
 /.claude/worktrees
 tmp/
 .claude/
+
+# Build / runtime artifacts
+weft.db
+weft.db-shm
+weft.db-wal
