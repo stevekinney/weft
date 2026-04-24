@@ -345,8 +345,10 @@ describe('EventLog.appendToBatch()', () => {
     expect(typeof newHead.lastHash).toBe('string');
     expect(newHead.lastHash).toHaveLength(16);
     // timestamp matches the entry's wall-clock stamp (non-negative).
+    // `Date.now()` can be stubbed to `0` in tests that inject a
+    // fixed clock, so the assertion must accept zero.
     expect(Number.isFinite(timestamp)).toBe(true);
-    expect(timestamp).toBeGreaterThan(0);
+    expect(timestamp).toBeGreaterThanOrEqual(0);
 
     // Nothing in storage yet — batch not flushed.
     const entries = await collectScan(log);

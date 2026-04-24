@@ -43,8 +43,9 @@ import type { WeftEventMap } from '../core/events.ts';
  *     IntelliSense still suggests the known literals.
  *
  * Cross-transport consumers match on `selector` first, then on
- * `kind` within that selector. The union is narrow enough to catch
- * typos on known kinds at construction sites yet extensible.
+ * `kind` within that selector. This union is extensible and preserves
+ * completion for known kinds, but the open-string tail means it does
+ * not by itself reject arbitrary or misspelled string literals.
  */
 export type FeedEventKind =
   | keyof WeftEventMap

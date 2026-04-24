@@ -359,9 +359,10 @@ const STREAM_CHUNK_KIND = 'stream:chunk';
 
 /**
  * Build the unified `#workflowFeedListeners` map key. Uses `\0` as
- * the separator: workflow IDs are alphanumeric + `-`, `_` by
- * validation, and the selector is a fixed two-member union, so no
- * legal input can collide.
+ * the separator: workflow ID validation (`assertValidWorkflowId`)
+ * rejects control characters, so no legal workflow ID can contain
+ * NUL, and the selector is a fixed two-member union, so no legal
+ * input can collide.
  */
 function workflowFeedListenerKey(workflowId: string, selector: WorkflowFeedSelector): string {
   return `${workflowId}\0${selector}`;
@@ -1929,9 +1930,10 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
    * misbehaving subscriber cannot corrupt the checkpoint or stream-
    * write hot paths.
    *
-   * NUL (`\0`) is a safe key separator: workflow IDs are validated
-   * against `ID_PATTERN` (alphanumeric + `-`, `_`) and selectors are
-   * a fixed two-member union, so no legal value can contain `\0`.
+   * NUL (`\0`) is a safe key separator: workflow ID validation
+   * (`assertValidWorkflowId`) rejects control characters, so no
+   * legal workflow ID can contain `\0`, and selectors are a fixed
+   * two-member union.
    */
   #workflowFeedListeners: Map<string, Set<WorkflowFeedListener>> = new Map();
   /**
@@ -5253,9 +5255,9 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
    * snapshots listener membership before dispatch.
    *
    * The unified registry is keyed by `${workflowId}\0${selector}`.
-   * NUL is a safe separator: workflow IDs are validated against a
-   * pattern that excludes control characters, and `selector` is a
-   * fixed two-member union.
+   * NUL is a safe separator: `assertValidWorkflowId` rejects control
+   * characters (so no legal workflow ID can contain `\0`), and
+   * `selector` is a fixed two-member union.
    */
   subscribeWorkflowFeedCommits(
     workflowId: string,
@@ -8031,6 +8033,13 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     this.#eventLogHeads.delete(workflowId);
     this.#pendingTimelineEntries.delete(workflowId);
     this.#workflowVersionTuples.delete(workflowId);
+    // Drop any remaining feed-listener buckets for this workflow.
+    // Transports normally unsubscribe when their subscription ends,
+    // but a crashed or leaked connection would otherwise retain its
+    // closure for the engine's lifetime. Per-workflow cleanup here
+    // matches the other maps above and prevents unbounded growth.
+    this.#workflowFeedListeners.delete(workflowFeedListenerKey(workflowId, 'events'));
+    this.#workflowFeedListeners.delete(workflowFeedListenerKey(workflowId, 'tokens'));
     this.#cleanupWaiters(workflowId);
 
     // Release the workflow's agent operation dedup entries via the reverse

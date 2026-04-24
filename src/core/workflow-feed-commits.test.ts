@@ -189,21 +189,29 @@ describe('Engine.subscribeWorkflowFeedCommits — listener isolation', () => {
     const unsubscribeOuter = engine.subscribeWorkflowFeedCommits(handle.id, 'events', (record) => {
       outerSequences.push(record.sequence);
       const lateToken = {};
+      // Record the birth sequence BEFORE registering the late
+      // listener. If `#notifyWorkflowFeedCommit` ever regressed to
+      // iterating the live Set, the newly-added listener would
+      // receive the in-flight record — and with birth already set,
+      // the assertion below catches the violation instead of
+      // silently skipping. (Reversing the order would make the
+      // guard fail open: `birth` would be `undefined` at call time,
+      // the `if` branch would skip, and the regression would hide.)
+      birthSequenceByLate.set(lateToken, record.sequence);
       const lateUnsubscribe = engine.subscribeWorkflowFeedCommits(
         handle.id,
         'events',
         (lateRecord) => {
-          // Capture the birth sequence for this particular late
-          // listener (the outer sequence that triggered its
-          // registration) so the `>` check below is per-listener.
           const birth = birthSequenceByLate.get(lateToken);
-          if (birth !== undefined) {
-            lateSequences.push(lateRecord.sequence);
-            expect(lateRecord.sequence).toBeGreaterThan(birth);
-          }
+          // `birth` must exist by construction — we set it before
+          // the late listener could possibly be called. If it is
+          // ever missing, that itself is a test-logic bug we want
+          // to surface, not silently skip.
+          expect(birth).toBeDefined();
+          lateSequences.push(lateRecord.sequence);
+          expect(lateRecord.sequence).toBeGreaterThan(birth as number);
         },
       );
-      birthSequenceByLate.set(lateToken, record.sequence);
       lateUnsubscribers.push(lateUnsubscribe);
     });
 
