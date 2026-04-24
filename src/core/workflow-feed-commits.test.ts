@@ -187,9 +187,13 @@ describe('Engine.subscribeWorkflowFeedCommits — listener isolation', () => {
     for (const u of lateUnsubscribers) u();
 
     // Sanity: the outer listener fired at least once (the post-
-    // signal resume commits at least one checkpoint). If the
-    // outer never fired, the test would pass vacuously — this
-    // assertion guards against that degenerate state.
+    // signal resume commits at least one checkpoint).
     expect(outerSequences.length).toBeGreaterThan(0);
+    // And: at least one late listener actually observed a post-
+    // birth record, so the inner `>` assertion ran for real. If
+    // the workflow collapsed to a single post-subscribe commit,
+    // no late listener would ever execute its body and the test
+    // would pass vacuously — this assertion guards against that.
+    expect(lateSequences.length).toBeGreaterThan(0);
   });
 });
