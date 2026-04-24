@@ -33,21 +33,7 @@ export type DispatchJsonRpcContext = {
   readonly engine: unknown;
   readonly transport: Extract<TransportKind, 'jsonRpcHttp' | 'jsonRpcWebSocket' | 'jsonRpcStdio'>;
   readonly registry: OperationRegistry;
-  /**
-   * Maximum number of items a single JSON-RPC batch may contain. A client
-   * that exceeds the cap receives `InvalidRequest` (-32600) with id null
-   * and NO dispatch occurs. Defaults to 100.
-   *
-   * Without this cap, a 1 MB body can encode thousands of tiny method
-   * calls that each touch the engine — because batches are sequential
-   * (Track 8 decision 13), that's a DoS amplifier. Adapters that read
-   * large bodies (HTTP POST, WebSocket frames, stdio sessions) all
-   * inherit the cap since every transport routes through this function.
-   */
-  readonly maxBatchSize?: number;
 };
-
-const DEFAULT_MAX_BATCH_SIZE = 100;
 
 /**
  * Result of dispatching a JSON-RPC body. Shapes:
@@ -110,20 +96,10 @@ async function dispatchBatch(
   parsed: Extract<ParseResult, { kind: 'batch' }>,
   context: DispatchJsonRpcContext,
 ): Promise<DispatchJsonRpcResult> {
-  const maxBatchSize = context.maxBatchSize ?? DEFAULT_MAX_BATCH_SIZE;
-  if (parsed.items.length > maxBatchSize) {
-    return {
-      kind: 'single',
-      response: {
-        jsonrpc: JSON_RPC_VERSION,
-        error: {
-          code: -32600,
-          message: `Batch size ${parsed.items.length} exceeds maximum ${maxBatchSize}`,
-        },
-        id: null,
-      },
-    };
-  }
+  // Batch size cap enforcement lives in `parseJsonRpcRequest` — the
+  // parser rejects batches over `MAX_JSON_RPC_BATCH_ITEMS` (100) with
+  // an `invalid-request` result BEFORE dispatch. Any batch that reaches
+  // this function is already within the cap.
   const responses: JsonRpcResponse[] = [];
   // Sequential dispatch in request order — Track 8 decision 13.
   for (const item of parsed.items) {
