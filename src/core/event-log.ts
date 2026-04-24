@@ -79,6 +79,18 @@ export const EMPTY_EVENT_HEAD: Readonly<EventHeadRecord> = Object.freeze({
   lastHash: GENESIS_HASH,
 });
 
+/**
+ * Result returned from `appendToBatch()`. Carries the updated head
+ * record AND the entry's wall-clock `timestamp` so post-commit
+ * listeners can emit the exact value written into the durable log
+ * without reaching for `Date.now()` a second time (which could
+ * produce a different value under a ticking `getNow` used in tests).
+ */
+export type AppendToBatchResult = {
+  readonly newHead: EventHeadRecord;
+  readonly timestamp: number;
+};
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -148,15 +160,15 @@ export class EventLog {
     batchOperations: BatchOperation[],
     head: Readonly<EventHeadRecord>,
     versionTuple?: WorkflowVersionTuple,
-  ): EventHeadRecord {
-    const { encoded, newHead } = this.#buildEntry(event, head, versionTuple);
+  ): AppendToBatchResult {
+    const { entry, encoded, newHead } = this.#buildEntry(event, head, versionTuple);
 
     batchOperations.push(
       { type: 'put', key: KEYS.event(this.#workflowId, newHead.sequence), value: encoded },
       { type: 'put', key: KEYS.eventHead(this.#workflowId), value: encode(newHead) },
     );
 
-    return newHead;
+    return { newHead, timestamp: entry.timestamp };
   }
 
   // -------------------------------------------------------------------------

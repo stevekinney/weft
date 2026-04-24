@@ -328,7 +328,7 @@ describe('EventLog.appendToBatch()', () => {
     const log = makeLog(storage);
 
     const operations: import('../../storage/interface.ts').BatchOperation[] = [];
-    const newHead = log.appendToBatch(
+    const { newHead, timestamp } = log.appendToBatch(
       { type: 'sync:event', payload: 42 },
       operations,
       EMPTY_EVENT_HEAD,
@@ -344,6 +344,9 @@ describe('EventLog.appendToBatch()', () => {
     expect(newHead.sequence).toBe(0);
     expect(typeof newHead.lastHash).toBe('string');
     expect(newHead.lastHash).toHaveLength(16);
+    // timestamp matches the entry's wall-clock stamp (non-negative).
+    expect(Number.isFinite(timestamp)).toBe(true);
+    expect(timestamp).toBeGreaterThan(0);
 
     // Nothing in storage yet — batch not flushed.
     const entries = await collectScan(log);
@@ -355,6 +358,7 @@ describe('EventLog.appendToBatch()', () => {
     expect(afterFlush).toHaveLength(1);
     expect(afterFlush[0]!.type).toBe('sync:event');
     expect(afterFlush[0]!.prevHash).toBe('0000000000000000');
+    expect(afterFlush[0]!.timestamp).toBe(timestamp);
   });
 
   it('chains hashes correctly across multiple appendToBatch calls', async () => {
@@ -363,9 +367,9 @@ describe('EventLog.appendToBatch()', () => {
 
     const ops: import('../../storage/interface.ts').BatchOperation[] = [];
     let head = EMPTY_EVENT_HEAD;
-    head = log.appendToBatch({ type: 'a', payload: 1 }, ops, head);
-    head = log.appendToBatch({ type: 'b', payload: 2 }, ops, head);
-    head = log.appendToBatch({ type: 'c', payload: 3 }, ops, head);
+    head = log.appendToBatch({ type: 'a', payload: 1 }, ops, head).newHead;
+    head = log.appendToBatch({ type: 'b', payload: 2 }, ops, head).newHead;
+    head = log.appendToBatch({ type: 'c', payload: 3 }, ops, head).newHead;
 
     await storage.batch(ops);
 

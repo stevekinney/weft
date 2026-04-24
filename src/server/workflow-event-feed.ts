@@ -25,10 +25,16 @@
  * all round-trip through this module.
  */
 
-import type { WeftEventMap } from '../core/events.ts';
-
-/** Any key of the `WeftEventMap` interface — the canonical event-kind string. */
-type WeftEventKind = keyof WeftEventMap;
+/**
+ * Discriminator string carried on every envelope. Includes the
+ * dispatched `WeftEventMap` event names plus durable log-entry types
+ * (`workflow:checkpoint`) and selector-scoped synthetic kinds
+ * (`stream:chunk`). Typed as a plain string because the feed's
+ * cross-transport consumers match on `selector` first, then on
+ * `kind` within that selector — locking the union to the dispatched
+ * event map would exclude entries that are only ever persisted.
+ */
+export type FeedEventKind = string;
 
 // ---------------------------------------------------------------------------
 // Cursor (opaque)
@@ -79,7 +85,7 @@ export type EventSelector = 'events' | 'tokens';
  * caller code via discriminated-union typing.
  */
 export type EventEnvelope = {
-  readonly kind: WeftEventKind;
+  readonly kind: FeedEventKind;
   readonly workflowId: string;
   readonly selector: EventSelector;
   readonly sequence: number;
