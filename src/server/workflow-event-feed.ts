@@ -25,16 +25,37 @@
  * all round-trip through this module.
  */
 
+import type { WeftEventMap } from '../core/events.ts';
+
 /**
- * Discriminator string carried on every envelope. Includes the
- * dispatched `WeftEventMap` event names plus durable log-entry types
- * (`workflow:checkpoint`) and selector-scoped synthetic kinds
- * (`stream:chunk`). Typed as a plain string because the feed's
- * cross-transport consumers match on `selector` first, then on
- * `kind` within that selector — locking the union to the dispatched
- * event map would exclude entries that are only ever persisted.
+ * Discriminator string carried on every envelope. The union covers:
+ *
+ *   - Dispatched `WeftEventMap` event names (`workflow:started`,
+ *     `activity:completed`, `agent:token`, …) — emitted when a
+ *     future log entry type corresponds to a runtime `Event`.
+ *   - Durable log entry types not in `WeftEventMap`
+ *     (`workflow:checkpoint` — the only one today; add others here
+ *     as new log kinds land).
+ *   - Selector-scoped synthetic kinds (`stream:chunk`) for records
+ *     that are not dispatched `Event` objects at all.
+ *   - An open `(string & {})` tail so third-party event kinds don't
+ *     fail typechecking at the envelope construction site while
+ *     IntelliSense still suggests the known literals.
+ *
+ * Cross-transport consumers match on `selector` first, then on
+ * `kind` within that selector. The union is narrow enough to catch
+ * typos on known kinds at construction sites yet extensible.
  */
-export type FeedEventKind = string;
+export type FeedEventKind =
+  | keyof WeftEventMap
+  | 'workflow:checkpoint'
+  | 'stream:chunk'
+  // The `& {}` trick preserves literal autocompletion while keeping
+  // the union open — without it, TypeScript widens `FeedEventKind`
+  // to `string` in most contexts and the literals disappear from
+  // completion lists.
+  // oxlint-disable-next-line typescript/no-restricted-types
+  | (string & {});
 
 // ---------------------------------------------------------------------------
 // Cursor (opaque)

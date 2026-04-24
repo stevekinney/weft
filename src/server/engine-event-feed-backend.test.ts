@@ -256,19 +256,35 @@ describe('createEngineEventFeedBackend — atomic handoff through the feed', () 
     const backend = createEngineEventFeedBackend(engine);
     const feed = createWorkflowEventFeed(backend);
 
+    // Deterministic sync: the subscribed iterator is "active" (past
+    // its snapshot step) once we've seen the first replayed record.
+    // Signaling only AFTER the first yield guarantees the resume +
+    // completion commits hit the live path, not the replay path —
+    // exactly the race the atomic-handoff protocol is designed to
+    // handle.
+    let resolveFirstRecord!: () => void;
+    const firstRecordPromise = new Promise<void>((resolve) => {
+      resolveFirstRecord = resolve;
+    });
+
     const subscribePromise = (async () => {
       const received: EventEnvelope[] = [];
+      let firstSeen = false;
       for await (const envelope of feed.subscribe({
         workflowId: handle.id,
         selector: 'events',
       })) {
         received.push(envelope);
+        if (!firstSeen) {
+          firstSeen = true;
+          resolveFirstRecord();
+        }
         if (envelope.kind === 'workflow:checkpoint' && received.length >= 3) break;
       }
       return received;
     })();
 
-    await Bun.sleep(5);
+    await firstRecordPromise;
     await engine.signal(handle.id, 'release', 'go');
     await handle.result();
 
@@ -394,5 +410,46 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
     unsubscribe();
     await engine.signal(handle.id, 'finish', 'go');
     await handle.result();
+  });
+
+  it('does not deliver token chunks across workflow ids', async () => {
+    // Regression guard: the unified `#workflowFeedListeners` map is
+    // keyed by `${workflowId}\0${selector}`. A key-collision bug
+    // would cause a listener registered for workflow A to receive
+    // chunks written by workflow B. Two concurrent streamers keep
+    // this honest.
+    const engine = createTokenStreamerEngine(['first-a', 'second-a']);
+    engine.register('streamer-b', async function* (ctx: WorkflowContext, _input: unknown) {
+      const context = ctx as Context;
+      yield* context.stream('tokens', async function* () {
+        yield 'first-b';
+        yield 'second-b';
+      });
+      yield* context.waitForSignal<string>('finish');
+      return 'done';
+    });
+
+    const a = await engine.start('streamer', {}, {});
+    const b = await engine.start('streamer-b', {}, {});
+    const backend = createEngineEventFeedBackend(engine);
+
+    const receivedForA: EventEnvelope[] = [];
+    const unsubscribeA = backend.subscribeLive(a.id, 'tokens', (envelope) => {
+      receivedForA.push(envelope);
+    });
+
+    await waitForStreamChunks(engine, a.id, 2);
+    await waitForStreamChunks(engine, b.id, 2);
+    await Bun.sleep(10);
+
+    for (const envelope of receivedForA) {
+      expect(envelope.workflowId).toBe(a.id);
+    }
+
+    unsubscribeA();
+    await engine.signal(a.id, 'finish', 'go');
+    await engine.signal(b.id, 'finish', 'go');
+    await a.result();
+    await b.result();
   });
 });

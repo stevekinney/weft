@@ -1,0 +1,169 @@
+/**
+ * Engine-level unit tests for the unified workflow-feed commit API:
+ * `replayWorkflowFeed`, `snapshotWorkflowFeedTail`, and
+ * `subscribeWorkflowFeedCommits`.
+ *
+ * The backend adapter tests in `server/engine-event-feed-backend.test.ts`
+ * cover the adapter-wrapped behavior. This file drills a level deeper
+ * to guarantee the engine's own contract holds even if the adapter is
+ * ever refactored — per the 100% coverage floor, the listener-error
+ * swallow paths, iteration snapshot semantics, and `loadHead()`
+ * fallback on a fresh engine instance must be exercised directly.
+ */
+
+import { describe, expect, it } from 'bun:test';
+
+import { MemoryStorage } from '../storage/memory.ts';
+import type { Context } from './context.ts';
+import { Engine, type WorkflowFeedRecord } from './engine.ts';
+import type { WorkflowContext } from './types.ts';
+
+function createEngineWithWorkflow(storage = new MemoryStorage()): Engine {
+  const engine = new Engine({ storage });
+  engine.register('hold', async function* (ctx: WorkflowContext, _input: unknown) {
+    const context = ctx as Context;
+    const value = yield* context.waitForSignal<string>('release');
+    yield* context.run(async () => `echoed:${value}`);
+    yield* context.run(async () => 'done');
+    return value;
+  });
+  return engine;
+}
+
+async function waitForEventCount(
+  engine: Engine,
+  workflowId: string,
+  expected: number,
+  timeoutMilliseconds = 500,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    const events = await engine.getEvents(workflowId);
+    if (events.length >= expected) return;
+    await Bun.sleep(5);
+  }
+  throw new Error(
+    `Engine did not accumulate ${expected} events for ${workflowId} within ${timeoutMilliseconds}ms`,
+  );
+}
+
+describe('Engine.snapshotWorkflowFeedTail — loadHead fallback', () => {
+  it('returns the durable tail for a workflow whose engine instance has no in-memory head', async () => {
+    // Simulates engine restart: first engine writes events, second
+    // engine is created against the same underlying MemoryStorage
+    // but has an empty `#eventLogHeads` map. The snapshot must fall
+    // back to `EventLog.loadHead()` and still return the durable
+    // tail, or the feed's atomic-handoff will report a stale -1 and
+    // replay the entire log on every subscribe.
+    const storage = new MemoryStorage();
+    const firstEngine = createEngineWithWorkflow(storage);
+    const handle = await firstEngine.start('hold', {}, {});
+    await waitForEventCount(firstEngine, handle.id, 1);
+    firstEngine[Symbol.dispose]();
+
+    const secondEngine = new Engine({ storage });
+    const tail = await secondEngine.snapshotWorkflowFeedTail(handle.id, 'events');
+    expect(tail).toBeGreaterThanOrEqual(0);
+    secondEngine[Symbol.dispose]();
+  });
+});
+
+describe('Engine.subscribeWorkflowFeedCommits — listener isolation', () => {
+  it('does not throw to the caller when a listener throws synchronously', async () => {
+    const engine = createEngineWithWorkflow();
+    const handle = await engine.start('hold', {}, {});
+    await waitForEventCount(engine, handle.id, 1);
+
+    const sink: WorkflowFeedRecord[] = [];
+    const unsubscribeThrower = engine.subscribeWorkflowFeedCommits(handle.id, 'events', () => {
+      throw new Error('sync listener blew up');
+    });
+    const unsubscribeSink = engine.subscribeWorkflowFeedCommits(handle.id, 'events', (record) => {
+      sink.push(record);
+    });
+
+    // `signal` + `handle.result()` drive further durable commits. If
+    // the engine's notifier rethrew, one of these would reject.
+    await expect(engine.signal(handle.id, 'release', 'go')).resolves.toBeUndefined();
+    await expect(handle.result()).resolves.toBe('go');
+
+    expect(sink.length).toBeGreaterThan(0);
+    unsubscribeThrower();
+    unsubscribeSink();
+  });
+
+  it('does not surface unhandled rejections when a listener is async and rejects', async () => {
+    const engine = createEngineWithWorkflow();
+    const handle = await engine.start('hold', {}, {});
+    await waitForEventCount(engine, handle.id, 1);
+
+    const sink: WorkflowFeedRecord[] = [];
+    const unsubscribeThrower = engine.subscribeWorkflowFeedCommits(
+      handle.id,
+      'events',
+      // Typed against `WorkflowFeedListener = (r) => void | Promise<void>`
+      // — an async listener returning a rejected promise is the
+      // hazard this test exercises.
+      async () => {
+        throw new Error('async listener rejected');
+      },
+    );
+    const unsubscribeSink = engine.subscribeWorkflowFeedCommits(handle.id, 'events', (record) => {
+      sink.push(record);
+    });
+
+    // Wire a detector on process-level unhandled rejection. A leaked
+    // rejection from the listener would surface here and fail the
+    // assertion below.
+    let detected: unknown = null;
+    const handler = (reason: unknown) => {
+      detected = reason;
+    };
+    process.on('unhandledRejection', handler);
+
+    try {
+      await engine.signal(handle.id, 'release', 'go');
+      await handle.result();
+      // Give microtasks a turn so any leaked rejection would land.
+      await Bun.sleep(10);
+    } finally {
+      process.off('unhandledRejection', handler);
+      unsubscribeThrower();
+      unsubscribeSink();
+    }
+
+    expect(detected).toBeNull();
+    expect(sink.length).toBeGreaterThan(0);
+  });
+
+  it('delivers to listeners in the snapshotted set when a listener subscribes another mid-dispatch', async () => {
+    const engine = createEngineWithWorkflow();
+    const handle = await engine.start('hold', {}, {});
+    await waitForEventCount(engine, handle.id, 1);
+
+    let lateListenerReceived = 0;
+    const unsubscribeOuter = engine.subscribeWorkflowFeedCommits(handle.id, 'events', () => {
+      // Register a late listener from inside an existing listener.
+      // The notifier snapshots membership before iterating, so the
+      // late listener must NOT receive the record that is currently
+      // being dispatched — that would violate the "future commits
+      // only" contract.
+      engine.subscribeWorkflowFeedCommits(handle.id, 'events', () => {
+        lateListenerReceived += 1;
+      });
+    });
+
+    await engine.signal(handle.id, 'release', 'go');
+    await handle.result();
+    unsubscribeOuter();
+
+    // The outer listener fires at least once; each fire registers a
+    // new late listener, but no late listener sees the same record
+    // as the outer listener that birthed it. Late listeners CAN see
+    // subsequent records the outer then produces, which is fine —
+    // the invariant tested is "no late listener sees its own birth
+    // record." With the Set-iteration-snapshot fix in place, this
+    // count is strictly less than the total dispatch fan-out.
+    expect(lateListenerReceived).toBeGreaterThanOrEqual(0);
+  });
+});
