@@ -118,7 +118,6 @@ describe('handler pipeline — streaming binding guard', () => {
       method: 'GET',
     });
     const response = await handleRequest(request, engine, {
-      restDispatchMode: 'via-execute-operation',
       operationRegistry: registry,
       restBindings: [binding],
     });
@@ -137,7 +136,6 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
       method: 'GET',
     });
     const response = await handleRequest(request, engine, {
-      restDispatchMode: 'via-execute-operation',
       operationRegistry: registry,
       restBindings: bindings,
       // authContext intentionally omitted.
@@ -156,7 +154,6 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
       method: 'GET',
     });
     const response = await handleRequest(request, engine, {
-      restDispatchMode: 'via-execute-operation',
       operationRegistry: registry,
       restBindings: bindings,
       authContext: {
@@ -182,7 +179,6 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
       method: 'GET',
     });
     const response = await handleRequest(request, engine, {
-      restDispatchMode: 'via-execute-operation',
       operationRegistry: registry,
       restBindings: bindings,
       authContext: { method: 'api-key' },
@@ -205,7 +201,6 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
     // (a real security concern for `optionalAuth` operations). The pipeline
     // must throw rather than silently downgrade to anonymous.
     const response = await handleRequest(request, engine, {
-      restDispatchMode: 'via-execute-operation',
       operationRegistry: registry,
       restBindings: bindings,
       authContext: { method: 'jwt' }, // claims intentionally omitted
@@ -237,7 +232,6 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
       method: 'GET',
     });
     const response = await handleRequest(request, engine, {
-      restDispatchMode: 'via-execute-operation',
       operationRegistry: registry,
       restBindings: bindings,
       authContext: { method: 'api-key', principal: forwardedPrincipal },
@@ -270,7 +264,6 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
       method: 'GET',
     });
     const response = await handleRequest(request, engine, {
-      restDispatchMode: 'via-execute-operation',
       operationRegistry: registry,
       restBindings: bindings,
       authContext: { method: 'mtls' },

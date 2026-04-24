@@ -15,12 +15,12 @@ import { encode } from '../core/codec.ts';
 import type { StoredStreamChunk } from '../core/context.ts';
 import { BulkDeleteRequiresTerminalWorkflowsError, type Engine } from '../core/engine.ts';
 import {
-  StartWorkflowValidationError,
   assertExclusiveStartWorkflowOptions,
   coerceStartWorkflowDuration,
   coerceStartWorkflowId,
   coerceStartWorkflowTags,
   coerceStartWorkflowTimestamp,
+  StartWorkflowValidationError,
 } from '../core/start-workflow-validation.ts';
 import { QuotaExceededError } from '../core/tenant-quotas.ts';
 import type {
@@ -53,9 +53,12 @@ import {
   principalFromMutualTls,
   type Principal,
 } from './principal.ts';
-import { bindingPathMatches } from './rest-binding.ts';
-import type { UnknownRestBinding } from './rest-bindings.ts';
-import { resolveRestDispatchMode, type RestDispatchModeConfig } from './rest-dispatch-mode.ts';
+import { bindingPathMatches, MalformedRouteParameterError } from './rest-binding.ts';
+import {
+  createLiveOperationRegistry,
+  REST_BINDINGS,
+  type UnknownRestBinding,
+} from './rest-bindings.ts';
 import { ROUTES, toRegex } from './route-model.ts';
 import { parseOptionalSequenceCursor } from './sequence-cursor.ts';
 
@@ -73,13 +76,6 @@ interface RouteMatch {
 
 /** Alias for `AuthContext` — kept local so handler-internal code reads naturally. */
 type AuthenticatedRequestContext = AuthContext;
-
-class MalformedRouteParameterError extends Error {
-  constructor() {
-    super('Malformed route parameter encoding');
-    this.name = 'MalformedRouteParameterError';
-  }
-}
 
 /**
  * Route patterns derived from the shared route model. The regex is computed
@@ -1135,15 +1131,6 @@ async function handleBulkMutateWorkflowTags(request: Request, engine: Engine): P
   }
 }
 
-async function handleGetWorkflow(engine: Engine, workflowId: string): Promise<Response> {
-  const state = await engine.get(workflowId);
-  if (state === null) {
-    return errorResponse(`Workflow "${workflowId}" not found`, 404);
-  }
-
-  return jsonResponse(state);
-}
-
 async function handleCancelWorkflow(engine: Engine, workflowId: string): Promise<Response> {
   try {
     await engine.cancel(workflowId);
@@ -1971,7 +1958,6 @@ const ROUTE_EXECUTORS: Record<HandlerName, RouteExecutor> = {
     handleGetTimeline(request, engine, param('id')),
   replayWorkflowToStep: async ({ request, engine, param }) =>
     handleReplayWorkflowToStep(request, engine, param('id'), param('step')),
-  getWorkflow: async ({ engine, param }) => handleGetWorkflow(engine, param('id')),
   cancelWorkflow: async ({ engine, param }) => handleCancelWorkflow(engine, param('id')),
   openApiDocument: async () => jsonResponse(generateOpenApiDocument()),
 };
@@ -2003,15 +1989,9 @@ export interface HandlerOptions {
    * path and has lower precedence if both are set.
    */
   metricsCollector?: MetricsCollector;
-  /**
-   * Per-operation REST dispatch-mode config. Controls whether each
-   * operation's REST mount runs through the legacy `handleXxx`
-   * executor or through the `executeOperation` pipeline.
-   */
-  restDispatchMode?: RestDispatchModeConfig;
-  /** Optional operation registry. Required when `restDispatchMode` resolves to 'via-execute-operation' for any route. */
+  /** Operation registry for pipeline dispatch. Required when `restBindings` is passed. */
   operationRegistry?: OperationRegistry;
-  /** Optional list of REST bindings. Required when the registry is passed — the router matches against these first. */
+  /** REST bindings. A request whose method+path matches a binding routes through the `executeOperation` pipeline. */
   restBindings?: ReadonlyArray<UnknownRestBinding>;
 }
 
@@ -2086,9 +2066,9 @@ async function dispatchViaExecuteOperation(
  *   loudly rather than as a silent security downgrade.
  * API key / mTLS: identity details are not carried on `authContext`
  * yet — this shim produces a minimal authenticated principal with no
- * scopes. Milestone 2 expands authContext to carry full principal info;
- * until then, scope-protected REST ops run on legacy dispatch per the
- * per-operation restDispatchMode flag.
+ * scopes. Scope-protected REST ops still dispatch through
+ * `authenticateRequest` in `authentication.ts`, which adds scopes via
+ * `resolveApiKeyPrincipal` / `defaultApiKeyScopes` when configured.
  */
 function authContextToPrincipal(authContext: AuthenticatedRequestContext | undefined): Principal {
   if (authContext === undefined) return anonymousPrincipal();
@@ -2129,6 +2109,19 @@ function defaultShapeSuccess(value: unknown, shape: UnknownRestBinding['success'
   return jsonResponse(value, shape.status);
 }
 
+/**
+ * Lazily-initialized live operation registry used as the default for
+ * callers that don't pass one. The registry is stateless and can be
+ * shared across all requests.
+ */
+let _defaultOperationRegistry: OperationRegistry | undefined;
+function defaultOperationRegistry(): OperationRegistry {
+  if (_defaultOperationRegistry === undefined) {
+    _defaultOperationRegistry = createLiveOperationRegistry();
+  }
+  return _defaultOperationRegistry;
+}
+
 /** Pure HTTP request handler. Maps Request to Response. */
 export async function handleRequest(
   request: Request,
@@ -2137,33 +2130,38 @@ export async function handleRequest(
 ): Promise<Response> {
   const url = new URL(request.url);
 
-  // Try the `RestBinding` path first when bindings + registry are
-  // configured. A binding whose operation resolves to 'legacy' falls
-  // through to the legacy route matcher below.
-  const bindingMatch = matchRestBinding(request.method, url.pathname, options?.restBindings);
-  if (bindingMatch !== null && options?.operationRegistry !== undefined) {
-    const mode = resolveRestDispatchMode(
-      options.restDispatchMode,
-      bindingMatch.binding.operationName,
-    );
-    if (mode === 'via-execute-operation') {
-      try {
-        return await dispatchViaExecuteOperation(
-          request,
-          engine,
-          bindingMatch.binding,
-          bindingMatch.pathParams,
-          options.operationRegistry,
-          authContextToPrincipal(options.authContext),
-        );
-      } catch (error) {
-        console.error('Unhandled error in dispatchViaExecuteOperation', {
-          method: request.method,
-          path: url.pathname,
-          error,
-        });
-        return errorResponse('Internal server error', 500);
-      }
+  // REST bindings match first — they dispatch through the shared
+  // `executeOperation` pipeline. Callers may override the registry and
+  // bindings for tests; production callers (serve()) pass their own
+  // instance so the registry shares the same lifecycle as the server.
+  const restBindings = options?.restBindings ?? REST_BINDINGS;
+  const operationRegistry = options?.operationRegistry ?? defaultOperationRegistry();
+  let bindingMatch: ReturnType<typeof matchRestBinding>;
+  try {
+    bindingMatch = matchRestBinding(request.method, url.pathname, restBindings);
+  } catch (error) {
+    if (error instanceof MalformedRouteParameterError) {
+      return errorResponse(error.message, 400);
+    }
+    throw error;
+  }
+  if (bindingMatch !== null) {
+    try {
+      return await dispatchViaExecuteOperation(
+        request,
+        engine,
+        bindingMatch.binding,
+        bindingMatch.pathParams,
+        operationRegistry,
+        authContextToPrincipal(options?.authContext),
+      );
+    } catch (error) {
+      console.error('Unhandled error in dispatchViaExecuteOperation', {
+        method: request.method,
+        path: url.pathname,
+        error,
+      });
+      return errorResponse('Internal server error', 500);
     }
   }
 

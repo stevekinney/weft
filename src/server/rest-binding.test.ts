@@ -4,10 +4,6 @@
  * owns the HTTP-specific concerns: method, path, where each input
  * field comes from (path param / query / header / body), and how the
  * output is shaped into an HTTP response.
- *
- * Phase 9 introduces the type. Phase 15 migrates individual REST routes
- * onto bindings one operation at a time behind the per-operation
- * `restDispatchMode` flag.
  */
 
 import { describe, expect, it } from 'bun:test';
@@ -17,6 +13,7 @@ import { defineOperation } from './operation-registry.ts';
 import {
   bindingPathMatches,
   isRestBindingCompatibleWithOperation,
+  MalformedRouteParameterError,
   type ParamSource,
   type ResponseShape,
   type RestBinding,
@@ -152,16 +149,20 @@ describe('bindingPathMatches', () => {
     expect(bindingPathMatches('/v1/workflows/:id/signal', '/v1/workflows//signal')).toBeNull();
   });
 
-  it('returns null for a malformed percent-encoded segment', () => {
+  it('throws MalformedRouteParameterError for a malformed percent-encoded segment', () => {
     // `decodeURIComponent('%')` and `decodeURIComponent('%GG')` throw
-    // URIError. The matcher catches and returns null so the router
-    // produces a 404 instead of letting the URIError propagate as a
-    // 500. Without this test, a future refactor that drops the
-    // try/catch would silently break every route with user-supplied
-    // path params.
-    expect(bindingPathMatches('/v1/workflows/:id', '/v1/workflows/%')).toBeNull();
-    expect(bindingPathMatches('/v1/workflows/:id', '/v1/workflows/%GG')).toBeNull();
-    expect(bindingPathMatches('/v1/workflows/:id', '/v1/workflows/abc%2')).toBeNull();
+    // URIError. The matcher wraps those in a typed error that the top-
+    // level handler catches and maps to a 400 — more informative than
+    // the 404 a silent non-match would produce.
+    expect(() => bindingPathMatches('/v1/workflows/:id', '/v1/workflows/%')).toThrow(
+      MalformedRouteParameterError,
+    );
+    expect(() => bindingPathMatches('/v1/workflows/:id', '/v1/workflows/%GG')).toThrow(
+      MalformedRouteParameterError,
+    );
+    expect(() => bindingPathMatches('/v1/workflows/:id', '/v1/workflows/abc%2')).toThrow(
+      MalformedRouteParameterError,
+    );
   });
 });
 

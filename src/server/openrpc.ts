@@ -1,21 +1,13 @@
 /**
  * OpenRPC 1.3.2 document generator driven from the transport-neutral
  * `OperationRegistry`. Produces a JSON-serializable OpenRPC document
- * that reflects exactly the operations that the running server will
- * dispatch over JSON-RPC — intersected with the live
- * `OpenRpcOptions.jsonRpc` runtime state (see `OpenRpcJsonRpcRuntime`)
- * AND each operation's transport availability. A later Track 8 phase
- * will wire this runtime state through `ServeOptions.jsonRpc`; until
- * then, callers pass it explicitly to `generateOpenRpcDocument`.
+ * listing every operation whose transport availability intersects
+ * `OpenRpcOptions.transports`.
  *
- * Track 8 design decisions 8, 9, and "OpenAPI / OpenRPC generation":
- *
- *   - `jsonRpc.enabled: false` → zero methods (discovery describes the
- *     live server, not the build).
- *   - `jsonRpc.transports: ['http']` → WebSocket-only methods are
- *     omitted (calling `weft.workflows.subscribe` over HTTP would
- *     return `UnsupportedTransport`, so the method should not appear
- *     in the HTTP-only document).
+ *   - `transports: ['http']` → WebSocket-only methods are omitted
+ *     (calling `weft.workflows.subscribe` over HTTP would return
+ *     `UnsupportedTransport`, so the method should not appear in the
+ *     HTTP-only document).
  *   - Every listed method carries `paramStructure: 'by-name'`, per-field
  *     `ContentDescriptor`s for human-readable surface, AND an
  *     `x-weft-paramsSchema` extension whose `additionalProperties` is
@@ -34,19 +26,14 @@ import { z } from 'zod';
 
 import type { ErasedOperation, OperationRegistry } from './operation-catalog.ts';
 
-/** Transports that MAY be enabled in `OpenRpcOptions.jsonRpc.transports` (a later phase will forward this from `ServeOptions.jsonRpc.transports`). */
+/** Transports that MAY be listed in `OpenRpcOptions.transports`. */
 export type OpenRpcTransport = 'http' | 'websocket' | 'stdio';
-
-export type OpenRpcJsonRpcRuntime = {
-  readonly enabled: boolean;
-  readonly transports: ReadonlyArray<OpenRpcTransport>;
-};
 
 export type OpenRpcOptions = {
   /** Live operation registry. Only operations from this registry can be listed. */
   readonly registry: OperationRegistry;
-  /** Live JSON-RPC runtime state — drives the runtime-aware filter. */
-  readonly jsonRpc: OpenRpcJsonRpcRuntime;
+  /** JSON-RPC transports whose methods should be included in the document. */
+  readonly transports: ReadonlyArray<OpenRpcTransport>;
   /** Document title. Defaults to `'Weft Workflow Engine'`. */
   readonly title?: string;
   /** Document version. Defaults to `'0.0.1'`. */
@@ -82,20 +69,18 @@ export function generateOpenRpcDocument(options: OpenRpcOptions): Record<string,
   const methods: OpenRpcMethod[] = [];
   let registryProvidesDiscover = false;
 
-  if (options.jsonRpc.enabled) {
-    for (const operation of options.registry.list()) {
-      if (!isOperationLiveOnJsonRpc(operation, options.jsonRpc.transports)) continue;
-      if (operation.name === DISCOVER_METHOD_NAME) {
-        // Consumers may register their own `rpc.discover` operation —
-        // use theirs verbatim and skip the synthetic one so we never
-        // emit duplicate method names.
-        registryProvidesDiscover = true;
-      }
-      methods.push(buildMethod(operation));
+  for (const operation of options.registry.list()) {
+    if (!isOperationLiveOnJsonRpc(operation, options.transports)) continue;
+    if (operation.name === DISCOVER_METHOD_NAME) {
+      // Consumers may register their own `rpc.discover` operation —
+      // use theirs verbatim and skip the synthetic one so we never
+      // emit duplicate method names.
+      registryProvidesDiscover = true;
     }
-    if (!registryProvidesDiscover) {
-      methods.push(buildDiscoverMethod());
-    }
+    methods.push(buildMethod(operation));
+  }
+  if (!registryProvidesDiscover && options.transports.length > 0) {
+    methods.push(buildDiscoverMethod());
   }
 
   const document: Record<string, unknown> = {

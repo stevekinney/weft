@@ -6,19 +6,27 @@
  * query / header / body), and how the output is shaped into an HTTP
  * response.
  *
- * Phase 9 introduces the type, helpers, and compatibility check.
- * Phase 15 migrates individual REST routes onto bindings one at a time
- * behind the per-operation `restDispatchMode` flag, with byte-for-byte
- * parity diff tests gating each migration.
- *
  * This module deliberately does NOT import the existing `route-model.ts`
- * — bindings are additive. The legacy `ROUTES` array and the new
- * `REST_BINDINGS` can coexist during Milestone 1 of Track 8, with the
- * OpenAPI generator picking per-operation which source to read from.
+ * — bindings describe migrated operations. The legacy `ROUTES` array
+ * still describes the remaining routes; the OpenAPI generator emits
+ * `REST_BINDINGS` first and falls back to `ROUTES` for anything not
+ * yet migrated.
  */
 
 import type { OperationFault } from './operation-fault.ts';
 import type { HttpMethod } from './route-model.ts';
+
+/**
+ * Thrown by `bindingPathMatches` (and the legacy route matcher) when a
+ * URL path parameter contains malformed percent-encoding. The top-level
+ * handler catches it and returns a 400.
+ */
+export class MalformedRouteParameterError extends Error {
+  constructor() {
+    super('Malformed route parameter encoding');
+    this.name = 'MalformedRouteParameterError';
+  }
+}
 
 /**
  * Where a single top-level field of the operation's `inputSchema`
@@ -125,12 +133,9 @@ export function bindingPathMatches(
       try {
         params[name] = decodeURIComponent(actualSegment);
       } catch {
-        // Malformed percent-encoding (e.g. `%` or `%GG`) — treat as
-        // no match so the router returns 404 rather than letting a
-        // `URIError` propagate. Letting it bubble would force every
-        // caller to wrap the matcher in try/catch; a clean non-match
-        // result is the right API contract here.
-        return null;
+        // Malformed percent-encoding (e.g. `%` or `%GG`) — the caller
+        // (handleRequest) catches this and returns a 400.
+        throw new MalformedRouteParameterError();
       }
     } else if (patternSegment !== actualSegment) {
       return null;

@@ -1,13 +1,12 @@
 /**
- * Phase 15a — REST unknown-key disposition baseline audit.
+ * REST unknown-key disposition baseline audit.
  *
- * Locks the current (pre-migration) top-level unknown-key behavior of
- * every REST route that accepts a JSON body. Each test sends a
- * known-good request with one extra top-level field and asserts the
- * same status code the route returns today. The captured disposition
- * — 'reject' vs 'strip' vs 'passthrough' — becomes the baseline each
- * migrated operation's `unknownKeyPolicy.http` must preserve once the
- * route flips to `restDispatchMode: 'via-execute-operation'`.
+ * Locks the top-level unknown-key behavior of every REST route that
+ * accepts a JSON body. Each test sends a known-good request with one
+ * extra top-level field and asserts the same status code the route
+ * returns today. The captured disposition — 'reject' vs 'strip' vs
+ * 'passthrough' — is the baseline each migrated operation's
+ * `unknownKeyPolicy.http` must preserve.
  *
  * Scope (Phase 15a):
  *   - Top-level only. Nested-object dispositions are captured per

@@ -1,20 +1,10 @@
 /**
- * Phase 15c — `weft.workflows.get` operation + REST binding.
+ * `weft.workflows.get` operation + REST binding.
  *
- * First REST operation migrated to the transport-neutral
- * `OperationDefinition` / `RestBinding` pair. Dispatch through
- * `executeOperation` is selected per request by the per-operation
- * `restDispatchMode` flag in `ServeOptions`.
- *
- * Legacy behavior — the `handleGetWorkflow` executor in `handler.ts` —
- * is preserved byte-for-byte while this operation runs behind a flag.
- * The legacy error body is `{ "error": "Workflow \"X\" not found" }`
- * (a bare string), different from the canonical fault shape
- * `{ error: { code, message, data? } }`. `shapeFault` below
- * reconstructs the legacy shape so the parity diff test passes.
- *
- * Milestone 2 will drop the `shapeFault` override and align this
- * endpoint to the canonical shape alongside the rest of Track 8.
+ * Returns a workflow's state by id. REST response shape preserves the
+ * historical format: 200 with the serialized `WorkflowState`, or a
+ * 4xx/5xx with `{ error: <message> }` (a bare string), as emitted by
+ * `shapeFault` below.
  *
  * @module server/operations/get-workflow
  */

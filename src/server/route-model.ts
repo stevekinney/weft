@@ -391,14 +391,6 @@ export const ROUTES = [
     tags: ['Checkpoints'],
   },
   {
-    method: 'GET',
-    path: '/v1/workflows/:id',
-    handler: 'getWorkflow',
-    paramNames: ['id'],
-    summary: 'Get workflow state',
-    tags: ['Workflows'],
-  },
-  {
     method: 'DELETE',
     path: '/v1/workflows/:id',
     handler: 'cancelWorkflow',
