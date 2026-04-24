@@ -5686,6 +5686,7 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
     this.#eventLogHeads.clear();
     this.#pendingTimelineEntries.clear();
     this.#workflowVersionTuples.clear();
+    this.#workflowFeedListeners.clear();
     this.#broadcastChannel?.close();
     this.#broadcastChannel = null;
   }

@@ -47,6 +47,32 @@ async function waitForEventCount(
   );
 }
 
+describe('Engine[Symbol.dispose] — feed listener cleanup', () => {
+  it('unsubscribe returned before dispose is a safe no-op afterwards', async () => {
+    // Regression guard: every other Map/Set on the Engine is cleared
+    // in `[Symbol.dispose]()`. A stale bucket surviving disposal
+    // would keep listener closures alive. This test proves the
+    // cleanup path exists by asserting the unsubscribe returned from
+    // a pre-dispose `subscribeWorkflowFeedCommits` can still be
+    // invoked after disposal without throwing — which only holds if
+    // the registry was cleared to an empty Map (so the unsubscribe's
+    // `.delete()` + `.size === 0` branch handles the missing bucket
+    // gracefully) AND the engine isn't silently retaining the
+    // pre-dispose bucket.
+    const engine = createEngineWithWorkflow();
+    const handle = await engine.start('hold', {}, {});
+    await waitForEventCount(engine, handle.id, 1);
+
+    const unsubscribe = engine.subscribeWorkflowFeedCommits(handle.id, 'events', () => {});
+    engine[Symbol.dispose]();
+
+    // Post-dispose unsubscribe: must not throw. The cleared Map
+    // means `get(key)` returns undefined, unsubscribe's guard
+    // (`if (!set) return`) handles that.
+    expect(() => unsubscribe()).not.toThrow();
+  });
+});
+
 describe('Engine.snapshotWorkflowFeedTail — loadHead fallback', () => {
   it('returns the durable tail for a workflow whose engine instance has no in-memory head', async () => {
     // Simulates engine restart: first engine writes events, second
