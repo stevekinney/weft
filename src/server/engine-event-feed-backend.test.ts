@@ -245,6 +245,48 @@ describe('createEngineEventFeedBackend — subscribeLive(events)', () => {
     unsubscribeThrower();
     unsubscribeSecond();
   });
+
+  it('isolates async listener rejections through the adapter layer', async () => {
+    // Regression guard: TypeScript allows an async function to be
+    // passed where the backend's `(envelope) => void` contract is
+    // expected — the returned promise is structurally discarded. If
+    // the adapter's wrapper does not propagate that promise to the
+    // engine's notifier, the rejection escapes as a process-level
+    // unhandled-rejection event. This test catches that regression
+    // by registering a detector.
+    const engine = createEngineWithSignalWorkflow();
+    const handle = await engine.start('hold', {}, {});
+    await waitForEventCount(engine, handle.id, 1);
+
+    const backend = createEngineEventFeedBackend(engine);
+    const second: EventEnvelope[] = [];
+    const asyncThrower: (envelope: EventEnvelope) => void = async () => {
+      throw new Error('async listener rejected');
+    };
+    const unsubscribeThrower = backend.subscribeLive(handle.id, 'events', asyncThrower);
+    const unsubscribeSecond = backend.subscribeLive(handle.id, 'events', (envelope) => {
+      second.push(envelope);
+    });
+
+    let detected: unknown = null;
+    const handler = (reason: unknown) => {
+      detected = reason;
+    };
+    process.on('unhandledRejection', handler);
+
+    try {
+      await engine.signal(handle.id, 'release', 'go');
+      await handle.result();
+      await Bun.sleep(10);
+    } finally {
+      process.off('unhandledRejection', handler);
+      unsubscribeThrower();
+      unsubscribeSecond();
+    }
+
+    expect(detected).toBeNull();
+    expect(second.length).toBeGreaterThan(0);
+  });
 });
 
 describe('createEngineEventFeedBackend — atomic handoff through the feed', () => {
@@ -388,20 +430,57 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
     expect(await backend.snapshotTailSequence('nothing', 'tokens')).toBe(-1);
   });
 
-  it('delivers live stream chunks to listeners', async () => {
-    const engine = createTokenStreamerEngine(['first', 'second']);
-    const backend = createEngineEventFeedBackend(engine);
-    const received: EventEnvelope[] = [];
+  /**
+   * Register a token-streamer workflow that waits for a `'start'`
+   * signal BEFORE emitting chunks, then emits the provided chunk
+   * list, then waits on `'finish'` to keep the workflow alive while
+   * tests inspect state. Gating emission lets tests subscribe first
+   * and then unblock the stream, removing timing races that a
+   * simple `Bun.sleep` post-check would paper over.
+   */
+  function registerGatedStreamerWorkflow(
+    engine: Engine,
+    name: string,
+    chunks: ReadonlyArray<unknown>,
+  ): void {
+    engine.register(name, async function* (ctx: WorkflowContext, _input: unknown) {
+      const context = ctx as Context;
+      yield* context.waitForSignal<string>('start');
+      yield* context.stream('tokens', async function* () {
+        for (const chunk of chunks) {
+          yield chunk;
+        }
+      });
+      yield* context.waitForSignal<string>('finish');
+      return 'done';
+    });
+  }
 
-    const handle = await engine.start('streamer', {}, {});
+  it('delivers live stream chunks to listeners', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    registerGatedStreamerWorkflow(engine, 'gated-streamer', ['first', 'second']);
+    const backend = createEngineEventFeedBackend(engine);
+
+    const handle = await engine.start('gated-streamer', {}, {});
+    // Subscribe BEFORE the workflow emits any chunks — the gate
+    // guarantees no chunk has been written yet.
+    const received: EventEnvelope[] = [];
     const unsubscribe = backend.subscribeLive(handle.id, 'tokens', (envelope) => {
       received.push(envelope);
     });
 
+    // Unblock the stream, then wait on storage for the expected
+    // chunk count (deadline-polled, caps at the helper's timeout).
+    await engine.signal(handle.id, 'start', 'go');
     await waitForStreamChunks(engine, handle.id, 2);
-    await Bun.sleep(10);
 
-    expect(received.length).toBeGreaterThanOrEqual(1);
+    // By the time `waitForStreamChunks` returns, the storage puts
+    // have committed AND the notifier has fired synchronously at
+    // each put's `storage.put(...)` resolution. No post-check sleep
+    // is needed.
+    expect(received.length).toBe(2);
+    expect(received.map((envelope) => envelope.payload)).toEqual(['first', 'second']);
     for (const envelope of received) {
       expect(envelope.selector).toBe('tokens');
       expect(envelope.workflowId).toBe(handle.id);
@@ -416,20 +495,15 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
     // Regression guard: the unified `#workflowFeedListeners` map is
     // keyed by `${workflowId}\0${selector}`. A key-collision bug
     // would cause a listener registered for workflow A to receive
-    // chunks written by workflow B. Two concurrent streamers keep
-    // this honest.
-    const engine = createTokenStreamerEngine(['first-a', 'second-a']);
-    engine.register('streamer-b', async function* (ctx: WorkflowContext, _input: unknown) {
-      const context = ctx as Context;
-      yield* context.stream('tokens', async function* () {
-        yield 'first-b';
-        yield 'second-b';
-      });
-      yield* context.waitForSignal<string>('finish');
-      return 'done';
-    });
+    // chunks written by workflow B. Two concurrent streamers with
+    // gated emission keep this deterministic — subscribe first,
+    // unblock both, then assert.
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    registerGatedStreamerWorkflow(engine, 'streamer-a', ['first-a', 'second-a']);
+    registerGatedStreamerWorkflow(engine, 'streamer-b', ['first-b', 'second-b']);
 
-    const a = await engine.start('streamer', {}, {});
+    const a = await engine.start('streamer-a', {}, {});
     const b = await engine.start('streamer-b', {}, {});
     const backend = createEngineEventFeedBackend(engine);
 
@@ -438,10 +512,13 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
       receivedForA.push(envelope);
     });
 
+    await engine.signal(a.id, 'start', 'go');
+    await engine.signal(b.id, 'start', 'go');
     await waitForStreamChunks(engine, a.id, 2);
     await waitForStreamChunks(engine, b.id, 2);
-    await Bun.sleep(10);
 
+    // A must have received exactly its two chunks; zero from B.
+    expect(receivedForA.length).toBe(2);
     for (const envelope of receivedForA) {
       expect(envelope.workflowId).toBe(a.id);
     }

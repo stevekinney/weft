@@ -53,9 +53,19 @@ export function createEngineEventFeedBackend(engine: Engine): WorkflowEventFeedB
     },
 
     subscribeLive(workflowId, selector, listener) {
-      return engine.subscribeWorkflowFeedCommits(workflowId, toCoreSelector(selector), (record) => {
-        listener(recordToEnvelope(record));
-      });
+      return engine.subscribeWorkflowFeedCommits(
+        workflowId,
+        toCoreSelector(selector),
+        // Return the listener's call result — if the listener is
+        // structurally `(e) => void` but actually an async function
+        // (TypeScript allows the widening), we must propagate its
+        // returned promise to the engine's `#notifyWorkflowFeedCommit`
+        // so the engine's rejection handler can swallow it. Wrapping
+        // in a block body that discards the return value would leak
+        // async rejections past the engine and surface as a
+        // process-level unhandled-rejection event.
+        (record) => listener(recordToEnvelope(record)),
+      );
     },
   };
 }

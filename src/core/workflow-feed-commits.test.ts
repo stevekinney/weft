@@ -136,34 +136,60 @@ describe('Engine.subscribeWorkflowFeedCommits — listener isolation', () => {
     expect(sink.length).toBeGreaterThan(0);
   });
 
-  it('delivers to listeners in the snapshotted set when a listener subscribes another mid-dispatch', async () => {
+  it('late listener registered mid-dispatch does not receive its birth record', async () => {
+    // Regression guard for the Set-iteration-snapshot fix in
+    // `#notifyWorkflowFeedCommit`. Without that fix, a listener
+    // that registers another listener from inside a dispatch would
+    // see the newly-added listener receive the in-flight record —
+    // violating the "future commits only" contract and causing
+    // duplicate delivery to any feed subscriber that treats the
+    // engine's listener as its single source of truth.
+    //
+    // The assertion: every sequence the late listener receives must
+    // be strictly greater than the sequence that triggered its
+    // registration. A tautological `>= 0` check cannot detect a
+    // regression; this one does.
     const engine = createEngineWithWorkflow();
     const handle = await engine.start('hold', {}, {});
     await waitForEventCount(engine, handle.id, 1);
 
-    let lateListenerReceived = 0;
-    const unsubscribeOuter = engine.subscribeWorkflowFeedCommits(handle.id, 'events', () => {
-      // Register a late listener from inside an existing listener.
-      // The notifier snapshots membership before iterating, so the
-      // late listener must NOT receive the record that is currently
-      // being dispatched — that would violate the "future commits
-      // only" contract.
-      engine.subscribeWorkflowFeedCommits(handle.id, 'events', () => {
-        lateListenerReceived += 1;
-      });
+    const outerSequences: number[] = [];
+    const lateSequences: number[] = [];
+    // Track which outer-sequence triggered each late registration so
+    // the per-late assertion can be precise.
+    const birthSequenceByLate = new Map<object, number>();
+    const lateUnsubscribers: Array<() => void> = [];
+
+    const unsubscribeOuter = engine.subscribeWorkflowFeedCommits(handle.id, 'events', (record) => {
+      outerSequences.push(record.sequence);
+      const lateToken = {};
+      const lateUnsubscribe = engine.subscribeWorkflowFeedCommits(
+        handle.id,
+        'events',
+        (lateRecord) => {
+          // Capture the birth sequence for this particular late
+          // listener (the outer sequence that triggered its
+          // registration) so the `>` check below is per-listener.
+          const birth = birthSequenceByLate.get(lateToken);
+          if (birth !== undefined) {
+            lateSequences.push(lateRecord.sequence);
+            expect(lateRecord.sequence).toBeGreaterThan(birth);
+          }
+        },
+      );
+      birthSequenceByLate.set(lateToken, record.sequence);
+      lateUnsubscribers.push(lateUnsubscribe);
     });
 
     await engine.signal(handle.id, 'release', 'go');
     await handle.result();
     unsubscribeOuter();
+    for (const u of lateUnsubscribers) u();
 
-    // The outer listener fires at least once; each fire registers a
-    // new late listener, but no late listener sees the same record
-    // as the outer listener that birthed it. Late listeners CAN see
-    // subsequent records the outer then produces, which is fine —
-    // the invariant tested is "no late listener sees its own birth
-    // record." With the Set-iteration-snapshot fix in place, this
-    // count is strictly less than the total dispatch fan-out.
-    expect(lateListenerReceived).toBeGreaterThanOrEqual(0);
+    // Sanity: the outer listener fired at least once (the post-
+    // signal resume commits at least one checkpoint). If the
+    // outer never fired, the test would pass vacuously — this
+    // assertion guards against that degenerate state.
+    expect(outerSequences.length).toBeGreaterThan(0);
   });
 });
