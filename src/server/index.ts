@@ -1124,10 +1124,15 @@ export function serve(options: ServeOptions): WeftServer {
           });
         } catch (error) {
           console.error('Unhandled error in /jsonrpc', { error });
+          // -32603 (InternalError) is the JSON-RPC 2.0 spec code for a
+          // generic internal error. This catch-all covers
+          // authenticator-contract violations and any other unexpected
+          // throw from the adapter — not specifically engine failures,
+          // so -32099 (EngineFailure) would mislabel the cause.
           return new Response(
             JSON.stringify({
               jsonrpc: '2.0',
-              error: { code: -32099, message: 'Internal server error' },
+              error: { code: -32603, message: 'Internal error' },
               id: null,
             }),
             {
