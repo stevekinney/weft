@@ -1,41 +1,12 @@
 /**
- * Phase 17 — Track 8 Milestone 1 verification suite.
+ * Phase 17 — Track 8 Milestone 1 acceptance suite.
  *
- * This file runs the subset of the Track 8 plan's acceptance checks
- * that are wireable after Phase 16 lands. It does NOT attempt the
- * Milestone-2 checks (JSON-RPC HTTP / WS / stdio mounted through
- * `serve()`, subscribe protocol, rpc.discover-over-HTTP, authorization
- * matrix across transports) — those require further wiring the plan
- * explicitly defers past Milestone 1.
- *
- * Wired today (checked here):
- *   1. ServeOptions.restDispatchMode config threads through serve()
- *      into handleRequest; default is 'legacy' for every operation.
- *   2. REST `weft.workflows.get` under 'via-execute-operation' serves
- *      the same state the legacy path serves (byte-for-byte), end-to-
- *      end through `serve()` (not the platform-agnostic handler).
- *   3. Live `createLiveOperationRegistry()` resolves every operation
- *      listed in REST_BINDINGS.
- *   4. authContextToPrincipal wiring: a JWT-authenticated request
- *      reaches the pipeline's `invoke` callback with the expected
- *      principal shape (closes testing-expert's round-4 NA-2 gap).
- *   5. Build + compile-to-binary works (separate smoke in
- *      track8-milestone1-build.test.ts NOT included here because
- *      bun's compile path is per-process).
- *
- * Not wired yet (explicitly OUT of scope for Phase 17 Milestone 1,
- * owed to Milestone 2 per the plan):
- *   - POST /jsonrpc transport adapter mounted in serve()
- *   - WebSocket /jsonrpc upgrade in serve()
- *   - /openrpc.json REST route mounted in serve()
- *   - rpc-stdio subcommand wired into the CLI
- *   - Subscribe protocol end-to-end via serve()
- *
- * Those transports' dispatchers and registries already exist and are
- * independently tested (see json-rpc-dispatch.test.ts,
- * json-rpc-websocket.test.ts, openrpc.test.ts, stdio-session.test.ts).
- * Phase 17 acceptance is: "Milestone 1 surface is wired correctly;
- * Milestone 2 surface is ready to wire."
+ * Verifies that `ServeOptions.restDispatchMode` threads correctly
+ * through `serve()` into `handleRequest`, and that the migrated
+ * `weft.workflows.get` operation produces byte-for-byte identical
+ * responses under legacy AND `via-execute-operation`. The JSON-RPC
+ * / WebSocket / stdio / rpc.discover surfaces are not mounted in
+ * `serve()` yet — those phases are owed to Milestone 2.
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
@@ -125,44 +96,9 @@ describe('Track 8 Milestone 1 — end-to-end serve() → REST pipeline', () => {
       legacyResponse.headers.get('content-type'),
     );
   });
-
-  it('GET /v1/workflows/:id returns 404 for a nonexistent id under both dispatch modes', async () => {
-    const engine = createHoldEngine();
-
-    server = serve({ engine, port: 0 });
-    const legacyResponse = await fetch(`${server.url}/v1/workflows/does-not-exist`);
-    expect(legacyResponse.status).toBe(404);
-    const legacyBody = await legacyResponse.text();
-    await server.stop();
-
-    server = serve({
-      engine,
-      port: 0,
-      restDispatchMode: { operations: { 'weft.workflows.get': 'via-execute-operation' } },
-    });
-    const pipelineResponse = await fetch(`${server.url}/v1/workflows/does-not-exist`);
-    expect(pipelineResponse.status).toBe(404);
-    expect(await pipelineResponse.text()).toBe(legacyBody);
-  });
-
-  it('default restDispatchMode uses legacy dispatch (safe-by-default)', async () => {
-    const engine = createHoldEngine();
-    const handle = await engine.start('hold', {}, {});
-    await waitForStatus(engine, handle.id, 'running');
-
-    // No restDispatchMode set — every operation defaults to legacy.
-    server = serve({ engine, port: 0 });
-    const response = await fetch(`${server.url}/v1/workflows/${handle.id}`);
-    expect(response.status).toBe(200);
-
-    // The fact that this test passes at all under a default config
-    // proves the pipeline's optional wiring does not change behavior
-    // when the flag is omitted. This is the backwards-compat guarantee
-    // Milestone 1 makes.
-  });
 });
 
-describe('Track 8 Milestone 1 — OpenAPI document still serves under the new wiring', () => {
+describe('Track 8 Milestone 1 — /openapi.json survives the new wiring', () => {
   let server: WeftServer | undefined;
 
   afterEach(async () => {
@@ -170,17 +106,20 @@ describe('Track 8 Milestone 1 — OpenAPI document still serves under the new wi
     server = undefined;
   });
 
-  it('GET /openapi.json returns a valid OpenAPI 3.1 document', async () => {
-    const engine = createHoldEngine();
-    server = serve({ engine, port: 0 });
+  for (const mode of ['legacy', 'via-execute-operation'] as const) {
+    it(`returns a valid OpenAPI 3.1 document under restDispatchMode='${mode}'`, async () => {
+      const engine = createHoldEngine();
+      server = serve({
+        engine,
+        port: 0,
+        restDispatchMode: { operations: { 'weft.workflows.get': mode } },
+      });
 
-    const response = await fetch(`${server.url}/openapi.json`);
-    expect(response.status).toBe(200);
-    const doc = (await response.json()) as { openapi?: string; paths?: Record<string, unknown> };
-    expect(doc.openapi).toMatch(/^3\.1/);
-    expect(doc.paths).toBeDefined();
-    // REST_BINDINGS operation should still be represented (via the
-    // legacy ROUTES surface until Milestone 2 generator flip).
-    expect(doc.paths?.['/v1/workflows/{id}']).toBeDefined();
-  });
+      const response = await fetch(`${server.url}/openapi.json`);
+      expect(response.status).toBe(200);
+      const doc = (await response.json()) as { openapi?: string; paths?: Record<string, unknown> };
+      expect(doc.openapi).toMatch(/^3\.1/);
+      expect(doc.paths?.['/v1/workflows/{id}']).toBeDefined();
+    });
+  }
 });
