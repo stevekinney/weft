@@ -85,6 +85,45 @@ function buildPrincipalSpy(): {
   return { registry, bindings: [binding as UnknownRestBinding], captured };
 }
 
+describe('handler pipeline — restBindings / operationRegistry pairing guard', () => {
+  it('rejects restBindings supplied without operationRegistry (500)', async () => {
+    const engine = createEngine();
+    const { registry: _registry, bindings } = buildPrincipalSpy();
+    const request = new Request('http://localhost/v1/test/principalspy/any-id', {
+      method: 'GET',
+    });
+    const response = await handleRequest(request, engine, {
+      restBindings: bindings,
+      // operationRegistry intentionally omitted — custom bindings would
+      // silently pair with the live registry otherwise, producing
+      // MethodNotFound at dispatch time for any operation that isn't in
+      // the live registry.
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: '`restBindings` and `operationRegistry` must be supplied together (or both omitted).',
+    });
+  });
+
+  it('rejects operationRegistry supplied without restBindings (500)', async () => {
+    const engine = createEngine();
+    const { registry, bindings: _bindings } = buildPrincipalSpy();
+    const request = new Request('http://localhost/v1/test/principalspy/any-id', {
+      method: 'GET',
+    });
+    const response = await handleRequest(request, engine, {
+      operationRegistry: registry,
+      // restBindings intentionally omitted — the custom registry would
+      // silently pair with the live bindings otherwise, producing the
+      // same MethodNotFound hazard in reverse.
+    });
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({
+      error: '`restBindings` and `operationRegistry` must be supplied together (or both omitted).',
+    });
+  });
+});
+
 describe('handler pipeline — streaming binding guard', () => {
   it('returns 500 when a streaming binding has no shapeSuccess', async () => {
     const engine = createEngine();

@@ -1989,9 +1989,19 @@ export interface HandlerOptions {
    * path and has lower precedence if both are set.
    */
   metricsCollector?: MetricsCollector;
-  /** Operation registry for pipeline dispatch. Required when `restBindings` is passed. */
+  /**
+   * Operation registry for pipeline dispatch. Must be supplied together
+   * with `restBindings` — a caller that overrides one but not the other
+   * gets a mismatched configuration (custom bindings referencing a live
+   * registry they weren't built against), which `handleRequest` rejects
+   * at request time. Omit both to use the live defaults.
+   */
   operationRegistry?: OperationRegistry;
-  /** REST bindings. A request whose method+path matches a binding routes through the `executeOperation` pipeline. */
+  /**
+   * REST bindings. A request whose method+path matches a binding routes
+   * through the `executeOperation` pipeline. Must be supplied together
+   * with `operationRegistry`. Omit both to use the live defaults.
+   */
   restBindings?: ReadonlyArray<UnknownRestBinding>;
 }
 
@@ -2134,6 +2144,19 @@ export async function handleRequest(
   // `executeOperation` pipeline. Callers may override the registry and
   // bindings for tests; production callers (serve()) pass their own
   // instance so the registry shares the same lifecycle as the server.
+  //
+  // Reject the half-configured case: a caller that supplies one of
+  // `restBindings` / `operationRegistry` without the other would get a
+  // silent mismatch — custom bindings paired with the live registry (or
+  // vice versa), producing `MethodNotFound` faults at dispatch time
+  // that surface as generic 500s. Fail loudly at the request boundary
+  // instead.
+  if ((options?.restBindings === undefined) !== (options?.operationRegistry === undefined)) {
+    return errorResponse(
+      '`restBindings` and `operationRegistry` must be supplied together (or both omitted).',
+      500,
+    );
+  }
   const restBindings = options?.restBindings ?? REST_BINDINGS;
   const operationRegistry = options?.operationRegistry ?? defaultOperationRegistry();
   let bindingMatch: ReturnType<typeof matchRestBinding>;
