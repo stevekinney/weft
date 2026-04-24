@@ -8,6 +8,8 @@
  * @module server/openapi
  */
 
+import type { ErasedOperation, OperationRegistry } from './operation-catalog.ts';
+import type { UnknownRestBinding } from './rest-bindings.ts';
 import { createLiveOperationRegistry, REST_BINDINGS } from './rest-bindings.ts';
 import { ROUTES, toOpenApiPath } from './route-model.ts';
 
@@ -44,14 +46,21 @@ function buildPathParameters(paramNames: readonly string[]): Array<Record<string
   }));
 }
 
-function emitBindings(
+/**
+ * Emit REST bindings into the OpenAPI paths map. Exported for tests;
+ * `generateOpenApiDocument` is the production entry point.
+ *
+ * @internal
+ */
+export function emitBindings(
   paths: Record<string, Record<string, unknown>>,
   tagSet: Set<string>,
+  bindings: ReadonlyArray<UnknownRestBinding> = REST_BINDINGS,
+  registry: OperationRegistry = createLiveOperationRegistry(),
 ): Set<string> {
-  const registry = createLiveOperationRegistry();
   const boundMethodPaths = new Set<string>();
-  for (const binding of REST_BINDINGS) {
-    const operation = registry.get(binding.operationName);
+  for (const binding of bindings) {
+    const operation: ErasedOperation | undefined = registry.get(binding.operationName);
     if (operation === undefined) continue;
     const openApiPath = toOpenApiPath(binding.path);
     boundMethodPaths.add(`${binding.method} ${openApiPath}`);
@@ -65,6 +74,15 @@ function emitBindings(
       responses: { '200': { description: 'Successful response' } },
     };
     if (parameters.length > 0) entry['parameters'] = parameters;
+
+    // Body-accepting methods documented with a JSON request body — same
+    // behavior as the legacy `emitRoutes` path so a migrated POST/PUT/
+    // PATCH operation keeps its `requestBody` entry in the document.
+    if (binding.method === 'POST' || binding.method === 'PUT' || binding.method === 'PATCH') {
+      entry['requestBody'] = {
+        content: { 'application/json': { schema: { type: 'object' } } },
+      };
+    }
 
     paths[openApiPath][binding.method.toLowerCase()] = entry;
     for (const tag of operation.tags) tagSet.add(tag);

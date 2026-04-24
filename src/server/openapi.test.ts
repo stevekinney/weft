@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'bun:test';
+import { z } from 'zod';
 
-import { generateOpenApiDocument } from './openapi.ts';
+import { emitBindings, generateOpenApiDocument } from './openapi.ts';
+import { createOperationRegistry } from './operation-catalog.ts';
+import { defineOperation } from './operation-registry.ts';
+import type { UnknownRestBinding } from './rest-bindings.ts';
 import { ROUTES, toOpenApiPath, toRegex } from './route-model.ts';
 
 describe('OpenAPI document generation', () => {
@@ -108,6 +112,79 @@ describe('OpenAPI document generation', () => {
     expect(healthPath).toBeDefined();
     const operation = healthPath!['get']!;
     expect(operation).not.toHaveProperty('requestBody');
+  });
+});
+
+// Exercises `emitBindings` with a synthetic POST/PUT/PATCH binding so
+// the body-emitting branch is covered before any production REST
+// operation lives on that method. Without this, the first POST binding
+// added to REST_BINDINGS would silently lose its `requestBody` entry.
+describe('emitBindings — body-accepting methods', () => {
+  for (const method of ['POST', 'PUT', 'PATCH'] as const) {
+    it(`adds requestBody for ${method} bindings`, () => {
+      const operation = defineOperation({
+        name: 'weft.test.bodysuffix',
+        summary: 'body-accepting test op',
+        inputSchema: z.object({ payload: z.unknown() }),
+        outputSchema: z.unknown(),
+        access: { kind: 'public' },
+        transports: {
+          http: true,
+          jsonRpcHttp: false,
+          jsonRpcWebSocket: false,
+          jsonRpcStdio: false,
+        },
+        unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
+        invoke: async () => ({}),
+      });
+      const binding: UnknownRestBinding = {
+        method,
+        path: '/v1/test/bodysuffix',
+        pathParamNames: [],
+        operationName: 'weft.test.bodysuffix',
+        inputSources: { payload: { kind: 'body' } },
+        extractInput: async (request) => ({ payload: await request.json() }),
+        success: { kind: 'json', status: 200 },
+      };
+      const registry = createOperationRegistry([operation]);
+      const paths: Record<string, Record<string, unknown>> = {};
+      emitBindings(paths, new Set(), [binding], registry);
+
+      const entry = paths['/v1/test/bodysuffix']?.[method.toLowerCase()] as
+        | Record<string, unknown>
+        | undefined;
+      expect(entry).toBeDefined();
+      expect(entry).toHaveProperty('requestBody');
+    });
+  }
+
+  it('does not add requestBody for GET bindings', () => {
+    const operation = defineOperation({
+      name: 'weft.test.getread',
+      summary: 'get-only test op',
+      inputSchema: z.object({ id: z.string() }),
+      outputSchema: z.unknown(),
+      access: { kind: 'public' },
+      transports: { http: true, jsonRpcHttp: false, jsonRpcWebSocket: false, jsonRpcStdio: false },
+      unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
+      invoke: async () => ({}),
+    });
+    const binding: UnknownRestBinding = {
+      method: 'GET',
+      path: '/v1/test/getread/:id',
+      pathParamNames: ['id'],
+      operationName: 'weft.test.getread',
+      inputSources: { id: { kind: 'path', pathParam: 'id' } },
+      extractInput: async (_request, pathParams) => ({ id: pathParams['id'] ?? '' }),
+      success: { kind: 'json', status: 200 },
+    };
+    const registry = createOperationRegistry([operation]);
+    const paths: Record<string, Record<string, unknown>> = {};
+    emitBindings(paths, new Set(), [binding], registry);
+
+    const entry = paths['/v1/test/getread/{id}']?.['get'] as Record<string, unknown> | undefined;
+    expect(entry).toBeDefined();
+    expect(entry).not.toHaveProperty('requestBody');
   });
 });
 
