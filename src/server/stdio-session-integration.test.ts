@@ -82,7 +82,14 @@ function controllableInput(): {
   close(): void;
 } {
   const encoder = new TextEncoder();
+  // The Web Streams spec guarantees `start()` runs synchronously inside
+  // the `ReadableStream` constructor, so `controller` is always assigned
+  // before any `send()` / `close()` call returns. The `!` non-null
+  // assertion is safe here — but only because of that constructor
+  // contract; do not lift this pattern into production code that might
+  // call `send()` from inside `start()` itself.
   let controller!: ReadableStreamDefaultController<Uint8Array>;
+  let closed = false;
   const stream = new ReadableStream<Uint8Array>({
     start(c) {
       controller = c;
@@ -91,9 +98,12 @@ function controllableInput(): {
   return {
     stream,
     send(line: string) {
+      if (closed) return;
       controller.enqueue(encoder.encode(line));
     },
     close() {
+      if (closed) return;
+      closed = true;
       controller.close();
     },
   };
@@ -261,32 +271,72 @@ describe('runStdioSession — engine-backed integration', () => {
       3_000,
     )) as any;
     expect(subscribeResponse.result.subscriptionId).toBeTruthy();
+    const subscriptionId = subscribeResponse.result.subscriptionId as string;
 
-    // Signal the workflow — this commits events that the engine-backed
-    // feed must propagate as weft.events.deliver notifications.
-    await engine.signal(handle.id, 'release', 'done');
+    try {
+      // Capture a baseline of the highest sequence already delivered
+      // by replay (from `engine.start`'s initial workflow:checkpoint).
+      // Any post-signal delivery the test asserts on must have a
+      // sequence STRICTLY GREATER than this baseline — otherwise a
+      // replayed event could satisfy the predicate and the signal-
+      // to-deliver wiring would not actually be exercised.
+      function highestDeliveredSequence(): number {
+        let max = -1;
+        for (const parsed of output.lines() as any[]) {
+          if (
+            parsed?.method === 'weft.events.deliver' &&
+            parsed?.params?.subscriptionId === subscriptionId &&
+            typeof parsed?.params?.envelope?.sequence === 'number' &&
+            parsed.params.envelope.sequence > max
+          ) {
+            max = parsed.params.envelope.sequence;
+          }
+        }
+        return max;
+      }
 
-    // Wait for at least one deliver notification to arrive.
-    const delivered = (await waitForLine(
-      output.lines.bind(output),
-      (parsed: any) =>
-        parsed?.method === 'weft.events.deliver' &&
-        parsed?.params?.envelope?.workflowId === handle.id &&
-        parsed?.params?.envelope?.selector === 'events',
-      3_000,
-    )) as any;
+      // Give replay a brief moment to drain into the output buffer
+      // so the baseline reflects every pre-signal delivery. Then
+      // snapshot.
+      await Bun.sleep(10);
+      const baselineSequence = highestDeliveredSequence();
 
-    expect(delivered.params.envelope.workflowId).toBe(handle.id);
-    expect(delivered.params.envelope.selector).toBe('events');
-    expect(typeof delivered.params.envelope.kind).toBe('string');
-    expect(typeof delivered.params.envelope.sequence).toBe('number');
-    expect(delivered.params.envelope.sequence).toBeGreaterThanOrEqual(0);
-    expect(typeof delivered.params.envelope.cursor).toBe('string');
+      // Signal the workflow — this commits events that the engine-backed
+      // feed must propagate as weft.events.deliver notifications.
+      await engine.signal(handle.id, 'release', 'done');
 
-    // Close the input to let the session drain and exit.
-    input.close();
-    const result = await sessionPromise;
-    expect(result.exitCode).toBe(0);
+      // Wait for a deliver whose sequence advances past the baseline.
+      // This proves the signal → engine commit → feed → stdio path
+      // produced a NEW envelope, not just a replay.
+      const delivered = (await waitForLine(
+        output.lines.bind(output),
+        (parsed: any) =>
+          parsed?.method === 'weft.events.deliver' &&
+          parsed?.params?.subscriptionId === subscriptionId &&
+          parsed?.params?.envelope?.workflowId === handle.id &&
+          parsed?.params?.envelope?.selector === 'events' &&
+          typeof parsed?.params?.envelope?.sequence === 'number' &&
+          parsed.params.envelope.sequence > baselineSequence,
+        3_000,
+      )) as any;
+
+      expect(delivered.params.subscriptionId).toBe(subscriptionId);
+      expect(delivered.params.envelope.workflowId).toBe(handle.id);
+      expect(delivered.params.envelope.selector).toBe('events');
+      expect(typeof delivered.params.envelope.kind).toBe('string');
+      expect(delivered.params.envelope.sequence).toBeGreaterThan(baselineSequence);
+      expect(typeof delivered.params.envelope.cursor).toBe('string');
+      // Close the input to let the session drain and exit.
+      input.close();
+      const result = await sessionPromise;
+      expect(result.exitCode).toBe(0);
+    } finally {
+      // Defense-in-depth: a thrown assertion above would skip the
+      // happy-path teardown. Ensure the session can't leak into the
+      // next test even on failure.
+      input.close();
+      await sessionPromise.catch(() => {});
+    }
   });
 
   it('test 3: unsubscribe stops further deliveries', async () => {
@@ -315,114 +365,215 @@ describe('runStdioSession — engine-backed integration', () => {
       feed,
     });
 
-    // Wait for the subscribe acknowledgement and capture the subscriptionId.
-    const subscribeResponse = (await waitForLine(
-      output.lines.bind(output),
-      (parsed: any) => parsed?.id === 1 && parsed?.result?.subscriptionId,
-      3_000,
-    )) as any;
-    const subscriptionId = subscribeResponse.result.subscriptionId as string;
-
-    // Unsubscribe.
-    input.send(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'weft.workflows.unsubscribe',
-        params: { subscriptionId },
-        id: 2,
-      }) + '\n',
-    );
-
-    // Wait for the unsubscribe acknowledgement before signalling.
-    await waitForLine(
-      output.lines.bind(output),
-      (parsed: any) => parsed?.id === 2 && parsed?.result !== undefined,
-      3_000,
-    );
-
-    // Snapshot the current line count — deliveries for this subscriptionId
-    // that arrive after this index are post-unsubscribe and must not appear.
-    const lineCountAfterUnsubscribe = output.lines().length;
-
-    // Signal the engine — commits that would have triggered deliveries
-    // MUST NOT reach the unsubscribed client.
-    await engine.signal(handle.id, 'release', 'done');
-
-    // Wait for the workflow to reach a terminal state so we know the engine
-    // has committed all events. If any deliver was going to arrive, the
-    // engine has finished emitting by this point.
-    await waitForStatus(engine, handle.id, 'completed', 2_000);
-
-    // Use a short window to assert no deliver arrives for this subscriptionId
-    // AFTER the unsubscribe. `waitForLine` with `startFromIndex` only checks
-    // new lines, so replayed events delivered before unsubscribe are excluded.
-    // This is stronger than `Bun.sleep + boolean check`: the test only passes
-    // if the promise explicitly times out.
-    const deliverPromise = waitForLine(
-      output.lines.bind(output),
-      (parsed: any) =>
-        parsed?.method === 'weft.events.deliver' &&
-        parsed?.params?.subscriptionId === subscriptionId,
-      200,
-      lineCountAfterUnsubscribe,
-    );
-
-    let timedOut = false;
     try {
-      await deliverPromise;
-    } catch (error) {
-      if (error instanceof Error && /timed out/i.test(error.message)) {
-        timedOut = true;
-      } else {
-        throw error;
-      }
-    }
-    expect(timedOut).toBe(true);
+      // Wait for the subscribe acknowledgement and capture the subscriptionId.
+      const subscribeResponse = (await waitForLine(
+        output.lines.bind(output),
+        (parsed: any) => parsed?.id === 1 && parsed?.result?.subscriptionId,
+        3_000,
+      )) as any;
+      const subscriptionId = subscribeResponse.result.subscriptionId as string;
 
-    // Tear down.
-    input.close();
-    const result = await sessionPromise;
-    expect(result.exitCode).toBe(0);
+      // Prove the subscription is actually live BEFORE unsubscribing.
+      // `engine.start('hold', ...)` already committed a
+      // `workflow:checkpoint`, so the subscribe replay must deliver it.
+      // Without this assertion, an unsubscribe-before-listener-active
+      // race would let the test pass vacuously — there'd be no
+      // delivery to suppress because the listener never installed.
+      const initialDelivered = (await waitForLine(
+        output.lines.bind(output),
+        (parsed: any) =>
+          parsed?.method === 'weft.events.deliver' &&
+          parsed?.params?.subscriptionId === subscriptionId,
+        3_000,
+      )) as any;
+      const baselineSequence = initialDelivered.params.envelope.sequence as number;
+      expect(baselineSequence).toBeGreaterThanOrEqual(0);
+
+      // Unsubscribe.
+      input.send(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'weft.workflows.unsubscribe',
+          params: { subscriptionId },
+          id: 2,
+        }) + '\n',
+      );
+
+      // Wait for the unsubscribe acknowledgement before signalling.
+      await waitForLine(
+        output.lines.bind(output),
+        (parsed: any) => parsed?.id === 2 && parsed?.result !== undefined,
+        3_000,
+      );
+
+      // Snapshot the current line count — deliveries for this subscriptionId
+      // that arrive after this index are post-unsubscribe and must not appear.
+      const lineCountAfterUnsubscribe = output.lines().length;
+
+      // Signal the engine — this commits another checkpoint that
+      // WOULD trigger a deliver if the unsubscribe failed. The pre-
+      // unsubscribe assertion above proved deliveries DO happen for
+      // this subscription; if the post-signal scan finds another
+      // deliver with sequence > baseline, the unsubscribe didn't
+      // actually unwire the listener.
+      await engine.signal(handle.id, 'release', 'done');
+
+      // Wait for the workflow to reach a terminal state so we know the engine
+      // has committed all events.
+      await waitForStatus(engine, handle.id, 'completed', 2_000);
+
+      // Primary assertion: scan every line written AFTER the
+      // unsubscribe index. None should be a deliver for our
+      // subscriptionId, AND in particular none should have a
+      // sequence greater than the baseline (any such delivery
+      // would prove the listener is still wired post-unsubscribe).
+      function findPostUnsubscribeDeliver(): unknown {
+        return output
+          .lines()
+          .slice(lineCountAfterUnsubscribe)
+          .find((parsed: any) => {
+            return (
+              parsed?.method === 'weft.events.deliver' &&
+              parsed?.params?.subscriptionId === subscriptionId
+            );
+          });
+      }
+      expect(findPostUnsubscribeDeliver()).toBeUndefined();
+
+      // Defense in depth: a short timeout window to catch any deliver
+      // that the engine commits asynchronously after the terminal-state
+      // wait. Pass condition is the timeout, not a delivery — a regression
+      // that re-introduced post-unsubscribe deliveries would surface here
+      // even if `waitForStatus` returned before the engine's emit.
+      const deliverPromise = waitForLine(
+        output.lines.bind(output),
+        (parsed: any) =>
+          parsed?.method === 'weft.events.deliver' &&
+          parsed?.params?.subscriptionId === subscriptionId,
+        200,
+        lineCountAfterUnsubscribe,
+      );
+
+      let timedOut = false;
+      try {
+        await deliverPromise;
+      } catch (error) {
+        if (error instanceof Error && /timed out/i.test(error.message)) {
+          timedOut = true;
+        } else {
+          throw error;
+        }
+      }
+      expect(timedOut).toBe(true);
+
+      // Tear down.
+      input.close();
+      const result = await sessionPromise;
+      expect(result.exitCode).toBe(0);
+    } finally {
+      // Defense-in-depth cleanup if any assertion above threw.
+      input.close();
+      await sessionPromise.catch(() => {});
+    }
   });
 
-  it('test 4: session close releases the engine listener without unhandled rejections', async () => {
+  it('test 4: subscribed session closes cleanly and releases engine listeners', async () => {
+    // Open a real subscription, prove it's wired (one delivery
+    // arrives), then tear the session down and assert:
+    //   1. The session returns `exitCode === 0`.
+    //   2. No unhandled rejection escapes (a late `emitter.send` on
+    //      a closed stream would otherwise leak).
+    //   3. Post-close engine commits do NOT produce any further
+    //      output — proof the engine listener was actually
+    //      unregistered, not just orphaned.
+    //
+    // The previous version of this test never subscribed, so it
+    // only proved EOF on an idle session returns cleanly — it did
+    // NOT exercise the listener-teardown path it claimed to.
     const handle = await engine.start('hold', {}, {});
     await waitForStatus(engine, handle.id, 'running');
 
-    // Capture any unhandled rejections that escape during session teardown.
     let leakedRejection: unknown = null;
     const rejectionHandler = (reason: unknown) => {
       leakedRejection = reason;
     };
     process.on('unhandledRejection', rejectionHandler);
 
+    const input = controllableInput();
+    const output = collectingWritable();
+
+    input.send(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: handle.id, selector: 'events' },
+        id: 1,
+      }) + '\n',
+    );
+
+    const sessionPromise = runStdioSession({
+      input: input.stream,
+      output: output.stream,
+      admission: { kind: 'allow-unauthenticated-local-admin' },
+      registry,
+      engine,
+      feed,
+    });
+
     try {
-      // An empty input stream causes the session to reach EOF immediately,
-      // which triggers the `finally` block in `runStdioSession` — that's
-      // where `session.close()` is called and engine listeners are released.
-      const input = readableFromLines([]);
-      const output = collectingWritable();
+      // Confirm the subscription is live before tearing down.
+      const subscribeResponse = (await waitForLine(
+        output.lines.bind(output),
+        (parsed: any) => parsed?.id === 1 && parsed?.result?.subscriptionId,
+        3_000,
+      )) as any;
+      const subscriptionId = subscribeResponse.result.subscriptionId as string;
 
-      const result = await runStdioSession({
-        input,
-        output: output.stream,
-        admission: { kind: 'allow-unauthenticated-local-admin' },
-        registry,
-        engine,
-        feed,
-      });
+      const initialDelivered = (await waitForLine(
+        output.lines.bind(output),
+        (parsed: any) =>
+          parsed?.method === 'weft.events.deliver' &&
+          parsed?.params?.subscriptionId === subscriptionId,
+        3_000,
+      )) as any;
+      expect(initialDelivered.params.subscriptionId).toBe(subscriptionId);
 
-      // The externally-observable proof that cleanup ran is the session
-      // returning a clean exitCode. Any engine-listener leak that caused an
-      // in-flight write to a closed stream after session.close() would
-      // surface as an unhandledRejection — asserted below.
+      // Close input → EOF → session.close() runs in the `finally`
+      // block of runStdioSession, which is what releases the
+      // engine listener for this subscription.
+      input.close();
+      const result = await sessionPromise;
       expect(result.exitCode).toBe(0);
 
-      // Give microtasks a chance to surface any late rejections from the
-      // session.close() → feed unsubscribe → engine-listener call chain.
+      // Snapshot the line count post-teardown. Any further engine
+      // commit MUST NOT produce a deliver in the output buffer
+      // (the writable is still alive in the test, but the session
+      // is gone).
+      const lineCountAfterClose = output.lines().length;
+
+      // Post-close commits — these would surface as deliveries if
+      // the engine listener was leaked.
+      await engine.signal(handle.id, 'release', 'done');
+      await waitForStatus(engine, handle.id, 'completed', 2_000);
+
+      // Give microtasks a turn so any late emission would land.
       await new Promise<void>((resolve) => setImmediate(resolve));
       await new Promise<void>((resolve) => setImmediate(resolve));
+
+      const postCloseDeliver = output
+        .lines()
+        .slice(lineCountAfterClose)
+        .find((parsed: any) => {
+          return (
+            parsed?.method === 'weft.events.deliver' &&
+            parsed?.params?.subscriptionId === subscriptionId
+          );
+        });
+      expect(postCloseDeliver).toBeUndefined();
     } finally {
+      input.close();
+      await sessionPromise.catch(() => {});
       process.off('unhandledRejection', rejectionHandler);
     }
 
