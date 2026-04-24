@@ -456,14 +456,73 @@ function cloneClaims(claims: JWTPayload | undefined): JWTPayload | undefined {
  */
 function deepFreeze<T>(value: T): T {
   if (typeof value !== 'object' || value === null) return value;
+  // Freeze BEFORE recursion so cyclic references are caught by the
+  // `Object.isFrozen` check on the second visit. If we froze after
+  // recursion instead, a self-referential object would recurse
+  // infinitely before the freeze ever landed.
+  Object.freeze(value);
   for (const key of Object.keys(value)) {
     const child = (value as Record<string, unknown>)[key];
     if (typeof child === 'object' && child !== null && !Object.isFrozen(child)) {
       deepFreeze(child);
     }
   }
-  Object.freeze(value);
   return value;
+}
+
+/**
+ * Run the API-key admission path for a presented key. Returns:
+ *   - `AuthResult` (authenticated: true OR false) when admission
+ *     resolves — caller must return this to its caller.
+ *   - `'continue'` when no API-key admission applied (e.g., resolver
+ *     absent + static set doesn't contain the key) — caller should
+ *     fall through to the next method block (JWT / mTLS).
+ *
+ * Extracted from `createAuthenticator`'s inner function so the
+ * resolver/static branch doesn't push the outer function's
+ * cyclomatic complexity past the lint threshold.
+ */
+async function tryAdmitApiKey(
+  presentedKey: string,
+  resolver: AuthConfig['resolveApiKeyPrincipal'],
+  apiKeySet: Set<string> | null,
+  defaultApiKeyScopes: ReadonlyArray<AuthorizationScope>,
+): Promise<AuthResult | 'continue'> {
+  if (resolver !== undefined) {
+    let resolved: AuthenticatedPrincipal | null;
+    try {
+      resolved = await resolver(presentedKey);
+    } catch (error) {
+      // Resolver throw: log server-side, reject client. Never leak the
+      // thrown error's message to the wire — it may contain DB queries,
+      // secrets, or other sensitive context.
+      console.warn('resolveApiKeyPrincipal threw:', error instanceof Error ? error.message : error);
+      resolved = null;
+    }
+    if (resolved !== null && validateApiKeyPrincipalMethod(resolved)) {
+      const admitted = deepFreezeApiKeyPrincipal(resolved);
+      return { authenticated: true, method: 'api-key', principal: admitted };
+    }
+    // Resolver returned null, threw, or produced a method-mismatched
+    // principal. Terminal: the resolver is authoritative for any key
+    // space it is configured for. Neither static apiKeys nor JWT
+    // verification may admit this request.
+    return { authenticated: false, error: 'No valid credentials provided' };
+  }
+  if (apiKeySet?.has(presentedKey)) {
+    // `principalFromApiKey` is guaranteed to set method:'api-key',
+    // so the runtime method guard from the resolver path is not
+    // needed here. If that factory invariant ever changes, the
+    // resolver-path method-mismatch test will continue to guard
+    // the boundary from resolver-supplied principals.
+    const principal = principalFromApiKey({
+      subject: 'api-key-caller',
+      scopes: defaultApiKeyScopes,
+    });
+    const admitted = deepFreezeApiKeyPrincipal(principal);
+    return { authenticated: true, method: 'api-key', principal: admitted };
+  }
+  return 'continue';
 }
 
 /**
@@ -580,49 +639,24 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
     //      If the key is not in the static set, fall through to the JWT
     //      block so Bearer JWT tokens (which look like api keys to
     //      extractApiKey but are actually JWTs) can be verified there.
+    // Only treat the key as an explicit auth attempt when there is an
+    // actual API-key admission path (resolver OR static apiKeySet). An
+    // mTLS-only or jwt+mtls config that happens to receive a stray
+    // `X-API-Key` header should fall through to the mTLS/JWT block as
+    // though the header wasn't present — marking it "attempted" would
+    // suppress the mTLS fallback and return 401 for a request the
+    // previous behavior admitted.
     const presentedKey = extractApiKey(request);
-    if (presentedKey) {
+    const hasApiKeyPath = resolver !== undefined || apiKeySet !== null;
+    if (presentedKey && hasApiKeyPath) {
       explicitAuthAttempted = true;
-      if (resolver !== undefined) {
-        let resolved: AuthenticatedPrincipal | null;
-        try {
-          resolved = await resolver(presentedKey);
-        } catch (error) {
-          // Resolver throw: log server-side, reject client. Never leak the
-          // thrown error's message to the wire — it may contain DB queries,
-          // secrets, or other sensitive context.
-          console.warn(
-            'resolveApiKeyPrincipal threw:',
-            error instanceof Error ? error.message : error,
-          );
-          resolved = null;
-        }
-        if (resolved !== null && validateApiKeyPrincipalMethod(resolved)) {
-          const admitted = deepFreezeApiKeyPrincipal(resolved);
-          return { authenticated: true, method: 'api-key', principal: admitted };
-        }
-        // Resolver returned null, threw, or produced a method-mismatched
-        // principal. Fall through to the terminal rejection below — must
-        // NOT admit under a contradictory method claim or consult static
-        // apiKeys as a fallback (the resolver is authoritative).
-        // Resolver said no (or returned an invalid-shape principal):
-        // terminal. Neither static apiKeys nor JWT verification may
-        // admit this request — the resolver is authoritative for any
-        // key space it is configured for.
-        return { authenticated: false, error: 'No valid credentials provided' };
-      } else if (apiKeySet?.has(presentedKey)) {
-        // `principalFromApiKey` is guaranteed to set method:'api-key',
-        // so the runtime method guard from the resolver path is not
-        // needed here. If that factory invariant ever changes, the
-        // resolver-path method-mismatch test will continue to guard
-        // the boundary from resolver-supplied principals.
-        const principal = principalFromApiKey({
-          subject: 'api-key-caller',
-          scopes: defaultApiKeyScopes,
-        });
-        const admitted = deepFreezeApiKeyPrincipal(principal);
-        return { authenticated: true, method: 'api-key', principal: admitted };
-      }
+      const apiKeyOutcome = await tryAdmitApiKey(
+        presentedKey,
+        resolver,
+        apiKeySet,
+        defaultApiKeyScopes,
+      );
+      if (apiKeyOutcome !== 'continue') return apiKeyOutcome;
     }
 
     // Try JWT verification on Bearer tokens that look like JWTs (contain dots).

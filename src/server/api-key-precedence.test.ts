@@ -288,6 +288,63 @@ describe('API-key admission — resolver present', () => {
   });
 });
 
+describe('mTLS fallback regression (Bugbot round 5)', () => {
+  it('mTLS-only config admits via mTLS even when a stray X-API-Key header is present', async () => {
+    // An mTLS-only server has no resolver and no apiKeys. A client
+    // request that happens to carry an X-API-Key header (e.g., left
+    // over from a different deployment) must not suppress the mTLS
+    // fallback — extractApiKey finds the header, but there is no
+    // API-key admission path, so explicitAuthAttempted must stay false
+    // and mTLS admits the request normally.
+    const config: AuthConfig = {
+      mtls: { ca: '', cert: '', key: '' },
+    };
+    const auth = await createAuthenticator(config);
+    const request = new Request('http://localhost/v1/workflows', {
+      method: 'GET',
+      headers: { 'X-API-Key': 'stray-header' },
+    });
+    const result = await auth(request);
+
+    expect(result.authenticated).toBe(true);
+    if (!result.authenticated) throw new Error('unreachable');
+    expect(result.method).toBe('mtls');
+  });
+});
+
+describe('deepFreeze cycle safety (Bugbot round 5)', () => {
+  it('cloneClaims does not stack-overflow on a circular claims graph', async () => {
+    // structuredClone preserves cyclic references; deepFreeze must
+    // freeze each node BEFORE recursing so the Object.isFrozen guard
+    // breaks the cycle. If freeze were deferred until after recursion,
+    // this test would blow the stack.
+    type CyclicClaims = { name: string; self?: CyclicClaims };
+    const cyclic: CyclicClaims = { name: 'cyclic' };
+    cyclic.self = cyclic;
+    const config: AuthConfig = {
+      resolveApiKeyPrincipal: async () => ({
+        method: 'api-key',
+        scopes: new Set<AuthorizationScope>([]),
+        claims: cyclic as unknown as Record<string, unknown>,
+        tenantId: undefined,
+        subject: 'cycle-test',
+        hasScope: () => false,
+      }),
+    };
+    const auth = await createAuthenticator(config);
+    const result = await auth(requestWithKey('any-key'));
+
+    expect(result.authenticated).toBe(true);
+    if (!result.authenticated) throw new Error('unreachable');
+    if (result.principal === undefined) throw new Error('expected principal');
+    const admittedClaims = result.principal.claims as CyclicClaims | undefined;
+    expect(admittedClaims?.name).toBe('cyclic');
+    // The cycle is preserved and the inner reference is frozen too.
+    expect(Object.isFrozen(admittedClaims)).toBe(true);
+    expect(Object.isFrozen(admittedClaims?.self)).toBe(true);
+  });
+});
+
 describe('validateAuthConfig — resolver-only admission', () => {
   it('accepts resolveApiKeyPrincipal as the sole configured method', () => {
     // Direct unit coverage: the plan mandates resolver-only configs
