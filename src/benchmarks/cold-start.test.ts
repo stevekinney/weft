@@ -22,7 +22,7 @@ import { BunSQLiteStorage } from '../storage/bun-sql.ts';
 // ---------------------------------------------------------------------------
 
 const LIBRARY_TARGET_MS = process.env['CI'] ? 200 : 100;
-const BINARY_WARM_CACHE_TARGET_MS = 150;
+const BINARY_WARM_CACHE_TARGET_MS = 100;
 
 describe('Library cold start', () => {
   it(`new Engine() to first workflow start completes in <${LIBRARY_TARGET_MS}ms`, async () => {
@@ -245,11 +245,9 @@ describe('Server cold start benchmark', () => {
           ].join('\n'),
         );
 
-        // Spec target: <100ms warm-cache cold start. Measured 2026-04-11:
-        // ~90ms median on this Apple Silicon host with a 120ms+ tail under
-        // suite-level CPU contention. The enforced gate stays at 150ms until
-        // the benchmark runs in a less noisy environment; the tighter spec
-        // target remains tracked in `reference/IMPORTANT.md`.
+        // Spec target: <100ms warm-cache cold start. Recent measurements on
+        // this host are well below that threshold, so the benchmark now
+        // enforces the architecture target directly.
         expect(median).toBeLessThan(BINARY_WARM_CACHE_TARGET_MS);
       } catch (error) {
         if (isMissingExecutableError(error)) {
