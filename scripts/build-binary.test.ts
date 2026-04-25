@@ -176,6 +176,7 @@ describe('outputNameForTarget', () => {
 
 describe('buildForTarget (current platform)', () => {
   const outdir = join(import.meta.dir, '..', 'dist', `test-binary-${process.pid}`);
+  const maxBinarySizeBytes = 100 * 1024 * 1024;
 
   beforeAll(() => {
     if (existsSync(outdir)) {
@@ -230,6 +231,25 @@ describe('buildForTarget (current platform)', () => {
     expect(stdout).toContain('--database');
     expect(stdout).toContain('--storage');
   }, 30_000);
+
+  it('keeps the compiled binary under 100MB', async () => {
+    const platform = process.platform === 'win32' ? 'windows' : process.platform;
+    const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+    const binaryName = `weft-${platform}-${arch}${platform === 'windows' ? '.exe' : ''}`;
+    const binaryPath = join(outdir, binaryName);
+
+    if (!existsSync(binaryPath)) {
+      console.warn('Skipping size test: binary not found');
+      return;
+    }
+
+    const sizeBytes = Bun.file(binaryPath).size;
+    console.log(
+      `Current-platform binary size: ${(sizeBytes / 1024 / 1024).toFixed(1)}MB (limit 100.0MB)`,
+    );
+
+    expect(sizeBytes).toBeLessThan(maxBinarySizeBytes);
+  });
 
   it('returns a failed result when bun build exits non-zero', async () => {
     const result = await buildForTarget(

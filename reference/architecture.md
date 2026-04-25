@@ -5185,8 +5185,8 @@ Three files. Webpack bundling. `proxyActivities` ceremony. Separate worker proce
 - [x] **`bun build --compile` produces standalone executables.** For `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64`, `windows-x64`.
 - [x] **Binary includes Bun runtime + SQLite + dashboard assets.** No external dependencies.
 - [x] **CLI flags: `--port`, `--database`, `--no-ui`, `--storage`.** Configurable at launch.
-- [ ] **Binary size < 100MB.** Target: ~60MB (Bun runtime is ~50MB, Weft + dashboard ~10MB).
-- [ ] **Cold start to first workflow < 100ms.** Measured from process start to HTTP 201 on workflow creation.
+- [x] **Binary size < 100MB.** Target: ~60MB (Bun runtime is ~50MB, Weft + dashboard ~10MB).
+- [x] **Cold start to first workflow < 100ms.** Measured from process start to HTTP 201 on workflow creation.
 - [x] **Cross-compilation from single CI pipeline.** One `build.ts` script, five output binaries.
 
 ### Browser / Service Worker

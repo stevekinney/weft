@@ -2786,10 +2786,14 @@ describe('task assignment deduplication', () => {
         input: null,
       });
 
-      await Bun.sleep(100);
-
-      expect(server.registry.getWorker('w-missing-op-id')?.inFlight).toBe(0);
-      expect(warningSpy).toHaveBeenCalled();
+      await waitFor(
+        () =>
+          server.registry.getWorker('w-missing-op-id')?.inFlight === 0 &&
+          warningSpy.mock.calls.length > 0,
+        {
+          label: 'worker in-flight counter decrement after taskResult without operationId',
+        },
+      );
 
       ws.close();
       await Bun.sleep(50);
