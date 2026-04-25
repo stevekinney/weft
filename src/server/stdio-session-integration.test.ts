@@ -264,16 +264,16 @@ describe('runStdioSession — engine-backed integration', () => {
       feed,
     });
 
-    // Wait for the subscription acknowledgement to arrive before signalling.
-    const subscribeResponse = (await waitForLine(
-      output.lines.bind(output),
-      (parsed: any) => parsed?.id === 1 && parsed?.result?.subscriptionId,
-      3_000,
-    )) as any;
-    expect(subscribeResponse.result.subscriptionId).toBeTruthy();
-    const subscriptionId = subscribeResponse.result.subscriptionId as string;
-
     try {
+      // Wait for the subscription acknowledgement to arrive before signalling.
+      const subscribeResponse = (await waitForLine(
+        output.lines.bind(output),
+        (parsed: any) => parsed?.id === 1 && parsed?.result?.subscriptionId,
+        3_000,
+      )) as any;
+      expect(subscribeResponse.result.subscriptionId).toBeTruthy();
+      const subscriptionId = subscribeResponse.result.subscriptionId as string;
+
       // Capture a baseline of the highest sequence already delivered
       // by replay (from `engine.start`'s initial workflow:checkpoint).
       // Any post-signal delivery the test asserts on must have a
