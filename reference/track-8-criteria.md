@@ -62,7 +62,7 @@ When wave PRs cite a criterion, they cite the `id` here, not a line number in `a
 - **`final-3`**: `bun run lint` (oxlint) exits 0.
 - **`final-4`**: `bun run build` succeeds.
 - **`final-5`**: `bun build --compile src/cli-main.ts --outfile weft` produces a working binary.
-- **`final-6`**: Every new primitive from this document has a dedicated test file under `src/**/__tests__/` and every acceptance criterion above is covered by at least one `test(...)` call whose failure message names the criterion.
+- **`final-6`**: Every new primitive from this document has a dedicated test file under `src/` (either as a colocated `src/**/*.test.ts` file or under `src/**/__tests__/`) and every acceptance criterion above is covered by at least one `test(...)` call whose failure message names the criterion.
 
 > The architecture criterion `weft validate examples/**/*.ts` exits 0 on the bundled examples is already shipped and is not in Track 8 scope.
 
@@ -72,6 +72,6 @@ When wave PRs cite a criterion, they cite the `id` here, not a line number in `a
 
 Per the Step 0 PR amendment to `reference/architecture.md` under Track 8 — Final verification:
 
-> Coverage rule: each behavioral or cross-cutting structural criterion has a real, non-skipped Bun test whose `it(...)` (or `test(...)` — the Bun aliases are equivalent) title quotes the criterion text from `reference/track-8-criteria.md`. The title is what `bun test` prints on failure, so this satisfies `final-6`'s "failure message names the criterion" phrasing. Design-invariant criteria are reviewed via the traceability matrix and the rationale paragraph in `runtime-and-deployment.md`, not via runtime tests, because no runtime assertion can prove "we did not build a second orchestration layer."
+> Coverage rule: each behavioral or cross-cutting structural criterion has a real, non-skipped Bun test whose `it(...)` (or `test(...)` — the Bun aliases are equivalent) title contains, as a substring, the exact post-colon sentence of the matching bullet in `reference/track-8-criteria.md`. The bullet's leading slug id and the colon are not part of the quoted span; backticks may be stripped. The title is what `bun test` prints on failure, so this satisfies `final-6`'s "failure message names the criterion" phrasing. Design-invariant criteria are reviewed via the traceability matrix and the rationale paragraph in `runtime-and-deployment.md`, not via runtime tests, because no runtime assertion can prove "we did not build a second orchestration layer."
 
 This carves design-invariant criteria (`8a-1`, `8a-3`, `8a-4`) and documentation criteria (`8-top-2`, `8d-1`) out of the runtime-test rule. They close via the traceability matrix's design-invariant or documentation evidence modes, not via a synthetic test.

@@ -5737,7 +5737,7 @@ Track 8 extends the runtime surface without creating a second execution system. 
 
 ### Final verification
 
-> Coverage rule: each behavioral or cross-cutting structural criterion has a real, non-skipped Bun test whose `it(...)` (or `test(...)` — the Bun aliases are equivalent) title quotes the criterion text from `reference/track-8-criteria.md`. The title is what `bun test` prints on failure, so this satisfies `final-6`'s "failure message names the criterion" phrasing. Design-invariant criteria are reviewed via the traceability matrix in `reference/track-8-traceability.md` and the rationale paragraphs in `reference/architecture/runtime-and-deployment.md`, not via runtime tests, because no runtime assertion can prove "we did not build a second orchestration layer."
+> Coverage rule: each behavioral or cross-cutting structural criterion has a real, non-skipped Bun test whose `it(...)` (or `test(...)` — the Bun aliases are equivalent) title contains, as a substring, the exact post-colon sentence of the matching bullet in `reference/track-8-criteria.md`. The bullet's leading slug id and the colon are not part of the quoted span; backticks may be stripped. The title is what `bun test` prints on failure, so this satisfies `final-6`'s "failure message names the criterion" phrasing. Design-invariant criteria are reviewed via the traceability matrix in `reference/track-8-traceability.md` and the rationale paragraphs in `reference/architecture/runtime-and-deployment.md`, not via runtime tests, because no runtime assertion can prove "we did not build a second orchestration layer."
 
 - [ ] `bun test` passes across the whole repo.
 - [ ] `bun run typecheck` exits 0.
@@ -5745,4 +5745,4 @@ Track 8 extends the runtime surface without creating a second execution system. 
 - [ ] `bun run build` succeeds.
 - [ ] `bun build --compile src/cli-main.ts --outfile weft` produces a working binary.
 - [x] `weft validate examples/**/*.ts` exits 0 on the bundled examples.
-- [ ] Every new primitive from this document has a dedicated test file under `src/**/__tests__/` and every acceptance criterion above is covered by at least one `test(...)` call whose failure message names the criterion.
+- [ ] Every new primitive from this document has a dedicated test file under `src/` (either as a colocated `src/**/*.test.ts` file or under `src/**/__tests__/`) and every acceptance criterion above is covered by at least one `test(...)` call whose failure message names the criterion.

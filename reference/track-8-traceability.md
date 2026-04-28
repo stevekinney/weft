@@ -11,7 +11,7 @@ This matrix is the single source of truth for whether a Track 8 criterion is `cl
 | `category`         | one of `behavioral` \| `cross-cutting-structural` \| `design-invariant` \| `documentation` \| `verification-gate`                                         |
 | `status`           | one of `shipped` \| `partial` \| `missing` \| `excluded`                                                                                                  |
 | `rationale`        | required when `status = excluded`; optional reviewer-facing context for `shipped` design-invariant rows; empty otherwise                                  |
-| `evidence_file`    | path (e.g. `src/server/operation-catalog.ts`) or `n/a`                                                                                                    |
+| `evidence_file`    | one or more comma-separated paths (e.g. `src/server/operation-catalog.ts, src/server/rest-bindings.ts`) or `n/a`                                          |
 | `evidence_section` | markdown anchor pinning the closing paragraph (e.g. `runtime-and-deployment.md#track-8-no-second-orchestration-layer-8a-1`) or `n/a`                      |
 | `evidence_test`    | named test + file (e.g. `openrpc.test.ts: "JSON-RPC uses named params only"`) or `n/a`                                                                    |
 | `evidence_command` | shell command whose successful run closes the row (e.g. `bun test`) or `n/a`                                                                              |
@@ -23,9 +23,9 @@ This matrix is the single source of truth for whether a Track 8 criterion is `cl
 
 Per the Step 0 amendment to `reference/architecture.md`:
 
-> Coverage rule: each behavioral or cross-cutting structural criterion has a real `it()` whose title quotes the criterion text. Design-invariant criteria are reviewed via the traceability matrix and the rationale paragraphs in `runtime-and-deployment.md`, not via runtime tests, because no runtime assertion can prove "we did not build a second orchestration layer."
+> Coverage rule: each behavioral or cross-cutting structural criterion has a real, non-skipped Bun test whose `it(...)` (or `test(...)` — the Bun aliases are equivalent) title contains, as a substring, the exact post-colon sentence of the matching bullet in `reference/track-8-criteria.md`. The bullet's leading slug id and the colon are not part of the quoted span; backticks may be stripped. The title is what `bun test` prints on failure, so this satisfies `final-6`'s "failure message names the criterion" phrasing. Design-invariant criteria are reviewed via the traceability matrix in `reference/track-8-traceability.md` and the rationale paragraphs in `reference/architecture/runtime-and-deployment.md`, not via runtime tests, because no runtime assertion can prove "we did not build a second orchestration layer."
 
-The matrix's `closeable` rule below is the operational form of that amendment. The phrase `quotes the criterion text` means: the test's `it(...)` title contains the exact criterion-text from `track-8-criteria.md` as a substring, modulo backticks. (`it` and `test` are Bun aliases; either is acceptable, but the title text rule is identical.)
+The matrix's `closeable` rule below is the operational form of that amendment. The amendment paragraph in `reference/architecture.md` is the canonical wording; the same paragraph is reproduced here so the matrix is self-contained.
 
 ## Closeable definition
 
@@ -46,7 +46,7 @@ A row is `closeable: true` iff one of these branches holds.
 
 These rules govern which routes belong on the cataloged transport-parity surface and which are intentionally REST-only or anonymous.
 
-- **Cataloged runtime operations** must support REST + JSON-RPC HTTP + JSON-RPC WebSocket + JSON-RPC stdio. As of Step 0: 39 currently-migrated operations (verified by `grep -hE "name: 'weft\." src/server/operations/*.ts | sort -u | wc -l`) plus the 5 added in Wave 1 (`weft.schedules.list`, `weft.schedules.get`, `weft.tenants.quota.get`, `weft.workflows.replay`, `weft.system.metrics`).
+- **Cataloged runtime operations** must support REST + JSON-RPC HTTP + JSON-RPC WebSocket + JSON-RPC stdio. As of Step 0, there are 39 currently migrated operations (verified by `grep -hE "name: 'weft\." src/server/operations/*.ts | sort -u | wc -l`). Wave 1 adds 5 more: `weft.schedules.list`, `weft.schedules.get`, `weft.tenants.quota.get`, `weft.workflows.replay`, `weft.system.metrics`.
 
   > **Note**: `src/server/operations/` also contains four helper modules — `operation-helpers.ts`, `bulk-filter-helpers.ts`, `sse-stream.ts`, `schedule-faults.ts` — that do not call `defineOperation` and are not counted as operations.
 
@@ -68,6 +68,8 @@ Cataloged operations follow `weft.<noun>.<verb>` or `weft.<noun>.<sub-noun>.<ver
 ## Matrix
 
 Rows reference criterion ids defined in `reference/track-8-criteria.md`.
+
+> **Note on `evidence_section` anchors**: rows whose `wave > 0` may carry an anchor that does not yet resolve on `main`. Those are forward references — the closing wave PR is responsible for adding the section so the anchor resolves. A row stays `closeable: false` until both the anchor's target section exists on `main` and the section heading or opening sentence cites the row's `id` verbatim, per the design-invariant branch of the closeable rule.
 
 | id        | criterion                                                         | category                 | status  | wave | evidence_file                                                                                     | evidence_section                                                     | evidence_test                                                                                                                                                                                                         | evidence_command                                                                             | evidence_pr_link         | rationale                                                                                                                                                     | closeable |
 | --------- | ----------------------------------------------------------------- | ------------------------ | ------- | ---- | ------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------- |
