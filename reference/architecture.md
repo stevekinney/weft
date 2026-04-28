@@ -5737,6 +5737,8 @@ Track 8 extends the runtime surface without creating a second execution system. 
 
 ### Final verification
 
+> Coverage rule: each behavioral or cross-cutting structural criterion has a real `it()` whose title quotes the criterion text. Design-invariant criteria are reviewed via the traceability matrix in `reference/track-8-traceability.md` and the rationale paragraphs in `reference/architecture/runtime-and-deployment.md`, not via runtime tests, because no runtime assertion can prove "we did not build a second orchestration layer."
+
 - [ ] `bun test` passes across the whole repo.
 - [ ] `bun run typecheck` exits 0.
 - [ ] `bun run lint` (oxlint) exits 0.
