@@ -72,6 +72,6 @@ When wave PRs cite a criterion, they cite the `id` here, not a line number in `a
 
 Per the Step 0 PR amendment to `reference/architecture.md` under Track 8 — Final verification:
 
-> Coverage rule: each behavioral or cross-cutting structural criterion has a real `it()` whose title quotes the criterion text. Design-invariant criteria are reviewed via the traceability matrix and the rationale paragraph in `runtime-and-deployment.md`, not via runtime tests, because no runtime assertion can prove "we did not build a second orchestration layer."
+> Coverage rule: each behavioral or cross-cutting structural criterion has a real, non-skipped Bun test whose `it(...)` (or `test(...)` — the Bun aliases are equivalent) title quotes the criterion text from `reference/track-8-criteria.md`. The title is what `bun test` prints on failure, so this satisfies `final-6`'s "failure message names the criterion" phrasing. Design-invariant criteria are reviewed via the traceability matrix and the rationale paragraph in `runtime-and-deployment.md`, not via runtime tests, because no runtime assertion can prove "we did not build a second orchestration layer."
 
-This carves design-invariant criteria (`8a-1`, `8a-3`, `8a-4`, `8-top-2` if categorized as documentation) out of the runtime-test rule. They close via the traceability matrix's design-invariant or documentation evidence modes, not via a synthetic test.
+This carves design-invariant criteria (`8a-1`, `8a-3`, `8a-4`) and documentation criteria (`8-top-2`, `8d-1`) out of the runtime-test rule. They close via the traceability matrix's design-invariant or documentation evidence modes, not via a synthetic test.
