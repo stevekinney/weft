@@ -86,91 +86,50 @@ function recomputePublicEntryPoints(pkg: PkgJson): Record<string, string> {
 }
 
 // ---------------------------------------------------------------------------
-// Conditional-types coverage check.
+// Top-level-types requirement.
 //
 // `pickTypesField` returns null for a conditional shape that has nested
 // platform `types` (e.g. `{ bun: { types }, node: { types } }`) without a
-// top-level `types` field. Both the manifest builder and the audit silently
-// skip these — the contract is that explicit per-platform subpaths
-// (`./storage/sqlite/bun`, `./storage/sqlite/node`) cover the public surface
-// instead. This check makes that contract enforceable.
+// top-level `types` field. The manifest builder and audit both silently skip
+// such exports — there is no single source file to map them to.
 //
-// Two condition shapes need different treatment:
-//   - Platform conditions (`bun`, `node`) name a runtime; `${subpath}/${name}`
-//     is a meaningful explicit subpath the project already uses.
-//   - Module-shape conditions (`import`, `default`) do not name a platform;
-//     `${subpath}/import` would be nonsense as a public import path. For
-//     these, the only correct fix is to hoist a unified top-level `types`
-//     field on the subpath itself.
+// Earlier iterations of this audit tried to compensate by requiring explicit
+// per-platform subpaths (`./storage/sqlite/bun`, `./storage/sqlite/node`)
+// when this shape appeared. That approach has a hole: the explicit subpath's
+// declaration may not actually cover the same surface the conditional
+// import path would resolve to, and proving equivalence requires either a
+// path-equality check (brittle, blocks legitimate divergence) or a separate
+// audit path that enumerates the nested declaration directly.
+//
+// The simpler answer: ban the conditional-only shape outright. If an export
+// has any nested `types` field, it must also carry a top-level `types`
+// field. The project follows this convention today; this assertion makes
+// it enforceable so a future contributor can't introduce the gap. If a
+// future export legitimately needs platform-specific types, split it into
+// explicit per-platform subpaths instead — those subpaths get audited as
+// first-class entry points with their own JSDoc coverage requirement.
 // ---------------------------------------------------------------------------
 
-const PLATFORM_KEYS = ['bun', 'node'] as const;
-const MODULE_SHAPE_KEYS = ['import', 'default'] as const;
-type ConditionKey = (typeof PLATFORM_KEYS)[number] | (typeof MODULE_SHAPE_KEYS)[number];
+const NESTED_CONDITION_KEYS = ['bun', 'node', 'import', 'default'] as const;
 
-type ConditionalOnlyExport = {
-  subpath: string;
-  platformKeys: (typeof PLATFORM_KEYS)[number][];
-  moduleShapeKeys: (typeof MODULE_SHAPE_KEYS)[number][];
-};
-
-function findConditionalOnlyExports(pkg: PkgJson): ConditionalOnlyExport[] {
-  if (!pkg.exports) return [];
-  const out: ConditionalOnlyExport[] = [];
+function assertTopLevelTypes(pkg: PkgJson, failures: string[]): void {
+  if (!pkg.exports) return;
   for (const [subpath, value] of Object.entries(pkg.exports)) {
     if (typeof value !== 'object' || value === null) continue;
     const obj = value as Record<string, unknown>;
     if (typeof obj['types'] === 'string') continue;
-    const platformKeys: (typeof PLATFORM_KEYS)[number][] = [];
-    const moduleShapeKeys: (typeof MODULE_SHAPE_KEYS)[number][] = [];
-    for (const key of [...PLATFORM_KEYS, ...MODULE_SHAPE_KEYS] as ConditionKey[]) {
+    const nestedTypesConditions: string[] = [];
+    for (const key of NESTED_CONDITION_KEYS) {
       const inner = obj[key];
       if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
         const innerTypes = (inner as Record<string, unknown>)['types'];
-        if (typeof innerTypes === 'string') {
-          if ((PLATFORM_KEYS as readonly string[]).includes(key)) {
-            platformKeys.push(key as (typeof PLATFORM_KEYS)[number]);
-          } else {
-            moduleShapeKeys.push(key as (typeof MODULE_SHAPE_KEYS)[number]);
-          }
-        }
+        if (typeof innerTypes === 'string') nestedTypesConditions.push(key);
       }
     }
-    if (platformKeys.length > 0 || moduleShapeKeys.length > 0) {
-      out.push({ subpath, platformKeys, moduleShapeKeys });
-    }
-  }
-  return out;
-}
-
-function assertConditionalSubpathCoverage(pkg: PkgJson, failures: string[]): void {
-  const conditionalExports = findConditionalOnlyExports(pkg);
-  for (const { subpath, platformKeys, moduleShapeKeys } of conditionalExports) {
-    // Platform conditions: require an explicit `${subpath}/${platform}`
-    // subpath whose own export entry has a usable top-level types field.
-    // The key existing isn't enough — a string-only export, or an export
-    // without a top-level types field, would silently re-create the same
-    // coverage gap this check exists to close.
-    for (const platform of platformKeys) {
-      const expectedSubpath = `${subpath}/${platform}`;
-      const subpathValue = pkg.exports?.[expectedSubpath];
-      if (subpathValue === undefined) {
-        failures.push(
-          `  conditional-types coverage: \`${subpath}\` has nested \`${platform}.types\` but no explicit \`${expectedSubpath}\` subpath. Either add the explicit subpath or hoist a unified \`types\` field on \`${subpath}\`.`,
-        );
-        continue;
-      }
-      if (pickTypesField(subpathValue) === null) {
-        failures.push(
-          `  conditional-types coverage: \`${expectedSubpath}\` exists but has no usable top-level \`types\` field. Add \`types\` to that export or hoist a unified \`types\` field on \`${subpath}\`.`,
-        );
-      }
-    }
-    // Module-shape conditions (`import`, `default`): the only correct fix is
-    // a top-level unified `types` field on the subpath itself.
-    for (const conditionKey of moduleShapeKeys) {
+    if (nestedTypesConditions.length > 0) {
+      const conditionsList = nestedTypesConditions.map((c) => `\`${c}.types\``).join(', ');
       failures.push(
-        `  conditional-types coverage: \`${subpath}\` has nested \`${conditionKey}.types\` but no top-level \`types\` field. Hoist a unified \`types\` field on \`${subpath}\` (\`import\`/\`default\` are not platform names — they cannot be covered by an explicit per-platform subpath).`,
+        `  top-level-types: \`${subpath}\` has nested types conditions (${conditionsList}) but no top-level \`types\` field. Add a top-level \`types\` field, or split into explicit per-platform subpaths (each with its own top-level \`types\`). The conditional-only shape silently drops public coverage from the audit.`,
       );
     }
   }
@@ -400,8 +359,10 @@ function main(): void {
   const recomputedPEP = recomputePublicEntryPoints(pkg);
   assertEqualMaps('publicEntryPoints', manifest.publicEntryPoints, recomputedPEP, failures);
 
-  // Assertion 1b: conditional-only-types subpath coverage.
-  assertConditionalSubpathCoverage(pkg, failures);
+  // Assertion 1b: every export with nested `types` conditions must also
+  // carry a top-level `types` field (otherwise the conditional surface is
+  // silently skipped by the manifest builder and the audit).
+  assertTopLevelTypes(pkg, failures);
 
   // Assertion 2: declaration-derived public-face set vs manifest publicFaces.
   const { triples: declTriples, missingFiles } = collectFromDeclarations(recomputedPEP, pkg);
