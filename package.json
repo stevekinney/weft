@@ -167,7 +167,7 @@
     "typecheck": "tsc --noEmit",
     "typecheck:package-root": "bun run build && tsc --noEmit -p tsconfig.package-test-d.json",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test-d.json && bun run typecheck:package-root",
-    "validate": "bun run lint && bun run typecheck && bun run typecheck:tests && bun run verify:no-test-sleeps && bun run verify:public-api && bun run test",
+    "validate": "bun run lint && bun run typecheck && bun run typecheck:tests && bun run verify:no-test-sleeps && bun run verify:public-api-jsdoc && bun run test",
     "verify:exports": "bun run scripts/verify-tree-shaking.ts",
     "verify:jsdoc": "bun run scripts/audit-jsdoc-manifest.ts",
     "verify:jsdoc:declarations": "bun run scripts/check-declaration-jsdoc.ts --all",
@@ -176,7 +176,7 @@
     "verify:markdown-doctests": "bun run scripts/extract-markdown-doctests.ts verify",
     "verify:no-test-sleeps": "bun run scripts/verify-no-test-sleeps.ts",
     "verify:portability": "bun run scripts/verify-portability.ts",
-    "verify:public-api": "bun run build && bun run verify:jsdoc",
+    "verify:public-api-jsdoc": "bun run build && bun run verify:jsdoc",
     "verify:release-version": "bun run scripts/verify-release-version.ts"
   },
   "lint-staged": {

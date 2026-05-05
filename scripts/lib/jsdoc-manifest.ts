@@ -19,7 +19,6 @@ const REPO_ROOT = resolve(import.meta.dir, '../..');
 const PACKAGE_JSON = resolve(REPO_ROOT, 'package.json');
 
 export type SymbolKind = 'value' | 'type' | 'namespace';
-export type CurrentState = 'no-jsdoc' | 'prose-only' | 'has-example';
 export type Classification = 'unclassified' | 'example-required' | 'prose-only' | 'not-public';
 
 export type PublicFace = {
@@ -148,7 +147,6 @@ function resolveToSourceDeclaration(
   sourceName: string;
   kind: SymbolKind;
   subKind: string;
-  underlying: ts.Symbol;
 } | null {
   let current = symbol;
   while (current.flags & ts.SymbolFlags.Alias) {
@@ -190,7 +188,6 @@ function resolveToSourceDeclaration(
     sourceName: current.getName(),
     kind,
     subKind,
-    underlying: current,
   };
 }
 
@@ -212,9 +209,17 @@ function runPass1(
   for (const [importPath, sourceRelative] of Object.entries(publicEntryPoints)) {
     const absoluteEntry = resolve(REPO_ROOT, sourceRelative);
     const entrySourceFile = program.getSourceFile(absoluteEntry);
-    if (!entrySourceFile) continue;
+    if (!entrySourceFile) {
+      throw new Error(
+        `buildManifest: source file for export '${importPath}' not found at ${sourceRelative}. Check package.json \`exports\` and ensure the source file exists.`,
+      );
+    }
     const moduleSymbol = checker.getSymbolAtLocation(entrySourceFile);
-    if (!moduleSymbol) continue;
+    if (!moduleSymbol) {
+      throw new Error(
+        `buildManifest: no module symbol for export '${importPath}' (${sourceRelative}). The TypeScript program could not resolve this file as a module.`,
+      );
+    }
     const exports = checker.getExportsOfModule(moduleSymbol);
     for (const exportSymbol of exports) {
       const exportName = exportSymbol.getName();
@@ -289,39 +294,6 @@ function classify(entry: ManifestEntry): Classification {
   if (entry.publicFaces.length === 0) return 'not-public';
   if (entry.kind === 'type' && PROSE_ONLY_NAME_PATTERN.test(entry.sourceName)) return 'prose-only';
   return 'example-required';
-}
-
-// ---------------------------------------------------------------------------
-// JSDoc inspection: detect currentState from a symbol's source-side JSDoc.
-// ---------------------------------------------------------------------------
-
-export function detectCurrentState(symbol: ts.Symbol): CurrentState {
-  const declarations = symbol.declarations ?? [];
-  let hasProse = false;
-  let hasExample = false;
-  for (const decl of declarations) {
-    const tags = ts.getJSDocTags(decl);
-    if (tags.some((tag) => tag.tagName.text === 'example')) hasExample = true;
-    const jsdocComments = ts.getJSDocCommentsAndTags(decl);
-    let proseText = '';
-    for (const node of jsdocComments) {
-      if (ts.isJSDoc(node)) {
-        const comment = node.comment;
-        if (typeof comment === 'string') proseText += comment;
-        else if (Array.isArray(comment)) {
-          for (const part of comment) {
-            if (part.kind === ts.SyntaxKind.JSDocText) {
-              proseText += (part as ts.JSDocText).text;
-            }
-          }
-        }
-      }
-    }
-    if (proseText.trim().length > 0) hasProse = true;
-  }
-  if (hasProse && hasExample) return 'has-example';
-  if (hasProse) return 'prose-only';
-  return 'no-jsdoc';
 }
 
 // ---------------------------------------------------------------------------

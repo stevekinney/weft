@@ -123,7 +123,8 @@ const stagedTouchesPublicSurface = staged.some(
     file.startsWith('scripts/audit-jsdoc-manifest') ||
     file.startsWith('scripts/build-jsdoc-manifest') ||
     file.startsWith('scripts/check-declaration-jsdoc') ||
-    file.startsWith('scripts/extract-doctests'),
+    file.startsWith('scripts/extract-doctests') ||
+    file.startsWith('scripts/extract-markdown-doctests'),
 );
 if (stagedTouchesPublicSurface) {
   info('Running JSDoc audit…');
@@ -132,7 +133,7 @@ if (stagedTouchesPublicSurface) {
     success('JSDoc audit passed');
   } catch {
     error(
-      'JSDoc audit failed — see hint above. The manifest is built in-memory; failures usually mean a new public export needs JSDoc + @example, or scripts/lib/jsdoc-manifest.ts cannot reach the symbol.',
+      'JSDoc audit failed — see hint above. The manifest is built in-memory; failures usually mean a new public export needs JSDoc + @example, or `dist/` is stale (run `bun run build`), or scripts/lib/jsdoc-manifest.ts cannot reach the symbol.',
     );
     ok = false;
   }

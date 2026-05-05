@@ -34,6 +34,14 @@ type CurrentState = 'no-jsdoc' | 'prose-only' | 'has-example';
 
 // ---------------------------------------------------------------------------
 // package.json reading.
+//
+// `pickTypesField` and `distToSource` below are intentionally duplicated from
+// scripts/lib/jsdoc-manifest.ts. The audit's whole point is to be an
+// independent cross-check: if both the manifest builder and the audit shared
+// these helpers, a logic bug in one place would silently make both gates
+// agree on the wrong answer. Edit either file with that in mind — they
+// should stay byte-for-byte equivalent in behavior, but a refactor that
+// merges them into a single shared helper defeats the cross-check.
 // ---------------------------------------------------------------------------
 
 type PkgJson = { name: string; exports?: Record<string, unknown> };
@@ -75,6 +83,56 @@ function recomputePublicEntryPoints(pkg: PkgJson): Record<string, string> {
     out[importPath] = sourcePath;
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Conditional-types coverage check.
+//
+// `pickTypesField` returns null for a conditional shape that has nested
+// platform `types` (e.g. `{ bun: { types }, node: { types } }`) without a
+// top-level `types` field. Both the manifest builder and the audit silently
+// skip these — the contract is that explicit per-platform subpaths
+// (`./storage/sqlite/bun`, `./storage/sqlite/node`) cover the public surface
+// instead. This check makes that contract enforceable: if a conditional
+// export has nested platform types but no matching explicit subpath in
+// the same exports map, the audit fails loudly so a future contributor
+// adding such a shape can't silently drop public coverage.
+// ---------------------------------------------------------------------------
+
+function findConditionalOnlyExports(pkg: PkgJson): { subpath: string; platforms: string[] }[] {
+  if (!pkg.exports) return [];
+  const out: { subpath: string; platforms: string[] }[] = [];
+  for (const [subpath, value] of Object.entries(pkg.exports)) {
+    if (typeof value !== 'object' || value === null) continue;
+    const obj = value as Record<string, unknown>;
+    if (typeof obj['types'] === 'string') continue;
+    const platforms: string[] = [];
+    for (const key of ['bun', 'node', 'import', 'default'] as const) {
+      const inner = obj[key];
+      if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
+        const innerTypes = (inner as Record<string, unknown>)['types'];
+        if (typeof innerTypes === 'string') platforms.push(key);
+      }
+    }
+    if (platforms.length > 0) out.push({ subpath, platforms });
+  }
+  return out;
+}
+
+function assertConditionalSubpathCoverage(pkg: PkgJson, failures: string[]): void {
+  const conditionalExports = findConditionalOnlyExports(pkg);
+  if (!pkg.exports) return;
+  const exportKeys = new Set(Object.keys(pkg.exports));
+  for (const { subpath, platforms } of conditionalExports) {
+    for (const platform of platforms) {
+      const expectedSubpath = `${subpath}/${platform}`;
+      if (!exportKeys.has(expectedSubpath)) {
+        failures.push(
+          `  conditional-types coverage: \`${subpath}\` has nested \`${platform}.types\` but no explicit \`${expectedSubpath}\` subpath. Either add the explicit subpath or hoist a unified \`types\` field on \`${subpath}\`.`,
+        );
+      }
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -300,6 +358,9 @@ function main(): void {
   // Assertion 1: publicEntryPoints.
   const recomputedPEP = recomputePublicEntryPoints(pkg);
   assertEqualMaps('publicEntryPoints', manifest.publicEntryPoints, recomputedPEP, failures);
+
+  // Assertion 1b: conditional-only-types subpath coverage.
+  assertConditionalSubpathCoverage(pkg, failures);
 
   // Assertion 2: declaration-derived public-face set vs manifest publicFaces.
   const { triples: declTriples, missingFiles } = collectFromDeclarations(recomputedPEP, pkg);
