@@ -7,6 +7,7 @@ import {
 } from '../../core/engine/errors.ts';
 import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
 import { QuotaExceededError } from '../../core/tenant-quotas.ts';
+import type { WorkflowRegistration } from '../../core/types.ts';
 import type { AccessPolicy } from '../authorization.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { invalidParamsFault } from '../operations/operation-helpers.ts';
@@ -25,6 +26,11 @@ const StartHandleSchema = z.object({
 });
 
 type StartHandle = z.infer<typeof StartHandleSchema>;
+
+type CatalogWorkflowRegistrationMetadata<Input> = Pick<
+  WorkflowRegistration<Input>,
+  'description' | 'inputSchema' | 'tags'
+>;
 
 /**
  * Options accepted by {@link catalogWorkflow}.
@@ -51,9 +57,10 @@ export type CatalogWorkflowOptions<Input> = {
   readonly name: string;
   readonly mcpExposable: boolean;
   readonly workflowType: string;
-  readonly summary: string;
+  readonly summary?: string;
   readonly tags?: ReadonlyArray<string>;
   readonly inputSchema?: z.ZodObject<z.ZodRawShape>;
+  readonly registration?: CatalogWorkflowRegistrationMetadata<Input>;
   readonly access: AccessPolicy;
   readonly transports: TransportAvailability;
   readonly unknownKeyPolicy: UnknownKeyPolicy;
@@ -72,15 +79,15 @@ export type CatalogWorkflowOptions<Input> = {
 export function catalogWorkflow<Input>(
   options: CatalogWorkflowOptions<Input>,
 ): OperationDefinition<Input, StartHandle> {
-  const inputSchema = (options.inputSchema ?? z.object({}).passthrough()) as z.ZodType<Input>;
+  const presentation = resolveCatalogWorkflowPresentation(options);
   validateOperationName(options.name);
 
   return {
     name: options.name,
     mcpExposable: options.mcpExposable,
-    summary: options.summary,
-    tags: [...(options.tags ?? [])],
-    inputSchema,
+    summary: presentation.summary,
+    tags: presentation.tags,
+    inputSchema: presentation.inputSchema,
     outputSchema: StartHandleSchema,
     access: copyAccessPolicy(options.access),
     // The adapter classifies engine errors into Conflict (workflow ID
@@ -138,6 +145,32 @@ export function catalogWorkflow<Input>(
       }
     },
   };
+}
+
+function resolveCatalogWorkflowPresentation<Input>(options: CatalogWorkflowOptions<Input>): {
+  inputSchema: z.ZodType<Input>;
+  summary: string;
+  tags: string[];
+} {
+  const inputSchema = (options.inputSchema ??
+    zodObjectFromRegistrationSchema(options.registration?.inputSchema) ??
+    z.object({}).passthrough()) as z.ZodType<Input>;
+  const summary =
+    options.summary ??
+    options.registration?.description ??
+    `Start ${options.workflowType} workflow`;
+  const tags = options.tags ?? options.registration?.tags ?? [];
+  return { inputSchema, summary, tags: [...tags] };
+}
+
+function zodObjectFromRegistrationSchema(schema: unknown): z.ZodObject<z.ZodRawShape> | undefined {
+  if (schema === undefined) return undefined;
+  if (schema instanceof z.ZodObject) {
+    return schema as z.ZodObject<z.ZodRawShape>;
+  }
+  throw new TypeError(
+    'catalogWorkflow() can reuse registration.inputSchema only when it is a Zod object. Pass inputSchema explicitly for other DefinitionSchema implementations.',
+  );
 }
 
 function copyAccessPolicy(policy: AccessPolicy): AccessPolicy {

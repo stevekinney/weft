@@ -10,6 +10,8 @@
  */
 
 export type { FaultCode } from '../operation-fault.ts';
+export { catalogActivities, catalogActivity } from './activity-adapter.ts';
+export type { CatalogActivityDefinition } from './activity-adapter.ts';
 export { DISPATCH_ALLOWLIST } from './dispatch-allowlist.ts';
 export { classifyEngineError } from './pipeline-helpers.ts';
 export { executeOperation } from './pipeline.ts';

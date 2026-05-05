@@ -199,6 +199,20 @@ interface WorkflowSessionState<T> {
 }
 ```
 
+### `DefinitionSchema`
+
+```ts partial
+type DefinitionSchema<Input = unknown, Output = Input> =
+  | StandardSchemaV1<Input, Output>
+  | StandardJSONSchemaV1<Input, Output>;
+```
+
+Schema metadata accepted by workflow and activity definitions. [Standard Schema](https://standardschema.dev/) validation and [Standard JSON Schema](https://standardschema.dev/json-schema) conversion are separate capabilities; a definition can provide either one or both.
+
+Core workflow and activity registration validates the Standard Schema metadata shape and stores these fields for introspection. Runtime input or output validation happens only in adapters that explicitly consume the metadata.
+
+Weft also exports the small Standard Schema helper surfaces used by those interfaces so diagnostics and generated declaration files stay self-contained: `StandardTypedV1Properties`, `StandardTypedV1Types`, `StandardSchemaV1Properties`, `StandardSchemaV1Result`, `StandardSchemaV1SuccessResult`, `StandardSchemaV1FailureResult`, `StandardSchemaV1Issue`, `StandardSchemaV1PathSegment`, `StandardSchemaV1Options`, `StandardJSONSchemaV1Properties`, `StandardJSONSchemaV1Converter`, `StandardJSONSchemaV1Target`, and `StandardJSONSchemaV1Options`.
+
 ### `WorkflowAtomicState<T>`
 
 Storage-backed durable state returned by `ctx.state.execution`,
@@ -229,9 +243,28 @@ interface WorkflowAtomicState<T> {
 ```ts partial
 interface WorkflowRegistration<TInput = unknown, TOutput = unknown> {
   version?: string;
+  description?: string;
+  tags?: ReadonlyArray<string>;
+  inputSchema?: DefinitionSchema<unknown, TInput>;
+  outputSchema?: DefinitionSchema<unknown, TOutput>;
   handler: WorkflowFunction<TInput, TOutput>;
   migrate?: (checkpoint: unknown, fromVersion: string) => unknown;
   searchAttributes?: SearchAttributeSchema;
+}
+```
+
+### `RegisteredWorkflowDefinition`
+
+Read-only metadata returned by engine workflow-definition introspection.
+
+```ts partial
+interface RegisteredWorkflowDefinition<TInput = unknown, TOutput = unknown> {
+  type: string;
+  version: string;
+  tags: ReadonlyArray<string>;
+  description?: string;
+  inputSchema?: DefinitionSchema<unknown, TInput>;
+  outputSchema?: DefinitionSchema<unknown, TOutput>;
 }
 ```
 
@@ -331,10 +364,53 @@ interface ActivityContext {
 ```ts partial
 interface ActivityDefinition<TInput = unknown, TOutput = unknown> {
   name: string;
+  description?: string;
+  tags?: ReadonlyArray<string>;
+  inputSchema?: DefinitionSchema<unknown, TInput>;
+  outputSchema?: DefinitionSchema<unknown, TOutput>;
   execute: ActivityFunction<TInput, TOutput>;
   retry?: RetryPolicy;
   timeout?: Duration;
   queue?: string;
+  idempotent?: boolean;
+}
+```
+
+`inputSchema` and `outputSchema` are definition metadata, not automatic execution validators.
+
+### `ActivityMetadata`
+
+Name-based metadata stored by `ActivityRegistry` and returned from engine activity introspection.
+
+```ts partial
+interface ActivityMetadata {
+  name: string;
+  queue: string;
+  description?: string;
+  tags?: ReadonlyArray<string>;
+  inputSchema?: DefinitionSchema;
+  outputSchema?: DefinitionSchema;
+  retry?: RetryPolicy;
+  timeout?: Duration;
+  idempotent?: boolean;
+}
+```
+
+Returned activity metadata is name-based. Aliases are reported separately even when they point at the same function.
+
+### `ActivityRegistrationOptions`
+
+Explicit metadata overrides for `engine.registerActivity()` and `ActivityRegistry.register()`.
+
+```ts partial
+interface ActivityRegistrationOptions {
+  queue?: string;
+  description?: string;
+  tags?: ReadonlyArray<string>;
+  inputSchema?: DefinitionSchema;
+  outputSchema?: DefinitionSchema;
+  retry?: RetryPolicy;
+  timeout?: Duration;
   idempotent?: boolean;
 }
 ```

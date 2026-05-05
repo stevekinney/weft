@@ -1,3 +1,4 @@
+import type { DefinitionSchema } from './definition-schema.ts';
 import type { Duration, RetryPolicy } from './retry-retention.ts';
 
 // ---------------------------------------------------------------------------
@@ -110,7 +111,10 @@ export interface ActivityCallOptions {
  * ```ts
  * import { activity, type ActivityDefinition } from 'weft';
  *
- * const sendEmail: ActivityDefinition<{ to: string; body: string }, void> = activity({
+ * const sendEmail: ActivityDefinition<{ to: string; body: string }, void> = activity<
+ *   { to: string; body: string },
+ *   void
+ * >({
  *   name: 'sendEmail',
  *   timeout: '30s',
  *   retry: { maxAttempts: 3, initialBackoff: '1s', backoffMultiplier: 2, maxBackoff: '10s' },
@@ -123,7 +127,17 @@ export interface ActivityCallOptions {
  * ```
  */
 export interface ActivityDefinition<TInput = unknown, TOutput = unknown> {
+  /** Stable activity name used for registration, dispatch, and introspection. */
   name: string;
+  /** User-facing description for catalog, code generation, and tool surfaces. */
+  description?: string;
+  /** User-facing grouping tags for catalog and documentation surfaces. */
+  tags?: ReadonlyArray<string>;
+  /** Optional input schema metadata for introspection; registration validates metadata shape only. */
+  inputSchema?: DefinitionSchema<unknown, TInput>;
+  /** Optional output schema metadata for introspection; registration validates metadata shape only. */
+  outputSchema?: DefinitionSchema<unknown, TOutput>;
+  /** Activity implementation called by the engine or worker. */
   execute: ActivityFunction<TInput, TOutput>;
   /**
    * Optional post-execution verifier.

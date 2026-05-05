@@ -82,6 +82,8 @@ GET /openrpc.json
 
 The `rpc.discover` JSON-RPC method returns the same document over the JSON-RPC transport. These discovery endpoints were introduced in the Track 8 operation catalogue consolidation.
 
+Engine-local definition introspection is separate from these transport documents. Use `engine.listWorkflowDefinitions()` and `engine.listActivityDefinitions()` when you need in-process metadata for registered user definitions; use `/openrpc.json`, `/openapi.json`, and `/asyncapi.json` when you need the server's network contract.
+
 **Start a workflow:**
 
 ```

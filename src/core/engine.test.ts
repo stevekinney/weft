@@ -31,7 +31,12 @@ import { InlineExecutionStrategy } from './inline-execution-strategy.ts';
 import type { ActivityInterceptor, WorkflowInterceptor } from './interceptor.ts';
 import { tenantFromInputField } from './tenant.ts';
 import { WorkflowTimeoutError } from './timeouts.ts';
-import type { WorkerOutboundMessage, WorkflowContext, WorkflowState } from './types.ts';
+import type {
+  DefinitionSchema,
+  WorkerOutboundMessage,
+  WorkflowContext,
+  WorkflowState,
+} from './types.ts';
 import { activity } from './types.ts';
 
 // ---------------------------------------------------------------------------
@@ -41,6 +46,16 @@ import { activity } from './types.ts';
 /** Drain microtasks so fire-and-forget work completes. */
 async function flush(): Promise<void> {
   await sleepForTesting(10);
+}
+
+function makeDefinitionSchema<TOutput>(): DefinitionSchema<unknown, TOutput> {
+  return {
+    '~standard': {
+      version: 1,
+      vendor: 'weft-test',
+      validate: (value) => ({ value: value as TOutput }),
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1264,6 +1279,77 @@ describe('Engine', () => {
     const handle = await engine.start('versioned', 'test');
     const result = await handle.result();
     expect(result).toBe('versioned: test');
+    engine[Symbol.dispose]();
+  });
+
+  it('register(name, registration) preserves workflow definition metadata for introspection', () => {
+    const engine = new Engine();
+    const tags = ['orders', 'examples'];
+    const inputSchema = makeDefinitionSchema<{ orderId: string }>();
+    const outputSchema = makeDefinitionSchema<{ completed: boolean }>();
+    const handler = async function* () {
+      return { completed: true };
+    };
+
+    engine.register('checkout', {
+      version: '2.0',
+      description: 'Runs checkout for an order.',
+      tags,
+      inputSchema,
+      outputSchema,
+      handler,
+    });
+
+    tags.push('caller-mutation');
+    const definition = engine.getWorkflowDefinition('checkout');
+    expect(definition).toMatchObject({
+      type: 'checkout',
+      version: '2.0',
+      description: 'Runs checkout for an order.',
+      tags: ['orders', 'examples'],
+    });
+    expect(definition?.inputSchema).toBe(inputSchema);
+    expect(definition?.outputSchema).toBe(outputSchema);
+
+    expect(definition).toBeDefined();
+    (definition!.tags as string[]).push('returned-mutation');
+    expect(engine.getWorkflowDefinition('checkout')?.tags).toEqual(['orders', 'examples']);
+    expect(engine.listWorkflowDefinitions().map((entry) => entry.type)).toEqual(['checkout']);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('register(name, registration) rejects malformed schema metadata', () => {
+    const engine = new Engine();
+    const handler = async function* () {
+      return { completed: true };
+    };
+
+    expect(() =>
+      engine.register('bad-input-schema', {
+        handler,
+        inputSchema: {
+          '~standard': {
+            version: 1,
+            validate: (value: unknown) => ({ value }),
+          },
+        } as unknown as DefinitionSchema,
+      }),
+    ).toThrow('registration("bad-input-schema").inputSchema');
+
+    expect(() =>
+      engine.register('bad-output-schema', {
+        handler,
+        outputSchema: {
+          '~standard': {
+            version: 1,
+            vendor: '',
+            validate: (value: unknown) => ({ value }),
+          },
+        } as unknown as DefinitionSchema,
+      }),
+    ).toThrow('registration("bad-output-schema").outputSchema');
+
     engine[Symbol.dispose]();
   });
 
@@ -2656,6 +2742,32 @@ describe('Engine', () => {
 
     const handle = await engine.start('send-email', undefined);
     await expect(handle.result()).resolves.toBe('sent to hello@example.com: Welcome');
+    engine[Symbol.dispose]();
+  });
+
+  it('lists activity definitions registered on the engine', () => {
+    const engine = new Engine();
+    const inputSchema = makeDefinitionSchema<{ to: string }>();
+    const sendEmail = activity({
+      name: 'sendEmail',
+      description: 'Sends a transactional email.',
+      tags: ['email'],
+      inputSchema,
+      execute: async (input: { to: string }) => `sent to ${input.to}`,
+    });
+
+    engine.registerActivity(sendEmail.name, sendEmail);
+
+    const definition = engine.getActivityDefinition('sendEmail');
+    expect(definition).toMatchObject({
+      name: 'sendEmail',
+      queue: 'default',
+      description: 'Sends a transactional email.',
+      tags: ['email'],
+    });
+    expect(definition?.inputSchema).toBe(inputSchema);
+    expect(engine.listActivityDefinitions().map((entry) => entry.name)).toEqual(['sendEmail']);
+
     engine[Symbol.dispose]();
   });
 

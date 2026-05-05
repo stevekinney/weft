@@ -16,12 +16,15 @@ import ts from 'typescript';
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const PACKAGE_JSON_PATH = resolve(REPO_ROOT, 'package.json');
 const SNAPSHOT_PATH = resolve(REPO_ROOT, 'tmp/public-api.snapshot.txt');
+const TSCONFIG_PATH = resolve(REPO_ROOT, 'tsconfig.json');
 const HEADER = '# Public API surface snapshot — see scripts/snapshot-public-api.ts';
 const TYPE_FORMAT_FLAGS =
   ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope;
 
 type ProgramBuild = { program: ts.Program; checker: ts.TypeChecker; sourceFile: ts.SourceFile };
 type PackageEntrypoint = { subpath: string; dtsPath: string };
+
+let cachedCompilerOptions: ts.CompilerOptions | null = null;
 
 function readPackageExports(): PackageEntrypoint[] {
   const parsedPackageJson: unknown = JSON.parse(readFileSync(PACKAGE_JSON_PATH, 'utf8'));
@@ -65,15 +68,7 @@ function packageEntrypointsFor(subpath: string, exportValue: unknown): PackageEn
 }
 
 function buildProgram(entryPath: string): ProgramBuild {
-  const program = ts.createProgram([entryPath], {
-    target: ts.ScriptTarget.Latest,
-    module: ts.ModuleKind.ESNext,
-    moduleResolution: ts.ModuleResolutionKind.Bundler,
-    noEmit: true,
-    skipLibCheck: true,
-    allowJs: false,
-    strictNullChecks: true,
-  });
+  const program = ts.createProgram([entryPath], readCompilerOptions());
   const checker = program.getTypeChecker();
   const sourceFile = program.getSourceFile(entryPath);
   if (!sourceFile) {
@@ -81,6 +76,36 @@ function buildProgram(entryPath: string): ProgramBuild {
     process.exit(1);
   }
   return { program, checker, sourceFile };
+}
+
+function readCompilerOptions(): ts.CompilerOptions {
+  if (cachedCompilerOptions !== null) return cachedCompilerOptions;
+
+  const configFile = ts.readConfigFile(TSCONFIG_PATH, (path) => ts.sys.readFile(path));
+  if (configFile.error) {
+    console.error(ts.formatDiagnostic(configFile.error, diagnosticFormatHost()));
+    process.exit(1);
+  }
+
+  const parsed = ts.parseJsonConfigFileContent(configFile.config, ts.sys, REPO_ROOT);
+  if (parsed.errors.length > 0) {
+    console.error(ts.formatDiagnosticsWithColorAndContext(parsed.errors, diagnosticFormatHost()));
+    process.exit(1);
+  }
+
+  cachedCompilerOptions = {
+    ...parsed.options,
+    noEmit: true,
+  };
+  return cachedCompilerOptions;
+}
+
+function diagnosticFormatHost(): ts.FormatDiagnosticsHost {
+  return {
+    getCanonicalFileName: (fileName) => fileName,
+    getCurrentDirectory: () => REPO_ROOT,
+    getNewLine: () => '\n',
+  };
 }
 
 function extractExportLines(
@@ -514,11 +539,11 @@ function memberType(
   member: ts.PropertySignature | ts.PropertyDeclaration,
   checker: ts.TypeChecker,
 ): string | null {
+  if (member.type) return typeString(checker, checker.getTypeFromTypeNode(member.type), member);
   const symbol = checker.getSymbolAtLocation(member.name);
   if (symbol) {
     return typeString(checker, checker.getTypeOfSymbolAtLocation(symbol, member), member);
   }
-  if (member.type) return typeString(checker, checker.getTypeFromTypeNode(member.type), member);
   return null;
 }
 

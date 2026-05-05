@@ -51,7 +51,9 @@ register(name: string, registration: WorkflowRegistration): void
 register(agentDef: AgentDefinition, options?: AgentRegistrationOptions): void
 ```
 
-Register a workflow by name. The simple form accepts a generator or step-based workflow function directly. The registration form accepts a `WorkflowRegistration` object with additional metadata like `version` and `migrate`. Agent definitions can also be registered directly with optional agent registration options.
+Register a workflow by name. The simple form accepts a generator or step-based workflow function directly. The registration form accepts a `WorkflowRegistration` object with execution metadata (`version`, `migrate`, retention) and catalog-neutral definition metadata (`description`, `tags`, `inputSchema`, `outputSchema`).
+
+The schema fields are introspection metadata. Core workflow registration validates their Standard Schema metadata shape, but workflow execution does not validate input or output from these fields unless an adapter explicitly opts into that validation. Agent definitions can also be registered directly with optional agent registration options.
 
 ```ts partial
 engine.register('send-email', async function* (context, input) {
@@ -62,11 +64,45 @@ engine.register('send-email', async function* (context, input) {
 // Or with version metadata:
 engine.register('send-email', {
   version: '2',
+  description: 'Send a transactional email',
+  tags: ['email'],
   handler: async function* (context, input) {
     /* ... */
   },
 });
 ```
+
+### `getWorkflowDefinition()`
+
+```ts partial
+getWorkflowDefinition(type: string): RegisteredWorkflowDefinition | undefined
+```
+
+Return read-only metadata for one registered workflow type. Simple `register(name, handler)` registrations return version `1`, empty tags, and no schemas.
+
+### `listWorkflowDefinitions()`
+
+```ts partial
+listWorkflowDefinitions(): RegisteredWorkflowDefinition[]
+```
+
+Return read-only metadata for all registered workflow types.
+
+### `getActivityDefinition()`
+
+```ts partial
+getActivityDefinition(name: string): ActivityMetadata | undefined
+```
+
+Return read-only metadata for one registered activity name.
+
+### `listActivityDefinitions()`
+
+```ts partial
+listActivityDefinitions(): ActivityMetadata[]
+```
+
+Return read-only metadata for all registered activity names. Activity definition introspection is name-based, so aliases are reported separately even when they point at the same function.
 
 ### `start()`
 
@@ -381,11 +417,17 @@ See also `StepWorkflowFunction` in [types.md](./types.md) — the step-based var
 ```ts partial
 interface WorkflowRegistration<TInput = unknown, TOutput = unknown> {
   version?: string;
+  description?: string;
+  tags?: ReadonlyArray<string>;
+  inputSchema?: DefinitionSchema<unknown, TInput>;
+  outputSchema?: DefinitionSchema<unknown, TOutput>;
   handler: WorkflowFunction<TInput, TOutput>;
   migrate?: (checkpoint: unknown, fromVersion: string) => unknown;
   searchAttributes?: SearchAttributeSchema;
 }
 ```
+
+`inputSchema` and `outputSchema` use [Standard Schema](https://standardschema.dev/) or [Standard JSON Schema](https://standardschema.dev/json-schema) compatible metadata. They are stored for introspection and adapter-level discovery; the engine does not enforce them during local execution.
 
 ### `Duration`
 

@@ -8,7 +8,11 @@ import { KEYS, type Storage as WeftStorage } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { ActivityWorkerDispatcher } from '../../workers/activity-worker-dispatcher.ts';
 import { WorkerPool } from '../../workers/pool.ts';
-import { ActivityRegistry, type ActivityRegistrationOptions } from '../activity-registry.ts';
+import {
+  ActivityRegistry,
+  type ActivityMetadata,
+  type ActivityRegistrationOptions,
+} from '../activity-registry.ts';
 import { AtomicState, type AtomicStateOptions } from '../atomic-state.ts';
 import type { StoredStreamChunk } from '../context.ts';
 import { createExpiredResponseCleanupTick, createHandleCacheFinalizer } from '../engine-helpers.ts';
@@ -38,6 +42,7 @@ import {
   type PurgeResult,
   type QueryDefinition,
   type RegisteredActivityFunction,
+  type RegisteredWorkflowDefinition,
   type RetentionOverview,
   type ScheduleAccessOptions,
   type ScheduleDefinition,
@@ -286,6 +291,20 @@ function resolveEngineInterceptors(options?: EngineConstructorOptions): Intercep
   // after construction. Mutating the source array directly would bypass
   // the composed-interceptor cache invalidation in `addInterceptor`.
   return options?.interceptors ? [...options.interceptors] : [];
+}
+
+function copyWorkflowDefinition(
+  type: string,
+  registration: RegistrationEntry,
+): RegisteredWorkflowDefinition {
+  return {
+    type,
+    version: registration.version,
+    tags: registration.tags === undefined ? [] : [...registration.tags],
+    ...(registration.description === undefined ? {} : { description: registration.description }),
+    ...(registration.inputSchema === undefined ? {} : { inputSchema: registration.inputSchema }),
+    ...(registration.outputSchema === undefined ? {} : { outputSchema: registration.outputSchema }),
+  };
 }
 
 // oxlint-disable-next-line complexity -- ID:core-engine-resolve-engine-options-complexity
@@ -693,6 +712,21 @@ export class Engine extends EventTarget implements Disposable, AsyncDisposable {
   ): void;
   registerActivity(name: string, fn: Function, options?: ActivityRegistrationOptions): void {
     getInternals(this).activityRegistry.register(name, fn, options);
+  }
+  getWorkflowDefinition(type: string): RegisteredWorkflowDefinition | undefined {
+    const registration = getInternals(this).registrations.get(type);
+    return registration === undefined ? undefined : copyWorkflowDefinition(type, registration);
+  }
+  listWorkflowDefinitions(): RegisteredWorkflowDefinition[] {
+    return [...getInternals(this).registrations.entries()].map(([type, registration]) =>
+      copyWorkflowDefinition(type, registration),
+    );
+  }
+  getActivityDefinition(name: string): ActivityMetadata | undefined {
+    return getInternals(this).activityRegistry.getDefinition(name);
+  }
+  listActivityDefinitions(): ActivityMetadata[] {
+    return getInternals(this).activityRegistry.listDefinitions();
   }
   async start<TName extends Extract<keyof WorkflowRegistry, string>>(
     type: TName,

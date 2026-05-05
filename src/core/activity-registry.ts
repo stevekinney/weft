@@ -11,7 +11,12 @@
  * @module core/activity-registry
  */
 
-import type { Duration, RetryPolicy } from './types.ts';
+import {
+  validateDefinitionSchemaMetadata,
+  type DefinitionSchema,
+  type Duration,
+  type RetryPolicy,
+} from './types.ts';
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -34,10 +39,23 @@ import type { Duration, RetryPolicy } from './types.ts';
  * ```
  */
 export interface ActivityMetadata {
+  /** Registered activity name. */
   name: string;
+  /** Queue used for activity dispatch. */
   queue: string;
+  /** User-facing description for catalog, code generation, and tool surfaces. */
+  description?: string;
+  /** User-facing grouping tags for catalog and documentation surfaces. */
+  tags?: ReadonlyArray<string>;
+  /** Optional input schema metadata for introspection; core execution does not validate input against it. */
+  inputSchema?: DefinitionSchema;
+  /** Optional output schema metadata for introspection; core execution does not validate output against it. */
+  outputSchema?: DefinitionSchema;
+  /** Retry policy used when the activity fails. */
   retry?: RetryPolicy;
+  /** Activity execution timeout. */
   timeout?: Duration;
+  /** Whether the activity can be safely repeated. */
   idempotent?: boolean;
 }
 
@@ -60,9 +78,21 @@ export interface ActivityMetadata {
  * ```
  */
 export interface ActivityRegistrationOptions {
+  /** Queue used for activity dispatch. */
   queue?: string;
+  /** User-facing description for catalog, code generation, and tool surfaces. */
+  description?: string;
+  /** User-facing grouping tags for catalog and documentation surfaces. */
+  tags?: ReadonlyArray<string>;
+  /** Optional input schema metadata for introspection; registration validates metadata shape only. */
+  inputSchema?: DefinitionSchema;
+  /** Optional output schema metadata for introspection; registration validates metadata shape only. */
+  outputSchema?: DefinitionSchema;
+  /** Retry policy used when the activity fails. */
   retry?: RetryPolicy;
+  /** Activity execution timeout. */
   timeout?: Duration;
+  /** Whether the activity can be safely repeated. */
   idempotent?: boolean;
 }
 
@@ -74,14 +104,36 @@ export type RegisteredActivityFunction = (input?: unknown, context?: unknown) =>
 
 /**
  * Detect whether `fn` carries colocated metadata from the `activity()` helper.
- * The helper assigns `name`, `execute`, and optionally `retry`, `timeout`,
- * `queue`, and `idempotent` as own properties on the returned function.
+ * The helper assigns `name`, `execute`, and optional catalog and dispatch
+ * metadata as own properties on the returned function.
  */
 // oxlint-disable-next-line complexity -- ID:core-activity-registry-extract-definition-metadata-complexity
-function extractDefinitionMetadata(fn: object): Partial<ActivityRegistrationOptions> {
+function extractDefinitionMetadata(name: string, fn: object): Partial<ActivityRegistrationOptions> {
   const result: Partial<ActivityRegistrationOptions> = {};
   const record = fn as Record<string, unknown>;
 
+  if ('description' in fn && typeof record['description'] === 'string') {
+    result.description = record['description'];
+  }
+  if (
+    'tags' in fn &&
+    Array.isArray(record['tags']) &&
+    record['tags'].every((tag) => typeof tag === 'string')
+  ) {
+    result.tags = [...record['tags']];
+  }
+  if ('inputSchema' in fn) {
+    result.inputSchema = validateDefinitionSchemaMetadata(
+      record['inputSchema'],
+      `activity definition "${name}".inputSchema`,
+    );
+  }
+  if ('outputSchema' in fn) {
+    result.outputSchema = validateDefinitionSchemaMetadata(
+      record['outputSchema'],
+      `activity definition "${name}".outputSchema`,
+    );
+  }
   if ('queue' in fn && typeof record['queue'] === 'string') {
     result.queue = record['queue'];
   }
@@ -99,6 +151,29 @@ function extractDefinitionMetadata(fn: object): Partial<ActivityRegistrationOpti
   }
 
   return result;
+}
+
+export function copyActivityMetadata(metadata: ActivityMetadata): ActivityMetadata {
+  return {
+    name: metadata.name,
+    queue: metadata.queue,
+    ...(metadata.description === undefined ? {} : { description: metadata.description }),
+    ...(metadata.tags === undefined ? {} : { tags: [...metadata.tags] }),
+    ...(metadata.inputSchema === undefined ? {} : { inputSchema: metadata.inputSchema }),
+    ...(metadata.outputSchema === undefined ? {} : { outputSchema: metadata.outputSchema }),
+    ...(metadata.retry === undefined ? {} : { retry: copyRetryPolicy(metadata.retry) }),
+    ...(metadata.timeout === undefined ? {} : { timeout: metadata.timeout }),
+    ...(metadata.idempotent === undefined ? {} : { idempotent: metadata.idempotent }),
+  };
+}
+
+function copyRetryPolicy(retry: RetryPolicy): RetryPolicy {
+  return {
+    ...retry,
+    ...(retry.nonRetryableErrors === undefined
+      ? {}
+      : { nonRetryableErrors: [...retry.nonRetryableErrors] }),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -129,6 +204,9 @@ export class ActivityRegistry {
   /** Metadata keyed to the activity function object. */
   #metadata: WeakMap<object, ActivityMetadata>;
 
+  /** Per-name metadata used by deterministic catalog introspection. */
+  #definitions: Map<string, ActivityMetadata>;
+
   /**
    * Name → function lookup. Holds strong references to registered functions,
    * keeping them (and their WeakMap metadata) alive until explicitly
@@ -138,7 +216,23 @@ export class ActivityRegistry {
 
   constructor() {
     this.#metadata = new WeakMap();
+    this.#definitions = new Map();
     this.#nameIndex = new Map();
+  }
+
+  #retargetFunctionMetadata(fn: object, excludingName?: string): void {
+    let replacementMetadata: ActivityMetadata | undefined;
+    for (const [registeredName, registeredFn] of this.#nameIndex) {
+      if (registeredName !== excludingName && registeredFn === fn) {
+        replacementMetadata = this.#definitions.get(registeredName);
+      }
+    }
+
+    if (replacementMetadata === undefined) {
+      this.#metadata.delete(fn);
+    } else {
+      this.#metadata.set(fn, replacementMetadata);
+    }
   }
 
   /**
@@ -150,33 +244,47 @@ export class ActivityRegistry {
    */
   // oxlint-disable-next-line complexity -- ID:core-activity-registry-constructor-complexity
   register(name: string, fn: Function, options?: ActivityRegistrationOptions): void {
-    // Clean up any previous registration under this name to avoid leaking
-    // the old function in #metadata. Only delete metadata if no other name
-    // still references the same function.
+    // Keep function-reference metadata aligned when this name moves to a
+    // different function. Aliased functions retarget to a remaining name;
+    // unaliased functions leave the WeakMap.
     const existingFn = this.#nameIndex.get(name);
     if (existingFn && existingFn !== fn) {
-      let stillReferenced = false;
-      for (const [registeredName, registeredFn] of this.#nameIndex) {
-        if (registeredName !== name && registeredFn === existingFn) {
-          stillReferenced = true;
-          break;
-        }
-      }
-
-      if (!stillReferenced) {
-        this.#metadata.delete(existingFn);
-      }
+      this.#retargetFunctionMetadata(existingFn, name);
     }
 
-    const extracted = extractDefinitionMetadata(fn);
+    const extracted = extractDefinitionMetadata(name, fn);
 
     const metadata: ActivityMetadata = {
       name,
       queue: options?.queue ?? extracted.queue ?? 'default',
     };
 
+    const description = options?.description ?? extracted.description;
+    if (description !== undefined) metadata.description = description;
+
+    const tags = options?.tags ?? extracted.tags;
+    if (tags !== undefined) metadata.tags = [...tags];
+
+    const inputSchema =
+      options?.inputSchema === undefined
+        ? extracted.inputSchema
+        : validateDefinitionSchemaMetadata(
+            options.inputSchema,
+            `activity registration "${name}".inputSchema`,
+          );
+    if (inputSchema !== undefined) metadata.inputSchema = inputSchema;
+
+    const outputSchema =
+      options?.outputSchema === undefined
+        ? extracted.outputSchema
+        : validateDefinitionSchemaMetadata(
+            options.outputSchema,
+            `activity registration "${name}".outputSchema`,
+          );
+    if (outputSchema !== undefined) metadata.outputSchema = outputSchema;
+
     const retry = options?.retry ?? extracted.retry;
-    if (retry !== undefined) metadata.retry = retry;
+    if (retry !== undefined) metadata.retry = copyRetryPolicy(retry);
 
     const timeout = options?.timeout ?? extracted.timeout;
     if (timeout !== undefined) metadata.timeout = timeout;
@@ -185,6 +293,7 @@ export class ActivityRegistry {
     if (idempotent !== undefined) metadata.idempotent = idempotent;
 
     this.#metadata.set(fn, metadata);
+    this.#definitions.set(name, metadata);
     this.#nameIndex.set(name, fn);
   }
 
@@ -202,33 +311,37 @@ export class ActivityRegistry {
 
   /** Get metadata for a function reference. Returns `undefined` if the function was never registered. */
   getMetadata(fn: Function): ActivityMetadata | undefined {
-    return this.#metadata.get(fn);
+    const metadata = this.#metadata.get(fn);
+    return metadata === undefined ? undefined : copyActivityMetadata(metadata);
   }
 
-  /** Get metadata by activity name. Resolves the function first, then looks up its metadata. */
+  /** Get metadata by registered activity name. */
   getMetadataByName(name: string): ActivityMetadata | undefined {
-    const fn = this.resolve(name);
-    if (!fn) return undefined;
-    return this.#metadata.get(fn);
+    return this.getDefinition(name);
+  }
+
+  /** Get catalog metadata for a registered activity name. */
+  getDefinition(name: string): ActivityMetadata | undefined {
+    const metadata = this.#definitions.get(name);
+    return metadata === undefined ? undefined : copyActivityMetadata(metadata);
+  }
+
+  /** List catalog metadata for all registered activity names. */
+  listDefinitions(): ActivityMetadata[] {
+    return [...this.#nameIndex.keys()].flatMap((name) => {
+      const metadata = this.getDefinition(name);
+      return metadata === undefined ? [] : [metadata];
+    });
   }
 
   /** Remove an activity registration by name. */
   unregister(name: string): void {
     const fn = this.#nameIndex.get(name);
     this.#nameIndex.delete(name);
+    this.#definitions.delete(name);
 
     if (fn) {
-      let stillReferenced = false;
-      for (const registeredFn of this.#nameIndex.values()) {
-        if (registeredFn === fn) {
-          stillReferenced = true;
-          break;
-        }
-      }
-
-      if (!stillReferenced) {
-        this.#metadata.delete(fn);
-      }
+      this.#retargetFunctionMetadata(fn);
     }
   }
 

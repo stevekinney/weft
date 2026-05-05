@@ -147,7 +147,7 @@ This section unifies the public type surface, ergonomics, and definition helpers
 
 The transport-neutral operation catalog, dispatch audit, stream/subscription kinds, OpenAPI hydration, AsyncAPI, `/.well-known/api-catalog`, OpenRPC errors, discovery info, and the `mcpExposable` ratchet have landed. The remaining catalog work is about user-defined workflows and activities rather than the built-in server operations.
 
-- [ ] **Finish workflow and activity catalog citizenship for user definitions.**
+- [x] **Finish workflow and activity catalog citizenship for user definitions.**
 
   **Where:** `src/core/types/workflow-function.ts` (`WorkflowRegistration`), `src/core/activity-registry.ts` (`ActivityRegistrationOptions`), `src/server/operation-catalog/workflow-adapter.ts`, and any future activity adapter.
 

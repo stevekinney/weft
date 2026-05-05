@@ -8,7 +8,7 @@ import {
 } from '../../core/engine/errors.ts';
 import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
 import { QuotaExceededError } from '../../core/tenant-quotas.ts';
-import type { WorkflowContext } from '../../core/types.ts';
+import type { DefinitionSchema, WorkflowContext, WorkflowRegistration } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { generateOpenRpcDocument } from '../openrpc.ts';
 import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
@@ -60,6 +60,28 @@ function registerCheckoutWorkflow(engine: Engine): void {
   engine.register('checkout', async function* (_context: WorkflowContext, input: unknown) {
     return { completed: true, input };
   });
+}
+
+function checkoutWorkflowRegistration() {
+  const registration = {
+    description: 'Start checkout from registration metadata',
+    tags: ['Registration', 'Checkout'],
+    inputSchema: checkoutInputSchema,
+    handler: async function* (_context: WorkflowContext) {
+      return { completed: true };
+    },
+  } satisfies WorkflowRegistration<CheckoutInput, { completed: true }>;
+  return registration;
+}
+
+function makeDefinitionSchema<TOutput>(): DefinitionSchema<unknown, TOutput> {
+  return {
+    '~standard': {
+      version: 1,
+      vendor: 'weft-test',
+      validate: (value) => ({ value: value as TOutput }),
+    },
+  };
 }
 
 function catalogCheckoutWorkflow() {
@@ -224,6 +246,97 @@ describe('catalogWorkflow', () => {
       arbitrary: true,
       count: 2,
     });
+  });
+
+  it('uses workflow registration metadata as adapter defaults', async () => {
+    const registration: WorkflowRegistration<CheckoutInput, { completed: true }> =
+      checkoutWorkflowRegistration();
+    const engine = createEngine();
+    engine.register('checkout', registration);
+    const registry = createOperationRegistry([
+      catalogWorkflow<CheckoutInput>({
+        name: 'weft.workflows.checkout.start',
+        mcpExposable: false,
+        workflowType: 'checkout',
+        registration,
+        access: { kind: 'public' },
+        transports: catalogTransports,
+        unknownKeyPolicy: catalogUnknownKeyPolicy,
+      }),
+    ]);
+
+    const operation = registry.get('weft.workflows.checkout.start');
+    expect(operation?.summary).toBe('Start checkout from registration metadata');
+    expect(operation?.tags).toEqual(['Registration', 'Checkout']);
+    expect(operation?.inputSchema).toBe(checkoutInputSchema);
+
+    const result = await executeOperation<StartHandle>(
+      'weft.workflows.checkout.start',
+      { orderId: 'ord_registration', amount: 99 },
+      {
+        principal: anonymousPrincipal(),
+        engine,
+        transport: 'jsonRpcHttp',
+        registry,
+      },
+    );
+
+    expect(result.ok).toBe(true);
+  });
+
+  it('lets adapter options override workflow registration presentation metadata', () => {
+    const registration = checkoutWorkflowRegistration();
+    const registry = createOperationRegistry([
+      catalogWorkflow<CheckoutInput>({
+        name: 'weft.workflows.checkout.start',
+        mcpExposable: false,
+        workflowType: 'checkout',
+        registration,
+        summary: 'Adapter-specific checkout start',
+        tags: ['Adapter'],
+        inputSchema: z.object({ orderId: z.string(), amount: z.number().min(1) }),
+        access: { kind: 'public' },
+        transports: catalogTransports,
+        unknownKeyPolicy: catalogUnknownKeyPolicy,
+      }),
+    ]);
+
+    const operation = registry.get('weft.workflows.checkout.start');
+    expect(operation?.summary).toBe('Adapter-specific checkout start');
+    expect(operation?.tags).toEqual(['Adapter']);
+    expect(operation?.inputSchema).not.toBe(checkoutInputSchema);
+  });
+
+  it('fails closed when registration schema metadata cannot become a catalog input schema', () => {
+    const registration = {
+      ...checkoutWorkflowRegistration(),
+      inputSchema: makeDefinitionSchema<CheckoutInput>(),
+    };
+
+    expect(() =>
+      catalogWorkflow<CheckoutInput>({
+        name: 'weft.workflows.checkout.start',
+        mcpExposable: false,
+        workflowType: 'checkout',
+        registration,
+        access: { kind: 'public' },
+        transports: catalogTransports,
+        unknownKeyPolicy: catalogUnknownKeyPolicy,
+      }),
+    ).toThrow('Pass inputSchema explicitly for other DefinitionSchema implementations');
+
+    expect(() =>
+      catalogWorkflow<CheckoutInput>({
+        name: 'weft.workflows.checkout.start',
+        mcpExposable: false,
+        workflowType: 'checkout',
+        registration,
+        inputSchema: checkoutInputSchema,
+        access: { kind: 'public' },
+        transports: catalogTransports,
+        unknownKeyPolicy: catalogUnknownKeyPolicy,
+      }),
+    ).not.toThrow();
   });
 
   it('maps engine start failures to operation faults', async () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { ActivityRegistry } from './activity-registry.ts';
-import type { RetryPolicy } from './types.ts';
+import type { DefinitionSchema, RetryPolicy } from './types.ts';
 import { activity } from './types.ts';
 
 // ---------------------------------------------------------------------------
@@ -10,6 +10,16 @@ import { activity } from './types.ts';
 
 function makeFunction(): (input: unknown) => unknown {
   return (_input: unknown) => 'result';
+}
+
+function makeDefinitionSchema<TOutput>(): DefinitionSchema<unknown, TOutput> {
+  return {
+    '~standard': {
+      version: 1,
+      vendor: 'weft-test',
+      validate: (value) => ({ value: value as TOutput }),
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -107,12 +117,24 @@ describe('ActivityRegistry', () => {
         initialBackoff: 500,
         backoffMultiplier: 1.5,
         maxBackoff: 10_000,
+        nonRetryableErrors: ['ValidationError'],
       };
 
       registry.register('compute', fn, { retry });
+      retry.nonRetryableErrors?.push('CallerMutation');
 
       const metadata = registry.getMetadata(fn);
-      expect(metadata!.retry).toEqual(retry);
+      expect(metadata!.retry).toEqual({
+        maxAttempts: 5,
+        initialBackoff: 500,
+        backoffMultiplier: 1.5,
+        maxBackoff: 10_000,
+        nonRetryableErrors: ['ValidationError'],
+      });
+
+      metadata!.retry!.nonRetryableErrors?.push('ReturnedMutation');
+
+      expect(registry.getMetadata(fn)!.retry?.nonRetryableErrors).toEqual(['ValidationError']);
     });
   });
 
@@ -197,6 +219,121 @@ describe('ActivityRegistry', () => {
       const metadata = registry.getMetadata(greet);
       expect(metadata!.queue).toBe('explicit-override');
     });
+
+    it('extracts catalog metadata from activity definitions', () => {
+      const registry = new ActivityRegistry();
+      const inputSchema = makeDefinitionSchema<string>();
+      const outputSchema = makeDefinitionSchema<string>();
+      const greet = activity({
+        name: 'greet',
+        description: 'Greets a user by name.',
+        tags: ['public', 'examples'],
+        inputSchema,
+        outputSchema,
+        execute: (input: string) => `Hello, ${input}!`,
+      });
+
+      registry.register('greet', greet);
+
+      const metadata = registry.getMetadataByName('greet');
+      expect(metadata).toMatchObject({
+        name: 'greet',
+        description: 'Greets a user by name.',
+        tags: ['public', 'examples'],
+      });
+      expect(metadata?.inputSchema).toBe(inputSchema);
+      expect(metadata?.outputSchema).toBe(outputSchema);
+    });
+
+    it('prefers explicit catalog metadata over activity definition metadata', () => {
+      const registry = new ActivityRegistry();
+      const definitionInputSchema = makeDefinitionSchema<string>();
+      const explicitInputSchema = makeDefinitionSchema<{ id: string }>();
+      const greet = activity({
+        name: 'greet',
+        description: 'From definition.',
+        tags: ['definition'],
+        inputSchema: definitionInputSchema,
+        execute: (input: string) => `Hello, ${input}!`,
+      });
+
+      registry.register('greet', greet, {
+        description: 'Explicit override.',
+        tags: ['explicit'],
+        inputSchema: explicitInputSchema,
+      });
+
+      const metadata = registry.getMetadataByName('greet');
+      expect(metadata?.description).toBe('Explicit override.');
+      expect(metadata?.tags).toEqual(['explicit']);
+      expect(metadata?.inputSchema).toBe(explicitInputSchema);
+    });
+
+    it('rejects malformed explicit schema metadata', () => {
+      const registry = new ActivityRegistry();
+      const greet = activity({
+        name: 'greet',
+        execute: (input: string) => `Hello, ${input}!`,
+      });
+
+      expect(() =>
+        registry.register('greet', greet, {
+          inputSchema: {
+            '~standard': {
+              version: 1,
+              validate: (value: unknown) => ({ value }),
+            },
+          } as unknown as DefinitionSchema,
+        }),
+      ).toThrow('activity registration "greet".inputSchema');
+
+      expect(() =>
+        registry.register('greet', greet, {
+          outputSchema: {
+            '~standard': {
+              version: 1,
+              vendor: '',
+              validate: (value: unknown) => ({ value }),
+            },
+          } as unknown as DefinitionSchema,
+        }),
+      ).toThrow('activity registration "greet".outputSchema');
+    });
+
+    it('rejects malformed activity definition schema metadata', () => {
+      const registry = new ActivityRegistry();
+
+      const malformedInputSchemaActivity = activity({
+        name: 'greet',
+        inputSchema: {
+          '~standard': {
+            version: 1,
+            validate: (value: unknown) => ({ value }),
+          },
+        } as unknown as DefinitionSchema<unknown, string>,
+        execute: (input: string) => `Hello, ${input}!`,
+      });
+
+      expect(() => registry.register('greet', malformedInputSchemaActivity)).toThrow(
+        'activity definition "greet".inputSchema',
+      );
+
+      const malformedOutputSchemaActivity = activity({
+        name: 'format',
+        outputSchema: {
+          '~standard': {
+            version: 1,
+            vendor: '',
+            validate: (value: unknown) => ({ value }),
+          },
+        } as unknown as DefinitionSchema<unknown, string>,
+        execute: (input: string) => `Hello, ${input}!`,
+      });
+
+      expect(() => registry.register('format', malformedOutputSchemaActivity)).toThrow(
+        'activity definition "format".outputSchema',
+      );
+    });
   });
 
   describe('unregister()', () => {
@@ -230,6 +367,59 @@ describe('ActivityRegistry', () => {
       expect(registry.resolve('alias')).toBe(fn);
       expect(registry.getMetadata(fn)?.name).toBe('alias');
     });
+
+    it('keeps per-name activity definitions stable when one function has aliases', () => {
+      const registry = new ActivityRegistry();
+      const fn = makeFunction();
+
+      registry.register('primary', fn, {
+        description: 'Primary definition.',
+        tags: ['primary'],
+      });
+      registry.register('alias', fn, {
+        description: 'Alias definition.',
+        tags: ['alias'],
+      });
+
+      expect(registry.getDefinition('primary')).toMatchObject({
+        name: 'primary',
+        description: 'Primary definition.',
+        tags: ['primary'],
+      });
+      expect(registry.getDefinition('alias')).toMatchObject({
+        name: 'alias',
+        description: 'Alias definition.',
+        tags: ['alias'],
+      });
+      expect(registry.getMetadata(fn)?.name).toBe('alias');
+    });
+
+    it('retargets function metadata when an aliased name is registered to a different function', () => {
+      const registry = new ActivityRegistry();
+      const original = makeFunction();
+      const replacement = makeFunction();
+
+      registry.register('primary', original, {
+        description: 'Primary definition.',
+      });
+      registry.register('alias', original, {
+        description: 'Alias definition.',
+      });
+      registry.register('alias', replacement, {
+        description: 'Replacement definition.',
+      });
+
+      expect(registry.getMetadata(original)).toMatchObject({
+        name: 'primary',
+        description: 'Primary definition.',
+      });
+      expect(registry.getMetadata(replacement)).toMatchObject({
+        name: 'alias',
+        description: 'Replacement definition.',
+      });
+      expect(registry.getDefinition('primary')?.name).toBe('primary');
+      expect(registry.getDefinition('alias')?.name).toBe('alias');
+    });
   });
 
   describe('names()', () => {
@@ -247,6 +437,34 @@ describe('ActivityRegistry', () => {
       const registry = new ActivityRegistry();
 
       expect([...registry.names()]).toEqual([]);
+    });
+  });
+
+  describe('definition introspection', () => {
+    it('returns isolated definition copies', () => {
+      const registry = new ActivityRegistry();
+      const tags = ['initial'];
+      registry.register('greet', makeFunction(), {
+        description: 'Greets a user.',
+        tags,
+      });
+
+      tags.push('caller-mutation');
+      const firstDefinition = registry.getDefinition('greet');
+      expect(firstDefinition).toBeDefined();
+      expect(firstDefinition?.tags).toEqual(['initial']);
+
+      (firstDefinition!.tags as string[]).push('returned-mutation');
+
+      expect(registry.getDefinition('greet')?.tags).toEqual(['initial']);
+      expect(registry.listDefinitions()).toEqual([
+        {
+          name: 'greet',
+          queue: 'default',
+          description: 'Greets a user.',
+          tags: ['initial'],
+        },
+      ]);
     });
   });
 });

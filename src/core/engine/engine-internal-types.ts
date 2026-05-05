@@ -6,6 +6,7 @@ import type { InlineExecutionStrategy } from '../inline-execution-strategy.ts';
 import type { TenantContext } from '../tenant.ts';
 import type {
   Checkpoint,
+  DefinitionSchema,
   EngineOptions,
   NormalizedRetentionPolicy,
   SearchAttributeSchema,
@@ -17,6 +18,10 @@ import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 export interface RegistrationEntry {
   handler: WorkflowFunction;
   version: string;
+  description?: string;
+  tags?: ReadonlyArray<string>;
+  inputSchema?: DefinitionSchema;
+  outputSchema?: DefinitionSchema;
   migrate?: (checkpoint: unknown, fromVersion: string) => unknown;
   searchAttributes?: SearchAttributeSchema;
   retention?: NormalizedRetentionPolicy;

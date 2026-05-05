@@ -77,7 +77,13 @@ The workflows module must default-export a `Record<string, WorkflowRegistration>
 import type { WorkflowRegistration } from 'weft';
 
 export default {
-  order: { version: '2.0.0', handler: orderWorkflow, migrate: migrateOrder },
+  order: {
+    version: '2.0.0',
+    description: 'Runs order fulfillment',
+    tags: ['orders'],
+    handler: orderWorkflow,
+    migrate: migrateOrder,
+  },
   onboard: { version: '1.0.0', handler: onboardWorkflow },
 } satisfies Record<string, WorkflowRegistration>;
 ```
