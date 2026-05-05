@@ -110,17 +110,24 @@ function recomputePublicEntryPoints(pkg: PkgJson): Record<string, string> {
 // first-class entry points with their own JSDoc coverage requirement.
 // ---------------------------------------------------------------------------
 
-const NESTED_CONDITION_KEYS = ['bun', 'node', 'import', 'default'] as const;
-
 function assertTopLevelTypes(pkg: PkgJson, failures: string[]): void {
   if (!pkg.exports) return;
   for (const [subpath, value] of Object.entries(pkg.exports)) {
     if (typeof value !== 'object' || value === null) continue;
     const obj = value as Record<string, unknown>;
     if (typeof obj['types'] === 'string') continue;
+    // Iterate every condition key on the export object (excluding the
+    // top-level `types` field itself, which we already handled above). The
+    // package-exports spec doesn't bound the condition vocabulary — `bun`,
+    // `node`, `import`, `default` are the ones the project uses today, but
+    // a future contributor could add `browser`, `deno`, `worker`, or any
+    // user-defined condition. The check has to detect any of them, not
+    // just a hardcoded set, otherwise a new condition with nested `types`
+    // would silently slip past the audit and recreate the coverage gap
+    // this check exists to close.
     const nestedTypesConditions: string[] = [];
-    for (const key of NESTED_CONDITION_KEYS) {
-      const inner = obj[key];
+    for (const [key, inner] of Object.entries(obj)) {
+      if (key === 'types') continue;
       if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
         const innerTypes = (inner as Record<string, unknown>)['types'];
         if (typeof innerTypes === 'string') nestedTypesConditions.push(key);
