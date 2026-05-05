@@ -27,9 +27,9 @@
  *    explicitly in a separate commit and document the reason in the commit body.
  *
  * 3. **Compile target: source-side.** Examples are typechecked against the
- *    same `paths` mapping the JSDoc doctest pipeline uses (sourced from
- *    `reference/jsdoc-manifest.json`'s `publicEntryPoints`). The public-face
- *    JSDoc gate (`scripts/check-declaration-jsdoc.ts --all`) already proves
+ *    same `paths` mapping the JSDoc doctest pipeline uses (sourced from the
+ *    in-memory manifest's `publicEntryPoints` via `scripts/lib/jsdoc-manifest.ts`).
+ *    The public-face JSDoc gate (`scripts/check-declaration-jsdoc.ts --all`) already proves
  *    source-vs-dist parity for the consumer-visible surface, so a snippet that
  *    imports `weft/storage/sqlite/node` resolves to `src/storage/node-sqlite.ts`
  *    and the result is verifiably equivalent to typechecking against built
@@ -50,9 +50,10 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync
 import { join, relative, resolve } from 'node:path';
 import ts from 'typescript';
 
+import { buildManifest } from './lib/jsdoc-manifest.ts';
+
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const DOCUMENTATION_DIR = resolve(REPO_ROOT, 'documentation');
-const MANIFEST_PATH = resolve(REPO_ROOT, 'reference/jsdoc-manifest.json');
 const DOCTESTS_DIR = resolve(REPO_ROOT, 'tmp/markdown-doctests');
 const INVENTORY_PATH = resolve(REPO_ROOT, 'tmp/markdown-doctest-inventory.json');
 const SKIP_COUNTS_PATH = resolve(REPO_ROOT, 'scripts/markdown-doctest-skip-counts.json');
@@ -85,10 +86,6 @@ type InventoryEntry = {
   reason?: string;
   typecheck?: 'pass' | 'fail';
   failures?: string[];
-};
-
-type Manifest = {
-  publicEntryPoints: Record<string, string>;
 };
 
 function slugify(input: string): string {
@@ -321,10 +318,6 @@ function assertPrerequisites(): void {
     console.error(`extract-markdown-doctests: ${DOCUMENTATION_DIR} not found`);
     process.exit(1);
   }
-  if (!existsSync(MANIFEST_PATH)) {
-    console.error(`extract-markdown-doctests: ${MANIFEST_PATH} not found`);
-    process.exit(1);
-  }
 }
 
 function collectAllBlocks(
@@ -457,7 +450,7 @@ function reportVerifyFailures(perFileFailures: Map<string, string[]>): void {
 function main(): void {
   const { mode, paths: allowedPaths } = parseArgs(process.argv.slice(2));
   assertPrerequisites();
-  const manifest: Manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8'));
+  const manifest = buildManifest();
   const allowedReasons = loadSkipReasons();
   const baselineCounts = loadSkipCounts();
 

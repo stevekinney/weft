@@ -1,11 +1,11 @@
 /**
- * Independent verification that the manifest's public-surface set agrees with
- * what consumers actually see (the emitted .d.ts files), and that every
- * classified entry's currentState satisfies the example-required / prose-only
- * invariants.
+ * Independent verification that the in-memory manifest's public-surface set
+ * agrees with what consumers actually see (the emitted .d.ts files), and that
+ * every classified entry's currentState satisfies the example-required /
+ * prose-only invariants.
  *
  * The audit deliberately uses a different enumeration mechanism than
- * scripts/build-jsdoc-manifest.ts (which walks source) so a shared logic bug
+ * scripts/lib/jsdoc-manifest.ts (which walks source) so a shared logic bug
  * cannot make both gates agree on a wrong denominator. The audit walks the
  * emitted dist/<path>.d.ts files via ts.createProgram + getExportsOfModule.
  *
@@ -19,44 +19,18 @@
  *      the re-derived currentState (read from source JSDoc) is 'has-example'.
  *   4. For each manifest entry with classification == 'prose-only', the
  *      re-derived currentState is 'prose-only' or 'has-example'.
- *
- * The audit never writes to the manifest. The classified manifest is the
- * source of truth for `classification`.
- *
- * Smoke test (against an unclassified manifest): exits non-zero with
- * "manifest contains unclassified entries; classification pass required".
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import ts from 'typescript';
 
+import { buildManifest, type ManifestEntry, type SymbolKind } from './lib/jsdoc-manifest.ts';
+
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const PACKAGE_JSON = resolve(REPO_ROOT, 'package.json');
-const MANIFEST_PATH = resolve(REPO_ROOT, 'reference/jsdoc-manifest.json');
 
-type SymbolKind = 'value' | 'type' | 'namespace';
 type CurrentState = 'no-jsdoc' | 'prose-only' | 'has-example';
-type Classification = 'unclassified' | 'example-required' | 'prose-only' | 'not-public';
-
-type PublicFace = { importPath: string; exportName: string; kind: SymbolKind };
-
-type ManifestEntry = {
-  sourceFile: string;
-  sourceName: string;
-  kind: SymbolKind;
-  subKind: string;
-  publicFaces: PublicFace[];
-  classification: Classification;
-  currentState: CurrentState;
-  classificationRationale: string | null;
-  batch: string | null;
-};
-
-type Manifest = {
-  publicEntryPoints: Record<string, string>;
-  entries: ManifestEntry[];
-};
 
 // ---------------------------------------------------------------------------
 // package.json reading.
@@ -73,10 +47,6 @@ function pickTypesField(value: unknown): string | null {
   if (value === null || typeof value !== 'object') return null;
   const obj = value as Record<string, unknown>;
   if (typeof obj['types'] === 'string') return obj['types'];
-  // Conditional shape with platform-specific types — return null. The
-  // unified specifier maps to different sources per platform; explicit
-  // per-platform subpaths in package.json must cover both. (Mirrors the
-  // build script's pickTypesField behavior.)
   for (const key of ['bun', 'node', 'import', 'default'] as const) {
     const inner = obj[key];
     if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
@@ -211,9 +181,6 @@ function detectCurrentStateFromSource(
   if (!sourceFile) {
     if (!existsSync(absolute)) return 'no-jsdoc';
     const text = readFileSync(absolute, 'utf8');
-    // setParentNodes: true is required for ts.getJSDocCommentsAndTags to walk
-    // the JSDoc node graph — program.getSourceFile() doesn't always preserve
-    // those bindings the way createSourceFile + setParentNodes does.
     sourceFile = ts.createSourceFile(absolute, text, ts.ScriptTarget.Latest, true);
     sourceFileCache.set(absolute, sourceFile);
   }
@@ -317,17 +284,13 @@ function assertEqualSets(
 // ---------------------------------------------------------------------------
 
 function main(): void {
-  if (!existsSync(MANIFEST_PATH)) {
-    console.error(`audit-jsdoc-manifest: manifest not found at ${MANIFEST_PATH}`);
-    process.exit(1);
-  }
-  const manifest: Manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8'));
+  const manifest = buildManifest();
   const pkg = loadPackageJson();
 
   const unclassified = manifest.entries.filter((e) => e.classification === 'unclassified');
   if (unclassified.length > 0) {
     console.error(
-      `audit-jsdoc-manifest: manifest contains ${unclassified.length} unclassified entries; classification pass required`,
+      `audit-jsdoc-manifest: in-memory manifest contains ${unclassified.length} unclassified entries; classification logic in scripts/lib/jsdoc-manifest.ts is broken`,
     );
     process.exit(1);
   }
@@ -378,16 +341,13 @@ function main(): void {
       [
         '',
         'How to fix:',
-        '  - "publicEntryPoints: key X present/missing": package.json `exports` changed.',
-        '    Run `bun run scripts/build-jsdoc-manifest.ts` to regenerate the manifest, then',
-        '    `bun run scripts/classify-jsdoc-manifest.ts` to re-apply classifications.',
+        '  - "publicEntryPoints: key X present/missing": package.json `exports` and the build are out of sync.',
+        '    Run `bun run build` to regenerate dist/.',
         '  - "public-face set: X in manifest but missing from declarations": a public export was',
-        '    removed from the runtime surface but still appears in the manifest.',
-        '    Run the build pipeline (`bun run build && bun run scripts/build-jsdoc-manifest.ts`).',
+        '    removed from the runtime surface but still appears in source. Run `bun run build` first.',
         '  - "public-face set: X in declarations but missing from manifest": a NEW public export',
-        '    was added without regenerating the manifest. Run',
-        '    `bun run scripts/build-jsdoc-manifest.ts && bun run scripts/classify-jsdoc-manifest.ts`,',
-        '    review the diff, then re-run the audit.',
+        '    was added — the in-memory builder should pick it up automatically. If this fires,',
+        '    inspect scripts/lib/jsdoc-manifest.ts (the source walker may not be reaching the symbol).',
         '  - "example-required entry has currentState=...": JSDoc is missing or incomplete on the',
         "    source declaration. Add prose + an @example block (`import { X } from '<face>'` first),",
         '    then re-run.',

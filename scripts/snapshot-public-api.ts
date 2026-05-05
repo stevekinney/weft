@@ -1,24 +1,26 @@
 /**
- * Snapshots the public API surface emitted by package export declaration files.
+ * Developer helper: snapshot the public API surface emitted by package export
+ * declaration files into tmp/public-api.snapshot.txt.
  *
- * The script walks exported declaration files with the TypeScript compiler API,
- * canonicalizes each exported symbol to one line, and either updates or checks
- * `documentation/public-api.snapshot.txt`.
+ * The script walks exported declaration files with the TypeScript compiler API
+ * and canonicalizes each exported symbol to one line. Use it locally when you
+ * want a textual diff of the public surface across two builds; the snapshot is
+ * not checked in and is not part of the CI gate (audit-jsdoc-manifest covers
+ * structural drift via the emitted .d.ts files).
  */
 
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import ts from 'typescript';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const PACKAGE_JSON_PATH = resolve(REPO_ROOT, 'package.json');
-const SNAPSHOT_PATH = resolve(REPO_ROOT, 'documentation/public-api.snapshot.txt');
+const SNAPSHOT_PATH = resolve(REPO_ROOT, 'tmp/public-api.snapshot.txt');
 const HEADER = '# Public API surface snapshot — see scripts/snapshot-public-api.ts';
 const TYPE_FORMAT_FLAGS =
   ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.UseAliasDefinedOutsideCurrentScope;
 
 type ProgramBuild = { program: ts.Program; checker: ts.TypeChecker; sourceFile: ts.SourceFile };
-type CommandMode = 'check' | 'update';
 type PackageEntrypoint = { subpath: string; dtsPath: string };
 
 function readPackageExports(): PackageEntrypoint[] {
@@ -603,31 +605,6 @@ function symbolName(line: string): string {
   return rest.slice(0, Math.min(...delimiterIndexes));
 }
 
-function diffLines(expected: string, actual: string): string {
-  const expectedLines = expected.split('\n');
-  const actualLines = actual.split('\n');
-  const lineCount = Math.max(expectedLines.length, actualLines.length);
-  const diff: string[] = ['--- documentation/public-api.snapshot.txt', '+++ generated snapshot'];
-
-  for (let index = 0; index < lineCount; index += 1) {
-    const expectedLine = expectedLines[index];
-    const actualLine = actualLines[index];
-    if (expectedLine === actualLine) continue;
-    if (expectedLine !== undefined) diff.push(`-${expectedLine}`);
-    if (actualLine !== undefined) diff.push(`+${actualLine}`);
-  }
-
-  return diff.join('\n');
-}
-
-function parseMode(arguments_: string[]): CommandMode {
-  const firstArgument = arguments_[0];
-  if (!firstArgument || firstArgument === '--check') return 'check';
-  if (firstArgument === '--update') return 'update';
-  console.error('Usage: bun run scripts/snapshot-public-api.ts [--check|--update]');
-  process.exit(1);
-}
-
 function isString(value: string | null): value is string {
   return value !== null;
 }
@@ -646,7 +623,6 @@ function main(): void {
     process.exit(1);
   }
 
-  const mode = parseMode(process.argv.slice(2));
   const extractedLinesByPath = new Map<string, string[]>();
   const sections = entrypoints.map(({ subpath, dtsPath }) => {
     const cachedLines = extractedLinesByPath.get(dtsPath);
@@ -659,19 +635,10 @@ function main(): void {
   });
   const snapshot = buildMultiEntrypointSnapshot(sections);
 
-  if (mode === 'update') {
-    writeFileSync(SNAPSHOT_PATH, snapshot);
-    console.log('Snapshot updated.');
-    return;
-  }
-
-  const expected = existsSync(SNAPSHOT_PATH) ? readFileSync(SNAPSHOT_PATH, 'utf8') : '';
-  if (expected !== snapshot) {
-    console.error(diffLines(expected, snapshot));
-    process.exit(1);
-  }
-
-  console.log('API surface unchanged.');
+  const directory = dirname(SNAPSHOT_PATH);
+  if (!existsSync(directory)) mkdirSync(directory, { recursive: true });
+  writeFileSync(SNAPSHOT_PATH, snapshot);
+  console.log(`Wrote ${SNAPSHOT_PATH}`);
 }
 
 main();

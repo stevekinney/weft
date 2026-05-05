@@ -19,27 +19,10 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { resolve } from 'node:path';
 import ts from 'typescript';
 
+import { buildManifest, type PublicFace } from './lib/jsdoc-manifest.ts';
+
 const REPO_ROOT = resolve(import.meta.dir, '..');
-const MANIFEST_PATH = resolve(REPO_ROOT, 'reference/jsdoc-manifest.json');
 const DOCTESTS_DIR = resolve(REPO_ROOT, 'tmp/doctests');
-
-type SymbolKind = 'value' | 'type' | 'namespace';
-
-type PublicFace = { importPath: string; exportName: string; kind: SymbolKind };
-
-type ManifestEntry = {
-  sourceFile: string;
-  sourceName: string;
-  kind: SymbolKind;
-  subKind: string;
-  publicFaces: PublicFace[];
-  classification: 'unclassified' | 'example-required' | 'prose-only' | 'not-public';
-};
-
-type Manifest = {
-  publicEntryPoints: Record<string, string>;
-  entries: ManifestEntry[];
-};
 
 // ---------------------------------------------------------------------------
 // Slugification helpers — keep filenames safe across filesystems.
@@ -238,11 +221,7 @@ function writeTsconfig(publicEntryPoints: Record<string, string>): void {
 // ---------------------------------------------------------------------------
 
 function main(): void {
-  if (!existsSync(MANIFEST_PATH)) {
-    console.error(`extract-doctests: manifest not found at ${MANIFEST_PATH}`);
-    process.exit(1);
-  }
-  const manifest: Manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8'));
+  const manifest = buildManifest();
 
   // Reset the doctests directory.
   if (existsSync(DOCTESTS_DIR)) rmSync(DOCTESTS_DIR, { recursive: true, force: true });

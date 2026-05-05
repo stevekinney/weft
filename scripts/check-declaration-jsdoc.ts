@@ -31,29 +31,18 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import ts from 'typescript';
 
+import {
+  buildManifest,
+  type Classification,
+  type Manifest,
+  type ManifestEntry,
+  type SymbolKind,
+} from './lib/jsdoc-manifest.ts';
+
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const PACKAGE_JSON = resolve(REPO_ROOT, 'package.json');
-const MANIFEST_PATH = resolve(REPO_ROOT, 'reference/jsdoc-manifest.json');
 
-type SymbolKind = 'value' | 'type' | 'namespace';
 type CurrentState = 'no-jsdoc' | 'prose-only' | 'has-example';
-type Classification = 'unclassified' | 'example-required' | 'prose-only' | 'not-public';
-
-type PublicFace = { importPath: string; exportName: string; kind: SymbolKind };
-
-type ManifestEntry = {
-  sourceFile: string;
-  sourceName: string;
-  kind: SymbolKind;
-  subKind: string;
-  publicFaces: PublicFace[];
-  classification: Classification;
-};
-
-type Manifest = {
-  publicEntryPoints: Record<string, string>;
-  entries: ManifestEntry[];
-};
 
 // ---------------------------------------------------------------------------
 // CLI parsing.
@@ -110,10 +99,10 @@ function normalizeExportKey(importPath: string, packageName: string): string {
 }
 
 function pickTypesField(value: unknown): string | null {
-  // Mirrors the logic in build-jsdoc-manifest.ts and audit-jsdoc-manifest.ts:
-  // a plain-string export carries no type info, and a conditional shape with
-  // platform-specific types but no top-level `types` field is ambiguous —
-  // explicit per-platform subpaths must cover those cases.
+  // Mirrors the logic in scripts/lib/jsdoc-manifest.ts: a plain-string export
+  // carries no type info, and a conditional shape with platform-specific
+  // types but no top-level `types` field is ambiguous — explicit per-platform
+  // subpaths must cover those cases.
   if (typeof value === 'string') return null;
   if (value === null || typeof value !== 'object') return null;
   const obj = value as Record<string, unknown>;
@@ -459,14 +448,7 @@ function checkItem(
 
 function main(): void {
   const selector = parseArgs(process.argv.slice(2));
-  if (!existsSync(MANIFEST_PATH)) {
-    console.error(`check-declaration-jsdoc: manifest not found at ${MANIFEST_PATH}`);
-    console.error(
-      `  → Fix: run \`bun run scripts/build-jsdoc-manifest.ts\` to generate the manifest.`,
-    );
-    process.exit(1);
-  }
-  const manifest: Manifest = JSON.parse(readFileSync(MANIFEST_PATH, 'utf8'));
+  const manifest: Manifest = buildManifest();
   const pkg = loadPackageJson();
   const compilerOptions = loadCompilerOptions();
 

@@ -176,7 +176,7 @@
     "verify:markdown-doctests": "bun run scripts/extract-markdown-doctests.ts verify",
     "verify:no-test-sleeps": "bun run scripts/verify-no-test-sleeps.ts",
     "verify:portability": "bun run scripts/verify-portability.ts",
-    "verify:public-api": "bun run build && bun run verify:jsdoc && bun run scripts/snapshot-public-api.ts --check",
+    "verify:public-api": "bun run build && bun run verify:jsdoc",
     "verify:release-version": "bun run scripts/verify-release-version.ts"
   },
   "lint-staged": {

@@ -10,10 +10,7 @@ type Finding = {
 const ROOTS = ['README.md', 'documentation', 'reference', 'src'] as const;
 const TEXT_EXTENSIONS = new Set(['.md', '.ts', '.txt']);
 const IGNORED_PATH_PARTS = new Set(['.git', 'coverage', 'dist', 'node_modules', 'tmp']);
-const IGNORED_FILES = new Set([
-  'documentation/public-api.snapshot.txt',
-  'reference/jsdoc-manifest.json',
-]);
+const IGNORED_FILES = new Set<string>();
 
 type CallExpression = {
   argumentsList: string[];
