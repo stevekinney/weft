@@ -22,16 +22,15 @@ export async function* streamMatchingWorkflowStates(
   const constrainedIds = await resolveConstrainedIds(internals, filter, normalizedTagFilters);
 
   if (constrainedIds !== null) {
-    const orderedIds = [...constrainedIds];
-    const stateBytesList = await Promise.all(
-      orderedIds.map((workflowId) => internals.storage.get(KEYS.workflow(workflowId))),
-    );
-
-    for (const stateBytes of stateBytesList) {
-      if (!stateBytes) continue;
-
-      const state = decodeWorkflowState(stateBytes);
-      if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters)) continue;
+    for (const workflowId of constrainedIds) {
+      const state = await loadMatchingWorkflowState(
+        internals,
+        workflowId,
+        filter,
+        constrainedIds,
+        normalizedTagFilters,
+      );
+      if (state === null) continue;
       yield state;
     }
 
@@ -45,6 +44,58 @@ export async function* streamMatchingWorkflowStates(
     if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters)) continue;
     yield state;
   }
+}
+
+/** Collect decoded workflow states that match a list filter. */
+export async function collectMatchingWorkflowStates(
+  internals: EngineInternals,
+  filter?: ListFilter,
+): Promise<WorkflowState[]> {
+  const normalizedTagFilters = normalizeWorkflowTags(filter?.tags);
+  const constrainedIds = await resolveConstrainedIds(internals, filter, normalizedTagFilters);
+
+  if (constrainedIds !== null) {
+    const orderedIds = [...constrainedIds];
+    const states = await Promise.all(
+      orderedIds.map((workflowId) =>
+        loadMatchingWorkflowState(
+          internals,
+          workflowId,
+          filter,
+          constrainedIds,
+          normalizedTagFilters,
+        ),
+      ),
+    );
+
+    return states.filter((state): state is WorkflowState => state !== null);
+  }
+
+  const states: WorkflowState[] = [];
+  for await (const [key, value] of internals.storage.scan('wf:')) {
+    if (!isTopLevelWorkflowStateKey(key)) continue;
+
+    const state = decodeWorkflowState(value);
+    if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters)) continue;
+    states.push(state);
+  }
+
+  return states;
+}
+
+async function loadMatchingWorkflowState(
+  internals: EngineInternals,
+  workflowId: string,
+  filter: ListFilter | undefined,
+  constrainedIds: Set<string> | null,
+  normalizedTagFilters: readonly string[] | undefined,
+): Promise<WorkflowState | null> {
+  const stateBytes = await internals.storage.get(KEYS.workflow(workflowId));
+  if (!stateBytes) return null;
+
+  const state = decodeWorkflowState(stateBytes);
+  if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters)) return null;
+  return state;
 }
 
 /** Resolve the indexed workflow IDs implied by tag and search-attribute filters. */

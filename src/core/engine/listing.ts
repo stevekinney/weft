@@ -12,7 +12,10 @@ import { mutateWorkflowTags, validateAttributeValueSizes } from './attributes-ta
 import type { EngineInternals } from './internals.ts';
 import { paginateWorkflowSummaries } from './state-utilities.ts';
 import { decodeWorkflowState, normalizeBulkFilterNumber } from './validation.ts';
-import { streamMatchingWorkflowStates } from './workflow-state-stream.ts';
+import {
+  collectMatchingWorkflowStates,
+  streamMatchingWorkflowStates,
+} from './workflow-state-stream.ts';
 
 export const BULK_OPERATION_BATCH_SIZE = 1000;
 
@@ -23,7 +26,7 @@ export async function list(
 ): Promise<PaginatedResult<WorkflowSummary>> {
   const items: WorkflowSummary[] = [];
 
-  for await (const state of streamMatchingWorkflowStates(internals, filter)) {
+  for (const state of await collectMatchingWorkflowStates(internals, filter)) {
     items.push({
       id: state.id,
       type: state.type,
