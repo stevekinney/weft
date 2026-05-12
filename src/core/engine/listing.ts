@@ -8,73 +8,22 @@ import type {
   WorkflowState,
   WorkflowSummary,
 } from '../types.ts';
-import { normalizeWorkflowTags } from '../workflow-tags.ts';
-import {
-  mutateWorkflowTags,
-  resolveConstrainedIds,
-  validateAttributeValueSizes,
-} from './attributes-tags.ts';
+import { mutateWorkflowTags, validateAttributeValueSizes } from './attributes-tags.ts';
 import type { EngineInternals } from './internals.ts';
-import { matchesListFilter, paginateWorkflowSummaries } from './state-utilities.ts';
+import { paginateWorkflowSummaries } from './state-utilities.ts';
 import { decodeWorkflowState, normalizeBulkFilterNumber } from './validation.ts';
+import { streamMatchingWorkflowStates } from './workflow-state-stream.ts';
 
 export const BULK_OPERATION_BATCH_SIZE = 1000;
 
 /** List workflow summaries that match a filter, using indexes when available. */
-// oxlint-disable-next-line complexity -- ID:core-engine-list-complexity
 export async function list(
   internals: EngineInternals,
   filter?: ListFilter,
 ): Promise<PaginatedResult<WorkflowSummary>> {
-  const normalizedTagFilters = normalizeWorkflowTags(filter?.tags);
-  const constrainedIds = await resolveConstrainedIds(internals, filter, normalizedTagFilters);
-
   const items: WorkflowSummary[] = [];
 
-  // Fast path: when tag or attribute filters constrained the set of
-  // candidate IDs, load only those rows by key instead of scanning every
-  // `wf:*` entry.
-  // This turns the cost from O(total workflows) into O(matches), which is
-  // the shape the architecture "<1ms single-attribute equality" target
-  // assumes.
-  if (constrainedIds !== null) {
-    // Parallelize storage reads. On in-memory backends this is essentially
-    // free; on remote backends (network KV, S3-backed) it converts N
-    // sequential round-trips into a single fan-out, which is what the
-    // architecture's <1ms attribute-equality target relies on.
-    // `Promise.all` preserves input order, so iterating the resolved array
-    // in lockstep with the original id list keeps results deterministic
-    // (insertion order from the attribute index intersection).
-    const orderedIds = [...constrainedIds];
-    const stateBytesList = await Promise.all(
-      orderedIds.map((workflowId) => internals.storage.get(KEYS.workflow(workflowId))),
-    );
-
-    for (const stateBytes of stateBytesList) {
-      if (!stateBytes) continue;
-
-      const state = decodeWorkflowState(stateBytes);
-      if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters)) continue;
-
-      items.push({
-        id: state.id,
-        type: state.type,
-        status: state.status,
-        ...(state.tags !== undefined && { tags: state.tags }),
-        version: state.version,
-        createdAt: state.createdAt,
-        updatedAt: state.updatedAt,
-      });
-    }
-    return paginateWorkflowSummaries(items, filter);
-  }
-
-  for await (const [key, value] of internals.storage.scan('wf:')) {
-    if (!isTopLevelWorkflowStateKey(key)) continue;
-
-    const state = decodeWorkflowState(value);
-    if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters)) continue;
-
+  for await (const state of streamMatchingWorkflowStates(internals, filter)) {
     items.push({
       id: state.id,
       type: state.type,
@@ -94,29 +43,7 @@ export async function* streamWorkflowStates(
   internals: EngineInternals,
   filter?: ListFilter,
 ): AsyncGenerator<WorkflowState> {
-  const normalizedTagFilters = normalizeWorkflowTags(filter?.tags);
-  const constrainedIds = await resolveConstrainedIds(internals, filter, normalizedTagFilters);
-
-  if (constrainedIds !== null) {
-    for (const workflowId of constrainedIds) {
-      const stateBytes = await internals.storage.get(KEYS.workflow(workflowId));
-      if (!stateBytes) continue;
-
-      const state = decodeWorkflowState(stateBytes);
-      if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters)) continue;
-      yield state;
-    }
-
-    return;
-  }
-
-  for await (const [key, value] of internals.storage.scan('wf:')) {
-    if (!isTopLevelWorkflowStateKey(key)) continue;
-
-    const state = decodeWorkflowState(value);
-    if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters)) continue;
-    yield state;
-  }
+  yield* streamMatchingWorkflowStates(internals, filter);
 }
 
 /** Stream decoded workflow states in fixed-size batches for bulk operations. */
@@ -230,9 +157,4 @@ export async function removeTags(
   ...tags: string[]
 ): Promise<void> {
   await mutateWorkflowTags(internals, workflowId, tags, 'remove');
-}
-
-function isTopLevelWorkflowStateKey(key: string): boolean {
-  const idPart = key.slice(3);
-  return !idPart.includes(':');
 }

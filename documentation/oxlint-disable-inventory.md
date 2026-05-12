@@ -300,13 +300,6 @@ naming the alternative that was rejected.
 - **Symbol**: `line-5082`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `core-engine-list-complexity`
-
-- **File**: `src/core/engine/listing.ts`
-- **Rule**: `complexity`
-- **Symbol**: `list`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `core-engine-matches-schedule-filter-complexity`
 
 - **File**: `src/core/engine/index.ts`

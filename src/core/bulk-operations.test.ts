@@ -683,6 +683,39 @@ describe('bulk workflow operations', () => {
     }
   });
 
+  it('applies limit and offset to tag-indexed bulk tag mutations after filtering', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    engine.register('echo', echoWorkflow);
+
+    try {
+      await createCompletedWorkflow(engine, 'bulk-tags-window-01', ['bulk-window']);
+      await createCompletedWorkflow(engine, 'bulk-tags-window-02', ['bulk-window']);
+      await createCompletedWorkflow(engine, 'bulk-tags-window-03', ['bulk-window']);
+      await createCompletedWorkflow(engine, 'bulk-tags-window-other', ['other']);
+
+      const result = await engine.tagAll(
+        {
+          tags: ['bulk-window'],
+          offset: 1,
+          limit: 1,
+        },
+        ['selected-window'],
+      );
+
+      expect(result).toEqual({ modified: 1 });
+      const firstWindowState = await engine.get('bulk-tags-window-01');
+      const secondWindowState = await engine.get('bulk-tags-window-02');
+      const thirdWindowState = await engine.get('bulk-tags-window-03');
+      const otherState = await engine.get('bulk-tags-window-other');
+      expect(firstWindowState?.tags).toEqual(['bulk-window']);
+      expect(secondWindowState?.tags).toEqual(['bulk-window', 'selected-window']);
+      expect(thirdWindowState?.tags).toEqual(['bulk-window']);
+      expect(otherState?.tags).toEqual(['other']);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
   it('snapshots workflow ids before bulk tag mutation rewrites workflow state entries mid-scan', async () => {
     const storage = new BulkWorkflowReorderingScanStorage();
     const engine = new Engine({ storage });
