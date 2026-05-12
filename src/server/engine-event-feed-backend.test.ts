@@ -14,8 +14,10 @@ import { sleepForTesting, waitForCondition } from '../testing/fake-timers.ts';
 
 import { describe, expect, it } from 'bun:test';
 
+import { encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
+import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { createEngineEventFeedBackend } from './engine-event-feed-backend.ts';
 import {
@@ -393,6 +395,8 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
     const engine = createTokenStreamerEngine(['hello', 'world']);
     const handle = await engine.start('streamer', {}, {});
     await waitForStreamChunks(engine, handle.id, 2);
+    const prefix = KEYS.streamChunkPrefix(handle.id, 'tokens');
+    await engine.storage.put(`${prefix}not-a-number`, encode('ignored'));
 
     const backend = createEngineEventFeedBackend(engine);
     const envelopes = await collect(
@@ -416,6 +420,8 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
     const engine = createTokenStreamerEngine(['a', 'b', 'c']);
     const handle = await engine.start('streamer', {}, {});
     await waitForStreamChunks(engine, handle.id, 3);
+    const prefix = KEYS.streamChunkPrefix(handle.id, 'tokens');
+    await engine.storage.put(`${prefix}0000000004-trailing-text`, encode('ignored'));
 
     const backend = createEngineEventFeedBackend(engine);
     expect(await backend.snapshotTailSequence(handle.id, 'tokens')).toBe(2);

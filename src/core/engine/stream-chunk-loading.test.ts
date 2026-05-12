@@ -42,12 +42,12 @@ describe('loadStoredStreamChunks', () => {
     expect(chunks).toEqual([{ sequence: 0, value: 'valid' }]);
   });
 
-  it('fails malformed stream chunk payloads without exposing codec internals', async () => {
+  it('preserves codec errors for malformed stream chunk payloads', async () => {
     const storage = new MemoryStorage();
     await storage.put(KEYS.streamChunk('workflow-1', 'tokens', 0), new Uint8Array([0xc1]));
 
     await expect(loadStoredStreamChunks(storage, 'workflow-1', 'tokens')).rejects.toThrow(
-      'Invalid stored stream chunk payload',
+      'Unrecognized type byte: 0xc1',
     );
   });
 });

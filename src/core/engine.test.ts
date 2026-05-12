@@ -3297,6 +3297,14 @@ describe('Engine', () => {
     expect(decode(chunk0!)).toEqual({ row: 1, data: 'first' });
     expect(decode(chunk1!)).toEqual({ row: 2, data: 'second' });
 
+    const prefix = KEYS.streamChunkPrefix(handle.id, 'report');
+    await storage.put(`${prefix}not-a-number`, encode({ row: 99, data: 'invalid suffix' }));
+    await storage.put(`${prefix}0000000003-trailing-text`, encode({ row: 100 }));
+    expect(await engine.getStreamChunks(handle.id, 'report')).toEqual([
+      { sequence: 0, value: { row: 1, data: 'first' } },
+      { sequence: 1, value: { row: 2, data: 'second' } },
+    ]);
+
     // Verify metadata
     const meta = await storage.get(KEYS.streamMetadata(handle.id, 'report'));
     expect(meta).not.toBeNull();

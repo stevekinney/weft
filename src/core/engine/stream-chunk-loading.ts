@@ -31,17 +31,9 @@ export async function loadStoredStreamChunks(
 
     chunks.push({
       sequence,
-      value: decodeStoredStreamChunk(chunkBytes),
+      value: decode(chunkBytes),
     });
   }
 
   return chunks;
-}
-
-function decodeStoredStreamChunk(chunkBytes: Uint8Array): unknown {
-  try {
-    return decode(chunkBytes);
-  } catch {
-    throw new Error('Invalid stored stream chunk payload');
-  }
 }
