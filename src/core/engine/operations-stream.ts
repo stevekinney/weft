@@ -1,5 +1,5 @@
 import { KEYS } from '../../storage/interface.ts';
-import { decode, encode } from '../codec.ts';
+import { encode } from '../codec.ts';
 import type {
   ContextOperationRequest,
   StoredStreamChunk,
@@ -8,6 +8,7 @@ import type {
 } from '../context.ts';
 import { cleanupPartialStreamChunks, createCleanupErrorReporter } from '../engine-helpers.ts';
 import type { EngineInternals } from './internals.ts';
+import { loadStoredStreamChunks } from './stream-chunk-loading.ts';
 import { STREAM_CHUNK_KIND, TOKENS_STREAM_KEY, notifyWorkflowFeedCommit } from './workflow-feed.ts';
 
 type StreamOperation = Extract<ContextOperationRequest, { type: 'stream' }>;
@@ -27,28 +28,7 @@ export async function getStreamChunksFromInternals(
   key: string,
   options?: { after?: number },
 ): Promise<StoredStreamChunk[]> {
-  const after = options?.after;
-  const prefix = KEYS.streamChunkPrefix(workflowId, key);
-  const chunks: StoredStreamChunk[] = [];
-  const scanOptions =
-    after !== undefined && after >= 0
-      ? { gt: KEYS.streamChunk(workflowId, key, after) }
-      : undefined;
-
-  for await (const [storageKey, chunkBytes] of internals.storage.scan(prefix, scanOptions)) {
-    const sequenceText = storageKey.slice(prefix.length);
-    const sequence = Number.parseInt(sequenceText, 10);
-    if (!Number.isSafeInteger(sequence) || sequence < 0) {
-      continue;
-    }
-
-    chunks.push({
-      sequence,
-      value: decode(chunkBytes),
-    });
-  }
-
-  return chunks;
+  return loadStoredStreamChunks(internals.storage, workflowId, key, options);
 }
 
 export async function processStreamOperation(

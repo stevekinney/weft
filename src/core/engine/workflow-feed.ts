@@ -1,9 +1,7 @@
-import { KEYS } from '../../storage/interface.ts';
-import { decode } from '../codec.ts';
-import type { StoredStreamChunk } from '../context.ts';
 import { EventLog } from '../event-log.ts';
 import type { EngineInternals } from './internals.ts';
 import { workflowFeedListenerKey } from './state-utilities.ts';
+import { loadStoredStreamChunks } from './stream-chunk-loading.ts';
 
 /**
  * Discriminator for `replayWorkflowFeed` / `snapshotWorkflowFeedTail`
@@ -59,36 +57,6 @@ export type WorkflowFeedRecordValue = WorkflowFeedRecord;
  */
 export type WorkflowFeedListener = (record: WorkflowFeedRecord) => void | Promise<void>;
 
-async function getWorkflowStreamChunks(
-  internals: EngineInternals,
-  workflowId: string,
-  key: string,
-  options?: { after?: number },
-): Promise<StoredStreamChunk[]> {
-  const after = options?.after;
-  const prefix = KEYS.streamChunkPrefix(workflowId, key);
-  const chunks: StoredStreamChunk[] = [];
-  const scanOptions =
-    after !== undefined && after >= 0
-      ? { gt: KEYS.streamChunk(workflowId, key, after) }
-      : undefined;
-
-  for await (const [storageKey, chunkBytes] of internals.storage.scan(prefix, scanOptions)) {
-    const sequenceText = storageKey.slice(prefix.length);
-    const sequence = Number.parseInt(sequenceText, 10);
-    if (!Number.isSafeInteger(sequence) || sequence < 0) {
-      continue;
-    }
-
-    chunks.push({
-      sequence,
-      value: decode(chunkBytes),
-    });
-  }
-
-  return chunks;
-}
-
 /**
  * Iterate over the workflow's post-commit records for a given selector.
  */
@@ -125,7 +93,7 @@ export async function snapshotWorkflowFeedTail(
   // prefix iteration is unavoidable without a schema change.
   // Acceptable for now; the typical token stream is short-lived
   // and reconnect frequency is low.
-  const chunks = await getWorkflowStreamChunks(internals, workflowId, TOKENS_STREAM_KEY);
+  const chunks = await loadStoredStreamChunks(internals.storage, workflowId, TOKENS_STREAM_KEY);
   if (chunks.length === 0) return -1;
   let max = -1;
   for (const chunk of chunks) {
@@ -190,10 +158,10 @@ export async function* replayWorkflowTokens(
 ): AsyncIterable<WorkflowFeedRecord> {
   const chunks =
     afterSequence >= 0
-      ? await getWorkflowStreamChunks(internals, workflowId, TOKENS_STREAM_KEY, {
+      ? await loadStoredStreamChunks(internals.storage, workflowId, TOKENS_STREAM_KEY, {
           after: afterSequence,
         })
-      : await getWorkflowStreamChunks(internals, workflowId, TOKENS_STREAM_KEY);
+      : await loadStoredStreamChunks(internals.storage, workflowId, TOKENS_STREAM_KEY);
   // Stream chunks carry no persisted timestamp — the replay path
   // stamps the wallclock at iteration time so consumers always see
   // a populated `timestamp`. Live chunks stamp the same way at
