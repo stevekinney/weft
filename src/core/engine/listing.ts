@@ -1,6 +1,6 @@
 import { KEYS } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
-import { normalizeListFilter } from '../list-filter-validation.ts';
+import { isFailureCategory, normalizeListFilter } from '../list-filter-validation.ts';
 import { buildIndexOperations, validateAttributeType } from '../search-attributes.ts';
 import type {
   FailureCategory,
@@ -24,14 +24,6 @@ import {
 } from './workflow-state-stream.ts';
 
 export const BULK_OPERATION_BATCH_SIZE = 1000;
-
-const FAILURE_CATEGORIES = new Set<FailureCategory>([
-  'memory',
-  'reflection',
-  'planning',
-  'action',
-  'system',
-]);
 
 /** List workflow summaries that match a filter, using indexes when available. */
 // oxlint-disable-next-line complexity -- ID:core-engine-list-complexity
@@ -65,25 +57,18 @@ export async function list(
     const chunkSize = 64;
     for (let start = 0; start < orderedIds.length; start += chunkSize) {
       const chunkIds = orderedIds.slice(start, start + chunkSize);
-      const chunkRecords = await Promise.all(
-        chunkIds.map(async (workflowId) => {
-          const [stateBytes, attributeBytes] = await Promise.all([
-            internals.storage.get(KEYS.workflow(workflowId)),
-            shouldProjectFailureCategory(options)
-              ? internals.storage.get(KEYS.attribute(workflowId))
-              : Promise.resolve(null),
-          ]);
-          return { stateBytes, attributeBytes };
-        }),
+      const chunkBytes = await Promise.all(
+        chunkIds.map((workflowId) => internals.storage.get(KEYS.workflow(workflowId))),
       );
-      for (const { stateBytes, attributeBytes } of chunkRecords) {
+      for (const stateBytes of chunkBytes) {
         if (!stateBytes) continue;
         const state = decodeWorkflowState(stateBytes);
         if (!matchesListFilter(state, normalizedFilter, constrainedIds, normalizedTagFilters))
           continue;
-        items.push(
-          summaryFromState(state, failureCategoryFromAttributeBytes(state, attributeBytes)),
-        );
+        const attributeBytes = shouldReadFailureCategoryAttribute(state, options)
+          ? await internals.storage.get(KEYS.attribute(state.id))
+          : null;
+        items.push(summaryFromState(state, failureCategoryFromAttributeBytes(attributeBytes)));
       }
     }
     return paginateWorkflowSummaries(sortSummariesByCreatedAtDescending(items), normalizedFilter);
@@ -101,25 +86,30 @@ export async function list(
     const state = decodeWorkflowState(value);
     if (!matchesListFilter(state, normalizedFilter, constrainedIds, normalizedTagFilters)) continue;
 
-    const attributeBytes =
-      shouldProjectFailureCategory(options) && state.failureCategory === undefined
-        ? await internals.storage.get(KEYS.attribute(state.id))
-        : null;
-    items.push(summaryFromState(state, failureCategoryFromAttributeBytes(state, attributeBytes)));
+    const attributeBytes = shouldReadFailureCategoryAttribute(state, options)
+      ? await internals.storage.get(KEYS.attribute(state.id))
+      : null;
+    items.push(summaryFromState(state, failureCategoryFromAttributeBytes(attributeBytes)));
   }
 
   return paginateWorkflowSummaries(sortSummariesByCreatedAtDescending(items), normalizedFilter);
 }
 
-function shouldProjectFailureCategory(options: ListOptions | undefined): boolean {
-  return options?.includeFailureCategory === true;
+function shouldReadFailureCategoryAttribute(
+  state: WorkflowState,
+  options: ListOptions | undefined,
+): boolean {
+  return (
+    options?.includeFailureCategory === true &&
+    state.status === 'failed' &&
+    (state.failureCategory === undefined || state.failureCategory === null)
+  );
 }
 
 function failureCategoryFromAttributeBytes(
-  state: WorkflowState,
   attributeBytes: Uint8Array | null,
 ): FailureCategory | undefined {
-  if (state.failureCategory !== undefined || attributeBytes === null) return undefined;
+  if (attributeBytes === null) return undefined;
 
   const attributes = decode(attributeBytes);
   if (!isRecord(attributes)) return undefined;
@@ -130,10 +120,6 @@ function failureCategoryFromAttributeBytes(
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function isFailureCategory(value: unknown): value is FailureCategory {
-  return typeof value === 'string' && FAILURE_CATEGORIES.has(value as FailureCategory);
 }
 
 function summaryFromState(

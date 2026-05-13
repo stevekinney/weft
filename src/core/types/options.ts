@@ -295,15 +295,15 @@ export interface ListFilter {
  *
  * const engine = new Engine();
  * const options: ListOptions = { includeFailureCategory: true };
- * const page = await engine.list({ status: 'running' }, options);
+ * const page = await engine.list({ status: 'failed' }, options);
  * void page;
  * ```
  */
 export interface ListOptions {
   /**
-   * Populate `WorkflowSummary.failureCategory` from the stored
-   * `failureCategory` search attribute when the workflow state itself does
-   * not carry a category. Defaults to `false`.
+   * Populate `WorkflowSummary.failureCategory` for failed workflows from the
+   * stored `failureCategory` search attribute when the workflow state itself
+   * does not carry a category. Defaults to `false`.
    */
   includeFailureCategory?: boolean;
 }

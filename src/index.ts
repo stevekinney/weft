@@ -80,6 +80,7 @@ export type {
   InferWorkflowEntries,
   InferWorkflowEntry,
   ListFilter,
+  ListOptions,
   NormalizedRetentionPolicy,
   PaginatedResult,
   PendingReviewEntry,

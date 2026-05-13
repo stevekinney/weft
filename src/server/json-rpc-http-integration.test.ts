@@ -12,8 +12,10 @@ import { sleepForTesting } from '../testing/fake-timers.ts';
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { decode, encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
-import type { WorkflowContext } from '../core/types.ts';
+import type { WorkflowContext, WorkflowState } from '../core/types.ts';
+import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { serve, type WeftServer } from './index.ts';
 
@@ -24,6 +26,30 @@ function createHoldEngine(): Engine {
     return yield* ctx.waitForSignal<string>('release');
   });
   return engine;
+}
+
+function createCrashEngine(storage = new MemoryStorage()): Engine {
+  const engine = new Engine({ storage });
+  engine.register('crash', async function* () {
+    throw new Error('workflow failure');
+  });
+  return engine;
+}
+
+async function startLegacyFailedWorkflow(
+  engine: Engine,
+  storage: MemoryStorage,
+  id: string,
+): Promise<void> {
+  const handle = await engine.start('crash', null, { id });
+  await expect(handle.result()).rejects.toThrow('workflow failure');
+
+  const stateBytes = await storage.get(KEYS.workflow(id));
+  expect(stateBytes).not.toBeNull();
+  const state = decode(stateBytes!) as WorkflowState;
+  state.failureCategory = null;
+  await storage.put(KEYS.workflow(id), encode(state));
+  await storage.put(KEYS.attribute(id), encode({ failureCategory: 'planning' }));
 }
 
 async function waitForStatus(
@@ -115,37 +141,71 @@ describe('serve() — POST /jsonrpc', () => {
   });
 
   it('dispatches weft.workflows.list with include failureCategory parameters', async () => {
-    const engine = createHoldEngine();
-    const handle = await engine.start('hold', null, { id: 'json-rpc-running-with-category' });
-    await waitForStatus(engine, handle.id, 'running');
-    await engine.setAttributes(handle.id, { failureCategory: 'planning' });
+    const storage = new MemoryStorage();
+    const engine = createCrashEngine(storage);
+    await startLegacyFailedWorkflow(engine, storage, 'json-rpc-failed-with-category');
 
     server = serve({ engine, port: 0 });
 
-    const response = await fetch(`${server.url}/jsonrpc`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0',
-        id: 9,
-        method: 'weft.workflows.list',
-        params: { status: 'running', include: ['failureCategory'] },
-      }),
-    });
+    for (const [id, include] of [
+      [9, ['failureCategory']],
+      [10, 'failureCategory'],
+    ] as const) {
+      const response = await fetch(`${server.url}/jsonrpc`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          method: 'weft.workflows.list',
+          params: { status: 'failed', include },
+        }),
+      });
 
-    expect(response.status).toBe(200);
-    const body = (await response.json()) as {
-      id: number;
-      result?: { items: Array<{ id: string; failureCategory?: string }> };
-      error?: unknown;
-    };
-    expect(body.id).toBe(9);
-    expect(body.error).toBeUndefined();
-    expect(body.result?.items).toHaveLength(1);
-    expect(body.result?.items[0]).toMatchObject({
-      id: 'json-rpc-running-with-category',
-      failureCategory: 'planning',
-    });
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        id: number;
+        result?: { items: Array<{ id: string; failureCategory?: string }> };
+        error?: unknown;
+      };
+      expect(body.id).toBe(id);
+      expect(body.error).toBeUndefined();
+      expect(body.result?.items).toHaveLength(1);
+      expect(body.result?.items[0]).toMatchObject({
+        id: 'json-rpc-failed-with-category',
+        failureCategory: 'planning',
+      });
+    }
+  });
+
+  it('rejects weft.workflows.list unsupported include parameters', async () => {
+    const engine = createHoldEngine();
+    server = serve({ engine, port: 0 });
+
+    for (const [id, include] of [
+      [11, ['failureCategory', 'input']],
+      [12, 'input'],
+    ] as const) {
+      const response = await fetch(`${server.url}/jsonrpc`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          method: 'weft.workflows.list',
+          params: { include },
+        }),
+      });
+
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as {
+        id: number;
+        error?: { code: number; data?: { weftCode?: string } };
+      };
+      expect(body.id).toBe(id);
+      expect(body.error?.code).toBe(-32602);
+      expect(body.error?.data?.weftCode).toBe('InvalidParams');
+    }
   });
 
   it('returns MethodNotFound for an unknown method', async () => {

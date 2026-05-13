@@ -160,3 +160,8 @@ export function normalizeListFilter(input: unknown): ListFilter {
   }
   return result.data as ListFilter;
 }
+
+/** Return true when a value is a recognized workflow failure category. */
+export function isFailureCategory(value: unknown): value is FailureCategory {
+  return failureCategorySchema.safeParse(value).success;
+}

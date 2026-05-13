@@ -10,7 +10,6 @@ import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts
 import type {
   FailureCategory,
   ListFilter,
-  ListOptions,
   PaginatedResult,
   SearchAttributeValue,
   WorkflowStatus,
@@ -116,7 +115,13 @@ export const listWorkflowsOperation = defineOperation<ListWorkflowsInput, ListWo
     }
 
     try {
-      return await e.list(filter, listOptionsFromInclude(include));
+      const includeFailureCategory = Array.isArray(include)
+        ? include.includes('failureCategory')
+        : include === 'failureCategory';
+      return await e.list(
+        filter,
+        includeFailureCategory ? { includeFailureCategory: true } : undefined,
+      );
     } catch (error) {
       if (error instanceof WorkflowListScanCapExceededError) throw toUnprocessable(error);
       throw error;
@@ -157,11 +162,6 @@ function extractListWorkflowsInput(request: Request): ListWorkflowsInput {
   }
 
   return filter;
-}
-
-function listOptionsFromInclude(include: ListWorkflowsInput['include']): ListOptions {
-  const values = Array.isArray(include) ? include : include === undefined ? [] : [include];
-  return values.includes('failureCategory') ? { includeFailureCategory: true } : {};
 }
 
 function shapeListWorkflowsSuccess(result: ListWorkflowsOutput): Response {
