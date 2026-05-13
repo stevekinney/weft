@@ -2,9 +2,10 @@ import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { Engine } from '../core/engine.ts';
 import { WorkflowCompletedEvent, WorkflowFailedEvent } from '../core/events.ts';
 import { tenantFromInputField } from '../core/tenant.ts';
-import type { WorkflowContext } from '../core/types.ts';
+import type { ScheduleSummary, WorkflowContext } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { sleepForTesting } from '../testing/fake-timers.ts';
+import { ScheduleHandleDelegation, WorkflowHandleDelegation } from './handle-delegation.ts';
 import type { WeftClient } from './interface.ts';
 import { LocalClient } from './local.ts';
 
@@ -580,6 +581,103 @@ describe('LocalClient', () => {
 });
 
 describe('LocalClient delegation surface', () => {
+  it('centralizes workflow and schedule handle delegation through shared client-backed helpers', async () => {
+    const workflowClient = {
+      cancel: mock(async () => undefined),
+      signal: mock(async () => undefined),
+      update: mock(async () => 'updated'),
+      query: mock(async () => 'queried'),
+      getAttributes: mock(async () => ({ priority: 'high' })),
+      setAttributes: mock(async () => undefined),
+      addTags: mock(async () => undefined),
+      removeTags: mock(async () => undefined),
+    };
+
+    class TestWorkflowHandle extends WorkflowHandleDelegation {
+      async result(): Promise<unknown> {
+        return 'done';
+      }
+
+      addEventListener(): void {}
+
+      removeEventListener(): void {}
+
+      [Symbol.dispose](): void {}
+    }
+
+    const workflowHandle = new TestWorkflowHandle('shared-workflow', workflowClient);
+
+    expect(await workflowHandle.result()).toBe('done');
+    await workflowHandle.cancel();
+    await workflowHandle.signal('status', { ok: true });
+    expect(await workflowHandle.update('rename', { value: 1 }, { timeout: 50 })).toBe('updated');
+    expect(await workflowHandle.query('status')).toBe('queried');
+    expect(await workflowHandle.getAttributes()).toEqual({ priority: 'high' });
+    await workflowHandle.setAttributes({ priority: 'critical' });
+    await workflowHandle.addTags('nightly', 'v2');
+    await workflowHandle.removeTags('nightly');
+
+    expect(workflowClient.cancel).toHaveBeenCalledWith('shared-workflow');
+    expect(workflowClient.signal).toHaveBeenCalledWith('shared-workflow', 'status', {
+      ok: true,
+    });
+    expect(workflowClient.update).toHaveBeenCalledWith(
+      'shared-workflow',
+      'rename',
+      { value: 1 },
+      {
+        timeout: 50,
+      },
+    );
+    expect(workflowClient.query).toHaveBeenCalledWith('shared-workflow', 'status', undefined);
+    expect(workflowClient.getAttributes).toHaveBeenCalledWith('shared-workflow');
+    expect(workflowClient.setAttributes).toHaveBeenCalledWith('shared-workflow', {
+      priority: 'critical',
+    });
+    expect(workflowClient.addTags).toHaveBeenCalledWith('shared-workflow', 'nightly', 'v2');
+    expect(workflowClient.removeTags).toHaveBeenCalledWith('shared-workflow', 'nightly');
+
+    const scheduleSummary: ScheduleSummary = {
+      id: 'shared-schedule',
+      workflowType: 'echo',
+      cronExpression: '0 * * * *',
+      status: 'active',
+      overlap: 'skip',
+      backfill: false,
+      createdAt: 1,
+      updatedAt: 1,
+      nextFireAt: 2,
+      queuedRuns: 0,
+    };
+
+    const scheduleClient = {
+      pauseSchedule: mock(async () => undefined),
+      resumeSchedule: mock(async () => undefined),
+      cancelSchedule: mock(async () => undefined),
+      updateSchedule: mock(async () => undefined),
+      getSchedule: mock(async () => scheduleSummary),
+    };
+
+    class TestScheduleHandle extends ScheduleHandleDelegation {
+      [Symbol.dispose](): void {}
+    }
+
+    const scheduleHandle = new TestScheduleHandle('shared-schedule', scheduleClient);
+    await scheduleHandle.pause();
+    await scheduleHandle.resume();
+    await scheduleHandle.update('30 * * * *');
+    expect(await scheduleHandle.describe()).toEqual(
+      expect.objectContaining({ id: 'shared-schedule', cronExpression: '0 * * * *' }),
+    );
+    await scheduleHandle.cancel();
+
+    expect(scheduleClient.pauseSchedule).toHaveBeenCalledWith('shared-schedule');
+    expect(scheduleClient.resumeSchedule).toHaveBeenCalledWith('shared-schedule');
+    expect(scheduleClient.updateSchedule).toHaveBeenCalledWith('shared-schedule', '30 * * * *');
+    expect(scheduleClient.getSchedule).toHaveBeenCalledWith('shared-schedule');
+    expect(scheduleClient.cancelSchedule).toHaveBeenCalledWith('shared-schedule');
+  });
+
   it('forwards every method to the underlying engine and wraps handles', async () => {
     const workflowHandle = new EventTarget() as EventTarget & {
       id: string;

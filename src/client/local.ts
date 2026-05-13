@@ -8,7 +8,7 @@
  * @module client/local
  */
 
-import type { Engine, ScheduleHandle, WorkflowHandle } from '../core/engine.ts';
+import type { Engine, WorkflowHandle } from '../core/engine.ts';
 import type {
   AttributeFilterKey,
   BulkCancelResult,
@@ -42,81 +42,23 @@ import type {
   WorkflowTimelineEntry,
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
+import { ScheduleHandleDelegation, WorkflowHandleDelegation } from './handle-delegation.ts';
 import type { ClientHandle, ClientScheduleHandle, UpdateResult, WeftClient } from './interface.ts';
 
 // ---------------------------------------------------------------------------
 // LocalHandle — wraps Engine's WorkflowHandle
 // ---------------------------------------------------------------------------
 
-class LocalHandle implements ClientHandle {
-  readonly id: string;
+class LocalHandle extends WorkflowHandleDelegation<LocalClient> {
   readonly #handle: WorkflowHandle;
-  readonly #client: LocalClient;
 
   constructor(handle: WorkflowHandle, client: LocalClient) {
-    this.id = handle.id;
+    super(handle.id, client);
     this.#handle = handle;
-    this.#client = client;
   }
 
   async result(): Promise<unknown> {
     return this.#handle.result();
-  }
-
-  async cancel(): Promise<void> {
-    return this.#client.cancel(this.id);
-  }
-
-  async signal(name: SignalDefinition): Promise<void>;
-  async signal<TInput>(name: SignalDefinition<TInput>, payload: TInput): Promise<void>;
-  async signal(name: string, payload?: unknown): Promise<void>;
-  async signal(nameOrDefinition: MessageName, payload?: unknown): Promise<void> {
-    return this.#client.signal(this.id, messageName(nameOrDefinition), payload);
-  }
-
-  async update<TOutput>(
-    name: UpdateDefinition<void, TOutput>,
-    payload?: void,
-    options?: { timeout?: number },
-  ): Promise<TOutput>;
-  async update<TInput, TOutput>(
-    name: UpdateDefinition<TInput, TOutput>,
-    payload: TInput,
-    options?: { timeout?: number },
-  ): Promise<TOutput>;
-  async update(name: string, payload?: unknown, options?: { timeout?: number }): Promise<unknown>;
-  async update(
-    nameOrDefinition: MessageName,
-    payload?: unknown,
-    options?: { timeout?: number },
-  ): Promise<unknown> {
-    return this.#client.update(this.id, messageName(nameOrDefinition), payload, options);
-  }
-
-  async query<TOutput>(name: QueryDefinition<void, TOutput>): Promise<TOutput>;
-  async query<TInput, TOutput>(
-    name: QueryDefinition<TInput, TOutput>,
-    input: TInput,
-  ): Promise<TOutput>;
-  async query(name: string, input?: unknown): Promise<unknown>;
-  async query(nameOrDefinition: MessageName, input?: unknown): Promise<unknown> {
-    return this.#client.query(this.id, messageName(nameOrDefinition), input);
-  }
-
-  async getAttributes(): Promise<Record<string, SearchAttributeValue> | null> {
-    return this.#client.getAttributes(this.id);
-  }
-
-  async setAttributes(attributes: Record<string, SearchAttributeValue>): Promise<void> {
-    return this.#client.setAttributes(this.id, attributes);
-  }
-
-  async addTags(...tags: string[]): Promise<void> {
-    return this.#client.addTags(this.id, ...tags);
-  }
-
-  async removeTags(...tags: string[]): Promise<void> {
-    return this.#client.removeTags(this.id, ...tags);
   }
 
   addEventListener(
@@ -141,39 +83,9 @@ class LocalHandle implements ClientHandle {
   }
 }
 
-class LocalScheduleHandle implements ClientScheduleHandle {
-  readonly id: string;
-  readonly #handle: ScheduleHandle;
-  readonly #client: LocalClient;
-
-  constructor(handle: ScheduleHandle, client: LocalClient) {
-    this.id = handle.id;
-    this.#handle = handle;
-    this.#client = client;
-  }
-
-  async pause(): Promise<void> {
-    return this.#client.pauseSchedule(this.id);
-  }
-
-  async resume(): Promise<void> {
-    return this.#client.resumeSchedule(this.id);
-  }
-
-  async cancel(): Promise<void> {
-    return this.#client.cancelSchedule(this.id);
-  }
-
-  async update(newCronExpression: string): Promise<void> {
-    return this.#client.updateSchedule(this.id, newCronExpression);
-  }
-
-  async describe(): Promise<ScheduleSummary | null> {
-    return this.#client.getSchedule(this.id);
-  }
-
+class LocalScheduleHandle extends ScheduleHandleDelegation<LocalClient> {
   [Symbol.dispose](): void {
-    void this.#handle;
+    // Local schedule handles do not hold long-lived resources.
   }
 }
 
@@ -217,7 +129,7 @@ export class LocalClient implements WeftClient {
     options?: ScheduleOptions,
   ): Promise<ClientScheduleHandle> {
     const handle = await this.#engine.schedule(type, input, cronExpression, options);
-    return new LocalScheduleHandle(handle, this);
+    return new LocalScheduleHandle(handle.id, this);
   }
 
   async get(id: string): Promise<WorkflowState | null> {

@@ -1,29 +1,14 @@
-import type {
-  MessageName,
-  QueryDefinition,
-  SearchAttributeValue,
-  SignalDefinition,
-  UpdateDefinition,
-  WorkflowEvent,
-} from '../core/types.ts';
-import { messageName } from '../core/types.ts';
+import type { WorkflowEvent } from '../core/types.ts';
+import { WorkflowHandleDelegation } from './handle-delegation.ts';
 import type { HttpClient } from './http-client.ts';
 import { HttpClientError, request } from './http-request.ts';
-import type { ClientHandle } from './interface.ts';
 
-export class HttpHandle implements ClientHandle {
-  readonly id: string;
-  readonly #client: HttpClient;
+export class HttpHandle extends WorkflowHandleDelegation<HttpClient> {
   readonly #events = new EventTarget();
   #pollTimer: ReturnType<typeof setInterval> | null = null;
   #lastEventIndex = 0;
   #pollInFlight = false;
   #closed = false;
-
-  constructor(id: string, client: HttpClient) {
-    this.id = id;
-    this.#client = client;
-  }
 
   #ensurePolling(): void {
     if (this.#closed || this.#pollTimer !== null) return;
@@ -42,9 +27,9 @@ export class HttpHandle implements ClientHandle {
     if (this.#pollInFlight) return;
     this.#pollInFlight = true;
     try {
-      const events = await this.#client.getEvents(this.id);
+      const events = await this.client.getEvents(this.id);
       if (events.length === 0 && this.#lastEventIndex > 0) {
-        const state = await this.#client.get(this.id);
+        const state = await this.client.get(this.id);
         if (state === null) {
           this.close();
           return;
@@ -81,70 +66,14 @@ export class HttpHandle implements ClientHandle {
 
   async result(): Promise<unknown> {
     const response = await request<{ result: unknown } | null>(
-      this.#client.baseUrl,
+      this.client.baseUrl,
       `/workflows/${encodeURIComponent(this.id)}/result`,
-      this.#client.headers,
+      this.client.headers,
     );
     if (response === null) {
       throw new HttpClientError(404, `Workflow "${this.id}" not found`);
     }
     return response.result;
-  }
-
-  async cancel(): Promise<void> {
-    return this.#client.cancel(this.id);
-  }
-
-  async signal(name: SignalDefinition): Promise<void>;
-  async signal<TInput>(name: SignalDefinition<TInput>, payload: TInput): Promise<void>;
-  async signal(name: string, payload?: unknown): Promise<void>;
-  async signal(nameOrDefinition: MessageName, payload?: unknown): Promise<void> {
-    return this.#client.signal(this.id, messageName(nameOrDefinition), payload);
-  }
-
-  async update<TOutput>(
-    name: UpdateDefinition<void, TOutput>,
-    payload?: void,
-    options?: { timeout?: number },
-  ): Promise<TOutput>;
-  async update<TInput, TOutput>(
-    name: UpdateDefinition<TInput, TOutput>,
-    payload: TInput,
-    options?: { timeout?: number },
-  ): Promise<TOutput>;
-  async update(name: string, payload?: unknown, options?: { timeout?: number }): Promise<unknown>;
-  async update(
-    nameOrDefinition: MessageName,
-    payload?: unknown,
-    options?: { timeout?: number },
-  ): Promise<unknown> {
-    return this.#client.update(this.id, messageName(nameOrDefinition), payload, options);
-  }
-
-  async query<TOutput>(name: QueryDefinition<void, TOutput>): Promise<TOutput>;
-  async query<TInput, TOutput>(
-    name: QueryDefinition<TInput, TOutput>,
-    input: TInput,
-  ): Promise<TOutput>;
-  async query(name: string, input?: unknown): Promise<unknown>;
-  async query(nameOrDefinition: MessageName, input?: unknown): Promise<unknown> {
-    return this.#client.query(this.id, messageName(nameOrDefinition), input);
-  }
-
-  async getAttributes(): Promise<Record<string, SearchAttributeValue> | null> {
-    return this.#client.getAttributes(this.id);
-  }
-
-  async setAttributes(attributes: Record<string, SearchAttributeValue>): Promise<void> {
-    return this.#client.setAttributes(this.id, attributes);
-  }
-
-  async addTags(...tags: string[]): Promise<void> {
-    return this.#client.addTags(this.id, ...tags);
-  }
-
-  async removeTags(...tags: string[]): Promise<void> {
-    return this.#client.removeTags(this.id, ...tags);
   }
 
   addEventListener(
