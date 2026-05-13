@@ -200,22 +200,19 @@ describe('algorithm switching', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Agent-aware compression
+// Key transparency
 // ---------------------------------------------------------------------------
 
-describe('agent-aware compression', () => {
-  it('ignores malformed encoded workflow ids when selecting a compressor', async () => {
-    const inner = new MemoryStorage();
-    const storage = new CompressedStorage(inner, {
-      algorithm: 'gzip',
-      threshold: 64,
-      agentAlgorithm: 'brotli',
-      agentThreshold: 32,
-      agentWorkflowIds: () => new Set(['agent-workflow']),
-    });
+describe('key transparency', () => {
+  it('treats malformed workflow-shaped keys as ordinary storage keys', async () => {
+    const { storage, inner } = createStorage({ algorithm: 'gzip', threshold: 64 });
     const value = new Uint8Array(128).fill(7);
 
-    await expect(storage.put('wf:%E0%A4%A:ckpt', value)).resolves.toBeUndefined();
+    await storage.put('wf:%E0%A4%A:ckpt', value);
+
+    const stored = await inner.get('wf:%E0%A4%A:ckpt');
+    expect(stored).not.toBeNull();
+    expect(stored![1]).toBe(0x01);
     await expect(storage.get('wf:%E0%A4%A:ckpt')).resolves.toEqual(value);
   });
 });

@@ -3,14 +3,10 @@
  * Wraps any {@link Storage} implementation and applies compression above a
  * configurable size threshold.
  *
- * Supports agent-aware compression: when a workflow ID belongs to an agent-typed
- * workflow, a different algorithm and threshold can be used (e.g., brotli with
- * lower threshold for conversation-heavy checkpoint data).
- *
  * @module storage/compressed-storage
  */
 
-import type { CompressionAlgorithm, CompressionOptions, Compressor } from '../core/compression.ts';
+import type { CompressionOptions, Compressor } from '../core/compression.ts';
 import {
   compressPayload,
   createBunCompressor,
@@ -18,51 +14,15 @@ import {
   resolveCompressionOptions,
 } from '../core/compression.ts';
 
-import {
-  type BatchOperation,
-  type ScanOptions,
-  type Storage,
-  tryDecodeStorageKeyComponent,
-} from './interface.ts';
-
-/**
- * Options for agent-aware compression in {@link CompressedStorage}.
- *
- * `agentWorkflowIds` is the gate for agent-aware compression. When omitted,
- * `agentAlgorithm` and `agentThreshold` are ignored.
- *
- * @example
- * ```ts
- * import { MemoryStorage } from 'weft';
- * import { CompressedStorage, type AgentCompressionOptions } from 'weft/storage/compressed';
- *
- * const agentOptions: AgentCompressionOptions = {
- *   agentWorkflowIds: () => new Set(['my-agent-workflow-id']),
- *   agentAlgorithm: 'brotli',
- *   agentThreshold: 512,
- * };
- * await using inner = new MemoryStorage();
- * const storage = new CompressedStorage(inner, agentOptions);
- * ```
- */
-export type AgentCompressionOptions = {
-  /** Returns the set of workflow IDs that are agent-typed. */
-  agentWorkflowIds?: () => ReadonlySet<string>;
-  /** Compression algorithm for agent workflow checkpoints. Default: same as main algorithm. */
-  agentAlgorithm?: CompressionAlgorithm;
-  /** Compression threshold for agent workflow checkpoints. Default: same as main threshold. */
-  agentThreshold?: number;
-};
+import { type BatchOperation, type ScanOptions, type Storage } from './interface.ts';
 
 /**
  * {@link Storage} decorator that transparently compresses payloads above a
  * configurable size threshold before writing and decompresses on read.
  *
  * Wraps any `Storage` implementation — pass a {@link BunSQLiteStorage},
- * {@link MemoryStorage}, or any other backend as the first argument.  Supports
- * agent-aware compression: when a key belongs to an agent workflow a different
- * algorithm and threshold can be applied to handle conversation-heavy checkpoint
- * data.
+ * {@link MemoryStorage}, or any other backend as the first argument. The same
+ * compression algorithm and threshold apply to every stored key.
  *
  * @example
  * ```ts
@@ -85,29 +45,12 @@ export class CompressedStorage implements Storage {
   #inner: Storage;
   #compressor: Compressor;
   #threshold: number;
-  #agentCompressor: Compressor | null;
-  #agentThreshold: number;
-  #getAgentWorkflowIds: (() => ReadonlySet<string>) | null;
 
-  constructor(inner: Storage, options?: CompressionOptions & AgentCompressionOptions) {
+  constructor(inner: Storage, options?: CompressionOptions) {
     this.#inner = inner;
     const resolved = resolveCompressionOptions(options);
     this.#compressor = createBunCompressor(resolved.algorithm);
     this.#threshold = resolved.threshold;
-
-    // Agent-aware compression: create a separate compressor when the caller
-    // provides an agent workflow ID source. When `agentAlgorithm` is omitted,
-    // falls back to the main algorithm (only the threshold may differ).
-    if (options?.agentWorkflowIds) {
-      const agentAlg = options.agentAlgorithm ?? resolved.algorithm;
-      this.#agentCompressor = createBunCompressor(agentAlg);
-      this.#agentThreshold = options.agentThreshold ?? resolved.threshold;
-      this.#getAgentWorkflowIds = options.agentWorkflowIds;
-    } else {
-      this.#agentCompressor = null;
-      this.#agentThreshold = resolved.threshold;
-      this.#getAgentWorkflowIds = null;
-    }
 
     // Forward query when the inner storage provides it. Assigned via
     // defineProperty so the property is absent (not undefined) when the
@@ -130,8 +73,7 @@ export class CompressedStorage implements Storage {
   }
 
   async put(key: string, value: Uint8Array): Promise<void> {
-    const [compressor, threshold] = this.#selectCompressor(key);
-    const compressed = await compressPayload(value, compressor, threshold);
+    const compressed = await compressPayload(value, this.#compressor, this.#threshold);
     return this.#inner.put(key, compressed);
   }
 
@@ -149,11 +91,10 @@ export class CompressedStorage implements Storage {
     const compressed = await Promise.all(
       operations.map(async (op) => {
         if (op.type === 'put') {
-          const [compressor, threshold] = this.#selectCompressor(op.key);
           return {
             type: 'put' as const,
             key: op.key,
-            value: await compressPayload(op.value, compressor, threshold),
+            value: await compressPayload(op.value, this.#compressor, this.#threshold),
           };
         }
         return op;
@@ -162,38 +103,7 @@ export class CompressedStorage implements Storage {
     return this.#inner.batch(compressed);
   }
 
-  /**
-   * Select the compressor and threshold for a given storage key. Returns the
-   * agent compressor when the key belongs to an agent workflow checkpoint,
-   * otherwise returns the default compressor.
-   */
-  #selectCompressor(key: string): [Compressor, number] {
-    if (this.#agentCompressor && this.#getAgentWorkflowIds) {
-      const workflowId = extractWorkflowIdFromKey(key);
-      if (workflowId && this.#getAgentWorkflowIds().has(workflowId)) {
-        return [this.#agentCompressor, this.#agentThreshold];
-      }
-    }
-    return [this.#compressor, this.#threshold];
-  }
-
   [Symbol.dispose](): void {
     this.#inner[Symbol.dispose]();
   }
-}
-
-/**
- * Extract the workflow ID from a storage key. Workflow-related keys follow
- * the pattern `wf:{workflowId}` or `wf:{workflowId}:*`. Returns null if the
- * key doesn't match.
- */
-function extractWorkflowIdFromKey(key: string): string | null {
-  if (!key.startsWith('wf:')) return null;
-  const secondColon = key.indexOf(':', 3);
-  if (secondColon === -1) {
-    // Key is of the form `wf:{workflowId}`
-    return tryDecodeStorageKeyComponent(key.slice(3));
-  }
-  // Key is of the form `wf:{workflowId}:*`
-  return tryDecodeStorageKeyComponent(key.slice(3, secondColon));
 }

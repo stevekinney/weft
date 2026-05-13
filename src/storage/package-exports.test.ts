@@ -45,6 +45,15 @@ describe('storage package exports', () => {
     });
   });
 
+  it('exposes compressed storage as a runtime-specific subpath', () => {
+    expect(packageJson.exports['./storage/compressed']).toEqual({
+      types: './dist/storage/compressed-storage.d.ts',
+      bun: './dist/storage/compressed-storage.js',
+      import: './dist/storage/compressed-storage.js',
+      default: './dist/storage/compressed-storage.js',
+    });
+  });
+
   it('exposes the RemoteWorker protocol contract as a package subpath', () => {
     expect(packageJson.exports['./worker-protocol']).toEqual({
       types: './dist/worker/protocol.d.ts',
