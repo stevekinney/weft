@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, mock } from 'bun:test';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { restoreRealTimers, useFakeTimers } from './fake-timers.ts';
@@ -73,6 +73,27 @@ describe('storage backend testing helpers', () => {
     await fixture.cleanup();
 
     expect(existsSync(fixture.path)).toBe(false);
+  });
+
+  it('continues best-effort cleanup after a sidecar removal failure', async () => {
+    const fixture = createDiskBackedTestFixture({
+      prefix: 'weft-storage-helper-best-effort',
+      suffix: '.db',
+      sidecarSuffixes: sqliteDatabaseSidecarSuffixes,
+    });
+    const nonRecursiveSidecarDirectory = `${fixture.path}-wal`;
+
+    try {
+      mkdirSync(nonRecursiveSidecarDirectory, { recursive: true });
+      await Bun.write(join(nonRecursiveSidecarDirectory, 'lock'), 'lock');
+      await Bun.write(fixture.path, 'database');
+
+      expect(() => fixture.cleanup()).not.toThrow();
+      expect(existsSync(fixture.path)).toBe(false);
+    } finally {
+      rmSync(nonRecursiveSidecarDirectory, { force: true, recursive: true });
+      fixture.cleanup();
+    }
   });
 
   it('rejects path-like fixture fragments before cleanup can target them', () => {

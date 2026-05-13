@@ -48,6 +48,15 @@ export type DiskBackedTestFixture = {
   cleanup: () => void;
 };
 
+function removeFixturePathBestEffort(path: string, recursive = false): void {
+  try {
+    rmSync(path, { force: true, recursive });
+  } catch {
+    // Test fixture cleanup is intentionally best-effort so teardown does not
+    // mask the original assertion failure when a backend still holds a file.
+  }
+}
+
 function assertSafeFixturePathPart(value: string, name: string): void {
   if (value.length === 0 || value.includes('/') || value.includes('\\') || value.includes('..')) {
     throw new Error(`${name} must be a plain filename fragment`);
@@ -87,9 +96,9 @@ export function createDiskBackedTestFixture(
       for (const sidecarSuffix of options.sidecarSuffixes ?? []) {
         const sidecarPath = resolve(`${path}${sidecarSuffix}`);
         assertFixturePathInsideTemporaryDirectory(sidecarPath);
-        rmSync(sidecarPath, { force: true });
+        removeFixturePathBestEffort(sidecarPath);
       }
-      rmSync(path, { force: true, recursive: options.recursive ?? false });
+      removeFixturePathBestEffort(path, options.recursive ?? false);
     },
   };
 }

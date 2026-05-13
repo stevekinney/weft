@@ -105,8 +105,8 @@ describe('database health with BunSQLiteStorage', () => {
       suffix: '.db',
       sidecarSuffixes: sqliteDatabaseSidecarSuffixes,
     });
+    const storage = new BunSQLiteStorage(fixture.path);
     try {
-      using storage = new BunSQLiteStorage(fixture.path);
       // Write some data so the file has non-zero size
       await storage.put('test-key', encode({ data: 'hello' }));
       const report = await collectDiagnostics(storage, fixture.path);
@@ -115,6 +115,7 @@ describe('database health with BunSQLiteStorage', () => {
       // WAL file should exist for a file-based WAL-mode database
       expect(typeof report.database.walSizeBytes).toBe('number');
     } finally {
+      storage[Symbol.dispose]();
       fixture.cleanup();
     }
   });
@@ -134,6 +135,7 @@ describe('database health with BunSQLiteStorage', () => {
       // Since the file doesn't exist, size should be 0 (Bun.file().size returns 0 for nonexistent)
       // and WAL will also not exist
       expect(report.database.sizeBytes).toBe(0);
+      expect(report.database.walSizeBytes).toBeNull();
     } finally {
       fixture.cleanup();
     }
