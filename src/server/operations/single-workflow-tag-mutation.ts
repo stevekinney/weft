@@ -39,7 +39,6 @@ type SingleWorkflowTagMutationOperationConfiguration = {
 type SingleWorkflowTagMutationRestBindingConfiguration = {
   readonly method: 'POST' | 'DELETE';
   readonly operationName: string;
-  readonly path?: string;
 };
 
 export function createSingleWorkflowTagMutationOperation(
@@ -80,7 +79,7 @@ export function createSingleWorkflowTagMutationRestBinding(
 ): RestBinding<SingleWorkflowTagMutationInput, SingleWorkflowTagMutationOutput> {
   return {
     method: configuration.method,
-    path: configuration.path ?? '/v1/workflows/:id/tags',
+    path: '/v1/workflows/:id/tags',
     pathParamNames: ['id'],
     operationName: configuration.operationName,
     inputSources: {

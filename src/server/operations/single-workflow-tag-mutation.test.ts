@@ -72,4 +72,83 @@ describe('single-workflow tag mutation helper', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: 'Field "tags" must not contain empty tags' });
   });
+
+  it('keeps legacy not-found failures at 404 with the raw engine message', async () => {
+    const operation = createSingleWorkflowTagMutationOperation({
+      name: 'weft.workflows.tags.test',
+      summary: 'Test workflow tag mutation',
+      mutateTags: async () => {
+        throw new Error('workflow not found');
+      },
+    });
+    const binding = createSingleWorkflowTagMutationRestBinding({
+      method: 'POST',
+      operationName: 'weft.workflows.tags.test',
+    });
+    const engine = new Engine({ storage: new MemoryStorage() });
+
+    const response = await handleRequest(
+      request('POST', '/v1/workflows/missing/tags', { tags: ['alpha'] }),
+      engine,
+      {
+        operationRegistry: createOperationRegistry([operation]),
+        restBindings: [binding],
+      },
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'workflow not found' });
+  });
+
+  it('keeps unexpected engine failures at 500 with the raw engine message', async () => {
+    const operation = createSingleWorkflowTagMutationOperation({
+      name: 'weft.workflows.tags.test',
+      summary: 'Test workflow tag mutation',
+      mutateTags: async () => {
+        throw new Error('boom');
+      },
+    });
+    const binding = createSingleWorkflowTagMutationRestBinding({
+      method: 'DELETE',
+      operationName: 'weft.workflows.tags.test',
+    });
+    const engine = new Engine({ storage: new MemoryStorage() });
+
+    const response = await handleRequest(
+      request('DELETE', '/v1/workflows/workflow-1/tags', { tags: ['alpha'] }),
+      engine,
+      {
+        operationRegistry: createOperationRegistry([operation]),
+        restBindings: [binding],
+      },
+    );
+
+    expect(response.status).toBe(500);
+    expect(await response.json()).toEqual({ error: 'boom' });
+  });
+
+  it('does not claim the bulk tag mutation route', async () => {
+    const operation = createSingleWorkflowTagMutationOperation({
+      name: 'weft.workflows.tags.test',
+      summary: 'Test workflow tag mutation',
+      mutateTags: async () => {},
+    });
+    const binding = createSingleWorkflowTagMutationRestBinding({
+      method: 'POST',
+      operationName: 'weft.workflows.tags.test',
+    });
+    const engine = new Engine({ storage: new MemoryStorage() });
+
+    const response = await handleRequest(
+      request('PATCH', '/v1/workflows/bulk/tags', { operation: 'add', tags: ['alpha'] }),
+      engine,
+      {
+        operationRegistry: createOperationRegistry([operation]),
+        restBindings: [binding],
+      },
+    );
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'Not found: PATCH /v1/workflows/bulk/tags' });
+  });
 });
