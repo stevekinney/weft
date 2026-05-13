@@ -12,6 +12,7 @@ import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
 import type { TenantQuotaUsage } from '../../core/types.ts';
+import { raiseFault } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
@@ -51,7 +52,7 @@ export const getTenantQuotaOperation = defineOperation<GetTenantQuotaInput, GetT
 
     if (principal.method === 'jwt') {
       if (principal.tenantId === undefined) {
-        throw {
+        raiseFault(getTenantQuotaOperation, {
           code: 'Forbidden',
           message:
             'JWT-authenticated tenant quota requests require a tenantId, tenant_id, or tenant claim',
@@ -59,14 +60,14 @@ export const getTenantQuotaOperation = defineOperation<GetTenantQuotaInput, GetT
             reason:
               'JWT-authenticated tenant quota requests require a tenantId, tenant_id, or tenant claim',
           },
-        } satisfies OperationFault;
+        });
       }
       if (principal.tenantId !== normalizedTenantId) {
-        throw {
+        raiseFault(getTenantQuotaOperation, {
           code: 'Forbidden',
           message: 'Tenant quota access is limited to the authenticated tenant',
           data: { reason: 'Tenant quota access is limited to the authenticated tenant' },
-        } satisfies OperationFault;
+        });
       }
     }
 

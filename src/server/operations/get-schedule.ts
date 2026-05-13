@@ -13,6 +13,7 @@ import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
 import type { ScheduleSummary } from '../../core/types.ts';
+import { raiseFault } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
@@ -54,11 +55,11 @@ export const getScheduleOperation = defineOperation<GetScheduleInput, GetSchedul
       accessOptions?.tenantId !== undefined &&
       input._resolvedTenantId !== accessOptions.tenantId
     ) {
-      throw {
+      raiseFault(getScheduleOperation, {
         code: 'Forbidden',
         message: 'Schedule access is limited to the authenticated tenant',
         data: { reason: 'tenantId mismatch with JWT claim' },
-      } satisfies OperationFault;
+      });
     }
 
     const schedule = await e.getSchedule(input.scheduleId, accessOptions);
