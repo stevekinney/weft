@@ -206,6 +206,16 @@ describe('fake timer testing helpers', () => {
     ).rejects.toThrow('Timed out after 5ms waiting for real timers: still waiting');
   });
 
+  it('waitForCondition checks the predicate at the real-timer timeout boundary', async () => {
+    const startedAt = performance.now();
+
+    await waitForCondition(() => performance.now() - startedAt >= 5, {
+      intervalMs: 50,
+      label: 'real timer boundary',
+      timeoutMs: 5,
+    });
+  });
+
   it('waitForCondition returns a plain real-timer timeout when the predicate never throws', async () => {
     await expect(
       waitForCondition(() => false, { timeoutMs: 5, intervalMs: 1, label: 'plain timeout' }),

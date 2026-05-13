@@ -11,7 +11,7 @@ import {
   getWorkflowTimelineOperation,
   getWorkflowTimelineRestBinding,
 } from './get-workflow-timeline.ts';
-import { waitForWorkflowStatus } from './operation-test-helpers.ts';
+import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 
 const noop = async () => null;
 

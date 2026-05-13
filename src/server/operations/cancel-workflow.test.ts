@@ -6,7 +6,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import { cancelWorkflowOperation, cancelWorkflowRestBinding } from './cancel-workflow.ts';
-import { waitForWorkflowStatus } from './operation-test-helpers.ts';
+import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 
 function createEngine(): Engine {
   const storage = new MemoryStorage();

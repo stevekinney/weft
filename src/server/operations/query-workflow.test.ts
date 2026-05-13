@@ -10,7 +10,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
-import { waitForWorkflowStatus } from './operation-test-helpers.ts';
+import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 import {
   queryWorkflowOperation,
   queryWorkflowRestBinding,

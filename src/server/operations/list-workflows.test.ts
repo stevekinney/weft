@@ -11,7 +11,7 @@ import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { listWorkflowsOperation, listWorkflowsRestBinding } from './list-workflows.ts';
-import { waitForWorkflowStatus } from './operation-test-helpers.ts';
+import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 
 function createEngine(): Engine {
   const storage = new MemoryStorage();

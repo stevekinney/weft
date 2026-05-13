@@ -6,7 +6,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import { forkWorkflowOperation, forkWorkflowRestBinding } from './fork-workflow.ts';
-import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.ts';
+import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.test-support.ts';
 
 function createEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage() });

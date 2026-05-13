@@ -7,7 +7,7 @@ import type { WorkflowContext } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
-import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.ts';
+import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.test-support.ts';
 import { startWorkflowOperation, startWorkflowRestBinding } from './start-workflow.ts';
 
 function createEngine(): Engine {

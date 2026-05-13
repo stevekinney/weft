@@ -8,7 +8,7 @@ import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { listCheckpointsOperation, listCheckpointsRestBinding } from './list-checkpoints.ts';
-import { waitForWorkflowStatus } from './operation-test-helpers.ts';
+import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 
 const noop = async () => null;
 

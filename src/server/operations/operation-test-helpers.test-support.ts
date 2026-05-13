@@ -1,6 +1,6 @@
 import type { Engine } from '../../core/engine.ts';
 import type { WorkflowStatus } from '../../core/types.ts';
-import { sleepForTesting } from '../../testing/fake-timers.ts';
+import { waitForCondition } from '../../testing/fake-timers.ts';
 
 type WaitForWorkflowStatusOptions = {
   intervalMilliseconds?: number;
@@ -39,14 +39,15 @@ export async function waitForWorkflowStatus(
     timeoutMilliseconds = DEFAULT_STATUS_TIMEOUT_MILLISECONDS,
   }: WaitForWorkflowStatusOptions = {},
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    const state = await engine.get(workflowId);
-    if (state?.status === status) {
-      return;
-    }
-    await sleepForTesting(intervalMilliseconds);
-  }
-
-  throw new Error(`Workflow ${workflowId} did not reach ${status} within ${timeoutMilliseconds}ms`);
+  await waitForCondition(
+    async () => {
+      const state = await engine.get(workflowId);
+      return state?.status === status;
+    },
+    {
+      intervalMs: intervalMilliseconds,
+      label: `workflow ${workflowId} to reach ${status}`,
+      timeoutMs: timeoutMilliseconds,
+    },
+  );
 }

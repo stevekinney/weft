@@ -218,15 +218,20 @@ async function waitForConditionWithRealTimers(
   let lastError: unknown;
   const start = performance.now();
 
-  while (performance.now() - start <= timeoutMs) {
+  while (true) {
     const result = await checkWaitCondition(predicate);
     if (result.satisfied) {
       return;
     }
     lastError = result.error;
 
+    const remainingMilliseconds = timeoutMs - (performance.now() - start);
+    if (remainingMilliseconds <= 0) {
+      break;
+    }
+
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, intervalMs);
+      setTimeout(resolve, Math.min(intervalMs, remainingMilliseconds));
     });
   }
 

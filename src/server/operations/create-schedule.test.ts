@@ -7,7 +7,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest, type HandlerOptions } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import { createScheduleOperation, createScheduleRestBinding } from './create-schedule.ts';
-import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.ts';
+import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.test-support.ts';
 
 function createEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage() });
