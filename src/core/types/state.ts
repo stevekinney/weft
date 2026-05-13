@@ -240,9 +240,10 @@ export interface WorkflowStateNamespace {
  * Use {@link Engine.get} to retrieve the complete {@link WorkflowState}. The
  * optional fields (`tenant`, `tenantId`, `executionDeadline`, and
  * `failureCategory`) are populated whenever the underlying `WorkflowState`
- * carries them. Notably absent from the summary: `input`, `result`, `error`,
- * and `forkedFrom` — fetch the full `WorkflowState` via `engine.get(id)` to
- * access those.
+ * carries them. `failureCategory` can also be projected from stored search
+ * attributes when list callers explicitly request it. Notably absent from
+ * the summary: `input`, `result`, `error`, and `forkedFrom` — fetch the full
+ * `WorkflowState` via `engine.get(id)` to access those.
  */
 export interface WorkflowSummary {
   id: WorkflowId;

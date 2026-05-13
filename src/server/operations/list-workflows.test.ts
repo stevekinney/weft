@@ -10,7 +10,11 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
-import { listWorkflowsOperation, listWorkflowsRestBinding } from './list-workflows.ts';
+import {
+  listWorkflowsOperation,
+  listWorkflowsRestBinding,
+  type ListWorkflowsOutput,
+} from './list-workflows.ts';
 import { waitForWorkflowStatus } from './operation-test-helpers.test-support.ts';
 
 function createEngine(): Engine {
@@ -82,6 +86,60 @@ describe('weft.workflows.list', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toBe('application/json');
     expect(await response.json()).toEqual(expected);
+  });
+
+  it('includes failureCategory from search attributes only when requested over REST', async () => {
+    const engine = createEngine();
+
+    const runningHandle = await engine.start('hold', null, { id: 'running-with-category' });
+    await waitForWorkflowStatus(engine, runningHandle.id, 'running');
+    await engine.setAttributes(runningHandle.id, { failureCategory: 'planning' });
+
+    const defaultResponse = await handleRequest(
+      new Request('http://localhost/v1/workflows?status=running', { method: 'GET' }),
+      engine,
+      {
+        operationRegistry: registry,
+        restBindings: bindings,
+      },
+    );
+
+    expect(defaultResponse.status).toBe(200);
+    const defaultBody = (await defaultResponse.json()) as ListWorkflowsOutput;
+    expect(defaultBody.items).toHaveLength(1);
+    expect(defaultBody.items[0]?.failureCategory).toBeUndefined();
+
+    const includedResponse = await handleRequest(
+      new Request('http://localhost/v1/workflows?status=running&include=failureCategory', {
+        method: 'GET',
+      }),
+      engine,
+      {
+        operationRegistry: registry,
+        restBindings: bindings,
+      },
+    );
+
+    expect(includedResponse.status).toBe(200);
+    const includedBody = (await includedResponse.json()) as ListWorkflowsOutput;
+    expect(includedBody.items).toHaveLength(1);
+    expect(includedBody.items[0]?.failureCategory).toBe('planning');
+  });
+
+  it('returns 400 when include contains an unsupported field', async () => {
+    const engine = createEngine();
+
+    const response = await handleRequest(
+      new Request('http://localhost/v1/workflows?include=input', { method: 'GET' }),
+      engine,
+      {
+        operationRegistry: registry,
+        restBindings: bindings,
+      },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'invalid params' });
   });
 
   it('returns 400 when query tags are invalid (validation runs in invoke for parity across transports)', async () => {

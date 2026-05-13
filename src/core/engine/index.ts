@@ -48,6 +48,7 @@ import {
   type InferWorkflowEntries,
   type InferWorkflowEntry,
   type ListFilter,
+  type ListOptions,
   type MessageName,
   type PaginatedResult,
   type PurgeResult,
@@ -963,8 +964,11 @@ export class Engine<
   }
   async list<
     const TAttributeKeys extends readonly AttributeFilterKey[] = readonly AttributeFilterKey[],
-  >(filter?: TypedListFilter<TAttributeKeys>): Promise<PaginatedResult<WorkflowSummary>> {
-    return listWorkflows(getInternals(this), filter);
+  >(
+    filter?: TypedListFilter<TAttributeKeys>,
+    options?: ListOptions,
+  ): Promise<PaginatedResult<WorkflowSummary>> {
+    return listWorkflows(getInternals(this), filter, options);
   }
   async aggregate(
     filter: ListFilter | undefined,

@@ -10,6 +10,7 @@ import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts
 import type {
   FailureCategory,
   ListFilter,
+  ListOptions,
   PaginatedResult,
   SearchAttributeValue,
   WorkflowStatus,
@@ -44,6 +45,15 @@ const timeRangeSchema = z.object({
   lte: z.number().optional(),
   lt: z.number().optional(),
 });
+const listIncludeSchema = z
+  .union([z.string(), z.array(z.string()).min(1)])
+  .refine(
+    (value) =>
+      Array.isArray(value)
+        ? value.every((entry) => entry === 'failureCategory')
+        : value === 'failureCategory',
+    { message: 'include must be "failureCategory"' },
+  );
 
 const listWorkflowsInput = z.object({
   status: z.union([workflowStatusSchema, z.array(workflowStatusSchema)]).optional(),
@@ -58,6 +68,7 @@ const listWorkflowsInput = z.object({
   executionDeadline: timeRangeSchema.optional(),
   tenantId: z.union([z.string(), z.array(z.string())]).optional(),
   failureCategory: z.union([failureCategorySchema, z.array(failureCategorySchema)]).optional(),
+  include: listIncludeSchema.optional(),
 });
 const listWorkflowsOutput = z.unknown();
 
@@ -77,6 +88,7 @@ export const listWorkflowsOperation = defineOperation<ListWorkflowsInput, ListWo
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<ListWorkflowsOutput> => {
     const e = engine as Engine;
+    const { include, ...filterInput } = input;
 
     // Tag validation lives in `invoke` (not in the REST extractor)
     // so every transport — REST, JSON-RPC HTTP/WS/stdio — gets the
@@ -84,9 +96,9 @@ export const listWorkflowsOperation = defineOperation<ListWorkflowsInput, ListWo
     // `extractListWorkflowsInput`, which let JSON-RPC clients send
     // `{tags: ['']}` and bypass `coerceStartWorkflowTags`.
     let validatedTags: string[] | undefined;
-    if (input.tags !== undefined) {
+    if (filterInput.tags !== undefined) {
       try {
-        validatedTags = coerceStartWorkflowTags(input.tags, 'tags');
+        validatedTags = coerceStartWorkflowTags(filterInput.tags, 'tags');
       } catch (error) {
         throw toUnprocessable(error);
       }
@@ -95,7 +107,7 @@ export const listWorkflowsOperation = defineOperation<ListWorkflowsInput, ListWo
     let filter: ListFilter;
     try {
       filter = normalizeListFilter({
-        ...input,
+        ...filterInput,
         ...(validatedTags !== undefined ? { tags: validatedTags } : {}),
       });
     } catch (error) {
@@ -104,7 +116,7 @@ export const listWorkflowsOperation = defineOperation<ListWorkflowsInput, ListWo
     }
 
     try {
-      return await e.list(filter);
+      return await e.list(filter, listOptionsFromInclude(include));
     } catch (error) {
       if (error instanceof WorkflowListScanCapExceededError) throw toUnprocessable(error);
       throw error;
@@ -137,7 +149,19 @@ function extractListWorkflowsInput(request: Request): ListWorkflowsInput {
     }
   }
 
+  const includes = url.searchParams.getAll('include');
+  if (includes.length === 1) {
+    filter.include = includes[0]!;
+  } else if (includes.length > 1) {
+    filter.include = includes;
+  }
+
   return filter;
+}
+
+function listOptionsFromInclude(include: ListWorkflowsInput['include']): ListOptions {
+  const values = Array.isArray(include) ? include : include === undefined ? [] : [include];
+  return values.includes('failureCategory') ? { includeFailureCategory: true } : {};
 }
 
 function shapeListWorkflowsSuccess(result: ListWorkflowsOutput): Response {
@@ -167,6 +191,7 @@ export const listWorkflowsRestBinding: UnknownRestBinding = {
     tags: { kind: 'query', queryParam: 'tag', repeating: true },
     limit: { kind: 'query', queryParam: 'limit' },
     offset: { kind: 'query', queryParam: 'offset' },
+    include: { kind: 'query', queryParam: 'include', repeating: true },
   },
   extractInput: async (request) => extractListWorkflowsInput(request),
   success: { kind: 'json', status: 200 },

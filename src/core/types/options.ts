@@ -284,6 +284,30 @@ export interface ListFilter {
   failureCategory?: FailureCategory | FailureCategory[];
 }
 
+/**
+ * Projection options for {@link Engine.list}. These options do not change
+ * which workflows match the list filter; they only control optional summary
+ * fields that may require additional storage reads.
+ *
+ * @example Include failure categories projected from search attributes
+ * ```ts
+ * import { Engine, type ListOptions } from 'weft';
+ *
+ * const engine = new Engine();
+ * const options: ListOptions = { includeFailureCategory: true };
+ * const page = await engine.list({ status: 'running' }, options);
+ * void page;
+ * ```
+ */
+export interface ListOptions {
+  /**
+   * Populate `WorkflowSummary.failureCategory` from the stored
+   * `failureCategory` search attribute when the workflow state itself does
+   * not carry a category. Defaults to `false`.
+   */
+  includeFailureCategory?: boolean;
+}
+
 export type AttributeFilterKey = string | SearchAttributeHandle;
 
 export type AttributeFilterValue<TKey extends AttributeFilterKey> =

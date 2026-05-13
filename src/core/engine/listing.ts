@@ -3,7 +3,9 @@ import { decode, encode } from '../codec.ts';
 import { normalizeListFilter } from '../list-filter-validation.ts';
 import { buildIndexOperations, validateAttributeType } from '../search-attributes.ts';
 import type {
+  FailureCategory,
   ListFilter,
+  ListOptions,
   PaginatedResult,
   SearchAttributeValue,
   WorkflowState,
@@ -23,11 +25,20 @@ import {
 
 export const BULK_OPERATION_BATCH_SIZE = 1000;
 
+const FAILURE_CATEGORIES = new Set<FailureCategory>([
+  'memory',
+  'reflection',
+  'planning',
+  'action',
+  'system',
+]);
+
 /** List workflow summaries that match a filter, using indexes when available. */
 // oxlint-disable-next-line complexity -- ID:core-engine-list-complexity
 export async function list(
   internals: EngineInternals,
   filter?: ListFilter,
+  options?: ListOptions,
 ): Promise<PaginatedResult<WorkflowSummary>> {
   // Validate the filter the same way `engine.aggregate()` does, so in-process
   // callers receive the same diagnostics as REST / JSON-RPC clients instead of
@@ -54,15 +65,25 @@ export async function list(
     const chunkSize = 64;
     for (let start = 0; start < orderedIds.length; start += chunkSize) {
       const chunkIds = orderedIds.slice(start, start + chunkSize);
-      const chunkBytes = await Promise.all(
-        chunkIds.map((workflowId) => internals.storage.get(KEYS.workflow(workflowId))),
+      const chunkRecords = await Promise.all(
+        chunkIds.map(async (workflowId) => {
+          const [stateBytes, attributeBytes] = await Promise.all([
+            internals.storage.get(KEYS.workflow(workflowId)),
+            shouldProjectFailureCategory(options)
+              ? internals.storage.get(KEYS.attribute(workflowId))
+              : Promise.resolve(null),
+          ]);
+          return { stateBytes, attributeBytes };
+        }),
       );
-      for (const stateBytes of chunkBytes) {
+      for (const { stateBytes, attributeBytes } of chunkRecords) {
         if (!stateBytes) continue;
         const state = decodeWorkflowState(stateBytes);
         if (!matchesListFilter(state, normalizedFilter, constrainedIds, normalizedTagFilters))
           continue;
-        items.push(summaryFromState(state));
+        items.push(
+          summaryFromState(state, failureCategoryFromAttributeBytes(state, attributeBytes)),
+        );
       }
     }
     return paginateWorkflowSummaries(sortSummariesByCreatedAtDescending(items), normalizedFilter);
@@ -80,13 +101,46 @@ export async function list(
     const state = decodeWorkflowState(value);
     if (!matchesListFilter(state, normalizedFilter, constrainedIds, normalizedTagFilters)) continue;
 
-    items.push(summaryFromState(state));
+    const attributeBytes =
+      shouldProjectFailureCategory(options) && state.failureCategory === undefined
+        ? await internals.storage.get(KEYS.attribute(state.id))
+        : null;
+    items.push(summaryFromState(state, failureCategoryFromAttributeBytes(state, attributeBytes)));
   }
 
   return paginateWorkflowSummaries(sortSummariesByCreatedAtDescending(items), normalizedFilter);
 }
 
-function summaryFromState(state: WorkflowState): WorkflowSummary {
+function shouldProjectFailureCategory(options: ListOptions | undefined): boolean {
+  return options?.includeFailureCategory === true;
+}
+
+function failureCategoryFromAttributeBytes(
+  state: WorkflowState,
+  attributeBytes: Uint8Array | null,
+): FailureCategory | undefined {
+  if (state.failureCategory !== undefined || attributeBytes === null) return undefined;
+
+  const attributes = decode(attributeBytes);
+  if (!isRecord(attributes)) return undefined;
+
+  const value = attributes['failureCategory'];
+  return isFailureCategory(value) ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isFailureCategory(value: unknown): value is FailureCategory {
+  return typeof value === 'string' && FAILURE_CATEGORIES.has(value as FailureCategory);
+}
+
+function summaryFromState(
+  state: WorkflowState,
+  attributeFailureCategory?: FailureCategory,
+): WorkflowSummary {
+  const failureCategory = state.failureCategory ?? attributeFailureCategory;
   return {
     id: state.id,
     type: state.type,
@@ -98,8 +152,7 @@ function summaryFromState(state: WorkflowState): WorkflowSummary {
     updatedAt: state.updatedAt,
     ...(state.tenant?.id !== undefined && { tenantId: state.tenant.id }),
     ...(state.executionDeadline !== undefined && { executionDeadline: state.executionDeadline }),
-    ...(state.failureCategory !== undefined &&
-      state.failureCategory !== null && { failureCategory: state.failureCategory }),
+    ...(failureCategory !== undefined && failureCategory !== null && { failureCategory }),
   };
 }
 

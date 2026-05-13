@@ -114,6 +114,40 @@ describe('serve() — POST /jsonrpc', () => {
     expect(body.result?.id).toBe(handle.id);
   });
 
+  it('dispatches weft.workflows.list with include failureCategory parameters', async () => {
+    const engine = createHoldEngine();
+    const handle = await engine.start('hold', null, { id: 'json-rpc-running-with-category' });
+    await waitForStatus(engine, handle.id, 'running');
+    await engine.setAttributes(handle.id, { failureCategory: 'planning' });
+
+    server = serve({ engine, port: 0 });
+
+    const response = await fetch(`${server.url}/jsonrpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 9,
+        method: 'weft.workflows.list',
+        params: { status: 'running', include: ['failureCategory'] },
+      }),
+    });
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as {
+      id: number;
+      result?: { items: Array<{ id: string; failureCategory?: string }> };
+      error?: unknown;
+    };
+    expect(body.id).toBe(9);
+    expect(body.error).toBeUndefined();
+    expect(body.result?.items).toHaveLength(1);
+    expect(body.result?.items[0]).toMatchObject({
+      id: 'json-rpc-running-with-category',
+      failureCategory: 'planning',
+    });
+  });
+
   it('returns MethodNotFound for an unknown method', async () => {
     const engine = createHoldEngine();
     server = serve({ engine, port: 0 });

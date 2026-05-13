@@ -82,6 +82,17 @@ function makeDefinitionSchema<TOutput>(): DefinitionSchema<unknown, TOutput> {
   };
 }
 
+class AttributeReadCountingStorage extends MemoryStorage {
+  attributeReadCount = 0;
+
+  override async get(key: string): Promise<Uint8Array | null> {
+    if (key.startsWith('attr:')) {
+      this.attributeReadCount += 1;
+    }
+    return super.get(key);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -1262,6 +1273,36 @@ describe('Engine', () => {
     await expect(engine.list({ idPrefix: 'a:b' })).rejects.toBeInstanceOf(
       ListFilterValidationError,
     );
+    engine[Symbol.dispose]();
+  });
+
+  it('list() projects failureCategory search attributes only when requested', async () => {
+    const storage = new AttributeReadCountingStorage();
+    const engine = new Engine({ storage });
+    engine.register('attribute-backed-category', async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('release');
+      return 'ok';
+    });
+
+    const handle = await engine.start('attribute-backed-category', null, {
+      id: 'wf-attribute-category',
+    });
+    await flush();
+    await engine.setAttributes(handle.id, { failureCategory: 'planning' });
+
+    storage.attributeReadCount = 0;
+
+    const defaultResult = await engine.list();
+    expect(defaultResult.items).toContainEqual(
+      expect.objectContaining({ id: 'wf-attribute-category' }),
+    );
+    expect(defaultResult.items[0]?.failureCategory).toBeUndefined();
+    expect(storage.attributeReadCount).toBe(0);
+
+    const includedResult = await engine.list(undefined, { includeFailureCategory: true });
+    expect(includedResult.items[0]?.failureCategory).toBe('planning');
+    expect(storage.attributeReadCount).toBe(1);
+
     engine[Symbol.dispose]();
   });
 
