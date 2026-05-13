@@ -106,6 +106,12 @@ precedence helpers `countLiteralSegments`, `countPathParameters`, or
 `shouldPreferLegacyRoute`. Direct meta and discovery endpoints are now modeled
 as reserved direct HTTP routes instead of legacy fallbacks.
 
+The `weft/storage/compressed` subpath no longer exports
+`AgentCompressionOptions`, and `CompressedStorage` no longer accepts
+agent-specific compression option names (`agentWorkflowIds`, `agentAlgorithm`,
+or `agentThreshold`). Compression now has one storage-level configuration path:
+`CompressionOptions`.
+
 ## [0.1.0] - 2026-05-11
 
 ### Removed (breaking)
