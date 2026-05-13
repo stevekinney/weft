@@ -1,4 +1,3 @@
-import { sleepForTesting } from '../../testing/fake-timers.ts';
 /**
  * `weft.workflows.list` operation + REST binding — behavior tests.
  */
@@ -12,6 +11,7 @@ import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { listWorkflowsOperation, listWorkflowsRestBinding } from './list-workflows.ts';
+import { waitForWorkflowStatus } from './operation-test-helpers.ts';
 
 function createEngine(): Engine {
   const storage = new MemoryStorage();
@@ -23,23 +23,6 @@ function createEngine(): Engine {
     return yield* ctx.waitForSignal<string>('release');
   });
   return engine;
-}
-
-async function waitForStatus(
-  engine: Engine,
-  workflowId: string,
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
-  timeoutMilliseconds = 500,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    const state = await engine.get(workflowId);
-    if (state?.status === status) {
-      return;
-    }
-    await sleepForTesting(5);
-  }
-  throw new Error(`Workflow ${workflowId} did not reach ${status} within ${timeoutMilliseconds}ms`);
 }
 
 const registry = createOperationRegistry([listWorkflowsOperation]);
@@ -54,7 +37,7 @@ describe('weft.workflows.list', () => {
       { scope: 'running' },
       { id: 'running-workflow', tags: ['alpha'] },
     );
-    await waitForStatus(engine, runningHandle.id, 'running');
+    await waitForWorkflowStatus(engine, runningHandle.id, 'running');
 
     const completedHandle = await engine.start(
       'echo',

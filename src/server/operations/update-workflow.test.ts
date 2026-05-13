@@ -6,6 +6,7 @@ import { UpdateTimeoutError, WorkflowTerminalError } from '../../core/updates.ts
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
+import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.ts';
 import { updateWorkflowOperation, updateWorkflowRestBinding } from './update-workflow.ts';
 
 function createEngine(): Engine {
@@ -14,23 +15,6 @@ function createEngine(): Engine {
     return input;
   });
   return engine;
-}
-
-function request(method: string, path: string, body?: unknown): Request {
-  const options: RequestInit = { method };
-  if (body !== undefined) {
-    options.headers = { 'Content-Type': 'application/json' };
-    options.body = JSON.stringify(body);
-  }
-  return new Request(`http://localhost${path}`, options);
-}
-
-function invalidJsonRequest(method: string, path: string, rawBody: string): Request {
-  return new Request(`http://localhost${path}`, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: rawBody,
-  });
 }
 
 const registry = createOperationRegistry([updateWorkflowOperation]);
@@ -61,7 +45,7 @@ describe('weft.workflows.update', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/workflows/workflow-123/update/rename', {
+        jsonRequest('POST', '/v1/workflows/workflow-123/update/rename', {
           payload: { name: 'Alice' },
           timeout: 2_000,
           idempotencyKey: 'update-1',
@@ -98,7 +82,7 @@ describe('weft.workflows.update', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/workflows/workflow-123/update/rename', {
+        jsonRequest('POST', '/v1/workflows/workflow-123/update/rename', {
           timeout: '2000',
           idempotencyKey: 12345,
         }),
@@ -152,7 +136,7 @@ describe('weft.workflows.update', () => {
         }) as Awaited<ReturnType<Engine['submitCoordinatedUpdate']>>;
 
       const response = await handleRequest(
-        request('POST', '/v1/workflows/workflow-123/update/rename', { payload: {} }),
+        jsonRequest('POST', '/v1/workflows/workflow-123/update/rename', { payload: {} }),
         engine,
         { operationRegistry: registry, restBindings: bindings },
       );
@@ -174,7 +158,7 @@ describe('weft.workflows.update', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/workflows/workflow-123/update/rename', { payload: {} }),
+        jsonRequest('POST', '/v1/workflows/workflow-123/update/rename', { payload: {} }),
         engine,
         { operationRegistry: registry, restBindings: bindings },
       );
@@ -199,7 +183,7 @@ describe('weft.workflows.update', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/workflows/workflow-123/update/rename', { payload: {} }),
+        jsonRequest('POST', '/v1/workflows/workflow-123/update/rename', { payload: {} }),
         engine,
         { operationRegistry: registry, restBindings: bindings },
       );
@@ -225,7 +209,7 @@ describe('weft.workflows.update', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/workflows/workflow-123/update/rename', { payload: {} }),
+        jsonRequest('POST', '/v1/workflows/workflow-123/update/rename', { payload: {} }),
         engine,
         { operationRegistry: registry, restBindings: bindings },
       );

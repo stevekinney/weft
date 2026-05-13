@@ -7,6 +7,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest, type HandlerOptions } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import { createScheduleOperation, createScheduleRestBinding } from './create-schedule.ts';
+import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.ts';
 
 function createEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage() });
@@ -27,23 +28,6 @@ function createTenantAwareEngine(): Engine {
   return engine;
 }
 
-function request(method: string, path: string, body?: unknown): Request {
-  const options: RequestInit = { method };
-  if (body !== undefined) {
-    options.headers = { 'Content-Type': 'application/json' };
-    options.body = JSON.stringify(body);
-  }
-  return new Request(`http://localhost${path}`, options);
-}
-
-function invalidJsonRequest(method: string, path: string, rawBody: string): Request {
-  return new Request(`http://localhost${path}`, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: rawBody,
-  });
-}
-
 const registry = createOperationRegistry([createScheduleOperation]);
 const bindings = [createScheduleRestBinding];
 
@@ -59,7 +43,7 @@ describe('weft.schedules.create', () => {
     engine = createEngine();
 
     const response = await handleRequest(
-      request('POST', '/v1/schedules', {
+      jsonRequest('POST', '/v1/schedules', {
         type: 'echo',
         input: { payload: 'nightly' },
         cronExpression: '0 * * * *',
@@ -101,7 +85,7 @@ describe('weft.schedules.create', () => {
     // fails the guard) with "Request body must be a JSON object".
     engine = createEngine();
 
-    const response = await handleRequest(request('POST', '/v1/schedules', null), engine, {
+    const response = await handleRequest(jsonRequest('POST', '/v1/schedules', null), engine, {
       operationRegistry: registry,
       restBindings: bindings,
     });
@@ -116,7 +100,7 @@ describe('weft.schedules.create', () => {
     engine = createEngine();
 
     const response = await handleRequest(
-      request('POST', '/v1/schedules', ['not-an-object']),
+      jsonRequest('POST', '/v1/schedules', ['not-an-object']),
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
@@ -129,7 +113,7 @@ describe('weft.schedules.create', () => {
     engine = createEngine();
 
     const response = await handleRequest(
-      request('POST', '/v1/schedules', {
+      jsonRequest('POST', '/v1/schedules', {
         type: 'echo',
         cronExpression: '0 * * * *',
         overlap: 'invalid',
@@ -156,7 +140,7 @@ describe('weft.schedules.create', () => {
     };
 
     const response = await handleRequest(
-      request('POST', '/v1/schedules', {
+      jsonRequest('POST', '/v1/schedules', {
         type: 'echo',
         cronExpression: '0 * * * *',
       }),
@@ -174,7 +158,7 @@ describe('weft.schedules.create', () => {
     engine = createTenantAwareEngine();
 
     const response = await handleRequest(
-      request('POST', '/v1/schedules', {
+      jsonRequest('POST', '/v1/schedules', {
         type: 'echo',
         input: { tenantId: 'globex', payload: 'tenant-b' },
         cronExpression: '0 * * * *',
@@ -207,7 +191,7 @@ describe('weft.schedules.create', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/schedules', {
+        jsonRequest('POST', '/v1/schedules', {
           type: 'echo',
           cronExpression: '0 * * * *',
         }),
@@ -226,7 +210,7 @@ describe('weft.schedules.create', () => {
     engine = createEngine();
 
     const firstResponse = await handleRequest(
-      request('POST', '/v1/schedules', {
+      jsonRequest('POST', '/v1/schedules', {
         type: 'echo',
         cronExpression: '0 * * * *',
         id: 'duplicate-schedule',
@@ -237,7 +221,7 @@ describe('weft.schedules.create', () => {
     expect(firstResponse.status).toBe(201);
 
     const secondResponse = await handleRequest(
-      request('POST', '/v1/schedules', {
+      jsonRequest('POST', '/v1/schedules', {
         type: 'echo',
         cronExpression: '0 * * * *',
         id: 'duplicate-schedule',
@@ -264,7 +248,7 @@ describe('weft.schedules.create', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/schedules', {
+        jsonRequest('POST', '/v1/schedules', {
           type: 'echo',
           cronExpression: '0 * * * *',
         }),

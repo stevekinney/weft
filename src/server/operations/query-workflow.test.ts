@@ -1,4 +1,3 @@
-import { sleepForTesting } from '../../testing/fake-timers.ts';
 /**
  * `weft.workflows.query` operation + REST binding — behavior tests.
  */
@@ -11,6 +10,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { waitForWorkflowStatus } from './operation-test-helpers.ts';
 import {
   queryWorkflowOperation,
   queryWorkflowRestBinding,
@@ -30,23 +30,6 @@ function createEngine(): Engine {
   return engine;
 }
 
-async function waitForStatus(
-  engine: Engine,
-  workflowId: string,
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
-  timeoutMilliseconds = 500,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    const state = await engine.get(workflowId);
-    if (state?.status === status) {
-      return;
-    }
-    await sleepForTesting(5);
-  }
-  throw new Error(`Workflow ${workflowId} did not reach ${status} within ${timeoutMilliseconds}ms`);
-}
-
 const registry = createOperationRegistry([queryWorkflowOperation]);
 const bindings = [queryWorkflowRestBinding, queryWorkflowWithInputRestBinding];
 
@@ -54,7 +37,7 @@ describe('weft.workflows.query', () => {
   it('returns the query result on the happy path', async () => {
     const engine = createEngine();
     const handle = await engine.start('queryable', null, { id: 'query-workflow-success' });
-    await waitForStatus(engine, handle.id, 'running');
+    await waitForWorkflowStatus(engine, handle.id, 'running');
 
     const response = await handleRequest(
       new Request(`http://localhost/v1/workflows/${handle.id}/query/counter`, {
@@ -75,7 +58,7 @@ describe('weft.workflows.query', () => {
   it('passes POST query input to workflow query handlers', async () => {
     const engine = createEngine();
     const handle = await engine.start('queryable', null, { id: 'query-workflow-input' });
-    await waitForStatus(engine, handle.id, 'running');
+    await waitForWorkflowStatus(engine, handle.id, 'running');
 
     const response = await handleRequest(
       new Request(`http://localhost/v1/workflows/${handle.id}/query/echoInput`, {
@@ -98,7 +81,7 @@ describe('weft.workflows.query', () => {
   it('returns 400 for malformed POST query JSON', async () => {
     const engine = createEngine();
     const handle = await engine.start('queryable', null, { id: 'query-workflow-malformed-input' });
-    await waitForStatus(engine, handle.id, 'running');
+    await waitForWorkflowStatus(engine, handle.id, 'running');
 
     const response = await handleRequest(
       new Request(`http://localhost/v1/workflows/${handle.id}/query/echoInput`, {
@@ -121,7 +104,7 @@ describe('weft.workflows.query', () => {
   it('returns 400 for non-object POST query JSON', async () => {
     const engine = createEngine();
     const handle = await engine.start('queryable', null, { id: 'query-workflow-array-input' });
-    await waitForStatus(engine, handle.id, 'running');
+    await waitForWorkflowStatus(engine, handle.id, 'running');
 
     const response = await handleRequest(
       new Request(`http://localhost/v1/workflows/${handle.id}/query/echoInput`, {
@@ -171,7 +154,7 @@ describe('weft.workflows.query', () => {
   it('returns null when the query accessor does not exist', async () => {
     const engine = createEngine();
     const handle = await engine.start('queryable', null, { id: 'query-workflow-null' });
-    await waitForStatus(engine, handle.id, 'running');
+    await waitForWorkflowStatus(engine, handle.id, 'running');
 
     const response = await handleRequest(
       new Request(`http://localhost/v1/workflows/${handle.id}/query/missing`, {

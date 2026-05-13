@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../../testing/fake-timers.ts';
 
 import { decode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
@@ -9,6 +8,7 @@ import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { getCheckpointAtOperation, getCheckpointAtRestBinding } from './get-checkpoint-at.ts';
+import { waitForWorkflowStatus } from './operation-test-helpers.ts';
 
 const noop = async () => null;
 
@@ -21,23 +21,6 @@ function createEngine(): Engine {
     return 'done';
   });
   return engine;
-}
-
-async function waitForWorkflowStatus(
-  engine: Engine,
-  workflowId: string,
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
-  timeoutMilliseconds = 500,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    const state = await engine.get(workflowId);
-    if (state?.status === status) {
-      return;
-    }
-    await sleepForTesting(5);
-  }
-  throw new Error(`Workflow ${workflowId} did not reach ${status} within ${timeoutMilliseconds}ms`);
 }
 
 const registry = createOperationRegistry([getCheckpointAtOperation]);

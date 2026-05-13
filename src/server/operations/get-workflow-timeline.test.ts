@@ -1,5 +1,4 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../../testing/fake-timers.ts';
 
 import { decode } from '../../core/codec.ts';
 import { Engine } from '../../core/engine.ts';
@@ -12,6 +11,7 @@ import {
   getWorkflowTimelineOperation,
   getWorkflowTimelineRestBinding,
 } from './get-workflow-timeline.ts';
+import { waitForWorkflowStatus } from './operation-test-helpers.ts';
 
 const noop = async () => null;
 
@@ -22,23 +22,6 @@ function createEngine(): Engine {
     return yield* ctx.run(noop);
   });
   return engine;
-}
-
-async function waitForWorkflowStatus(
-  engine: Engine,
-  workflowId: string,
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
-  timeoutMilliseconds = 500,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    const state = await engine.get(workflowId);
-    if (state?.status === status) {
-      return;
-    }
-    await sleepForTesting(5);
-  }
-  throw new Error(`Workflow ${workflowId} did not reach ${status} within ${timeoutMilliseconds}ms`);
 }
 
 const registry = createOperationRegistry([getWorkflowTimelineOperation]);

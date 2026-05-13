@@ -7,6 +7,7 @@ import type { WorkflowContext } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
+import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.ts';
 import { startWorkflowOperation, startWorkflowRestBinding } from './start-workflow.ts';
 
 function createEngine(): Engine {
@@ -15,23 +16,6 @@ function createEngine(): Engine {
     return input;
   });
   return engine;
-}
-
-function request(method: string, path: string, body?: unknown): Request {
-  const options: RequestInit = { method };
-  if (body !== undefined) {
-    options.headers = { 'Content-Type': 'application/json' };
-    options.body = JSON.stringify(body);
-  }
-  return new Request(`http://localhost${path}`, options);
-}
-
-function invalidJsonRequest(method: string, path: string, rawBody: string): Request {
-  return new Request(`http://localhost${path}`, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: rawBody,
-  });
 }
 
 const registry = createOperationRegistry([startWorkflowOperation]);
@@ -49,7 +33,7 @@ describe('weft.workflows.start', () => {
     engine = createEngine();
 
     const response = await handleRequest(
-      request('POST', '/v1/workflows', {
+      jsonRequest('POST', '/v1/workflows', {
         type: 'echo',
         input: { hello: 'world' },
         id: 'start-workflow-success',
@@ -82,7 +66,7 @@ describe('weft.workflows.start', () => {
     // that path; arrays are handled by the next test as legacy parity.
     engine = createEngine();
 
-    const response = await handleRequest(request('POST', '/v1/workflows', null), engine, {
+    const response = await handleRequest(jsonRequest('POST', '/v1/workflows', null), engine, {
       operationRegistry: registry,
       restBindings: bindings,
     });
@@ -99,7 +83,7 @@ describe('weft.workflows.start', () => {
     engine = createEngine();
 
     const response = await handleRequest(
-      request('POST', '/v1/workflows', ['not-an-object']),
+      jsonRequest('POST', '/v1/workflows', ['not-an-object']),
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
@@ -112,7 +96,7 @@ describe('weft.workflows.start', () => {
     engine = createEngine();
 
     const response = await handleRequest(
-      request('POST', '/v1/workflows', {
+      jsonRequest('POST', '/v1/workflows', {
         type: 'echo',
         startAt: Date.now(),
         startAfter: '1s',
@@ -135,7 +119,7 @@ describe('weft.workflows.start', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/workflows', { type: 'echo' }),
+        jsonRequest('POST', '/v1/workflows', { type: 'echo' }),
         engine,
         { operationRegistry: registry, restBindings: bindings },
       );
@@ -162,7 +146,7 @@ describe('weft.workflows.start', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/workflows', { type: 'echo' }),
+        jsonRequest('POST', '/v1/workflows', { type: 'echo' }),
         engine,
         { operationRegistry: registry, restBindings: bindings },
       );
@@ -182,7 +166,7 @@ describe('weft.workflows.start', () => {
     engine = createEngine();
 
     const response = await handleRequest(
-      request('POST', '/v1/workflows', { type: 'missing-workflow' }),
+      jsonRequest('POST', '/v1/workflows', { type: 'missing-workflow' }),
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
@@ -199,14 +183,14 @@ describe('weft.workflows.start', () => {
     engine = createEngine();
 
     const firstResponse = await handleRequest(
-      request('POST', '/v1/workflows', { type: 'echo', id: 'duplicate-workflow-id' }),
+      jsonRequest('POST', '/v1/workflows', { type: 'echo', id: 'duplicate-workflow-id' }),
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
     expect(firstResponse.status).toBe(201);
 
     const secondResponse = await handleRequest(
-      request('POST', '/v1/workflows', { type: 'echo', id: 'duplicate-workflow-id' }),
+      jsonRequest('POST', '/v1/workflows', { type: 'echo', id: 'duplicate-workflow-id' }),
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
@@ -229,7 +213,7 @@ describe('weft.workflows.start', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/workflows', { type: 'echo' }),
+        jsonRequest('POST', '/v1/workflows', { type: 'echo' }),
         engine,
         { operationRegistry: registry, restBindings: bindings },
       );

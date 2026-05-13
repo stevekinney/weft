@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../../testing/fake-timers.ts';
 
 import { Engine } from '../../core/engine.ts';
 import type { WorkflowContext } from '../../core/types.ts';
@@ -7,6 +6,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import { cancelWorkflowOperation, cancelWorkflowRestBinding } from './cancel-workflow.ts';
+import { waitForWorkflowStatus } from './operation-test-helpers.ts';
 
 function createEngine(): Engine {
   const storage = new MemoryStorage();
@@ -17,24 +17,6 @@ function createEngine(): Engine {
   return engine;
 }
 
-async function waitForStatus(
-  engine: Engine,
-  workflowId: string,
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
-  timeoutMilliseconds = 500,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    const state = await engine.get(workflowId);
-    if (state?.status === status) {
-      return;
-    }
-    await sleepForTesting(5);
-  }
-
-  throw new Error(`Workflow ${workflowId} did not reach ${status} within ${timeoutMilliseconds}ms`);
-}
-
 const registry = createOperationRegistry([cancelWorkflowOperation]);
 const bindings = [cancelWorkflowRestBinding];
 
@@ -42,7 +24,7 @@ describe('weft.workflows.cancel', () => {
   it('cancels a workflow and returns 204', async () => {
     const engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'cancel-success' });
-    await waitForStatus(engine, handle.id, 'running');
+    await waitForWorkflowStatus(engine, handle.id, 'running');
 
     const resultPromise = handle.result().catch(() => undefined);
     const response = await handleRequest(
@@ -56,7 +38,7 @@ describe('weft.workflows.cancel', () => {
 
     expect(response.status).toBe(204);
     await resultPromise;
-    await waitForStatus(engine, handle.id, 'cancelled');
+    await waitForWorkflowStatus(engine, handle.id, 'cancelled');
   });
 
   it('returns 404 when the engine reports that the workflow was not found', async () => {

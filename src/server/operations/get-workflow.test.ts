@@ -1,4 +1,3 @@
-import { sleepForTesting } from '../../testing/fake-timers.ts';
 /**
  * `weft.workflows.get` operation + REST binding — behavior tests.
  *
@@ -17,6 +16,7 @@ import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { getWorkflowOperation, getWorkflowRestBinding } from './get-workflow.ts';
+import { waitForWorkflowStatus } from './operation-test-helpers.ts';
 
 function createEngine(): Engine {
   const storage = new MemoryStorage();
@@ -27,21 +27,6 @@ function createEngine(): Engine {
   return engine;
 }
 
-async function waitForStatus(
-  engine: Engine,
-  workflowId: string,
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
-  timeoutMilliseconds = 500,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    const state = await engine.get(workflowId);
-    if (state?.status === status) return;
-    await sleepForTesting(5);
-  }
-  throw new Error(`Workflow ${workflowId} did not reach ${status} within ${timeoutMilliseconds}ms`);
-}
-
 const registry = createOperationRegistry([getWorkflowOperation]);
 const bindings = [getWorkflowRestBinding];
 
@@ -49,7 +34,7 @@ describe('weft.workflows.get', () => {
   it('returns the workflow state on the happy path', async () => {
     const engine = createEngine();
     const handle = await engine.start('hold', { hello: 'world' }, {});
-    await waitForStatus(engine, handle.id, 'running');
+    await waitForWorkflowStatus(engine, handle.id, 'running');
 
     const request = new Request(`http://localhost/v1/workflows/${handle.id}`, { method: 'GET' });
     const response = await handleRequest(request, engine, {
@@ -79,7 +64,7 @@ describe('weft.workflows.get', () => {
   it('maps EngineFailure faults to the legacy 500 response body', async () => {
     const engine = createEngine();
     const handle = await engine.start('hold', {}, {});
-    await waitForStatus(engine, handle.id, 'running');
+    await waitForWorkflowStatus(engine, handle.id, 'running');
 
     const failingOperation = {
       ...getWorkflowOperation,

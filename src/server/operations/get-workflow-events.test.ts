@@ -1,4 +1,3 @@
-import { sleepForTesting } from '../../testing/fake-timers.ts';
 /**
  * `weft.workflows.events.list` operation + REST binding — behavior tests.
  */
@@ -13,6 +12,7 @@ import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { getWorkflowEventsOperation, getWorkflowEventsRestBinding } from './get-workflow-events.ts';
+import { waitForWorkflowStatus } from './operation-test-helpers.ts';
 
 function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
   const storage = new MemoryStorage();
@@ -23,23 +23,6 @@ function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
   return { engine, storage };
 }
 
-async function waitForStatus(
-  engine: Engine,
-  workflowId: string,
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
-  timeoutMilliseconds = 500,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    const state = await engine.get(workflowId);
-    if (state?.status === status) {
-      return;
-    }
-    await sleepForTesting(5);
-  }
-  throw new Error(`Workflow ${workflowId} did not reach ${status} within ${timeoutMilliseconds}ms`);
-}
-
 const registry = createOperationRegistry([getWorkflowEventsOperation]);
 const bindings = [getWorkflowEventsRestBinding];
 
@@ -47,7 +30,7 @@ describe('weft.workflows.events.list', () => {
   it('returns the workflow events on the happy path', async () => {
     const { engine, storage } = createEngineWithStorage();
     const handle = await engine.start('echo', 'hello', { id: 'workflow-events-success' });
-    await waitForStatus(engine, handle.id, 'completed');
+    await waitForWorkflowStatus(engine, handle.id, 'completed');
 
     const eventLog = new EventLog(storage, handle.id);
     await eventLog.append({ type: 'workflow:started', payload: { workflowId: handle.id } });

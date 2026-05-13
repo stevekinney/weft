@@ -6,6 +6,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import { forkWorkflowOperation, forkWorkflowRestBinding } from './fork-workflow.ts';
+import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.ts';
 
 function createEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage() });
@@ -13,23 +14,6 @@ function createEngine(): Engine {
     return input;
   });
   return engine;
-}
-
-function request(method: string, path: string, body?: unknown): Request {
-  const options: RequestInit = { method };
-  if (body !== undefined) {
-    options.headers = { 'Content-Type': 'application/json' };
-    options.body = JSON.stringify(body);
-  }
-  return new Request(`http://localhost${path}`, options);
-}
-
-function invalidJsonRequest(method: string, path: string, rawBody: string): Request {
-  return new Request(`http://localhost${path}`, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: rawBody,
-  });
 }
 
 const registry = createOperationRegistry([forkWorkflowOperation]);
@@ -55,7 +39,7 @@ describe('weft.workflows.fork', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/workflows/workflow-123/fork', { fromStep: 3 }),
+        jsonRequest('POST', '/v1/workflows/workflow-123/fork', { fromStep: 3 }),
         engine,
         { operationRegistry: registry, restBindings: bindings },
       );
@@ -84,7 +68,7 @@ describe('weft.workflows.fork', () => {
     engine = createEngine();
 
     const response = await handleRequest(
-      request('POST', '/v1/workflows/workflow-123/fork', ['not-an-object']),
+      jsonRequest('POST', '/v1/workflows/workflow-123/fork', ['not-an-object']),
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
@@ -97,7 +81,7 @@ describe('weft.workflows.fork', () => {
     engine = createEngine();
 
     const response = await handleRequest(
-      request('POST', '/v1/workflows/workflow-123/fork', { fromStep: -1 }),
+      jsonRequest('POST', '/v1/workflows/workflow-123/fork', { fromStep: -1 }),
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
@@ -118,7 +102,7 @@ describe('weft.workflows.fork', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/workflows/workflow-123/fork'),
+        jsonRequest('POST', '/v1/workflows/workflow-123/fork'),
         engine,
         { operationRegistry: registry, restBindings: bindings },
       );
@@ -140,7 +124,7 @@ describe('weft.workflows.fork', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/workflows/workflow-123/fork'),
+        jsonRequest('POST', '/v1/workflows/workflow-123/fork'),
         engine,
         { operationRegistry: registry, restBindings: bindings },
       );
@@ -158,7 +142,7 @@ describe('weft.workflows.fork', () => {
     engine = createEngine();
 
     const response = await handleRequest(
-      request('POST', '/v1/workflows/missing-workflow/fork'),
+      jsonRequest('POST', '/v1/workflows/missing-workflow/fork'),
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
@@ -177,7 +161,7 @@ describe('weft.workflows.fork', () => {
       };
 
       const response = await handleRequest(
-        request('POST', '/v1/workflows/workflow-123/fork'),
+        jsonRequest('POST', '/v1/workflows/workflow-123/fork'),
         engine,
         { operationRegistry: registry, restBindings: bindings },
       );

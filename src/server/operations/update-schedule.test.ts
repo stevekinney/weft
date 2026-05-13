@@ -6,6 +6,7 @@ import type { WorkflowContext } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest, type HandlerOptions } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
+import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.ts';
 import { updateScheduleOperation, updateScheduleRestBinding } from './update-schedule.ts';
 
 function createEngine(): Engine {
@@ -27,23 +28,6 @@ function createTenantAwareEngine(): Engine {
   return engine;
 }
 
-function request(method: string, path: string, body?: unknown): Request {
-  const options: RequestInit = { method };
-  if (body !== undefined) {
-    options.headers = { 'Content-Type': 'application/json' };
-    options.body = JSON.stringify(body);
-  }
-  return new Request(`http://localhost${path}`, options);
-}
-
-function invalidJsonRequest(method: string, path: string, rawBody: string): Request {
-  return new Request(`http://localhost${path}`, {
-    method,
-    headers: { 'Content-Type': 'application/json' },
-    body: rawBody,
-  });
-}
-
 const registry = createOperationRegistry([updateScheduleOperation]);
 const bindings = [updateScheduleRestBinding];
 
@@ -60,7 +44,7 @@ describe('weft.schedules.update', () => {
     await engine.schedule('echo', null, '0 * * * *', { id: 'schedule-update' });
 
     const response = await handleRequest(
-      request('PATCH', '/v1/schedules/schedule-update', { cronExpression: '30 * * * *' }),
+      jsonRequest('PATCH', '/v1/schedules/schedule-update', { cronExpression: '30 * * * *' }),
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
@@ -91,7 +75,7 @@ describe('weft.schedules.update', () => {
     engine = createEngine();
 
     const response = await handleRequest(
-      request('PATCH', '/v1/schedules/schedule-update', null),
+      jsonRequest('PATCH', '/v1/schedules/schedule-update', null),
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
@@ -106,7 +90,7 @@ describe('weft.schedules.update', () => {
     engine = createEngine();
 
     const response = await handleRequest(
-      request('PATCH', '/v1/schedules/schedule-update', ['not-an-object']),
+      jsonRequest('PATCH', '/v1/schedules/schedule-update', ['not-an-object']),
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
@@ -127,7 +111,7 @@ describe('weft.schedules.update', () => {
     };
 
     const response = await handleRequest(
-      request('PATCH', '/v1/schedules/schedule-update', { cronExpression: '30 * * * *' }),
+      jsonRequest('PATCH', '/v1/schedules/schedule-update', { cronExpression: '30 * * * *' }),
       engine,
       options,
     );
@@ -143,7 +127,7 @@ describe('weft.schedules.update', () => {
     await engine.schedule('echo', { tenantId: 'globex' }, '0 * * * *', { id: 'schedule-globex' });
 
     const response = await handleRequest(
-      request('PATCH', '/v1/schedules/schedule-globex', { cronExpression: '30 * * * *' }),
+      jsonRequest('PATCH', '/v1/schedules/schedule-globex', { cronExpression: '30 * * * *' }),
       engine,
       {
         authContext: {
@@ -163,7 +147,7 @@ describe('weft.schedules.update', () => {
     engine = createEngine();
 
     const response = await handleRequest(
-      request('PATCH', '/v1/schedules/missing-schedule', { cronExpression: '30 * * * *' }),
+      jsonRequest('PATCH', '/v1/schedules/missing-schedule', { cronExpression: '30 * * * *' }),
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
@@ -182,7 +166,7 @@ describe('weft.schedules.update', () => {
       };
 
       const response = await handleRequest(
-        request('PATCH', '/v1/schedules/schedule-update', { cronExpression: '30 * * * *' }),
+        jsonRequest('PATCH', '/v1/schedules/schedule-update', { cronExpression: '30 * * * *' }),
         engine,
         { operationRegistry: registry, restBindings: bindings },
       );
@@ -199,7 +183,7 @@ describe('weft.schedules.update', () => {
     await engine.schedule('echo', null, '0 * * * *', { id: 'schedule-update-invalid-cron' });
 
     const response = await handleRequest(
-      request('PATCH', '/v1/schedules/schedule-update-invalid-cron', {
+      jsonRequest('PATCH', '/v1/schedules/schedule-update-invalid-cron', {
         cronExpression: 'not-a-cron',
       }),
       engine,
@@ -224,7 +208,7 @@ describe('weft.schedules.update', () => {
       };
 
       const response = await handleRequest(
-        request('PATCH', '/v1/schedules/schedule-update', { cronExpression: '30 * * * *' }),
+        jsonRequest('PATCH', '/v1/schedules/schedule-update', { cronExpression: '30 * * * *' }),
         engine,
         { operationRegistry: registry, restBindings: bindings },
       );
