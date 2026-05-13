@@ -1,3 +1,4 @@
+import type { WeftEventMap } from '../core/events.ts';
 import type { WorkflowEvent } from '../core/types.ts';
 import { WorkflowHandleDelegation } from './handle-delegation.ts';
 import type { HttpClient } from './http-client.ts';
@@ -76,6 +77,11 @@ export class HttpHandle extends WorkflowHandleDelegation<HttpClient> {
     return response.result;
   }
 
+  addEventListener<K extends keyof WeftEventMap>(
+    type: K,
+    listener: (event: WeftEventMap[K]) => void,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
   addEventListener(
     type: string,
     listener: EventListenerOrEventListenerObject,
@@ -85,6 +91,11 @@ export class HttpHandle extends WorkflowHandleDelegation<HttpClient> {
     this.#events.addEventListener(type, listener, options);
   }
 
+  removeEventListener<K extends keyof WeftEventMap>(
+    type: K,
+    listener: (event: WeftEventMap[K]) => void,
+    options?: boolean | EventListenerOptions,
+  ): void;
   removeEventListener(
     type: string,
     listener: EventListenerOrEventListenerObject,

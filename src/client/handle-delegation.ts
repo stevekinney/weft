@@ -1,3 +1,4 @@
+import type { WeftEventMap } from '../core/events.ts';
 import type {
   MessageName,
   QueryDefinition,
@@ -94,12 +95,22 @@ export abstract class WorkflowHandleDelegation<
     return this.client.removeTags(this.id, ...tags);
   }
 
+  abstract addEventListener<K extends keyof WeftEventMap>(
+    type: K,
+    listener: (event: WeftEventMap[K]) => void,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
   abstract addEventListener(
     type: string,
     listener: EventListenerOrEventListenerObject,
     options?: boolean | AddEventListenerOptions,
   ): void;
 
+  abstract removeEventListener<K extends keyof WeftEventMap>(
+    type: K,
+    listener: (event: WeftEventMap[K]) => void,
+    options?: boolean | EventListenerOptions,
+  ): void;
   abstract removeEventListener(
     type: string,
     listener: EventListenerOrEventListenerObject,

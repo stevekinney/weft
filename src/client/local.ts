@@ -9,6 +9,7 @@
  */
 
 import type { Engine, WorkflowHandle } from '../core/engine.ts';
+import type { WeftEventMap } from '../core/events.ts';
 import type {
   AttributeFilterKey,
   BulkCancelResult,
@@ -61,6 +62,11 @@ class LocalHandle extends WorkflowHandleDelegation<LocalClient> {
     return this.#handle.result();
   }
 
+  addEventListener<K extends keyof WeftEventMap>(
+    type: K,
+    listener: (event: WeftEventMap[K]) => void,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
   addEventListener(
     type: string,
     listener: EventListenerOrEventListenerObject,
@@ -69,6 +75,11 @@ class LocalHandle extends WorkflowHandleDelegation<LocalClient> {
     this.#handle.addEventListener(type, listener, options);
   }
 
+  removeEventListener<K extends keyof WeftEventMap>(
+    type: K,
+    listener: (event: WeftEventMap[K]) => void,
+    options?: boolean | EventListenerOptions,
+  ): void;
   removeEventListener(
     type: string,
     listener: EventListenerOrEventListenerObject,
