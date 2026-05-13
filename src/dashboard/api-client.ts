@@ -16,10 +16,6 @@ import type {
   WorkflowTimelineEntry,
 } from '../core/types.ts';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
 export type WorkflowStatus =
   | 'pending'
   | 'running'
@@ -254,10 +250,6 @@ export interface TaskDiagnosticsFilter {
   limit?: number;
 }
 
-// ---------------------------------------------------------------------------
-// Error
-// ---------------------------------------------------------------------------
-
 export class ApiError extends Error {
   readonly status: number;
 
@@ -267,10 +259,6 @@ export class ApiError extends Error {
     this.status = status;
   }
 }
-
-// ---------------------------------------------------------------------------
-// Client
-// ---------------------------------------------------------------------------
 
 const BASE_PATH = '/v1';
 

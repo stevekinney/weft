@@ -1,8 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { existsSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
+import { createDiskBackedTestFixture } from '../testing/storage-backends.ts';
 import { LMDBStorage } from './lmdb';
 
 /** Helper to encode a string as Uint8Array. */
@@ -24,27 +22,23 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
   return results;
 }
 
-/** Create a unique temporary directory path for each test. */
-function createTemporaryPath(): string {
-  return join(tmpdir(), `lmdb-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-}
-
 describe('LMDBStorage', () => {
-  const temporaryPaths: string[] = [];
+  const fixtureCleanups: Array<() => void> = [];
 
   function createStorage(): LMDBStorage {
-    const path = createTemporaryPath();
-    temporaryPaths.push(path);
-    return new LMDBStorage(path);
+    const fixture = createDiskBackedTestFixture({
+      prefix: 'lmdb-test',
+      recursive: true,
+    });
+    fixtureCleanups.push(fixture.cleanup);
+    return new LMDBStorage(fixture.path);
   }
 
   afterEach(() => {
-    for (const path of temporaryPaths) {
-      if (existsSync(path)) {
-        rmSync(path, { recursive: true, force: true });
-      }
+    for (const cleanup of fixtureCleanups) {
+      cleanup();
     }
-    temporaryPaths.length = 0;
+    fixtureCleanups.length = 0;
   });
 
   it('get on empty storage returns null', async () => {

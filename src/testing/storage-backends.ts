@@ -1,8 +1,8 @@
 import 'fake-indexeddb/auto';
 
-import { existsSync, rmSync } from 'node:fs';
+import { rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 
 import type { Engine } from '../core/engine.ts';
 import type { WorkflowStatus } from '../core/types.ts';
@@ -33,6 +33,66 @@ export type StorageBackendDescriptor = {
   name: string;
   factory: StorageFactory;
 };
+
+export const sqliteDatabaseSidecarSuffixes = ['-wal', '-shm'] as const;
+
+export type DiskBackedTestFixtureOptions = {
+  prefix: string;
+  suffix?: string;
+  recursive?: boolean;
+  sidecarSuffixes?: readonly string[];
+};
+
+export type DiskBackedTestFixture = {
+  path: string;
+  cleanup: () => void;
+};
+
+function assertSafeFixturePathPart(value: string, name: string): void {
+  if (value.length === 0 || value.includes('/') || value.includes('\\') || value.includes('..')) {
+    throw new Error(`${name} must be a plain filename fragment`);
+  }
+}
+
+function assertFixturePathInsideTemporaryDirectory(path: string): void {
+  const temporaryDirectory = resolve(tmpdir());
+  const relativePath = relative(temporaryDirectory, path);
+
+  if (relativePath === '' || relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    throw new Error(
+      'Disk-backed test fixture path must stay inside the system temporary directory',
+    );
+  }
+}
+
+export function createDiskBackedTestFixture(
+  options: DiskBackedTestFixtureOptions,
+): DiskBackedTestFixture {
+  assertSafeFixturePathPart(options.prefix, 'Fixture prefix');
+  if (options.suffix !== undefined) {
+    assertSafeFixturePathPart(options.suffix, 'Fixture suffix');
+  }
+  for (const sidecarSuffix of options.sidecarSuffixes ?? []) {
+    assertSafeFixturePathPart(sidecarSuffix, 'Fixture sidecar suffix');
+  }
+
+  const path = resolve(
+    join(tmpdir(), `${options.prefix}-${crypto.randomUUID()}${options.suffix ?? ''}`),
+  );
+  assertFixturePathInsideTemporaryDirectory(path);
+
+  return {
+    path,
+    cleanup: () => {
+      for (const sidecarSuffix of options.sidecarSuffixes ?? []) {
+        const sidecarPath = resolve(`${path}${sidecarSuffix}`);
+        assertFixturePathInsideTemporaryDirectory(sidecarPath);
+        rmSync(sidecarPath, { force: true });
+      }
+      rmSync(path, { force: true, recursive: options.recursive ?? false });
+    },
+  };
+}
 
 /**
  * All storage backends available for parametrized integration tests.
@@ -66,15 +126,16 @@ export const storageBackends: StorageBackendDescriptor[] = [
   {
     name: 'LMDBStorage',
     factory: () => {
-      const path = join(tmpdir(), `lmdb-test-${Date.now()}-${Math.random().toString(36).slice(2)}`);
-      const storage = new LMDBStorage(path);
+      const fixture = createDiskBackedTestFixture({
+        prefix: 'lmdb-test',
+        recursive: true,
+      });
+      const storage = new LMDBStorage(fixture.path);
       return {
         storage,
         cleanup: async () => {
           await storage.close();
-          if (existsSync(path)) {
-            rmSync(path, { recursive: true, force: true });
-          }
+          fixture.cleanup();
         },
       };
     },

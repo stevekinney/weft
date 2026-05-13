@@ -9,6 +9,10 @@ import {
 import { BunSQLiteStorage } from '../storage/bun-sql.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import {
+  createDiskBackedTestFixture,
+  sqliteDatabaseSidecarSuffixes,
+} from '../testing/storage-backends.ts';
 import { collectDiagnostics } from './doctor.ts';
 
 // ---------------------------------------------------------------------------
@@ -96,62 +100,43 @@ describe('database health with BunSQLiteStorage', () => {
   });
 
   it('reads file size from disk for a file-based database', async () => {
-    const temporaryPath = `/tmp/weft-test-${Date.now()}.db`;
+    const fixture = createDiskBackedTestFixture({
+      prefix: 'weft-doctor-test',
+      suffix: '.db',
+      sidecarSuffixes: sqliteDatabaseSidecarSuffixes,
+    });
     try {
-      using storage = new BunSQLiteStorage(temporaryPath);
+      using storage = new BunSQLiteStorage(fixture.path);
       // Write some data so the file has non-zero size
       await storage.put('test-key', encode({ data: 'hello' }));
-      const report = await collectDiagnostics(storage, temporaryPath);
+      const report = await collectDiagnostics(storage, fixture.path);
 
       expect(report.database.sizeBytes).toBeGreaterThan(0);
       // WAL file should exist for a file-based WAL-mode database
       expect(typeof report.database.walSizeBytes).toBe('number');
     } finally {
-      // Clean up temp files
-      try {
-        await Bun.write(temporaryPath, '');
-      } catch {
-        /* ignore */
-      }
-      try {
-        await Bun.write(temporaryPath + '-wal', '');
-      } catch {
-        /* ignore */
-      }
-      try {
-        await Bun.write(temporaryPath + '-shm', '');
-      } catch {
-        /* ignore */
-      }
-      const { unlinkSync } = await import('node:fs');
-      try {
-        unlinkSync(temporaryPath);
-      } catch {
-        /* ignore */
-      }
-      try {
-        unlinkSync(temporaryPath + '-wal');
-      } catch {
-        /* ignore */
-      }
-      try {
-        unlinkSync(temporaryPath + '-shm');
-      } catch {
-        /* ignore */
-      }
+      fixture.cleanup();
     }
   });
 
   it('returns null WAL size when WAL file does not exist', async () => {
-    const temporaryPath = `/tmp/weft-test-nonexistent-${Date.now()}.db`;
-    using storage = new BunSQLiteStorage(':memory:');
-    // Pass a non-memory path but the storage is actually in-memory
-    // so the file won't exist on disk — tests the catch path
-    const report = await collectDiagnostics(storage, temporaryPath);
+    const fixture = createDiskBackedTestFixture({
+      prefix: 'weft-doctor-nonexistent',
+      suffix: '.db',
+      sidecarSuffixes: sqliteDatabaseSidecarSuffixes,
+    });
+    try {
+      using storage = new BunSQLiteStorage(':memory:');
+      // Pass a non-memory path but the storage is actually in-memory
+      // so the file won't exist on disk — tests the catch path
+      const report = await collectDiagnostics(storage, fixture.path);
 
-    // Since the file doesn't exist, size should be 0 (Bun.file().size returns 0 for nonexistent)
-    // and WAL will also not exist
-    expect(report.database.sizeBytes).toBe(0);
+      // Since the file doesn't exist, size should be 0 (Bun.file().size returns 0 for nonexistent)
+      // and WAL will also not exist
+      expect(report.database.sizeBytes).toBe(0);
+    } finally {
+      fixture.cleanup();
+    }
   });
 });
 

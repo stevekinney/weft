@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { unlinkSync } from 'node:fs';
 import { sleepForTesting } from '../testing/fake-timers.ts';
 
 import { BunSQLiteStorage } from '../storage/bun-sql.ts';
+import {
+  createDiskBackedTestFixture,
+  sqliteDatabaseSidecarSuffixes,
+  type DiskBackedTestFixture,
+} from '../testing/storage-backends.ts';
 import { Engine } from './engine.ts';
 import { tenantFromInputField, type TenantContext, type TenantResolver } from './tenant.ts';
 import type { WorkflowContext } from './types.ts';
@@ -59,19 +63,11 @@ describe('tenantFromInputField', () => {
 describe('Engine with tenantResolver', () => {
   // Track on-disk SQLite files created by tests below so we can delete them
   // even when an assertion failure interrupts the body of a test.
-  const temporarySqliteFiles: string[] = [];
+  const temporarySqliteFixtures: DiskBackedTestFixture[] = [];
 
   afterEach(() => {
-    while (temporarySqliteFiles.length > 0) {
-      const path = temporarySqliteFiles.pop()!;
-      for (const suffix of ['', '-wal', '-shm']) {
-        try {
-          unlinkSync(`${path}${suffix}`);
-        } catch {
-          // File may not exist if the test never reached the create step, or
-          // the WAL companions weren't produced. Best-effort cleanup.
-        }
-      }
+    while (temporarySqliteFixtures.length > 0) {
+      temporarySqliteFixtures.pop()!.cleanup();
     }
   });
 
@@ -178,8 +174,12 @@ describe('Engine with tenantResolver', () => {
 
   it('ctx.tenant survives recovery across engine restart', async () => {
     // Use a shared on-disk path so a second engine can reopen the same storage.
-    const path = `/tmp/weft-tenant-recovery-${crypto.randomUUID()}.sqlite`;
-    temporarySqliteFiles.push(path);
+    const fixture = createDiskBackedTestFixture({
+      prefix: 'weft-tenant-recovery',
+      suffix: '.sqlite',
+      sidecarSuffixes: sqliteDatabaseSidecarSuffixes,
+    });
+    temporarySqliteFixtures.push(fixture);
     const workflowId = `wf-${crypto.randomUUID()}`;
 
     const resolver: TenantResolver = {
@@ -187,7 +187,7 @@ describe('Engine with tenantResolver', () => {
     };
 
     // First engine: start the workflow and let it park on a signal.
-    const firstStorage = new BunSQLiteStorage(path);
+    const firstStorage = new BunSQLiteStorage(fixture.path);
     const firstEngine = new Engine({ storage: firstStorage, tenantResolver: resolver });
 
     firstEngine.register('park-and-capture', async function* (ctx: WorkflowContext) {
@@ -204,7 +204,7 @@ describe('Engine with tenantResolver', () => {
 
     // Second engine: reopen the same storage. Intentionally do NOT configure a
     // resolver — the tenant must come back from persisted state.
-    const secondStorage = new BunSQLiteStorage(path);
+    const secondStorage = new BunSQLiteStorage(fixture.path);
     const secondEngine = new Engine({ storage: secondStorage });
 
     secondEngine.register('park-and-capture', async function* (ctx: WorkflowContext) {

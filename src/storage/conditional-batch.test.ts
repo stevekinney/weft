@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'bun:test';
-import { existsSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
-import { storageBackends } from '../testing/storage-backends.ts';
+import {
+  createDiskBackedTestFixture,
+  sqliteDatabaseSidecarSuffixes,
+  storageBackends,
+} from '../testing/storage-backends.ts';
 import { TursoStorage } from './turso.ts';
 
 function encode(value: string): Uint8Array {
@@ -18,19 +19,18 @@ const conditionalBatchBackends = storageBackends.map((backend) => {
   return {
     name: backend.name,
     factory: () => {
-      const path = join(
-        tmpdir(),
-        `turso-conditional-batch-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
-      );
-      const storage = new TursoStorage({ url: `file:${path}` });
+      const fixture = createDiskBackedTestFixture({
+        prefix: 'turso-conditional-batch',
+        suffix: '.db',
+        sidecarSuffixes: sqliteDatabaseSidecarSuffixes,
+      });
+      const storage = new TursoStorage({ url: `file:${fixture.path}` });
 
       return {
         storage,
         cleanup: () => {
           storage[Symbol.dispose]();
-          if (existsSync(path)) {
-            rmSync(path, { force: true });
-          }
+          fixture.cleanup();
         },
       };
     },

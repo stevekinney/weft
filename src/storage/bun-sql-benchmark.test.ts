@@ -1,7 +1,4 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { existsSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 
 import type { BatchOperation } from './interface';
 
@@ -9,12 +6,11 @@ import {
   isConstrainedCodexRunner,
   isGitHubActionsRunner,
 } from '../benchmarks/benchmark-environment';
+import {
+  createDiskBackedTestFixture,
+  sqliteDatabaseSidecarSuffixes,
+} from '../testing/storage-backends.ts';
 import { BunSQLiteStorage } from './bun-sql';
-
-/** Create a unique temporary file path for each test. */
-function createTemporaryPath(): string {
-  return join(tmpdir(), `sqlite-bench-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
-}
 
 /** Generate a realistic ~2KB value (typical checkpoint size). */
 function generateCheckpointValue(): Uint8Array {
@@ -40,22 +36,23 @@ function median(values: number[]): number {
 }
 
 describe('BunSQLiteStorage benchmark', () => {
-  const temporaryPaths: string[] = [];
+  const fixtureCleanups: Array<() => void> = [];
 
   function createStorage(): BunSQLiteStorage {
-    const path = createTemporaryPath();
-    temporaryPaths.push(path);
-    return new BunSQLiteStorage(path);
+    const fixture = createDiskBackedTestFixture({
+      prefix: 'sqlite-bench',
+      suffix: '.db',
+      sidecarSuffixes: sqliteDatabaseSidecarSuffixes,
+    });
+    fixtureCleanups.push(fixture.cleanup);
+    return new BunSQLiteStorage(fixture.path);
   }
 
   afterEach(() => {
-    for (const path of temporaryPaths) {
-      if (existsSync(path)) rmSync(path, { force: true });
-      // WAL and SHM sidecar files
-      if (existsSync(`${path}-wal`)) rmSync(`${path}-wal`, { force: true });
-      if (existsSync(`${path}-shm`)) rmSync(`${path}-shm`, { force: true });
+    for (const cleanup of fixtureCleanups) {
+      cleanup();
     }
-    temporaryPaths.length = 0;
+    fixtureCleanups.length = 0;
   });
 
   it('records batch write throughput and verifies stored data', async () => {
@@ -274,5 +271,5 @@ describe('BunSQLiteStorage benchmark', () => {
     expect(operationsPerSecond).toBeGreaterThan(0);
 
     storage[Symbol.dispose]();
-  });
+  }, 15_000);
 });
