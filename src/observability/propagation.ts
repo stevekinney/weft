@@ -22,6 +22,22 @@ function randomHex(byteCount: number): string {
 // Types
 // ---------------------------------------------------------------------------
 
+/**
+ * Parsed W3C trace context fields from a `traceparent` header.
+ *
+ * @example
+ * ```ts
+ * import { formatTraceParent, type TraceContext } from 'weft/observability';
+ *
+ * const context: TraceContext = {
+ *   version: '00',
+ *   traceId: '4bf92f3577b34da6a3ce929d0e0e4736',
+ *   spanId: '00f067aa0ba902b7',
+ *   traceFlags: 1,
+ * };
+ * console.log(formatTraceParent(context));
+ * ```
+ */
 export interface TraceContext {
   version: string;
   traceId: string;
@@ -99,14 +115,42 @@ export function formatTraceParent(context: TraceContext): string {
 // Header injection and extraction
 // ---------------------------------------------------------------------------
 
-/** Extract a traceparent header value from a headers map. */
+/**
+ * Extract and parse a `traceparent` header from a headers map.
+ *
+ * @example
+ * ```ts
+ * import { extractTraceParent } from 'weft/observability';
+ *
+ * const headers = new Map([
+ *   ['traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'],
+ * ]);
+ * console.log(extractTraceParent(headers)?.traceId);
+ * ```
+ */
 export function extractTraceParent(headers: Map<string, string>): TraceContext | null {
   const value = headers.get(TRACEPARENT_HEADER);
   if (!value) return null;
   return parseTraceParent(value);
 }
 
-/** Inject a traceparent header into a headers map. */
+/**
+ * Format and inject a `traceparent` header into a headers map.
+ *
+ * @example
+ * ```ts
+ * import { generateSpanId, generateTraceId, injectTraceParent } from 'weft/observability';
+ *
+ * const headers = new Map<string, string>();
+ * injectTraceParent(headers, {
+ *   version: '00',
+ *   traceId: generateTraceId(),
+ *   spanId: generateSpanId(),
+ *   traceFlags: 1,
+ * });
+ * console.log(headers.has('traceparent'));
+ * ```
+ */
 export function injectTraceParent(headers: Map<string, string>, context: TraceContext): void {
   headers.set(TRACEPARENT_HEADER, formatTraceParent(context));
 }

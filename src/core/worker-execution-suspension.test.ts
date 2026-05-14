@@ -42,7 +42,7 @@ describe('worker execution signal suspension', () => {
   function createWorkerEngine(storage = new MemoryStorage()): Engine {
     const workerEngine = new Engine({
       storage,
-      workerExecution: { workerUrl, concurrency: 1 },
+      workerExecution: { workerUrl, poolSize: 1 },
     });
     registerWorkerExecutionTestWorkflows(workerEngine);
     engine = workerEngine;

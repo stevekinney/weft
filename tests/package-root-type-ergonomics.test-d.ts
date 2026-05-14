@@ -50,9 +50,29 @@ engine.register(
   async function* (ctx: WorkflowContext, input: PackageRootWelcomeInput) {
     const greeting = yield* ctx.run('packageRootFormatGreeting', { name: input.name });
     const approval = yield* ctx.waitForSignal(packageRootApprovalSignal);
+    const parallel = yield* ctx.all([
+      ctx.run('packageRootFormatGreeting', { name: input.name }),
+      ctx.run(async () => 42),
+    ]);
+    const typedParallel: [string, number] = parallel;
+    const raced = yield* ctx.race([
+      ctx.run('packageRootFormatGreeting', { name: input.name }),
+      ctx.run(async () => 42),
+    ]);
+    const typedRace: string | number = raced;
+    const runAllResult = yield* ctx.runAll({
+      greeting: [async (value: PackageRootWelcomeInput) => value.name, input],
+      count: [async () => 42],
+    });
+    const typedRunAllResult: { greeting: string; count: number } = runAllResult;
     // @ts-expect-error string-name activity arguments must match the package-root augmentation.
     yield* ctx.run('packageRootFormatGreeting', { id: 'wrong' });
+    // @ts-expect-error child workflow options are closed to fields the engine reads.
+    yield* ctx.startChild('packageRootWelcome', input, { unknownOption: true });
     approval.approved.valueOf();
+    void typedParallel;
+    void typedRace;
+    void typedRunAllResult;
     return { greeting };
   },
 );

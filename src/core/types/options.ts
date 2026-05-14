@@ -129,7 +129,7 @@ export interface EngineOptions {
     /** URL of the worker script (created via `createWorkerEntryUrl`). */
     workerUrl: string | URL;
     /** Maximum number of concurrent workers. Default: 4. */
-    concurrency?: number;
+    poolSize?: number;
     /** Use Bun's `smol` worker option for smaller memory footprint. */
     smol?: boolean;
   };

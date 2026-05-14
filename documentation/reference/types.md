@@ -131,7 +131,7 @@ interface WorkflowReduceOptions extends Record<string, unknown> {
   idPrefix?: string;
 }
 
-type ChildWorkflowOptions = Record<string, unknown> & {
+type ChildWorkflowOptions = {
   id?: string;
 };
 
@@ -212,7 +212,7 @@ Schema metadata accepted by workflow and activity definitions. [Standard Schema]
 
 Core workflow and activity registration validates the Standard Schema metadata shape and stores these fields for introspection. Runtime input or output validation happens only in adapters that explicitly consume the metadata.
 
-Weft also exports the small Standard Schema helper surfaces used by those interfaces so diagnostics and generated declaration files stay self-contained: `StandardTypedV1Properties`, `StandardTypedV1Types`, `StandardSchemaV1Properties`, `StandardSchemaV1Result`, `StandardSchemaV1SuccessResult`, `StandardSchemaV1FailureResult`, `StandardSchemaV1Issue`, `StandardSchemaV1PathSegment`, `StandardSchemaV1Options`, `StandardJSONSchemaV1Properties`, `StandardJSONSchemaV1Converter`, `StandardJSONSchemaV1Target`, and `StandardJSONSchemaV1Options`.
+Weft exports the small Standard Schema helper surfaces from `weft/json-schema` so diagnostics and generated declaration files stay self-contained without crowding the workflow-authoring entrypoint: `StandardTypedV1Properties`, `StandardTypedV1Types`, `StandardSchemaV1Properties`, `StandardSchemaV1Result`, `StandardSchemaV1SuccessResult`, `StandardSchemaV1FailureResult`, `StandardSchemaV1Issue`, `StandardSchemaV1PathSegment`, `StandardSchemaV1Options`, `StandardJSONSchemaV1Properties`, `StandardJSONSchemaV1Converter`, `StandardJSONSchemaV1Target`, and `StandardJSONSchemaV1Options`.
 
 ### `WorkflowAtomicState<T>`
 

@@ -151,10 +151,9 @@ export type ChildWorkflowTarget<TInput = unknown, TOutput = unknown> =
 /**
  * Options passed to child workflow invocations within `ctx.pipe`, `ctx.map`,
  * or `ctx.reduce`. Currently accepts an optional `id` to control the child
- * workflow ID; additional fields are reserved for future fields; today the
- * engine reads only `id` from this record and ignores other keys.
+ * workflow ID.
  */
-export type ChildWorkflowOptions = Record<string, unknown> & {
+export type ChildWorkflowOptions = {
   id?: string;
 };
 

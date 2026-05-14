@@ -7,6 +7,7 @@ import {
 import {
   executeRunAllBranches,
   executeRunAllBranchesSettled,
+  type RunAllBranch,
   type RunAllBranchOutcome,
 } from '../engine-helpers.ts';
 import type { EngineInternals } from './internals.ts';
@@ -251,11 +252,11 @@ export async function processRunAllOperation(
 
 /** Drop fulfilled-on-resume branches so we only re-dispatch the rest. */
 function filterBranchesToRun(
-  branches: Record<string, [Function] | [Function, unknown]>,
+  branches: Record<string, RunAllBranch>,
   branchNames: string[],
   resumedSlotsByName: Map<string, ParallelBranchSlot> | undefined,
-): Record<string, [Function] | [Function, unknown]> {
-  const result: Record<string, [Function] | [Function, unknown]> = {};
+): Record<string, RunAllBranch> {
+  const result: Record<string, RunAllBranch> = {};
   for (const name of branchNames) {
     if (resumedSlotsByName?.get(name)?.status !== 'fulfilled') {
       const branch = branches[name];

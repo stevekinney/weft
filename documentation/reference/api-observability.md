@@ -61,7 +61,8 @@ Span names follow the pattern `workflow:<type>`, `activity:<name>`, `sleep`, or 
 **Example:**
 
 ```ts
-import { createObservabilityInterceptors, Engine } from 'weft';
+import { Engine } from 'weft';
+import { createObservabilityInterceptors } from 'weft/observability';
 
 const engine = new Engine();
 
@@ -219,7 +220,12 @@ interface TraceContext {
 **Example:**
 
 ```ts
-import { generateTraceId, generateSpanId, formatTraceParent, parseTraceParent } from 'weft';
+import {
+  generateTraceId,
+  generateSpanId,
+  formatTraceParent,
+  parseTraceParent,
+} from 'weft/observability';
 
 const traceId = generateTraceId();
 const spanId = generateSpanId();

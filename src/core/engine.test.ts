@@ -5713,9 +5713,9 @@ describe('Engine speculative execution', () => {
 
     engine.register('speculate-parallel-success', async function* (ctx: WorkflowContext) {
       const context = ctx;
-      const result = (yield* context.speculate(async function* (branch) {
+      const result = yield* context.speculate(async function* (branch) {
         return yield* branch.all([branch.run(double, 5), branch.run(increment, 5)]);
-      })) as [number, number];
+      });
 
       return result;
     });
@@ -5862,7 +5862,7 @@ describe('Engine tenant-isolation guards', () => {
       },
       workerExecution: {
         workerUrl: new URL('https://example.invalid/worker.js'),
-        concurrency: 1,
+        poolSize: 1,
       },
     });
     expect(engine).toBeInstanceOf(Engine);
@@ -5873,7 +5873,7 @@ describe('Engine tenant-isolation guards', () => {
     const engine = new Engine({
       workerExecution: {
         workerUrl: new URL('https://example.invalid/worker.js'),
-        concurrency: 1,
+        poolSize: 1,
       },
     });
     expect(engine).toBeInstanceOf(Engine);

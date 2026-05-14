@@ -209,7 +209,7 @@ export function* map<TItem, TResult>(
 
   for (let startIndex = 0; startIndex < items.length; startIndex += concurrency) {
     const batchItems = items.slice(startIndex, startIndex + concurrency);
-    const batchResults = (yield* context.all(
+    const batchResults = yield* context.all(
       batchItems.map((item, batchIndex) =>
         context.startChild<TResult>(
           resolvedWorkflowType,
@@ -217,7 +217,7 @@ export function* map<TItem, TResult>(
           createCompositionChildWorkflowOptions(internals, mapToken, startIndex + batchIndex),
         ),
       ),
-    )) as TResult[];
+    );
 
     for (let batchIndex = 0; batchIndex < batchResults.length; batchIndex++) {
       results[startIndex + batchIndex] = batchResults[batchIndex]!;

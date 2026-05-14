@@ -93,8 +93,15 @@ engine.register('welcome', async function* (ctx: WorkflowContext, input: Welcome
   const customer = ctx.getAttribute<string>('customer');
   const attributes = ctx.getAttributes();
   const child = yield* ctx.startChild<WelcomeOutput>('registered', input);
+  // @ts-expect-error child workflow options are closed to fields the engine reads.
+  yield* ctx.startChild<WelcomeOutput>('registered', input, { unknownOption: true });
   const parallel = yield* ctx.all([ctx.run('formatGreeting', input), ctx.sleep(1)]);
+  const typedParallel: [string, void] = parallel;
   const raced = yield* ctx.race([ctx.run('formatGreeting', input)]);
+  const typedRace: string | number = yield* ctx.race([
+    ctx.run('formatGreeting', input),
+    ctx.run(async () => 42),
+  ]);
   const offloadReference = yield* ctx.offload('welcome-output', async () => child);
   const loaded = yield* ctx.load<WelcomeOutput>(offloadReference);
   yield* ctx.archive('welcome-output', loaded);
@@ -105,7 +112,9 @@ engine.register('welcome', async function* (ctx: WorkflowContext, input: Welcome
   const memoized = yield* ctx.memo('memo-key', () => input.name);
   const runAllResult = yield* ctx.runAll({
     formatGreeting: [async (value: WelcomeInput) => value.name, input],
+    count: [async () => 42],
   });
+  const typedRunAllResult: { formatGreeting: string; count: number } = runAllResult;
   const sagaResult = yield* ctx.saga<WelcomeOutput>([]);
   const session = ctx.state.session('name', { initial: input.name });
 
@@ -114,13 +123,14 @@ engine.register('welcome', async function* (ctx: WorkflowContext, input: Welcome
   void updatePayload;
   void customer;
   void attributes;
-  void parallel;
+  void typedParallel;
   void raced;
+  void typedRace;
   void streamUrl;
   void mapped;
   void reduced;
   void memoized;
-  void runAllResult;
+  void typedRunAllResult;
   void sagaResult;
   void session;
 

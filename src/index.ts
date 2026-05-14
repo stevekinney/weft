@@ -107,22 +107,6 @@ export type {
   SearchAttributeValue,
   Serializer,
   SignalDefinition,
-  StandardJSONSchemaV1,
-  StandardJSONSchemaV1Converter,
-  StandardJSONSchemaV1Options,
-  StandardJSONSchemaV1Properties,
-  StandardJSONSchemaV1Target,
-  StandardSchemaV1,
-  StandardSchemaV1FailureResult,
-  StandardSchemaV1Issue,
-  StandardSchemaV1Options,
-  StandardSchemaV1PathSegment,
-  StandardSchemaV1Properties,
-  StandardSchemaV1Result,
-  StandardSchemaV1SuccessResult,
-  StandardTypedV1,
-  StandardTypedV1Properties,
-  StandardTypedV1Types,
   StartOptions,
   SubmitReviewOptions,
   TenantQuotaMetricUsage,
@@ -332,7 +316,6 @@ export type {
   SleepFunction,
 } from './core/atomic-state';
 
-export type { PrometheusExporter } from './observability/metrics';
 export { handleRequest } from './server/handler';
 export type { SchedulingPolicy } from './server/task-queue';
 export type { RoutingPolicy } from './worker/registry';
@@ -379,14 +362,7 @@ export {
   createMetricsCollectorExporter,
   createOpenTelemetryMetrics,
 } from './observability/metrics';
-export type { OpenTelemetryMetrics } from './observability/metrics';
 export { getOpenTelemetryApi } from './observability/no-op-telemetry';
-export type {
-  OpenTelemetryApi,
-  OpenTelemetryMeter,
-  OpenTelemetrySpan,
-  OpenTelemetryTracer,
-} from './observability/no-op-telemetry';
 export {
   formatTraceParent,
   generateSpanId,

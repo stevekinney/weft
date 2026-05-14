@@ -424,7 +424,7 @@ describe('constraint primitive', () => {
     const engine = new Engine({
       workerExecution: {
         workerUrl: new URL('https://example.invalid/worker.js'),
-        concurrency: 1,
+        poolSize: 1,
       },
     });
 

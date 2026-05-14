@@ -965,7 +965,7 @@ describe('Context', () => {
       const result = generator.next();
 
       expect(result.done).toBe(true);
-      expect(result.value).toBe(cached);
+      expect(result.value as unknown).toBe(cached);
     });
   });
 
@@ -1025,7 +1025,7 @@ describe('Context', () => {
 
       const result = generator.next({ charge: 'ok', notify: 'done' });
       expect(result.done).toBe(true);
-      expect(result.value).toEqual({ charge: 'ok', notify: 'done' });
+      expect(result.value as unknown).toEqual({ charge: 'ok', notify: 'done' });
     });
   });
 
@@ -1356,21 +1356,19 @@ describe('Context', () => {
       expect(request.callerStack!.length).toBeGreaterThan(0);
     });
 
-    it('ctx.startChild preserves custom option keys alongside id', () => {
+    it('ctx.startChild passes through the supported child workflow id option', () => {
       const context = createContext();
       const generator = context.startChild(
         'child-type',
         { key: 'value' },
         {
           id: 'child-123',
-          queue: 'priority',
         },
       );
       const request = expectRequest(generator.next(), 'child-workflow');
 
       expect(request.options).toEqual({
         id: 'child-123',
-        queue: 'priority',
       });
     });
 

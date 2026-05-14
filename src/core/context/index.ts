@@ -12,6 +12,7 @@ import type {
   Duration,
   MessageName,
   QueryDefinition,
+  RunAllResult,
   SearchAttributeHandle,
   SearchAttributeValue,
   SignalDefinition,
@@ -19,10 +20,13 @@ import type {
   UpdateDefinition,
   WorkflowContext,
   WorkflowMapOptions,
+  WorkflowOperation,
+  WorkflowOperationTupleResult,
   WorkflowPipeStage,
   WorkflowPipeStageDefinition,
   WorkflowReduceInput,
   WorkflowReduceOptions,
+  WorkflowRunAllBranch,
   WorkflowStateNamespace,
 } from '../types.ts';
 import { messageName, searchAttributeName } from '../types.ts';
@@ -375,15 +379,27 @@ export class Context implements WorkflowContext {
   ): Generator<ContextOperationRequest, HumanReviewResult, unknown> {
     return yield* durableOperations.review(this, getInternals(this), options);
   }
-  *all(
-    operations: Generator<ContextOperationRequest, unknown, unknown>[],
-  ): Generator<ContextOperationRequest, unknown[], unknown> {
-    return yield* parallelOperations.all(this, getInternals(this), operations);
+  *all<const TOperations extends readonly WorkflowOperation<unknown>[]>(
+    operations: TOperations,
+  ): Generator<ContextOperationRequest, WorkflowOperationTupleResult<TOperations>, unknown> {
+    return (yield* parallelOperations.all(this, getInternals(this), [...operations] as Generator<
+      ContextOperationRequest,
+      unknown,
+      unknown
+    >[])) as WorkflowOperationTupleResult<TOperations>;
   }
-  *race(
-    operations: Generator<ContextOperationRequest, unknown, unknown>[],
-  ): Generator<ContextOperationRequest, unknown, unknown> {
-    return yield* parallelOperations.race(this, getInternals(this), operations);
+  *race<const TOperations extends readonly WorkflowOperation<unknown>[]>(
+    operations: TOperations,
+  ): Generator<
+    ContextOperationRequest,
+    WorkflowOperationTupleResult<TOperations>[number],
+    unknown
+  > {
+    return (yield* parallelOperations.race(this, getInternals(this), [...operations] as Generator<
+      ContextOperationRequest,
+      unknown,
+      unknown
+    >[])) as WorkflowOperationTupleResult<TOperations>[number];
   }
   *memo<T>(key: string, fn: () => T | Promise<T>): Generator<ContextOperationRequest, T, unknown> {
     return yield* parallelOperations.memo(this, getInternals(this), key, fn);
@@ -406,10 +422,14 @@ export class Context implements WorkflowContext {
   *archive(key: string, data: unknown): Generator<ContextOperationRequest, void, unknown> {
     return yield* durableOperations.archive(this, getInternals(this), key, data);
   }
-  *runAll<T extends Record<string, [Function] | [Function, unknown]>>(
-    branches: T,
-  ): Generator<ContextOperationRequest, Record<keyof T, unknown>, unknown> {
-    return yield* parallelOperations.runAll(this, getInternals(this), branches);
+  *runAll<const TBranches extends Record<string, WorkflowRunAllBranch>>(
+    branches: TBranches,
+  ): Generator<ContextOperationRequest, RunAllResult<TBranches>, unknown> {
+    return (yield* parallelOperations.runAll(
+      this,
+      getInternals(this),
+      branches as Record<string, readonly [Function] | readonly [Function, unknown]>,
+    )) as RunAllResult<TBranches>;
   }
   *saga<TFinalOutput = unknown>(
     steps: ErasedSagaStep[],
