@@ -12,6 +12,7 @@ import {
   REGISTRY_VERSION,
   RegistrySchemaConversionError,
 } from './registry-snapshot.ts';
+import { activity } from './types.ts';
 
 function createEngine(): Engine {
   return new Engine({ storage: new MemoryStorage() });
@@ -101,15 +102,15 @@ describe('buildRegistrySnapshot', () => {
 
   it('includes activities with queue, schemas, and description', () => {
     engine = createEngine();
-    engine.registerActivity(
-      'sendEmail',
-      async (input: { to: string }) => ({ delivered: true, recipient: input.to }),
-      {
+    engine.register(
+      activity({
+        name: 'sendEmail',
+        execute: async (input: { to: string }) => ({ delivered: true, recipient: input.to }),
         queue: 'mail',
         inputSchema: z.object({ to: z.string() }),
         outputSchema: z.object({ delivered: z.boolean(), recipient: z.string() }),
         description: 'Sends an email.',
-      },
+      }),
     );
 
     const snapshot = buildRegistrySnapshot(engine);
@@ -136,7 +137,7 @@ describe('buildRegistrySnapshot', () => {
 
   it('omits activity schema fields that are absent on registration', () => {
     engine = createEngine();
-    engine.registerActivity('noop', async () => undefined);
+    engine.register(activity({ name: 'noop', execute: async () => undefined }));
 
     const snapshot = buildRegistrySnapshot(engine);
     const entry = snapshot.activities['noop'];
@@ -167,9 +168,9 @@ describe('buildRegistrySnapshot', () => {
 
   it('orders activity keys alphabetically by codepoint', () => {
     engine = createEngine();
-    engine.registerActivity('xyz', async () => undefined);
-    engine.registerActivity('abc', async () => undefined);
-    engine.registerActivity('mno', async () => undefined);
+    engine.register(activity({ name: 'xyz', execute: async () => undefined }));
+    engine.register(activity({ name: 'abc', execute: async () => undefined }));
+    engine.register(activity({ name: 'mno', execute: async () => undefined }));
 
     const snapshot = buildRegistrySnapshot(engine);
     expect(Object.keys(snapshot.activities)).toEqual(['abc', 'mno', 'xyz']);
@@ -234,9 +235,13 @@ describe('buildRegistrySnapshot', () => {
   it('throws RegistrySchemaConversionError with activity context when input schema conversion fails', () => {
     engine = createEngine();
     const brokenSchema = makeBrokenSchema('input');
-    engine.registerActivity('brokenActivity', async () => undefined, {
-      inputSchema: brokenSchema,
-    });
+    engine.register(
+      activity({
+        name: 'brokenActivity',
+        execute: async () => undefined,
+        inputSchema: brokenSchema,
+      }),
+    );
 
     let captured: unknown;
     try {
@@ -254,9 +259,13 @@ describe('buildRegistrySnapshot', () => {
   it('throws RegistrySchemaConversionError with activity context when output schema conversion fails', () => {
     engine = createEngine();
     const brokenSchema = makeBrokenSchema('output');
-    engine.registerActivity('brokenActivity', async () => undefined, {
-      outputSchema: brokenSchema,
-    });
+    engine.register(
+      activity({
+        name: 'brokenActivity',
+        execute: async () => undefined,
+        outputSchema: brokenSchema,
+      }),
+    );
 
     let captured: unknown;
     try {
@@ -277,7 +286,7 @@ describe('buildRegistrySnapshot', () => {
     // on a connected worker, not in the engine's activity registry. Since
     // buildRegistrySnapshot only reads from engine.listActivityDefinitions(), there is
     // no path through which a remote-only name could leak into the snapshot.
-    engine.registerActivity('local', async () => undefined);
+    engine.register(activity({ name: 'local', execute: async () => undefined }));
     const snapshot = buildRegistrySnapshot(engine);
     expect(Object.keys(snapshot.activities)).toEqual(['local']);
     // Sanity: a fictitious remote-only name must not appear.
@@ -290,7 +299,7 @@ describe('buildRegistrySnapshot', () => {
     // JSON output. Null-prototype maps store it as a normal property.
     engine = createEngine();
     engine.register('__proto__', { handler: async function* () {} });
-    engine.registerActivity('__proto__', async () => undefined);
+    engine.register(activity({ name: '__proto__', execute: async () => undefined }));
 
     const snapshot = buildRegistrySnapshot(engine);
     expect(Object.keys(snapshot.workflows)).toContain('__proto__');
@@ -312,9 +321,13 @@ describe('buildRegistrySnapshot', () => {
     // which have no place for tags. If the contract changes, this test will
     // start failing and the type/comment can be updated together.
     engine = createEngine();
-    engine.registerActivity('tagged', async () => undefined, {
-      tags: ['observability', 'critical'],
-    });
+    engine.register(
+      activity({
+        name: 'tagged',
+        execute: async () => undefined,
+        tags: ['observability', 'critical'],
+      }),
+    );
 
     const snapshot = buildRegistrySnapshot(engine);
     expect(snapshot.activities['tagged']).not.toHaveProperty('tags');

@@ -1,6 +1,6 @@
 # Recovery and Deploys
 
-Weft promises that workflows survive process death. The mechanism is `engine.recoverAll()` — at boot, the engine scans storage for workflows that were running when the previous process exited and resumes them. `Engine.create()` calls `recoverAll()` for you as part of construction; you can also call it directly on a manually-built engine.
+Weft promises that workflows survive process death. The mechanism is `engine.recoverAll()` — at boot, the engine scans storage for workflows that were running when the previous process exited and resumes them. Call it directly on a manually-built engine, or pass `recover: true` to `Engine.create()` so recovery runs after definition registration.
 
 This guide is about what happens when recovery and your deploy lifecycle disagree — when storage holds workflows whose code is no longer in the new build, when you're rolling pods one at a time, or when you genuinely want to abandon old workflows and need to do it on purpose.
 
@@ -16,6 +16,7 @@ try {
   const engine = await Engine.create({
     storage: new SQLiteStorage('./weft.db'),
     workflows: { greet },
+    recover: true,
   });
 } catch (error) {
   if (error instanceof WorkflowTypeNotRegisteredForRecoveryError) {

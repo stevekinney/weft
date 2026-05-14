@@ -15,6 +15,7 @@ import type {
 } from '../core/interceptor';
 import type { WorkflowContext } from '../core/types';
 import { MemoryStorage } from '../storage/memory';
+import { flush } from '../testing/storage-backends';
 import { createObservabilityInterceptors } from './index';
 import { MetricsCollector } from './metrics';
 import type {
@@ -1819,6 +1820,7 @@ describe('createObservabilityInterceptors', () => {
       });
 
       const handle = await engine.start('greeter', { name: 'world' });
+      await flush();
       const result = await handle.result();
       expect(result).toBe('hello');
 
@@ -1847,6 +1849,7 @@ describe('createObservabilityInterceptors', () => {
       });
 
       const handle = await engine.start('flaky', undefined);
+      await flush();
       await handle.result().catch(() => undefined);
 
       const rootSpan = spans.find((s) => s.name === 'workflow:flaky');
@@ -1877,7 +1880,9 @@ describe('createObservabilityInterceptors', () => {
       });
 
       const handle = await engine.start('waiter', undefined);
+      await flush();
       await engine.cancel(handle.id);
+      await flush();
       await handle.result().catch(() => undefined);
 
       const rootSpan = spans.find((s) => s.name === 'workflow:waiter');

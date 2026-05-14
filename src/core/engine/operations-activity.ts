@@ -52,7 +52,7 @@ export function resolveActivityFunction(
   if (operation.fn) return operation.fn as (...arguments_: unknown[]) => unknown;
   throw new Error(
     `No activity registered with name "${operation.activityName}". ` +
-      'In worker mode, activities must be registered via engine.registerActivity().',
+      'In worker mode, activities must be registered via engine.register(activityDefinition).',
   );
 }
 

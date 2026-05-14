@@ -183,7 +183,7 @@ function copyRetryPolicy(retry: RetryPolicy): RetryPolicy {
 /**
  * WeakMap-backed registry mapping activity names to their execute functions
  * and metadata. Used internally by the {@link Engine} to dispatch activities
- * by name. Call `engine.registerActivity(name, fn, options)` rather than
+ * by name. Call `engine.register(activityDefinition)` rather than
  * constructing an `ActivityRegistry` directly — the engine manages the
  * registry lifecycle.
  *

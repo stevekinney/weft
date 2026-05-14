@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import { Engine } from '../core/engine.ts';
 import { tenantFromInputField } from '../core/tenant.ts';
-import type { DefinitionSchema, WorkflowContext } from '../core/types.ts';
+import { activity, type DefinitionSchema, type WorkflowContext } from '../core/types.ts';
 import { signJWT } from '../server/authentication.ts';
 import { serve, type WeftServer } from '../server/index.ts';
 import { anonymousPrincipal, principalFromJwtClaims } from '../server/principal.ts';
@@ -15,6 +15,7 @@ import { callMcpTool } from './tools.ts';
 
 const MCP_PROTOCOL_VERSION = '2025-11-25';
 const TEST_SECRET = 'mcp-test-secret-at-least-32-chars';
+const enginesToDispose: Engine[] = [];
 
 type JsonRpcEnvelope = {
   jsonrpc: '2.0';
@@ -33,6 +34,7 @@ function createEngine(): Engine {
     storage: new MemoryStorage(),
     tenantResolver: tenantFromInputField('tenantId'),
   });
+  enginesToDispose.push(engine);
 
   engine.register('greet-customer', {
     description: 'Greet a customer by name.',
@@ -69,8 +71,13 @@ function createEngine(): Engine {
     return 'hidden';
   });
 
-  engine.registerActivity('internal-only-activity', async () => 'not exposed');
+  engine.register(activity({ name: 'internal-only-activity', execute: async () => 'not exposed' }));
 
+  return engine;
+}
+
+function trackEngine(engine: Engine): Engine {
+  enginesToDispose.push(engine);
   return engine;
 }
 
@@ -203,6 +210,9 @@ describe('MCP Streamable HTTP transport', () => {
   afterEach(async () => {
     await server?.stop();
     server = undefined;
+    for (const engine of enginesToDispose.splice(0)) {
+      engine[Symbol.dispose]();
+    }
   });
 
   it('initializes a session, lists tools, calls a registered workflow tool, and hides activities', async () => {
@@ -325,7 +335,7 @@ describe('MCP Streamable HTTP transport', () => {
   });
 
   it('reuses the converted tool registry until workflow definitions change', async () => {
-    const engine = new Engine({ storage: new MemoryStorage() });
+    const engine = trackEngine(new Engine({ storage: new MemoryStorage() }));
     let inputConversions = 0;
     engine.register('counted-tool', {
       inputSchema: countingDefinitionSchema<{ name?: string }>(() => {
@@ -387,9 +397,13 @@ describe('MCP Streamable HTTP transport', () => {
 
   it('does not let broken activity schemas break MCP workflow tools', async () => {
     const engine = createEngine();
-    engine.registerActivity('broken-activity', async () => undefined, {
-      inputSchema: makeBrokenSchema('activity'),
-    });
+    engine.register(
+      activity({
+        name: 'broken-activity',
+        execute: async () => undefined,
+        inputSchema: makeBrokenSchema('activity'),
+      }),
+    );
     server = serve({ engine, port: 0 });
     const sessionId = await initialize(server);
 

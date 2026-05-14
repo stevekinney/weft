@@ -25,6 +25,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `EngineOptions.workerExecution.poolSize`, matching
   `activityExecution.poolSize`.
 
+### Changed — Engine lifecycle and registration ergonomics
+
+`Engine.create()` no longer recovers stored workflows by default. Pass
+`recover: true` to run `recoverAll()` after definition registration, or call
+`await engine.recoverAll()` explicitly after manual registration. This matches
+the constructor path, where recovery has always been an explicit async step.
+
+Activity definitions now register through `engine.register(activityDefinition)`.
+The previous `engine.registerActivity()`, `engine.withWorkflow()`, and
+`engine.withActivity()` sibling methods were removed so workflow and activity
+definitions share one registration surface. Leaked engines now emit a
+development warning when garbage collection observes that `[Symbol.dispose]`
+was never called.
+
 ### Added — workflow visibility surface
 
 `engine.list` and the `weft.workflows.list` operation now accept a richer

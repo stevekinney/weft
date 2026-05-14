@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
 import { Engine } from '../../core/engine.ts';
+import { activity } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
@@ -59,17 +60,17 @@ describe('GET /v1/registry — successful responses', () => {
     engine.register('schemaless', {
       handler: async function* () {},
     });
-    engine.registerActivity(
-      'sendEmail',
-      async (input: { to: string }) => ({ delivered: true, recipient: input.to }),
-      {
+    engine.register(
+      activity({
+        name: 'sendEmail',
+        execute: async (input: { to: string }) => ({ delivered: true, recipient: input.to }),
         queue: 'mail',
         inputSchema: z.object({ to: z.string() }),
         outputSchema: z.object({ delivered: z.boolean(), recipient: z.string() }),
         description: 'Sends an email.',
-      },
+      }),
     );
-    engine.registerActivity('noop', async () => undefined);
+    engine.register(activity({ name: 'noop', execute: async () => undefined }));
 
     const response = await handleRequest(
       new Request('http://localhost/v1/registry', { method: 'GET' }),
@@ -156,8 +157,8 @@ describe('GET /v1/registry — successful responses', () => {
     engine.register('charlie', { handler: async function* () {} });
     engine.register('alpha', { handler: async function* () {} });
     engine.register('bravo', { handler: async function* () {} });
-    engine.registerActivity('zulu', async () => undefined);
-    engine.registerActivity('alpha', async () => undefined);
+    engine.register(activity({ name: 'zulu', execute: async () => undefined }));
+    engine.register(activity({ name: 'alpha', execute: async () => undefined }));
 
     const response = await handleRequest(
       new Request('http://localhost/v1/registry', { method: 'GET' }),
@@ -187,7 +188,7 @@ describe('GET /v1/registry — successful responses', () => {
     // entry.
     engine = createEngine();
     engine.register('__proto__', { handler: async function* () {} });
-    engine.registerActivity('__proto__', async () => undefined);
+    engine.register(activity({ name: '__proto__', execute: async () => undefined }));
 
     const response = await handleRequest(
       new Request('http://localhost/v1/registry', { method: 'GET' }),
@@ -219,7 +220,7 @@ describe('GET /v1/registry — successful responses', () => {
     // the response. This test pins that by construction: register one local
     // activity, assert it is the only one reported.
     engine = createEngine();
-    engine.registerActivity('localOnly', async () => undefined);
+    engine.register(activity({ name: 'localOnly', execute: async () => undefined }));
 
     const response = await handleRequest(
       new Request('http://localhost/v1/registry', { method: 'GET' }),

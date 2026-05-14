@@ -78,9 +78,9 @@ const result = await handle.result();
 
 That's the core loop: activities give side effects a durable dispatch name, workflows give the engine a durable type to drive, every `yield*` is a checkpoint boundary, and `handle.result()` waits for the output. Checkpoints are written to `./weft.db`, so running workflows survive process crashes.
 
-`Engine.create()` does the boot dance for you: it constructs the engine, registers everything you passed in (activities first, then workflows), and calls `engine.recoverAll()` so any workflows still running from a previous process pick up where they left off. The next time you run this script, recovery resumes the in-flight `welcome` workflow before `engine.start()` runs — so passing a stable `options.id` is enough to make the script idempotent.
+`Engine.create()` does the registration dance for you: it constructs the engine and registers everything you passed in, activities first and then workflows. Pass `recover: true` when booting against durable storage so `engine.recoverAll()` runs after registration and any workflows still running from a previous process pick up where they left off.
 
-If you'd rather wire things up by hand — useful for tests, multi-tenant setups, or dynamic registration — `new Engine({ storage })`, `engine.register()`, `engine.registerActivity()`, and `await engine.recoverAll()` all still exist as the underlying primitives. `Engine.create()` is sugar over the same surface.
+If you'd rather wire things up by hand — useful for tests, multi-tenant setups, or dynamic registration — `new Engine({ storage })`, `engine.register()`, and `await engine.recoverAll()` are the underlying primitives. Register every activity and workflow first, then recover explicitly.
 
 > [!NOTE]
 > `MemoryStorage` (also exported from `weft`) is fine for tests and ephemeral scripts, but it lives in process memory—a crash takes the checkpoints with it. Use a persistent backend like `SQLiteStorage` whenever durability actually matters.

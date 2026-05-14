@@ -104,6 +104,10 @@ export interface EngineInternals {
   pendingScheduleCreations: Set<string>;
   workflowsNeedingTerminalCleanup: Set<string>;
   cleanupInterval: ReturnType<typeof setInterval> | null;
+  cleanupIntervalDisposalTracker: {
+    disposed: boolean;
+    cleanupInterval: ReturnType<typeof setInterval> | null;
+  } | null;
   retentionSweepInterval: ReturnType<typeof setInterval> | null;
   retentionSweepInFlight: Promise<void> | null;
   nextRetentionSweepAt: number | null;

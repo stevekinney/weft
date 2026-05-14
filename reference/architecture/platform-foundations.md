@@ -1231,14 +1231,32 @@ class CheckpointCache {
 
 #### Activity Registry
 
-Activities are registered by string name and looked up at dispatch time. The registry is a simple `Map<string, Function>` — straightforward and predictable:
+Activities are registered by definition name and looked up at dispatch time. `Engine.register(activityDefinition)` delegates to the internal `ActivityRegistry`, which keeps a name index for dispatch and WeakMap-backed metadata for function references:
 
 ```typescript
-// Actual implementation in engine.ts
-#activityRegistrations: Map<string, (...arguments_: unknown[]) => unknown>;
+class ActivityRegistry {
+  #metadata = new WeakMap<object, ActivityMetadata>();
+  #definitions = new Map<string, ActivityMetadata>();
+  #nameIndex = new Map<string, object>();
 
-registerActivity(name: string, fn: (...arguments_: unknown[]) => unknown): void {
-  this.#activityRegistrations.set(name, fn);
+  register(name: string, fn: Function, options?: ActivityRegistrationOptions): void {
+    const metadata = buildActivityMetadata(name, fn, options);
+    this.#metadata.set(fn, metadata);
+    this.#definitions.set(name, metadata);
+    this.#nameIndex.set(name, fn);
+  }
+}
+
+class Engine {
+  register(registration: WorkflowRegistration | ActivityDefinition): this {
+    if (isActivityDefinition(registration)) {
+      this.#internals.activityRegistry.register(registration.name, registration);
+      return this;
+    }
+
+    registerWorkflow(this.#internals, registration);
+    return this;
+  }
 }
 ```
 

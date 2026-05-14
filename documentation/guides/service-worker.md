@@ -73,7 +73,7 @@ const formatGreeting = activity({
 const setup = await setupServiceWorker({
   pathPrefix: '/weft/',
   async register(engine) {
-    engine.registerActivity(formatGreeting.name, formatGreeting);
+    engine.register(formatGreeting);
     engine.register('welcome', async function* (ctx, input: { name: string }) {
       const greeting = yield* ctx.run(formatGreeting, { name: input.name });
       yield* ctx.sleep('5s');
@@ -226,7 +226,7 @@ const uploadDraft = activity({
 
 // Register inside the setupServiceWorker register callback (or before
 // engine.recoverAll() in the manual-setup path).
-engine.registerActivity(uploadDraft.name, uploadDraft);
+engine.register(uploadDraft);
 ```
 
 ## Debugging
@@ -276,7 +276,7 @@ const formatGreeting = activity({
   execute: async (input: { name: string }) => `Hello, ${input.name}!`,
 });
 
-engine.registerActivity(formatGreeting.name, formatGreeting);
+engine.register(formatGreeting);
 
 engine.register('welcome', async function* (ctx, input: { name: string }) {
   const greeting = yield* ctx.run(formatGreeting, { name: input.name });

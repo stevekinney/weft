@@ -35,7 +35,7 @@ const sendConfirmation = activity({
 });
 ```
 
-Register activities with `engine.registerActivity(name, activity)` before workflows need them, then run them with `yield* ctx.run(activity, input)`. The function reference keeps local development pleasant, but remote workers receive the activity name and serialized input. If an activity throws, the engine retries it according to the retry policy. Activities are the boundary between your durable workflow logic and the messy outside world.
+Register activities with `engine.register(activity)` before workflows need them, then run them with `yield* ctx.run(activity, input)`. The function reference keeps local development pleasant, but remote workers receive the activity name and serialized input. If an activity throws, the engine retries it according to the retry policy. Activities are the boundary between your durable workflow logic and the messy outside world.
 
 ## Checkpoint
 

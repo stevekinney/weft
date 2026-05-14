@@ -1968,14 +1968,32 @@ class CheckpointCache {
 
 #### Activity Registry
 
-Activities are registered by string name and looked up at dispatch time. The registry is a simple `Map<string, Function>` — straightforward and predictable:
+Activities are registered by definition name and looked up at dispatch time. `Engine.register(activityDefinition)` delegates to the internal `ActivityRegistry`, which keeps a name index for dispatch and WeakMap-backed metadata for function references:
 
 ```typescript
-// Actual implementation in engine.ts
-#activityRegistrations: Map<string, (...arguments_: unknown[]) => unknown>;
+class ActivityRegistry {
+  #metadata = new WeakMap<object, ActivityMetadata>();
+  #definitions = new Map<string, ActivityMetadata>();
+  #nameIndex = new Map<string, object>();
 
-registerActivity(name: string, fn: (...arguments_: unknown[]) => unknown): void {
-  this.#activityRegistrations.set(name, fn);
+  register(name: string, fn: Function, options?: ActivityRegistrationOptions): void {
+    const metadata = buildActivityMetadata(name, fn, options);
+    this.#metadata.set(fn, metadata);
+    this.#definitions.set(name, metadata);
+    this.#nameIndex.set(name, fn);
+  }
+}
+
+class Engine {
+  register(registration: WorkflowRegistration | ActivityDefinition): this {
+    if (isActivityDefinition(registration)) {
+      this.#internals.activityRegistry.register(registration.name, registration);
+      return this;
+    }
+
+    registerWorkflow(this.#internals, registration);
+    return this;
+  }
 }
 ```
 
@@ -5116,7 +5134,7 @@ Three files. Webpack bundling. `proxyActivities` ceremony. Separate worker proce
 
 - [x] **Checkpoint cache uses `WeakRef`.** Cached checkpoints are GC-eligible. Cache miss triggers storage re-read.
 - [x] **`FinalizationRegistry` cleans up dead cache entries.** No periodic sweep timer needed.
-- [x] **Activity registry uses `Map<string, Function>`.** Activities are keyed by name; registered via `engine.registerActivity(name, fn)`.
+- [x] **Activity registry uses a simple name-to-callable map.** Activities are keyed by name; registered via `engine.register(activityDefinition)`.
 - [x] **Handle registry uses `WeakRef`.** Engine doesn't prevent GC of dropped handles.
 - [x] **`Transferable` used for Worker communication.** Checkpoint `ArrayBuffer` is transferred, not copied, to/from Workers.
 - [x] **Memory per idle workflow ≤ 2KB.** Verified by benchmark with 100K concurrent workflows; `src/benchmarks/memory-per-workflow.test.ts` reports a max durable footprint of ~743 bytes/workflow and a max current checkpoint size of ~132 bytes/workflow.

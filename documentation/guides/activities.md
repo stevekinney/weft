@@ -17,8 +17,8 @@ const notify = activity({
   execute: async (input: { message: string }) => `Notified: ${input.message}`,
 });
 
-engine.registerActivity(greet.name, greet);
-engine.registerActivity(notify.name, notify);
+engine.register(greet);
+engine.register(notify);
 
 engine.register('welcome', async function* (ctx, input: { name: string }) {
   const greeting = yield* ctx.run(greet, { name: input.name });
@@ -185,8 +185,8 @@ const triple = activity({
   execute: async (input: number) => input * 3,
 });
 
-engine.registerActivity(double.name, double);
-engine.registerActivity(triple.name, triple);
+engine.register(double);
+engine.register(triple);
 
 engine.register('parallel', async function* (ctx, input: number) {
   const [doubled, tripled] = yield* ctx.all([ctx.run(double, input), ctx.run(triple, input)]);

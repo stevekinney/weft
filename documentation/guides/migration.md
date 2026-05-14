@@ -17,9 +17,9 @@ The new behavior is to throw `WorkflowTypeNotRegisteredForRecoveryError` listing
 - If you're rolling deploys where old pods own workflow types the new build doesn't know about, pass `acknowledgeUnknownWorkflowTypes: true` to `recoverAll()` (or to `Engine.create()`) for the duration of the rollover. See the [Recovery and deploys guide](./recovery-and-deploys.md).
 - The HTTP `weft.recover.all` operation returns `409 Conflict` with `{ missingTypes, missingWorkflowCount, samplesTruncated }` when drift is detected. Workflow IDs are never serialized over HTTP, and the `acknowledgeUnknownWorkflowTypes` opt-out is intentionally not exposed over the public HTTP surface — operators who need the dangerous skip can call `engine.recoverAll({ acknowledgeUnknownWorkflowTypes: true })` from their boot code.
 
-## `Engine.create` Replaces the Boot Dance
+## `Engine.create` Replaces Registration Boilerplate
 
-The four-step `new Engine() → registerActivity() → register() → recoverAll()` boot sequence still works, but `Engine.create()` collapses it into a single `await`:
+The manual `new Engine() → register(activity) → register(workflow) → recoverAll()` boot sequence still works, but `Engine.create()` collapses the registration portion into a single `await`:
 
 ```typescript partial
 const engine = await Engine.create({
@@ -29,9 +29,9 @@ const engine = await Engine.create({
 });
 ```
 
-`Engine.create()` registers activities first, then workflows, then runs `recoverAll()` (unless you pass `recover: false`). Map keys must match each definition's `name` field — `Engine.create({ workflows: { greet: farewellDefinition } })` throws `EngineCreateNameMismatchError` rather than silently registering `farewell` under the wrong key.
+`Engine.create()` registers activities first, then workflows. Pass `recover: true` when this boot path should also run `recoverAll()` after registration. Map keys must match each definition's `name` field — `Engine.create({ workflows: { greet: farewellDefinition } })` throws `EngineCreateNameMismatchError` rather than silently registering `farewell` under the wrong key.
 
-The constructor and individual `register*` methods remain available for tests, multi-tenant setups, and dynamic plugin loading.
+The constructor and `register()` remain available for tests, multi-tenant setups, and dynamic plugin loading.
 
 ## AI Agent Surface Removal
 

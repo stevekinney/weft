@@ -130,11 +130,11 @@ There's no replay happening here. Weft doesn't re-execute your workflow from the
 
 `ctx.run(activity, input)` is how you run an **activity** through its durable dispatch boundary. You can pass either the activity definition (as the example does) or the activity's name string. Either way, remote workers receive an activity name plus serialized input — not your in-process closure — which is why activities have to be registered with the engine before a workflow can dispatch to them.
 
-`Engine.create()` does the registration and recovery dance for you in one call: construct the engine, register every activity in the `activities` map, register every workflow in the `workflows` map, then call `engine.recoverAll()` so any workflows still running from a previous process pick up where they left off. The map keys (`helloWorldFormatGreeting`, `helloWorldWelcome`) become the inferred type-system names — Weft validates at runtime that each key matches its definition's `name` field, so you can't accidentally register `farewell` under the key `welcome`.
+`Engine.create()` does the registration dance for you in one call: construct the engine, register every activity in the `activities` map, then register every workflow in the `workflows` map. Pass `recover: true` when booting against durable storage to call `engine.recoverAll()` after registration so any workflows still running from a previous process pick up where they left off. The map keys (`helloWorldFormatGreeting`, `helloWorldWelcome`) become the inferred type-system names — Weft validates at runtime that each key matches its definition's `name` field, so you can't accidentally register `farewell` under the key `welcome`.
 
 `engine.start()` kicks off a new execution and returns a handle. `handle.result()` waits for the workflow to finish and gives you the output. Without `options.id`, each call gets a fresh UUID; with a stable id, the second run of this script throws `WorkflowAlreadyExistsError` instead of double-starting — which is what the `try`/`catch` block handles by resuming the existing workflow.
 
-If you'd rather wire registration up yourself — useful for tests, multi-tenant setups, or dynamic plugin loading — `new Engine({ storage })`, `engine.register()`, `engine.registerActivity()`, and `await engine.recoverAll()` all still exist. `Engine.create()` is sugar over the same primitives.
+If you'd rather wire registration up yourself — useful for tests, multi-tenant setups, or dynamic plugin loading — `new Engine({ storage })`, `engine.register()`, and `await engine.recoverAll()` are the same primitives. Register every activity and workflow before recovering.
 
 ## Adding a Sleep
 
@@ -190,8 +190,8 @@ const triple = activity({
   execute: async (input: number) => input * 3,
 });
 
-engine.registerActivity(double.name, double);
-engine.registerActivity(triple.name, triple);
+engine.register(double);
+engine.register(triple);
 
 engine.register('parallel', async function* (ctx, input: number) {
   const [doubled, tripled] = yield* ctx.all([ctx.run(double, input), ctx.run(triple, input)]);
@@ -219,7 +219,7 @@ const engine = await Engine.create({
 });
 ```
 
-Now your checkpoints live in a SQLite database on disk. Crash the process, restart it, and `Engine.create` will resume any workflows that were running — `recoverAll()` runs as part of `create`, after every activity and workflow you passed in is registered. Persistent storage keeps the bytes; recovery tells the new engine process to own the work again.
+Now your checkpoints live in a SQLite database on disk. Crash the process, restart it, and `Engine.create({ recover: true })` will resume any workflows that were running — `recoverAll()` runs after every activity and workflow you passed in is registered. Persistent storage keeps the bytes; recovery tells the new engine process to own the work again.
 
 > [!IMPORTANT]
 > If your storage contains running workflows whose types aren't in the `workflows` map you passed to `Engine.create`, recovery will throw `WorkflowTypeNotRegisteredForRecoveryError` listing the unknown types. This is intentional: the alternative is silently abandoning workflows mid-flight. The [Recovery and deploys guide](../guides/recovery-and-deploys.md) covers how to handle this during rolling deploys and how to drain workflows whose types you want to retire.
@@ -231,7 +231,7 @@ import { Engine } from 'weft';
 import { resolveDefaultStorage } from 'weft/storage/auto';
 
 await using storage = await resolveDefaultStorage();
-await using engine = await Engine.create({ storage });
+await using engine = await Engine.create({ storage, recover: true });
 ```
 
 ## Next Steps

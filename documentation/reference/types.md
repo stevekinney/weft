@@ -446,7 +446,7 @@ Returned activity metadata is name-based. Aliases are reported separately even w
 
 ### `ActivityRegistrationOptions`
 
-Explicit metadata overrides for `engine.registerActivity()` and `ActivityRegistry.register()`.
+Explicit metadata carried by activity definitions passed to `engine.register()` and by lower-level `ActivityRegistry.register()` calls.
 
 ```ts partial
 interface ActivityRegistrationOptions {

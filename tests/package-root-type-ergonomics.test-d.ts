@@ -2,6 +2,7 @@ import {
   BulkDeleteRequiresTerminalWorkflowsError,
   BulkOperationConfirmationError,
   Engine,
+  activity,
   signal,
   type BulkOperationDryRunResult,
   type BulkSignalResult,
@@ -37,13 +38,20 @@ declare module 'weft' {
 const engine = new Engine();
 const packageRootApprovalSignal = signal<{ approved: boolean }>('packageRootApproval');
 
-engine.registerActivity(
-  'packageRootFormatGreeting',
-  async (input: PackageRootFormatGreetingInput) => `Hello, ${input.name}`,
+engine.register(
+  activity({
+    name: 'packageRootFormatGreeting',
+    execute: async (input: PackageRootFormatGreetingInput) => `Hello, ${input.name}`,
+  }),
 );
 
-// @ts-expect-error registered activities must match the public package-root augmentation.
-engine.registerActivity('packageRootFormatGreeting', async (input: { id: string }) => input.id);
+engine.register(
+  // @ts-expect-error registered activities must match the public package-root augmentation.
+  activity({
+    name: 'packageRootFormatGreeting',
+    execute: async (input: { id: string }) => input.id,
+  }),
+);
 
 engine.register(
   'packageRootWelcome',

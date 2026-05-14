@@ -1,5 +1,5 @@
 import { Engine } from '../core/engine.ts';
-import type { WorkflowContext } from '../core/types.ts';
+import { activity, type WorkflowContext } from '../core/types.ts';
 import { BunSQLiteStorage } from '../storage/bun-sql.ts';
 
 export type ActivityCompletionMeasurement = {
@@ -12,6 +12,8 @@ function echo(value: unknown): unknown {
   return value;
 }
 
+const echoActivity = activity({ name: 'echo', execute: echo });
+
 async function measureActivityCompletionRound(
   totalWorkflows: number,
   activitiesPerWorkflow: number,
@@ -21,7 +23,7 @@ async function measureActivityCompletionRound(
   const engine = new Engine({ storage });
 
   try {
-    engine.registerActivity('echo', echo);
+    engine.register(echoActivity);
 
     engine.register('with-activity', async function* (ctx: WorkflowContext) {
       let result: unknown = 0;
