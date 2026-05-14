@@ -113,20 +113,6 @@ naming the alternative that was rejected.
 - **Symbol**: `(whole file)`
 - **Reason**: Bulk operations and terminal purge share the same workflow-state scan, confirmation, audit, and cleanup helpers. Splitting the file while this surface is still being actively expanded would make the destructive-action review path harder to audit; revisit when retry and recover bulk actions are added.
 
-## `core-engine-apply-schedule-occurrence-complexity`
-
-- **File**: `src/core/engine/schedules.ts`
-- **Rule**: `complexity`
-- **Symbol**: `applyScheduleOccurrence`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-bootstrap-workflow-result-resolver-complexity`
-
-- **File**: `src/core/engine/handle-result.ts`
-- **Rule**: `complexity`
-- **Symbol**: `bootstrapWorkflowResultResolver`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `core-engine-cleanup-waiters-complexity`
 
 - **File**: `src/core/engine/index.ts`
@@ -169,25 +155,11 @@ naming the alternative that was rejected.
 - **Symbol**: `(whole file)`
 - **Reason**: Engine class is the public coordinator: ~170 lines of imports from 30+ sibling modules + the Engine class with public-method shims that delegate via getInternals(this) and callback bundles. Splitting the Engine class itself would fragment the public API entrypoint. The file is structurally minimal already — every method body is a one- or two-line shim.
 
-## `core-engine-evaluate-constraints-complexity`
-
-- **File**: `src/core/engine/constraints.ts`
-- **Rule**: `complexity`
-- **Symbol**: `evaluateConstraints`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `core-engine-execute-child-complexity`
 
 - **File**: `src/core/engine/index.ts`
 - **Rule**: `complexity`
 - **Symbol**: `executeChild`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-execute-sub-operation-complexity`
-
-- **File**: `src/core/engine/sub-operation.ts`
-- **Rule**: `complexity`
-- **Symbol**: `executeSubOperation`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
 ## `core-engine-lifecycle-file-length`
@@ -225,32 +197,11 @@ naming the alternative that was rejected.
 - **Symbol**: `getTimelineOperationLabel`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `core-engine-handle-schedule-timer-complexity`
-
-- **File**: `src/core/engine/schedules.ts`
-- **Rule**: `complexity`
-- **Symbol**: `handleScheduleTimer`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-handle-timer-fired-complexity`
-
-- **File**: `src/core/engine/operations-time.ts`
-- **Rule**: `complexity`
-- **Symbol**: `handleTimerFired`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `core-engine-is-workflow-timeline-entry-complexity`
 
 - **File**: `src/core/engine/index.ts`
 - **Rule**: `complexity`
 - **Symbol**: `isWorkflowTimelineEntry`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-line-3045-complexity`
-
-- **File**: `src/core/engine/listing.ts`
-- **Rule**: `complexity`
-- **Symbol**: `line-3045`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
 ## `core-engine-line-5082-complexity`
@@ -302,53 +253,11 @@ naming the alternative that was rejected.
 - **Symbol**: `matchesScheduleFilter`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `core-engine-mutate-workflow-tags-complexity`
-
-- **File**: `src/core/engine/attributes-tags.ts`
-- **Rule**: `complexity`
-- **Symbol**: `mutateWorkflowTags`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `core-engine-normalize-schedule-filter-complexity`
 
 - **File**: `src/core/engine/index.ts`
 - **Rule**: `complexity`
 - **Symbol**: `normalizeScheduleFilter`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-persist-checkpoint-complexity`
-
-- **File**: `src/core/engine/checkpoint-io.ts`
-- **Rule**: `complexity`
-- **Symbol**: `persistCheckpoint`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-process-operation-complexity`
-
-- **File**: `src/core/engine/operations-router.ts`
-- **Rule**: `complexity`
-- **Symbol**: `processOperation`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-process-review-operation-complexity`
-
-- **File**: `src/core/engine/reviews.ts`
-- **Rule**: `complexity`
-- **Symbol**: `processReviewOperation`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-purge-workflow-complexity`
-
-- **File**: `src/core/engine/bulk-operations.ts`
-- **Rule**: `complexity`
-- **Symbol**: `purgeWorkflow`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-query-attribute-index-complexity`
-
-- **File**: `src/core/engine/attributes-tags.ts`
-- **Rule**: `complexity`
-- **Symbol**: `queryAttributeIndex`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
 ## `core-engine-register-complexity`
@@ -358,20 +267,6 @@ naming the alternative that was rejected.
 - **Symbol**: `register`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `core-engine-remove-tags-complexity`
-
-- **File**: `src/core/engine/handles.ts`
-- **Rule**: `complexity`
-- **Symbol**: `removeTags`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-resolve-constrained-ids-complexity`
-
-- **File**: `src/core/engine/attributes-tags.ts`
-- **Rule**: `complexity`
-- **Symbol**: `resolveConstrainedIds`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `core-engine-resolve-engine-options-complexity`
 
 - **File**: `src/core/engine/index.ts`
@@ -379,46 +274,11 @@ naming the alternative that was rejected.
 - **Symbol**: `resolveEngineOptions`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `core-engine-resolve-purge-window-complexity`
-
-- **File**: `src/core/engine/bulk-operations.ts`
-- **Rule**: `complexity`
-- **Symbol**: `resolvePurgeWindow`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-schedule-complexity`
-
-- **File**: `src/core/engine/schedules.ts`
-- **Rule**: `complexity`
-- **Symbol**: `schedule`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-start-delayed-workflow-complexity`
-
-- **File**: `src/core/engine/operations-time.ts`
-- **Rule**: `complexity`
-- **Symbol**: `startDelayedWorkflow`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `core-engine-start-workflow-complexity`
 
 - **File**: `src/core/engine/index.ts`
 - **Rule**: `complexity`
 - **Symbol**: `startWorkflow`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-submit-review-complexity`
-
-- **File**: `src/core/engine/reviews.ts`
-- **Rule**: `complexity`
-- **Symbol**: `submitReview`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-update-complexity`
-
-- **File**: `src/core/engine/updates.ts`
-- **Rule**: `complexity`
-- **Symbol**: `update`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
 - **File**: `src/core/events.ts`

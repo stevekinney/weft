@@ -177,7 +177,6 @@ export async function mutateWorkflowTags(
   tags: string[],
   mode: 'add' | 'remove',
 ): Promise<boolean> {
-  // oxlint-disable-next-line complexity -- ID:core-engine-mutate-workflow-tags-complexity
   return await runSerializedWorkflowStateWrite(internals, workflowId, async () => {
     const bytes = await internals.storage.get(KEYS.workflow(workflowId));
     if (!bytes) {
@@ -187,27 +186,8 @@ export async function mutateWorkflowTags(
     const state = decodeWorkflowState(bytes);
     const currentTags = normalizeWorkflowTags(state.tags) ?? [];
     const requestedTags = normalizeStartWorkflowTags(tags, 'Workflow tags') ?? [];
-    if (requestedTags.length === 0) {
-      return false;
-    }
-
-    const nextTagSet = new Set(currentTags);
-    for (const tag of requestedTags) {
-      if (mode === 'add') {
-        nextTagSet.add(tag);
-      } else {
-        nextTagSet.delete(tag);
-      }
-    }
-
-    const nextTags = normalizeWorkflowTags([...nextTagSet]);
-    if (mode === 'add' && nextTags !== undefined) {
-      assertWorkflowTagCount(nextTags, 'Workflow tags');
-    }
-    const unchanged =
-      currentTags.length === (nextTags?.length ?? 0) &&
-      currentTags.every((tag, index) => tag === nextTags?.[index]);
-    if (unchanged) {
+    const nextTags = resolveMutatedWorkflowTags(currentTags, requestedTags, mode);
+    if (requestedTags.length === 0 || workflowTagsAreUnchanged(currentTags, nextTags)) {
       return false;
     }
 
@@ -230,6 +210,37 @@ export async function mutateWorkflowTags(
 
     return true;
   });
+}
+
+function resolveMutatedWorkflowTags(
+  currentTags: readonly string[],
+  requestedTags: readonly string[],
+  mode: 'add' | 'remove',
+): string[] | undefined {
+  const nextTagSet = new Set(currentTags);
+  for (const tag of requestedTags) {
+    if (mode === 'add') {
+      nextTagSet.add(tag);
+    } else {
+      nextTagSet.delete(tag);
+    }
+  }
+
+  const nextTags = normalizeWorkflowTags([...nextTagSet]);
+  if (mode === 'add' && nextTags !== undefined) {
+    assertWorkflowTagCount(nextTags, 'Workflow tags');
+  }
+  return nextTags;
+}
+
+function workflowTagsAreUnchanged(
+  currentTags: readonly string[],
+  nextTags: readonly string[] | undefined,
+): boolean {
+  return (
+    currentTags.length === (nextTags?.length ?? 0) &&
+    currentTags.every((tag, index) => tag === nextTags?.[index])
+  );
 }
 
 /** Add or remove tags for every workflow selected by a scoped bulk filter. */

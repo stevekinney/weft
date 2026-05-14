@@ -234,8 +234,17 @@ export async function replayTo(
   };
 }
 
+type CheckpointCommit = {
+  checkpoint: CheckpointStateForCommit;
+  serialized: Uint8Array;
+  step: number;
+  timestamp: number;
+  operations: BatchOperation[];
+};
+
+type CheckpointStateForCommit = ReturnType<typeof deserializeCheckpoint>;
+
 /** Persist a workflow checkpoint, history entry, timeline record, and event log record. */
-// oxlint-disable-next-line complexity -- ID:core-engine-persist-checkpoint-complexity
 export async function persistCheckpoint(
   internals: EngineInternals,
   workflowId: string,
@@ -246,150 +255,176 @@ export async function persistCheckpoint(
   const context = internals.inlineStrategy?.getContext(workflowId);
 
   if (context) {
-    // Inline strategy: advance checkpoint from context state
-    const current = internals.checkpoints.get(workflowId);
-    if (!current) return;
-
-    const previousAttributes = { ...current.searchAttributes };
-    const hasPendingAttributeChanges = context.hasPendingAttributeChanges;
-    const checkpointLocals = context.checkpointLocals;
-    const pendingAttributeChanges = context.checkpointPendingAttributeChanges;
-    const accumulatedResults = context.checkpointAccumulatedResults;
-    const advanced = advanceCheckpoint(current, checkpointLocals, {
-      accumulatedResults,
-      now: internals.options.getNow(),
-      ...(pendingAttributeChanges !== undefined
-        ? { searchAttributes: pendingAttributeChanges }
-        : {}),
-    });
-
-    const serialized = serializeCheckpoint(advanced);
-
-    if (serialized.byteLength >= internals.options.checkpointSizeWarningThreshold) {
-      callbacks.dispatchEvent(
-        new CheckpointSizeWarningEvent(workflowId, serialized.byteLength, advanced.step),
-      );
-    }
-
-    const operations: BatchOperation[] = [
-      { type: 'put', key: KEYS.checkpoint(workflowId), value: serialized },
-    ];
-
-    if (internals.options.checkpointHistory > 0) {
-      operations.push({
-        type: 'put',
-        key: KEYS.checkpointHistory(workflowId, advanced.step),
-        value: serialized,
-      });
-    }
-
-    if (hasPendingAttributeChanges) {
-      callbacks.validateAttributeValueSizes(pendingAttributeChanges ?? {});
-      operations.push({
-        type: 'put',
-        key: KEYS.attribute(workflowId),
-        value: encode(advanced.searchAttributes),
-      });
-      operations.push(
-        ...buildIndexOperations(workflowId, previousAttributes, advanced.searchAttributes),
-      );
-    }
-
-    const nextPendingTimelineEntry = callbacks.appendTimelineBatchOperations(
-      workflowId,
-      operation,
-      advanced.step,
-      advanced.createdAt,
-      operations,
-    );
-
-    // Co-write event log entry in the same batch so checkpoint and log never diverge.
-    // appendToBatch() is synchronous — no storage reads, no extra await.
-    const eventLog = new EventLog(internals.storage, workflowId);
-    const { newHead, timestamp } = eventLog.appendToBatch(
-      { type: 'workflow:checkpoint', payload: { step: advanced.step } },
-      operations,
-      internals.eventLogHeads.get(workflowId) ?? EMPTY_EVENT_HEAD,
-      internals.workflowVersionTuples.get(workflowId),
-    );
-
-    await internals.storage.batch(operations);
-    internals.pendingTimelineEntries.set(workflowId, nextPendingTimelineEntry);
-    internals.checkpoints.set(workflowId, advanced);
-    internals.eventLogHeads.set(workflowId, newHead);
-    notifyWorkflowFeedCommit(internals, workflowId, 'events', {
-      workflowId,
-      selector: 'events',
-      kind: 'workflow:checkpoint',
-      sequence: newHead.sequence,
-      timestamp,
-      payload: { step: advanced.step },
-    });
-    // Fire-and-forget: pruning is idempotent and non-critical, so deferring
-    // it avoids blocking the checkpoint persist path.
-    callbacks.swallowPromiseRejection(callbacks.pruneCheckpointHistory(workflowId, advanced.step));
-
-    if (hasPendingAttributeChanges) {
-      const changedAttributes = pendingAttributeChanges ?? {};
-      callbacks.dispatchEvent(new AttributesChangedEvent(workflowId, { ...changedAttributes }));
-    }
+    await persistInlineCheckpoint(internals, workflowId, operation, callbacks);
   } else if (workerCheckpointBytes && workerCheckpointBytes.byteLength > 0) {
-    // Worker strategy: persist the checkpoint bytes sent from the worker
-    const serialized = new Uint8Array(workerCheckpointBytes);
-    const checkpoint = deserializeCheckpoint(serialized);
-
-    if (serialized.byteLength >= internals.options.checkpointSizeWarningThreshold) {
-      callbacks.dispatchEvent(
-        new CheckpointSizeWarningEvent(workflowId, serialized.byteLength, checkpoint.step),
-      );
-    }
-
-    const operations: BatchOperation[] = [
-      { type: 'put', key: KEYS.checkpoint(workflowId), value: serialized },
-    ];
-
-    if (internals.options.checkpointHistory > 0) {
-      operations.push({
-        type: 'put',
-        key: KEYS.checkpointHistory(workflowId, checkpoint.step),
-        value: serialized,
-      });
-    }
-
-    const nextPendingTimelineEntry = callbacks.appendTimelineBatchOperations(
+    await persistWorkerCheckpoint(
+      internals,
       workflowId,
       operation,
-      checkpoint.step,
-      checkpoint.createdAt,
-      operations,
-    );
-
-    // Co-write event log entry in the same batch so checkpoint and log never diverge.
-    // appendToBatch() is synchronous — no storage reads, no extra await.
-    const eventLog = new EventLog(internals.storage, workflowId);
-    const { newHead, timestamp } = eventLog.appendToBatch(
-      { type: 'workflow:checkpoint', payload: { step: checkpoint.step } },
-      operations,
-      internals.eventLogHeads.get(workflowId) ?? EMPTY_EVENT_HEAD,
-      internals.workflowVersionTuples.get(workflowId),
-    );
-
-    await internals.storage.batch(operations);
-    internals.pendingTimelineEntries.set(workflowId, nextPendingTimelineEntry);
-    internals.checkpoints.set(workflowId, checkpoint);
-    internals.eventLogHeads.set(workflowId, newHead);
-    notifyWorkflowFeedCommit(internals, workflowId, 'events', {
-      workflowId,
-      selector: 'events',
-      kind: 'workflow:checkpoint',
-      sequence: newHead.sequence,
-      timestamp,
-      payload: { step: checkpoint.step },
-    });
-    callbacks.swallowPromiseRejection(
-      callbacks.pruneCheckpointHistory(workflowId, checkpoint.step),
+      workerCheckpointBytes,
+      callbacks,
     );
   }
+}
+
+async function persistInlineCheckpoint(
+  internals: EngineInternals,
+  workflowId: string,
+  operation: ContextOperationRequest,
+  callbacks: PersistCheckpointCallbacks,
+): Promise<void> {
+  const current = internals.checkpoints.get(workflowId);
+  const context = internals.inlineStrategy?.getContext(workflowId);
+  if (!current || !context) return;
+
+  const previousAttributes = { ...current.searchAttributes };
+  const pendingAttributeChanges = context.checkpointPendingAttributeChanges;
+  const advanced = advanceCheckpoint(current, context.checkpointLocals, {
+    accumulatedResults: context.checkpointAccumulatedResults,
+    now: internals.options.getNow(),
+    ...(pendingAttributeChanges !== undefined ? { searchAttributes: pendingAttributeChanges } : {}),
+  });
+  const commit = createCheckpointCommit(
+    internals,
+    workflowId,
+    advanced,
+    serializeCheckpoint(advanced),
+  );
+  appendAttributeOperations(
+    workflowId,
+    commit,
+    previousAttributes,
+    pendingAttributeChanges,
+    context.hasPendingAttributeChanges,
+    callbacks,
+  );
+  await commitCheckpoint(internals, workflowId, operation, commit, callbacks);
+  if (context.hasPendingAttributeChanges) {
+    callbacks.dispatchEvent(new AttributesChangedEvent(workflowId, pendingAttributeChanges ?? {}));
+  }
+}
+
+async function persistWorkerCheckpoint(
+  internals: EngineInternals,
+  workflowId: string,
+  operation: ContextOperationRequest,
+  workerCheckpointBytes: ArrayBuffer,
+  callbacks: PersistCheckpointCallbacks,
+): Promise<void> {
+  const serialized = new Uint8Array(workerCheckpointBytes);
+  const checkpoint = deserializeCheckpoint(serialized);
+  await commitCheckpoint(
+    internals,
+    workflowId,
+    operation,
+    createCheckpointCommit(internals, workflowId, checkpoint, serialized),
+    callbacks,
+  );
+}
+
+function createCheckpointCommit(
+  internals: EngineInternals,
+  workflowId: string,
+  checkpoint: CheckpointStateForCommit,
+  serialized: Uint8Array,
+): CheckpointCommit {
+  const operations: BatchOperation[] = [
+    { type: 'put', key: KEYS.checkpoint(workflowId), value: serialized },
+  ];
+  if (internals.options.checkpointHistory > 0) {
+    operations.push({
+      type: 'put',
+      key: KEYS.checkpointHistory(workflowId, checkpoint.step),
+      value: serialized,
+    });
+  }
+  return {
+    checkpoint,
+    serialized,
+    step: checkpoint.step,
+    timestamp: checkpoint.createdAt,
+    operations,
+  };
+}
+
+function appendAttributeOperations(
+  workflowId: string,
+  commit: CheckpointCommit,
+  previousAttributes: Record<string, SearchAttributeValue>,
+  pendingAttributeChanges: Record<string, SearchAttributeValue> | undefined,
+  hasPendingAttributeChanges: boolean,
+  callbacks: PersistCheckpointCallbacks,
+): void {
+  if (!hasPendingAttributeChanges) return;
+
+  callbacks.validateAttributeValueSizes(pendingAttributeChanges ?? {});
+  commit.operations.push({
+    type: 'put',
+    key: KEYS.attribute(workflowId),
+    value: encode(commit.checkpoint.searchAttributes),
+  });
+  commit.operations.push(
+    ...buildIndexOperations(workflowId, previousAttributes, commit.checkpoint.searchAttributes),
+  );
+}
+
+async function commitCheckpoint(
+  internals: EngineInternals,
+  workflowId: string,
+  operation: ContextOperationRequest,
+  commit: CheckpointCommit,
+  callbacks: PersistCheckpointCallbacks,
+): Promise<void> {
+  dispatchCheckpointSizeWarning(internals, workflowId, commit, callbacks);
+  const nextPendingTimelineEntry = callbacks.appendTimelineBatchOperations(
+    workflowId,
+    operation,
+    commit.step,
+    commit.timestamp,
+    commit.operations,
+  );
+  const { newHead, timestamp } = appendCheckpointEventLog(internals, workflowId, commit);
+
+  await internals.storage.batch(commit.operations);
+  internals.pendingTimelineEntries.set(workflowId, nextPendingTimelineEntry);
+  internals.checkpoints.set(workflowId, commit.checkpoint);
+  internals.eventLogHeads.set(workflowId, newHead);
+  notifyWorkflowFeedCommit(internals, workflowId, 'events', {
+    workflowId,
+    selector: 'events',
+    kind: 'workflow:checkpoint',
+    sequence: newHead.sequence,
+    timestamp,
+    payload: { step: commit.step },
+  });
+  callbacks.swallowPromiseRejection(callbacks.pruneCheckpointHistory(workflowId, commit.step));
+}
+
+function dispatchCheckpointSizeWarning(
+  internals: EngineInternals,
+  workflowId: string,
+  commit: CheckpointCommit,
+  callbacks: PersistCheckpointCallbacks,
+): void {
+  if (commit.serialized.byteLength >= internals.options.checkpointSizeWarningThreshold) {
+    callbacks.dispatchEvent(
+      new CheckpointSizeWarningEvent(workflowId, commit.serialized.byteLength, commit.step),
+    );
+  }
+}
+
+function appendCheckpointEventLog(
+  internals: EngineInternals,
+  workflowId: string,
+  commit: CheckpointCommit,
+): ReturnType<EventLog['appendToBatch']> {
+  const eventLog = new EventLog(internals.storage, workflowId);
+  return eventLog.appendToBatch(
+    { type: 'workflow:checkpoint', payload: { step: commit.step } },
+    commit.operations,
+    internals.eventLogHeads.get(workflowId) ?? EMPTY_EVENT_HEAD,
+    internals.workflowVersionTuples.get(workflowId),
+  );
 }
 
 /** Delete the single checkpoint history entry that overflows the retention limit. */

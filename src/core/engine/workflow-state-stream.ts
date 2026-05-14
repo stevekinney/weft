@@ -63,7 +63,6 @@ async function loadMatchingWorkflowState(
 }
 
 /** Resolve the indexed workflow IDs implied by tag and search-attribute filters. */
-// oxlint-disable-next-line complexity -- ID:core-engine-resolve-constrained-ids-complexity
 export async function resolveConstrainedIds(
   internals: EngineInternals,
   filter: ListFilter | undefined,
@@ -77,50 +76,11 @@ export async function resolveConstrainedIds(
     return null;
   }
 
-  // Bound concurrency so a request with many attribute filters can't
-  // saturate a connection-limited storage backend with N parallel scans.
-  const queries: Array<() => Promise<Set<string>>> = [];
-  if (normalizedTagFilters) {
-    for (const tag of normalizedTagFilters) {
-      queries.push(() => queryTagIndex(internals, tag));
-    }
-  }
-  if (attributeFilters) {
-    for (const attributeFilter of attributeFilters) {
-      queries.push(() => queryAttributeIndex(internals, attributeFilter));
-    }
-  }
-
-  const idSets: Array<Set<string> | undefined> = Array.from({ length: queries.length });
-  const workerLimit = Math.max(1, Math.min(ATTRIBUTE_SCAN_CONCURRENCY, queries.length));
-  let nextIndex = 0;
-  const runWorker = async (): Promise<void> => {
-    while (true) {
-      const currentIndex = nextIndex;
-      nextIndex += 1;
-      if (currentIndex >= queries.length) return;
-      idSets[currentIndex] = await queries[currentIndex]!();
-    }
-  };
-  const workers: Promise<void>[] = [];
-  for (let workerIndex = 0; workerIndex < workerLimit; workerIndex += 1) {
-    workers.push(runWorker());
-  }
-  await Promise.all(workers);
-
-  const completedIdSets: Set<string>[] = [];
-  for (const idSet of idSets) {
-    if (idSet === undefined) {
-      throw new Error('Attribute index query did not produce a workflow ID set.');
-    }
-    completedIdSets.push(idSet);
-  }
-
-  return intersectIdentifierSets(completedIdSets);
+  const queries = buildConstrainedIdQueries(internals, normalizedTagFilters, attributeFilters);
+  return intersectIdentifierSets(await runConstrainedIdQueries(queries));
 }
 
 /** Query a single search-attribute index filter and return matching workflow IDs. */
-// oxlint-disable-next-line complexity -- ID:core-engine-query-attribute-index-complexity
 export async function queryAttributeIndex(
   internals: EngineInternals,
   filter: AttributeFilter,
@@ -130,49 +90,112 @@ export async function queryAttributeIndex(
   const prefix = `idx:${attributeName}:`;
 
   if (filter.value !== undefined) {
-    const values =
-      filter.key === 'failureCategory' && isFailureCategory(filter.value)
-        ? failureCategorySearchValues(filter.value)
-        : [filter.value];
-    for (const value of values) {
-      const encodedValue = encodeAttributeValue(value);
-      const exactPrefix = `idx:${attributeName}:${encodedValue}:`;
-      for await (const [key] of internals.storage.scan(exactPrefix)) {
-        const workflowId = tryDecodeStorageKeyComponent(key.slice(exactPrefix.length));
-        if (workflowId !== null) {
-          ids.add(workflowId);
-        }
-      }
-    }
+    await collectExactAttributeMatches(internals, filter, attributeName, ids);
   } else {
-    const scanOptions: ScanOptions = {};
-    if (filter.gte !== undefined) {
-      scanOptions.gte = `idx:${attributeName}:${encodeAttributeValue(filter.gte)}:`;
-    }
-    if (filter.gt !== undefined) {
-      scanOptions.gt = `idx:${attributeName}:${encodeAttributeValue(filter.gt)}:\xff`;
-    }
-    if (filter.lte !== undefined) {
-      const encodedLte = encodeAttributeValue(filter.lte);
-      scanOptions.lte = `idx:${attributeName}:${encodedLte}:\xff`;
-    }
-    if (filter.lt !== undefined) {
-      scanOptions.lt = `idx:${attributeName}:${encodeAttributeValue(filter.lt)}:`;
-    }
-
-    for await (const [key] of internals.storage.scan(prefix, scanOptions)) {
-      const afterPrefix = key.slice(prefix.length);
-      const lastColon = afterPrefix.lastIndexOf(':');
-      if (lastColon >= 0) {
-        const workflowId = tryDecodeStorageKeyComponent(afterPrefix.slice(lastColon + 1));
-        if (workflowId !== null) {
-          ids.add(workflowId);
-        }
-      }
-    }
+    await collectRangeAttributeMatches(internals, filter, prefix, ids);
   }
 
   return ids;
+}
+
+function buildConstrainedIdQueries(
+  internals: EngineInternals,
+  normalizedTagFilters: readonly string[] | undefined,
+  attributeFilters: readonly AttributeFilter[] | undefined,
+): Array<() => Promise<Set<string>>> {
+  return [
+    ...(normalizedTagFilters?.map((tag) => () => queryTagIndex(internals, tag)) ?? []),
+    ...(attributeFilters?.map(
+      (attributeFilter) => () => queryAttributeIndex(internals, attributeFilter),
+    ) ?? []),
+  ];
+}
+
+async function runConstrainedIdQueries(
+  queries: Array<() => Promise<Set<string>>>,
+): Promise<Set<string>[]> {
+  const idSets: Array<Set<string> | undefined> = Array.from({ length: queries.length });
+  let nextIndex = 0;
+  const runWorker = async (): Promise<void> => {
+    while (nextIndex < queries.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      idSets[currentIndex] = await queries[currentIndex]!();
+    }
+  };
+
+  const workerLimit = Math.max(1, Math.min(ATTRIBUTE_SCAN_CONCURRENCY, queries.length));
+  await Promise.all(Array.from({ length: workerLimit }, () => runWorker()));
+  return idSets.map(requireConstrainedIdSet);
+}
+
+function requireConstrainedIdSet(idSet: Set<string> | undefined): Set<string> {
+  if (idSet === undefined) {
+    throw new Error('Attribute index query did not produce a workflow ID set.');
+  }
+
+  return idSet;
+}
+
+async function collectExactAttributeMatches(
+  internals: EngineInternals,
+  filter: AttributeFilter,
+  attributeName: string,
+  ids: Set<string>,
+): Promise<void> {
+  const exactValue = filter.value;
+  if (exactValue === undefined) return;
+
+  const values =
+    filter.key === 'failureCategory' && isFailureCategory(exactValue)
+      ? failureCategorySearchValues(exactValue)
+      : [exactValue];
+
+  for (const value of values) {
+    const exactPrefix = `idx:${attributeName}:${encodeAttributeValue(value)}:`;
+    for await (const [key] of internals.storage.scan(exactPrefix)) {
+      addWorkflowIdFromIndexKey(ids, key.slice(exactPrefix.length));
+    }
+  }
+}
+
+async function collectRangeAttributeMatches(
+  internals: EngineInternals,
+  filter: AttributeFilter,
+  prefix: string,
+  ids: Set<string>,
+): Promise<void> {
+  for await (const [key] of internals.storage.scan(prefix, attributeRangeScanOptions(filter))) {
+    const afterPrefix = key.slice(prefix.length);
+    const lastColon = afterPrefix.lastIndexOf(':');
+    if (lastColon >= 0) {
+      addWorkflowIdFromIndexKey(ids, afterPrefix.slice(lastColon + 1));
+    }
+  }
+}
+
+function attributeRangeScanOptions(filter: AttributeFilter): ScanOptions {
+  const scanOptions: ScanOptions = {};
+  if (filter.gte !== undefined) {
+    scanOptions.gte = `idx:${searchAttributeName(filter.key)}:${encodeAttributeValue(filter.gte)}:`;
+  }
+  if (filter.gt !== undefined) {
+    scanOptions.gt = `idx:${searchAttributeName(filter.key)}:${encodeAttributeValue(filter.gt)}:\xff`;
+  }
+  if (filter.lte !== undefined) {
+    scanOptions.lte = `idx:${searchAttributeName(filter.key)}:${encodeAttributeValue(filter.lte)}:\xff`;
+  }
+  if (filter.lt !== undefined) {
+    scanOptions.lt = `idx:${searchAttributeName(filter.key)}:${encodeAttributeValue(filter.lt)}:`;
+  }
+  return scanOptions;
+}
+
+function addWorkflowIdFromIndexKey(ids: Set<string>, encodedWorkflowId: string): void {
+  const workflowId = tryDecodeStorageKeyComponent(encodedWorkflowId);
+  if (workflowId !== null) {
+    ids.add(workflowId);
+  }
 }
 
 /** Query the workflow tag index and return matching workflow IDs. */

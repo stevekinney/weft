@@ -139,59 +139,61 @@ export function translateOperationRequest(
   throw new Error('Unsupported operation request shape received from execution strategy');
 }
 
-// oxlint-disable-next-line complexity -- ID:core-engine-process-operation-complexity
 export async function processOperation(
   internals: EngineInternals,
   workflowId: string,
   operation: ContextOperationRequest,
   callbacks: OperationRouterCallbacks,
 ): Promise<void> {
-  switch (operation.type) {
-    case 'activity':
-      return callbacks.processActivityOperation(workflowId, operation);
-    case 'sleep':
-      return callbacks.processSleepOperation(workflowId, operation);
-    case 'wait-signal':
-      return callbacks.processWaitSignalOperation(workflowId, operation);
-    case 'wait-update':
-      return callbacks.processWaitUpdateOperation(workflowId, operation);
-    case 'parallel':
-      return callbacks.processParallelOperation(workflowId, operation);
-    case 'race':
-      return callbacks.processRaceOperation(workflowId, operation);
-    case 'memo':
-      return callbacks.processMemoOperation(workflowId, operation);
-    case 'child-workflow':
-      return callbacks.processChildWorkflowOperation(workflowId, operation);
-    case 'offload':
-      return callbacks.processOffloadOperation(workflowId, operation);
-    case 'load':
-      return callbacks.processLoadOperation(workflowId, operation);
-    case 'archive':
-      return callbacks.processArchiveOperation(workflowId, operation);
-    case 'state-read':
-      return callbacks.processStateReadOperation(workflowId, operation);
-    case 'state-commit':
-      return callbacks.processStateCommitOperation(workflowId, operation);
-    case 'run-all':
-      return callbacks.processRunAllOperation(workflowId, operation);
-    case 'speculate':
-      return callbacks.processSpeculateOperation(workflowId, operation);
-    case 'stream':
-      return callbacks.processStreamOperation(workflowId, operation);
-    case 'wait-review':
-      return callbacks.processWaitReviewOperation(workflowId, operation);
-    default:
-      const unsupportedType = String((operation as Record<string, unknown>)['type']);
-      failOperation(
-        internals,
-        workflowId,
-        operation,
-        new Error(`Unsupported operation type: ${unsupportedType}`),
-        callbacks,
-      );
-      return;
+  const operationProcessor = resolveOperationProcessor(operation, callbacks);
+  if (operationProcessor) {
+    return operationProcessor(workflowId, operation as never);
   }
+
+  const unsupportedType = String((operation as Record<string, unknown>)['type']);
+  failOperation(
+    internals,
+    workflowId,
+    operation,
+    new Error(`Unsupported operation type: ${unsupportedType}`),
+    callbacks,
+  );
+}
+
+type OperationProcessorMap = {
+  [Type in ContextOperationRequest['type']]: (
+    workflowId: string,
+    operation: Extract<ContextOperationRequest, { type: Type }>,
+  ) => Promise<void>;
+};
+
+function operationProcessors(callbacks: OperationRouterCallbacks): OperationProcessorMap {
+  return {
+    activity: callbacks.processActivityOperation,
+    sleep: callbacks.processSleepOperation,
+    'wait-signal': callbacks.processWaitSignalOperation,
+    'wait-update': callbacks.processWaitUpdateOperation,
+    parallel: callbacks.processParallelOperation,
+    race: callbacks.processRaceOperation,
+    memo: callbacks.processMemoOperation,
+    'child-workflow': callbacks.processChildWorkflowOperation,
+    offload: callbacks.processOffloadOperation,
+    load: callbacks.processLoadOperation,
+    archive: callbacks.processArchiveOperation,
+    'state-read': callbacks.processStateReadOperation,
+    'state-commit': callbacks.processStateCommitOperation,
+    'run-all': callbacks.processRunAllOperation,
+    speculate: callbacks.processSpeculateOperation,
+    stream: callbacks.processStreamOperation,
+    'wait-review': callbacks.processWaitReviewOperation,
+  };
+}
+
+function resolveOperationProcessor(
+  operation: ContextOperationRequest,
+  callbacks: OperationRouterCallbacks,
+): OperationProcessorMap[ContextOperationRequest['type']] | undefined {
+  return operationProcessors(callbacks)[operation.type];
 }
 
 export function completeOperation(

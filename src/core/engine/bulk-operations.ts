@@ -883,28 +883,38 @@ async function loadTerminalWorkflowStatesForBatch(
   return workflowStates;
 }
 
-// oxlint-disable-next-line complexity -- ID:core-engine-resolve-purge-window-complexity
 function resolvePurgeWindow(
   _internals: EngineInternals,
   filter: ListFilter | undefined,
   fallbackLimit: number | undefined,
 ): { effectiveLimit: number | undefined; manualOffset: number } {
-  const manualOffset =
-    filter?.offset !== undefined && Number.isFinite(filter.offset) && filter.offset > 0
-      ? Math.floor(filter.offset)
-      : 0;
-  const manualLimit =
-    filter?.limit !== undefined && Number.isFinite(filter.limit) && filter.limit >= 0
-      ? Math.floor(filter.limit)
-      : undefined;
-
   return {
-    manualOffset,
-    effectiveLimit:
-      manualLimit !== undefined && fallbackLimit !== undefined
-        ? Math.min(manualLimit, fallbackLimit)
-        : (manualLimit ?? fallbackLimit),
+    manualOffset: normalizePurgeOffset(filter?.offset),
+    effectiveLimit: resolvePurgeLimit(normalizePurgeLimit(filter?.limit), fallbackLimit),
   };
+}
+
+function normalizePurgeOffset(offset: number | undefined): number {
+  if (offset === undefined) return 0;
+  if (!Number.isFinite(offset)) return 0;
+  if (offset <= 0) return 0;
+  return Math.floor(offset);
+}
+
+function normalizePurgeLimit(limit: number | undefined): number | undefined {
+  if (limit === undefined) return undefined;
+  if (!Number.isFinite(limit)) return undefined;
+  if (limit < 0) return undefined;
+  return Math.floor(limit);
+}
+
+function resolvePurgeLimit(
+  manualLimit: number | undefined,
+  fallbackLimit: number | undefined,
+): number | undefined {
+  if (manualLimit === undefined) return fallbackLimit;
+  if (fallbackLimit === undefined) return manualLimit;
+  return Math.min(manualLimit, fallbackLimit);
 }
 
 function shouldPurgeWorkflowState(
@@ -934,82 +944,16 @@ function getWorkflowRetentionDeadline(
   return state.updatedAt + retentionMs;
 }
 
-// oxlint-disable-next-line complexity -- ID:core-engine-purge-workflow-complexity
 async function purgeWorkflow(
   internals: EngineInternals,
   state: WorkflowState,
   cleanupWaiters: CleanupWaiters,
 ): Promise<void> {
   const workflowId = state.id;
-  const encodedWorkflowId = encodeStorageKeyComponent(workflowId);
   const attributeBytes = await internals.storage.get(KEYS.attribute(workflowId));
-  const deleteOperations: BatchOperation[] = [];
-  const deleteKeys = new Set<string>([
-    KEYS.workflow(workflowId),
-    KEYS.checkpoint(workflowId),
-    KEYS.workflowHeaders(workflowId),
-    KEYS.terminalCleanupNeeded(workflowId),
-    KEYS.attribute(workflowId),
-    KEYS.terminalWorkflow(state.updatedAt, workflowId),
-  ]);
-
-  if (state.executionDeadline !== undefined) {
-    deleteKeys.add(KEYS.deadline(state.executionDeadline, workflowId));
-    deleteKeys.add(`timer-idx:deadline:${workflowId}`);
-  }
-
-  const cleanupIncludesOutputArtifacts =
-    state.status === 'cancelled' || state.status === 'timed-out';
-  if (state.terminalCleanupToken !== undefined) {
-    const terminalCleanupTimerId = createTerminalCleanupTimerId(
-      cleanupIncludesOutputArtifacts,
-      state.terminalCleanupToken,
-    );
-    deleteKeys.add(
-      KEYS.terminalCleanup(state.updatedAt + TERMINAL_CLEANUP_DELAY_MS, terminalCleanupTimerId),
-    );
-  }
-
-  if (attributeBytes) {
-    const currentAttributes = decode(attributeBytes) as Record<string, SearchAttributeValue>;
-    for (const operation of buildIndexOperations(workflowId, currentAttributes, {})) {
-      if (operation.type === 'delete') deleteOperations.push(operation);
-    }
-  }
-
-  for (const operation of buildWorkflowTagIndexOperations(
-    workflowId,
-    normalizeWorkflowTags(state.tags),
-    undefined,
-  )) {
-    if (operation.type === 'delete') deleteOperations.push(operation);
-  }
-
-  const updateRequestPrefix = KEYS.updatePrefix(workflowId);
-  const updateRequestKeys = await collectKeysForPrefix(internals.storage, updateRequestPrefix);
-  for (const key of updateRequestKeys) {
-    deleteKeys.add(key);
-    const updateId = key.slice(updateRequestPrefix.length);
-    if (updateId.length > 0) deleteKeys.add(KEYS.updateResponse(updateId));
-  }
-
-  for (const prefix of [
-    `wf:${encodedWorkflowId}:ckpt:`,
-    `ev:${encodedWorkflowId}:`,
-    `sig:${encodedWorkflowId}:`,
-    `review:${encodedWorkflowId}:`,
-    `offload:${encodedWorkflowId}:`,
-    `archive:${encodedWorkflowId}:`,
-    `blob:${encodedWorkflowId}:`,
-    `state:execution:${encodedWorkflowId}:`,
-    `tool-effect:${encodedWorkflowId}:`,
-    `upk:${encodedWorkflowId}:`,
-  ]) {
-    const keys = await collectKeysForPrefix(internals.storage, prefix);
-    for (const key of keys) deleteKeys.add(key);
-  }
-
-  for (const key of deleteKeys) deleteOperations.push({ type: 'delete', key });
+  const deleteOperations = buildWorkflowIndexDeleteOperations(state, attributeBytes);
+  const deleteKeys = await collectWorkflowPurgeDeleteKeys(internals, state);
+  appendKeyDeleteOperations(deleteOperations, deleteKeys);
   deleteOperations.push(
     ...buildWorkflowVisibilityIndexTransition(workflowId, state, null).batchOps,
   );
@@ -1023,6 +967,138 @@ async function purgeWorkflow(
   internals.workflowHeaders.delete(workflowId);
   internals.workflowNestingDepths.delete(workflowId);
   cleanupWaiters(workflowId);
+}
+
+function buildWorkflowIndexDeleteOperations(
+  state: WorkflowState,
+  attributeBytes: Uint8Array | null,
+): BatchOperation[] {
+  return [
+    ...buildSearchAttributeDeleteOperations(state.id, attributeBytes),
+    ...buildTagIndexDeleteOperations(state),
+  ];
+}
+
+function buildSearchAttributeDeleteOperations(
+  workflowId: string,
+  attributeBytes: Uint8Array | null,
+): BatchOperation[] {
+  if (!attributeBytes) return [];
+  const currentAttributes = decode(attributeBytes) as Record<string, SearchAttributeValue>;
+  return buildIndexOperations(workflowId, currentAttributes, {}).filter(isDeleteOperation);
+}
+
+function buildTagIndexDeleteOperations(state: WorkflowState): BatchOperation[] {
+  return buildWorkflowTagIndexOperations(
+    state.id,
+    normalizeWorkflowTags(state.tags),
+    undefined,
+  ).filter(isDeleteOperation);
+}
+
+function isDeleteOperation(operation: BatchOperation): operation is BatchOperation {
+  return operation.type === 'delete';
+}
+
+async function collectWorkflowPurgeDeleteKeys(
+  internals: EngineInternals,
+  state: WorkflowState,
+): Promise<Set<string>> {
+  const workflowId = state.id;
+  const deleteKeys = buildBaseWorkflowDeleteKeys(state);
+  addExecutionDeadlineDeleteKeys(deleteKeys, state);
+  addTerminalCleanupDeleteKey(deleteKeys, state);
+  await addUpdateRequestDeleteKeys(internals.storage, deleteKeys, workflowId);
+  await addWorkflowPrefixDeleteKeys(internals.storage, deleteKeys, workflowId);
+  return deleteKeys;
+}
+
+function buildBaseWorkflowDeleteKeys(state: WorkflowState): Set<string> {
+  return new Set([
+    KEYS.workflow(state.id),
+    KEYS.checkpoint(state.id),
+    KEYS.workflowHeaders(state.id),
+    KEYS.terminalCleanupNeeded(state.id),
+    KEYS.attribute(state.id),
+    KEYS.terminalWorkflow(state.updatedAt, state.id),
+  ]);
+}
+
+function addExecutionDeadlineDeleteKeys(deleteKeys: Set<string>, state: WorkflowState): void {
+  if (state.executionDeadline === undefined) return;
+  deleteKeys.add(KEYS.deadline(state.executionDeadline, state.id));
+  deleteKeys.add(`timer-idx:deadline:${state.id}`);
+}
+
+function addTerminalCleanupDeleteKey(deleteKeys: Set<string>, state: WorkflowState): void {
+  if (state.terminalCleanupToken === undefined) return;
+  const terminalCleanupTimerId = createTerminalCleanupTimerId(
+    shouldCleanupTerminalOutputArtifacts(state),
+    state.terminalCleanupToken,
+  );
+  deleteKeys.add(
+    KEYS.terminalCleanup(state.updatedAt + TERMINAL_CLEANUP_DELAY_MS, terminalCleanupTimerId),
+  );
+}
+
+function shouldCleanupTerminalOutputArtifacts(state: WorkflowState): boolean {
+  return state.status === 'cancelled' || state.status === 'timed-out';
+}
+
+async function addUpdateRequestDeleteKeys(
+  storage: WeftStorage,
+  deleteKeys: Set<string>,
+  workflowId: string,
+): Promise<void> {
+  const updateRequestPrefix = KEYS.updatePrefix(workflowId);
+  const updateRequestKeys = await collectKeysForPrefix(storage, updateRequestPrefix);
+  for (const key of updateRequestKeys) {
+    deleteKeys.add(key);
+    addUpdateResponseDeleteKey(deleteKeys, updateRequestPrefix, key);
+  }
+}
+
+function addUpdateResponseDeleteKey(
+  deleteKeys: Set<string>,
+  updateRequestPrefix: string,
+  updateRequestKey: string,
+): void {
+  const updateId = updateRequestKey.slice(updateRequestPrefix.length);
+  if (updateId.length > 0) deleteKeys.add(KEYS.updateResponse(updateId));
+}
+
+async function addWorkflowPrefixDeleteKeys(
+  storage: WeftStorage,
+  deleteKeys: Set<string>,
+  workflowId: string,
+): Promise<void> {
+  for (const prefix of workflowPurgePrefixes(workflowId)) {
+    const keys = await collectKeysForPrefix(storage, prefix);
+    for (const key of keys) deleteKeys.add(key);
+  }
+}
+
+function workflowPurgePrefixes(workflowId: string): string[] {
+  const encodedWorkflowId = encodeStorageKeyComponent(workflowId);
+  return [
+    `wf:${encodedWorkflowId}:ckpt:`,
+    `ev:${encodedWorkflowId}:`,
+    `sig:${encodedWorkflowId}:`,
+    `review:${encodedWorkflowId}:`,
+    `offload:${encodedWorkflowId}:`,
+    `archive:${encodedWorkflowId}:`,
+    `blob:${encodedWorkflowId}:`,
+    `state:execution:${encodedWorkflowId}:`,
+    `tool-effect:${encodedWorkflowId}:`,
+    `upk:${encodedWorkflowId}:`,
+  ];
+}
+
+function appendKeyDeleteOperations(
+  deleteOperations: BatchOperation[],
+  deleteKeys: Iterable<string>,
+): void {
+  for (const key of deleteKeys) deleteOperations.push({ type: 'delete', key });
 }
 
 async function collectKeysForPrefix(storage: WeftStorage, prefix: string): Promise<string[]> {

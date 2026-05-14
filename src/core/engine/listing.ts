@@ -190,45 +190,63 @@ export async function* streamWorkflowStates(
 }
 
 /** Stream decoded workflow states in fixed-size batches for bulk operations. */
-// oxlint-disable-next-line complexity -- ID:core-engine-line-3045-complexity
 export async function* streamWorkflowStateBatches(
   internals: EngineInternals,
   filter?: ListFilter,
 ): AsyncGenerator<WorkflowState[]> {
-  let remainingOffset = normalizeBulkFilterNumber(filter?.offset, 'offset') ?? 0;
-  let remainingLimit = normalizeBulkFilterNumber(filter?.limit, 'limit');
+  const window = resolveBulkWorkflowStateBatchWindow(filter);
 
-  if (remainingLimit === 0) {
+  if (isBulkWorkflowStateBatchWindowExhausted(window)) {
     return;
   }
 
   let batch: WorkflowState[] = [];
 
   for await (const state of streamWorkflowStates(internals, filter)) {
-    if (remainingOffset > 0) {
-      remainingOffset -= 1;
-      continue;
-    }
+    if (skipWorkflowStateForBulkWindow(window)) continue;
 
     batch.push(state);
-
-    if (remainingLimit !== undefined) {
-      remainingLimit -= 1;
-    }
-
+    consumeWorkflowStateFromBulkWindow(window);
     if (batch.length === BULK_OPERATION_BATCH_SIZE) {
       yield batch;
       batch = [];
     }
 
-    if (remainingLimit === 0) {
-      break;
-    }
+    if (isBulkWorkflowStateBatchWindowExhausted(window)) break;
   }
 
   if (batch.length > 0) {
     yield batch;
   }
+}
+
+type BulkWorkflowStateBatchWindow = {
+  remainingOffset: number;
+  remainingLimit: number | undefined;
+};
+
+function resolveBulkWorkflowStateBatchWindow(
+  filter: ListFilter | undefined,
+): BulkWorkflowStateBatchWindow {
+  return {
+    remainingOffset: normalizeBulkFilterNumber(filter?.offset, 'offset') ?? 0,
+    remainingLimit: normalizeBulkFilterNumber(filter?.limit, 'limit'),
+  };
+}
+
+function skipWorkflowStateForBulkWindow(window: BulkWorkflowStateBatchWindow): boolean {
+  if (window.remainingOffset <= 0) return false;
+  window.remainingOffset -= 1;
+  return true;
+}
+
+function consumeWorkflowStateFromBulkWindow(window: BulkWorkflowStateBatchWindow): void {
+  if (window.remainingLimit === undefined) return;
+  window.remainingLimit -= 1;
+}
+
+function isBulkWorkflowStateBatchWindowExhausted(window: BulkWorkflowStateBatchWindow): boolean {
+  return window.remainingLimit === 0;
 }
 
 /** Retrieve search attributes for a workflow. */

@@ -108,7 +108,6 @@ export function registerSleepResolver(
   workflowOperations.add(operationId);
 }
 
-// oxlint-disable-next-line complexity -- ID:core-engine-start-delayed-workflow-complexity
 export async function startDelayedWorkflow(
   internals: EngineInternals,
   entry: TimerEntry,
@@ -128,15 +127,10 @@ export async function startDelayedWorkflow(
     return;
   }
 
-  const checkpointBytes = await internals.storage.get(KEYS.checkpoint(entry.workflowId));
-  if (!checkpointBytes) {
-    await callbacks.failWorkflow(
-      entry.workflowId,
-      new Error(`Checkpoint not found for delayed workflow "${entry.workflowId}"`),
-    );
+  const checkpoint = await loadDelayedWorkflowCheckpoint(internals, entry, callbacks);
+  if (!checkpoint) {
     return;
   }
-  const checkpoint = deserializeCheckpoint(checkpointBytes);
 
   const registration = internals.registrations.get(state.type);
   if (!registration) {
@@ -148,29 +142,9 @@ export async function startDelayedWorkflow(
   }
 
   const now = internals.options.getNow();
-  let executionDeadline: number | undefined;
-  if (entry.executionTimeoutMs !== undefined) {
-    if (!Number.isFinite(entry.executionTimeoutMs) || entry.executionTimeoutMs < 0) {
-      await callbacks.failWorkflow(
-        entry.workflowId,
-        new Error(`Invalid delayed execution timeout for workflow "${entry.workflowId}"`),
-      );
-      return;
-    }
+  const executionDeadline = await resolveDelayedExecutionDeadline(entry, now, callbacks);
+  if (executionDeadline === 'invalid') return;
 
-    try {
-      executionDeadline = normalizeStorageTimestamp(
-        now + entry.executionTimeoutMs,
-        `Delayed execution timeout for workflow "${entry.workflowId}"`,
-      );
-    } catch {
-      await callbacks.failWorkflow(
-        entry.workflowId,
-        new Error(`Invalid delayed execution timeout for workflow "${entry.workflowId}"`),
-      );
-      return;
-    }
-  }
   const runningState = await callbacks.runSerializedWorkflowStateWrite(
     entry.workflowId,
     async () => {
@@ -236,7 +210,58 @@ export async function startDelayedWorkflow(
   );
 }
 
-// oxlint-disable-next-line complexity -- ID:core-engine-handle-timer-fired-complexity
+async function loadDelayedWorkflowCheckpoint(
+  internals: EngineInternals,
+  entry: TimerEntry,
+  callbacks: Pick<TimeOperationCallbacks, 'failWorkflow'>,
+): Promise<Checkpoint | null> {
+  const checkpointBytes = await internals.storage.get(KEYS.checkpoint(entry.workflowId));
+  if (!checkpointBytes) {
+    await callbacks.failWorkflow(
+      entry.workflowId,
+      new Error(`Checkpoint not found for delayed workflow "${entry.workflowId}"`),
+    );
+    return null;
+  }
+
+  return deserializeCheckpoint(checkpointBytes);
+}
+
+async function resolveDelayedExecutionDeadline(
+  entry: TimerEntry,
+  now: number,
+  callbacks: Pick<TimeOperationCallbacks, 'failWorkflow'>,
+): Promise<number | undefined | 'invalid'> {
+  if (entry.executionTimeoutMs === undefined) {
+    return undefined;
+  }
+
+  if (!Number.isFinite(entry.executionTimeoutMs) || entry.executionTimeoutMs < 0) {
+    await failInvalidDelayedExecutionTimeout(entry, callbacks);
+    return 'invalid';
+  }
+
+  try {
+    return normalizeStorageTimestamp(
+      now + entry.executionTimeoutMs,
+      `Delayed execution timeout for workflow "${entry.workflowId}"`,
+    );
+  } catch {
+    await failInvalidDelayedExecutionTimeout(entry, callbacks);
+    return 'invalid';
+  }
+}
+
+async function failInvalidDelayedExecutionTimeout(
+  entry: TimerEntry,
+  callbacks: Pick<TimeOperationCallbacks, 'failWorkflow'>,
+): Promise<void> {
+  await callbacks.failWorkflow(
+    entry.workflowId,
+    new Error(`Invalid delayed execution timeout for workflow "${entry.workflowId}"`),
+  );
+}
+
 export async function handleTimerFired(
   internals: EngineInternals,
   entry: TimerEntry,
@@ -254,18 +279,8 @@ export async function handleTimerFired(
     | 'workflowVersionTupleFromState'
   >,
 ): Promise<void> {
-  // Check if this timer is for a review escalation/timeout
   if (entry.id.startsWith('review-escalation:') || entry.id.startsWith('review-timeout:')) {
-    // Extract reviewId from the timer ID
-    const parts = entry.id.split(':');
-    const reviewId = parts[1]!;
-    const handler = internals.reviewEscalationHandlers.get(reviewId);
-    if (handler) {
-      // Guard: skip if the workflow is no longer running (e.g. cancelled/failed concurrently)
-      const state = await callbacks.loadWorkflowState(entry.workflowId);
-      if (!state || state.status !== 'running') return;
-      await handler(entry);
-    }
+    await handleReviewTimer(internals, entry, callbacks);
     return;
   }
 
@@ -285,20 +300,47 @@ export async function handleTimerFired(
   }
 
   if (entry.kind === 'sleep') {
-    // Extract the operation ID from the timer ID (format: "sleep:<operationId>")
-    const operationId = entry.id.replace('sleep:', '');
-    const resolverKey = `${entry.workflowId}:${operationId}`;
-    const resolver = internals.sleepResolvers.get(resolverKey);
-    if (resolver) {
-      internals.sleepResolvers.delete(resolverKey);
-      const workflowOps = internals.sleepResolversByWorkflow.get(entry.workflowId);
-      if (workflowOps) {
-        workflowOps.delete(operationId);
-        if (workflowOps.size === 0) internals.sleepResolversByWorkflow.delete(entry.workflowId);
-      }
-      resolver();
-    }
+    resolveSleepTimer(internals, entry);
   } else if (entry.kind === 'execution-deadline') {
     await callbacks.timeout(entry.workflowId);
   }
+}
+
+async function handleReviewTimer(
+  internals: EngineInternals,
+  entry: TimerEntry,
+  callbacks: Pick<TimeOperationCallbacks, 'loadWorkflowState'>,
+): Promise<void> {
+  const reviewId = entry.id.split(':')[1];
+  if (!reviewId) return;
+
+  const handler = internals.reviewEscalationHandlers.get(reviewId);
+  if (!handler) return;
+
+  const state = await callbacks.loadWorkflowState(entry.workflowId);
+  if (!state || state.status !== 'running') return;
+  await handler(entry);
+}
+
+function resolveSleepTimer(internals: EngineInternals, entry: TimerEntry): void {
+  const operationId = entry.id.replace('sleep:', '');
+  const resolverKey = `${entry.workflowId}:${operationId}`;
+  const resolver = internals.sleepResolvers.get(resolverKey);
+  if (!resolver) return;
+
+  internals.sleepResolvers.delete(resolverKey);
+  untrackSleepResolver(internals, entry.workflowId, operationId);
+  resolver();
+}
+
+function untrackSleepResolver(
+  internals: EngineInternals,
+  workflowId: string,
+  operationId: string,
+): void {
+  const workflowOperations = internals.sleepResolversByWorkflow.get(workflowId);
+  if (!workflowOperations) return;
+
+  workflowOperations.delete(operationId);
+  if (workflowOperations.size === 0) internals.sleepResolversByWorkflow.delete(workflowId);
 }

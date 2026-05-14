@@ -1,11 +1,7 @@
 import type { BatchOperation } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
-import {
-  collectDueCronOccurrences,
-  getNextCronOccurrence,
-  parseCronExpression,
-} from '../schedule.ts';
+import { getNextCronOccurrence, parseCronExpression } from '../schedule.ts';
 import type { TenantContext } from '../tenant.ts';
 import type {
   PaginatedResult,
@@ -14,7 +10,6 @@ import type {
   ScheduleOptions,
   ScheduleState,
   ScheduleSummary,
-  TimerEntry,
   WorkflowState,
 } from '../types.ts';
 import { WorkflowNotRegisteredError } from './errors.ts';
@@ -36,8 +31,7 @@ import {
   normalizeScheduleOptions,
 } from './validation.ts';
 
-const SCHEDULE_LATE_GRACE_MILLISECONDS = 1000;
-const MAX_SCHEDULE_BACKFILL_OCCURRENCES_PER_TICK = 256;
+export { handleScheduleTimer } from './schedule-timer.ts';
 
 export type RefreshedScheduleState = {
   state: ScheduleState;
@@ -62,7 +56,34 @@ export type ScheduleCallbacks = {
   flushQueuedInlineWorkflowStartsDirectly: () => Promise<void>;
 };
 
-// oxlint-disable-next-line complexity -- ID:core-engine-schedule-complexity
+async function resolveScheduleTenant(
+  internals: EngineInternals,
+  scheduleId: string,
+  workflowType: string,
+  input: unknown,
+  accessOptions: ScheduleAccessOptions | undefined,
+): Promise<TenantContext | undefined> {
+  const resolvedTenant = await internals.options.tenantResolver?.resolve(
+    scheduleId,
+    input,
+    workflowType,
+  );
+
+  if (accessOptions?.tenantId === undefined) {
+    return resolvedTenant;
+  }
+
+  if (resolvedTenant === undefined) {
+    return { id: accessOptions.tenantId };
+  }
+
+  if (resolvedTenant.id !== accessOptions.tenantId) {
+    throw new Error('Schedule creation is limited to the authenticated tenant');
+  }
+
+  return resolvedTenant;
+}
+
 export async function schedule(
   internals: EngineInternals,
   type: string,
@@ -90,20 +111,13 @@ export async function schedule(
       throw new Error(`Schedule with id "${scheduleId}" already exists`);
     }
     const now = internals.options.getNow();
-    const tenantResolver = internals.options.tenantResolver;
-    const resolvedTenant = tenantResolver
-      ? await tenantResolver.resolve(scheduleId, input, type)
-      : undefined;
-    const tenant =
-      normalizedAccessOptions?.tenantId === undefined
-        ? resolvedTenant
-        : resolvedTenant === undefined
-          ? { id: normalizedAccessOptions.tenantId }
-          : resolvedTenant.id === normalizedAccessOptions.tenantId
-            ? resolvedTenant
-            : (() => {
-                throw new Error('Schedule creation is limited to the authenticated tenant');
-              })();
+    const tenant = await resolveScheduleTenant(
+      internals,
+      scheduleId,
+      type,
+      input,
+      normalizedAccessOptions,
+    );
     const state: ScheduleState = {
       id: scheduleId,
       workflowType: type,
@@ -292,19 +306,47 @@ export async function startScheduledRun(
   callbacks: Pick<ScheduleCallbacks, 'startWorkflow'>,
 ): Promise<string> {
   const workflowId = crypto.randomUUID();
+  const scheduleRunOperations =
+    state.overlap === 'allow'
+      ? undefined
+      : [{ type: 'put' as const, key: KEYS.scheduleRun(workflowId), value: encode(state.id) }];
   await callbacks.startWorkflow(
     state.workflowType,
     state.input,
     { id: workflowId },
     { resolved: state.tenant },
-    state.overlap === 'allow'
-      ? undefined
-      : [{ type: 'put', key: KEYS.scheduleRun(workflowId), value: encode(state.id) }],
+    scheduleRunOperations,
   );
   return workflowId;
 }
 
-// oxlint-disable-next-line complexity -- ID:core-engine-apply-schedule-occurrence-complexity
+function hasActiveScheduledWorkflow(
+  currentWorkflowState: WorkflowState | null | undefined,
+): boolean {
+  return currentWorkflowState?.status === 'running' || currentWorkflowState?.status === 'pending';
+}
+
+async function applyBlockedScheduleOccurrence(
+  state: ScheduleState,
+  hasActiveWorkflow: boolean,
+  callbacks: Pick<ScheduleCallbacks, 'cancelWorkflow' | 'getWorkflowResult' | 'startScheduledRun'>,
+): Promise<ScheduleState> {
+  if (hasActiveWorkflow) {
+    if (state.overlap === 'cancel-running' && state.currentWorkflowId) {
+      void callbacks.getWorkflowResult(state.currentWorkflowId).catch(() => {});
+      await callbacks.cancelWorkflow(state.currentWorkflowId);
+    } else if (state.overlap === 'queue') {
+      return { ...state, queuedRuns: state.queuedRuns + 1 };
+    } else if (state.overlap === 'skip') {
+      return state;
+    }
+  }
+
+  const stateForStart =
+    state.overlap === 'cancel-running' ? clearScheduleCurrentWorkflow(state) : state;
+  return { ...state, currentWorkflowId: await callbacks.startScheduledRun(stateForStart) };
+}
+
 export async function applyScheduleOccurrence(
   _internals: EngineInternals,
   state: ScheduleState,
@@ -312,48 +354,14 @@ export async function applyScheduleOccurrence(
 ): Promise<ScheduleState> {
   const { state: refreshedState, currentWorkflowState } =
     await callbacks.refreshScheduledWorkflowState(state);
-  const hasActiveWorkflow =
-    currentWorkflowState?.status === 'running' || currentWorkflowState?.status === 'pending';
+  const hasActiveWorkflow = hasActiveScheduledWorkflow(currentWorkflowState);
 
-  switch (refreshedState.overlap) {
-    case 'allow':
-      await callbacks.startScheduledRun(refreshedState);
-      return refreshedState;
-
-    case 'cancel-running':
-      if (hasActiveWorkflow && refreshedState.currentWorkflowId) {
-        void callbacks.getWorkflowResult(refreshedState.currentWorkflowId).catch(() => {});
-        await callbacks.cancelWorkflow(refreshedState.currentWorkflowId);
-      }
-      return {
-        ...refreshedState,
-        currentWorkflowId: await callbacks.startScheduledRun(
-          clearScheduleCurrentWorkflow(refreshedState),
-        ),
-      };
-
-    case 'queue':
-      if (hasActiveWorkflow) {
-        return {
-          ...refreshedState,
-          queuedRuns: refreshedState.queuedRuns + 1,
-        };
-      }
-      return {
-        ...refreshedState,
-        currentWorkflowId: await callbacks.startScheduledRun(refreshedState),
-      };
-
-    case 'skip':
-    default:
-      if (hasActiveWorkflow) {
-        return refreshedState;
-      }
-      return {
-        ...refreshedState,
-        currentWorkflowId: await callbacks.startScheduledRun(refreshedState),
-      };
+  if (refreshedState.overlap === 'allow') {
+    await callbacks.startScheduledRun(refreshedState);
+    return refreshedState;
   }
+
+  return applyBlockedScheduleOccurrence(refreshedState, hasActiveWorkflow, callbacks);
 }
 
 export async function settleBackfillScheduleState(
@@ -377,81 +385,6 @@ export async function settleBackfillScheduleState(
 
   const refreshed = await callbacks.refreshScheduledWorkflowState(state);
   return refreshed.state;
-}
-
-// oxlint-disable-next-line complexity -- ID:core-engine-handle-schedule-timer-complexity
-export async function handleScheduleTimer(
-  internals: EngineInternals,
-  entry: TimerEntry,
-  callbacks: ScheduleCallbacks,
-): Promise<void> {
-  const state = await loadScheduleState(internals, entry.workflowId);
-  if (!state || state.status !== 'active' || state.nextFireAt === null) {
-    return;
-  }
-  if (state.nextFireAt !== entry.fireAt) {
-    return;
-  }
-  let nextState = state;
-  try {
-    const now = internals.options.getNow();
-    const dueThroughTimestamp = Math.max(now, entry.fireAt);
-    const dueOccurrences = collectDueCronOccurrences(
-      state.cronExpression,
-      state.nextFireAt,
-      dueThroughTimestamp,
-      {
-        maxOccurrences: state.backfill ? MAX_SCHEDULE_BACKFILL_OCCURRENCES_PER_TICK : 2,
-      },
-    );
-    if (dueOccurrences.length === 0) {
-      return;
-    }
-    const isLate = now - state.nextFireAt > SCHEDULE_LATE_GRACE_MILLISECONDS;
-    const shouldSkipMissedOccurrences = !state.backfill && isLate;
-    const occurrencesToProcess = shouldSkipMissedOccurrences
-      ? []
-      : state.backfill
-        ? dueOccurrences
-        : dueOccurrences.slice(0, 1);
-
-    for (const occurrence of occurrencesToProcess) {
-      nextState = {
-        ...(await callbacks.applyScheduleOccurrence(nextState)),
-        lastFireAt: occurrence,
-        updatedAt: now,
-      };
-      await writeScheduleState(internals, nextState, { includeTimer: false });
-      if (state.backfill && nextState.currentWorkflowId !== undefined) {
-        nextState = await callbacks.settleBackfillScheduleState(nextState);
-      }
-    }
-
-    nextState = {
-      ...nextState,
-      updatedAt: now,
-      nextFireAt: shouldSkipMissedOccurrences
-        ? getNextCronOccurrence(nextState.cronExpression, now)
-        : getNextCronOccurrence(
-            nextState.cronExpression,
-            occurrencesToProcess.at(-1) ?? dueOccurrences.at(-1)!,
-          ),
-    };
-    await writeScheduleState(internals, nextState);
-  } catch (error) {
-    const errorNow = internals.options.getNow();
-    const pausedState: ScheduleState = {
-      ...nextState,
-      status: 'paused',
-      updatedAt: errorNow,
-      nextFireAt: getNextCronOccurrence(nextState.cronExpression, errorNow),
-    };
-    await writeScheduleState(internals, pausedState, { includeTimer: false });
-    console.error(
-      `[weft] Paused schedule "${pausedState.id}" after timer processing failed:`,
-      error,
-    );
-  }
 }
 
 export async function handleScheduledWorkflowTerminal(

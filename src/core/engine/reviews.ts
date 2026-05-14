@@ -38,6 +38,12 @@ export type ReviewOperationCallbacks = {
   ensureTerminalCleanupTracked: (workflowId: string) => Promise<void>;
 };
 
+type StoredReviewLookup = {
+  reviewKey: string;
+  reviewData: ReviewRequest | null;
+  workflowId: string;
+};
+
 function reviewScanPrefix(filter: ReviewListFilter): string {
   if (filter.workflowId === undefined) {
     return 'review:';
@@ -102,58 +108,51 @@ export async function getReview(
   return internals.reviewCoordinator.getReview(workflowId, reviewId);
 }
 
-/**
- * Submit a decision for a pending review. Stores the decision, removes
- * the pending review, and wakes the paused workflow if one is waiting.
- */
-// oxlint-disable-next-line complexity -- ID:core-engine-submit-review-complexity
-export async function submitReview(
+async function findReviewByScan(
   internals: EngineInternals,
   reviewId: string,
-  options: SubmitReviewOptions,
-  callbacks: SubmitReviewCallbacks,
-): Promise<void> {
-  const { decision, reviewer, feedback, sectionDecisions, workflowId } = options;
+): Promise<StoredReviewLookup | null> {
+  for await (const [reviewKey, value] of internals.storage.scan('review:')) {
+    const reviewData = parseStoredReviewRequest(value);
+    if (reviewData !== null && reviewData.reviewId === reviewId) {
+      return {
+        reviewKey,
+        reviewData,
+        workflowId: reviewData.workflowId,
+      };
+    }
+  }
 
-  // Look up the review by direct key when workflowId is provided (O(1)),
-  // otherwise fall back to scanning all review entries (O(n)).
-  let reviewKey: string | null = null;
-  let resolvedWorkflowId: string | undefined = workflowId;
-  let reviewData: ReviewRequest | undefined;
+  return null;
+}
 
+async function findStoredReview(
+  internals: EngineInternals,
+  reviewId: string,
+  workflowId: string | undefined,
+): Promise<StoredReviewLookup | null> {
   if (workflowId !== undefined) {
-    const directKey = KEYS.review(workflowId, reviewId);
-    const existing = await internals.storage.get(directKey);
-    if (existing !== null) {
-      reviewKey = directKey;
-      reviewData = parseStoredReviewRequest(existing) ?? undefined;
-    }
-  } else {
-    for await (const [key, value] of internals.storage.scan('review:')) {
-      const review = parseStoredReviewRequest(value);
-      if (review !== null && review.reviewId === reviewId) {
-        reviewKey = key;
-        reviewData = review;
-        resolvedWorkflowId = review.workflowId;
-        break;
-      }
-    }
+    const reviewKey = KEYS.review(workflowId, reviewId);
+    const existing = await internals.storage.get(reviewKey);
+    return existing === null
+      ? null
+      : { reviewKey, reviewData: parseStoredReviewRequest(existing), workflowId };
   }
 
-  if (reviewKey === null) {
-    throw new Error(`Review "${reviewId}" not found`);
-  }
+  return findReviewByScan(internals, reviewId);
+}
 
-  if (reviewData === undefined) {
-    throw new Error(`Review "${reviewId}" could not be loaded`);
-  }
-
-  const now = internals.options.getNow();
+function createHumanReviewResult(
+  reviewId: string,
+  options: SubmitReviewOptions,
+  timestamp: number,
+): HumanReviewResult {
+  const { decision, reviewer, feedback, sectionDecisions } = options;
   const decisionResult: HumanReviewResult = {
     reviewId,
     decision,
     reviewer,
-    timestamp: now,
+    timestamp,
   };
 
   if (feedback !== undefined) {
@@ -164,24 +163,54 @@ export async function submitReview(
     decisionResult.sectionDecisions = sectionDecisions;
   }
 
+  return decisionResult;
+}
+
+function resolveWaitingReview(
+  internals: EngineInternals,
+  workflowId: string,
+  reviewId: string,
+  decisionResult: HumanReviewResult,
+): void {
+  const waiterKey = `${workflowId}:${reviewId}`;
+  const waiter = internals.reviewWaiters.get(waiterKey);
+
+  if (!waiter) {
+    return;
+  }
+
+  internals.reviewWaiters.delete(waiterKey);
+  untrackWaiterKey(internals.reviewWaitersByWorkflow, workflowId, waiterKey);
+  waiter(decisionResult);
+}
+
+export async function submitReview(
+  internals: EngineInternals,
+  reviewId: string,
+  options: SubmitReviewOptions,
+  callbacks: SubmitReviewCallbacks,
+): Promise<void> {
+  const storedReview = await findStoredReview(internals, reviewId, options.workflowId);
+
+  if (storedReview === null) {
+    throw new Error(`Review "${reviewId}" not found`);
+  }
+
+  if (storedReview.reviewData === null) {
+    throw new Error(`Review "${reviewId}" could not be loaded`);
+  }
+
+  const decisionResult = createHumanReviewResult(reviewId, options, internals.options.getNow());
+
   await dispatchCompletedReview(
     internals,
-    reviewKey,
-    reviewData,
+    storedReview.reviewKey,
+    storedReview.reviewData,
     decisionResult,
     callbacks.dispatchEvent,
   );
 
-  // Wake the waiting workflow by resolving its review waiter
-  if (resolvedWorkflowId) {
-    const waiterKey = `${resolvedWorkflowId}:${reviewId}`;
-    const waiter = internals.reviewWaiters.get(waiterKey);
-    if (waiter) {
-      internals.reviewWaiters.delete(waiterKey);
-      untrackWaiterKey(internals.reviewWaitersByWorkflow, resolvedWorkflowId, waiterKey);
-      waiter(decisionResult);
-    }
-  }
+  resolveWaitingReview(internals, storedReview.workflowId, reviewId, decisionResult);
 }
 
 export function resolveReviewDecision(
@@ -313,12 +342,101 @@ export async function cleanupReviews(
   await deleteCompletedReviewsForWorkflow(internals.storage, workflowId);
 }
 
-/**
- * Handle a `wait-review` operation: create a durable review request,
- * dispatch events, fire webhooks, set up escalation timers, and block
- * until a decision arrives via `submitReview()`.
- */
-// oxlint-disable-next-line complexity -- ID:core-engine-process-review-operation-complexity
+function setReviewOption<K extends keyof ReviewOptions>(
+  reviewOptions: ReviewOptions,
+  key: K,
+  value: ReviewOptions[K] | undefined,
+): void {
+  if (value !== undefined) reviewOptions[key] = value;
+}
+
+function createReviewOptions(options: HumanReviewOptions): ReviewOptions {
+  const reviewOptions: ReviewOptions = { artifact: options.artifact };
+  setReviewOption(reviewOptions, 'reviewType', options.reviewType);
+  setReviewOption(reviewOptions, 'reviewers', options.reviewers);
+  setReviewOption(reviewOptions, 'allowPartial', options.allowPartial);
+  setReviewOption(reviewOptions, 'timeout', options.timeout);
+  setReviewOption(reviewOptions, 'escalation', options.escalation);
+  setReviewOption(reviewOptions, 'webhookUrl', options.webhookUrl);
+  return reviewOptions;
+}
+
+async function scheduleReviewTimers(
+  internals: EngineInternals,
+  workflowId: string,
+  reviewId: string,
+  options: HumanReviewOptions,
+  now: number,
+): Promise<string[]> {
+  const timerIds: string[] = [];
+  for (const step of options.escalation ?? []) {
+    const timerId = `review-escalation:${reviewId}:${step.after}`;
+    timerIds.push(timerId);
+    await internals.scheduler.schedule({
+      id: timerId,
+      workflowId,
+      fireAt: now + step.after,
+      kind: 'sleep',
+    });
+  }
+  if (options.timeout !== undefined) {
+    const timerId = `review-timeout:${reviewId}`;
+    timerIds.push(timerId);
+    await internals.scheduler.schedule({
+      id: timerId,
+      workflowId,
+      fireAt: now + options.timeout,
+      kind: 'sleep',
+    });
+  }
+  return timerIds;
+}
+
+function createReviewWaiter(
+  internals: EngineInternals,
+  workflowId: string,
+  reviewId: string,
+): {
+  promise: Promise<ReviewOperationOutcome>;
+  resolve: (result: ReviewOperationOutcome) => void;
+  waiterKey: string;
+} {
+  const { promise, resolve } = Promise.withResolvers<ReviewOperationOutcome>();
+  const waiterKey = `${workflowId}:${reviewId}`;
+  internals.reviewWaiters.set(waiterKey, (decision) => resolveReviewDecision(resolve, decision));
+  trackWaiterKey(internals.reviewWaitersByWorkflow, workflowId, waiterKey);
+  return { promise, resolve, waiterKey };
+}
+
+function registerReviewLifecycleTracking(
+  internals: EngineInternals,
+  workflowId: string,
+  reviewId: string,
+  timerIds: string[],
+  handler: (entry: { id: string; workflowId: string }) => Promise<boolean>,
+): void {
+  let reviewIdSet = internals.workflowReviewIds.get(workflowId);
+  internals.reviewEscalationHandlers.set(reviewId, handler);
+  if (timerIds.length > 0) internals.reviewTimerIds.set(reviewId, timerIds);
+  if (!reviewIdSet) {
+    reviewIdSet = new Set();
+    internals.workflowReviewIds.set(workflowId, reviewIdSet);
+  }
+  reviewIdSet.add(reviewId);
+}
+
+function cleanupReviewLifecycleTracking(
+  internals: EngineInternals,
+  workflowId: string,
+  reviewId: string,
+): void {
+  const trackedIds = internals.workflowReviewIds.get(workflowId);
+  internals.reviewEscalationHandlers.delete(reviewId);
+  internals.reviewTimerIds.delete(reviewId);
+  trackedIds?.delete(reviewId);
+  if (trackedIds?.size === 0) internals.workflowReviewIds.delete(workflowId);
+}
+
 export async function processReviewOperation(
   internals: EngineInternals,
   workflowId: string,
@@ -328,22 +446,12 @@ export async function processReviewOperation(
   const now = internals.options.getNow();
   await callbacks.ensureTerminalCleanupTracked(workflowId);
 
-  // Create a review request in storage
-  const reviewOptions: ReviewOptions = {
-    artifact: options.artifact,
-  };
-  if (options.reviewType !== undefined) reviewOptions.reviewType = options.reviewType;
-  if (options.reviewers !== undefined) reviewOptions.reviewers = options.reviewers;
-  if (options.allowPartial !== undefined) reviewOptions.allowPartial = options.allowPartial;
-  if (options.timeout !== undefined) reviewOptions.timeout = options.timeout;
-  if (options.escalation !== undefined) reviewOptions.escalation = options.escalation;
-  if (options.webhookUrl !== undefined) reviewOptions.webhookUrl = options.webhookUrl;
-
-  const reviewRequest = await internals.reviewCoordinator.createReview(workflowId, reviewOptions);
-
+  const reviewRequest = await internals.reviewCoordinator.createReview(
+    workflowId,
+    createReviewOptions(options),
+  );
   const reviewId = reviewRequest.reviewId;
 
-  // Dispatch ReviewRequestedEvent
   callbacks.dispatchEvent(
     new ReviewRequestedEvent(
       workflowId,
@@ -353,52 +461,15 @@ export async function processReviewOperation(
     ),
   );
 
-  // Fire webhook notification with cancellation support tied to engine lifecycle
-  if (options.webhookUrl) {
+  if (options.webhookUrl !== undefined) {
     const webhookAbort = new AbortController();
     internals.pendingWebhooks.add(webhookAbort);
     void sendReviewWebhook(internals, workflowId, reviewRequest, options.webhookUrl, webhookAbort);
   }
 
-  // Set up escalation timers and track their IDs for cleanup
-  const timerIds: string[] = [];
-  if (options.escalation && options.escalation.length > 0) {
-    for (const step of options.escalation) {
-      const fireAt = now + step.after;
-      const timerId = `review-escalation:${reviewId}:${step.after}`;
-      timerIds.push(timerId);
-      await internals.scheduler.schedule({
-        id: timerId,
-        workflowId,
-        fireAt,
-        kind: 'sleep', // Reuse sleep kind — the timer handler checks the id prefix
-      });
-    }
-  }
-
-  // Set up timeout timer
-  if (options.timeout !== undefined) {
-    const timeoutFireAt = now + options.timeout;
-    const timeoutTimerId = `review-timeout:${reviewId}`;
-    timerIds.push(timeoutTimerId);
-    await internals.scheduler.schedule({
-      id: timeoutTimerId,
-      workflowId,
-      fireAt: timeoutFireAt,
-      kind: 'sleep',
-    });
-  }
-
-  // Wait for the review decision (blocks the workflow generator).
-  // We use a result-or-error wrapper instead of rejection to avoid
-  // unhandled rejection timing issues with bun:test.
-  const { promise, resolve } = Promise.withResolvers<ReviewOperationOutcome>();
-  const waiterKey = `${workflowId}:${reviewId}`;
-  internals.reviewWaiters.set(waiterKey, (decision) => resolveReviewDecision(resolve, decision));
-  trackWaiterKey(internals.reviewWaitersByWorkflow, workflowId, waiterKey);
-
-  // Register the escalation handler and track the reviewId → workflowId association
-  internals.reviewEscalationHandlers.set(reviewId, (entry) =>
+  const timerIds = await scheduleReviewTimers(internals, workflowId, reviewId, options, now);
+  const { promise, resolve, waiterKey } = createReviewWaiter(internals, workflowId, reviewId);
+  registerReviewLifecycleTracking(internals, workflowId, reviewId, timerIds, (entry) =>
     handleReviewEscalationTimer(
       internals,
       workflowId,
@@ -411,35 +482,12 @@ export async function processReviewOperation(
       callbacks,
     ),
   );
-  if (timerIds.length > 0) {
-    internals.reviewTimerIds.set(reviewId, timerIds);
-  }
-  let reviewIdSet = internals.workflowReviewIds.get(workflowId);
-  if (!reviewIdSet) {
-    reviewIdSet = new Set();
-    internals.workflowReviewIds.set(workflowId, reviewIdSet);
-  }
-  reviewIdSet.add(reviewId);
 
   const outcome = await promise;
 
-  // Clean up escalation handler, timer IDs, and workflow-reviewId tracking
-  internals.reviewEscalationHandlers.delete(reviewId);
-  internals.reviewTimerIds.delete(reviewId);
-  const trackedIds = internals.workflowReviewIds.get(workflowId);
-  if (trackedIds) {
-    trackedIds.delete(reviewId);
-    if (trackedIds.size === 0) internals.workflowReviewIds.delete(workflowId);
-  }
-
-  // Cancel any remaining escalation/timeout timers
-  if (options.escalation) {
-    for (const step of options.escalation) {
-      await internals.scheduler.cancel(`review-escalation:${reviewId}:${step.after}`, workflowId);
-    }
-  }
-  if (options.timeout !== undefined) {
-    await internals.scheduler.cancel(`review-timeout:${reviewId}`, workflowId);
+  cleanupReviewLifecycleTracking(internals, workflowId, reviewId);
+  for (const timerId of timerIds) {
+    await internals.scheduler.cancel(timerId, workflowId);
   }
 
   if (!outcome.ok) {

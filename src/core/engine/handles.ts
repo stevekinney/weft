@@ -16,42 +16,12 @@ import type {
   WorkflowState,
 } from '../types.ts';
 import { messageName } from '../types.ts';
-
-type WorkflowHandleEventQueue = {
-  events: Event[];
-  resolver: (() => void) | undefined;
-};
-
-type WorkflowHandleIteratorState = {
-  done: boolean;
-};
+import { createWorkflowHandleEventIterator } from './handle-iteration.ts';
 
 export function getWorkflowExecutionStartedAt(
   state: Pick<WorkflowState, 'createdAt' | 'startedAt'>,
 ): number {
   return state.startedAt ?? state.createdAt;
-}
-
-function enqueueWorkflowHandleEvent(queue: WorkflowHandleEventQueue, event: Event): void {
-  queue.events.push(event);
-  queue.resolver?.();
-}
-
-function finishWorkflowHandleIteration(
-  state: WorkflowHandleIteratorState,
-  queue: WorkflowHandleEventQueue,
-  event: Event,
-): void {
-  // Guard against the "synthesized terminal event already landed" race: when
-  // iteration starts after a workflow has already finished, the asyncIterator
-  // synthesizes a terminal event from persisted state and sets `state.done =
-  // true`. If the real terminal event then arrives (because it was in flight
-  // between `addEventListener` and `await this.#engine.get()`), we must not
-  // enqueue it a second time — the test suite asserts terminal events are
-  // yielded exactly once.
-  if (state.done) return;
-  state.done = true;
-  enqueueWorkflowHandleEvent(queue, event);
 }
 
 /**
@@ -249,71 +219,12 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
     return this.#engine.removeTags(this.id, ...tags);
   }
 
-  // oxlint-disable-next-line complexity -- ID:core-engine-remove-tags-complexity
   async *[Symbol.asyncIterator](): AsyncIterableIterator<Event> {
-    const queue: WorkflowHandleEventQueue = { events: [], resolver: undefined };
-    const state = { done: false };
-    const listener = enqueueWorkflowHandleEvent.bind(undefined, queue);
-    const terminal = finishWorkflowHandleIteration.bind(undefined, state, queue);
-
-    // Non-terminal events use the plain enqueuing listener; terminal events
-    // use `terminal`, which both enqueues the event AND sets `state.done =
-    // true`. Registering `listener` and `terminal` on the same type would
-    // enqueue the terminal event twice, so terminal types are handled only by
-    // `terminal`.
-    const nonTerminalTypes = ['activity:started', 'activity:completed', 'signal:received'];
-    const terminalTypes = [
-      'workflow:completed',
-      'workflow:failed',
-      'workflow:cancelled',
-      'workflow:timed-out',
-    ];
-
-    for (const type of nonTerminalTypes) {
-      this.addEventListener(type, listener);
-    }
-    for (const type of terminalTypes) {
-      this.addEventListener(type, terminal);
-    }
-
-    try {
-      // Guard against the "started iterating after workflow already finished"
-      // hang: terminal events fire exactly once and are not replayed, so a
-      // consumer that attaches listeners post-termination would wait forever.
-      // We intentionally attach listeners BEFORE checking persisted status so
-      // the race is trivially safe — if the workflow transitions between
-      // listener attachment and the status read, the real event is already
-      // queued and `state.done` is true, and we skip synthesis.
-      if (!state.done) {
-        const persisted = await this.#engine.get(this.id);
-        if (persisted && !state.done) {
-          const synthetic = synthesizeTerminalEventFromState(persisted);
-          if (synthetic) {
-            queue.events.push(synthetic);
-            state.done = true;
-          }
-        }
-      }
-
-      while (!state.done || queue.events.length > 0) {
-        if (queue.events.length === 0) {
-          const { promise, resolve } = Promise.withResolvers<void>();
-          queue.resolver = resolve;
-          await promise;
-          queue.resolver = undefined;
-        }
-        while (queue.events.length > 0) {
-          yield queue.events.shift()!;
-        }
-      }
-    } finally {
-      for (const type of nonTerminalTypes) {
-        this.removeEventListener(type, listener);
-      }
-      for (const type of terminalTypes) {
-        this.removeEventListener(type, terminal);
-      }
-    }
+    yield* createWorkflowHandleEventIterator(
+      this,
+      () => this.#engine.get(this.id),
+      synthesizeTerminalEventFromState,
+    );
   }
 
   [Symbol.observable](): {

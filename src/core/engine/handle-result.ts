@@ -37,7 +37,6 @@ export function getWorkflowResultPromise(
   return waiter.promise;
 }
 
-// oxlint-disable-next-line complexity -- ID:core-engine-bootstrap-workflow-result-resolver-complexity
 export async function bootstrapWorkflowResultResolver(
   internals: EngineInternals,
   workflowId: string,
@@ -45,9 +44,7 @@ export async function bootstrapWorkflowResultResolver(
 ): Promise<void> {
   try {
     const state = await loadWorkflowState(internals, workflowId);
-    const currentWaiter = internals.resultResolvers.get(workflowId);
-    if (currentWaiter !== undefined && currentWaiter !== waiter) {
-      void currentWaiter.promise.then(waiter.resolve, waiter.reject);
+    if (linkToReplacementWaiter(internals, workflowId, waiter)) {
       return;
     }
 
@@ -63,21 +60,39 @@ export async function bootstrapWorkflowResultResolver(
 
     try {
       const result = await loadWorkflowResult(internals, workflowId);
-      if (internals.resultResolvers.get(workflowId) === waiter) {
-        internals.resultResolvers.delete(workflowId);
-      }
+      clearResultWaiter(internals, workflowId, waiter);
       waiter.resolve(result);
     } catch (error) {
-      if (internals.resultResolvers.get(workflowId) === waiter) {
-        internals.resultResolvers.delete(workflowId);
-      }
+      clearResultWaiter(internals, workflowId, waiter);
       waiter.reject(error);
     }
   } catch (error) {
-    if (internals.resultResolvers.get(workflowId) === waiter) {
-      internals.resultResolvers.delete(workflowId);
-    }
+    clearResultWaiter(internals, workflowId, waiter);
     waiter.reject(error);
+  }
+}
+
+function linkToReplacementWaiter(
+  internals: EngineInternals,
+  workflowId: string,
+  waiter: WorkflowResultWaiter,
+): boolean {
+  const currentWaiter = internals.resultResolvers.get(workflowId);
+  if (currentWaiter === undefined || currentWaiter === waiter) {
+    return false;
+  }
+
+  void currentWaiter.promise.then(waiter.resolve, waiter.reject);
+  return true;
+}
+
+function clearResultWaiter(
+  internals: EngineInternals,
+  workflowId: string,
+  waiter: WorkflowResultWaiter,
+): void {
+  if (internals.resultResolvers.get(workflowId) === waiter) {
+    internals.resultResolvers.delete(workflowId);
   }
 }
 

@@ -29,7 +29,6 @@ export type ConstraintCallbacks = {
  * `!context` guard here only fires for benign cases (e.g. the workflow has
  * already terminated or the context was cleared mid-evaluation).
  */
-// oxlint-disable-next-line complexity -- ID:core-engine-evaluate-constraints-complexity
 export async function evaluateConstraints(
   internals: EngineInternals,
   workflowId: string,
@@ -53,34 +52,14 @@ export async function evaluateConstraints(
   };
 
   for (const definition of constraints) {
-    let violated: boolean;
-    try {
-      const result = definition.check(stateSnapshot);
-      violated = !(result instanceof Promise ? await result : result);
-    } catch (error) {
-      // A throwing check is treated as a violation so the workflow doesn't
-      // silently continue in an unknown state. Log the original error to aid
-      // debugging — without this, users would see only the constraint
-      // violation message with no indication their check() is broken.
-      console.warn(`[weft] Constraint "${definition.name}" check() threw an error:`, error);
-      violated = true;
-    }
+    const violated = await isConstraintViolated(definition, stateSnapshot);
 
     if (!violated) continue;
 
-    callbacks.dispatchEvent(
-      new ConstraintViolatedEvent(
-        workflowId,
-        definition.name,
-        definition.scope,
-        definition.onViolation,
-      ),
-    );
+    dispatchConstraintViolation(callbacks, workflowId, definition);
 
     if (definition.onViolation === 'warn') {
-      console.warn(
-        `[weft] Constraint "${definition.name}" (scope: ${definition.scope}) violated on workflow "${workflowId}" — continuing (onViolation: 'warn')`,
-      );
+      warnConstraintViolation(workflowId, definition);
       continue;
     }
 
@@ -90,30 +69,76 @@ export async function evaluateConstraints(
     );
 
     if (definition.onViolation === 'fail') {
-      // 'fail': bypass saga — directly mark the workflow failed without
-      // throwing into the generator. Any active ctx.saga() will NOT run
-      // its compensators. Use 'compensate' if you want compensation to run.
-      // Cancel the workflow in the strategy first to release the generator,
-      // context, and abort controller — same as terminateWorkflow does.
-      callbacks.cancelWorkflowInStrategy(workflowId);
-      await callbacks.failWorkflow(workflowId, violationError);
+      await failConstraintViolation(callbacks, workflowId, violationError);
     } else {
-      // 'compensate': throw into the generator. If an active ctx.saga() is
-      // wrapping the current step it will catch the error, run its registered
-      // compensators in reverse, and then re-throw, completing the workflow failure.
-      callbacks.feedOperationResult(
-        workflowId,
-        {
-          status: 'failed',
-          error: violationError.message,
-          errorName: violationError.name,
-          failureCategory: 'application',
-        },
-        { value: violationError },
-      );
+      compensateConstraintViolation(callbacks, workflowId, violationError);
     }
     return true;
   }
 
   return false;
+}
+
+type ConstraintDefinition = NonNullable<RegistrationEntry['constraints']>[number];
+type RegistrationEntry =
+  EngineInternals['registrations'] extends Map<string, infer Entry> ? Entry : never;
+
+async function isConstraintViolated(
+  definition: ConstraintDefinition,
+  stateSnapshot: ConstraintCheckState,
+): Promise<boolean> {
+  try {
+    const result = definition.check(stateSnapshot);
+    return !(result instanceof Promise ? await result : result);
+  } catch (error) {
+    console.warn(`[weft] Constraint "${definition.name}" check() threw an error:`, error);
+    return true;
+  }
+}
+
+function dispatchConstraintViolation(
+  callbacks: ConstraintCallbacks,
+  workflowId: string,
+  definition: ConstraintDefinition,
+): void {
+  callbacks.dispatchEvent(
+    new ConstraintViolatedEvent(
+      workflowId,
+      definition.name,
+      definition.scope,
+      definition.onViolation,
+    ),
+  );
+}
+
+function warnConstraintViolation(workflowId: string, definition: ConstraintDefinition): void {
+  console.warn(
+    `[weft] Constraint "${definition.name}" (scope: ${definition.scope}) violated on workflow "${workflowId}" — continuing (onViolation: 'warn')`,
+  );
+}
+
+async function failConstraintViolation(
+  callbacks: ConstraintCallbacks,
+  workflowId: string,
+  violationError: Error,
+): Promise<void> {
+  callbacks.cancelWorkflowInStrategy(workflowId);
+  await callbacks.failWorkflow(workflowId, violationError);
+}
+
+function compensateConstraintViolation(
+  callbacks: ConstraintCallbacks,
+  workflowId: string,
+  violationError: Error,
+): void {
+  callbacks.feedOperationResult(
+    workflowId,
+    {
+      status: 'failed',
+      error: violationError.message,
+      errorName: violationError.name,
+      failureCategory: 'application',
+    },
+    { value: violationError },
+  );
 }
