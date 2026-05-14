@@ -301,7 +301,7 @@ async function persistInlineCheckpoint(
   );
   await commitCheckpoint(internals, workflowId, operation, commit, callbacks);
   if (hasPendingAttributeChanges) {
-    callbacks.dispatchEvent(new AttributesChangedEvent(workflowId, pendingAttributeChanges ?? {}));
+    callbacks.dispatchEvent(new AttributesChangedEvent(workflowId, { ...pendingAttributeChanges }));
   }
 }
 

@@ -186,8 +186,12 @@ export async function mutateWorkflowTags(
     const state = decodeWorkflowState(bytes);
     const currentTags = normalizeWorkflowTags(state.tags) ?? [];
     const requestedTags = normalizeStartWorkflowTags(tags, 'Workflow tags') ?? [];
+    if (requestedTags.length === 0) {
+      return false;
+    }
+
     const nextTags = resolveMutatedWorkflowTags(currentTags, requestedTags, mode);
-    if (requestedTags.length === 0 || workflowTagsAreUnchanged(currentTags, nextTags)) {
+    if (workflowTagsAreUnchanged(currentTags, nextTags)) {
       return false;
     }
 

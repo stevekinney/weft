@@ -10,8 +10,9 @@ const MAX_SCHEDULE_BACKFILL_OCCURRENCES_PER_TICK = 256;
 type ActiveScheduleTimerState = ScheduleState & { nextFireAt: number };
 
 type ScheduleTimerWork = {
+  dueOccurrences: number[];
   occurrencesToProcess: number[];
-  nextFireAt: number;
+  skipMissedOccurrences: boolean;
 };
 
 export async function handleScheduleTimer(
@@ -45,7 +46,7 @@ export async function handleScheduleTimer(
     await writeScheduleState(internals, {
       ...nextState,
       updatedAt: now,
-      nextFireAt: work.nextFireAt,
+      nextFireAt: resolveNextScheduleFireAt(nextState, work, now),
     });
   } catch (error) {
     await pauseScheduleAfterTimerFailure(internals, nextState, error);
@@ -76,17 +77,31 @@ function planScheduleTimerWork(
 
   if (!state.backfill && now - state.nextFireAt > SCHEDULE_LATE_GRACE_MILLISECONDS) {
     return {
+      dueOccurrences,
       occurrencesToProcess: [],
-      nextFireAt: getNextCronOccurrence(state.cronExpression, now),
+      skipMissedOccurrences: true,
     };
   }
 
   const occurrencesToProcess = state.backfill ? dueOccurrences : dueOccurrences.slice(0, 1);
-  const anchorOccurrence = occurrencesToProcess.at(-1) ?? dueOccurrences.at(-1)!;
   return {
+    dueOccurrences,
     occurrencesToProcess,
-    nextFireAt: getNextCronOccurrence(state.cronExpression, anchorOccurrence),
+    skipMissedOccurrences: false,
   };
+}
+
+function resolveNextScheduleFireAt(
+  state: ScheduleState,
+  work: ScheduleTimerWork,
+  now: number,
+): number {
+  if (work.skipMissedOccurrences) {
+    return getNextCronOccurrence(state.cronExpression, now);
+  }
+
+  const anchorOccurrence = work.occurrencesToProcess.at(-1) ?? work.dueOccurrences.at(-1)!;
+  return getNextCronOccurrence(state.cronExpression, anchorOccurrence);
 }
 
 async function processScheduleTimerOccurrences(
