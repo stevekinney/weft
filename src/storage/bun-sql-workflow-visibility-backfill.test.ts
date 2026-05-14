@@ -143,6 +143,22 @@ describe('BunSQLite workflow visibility backfill', () => {
     expect(await collectKeys(storage, 'wf-idx-deadline:')).toEqual([
       KEYS.workflowVisibilityDeadline(1_700_000_010_000, 'workflow-b'),
     ]);
+
+    const indexedKeysAfterFirstBackfill = await collectKeys(storage, 'wf-idx-');
+    const secondReport = await runWorkflowVisibilityBackfill(storage);
+
+    expect(secondReport).toEqual({ processed: 2, conflicts: 0, watermarkWritten: true });
+    expect(await collectKeys(storage, 'wf-idx-')).toEqual(indexedKeysAfterFirstBackfill);
+    expect(
+      decodeWorkflowVisibilityManifest(
+        await storage.get(KEYS.workflowVisibilityManifest('workflow-a')),
+      ),
+    ).toEqual(manifestA);
+    expect(
+      decodeWorkflowVisibilityManifest(
+        await storage.get(KEYS.workflowVisibilityManifest('workflow-b')),
+      ),
+    ).toEqual(manifestB);
   });
 
   it('drops visibility rows and watermark without deleting workflow state', async () => {
@@ -162,6 +178,7 @@ describe('BunSQLite workflow visibility backfill', () => {
 
     expect(report.rowsDeleted).toBeGreaterThan(0);
     expect(await getWorkflowVisibilityWatermark(storage)).toBe('stale');
+    expect(await storage.get(KEYS.workflowVisibilityMetaVersion())).toBeNull();
     expect(await storage.get(KEYS.workflowVisibilityMetaCursor())).toBeNull();
     expect(await storage.get(KEYS.workflowVisibilityMetaBuiltAt())).toBeNull();
     expect(await storage.get(KEYS.workflow('workflow-a'))).not.toBeNull();
