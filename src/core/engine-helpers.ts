@@ -86,7 +86,7 @@ export type RunAllSettledResult = {
   firstError: unknown;
 };
 
-export type RunAllBranch = [fn: Function] | [fn: Function, input: unknown];
+export type RunAllBranch = readonly [fn: Function] | readonly [fn: Function, input: unknown];
 
 /**
  * Execute every `ctx.runAll()` branch and return per-branch settled

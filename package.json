@@ -149,6 +149,18 @@
       "import": "./dist/client/local.js",
       "default": "./dist/client/local.js"
     },
+    "./observability": {
+      "types": "./dist/observability/index.d.ts",
+      "bun": "./dist/observability/index.js",
+      "import": "./dist/observability/index.js",
+      "default": "./dist/observability/index.js"
+    },
+    "./json-schema": {
+      "types": "./dist/json-schema.d.ts",
+      "bun": "./dist/json-schema.js",
+      "import": "./dist/json-schema.js",
+      "default": "./dist/json-schema.js"
+    },
     "./worker-protocol": {
       "types": "./dist/worker/protocol.d.ts",
       "bun": "./dist/worker/protocol.js",

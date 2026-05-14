@@ -18,7 +18,13 @@ import type { ObservabilityOptions, ObservabilityState } from './types';
 import { buildWorkflowInterceptor } from './workflow-interceptor';
 import { createWorkflowLifecycle } from './workflow-lifecycle';
 
-export { METRICS, MetricsCollector } from './metrics';
+export {
+  createMetricsCollectorExporter,
+  createOpenTelemetryMetrics,
+  METRICS,
+  MetricsCollector,
+  serializeMetricsSnapshotForPrometheus,
+} from './metrics';
 export type {
   CounterMetric,
   GaugeMetric,
@@ -26,7 +32,16 @@ export type {
   MetricDefinition,
   MetricsSnapshot,
   MetricType,
+  OpenTelemetryMetrics,
+  PrometheusExporter,
 } from './metrics';
+export { getOpenTelemetryApi } from './no-op-telemetry';
+export type {
+  OpenTelemetryApi,
+  OpenTelemetryMeter,
+  OpenTelemetrySpan,
+  OpenTelemetryTracer,
+} from './no-op-telemetry';
 export {
   extractTraceParent,
   formatTraceParent,

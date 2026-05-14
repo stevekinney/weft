@@ -139,7 +139,7 @@ export type ContextOperationRequest =
   | {
       type: 'run-all';
       operationId: string;
-      branches: Record<string, [Function] | [Function, unknown]>;
+      branches: Record<string, readonly [Function] | readonly [Function, unknown]>;
       /** Workflow step index — see note on `parallel.step`. */
       step: number;
       /**

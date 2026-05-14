@@ -311,7 +311,9 @@ function validateRunAllTopology(
   }
 }
 
-export function* runAll<T extends Record<string, [Function] | [Function, unknown]>>(
+export function* runAll<
+  T extends Record<string, readonly [Function] | readonly [Function, unknown]>,
+>(
   context: Context,
   internals: ContextInternals,
   branches: T,

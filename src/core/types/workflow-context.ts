@@ -29,6 +29,36 @@ import type {
   UnregisteredName,
 } from './workflow-registries.ts';
 
+export type WorkflowOperationResult<TOperation> =
+  TOperation extends Generator<unknown, infer TResult, unknown> ? TResult : never;
+
+export type WorkflowOperationTupleResult<
+  TOperations extends readonly WorkflowOperation<unknown>[],
+> = {
+  -readonly [TIndex in keyof TOperations]: WorkflowOperationResult<TOperations[TIndex]>;
+};
+
+type RunAllBranchResult<TBranch> = TBranch extends readonly [
+  execute: infer TExecute,
+  ...rest: unknown[],
+]
+  ? TExecute extends (...arguments_: never[]) => infer TResult
+    ? Awaited<TResult>
+    : unknown
+  : never;
+
+export type WorkflowRunAllBranch =
+  | readonly [execute: (...arguments_: never[]) => unknown]
+  | readonly [execute: (...arguments_: never[]) => unknown, input: unknown]
+  | readonly [execute: Function]
+  | readonly [execute: Function, input: unknown];
+
+export type RunAllResult<TBranches extends Record<string, WorkflowRunAllBranch>> = {
+  [TKey in keyof TBranches]: [RunAllBranchResult<TBranches[TKey]>] extends [never]
+    ? unknown
+    : RunAllBranchResult<TBranches[TKey]>;
+};
+
 /**
  * The durable workflow authoring surface passed to every
  * {@link WorkflowFunction}. Workflow handlers can call `ctx.run`,
@@ -117,8 +147,12 @@ export interface WorkflowContext {
     name: string,
   ): WorkflowOperation<{ payload: T; respond: (result: unknown) => void }>;
   review(options: HumanReviewOptions): WorkflowOperation<HumanReviewResult>;
-  all(operations: WorkflowOperation<unknown>[]): WorkflowOperation<unknown[]>;
-  race(operations: WorkflowOperation<unknown>[]): WorkflowOperation<unknown>;
+  all<const TOperations extends readonly WorkflowOperation<unknown>[]>(
+    operations: TOperations,
+  ): WorkflowOperation<WorkflowOperationTupleResult<TOperations>>;
+  race<const TOperations extends readonly WorkflowOperation<unknown>[]>(
+    operations: TOperations,
+  ): WorkflowOperation<WorkflowOperationTupleResult<TOperations>[number]>;
   memo<T>(key: string, fn: () => T | Promise<T>): WorkflowOperation<T>;
   offload<T>(key: string, fn: () => Promise<T>): WorkflowOperation<OffloadReference>;
   stream(
@@ -127,9 +161,9 @@ export interface WorkflowContext {
   ): WorkflowOperation<StreamReference>;
   load<T>(reference: OffloadReference): WorkflowOperation<T>;
   archive(key: string, data: unknown): WorkflowOperation<void>;
-  runAll<T extends Record<string, [Function] | [Function, unknown]>>(
-    branches: T,
-  ): WorkflowOperation<Record<keyof T, unknown>>;
+  runAll<const TBranches extends Record<string, WorkflowRunAllBranch>>(
+    branches: TBranches,
+  ): WorkflowOperation<RunAllResult<TBranches>>;
   saga<TFinalOutput = unknown>(steps: ErasedSagaStep[]): WorkflowOperation<TFinalOutput>;
   startChild<TResult = unknown>(
     workflowType: string,

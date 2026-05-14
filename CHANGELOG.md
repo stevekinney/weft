@@ -18,6 +18,24 @@ read (`memory` to `resource`, the others to `application`) so existing workflow
 state and legacy search-attribute records still surface through the new public
 type.
 
+### Changed — API surface polish
+
+- `ctx.all([...])`, `ctx.race([...])`, and `ctx.runAll({ ... })` now preserve
+  per-branch output inference in TypeScript instead of collapsing results to
+  `unknown[]`, `unknown`, or `Record<key, unknown>`.
+- `ChildWorkflowOptions` is now a closed shape with only the `id` field the
+  engine currently reads.
+- Standard Schema and Standard JSON Schema helper types moved from the package
+  root to `weft/json-schema`.
+- OpenTelemetry, trace propagation, metrics, and Prometheus infrastructure
+  types moved from the package root to `weft/observability`.
+
+### Renamed (breaking)
+
+- `EngineOptions.workerExecution.concurrency` is now
+  `EngineOptions.workerExecution.poolSize`, matching
+  `activityExecution.poolSize`.
+
 ### Changed — Engine lifecycle and registration ergonomics
 
 `Engine.create()` no longer recovers stored workflows by default. Pass

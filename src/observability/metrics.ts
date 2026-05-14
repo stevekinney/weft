@@ -8,25 +8,20 @@
  * @module metrics
  */
 
+import { METRICS } from './metrics-catalog.ts';
+import type { MetricsSnapshot } from './metrics-snapshot.ts';
 import type { OpenTelemetryMeter } from './no-op-telemetry';
 import { getOpenTelemetryApi } from './no-op-telemetry';
 
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-export type MetricType = 'counter' | 'gauge' | 'histogram';
-
-export interface MetricDefinition {
-  name: string;
-  description: string;
-  unit: string;
-  type: MetricType;
-}
-
-// ---------------------------------------------------------------------------
-// Metric catalogue
-// ---------------------------------------------------------------------------
+export { METRICS } from './metrics-catalog.ts';
+export type {
+  CounterMetric,
+  GaugeMetric,
+  HistogramMetric,
+  MetricDefinition,
+  MetricsSnapshot,
+  MetricType,
+} from './metrics-snapshot.ts';
 
 // ---------------------------------------------------------------------------
 // Circular buffer for bounded histogram storage
@@ -76,22 +71,6 @@ class CircularBuffer {
 // Metrics collector
 // ---------------------------------------------------------------------------
 
-export type CounterMetric = { type: 'counter'; value: number };
-
-export type HistogramMetric = {
-  type: 'histogram';
-  count: number;
-  sum: number;
-  p50: number;
-  p99: number;
-  min: number;
-  max: number;
-};
-
-export type GaugeMetric = { type: 'gauge'; value: number };
-
-export type MetricsSnapshot = Record<string, CounterMetric | HistogramMetric | GaugeMetric>;
-
 /**
  * Collects counters, histograms, and gauges for Weft observability.
  *
@@ -99,6 +78,16 @@ export type MetricsSnapshot = Record<string, CounterMetric | HistogramMetric | G
  * `record()`/`increment()` calls from the same isolate do not require locking.
  * Call {@link snapshot} to read all collected values and {@link reset} to
  * clear them.
+ *
+ * @example
+ * ```ts
+ * import { MetricsCollector } from 'weft/observability';
+ *
+ * const collector = new MetricsCollector();
+ * collector.increment('weft.workflow.started');
+ * collector.record('weft.workflow.duration', 42);
+ * console.log(collector.snapshot());
+ * ```
  */
 export class MetricsCollector {
   #counters: Map<string, number>;
@@ -177,7 +166,7 @@ export class MetricsCollector {
  *
  * @example
  * ```ts
- * import { createOpenTelemetryMetrics, type OpenTelemetryMetrics } from 'weft';
+ * import { createOpenTelemetryMetrics, type OpenTelemetryMetrics } from 'weft/observability';
  *
  * const openTelemetryMetrics: OpenTelemetryMetrics = createOpenTelemetryMetrics('my-service');
  * openTelemetryMetrics.workflowDuration.record(120);
@@ -208,7 +197,7 @@ export type OpenTelemetryMetrics = {
  *
  * @example
  * ```ts
- * import { createOpenTelemetryMetrics } from 'weft';
+ * import { createOpenTelemetryMetrics } from 'weft/observability';
  *
  * // Uses the auto-detected OpenTelemetry API or no-op fallback
  * const instruments = createOpenTelemetryMetrics('my-service');
@@ -293,6 +282,16 @@ export interface PrometheusExporter {
  * definitions registered in {@link METRICS}. Metrics that aren't in the
  * snapshot still emit their `# HELP` / `# TYPE` lines with zero values so
  * Prometheus scrapers see a stable schema.
+ *
+ * @example
+ * ```ts
+ * import { MetricsCollector, serializeMetricsSnapshotForPrometheus } from 'weft/observability';
+ *
+ * const collector = new MetricsCollector();
+ * collector.increment('weft.workflow.started');
+ * const body = serializeMetricsSnapshotForPrometheus(collector.snapshot());
+ * console.log(body.includes('weft_workflow_started_total'));
+ * ```
  */
 // oxlint-disable-next-line complexity -- ID:observability-metrics-serialize-metrics-snapshot-for-prometheus-complexity
 export function serializeMetricsSnapshotForPrometheus(snapshot: MetricsSnapshot): string {
@@ -345,7 +344,7 @@ export function serializeMetricsSnapshotForPrometheus(snapshot: MetricsSnapshot)
  *
  * @example
  * ```ts
- * import { createMetricsCollectorExporter } from 'weft';
+ * import { createMetricsCollectorExporter } from 'weft/observability';
  *
  * const exporter = createMetricsCollectorExporter(undefined);
  * // Pass to serve() to expose /v1/metrics
@@ -363,131 +362,3 @@ export function createMetricsCollectorExporter(
     },
   };
 }
-
-// ---------------------------------------------------------------------------
-// Metric catalogue
-// ---------------------------------------------------------------------------
-
-/**
- * Metric names and descriptions for Weft observability.
- *
- * @example
- * ```ts
- * import { METRICS } from 'weft';
- *
- * for (const metric of Object.values(METRICS)) {
- *   console.log(metric.name, metric.type, metric.unit);
- * }
- * // e.g. 'weft.workflow.duration' 'histogram' 'ms'
- * ```
- */
-export const METRICS = {
-  workflowDuration: {
-    name: 'weft.workflow.duration',
-    description: 'Duration of workflow execution in milliseconds',
-    unit: 'ms',
-    type: 'histogram' as const,
-  },
-  activityDuration: {
-    name: 'weft.activity.duration',
-    description: 'Duration of activity execution in milliseconds',
-    unit: 'ms',
-    type: 'histogram' as const,
-  },
-  activityAttempts: {
-    name: 'weft.activity.attempts',
-    description: 'Total activity execution attempts',
-    unit: 'attempts',
-    type: 'counter' as const,
-  },
-  workflowActive: {
-    name: 'weft.workflow.active',
-    description: 'Number of currently active workflows',
-    unit: 'workflows',
-    type: 'gauge' as const,
-  },
-  workflowStarted: {
-    name: 'weft.workflow.started',
-    description: 'Total workflows started',
-    unit: 'workflows',
-    type: 'counter' as const,
-  },
-  workflowCompleted: {
-    name: 'weft.workflow.completed',
-    description: 'Total workflows completed',
-    unit: 'workflows',
-    type: 'counter' as const,
-  },
-  workflowFailed: {
-    name: 'weft.workflow.failed',
-    description: 'Total workflows failed',
-    unit: 'workflows',
-    type: 'counter' as const,
-  },
-  promptCacheHits: {
-    name: 'weft.prompt_cache.hits',
-    description: 'Total prompt prefix cache hits',
-    unit: 'hits',
-    type: 'counter' as const,
-  },
-  promptCacheMisses: {
-    name: 'weft.prompt_cache.misses',
-    description: 'Total prompt prefix cache misses',
-    unit: 'misses',
-    type: 'counter' as const,
-  },
-  dpmoDefects: {
-    name: 'weft.dpmo.defects',
-    description: 'Total failed workflows (DPMO numerator)',
-    unit: 'workflows',
-    type: 'counter' as const,
-  },
-  dpmoOperations: {
-    name: 'weft.dpmo.operations',
-    description: 'Total started workflows (DPMO denominator)',
-    unit: 'workflows',
-    type: 'counter' as const,
-  },
-  taskBacklog: {
-    name: 'weft.task.backlog',
-    description: 'Number of queued tasks waiting for workers',
-    unit: 'tasks',
-    type: 'gauge' as const,
-  },
-  taskQueueLatency: {
-    name: 'weft.task.queue_latency',
-    description: 'Time tasks spend queued before dispatch in milliseconds',
-    unit: 'ms',
-    type: 'histogram' as const,
-  },
-  taskExecutionLatency: {
-    name: 'weft.task.execution_latency',
-    description: 'Time tasks spend executing after worker start in milliseconds',
-    unit: 'ms',
-    type: 'histogram' as const,
-  },
-  taskRetries: {
-    name: 'weft.task.retries',
-    description: 'Total task retry attempts after the first dispatch attempt',
-    unit: 'retries',
-    type: 'counter' as const,
-  },
-  taskRequeues: {
-    name: 'weft.task.requeues',
-    description: 'Total visibility-timeout or disconnect task requeues',
-    unit: 'requeues',
-    type: 'counter' as const,
-  },
-  taskStaleHeartbeats: {
-    name: 'weft.task.stale_heartbeats',
-    description: 'Number of in-flight tasks whose heartbeat age exceeds the diagnostic threshold',
-    unit: 'tasks',
-    type: 'gauge' as const,
-  },
-  workerCapacitySaturation: {
-    name: 'weft.worker.capacity_saturation',
-    description: 'Ratio of in-flight worker slots to total worker concurrency',
-    unit: 'ratio',
-    type: 'gauge' as const,
-  },
-} as const;

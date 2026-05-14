@@ -24,6 +24,8 @@ await Bun.build({
     './src/worker/protocol.ts',
     './src/mcp/index.ts',
     './src/mcp/cli.ts',
+    './src/observability/index.ts',
+    './src/json-schema.ts',
     // Bun-only server subpath (weft/server)
     './src/server/index.ts',
   ],

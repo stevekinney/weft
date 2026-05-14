@@ -593,7 +593,7 @@ function createExecutionStrategyBundle(parameters: {
   if (options?.workerExecution) {
     const pool = new WorkerPool({
       workerUrl: options.workerExecution.workerUrl,
-      concurrency: options.workerExecution.concurrency ?? 4,
+      concurrency: options.workerExecution.poolSize ?? 4,
       smol: options.workerExecution.smol ?? false,
     });
     return {
