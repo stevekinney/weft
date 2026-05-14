@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { assertScopedBulkWorkflowFilter } from '../../core/bulk-workflow-filter.ts';
+import { isFailureCategory } from '../../core/failure-categories.ts';
 import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
 import type {
   AttributeFilter,
@@ -20,6 +21,7 @@ import {
 import type { AccessPolicy } from '../authorization.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import type { Principal } from '../principal.ts';
+import { parseOptionalFailureCategoryFilter } from './failure-category-filter.ts';
 import { invalidParamsFault } from './operation-helpers.ts';
 
 const workflowStatusSchema = z.custom<WorkflowStatus>((value) => typeof value === 'string');
@@ -38,7 +40,7 @@ const attributeFilterSchema = z.object({
   gte: searchAttributeValueSchema.optional(),
   lte: searchAttributeValueSchema.optional(),
 });
-const failureCategorySchema = z.custom<FailureCategory>((value) => typeof value === 'string');
+const failureCategorySchema = z.custom<FailureCategory>(isFailureCategory);
 const timeRangeSchema = z.object({
   gte: z.number().optional(),
   gt: z.number().optional(),
@@ -265,7 +267,7 @@ export function parseBulkListFilterFromBody(body: unknown): ListFilter {
     filter.tenantId = tenantId;
   }
 
-  const failureCategory = parseOptionalFailureCategory(filterRecord['failureCategory']);
+  const failureCategory = parseOptionalFailureCategoryFilter(filterRecord['failureCategory']);
   if (failureCategory !== undefined) {
     filter.failureCategory = failureCategory;
   }
@@ -295,17 +297,6 @@ function parseOptionalTenantId(value: unknown): string | string[] | undefined {
     return value;
   }
   throw new Error('Field "filter.tenantId" must be a string or an array of strings');
-}
-
-function parseOptionalFailureCategory(
-  value: unknown,
-): FailureCategory | FailureCategory[] | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value === 'string') return value as FailureCategory;
-  if (Array.isArray(value) && value.every((entry) => typeof entry === 'string')) {
-    return value as FailureCategory[];
-  }
-  throw new Error('Field "filter.failureCategory" must be a string or an array of strings');
 }
 
 const TIME_RANGE_BOUNDS = ['gte', 'gt', 'lte', 'lt'] as const;

@@ -264,6 +264,14 @@
     'system',
   ];
 
+  function formatFailureCategoryFilter(
+    category: FailureCategory | FailureCategory[] | undefined,
+  ): string {
+    if (category === undefined) return 'Any';
+    const categories = Array.isArray(category) ? category : [category];
+    return categories.map((entry) => failureCategoryLabels[entry]).join(', ');
+  }
+
   const statusCountRows = $derived.by(() => {
     const counts = new Map<WorkflowStatus, number>();
     for (const group of statusAggregate?.groups ?? []) {
@@ -571,12 +579,7 @@
     });
     details.push({
       label: 'Failure category',
-      value:
-        filter.failureCategory === undefined
-          ? 'Any'
-          : Array.isArray(filter.failureCategory)
-            ? filter.failureCategory.join(', ')
-            : filter.failureCategory,
+      value: formatFailureCategoryFilter(filter.failureCategory),
     });
     if (filter.attributes !== undefined && filter.attributes.length > 0) {
       details.push({

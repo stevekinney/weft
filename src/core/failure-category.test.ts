@@ -6,7 +6,12 @@ import { sleepForTesting } from '../testing/fake-timers.ts';
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
+import { KEYS } from '../storage/interface.ts';
+import { MemoryStorage } from '../storage/memory.ts';
+import { encode } from './codec/api.ts';
 import { Engine } from './engine.ts';
+import { classifyErrorAsFailureCategory } from './failure-categories.ts';
+import { buildIndexOperations as buildSearchAttributeIndexOperations } from './search-attributes.ts';
 import type { FailureCategory } from './types.ts';
 
 /** Drain microtasks so fire-and-forget work completes. */
@@ -116,6 +121,10 @@ describe('failureCategory on WorkflowState', () => {
     resolve();
     await handle.result();
   });
+
+  it('classifies non-Error values as system failures at runtime boundaries', () => {
+    expect(classifyErrorAsFailureCategory('string failure')).toBe('system');
+  });
 });
 
 describe('failureCategory search attribute indexing', () => {
@@ -187,5 +196,41 @@ describe('failureCategory search attribute indexing', () => {
 
     expect(result.items.length).toBe(1);
     expect(result.items[0]!.id).toBe('wf-fail');
+  });
+
+  it('engine.list({ attributes: [{ key: "failureCategory", value: "application" }] }) matches legacy indexed categories', async () => {
+    const storage = new MemoryStorage();
+    engine = new Engine({ storage });
+    const workflowId = 'wf-legacy-planning-index';
+
+    await storage.put(
+      KEYS.workflow(workflowId),
+      encode({
+        id: workflowId,
+        type: 'legacy',
+        status: 'failed',
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        input: null,
+        output: undefined,
+        error: 'legacy planning failure',
+        failureCategory: null,
+        tags: [],
+      }),
+    );
+    await storage.put(KEYS.attribute(workflowId), encode({ failureCategory: 'planning' }));
+    await storage.batch(
+      buildSearchAttributeIndexOperations(workflowId, {}, { failureCategory: 'planning' }),
+    );
+
+    const result = await engine.list(
+      {
+        attributes: [{ key: 'failureCategory', value: 'application' as FailureCategory }],
+      },
+      { includeFailureCategory: true },
+    );
+
+    expect(result.items.map((item) => item.id)).toEqual([workflowId]);
+    expect(result.items[0]?.failureCategory).toBe('application');
   });
 });

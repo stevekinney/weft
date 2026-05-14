@@ -107,6 +107,8 @@ describe('operations router', () => {
       'workflow-router',
       {
         error: 'Unsupported operation type: unknown-operation',
+        errorName: 'Error',
+        failureCategory: 'application',
         status: 'failed',
       },
       expect.objectContaining({

@@ -100,11 +100,18 @@ describe('OperationOutcome discriminated union', () => {
     }
   });
 
-  it('narrows to failed with an error', () => {
-    const outcome: OperationOutcome = { status: 'failed', error: 'boom' };
+  it('narrows to failed with an error and optional failure metadata', () => {
+    const outcome: OperationOutcome = {
+      status: 'failed',
+      error: 'boom',
+      errorName: 'ReviewTimeoutError',
+      failureCategory: 'timeout',
+    };
 
     if (outcome.status === 'failed') {
       expect(outcome.error).toBe('boom');
+      expect(outcome.errorName).toBe('ReviewTimeoutError');
+      expect(outcome.failureCategory).toBe('timeout');
     } else {
       expect(true).toBe(false);
     }

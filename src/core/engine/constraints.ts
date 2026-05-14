@@ -103,7 +103,12 @@ export async function evaluateConstraints(
       // compensators in reverse, and then re-throw, completing the workflow failure.
       callbacks.feedOperationResult(
         workflowId,
-        { status: 'failed', error: violationError.message },
+        {
+          status: 'failed',
+          error: violationError.message,
+          errorName: violationError.name,
+          failureCategory: 'application',
+        },
         { value: violationError },
       );
     }

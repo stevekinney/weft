@@ -75,6 +75,18 @@ describe('operation coverage regressions', () => {
     );
   });
 
+  it('rejects legacy failure categories in bulk filters', () => {
+    expect(() =>
+      parseRequiredBulkListFilter({
+        filter: { status: 'failed', failureCategory: 'planning' },
+      }),
+    ).toThrow(
+      invalidParamsFault(
+        'Field "filter.failureCategory" must be one of application, timeout, cancellation, resource, system',
+      ).message,
+    );
+  });
+
   it('rejects invalid filter tags across bulk operations', async () => {
     const engine = createEngine();
 

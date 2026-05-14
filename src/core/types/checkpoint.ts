@@ -121,7 +121,12 @@ export interface OperationRequest {
 
 export type OperationOutcome =
   | { status: 'completed'; value: unknown }
-  | { status: 'failed'; error: string };
+  | {
+      status: 'failed';
+      error: string;
+      errorName?: string;
+      failureCategory?: FailureCategory;
+    };
 
 // ---------------------------------------------------------------------------
 // Timer entry for scheduler
@@ -202,6 +207,6 @@ export type WorkerOutboundMessage =
       workflowId: WorkflowId;
       error: string;
       errorStack?: string;
-      /** Populated when the inline strategy can classify the failure cause. */
+      /** Populated when the execution strategy can classify the failure cause. */
       failureCategory?: FailureCategory;
     };

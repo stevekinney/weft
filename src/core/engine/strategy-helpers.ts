@@ -39,7 +39,7 @@ export function feedOperationResult(
     } else {
       internals.inlineStrategy.throwIntoWorkflow(
         workflowId,
-        originalReason !== undefined ? originalReason.value : new Error(outcome.error),
+        originalReason !== undefined ? originalReason.value : errorFromFailedOutcome(outcome),
       );
     }
     return;
@@ -52,6 +52,14 @@ export function feedOperationResult(
     checkpoint: serialized,
     operationResult: outcome,
   });
+}
+
+function errorFromFailedOutcome(outcome: Extract<OperationOutcome, { status: 'failed' }>): Error {
+  const error = new Error(outcome.error);
+  if (outcome.errorName !== undefined) {
+    error.name = outcome.errorName;
+  }
+  return error;
 }
 
 export async function swallowPromiseRejection(

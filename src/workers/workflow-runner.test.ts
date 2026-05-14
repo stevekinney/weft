@@ -68,6 +68,31 @@ describe('handleRunMessage', () => {
 
     expect(result.type).toBe('failed');
     expect((result as { error: string }).error).toContain('workflow exploded');
+    expect(result.type === 'failed' ? result.failureCategory : undefined).toBe('application');
+  });
+
+  it('classifies timeout-shaped worker run failures', async () => {
+    class ReviewTimeoutError extends Error {
+      constructor() {
+        super('review timed out');
+        this.name = 'ReviewTimeoutError';
+      }
+    }
+
+    const context = createWorkflowRunnerContext();
+
+    async function* timeoutWorkflow() {
+      throw new ReviewTimeoutError();
+    }
+
+    const result = await handleRunMessage(
+      context,
+      { workflowId: 'wf-timeout', workflowType: 'timeout', input: null },
+      () => timeoutWorkflow,
+    );
+
+    expect(result.type).toBe('failed');
+    expect(result.type === 'failed' ? result.failureCategory : undefined).toBe('timeout');
   });
 
   it('returns a checkpoint when the generator yields an operation request', async () => {
@@ -774,6 +799,7 @@ describe('handleResumeMessage — error paths', () => {
 
     expect(result.type).toBe('failed');
     expect((result as { error: string }).error).toContain('resume exploded');
+    expect(result.type === 'failed' ? result.failureCategory : undefined).toBe('application');
 
     // Generator should be cleaned up
     expect(context.generators.has('wf-throw-on-resume')).toBe(false);
@@ -797,6 +823,7 @@ describe('formatError', () => {
 
     expect(result.type).toBe('failed');
     expect((result as { error: string }).error).toBe('string-error');
+    expect(result.type === 'failed' ? result.failureCategory : undefined).toBe('system');
   });
 
   it('handles non-Error thrown values in handleResumeMessage', async () => {
@@ -835,5 +862,53 @@ describe('formatError', () => {
 
     expect(result.type).toBe('failed');
     expect((result as { error: string }).error).toBe('42');
+    expect(result.type === 'failed' ? result.failureCategory : undefined).toBe('system');
+  });
+
+  it('preserves failed operation categories when an operation failure terminates the workflow', async () => {
+    const context = createWorkflowRunnerContext();
+
+    const operationRequest: OperationRequest = {
+      id: 'op-1',
+      workflowId: 'wf-operation-failure-category',
+      kind: 'activity',
+      queue: 'default',
+      attempt: 1,
+      retryPolicy: {
+        maxAttempts: 3,
+        initialBackoff: 1000,
+        backoffMultiplier: 2,
+        maxBackoff: 30_000,
+      },
+      scheduledAt: Date.now(),
+    };
+
+    async function* uncaughtOperationFailure() {
+      yield operationRequest;
+    }
+
+    await handleRunMessage(
+      context,
+      {
+        workflowId: 'wf-operation-failure-category',
+        workflowType: 'operation-failure',
+        input: null,
+      },
+      () => uncaughtOperationFailure,
+    );
+
+    const result = await handleResumeMessage(context, {
+      workflowId: 'wf-operation-failure-category',
+      result: undefined,
+      operationResult: {
+        status: 'failed',
+        error: 'review timed out',
+        errorName: 'ReviewTimeoutError',
+        failureCategory: 'timeout',
+      },
+    });
+
+    expect(result.type).toBe('failed');
+    expect(result.type === 'failed' ? result.failureCategory : undefined).toBe('timeout');
   });
 });

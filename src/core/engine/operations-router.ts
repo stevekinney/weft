@@ -1,4 +1,5 @@
 import type { ContextOperationRequest } from '../context.ts';
+import { classifyErrorAsFailureCategory } from '../failure-categories.ts';
 import type { OperationOutcome } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 import type { CapturedRejectionReason } from './strategy-helpers.ts';
@@ -223,7 +224,14 @@ export function failOperation(
   callbacks.finalizePendingTimelineEntry(workflowId, 'failed', errorMessage);
   callbacks.feedOperationResult(
     workflowId,
-    { status: 'failed', error: errorMessage },
+    {
+      status: 'failed',
+      error: errorMessage,
+      ...(error instanceof Error ? { errorName: error.name } : {}),
+      failureCategory: classifyErrorAsFailureCategory(error, {
+        defaultErrorCategory: 'application',
+      }),
+    },
     { value: error },
   );
 }

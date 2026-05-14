@@ -1,4 +1,5 @@
 import { WorkflowAtomicStateHandle } from '../core/context/state-namespace.ts';
+import { classifyErrorAsFailureCategory } from '../core/failure-categories.ts';
 import type { TenantContext } from '../core/tenant.ts';
 import type {
   OperationOutcome,
@@ -140,6 +141,7 @@ export async function handleRunMessage(
       type: 'failed',
       workflowId: message.workflowId,
       error: `Unknown workflow type: ${message.workflowType}`,
+      failureCategory: 'system',
     };
   }
 
@@ -158,6 +160,9 @@ export async function handleRunMessage(
       type: 'failed',
       workflowId: message.workflowId,
       error: formatError(error),
+      failureCategory: classifyErrorAsFailureCategory(error, {
+        defaultErrorCategory: 'application',
+      }),
     };
   }
 }
@@ -177,8 +182,14 @@ export async function handleResumeMessage(
       type: 'failed',
       workflowId: message.workflowId,
       error: `No active generator for workflow: ${message.workflowId}`,
+      failureCategory: 'system',
     };
   }
+
+  const operationFailureCategory =
+    message.operationResult?.status === 'failed'
+      ? message.operationResult.failureCategory
+      : undefined;
 
   try {
     // If the operation failed, throw the error into the generator so the
@@ -186,7 +197,7 @@ export async function handleResumeMessage(
     const outcome = message.operationResult;
     const step =
       outcome?.status === 'failed'
-        ? await generator.throw(new Error(outcome.error))
+        ? await generator.throw(errorFromOperationOutcome(outcome))
         : await generator.next(message.result);
     return processGeneratorStep(context, message.workflowId, generator, step);
   } catch (error) {
@@ -195,6 +206,9 @@ export async function handleResumeMessage(
       type: 'failed',
       workflowId: message.workflowId,
       error: formatError(error),
+      failureCategory:
+        operationFailureCategory ??
+        classifyErrorAsFailureCategory(error, { defaultErrorCategory: 'application' }),
     };
   }
 }
@@ -289,4 +303,14 @@ function formatError(error: unknown): string {
     return error.message;
   }
   return String(error);
+}
+
+function errorFromOperationOutcome(
+  outcome: Extract<OperationOutcome, { status: 'failed' }>,
+): Error {
+  const error = new Error(outcome.error);
+  if (outcome.errorName !== undefined) {
+    error.name = outcome.errorName;
+  }
+  return error;
 }

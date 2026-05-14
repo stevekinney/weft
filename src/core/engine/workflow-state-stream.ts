@@ -4,6 +4,7 @@ import {
   encodeStorageKeyComponent,
   tryDecodeStorageKeyComponent,
 } from '../../storage/interface.ts';
+import { failureCategorySearchValues, isFailureCategory } from '../failure-categories.ts';
 import { encodeAttributeValue, searchAttributeName } from '../search-attributes.ts';
 import type { AttributeFilter, ListFilter, WorkflowState } from '../types.ts';
 import { normalizeWorkflowTags } from '../workflow-tags.ts';
@@ -129,12 +130,18 @@ async function queryAttributeIndex(
   const prefix = `idx:${attributeName}:`;
 
   if (filter.value !== undefined) {
-    const encodedValue = encodeAttributeValue(filter.value);
-    const exactPrefix = `idx:${attributeName}:${encodedValue}:`;
-    for await (const [key] of internals.storage.scan(exactPrefix)) {
-      const workflowId = tryDecodeStorageKeyComponent(key.slice(exactPrefix.length));
-      if (workflowId !== null) {
-        ids.add(workflowId);
+    const values =
+      filter.key === 'failureCategory' && isFailureCategory(filter.value)
+        ? failureCategorySearchValues(filter.value)
+        : [filter.value];
+    for (const value of values) {
+      const encodedValue = encodeAttributeValue(value);
+      const exactPrefix = `idx:${attributeName}:${encodedValue}:`;
+      for await (const [key] of internals.storage.scan(exactPrefix)) {
+        const workflowId = tryDecodeStorageKeyComponent(key.slice(exactPrefix.length));
+        if (workflowId !== null) {
+          ids.add(workflowId);
+        }
       }
     }
   } else {

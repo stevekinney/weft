@@ -13,9 +13,9 @@
 import type { ContextOperationRequest, ContextOptions } from './context.ts';
 import { Context } from './context.ts';
 import type { ExecutionStrategy } from './execution-strategy.ts';
+import { classifyErrorAsFailureCategory } from './failure-categories.ts';
 import type { TenantContext } from './tenant.ts';
 import type {
-  FailureCategory,
   OperationOutcome,
   SearchAttributeSchema,
   WorkerOutboundMessage,
@@ -84,58 +84,6 @@ function createInlineContextOptions(
     ...(parameters.deadline !== undefined && { deadline: parameters.deadline }),
     ...(parameters.tenant !== undefined && { tenant: parameters.tenant }),
   };
-}
-
-// ---------------------------------------------------------------------------
-// Error classification
-// ---------------------------------------------------------------------------
-
-const timeoutErrorNames = new Set([
-  'MCPToolTimeoutError',
-  'ReviewTimeoutError',
-  'UpdateTimeoutError',
-  'WorkflowTimeoutError',
-  'ChaosTimeoutError',
-  'TimeoutError',
-]);
-
-const cancellationErrorNames = new Set([
-  'AbortError',
-  'CancelledError',
-  'CancellationError',
-  'WorkflowCancelledError',
-]);
-
-const resourceErrorNames = new Set([
-  'QuotaExceededError',
-  'ResourceExhaustedError',
-  'OutOfMemoryError',
-  'StorageQuotaExceededError',
-]);
-
-/**
- * Classify an error into a {@link FailureCategory} without importing the
- * concrete error classes (avoids cross-module circular imports). Uses `.name`
- * for class-based discrimination and treats ordinary thrown errors as
- * application failures.
- *
- * Error names that map to specific categories:
- * - timeout-shaped errors → `'timeout'`
- * - abort/cancellation-shaped errors → `'cancellation'`
- * - quota/capacity-shaped errors → `'resource'`
- * - ordinary user-code and validation errors → `'application'`
- * - non-Error failures → `'system'`
- */
-function classifyErrorAsFailureCategory(error: unknown): FailureCategory {
-  if (!(error instanceof Error)) {
-    return 'system';
-  }
-
-  if (timeoutErrorNames.has(error.name)) return 'timeout';
-  if (cancellationErrorNames.has(error.name)) return 'cancellation';
-  if (resourceErrorNames.has(error.name)) return 'resource';
-
-  return 'application';
 }
 
 // ---------------------------------------------------------------------------
@@ -367,7 +315,9 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
             type: 'failed',
             workflowId,
             error: error instanceof Error ? error.message : String(error),
-            failureCategory: classifyErrorAsFailureCategory(error),
+            failureCategory: classifyErrorAsFailureCategory(error, {
+              defaultErrorCategory: 'application',
+            }),
           };
           if (error instanceof Error && error.stack !== undefined) {
             failedMessage.errorStack = error.stack;
@@ -421,7 +371,9 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
             type: 'failed',
             workflowId,
             error: innerError instanceof Error ? innerError.message : String(innerError),
-            failureCategory: classifyErrorAsFailureCategory(innerError),
+            failureCategory: classifyErrorAsFailureCategory(innerError, {
+              defaultErrorCategory: 'application',
+            }),
           };
           if (innerError instanceof Error && innerError.stack !== undefined) {
             failedMessage.errorStack = innerError.stack;
