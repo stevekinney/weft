@@ -116,11 +116,11 @@ describe('engine.aggregate', () => {
     await storage.delete(KEYS.attribute('failed-1'));
 
     const result = await engine.aggregate(
-      { status: 'failed', failureCategory: 'system' },
+      { status: 'failed', failureCategory: 'application' },
       { groupBy: 'failureCategory' },
     );
     expect(result.total).toBe(1);
-    expect(result.groups).toEqual([{ key: 'system', count: 1 }]);
+    expect(result.groups).toEqual([{ key: 'application', count: 1 }]);
     engine[Symbol.dispose]();
   });
 

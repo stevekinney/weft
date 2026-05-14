@@ -190,7 +190,7 @@ describe('serve() — POST /jsonrpc', () => {
       expect(body.result?.items).toHaveLength(1);
       expect(body.result?.items[0]).toMatchObject({
         id: 'json-rpc-failed-with-category',
-        failureCategory: 'planning',
+        failureCategory: 'application',
       });
     }
   });

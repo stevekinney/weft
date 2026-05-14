@@ -266,10 +266,10 @@ export class TestEngine extends Engine {
     let passes = 0;
     const successOutputs: unknown[] = [];
     const categories: Record<FailureCategory, number> = {
-      memory: 0,
-      reflection: 0,
-      planning: 0,
-      action: 0,
+      application: 0,
+      timeout: 0,
+      cancellation: 0,
+      resource: 0,
       system: 0,
     };
 

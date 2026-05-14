@@ -249,18 +249,18 @@
   ];
 
   const failureCategoryLabels = {
-    memory: 'Memory',
-    reflection: 'Reflection',
-    planning: 'Planning',
-    action: 'Action',
+    application: 'Application',
+    timeout: 'Timeout',
+    cancellation: 'Cancellation',
+    resource: 'Resource',
     system: 'System',
   } satisfies Record<FailureCategory, string>;
 
   const FAILURE_CATEGORY_OPTIONS: FailureCategory[] = [
-    'memory',
-    'reflection',
-    'planning',
-    'action',
+    'application',
+    'timeout',
+    'cancellation',
+    'resource',
     'system',
   ];
 

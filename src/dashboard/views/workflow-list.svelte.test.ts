@@ -820,7 +820,7 @@ describe('WorkflowList view', () => {
     try {
       await changeInputValue(inputByPlaceholder('Filter by ID prefix...'), 'order-');
       await changeInputValue(inputByPlaceholder('Tenant ID'), 'tenant-a');
-      await clickButton('Planning');
+      await clickButton('Application');
       await changeInputValue(
         document.querySelector<HTMLInputElement>('#created-at-gte')!,
         '2026-05-13T09:30',
@@ -831,7 +831,7 @@ describe('WorkflowList view', () => {
         expect.objectContaining({
           idPrefix: 'order-',
           tenantId: 'tenant-a',
-          failureCategory: 'planning',
+          failureCategory: 'application',
           createdAt: { gte: new Date('2026-05-13T09:30').getTime() },
           limit: 20,
           offset: 0,
@@ -841,7 +841,7 @@ describe('WorkflowList view', () => {
       const expectedAggregateFilter = {
         idPrefix: 'order-',
         tenantId: 'tenant-a',
-        failureCategory: 'planning',
+        failureCategory: 'application',
         createdAt: { gte: new Date('2026-05-13T09:30').getTime() },
       } satisfies Pick<AggregateFilter, 'idPrefix' | 'tenantId' | 'failureCategory' | 'createdAt'>;
       expect(
@@ -859,7 +859,7 @@ describe('WorkflowList view', () => {
             call.limit === 100 &&
             filterContains(call.filter, {
               idPrefix: 'order-',
-              failureCategory: 'planning',
+              failureCategory: 'application',
               createdAt: { gte: new Date('2026-05-13T09:30').getTime() },
             }) &&
             call.filter?.tenantId === undefined,

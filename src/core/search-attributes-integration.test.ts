@@ -307,7 +307,7 @@ for (const backend of storageBackends) {
       const attributeBytes = await result.storage.get(KEYS.attribute('wf-fail-cleanup'));
       expect(attributeBytes).not.toBeNull();
       const attributes = decode(attributeBytes!) as Record<string, unknown>;
-      expect(attributes['failureCategory']).toBe('system');
+      expect(attributes['failureCategory']).toBe('application');
     });
 
     it('index entries are cleaned up on workflow cancellation', async () => {

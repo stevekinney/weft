@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — failure category semantics
+
+`FailureCategory` remains part of the public workflow visibility surface, but
+its values are now execution-oriented instead of AI-agent-oriented:
+`application`, `timeout`, `cancellation`, `resource`, and `system`. Fresh
+workflow failures persist only the new values. Stored records with the old
+`memory`, `reflection`, `planning`, or `action` categories are normalized on
+read (`memory` to `resource`, the others to `application`) so existing workflow
+state and legacy search-attribute records still surface through the new public
+type.
+
 ### Changed — Engine lifecycle and registration ergonomics
 
 `Engine.create()` no longer recovers stored workflows by default. Pass

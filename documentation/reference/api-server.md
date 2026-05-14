@@ -152,7 +152,7 @@ Returns `201` with `{ "id": "<workflow-id>" }`.
 | `tag`                                                  | `string` | Filter by tag. Repeat to AND multiple tags.                                          |
 | `id_prefix`                                            | `string` | Match workflow ids starting with this prefix. Restricted to `[A-Za-z0-9_-]+`.        |
 | `tenant_id`                                            | `string` | Filter by tenant id. Repeat for an OR filter across tenants.                         |
-| `failure_category`                                     | `string` | One of `memory`, `reflection`, `planning`, `action`, `system`. Repeats OR.           |
+| `failure_category`                                     | `string` | One of `application`, `timeout`, `cancellation`, `resource`, `system`. Repeats OR.   |
 | `created_at_{gte,gt,lte,lt}`                           | `number` | Filter by `createdAt` (ms epoch). At most one of `gte`/`gt` and one of `lte`/`lt`.   |
 | `updated_at_{gte,gt,lte,lt}`                           | `number` | Filter by `updatedAt` (ms epoch).                                                    |
 | `execution_deadline_{gte,gt,lte,lt}`                   | `number` | Filter by `executionDeadline` (ms epoch).                                            |

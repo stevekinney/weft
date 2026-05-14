@@ -90,32 +90,52 @@ function createInlineContextOptions(
 // Error classification
 // ---------------------------------------------------------------------------
 
+const timeoutErrorNames = new Set([
+  'MCPToolTimeoutError',
+  'ReviewTimeoutError',
+  'UpdateTimeoutError',
+  'WorkflowTimeoutError',
+  'ChaosTimeoutError',
+  'TimeoutError',
+]);
+
+const cancellationErrorNames = new Set([
+  'AbortError',
+  'CancelledError',
+  'CancellationError',
+  'WorkflowCancelledError',
+]);
+
+const resourceErrorNames = new Set([
+  'QuotaExceededError',
+  'ResourceExhaustedError',
+  'OutOfMemoryError',
+  'StorageQuotaExceededError',
+]);
+
 /**
  * Classify an error into a {@link FailureCategory} without importing the
  * concrete error classes (avoids cross-module circular imports). Uses `.name`
- * for class-based discrimination and falls back to `'system'`.
+ * for class-based discrimination and treats ordinary thrown errors as
+ * application failures.
  *
  * Error names that map to specific categories:
- * - `'ToolSchemaValidationError'` → `'planning'` (invalid effect input)
- * - `'EffectReplayConflictError'` → `'action'` (effect replay conflict)
- * - `'MCPServerUnavailableError'`, `'MCPToolTimeoutError'` → `'action'` (external effect execution)
- * - everything else → `'system'`
+ * - timeout-shaped errors → `'timeout'`
+ * - abort/cancellation-shaped errors → `'cancellation'`
+ * - quota/capacity-shaped errors → `'resource'`
+ * - ordinary user-code and validation errors → `'application'`
+ * - non-Error failures → `'system'`
  */
 function classifyErrorAsFailureCategory(error: unknown): FailureCategory {
   if (!(error instanceof Error)) {
     return 'system';
   }
 
-  switch (error.name) {
-    case 'ToolSchemaValidationError':
-      return 'planning';
-    case 'EffectReplayConflictError':
-    case 'MCPServerUnavailableError':
-    case 'MCPToolTimeoutError':
-      return 'action';
-    default:
-      return 'system';
-  }
+  if (timeoutErrorNames.has(error.name)) return 'timeout';
+  if (cancellationErrorNames.has(error.name)) return 'cancellation';
+  if (resourceErrorNames.has(error.name)) return 'resource';
+
+  return 'application';
 }
 
 // ---------------------------------------------------------------------------

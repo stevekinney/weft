@@ -160,7 +160,7 @@ describe('weft.workflows.list', () => {
     expect(includedResponse.status).toBe(200);
     const includedBody = (await includedResponse.json()) as ListWorkflowsOutput;
     expect(includedBody.items).toHaveLength(1);
-    expect(includedBody.items[0]?.failureCategory).toBe('planning');
+    expect(includedBody.items[0]?.failureCategory).toBe('application');
 
     const repeatedIncludedResponse = await handleRequest(
       new Request(
@@ -177,7 +177,7 @@ describe('weft.workflows.list', () => {
     expect(repeatedIncludedResponse.status).toBe(200);
     const repeatedIncludedBody = (await repeatedIncludedResponse.json()) as ListWorkflowsOutput;
     expect(repeatedIncludedBody.items).toHaveLength(1);
-    expect(repeatedIncludedBody.items[0]?.failureCategory).toBe('planning');
+    expect(repeatedIncludedBody.items[0]?.failureCategory).toBe('application');
   });
 
   it('returns 400 when include contains an unsupported field', async () => {

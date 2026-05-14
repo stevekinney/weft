@@ -8,7 +8,7 @@ export type WorkflowStatus =
   | 'cancelled'
   | 'timed-out';
 
-export type FailureCategory = 'memory' | 'reflection' | 'planning' | 'action' | 'system';
+export type FailureCategory = 'application' | 'timeout' | 'cancellation' | 'resource' | 'system';
 
 export interface TimeRange {
   gte?: number;

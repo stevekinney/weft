@@ -22,10 +22,10 @@ import { TestEngine } from '../test-engine.ts';
 // ---------------------------------------------------------------------------
 
 const ALL_FAILURE_CATEGORIES: FailureCategory[] = [
-  'memory',
-  'reflection',
-  'planning',
-  'action',
+  'application',
+  'timeout',
+  'cancellation',
+  'resource',
   'system',
 ];
 
@@ -300,7 +300,7 @@ describe('TestEngine.runN', () => {
     engine[Symbol.dispose]();
   });
 
-  it('counts stored planning failures in RunNResult.categories', async () => {
+  it('counts stored application failures in RunNResult.categories', async () => {
     class ToolSchemaValidationError extends Error {
       constructor() {
         super('invalid planned operation');
@@ -316,7 +316,7 @@ describe('TestEngine.runN', () => {
     const result = await engine.runN('planning-failure', undefined, { runs: 1 });
 
     expect(result.passRate).toBe(0);
-    expect(result.categories.planning).toBe(1);
+    expect(result.categories.application).toBe(1);
     expect(result.categories.system).toBe(0);
 
     engine[Symbol.dispose]();

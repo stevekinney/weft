@@ -11,6 +11,7 @@
 
 import { z, type ZodIssue } from 'zod';
 
+import { FAILURE_CATEGORIES, isFailureCategory } from './failure-categories.ts';
 import type { FailureCategory, WorkflowStatus } from './types/identity.ts';
 import type { ListFilter } from './types/options.ts';
 
@@ -22,14 +23,6 @@ const WORKFLOW_STATUSES = [
   'cancelled',
   'timed-out',
 ] as const satisfies readonly WorkflowStatus[];
-
-const FAILURE_CATEGORIES = [
-  'memory',
-  'reflection',
-  'planning',
-  'action',
-  'system',
-] as const satisfies readonly FailureCategory[];
 
 const ID_PREFIX_PATTERN = /^[A-Za-z0-9_-]+$/;
 
@@ -161,7 +154,4 @@ export function normalizeListFilter(input: unknown): ListFilter {
   return result.data as ListFilter;
 }
 
-/** Return true when a value is a recognized workflow failure category. */
-export function isFailureCategory(value: unknown): value is FailureCategory {
-  return failureCategorySchema.safeParse(value).success;
-}
+export { isFailureCategory };

@@ -96,6 +96,29 @@ describe('engine validation helpers', () => {
     ).toBe(true);
   });
 
+  it('normalizes legacy workflow failure categories while decoding persisted state', () => {
+    expect(
+      decodeWorkflowState(encode(createWorkflowState({ failureCategory: 'planning' as never })))
+        .failureCategory,
+    ).toBe('application');
+    expect(
+      decodeWorkflowState(encode(createWorkflowState({ failureCategory: 'action' as never })))
+        .failureCategory,
+    ).toBe('application');
+    expect(
+      decodeWorkflowState(encode(createWorkflowState({ failureCategory: 'reflection' as never })))
+        .failureCategory,
+    ).toBe('application');
+    expect(
+      decodeWorkflowState(encode(createWorkflowState({ failureCategory: 'memory' as never })))
+        .failureCategory,
+    ).toBe('resource');
+    expect(
+      decodeWorkflowState(encode(createWorkflowState({ failureCategory: 'system' })))
+        .failureCategory,
+    ).toBe('system');
+  });
+
   it('validates schedule identifiers and bulk filter numbers', () => {
     expect(isValidScheduleIdentifier(42)).toBe(false);
     expect(isValidScheduleIdentifier('')).toBe(false);

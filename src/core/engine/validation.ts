@@ -1,6 +1,7 @@
 /* oxlint-disable max-lines -- ID:core-engine-validation-file-length */
 import { decode } from '../codec.ts';
 import { isRecord } from '../debug-output.ts';
+import { normalizeFailureCategory } from '../failure-categories.ts';
 import { parseCronExpression } from '../schedule.ts';
 import { coerceStartWorkflowId, parseStartWorkflowDuration } from '../start-workflow-validation.ts';
 import type {
@@ -283,6 +284,14 @@ export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
         'dropping the malformed tag list from the decoded state.',
     );
     delete state.tags;
+  }
+  if (state.failureCategory !== undefined && state.failureCategory !== null) {
+    const normalizedFailureCategory = normalizeFailureCategory(state.failureCategory);
+    if (normalizedFailureCategory === undefined) {
+      delete state.failureCategory;
+    } else {
+      state.failureCategory = normalizedFailureCategory;
+    }
   }
   if (state.executionStateOwnerId !== undefined) {
     try {

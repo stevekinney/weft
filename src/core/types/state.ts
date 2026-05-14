@@ -35,7 +35,7 @@ export interface WorkflowState {
    * a failure occurred but the category could not be determined.
    *
    * Also indexed as a search attribute so callers can query via:
-   * `engine.list({ attributes: [{ key: 'failureCategory', value: 'planning' }] })`
+   * `engine.list({ attributes: [{ key: 'failureCategory', value: 'application' }] })`
    */
   failureCategory?: FailureCategory | null;
   version: string;

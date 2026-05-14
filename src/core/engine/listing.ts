@@ -1,5 +1,6 @@
 import { KEYS } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
+import { normalizeFailureCategory } from '../failure-categories.ts';
 import { isFailureCategory, normalizeListFilter } from '../list-filter-validation.ts';
 import { buildIndexOperations, validateAttributeType } from '../search-attributes.ts';
 import type {
@@ -138,7 +139,8 @@ function failureCategoryFromAttributeBytes(
   if (!isRecord(attributes)) return undefined;
 
   const value = attributes['failureCategory'];
-  return isFailureCategory(value) ? value : undefined;
+  if (isFailureCategory(value)) return value;
+  return normalizeFailureCategory(value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -116,17 +116,23 @@ describe('normalizeListFilter', () => {
 
   describe('failureCategory', () => {
     it('accepts a single value from the enum', () => {
-      expect(normalizeListFilter({ failureCategory: 'memory' }).failureCategory).toBe('memory');
+      expect(normalizeListFilter({ failureCategory: 'resource' }).failureCategory).toBe('resource');
     });
 
     it('accepts an array of enum values', () => {
       expect(
-        normalizeListFilter({ failureCategory: ['planning', 'system'] }).failureCategory,
-      ).toEqual(['planning', 'system']);
+        normalizeListFilter({ failureCategory: ['application', 'system'] }).failureCategory,
+      ).toEqual(['application', 'system']);
     });
 
     it('rejects unknown enum values', () => {
       expect(() => normalizeListFilter({ failureCategory: 'bogus' })).toThrow(
+        ListFilterValidationError,
+      );
+    });
+
+    it('rejects legacy AI-ontology enum values', () => {
+      expect(() => normalizeListFilter({ failureCategory: 'planning' })).toThrow(
         ListFilterValidationError,
       );
     });

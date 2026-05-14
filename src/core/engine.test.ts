@@ -1349,7 +1349,7 @@ describe('Engine', () => {
       { status: 'failed' },
       { includeFailureCategory: true },
     );
-    expect(includedResult.items[0]?.failureCategory).toBe('planning');
+    expect(includedResult.items[0]?.failureCategory).toBe('application');
     expect(storage.attributeReadCount).toBe(1);
 
     engine[Symbol.dispose]();
@@ -1378,7 +1378,7 @@ describe('Engine', () => {
     expect(includedResult.items).toContainEqual(
       expect.objectContaining({
         id: 'wf-state-category',
-        failureCategory: 'system',
+        failureCategory: 'application',
       }),
     );
     expect(storage.attributeReadCount).toBe(0);
@@ -1420,7 +1420,7 @@ describe('Engine', () => {
     );
 
     expect(result.items).toHaveLength(3);
-    expect(result.items.every((item) => item.failureCategory === 'planning')).toBe(true);
+    expect(result.items.every((item) => item.failureCategory === 'application')).toBe(true);
     expect(storage.attributeReadCount).toBe(3);
     expect(storage.maxConcurrentAttributeReadCount).toBeGreaterThan(1);
 

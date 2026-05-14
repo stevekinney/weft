@@ -69,12 +69,16 @@ describe('hasScopedBulkWorkflowFilter — idPrefix', () => {
 
 describe('hasScopedBulkWorkflowFilter — failureCategory', () => {
   it('rejects failureCategory alone (footgun)', () => {
-    expect(hasScopedBulkWorkflowFilter({ failureCategory: 'memory' })).toBe(false);
-    expect(hasScopedBulkWorkflowFilter({ failureCategory: ['memory', 'planning'] })).toBe(false);
+    expect(hasScopedBulkWorkflowFilter({ failureCategory: 'resource' })).toBe(false);
+    expect(hasScopedBulkWorkflowFilter({ failureCategory: ['resource', 'application'] })).toBe(
+      false,
+    );
   });
 
   it('accepts failureCategory combined with a status filter', () => {
-    expect(hasScopedBulkWorkflowFilter({ failureCategory: 'memory', status: 'failed' })).toBe(true);
+    expect(hasScopedBulkWorkflowFilter({ failureCategory: 'resource', status: 'failed' })).toBe(
+      true,
+    );
   });
 });
 
@@ -123,7 +127,7 @@ describe('assertScopedBulkWorkflowFilter', () => {
   });
 
   it('throws on a failureCategory-only filter', () => {
-    expect(() => assertScopedBulkWorkflowFilter({ failureCategory: 'memory' })).toThrow(
+    expect(() => assertScopedBulkWorkflowFilter({ failureCategory: 'resource' })).toThrow(
       BULK_WORKFLOW_FILTER_ERROR_MESSAGE,
     );
   });

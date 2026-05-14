@@ -181,7 +181,7 @@ describe('buildWorkflowListFilter', () => {
         offset: 0,
         idPrefix: 'order-',
         tenantId: ['acme'],
-        failureCategory: ['memory', 'planning'],
+        failureCategory: ['resource', 'application'],
         createdAt: { gte: 1000 },
         updatedAt: { lt: 5000 },
       },
@@ -195,7 +195,7 @@ describe('buildWorkflowListFilter', () => {
       tags: ['nightly'],
       idPrefix: 'order-',
       tenantId: 'acme',
-      failureCategory: ['memory', 'planning'],
+      failureCategory: ['resource', 'application'],
       createdAt: { gte: 1000 },
       updatedAt: { lt: 5000 },
     });

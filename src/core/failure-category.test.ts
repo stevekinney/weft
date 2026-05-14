@@ -21,7 +21,7 @@ describe('failureCategory on WorkflowState', () => {
     engine[Symbol.dispose]();
   });
 
-  it('sets failureCategory to "system" when a non-agent workflow throws', async () => {
+  it('sets failureCategory to "application" when workflow code throws', async () => {
     engine = new Engine();
 
     engine.register('crash', async function* () {
@@ -38,7 +38,60 @@ describe('failureCategory on WorkflowState', () => {
 
     const state = await engine.get('wf-system-fail');
     expect(state?.status).toBe('failed');
-    expect(state?.failureCategory).toBe('system');
+    expect(state?.failureCategory).toBe('application');
+  });
+
+  it('sets failureCategory to "timeout" for timeout-shaped errors', async () => {
+    class ReviewTimeoutError extends Error {
+      constructor() {
+        super('review timed out');
+        this.name = 'ReviewTimeoutError';
+      }
+    }
+
+    engine = new Engine();
+    engine.register('timeout-crash', async function* () {
+      throw new ReviewTimeoutError();
+    });
+
+    const handle = await engine.start('timeout-crash', null, { id: 'wf-timeout-fail' });
+    await expect(handle.result()).rejects.toThrow('review timed out');
+
+    const state = await engine.get('wf-timeout-fail');
+    expect(state?.failureCategory).toBe('timeout');
+  });
+
+  it('sets failureCategory to "cancellation" for abort-shaped errors', async () => {
+    engine = new Engine();
+    engine.register('abort-crash', async function* () {
+      throw new DOMException('operation aborted', 'AbortError');
+    });
+
+    const handle = await engine.start('abort-crash', null, { id: 'wf-cancellation-fail' });
+    await expect(handle.result()).rejects.toThrow('operation aborted');
+
+    const state = await engine.get('wf-cancellation-fail');
+    expect(state?.failureCategory).toBe('cancellation');
+  });
+
+  it('sets failureCategory to "resource" for quota-shaped errors', async () => {
+    class QuotaExceededError extends Error {
+      constructor() {
+        super('tenant quota exceeded');
+        this.name = 'QuotaExceededError';
+      }
+    }
+
+    engine = new Engine();
+    engine.register('quota-crash', async function* () {
+      throw new QuotaExceededError();
+    });
+
+    const handle = await engine.start('quota-crash', null, { id: 'wf-resource-fail' });
+    await expect(handle.result()).rejects.toThrow('tenant quota exceeded');
+
+    const state = await engine.get('wf-resource-fail');
+    expect(state?.failureCategory).toBe('resource');
   });
 
   it('failureCategory is null when a workflow has not yet failed', async () => {
@@ -72,7 +125,7 @@ describe('failureCategory search attribute indexing', () => {
     engine[Symbol.dispose]();
   });
 
-  it('engine.list({ attributes: [{ key: "failureCategory", value: "system" }] }) returns failed workflow', async () => {
+  it('engine.list({ attributes: [{ key: "failureCategory", value: "application" }] }) returns failed workflow', async () => {
     engine = new Engine();
 
     engine.register('crash-a', async function* () {
@@ -98,7 +151,7 @@ describe('failureCategory search attribute indexing', () => {
     }
 
     const result = await engine.list({
-      attributes: [{ key: 'failureCategory', value: 'system' as FailureCategory }],
+      attributes: [{ key: 'failureCategory', value: 'application' as FailureCategory }],
     });
 
     expect(result.items.length).toBe(2);
@@ -107,7 +160,7 @@ describe('failureCategory search attribute indexing', () => {
     expect(ids).toContain('wf-cat-b');
   });
 
-  it('engine.list({ attributes: [{ key: "failureCategory", value: "system" }] }) does not return completed workflows', async () => {
+  it('engine.list({ attributes: [{ key: "failureCategory", value: "application" }] }) does not return completed workflows', async () => {
     engine = new Engine();
 
     engine.register('succeed', async function* () {
@@ -129,7 +182,7 @@ describe('failureCategory search attribute indexing', () => {
     }
 
     const result = await engine.list({
-      attributes: [{ key: 'failureCategory', value: 'system' as FailureCategory }],
+      attributes: [{ key: 'failureCategory', value: 'application' as FailureCategory }],
     });
 
     expect(result.items.length).toBe(1);

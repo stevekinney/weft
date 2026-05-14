@@ -977,7 +977,7 @@ describe('ApiClient', () => {
       status: ['failed', 'timed-out'],
       idPrefix: 'order-',
       tenantId: ['acme', 'globex'],
-      failureCategory: ['memory', 'planning'],
+      failureCategory: ['resource', 'application'],
       createdAt: { gte: 1000, lt: 5000 },
       updatedAt: { gt: 2000 },
       executionDeadline: { lte: 10_000 },
@@ -989,8 +989,8 @@ describe('ApiClient', () => {
     expect(requestedUrl).toContain('id_prefix=order-');
     expect(requestedUrl).toContain('tenant_id=acme');
     expect(requestedUrl).toContain('tenant_id=globex');
-    expect(requestedUrl).toContain('failure_category=memory');
-    expect(requestedUrl).toContain('failure_category=planning');
+    expect(requestedUrl).toContain('failure_category=resource');
+    expect(requestedUrl).toContain('failure_category=application');
     expect(requestedUrl).toContain('created_at_gte=1000');
     expect(requestedUrl).toContain('created_at_lt=5000');
     expect(requestedUrl).toContain('updated_at_gt=2000');

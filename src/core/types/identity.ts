@@ -31,29 +31,29 @@ export type OperationId = string;
 
 /**
  * Classifies why a workflow failed. Populated automatically by the engine on
- * failure so operators can query e.g. "all planning failures in the last hour"
- * via `engine.list({ attributes: [{ key: 'failureCategory', value: 'planning' }] })`.
+ * failure so operators can query e.g. "all timeout failures in the last hour"
+ * via `engine.list({ attributes: [{ key: 'failureCategory', value: 'timeout' }] })`.
  *
- * - `'memory'`    — execution context exceeded its memory budget
- * - `'reflection'` — never assigned by the engine today; reserved as a typed slot for future categorisation
- * - `'planning'`  — invalid planned operation or schema violation
- * - `'action'`    — external effect execution threw
- * - `'system'`    — any other failure (default for storage errors, runtime errors, etc.)
+ * - `'application'` — workflow or activity application code threw
+ * - `'timeout'` — execution exceeded a configured deadline
+ * - `'cancellation'` — cancellation or abort ended execution
+ * - `'resource'` — quota, memory, disk, or capacity limit was exceeded
+ * - `'system'` — engine, storage, or worker infrastructure fault
  *
  * @example
  * ```ts
  * import { Engine, type FailureCategory } from 'weft';
  *
  * const engine = new Engine();
- * // Query all workflows that failed due to a planning error:
+ * // Query all workflows that failed due to a timeout:
  * const results = await engine.list({
  *   status: 'failed',
- *   attributes: [{ key: 'failureCategory', value: 'planning' as FailureCategory }],
+ *   attributes: [{ key: 'failureCategory', value: 'timeout' as FailureCategory }],
  * });
  * void results;
  * ```
  */
-export type FailureCategory = 'memory' | 'reflection' | 'planning' | 'action' | 'system';
+export type FailureCategory = 'application' | 'timeout' | 'cancellation' | 'resource' | 'system';
 
 // ---------------------------------------------------------------------------
 // Workflow status state machine
