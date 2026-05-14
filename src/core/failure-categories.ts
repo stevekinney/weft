@@ -1,4 +1,4 @@
-import type { FailureCategory } from './types/identity.ts';
+import type { FailureCategory, OperationOutcome } from './types.ts';
 
 export const FAILURE_CATEGORIES = [
   'application',
@@ -81,4 +81,14 @@ export function classifyErrorAsFailureCategory(
   if (resourceErrorNames.has(error.name)) return 'resource';
 
   return options.defaultErrorCategory ?? 'system';
+}
+
+export function errorFromFailedOperationOutcome(
+  outcome: Extract<OperationOutcome, { status: 'failed' }>,
+): Error {
+  const error = new Error(outcome.error);
+  if (outcome.errorName !== undefined) {
+    error.name = outcome.errorName;
+  }
+  return error;
 }

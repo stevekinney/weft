@@ -1,4 +1,5 @@
 import { serializeCheckpoint } from '../checkpoint.ts';
+import { errorFromFailedOperationOutcome } from '../failure-categories.ts';
 import type { ComposedActivityInterceptor, ComposedWorkflowInterceptor } from '../interceptor.ts';
 import {
   composeActivityInterceptors,
@@ -39,7 +40,9 @@ export function feedOperationResult(
     } else {
       internals.inlineStrategy.throwIntoWorkflow(
         workflowId,
-        originalReason !== undefined ? originalReason.value : errorFromFailedOutcome(outcome),
+        originalReason !== undefined
+          ? originalReason.value
+          : errorFromFailedOperationOutcome(outcome),
       );
     }
     return;
@@ -52,14 +55,6 @@ export function feedOperationResult(
     checkpoint: serialized,
     operationResult: outcome,
   });
-}
-
-function errorFromFailedOutcome(outcome: Extract<OperationOutcome, { status: 'failed' }>): Error {
-  const error = new Error(outcome.error);
-  if (outcome.errorName !== undefined) {
-    error.name = outcome.errorName;
-  }
-  return error;
 }
 
 export async function swallowPromiseRejection(

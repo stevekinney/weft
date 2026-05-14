@@ -13,9 +13,13 @@
 import type { ContextOperationRequest, ContextOptions } from './context.ts';
 import { Context } from './context.ts';
 import type { ExecutionStrategy } from './execution-strategy.ts';
-import { classifyErrorAsFailureCategory } from './failure-categories.ts';
+import {
+  classifyErrorAsFailureCategory,
+  errorFromFailedOperationOutcome,
+} from './failure-categories.ts';
 import type { TenantContext } from './tenant.ts';
 import type {
+  FailureCategory,
   OperationOutcome,
   SearchAttributeSchema,
   WorkerOutboundMessage,
@@ -166,13 +170,22 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
       parameters.operationResult.status === 'completed'
         ? parameters.operationResult.value
         : undefined;
+    const operationFailureCategory =
+      parameters.operationResult.status === 'failed'
+        ? parameters.operationResult.failureCategory
+        : undefined;
     const error =
       parameters.operationResult.status === 'failed'
-        ? new Error(parameters.operationResult.error)
+        ? errorFromFailedOperationOutcome(parameters.operationResult)
         : undefined;
 
     if (error) {
-      void this.#throwIntoGenerator(parameters.workflowId, generator, error);
+      void this.#throwIntoGenerator(
+        parameters.workflowId,
+        generator,
+        error,
+        operationFailureCategory,
+      );
     } else {
       void this.#driveGenerator(parameters.workflowId, generator, result);
     }
@@ -332,6 +345,7 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     workflowId: string,
     generator: AsyncGenerator,
     error: unknown,
+    operationFailureCategory?: FailureCategory,
   ): Promise<void> {
     return this.#trackWorkflowAdvance(
       workflowId,
@@ -371,9 +385,11 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
             type: 'failed',
             workflowId,
             error: innerError instanceof Error ? innerError.message : String(innerError),
-            failureCategory: classifyErrorAsFailureCategory(innerError, {
-              defaultErrorCategory: 'application',
-            }),
+            failureCategory:
+              operationFailureCategory ??
+              classifyErrorAsFailureCategory(innerError, {
+                defaultErrorCategory: 'application',
+              }),
           };
           if (innerError instanceof Error && innerError.stack !== undefined) {
             failedMessage.errorStack = innerError.stack;

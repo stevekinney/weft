@@ -565,6 +565,57 @@ describe('InlineExecutionStrategy', () => {
         expect(message.error).toBe('oops');
       }
     });
+
+    it('preserves failed operation categories when the workflow wraps the operation error', async () => {
+      setup();
+
+      registrations.set('wraps-operation-failure', {
+        handler: async function* (_context, _input) {
+          try {
+            yield {
+              type: 'activity',
+              operationId: 'op-1',
+              activityName: 'mayTimeout',
+              fn: () => {},
+              input: undefined,
+            };
+          } catch {
+            throw new Error('wrapped timeout');
+          }
+        },
+        version: '1',
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-1',
+        workflowType: 'wraps-operation-failure',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+
+      await sleepForTesting(10);
+      messages.length = 0;
+
+      strategy.resumeWorkflow({
+        workflowId: 'wf-1',
+        checkpoint: new ArrayBuffer(0),
+        operationResult: {
+          status: 'failed',
+          error: 'review timed out',
+          errorName: 'ReviewTimeoutError',
+          failureCategory: 'timeout',
+        },
+      });
+
+      await sleepForTesting(10);
+
+      const message = firstMessage();
+      expect(message.type).toBe('failed');
+      if (message.type === 'failed') {
+        expect(message.error).toBe('wrapped timeout');
+        expect(message.failureCategory).toBe('timeout');
+      }
+    });
   });
 
   // -------------------------------------------------------------------------

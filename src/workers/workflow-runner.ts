@@ -1,5 +1,8 @@
 import { WorkflowAtomicStateHandle } from '../core/context/state-namespace.ts';
-import { classifyErrorAsFailureCategory } from '../core/failure-categories.ts';
+import {
+  classifyErrorAsFailureCategory,
+  errorFromFailedOperationOutcome,
+} from '../core/failure-categories.ts';
 import type { TenantContext } from '../core/tenant.ts';
 import type {
   OperationOutcome,
@@ -197,7 +200,7 @@ export async function handleResumeMessage(
     const outcome = message.operationResult;
     const step =
       outcome?.status === 'failed'
-        ? await generator.throw(errorFromOperationOutcome(outcome))
+        ? await generator.throw(errorFromFailedOperationOutcome(outcome))
         : await generator.next(message.result);
     return processGeneratorStep(context, message.workflowId, generator, step);
   } catch (error) {
@@ -303,14 +306,4 @@ function formatError(error: unknown): string {
     return error.message;
   }
   return String(error);
-}
-
-function errorFromOperationOutcome(
-  outcome: Extract<OperationOutcome, { status: 'failed' }>,
-): Error {
-  const error = new Error(outcome.error);
-  if (outcome.errorName !== undefined) {
-    error.name = outcome.errorName;
-  }
-  return error;
 }
