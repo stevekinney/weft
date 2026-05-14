@@ -331,20 +331,24 @@ async function applyBlockedScheduleOccurrence(
   hasActiveWorkflow: boolean,
   callbacks: Pick<ScheduleCallbacks, 'cancelWorkflow' | 'getWorkflowResult' | 'startScheduledRun'>,
 ): Promise<ScheduleState> {
-  if (hasActiveWorkflow) {
-    if (state.overlap === 'cancel-running' && state.currentWorkflowId) {
-      void callbacks.getWorkflowResult(state.currentWorkflowId).catch(() => {});
-      await callbacks.cancelWorkflow(state.currentWorkflowId);
-    } else if (state.overlap === 'queue') {
-      return { ...state, queuedRuns: state.queuedRuns + 1 };
-    } else if (state.overlap === 'skip') {
-      return state;
-    }
+  if (!hasActiveWorkflow) {
+    return { ...state, currentWorkflowId: await callbacks.startScheduledRun(state) };
   }
 
-  const stateForStart =
-    state.overlap === 'cancel-running' ? clearScheduleCurrentWorkflow(state) : state;
-  return { ...state, currentWorkflowId: await callbacks.startScheduledRun(stateForStart) };
+  if (state.overlap === 'cancel-running') {
+    if (state.currentWorkflowId) {
+      void callbacks.getWorkflowResult(state.currentWorkflowId).catch(() => {});
+      await callbacks.cancelWorkflow(state.currentWorkflowId);
+    }
+    const stateForStart = clearScheduleCurrentWorkflow(state);
+    return { ...state, currentWorkflowId: await callbacks.startScheduledRun(stateForStart) };
+  }
+
+  if (state.overlap === 'queue') {
+    return { ...state, queuedRuns: state.queuedRuns + 1 };
+  }
+
+  return state;
 }
 
 export async function applyScheduleOccurrence(

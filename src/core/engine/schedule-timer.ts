@@ -38,6 +38,9 @@ export async function handleScheduleTimer(
       work.occurrencesToProcess,
       now,
       callbacks,
+      (processedState) => {
+        nextState = processedState;
+      },
     );
     await writeScheduleState(internals, {
       ...nextState,
@@ -92,6 +95,7 @@ async function processScheduleTimerOccurrences(
   occurrencesToProcess: number[],
   now: number,
   callbacks: ScheduleCallbacks,
+  onProcessedState: (state: ScheduleState) => void,
 ): Promise<ScheduleState> {
   let nextState: ScheduleState = state;
 
@@ -101,9 +105,11 @@ async function processScheduleTimerOccurrences(
       lastFireAt: occurrence,
       updatedAt: now,
     };
+    onProcessedState(nextState);
     await writeScheduleState(internals, nextState, { includeTimer: false });
     if (state.backfill && nextState.currentWorkflowId !== undefined) {
       nextState = await callbacks.settleBackfillScheduleState(nextState);
+      onProcessedState(nextState);
     }
   }
 

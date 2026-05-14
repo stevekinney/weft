@@ -279,6 +279,7 @@ async function persistInlineCheckpoint(
 
   const previousAttributes = { ...current.searchAttributes };
   const pendingAttributeChanges = context.checkpointPendingAttributeChanges;
+  const hasPendingAttributeChanges = context.hasPendingAttributeChanges;
   const advanced = advanceCheckpoint(current, context.checkpointLocals, {
     accumulatedResults: context.checkpointAccumulatedResults,
     now: internals.options.getNow(),
@@ -295,11 +296,11 @@ async function persistInlineCheckpoint(
     commit,
     previousAttributes,
     pendingAttributeChanges,
-    context.hasPendingAttributeChanges,
+    hasPendingAttributeChanges,
     callbacks,
   );
   await commitCheckpoint(internals, workflowId, operation, commit, callbacks);
-  if (context.hasPendingAttributeChanges) {
+  if (hasPendingAttributeChanges) {
     callbacks.dispatchEvent(new AttributesChangedEvent(workflowId, pendingAttributeChanges ?? {}));
   }
 }
