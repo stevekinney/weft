@@ -241,10 +241,14 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
    * Throw an error into the generator (used by the engine for propagating
    * activity failures, etc.).
    */
-  throwIntoWorkflow(workflowId: string, error: unknown): void {
+  throwIntoWorkflow(
+    workflowId: string,
+    error: unknown,
+    operationFailureCategory?: FailureCategory,
+  ): void {
     const generator = this.#generators.get(workflowId);
     if (!generator) return;
-    void this.#throwIntoGenerator(workflowId, generator, error);
+    void this.#throwIntoGenerator(workflowId, generator, error, operationFailureCategory);
   }
 
   /**

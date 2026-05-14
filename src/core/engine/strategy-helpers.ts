@@ -43,6 +43,7 @@ export function feedOperationResult(
         originalReason !== undefined
           ? originalReason.value
           : errorFromFailedOperationOutcome(outcome),
+        outcome.failureCategory,
       );
     }
     return;

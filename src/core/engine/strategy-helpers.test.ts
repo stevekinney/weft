@@ -8,6 +8,10 @@ import {
   swallowPromiseRejection,
 } from './strategy-helpers.ts';
 
+function minimalEngineInternals(overrides: Record<string, unknown>): EngineInternals {
+  return overrides as unknown as EngineInternals;
+}
+
 describe('strategy helpers', () => {
   it('returns the cached composed activity interceptor when already computed', () => {
     const internals = {
@@ -24,7 +28,7 @@ describe('strategy helpers', () => {
 
   it('resumes worker strategy execution with the latest checkpoint bytes', () => {
     const resumed: unknown[] = [];
-    const internals = {
+    const internals = minimalEngineInternals({
       checkpoints: new Map([
         ['workflow-worker-result', createCheckpoint('workflow-worker-result', '1', 1_000)],
       ]),
@@ -34,7 +38,7 @@ describe('strategy helpers', () => {
           resumed.push(message);
         },
       },
-    } as EngineInternals;
+    });
 
     feedOperationResult(internals, 'workflow-worker-result', {
       status: 'completed',
@@ -46,6 +50,36 @@ describe('strategy helpers', () => {
         operationResult: { status: 'completed', value: 'done' },
         workflowId: 'workflow-worker-result',
       }),
+    ]);
+  });
+
+  it('passes failed operation categories into the inline throw boundary', () => {
+    const thrown: unknown[] = [];
+    const internals = minimalEngineInternals({
+      checkpoints: new Map(),
+      inlineStrategy: {
+        continueWorkflow: () => {
+          throw new Error('continueWorkflow should not be called for failed outcomes');
+        },
+        throwIntoWorkflow: (...parameters: unknown[]) => {
+          thrown.push(parameters);
+        },
+      },
+    });
+
+    feedOperationResult(internals, 'workflow-inline-result', {
+      status: 'failed',
+      error: 'review timed out',
+      errorName: 'ReviewTimeoutError',
+      failureCategory: 'timeout',
+    });
+
+    expect(thrown).toEqual([
+      [
+        'workflow-inline-result',
+        expect.objectContaining({ message: 'review timed out', name: 'ReviewTimeoutError' }),
+        'timeout',
+      ],
     ]);
   });
 });
