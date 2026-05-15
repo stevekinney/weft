@@ -97,6 +97,18 @@ describe('Context', () => {
       expect(result.value).toBe('cached-result');
     });
 
+    it('on recovery returns cached undefined without yielding', () => {
+      const accumulatedResults = new Map<number, unknown>();
+      accumulatedResults.set(0, undefined);
+      const context = createContext({ accumulatedResults });
+
+      const generator = context.run(() => undefined);
+      const result = generator.next();
+
+      expect(result.done).toBe(true);
+      expect(result.value).toBeUndefined();
+    });
+
     it('derives activity name from function name', () => {
       const context = createContext();
 

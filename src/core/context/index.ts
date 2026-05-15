@@ -1,6 +1,5 @@
-/* oxlint-disable max-lines -- ID:core-context-public-workflow-surface */
 import type { HumanReviewOptions, HumanReviewResult } from '../review/index.ts';
-import { cloneSessionStateStore, normalizeSessionStateLocals } from '../session-state.ts';
+import { normalizeSessionStateLocals } from '../session-state.ts';
 import type {
   ActivityArguments,
   ActivityCallable,
@@ -36,9 +35,13 @@ import * as durableOperations from './durable-operations.ts';
 import { getInternals, initializeInternals } from './internals.ts';
 import type { ContextOperationRequest } from './operation-request.ts';
 import * as parallelOperations from './parallel-operations.ts';
+import { createRunActivityRequest } from './run-operation.ts';
 import * as sagaHelpers from './saga.ts';
-import * as stateSessionHelpers from './session-state.ts';
 import * as speculateOperations from './speculate-operations.ts';
+import {
+  commitSpeculativeChild as commitSpeculativeChildState,
+  createSpeculativeChild as createSpeculativeChildState,
+} from './speculative-child.ts';
 import * as stateNamespaceHelpers from './state-namespace.ts';
 import type {
   ContextOptions,
@@ -48,7 +51,6 @@ import type {
   StreamSink,
 } from './types.ts';
 import * as contextUpdates from './updates.ts';
-import * as contextValidation from './validation.ts';
 export type { ContextOperationRequest } from './operation-request.ts';
 export type {
   ContextOptions,
@@ -58,13 +60,6 @@ export type {
   StreamReference,
   StreamSink,
 } from './types.ts';
-
-function acceptsNoActivityInput(fn: unknown): boolean {
-  if (typeof fn !== 'function') return false;
-  if (fn.length === 0) return true;
-  const execute = (fn as { execute?: unknown }).execute;
-  return typeof execute === 'function' && execute.length === 0;
-}
 
 /**
  * Concrete workflow execution context injected as the first argument of every
@@ -157,85 +152,11 @@ export class Context implements WorkflowContext {
     const exposedValues = getInternals(this).exposedValues;
     return exposedValues !== undefined && exposedValues.size > 0;
   }
-  // oxlint-disable-next-line complexity -- ID:core-context-create-speculative-child-complexity
   createSpeculativeChild(): Context {
-    const internals = getInternals(this);
-    const childOptions: ContextOptions = {
-      workflowId: this.workflowId,
-      workflowType: this.workflowType,
-      startedAt: this.startedAt,
-      abortController: internals.abortController,
-      getNow: internals.getNow,
-      initialStep: internals.stepIndex,
-      ...(internals.accumulatedResults !== undefined
-        ? { accumulatedResults: new Map(internals.accumulatedResults) }
-        : {}),
-      locals: internals.checkpointLocals,
-      searchAttributes: internals.searchAttributes,
-      nestingDepth: internals.nestingDepth,
-      ...(internals.deadline !== undefined ? { deadline: internals.deadline } : {}),
-      ...(internals.searchAttributeSchema !== undefined
-        ? { searchAttributeSchema: internals.searchAttributeSchema }
-        : {}),
-      ...(internals.tenant !== undefined ? { tenant: internals.tenant } : {}),
-      executionStateOwnerId: internals.executionStateOwnerId,
-      ...(internals.sleepReferenceTime !== undefined
-        ? { sleepReferenceTime: internals.sleepReferenceTime }
-        : {}),
-      ...(internals.resolveWorkflowType !== undefined
-        ? { resolveWorkflowType: internals.resolveWorkflowType }
-        : {}),
-    };
-    const child = new Context(childOptions);
-    const childInternals = getInternals(child);
-    childInternals.pendingAttributeChanges =
-      internals.pendingAttributeChanges !== undefined
-        ? { ...internals.pendingAttributeChanges }
-        : undefined;
-    childInternals.updateHandlers =
-      internals.updateHandlers !== undefined ? new Map(internals.updateHandlers) : undefined;
-    childInternals.queryHandlers =
-      internals.queryHandlers !== undefined ? new Map(internals.queryHandlers) : undefined;
-    childInternals.exposedValues =
-      internals.exposedValues !== undefined ? new Map(internals.exposedValues) : undefined;
-    childInternals.memoCache =
-      internals.memoCache !== undefined ? new Map(internals.memoCache) : undefined;
-    childInternals.explainMode = internals.explainMode;
-    return child;
+    return createSpeculativeChildState(this, (options) => new Context(options));
   }
   commitSpeculativeChild(child: Context): void {
-    const internals = getInternals(this);
-    const childInternals = getInternals(child);
-    internals.stepIndex = childInternals.stepIndex;
-    internals.accumulatedResults =
-      childInternals.accumulatedResults !== undefined
-        ? new Map(childInternals.accumulatedResults)
-        : undefined;
-    internals.stateSession = cloneSessionStateStore(childInternals.stateSession);
-    internals.checkpointLocals = stateSessionHelpers.createCheckpointLocals(
-      internals.stateSession,
-      childInternals.checkpointLocals,
-    );
-    internals.searchAttributes = { ...childInternals.searchAttributes };
-    internals.pendingAttributeChanges =
-      childInternals.pendingAttributeChanges !== undefined
-        ? { ...childInternals.pendingAttributeChanges }
-        : undefined;
-    internals.updateHandlers =
-      childInternals.updateHandlers !== undefined
-        ? new Map(childInternals.updateHandlers)
-        : undefined;
-    internals.queryHandlers =
-      childInternals.queryHandlers !== undefined
-        ? new Map(childInternals.queryHandlers)
-        : undefined;
-    internals.exposedValues =
-      childInternals.exposedValues !== undefined
-        ? new Map(childInternals.exposedValues)
-        : undefined;
-    internals.memoCache =
-      childInternals.memoCache !== undefined ? new Map(childInternals.memoCache) : undefined;
-    internals.sleepReferenceTime = childInternals.sleepReferenceTime;
+    commitSpeculativeChildState(this, child);
   }
   get state(): WorkflowStateNamespace {
     return stateNamespaceHelpers.createStateNamespace(this, getInternals(this));
@@ -271,7 +192,6 @@ export class Context implements WorkflowContext {
     input: TInput,
     options?: ActivityCallOptions,
   ): Generator<ContextOperationRequest, TResult, unknown>;
-  // oxlint-disable-next-line complexity -- ID:core-context-fn-complexity
   *run<TInput, TResult>(
     activity:
       | string
@@ -281,50 +201,13 @@ export class Context implements WorkflowContext {
       | (((input: TInput) => Promise<TResult> | TResult) & { execute?: never }),
     ...rest: unknown[]
   ): Generator<ContextOperationRequest, TResult, unknown> {
-    let options: ActivityCallOptions | undefined;
-    if (
-      rest.length > 0 &&
-      stateSessionHelpers.isActivityCallOptions(rest[rest.length - 1]) &&
-      (rest.length > 1 || (typeof activity !== 'string' && acceptsNoActivityInput(activity)))
-    ) {
-      options = rest.pop() as ActivityCallOptions;
-    }
-    if (rest.length > 1) {
-      throw new Error(
-        'ctx.run() accepts one activity input value plus optional ActivityCallOptions.',
-      );
-    }
-    const input = rest[0];
-    const activityName = typeof activity === 'string' ? activity : activity.name || 'anonymous';
-    const activityFunction = typeof activity === 'function' ? activity : undefined;
-    const internals = getInternals(this);
-    const step = internals.stepIndex++;
-    if (internals.accumulatedResults?.has(step)) {
-      if (internals.explainMode) {
-        console.log(`[weft] ctx.run(${activityName}) → Returning cached result from step ${step}`);
-      }
-      return internals.accumulatedResults.get(step) as TResult;
-    }
-    const queue = options?.queue ?? 'default';
-    if (internals.explainMode) {
-      console.log(`[weft] ctx.run(${activityName}, ${JSON.stringify(input)})`);
-      console.log(`  → Creating checkpoint at step ${step}`);
-      console.log(`  → Dispatching activity "${activityName}" to queue "${queue}"`);
-    }
-    const operationId = crypto.randomUUID();
-    const callerStack = contextValidation.captureCallerStack();
-    const executeActivity = activityFunction as
-      | ((input: unknown, context?: unknown) => unknown)
-      | undefined;
-    const result = yield {
-      type: 'activity',
-      operationId,
-      activityName,
-      ...(executeActivity !== undefined ? { fn: executeActivity } : {}),
-      input,
-      callerStack,
-      ...(options !== undefined ? { options: options as Record<string, unknown> } : {}),
-    };
+    const { request, step, hasCachedResult, cachedResult } = createRunActivityRequest<TResult>(
+      this,
+      activity,
+      rest,
+    );
+    if (hasCachedResult) return cachedResult as TResult;
+    const result = yield request;
     this.accumulatedResults.set(step, result);
     return result as TResult;
   }

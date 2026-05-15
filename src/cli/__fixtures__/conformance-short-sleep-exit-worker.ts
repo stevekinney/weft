@@ -5,6 +5,7 @@ export type ConformanceShortSleepExitWorkerFixture = 'short-sleep-exit';
 const serverUrl = Bun.env['WEFT_WORKER_URL'];
 const queue = Bun.env['WEFT_WORKER_QUEUE'] ?? 'conformance';
 const protocolVersion = Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '1');
+const launchIndex = Number(Bun.env['WEFT_CONFORMANCE_LAUNCH_INDEX'] ?? '1');
 const activities = (Bun.env['WEFT_WORKER_ACTIVITIES'] ?? '')
   .split(',')
   .map((activity) => activity.trim())
@@ -50,11 +51,17 @@ function handleTaskMessage(parsed: Record<string, unknown>): void {
   }
 
   const milliseconds = readMilliseconds(input);
+  if (milliseconds > 100 && launchIndex === 1) {
+    return;
+  }
+
   setTimeout(() => {
-    send({ type: 'taskResult', operationId, status: 'completed', value: input ?? null });
-    if (milliseconds > 100) {
+    if (milliseconds > 100 && launchIndex > 1) {
       socket.close();
+      return;
     }
+
+    send({ type: 'taskResult', operationId, status: 'completed', value: input ?? null });
   }, milliseconds);
 }
 

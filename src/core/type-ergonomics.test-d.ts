@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import {
   activity,
+  Context,
   Engine,
   signal,
   update,
@@ -74,6 +75,8 @@ type Equals<X, Y> =
 
 const workflowContextDriftGuard: AssertNever<MissingWorkflowContextKeys> = undefined as never;
 void workflowContextDriftGuard;
+const concreteContextContractGuard: Context extends WorkflowContext ? true : never = true;
+void concreteContextContractGuard;
 
 const engine = new Engine();
 const approvalSignal = signal<{ approved: boolean }>('approval');

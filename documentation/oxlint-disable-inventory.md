@@ -35,32 +35,6 @@ naming the alternative that was rejected.
 - **Symbol**: `extractDefinitionMetadata`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `core-context-create-speculative-child-complexity`
-
-- **File**: `src/core/context/index.ts`
-- **Rule**: `complexity`
-- **Symbol**: `createSpeculativeChild`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-- **File**: `src/core/context.ts`
-- **Rule**: `max-lines`
-- **Symbol**: `(whole file)`
-- **Reason**: Pre-existing oversized file; tracked by oxlint-strict initiative for split.
-
-## `core-context-fn-complexity`
-
-- **File**: `src/core/context/index.ts`
-- **Rule**: `complexity`
-- **Symbol**: `fn`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-context-public-workflow-surface`
-
-- **File**: `src/core/context/index.ts`
-- **Rule**: `max-lines`
-- **Symbol**: `(whole file)`
-- **Reason**: Context is the workflow authoring surface. The definition-vocabulary cleanup keeps activity, signal, update, query, and search-attribute overloads together so the public workflow contract stays inspectable in one place.
-
 ## `core-debug-output-sanitize-object-complexity`
 
 - **File**: `src/core/debug-output.ts`
