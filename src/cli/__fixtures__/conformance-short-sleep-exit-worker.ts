@@ -5,7 +5,8 @@ export type ConformanceShortSleepExitWorkerFixture = 'short-sleep-exit';
 const serverUrl = Bun.env['WEFT_WORKER_URL'];
 const queue = Bun.env['WEFT_WORKER_QUEUE'] ?? 'conformance';
 const protocolVersion = Number(Bun.env['WEFT_WORKER_PROTOCOL_VERSION'] ?? '1');
-const launchIndex = Number(Bun.env['WEFT_CONFORMANCE_LAUNCH_INDEX'] ?? '1');
+const mode = Bun.env['WEFT_SHORT_SLEEP_EXIT_MODE'] ?? 'default';
+const launchStateFile = Bun.env['WEFT_SHORT_SLEEP_EXIT_STATE_FILE'];
 const activities = (Bun.env['WEFT_WORKER_ACTIVITIES'] ?? '')
   .split(',')
   .map((activity) => activity.trim())
@@ -17,6 +18,16 @@ if (serverUrl === undefined) {
   process.exit(2);
 }
 
+async function nextLaunchIndex(): Promise<number> {
+  if (launchStateFile === undefined) return 0;
+  const file = Bun.file(launchStateFile);
+  const previous = (await file.exists()) ? Number(await file.text()) : 0;
+  const next = Number.isFinite(previous) ? previous + 1 : 1;
+  await Bun.write(launchStateFile, String(next));
+  return next;
+}
+
+const launchIndex = await nextLaunchIndex();
 const socket = new WebSocket(serverUrl);
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -51,12 +62,15 @@ function handleTaskMessage(parsed: Record<string, unknown>): void {
   }
 
   const milliseconds = readMilliseconds(input);
-  if (milliseconds > 100 && launchIndex === 1) {
+  if (mode === 'replacement-disconnect' && milliseconds > 100 && launchIndex === 1) {
+    setTimeout(() => {
+      send({ type: 'taskResult', operationId, status: 'completed', value: input ?? null });
+    }, milliseconds * 20);
     return;
   }
 
   setTimeout(() => {
-    if (milliseconds > 100 && launchIndex > 1) {
+    if (mode === 'replacement-disconnect' && milliseconds > 100 && launchIndex > 1) {
       socket.close();
       return;
     }

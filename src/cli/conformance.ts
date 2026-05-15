@@ -64,7 +64,7 @@ async function waitForCondition(
     : new Error(message);
 }
 
-function startWorker(command: string[], server: WeftServer, launchIndex: number): RunningWorker {
+function startWorker(command: string[], server: WeftServer): RunningWorker {
   const environment = {
     ...Bun.env,
     WEFT_WORKER_URL: `${server.url.replace('http://', 'ws://')}/v1/tasks/${CONFORMANCE_QUEUE}/stream`,
@@ -72,7 +72,6 @@ function startWorker(command: string[], server: WeftServer, launchIndex: number)
     WEFT_WORKER_ACTIVITIES: CONFORMANCE_ACTIVITIES.join(','),
     WEFT_WORKER_PROTOCOL_VERSION: String(REMOTE_WORKER_PROTOCOL_VERSION),
     WEFT_CONFORMANCE_HEARTBEAT_INTERVAL_MS: String(CONFORMANCE_HEARTBEAT_INTERVAL_MS),
-    WEFT_CONFORMANCE_LAUNCH_INDEX: String(launchIndex),
   };
 
   return {
@@ -234,11 +233,9 @@ async function runConformanceChecks(
   const server = serve({ engine, port: 0, hostname: '127.0.0.1' });
   const checks: ConformanceCheck[] = [];
   let worker: RunningWorker | undefined;
-  let workerLaunchCount = 0;
-  const launchWorker = (): RunningWorker => startWorker(command, server, ++workerLaunchCount);
 
   try {
-    worker = launchWorker();
+    worker = startWorker(command, server);
     const workerId = await waitForRegisteredWorker(server, timeoutMs);
     const registered = server.registry.getWorker(workerId);
     checks.push(
@@ -310,7 +307,7 @@ async function runConformanceChecks(
       'in-flight reconnect task assignment',
     );
 
-    const replacementWorker = launchWorker();
+    const replacementWorker = startWorker(command, server);
     const replacementWorkerId = await waitForReplacementWorker(server, workerId, timeoutMs);
     await waitForWorkerHeartbeat(server, replacementWorkerId, timeoutMs);
     await stopWorker(worker);
