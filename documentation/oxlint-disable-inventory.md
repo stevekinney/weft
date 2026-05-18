@@ -349,13 +349,6 @@ naming the alternative that was rejected.
 - **Symbol**: `deletePrefix`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `storage-lmdb-delete-prefix-complexity`
-
-- **File**: `src/storage/lmdb.ts`
-- **Rule**: `complexity`
-- **Symbol**: `deletePrefix`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `worker-protocol-contract-file-length`
 
 - **File**: `src/worker/protocol.ts`

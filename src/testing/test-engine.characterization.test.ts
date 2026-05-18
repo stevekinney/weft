@@ -22,10 +22,7 @@ function makeEngine(workflowFn: (ctx: WorkflowContext, input: unknown) => AsyncG
 }
 
 /** Simple passing workflow: returns the input unchanged. */
-async function* passThroughWorkflow(
-  _ctx: WorkflowContext,
-  input: unknown,
-): AsyncGenerator {
+async function* passThroughWorkflow(_ctx: WorkflowContext, input: unknown): AsyncGenerator {
   return input;
 }
 
@@ -198,7 +195,7 @@ describe('runN — chaos seed advances per run', () => {
     const eng1 = buildEngineForDeterminism();
     const eng2 = buildEngineForDeterminism();
 
-    const options = { runs: 10, chaos: { faultRate: 0.5, faults: ['error'] as const, seed: 42 } };
+    const options = { runs: 10, chaos: { faultRate: 0.5, faults: ['error' as const], seed: 42 } };
 
     const r1 = await eng1.runN('wf', null, options);
     const r2 = await eng2.runN('wf', null, options);
