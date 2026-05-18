@@ -56,11 +56,14 @@ export type StartWorkflowOutput = z.infer<typeof startWorkflowOutput>;
  * they appear there: id → executionTimeout → startAt → startAfter → tags →
  * idempotencyKey → searchAttributes.
  *
+ * `lookupSearchAttributeSchema` is invoked only after the type has been
+ * validated, so an invalid type rejects without touching engine state.
+ *
  * Returns the workflow type string and the resolved `StartOptions`.
  */
 function validateStartWorkflowInput(
   input: StartWorkflowInput,
-  searchAttributeSchema: SearchAttributeSchema | undefined,
+  lookupSearchAttributeSchema: (type: string) => SearchAttributeSchema | undefined,
 ): { type: string; options: StartOptions } {
   if (typeof input.type !== 'string' || input.type.length === 0) {
     throw invalidParamsFault('Missing required field: type');
@@ -69,7 +72,7 @@ function validateStartWorkflowInput(
 
   let options: StartOptions;
   try {
-    options = buildStartWorkflowOptions(input, searchAttributeSchema);
+    options = buildStartWorkflowOptions(input, lookupSearchAttributeSchema(type));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw invalidParamsFault(message);
@@ -136,17 +139,12 @@ export const startWorkflowOperation = defineOperation<StartWorkflowInput, StartW
   invoke: async ({ input, engine }): Promise<StartWorkflowOutput> => {
     const typedEngine = runtimeWorkflowEngine(engine);
 
-    // Validate `type` BEFORE consulting the engine so an invalid type rejects
-    // without invoking engine logic with an empty string. The validator throws
-    // an InvalidParams fault when `input.type` is not a non-empty string.
-    if (typeof input.type !== 'string' || input.type.length === 0) {
-      throw invalidParamsFault('Missing required field: type');
-    }
-
-    const { type, options } = validateStartWorkflowInput(
-      input,
-      typedEngine.getWorkflowDefinition(input.type)?.searchAttributes,
-    );
+    // The validator checks `input.type` first and only then calls the
+    // schema-lookup callback, so an invalid type rejects without invoking
+    // engine logic on an empty string.
+    const { type, options } = validateStartWorkflowInput(input, (validType) => {
+      return typedEngine.getWorkflowDefinition(validType)?.searchAttributes;
+    });
 
     try {
       const handle = await typedEngine.start(type, input.input, options);

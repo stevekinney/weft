@@ -3,6 +3,7 @@
 // ---------------------------------------------------------------------------
 
 import type { RemoteWorkerCapabilities } from '../protocol.ts';
+import type { WorkerHealth, WorkerSummary } from './types.ts';
 
 /**
  * Minimal read-only snapshot of a single worker's state, as held by the
@@ -17,30 +18,6 @@ export type WorkerSnapshot = {
   inFlight: number;
   connectedAt: number;
   lastHeartbeat: number;
-  startedAt: number;
-  capabilities: RemoteWorkerCapabilities;
-  health: WorkerHealth;
-  deploymentName?: string | undefined;
-  buildId?: string | undefined;
-  runtimeVersion?: string | undefined;
-  gitSha?: string | undefined;
-};
-
-export type WorkerHealth = 'active' | 'draining' | 'drained';
-
-/**
- * Per-worker projection returned by the public `weft.workers.list` operation.
- */
-export type WorkerSummary = {
-  id: string;
-  queue: string;
-  activities: string[];
-  concurrency: number;
-  inFlight: number;
-  availableCapacity: number;
-  connectedAt: number;
-  lastHeartbeatAt: number;
-  heartbeatAgeMs: number;
   startedAt: number;
   capabilities: RemoteWorkerCapabilities;
   health: WorkerHealth;

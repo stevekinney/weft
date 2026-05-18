@@ -149,15 +149,6 @@ function resolveTaskResultStatus(message: TaskResultMessage): 'completed' | 'fai
   return message.status === 'completed' ? 'completed' : 'failed';
 }
 
-/** Handle a validated `register` message from a worker. */
-function onRegisterMessage(
-  context: ServerContext,
-  ws: ServerWebSocket<WebSocketData>,
-  message: RegisterMessage,
-): void {
-  registerWorker(context, ws, message);
-}
-
 /** Handle a validated `taskResult` message from a worker. */
 function onTaskResultMessage(
   context: ServerContext,
@@ -312,7 +303,7 @@ export function handleWorkerWebSocketMessage(
 
   switch (message.type) {
     case 'register': {
-      onRegisterMessage(context, ws, message);
+      registerWorker(context, ws, message);
       break;
     }
     case 'taskResult': {
