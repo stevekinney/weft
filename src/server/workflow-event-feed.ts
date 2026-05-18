@@ -336,16 +336,7 @@ export type InMemoryEventBackend = WorkflowEventFeedBackend & {
   emitLive(envelope: EventEnvelope): Promise<void>;
 };
 
-/**
- * Simple in-memory backend. Events are stored in an array keyed by
- * `${workflowId}:${selector}`. `snapshotTailSequence` returns the
- * highest `sequence` seen so far. Live listeners are invoked
- * synchronously when `emitLive` or `append` is called.
- */
-/**
- * Storage-replay generator up to `snapshot` inclusive. Extracted so
- * `subscribe`'s body stays under the complexity limit.
- */
+/** Storage-replay generator up to `snapshot` inclusive. */
 async function* replayUpTo(
   backend: WorkflowEventFeedBackend,
   args: { workflowId: string; selector: EventSelector; signal?: AbortSignal },
@@ -364,19 +355,55 @@ async function* replayUpTo(
 }
 
 /**
- * Live-drain loop:
- *   - Yields any buffered envelope with sequence > snapshot (dedupes
- *     any event that was also replayed from storage).
- *   - Trusts the `subscribeLive` in-order delivery contract: a lower
- *     sequence arriving after a higher one would be dropped by the
- *     `<= lastDelivered` check.
- *   - Guards the wait loop against a lost-wakeup race: after
- *     assigning the waker callback, re-checks buffer / overflow /
- *     abort state BEFORE awaiting. An event that arrives in the
- *     window between buffer-empty check and waker assignment would
- *     otherwise hang the consumer forever.
+ * Shift all buffered envelopes strictly above `watermark` into a batch,
+ * advancing the watermark monotonically. Envelopes at or below `watermark`
+ * are dropped (already covered by the storage replay phase).
  */
-// oxlint-disable-next-line complexity -- ID:server-workflow-event-feed-drain-live-complexity
+function flushPendingBuffer(
+  buffer: EventEnvelope[],
+  watermark: number,
+): { batch: EventEnvelope[]; newWatermark: number } {
+  const batch: EventEnvelope[] = [];
+  let newWatermark = watermark;
+  let head = buffer.shift();
+  while (head !== undefined) {
+    if (head.sequence > newWatermark) {
+      batch.push(head);
+      newWatermark = head.sequence;
+    }
+    head = buffer.shift();
+  }
+  return { batch, newWatermark };
+}
+
+/**
+ * Arm the waker and wait for the next buffer push, overflow, or abort.
+ * Re-checks all three immediately after arming to close the lost-wakeup
+ * race: an event that arrives in the window between the buffer-empty
+ * check and waker installation cancels the wait rather than hanging.
+ */
+async function armAndWait(
+  buffer: EventEnvelope[],
+  overflowed: () => boolean,
+  signal: AbortSignal | undefined,
+  installWaker: (fn: (() => void) | null) => void,
+): Promise<void> {
+  const armed = new Promise<void>((resolve) => {
+    installWaker(resolve);
+  });
+  if (buffer.length > 0 || overflowed() || signal?.aborted) {
+    installWaker(null);
+    return;
+  }
+  await armed;
+}
+
+/**
+ * Live-drain loop. Yields buffered envelopes above `snapshot`, deduping
+ * events already covered by the storage replay phase. Uses
+ * `flushPendingBuffer` for watermark-advancing dedup and `armAndWait`
+ * for the lost-wakeup-safe idle wait.
+ */
 async function* drainLive(
   buffer: EventEnvelope[],
   snapshot: number,
@@ -384,24 +411,17 @@ async function* drainLive(
   overflowed: () => boolean,
   installWaker: (fn: (() => void) | null) => void,
 ): AsyncIterable<EventEnvelope> {
-  let lastDelivered = snapshot;
+  let watermark = snapshot;
   while (true) {
     if (signal?.aborted || overflowed()) return;
-    const head = buffer.shift();
-    if (head !== undefined) {
-      if (head.sequence <= lastDelivered) continue;
-      yield head;
-      lastDelivered = head.sequence;
-      continue;
+    const { batch, newWatermark } = flushPendingBuffer(buffer, watermark);
+    watermark = newWatermark;
+    for (const envelope of batch) {
+      if (signal?.aborted || overflowed()) return;
+      yield envelope;
     }
-    const armed = new Promise<void>((resolve) => {
-      installWaker(resolve);
-    });
-    if (buffer.length > 0 || overflowed() || signal?.aborted) {
-      installWaker(null);
-      continue;
-    }
-    await armed;
+    if (batch.length > 0) continue;
+    await armAndWait(buffer, overflowed, signal, installWaker);
   }
 }
 

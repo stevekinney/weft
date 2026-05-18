@@ -335,13 +335,6 @@ naming the alternative that was rejected.
 - **Symbol**: `invoke`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `server-workflow-event-feed-drain-live-complexity`
-
-- **File**: `src/server/workflow-event-feed.ts`
-- **Rule**: `complexity`
-- **Symbol**: `drainLive`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `storage-indexeddb-delete-prefix-complexity`
 
 - **File**: `src/storage/indexeddb.ts`
