@@ -335,13 +335,6 @@ naming the alternative that was rejected.
 - **Symbol**: `invoke`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `storage-indexeddb-delete-prefix-complexity`
-
-- **File**: `src/storage/indexeddb.ts`
-- **Rule**: `complexity`
-- **Symbol**: `deletePrefix`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `worker-protocol-contract-file-length`
 
 - **File**: `src/worker/protocol.ts`
