@@ -253,13 +253,6 @@ naming the alternative that was rejected.
 - **Symbol**: `handleEvent`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `server-index-serve-complexity`
-
-- **File**: `src/server/index.ts`
-- **Rule**: `complexity`
-- **Symbol**: `serve`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `worker-protocol-contract-file-length`
 
 - **File**: `src/worker/protocol.ts`
