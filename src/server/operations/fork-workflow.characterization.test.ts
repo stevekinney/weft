@@ -24,7 +24,11 @@ import type { WorkflowContext } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
-import { forkWorkflowOperation, forkWorkflowRestBinding } from './fork-workflow.ts';
+import {
+  forkWorkflowOperation,
+  forkWorkflowRestBinding,
+  resolveForkAccess,
+} from './fork-workflow.ts';
 import { jsonRequest } from './operation-test-helpers.test-support.ts';
 
 function createEngine(): Engine {
@@ -74,66 +78,65 @@ describe('fork-workflow — validation precedence', () => {
     });
   });
 
-  // --- engine error routing: 'Checkpoint not found at step' wins over 'Checkpoint not found' ---
-  it('maps "Checkpoint not found at step N" to 400 (not 404)', async () => {
-    engine = createEngine();
-    const originalFork = engine.fork.bind(engine);
-
+  // --- engine error routing: tested directly against resolveForkAccess ---
+  //
+  // These tests target the extracted error-mapping helper rather than monkey-
+  // patching `engine.fork`. The mapping is a pure function over an `Error`
+  // instance, so the unit-level test is both more precise and stable.
+  it('resolveForkAccess maps "Checkpoint not found at step N" to InvalidParams', () => {
+    let captured: unknown;
     try {
-      engine.fork = async () => {
-        throw new Error('Checkpoint not found at step 5');
-      };
-      const response = await handleRequest(jsonRequest('POST', '/v1/workflows/wf-1/fork'), engine, {
-        operationRegistry: registry,
-        restBindings: bindings,
-      });
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({ error: 'Checkpoint not found at step 5' });
-    } finally {
-      engine.fork = originalFork;
+      resolveForkAccess(new Error('Checkpoint not found at step 5'));
+    } catch (fault) {
+      captured = fault;
     }
+    expect(captured).toMatchObject({
+      code: 'InvalidParams',
+      message: 'Checkpoint not found at step 5',
+    });
   });
 
-  // --- engine error routing: 'Checkpoint not found' (without 'at step') maps to 404 ---
-  it('maps "Checkpoint not found" to 404 with resource=checkpoint', async () => {
-    engine = createEngine();
-    const originalFork = engine.fork.bind(engine);
-
+  it('resolveForkAccess maps "Checkpoint not found" (no step) to NotFound checkpoint', () => {
+    let captured: unknown;
     try {
-      engine.fork = async () => {
-        throw new Error('Checkpoint not found for workflow');
-      };
-      const response = await handleRequest(jsonRequest('POST', '/v1/workflows/wf-1/fork'), engine, {
-        operationRegistry: registry,
-        restBindings: bindings,
-      });
-      expect(response.status).toBe(404);
-    } finally {
-      engine.fork = originalFork;
+      resolveForkAccess(new Error('Checkpoint not found for workflow'));
+    } catch (fault) {
+      captured = fault;
     }
+    expect(captured).toMatchObject({
+      code: 'NotFound',
+      data: { resource: 'checkpoint' },
+    });
   });
 
-  // --- all-bad: field validation error takes precedence over engine throw ---
-  it('reports fromStep validation error even when engine would also throw', async () => {
-    engine = createEngine();
-    const originalFork = engine.fork.bind(engine);
-
+  it('resolveForkAccess maps "workflow not found" to NotFound workflow', () => {
+    let captured: unknown;
     try {
-      // Engine would throw 'not found', but field validation fires first.
-      engine.fork = async () => {
-        throw new Error('workflow not found');
-      };
-      const response = await handleRequest(
-        jsonRequest('POST', '/v1/workflows/wf-1/fork', { fromStep: -99 }),
-        engine,
-        { operationRegistry: registry, restBindings: bindings },
-      );
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({
-        error: 'Field "fromStep" must be a non-negative safe integer',
-      });
-    } finally {
-      engine.fork = originalFork;
+      resolveForkAccess(new Error('workflow not found'));
+    } catch (fault) {
+      captured = fault;
     }
+    expect(captured).toMatchObject({
+      code: 'NotFound',
+      data: { resource: 'workflow' },
+    });
+  });
+
+  // --- all-bad: field validation error takes precedence over engine reachability ---
+  //
+  // With a real engine (no monkey-patching), the workflow ID 'wf-nonexistent'
+  // does not exist, so `engine.fork` would naturally throw a 'not found' error.
+  // We assert that field validation surfaces first.
+  it('reports fromStep validation error even when the target workflow does not exist', async () => {
+    engine = createEngine();
+    const response = await handleRequest(
+      jsonRequest('POST', '/v1/workflows/wf-nonexistent/fork', { fromStep: -99 }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'Field "fromStep" must be a non-negative safe integer',
+    });
   });
 });

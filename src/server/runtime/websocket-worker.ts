@@ -196,9 +196,8 @@ function onHeartbeatMessage(
   context: ServerContext,
   options: ServeOptions,
   ws: ServerWebSocket<WebSocketData>,
-  message: HeartbeatMessage,
+  _message: HeartbeatMessage,
 ): void {
-  void message;
   const workerId = ws.data.workerId;
   if (!workerId) return;
 
@@ -323,6 +322,12 @@ export function handleWorkerWebSocketMessage(
     case 'heartbeat': {
       onHeartbeatMessage(context, options, ws, message);
       break;
+    }
+    default: {
+      // Exhaustiveness guard: adding a new WorkerToServerMessage variant
+      // without a case above must fail this typecheck.
+      const _exhaustive: never = message;
+      return _exhaustive;
     }
   }
 }

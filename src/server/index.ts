@@ -11,21 +11,22 @@ import { WorkerRegistry } from '../worker/registry.ts';
 import type { AuthConfig } from './authentication.ts';
 import type { DiscoveryInfo } from './discovery-info.ts';
 import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
+import { createServerWebSocketHandlers } from './runtime/authentication-bridge.ts';
+import { wireEventBroadcasting } from './runtime/event-broadcasting.ts';
 import {
   shutdownAllWorkers as shutdownAllWorkersImpl,
   shutdownWorker as shutdownWorkerImpl,
 } from './runtime/shutdown.ts';
 import { cancelTask, dispatchTaskImpl } from './runtime/task-dispatch.ts';
+import { publishTokenMessage } from './runtime/websocket-stream.ts';
 import {
   buildBunServeConfig,
   buildFetchHandler,
   buildServerContext,
-  buildWebSocketCallbacks,
   cleanupWorkflowIndex,
   registerStackDisposers,
   resolveNetworkConfig,
   restoreInflightTasks,
-  wireEventBroadcastingWithGuard,
   wireShutdownHandlers,
 } from './serve-internals.ts';
 import { TaskQueue, type SchedulingPolicy } from './task-queue.ts';
@@ -269,13 +270,17 @@ export function serve(options: ServeOptions): WeftServer {
       routes,
       tlsOptions,
       buildFetchHandler(serverHolder, context, serverOptions),
-      buildWebSocketCallbacks(context, serverOptions, boundCleanup),
+      createServerWebSocketHandlers(context, serverOptions, boundCleanup),
     ),
   );
   serverHolder.current = server;
 
   const stack = new AsyncDisposableStack();
-  const broadcastingHandle = wireEventBroadcastingWithGuard(options.engine, server, context, stack);
+  const broadcastingHandle = wireEventBroadcasting(options.engine, server, {
+    publishTokenMessage: (workflowId, sequence, message) => {
+      publishTokenMessage(context, workflowId, sequence, message);
+    },
+  });
   registerStackDisposers(stack, context, options, server, broadcastingHandle, boundCleanup);
   restoreInflightTasks(context, options);
   wireShutdownHandlers(stack);

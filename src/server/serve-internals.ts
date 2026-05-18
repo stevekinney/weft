@@ -6,7 +6,6 @@
  */
 
 import { decode } from '../core/codec.ts';
-import type { Engine } from '../core/engine.ts';
 import { createMcpSessionManager } from '../mcp/session.ts';
 import { createMetricsCollectorExporter, MetricsCollector } from '../observability/metrics.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
@@ -25,12 +24,10 @@ import {
 import type { ServerContext } from './runtime/context.ts';
 import {
   registerWorkflowEventLifecycle,
-  wireEventBroadcasting,
   type EventBroadcastingHandle,
 } from './runtime/event-broadcasting.ts';
 import { stopBunServerForShutdown } from './runtime/stop-server.ts';
 import { reconcileOrphanedRecords, scanExpiredTasks } from './runtime/task-reconciliation.ts';
-import { publishTokenMessage } from './runtime/websocket-stream.ts';
 import { isInflightRecord, withRetry } from './runtime/websocket-worker.ts';
 import { TaskQueue } from './task-queue.ts';
 import { createWorkflowEventFeed } from './workflow-event-feed.ts';
@@ -167,19 +164,6 @@ export function buildFetchHandler(
 }
 
 /**
- * Returns the WebSocket lifecycle callbacks for `Bun.serve()`. Delegates to
- * `createServerWebSocketHandlers` in `authentication-bridge.ts` with the
- * workflow index cleanup callback.
- */
-export function buildWebSocketCallbacks(
-  context: ServerContext,
-  options: ResolvedServeOptions,
-  onOperationCleanup: (operationId: string) => void,
-): ReturnType<typeof createServerWebSocketHandlers> {
-  return createServerWebSocketHandlers(context, options, onOperationCleanup);
-}
-
-/**
  * Removes an operationId from the workflow→operations reverse index.
  * Module-scope so it does not contribute to `serve()`'s cyclomatic complexity.
  */
@@ -219,29 +203,6 @@ export function buildBunServeConfig(
     config.tls = tlsOptions;
   }
   return config;
-}
-
-/**
- * Wires event broadcasting from the engine into the Bun server. If wiring
- * throws, the already-listening server is torn down via the stack before the
- * error propagates — preventing a leaked server binding.
- */
-export function wireEventBroadcastingWithGuard(
-  engine: Engine,
-  server: ReturnType<typeof Bun.serve>,
-  context: ServerContext,
-  stack: AsyncDisposableStack,
-): EventBroadcastingHandle {
-  try {
-    return wireEventBroadcasting(engine, server, {
-      publishTokenMessage: (workflowId, sequence, message) => {
-        publishTokenMessage(context, workflowId, sequence, message);
-      },
-    });
-  } catch (error) {
-    void stack[Symbol.asyncDispose]();
-    throw error;
-  }
 }
 
 /**

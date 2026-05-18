@@ -51,7 +51,7 @@ function validateForkInput(input: ForkWorkflowInput): { fromStep: number } | und
  *   3. 'not found'                                  → NotFound, resource: 'workflow'
  *   4. otherwise                                    → EngineFailure
  */
-function resolveForkAccess(error: unknown): never {
+export function resolveForkAccess(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
 
   if (message.includes('fromStep') || message.includes('Checkpoint not found at step')) {

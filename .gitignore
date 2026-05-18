@@ -112,3 +112,4 @@ weft.db-wal
 *.sqlite-shm
 *.sqlite-wal
 .codex-worktrees/
+tmp/

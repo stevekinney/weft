@@ -101,9 +101,14 @@ describe('wireShutdownHandlers()', () => {
 
   it('disposes the stack exactly once even when the signal fires twice', async () => {
     let disposeCount = 0;
+    let resolveDisposed!: () => void;
+    const disposedPromise = new Promise<void>((resolve) => {
+      resolveDisposed = resolve;
+    });
     const stack = new AsyncDisposableStack();
     stack.defer(() => {
       disposeCount++;
+      resolveDisposed();
     });
 
     const handlers: Array<() => void> = [];
@@ -117,17 +122,22 @@ describe('wireShutdownHandlers()', () => {
     handlers[0]!();
     handlers[0]!();
 
-    // Allow the async dispose microtask to settle.
-    await Bun.sleep(10);
+    // Wait for the actual disposer to run (deterministic, not timer-based).
+    await disposedPromise;
 
     expect(disposeCount).toBe(1);
   });
 
   it('disposes the stack exactly once when both SIGINT and SIGTERM fire', async () => {
     let disposeCount = 0;
+    let resolveDisposed!: () => void;
+    const disposedPromise = new Promise<void>((resolve) => {
+      resolveDisposed = resolve;
+    });
     const stack = new AsyncDisposableStack();
     stack.defer(() => {
       disposeCount++;
+      resolveDisposed();
     });
 
     const handlerMap = new Map<string, () => void>();
@@ -140,7 +150,7 @@ describe('wireShutdownHandlers()', () => {
     handlerMap.get('SIGINT')?.();
     handlerMap.get('SIGTERM')?.();
 
-    await Bun.sleep(10);
+    await disposedPromise;
 
     expect(disposeCount).toBe(1);
   });
