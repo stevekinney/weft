@@ -136,14 +136,16 @@ export const startWorkflowOperation = defineOperation<StartWorkflowInput, StartW
   invoke: async ({ input, engine }): Promise<StartWorkflowOutput> => {
     const typedEngine = runtimeWorkflowEngine(engine);
 
-    // Validate `type` here so REST and JSON-RPC clients share one error path.
-    // We pass the search-attribute schema from the engine definition (if any).
-    // At this point `input.type` may not yet be validated; the function checks
-    // the type field first and throws before the schema is consulted.
-    const rawType = typeof input.type === 'string' ? input.type : '';
+    // Validate `type` BEFORE consulting the engine so an invalid type rejects
+    // without invoking engine logic with an empty string. The validator throws
+    // an InvalidParams fault when `input.type` is not a non-empty string.
+    if (typeof input.type !== 'string' || input.type.length === 0) {
+      throw invalidParamsFault('Missing required field: type');
+    }
+
     const { type, options } = validateStartWorkflowInput(
       input,
-      typedEngine.getWorkflowDefinition(rawType)?.searchAttributes,
+      typedEngine.getWorkflowDefinition(input.type)?.searchAttributes,
     );
 
     try {

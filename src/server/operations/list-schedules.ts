@@ -83,11 +83,18 @@ function applyScheduleTypeAndTenantFilter(filter: ScheduleFilter, input: ListSch
   }
 }
 
-const TENANT_MISMATCH_FAULT: OperationFault = {
-  code: 'Forbidden',
-  message: 'Schedule access is limited to the authenticated tenant',
-  data: { reason: 'tenantId mismatch with JWT claim' },
-};
+/**
+ * Build a fresh `Forbidden` fault per throw. A shared module-level constant
+ * would be exposed to any downstream catch handler that mutates the caught
+ * value (e.g., attaching context), poisoning subsequent requests.
+ */
+function tenantMismatchFault(): OperationFault {
+  return {
+    code: 'Forbidden',
+    message: 'Schedule access is limited to the authenticated tenant',
+    data: { reason: 'tenantId mismatch with JWT claim' },
+  };
+}
 
 /** Enforce JWT tenant scope after tenantId is set on the filter. */
 function applyTenantScope(
@@ -100,14 +107,14 @@ function applyTenantScope(
     resolvedTenantId !== undefined &&
     input._resolvedTenantId !== resolvedTenantId
   ) {
-    throw TENANT_MISMATCH_FAULT;
+    throw tenantMismatchFault();
   }
 
   if (resolvedTenantId !== undefined) {
     // If the caller also passed tenantId and it disagrees, that is a
     // scope-mismatch — the tenant scope wins.
     if (filter.tenantId !== undefined && filter.tenantId !== resolvedTenantId) {
-      throw TENANT_MISMATCH_FAULT;
+      throw tenantMismatchFault();
     }
     filter.tenantId = resolvedTenantId;
   }

@@ -12,11 +12,15 @@ import type { AuthConfig } from './authentication.ts';
 import type { DiscoveryInfo } from './discovery-info.ts';
 import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
 import { createServerWebSocketHandlers } from './runtime/authentication-bridge.ts';
-import { wireEventBroadcasting } from './runtime/event-broadcasting.ts';
+import {
+  wireEventBroadcasting,
+  type EventBroadcastingHandle,
+} from './runtime/event-broadcasting.ts';
 import {
   shutdownAllWorkers as shutdownAllWorkersImpl,
   shutdownWorker as shutdownWorkerImpl,
 } from './runtime/shutdown.ts';
+import { stopBunServerForShutdown } from './runtime/stop-server.ts';
 import { cancelTask, dispatchTaskImpl } from './runtime/task-dispatch.ts';
 import { publishTokenMessage } from './runtime/websocket-stream.ts';
 import {
@@ -276,12 +280,28 @@ export function serve(options: ServeOptions): WeftServer {
   serverHolder.current = server;
 
   const stack = new AsyncDisposableStack();
-  const broadcastingHandle = wireEventBroadcasting(options.engine, server, {
-    publishTokenMessage: (workflowId, sequence, message) => {
-      publishTokenMessage(context, workflowId, sequence, message);
-    },
-  });
-  registerStackDisposers(stack, context, options, server, broadcastingHandle, boundCleanup);
+  // Register the server-stop disposer before wiring anything else, so a failure
+  // during broadcasting setup still releases the bound port instead of leaking it.
+  stack.defer(() => stopBunServerForShutdown(server));
+
+  let broadcastingHandle: EventBroadcastingHandle;
+  try {
+    broadcastingHandle = wireEventBroadcasting(options.engine, server, {
+      publishTokenMessage: (workflowId, sequence, message) => {
+        publishTokenMessage(context, workflowId, sequence, message);
+      },
+    });
+  } catch (error) {
+    // Stop the server before propagating. The stack's async disposers have not
+    // been registered yet and the only resource that needs releasing is the
+    // bound server. `serve()` is synchronous, so we kick the stop and rely on
+    // Bun's force-stop to release the port promptly; the returned promise is
+    // best-effort and the error propagation is what the caller observes.
+    void stopBunServerForShutdown(server);
+    throw error;
+  }
+
+  registerStackDisposers(stack, context, options, broadcastingHandle, boundCleanup);
   restoreInflightTasks(context, options);
   wireShutdownHandlers(stack);
 

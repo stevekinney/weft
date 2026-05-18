@@ -26,7 +26,6 @@ import {
   registerWorkflowEventLifecycle,
   type EventBroadcastingHandle,
 } from './runtime/event-broadcasting.ts';
-import { stopBunServerForShutdown } from './runtime/stop-server.ts';
 import { reconcileOrphanedRecords, scanExpiredTasks } from './runtime/task-reconciliation.ts';
 import { isInflightRecord, withRetry } from './runtime/websocket-worker.ts';
 import { TaskQueue } from './task-queue.ts';
@@ -214,14 +213,12 @@ export function registerStackDisposers(
   stack: AsyncDisposableStack,
   context: ServerContext,
   options: ServeOptions,
-  server: ReturnType<typeof Bun.serve>,
   broadcastingHandle: EventBroadcastingHandle,
   onOperationCleanup: (operationId: string) => void,
 ): void {
-  // Registered first — disposed last: stop the HTTP server.
-  stack.defer(() => stopBunServerForShutdown(server));
-
-  // Registered second — disposed second-to-last.
+  // The caller has already registered the server-stop disposer so a failure
+  // during broadcasting setup can still release the port. Disposers added here
+  // run before it (LIFO).
   stack.defer(broadcastingHandle.dispose);
   stack.defer(() => context.workflowEventFeed.dispose());
   // Registered third — disposed third. Close every active `/jsonrpc` WS session
