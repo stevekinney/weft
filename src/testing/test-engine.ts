@@ -260,7 +260,6 @@ export class TestEngine extends Engine {
    * @param options `{ runs, chaos? }` — number of runs and optional scenario.
    * @returns       `{ passRate, consistency, categories }` aggregate metrics.
    */
-  // oxlint-disable-next-line complexity -- ID:testing-test-engine-run-n-complexity
   async runN(type: string, input: unknown, options: RunNOptions): Promise<RunNResult> {
     const { runs, chaos } = options;
 
@@ -275,30 +274,7 @@ export class TestEngine extends Engine {
     };
 
     for (let i = 0; i < runs; i++) {
-      // Temporarily wrap all mocks with chaos for this run.
-      // Save original base implementations so they can be restored afterward.
-      const savedImplementations = new Map<Function, MockActivityFunction<unknown, unknown>>();
-
-      if (chaos) {
-        for (const [activity, mocked] of this.#mocks.entries()) {
-          // Capture the current base implementation (not the bound execute wrapper).
-          const original = mocked.handle.currentImplementation;
-          savedImplementations.set(activity, original);
-
-          // Derive a per-run seed so each run gets a different fault sequence.
-          // Using the same seed for all N runs would produce identical fault patterns,
-          // making passRate always 0.0 or 1.0 and masking real reliability variance.
-          const perRunChaos = chaos.seed !== undefined ? { ...chaos, seed: chaos.seed + i } : chaos;
-          // Build a chaos-wrapped version of the single-input original.
-          const chaosWrapped = withChaos(
-            (activityInput: unknown) => original(activityInput),
-            perRunChaos,
-          );
-
-          // Replace the handle's base implementation for this run.
-          mocked.handle.mockImplementation((activityInput: unknown) => chaosWrapped(activityInput));
-        }
-      }
+      const saved = wrapMocksWithChaos(this.#mocks, chaos, i);
 
       // Use a unique ID per run to keep workflow state isolated.
       const runId = `runN-${type}-${i}-${Date.now()}`;
@@ -313,31 +289,90 @@ export class TestEngine extends Engine {
         const category = state?.failureCategory ?? 'system';
         categories[category]++;
       } finally {
-        // Restore original mock base implementations.
-        if (chaos) {
-          for (const [activity, mocked] of this.#mocks.entries()) {
-            const original = savedImplementations.get(activity);
-            if (original !== undefined) {
-              mocked.handle.mockImplementation(original);
-            }
-          }
-        }
+        restoreMocks(this.#mocks, saved);
       }
     }
 
     const passRate = runs > 0 ? passes / runs : 0;
-
-    let consistency: number;
-    if (successOutputs.length === 0) {
-      consistency = NaN;
-    } else {
-      const firstOutput = JSON.stringify(successOutputs[0]);
-      const identicalCount = successOutputs.filter(
-        (out) => JSON.stringify(out) === firstOutput,
-      ).length;
-      consistency = identicalCount / successOutputs.length;
-    }
+    const consistency = computeConsistency(successOutputs);
 
     return { passRate, consistency, categories };
   }
+}
+
+// ---------------------------------------------------------------------------
+// runN helpers (module-private)
+// ---------------------------------------------------------------------------
+
+/**
+ * Wrap every mock in `registry` with a chaos-injecting shim for a single run.
+ *
+ * Returns a save-map of the original base implementations keyed by activity
+ * function reference. The caller must pass this map to {@link restoreMocks}
+ * in the run's `finally` block.
+ *
+ * When `chaos` is `undefined` no wrapping occurs and an empty map is returned,
+ * so the caller's `finally` block is unconditionally safe.
+ *
+ * The per-run seed offset ensures each run receives a distinct fault sequence.
+ * Reusing the same seed for every run would produce identical fault patterns
+ * and collapse `passRate` to either 0 or 1, hiding real reliability variance.
+ */
+function wrapMocksWithChaos(
+  registry: ActivityMockRegistry,
+  chaos: ChaosScenario | undefined,
+  runIndex: number,
+): Map<Function, MockActivityFunction<unknown, unknown>> {
+  const saved = new Map<Function, MockActivityFunction<unknown, unknown>>();
+
+  if (!chaos) return saved;
+
+  for (const [activity, mocked] of registry.entries()) {
+    const original = mocked.handle.currentImplementation;
+    saved.set(activity, original);
+
+    // Derive a per-run seed so each run gets a different fault sequence.
+    const perRunChaos = chaos.seed !== undefined ? { ...chaos, seed: chaos.seed + runIndex } : chaos;
+
+    const chaosWrapped = withChaos(
+      (activityInput: unknown) => original(activityInput),
+      perRunChaos,
+    );
+
+    mocked.handle.mockImplementation((activityInput: unknown) => chaosWrapped(activityInput));
+  }
+
+  return saved;
+}
+
+/**
+ * Restore every mock in `registry` to its saved base implementation.
+ *
+ * Entries absent from `saved` (because no chaos was active) are left
+ * untouched. This is always safe to call even when `saved` is empty.
+ */
+function restoreMocks(
+  registry: ActivityMockRegistry,
+  saved: Map<Function, MockActivityFunction<unknown, unknown>>,
+): void {
+  for (const [activity, mocked] of registry.entries()) {
+    const original = saved.get(activity);
+    if (original !== undefined) {
+      mocked.handle.mockImplementation(original);
+    }
+  }
+}
+
+/**
+ * Compute the consistency score for a list of successful run outputs.
+ *
+ * Returns the fraction of outputs that are JSON-equal to the first output.
+ * Returns `NaN` when `outputs` is empty (no successful runs).
+ */
+function computeConsistency(outputs: unknown[]): number {
+  if (outputs.length === 0) return NaN;
+
+  const firstOutput = JSON.stringify(outputs[0]);
+  const identicalCount = outputs.filter((out) => JSON.stringify(out) === firstOutput).length;
+  return identicalCount / outputs.length;
 }
