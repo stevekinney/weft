@@ -258,28 +258,28 @@ naming the alternative that was rejected.
 - **File**: `src/worker/protocol.ts`
 - **Rule**: `max-lines`
 - **Symbol**: `(whole file)`
-- **Reason**: Canonical RemoteWorker protocol module owns the public v1 constants, message unions, deterministic JSON Schema exports, and parser guards that must stay together for SDK authors importing `weft/worker-protocol`. Splitting the contract would make schema drift harder to audit.
+- **Reason**: Canonical RemoteWorker protocol module owns the public v1 constants, message unions, deterministic JSON Schema exports, and parser guards that must stay together for SDK authors importing `weft/worker-protocol`. The schema declarations and the field-by-field parsers reference one another by structural shape, and keeping them adjacent is what lets a reviewer verify that an accepted message matches the documented contract without crossing files. Rejected alternative: splitting the schemas, exports, and parsers across sibling modules (`protocol-schemas.ts`, `protocol-parsers.ts`, `protocol-exports.ts`); rejected because the schema/parser cross-references would be cut by the file boundary, harming SDK auditability and making schema drift harder to spot in review.
 
 ## `worker-protocol-parse-register-message-complexity`
 
 - **File**: `src/worker/protocol.ts`
 - **Rule**: `complexity`
 - **Symbol**: `parseRegisterMessage`
-- **Reason**: Registration parsing is the protocol trust boundary for version, worker identity, activity list, concurrency, and queue validation. Keeping the checks linear makes the rejection reason deterministic and mirrors the schema fields.
+- **Reason**: Registration parsing is the protocol trust boundary for version, worker identity, activity list, concurrency, and queue validation. Keeping the checks linear makes the rejection reason deterministic and mirrors the exported register-message schema field-by-field; a reviewer auditing trust-boundary behavior reads the parser top-to-bottom and matches each guard against the corresponding schema field. Rejected alternative: extracting per-field helpers (`validateRegisterIdentity`, `validateRegisterCapability`, `validateRegisterRuntime`) into `protocol-parsers.ts`; rejected because it scatters trust-boundary validation order across helpers, hides field-precedence in helper call order rather than source order, and obscures the parser's one-to-one correspondence with the schema.
 
 ## `worker-protocol-parse-task-message-complexity`
 
 - **File**: `src/worker/protocol.ts`
 - **Rule**: `complexity`
 - **Symbol**: `parseTaskMessage`
-- **Reason**: Task parsing validates every server-to-worker field before a worker SDK acts on it. The field checks intentionally mirror the exported task schema rather than hiding validation in smaller helpers.
+- **Reason**: Task parsing validates every server-to-worker field before a worker SDK acts on it. The field checks intentionally mirror the exported task schema rather than hiding validation in smaller helpers, so a reviewer can confirm one-pass that each schema field has a corresponding guard. Rejected alternative: extracting per-field helpers into `protocol-parsers.ts`; rejected because it would scatter the trust-boundary validation order across helpers and break the linear schema-to-guard correspondence that makes drift visible at review time.
 
 ## `worker-protocol-parse-task-result-message-complexity`
 
 - **File**: `src/worker/protocol.ts`
 - **Rule**: `complexity`
 - **Symbol**: `parseTaskResultMessage`
-- **Reason**: `taskResult` is a discriminated union with completed, failed, and cancelled variants. Keeping the variant checks together makes malformed result handling deterministic at the server trust boundary.
+- **Reason**: `taskResult` is a discriminated union with completed, failed, and cancelled variants. Keeping the variant checks together makes malformed result handling deterministic at the server trust boundary, and the linear shape lets a reviewer audit the full set of accepted-vs-rejected shapes from a single source location. Rejected alternative: extracting per-variant helpers (`parseCompletedResult`, `parseFailedResult`, `parseCancelledResult`); rejected because it scatters the discriminator-to-variant dispatch across files and makes it harder to verify that a malformed variant is rejected before its body is read.
 
 ## `dashboard-api-client-max-lines`
 
