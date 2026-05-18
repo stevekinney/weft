@@ -46,6 +46,117 @@ const listSchedulesOutput = z.unknown();
 export type ListSchedulesInput = z.infer<typeof listSchedulesInput>;
 export type ListSchedulesOutput = PaginatedResult<ScheduleSummary>;
 
+/** Apply the status filter dimension, normalizing scalar to single-element form. */
+function applyStatusFilter(filter: ScheduleFilter, input: ListSchedulesInput): void {
+  if (input.status === undefined) return;
+
+  const statuses = Array.isArray(input.status) ? input.status : [input.status];
+  const normalized: ScheduleStatus[] = [];
+  for (const s of statuses) {
+    if (typeof s !== 'string' || !isValidScheduleStatus(s)) {
+      throw invalidParamsFault(
+        'Query parameter "status" must be one of active, paused, cancelled',
+      );
+    }
+    normalized.push(s);
+  }
+
+  if (normalized.length === 1 && normalized[0] !== undefined) {
+    filter.status = normalized[0];
+  } else if (normalized.length > 1) {
+    filter.status = normalized;
+  }
+}
+
+/** Apply workflowType and tenantId filter dimensions. */
+function applyScheduleTypeAndTenantFilter(
+  filter: ScheduleFilter,
+  input: ListSchedulesInput,
+): void {
+  if (input.workflowType !== undefined) {
+    if (typeof input.workflowType !== 'string') {
+      throw invalidParamsFault('Query parameter "workflowType" must be a string');
+    }
+    filter.workflowType = input.workflowType;
+  }
+
+  if (input.tenantId !== undefined) {
+    if (typeof input.tenantId !== 'string') {
+      throw invalidParamsFault('Query parameter "tenantId" must be a string');
+    }
+    filter.tenantId = input.tenantId;
+  }
+}
+
+const TENANT_MISMATCH_FAULT: OperationFault = {
+  code: 'Forbidden',
+  message: 'Schedule access is limited to the authenticated tenant',
+  data: { reason: 'tenantId mismatch with JWT claim' },
+};
+
+/** Enforce JWT tenant scope after tenantId is set on the filter. */
+function applyTenantScope(
+  filter: ScheduleFilter,
+  input: ListSchedulesInput,
+  resolvedTenantId: string | undefined,
+): void {
+  if (
+    input._resolvedTenantId !== undefined &&
+    resolvedTenantId !== undefined &&
+    input._resolvedTenantId !== resolvedTenantId
+  ) {
+    throw TENANT_MISMATCH_FAULT;
+  }
+
+  if (resolvedTenantId !== undefined) {
+    // If the caller also passed tenantId and it disagrees, that is a
+    // scope-mismatch — the tenant scope wins.
+    if (filter.tenantId !== undefined && filter.tenantId !== resolvedTenantId) {
+      throw TENANT_MISMATCH_FAULT;
+    }
+    filter.tenantId = resolvedTenantId;
+  }
+}
+
+/** Apply pagination filter dimensions (limit and offset). */
+function applyPaginationFilter(filter: ScheduleFilter, input: ListSchedulesInput): void {
+  if (input.limit !== undefined) {
+    const parsed = Number(input.limit);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      throw invalidParamsFault('Query parameter "limit" must be a positive integer');
+    }
+    filter.limit = Math.min(parsed, 1000);
+  }
+
+  if (input.offset !== undefined) {
+    const parsed = Number(input.offset);
+    if (!Number.isInteger(parsed) || parsed < 0) {
+      throw invalidParamsFault('Query parameter "offset" must be a non-negative integer');
+    }
+    filter.offset = parsed;
+  }
+}
+
+/**
+ * Validate query parameters and build a `ScheduleFilter` from the operation
+ * input. Field-validation order mirrors the legacy `parseScheduleListFilter`:
+ * status → workflowType → tenantId → (tenant-scope checks) → limit → offset.
+ *
+ * Tenant-scope enforcement happens after the tenantId field so that
+ * JWT-claim mismatches are caught before pagination params are validated.
+ */
+function validateListSchedulesQuery(
+  input: ListSchedulesInput,
+  resolvedTenantId: string | undefined,
+): ScheduleFilter {
+  const filter: ScheduleFilter = {};
+  applyStatusFilter(filter, input);
+  applyScheduleTypeAndTenantFilter(filter, input);
+  applyTenantScope(filter, input, resolvedTenantId);
+  applyPaginationFilter(filter, input);
+  return filter;
+}
+
 export const listSchedulesOperation = defineOperation<ListSchedulesInput, ListSchedulesOutput>({
   name: 'weft.schedules.list',
   mcpExposable: false,
@@ -58,95 +169,17 @@ export const listSchedulesOperation = defineOperation<ListSchedulesInput, ListSc
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  // oxlint-disable-next-line eslint(complexity) -- ID:server-operations-list-schedules-validation-complexity -- preserves the legacy query-validation order at one transport-neutral invoke boundary.
   invoke: async ({ input, engine, principal }): Promise<ListSchedulesOutput> => {
     const e = engine as Engine;
 
     // Build the ScheduleFilter from the validated input. Field-level
     // validation mirrors the legacy `parseScheduleListFilter` exactly.
-    const filter: ScheduleFilter = {};
     const accessOptions = resolveScheduleAccessOptions(principal);
     if (isOperationFault(accessOptions)) {
       throw accessOptions;
     }
     const resolvedTenantId = accessOptions?.tenantId;
-
-    if (input.status !== undefined) {
-      const statuses = Array.isArray(input.status) ? input.status : [input.status];
-
-      const normalized: ScheduleStatus[] = [];
-      for (const s of statuses) {
-        if (typeof s !== 'string' || !isValidScheduleStatus(s)) {
-          throw invalidParamsFault(
-            'Query parameter "status" must be one of active, paused, cancelled',
-          );
-        }
-        normalized.push(s);
-      }
-
-      if (normalized.length === 1 && normalized[0] !== undefined) {
-        filter.status = normalized[0];
-      } else if (normalized.length > 1) {
-        filter.status = normalized;
-      }
-    }
-
-    if (input.workflowType !== undefined) {
-      if (typeof input.workflowType !== 'string') {
-        throw invalidParamsFault('Query parameter "workflowType" must be a string');
-      }
-      filter.workflowType = input.workflowType;
-    }
-
-    if (input.tenantId !== undefined) {
-      if (typeof input.tenantId !== 'string') {
-        throw invalidParamsFault('Query parameter "tenantId" must be a string');
-      }
-      filter.tenantId = input.tenantId;
-    }
-
-    if (
-      input._resolvedTenantId !== undefined &&
-      resolvedTenantId !== undefined &&
-      input._resolvedTenantId !== resolvedTenantId
-    ) {
-      const fault: OperationFault = {
-        code: 'Forbidden',
-        message: 'Schedule access is limited to the authenticated tenant',
-        data: { reason: 'tenantId mismatch with JWT claim' },
-      };
-      throw fault;
-    }
-
-    if (resolvedTenantId !== undefined) {
-      // If the caller also passed tenantId and it disagrees, that is a
-      // scope-mismatch — the tenant scope wins.
-      if (filter.tenantId !== undefined && filter.tenantId !== resolvedTenantId) {
-        const fault: OperationFault = {
-          code: 'Forbidden',
-          message: 'Schedule access is limited to the authenticated tenant',
-          data: { reason: 'tenantId mismatch with JWT claim' },
-        };
-        throw fault;
-      }
-      filter.tenantId = resolvedTenantId;
-    }
-
-    if (input.limit !== undefined) {
-      const parsed = Number(input.limit);
-      if (!Number.isInteger(parsed) || parsed < 1) {
-        throw invalidParamsFault('Query parameter "limit" must be a positive integer');
-      }
-      filter.limit = Math.min(parsed, 1000);
-    }
-
-    if (input.offset !== undefined) {
-      const parsed = Number(input.offset);
-      if (!Number.isInteger(parsed) || parsed < 0) {
-        throw invalidParamsFault('Query parameter "offset" must be a non-negative integer');
-      }
-      filter.offset = parsed;
-    }
+    const filter = validateListSchedulesQuery(input, resolvedTenantId);
 
     return e.listSchedules(filter);
   },

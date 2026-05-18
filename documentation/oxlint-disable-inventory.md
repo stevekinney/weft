@@ -293,13 +293,6 @@ naming the alternative that was rejected.
 - **Symbol**: `serve`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `server-operations-list-schedules-validation-complexity`
-
-- **File**: `src/server/operations/list-schedules.ts`
-- **Rule**: `complexity` (via `eslint(complexity)`)
-- **Symbol**: `(list-schedules invoke boundary)`
-- **Reason**: Pre-existing complexity violation; preserves the legacy query-validation order at one transport-neutral invoke boundary.
-
 ## `server-operations-start-workflow-invoke-complexity`
 
 - **File**: `src/server/operations/start-workflow.ts`
