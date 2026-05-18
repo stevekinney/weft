@@ -342,13 +342,6 @@ naming the alternative that was rejected.
 - **Symbol**: `drainLive`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `storage-indexeddb-delete-prefix-complexity`
-
-- **File**: `src/storage/indexeddb.ts`
-- **Rule**: `complexity`
-- **Symbol**: `deletePrefix`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `storage-lmdb-delete-prefix-complexity`
 
 - **File**: `src/storage/lmdb.ts`

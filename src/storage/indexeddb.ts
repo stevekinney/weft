@@ -193,9 +193,8 @@ export class IndexedDBStorage implements Storage {
     });
   }
 
-  // oxlint-disable-next-line complexity -- ID:storage-indexeddb-delete-prefix-complexity
   async *scan(prefix: string, options: ScanOptions = {}): AsyncIterable<[string, Uint8Array]> {
-    const { limit, reverse, gt, lt, gte, lte } = options;
+    const { limit, reverse } = options;
     const database = await this.#databasePromise;
 
     const prefixEnd = resolvePrefixRangeEnd(prefix);
@@ -221,14 +220,7 @@ export class IndexedDBStorage implements Storage {
 
         const key = cursor.key as string;
 
-        // Apply bound filters
-        let include = true;
-        if (gt !== undefined && key <= gt) include = false;
-        if (gte !== undefined && key < gte) include = false;
-        if (lt !== undefined && key >= lt) include = false;
-        if (lte !== undefined && key > lte) include = false;
-
-        if (include) {
+        if (matchesScanOptions(key, options)) {
           yield [key, new Uint8Array(cursor.value)];
           count++;
         }
