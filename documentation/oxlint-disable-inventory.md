@@ -293,13 +293,6 @@ naming the alternative that was rejected.
 - **Symbol**: `serve`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `server-operations-bulk-filter-helpers-parse-bulk-list-filter-from-body-complexity`
-
-- **File**: `src/server/operations/bulk-filter-helpers.ts`
-- **Rule**: `complexity`
-- **Symbol**: `parseBulkListFilterFromBody`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `server-operations-create-schedule-invoke-complexity`
 
 - **File**: `src/server/operations/create-schedule.ts`
