@@ -293,13 +293,6 @@ naming the alternative that was rejected.
 - **Symbol**: `serve`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `server-operations-fork-workflow-invoke-complexity`
-
-- **File**: `src/server/operations/fork-workflow.ts`
-- **Rule**: `complexity`
-- **Symbol**: `invoke`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `server-operations-list-schedules-validation-complexity`
 
 - **File**: `src/server/operations/list-schedules.ts`
