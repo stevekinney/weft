@@ -19,27 +19,39 @@ function tryDecodePathComponent(value: string): string | null {
   }
 }
 
+/**
+ * Match a URL pathname against a route regex and decode the first capture group.
+ * Returns the decoded value, null if decoding fails, or undefined if the path
+ * does not match.
+ */
+function matchUpgradePath(pathname: string, pattern: RegExp): string | null | undefined {
+  const match = pattern.exec(pathname);
+  if (!match?.[1]) return undefined;
+  return tryDecodePathComponent(match[1]);
+}
+
 /** Classify a WebSocket request URL and extract relevant parameters. */
-// oxlint-disable-next-line complexity -- ID:server-index-classify-connection-complexity
 export function classifyConnection(
   url: URL,
 ): Pick<WebSocketData, 'connectionType' | 'workflowId' | 'queue'> | null {
-  const pathname = url.pathname;
-  const streamMatch = WORKFLOW_STREAM_RE.exec(pathname);
-  if (streamMatch?.[1]) {
-    const workflowId = tryDecodePathComponent(streamMatch[1]);
-    return workflowId === null ? null : { connectionType: 'stream', workflowId };
+  const { pathname } = url;
+
+  const workflowStreamId = matchUpgradePath(pathname, WORKFLOW_STREAM_RE);
+  if (workflowStreamId !== undefined) {
+    return workflowStreamId === null
+      ? null
+      : { connectionType: 'stream', workflowId: workflowStreamId };
   }
 
-  const watchMatch = WORKFLOW_WATCH_RE.exec(pathname);
-  if (watchMatch?.[1]) {
-    const workflowId = tryDecodePathComponent(watchMatch[1]);
-    return workflowId === null ? null : { connectionType: 'watch', workflowId };
+  const workflowWatchId = matchUpgradePath(pathname, WORKFLOW_WATCH_RE);
+  if (workflowWatchId !== undefined) {
+    return workflowWatchId === null
+      ? null
+      : { connectionType: 'watch', workflowId: workflowWatchId };
   }
 
-  const workerMatch = WORKER_STREAM_RE.exec(pathname);
-  if (workerMatch?.[1]) {
-    const queue = tryDecodePathComponent(workerMatch[1]);
+  const queue = matchUpgradePath(pathname, WORKER_STREAM_RE);
+  if (queue !== undefined) {
     return queue === null ? null : { connectionType: 'worker', queue };
   }
 
