@@ -273,7 +273,6 @@ function buildSuccessResponse(
  *
  * @internal
  */
-// oxlint-disable-next-line complexity -- ID:server-openapi-emit-bindings-complexity
 export function emitBindings(
   paths: Record<string, Record<string, unknown>>,
   tagSet: Set<string>,
@@ -282,31 +281,54 @@ export function emitBindings(
   schemaHelper: OpenApiSchemaHelper = DEFAULT_SCHEMA_HELPER,
 ): void {
   for (const binding of bindings) {
-    const operation: ErasedOperation | undefined = registry.get(binding.operationName);
-    if (operation === undefined) continue;
-    const openApiPath = toOpenApiPath(binding.path);
-    if (!isDiscoverable(operation)) continue;
-    if (!paths[openApiPath]) paths[openApiPath] = {};
-
-    const parameters = buildBindingParameters(binding, operation);
-    const successResponse = buildSuccessResponse(binding, operation, schemaHelper);
-    const entry: Record<string, unknown> = {
-      summary: operation.summary,
-      operationId: operation.name,
-      tags: operation.tags,
-      responses: {
-        ...successResponse,
-        ...buildErrorResponses(operation),
-      },
-    };
-    if (parameters.length > 0) entry['parameters'] = parameters;
-
-    const requestBody = buildRequestBody(binding, operation, schemaHelper);
-    if (requestBody !== undefined) entry['requestBody'] = requestBody;
-
-    paths[openApiPath][binding.method.toLowerCase()] = entry;
-    for (const tag of operation.tags) tagSet.add(tag);
+    tryRegisterBinding(paths, tagSet, binding, registry, schemaHelper);
   }
+}
+
+function tryRegisterBinding(
+  paths: Record<string, Record<string, unknown>>,
+  tagSet: Set<string>,
+  binding: UnknownRestBinding,
+  registry: OperationRegistry,
+  schemaHelper: OpenApiSchemaHelper,
+): void {
+  const operation: ErasedOperation | undefined = registry.get(binding.operationName);
+  if (operation === undefined) return;
+  if (!isDiscoverable(operation)) return;
+
+  const openApiPath = toOpenApiPath(binding.path);
+  if (!paths[openApiPath]) paths[openApiPath] = {};
+
+  paths[openApiPath][binding.method.toLowerCase()] = buildBindingEntry(
+    binding,
+    operation,
+    schemaHelper,
+  );
+  for (const tag of operation.tags) tagSet.add(tag);
+}
+
+function buildBindingEntry(
+  binding: UnknownRestBinding,
+  operation: ErasedOperation,
+  schemaHelper: OpenApiSchemaHelper,
+): Record<string, unknown> {
+  const parameters = buildBindingParameters(binding, operation);
+  const successResponse = buildSuccessResponse(binding, operation, schemaHelper);
+  const entry: Record<string, unknown> = {
+    summary: operation.summary,
+    operationId: operation.name,
+    tags: operation.tags,
+    responses: {
+      ...successResponse,
+      ...buildErrorResponses(operation),
+    },
+  };
+  if (parameters.length > 0) entry['parameters'] = parameters;
+
+  const requestBody = buildRequestBody(binding, operation, schemaHelper);
+  if (requestBody !== undefined) entry['requestBody'] = requestBody;
+
+  return entry;
 }
 
 function buildDirectRouteResponses(route: DirectHttpRouteDefinition): Record<string, unknown> {
@@ -358,42 +380,15 @@ function emitDirectRoutes(
   }
 }
 
-// oxlint-disable-next-line complexity -- ID:server-openapi-generate-open-api-document-complexity
 export function generateOpenApiDocument(options?: OpenApiOptions): Record<string, unknown> {
   const title = options?.title ?? 'Weft Workflow Engine';
   const version = options?.version ?? VERSION;
   const infoBlock = applyDiscoveryInfo({ title, version }, options?.discoveryInfo);
   const registry = options?.registry ?? createLiveOperationRegistry();
-  const restBindings = options?.restBindings;
-
-  const paths: Record<string, Record<string, unknown>> = {};
-  const tagSet = new Set<string>();
   const schemaHelper = extractComponentsSchemas(registry);
 
-  emitBindings(paths, tagSet, restBindings, registry, schemaHelper);
-  // Direct routes are reserved infrastructure endpoints, so they are emitted
-  // after bindings and overwrite any conflicting user binding documentation.
-  emitDirectRoutes(paths, tagSet);
-
-  const tags = [...tagSet].toSorted().map((name) => ({ name }));
-  const supportedSchemes =
-    options?.supportedSchemes ?? new Set<OpenApiSecuritySchemeName>(['bearerAuth', 'apiKeyAuth']);
-  const security = [...supportedSchemes].map((schemeName) => ({ [schemeName]: [] }));
-  const schemeDefinitions: Record<OpenApiSecuritySchemeName, Record<string, string>> = {
-    bearerAuth: {
-      type: 'http',
-      scheme: 'bearer',
-      bearerFormat: 'JWT',
-    },
-    apiKeyAuth: {
-      type: 'apiKey',
-      in: 'header',
-      name: 'x-api-key',
-    },
-  };
-  const emittedSecuritySchemes = Object.fromEntries(
-    [...supportedSchemes].map((schemeName) => [schemeName, schemeDefinitions[schemeName]]),
-  );
+  const { paths, tags } = buildOpenApiPaths(options, registry, schemaHelper);
+  const { security, securitySchemes } = buildSecurityBlock(options?.supportedSchemes);
 
   const document: Record<string, unknown> = {
     openapi: '3.1.0',
@@ -406,16 +401,67 @@ export function generateOpenApiDocument(options?: OpenApiOptions): Record<string
         ...schemaHelper.components,
         Error: ERROR_SCHEMA,
       },
-      securitySchemes: emittedSecuritySchemes,
+      securitySchemes,
     },
   };
 
+  applyOpenApiExtras(document, options);
+  return document;
+}
+
+function buildOpenApiPaths(
+  options: OpenApiOptions | undefined,
+  registry: OperationRegistry,
+  schemaHelper: OpenApiSchemaHelper,
+): { paths: Record<string, Record<string, unknown>>; tags: Array<{ name: string }> } {
+  const paths: Record<string, Record<string, unknown>> = {};
+  const tagSet = new Set<string>();
+
+  emitBindings(paths, tagSet, options?.restBindings, registry, schemaHelper);
+  // Direct routes are reserved infrastructure endpoints, so they are emitted
+  // after bindings and overwrite any conflicting user binding documentation.
+  emitDirectRoutes(paths, tagSet);
+
+  const tags = [...tagSet].toSorted().map((name) => ({ name }));
+  return { paths, tags };
+}
+
+const SECURITY_SCHEME_DEFINITIONS: Record<OpenApiSecuritySchemeName, Record<string, string>> = {
+  bearerAuth: {
+    type: 'http',
+    scheme: 'bearer',
+    bearerFormat: 'JWT',
+  },
+  apiKeyAuth: {
+    type: 'apiKey',
+    in: 'header',
+    name: 'x-api-key',
+  },
+};
+
+function buildSecurityBlock(supportedSchemes?: ReadonlySet<OpenApiSecuritySchemeName>): {
+  security: Array<Record<OpenApiSecuritySchemeName, never[]>>;
+  securitySchemes: Record<string, Record<string, string>>;
+} {
+  const schemes =
+    supportedSchemes ?? new Set<OpenApiSecuritySchemeName>(['bearerAuth', 'apiKeyAuth']);
+  const security = [...schemes].map(
+    (schemeName) => ({ [schemeName]: [] }) as Record<OpenApiSecuritySchemeName, never[]>,
+  );
+  const securitySchemes = Object.fromEntries(
+    [...schemes].map((schemeName) => [schemeName, SECURITY_SCHEME_DEFINITIONS[schemeName]]),
+  );
+  return { security, securitySchemes };
+}
+
+function applyOpenApiExtras(
+  document: Record<string, unknown>,
+  options: OpenApiOptions | undefined,
+): void {
   if (options?.serverUrl) {
     document['servers'] = [{ url: options.serverUrl }];
   }
   if (options?.discoveryInfo?.externalDocs !== undefined) {
     document['externalDocs'] = { ...options.discoveryInfo.externalDocs };
   }
-
-  return document;
 }

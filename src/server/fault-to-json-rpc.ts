@@ -41,60 +41,97 @@ export function faultToJsonRpcError(fault: OperationFault): JsonRpcError {
 }
 
 /**
- * Extract the fault's typed `data` payload as a plain object suitable for
- * spreading into the JSON-RPC `data` envelope. Exhaustive over `FaultCode`
- * with no `default` branch — adding a new fault variant must produce a
- * compile error here so we deliberately decide what its data shape spreads
- * to (and verify no field collides with the envelope's `weftCode` /
- * `httpStatus` keys).
+ * Per-fault-code payload extractors. The table is typed so every
+ * `OperationFault['code']` MUST map to an extractor — adding a new fault
+ * variant produces a compile error here (no `default` branch), forcing a
+ * deliberate decision about its wire payload and a check that no field
+ * collides with the envelope's `weftCode` / `httpStatus` keys.
  */
-// oxlint-disable-next-line complexity -- ID:server-fault-to-json-rpc-extract-fault-data-payload-complexity
+type FaultExtractor<C extends OperationFault['code']> = (
+  data: Extract<OperationFault, { code: C }>['data'],
+) => Record<string, unknown>;
+
+type FaultExtractors = {
+  [C in OperationFault['code']]: FaultExtractor<C>;
+};
+
+const EMPTY: Record<string, unknown> = {};
+
+const FAULT_DATA_EXTRACTORS: FaultExtractors = {
+  NotImplemented: () => EMPTY,
+  EngineFailure: () => EMPTY,
+  Unauthorized: (data) => ({ reason: data.reason }),
+  Forbidden: (data) => ({ reason: data.reason }),
+  Unprocessable: (data) => ({ reason: data.reason }),
+  Conflict: dataForConflict,
+  NotFound: dataForNotFound,
+  Timeout: dataForTimeout,
+  RateLimited: dataForRateLimited,
+  UnsupportedTransport: dataForUnsupportedTransport,
+  SubscriptionOverflow: dataForSubscriptionOverflow,
+  InvalidParams: dataForInvalidParams,
+  MethodNotFound: (data) => ({ method: data.method }),
+};
+
 function extractFaultDataPayload(fault: OperationFault): Record<string, unknown> {
-  switch (fault.code) {
-    case 'NotImplemented':
-    case 'EngineFailure':
-      return {};
-    case 'Unauthorized':
-    case 'Forbidden':
-    case 'Unprocessable':
-      return { reason: fault.data.reason };
-    case 'Conflict':
-      return filterDefined({
-        reason: fault.data.reason,
-        missingTypes:
-          fault.data.missingTypes === undefined ? undefined : [...fault.data.missingTypes],
-        missingWorkflowCount: fault.data.missingWorkflowCount,
-        samplesTruncated: fault.data.samplesTruncated,
-      });
-    case 'NotFound':
-      return fault.data.identifier === undefined
-        ? { resource: fault.data.resource }
-        : { resource: fault.data.resource, identifier: fault.data.identifier };
-    case 'Timeout':
-      return fault.data.operationName === undefined
-        ? {}
-        : { operationName: fault.data.operationName };
-    case 'RateLimited':
-      // Only expose retryAfterMs when it's a finite positive number — NaN /
-      // Infinity would JSON-serialize to `null` and leave clients with a
-      // typed-as-number field whose wire value violates the type contract.
-      return typeof fault.data.retryAfterMs === 'number' &&
-        Number.isFinite(fault.data.retryAfterMs) &&
-        fault.data.retryAfterMs > 0
-        ? { retryAfterMs: fault.data.retryAfterMs }
-        : {};
-    case 'UnsupportedTransport':
-      return { transport: fault.data.transport, supported: [...fault.data.supported] };
-    case 'SubscriptionOverflow':
-      return {
-        subscriptionId: fault.data.subscriptionId,
-        droppedCount: fault.data.droppedCount,
-      };
-    case 'InvalidParams':
-      return { issues: fault.data.issues.map((issue) => ({ ...issue, path: [...issue.path] })) };
-    case 'MethodNotFound':
-      return { method: fault.data.method };
-  }
+  // The cast is sound because `FAULT_DATA_EXTRACTORS` is typed so each key
+  // maps to an extractor for that fault's data — TypeScript cannot narrow
+  // `fault.data` through the dynamic lookup, so we delegate to the table.
+  const extractor = FAULT_DATA_EXTRACTORS[fault.code] as FaultExtractor<typeof fault.code>;
+  return extractor(fault.data);
+}
+
+function dataForConflict(
+  data: Extract<OperationFault, { code: 'Conflict' }>['data'],
+): Record<string, unknown> {
+  return filterDefined({
+    reason: data.reason,
+    missingTypes: data.missingTypes === undefined ? undefined : [...data.missingTypes],
+    missingWorkflowCount: data.missingWorkflowCount,
+    samplesTruncated: data.samplesTruncated,
+  });
+}
+
+function dataForNotFound(
+  data: Extract<OperationFault, { code: 'NotFound' }>['data'],
+): Record<string, unknown> {
+  return data.identifier === undefined
+    ? { resource: data.resource }
+    : { resource: data.resource, identifier: data.identifier };
+}
+
+function dataForTimeout(
+  data: Extract<OperationFault, { code: 'Timeout' }>['data'],
+): Record<string, unknown> {
+  return data.operationName === undefined ? {} : { operationName: data.operationName };
+}
+
+function dataForRateLimited(
+  data: Extract<OperationFault, { code: 'RateLimited' }>['data'],
+): Record<string, unknown> {
+  // Only expose retryAfterMs when it's a finite positive number — NaN /
+  // Infinity would JSON-serialize to `null` and leave clients with a
+  // typed-as-number field whose wire value violates the type contract.
+  const ms = data.retryAfterMs;
+  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? { retryAfterMs: ms } : {};
+}
+
+function dataForUnsupportedTransport(
+  data: Extract<OperationFault, { code: 'UnsupportedTransport' }>['data'],
+): Record<string, unknown> {
+  return { transport: data.transport, supported: [...data.supported] };
+}
+
+function dataForSubscriptionOverflow(
+  data: Extract<OperationFault, { code: 'SubscriptionOverflow' }>['data'],
+): Record<string, unknown> {
+  return { subscriptionId: data.subscriptionId, droppedCount: data.droppedCount };
+}
+
+function dataForInvalidParams(
+  data: Extract<OperationFault, { code: 'InvalidParams' }>['data'],
+): Record<string, unknown> {
+  return { issues: data.issues.map((issue) => ({ ...issue, path: [...issue.path] })) };
 }
 
 function filterDefined(input: Record<string, unknown>): Record<string, unknown> {

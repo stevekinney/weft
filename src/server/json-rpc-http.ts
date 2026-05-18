@@ -52,38 +52,22 @@ function textResponse(body: string, status: number, extra?: HeadersInit): Respon
 }
 
 /** Handle a POST `/jsonrpc` request end-to-end. */
-// oxlint-disable-next-line complexity -- ID:server-json-rpc-http-handle-json-rpc-http-request-complexity
 export async function handleJsonRpcHttpRequest(
   request: Request,
   context: JsonRpcHttpContext,
 ): Promise<Response> {
-  if (request.method !== 'POST') {
-    return textResponse('Method Not Allowed', 405, { allow: 'POST' });
-  }
+  const methodRejection = guardMethod(request);
+  if (methodRejection !== null) return methodRejection;
 
-  const contentType = request.headers.get('content-type') ?? '';
-  if (!isJsonContentType(contentType)) {
-    return textResponse('Unsupported Media Type', 415);
-  }
+  const contentTypeRejection = guardContentType(request);
+  if (contentTypeRejection !== null) return contentTypeRejection;
 
   const maxBytes = context.maxBodyBytes ?? DEFAULT_MAX_BODY_BYTES;
-
-  // Pre-read guard: validate `content-length` as a canonical
-  // non-negative base-10 integer. Invalid, negative, fractional, or
-  // non-finite values are rejected as 400 — they indicate a malformed
-  // request. A valid-but-oversized declaration short-circuits with
-  // 413 before we allocate the body buffer.
-  const contentLengthHeader = request.headers.get('content-length');
-  if (contentLengthHeader !== null) {
-    if (!CONTENT_LENGTH_PATTERN.test(contentLengthHeader)) {
-      return textResponse('Bad Request', 400);
-    }
-    const declared = Number(contentLengthHeader);
-    if (!Number.isSafeInteger(declared) || declared < 0) {
-      return textResponse('Bad Request', 400);
-    }
-    if (declared > maxBytes) return textResponse('Payload Too Large', 413);
-  }
+  const contentLengthRejection = guardContentLength(
+    request.headers.get('content-length'),
+    maxBytes,
+  );
+  if (contentLengthRejection !== null) return contentLengthRejection;
 
   // Stream-bounded body read. Pulls chunks and enforces `maxBytes`
   // as the hard ceiling so a lying or missing content-length header
@@ -106,7 +90,36 @@ export async function handleJsonRpcHttpRequest(
   };
 
   const result = await dispatchJsonRpc(bodyText, dispatchContext);
+  return dispatchResultToResponse(result);
+}
 
+function guardMethod(request: Request): Response | null {
+  if (request.method === 'POST') return null;
+  return textResponse('Method Not Allowed', 405, { allow: 'POST' });
+}
+
+function guardContentType(request: Request): Response | null {
+  const contentType = request.headers.get('content-type') ?? '';
+  if (isJsonContentType(contentType)) return null;
+  return textResponse('Unsupported Media Type', 415);
+}
+
+/**
+ * Pre-read content-length guard. Validates a canonical non-negative
+ * base-10 integer. Invalid/negative/fractional values → 400 (malformed
+ * request). A valid-but-oversize declaration → 413 before any body
+ * buffer is allocated.
+ */
+function guardContentLength(header: string | null, maxBytes: number): Response | null {
+  if (header === null) return null;
+  if (!CONTENT_LENGTH_PATTERN.test(header)) return textResponse('Bad Request', 400);
+  const declared = Number(header);
+  if (!Number.isSafeInteger(declared) || declared < 0) return textResponse('Bad Request', 400);
+  if (declared > maxBytes) return textResponse('Payload Too Large', 413);
+  return null;
+}
+
+function dispatchResultToResponse(result: Awaited<ReturnType<typeof dispatchJsonRpc>>): Response {
   switch (result.kind) {
     case 'notification':
     case 'notification-batch':

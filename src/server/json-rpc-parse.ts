@@ -156,7 +156,8 @@ function parseBatchItem(item: unknown): ParsedBatchItem {
   };
 }
 
-// oxlint-disable-next-line complexity -- ID:server-json-rpc-parse-parse-single-object-complexity
+type InvalidRequest = Extract<ParseResult, { kind: 'invalid-request' }>;
+
 function parseSingleObject(
   object: Record<string, unknown>,
 ): Extract<ParseResult, { kind: 'single' | 'invalid-request' }> {
@@ -167,66 +168,18 @@ function parseSingleObject(
   const hasIdKey = 'id' in object;
   const idForError: JsonRpcId = isValidJsonRpcId(rawId) ? rawId : null;
 
-  if (object['jsonrpc'] !== JSON_RPC_VERSION) {
-    return {
-      kind: 'invalid-request',
-      code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
-      message: `jsonrpc field must be exactly "${JSON_RPC_VERSION}"`,
-      id: idForError,
-    };
-  }
+  const versionRejection = checkJsonRpcVersion(object, idForError);
+  if (versionRejection !== null) return versionRejection;
 
   const method = object['method'];
-  if (typeof method !== 'string' || method.length === 0) {
-    return {
-      kind: 'invalid-request',
-      code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
-      message: 'method field must be a non-empty string',
-      id: idForError,
-    };
-  }
+  const methodRejection = checkMethodField(method, idForError);
+  if (methodRejection !== null) return methodRejection;
 
-  const rawParams = object['params'];
-  const hasParamsKey = 'params' in object;
-  let params: Record<string, unknown> | undefined;
-  if (hasParamsKey) {
-    if (Array.isArray(rawParams)) {
-      return {
-        kind: 'invalid-request',
-        code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
-        message:
-          'positional params are not supported; use named params (params must be a JSON object)',
-        id: idForError,
-      };
-    }
-    if (!isPlainObject(rawParams)) {
-      return {
-        kind: 'invalid-request',
-        code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
-        message: 'params must be a JSON object (named params) or absent',
-        id: idForError,
-      };
-    }
-    // `params` is passed through verbatim. Prototype-pollution keys
-    // (`__proto__` / `constructor` / `prototype`) are NOT stripped
-    // here — the authoritative defense is `executeOperation`'s
-    // `UNSAFE_PROTOTYPE_KEYS` filter plus the registry-time rejection
-    // of schema-declared unsafe keys. Sanitizing at the parse layer
-    // would duplicate that policy and force the transport-neutral
-    // parser to know about operation-catalog internals. The security
-    // boundary is the pipeline, not the parser — this comment exists
-    // so a future reviewer sees the decision is deliberate.
-    params = rawParams;
-  }
+  const paramsResult = parseParamsField(object, idForError);
+  if (paramsResult.kind === 'invalid-request') return paramsResult;
 
-  if (hasIdKey && !isValidJsonRpcId(rawId)) {
-    return {
-      kind: 'invalid-request',
-      code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
-      message: 'id must be a string, finite number, or null',
-      id: null,
-    };
-  }
+  const idRejection = checkIdField(rawId, hasIdKey);
+  if (idRejection !== null) return idRejection;
 
   // Notifications omit the `id` key entirely. `id: null` is a real
   // request per the JSON-RPC 2.0 spec.
@@ -234,10 +187,82 @@ function parseSingleObject(
 
   const request: JsonRpcRequest = {
     jsonrpc: JSON_RPC_VERSION,
-    method,
-    ...(params === undefined ? {} : { params }),
+    method: method as string,
+    ...(paramsResult.params === undefined ? {} : { params: paramsResult.params }),
     ...(hasIdKey ? { id: rawId as JsonRpcId } : {}),
   };
 
   return { kind: 'single', request, isNotification };
+}
+
+function checkJsonRpcVersion(
+  object: Record<string, unknown>,
+  idForError: JsonRpcId,
+): InvalidRequest | null {
+  if (object['jsonrpc'] === JSON_RPC_VERSION) return null;
+  return {
+    kind: 'invalid-request',
+    code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
+    message: `jsonrpc field must be exactly "${JSON_RPC_VERSION}"`,
+    id: idForError,
+  };
+}
+
+function checkMethodField(method: unknown, idForError: JsonRpcId): InvalidRequest | null {
+  if (typeof method === 'string' && method.length > 0) return null;
+  return {
+    kind: 'invalid-request',
+    code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
+    message: 'method field must be a non-empty string',
+    id: idForError,
+  };
+}
+
+type ParamsParseResult =
+  | { readonly kind: 'ok'; readonly params: Record<string, unknown> | undefined }
+  | InvalidRequest;
+
+function parseParamsField(
+  object: Record<string, unknown>,
+  idForError: JsonRpcId,
+): ParamsParseResult {
+  if (!('params' in object)) return { kind: 'ok', params: undefined };
+  const rawParams = object['params'];
+  if (Array.isArray(rawParams)) {
+    return {
+      kind: 'invalid-request',
+      code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
+      message:
+        'positional params are not supported; use named params (params must be a JSON object)',
+      id: idForError,
+    };
+  }
+  if (!isPlainObject(rawParams)) {
+    return {
+      kind: 'invalid-request',
+      code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
+      message: 'params must be a JSON object (named params) or absent',
+      id: idForError,
+    };
+  }
+  // `params` is passed through verbatim. Prototype-pollution keys
+  // (`__proto__` / `constructor` / `prototype`) are NOT stripped
+  // here — the authoritative defense is `executeOperation`'s
+  // `UNSAFE_PROTOTYPE_KEYS` filter plus the registry-time rejection
+  // of schema-declared unsafe keys. Sanitizing at the parse layer
+  // would duplicate that policy and force the transport-neutral
+  // parser to know about operation-catalog internals. The security
+  // boundary is the pipeline, not the parser — this comment exists
+  // so a future reviewer sees the decision is deliberate.
+  return { kind: 'ok', params: rawParams };
+}
+
+function checkIdField(rawId: unknown, hasIdKey: boolean): InvalidRequest | null {
+  if (!hasIdKey || isValidJsonRpcId(rawId)) return null;
+  return {
+    kind: 'invalid-request',
+    code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
+    message: 'id must be a string, finite number, or null',
+    id: null,
+  };
 }

@@ -42,7 +42,6 @@ type ErrorBody = {
   data?: unknown;
 };
 
-// oxlint-disable-next-line complexity -- ID:server-fault-to-http-shape-error-body-complexity
 function shapeErrorBody(fault: OperationFault): ErrorBody {
   const base: ErrorBody = { code: fault.code, message: fault.message };
   // EngineFailure and NotImplemented carry `data: {}` for type uniformity
@@ -51,26 +50,41 @@ function shapeErrorBody(fault: OperationFault): ErrorBody {
   if (fault.code === 'EngineFailure' || fault.code === 'NotImplemented') {
     return base;
   }
-  if (fault.code === 'RateLimited') {
-    // Only include retryAfterMs in the body when it's a finite positive
-    // number — NaN/Infinity would JSON-serialize to `null` and violate the
-    // typed-as-number contract.
-    const ms = fault.data.retryAfterMs;
-    if (typeof ms === 'number' && Number.isFinite(ms) && ms > 0) {
-      return { ...base, data: { retryAfterMs: ms } };
-    }
-    return base;
-  }
-  if (fault.code === 'Timeout') {
-    const defined = filterDefined(fault.data);
-    return Object.keys(defined).length === 0 ? base : { ...base, data: defined };
-  }
-  if (fault.code === 'NotFound') {
-    return fault.data.identifier === undefined
-      ? { ...base, data: { resource: fault.data.resource } }
-      : { ...base, data: fault.data };
-  }
+  if (fault.code === 'RateLimited') return shapeRateLimitedBody(base, fault.data);
+  if (fault.code === 'Timeout') return shapeTimeoutBody(base, fault.data);
+  if (fault.code === 'NotFound') return shapeNotFoundBody(base, fault.data);
   return { ...base, data: fault.data };
+}
+
+function shapeRateLimitedBody(
+  base: ErrorBody,
+  data: Extract<OperationFault, { code: 'RateLimited' }>['data'],
+): ErrorBody {
+  // Only include retryAfterMs in the body when it's a finite positive
+  // number — NaN/Infinity would JSON-serialize to `null` and violate the
+  // typed-as-number contract.
+  const ms = data.retryAfterMs;
+  if (typeof ms === 'number' && Number.isFinite(ms) && ms > 0) {
+    return { ...base, data: { retryAfterMs: ms } };
+  }
+  return base;
+}
+
+function shapeTimeoutBody(
+  base: ErrorBody,
+  data: Extract<OperationFault, { code: 'Timeout' }>['data'],
+): ErrorBody {
+  const defined = filterDefined(data);
+  return Object.keys(defined).length === 0 ? base : { ...base, data: defined };
+}
+
+function shapeNotFoundBody(
+  base: ErrorBody,
+  data: Extract<OperationFault, { code: 'NotFound' }>['data'],
+): ErrorBody {
+  return data.identifier === undefined
+    ? { ...base, data: { resource: data.resource } }
+    : { ...base, data };
 }
 
 function filterDefined(input: Record<string, unknown>): Record<string, unknown> {
