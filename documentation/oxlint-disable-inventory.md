@@ -356,13 +356,6 @@ naming the alternative that was rejected.
 - **Symbol**: `deletePrefix`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `testing-test-engine-run-n-complexity`
-
-- **File**: `src/testing/test-engine.ts`
-- **Rule**: `complexity`
-- **Symbol**: `runN`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `worker-protocol-contract-file-length`
 
 - **File**: `src/worker/protocol.ts`
