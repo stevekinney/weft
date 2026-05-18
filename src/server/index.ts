@@ -4,49 +4,31 @@
  * @module server
  */
 
-import { decode } from '../core/codec.ts';
-import type { Engine } from '../core/engine.ts';
 import type { RetryPolicy } from '../core/types.ts';
-import { createMcpSessionManager } from '../mcp/session.ts';
-import {
-  createMetricsCollectorExporter,
-  MetricsCollector,
-  type PrometheusExporter,
-} from '../observability/metrics.ts';
+import type { PrometheusExporter } from '../observability/metrics.ts';
 import type { RoutingPolicy } from '../worker/registry.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
 import type { AuthConfig } from './authentication.ts';
-import { buildTLSOptions, createAuthenticator, validateAuthConfig } from './authentication.ts';
-import { DeadlineTracker } from './deadline-tracker.ts';
 import type { DiscoveryInfo } from './discovery-info.ts';
-import { createEngineEventFeedBackend } from './engine-event-feed-backend.ts';
-import {
-  closeJsonRpcSessionsForShutdown,
-  type WebSocketData,
-} from './json-rpc-websocket-runtime.ts';
-import { createLiveOperationRegistry, createLiveRestBindings } from './rest-bindings.ts';
-import {
-  createServerWebSocketHandlers,
-  deriveSupportedOpenApiSecuritySchemes,
-  handleServerFetchRequest,
-} from './runtime/authentication-bridge.ts';
-import type { ServerContext } from './runtime/context.ts';
-import {
-  registerWorkflowEventLifecycle,
-  wireEventBroadcasting,
-  type EventBroadcastingHandle,
-} from './runtime/event-broadcasting.ts';
+import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
 import {
   shutdownAllWorkers as shutdownAllWorkersImpl,
   shutdownWorker as shutdownWorkerImpl,
 } from './runtime/shutdown.ts';
-import { stopBunServerForShutdown } from './runtime/stop-server.ts';
 import { cancelTask, dispatchTaskImpl } from './runtime/task-dispatch.ts';
-import { reconcileOrphanedRecords, scanExpiredTasks } from './runtime/task-reconciliation.ts';
-import { publishTokenMessage } from './runtime/websocket-stream.ts';
-import { isInflightRecord, withRetry } from './runtime/websocket-worker.ts';
+import {
+  buildBunServeConfig,
+  buildFetchHandler,
+  buildServerContext,
+  buildWebSocketCallbacks,
+  cleanupWorkflowIndex,
+  registerStackDisposers,
+  resolveNetworkConfig,
+  restoreInflightTasks,
+  wireEventBroadcastingWithGuard,
+  wireShutdownHandlers,
+} from './serve-internals.ts';
 import { TaskQueue, type SchedulingPolicy } from './task-queue.ts';
-import { createWorkflowEventFeed } from './workflow-event-feed.ts';
 
 export {
   wireEventBroadcasting,
@@ -78,7 +60,7 @@ export {
  * ```
  */
 export interface ServeOptions {
-  engine: Engine;
+  engine: import('../core/engine.ts').Engine;
   port?: number;
   hostname?: string;
   /** Enable Bun's development mode (HMR, source maps, detailed errors). */
@@ -236,13 +218,6 @@ export interface WeftServer extends AsyncDisposable {
 }
 
 // ---------------------------------------------------------------------------
-// Worker stream helpers
-// ---------------------------------------------------------------------------
-
-/** Reconciliation full-scan runs at this multiple of the visibility poll interval (~60s at default). */
-const RECONCILIATION_MULTIPLIER = 12;
-
-// ---------------------------------------------------------------------------
 // Implementation
 // ---------------------------------------------------------------------------
 
@@ -272,206 +247,38 @@ const RECONCILIATION_MULTIPLIER = 12;
  * console.log(`Weft listening on ${server.url}`);
  * ```
  */
-// oxlint-disable-next-line complexity -- ID:server-index-serve-complexity
 export function serve(options: ServeOptions): WeftServer {
-  const port = options.port ?? 7233;
-  const hostname = options.hostname ?? '0.0.0.0';
-  const development = options.development ?? false;
-  const serverMetricsCollector = new MetricsCollector();
-  const defaultPrometheusExporter = createMetricsCollectorExporter(serverMetricsCollector);
-  const prometheusExporter = options.prometheusExporter ?? defaultPrometheusExporter;
-  const serverOptions = { ...options, prometheusExporter };
+  const { port, hostname, development, tlsOptions, serverOptions, serverMetricsCollector } =
+    resolveNetworkConfig(options);
 
-  // Validate auth config synchronously so misconfigurations fail fast.
-  if (options.auth) {
-    validateAuthConfig(options.auth);
-  }
+  const context = buildServerContext(serverOptions, serverMetricsCollector);
+  const boundCleanup = (operationId: string): void => cleanupWorkflowIndex(context, operationId);
 
-  const tlsOptions = buildTLSOptions(options.auth);
-  // The dashboard HTML is passed in via options or loaded dynamically.
-  // When available, Bun's static route handler bundles and serves it
-  // with HMR in dev mode and cached assets in production mode.
-  const dashboard = options.dashboard ?? null;
-  const eventFeedBackend = createEngineEventFeedBackend(options.engine);
-  const workerRegistry = new WorkerRegistry(
-    options.routingPolicy !== undefined ? { policy: options.routingPolicy } : undefined,
-  );
-  const taskQueue = new TaskQueue(
-    options.schedulingPolicy !== undefined
-      ? { schedulingPolicy: options.schedulingPolicy }
-      : undefined,
-  );
-  const context: ServerContext = {
-    registry: workerRegistry,
-    taskQueue,
-    workerSockets: new Map(),
-    streamSockets: new Map(),
-    workerAffinity: new Map(),
-    workflowOperations: new Map(),
-    operationToWorkflow: new Map(),
-    pendingTimers: new Set(),
-    deadlineTracker: new DeadlineTracker(),
-    liveOperationRegistry: createLiveOperationRegistry({
-      workerRegistry,
-      taskQueue,
-      metricsCollector: serverMetricsCollector,
-    }),
-    liveRestBindings: createLiveRestBindings(),
-    supportedAuthenticationSchemes: deriveSupportedOpenApiSecuritySchemes(options.auth),
-    metricsCollector: serverMetricsCollector,
-    eventFeedBackend,
-    workflowEventFeed: createWorkflowEventFeed(eventFeedBackend),
-    activeJsonRpcSessions: new Set(),
-    mcpSessionManager: createMcpSessionManager(options.engine),
-    // The authenticator is initialized asynchronously (key import) but the
-    // promise is created eagerly and resolved before the first request completes.
-    authenticatorPromise: options.auth ? createAuthenticator(options.auth) : null,
-    visibilityPollMs: options.visibilityPollIntervalMs ?? 5_000,
-    scanRunning: false,
-    processingOperations: new Set(),
-    reconciliationRunning: false,
-  };
-  /** Remove an operationId from the workflow→operations reverse index. */
-  function cleanupWorkflowIndex(operationId: string): void {
-    const workflowId = context.operationToWorkflow.get(operationId);
-    if (workflowId) {
-      const opIds = context.workflowOperations.get(workflowId);
-      if (opIds) {
-        opIds.delete(operationId);
-        if (opIds.size === 0) context.workflowOperations.delete(workflowId);
-      }
-      context.operationToWorkflow.delete(operationId);
-    }
-  }
   const routes: Record<string, unknown> = {};
-  if (dashboard !== null) {
-    routes['/ui'] = dashboard;
-    routes['/ui/*'] = dashboard;
+  if (options.dashboard != null) {
+    routes['/ui'] = options.dashboard;
+    routes['/ui/*'] = options.dashboard;
   }
 
-  let server: ReturnType<typeof Bun.serve>;
-  server = Bun.serve<WebSocketData>({
-    port,
-    hostname,
-    development,
-    routes,
-    ...(tlsOptions ? { tls: tlsOptions } : {}),
-    fetch: (request): Promise<Response | undefined> =>
-      handleServerFetchRequest(server, context, serverOptions, request),
-    websocket: createServerWebSocketHandlers(context, serverOptions, cleanupWorkflowIndex),
-  });
+  const serverHolder: { current: ReturnType<typeof Bun.serve> | null } = { current: null };
+  const server = Bun.serve<WebSocketData>(
+    buildBunServeConfig(
+      port,
+      hostname,
+      development,
+      routes,
+      tlsOptions,
+      buildFetchHandler(serverHolder, context, serverOptions),
+      buildWebSocketCallbacks(context, serverOptions, boundCleanup),
+    ),
+  );
+  serverHolder.current = server;
 
-  // AsyncDisposableStack manages all server resources and disposes them in
-  // reverse registration order on shutdown: interval → broadcasting → server.
   const stack = new AsyncDisposableStack();
-
-  // Register the HTTP server first — it is disposed last.
-  // Force-close active connections to avoid hanging on drain.
-  stack.defer(() => stopBunServerForShutdown(server));
-
-  // Wire up engine events → WebSocket broadcasting.
-  // If wiring throws after the server is already listening, dispose the
-  // stack (which stops the server) before propagating the error.
-  let broadcastingHandle: EventBroadcastingHandle;
-  try {
-    broadcastingHandle = wireEventBroadcasting(options.engine, server, {
-      publishTokenMessage: (workflowId, sequence, message) => {
-        publishTokenMessage(context, workflowId, sequence, message);
-      },
-    });
-  } catch (error) {
-    void stack[Symbol.asyncDispose]();
-    throw error;
-  }
-
-  // Registered second — disposed second-to-last.
-  stack.defer(broadcastingHandle.dispose);
-  stack.defer(() => context.workflowEventFeed.dispose());
-  // Registered last — disposed FIRST. Close every active
-  // `/jsonrpc` WS session and wait for its subscription pumps to
-  // drain before the shared `WorkflowEventFeed` disposes or the
-  // server force-closes sockets. Without this, `server.stop(true)`
-  // would tear down sockets mid-pump, which produces noisy
-  // post-dispose callbacks on the engine's listener registry.
-  stack.defer(async () => {
-    await closeJsonRpcSessionsForShutdown(context.activeJsonRpcSessions);
-  });
-  stack.defer(() => context.mcpSessionManager[Symbol.asyncDispose]());
-
-  stack.defer(registerWorkflowEventLifecycle(options.engine, context, broadcastingHandle));
-
-  // Restore persisted in-flight records from storage so visibility timeout
-  // tracking survives server restarts. Records whose deadline has already
-  // passed are removed from storage (the task will be retried by the engine).
-  void withRetry(async () => {
-    for await (const [key, value] of options.engine.storage.scan('op:inflight:')) {
-      const decoded = decode(value);
-      if (!isInflightRecord(decoded)) {
-        console.error(`[weft] Corrupt inflight record at "${key}" during restore — skipping`);
-        continue;
-      }
-      const record = decoded;
-      const now = Date.now();
-      if (record.deadline <= now) {
-        // Expired while the server was down — remove from storage.
-        void options.engine.storage.delete(key);
-      } else {
-        // Still within the visibility window — use remaining time so the
-        // deadline matches the original persisted value. Then patch the
-        // stored visibilityTimeout to the original value so future heartbeat
-        // extensions use the full duration, not the diminished remainder.
-        const remaining = record.deadline - now;
-        context.registry.assignTask(record.workerId, record.operationId, remaining);
-        context.deadlineTracker.add({ operationId: record.operationId, deadline: record.deadline });
-        const tracked = context.registry
-          .getWorkerTasks(record.workerId)
-          .find((t) => t.operationId === record.operationId);
-        if (tracked) {
-          tracked.visibilityTimeout = record.visibilityTimeout;
-        }
-
-        // Rebuild workflow→operations reverse index so WorkflowCancelledEvent
-        // can propagate cancels to tasks restored from storage after a restart.
-        if (record.workflowId) {
-          let opIds = context.workflowOperations.get(record.workflowId);
-          if (!opIds) {
-            opIds = new Set();
-            context.workflowOperations.set(record.workflowId, opIds);
-          }
-          opIds.add(record.operationId);
-          context.operationToWorkflow.set(record.operationId, record.workflowId);
-        }
-      }
-    }
-  }, 'restore in-flight tasks from storage').catch((error) => {
-    console.error('[weft] Failed to restore in-flight tasks from storage:', error);
-  });
-
-  const visibilityPollHandle = setInterval(() => {
-    void scanExpiredTasks(context, options, cleanupWorkflowIndex);
-  }, context.visibilityPollMs);
-
-  // Periodic full-storage reconciliation to catch orphaned inflight records
-  // that were never tracked in the heap (e.g., written by another process or
-  // left over from a crash). Runs at 12x the visibility poll interval to keep
-  // cost low while still providing a safety net.
-  const reconciliationIntervalMs = context.visibilityPollMs * RECONCILIATION_MULTIPLIER;
-  const reconciliationHandle = setInterval(() => {
-    void reconcileOrphanedRecords(context, options, cleanupWorkflowIndex);
-  }, reconciliationIntervalMs);
-
-  // Registered last — disposed first (reverse order).
-  stack.defer(() => {
-    clearInterval(visibilityPollHandle);
-    clearInterval(reconciliationHandle);
-    context.deadlineTracker.clear();
-    // Clear all pending backoff-delay timers to prevent callbacks firing
-    // against a stopped server.
-    for (const timer of context.pendingTimers) {
-      clearTimeout(timer);
-    }
-    context.pendingTimers.clear();
-  });
+  const broadcastingHandle = wireEventBroadcastingWithGuard(options.engine, server, context, stack);
+  registerStackDisposers(stack, context, options, server, broadcastingHandle, boundCleanup);
+  restoreInflightTasks(context, options);
+  wireShutdownHandlers(stack);
 
   const resolvedPort = server.port ?? port;
   const resolvedHostname = server.hostname ?? hostname;

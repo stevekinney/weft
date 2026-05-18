@@ -267,11 +267,6 @@ naming the alternative that was rejected.
 - **Symbol**: `dispatchTaskImpl`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-- **File**: `src/server/index.ts`
-- **Rule**: `max-lines`
-- **Symbol**: `(whole file)`
-- **Reason**: Pre-existing oversized file; tracked by oxlint-strict initiative for split.
-
 ## `server-index-handle-task-result-request-complexity`
 
 - **File**: `src/server/runtime/task-polling.ts`
@@ -284,13 +279,6 @@ naming the alternative that was rejected.
 - **File**: `src/server/runtime/websocket-worker.ts`
 - **Rule**: `complexity`
 - **Symbol**: `handleWorkerWebSocketMessage`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `server-index-serve-complexity`
-
-- **File**: `src/server/index.ts`
-- **Rule**: `complexity`
-- **Symbol**: `serve`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
 ## `server-operations-bulk-filter-helpers-parse-bulk-list-filter-from-body-complexity`
