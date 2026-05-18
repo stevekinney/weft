@@ -175,8 +175,8 @@ function parseSingleObject(
   const methodRejection = checkMethodField(method, idForError);
   if (methodRejection !== null) return methodRejection;
 
-  const paramsResult = parseParamsField(object, idForError);
-  if (paramsResult.kind === 'invalid-request') return paramsResult;
+  const paramsRejection = checkParamsField(object, idForError);
+  if (paramsRejection !== null) return paramsRejection;
 
   const idRejection = checkIdField(rawId, hasIdKey);
   if (idRejection !== null) return idRejection;
@@ -184,11 +184,15 @@ function parseSingleObject(
   // Notifications omit the `id` key entirely. `id: null` is a real
   // request per the JSON-RPC 2.0 spec.
   const isNotification = !hasIdKey;
+  // `params` is narrowed to a plain object by `checkParamsField`; we
+  // re-read here only for the success path (the validator already
+  // guarantees the shape).
+  const params = 'params' in object ? (object['params'] as Record<string, unknown>) : undefined;
 
   const request: JsonRpcRequest = {
     jsonrpc: JSON_RPC_VERSION,
     method: method as string,
-    ...(paramsResult.params === undefined ? {} : { params: paramsResult.params }),
+    ...(params === undefined ? {} : { params }),
     ...(hasIdKey ? { id: rawId as JsonRpcId } : {}),
   };
 
@@ -218,15 +222,23 @@ function checkMethodField(method: unknown, idForError: JsonRpcId): InvalidReques
   };
 }
 
-type ParamsParseResult =
-  | { readonly kind: 'ok'; readonly params: Record<string, unknown> | undefined }
-  | InvalidRequest;
-
-function parseParamsField(
+/**
+ * Validate the `params` field. Returns `null` when absent or a plain object
+ * (the two accepted shapes); returns an `invalid-request` rejection
+ * otherwise.
+ *
+ * `params` is passed through verbatim on success. Prototype-pollution keys
+ * (`__proto__` / `constructor` / `prototype`) are NOT stripped here — the
+ * authoritative defense is `executeOperation`'s `UNSAFE_PROTOTYPE_KEYS`
+ * filter plus the registry-time rejection of schema-declared unsafe keys.
+ * Sanitizing at the parse layer would duplicate that policy and force the
+ * transport-neutral parser to know about operation-catalog internals.
+ */
+function checkParamsField(
   object: Record<string, unknown>,
   idForError: JsonRpcId,
-): ParamsParseResult {
-  if (!('params' in object)) return { kind: 'ok', params: undefined };
+): InvalidRequest | null {
+  if (!('params' in object)) return null;
   const rawParams = object['params'];
   if (Array.isArray(rawParams)) {
     return {
@@ -245,16 +257,7 @@ function parseParamsField(
       id: idForError,
     };
   }
-  // `params` is passed through verbatim. Prototype-pollution keys
-  // (`__proto__` / `constructor` / `prototype`) are NOT stripped
-  // here — the authoritative defense is `executeOperation`'s
-  // `UNSAFE_PROTOTYPE_KEYS` filter plus the registry-time rejection
-  // of schema-declared unsafe keys. Sanitizing at the parse layer
-  // would duplicate that policy and force the transport-neutral
-  // parser to know about operation-catalog internals. The security
-  // boundary is the pipeline, not the parser — this comment exists
-  // so a future reviewer sees the decision is deliberate.
-  return { kind: 'ok', params: rawParams };
+  return null;
 }
 
 function checkIdField(rawId: unknown, hasIdKey: boolean): InvalidRequest | null {

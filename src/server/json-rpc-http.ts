@@ -21,7 +21,11 @@
  * the client omits content-length or lies.
  */
 
-import { dispatchJsonRpc, type DispatchJsonRpcContext } from './json-rpc-dispatch.ts';
+import {
+  dispatchJsonRpc,
+  type DispatchJsonRpcContext,
+  type DispatchJsonRpcResult,
+} from './json-rpc-dispatch.ts';
 import type { OperationRegistry } from './operation-catalog.ts';
 import type { Principal } from './principal.ts';
 
@@ -119,7 +123,7 @@ function guardContentLength(header: string | null, maxBytes: number): Response |
   return null;
 }
 
-function dispatchResultToResponse(result: Awaited<ReturnType<typeof dispatchJsonRpc>>): Response {
+function dispatchResultToResponse(result: DispatchJsonRpcResult): Response {
   switch (result.kind) {
     case 'notification':
     case 'notification-batch':
