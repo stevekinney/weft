@@ -29,6 +29,73 @@ async function parseTaskResultBody(request: Request): Promise<Record<string, unk
   }
 }
 
+type ValidatedTaskResult = {
+  operationId: string;
+  status: 'completed' | 'failed';
+  value: unknown;
+  error: string | undefined;
+};
+
+/**
+ * Validate and extract typed fields from a parsed task-result body.
+ * Returns the validated result or a 400 Response if validation fails.
+ */
+function validateTaskResultBody(body: Record<string, unknown>): ValidatedTaskResult | Response {
+  const operationId = body['operationId'];
+  const status = body['status'];
+  if (typeof operationId !== 'string' || typeof status !== 'string') {
+    return Response.json(
+      { error: 'Missing required fields: operationId, status' },
+      { status: 400 },
+    );
+  }
+
+  if (status !== 'completed' && status !== 'failed') {
+    return Response.json({ error: 'status must be "completed" or "failed"' }, { status: 400 });
+  }
+
+  return {
+    operationId,
+    status,
+    value: body['value'],
+    error: typeof body['error'] === 'string' ? body['error'] : undefined,
+  };
+}
+
+/**
+ * Apply a validated task result: notify the task queue, remove the deadline,
+ * and transition the storage record to resolved.
+ */
+async function applyTaskResult(
+  context: ServerContext,
+  options: ServeOptions,
+  result: ValidatedTaskResult,
+): Promise<void> {
+  const { operationId, status, value, error } = result;
+
+  context.taskQueue.complete({ operationId, status, value, error });
+  context.deadlineTracker.remove(operationId);
+
+  const resolvedStatus = status === 'failed' ? 'failed' : ('completed' as const);
+  try {
+    const inflightRecord = await readInflightRecord(options.engine.storage, operationId);
+    const resolvedAt = Date.now();
+    await transitionInflightToResolved(options.engine.storage, operationId, resolvedStatus, {
+      ...(inflightRecord === null ? {} : { record: inflightRecord }),
+      resolvedAt,
+      resolutionReason: resolvedStatus,
+    });
+    if (inflightRecord !== null) {
+      recordTaskExecutionLatencyMetric(context.metricsCollector, inflightRecord, resolvedAt);
+    }
+  } catch (storageError) {
+    console.error(
+      `[weft] Failed to transition task "${operationId}" to resolved — inflight record may leak:`,
+      storageError,
+    );
+  }
+}
+
 export function createLongPollInflightRecord(queue: string, task: PendingTask): InflightRecord {
   const now = Date.now();
   const visibilityTimeout = task.visibilityTimeout ?? DEFAULT_VISIBILITY_TIMEOUT;
@@ -118,7 +185,6 @@ export async function handleTaskPollRequest(
   return new Response(null, { status: 204 });
 }
 
-// oxlint-disable-next-line complexity -- ID:server-index-handle-task-result-request-complexity
 export async function handleTaskResultRequest(
   context: ServerContext,
   options: ServeOptions,
@@ -139,45 +205,11 @@ export async function handleTaskResultRequest(
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const operationId = body['operationId'];
-  const status = body['status'];
-  if (typeof operationId !== 'string' || typeof status !== 'string') {
-    return Response.json(
-      { error: 'Missing required fields: operationId, status' },
-      { status: 400 },
-    );
+  const validated = validateTaskResultBody(body);
+  if (validated instanceof Response) {
+    return validated;
   }
 
-  if (status !== 'completed' && status !== 'failed') {
-    return Response.json({ error: 'status must be "completed" or "failed"' }, { status: 400 });
-  }
-
-  context.taskQueue.complete({
-    operationId,
-    status,
-    value: body['value'],
-    error: typeof body['error'] === 'string' ? body['error'] : undefined,
-  });
-
-  context.deadlineTracker.remove(operationId);
-  const resolvedStatus = status === 'failed' ? 'failed' : ('completed' as const);
-  try {
-    const inflightRecord = await readInflightRecord(options.engine.storage, operationId);
-    const resolvedAt = Date.now();
-    await transitionInflightToResolved(options.engine.storage, operationId, resolvedStatus, {
-      ...(inflightRecord === null ? {} : { record: inflightRecord }),
-      resolvedAt,
-      resolutionReason: resolvedStatus,
-    });
-    if (inflightRecord !== null) {
-      recordTaskExecutionLatencyMetric(context.metricsCollector, inflightRecord, resolvedAt);
-    }
-  } catch (error) {
-    console.error(
-      `[weft] Failed to transition task "${operationId}" to resolved — inflight record may leak:`,
-      error,
-    );
-  }
-
+  await applyTaskResult(context, options, validated);
   return Response.json({ ok: true });
 }
