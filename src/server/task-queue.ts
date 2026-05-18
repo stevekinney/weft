@@ -1,9 +1,10 @@
-/* oxlint-disable max-lines -- ID:server-task-queue-includes-snapshot-projection */
 // ---------------------------------------------------------------------------
 // In-memory task queue for HTTP long-poll workers
 // ---------------------------------------------------------------------------
 
 import type { RetryPolicy } from '../core/types.ts';
+import type { TaskQueueSnapshot } from './task-queue-summary.ts';
+import { buildQueueSummaries } from './task-queue-summary.ts';
 import type { TaskLifecycleFields } from './task-state.ts';
 
 /** A task waiting to be claimed by a long-poll worker. */
@@ -393,57 +394,30 @@ export class TaskQueue {
   }
 
   /**
-   * Per-queue snapshot used by `weft.task.queues.list`. Returns one entry per
-   * queue name appearing in either `#pending` or `#waiters`, sorted by queue
-   * name ascending so REST/JSON-RPC responses are stable. The worker-queue
-   * union (idle queues with connected workers but no pending tasks and no
-   * waiters) is layered in by the operation, not here — `TaskQueue` knows
-   * only about its own state.
-   *
-   * `oldestEnqueuedAt` reports the minimum `enqueuedAt` across the pending
-   * tasks in a queue, or `null` when the queue has no pending tasks. The
-   * value is wall-clock epoch milliseconds; age computation belongs to the
-   * caller so this method stays clock-free.
+   * Synchronously reads internal state into a plain snapshot object for use by
+   * {@link buildQueueSummaries}. Single-turn event-loop reads are consistent
+   * without explicit locking.
+   */
+  captureSnapshot(): TaskQueueSnapshot {
+    return {
+      pending: new Map(
+        [...this.#pending.entries()].map(([q, tasks]) => [
+          q,
+          tasks.map((t) => ({ enqueuedAt: t.enqueuedAt })),
+        ]),
+      ),
+      waiters: new Map([...this.#waiters.entries()].map(([q, ws]) => [q, ws.slice()])),
+      schedulingPolicy: this.#schedulingPolicy,
+    };
+  }
+
+  /**
+   * Per-queue summary used by `weft.task.queues.list`. Returns one entry per
+   * queue appearing in `#pending` or `#waiters`, sorted ascending by name.
+   * See {@link buildQueueSummaries} for field semantics.
    */
   getQueueSummaries(): TaskQueueSummary[] {
-    const summaries = new Map<string, TaskQueueSummary>();
-
-    for (const [queue, tasks] of this.#pending) {
-      let oldestEnqueuedAt: number | null = null;
-      for (const task of tasks) {
-        const enqueuedAt = task.enqueuedAt;
-        if (enqueuedAt === undefined) continue;
-        if (oldestEnqueuedAt === null || enqueuedAt < oldestEnqueuedAt) {
-          oldestEnqueuedAt = enqueuedAt;
-        }
-      }
-      summaries.set(queue, {
-        queue,
-        backlog: tasks.length,
-        oldestEnqueuedAt,
-        waitingPollers: 0,
-        schedulingPolicy: this.#schedulingPolicy,
-      });
-    }
-
-    for (const [queue, waiters] of this.#waiters) {
-      const existing = summaries.get(queue);
-      if (existing === undefined) {
-        summaries.set(queue, {
-          queue,
-          backlog: 0,
-          oldestEnqueuedAt: null,
-          waitingPollers: waiters.length,
-          schedulingPolicy: this.#schedulingPolicy,
-        });
-      } else {
-        existing.waitingPollers = waiters.length;
-      }
-    }
-
-    return [...summaries.values()].toSorted((a, b) =>
-      a.queue < b.queue ? -1 : a.queue > b.queue ? 1 : 0,
-    );
+    return buildQueueSummaries(this.captureSnapshot());
   }
 
   /** Remove and return pending tasks older than `maxAge` milliseconds. */
