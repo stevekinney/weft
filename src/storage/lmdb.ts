@@ -12,6 +12,20 @@ import {
 import { scopedStorage } from './scoped-storage';
 
 /**
+ * Test whether a key satisfies the gt/gte/lt/lte bounds in `options`.
+ *
+ * Returns `true` when the key is within all supplied bounds, `false` when any
+ * bound rejects it. Bounds that are `undefined` are not checked.
+ */
+function passesScanBounds(key: string, options: ScanOptions): boolean {
+  if (options.gt !== undefined && key <= options.gt) return false;
+  if (options.gte !== undefined && key < options.gte) return false;
+  if (options.lt !== undefined && key >= options.lt) return false;
+  if (options.lte !== undefined && key > options.lte) return false;
+  return true;
+}
+
+/**
  * LMDB-backed storage adapter. Reads hit lmdb-js's synchronous memory-mapped
  * path internally, but the Storage interface presents them as Promises and
  * copies the bytes into a fresh Uint8Array on each call. Writes use lmdb-js's
@@ -90,10 +104,9 @@ export class LMDBStorage implements Storage {
     return keys.length;
   }
 
-  // oxlint-disable-next-line complexity -- ID:storage-lmdb-delete-prefix-complexity
   async *scan(prefix: string, options: ScanOptions = {}): AsyncIterable<[string, Uint8Array]> {
     this.#assertOpen();
-    const { limit, reverse, gt, lt, gte, lte } = options;
+    const { limit, reverse } = options;
 
     const prefixEnd = resolvePrefixRangeEnd(prefix);
 
@@ -119,11 +132,8 @@ export class LMDBStorage implements Storage {
         break;
       }
       enteredPrefix = true;
-      if (gt !== undefined && key <= gt) continue;
-      if (gte !== undefined && key < gte) continue;
-      if (lt !== undefined && key >= lt) continue;
-      if (lte !== undefined && key > lte) continue;
 
+      if (!passesScanBounds(key, options)) continue;
       if (limit !== undefined && count >= limit) break;
 
       yield [key, new Uint8Array(value)];
