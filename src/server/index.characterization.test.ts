@@ -8,7 +8,6 @@ import { describe, expect, it } from 'bun:test';
 import { Engine } from '../core/engine.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { serve } from './index.ts';
-import { type SignalRegistrar, wireShutdownHandlers } from './serve-internals.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -77,81 +76,5 @@ describe('serve()', () => {
       await a.stop();
       await expect(b.stop()).resolves.toBeUndefined();
     });
-  });
-});
-
-// ---------------------------------------------------------------------------
-// wireShutdownHandlers — signal-registrar hook
-// ---------------------------------------------------------------------------
-
-describe('wireShutdownHandlers()', () => {
-  it('registers handlers for both SIGINT and SIGTERM', () => {
-    const stack = new AsyncDisposableStack();
-    const registered: string[] = [];
-
-    const registrar: SignalRegistrar = (signal) => {
-      registered.push(signal);
-    };
-
-    wireShutdownHandlers(stack, registrar);
-
-    expect(registered).toContain('SIGINT');
-    expect(registered).toContain('SIGTERM');
-  });
-
-  it('disposes the stack exactly once even when the signal fires twice', async () => {
-    let disposeCount = 0;
-    let resolveDisposed!: () => void;
-    const disposedPromise = new Promise<void>((resolve) => {
-      resolveDisposed = resolve;
-    });
-    const stack = new AsyncDisposableStack();
-    stack.defer(() => {
-      disposeCount++;
-      resolveDisposed();
-    });
-
-    const handlers: Array<() => void> = [];
-    const registrar: SignalRegistrar = (_signal, handler) => {
-      handlers.push(handler);
-    };
-
-    wireShutdownHandlers(stack, registrar);
-
-    // Fire the same handler twice (simulates two rapid signals).
-    handlers[0]!();
-    handlers[0]!();
-
-    // Wait for the actual disposer to run (deterministic, not timer-based).
-    await disposedPromise;
-
-    expect(disposeCount).toBe(1);
-  });
-
-  it('disposes the stack exactly once when both SIGINT and SIGTERM fire', async () => {
-    let disposeCount = 0;
-    let resolveDisposed!: () => void;
-    const disposedPromise = new Promise<void>((resolve) => {
-      resolveDisposed = resolve;
-    });
-    const stack = new AsyncDisposableStack();
-    stack.defer(() => {
-      disposeCount++;
-      resolveDisposed();
-    });
-
-    const handlerMap = new Map<string, () => void>();
-    const registrar: SignalRegistrar = (signal, handler) => {
-      handlerMap.set(signal, handler);
-    };
-
-    wireShutdownHandlers(stack, registrar);
-
-    handlerMap.get('SIGINT')?.();
-    handlerMap.get('SIGTERM')?.();
-
-    await disposedPromise;
-
-    expect(disposeCount).toBe(1);
   });
 });

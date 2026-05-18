@@ -64,12 +64,6 @@ export type ResolvedNetworkConfig = {
   serverMetricsCollector: MetricsCollector;
 };
 
-/**
- * Type for a function that registers a process signal handler. Injectable so
- * tests can intercept signal registration without touching `process.on`.
- */
-export type SignalRegistrar = (signal: 'SIGINT' | 'SIGTERM', handler: () => void) => void;
-
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -258,35 +252,6 @@ export function registerStackDisposers(
     }
     context.pendingTimers.clear();
   });
-}
-
-const defaultSignalRegistrar: SignalRegistrar = (signal, handler) => {
-  process.on(signal, handler);
-};
-
-/**
- * Registers SIGINT and SIGTERM handlers so the server shuts down cleanly on
- * process termination. The `stack` is disposed at most once regardless of
- * how many signals arrive.
- *
- * An optional `signalRegistrar` is accepted for testability — pass your own
- * to capture registrations without touching the global `process` object.
- * This parameter is intentionally not part of the public `ServeOptions` type.
- */
-export function wireShutdownHandlers(
-  stack: AsyncDisposableStack,
-  signalRegistrar: SignalRegistrar = defaultSignalRegistrar,
-): void {
-  let shutdownTriggered = false;
-
-  const handleSignal = (): void => {
-    if (shutdownTriggered) return;
-    shutdownTriggered = true;
-    void stack[Symbol.asyncDispose]();
-  };
-
-  signalRegistrar('SIGINT', handleSignal);
-  signalRegistrar('SIGTERM', handleSignal);
 }
 
 /**

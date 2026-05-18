@@ -31,7 +31,6 @@ import {
   registerStackDisposers,
   resolveNetworkConfig,
   restoreInflightTasks,
-  wireShutdownHandlers,
 } from './serve-internals.ts';
 import { TaskQueue, type SchedulingPolicy } from './task-queue.ts';
 
@@ -303,7 +302,9 @@ export function serve(options: ServeOptions): WeftServer {
 
   registerStackDisposers(stack, context, options, broadcastingHandle, boundCleanup);
   restoreInflightTasks(context, options);
-  wireShutdownHandlers(stack);
+  // Process-level signal handling is the CLI's responsibility (`cli-main.ts`);
+  // installing it here would race with the CLI and leak handlers across
+  // repeated `serve()` calls in library/test contexts.
 
   const resolvedPort = server.port ?? port;
   const resolvedHostname = server.hostname ?? hostname;
