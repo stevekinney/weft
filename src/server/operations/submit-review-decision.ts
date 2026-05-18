@@ -27,6 +27,90 @@ const submitReviewDecisionOutput = z.object({
 export type SubmitReviewDecisionInput = z.infer<typeof submitReviewDecisionInput>;
 export type SubmitReviewDecisionOutput = z.infer<typeof submitReviewDecisionOutput>;
 
+type ValidatedReviewDecisionInput = {
+  decision: ReviewDecision;
+  reviewer: string;
+  reviewOptions: SubmitReviewOptions;
+};
+
+/**
+ * Validate the review decision input fields in precedence order:
+ *   1. decision + reviewer presence  — both must be strings
+ *   2. decision value validity        — must be one of the allowed decisions
+ *   3. feedback type                  — must be a string when provided
+ *
+ * Returns the validated decision, reviewer, and the constructed `SubmitReviewOptions`.
+ * Throws an `InvalidParams` fault on the first invalid field.
+ */
+function validateReviewDecisionInput(
+  input: SubmitReviewDecisionInput,
+): ValidatedReviewDecisionInput {
+  if (typeof input.decision !== 'string' || typeof input.reviewer !== 'string') {
+    const fault: OperationFault = {
+      code: 'InvalidParams',
+      message: 'Missing required fields: decision, reviewer',
+      data: { issues: [] },
+    };
+    throw fault;
+  }
+
+  if (!VALID_DECISIONS.includes(input.decision as (typeof VALID_DECISIONS)[number])) {
+    const fault: OperationFault = {
+      code: 'InvalidParams',
+      message: `Invalid decision "${input.decision}". Must be one of: ${VALID_DECISIONS.join(', ')}`,
+      data: { issues: [] },
+    };
+    throw fault;
+  }
+
+  if (input.feedback !== undefined && typeof input.feedback !== 'string') {
+    const fault: OperationFault = {
+      code: 'InvalidParams',
+      message: 'Field "feedback" must be a string when provided',
+      data: { issues: [] },
+    };
+    throw fault;
+  }
+
+  const decision = input.decision as ReviewDecision;
+  const reviewer = input.reviewer;
+  const reviewOptions: SubmitReviewOptions = { decision, reviewer };
+  if (typeof input.feedback === 'string') {
+    reviewOptions.feedback = input.feedback;
+  }
+  if (typeof input.workflowId === 'string') {
+    reviewOptions.workflowId = input.workflowId;
+  }
+
+  return { decision, reviewer, reviewOptions };
+}
+
+/**
+ * Map an engine error thrown by `engine.submitReview` to the canonical fault.
+ *
+ * Routing order:
+ *   1. 'not found' → NotFound, resource: 'review'
+ *   2. otherwise   → EngineFailure
+ */
+function mapReviewDecisionError(error: unknown, reviewId: string): never {
+  const message = error instanceof Error ? error.message : String(error);
+  if (message.includes('not found')) {
+    const fault: OperationFault = {
+      code: 'NotFound',
+      message,
+      data: { resource: 'review', identifier: reviewId },
+    };
+    throw fault;
+  }
+
+  const fault: OperationFault = {
+    code: 'EngineFailure',
+    message,
+    data: {},
+  };
+  throw fault;
+}
+
 export const submitReviewDecisionOperation = defineOperation<
   SubmitReviewDecisionInput,
   SubmitReviewDecisionOutput
@@ -41,68 +125,16 @@ export const submitReviewDecisionOperation = defineOperation<
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  // oxlint-disable-next-line complexity -- ID:server-operations-submit-review-decision-invoke-complexity
   invoke: async ({ input, engine }): Promise<SubmitReviewDecisionOutput> => {
     const e = engine as Engine;
 
-    if (typeof input.decision !== 'string' || typeof input.reviewer !== 'string') {
-      const fault: OperationFault = {
-        code: 'InvalidParams',
-        message: 'Missing required fields: decision, reviewer',
-        data: { issues: [] },
-      };
-      throw fault;
-    }
-
-    if (!VALID_DECISIONS.includes(input.decision as (typeof VALID_DECISIONS)[number])) {
-      const fault: OperationFault = {
-        code: 'InvalidParams',
-        message: `Invalid decision "${input.decision}". Must be one of: ${VALID_DECISIONS.join(', ')}`,
-        data: { issues: [] },
-      };
-      throw fault;
-    }
-
-    if (input.feedback !== undefined && typeof input.feedback !== 'string') {
-      const fault: OperationFault = {
-        code: 'InvalidParams',
-        message: 'Field "feedback" must be a string when provided',
-        data: { issues: [] },
-      };
-      throw fault;
-    }
-
-    const reviewOptions: SubmitReviewOptions = {
-      decision: input.decision as ReviewDecision,
-      reviewer: input.reviewer,
-    };
-    if (typeof input.feedback === 'string') {
-      reviewOptions.feedback = input.feedback;
-    }
-    if (typeof input.workflowId === 'string') {
-      reviewOptions.workflowId = input.workflowId;
-    }
+    const { reviewOptions } = validateReviewDecisionInput(input);
 
     try {
       await e.submitReview(input.reviewId, reviewOptions);
       return { ok: true };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (message.includes('not found')) {
-        const fault: OperationFault = {
-          code: 'NotFound',
-          message,
-          data: { resource: 'review', identifier: input.reviewId },
-        };
-        throw fault;
-      }
-
-      const fault: OperationFault = {
-        code: 'EngineFailure',
-        message,
-        data: {},
-      };
-      throw fault;
+      mapReviewDecisionError(error, input.reviewId);
     }
   },
 });

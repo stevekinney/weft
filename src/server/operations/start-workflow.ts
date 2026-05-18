@@ -48,6 +48,80 @@ const startWorkflowOutput = z.object({
 export type StartWorkflowInput = z.infer<typeof startWorkflowInput>;
 export type StartWorkflowOutput = z.infer<typeof startWorkflowOutput>;
 
+/**
+ * Validate the `type` field and build `StartOptions` from the operation input.
+ *
+ * Validates `type` first so both REST and JSON-RPC clients share one error path.
+ * Remaining fields are validated inside `buildStartWorkflowOptions` in the order
+ * they appear there: id → executionTimeout → startAt → startAfter → tags →
+ * idempotencyKey → searchAttributes.
+ *
+ * Returns the workflow type string and the resolved `StartOptions`.
+ */
+function validateStartWorkflowInput(
+  input: StartWorkflowInput,
+  searchAttributeSchema: SearchAttributeSchema | undefined,
+): { type: string; options: StartOptions } {
+  if (typeof input.type !== 'string' || input.type.length === 0) {
+    throw invalidParamsFault('Missing required field: type');
+  }
+  const type = input.type;
+
+  let options: StartOptions;
+  try {
+    options = buildStartWorkflowOptions(input, searchAttributeSchema);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw invalidParamsFault(message);
+  }
+
+  return { type, options };
+}
+
+/**
+ * Map an engine error thrown by `engine.start` to the canonical operation fault.
+ *
+ * Routing order (typed errors take precedence over string matching):
+ *   1. WorkflowNotRegisteredError   → InvalidParams
+ *   2. WorkflowAlreadyExistsError   → Conflict
+ *   3. StartWorkflowValidationError → InvalidParams
+ *   4. QuotaExceededError           → RateLimited
+ *   5. otherwise                    → EngineFailure
+ */
+function resolveStartWorkflowAccess(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (error instanceof WorkflowNotRegisteredError) {
+    throw invalidParamsFault(message);
+  }
+  if (error instanceof WorkflowAlreadyExistsError) {
+    const fault: OperationFault = {
+      code: 'Conflict',
+      message,
+      data: { reason: message },
+    };
+    throw fault;
+  }
+  if (error instanceof StartWorkflowValidationError) {
+    throw invalidParamsFault(message);
+  }
+  if (error instanceof QuotaExceededError) {
+    const fault: OperationFault = {
+      code: 'RateLimited',
+      message,
+      data: {},
+    };
+    throw fault;
+  }
+
+  const fault: OperationFault = {
+    code: 'EngineFailure',
+    message,
+    data: {},
+  };
+  throw fault;
+}
+
 export const startWorkflowOperation = defineOperation<StartWorkflowInput, StartWorkflowOutput>({
   name: 'weft.workflows.start',
   mcpExposable: false,
@@ -59,66 +133,28 @@ export const startWorkflowOperation = defineOperation<StartWorkflowInput, StartW
   producibleFaults: ['RateLimited', 'Conflict'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  // oxlint-disable-next-line complexity -- ID:server-operations-start-workflow-invoke-complexity
   invoke: async ({ input, engine }): Promise<StartWorkflowOutput> => {
     const typedEngine = runtimeWorkflowEngine(engine);
 
     // Validate `type` here so REST and JSON-RPC clients share one error path.
-    if (typeof input.type !== 'string' || input.type.length === 0) {
-      throw invalidParamsFault('Missing required field: type');
-    }
-    const type = input.type;
-
-    let options: StartOptions;
-    try {
-      options = buildStartWorkflowOptions(
-        input,
-        typedEngine.getWorkflowDefinition(type)?.searchAttributes,
-      );
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      throw invalidParamsFault(message);
-    }
+    // We pass the search-attribute schema from the engine definition (if any).
+    // At this point `input.type` may not yet be validated; the function checks
+    // the type field first and throws before the schema is consulted.
+    const rawType = typeof input.type === 'string' ? input.type : '';
+    const { type, options } = validateStartWorkflowInput(
+      input,
+      typedEngine.getWorkflowDefinition(rawType)?.searchAttributes,
+    );
 
     try {
       const handle = await typedEngine.start(type, input.input, options);
       return { id: handle.id };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-
       // Typed engine errors first; the engine throws these for the
       // canonical failure modes (workflow type not registered, workflow
       // ID collision). String-matching the message would silently
       // misclassify the fault if the message text is ever changed.
-      if (error instanceof WorkflowNotRegisteredError) {
-        throw invalidParamsFault(message);
-      }
-      if (error instanceof WorkflowAlreadyExistsError) {
-        const fault: OperationFault = {
-          code: 'Conflict',
-          message,
-          data: { reason: message },
-        };
-        throw fault;
-      }
-      if (error instanceof StartWorkflowValidationError) {
-        throw invalidParamsFault(message);
-      }
-      if (error instanceof QuotaExceededError) {
-        const fault: OperationFault = {
-          code: 'RateLimited',
-          message,
-          data: {},
-        };
-        throw fault;
-      }
-
-      const fault: OperationFault = {
-        code: 'EngineFailure',
-        message,
-        data: {},
-      };
-      throw fault;
+      resolveStartWorkflowAccess(error);
     }
   },
 });

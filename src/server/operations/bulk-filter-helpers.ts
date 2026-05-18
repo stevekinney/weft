@@ -206,7 +206,66 @@ function parseOptionalFilterNumber(
   return Math.floor(value);
 }
 
-// oxlint-disable-next-line complexity -- ID:server-operations-bulk-filter-helpers-parse-bulk-list-filter-from-body-complexity
+/**
+ * Ordered parsers for each filter dimension in `parseBulkListFilterFromBody`.
+ * Precedence is visible in source order: status → type → tags → attributes →
+ * limit → offset → idPrefix → tenantId → failureCategory → createdAt →
+ * updatedAt → executionDeadline.
+ */
+const BULK_FILTER_DIMENSION_PARSERS: ReadonlyArray<
+  (filter: ListFilter, record: Record<string, unknown>) => void
+> = [
+  (filter, record) => {
+    const status = parseFilterStatus(record['status']);
+    if (status !== undefined) filter.status = status;
+  },
+  (filter, record) => {
+    const type = parseOptionalFilterType(record['type']);
+    if (type !== undefined) filter.type = type;
+  },
+  (filter, record) => {
+    const tags = parseOptionalFilterTags(record['tags']);
+    if (tags !== undefined) filter.tags = tags;
+  },
+  (filter, record) => {
+    if (record['attributes'] !== undefined) {
+      filter.attributes = parseAttributeFiltersFromBody(record['attributes']);
+    }
+  },
+  (filter, record) => {
+    const limit = parseOptionalFilterNumber(record['limit'], 'limit');
+    if (limit !== undefined) filter.limit = limit;
+  },
+  (filter, record) => {
+    const offset = parseOptionalFilterNumber(record['offset'], 'offset');
+    if (offset !== undefined) filter.offset = offset;
+  },
+  (filter, record) => {
+    const idPrefix = record['idPrefix'];
+    if (typeof idPrefix === 'string') filter.idPrefix = idPrefix;
+  },
+  (filter, record) => {
+    const tenantId = parseOptionalTenantId(record['tenantId']);
+    if (tenantId !== undefined) filter.tenantId = tenantId;
+  },
+  (filter, record) => {
+    const failureCategory = parseOptionalFailureCategoryFilter(record['failureCategory']);
+    if (failureCategory !== undefined) filter.failureCategory = failureCategory;
+  },
+  (filter, record) => {
+    const createdAt = parseOptionalTimeRange(record['createdAt']);
+    if (createdAt !== undefined) filter.createdAt = createdAt;
+  },
+  (filter, record) => {
+    const updatedAt = parseOptionalTimeRange(record['updatedAt']);
+    if (updatedAt !== undefined) filter.updatedAt = updatedAt;
+  },
+  (filter, record) => {
+    const executionDeadline = parseOptionalTimeRange(record['executionDeadline']);
+    if (executionDeadline !== undefined) filter.executionDeadline = executionDeadline;
+  },
+];
+
 export function parseBulkListFilterFromBody(body: unknown): ListFilter {
   if (body === undefined) {
     return {};
@@ -228,65 +287,9 @@ export function parseBulkListFilterFromBody(body: unknown): ListFilter {
 
   const filterRecord = rawFilter as Record<string, unknown>;
   const filter: ListFilter = {};
-  const status = parseFilterStatus(filterRecord['status']);
-  if (status !== undefined) {
-    filter.status = status;
+  for (const applyDimension of BULK_FILTER_DIMENSION_PARSERS) {
+    applyDimension(filter, filterRecord);
   }
-
-  const type = parseOptionalFilterType(filterRecord['type']);
-  if (type !== undefined) {
-    filter.type = type;
-  }
-
-  const tags = parseOptionalFilterTags(filterRecord['tags']);
-  if (tags !== undefined) {
-    filter.tags = tags;
-  }
-
-  if (filterRecord['attributes'] !== undefined) {
-    filter.attributes = parseAttributeFiltersFromBody(filterRecord['attributes']);
-  }
-
-  const limit = parseOptionalFilterNumber(filterRecord['limit'], 'limit');
-  if (limit !== undefined) {
-    filter.limit = limit;
-  }
-
-  const offset = parseOptionalFilterNumber(filterRecord['offset'], 'offset');
-  if (offset !== undefined) {
-    filter.offset = offset;
-  }
-
-  const idPrefix = filterRecord['idPrefix'];
-  if (typeof idPrefix === 'string') {
-    filter.idPrefix = idPrefix;
-  }
-
-  const tenantId = parseOptionalTenantId(filterRecord['tenantId']);
-  if (tenantId !== undefined) {
-    filter.tenantId = tenantId;
-  }
-
-  const failureCategory = parseOptionalFailureCategoryFilter(filterRecord['failureCategory']);
-  if (failureCategory !== undefined) {
-    filter.failureCategory = failureCategory;
-  }
-
-  const createdAt = parseOptionalTimeRange(filterRecord['createdAt']);
-  if (createdAt !== undefined) {
-    filter.createdAt = createdAt;
-  }
-
-  const updatedAt = parseOptionalTimeRange(filterRecord['updatedAt']);
-  if (updatedAt !== undefined) {
-    filter.updatedAt = updatedAt;
-  }
-
-  const executionDeadline = parseOptionalTimeRange(filterRecord['executionDeadline']);
-  if (executionDeadline !== undefined) {
-    filter.executionDeadline = executionDeadline;
-  }
-
   return filter;
 }
 

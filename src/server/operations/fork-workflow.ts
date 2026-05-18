@@ -21,6 +21,67 @@ const forkWorkflowOutput = z.object({
 export type ForkWorkflowInput = z.infer<typeof forkWorkflowInput>;
 export type ForkWorkflowOutput = z.infer<typeof forkWorkflowOutput>;
 
+/**
+ * Validate the `fromStep` field of a fork request.
+ *
+ * Returns the resolved fork options when `fromStep` is present and valid, or
+ * `undefined` when `fromStep` was not provided. Throws an `InvalidParams` fault
+ * if `fromStep` is present but not a non-negative safe integer.
+ */
+function validateForkInput(input: ForkWorkflowInput): { fromStep: number } | undefined {
+  if (input.fromStep === undefined) {
+    return undefined;
+  }
+  if (
+    typeof input.fromStep !== 'number' ||
+    !Number.isSafeInteger(input.fromStep) ||
+    input.fromStep < 0
+  ) {
+    throw invalidParamsFault('Field "fromStep" must be a non-negative safe integer');
+  }
+  return { fromStep: input.fromStep };
+}
+
+/**
+ * Map an engine error thrown by `engine.fork` to the canonical operation fault.
+ *
+ * Routing order (precedence preserved from legacy implementation):
+ *   1. 'fromStep' / 'Checkpoint not found at step' → InvalidParams (400)
+ *   2. 'Checkpoint not found'                       → NotFound, resource: 'checkpoint'
+ *   3. 'not found'                                  → NotFound, resource: 'workflow'
+ *   4. otherwise                                    → EngineFailure
+ */
+function resolveForkAccess(error: unknown): never {
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (message.includes('fromStep') || message.includes('Checkpoint not found at step')) {
+    throw invalidParamsFault(message);
+  }
+  if (message.includes('Checkpoint not found')) {
+    const fault: OperationFault = {
+      code: 'NotFound',
+      message,
+      data: { resource: 'checkpoint' },
+    };
+    throw fault;
+  }
+  if (message.includes('not found')) {
+    const fault: OperationFault = {
+      code: 'NotFound',
+      message,
+      data: { resource: 'workflow' },
+    };
+    throw fault;
+  }
+
+  const fault: OperationFault = {
+    code: 'EngineFailure',
+    message,
+    data: {},
+  };
+  throw fault;
+}
+
 export const forkWorkflowOperation = defineOperation<ForkWorkflowInput, ForkWorkflowOutput>({
   name: 'weft.workflows.fork',
   mcpExposable: false,
@@ -32,54 +93,15 @@ export const forkWorkflowOperation = defineOperation<ForkWorkflowInput, ForkWork
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  // oxlint-disable-next-line complexity -- ID:server-operations-fork-workflow-invoke-complexity
   invoke: async ({ input, engine }): Promise<ForkWorkflowOutput> => {
     const typedEngine = engine as Engine;
-
-    let options: { fromStep: number } | undefined;
-    if (input.fromStep !== undefined) {
-      if (
-        typeof input.fromStep !== 'number' ||
-        !Number.isSafeInteger(input.fromStep) ||
-        input.fromStep < 0
-      ) {
-        throw invalidParamsFault('Field "fromStep" must be a non-negative safe integer');
-      }
-      options = { fromStep: input.fromStep };
-    }
+    const options = validateForkInput(input);
 
     try {
       const handle = await typedEngine.fork(input.workflowId, options);
       return { id: handle.id };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-
-      if (message.includes('fromStep') || message.includes('Checkpoint not found at step')) {
-        throw invalidParamsFault(message);
-      }
-      if (message.includes('Checkpoint not found')) {
-        const fault: OperationFault = {
-          code: 'NotFound',
-          message,
-          data: { resource: 'checkpoint' },
-        };
-        throw fault;
-      }
-      if (message.includes('not found')) {
-        const fault: OperationFault = {
-          code: 'NotFound',
-          message,
-          data: { resource: 'workflow' },
-        };
-        throw fault;
-      }
-
-      const fault: OperationFault = {
-        code: 'EngineFailure',
-        message,
-        data: {},
-      };
-      throw fault;
+      resolveForkAccess(error);
     }
   },
 });
