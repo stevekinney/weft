@@ -253,39 +253,6 @@ naming the alternative that was rejected.
 - **Symbol**: `handleEvent`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
-## `server-index-classify-connection-complexity`
-
-- **File**: `src/server/runtime/websocket-upgrade.ts`
-- **Rule**: `complexity`
-- **Symbol**: `classifyConnection`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `server-index-dispatch-task-impl-complexity`
-
-- **File**: `src/server/runtime/task-dispatch.ts`
-- **Rule**: `complexity`
-- **Symbol**: `dispatchTaskImpl`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-- **File**: `src/server/index.ts`
-- **Rule**: `max-lines`
-- **Symbol**: `(whole file)`
-- **Reason**: Pre-existing oversized file; tracked by oxlint-strict initiative for split.
-
-## `server-index-handle-task-result-request-complexity`
-
-- **File**: `src/server/runtime/task-polling.ts`
-- **Rule**: `complexity`
-- **Symbol**: `handleTaskResultRequest`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `server-index-handle-worker-web-socket-message-complexity`
-
-- **File**: `src/server/runtime/websocket-worker.ts`
-- **Rule**: `complexity`
-- **Symbol**: `handleWorkerWebSocketMessage`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
 ## `server-index-serve-complexity`
 
 - **File**: `src/server/index.ts`

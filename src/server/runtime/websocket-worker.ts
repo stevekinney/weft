@@ -6,10 +6,12 @@ import {
   REMOTE_WORKER_PROTOCOL_VERSION,
   REMOTE_WORKER_SUPPORTED_PROTOCOL_VERSIONS,
   parseWorkerToServerMessage,
+  type HeartbeatMessage,
   type ProtocolErrorMessage,
   type RegisterErrorMessage,
   type RegisterMessage,
   type TaskResultMessage,
+  type WorkerToServerMessage,
 } from '../../worker/protocol.ts';
 import type { ServeOptions } from '../index.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
@@ -147,16 +149,114 @@ function resolveTaskResultStatus(message: TaskResultMessage): 'completed' | 'fai
   return message.status === 'completed' ? 'completed' : 'failed';
 }
 
-// oxlint-disable-next-line complexity -- ID:server-index-handle-worker-web-socket-message-complexity
-export function handleWorkerWebSocketMessage(
+/** Handle a validated `register` message from a worker. */
+function onRegisterMessage(
+  context: ServerContext,
+  ws: ServerWebSocket<WebSocketData>,
+  message: RegisterMessage,
+): void {
+  registerWorker(context, ws, message);
+}
+
+/** Handle a validated `taskResult` message from a worker. */
+function onTaskResultMessage(
+  context: ServerContext,
+  options: ServeOptions,
+  message: TaskResultMessage,
+  cleanupWorkflowIndex: (operationId: string) => void,
+): void {
+  const operationId = message.operationId;
+  context.registry.completeTask(operationId);
+  context.deadlineTracker.remove(operationId);
+  cleanupWorkflowIndex(operationId);
+  recordWorkerCapacitySaturationMetric(context.metricsCollector, context.registry);
+
+  void (async () => {
+    const inflightRecord = await readInflightRecord(options.engine.storage, operationId);
+    const resolvedAt = Date.now();
+    const resolvedStatus = resolveTaskResultStatus(message);
+    await transitionInflightToResolved(options.engine.storage, operationId, resolvedStatus, {
+      ...(inflightRecord === null ? {} : { record: inflightRecord }),
+      resolvedAt,
+      resolutionReason: resolvedStatus,
+    });
+    if (inflightRecord !== null) {
+      recordTaskExecutionLatencyMetric(context.metricsCollector, inflightRecord, resolvedAt);
+    }
+  })().catch((error) => {
+    console.error(
+      `[weft] Failed to transition task "${operationId}" to resolved — inflight record may leak:`,
+      error,
+    );
+  });
+}
+
+/** Handle a validated `heartbeat` message from a worker. */
+function onHeartbeatMessage(
   context: ServerContext,
   options: ServeOptions,
   ws: ServerWebSocket<WebSocketData>,
-  rawMessage: string | Buffer,
-  cleanupWorkflowIndex: (operationId: string) => void,
+  message: HeartbeatMessage,
 ): void {
-  if (!isWorkerConnection(ws.data.pathname)) return;
+  void message;
+  const workerId = ws.data.workerId;
+  if (!workerId) return;
 
+  context.registry.heartbeat(workerId);
+
+  // Extend visibility deadline for all in-flight tasks assigned to this worker.
+  for (const task of context.registry.getWorkerTasks(workerId)) {
+    const newDeadline = context.registry.extendVisibility(task.operationId, task.visibilityTimeout);
+
+    // Update persisted storage record and deadline tracker with
+    // the same deadline the registry computed, so all three stay
+    // in sync across restarts and visibility scans.
+    if (newDeadline !== undefined) {
+      context.deadlineTracker.remove(task.operationId);
+      context.deadlineTracker.add({ operationId: task.operationId, deadline: newDeadline });
+
+      const opId = task.operationId;
+      const heartbeatWorkerId = ws.data.workerId;
+      void withRetry(async () => {
+        // Guard: if the task completed or was reassigned during the async gap,
+        // skip the write to avoid resurrecting or corrupting another worker's record.
+        if (!context.registry.isAssigned(opId)) return;
+        const currentTask = context.registry
+          .getWorkerTasks(heartbeatWorkerId ?? '')
+          .find((trackedTask) => trackedTask.operationId === opId);
+        if (!currentTask) return;
+
+        const inflightKey = KEYS.operationInflight(opId);
+        const existing = await options.engine.storage.get(inflightKey);
+        if (existing) {
+          const decoded = decode(existing);
+          if (!isInflightRecord(decoded)) {
+            console.error(
+              `[weft] Corrupt inflight record for task "${opId}" during heartbeat — skipping visibility extension`,
+            );
+            return;
+          }
+          const updated = { ...decoded, deadline: newDeadline, lastHeartbeatAt: Date.now() };
+          await options.engine.storage.put(inflightKey, encode(updated));
+        }
+      }, `extend visibility for task "${opId}"`).catch((error) => {
+        console.error(`[weft] Failed to extend visibility for task "${opId}":`, error);
+      });
+    }
+  }
+}
+
+type ParseResult = { ok: true; message: WorkerToServerMessage } | { ok: false };
+
+/**
+ * Parse and validate an incoming WebSocket frame from a worker.
+ * Rejects the connection if the frame is malformed or fails protocol validation.
+ * Returns the parsed message on success or `{ ok: false }` if the connection was closed.
+ */
+function parseAndValidateWorkerFrame(
+  ws: ServerWebSocket<WebSocketData>,
+  rawMessage: string | Buffer,
+): ParseResult {
   const text = typeof rawMessage === 'string' ? rawMessage : new TextDecoder().decode(rawMessage);
 
   let parsed: unknown;
@@ -164,7 +264,7 @@ export function handleWorkerWebSocketMessage(
     parsed = JSON.parse(text);
   } catch {
     rejectProtocolMessage(ws, 'invalid_json', 'Worker protocol messages must be valid JSON');
-    return;
+    return { ok: false };
   }
 
   const result = parseWorkerToServerMessage(parsed);
@@ -179,14 +279,29 @@ export function handleWorkerWebSocketMessage(
         result.error.message,
         result.error.requestedProtocolVersion,
       );
-      return;
+      return { ok: false };
     }
 
     rejectProtocolMessage(ws, result.error.code, result.error.message);
-    return;
+    return { ok: false };
   }
 
-  const message = result.message;
+  return { ok: true, message: result.message };
+}
+
+export function handleWorkerWebSocketMessage(
+  context: ServerContext,
+  options: ServeOptions,
+  ws: ServerWebSocket<WebSocketData>,
+  rawMessage: string | Buffer,
+  cleanupWorkflowIndex: (operationId: string) => void,
+): void {
+  if (!isWorkerConnection(ws.data.pathname)) return;
+
+  const parsed = parseAndValidateWorkerFrame(ws, rawMessage);
+  if (!parsed.ok) return;
+
+  const { message } = parsed;
   if (message.type !== 'register' && ws.data.workerRegistered !== true) {
     rejectProtocolMessage(
       ws,
@@ -198,85 +313,15 @@ export function handleWorkerWebSocketMessage(
 
   switch (message.type) {
     case 'register': {
-      registerWorker(context, ws, message);
+      onRegisterMessage(context, ws, message);
       break;
     }
     case 'taskResult': {
-      const operationId = message.operationId;
-      context.registry.completeTask(operationId);
-      context.deadlineTracker.remove(operationId);
-      cleanupWorkflowIndex(operationId);
-      recordWorkerCapacitySaturationMetric(context.metricsCollector, context.registry);
-
-      void (async () => {
-        const inflightRecord = await readInflightRecord(options.engine.storage, operationId);
-        const resolvedAt = Date.now();
-        const resolvedStatus = resolveTaskResultStatus(message);
-        await transitionInflightToResolved(options.engine.storage, operationId, resolvedStatus, {
-          ...(inflightRecord === null ? {} : { record: inflightRecord }),
-          resolvedAt,
-          resolutionReason: resolvedStatus,
-        });
-        if (inflightRecord !== null) {
-          recordTaskExecutionLatencyMetric(context.metricsCollector, inflightRecord, resolvedAt);
-        }
-      })().catch((error) => {
-        console.error(
-          `[weft] Failed to transition task "${operationId}" to resolved — inflight record may leak:`,
-          error,
-        );
-      });
+      onTaskResultMessage(context, options, message, cleanupWorkflowIndex);
       break;
     }
     case 'heartbeat': {
-      const workerId = ws.data.workerId;
-      if (workerId) {
-        context.registry.heartbeat(workerId);
-
-        // Extend visibility deadline for all in-flight tasks assigned to this worker.
-        for (const task of context.registry.getWorkerTasks(workerId)) {
-          const newDeadline = context.registry.extendVisibility(
-            task.operationId,
-            task.visibilityTimeout,
-          );
-
-          // Update persisted storage record and deadline tracker with
-          // the same deadline the registry computed, so all three stay
-          // in sync across restarts and visibility scans.
-          if (newDeadline !== undefined) {
-            context.deadlineTracker.remove(task.operationId);
-            context.deadlineTracker.add({ operationId: task.operationId, deadline: newDeadline });
-
-            const opId = task.operationId;
-            const heartbeatWorkerId = ws.data.workerId;
-            void withRetry(async () => {
-              // Guard: if the task completed or was reassigned during the async gap,
-              // skip the write to avoid resurrecting or corrupting another worker's record.
-              if (!context.registry.isAssigned(opId)) return;
-              const currentTask = context.registry
-                .getWorkerTasks(heartbeatWorkerId ?? '')
-                .find((trackedTask) => trackedTask.operationId === opId);
-              if (!currentTask) return;
-
-              const inflightKey = KEYS.operationInflight(opId);
-              const existing = await options.engine.storage.get(inflightKey);
-              if (existing) {
-                const decoded = decode(existing);
-                if (!isInflightRecord(decoded)) {
-                  console.error(
-                    `[weft] Corrupt inflight record for task "${opId}" during heartbeat — skipping visibility extension`,
-                  );
-                  return;
-                }
-                const updated = { ...decoded, deadline: newDeadline, lastHeartbeatAt: Date.now() };
-                await options.engine.storage.put(inflightKey, encode(updated));
-              }
-            }, `extend visibility for task "${opId}"`).catch((error) => {
-              console.error(`[weft] Failed to extend visibility for task "${opId}":`, error);
-            });
-          }
-        }
-      }
+      onHeartbeatMessage(context, options, ws, message);
       break;
     }
   }
