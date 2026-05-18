@@ -41,6 +41,75 @@ const createScheduleOutput = z.object({
 export type CreateScheduleInput = z.infer<typeof createScheduleInput>;
 export type CreateScheduleOutput = z.infer<typeof createScheduleOutput>;
 
+type ValidatedCreateScheduleInput = {
+  type: string;
+  cronExpression: string;
+  id: string | undefined;
+  overlap: NonNullable<ScheduleOptions['overlap']> | undefined;
+  backfill: boolean | undefined;
+};
+
+/** Validate the required string fields type and cronExpression. */
+function validateRequiredScheduleFields(
+  input: CreateScheduleInput,
+): { type: string; cronExpression: string } {
+  if (typeof input.type !== 'string' || input.type.length === 0) {
+    throw invalidParamsFault('Missing required field: type');
+  }
+  if (typeof input.cronExpression !== 'string' || input.cronExpression.length === 0) {
+    throw invalidParamsFault('Missing required field: cronExpression');
+  }
+  return { type: input.type, cronExpression: input.cronExpression };
+}
+
+/** Validate optional schedule fields id, overlap, and backfill. */
+function validateOptionalScheduleFields(input: CreateScheduleInput): {
+  id: string | undefined;
+  overlap: NonNullable<ScheduleOptions['overlap']> | undefined;
+  backfill: boolean | undefined;
+} {
+  let validatedId: string | undefined;
+  if (input.id !== undefined) {
+    if (typeof input.id !== 'string' || input.id.length === 0) {
+      throw invalidParamsFault('Field "id" must be a non-empty string');
+    }
+    validatedId = input.id;
+  }
+
+  let validatedOverlap: NonNullable<ScheduleOptions['overlap']> | undefined;
+  if (input.overlap !== undefined) {
+    if (typeof input.overlap !== 'string' || !isScheduleOverlapPolicy(input.overlap)) {
+      throw invalidParamsFault(
+        'Field "overlap" must be one of skip, queue, cancel-running, allow',
+      );
+    }
+    validatedOverlap = input.overlap;
+  }
+
+  let validatedBackfill: boolean | undefined;
+  if (input.backfill !== undefined) {
+    if (typeof input.backfill !== 'boolean') {
+      throw invalidParamsFault('Field "backfill" must be a boolean');
+    }
+    validatedBackfill = input.backfill;
+  }
+
+  return { id: validatedId, overlap: validatedOverlap, backfill: validatedBackfill };
+}
+
+/**
+ * Validate `CreateScheduleInput` fields in legacy order:
+ * type → cronExpression → id → overlap → backfill.
+ *
+ * Throws an `InvalidParams` fault on the first invalid field so both REST and
+ * JSON-RPC callers receive the same error messages.
+ */
+function validateCreateScheduleInput(input: CreateScheduleInput): ValidatedCreateScheduleInput {
+  const { type, cronExpression } = validateRequiredScheduleFields(input);
+  const { id, overlap, backfill } = validateOptionalScheduleFields(input);
+  return { type, cronExpression, id, overlap, backfill };
+}
+
 export const createScheduleOperation = defineOperation<CreateScheduleInput, CreateScheduleOutput>({
   name: 'weft.schedules.create',
   mcpExposable: false,
@@ -52,45 +121,13 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
   producibleFaults: ['NotFound', 'Conflict'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  // oxlint-disable-next-line complexity -- ID:server-operations-create-schedule-invoke-complexity
   invoke: async ({ input, engine, principal }): Promise<CreateScheduleOutput> => {
     const typedEngine = engine as Engine;
 
     // All field validation lives here so REST and JSON-RPC clients both
     // receive the legacy error messages verbatim. Order matches legacy
     // `validateScheduleOptions`: type → cronExpression → id → overlap → backfill.
-    if (typeof input.type !== 'string' || input.type.length === 0) {
-      throw invalidParamsFault('Missing required field: type');
-    }
-    if (typeof input.cronExpression !== 'string' || input.cronExpression.length === 0) {
-      throw invalidParamsFault('Missing required field: cronExpression');
-    }
-
-    let validatedId: string | undefined;
-    if (input.id !== undefined) {
-      if (typeof input.id !== 'string' || input.id.length === 0) {
-        throw invalidParamsFault('Field "id" must be a non-empty string');
-      }
-      validatedId = input.id;
-    }
-
-    let validatedOverlap: NonNullable<ScheduleOptions['overlap']> | undefined;
-    if (input.overlap !== undefined) {
-      if (typeof input.overlap !== 'string' || !isScheduleOverlapPolicy(input.overlap)) {
-        throw invalidParamsFault(
-          'Field "overlap" must be one of skip, queue, cancel-running, allow',
-        );
-      }
-      validatedOverlap = input.overlap;
-    }
-
-    let validatedBackfill: boolean | undefined;
-    if (input.backfill !== undefined) {
-      if (typeof input.backfill !== 'boolean') {
-        throw invalidParamsFault('Field "backfill" must be a boolean');
-      }
-      validatedBackfill = input.backfill;
-    }
+    const validated = validateCreateScheduleInput(input);
 
     const accessOptions = resolveScheduleAccessOptions(principal);
     if (isOperationFault(accessOptions)) {
@@ -98,16 +135,16 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
     }
 
     const options: ScheduleOptions = {
-      ...(validatedId !== undefined ? { id: validatedId } : {}),
-      ...(validatedOverlap !== undefined ? { overlap: validatedOverlap } : {}),
-      ...(validatedBackfill !== undefined ? { backfill: validatedBackfill } : {}),
+      ...(validated.id !== undefined ? { id: validated.id } : {}),
+      ...(validated.overlap !== undefined ? { overlap: validated.overlap } : {}),
+      ...(validated.backfill !== undefined ? { backfill: validated.backfill } : {}),
     };
 
     try {
       const handle = await typedEngine.schedule(
-        input.type,
+        validated.type,
         input.input,
-        input.cronExpression,
+        validated.cronExpression,
         options,
         accessOptions,
       );
@@ -115,7 +152,7 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
     } catch (error) {
       // Engine errors map to the canonical schedule fault classification;
       // identifier defaults to the validated id when present.
-      throw mapScheduleErrorToFault(validatedId ?? '', error);
+      throw mapScheduleErrorToFault(validated.id ?? '', error);
     }
   },
 });
