@@ -11,11 +11,12 @@ import type { SpanLink } from './no-op-telemetry';
 import { extractTraceParent } from './propagation';
 import {
   applyCustomAttributes,
-  errorMessage,
   injectSpanContext,
   parentContextForWorkflow,
+  runAsyncWithSpan,
+  runGeneratorWithSpan,
+  runWithSpan,
   serializePayload,
-  toError,
 } from './span-helpers';
 import type { ObservabilityState } from './types';
 import { endAndRemoveWorkflowSpan, evictStaleWorkflowSpans } from './workflow-lifecycle';
@@ -85,19 +86,15 @@ export function buildWorkflowInterceptor(state: ObservabilityState): WorkflowInt
       applyCustomAttributes(state, span, interception);
       const startTime = Date.now();
 
-      try {
-        const result = yield* next(interception);
-        span.setStatus({ code: state.SpanStatusCode.OK });
-        state.metrics.record('weft.activity.duration', Date.now() - startTime);
-        state.metrics.increment('weft.activity.attempts');
-        span.end();
-        return result;
-      } catch (error) {
-        span.setStatus({ code: state.SpanStatusCode.ERROR, message: errorMessage(error) });
-        span.recordException(toError(error));
-        span.end();
-        throw error;
-      }
+      return yield* runGeneratorWithSpan(
+        state,
+        span,
+        () => next(interception),
+        () => {
+          state.metrics.record('weft.activity.duration', Date.now() - startTime);
+          state.metrics.increment('weft.activity.attempts');
+        },
+      );
     },
 
     *sleep(
@@ -116,16 +113,7 @@ export function buildWorkflowInterceptor(state: ObservabilityState): WorkflowInt
 
       applyCustomAttributes(state, span, interception);
 
-      try {
-        yield* next(interception);
-        span.setStatus({ code: state.SpanStatusCode.OK });
-      } catch (error) {
-        span.setStatus({ code: state.SpanStatusCode.ERROR, message: errorMessage(error) });
-        span.recordException(toError(error));
-        throw error;
-      } finally {
-        span.end();
-      }
+      yield* runGeneratorWithSpan(state, span, () => next(interception));
     },
 
     *waitForSignal(
@@ -144,17 +132,7 @@ export function buildWorkflowInterceptor(state: ObservabilityState): WorkflowInt
 
       applyCustomAttributes(state, span, interception);
 
-      try {
-        const result = yield* next(interception);
-        span.setStatus({ code: state.SpanStatusCode.OK });
-        span.end();
-        return result;
-      } catch (error) {
-        span.setStatus({ code: state.SpanStatusCode.ERROR, message: errorMessage(error) });
-        span.recordException(toError(error));
-        span.end();
-        throw error;
-      }
+      return yield* runGeneratorWithSpan(state, span, () => next(interception));
     },
 
     async childWorkflow(
@@ -197,17 +175,7 @@ export function buildWorkflowInterceptor(state: ObservabilityState): WorkflowInt
 
       state.metrics.increment('weft.child_workflow.started');
 
-      try {
-        const result = await next(interception);
-        span.setStatus({ code: state.SpanStatusCode.OK });
-        span.end();
-        return result;
-      } catch (error) {
-        span.setStatus({ code: state.SpanStatusCode.ERROR, message: errorMessage(error) });
-        span.recordException(toError(error));
-        span.end();
-        throw error;
-      }
+      return runAsyncWithSpan(state, span, () => next(interception));
     },
 
     signalReceived(
@@ -223,16 +191,7 @@ export function buildWorkflowInterceptor(state: ObservabilityState): WorkflowInt
 
       applyCustomAttributes(state, span, interception);
 
-      try {
-        next(interception);
-        span.setStatus({ code: state.SpanStatusCode.OK });
-        span.end();
-      } catch (error) {
-        span.setStatus({ code: state.SpanStatusCode.ERROR, message: errorMessage(error) });
-        span.recordException(toError(error));
-        span.end();
-        throw error;
-      }
+      runWithSpan(state, span, () => next(interception));
     },
   };
 }

@@ -7,6 +7,7 @@ import { anonymousPrincipal } from '../principal.ts';
 import { DISPATCH_ALLOWLIST } from './dispatch-allowlist.ts';
 import { executeOperation } from './pipeline.ts';
 import { createOperationRegistry } from './registry.ts';
+import { executeStream, executeSubscription } from './stream-pipeline.ts';
 import type {
   DispatchContext,
   ErasedOperation,
@@ -147,6 +148,50 @@ describe('operation dispatch audit — discriminated union compile-time guarante
   //     ^^^^^^^^^^^ Object literal may only specify known properties,
   //                 and 'eventSchema' does not exist in type
   //                 'UnaryOperationDefinition...'
+});
+
+describe('operation dispatch audit — long-lived kind guards', () => {
+  it('executeStream against a unary operation records only `looked-up` then fails Unprocessable', async () => {
+    // The kind check sits between lookupOperation and prepareAuthorizedInput;
+    // if a future refactor pushed it past transport/access, this trace would
+    // grow extra markers and the failure code would still pass — only the
+    // pinned marker list catches the regression.
+    const registry = createOperationRegistry([createTraceOperation()]);
+    const markers: PipelineTraceMarker[] = [];
+    const result = await executeStream(
+      'weft.audit.trace',
+      { value: 'ok' },
+      {
+        principal: anonymousPrincipal(),
+        engine: {},
+        transport: 'jsonRpcWebSocket',
+        registry,
+        pipelineTrace: (marker) => markers.push(marker),
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.fault.code).toBe('Unprocessable');
+    expect(markers).toEqual(['looked-up']);
+  });
+
+  it('executeSubscription against a unary operation records only `looked-up` then fails Unprocessable', async () => {
+    const registry = createOperationRegistry([createTraceOperation()]);
+    const markers: PipelineTraceMarker[] = [];
+    const result = await executeSubscription(
+      'weft.audit.trace',
+      { value: 'ok' },
+      {
+        principal: anonymousPrincipal(),
+        engine: {},
+        transport: 'jsonRpcWebSocket',
+        registry,
+        pipelineTrace: (marker) => markers.push(marker),
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.fault.code).toBe('Unprocessable');
+    expect(markers).toEqual(['looked-up']);
+  });
 });
 
 describe('operation dispatch audit — HTTP-handler integration', () => {

@@ -2,7 +2,7 @@ import type { ActivityExecutionInterception, ActivityInterceptor } from '../core
 import type { OpenTelemetrySpan } from './no-op-telemetry';
 import { NO_OP_SPAN_METHODS } from './no-op-telemetry';
 import { extractTraceParent } from './propagation';
-import { errorMessage, serializePayload, toError } from './span-helpers';
+import { runAsyncWithSpan, serializePayload } from './span-helpers';
 import type { ObservabilityState } from './types';
 
 export function buildActivityInterceptor(state: ObservabilityState): ActivityInterceptor {
@@ -47,17 +47,7 @@ export function buildActivityInterceptor(state: ObservabilityState): ActivityInt
         );
       }
 
-      try {
-        const result = await next(interception);
-        span.setStatus({ code: state.SpanStatusCode.OK });
-        span.end();
-        return result;
-      } catch (error) {
-        span.setStatus({ code: state.SpanStatusCode.ERROR, message: errorMessage(error) });
-        span.recordException(toError(error));
-        span.end();
-        throw error;
-      }
+      return runAsyncWithSpan(state, span, () => next(interception));
     },
   };
 }

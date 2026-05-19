@@ -16,11 +16,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromApiKey, principalFromJwtClaims } from '../principal.ts';
+import { principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import { TaskQueue } from '../task-queue.ts';
 import {
@@ -28,6 +27,12 @@ import {
   createListWorkersRestBinding,
   listWorkersOperation,
 } from './list-workers.ts';
+import {
+  assertOperationRejectsInsufficientScope,
+  assertOperationRejectsUnauthenticated,
+  createOperationTestEngine,
+  systemReadAuthContext,
+} from './operation-registry-test-helpers.test-support.ts';
 import {
   createClearDeploymentDrainOperation,
   createClearDeploymentDrainRestBinding,
@@ -38,19 +43,6 @@ import {
   createDrainWorkerOperation,
   createDrainWorkerRestBinding,
 } from './worker-drain.ts';
-
-function createEngine(): Engine {
-  return new Engine({ storage: new MemoryStorage() });
-}
-
-function systemReadAuthContext() {
-  return {
-    authContext: {
-      method: 'api-key' as const,
-      principal: principalFromApiKey({ subject: 'test', scopes: ['system:read'] }),
-    },
-  };
-}
 
 function systemAdminAuthContext() {
   return {
@@ -72,7 +64,7 @@ describe('weft.workers.list — REST GET /v1/workers', () => {
   });
 
   it('returns a sorted-by-id list with derived capacity and heartbeat age', async () => {
-    engine = createEngine();
+    engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
       id: 'charlie',
@@ -134,7 +126,7 @@ describe('weft.workers.list — REST GET /v1/workers', () => {
   });
 
   it('returns deployment identity, drain health, and deployment aggregate summaries', async () => {
-    engine = createEngine();
+    engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
       id: 'active-worker',
@@ -208,7 +200,7 @@ describe('weft.workers.list — REST GET /v1/workers', () => {
   });
 
   it('strips unknown query keys without raising InvalidParams', async () => {
-    engine = createEngine();
+    engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
 
     const response = await handleRequest(
@@ -229,45 +221,27 @@ describe('weft.workers.list — REST GET /v1/workers', () => {
   });
 
   it('rejects unauthenticated callers with 401', async () => {
-    engine = createEngine();
+    engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     const taskQueue = new TaskQueue();
 
-    const result = await executeOperation(
-      'weft.workers.list',
-      {},
-      {
-        principal: { method: 'unauthenticated' },
-        engine,
-        transport: 'jsonRpcStdio',
-        registry: createLiveOperationRegistry({ workerRegistry, taskQueue }),
-      },
-    );
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected rejection');
-    expect(result.fault.code).toBe('Unauthorized');
+    await assertOperationRejectsUnauthenticated({
+      operationName: 'weft.workers.list',
+      engine,
+      liveRegistry: createLiveOperationRegistry({ workerRegistry, taskQueue }),
+    });
   });
 
   it('rejects callers without system:read with 403', async () => {
-    engine = createEngine();
+    engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     const taskQueue = new TaskQueue();
 
-    const result = await executeOperation(
-      'weft.workers.list',
-      {},
-      {
-        principal: principalFromJwtClaims({ sub: 'user', scope: 'workflows:read' }),
-        engine,
-        transport: 'jsonRpcStdio',
-        registry: createLiveOperationRegistry({ workerRegistry, taskQueue }),
-      },
-    );
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected rejection');
-    expect(result.fault.code).toBe('Forbidden');
+    await assertOperationRejectsInsufficientScope({
+      operationName: 'weft.workers.list',
+      engine,
+      liveRegistry: createLiveOperationRegistry({ workerRegistry, taskQueue }),
+    });
   });
 });
 
@@ -280,7 +254,7 @@ describe('worker drain operations', () => {
   });
 
   it('marks and clears a worker drain over REST with system:admin', async () => {
-    engine = createEngine();
+    engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
       id: 'worker-1',
@@ -341,7 +315,7 @@ describe('worker drain operations', () => {
   });
 
   it('requires system:admin for worker drain mutations', async () => {
-    engine = createEngine();
+    engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
       id: 'worker-1',
@@ -367,7 +341,7 @@ describe('worker drain operations', () => {
   });
 
   it('rejects unused resume reasons over JSON-RPC', async () => {
-    engine = createEngine();
+    engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
       id: 'worker-1',
@@ -407,7 +381,7 @@ describe('worker drain operations', () => {
   });
 
   it('rejects malformed worker drain JSON before mutating drain state', async () => {
-    engine = createEngine();
+    engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
       id: 'worker-1',
@@ -437,7 +411,7 @@ describe('worker drain operations', () => {
   });
 
   it('marks and clears deployment drain state for all matching workers', async () => {
-    engine = createEngine();
+    engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     workerRegistry.register({
       id: 'worker-a',
@@ -524,7 +498,7 @@ describe('weft.workers.list — operation behavior', () => {
         return 100;
       },
     });
-    const engine = createEngine();
+    const engine = createOperationTestEngine();
     try {
       const result = await executeOperation(
         'weft.workers.list',
@@ -548,7 +522,7 @@ describe('weft.workers.list — operation behavior', () => {
   });
 
   it('throws when invoked from a discovery-only registry (no WorkerRegistry wired in)', async () => {
-    const engine = createEngine();
+    const engine = createOperationTestEngine();
     try {
       const result = await executeOperation(
         'weft.workers.list',

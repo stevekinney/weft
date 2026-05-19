@@ -1,14 +1,11 @@
 import { z } from 'zod';
 
-import { assertScopedBulkWorkflowFilter } from '../../core/bulk-workflow-filter.ts';
 import {
   BulkDeleteRequiresTerminalWorkflowsError,
   BulkOperationConfirmationError,
   type Engine,
 } from '../../core/engine.ts';
-import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
 import type { BulkDeleteResult, BulkOperationDryRunResult } from '../../core/types.ts';
-import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import {
@@ -18,7 +15,6 @@ import {
   bulkOperatorAccessPolicy,
   engineFailureFault,
   faultMessage,
-  listFilterFromBulkInput,
   parseBulkListFilterFromBody,
   parseBulkOperationControlFromBody,
   readOptionalJsonBody,
@@ -26,6 +22,10 @@ import {
   type BulkListFilterInput,
   type BulkOperationControlInput,
 } from './bulk-filter-helpers.ts';
+import {
+  shapeBulkJsonSuccess,
+  validatedListFilterFromBulkInput,
+} from './bulk-operation-helpers.ts';
 import {
   invalidParamsFault,
   shapeLegacyRestFaultWithRawEngineFailureMessage,
@@ -54,26 +54,7 @@ export const bulkDeleteWorkflowsOperation = defineOperation<
   invoke: async ({ input, engine, principal }): Promise<BulkDeleteWorkflowsOutput> => {
     const e = engine as Engine;
 
-    let validatedTags: string[] | undefined;
-    if (input.tags !== undefined) {
-      try {
-        validatedTags = coerceStartWorkflowTags(input.tags, 'Field "filter.tags"');
-      } catch (error) {
-        throw invalidParamsFault(faultMessage(error));
-      }
-    }
-
-    const filter = listFilterFromBulkInput({
-      ...input,
-      ...(validatedTags === undefined ? {} : { tags: validatedTags }),
-    });
-
-    try {
-      assertScopedBulkWorkflowFilter(filter);
-    } catch (error) {
-      throw invalidParamsFault(faultMessage(error));
-    }
-
+    const filter = validatedListFilterFromBulkInput(input);
     const operationOptions = bulkOperationOptionsFromInput(input, principal);
 
     try {
@@ -94,17 +75,6 @@ export const bulkDeleteWorkflowsOperation = defineOperation<
   },
 });
 
-function shapeBulkDeleteWorkflowsSuccess(result: BulkDeleteWorkflowsOutput): Response {
-  return new Response(JSON.stringify(result), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-function shapeBulkDeleteWorkflowsFault(fault: OperationFault): Response {
-  return shapeLegacyRestFaultWithRawEngineFailureMessage(fault);
-}
-
 export const bulkDeleteWorkflowsRestBinding: UnknownRestBinding = {
   method: 'DELETE',
   path: '/v1/workflows/bulk',
@@ -124,6 +94,6 @@ export const bulkDeleteWorkflowsRestBinding: UnknownRestBinding = {
     }
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: BulkDeleteWorkflowsOutput) => shapeBulkDeleteWorkflowsSuccess(output),
-  shapeFault: shapeBulkDeleteWorkflowsFault,
+  shapeSuccess: (output: BulkDeleteWorkflowsOutput) => shapeBulkJsonSuccess(output),
+  shapeFault: shapeLegacyRestFaultWithRawEngineFailureMessage,
 };

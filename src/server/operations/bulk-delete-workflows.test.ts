@@ -205,6 +205,36 @@ describe('weft.workflows.bulk.delete', () => {
     });
   });
 
+  it('returns 400 with the "Field \\"filter.tags\\"" label when filter tags contain an empty string', async () => {
+    const engine = createEngine();
+
+    const response = await handleRequest(request({ filter: { tags: [''] } }), engine, {
+      ...bulkAdminHandlerOptions(),
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get('content-type')).toBe('application/json');
+    expect(await response.json()).toEqual({
+      error: 'Field "filter.tags" must not contain empty tags',
+    });
+  });
+
+  it('returns 400 when a filter time-range bound is not a finite number', async () => {
+    const engine = createEngine();
+
+    const response = await handleRequest(
+      request({ filter: { tags: ['selected'], createdAt: { gt: 'not-a-number' } } }),
+      engine,
+      { ...bulkAdminHandlerOptions() },
+    );
+
+    expect(response.status).toBe(400);
+    expect(response.headers.get('content-type')).toBe('application/json');
+    expect(await response.json()).toEqual({
+      error: 'Time-range bound "gt" must be a finite number',
+    });
+  });
+
   it('maps EngineFailure faults to the legacy 500 response body', async () => {
     const engine = createEngine();
     const failingOperation = {

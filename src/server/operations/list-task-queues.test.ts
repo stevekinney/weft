@@ -21,11 +21,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import { WorkerRegistry } from '../../worker/registry.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
-import { principalFromApiKey, principalFromJwtClaims } from '../principal.ts';
+import { principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import type { PendingTask } from '../task-queue.ts';
 import { TaskQueue } from '../task-queue.ts';
@@ -35,19 +34,12 @@ import {
   listTaskQueuesOperation,
   mergeQueueHealth,
 } from './list-task-queues.ts';
-
-function createEngine(): Engine {
-  return new Engine({ storage: new MemoryStorage() });
-}
-
-function systemReadAuthContext() {
-  return {
-    authContext: {
-      method: 'api-key' as const,
-      principal: principalFromApiKey({ subject: 'test', scopes: ['system:read'] }),
-    },
-  };
-}
+import {
+  assertOperationRejectsInsufficientScope,
+  assertOperationRejectsUnauthenticated,
+  createOperationTestEngine,
+  systemReadAuthContext,
+} from './operation-registry-test-helpers.test-support.ts';
 
 function pinnedTask(operationId: string, activityName: string, enqueuedAt: number): PendingTask {
   return { operationId, activityName, input: {}, enqueuedAt };
@@ -70,7 +62,7 @@ describe('weft.task.queues.list — REST GET /v1/task-queues', () => {
   });
 
   it('reports backlog, oldest queued age, in-flight, waiting pollers, and idle-worker queues', async () => {
-    engine = createEngine();
+    engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     const taskQueue = new TaskQueue();
 
@@ -164,45 +156,27 @@ describe('weft.task.queues.list — REST GET /v1/task-queues', () => {
   });
 
   it('rejects unauthenticated callers with 401', async () => {
-    engine = createEngine();
+    engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     const taskQueue = new TaskQueue();
 
-    const result = await executeOperation(
-      'weft.task.queues.list',
-      {},
-      {
-        principal: { method: 'unauthenticated' },
-        engine,
-        transport: 'jsonRpcStdio',
-        registry: createLiveOperationRegistry({ workerRegistry, taskQueue }),
-      },
-    );
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected rejection');
-    expect(result.fault.code).toBe('Unauthorized');
+    await assertOperationRejectsUnauthenticated({
+      operationName: 'weft.task.queues.list',
+      engine,
+      liveRegistry: createLiveOperationRegistry({ workerRegistry, taskQueue }),
+    });
   });
 
   it('rejects callers without system:read with 403', async () => {
-    engine = createEngine();
+    engine = createOperationTestEngine();
     const workerRegistry = new WorkerRegistry();
     const taskQueue = new TaskQueue();
 
-    const result = await executeOperation(
-      'weft.task.queues.list',
-      {},
-      {
-        principal: principalFromJwtClaims({ sub: 'user', scope: 'workflows:read' }),
-        engine,
-        transport: 'jsonRpcStdio',
-        registry: createLiveOperationRegistry({ workerRegistry, taskQueue }),
-      },
-    );
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected rejection');
-    expect(result.fault.code).toBe('Forbidden');
+    await assertOperationRejectsInsufficientScope({
+      operationName: 'weft.task.queues.list',
+      engine,
+      liveRegistry: createLiveOperationRegistry({ workerRegistry, taskQueue }),
+    });
   });
 });
 
@@ -224,7 +198,7 @@ describe('weft.task.queues.list — operation behavior', () => {
       },
     });
 
-    const engine = createEngine();
+    const engine = createOperationTestEngine();
     try {
       const result = await executeOperation(
         'weft.task.queues.list',
@@ -249,7 +223,7 @@ describe('weft.task.queues.list — operation behavior', () => {
   });
 
   it('throws EngineFailure when invoked from a discovery-only registry', async () => {
-    const engine = createEngine();
+    const engine = createOperationTestEngine();
     try {
       const result = await executeOperation(
         'weft.task.queues.list',

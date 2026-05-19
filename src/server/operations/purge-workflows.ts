@@ -3,7 +3,6 @@ import { z } from 'zod';
 import type { Engine } from '../../core/engine.ts';
 import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
 import type { PurgeResult } from '../../core/types.ts';
-import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import {
@@ -14,6 +13,7 @@ import {
   readOptionalJsonBody,
   type BulkListFilterInput,
 } from './bulk-filter-helpers.ts';
+import { shapeBulkJsonSuccess } from './bulk-operation-helpers.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 
 const purgeWorkflowsOutput = z.unknown();
@@ -34,11 +34,13 @@ export const purgeWorkflowsOperation = defineOperation<PurgeWorkflowsInput, Purg
   invoke: async ({ input, engine }): Promise<PurgeWorkflowsOutput> => {
     const e = engine as Engine;
 
-    // Validate tags in `invoke` so JSON-RPC / stdio callers hit the
-    // same `coerceStartWorkflowTags` check the REST extractInput
-    // path runs via `parseBulkListFilterFromBody`. Without this,
-    // a JSON-RPC client sending `{tags: ['']}` would bypass the
-    // empty-tag rejection and reach `engine.purge` with garbage.
+    // purge intentionally keeps inline tag coercion + filter assembly
+    // local; it must allow empty filters (no scoped assert) and shape
+    // faults via `shapeRestFault` (sanitized), so
+    // `validatedListFilterFromBulkInput` is not appropriate here.
+    // Validating tags in `invoke` also ensures JSON-RPC / stdio callers
+    // hit the same `coerceStartWorkflowTags` check the REST
+    // `extractInput` path runs via `parseBulkListFilterFromBody`.
     let validatedTags: string[] | undefined;
     if (input.tags !== undefined) {
       try {
@@ -56,17 +58,6 @@ export const purgeWorkflowsOperation = defineOperation<PurgeWorkflowsInput, Purg
   },
 });
 
-function shapePurgeWorkflowsSuccess(result: PurgeWorkflowsOutput): Response {
-  return new Response(JSON.stringify(result), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-function shapePurgeWorkflowsFault(fault: OperationFault): Response {
-  return shapeRestFault(fault);
-}
-
 export const purgeWorkflowsRestBinding: UnknownRestBinding = {
   method: 'POST',
   path: '/v1/workflows/purge',
@@ -83,6 +74,6 @@ export const purgeWorkflowsRestBinding: UnknownRestBinding = {
     }
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: PurgeWorkflowsOutput) => shapePurgeWorkflowsSuccess(output),
-  shapeFault: shapePurgeWorkflowsFault,
+  shapeSuccess: (output: PurgeWorkflowsOutput) => shapeBulkJsonSuccess(output),
+  shapeFault: shapeRestFault,
 };

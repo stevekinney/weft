@@ -1,6 +1,5 @@
 import { z } from 'zod';
 
-import { assertScopedBulkWorkflowFilter } from '../../core/bulk-workflow-filter.ts';
 import { BulkOperationConfirmationError, type Engine } from '../../core/engine.ts';
 import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
 import type {
@@ -10,7 +9,6 @@ import type {
   BulkTagResult,
   ListFilter,
 } from '../../core/types.ts';
-import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import {
@@ -20,11 +18,14 @@ import {
   bulkOperatorAccessPolicy,
   engineFailureFault,
   faultMessage,
-  listFilterFromBulkInput,
   parseBulkListFilterFromBody,
   parseBulkOperationControlFromBody,
   readOptionalJsonBody,
 } from './bulk-filter-helpers.ts';
+import {
+  shapeBulkJsonSuccess,
+  validatedListFilterFromBulkInput,
+} from './bulk-operation-helpers.ts';
 import {
   invalidParamsFault,
   shapeLegacyRestFaultWithRawEngineFailureMessage,
@@ -58,29 +59,11 @@ export const bulkMutateWorkflowTagsOperation = defineOperation<
   invoke: async ({ input, engine, principal }): Promise<BulkMutateWorkflowTagsOutput> => {
     const e = engine as Engine;
 
-    let validatedFilterTags: string[] | undefined;
-    if (input.filter?.tags !== undefined) {
-      try {
-        validatedFilterTags = coerceStartWorkflowTags(input.filter.tags, 'Field "filter.tags"');
-      } catch (error) {
-        throw invalidParamsFault(faultMessage(error));
-      }
-    }
+    const filter = validatedListFilterFromBulkInput(input.filter ?? {});
 
     let validatedTags: string[];
     try {
       validatedTags = coerceStartWorkflowTags(input.tags, 'Field "tags"');
-    } catch (error) {
-      throw invalidParamsFault(faultMessage(error));
-    }
-
-    const filter = listFilterFromBulkInput({
-      ...input.filter,
-      ...(validatedFilterTags === undefined ? {} : { tags: validatedFilterTags }),
-    });
-
-    try {
-      assertScopedBulkWorkflowFilter(filter);
     } catch (error) {
       throw invalidParamsFault(faultMessage(error));
     }
@@ -120,21 +103,6 @@ async function executeBulkTagMutation(
   return operation === 'add'
     ? await engine.tagAll(filter, tags, options)
     : await engine.untagAll(filter, tags, options);
-}
-
-function shapeBulkMutateWorkflowTagsSuccess(result: BulkMutateWorkflowTagsOutput): Response {
-  return new Response(JSON.stringify(result), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-function shapeBulkMutateWorkflowTagsFault(fault: OperationFault): Response {
-  // `InvalidParams` (caller mistakes — bad body, scope assertion,
-  // tag validation, missing operation field) maps canonically to
-  // 400. `EngineFailure` echoes raw engine message at 500 (legacy
-  // parity).
-  return shapeLegacyRestFaultWithRawEngineFailureMessage(fault);
 }
 
 export const bulkMutateWorkflowTagsRestBinding: UnknownRestBinding = {
@@ -181,7 +149,6 @@ export const bulkMutateWorkflowTagsRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: BulkMutateWorkflowTagsOutput) =>
-    shapeBulkMutateWorkflowTagsSuccess(output),
-  shapeFault: shapeBulkMutateWorkflowTagsFault,
+  shapeSuccess: (output: BulkMutateWorkflowTagsOutput) => shapeBulkJsonSuccess(output),
+  shapeFault: shapeLegacyRestFaultWithRawEngineFailureMessage,
 };

@@ -1,10 +1,7 @@
 import { z } from 'zod';
 
-import { assertScopedBulkWorkflowFilter } from '../../core/bulk-workflow-filter.ts';
 import { BulkOperationConfirmationError, type Engine } from '../../core/engine.ts';
-import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
 import type { BulkOperationDryRunResult, BulkSignalResult, ListFilter } from '../../core/types.ts';
-import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import {
@@ -14,12 +11,14 @@ import {
   bulkOperatorAccessPolicy,
   engineFailureFault,
   faultMessage,
-  listFilterFromBulkInput,
   parseBulkListFilterFromBody,
   parseBulkOperationControlFromBody,
   readOptionalJsonBody,
-  type BulkListFilterInput,
 } from './bulk-filter-helpers.ts';
+import {
+  shapeBulkJsonSuccess,
+  validatedListFilterFromBulkInput,
+} from './bulk-operation-helpers.ts';
 import {
   invalidParamsFault,
   shapeLegacyRestFaultWithRawEngineFailureMessage,
@@ -52,27 +51,7 @@ export const bulkSignalWorkflowsOperation = defineOperation<
   invoke: async ({ input, engine, principal }): Promise<BulkSignalWorkflowsOutput> => {
     const e = engine as Engine;
 
-    let validatedTags: string[] | undefined;
-    if (input.tags !== undefined) {
-      try {
-        validatedTags = coerceStartWorkflowTags(input.tags, 'Field "filter.tags"');
-      } catch (error) {
-        throw invalidParamsFault(faultMessage(error));
-      }
-    }
-
-    const filterInput: BulkListFilterInput = {
-      ...input,
-      ...(validatedTags === undefined ? {} : { tags: validatedTags }),
-    };
-    const filter = listFilterFromBulkInput(filterInput);
-
-    try {
-      assertScopedBulkWorkflowFilter(filter);
-    } catch (error) {
-      throw invalidParamsFault(faultMessage(error));
-    }
-
+    const filter = validatedListFilterFromBulkInput(input);
     const operationOptions = bulkOperationOptionsFromInput(input, principal);
 
     try {
@@ -88,20 +67,6 @@ export const bulkSignalWorkflowsOperation = defineOperation<
     }
   },
 });
-
-function shapeBulkSignalWorkflowsSuccess(result: BulkSignalWorkflowsOutput): Response {
-  return new Response(JSON.stringify(result), {
-    status: 200,
-    headers: { 'Content-Type': 'application/json' },
-  });
-}
-
-function shapeBulkSignalWorkflowsFault(fault: OperationFault): Response {
-  // `InvalidParams` (caller mistakes — bad body, scope assertion,
-  // tag validation) maps canonically to 400. `EngineFailure` echoes
-  // raw engine message at 500 (legacy parity).
-  return shapeLegacyRestFaultWithRawEngineFailureMessage(fault);
-}
 
 export const bulkSignalWorkflowsRestBinding: UnknownRestBinding = {
   method: 'POST',
@@ -139,6 +104,6 @@ export const bulkSignalWorkflowsRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 200 },
-  shapeSuccess: (output: BulkSignalWorkflowsOutput) => shapeBulkSignalWorkflowsSuccess(output),
-  shapeFault: shapeBulkSignalWorkflowsFault,
+  shapeSuccess: (output: BulkSignalWorkflowsOutput) => shapeBulkJsonSuccess(output),
+  shapeFault: shapeLegacyRestFaultWithRawEngineFailureMessage,
 };
