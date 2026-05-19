@@ -121,4 +121,28 @@ describe('resolveEngineOptions', () => {
       resolveEngineOptions(new MemoryStorage(), { suspendOnLlmWait: true }, getNow),
     ).toThrow('suspendOnLlmWait is not yet implemented');
   });
+
+  it('coerces explicit-null scalar fields to documented defaults (JS-caller safety)', () => {
+    // Untyped JavaScript callers can pass `null` even though TypeScript types
+    // forbid it. The pre-refactor `options?.field ?? default` pattern coerced
+    // null to the default; defaulting must preserve that behavior so non-TS
+    // callers don't see null slip into ResolvedOptions.
+    const resolved = resolveEngineOptions(
+      new MemoryStorage(),
+      {
+        development: null as any,
+        checkpointHistory: null as any,
+        checkpointSizeWarningThreshold: null as any,
+        maxNestingDepth: null as any,
+        broadcastEvents: null as any,
+      },
+      getNow,
+    );
+
+    expect(resolved.development).toBe(false);
+    expect(resolved.checkpointHistory).toBe(10);
+    expect(resolved.checkpointSizeWarningThreshold).toBe(65_536);
+    expect(resolved.maxNestingDepth).toBe(10);
+    expect(resolved.broadcastEvents).toBe(false);
+  });
 });

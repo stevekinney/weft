@@ -107,6 +107,38 @@ function resolveRetentionFields(
   };
 }
 
+// `??` coerces both `undefined` and `null` to the default; destructuring
+// defaults only fire on `undefined`. Using `??` here preserves the
+// pre-refactor behavior for untyped JS callers that may pass an explicit
+// `null` for an optional field. `defaultTo` keeps each defaulting expression
+// at constant complexity, so the surrounding helpers stay under the
+// per-function complexity ceiling.
+function defaultTo<T>(value: T | null | undefined, fallback: T): T {
+  return value ?? fallback;
+}
+
+function resolveBooleanDefaults(
+  options: EngineConstructorOptions | undefined,
+): Pick<ResolvedOptions, 'development' | 'broadcastEvents'> {
+  return {
+    development: defaultTo(options?.development, false),
+    broadcastEvents: defaultTo(options?.broadcastEvents, false),
+  };
+}
+
+function resolveNumericDefaults(
+  options: EngineConstructorOptions | undefined,
+): Pick<
+  ResolvedOptions,
+  'checkpointHistory' | 'checkpointSizeWarningThreshold' | 'maxNestingDepth'
+> {
+  return {
+    checkpointHistory: defaultTo(options?.checkpointHistory, 10),
+    checkpointSizeWarningThreshold: defaultTo(options?.checkpointSizeWarningThreshold, 65_536),
+    maxNestingDepth: defaultTo(options?.maxNestingDepth, 10),
+  };
+}
+
 export function resolveEngineOptions(
   storage: WeftStorage,
   options: EngineConstructorOptions | undefined,
@@ -116,25 +148,13 @@ export function resolveEngineOptions(
     throw new Error('suspendOnLlmWait is not yet implemented');
   }
 
-  const {
-    development = false,
-    checkpointHistory = 10,
-    checkpointSizeWarningThreshold = 65_536,
-    maxNestingDepth = 10,
-    broadcastEvents = false,
-    tenantResolver,
-  } = options ?? {};
-
   return {
     storage,
-    development,
-    checkpointHistory,
-    checkpointSizeWarningThreshold,
-    maxNestingDepth,
-    broadcastEvents,
     suspendOnLlmWait: false,
     getNow,
-    tenantResolver,
+    tenantResolver: options?.tenantResolver,
+    ...resolveBooleanDefaults(options),
+    ...resolveNumericDefaults(options),
     ...resolveRetentionFields(options),
   };
 }
