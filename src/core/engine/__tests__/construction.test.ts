@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { Storage as WeftStorage } from '../../../storage/interface.ts';
+import { MemoryStorage } from '../../../storage/memory.ts';
 import type { TenantResolver } from '../../tenant.ts';
 import {
   DEFAULT_RETENTION_SWEEP_BATCH_SIZE,
@@ -11,34 +11,11 @@ import {
 import { resolveEngineOptions } from '../construction.ts';
 import { normalizeRetentionDuration, normalizeRetentionPolicy } from '../validation.ts';
 
-function createMockStorage(): WeftStorage {
-  return {
-    async get() {
-      return null;
-    },
-    async put() {
-      return undefined;
-    },
-    async delete() {
-      return undefined;
-    },
-    async *scan() {
-      return undefined;
-    },
-    async batch() {
-      return undefined;
-    },
-    [Symbol.dispose]() {
-      return undefined;
-    },
-  };
-}
-
 const getNow = () => 1_234;
 
 describe('resolveEngineOptions', () => {
   it('uses default values when constructor options are omitted', () => {
-    const storage = createMockStorage();
+    const storage = new MemoryStorage();
     const resolved = resolveEngineOptions(storage, undefined, getNow);
 
     expect(resolved.development).toBe(false);
@@ -56,7 +33,7 @@ describe('resolveEngineOptions', () => {
   });
 
   it('passes explicit constructor option values through', () => {
-    const storage = createMockStorage();
+    const storage = new MemoryStorage();
     const suppliedRetention = {
       completed: '1d',
       failed: 12_000,
@@ -110,7 +87,7 @@ describe('resolveEngineOptions', () => {
 
   it('clamps fractional retention sweep batch sizes below one', () => {
     const resolved = resolveEngineOptions(
-      createMockStorage(),
+      new MemoryStorage(),
       { retentionSweepBatchSize: 0.4 },
       getNow,
     );
@@ -120,7 +97,7 @@ describe('resolveEngineOptions', () => {
 
   it('floors fractional retention sweep batch sizes above one', () => {
     const resolved = resolveEngineOptions(
-      createMockStorage(),
+      new MemoryStorage(),
       { retentionSweepBatchSize: 3.7 },
       getNow,
     );
@@ -134,14 +111,14 @@ describe('resolveEngineOptions', () => {
     // and returns null because isEmpty is true.
     expect(normalizeRetentionPolicy('invalid-shape' as any, 'options.retention')).toBeNull();
     expect(
-      resolveEngineOptions(createMockStorage(), { retention: 'invalid-shape' as any }, getNow)
+      resolveEngineOptions(new MemoryStorage(), { retention: 'invalid-shape' as any }, getNow)
         .retention,
     ).toBeNull();
   });
 
   it('keeps the suspendOnLlmWait implementation guard', () => {
     expect(() =>
-      resolveEngineOptions(createMockStorage(), { suspendOnLlmWait: true }, getNow),
-    ).toThrow(new Error('suspendOnLlmWait is not yet implemented'));
+      resolveEngineOptions(new MemoryStorage(), { suspendOnLlmWait: true }, getNow),
+    ).toThrow('suspendOnLlmWait is not yet implemented');
   });
 });

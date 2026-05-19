@@ -49,11 +49,14 @@ export function typedEngineView<TViewWorkflows extends object, TViewActivities e
   engine: object,
   _phantomTypes?: readonly [TViewWorkflows, TViewActivities],
 ): never {
-  // The runtime instance is the same Engine; this re-narrows the phantom type
-  // parameters after `register` has mutated the underlying registries. The
-  // helper returns `never` so construction.ts does not import the Engine class
-  // and form a module cycle; overload signatures in index.ts provide the
-  // public return type.
+  // Cycle-breaking workaround. The runtime instance is the same Engine; this
+  // re-narrows the phantom type parameters after `register` has mutated the
+  // underlying registries. The declared return type is `never` so this module
+  // does not need to import the Engine class from `./index.ts` (which itself
+  // imports from this module — a runtime cycle). The public return type is
+  // produced by `register`'s overload signatures in `./index.ts`; this helper
+  // is only invoked from inside `register`'s `unknown`-typed implementation
+  // body, where `never` is assignable. Do not call from any other context.
   return engine as never;
 }
 
@@ -189,6 +192,11 @@ export function createActivityWorkerDispatcher(
 }
 
 export function createAlertManagerForEngine(
+  // Typed as the structural parent `EventTarget` rather than `Engine<...>` to
+  // keep this module free of an Engine import (see `typedEngineView` for the
+  // cycle rationale). `AlertManager` only relies on the EventTarget surface;
+  // no workflow/activity generic information is lost at call sites because
+  // they retain their `Engine` typing.
   engine: EventTarget,
   alerts: EngineOptions['alerts'] | undefined,
   getNow: () => number,
