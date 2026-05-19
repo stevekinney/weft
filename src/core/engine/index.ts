@@ -1,22 +1,14 @@
 /* oxlint-disable max-lines -- ID:core-engine-index-file-length */
-import { AlertManager } from '../../alerting/alert-manager.ts';
-import { CompressedStorage } from '../../storage/compressed-storage.ts';
 import { KEYS, type Storage as WeftStorage } from '../../storage/interface.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { ActivityWorkerDispatcher } from '../../workers/activity-worker-dispatcher.ts';
-import { WorkerPool } from '../../workers/pool.ts';
 import { ActivityRegistry, type ActivityMetadata } from '../activity-registry.ts';
 import { AtomicState, type AtomicStateOptions } from '../atomic-state.ts';
 import type { StoredStreamChunk } from '../context.ts';
 import { createExpiredResponseCleanupTick, createHandleCacheFinalizer } from '../engine-helpers.ts';
-import { InlineExecutionStrategy } from '../inline-execution-strategy.ts';
 import type { Interceptor } from '../interceptor.ts';
 import { ReviewCoordinator, type ReviewRequest } from '../review/index.ts';
 import { Scheduler } from '../scheduler.ts';
 import { TenantQuotaManager } from '../tenant-quotas.ts';
 import {
-  DEFAULT_RETENTION_SWEEP_BATCH_SIZE,
-  DEFAULT_RETENTION_SWEEP_INTERVAL_MS,
   messageName,
   type AnyActivityDefinition,
   type AnyWorkflowDefinition,
@@ -35,7 +27,6 @@ import {
   type CoordinatedUpdateResult,
   type DefaultActivityTypes,
   type DefaultWorkflowRegistry,
-  type EngineOptions,
   type ForkOptions,
   type InferActivityEntries,
   type InferActivityEntry,
@@ -79,7 +70,6 @@ import {
 import type { TimerEntry } from '../types/checkpoint.ts';
 import type { UnknownNameWhenRegistryHasNoKnownNames } from '../types/registry-type-helpers.ts';
 import { UpdateCoordinator } from '../updates.ts';
-import { WorkerExecutionStrategy } from '../worker-execution-strategy.ts';
 import {
   aggregate as aggregateWorkflows,
   type AggregateOptions,
@@ -110,12 +100,22 @@ import {
   listCheckpoints as listCheckpointHistory,
   replayTo as replayWorkflowToCheckpoint,
 } from './checkpoint-io.ts';
-import type {
-  EngineConstructorOptions,
-  ExecutionStrategyBundle,
-  RegistrationEntry,
-  ResolvedOptions,
-} from './engine-internal-types.ts';
+import {
+  copyWorkflowDefinition,
+  createActivityWorkerDispatcher,
+  createAlertManagerForEngine,
+  createExecutionStrategyBundle,
+  definitionEntries,
+  resolveEngineInterceptors,
+  resolveEngineOptions,
+  resolveEngineStorage,
+  typedEngineView,
+  type EmptyActivityDefinitions,
+  type EmptyWorkflowDefinitions,
+  type EngineCreateRuntimeOptions,
+  type KnownWorkflowNames,
+} from './construction.ts';
+import type { EngineConstructorOptions } from './engine-internal-types.ts';
 import { EngineCreateNameMismatchError } from './errors.ts';
 import {
   createWorkflowHandleWithResultPromise as createWorkflowHandleWithResultPromiseFromInternals,
@@ -197,12 +197,7 @@ import {
   update as updateFromInternals,
   type UpdateCallbacks,
 } from './updates.ts';
-import {
-  coerceScheduleId,
-  normalizeRetentionDuration,
-  normalizeRetentionPolicy,
-  normalizeScheduleAccessOptions,
-} from './validation.ts';
+import { coerceScheduleId, normalizeScheduleAccessOptions } from './validation.ts';
 import {
   replayWorkflowFeed,
   snapshotWorkflowFeedTail,
@@ -316,22 +311,6 @@ export type EngineCreateOptions<
         acknowledgeUnknownWorkflowTypes?: never;
       }
   );
-
-type KnownWorkflowNames<TWorkflows extends object> = Extract<keyof TWorkflows, string>;
-declare const emptyWorkflowDefinitions: unique symbol;
-declare const emptyActivityDefinitions: unique symbol;
-type EmptyWorkflowDefinitions = Record<string, never> & {
-  readonly [emptyWorkflowDefinitions]: true;
-};
-type EmptyActivityDefinitions = Record<string, never> & {
-  readonly [emptyActivityDefinitions]: true;
-};
-type EngineCreateRuntimeOptions = EngineConstructorOptions & {
-  activities?: Record<string, AnyActivityDefinition> | undefined;
-  workflows?: Record<string, AnyWorkflowDefinition> | undefined;
-  recover?: boolean | undefined;
-  acknowledgeUnknownWorkflowTypes?: boolean | undefined;
-};
 
 type UnknownWorkflowNameWhenDefaultRegistryIsEmpty<
   TWorkflows extends object,
@@ -489,153 +468,6 @@ function disposeEngineCleanupInterval(internals: EngineInternals): void {
     engineCleanupIntervalFinalizer.unregister(internals.cleanupIntervalDisposalTracker);
     internals.cleanupIntervalDisposalTracker = null;
   }
-}
-
-function definitionEntries<TDefinition extends object>(
-  definitions: Record<string, TDefinition> | undefined,
-): Array<[string, TDefinition]> {
-  return Object.entries(definitions ?? {});
-}
-
-function typedEngineView<TViewWorkflows extends object, TViewActivities extends object>(
-  engine: object,
-): Engine<TViewWorkflows, TViewActivities> {
-  // The runtime instance is the same Engine; this re-narrows the phantom type
-  // parameters after `register` has mutated the
-  // underlying registries. There is no sound type-system bridge: `Engine` is
-  // invariant in both type parameters because the `register` method makes them
-  // contravariant, so any cast that preserves the structural relationship
-  // would have to flow through `unknown`/`never`. The bypass is contained to
-  // this single helper and the `engine: object` parameter ensures callers can
-  // only pass an actual instance (the Engine class extends EventTarget which
-  // extends object).
-  return engine as never;
-}
-
-function resolveEngineStorage(options?: EngineConstructorOptions): WeftStorage {
-  const baseStorage = options?.storage ?? new MemoryStorage();
-  if (!options?.compression) return baseStorage;
-  return new CompressedStorage(baseStorage, options.compression);
-}
-
-function resolveEngineInterceptors(options?: EngineConstructorOptions): Interceptor[] {
-  // Defensive copy: callers must not mutate the engine's interceptor list
-  // after construction. Mutating the source array directly would bypass
-  // the composed-interceptor cache invalidation in `addInterceptor`.
-  return options?.interceptors ? [...options.interceptors] : [];
-}
-
-function copyWorkflowDefinition(
-  type: string,
-  registration: RegistrationEntry,
-): RegisteredWorkflowDefinition {
-  return {
-    type,
-    version: registration.version,
-    tags: registration.tags === undefined ? [] : [...registration.tags],
-    ...(registration.description === undefined ? {} : { description: registration.description }),
-    ...(registration.inputSchema === undefined ? {} : { inputSchema: registration.inputSchema }),
-    ...(registration.outputSchema === undefined ? {} : { outputSchema: registration.outputSchema }),
-    ...(registration.searchAttributes === undefined
-      ? {}
-      : { searchAttributes: registration.searchAttributes }),
-  };
-}
-
-// oxlint-disable-next-line complexity -- ID:core-engine-resolve-engine-options-complexity
-function resolveEngineOptions(
-  storage: WeftStorage,
-  options: EngineConstructorOptions | undefined,
-  getNow: () => number,
-): ResolvedOptions {
-  if (options?.suspendOnLlmWait === true) {
-    throw new Error('suspendOnLlmWait is not yet implemented');
-  }
-
-  return {
-    storage,
-    development: options?.development ?? false,
-    checkpointHistory: options?.checkpointHistory ?? 10,
-    checkpointSizeWarningThreshold: options?.checkpointSizeWarningThreshold ?? 65_536,
-    maxNestingDepth: options?.maxNestingDepth ?? 10,
-    broadcastEvents: options?.broadcastEvents ?? false,
-    suspendOnLlmWait: false,
-    retention: normalizeRetentionPolicy(options?.retention, 'options.retention'),
-    retentionSweepIntervalMs:
-      normalizeRetentionDuration(
-        options?.retentionSweepInterval,
-        'options.retentionSweepInterval',
-      ) ?? DEFAULT_RETENTION_SWEEP_INTERVAL_MS,
-    retentionSweepBatchSize:
-      options?.retentionSweepBatchSize !== undefined
-        ? Math.max(1, Math.floor(options.retentionSweepBatchSize))
-        : DEFAULT_RETENTION_SWEEP_BATCH_SIZE,
-    getNow,
-    tenantResolver: options?.tenantResolver,
-  };
-}
-
-function createExecutionStrategyBundle(parameters: {
-  options: EngineConstructorOptions | undefined;
-  getNow: () => number;
-  maxNestingDepth: number;
-  development: boolean;
-  broadcastEvents: boolean;
-  getRegistration: (workflowType: string) => RegistrationEntry | undefined;
-  resolveWorkflowType: (target: string | Function) => string;
-}): ExecutionStrategyBundle {
-  const {
-    options,
-    getNow,
-    maxNestingDepth,
-    development,
-    broadcastEvents,
-    getRegistration,
-    resolveWorkflowType,
-  } = parameters;
-  if (options?.workerExecution) {
-    const pool = new WorkerPool({
-      workerUrl: options.workerExecution.workerUrl,
-      concurrency: options.workerExecution.poolSize ?? 4,
-      smol: options.workerExecution.smol ?? false,
-    });
-    return {
-      strategy: new WorkerExecutionStrategy(pool, { broadcastEvents }),
-      inlineStrategy: null,
-    };
-  }
-  const inlineStrategy = new InlineExecutionStrategy({
-    getRegistration,
-    getNow,
-    maxNestingDepth,
-    development,
-    resolveWorkflowType,
-  });
-  return { strategy: inlineStrategy, inlineStrategy };
-}
-
-function createActivityWorkerDispatcher(
-  activityExecution: EngineConstructorOptions['activityExecution'],
-): ActivityWorkerDispatcher | null {
-  if (!activityExecution) return null;
-  return new ActivityWorkerDispatcher(
-    new WorkerPool({
-      workerUrl: activityExecution.workerUrl,
-      concurrency: activityExecution.poolSize ?? 4,
-      smol: activityExecution.smol ?? false,
-    }),
-  );
-}
-
-function createAlertManagerForEngine<
-  TAlertWorkflows extends object,
-  TAlertActivities extends object,
->(
-  engine: Engine<TAlertWorkflows, TAlertActivities>,
-  alerts: EngineOptions['alerts'] | undefined,
-  getNow: () => number,
-): AlertManager | null {
-  return alerts ? new AlertManager(engine, alerts, getNow) : null;
 }
 
 export const ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING = Symbol(

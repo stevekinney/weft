@@ -68,7 +68,12 @@ naming the alternative that was rejected.
 - **File**: `src/core/engine/index.ts`
 - **Rule**: `max-lines`
 - **Symbol**: `(whole file)`
-- **Reason**: Engine class is the public coordinator: ~170 lines of imports from 30+ sibling modules + the Engine class with public-method shims that delegate via getInternals(this) and callback bundles. Splitting the Engine class itself would fragment the public API entrypoint. The file is structurally minimal already — every method body is a one- or two-line shim.
+- **Current size**: ~1464 lines after this pass extracted construction helpers and local types to `src/core/engine/construction.ts` (~197 lines). The remaining bulk is the `Engine` class itself (~960 lines).
+- **Rejected alternatives**:
+  - Splitting the `Engine` class via `interface` declaration merging: loses generic preservation across `withWorkflow`/`withActivity` builders, breaks the chained-builder type inference that is the whole point of the typed registry.
+  - Splitting the `Engine` class via prototype assignment in sibling modules: alters generated `.d.ts` output and JSDoc attachment for the public class, downgrades inference on static `Engine.create` overloads, and creates a runtime ordering hazard.
+  - Lowering the `max-lines` threshold or raising it just for this file: lint policy is enforced globally; per-file overrides are not the project's pattern (see how `.oxlintrc.json` handles test files only via glob, not per-file allowlists).
+- **Reason**: the class itself is ~960 lines of public method shims and type plumbing; everything separable from it has been extracted. No further extraction is possible without splitting the public class declaration, which the rejected alternatives above show is not viable.
 
 ## `core-engine-execute-child-complexity`
 
@@ -180,13 +185,6 @@ naming the alternative that was rejected.
 - **File**: `src/core/engine/index.ts`
 - **Rule**: `complexity`
 - **Symbol**: `register`
-- **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
-
-## `core-engine-resolve-engine-options-complexity`
-
-- **File**: `src/core/engine/index.ts`
-- **Rule**: `complexity`
-- **Symbol**: `resolveEngineOptions`
 - **Reason**: Pre-existing complexity violation; tracked by oxlint-strict initiative for refactor.
 
 ## `core-engine-start-workflow-complexity`
