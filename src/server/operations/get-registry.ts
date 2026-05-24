@@ -24,7 +24,6 @@ import {
   RegistrySchemaConversionError,
   type RegistrySnapshot,
 } from '../../core/registry-snapshot.ts';
-import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { shapeRestFault } from './operation-helpers.ts';
@@ -94,12 +93,6 @@ export const getRegistryOperation = defineOperation<GetRegistryInput, GetRegistr
   },
 });
 
-function shapeGetRegistryFault(fault: OperationFault): Response {
-  // `RegistrySchemaConversionError` details are logged in `invoke`; the
-  // shared REST shaper keeps the wire response masked.
-  return shapeRestFault(fault);
-}
-
 export const getRegistryRestBinding: UnknownRestBinding = {
   method: 'GET',
   path: '/v1/registry',
@@ -113,5 +106,7 @@ export const getRegistryRestBinding: UnknownRestBinding = {
       status: 200,
       headers: { 'Content-Type': 'application/json' },
     }),
-  shapeFault: shapeGetRegistryFault,
+  // `RegistrySchemaConversionError` details are logged in `invoke`; the
+  // shared REST shaper keeps the wire response masked.
+  shapeFault: shapeRestFault,
 };

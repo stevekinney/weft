@@ -85,16 +85,6 @@ function shapeGetWorkflowSuccess(state: WorkflowState): Response {
 }
 
 /**
- * Fault mapper. The only fault this operation emits under normal
- * conditions is `NotFound`; every fault goes through the canonical
- * `shapeRestFault`, which masks `EngineFailure` to a generic 500 and
- * maps other codes to their status via `FAULT_CODE_TO_HTTP_STATUS`.
- */
-function shapeGetWorkflowFault(fault: OperationFault): Response {
-  return shapeRestFault(fault);
-}
-
-/**
  * RestBinding for `GET /v1/workflows/:id`. Pulls the workflow id from
  * the path param, invokes the operation, maps success/fault to the
  * REST response shape.
@@ -122,5 +112,8 @@ export const getWorkflowRestBinding: UnknownRestBinding = {
   // `RestBinding<any, any>`, so `output` here is typed `any`; the cast
   // is a no-op but communicates the concrete shape expected.
   shapeSuccess: (output: WorkflowState) => shapeGetWorkflowSuccess(output),
-  shapeFault: shapeGetWorkflowFault,
+  // The only fault this operation emits under normal conditions is `NotFound`;
+  // the canonical `shapeRestFault` masks `EngineFailure` to a generic 500 and
+  // maps other codes to their status via `FAULT_CODE_TO_HTTP_STATUS`.
+  shapeFault: shapeRestFault,
 };
