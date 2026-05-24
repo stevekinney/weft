@@ -357,6 +357,7 @@ async function mountWorkflowList(apiClient: WorkflowListApiClient): Promise<{
       },
     };
   } catch (error) {
+    flushSvelte = (): void => {};
     cleanupDom();
     throw error;
   }

@@ -100,6 +100,7 @@ async function mountDateRangePicker(): Promise<{
       },
     };
   } catch (error) {
+    flushSvelte = (): void => {};
     cleanupDom();
     throw error;
   }
