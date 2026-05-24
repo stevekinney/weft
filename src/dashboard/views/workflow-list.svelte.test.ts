@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { rmSync } from 'node:fs';
-import { join } from 'node:path';
-import { pathToFileURL } from 'node:url';
-
-import type { BunPlugin } from 'bun';
-import { JSDOM } from 'jsdom';
+import {
+  compileSvelteHarnessModule,
+  createGeneratedArtifactTracker,
+  installDashboardDom,
+} from '../svelte-test-harness.test-support.ts';
 
 import type {
   AggregateFilter,
@@ -46,17 +45,11 @@ type SvelteClientModule = {
 };
 
 const COMPONENT_DIRECTORY = new URL('.', import.meta.url).pathname;
-const generatedFiles: string[] = [];
-const generatedDirectories: string[] = [];
+const tracker = createGeneratedArtifactTracker();
 let flushSvelte = (): void => {};
 
 afterEach(() => {
-  for (const generatedFile of generatedFiles.splice(0)) {
-    rmSync(generatedFile, { force: true });
-  }
-  for (const generatedDirectory of generatedDirectories.splice(0)) {
-    rmSync(generatedDirectory, { force: true, recursive: true });
-  }
+  tracker.cleanup();
 });
 
 function createDeferred<TValue>(): {
@@ -74,7 +67,6 @@ function createDeferred<TValue>(): {
 }
 
 async function loadWorkflowListHarnessModule(): Promise<SvelteClientModule> {
-  const harnessPath = join(COMPONENT_DIRECTORY, `.workflow-list-harness.${crypto.randomUUID()}.ts`);
   const source = `
     import { flushSync, mount, unmount } from 'svelte';
     import WorkflowList from './workflow-list.svelte';
@@ -111,87 +103,16 @@ async function loadWorkflowListHarnessModule(): Promise<SvelteClientModule> {
       return unmount(component);
     }
   `;
-  await Bun.write(harnessPath, source);
-  generatedFiles.push(harnessPath);
-
-  const sveltePluginSpecifier = 'bun-plugin-svelte';
-  const sveltePluginModule = (await import(sveltePluginSpecifier)) as {
-    SveltePlugin: (options: { forceSide: 'client'; development: boolean }) => BunPlugin;
-  };
-  const outputDirectory = join(
-    COMPONENT_DIRECTORY,
-    `.workflow-list-harness.${crypto.randomUUID()}.compiled`,
-  );
-  generatedDirectories.push(outputDirectory);
-
-  const result = await Bun.build({
-    entrypoints: [harnessPath],
-    target: 'browser',
-    format: 'esm',
-    outdir: outputDirectory,
-    plugins: [sveltePluginModule.SveltePlugin({ forceSide: 'client', development: false })],
-  });
-
-  expect(result.success).toBe(true);
-  const outputPath = result.outputs[0]?.path;
-  expect(outputPath).toBeString();
-  if (outputPath === undefined) {
-    throw new Error('Svelte component build did not produce an output file');
-  }
-
-  return (await import(pathToFileURL(outputPath).href)) as SvelteClientModule;
-}
-
-function installDom(): () => void {
-  const dom = new JSDOM('<!doctype html><html><body></body></html>', {
-    url: 'http://localhost/',
-  });
-  const replacements: Record<string, unknown> = {
-    window: dom.window,
-    document: dom.window.document,
-    Element: dom.window.Element,
-    HTMLElement: dom.window.HTMLElement,
-    SVGElement: dom.window.SVGElement,
-    Text: dom.window.Text,
-    Comment: dom.window.Comment,
-    Document: dom.window.Document,
-    DocumentFragment: dom.window.DocumentFragment,
-    HTMLButtonElement: dom.window.HTMLButtonElement,
-    HTMLInputElement: dom.window.HTMLInputElement,
-    HTMLMediaElement: dom.window.HTMLMediaElement,
-    HTMLSelectElement: dom.window.HTMLSelectElement,
-    Event: dom.window.Event,
-    MouseEvent: dom.window.MouseEvent,
-    CustomEvent: dom.window.CustomEvent,
-    MutationObserver: dom.window.MutationObserver,
-    Node: dom.window.Node,
-    navigator: dom.window.navigator,
-    getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
-    requestAnimationFrame: (callback: FrameRequestCallback): number =>
-      setTimeout(() => callback(Date.now()), 0) as unknown as number,
-    cancelAnimationFrame: (handle: number): void => clearTimeout(handle),
-  };
-  const previousDescriptors = new Map<string, PropertyDescriptor | undefined>();
-
-  for (const [key, value] of Object.entries(replacements)) {
-    previousDescriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
-    Object.defineProperty(globalThis, key, {
-      configurable: true,
-      writable: true,
-      value,
-    });
-  }
-
-  return () => {
-    for (const [key, descriptor] of previousDescriptors) {
-      if (descriptor === undefined) {
-        Reflect.deleteProperty(globalThis, key);
-      } else {
-        Object.defineProperty(globalThis, key, descriptor);
-      }
-    }
-    dom.window.close();
-  };
+  // The harness is plain TypeScript (`mount`/`unmount`, no module-scope runes),
+  // so it must compile as a `.ts` module, not be routed through Svelte's
+  // compileModule.
+  return (await compileSvelteHarnessModule({
+    componentDirectory: COMPONENT_DIRECTORY,
+    harnessBaseName: 'workflow-list-harness',
+    harnessExtension: '.ts',
+    source,
+    tracker,
+  })) as SvelteClientModule;
 }
 
 function createWorkflowSummary(id: string): WorkflowSummary {
@@ -406,28 +327,39 @@ async function mountWorkflowList(apiClient: WorkflowListApiClient): Promise<{
   unmount: () => Promise<void>;
   cleanup: () => Promise<void>;
 }> {
-  const cleanupDom = installDom();
-  const harnessModule = await loadWorkflowListHarnessModule();
-  flushSvelte = harnessModule.flushSync;
-  const mounted = harnessModule.mountWorkflowList(document.body, apiClient);
-  let unmounted = false;
-  flushSvelte();
-  await settle();
-  async function unmountComponent(): Promise<void> {
-    if (unmounted) return;
-    await harnessModule.unmountWorkflowList(mounted);
-    unmounted = true;
+  const cleanupDom = installDashboardDom((window) => ({
+    HTMLButtonElement: window.HTMLButtonElement,
+    HTMLMediaElement: window.HTMLMediaElement,
+    HTMLSelectElement: window.HTMLSelectElement,
+    MouseEvent: window.MouseEvent,
+    CustomEvent: window.CustomEvent,
+  }));
+  try {
+    const harnessModule = await loadWorkflowListHarnessModule();
+    flushSvelte = harnessModule.flushSync;
+    const mounted = harnessModule.mountWorkflowList(document.body, apiClient);
+    let unmounted = false;
     flushSvelte();
     await settle();
+    async function unmountComponent(): Promise<void> {
+      if (unmounted) return;
+      await harnessModule.unmountWorkflowList(mounted);
+      unmounted = true;
+      flushSvelte();
+      await settle();
+    }
+    return {
+      unmount: unmountComponent,
+      cleanup: async () => {
+        await unmountComponent();
+        flushSvelte = (): void => {};
+        cleanupDom();
+      },
+    };
+  } catch (error) {
+    cleanupDom();
+    throw error;
   }
-  return {
-    unmount: unmountComponent,
-    cleanup: async () => {
-      await unmountComponent();
-      flushSvelte = (): void => {};
-      cleanupDom();
-    },
-  };
 }
 
 function installIntervalController(): {

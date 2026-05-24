@@ -1369,6 +1369,15 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
   ],
   ['src/core/tenant-quotas/quota-manager-operations.ts', { lines: new Set([31, 33, 34, 35, 36]) }],
   [
+    // Shared dashboard Svelte test harness. Bun instruments the helper even
+    // though the two defensive paths cannot run during the suites: the
+    // build-output guard (111) never fires for a successful Bun.build, and the
+    // requestAnimationFrame shim (149) is only invoked if a mounted component
+    // schedules an animation frame, which neither suite triggers.
+    'src/dashboard/svelte-test-harness.test-support.ts',
+    { functions: 2, lines: new Set([111, 149]) },
+  ],
+  [
     'src/dashboard/utilities/workflow-detail-timeline.ts',
     { lines: new Set([180, 185, 186, 209, 210]) },
   ],
