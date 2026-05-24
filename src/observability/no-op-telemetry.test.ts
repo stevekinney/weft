@@ -6,7 +6,65 @@ import {
   isSupportedOpenTelemetryApi,
   resetCachedOpenTelemetryApiForTesting,
   resolveInstalledOpenTelemetryApi,
+  type OpenTelemetryApi,
 } from './no-op-telemetry';
+
+/**
+ * Builds a fresh object matching the supported OpenTelemetry API shape Weft
+ * inspects, without importing the real `@opentelemetry/api` package. Returns a
+ * new object on each call so identity (`toBe`) assertions stay meaningful.
+ *
+ * Pass `overrides` to void or replace selected top-level fields — the only
+ * intended use is the missing-field reject cases, where a near-complete
+ * candidate omits exactly one required field (e.g. `{ trace: {} as never }`).
+ */
+function makeSupportedOpenTelemetryApi(overrides?: Partial<OpenTelemetryApi>): OpenTelemetryApi {
+  const api: OpenTelemetryApi = {
+    trace: {
+      getTracer() {
+        return {
+          startSpan() {
+            return {
+              setAttribute() {},
+              setStatus() {},
+              recordException() {},
+              end() {},
+              spanContext() {
+                return { traceId: '0'.repeat(32), spanId: '0'.repeat(16), traceFlags: 0 };
+              },
+            };
+          },
+        };
+      },
+      setSpan(context: unknown) {
+        return context;
+      },
+    },
+    metrics: {
+      getMeter() {
+        return {
+          createHistogram() {
+            return { record() {} };
+          },
+          createCounter() {
+            return { add() {} };
+          },
+          createUpDownCounter() {
+            return { add() {} };
+          },
+        };
+      },
+    },
+    context: {
+      ROOT_CONTEXT: {},
+      with<T>(_ctx: unknown, fn: () => T): T {
+        return fn();
+      },
+    },
+    SpanStatusCode: { OK: 1, ERROR: 2, UNSET: 0 },
+  };
+  return overrides ? { ...api, ...overrides } : api;
+}
 
 describe('getOpenTelemetryApi', () => {
   it('returns an object with trace, metrics, context, and SpanStatusCode', () => {
@@ -130,106 +188,27 @@ describe('getOpenTelemetryApi', () => {
   });
 
   it('isSupportedOpenTelemetryApi accepts the subset of the OpenTelemetry API Weft requires', () => {
-    expect(
-      isSupportedOpenTelemetryApi({
-        trace: {
-          getTracer() {
-            return {
-              startSpan() {
-                return {
-                  setAttribute() {},
-                  setStatus() {},
-                  recordException() {},
-                  end() {},
-                  spanContext() {
-                    return { traceId: '0', spanId: '0', traceFlags: 0 };
-                  },
-                };
-              },
-            };
-          },
-          setSpan(context: unknown) {
-            return context;
-          },
-        },
-        metrics: {
-          getMeter() {
-            return {
-              createHistogram() {
-                return { record() {} };
-              },
-              createCounter() {
-                return { add() {} };
-              },
-              createUpDownCounter() {
-                return { add() {} };
-              },
-            };
-          },
-        },
-        context: {
-          ROOT_CONTEXT: {},
-          with<T>(_ctx: unknown, fn: () => T): T {
-            return fn();
-          },
-        },
-        SpanStatusCode: { OK: 1, ERROR: 2, UNSET: 0 },
-      }),
-    ).toBe(true);
+    expect(isSupportedOpenTelemetryApi(makeSupportedOpenTelemetryApi())).toBe(true);
   });
 
   it('isSupportedOpenTelemetryApi rejects incomplete module shapes', () => {
     expect(isSupportedOpenTelemetryApi(undefined)).toBe(false);
     expect(isSupportedOpenTelemetryApi({ trace: {} } as never)).toBe(false);
+
+    // Missing SpanStatusCode (guard checks value.SpanStatusCode != null)
+    const withoutStatusCode = makeSupportedOpenTelemetryApi({ SpanStatusCode: undefined as never });
+    expect(isSupportedOpenTelemetryApi(withoutStatusCode)).toBe(false);
+
+    // Missing trace.getTracer (guard checks value.trace?.getTracer != null)
+    const withoutTrace = makeSupportedOpenTelemetryApi({ trace: {} as never });
+    expect(isSupportedOpenTelemetryApi(withoutTrace)).toBe(false);
   });
 
   it('resolveInstalledOpenTelemetryApi returns the installed module when the loader exposes the required shape', () => {
-    const loadedApi = resolveInstalledOpenTelemetryApi(() => ({
-      trace: {
-        getTracer() {
-          return {
-            startSpan() {
-              return {
-                setAttribute() {},
-                setStatus() {},
-                recordException() {},
-                end() {},
-                spanContext() {
-                  return { traceId: '0', spanId: '0', traceFlags: 0 };
-                },
-              };
-            },
-          };
-        },
-        setSpan(context: unknown) {
-          return context;
-        },
-      },
-      metrics: {
-        getMeter() {
-          return {
-            createHistogram() {
-              return { record() {} };
-            },
-            createCounter() {
-              return { add() {} };
-            },
-            createUpDownCounter() {
-              return { add() {} };
-            },
-          };
-        },
-      },
-      context: {
-        ROOT_CONTEXT: {},
-        with<T>(_ctx: unknown, fn: () => T): T {
-          return fn();
-        },
-      },
-      SpanStatusCode: { OK: 1, ERROR: 2, UNSET: 0 },
-    }));
+    const api = makeSupportedOpenTelemetryApi();
+    const loadedApi = resolveInstalledOpenTelemetryApi(() => api);
 
-    expect(loadedApi).toBeDefined();
+    expect(loadedApi).toBe(api);
     expect(loadedApi!.SpanStatusCode.OK).toBe(1);
   });
 
@@ -245,50 +224,7 @@ describe('getOpenTelemetryApi', () => {
     const globalObject = globalThis as Record<PropertyKey, unknown>;
     const originalRequire = globalObject['require'];
     const requestedModules: string[] = [];
-    const installedApi = {
-      trace: {
-        getTracer() {
-          return {
-            startSpan() {
-              return {
-                setAttribute() {},
-                setStatus() {},
-                recordException() {},
-                end() {},
-                spanContext() {
-                  return { traceId: '0', spanId: '0', traceFlags: 0 };
-                },
-              };
-            },
-          };
-        },
-        setSpan(context: unknown) {
-          return context;
-        },
-      },
-      metrics: {
-        getMeter() {
-          return {
-            createHistogram() {
-              return { record() {} };
-            },
-            createCounter() {
-              return { add() {} };
-            },
-            createUpDownCounter() {
-              return { add() {} };
-            },
-          };
-        },
-      },
-      context: {
-        ROOT_CONTEXT: {},
-        with<T>(_ctx: unknown, fn: () => T): T {
-          return fn();
-        },
-      },
-      SpanStatusCode: { OK: 1, ERROR: 2, UNSET: 0 },
-    };
+    const installedApi = makeSupportedOpenTelemetryApi();
 
     globalObject['require'] = (moduleName: string) => {
       requestedModules.push(moduleName);
@@ -321,50 +257,7 @@ describe('getOpenTelemetryApi', () => {
   it('getOpenTelemetryApi caches the installed module when a loader is provided', () => {
     resetCachedOpenTelemetryApiForTesting();
 
-    const installedApi = {
-      trace: {
-        getTracer() {
-          return {
-            startSpan() {
-              return {
-                setAttribute() {},
-                setStatus() {},
-                recordException() {},
-                end() {},
-                spanContext() {
-                  return { traceId: '0', spanId: '0', traceFlags: 0 };
-                },
-              };
-            },
-          };
-        },
-        setSpan(context: unknown) {
-          return context;
-        },
-      },
-      metrics: {
-        getMeter() {
-          return {
-            createHistogram() {
-              return { record() {} };
-            },
-            createCounter() {
-              return { add() {} };
-            },
-            createUpDownCounter() {
-              return { add() {} };
-            },
-          };
-        },
-      },
-      context: {
-        ROOT_CONTEXT: {},
-        with<T>(_ctx: unknown, fn: () => T): T {
-          return fn();
-        },
-      },
-      SpanStatusCode: { OK: 1, ERROR: 2, UNSET: 0 },
-    };
+    const installedApi = makeSupportedOpenTelemetryApi();
 
     const api = getOpenTelemetryApi(() => installedApi);
 
