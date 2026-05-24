@@ -275,14 +275,15 @@ setInterval(() => {}, 1000);
     });
 
     try {
-      // The subprocess calls Bun.serve() synchronously on the blocked port,
-      // which throws EADDRINUSE and exits the process before readiness. The
-      // readiness watcher must observe that exit rather than time out first, so
-      // give it a generous startup budget — a short timeout races the OS port
-      // hand-off after the SIGKILL above and produces a misleading timeout
-      // error instead of the real bind failure.
+      // A subprocess that cannot bind the reused port either exits before
+      // readiness or logs EADDRINUSE — both are causally tied to the port being
+      // occupied. The startup timeout is generous (5s) so that, under test-suite
+      // concurrency, the blocked subprocess has time to actually exit or log the
+      // bind error rather than tripping the readiness-timeout path. Keeping the
+      // assertion to these two messages preserves the test's intent: it must not
+      // pass merely because some unrelated startup delay timed out.
       await expect(
-        startDurableServer(entrypoint, databasePath, handle.port, { startupTimeoutMs: 5_000 }),
+        startDurableServer(entrypoint, databasePath, handle.port, { startupTimeoutMs: 5000 }),
       ).rejects.toThrow(/before readiness|EADDRINUSE/);
     } finally {
       portBlocker.stop(true);
