@@ -17,6 +17,11 @@ import {
   scenarioNames,
 } from '../../src/testing/replay-scenarios.test-support.ts';
 import { TestEngine } from '../../src/testing/test-engine.ts';
+import {
+  sortedStorageEntries,
+  storageAsBase64Record,
+  withDeterministicRuntime,
+} from '../../src/testing/trace-fixture-support.test-support.ts';
 
 type TraceFixture = {
   scenario: string;
@@ -33,7 +38,6 @@ type ScenarioRun = {
 };
 
 type ScenarioRunner = (fixture: TraceFixture) => Promise<ScenarioRun>;
-type RandomUuid = ReturnType<Crypto['randomUUID']>;
 
 const replayFixtureDirectory = 'tests/replay-fixtures';
 const expectedFixtureCount = 10;
@@ -67,63 +71,6 @@ async function storageFromFixture(fixture: TraceFixture): Promise<MemoryStorage>
   }
 
   return storage;
-}
-
-function sortedStorageEntries(storage: MemoryStorage): Array<readonly [string, Uint8Array]> {
-  return [...storage.snapshot().entries()].toSorted(([left], [right]) =>
-    left < right ? -1 : left > right ? 1 : 0,
-  );
-}
-
-function storageAsBase64Record(
-  entries: readonly (readonly [string, Uint8Array])[],
-): Record<string, string> {
-  const storage: Record<string, string> = {};
-
-  for (const [key, value] of entries) {
-    storage[key] = Buffer.from(value).toString('base64');
-  }
-
-  return storage;
-}
-
-function formatDeterministicRandomUuid(counter: number): RandomUuid {
-  const suffix = counter.toString(16).padStart(12, '0').slice(-12);
-
-  // crypto.randomUUID() is typed as a UUID template literal, and this
-  // constructed value follows that shape for deterministic fixture checks.
-  return `00000000-0000-4000-8000-${suffix}` as RandomUuid;
-}
-
-async function withDeterministicRuntime<T>(operation: () => Promise<T>): Promise<T> {
-  const originalRandomUuid = globalThis.crypto.randomUUID.bind(globalThis.crypto);
-  const originalDateNow = Date.now.bind(Date);
-  let counter = 0;
-
-  Object.defineProperty(globalThis.crypto, 'randomUUID', {
-    configurable: true,
-    value: () => {
-      counter += 1;
-      return formatDeterministicRandomUuid(counter);
-    },
-  });
-  Object.defineProperty(Date, 'now', {
-    configurable: true,
-    value: () => 0,
-  });
-
-  try {
-    return await operation();
-  } finally {
-    Object.defineProperty(globalThis.crypto, 'randomUUID', {
-      configurable: true,
-      value: originalRandomUuid,
-    });
-    Object.defineProperty(Date, 'now', {
-      configurable: true,
-      value: originalDateNow,
-    });
-  }
 }
 
 async function waitForCheckpoint(engine: Engine, workflowId: string): Promise<void> {

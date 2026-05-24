@@ -18,8 +18,12 @@ import {
   type WorkflowState,
   type WorkflowTimelineEntry,
 } from '../src/core/types.ts';
-import { MemoryStorage } from '../src/storage/memory.ts';
 import { TestEngine } from '../src/testing/test-engine.ts';
+import {
+  sortedStorageEntries,
+  storageAsBase64Record,
+  withDeterministicRuntime,
+} from '../src/testing/trace-fixture-support.test-support.ts';
 
 type TraceFixture = {
   scenario: string;
@@ -41,29 +45,9 @@ type ScenarioDefinition = {
   run: () => Promise<ScenarioRun>;
 };
 
-type RandomUuid = ReturnType<Crypto['randomUUID']>;
-
 const replayFixtureDirectory = 'tests/replay-fixtures';
 const checkpointFixtureDirectory = 'tests/checkpoint-compat';
 const textEncoder = new TextEncoder();
-
-function sortedStorageEntries(storage: MemoryStorage): Array<readonly [string, Uint8Array]> {
-  return [...storage.snapshot().entries()].toSorted(([left], [right]) =>
-    left < right ? -1 : left > right ? 1 : 0,
-  );
-}
-
-function storageAsBase64Record(
-  entries: readonly (readonly [string, Uint8Array])[],
-): Record<string, string> {
-  const storage: Record<string, string> = {};
-
-  for (const [key, value] of entries) {
-    storage[key] = Buffer.from(value).toString('base64');
-  }
-
-  return storage;
-}
 
 function serializeSnapshot(entries: readonly (readonly [string, Uint8Array])[]): Uint8Array {
   const encodedEntries = entries.map(([key, value]) => ({
@@ -95,45 +79,6 @@ function serializeSnapshot(entries: readonly (readonly [string, Uint8Array])[]):
   }
 
   return bytes;
-}
-
-function formatDeterministicRandomUuid(counter: number): RandomUuid {
-  const suffix = counter.toString(16).padStart(12, '0').slice(-12);
-
-  // The constructed value is a valid UUID-shaped string; TypeScript models
-  // crypto.randomUUID() with a template-literal return type.
-  return `00000000-0000-4000-8000-${suffix}` as RandomUuid;
-}
-
-async function withDeterministicRuntime<T>(operation: () => Promise<T>): Promise<T> {
-  const originalRandomUuid = globalThis.crypto.randomUUID.bind(globalThis.crypto);
-  const originalDateNow = Date.now.bind(Date);
-  let counter = 0;
-
-  Object.defineProperty(globalThis.crypto, 'randomUUID', {
-    configurable: true,
-    value: () => {
-      counter += 1;
-      return formatDeterministicRandomUuid(counter);
-    },
-  });
-  Object.defineProperty(Date, 'now', {
-    configurable: true,
-    value: () => 0,
-  });
-
-  try {
-    return await operation();
-  } finally {
-    Object.defineProperty(globalThis.crypto, 'randomUUID', {
-      configurable: true,
-      value: originalRandomUuid,
-    });
-    Object.defineProperty(Date, 'now', {
-      configurable: true,
-      value: originalDateNow,
-    });
-  }
 }
 
 async function waitForCheckpoint(engine: Engine, workflowId: string): Promise<void> {
@@ -414,12 +359,14 @@ async function runRecoveryAfterCrash(): Promise<ScenarioRun> {
   const engine = new TestEngine({ startTime: 0 });
 
   const registerRecoveryWorkflow = (target: Engine): void => {
-    target.register('recovery-after-crash', async function* (ctx: WorkflowContext) {
-      const context = ctx as Context;
-      const stepOne = yield* context.run(async () => 'checkpoint-me');
-      const stepTwo = yield* context.run(async () => `resumed:${String(stepOne)}`);
-      return stepTwo;
-    });
+    target.register(
+      workflow({ name: 'recovery-after-crash' }).execute(async function* (ctx: WorkflowContext) {
+        const context = ctx as Context;
+        const stepOne = yield* context.run(async () => 'checkpoint-me');
+        const stepTwo = yield* context.run(async () => `resumed:${String(stepOne)}`);
+        return stepTwo;
+      }),
+    );
   };
 
   registerRecoveryWorkflow(engine);
