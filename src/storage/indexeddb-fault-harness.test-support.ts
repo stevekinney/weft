@@ -53,7 +53,7 @@ export type FakeRequest<T> = IDBRequest<T> & {
  */
 export function createFakeRequest<T>(options: {
   result?: T;
-  error?: Error | null;
+  error?: DOMException | Error | null;
 }): FakeRequest<T> {
   const request = {
     result: options.result,
@@ -79,7 +79,7 @@ export function createFakeRequest<T>(options: {
  * forward `let transaction` closure.
  */
 export function createFakeTransaction(options: {
-  transactionError?: Error | null;
+  transactionError?: DOMException | Error | null;
   store: (transaction: FakeTransaction) => Partial<IDBObjectStore>;
 }): FakeTransaction {
   const transaction = {
@@ -170,7 +170,7 @@ export async function withFakeIndexedDb(
  * the next microtask, carrying `openError`.
  */
 export async function withFailingIndexedDbOpen(
-  openError: Error,
+  openError: DOMException | Error,
   body: () => Promise<void>,
 ): Promise<void> {
   const originalOpen = indexedDB.open.bind(indexedDB);
