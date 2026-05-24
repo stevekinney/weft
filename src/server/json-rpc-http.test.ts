@@ -22,32 +22,11 @@ import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
 import { handleJsonRpcHttpRequest } from './json-rpc-http.ts';
-import {
-  createOperationRegistry,
-  type ErasedOperation,
-  type OperationDefinition,
-} from './operation-catalog.ts';
+import { makeOperation as makeOp } from './json-rpc-operation.test-support.ts';
+import { createOperationRegistry } from './operation-catalog.ts';
 import { anonymousPrincipal, principalFromApiKey } from './principal.ts';
 
 const fakeEngine = {} as unknown;
-
-function makeOp<I, O>(
-  overrides: Partial<OperationDefinition<I, O>> & {
-    name: string;
-    inputSchema: z.ZodType<I>;
-    outputSchema: z.ZodType<O>;
-    invoke: OperationDefinition<I, O>['invoke'];
-  },
-): ErasedOperation {
-  return {
-    summary: 'test op',
-    tags: [],
-    access: { kind: 'public' },
-    transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
-    unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
-    ...overrides,
-  } as unknown as ErasedOperation;
-}
 
 function baseContext() {
   const registry = createOperationRegistry([

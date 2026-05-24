@@ -24,6 +24,7 @@ import { MemoryStorage } from '../storage/memory.ts';
 import { createEngineEventFeedBackend } from './engine-event-feed-backend.ts';
 import { createLiveOperationRegistry } from './rest-bindings.ts';
 import { runStdioSession } from './stdio-session.ts';
+import { collectingWritable, readableFromLines } from './stdio-stream.test-support.ts';
 import { createWorkflowEventFeed, type WorkflowEventFeed } from './workflow-event-feed.ts';
 
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
@@ -36,49 +37,6 @@ const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/** Build a ReadableStream<Uint8Array> that streams the given pre-encoded lines. */
-function readableFromLines(lines: string[]): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-  return new ReadableStream({
-    start(controller) {
-      for (const line of lines) {
-        controller.enqueue(encoder.encode(line));
-      }
-      controller.close();
-    },
-  });
-}
-
-/** Collect every chunk written to a WritableStream<Uint8Array> as newline-split lines. */
-function collectingWritable(): {
-  stream: WritableStream<Uint8Array>;
-  lines(): string[];
-} {
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-  const complete: string[] = [];
-  const stream = new WritableStream<Uint8Array>({
-    write(chunk) {
-      buffer += decoder.decode(chunk, { stream: true });
-      let newlineIndex = buffer.indexOf('\n');
-      while (newlineIndex !== -1) {
-        complete.push(buffer.slice(0, newlineIndex));
-        buffer = buffer.slice(newlineIndex + 1);
-        newlineIndex = buffer.indexOf('\n');
-      }
-    },
-    close() {
-      if (buffer.length > 0) complete.push(buffer);
-    },
-  });
-  return {
-    stream,
-    lines() {
-      return [...complete];
-    },
-  };
-}
 
 /**
  * A manually-controlled readable stream. Callers enqueue encoded lines

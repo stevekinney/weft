@@ -11,6 +11,7 @@ import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { serve, type WeftServer } from './index.ts';
+import { openWebSocket, waitForMessage } from './json-rpc-websocket-client.test-support.ts';
 
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
   ctx: WorkflowContext,
@@ -19,50 +20,12 @@ const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
   return yield* ctx.waitForSignal<string>('release');
 });
 
-function waitForMessage(
-  ws: WebSocket,
-  predicate: (parsed: unknown) => boolean,
-  timeoutMs = 3_000,
-): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      ws.removeEventListener('message', handler);
-      reject(new Error('waitForMessage timed out'));
-    }, timeoutMs);
-
-    function handler(event: MessageEvent) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(String(event.data));
-      } catch {
-        return;
-      }
-
-      if (predicate(parsed)) {
-        clearTimeout(timer);
-        ws.removeEventListener('message', handler);
-        resolve(parsed);
-      }
-    }
-
-    ws.addEventListener('message', handler);
-  });
-}
-
-function openWebSocket(url: string): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const ws = new WebSocket(url);
-    ws.addEventListener('open', () => resolve(ws));
-    ws.addEventListener('error', (event) => reject(event));
-  });
-}
-
 /**
  * `weft.workflows.events` (the operation that `weft.workflows.subscribe`
  * wraps) requires the `workflows:read` scope. Tests that subscribe must
- * authenticate with a key that carries that scope; tests that only call
- * public operations (e.g. `weft.workflows.get`) keep using the no-auth
- * `serve({ engine, port: 0 })` form.
+ * authenticate with a key that carries that scope (passed to `openWebSocket`);
+ * tests that only call public operations (e.g. `weft.workflows.get`) keep using
+ * the no-auth `serve({ engine, port: 0 })` form.
  */
 const SUBSCRIBE_TEST_API_KEY = 'weft_test_subscribe_workflows_read_scope_key_xxx';
 const subscribeServeOptions = {
@@ -72,18 +35,6 @@ const subscribeServeOptions = {
     defaultApiKeyScopes: ['workflows:read'] as const,
   },
 };
-function openAuthenticatedWebSocket(url: string): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    // Bun's WebSocket constructor accepts a `{ headers }` options object,
-    // but the WHATWG type only types the second arg as a subprotocols
-    // array. The `as any` cast matches the existing project pattern.
-    const ws = new WebSocket(url, {
-      headers: { authorization: `Bearer ${SUBSCRIBE_TEST_API_KEY}` },
-    } as any);
-    ws.addEventListener('open', () => resolve(ws));
-    ws.addEventListener('error', (event) => reject(event));
-  });
-}
 
 function createHoldEngine(): Engine {
   const storage = new MemoryStorage();
@@ -157,7 +108,7 @@ describe('serve() — WebSocket /jsonrpc', () => {
 
     server = serve({ engine, ...subscribeServeOptions });
     const wsUrl = `${server.url.replace('http://', 'ws://')}/jsonrpc`;
-    const ws = await openAuthenticatedWebSocket(wsUrl);
+    const ws = await openWebSocket(wsUrl, SUBSCRIBE_TEST_API_KEY);
 
     const subscribeResponsePromise = waitForMessage(
       ws,
@@ -207,7 +158,7 @@ describe('serve() — WebSocket /jsonrpc', () => {
 
     server = serve({ engine, ...subscribeServeOptions });
     const wsUrl = `${server.url.replace('http://', 'ws://')}/jsonrpc`;
-    const ws = await openAuthenticatedWebSocket(wsUrl);
+    const ws = await openWebSocket(wsUrl, SUBSCRIBE_TEST_API_KEY);
 
     const subscribeResponsePromise = waitForMessage(
       ws,
@@ -367,7 +318,7 @@ describe('serve() — WebSocket /jsonrpc', () => {
 
     server = serve({ engine, ...subscribeServeOptions });
     const wsUrl = `${server.url.replace('http://', 'ws://')}/jsonrpc`;
-    const ws = await openAuthenticatedWebSocket(wsUrl);
+    const ws = await openWebSocket(wsUrl, SUBSCRIBE_TEST_API_KEY);
 
     const subscribeResponsePromise = waitForMessage(
       ws,
@@ -483,8 +434,8 @@ describe('serve() — WebSocket /jsonrpc', () => {
     const wsUrl = `${server.url.replace('http://', 'ws://')}/jsonrpc`;
 
     const [wsA, wsB] = await Promise.all([
-      openAuthenticatedWebSocket(wsUrl),
-      openAuthenticatedWebSocket(wsUrl),
+      openWebSocket(wsUrl, SUBSCRIBE_TEST_API_KEY),
+      openWebSocket(wsUrl, SUBSCRIBE_TEST_API_KEY),
     ]);
 
     async function subscribeAndAwaitId(ws: WebSocket, correlationId: number): Promise<string> {
@@ -554,7 +505,7 @@ describe('serve() — WebSocket /jsonrpc', () => {
 
     server = serve({ engine, ...subscribeServeOptions });
     const wsUrl = `${server.url.replace('http://', 'ws://')}/jsonrpc`;
-    const ws = await openAuthenticatedWebSocket(wsUrl);
+    const ws = await openWebSocket(wsUrl, SUBSCRIBE_TEST_API_KEY);
 
     const subscribeResponsePromise = waitForMessage(
       ws,
