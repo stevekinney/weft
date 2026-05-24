@@ -3,6 +3,11 @@ import { describe, expect, it } from 'bun:test';
 import type { BatchOperation, Storage } from './interface.ts';
 import { MemoryStorage } from './memory.ts';
 import { scopedStorage } from './scoped-storage.ts';
+import {
+  collect,
+  createCoreStorageAdapter,
+  createFullStorageAdapter,
+} from './storage-adapter.test-support.ts';
 
 function encode(value: string): Uint8Array {
   return new TextEncoder().encode(value);
@@ -10,52 +15,6 @@ function encode(value: string): Uint8Array {
 
 function decode(value: Uint8Array): string {
   return new TextDecoder().decode(value);
-}
-
-async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
-  const values: T[] = [];
-  for await (const value of iterable) {
-    values.push(value);
-  }
-  return values;
-}
-
-function createCoreStorageAdapter(): Storage {
-  const storage = new MemoryStorage();
-
-  return {
-    get: storage.get.bind(storage),
-    put: storage.put.bind(storage),
-    delete: storage.delete.bind(storage),
-    scan: storage.scan.bind(storage),
-    batch: storage.batch.bind(storage),
-    [Symbol.dispose]: storage[Symbol.dispose].bind(storage),
-  };
-}
-
-function createFullStorageAdapter() {
-  const storage = new MemoryStorage();
-  let disposed = false;
-
-  return {
-    storage: {
-      get: storage.get.bind(storage),
-      put: storage.put.bind(storage),
-      delete: storage.delete.bind(storage),
-      scan: storage.scan.bind(storage),
-      batch: storage.batch.bind(storage),
-      has: storage.has?.bind(storage),
-      deletePrefix: storage.deletePrefix?.bind(storage),
-      keys: storage.keys?.bind(storage),
-      count: storage.count?.bind(storage),
-      [Symbol.dispose]: () => {
-        disposed = true;
-        storage[Symbol.dispose]();
-      },
-    } satisfies Storage,
-    inner: storage,
-    wasDisposed: () => disposed,
-  };
 }
 
 async function writeEntries(storage: Storage, operations: BatchOperation[]): Promise<void> {

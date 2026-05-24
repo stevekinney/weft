@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import type { Storage } from './interface.ts';
 import { MemoryStorage } from './memory.ts';
+import {
+  collect,
+  createCoreStorageAdapter,
+  createFullStorageAdapter,
+} from './storage-adapter.test-support.ts';
 import {
   type JsonValue,
   type MessagePackValue,
@@ -10,51 +14,6 @@ import {
   msgpackCodec,
   withCodec,
 } from './typed-storage.ts';
-
-async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
-  const values: T[] = [];
-  for await (const value of iterable) {
-    values.push(value);
-  }
-  return values;
-}
-
-function createCoreStorageAdapter(): Storage {
-  const storage = new MemoryStorage();
-
-  return {
-    get: storage.get.bind(storage),
-    put: storage.put.bind(storage),
-    delete: storage.delete.bind(storage),
-    scan: storage.scan.bind(storage),
-    batch: storage.batch.bind(storage),
-    [Symbol.dispose]: storage[Symbol.dispose].bind(storage),
-  };
-}
-
-function createFullStorageAdapter() {
-  const storage = new MemoryStorage();
-  let disposed = false;
-
-  return {
-    storage: {
-      get: storage.get.bind(storage),
-      put: storage.put.bind(storage),
-      delete: storage.delete.bind(storage),
-      scan: storage.scan.bind(storage),
-      batch: storage.batch.bind(storage),
-      has: storage.has?.bind(storage),
-      deletePrefix: storage.deletePrefix?.bind(storage),
-      keys: storage.keys?.bind(storage),
-      count: storage.count?.bind(storage),
-      [Symbol.dispose]: () => {
-        disposed = true;
-        storage[Symbol.dispose]();
-      },
-    } satisfies Storage,
-    wasDisposed: () => disposed,
-  };
-}
 
 describe('withCodec', () => {
   it('withCodec(storage, jsonCodec) round-trips structured values without TextEncoder boilerplate', async () => {
