@@ -8,6 +8,7 @@ import {
   withFailingIndexedDbOpen,
   withFakeIndexedDb,
 } from './indexeddb-fault-harness.test-support.ts';
+import { collect } from './storage-adapter.test-support.ts';
 
 const INDEXED_DB_LARGE_SCAN_TIMEOUT_MS = 30_000;
 
@@ -19,15 +20,6 @@ function encode(value: string): Uint8Array {
 /** Helper to decode a Uint8Array to string. */
 function decode(value: Uint8Array): string {
   return new TextDecoder().decode(value);
-}
-
-/** Collect all entries from an async iterable into an array. */
-async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
-  const results: T[] = [];
-  for await (const item of iterable) {
-    results.push(item);
-  }
-  return results;
 }
 
 describe('IndexedDBStorage', () => {

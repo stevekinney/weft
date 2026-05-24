@@ -211,7 +211,10 @@ describe('subprocess server harness', () => {
       `
 ${parseArgumentsSource()}
 console.log('WEFT_SUBPROCESS_READY http://127.0.0.1:' + port);
-setTimeout(() => process.exit(17), 100);
+// Exit well after the parent's post-readiness stabilization window
+// (verifyProcessSurvivedReadiness waits up to 50ms); a short delay races that
+// window under load and trips a spurious "exited after readiness" rejection.
+setTimeout(() => process.exit(17), 1_000);
 `,
     );
     const handle = await spawnServerSubprocess({
@@ -272,14 +275,15 @@ setInterval(() => {}, 1000);
     });
 
     try {
-      // A subprocess that cannot bind the reused port fails to reach readiness.
-      // Depending on platform timing this surfaces as the bind error
-      // (EADDRINUSE), the process exiting before readiness, or the readiness
-      // watcher timing out — all three mean the same thing: the server never
-      // came up on the blocked port.
+      // The subprocess calls Bun.serve() synchronously on the blocked port,
+      // which throws EADDRINUSE and exits the process before readiness. The
+      // readiness watcher must observe that exit rather than time out first, so
+      // give it a generous startup budget — a short timeout races the OS port
+      // hand-off after the SIGKILL above and produces a misleading timeout
+      // error instead of the real bind failure.
       await expect(
-        startDurableServer(entrypoint, databasePath, handle.port, { startupTimeoutMs: 500 }),
-      ).rejects.toThrow(/before readiness|EADDRINUSE|waiting for subprocess readiness/);
+        startDurableServer(entrypoint, databasePath, handle.port, { startupTimeoutMs: 5_000 }),
+      ).rejects.toThrow(/before readiness|EADDRINUSE/);
     } finally {
       portBlocker.stop(true);
     }

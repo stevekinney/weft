@@ -130,7 +130,9 @@ function createFakeDatabase(transaction: IDBTransaction): IDBDatabase {
  * `transaction.fireError()` from inside `database.transaction()`).
  */
 export async function withFakeIndexedDb(
-  options: { transaction?: IDBTransaction; database?: () => IDBDatabase },
+  options:
+    | { transaction: IDBTransaction; database?: never }
+    | { database: () => IDBDatabase; transaction?: never },
   body: () => Promise<void>,
 ): Promise<void> {
   const originalOpen = indexedDB.open.bind(indexedDB);
@@ -139,7 +141,7 @@ export async function withFakeIndexedDb(
     indexedDB.open = (() => {
       const database = options.database
         ? options.database()
-        : createFakeDatabase(options.transaction!);
+        : createFakeDatabase(options.transaction);
 
       const request = {
         result: database,

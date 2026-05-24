@@ -50,7 +50,7 @@ export type FullStorageAdapter = {
   /** The underlying `MemoryStorage`, for asserting raw on-disk keys. */
   readonly inner: MemoryStorage;
   /** True once the adapter's `[Symbol.dispose]` ran. */
-  wasDisposed: () => boolean;
+  readonly wasDisposed: () => boolean;
 };
 
 /**
