@@ -1460,8 +1460,12 @@ describe('worker WebSocket protocol', () => {
     // Right after dispatch, in-flight should be 1
     expect(server.registry.getAll()[0]?.inFlight).toBe(1);
 
-    // Wait for the task result to arrive
-    await waitForRealTimersForTesting(100);
+    // Wait for the task result to round-trip and decrement the in-flight count.
+    // Poll the actual condition instead of a fixed sleep so the assertion stays
+    // stable under load rather than racing a hardcoded delay.
+    await waitFor(() => server.registry.getAll()[0]?.inFlight === 0, {
+      label: 'in-flight count returns to 0',
+    });
 
     expect(server.registry.getAll()[0]?.inFlight).toBe(0);
 

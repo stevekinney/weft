@@ -30,7 +30,7 @@ function makeSupportedOpenTelemetryApi(overrides?: Partial<OpenTelemetryApi>): O
               recordException() {},
               end() {},
               spanContext() {
-                return { traceId: '0', spanId: '0', traceFlags: 0 };
+                return { traceId: '0'.repeat(32), spanId: '0'.repeat(16), traceFlags: 0 };
               },
             };
           },

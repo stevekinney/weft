@@ -272,9 +272,12 @@ setInterval(() => {}, 1000);
     });
 
     try {
+      // A blocked port prevents readiness either way: the subprocess may exit
+      // with a bind error ("before readiness"/EADDRINUSE) or hang until the
+      // readiness watcher times out — both confirm the port reuse was fatal.
       await expect(
         startDurableServer(entrypoint, databasePath, handle.port, { startupTimeoutMs: 500 }),
-      ).rejects.toThrow(/before readiness|EADDRINUSE/);
+      ).rejects.toThrow(/before readiness|EADDRINUSE|waiting for subprocess readiness/);
     } finally {
       portBlocker.stop(true);
     }
