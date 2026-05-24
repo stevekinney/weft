@@ -106,8 +106,7 @@ export async function compileSvelteHarnessModule(options: {
 
   expect(result.success).toBe(true);
   const outputPath = result.outputs[0]?.path;
-  expect(outputPath).toBeString();
-  if (outputPath === undefined) {
+  if (typeof outputPath !== 'string') {
     throw new Error('Svelte component build did not produce an output file');
   }
 
