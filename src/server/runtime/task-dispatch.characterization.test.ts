@@ -8,54 +8,13 @@
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { MetricsCollector } from '../../observability/metrics.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
-import { WorkerRegistry } from '../../worker/registry.ts';
-import { DeadlineTracker } from '../deadline-tracker.ts';
-import { TaskQueue } from '../task-queue.ts';
+import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import { dispatchTaskImpl } from './task-dispatch.ts';
 
 import type { ServerContext } from './context.ts';
 
-function createMinimalContext(): ServerContext {
-  const registry = new WorkerRegistry();
-  const taskQueue = new TaskQueue();
-  const deadlineTracker = new DeadlineTracker();
-
-  return {
-    registry,
-    taskQueue,
-    workerSockets: new Map(),
-    streamSockets: new Map(),
-    workerAffinity: new Map(),
-    workflowOperations: new Map(),
-    operationToWorkflow: new Map(),
-    pendingTimers: new Set(),
-    deadlineTracker,
-    liveOperationRegistry: null as never,
-    liveRestBindings: null as never,
-    supportedAuthenticationSchemes: new Set() as never,
-    metricsCollector: new MetricsCollector(),
-    eventFeedBackend: null as never,
-    workflowEventFeed: null as never,
-    activeJsonRpcSessions: new Set(),
-    mcpSessionManager: null as never,
-    authenticatorPromise: null,
-    visibilityPollMs: 5000,
-    workerReconnectGracePeriodMs: 0,
-    pendingWorkerRequeues: new Map(),
-    scanRunning: false,
-    processingOperations: new Set(),
-    reconciliationRunning: false,
-  };
-}
-
-function createMinimalOptions(storage = new MemoryStorage()) {
-  return {
-    engine: { storage },
-    port: 0,
-  } as never;
-}
+const createMinimalContext = minimalServerContext;
+const createMinimalOptions = minimalServeOptions;
 
 describe('dispatchTaskImpl', () => {
   let context: ServerContext;

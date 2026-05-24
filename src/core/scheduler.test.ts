@@ -5,9 +5,13 @@ import {
   restoreRealTimers,
   useFakeTimers,
 } from '../testing/fake-timers.ts';
+import {
+  createSchedulerContractContext,
+  describeSchedulerContract,
+  type SchedulerContractContext,
+} from '../testing/scheduler-contract.test-support.ts';
 
 import { KEYS } from '../storage/interface';
-import { MemoryStorage } from '../storage/memory';
 import { decode, encode } from './codec';
 import { calculateBackoff, parseDuration, Scheduler } from './scheduler';
 import type { TimerEntry } from './types';
@@ -166,16 +170,39 @@ describe('calculateBackoff', () => {
 // Scheduler
 // ---------------------------------------------------------------------------
 
-describe('Scheduler', () => {
-  let storage: MemoryStorage;
+describeSchedulerContract({
+  name: 'core',
+  createScheduler(context) {
+    // Core's `cancel(id, workflowId)` already matches `ContractScheduler`, so
+    // the instance is returned directly without a wrapper.
+    return new Scheduler({
+      storage: context.storage,
+      onTimerFired: (entry) => {
+        context.firedEntries.push(entry);
+      },
+      pollIntervalMs: 100,
+      getNow: () => context.getCurrentTime(),
+    });
+  },
+});
+
+// ---------------------------------------------------------------------------
+// Scheduler — implementation-specific (core only). Sibling describe with its
+// own hooks so it does not share the contract's lifecycle.
+// ---------------------------------------------------------------------------
+
+describe('Scheduler — implementation-specific', () => {
+  let context: SchedulerContractContext;
+  let storage: SchedulerContractContext['storage'];
   let firedEntries: TimerEntry[];
   let scheduler: Scheduler;
-  let currentTime: number;
+
+  /** Current fake time, read through the shared context. */
+  const now = () => context.getCurrentTime();
 
   beforeEach(() => {
-    storage = new MemoryStorage();
-    firedEntries = [];
-    currentTime = 1000000;
+    context = createSchedulerContractContext();
+    ({ storage, firedEntries } = context);
 
     scheduler = new Scheduler({
       storage,
@@ -183,7 +210,7 @@ describe('Scheduler', () => {
         firedEntries.push(entry);
       },
       pollIntervalMs: 100,
-      getNow: () => currentTime,
+      getNow: () => context.getCurrentTime(),
     });
   });
 
@@ -192,35 +219,9 @@ describe('Scheduler', () => {
     restoreRealTimers();
   });
 
-  function makeTimer(overrides: Partial<TimerEntry> = {}): TimerEntry {
-    return {
-      id: 'timer-1',
-      workflowId: 'workflow-1',
-      fireAt: currentTime + 5000,
-      kind: 'sleep',
-      ...overrides,
-    };
-  }
-
-  async function collectStorageKeys(): Promise<string[]> {
-    const keys: string[] = [];
-    for await (const key of storage.keys('')) {
-      keys.push(key);
-    }
-    return keys;
-  }
-
-  it('writes a timer entry to storage on schedule', async () => {
-    const entry = makeTimer();
-    await scheduler.schedule(entry);
-
-    // Verify something was written to storage
-    const keys = await collectStorageKeys();
-    expect(keys.some((key) => key.startsWith('wf-deadline:'))).toBe(true);
-
-    // Verify the index key was also written
-    expect(keys.some((key) => key.startsWith('timer-idx:'))).toBe(true);
-  });
+  const makeTimer = (overrides: Partial<TimerEntry> = {}): TimerEntry =>
+    context.makeTimer(overrides);
+  const collectStorageKeys = () => context.collectStorageKeys();
 
   it('rounds fractional timer fireAt values up before persisting them', async () => {
     const entry = makeTimer({ fireAt: 1_000_000.1 });
@@ -233,20 +234,10 @@ describe('Scheduler', () => {
     expect(storedEntry.fireAt).toBe(1_000_001);
   });
 
-  it('fires callback for expired timers when tick is called', async () => {
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
-    await scheduler.schedule(entry);
-
-    await scheduler.tick(currentTime);
-
-    expect(firedEntries).toHaveLength(1);
-    expect(firedEntries[0]!.id).toBe('timer-1');
-  });
-
   it('does not read a timer index when firing a terminal cleanup timer', async () => {
     const entry = makeTimer({
       id: 'terminal-cleanup:cleanup-token',
-      fireAt: currentTime - 1000,
+      fireAt: now() - 1000,
       kind: 'terminal-cleanup',
     });
     await scheduler.schedule(entry);
@@ -263,70 +254,36 @@ describe('Scheduler', () => {
       return originalGet(key);
     };
 
-    await scheduler.tick(currentTime);
+    await scheduler.tick(now());
 
     expect(firedEntries).toHaveLength(1);
     expect(firedEntries[0]!.id).toBe(entry.id);
     expect(timerIndexReadCount).toBe(0);
   });
 
-  it('does NOT fire callback for future timers', async () => {
-    const entry = makeTimer({ fireAt: currentTime + 5000 });
-    await scheduler.schedule(entry);
-
-    await scheduler.tick(currentTime);
-
-    expect(firedEntries).toHaveLength(0);
-  });
-
-  it('fires all expired timers in chronological order', async () => {
-    const entry1 = makeTimer({ id: 'timer-1', fireAt: currentTime - 3000 });
-    const entry2 = makeTimer({ id: 'timer-2', fireAt: currentTime - 1000 });
-    const entry3 = makeTimer({ id: 'timer-3', fireAt: currentTime - 2000 });
-
-    await scheduler.schedule(entry1);
-    await scheduler.schedule(entry2);
-    await scheduler.schedule(entry3);
-
-    await scheduler.tick(currentTime);
-
-    expect(firedEntries).toHaveLength(3);
-    // Chronological order: entry1 (-3000), entry3 (-2000), entry2 (-1000)
-    expect(firedEntries[0]!.id).toBe('timer-1');
-    expect(firedEntries[1]!.id).toBe('timer-3');
-    expect(firedEntries[2]!.id).toBe('timer-2');
-  });
-
   it('preserves stable ordering when expired deadline and delayed-start timers share a fireAt', async () => {
     const deadlineEntry = makeTimer({
       id: 'deadline-workflow-1',
       workflowId: 'workflow-1',
-      fireAt: currentTime - 1000,
+      fireAt: now() - 1000,
       kind: 'execution-deadline',
     });
     const delayedStartEntry = makeTimer({
       id: 'delayed-start:workflow-2',
       workflowId: 'workflow-2',
-      fireAt: currentTime - 1000,
+      fireAt: now() - 1000,
       kind: 'delayed-start',
     });
 
     await scheduler.schedule(delayedStartEntry);
     await scheduler.schedule(deadlineEntry);
 
-    await scheduler.tick(currentTime);
+    await scheduler.tick(now());
 
     expect(firedEntries.map((entry) => entry.id)).toEqual([
       'deadline-workflow-1',
       'delayed-start:workflow-2',
     ]);
-  });
-
-  it('cancel is a no-op for a timer that was never scheduled', async () => {
-    await scheduler.cancel('nonexistent-timer', 'some-workflow');
-    // Should not throw and no entries should fire
-    await scheduler.tick(currentTime);
-    expect(firedEntries).toHaveLength(0);
   });
 
   it('start is idempotent (calling start twice does not create duplicate intervals)', async () => {
@@ -336,18 +293,8 @@ describe('Scheduler', () => {
     // No assertion needed -- just verifying it doesn't throw or create duplicate intervals
   });
 
-  it('cancel prevents a timer from firing', async () => {
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
-    await scheduler.schedule(entry);
-    await scheduler.cancel(entry.id, entry.workflowId);
-
-    await scheduler.tick(currentTime);
-
-    expect(firedEntries).toHaveLength(0);
-  });
-
   it('Symbol.dispose stops the polling interval', async () => {
-    useFakeTimers(currentTime);
+    useFakeTimers(now());
     scheduler[Symbol.dispose]();
     scheduler = new Scheduler({
       storage,
@@ -355,14 +302,14 @@ describe('Scheduler', () => {
         firedEntries.push(entry);
       },
       pollIntervalMs: 100,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
     scheduler.start();
     scheduler[Symbol.dispose]();
 
     // Schedule a timer that would fire
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
+    const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
     // Wait for what would be a poll cycle
@@ -372,18 +319,8 @@ describe('Scheduler', () => {
     expect(firedEntries).toHaveLength(0);
   });
 
-  it('flush processes expired timers then stops', async () => {
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
-    await scheduler.schedule(entry);
-
-    await scheduler.flush(currentTime);
-
-    expect(firedEntries).toHaveLength(1);
-    expect(firedEntries[0]!.id).toBe('timer-1');
-  });
-
   it('does not fire after dispose', async () => {
-    useFakeTimers(currentTime);
+    useFakeTimers(now());
     scheduler[Symbol.dispose]();
     scheduler = new Scheduler({
       storage,
@@ -391,12 +328,12 @@ describe('Scheduler', () => {
         firedEntries.push(entry);
       },
       pollIntervalMs: 100,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
     scheduler.start();
 
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
+    const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
     scheduler[Symbol.dispose]();
@@ -408,19 +345,8 @@ describe('Scheduler', () => {
     expect(firedEntries).toHaveLength(0);
   });
 
-  it('tick uses getNow when no argument is provided', async () => {
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
-    await scheduler.schedule(entry);
-
-    // Call tick() without an argument; should use getNow()
-    await scheduler.tick();
-
-    expect(firedEntries).toHaveLength(1);
-    expect(firedEntries[0]!.id).toBe('timer-1');
-  });
-
   it('polling loop fires expired timers automatically', async () => {
-    useFakeTimers(currentTime);
+    useFakeTimers(now());
 
     // Use a very short poll interval so the interval actually fires
     scheduler[Symbol.dispose]();
@@ -430,10 +356,10 @@ describe('Scheduler', () => {
         firedEntries.push(entry);
       },
       pollIntervalMs: 20,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
+    const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
     scheduler.start();
@@ -450,15 +376,15 @@ describe('Scheduler', () => {
   it('removes corrupted timer entries from storage and processes valid timers', async () => {
     // Write a garbage value directly under a wf-deadline: key to simulate corruption.
     // The encoded value is a plain string, which isTimerEntry() will reject.
-    const corruptedFireAt = currentTime - 2000;
+    const corruptedFireAt = now() - 2000;
     const corruptedKey = KEYS.deadline(corruptedFireAt, 'corrupted-id');
     await storage.put(corruptedKey, encode('this is not a TimerEntry'));
 
     // Schedule a real timer that expires before now.
-    const validEntry = makeTimer({ id: 'timer-valid', fireAt: currentTime - 1000 });
+    const validEntry = makeTimer({ id: 'timer-valid', fireAt: now() - 1000 });
     await scheduler.schedule(validEntry);
 
-    await scheduler.tick(currentTime);
+    await scheduler.tick(now());
 
     // The valid timer must have fired.
     expect(firedEntries).toHaveLength(1);
@@ -476,21 +402,21 @@ describe('Scheduler', () => {
   });
 
   it('removes timer entries with invalid kinds before they can fire', async () => {
-    const invalidKey = KEYS.deadline(currentTime - 2000, 'invalid-kind');
+    const invalidKey = KEYS.deadline(now() - 2000, 'invalid-kind');
     await storage.put(
       invalidKey,
       encode({
         id: 'invalid-kind',
         workflowId: 'workflow-1',
-        fireAt: currentTime - 2000,
+        fireAt: now() - 2000,
         kind: 'definitely-not-a-real-kind',
       }),
     );
 
-    const validEntry = makeTimer({ id: 'timer-valid', fireAt: currentTime - 1000 });
+    const validEntry = makeTimer({ id: 'timer-valid', fireAt: now() - 1000 });
     await scheduler.schedule(validEntry);
 
-    await scheduler.tick(currentTime);
+    await scheduler.tick(now());
 
     expect(firedEntries.map((entry) => entry.id)).toEqual(['timer-valid']);
 
@@ -512,16 +438,16 @@ describe('Scheduler', () => {
         }
       },
       pollIntervalMs: 100,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
-    const entry1 = makeTimer({ id: 'timer-throw', fireAt: currentTime - 2000 });
-    const entry2 = makeTimer({ id: 'timer-ok', fireAt: currentTime - 1000 });
+    const entry1 = makeTimer({ id: 'timer-throw', fireAt: now() - 2000 });
+    const entry2 = makeTimer({ id: 'timer-ok', fireAt: now() - 1000 });
 
     await scheduler.schedule(entry1);
     await scheduler.schedule(entry2);
 
-    await scheduler.tick(currentTime);
+    await scheduler.tick(now());
 
     // Both callbacks were invoked despite the first one throwing
     expect(firedEntries).toHaveLength(2);
@@ -538,28 +464,28 @@ describe('Scheduler', () => {
   });
 
   it('tick is a no-op after stop, preventing callbacks on disposed scheduler', async () => {
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
+    const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
     scheduler.stop();
 
     // Calling tick after stop should not fire any callbacks
-    await scheduler.tick(currentTime);
+    await scheduler.tick(now());
 
     expect(firedEntries).toHaveLength(0);
   });
 
   it('start resets the stopped flag so tick works again', async () => {
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
+    const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
     scheduler.stop();
-    await scheduler.tick(currentTime);
+    await scheduler.tick(now());
     expect(firedEntries).toHaveLength(0);
 
     // Restart and verify tick works again
     scheduler.start();
-    await scheduler.tick(currentTime);
+    await scheduler.tick(now());
     expect(firedEntries).toHaveLength(1);
     expect(firedEntries[0]!.id).toBe('timer-1');
 
@@ -567,14 +493,14 @@ describe('Scheduler', () => {
   });
 
   it('flush works after stop (drains remaining timers)', async () => {
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
+    const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
     // Stop the scheduler (halts the polling loop)
     scheduler.stop();
 
     // flush() should still process expired timers despite stop() having been called
-    await scheduler.flush(currentTime);
+    await scheduler.flush(now());
 
     expect(firedEntries).toHaveLength(1);
     expect(firedEntries[0]!.id).toBe('timer-1');
@@ -595,41 +521,19 @@ describe('Scheduler', () => {
         }
       },
       pollIntervalMs: 100,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
-    const entryA = makeTimer({ id: 'timer-a', fireAt: currentTime - 2000 });
-    const entryB = makeTimer({ id: 'timer-b', fireAt: currentTime - 1000 });
+    const entryA = makeTimer({ id: 'timer-a', fireAt: now() - 2000 });
+    const entryB = makeTimer({ id: 'timer-b', fireAt: now() - 1000 });
 
     await scheduler.schedule(entryA);
     await scheduler.schedule(entryB);
 
-    await scheduler.tick(currentTime);
+    await scheduler.tick(now());
 
     // Only timer-a should have fired; timer-b should be skipped because
     // stop() was called during the first callback
     expect(fired).toEqual(['timer-a']);
-  });
-
-  it('full integration: schedule, advance time via tick, verify fired', async () => {
-    const entry = makeTimer({ fireAt: currentTime + 5000 });
-    await scheduler.schedule(entry);
-
-    // Timer should not fire yet
-    await scheduler.tick(currentTime);
-    expect(firedEntries).toHaveLength(0);
-
-    // Advance time past the timer's fireAt
-    currentTime += 6000;
-    await scheduler.tick(currentTime);
-
-    expect(firedEntries).toHaveLength(1);
-    expect(firedEntries[0]!.id).toBe('timer-1');
-    expect(firedEntries[0]!.workflowId).toBe('workflow-1');
-
-    // Verify the timer was cleaned up from storage (deadline key removed)
-    const keys = await collectStorageKeys();
-    const deadlineKeys = keys.filter((key) => key.startsWith('wf-deadline:'));
-    expect(deadlineKeys).toHaveLength(0);
   });
 });

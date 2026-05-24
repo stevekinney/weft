@@ -7,6 +7,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { signJWT } from '../authentication.ts';
 import { handleRequest } from '../handler.ts';
 import { serve, type WeftServer } from '../index.ts';
+import { openWebSocket, waitForMessage } from '../json-rpc-websocket-client.test-support.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { anonymousPrincipal, principalFromJwtClaims } from '../principal.ts';
@@ -83,47 +84,6 @@ async function postJsonRpc(
       method,
       params,
     }),
-  });
-}
-
-function waitForMessage(
-  ws: WebSocket,
-  predicate: (parsed: unknown) => boolean,
-  timeoutMs = 3_000,
-): Promise<unknown> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      ws.removeEventListener('message', handler);
-      reject(new Error('waitForMessage timed out'));
-    }, timeoutMs);
-
-    function handler(event: MessageEvent) {
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(String(event.data));
-      } catch {
-        return;
-      }
-
-      if (predicate(parsed)) {
-        clearTimeout(timer);
-        ws.removeEventListener('message', handler);
-        resolve(parsed);
-      }
-    }
-
-    ws.addEventListener('message', handler);
-  });
-}
-
-function openWebSocket(url: string, token?: string): Promise<WebSocket> {
-  return new Promise((resolve, reject) => {
-    const socket =
-      token === undefined
-        ? new WebSocket(url)
-        : new WebSocket(url, { headers: { authorization: `Bearer ${token}` } } as any);
-    socket.addEventListener('open', () => resolve(socket));
-    socket.addEventListener('error', (event: Event) => reject(event));
   });
 }
 

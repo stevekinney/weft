@@ -5,31 +5,73 @@ import {
   sleepForTesting,
   useFakeTimers,
 } from '../testing/fake-timers.ts';
+import {
+  type ContractScheduler,
+  createSchedulerContractContext,
+  describeSchedulerContract,
+  type SchedulerContractContext,
+} from '../testing/scheduler-contract.test-support.ts';
 
 import type { TimerEntry } from '../core/types';
 import type { Storage } from '../storage/interface';
 import { MemoryStorage } from '../storage/memory';
 import { ServiceWorkerScheduler } from './scheduler';
 
-describe('ServiceWorkerScheduler', () => {
-  let storage: MemoryStorage;
+/**
+ * Wrap a {@link ServiceWorkerScheduler} so its `cancel(id)` satisfies the
+ * contract's `cancel(id, workflowId)` shape; the workflow id is dropped because
+ * the service-worker scheduler cancels by timer id alone.
+ */
+function toContractScheduler(instance: ServiceWorkerScheduler): ContractScheduler {
+  return {
+    schedule: (entry) => instance.schedule(entry),
+    tick: (now) => instance.tick(now),
+    flush: (now) => instance.flush(now),
+    cancel: (id, _workflowId) => instance.cancel(id),
+    [Symbol.dispose]: () => instance[Symbol.dispose](),
+  };
+}
+
+describeSchedulerContract({
+  name: 'service-worker',
+  createScheduler(context) {
+    const instance = new ServiceWorkerScheduler({
+      storage: context.storage,
+      onTimerFired: (entry) => {
+        context.firedEntries.push(entry);
+      },
+      getNow: () => context.getCurrentTime(),
+    });
+    return toContractScheduler(instance);
+  },
+});
+
+// ---------------------------------------------------------------------------
+// ServiceWorkerScheduler — implementation-specific. Sibling describe with its
+// own global useFakeTimers() so the contract cases do not inherit it.
+// ---------------------------------------------------------------------------
+
+describe('ServiceWorkerScheduler — implementation-specific', () => {
+  let context: SchedulerContractContext;
+  let storage: SchedulerContractContext['storage'];
   let firedEntries: TimerEntry[];
   let scheduler: ServiceWorkerScheduler;
-  let currentTime: number;
+
+  /** Current fake time, read through the shared context. */
+  const now = () => context.getCurrentTime();
 
   beforeEach(() => {
     useFakeTimers();
 
-    storage = new MemoryStorage();
-    firedEntries = [];
-    currentTime = 1000000;
+    context = createSchedulerContractContext();
+    ({ storage, firedEntries } = context);
 
     scheduler = new ServiceWorkerScheduler({
       storage,
       onTimerFired: (entry) => {
         firedEntries.push(entry);
       },
-      getNow: () => currentTime,
+      getNow: () => context.getCurrentTime(),
     });
   });
 
@@ -38,45 +80,9 @@ describe('ServiceWorkerScheduler', () => {
     restoreRealTimers();
   });
 
-  function makeTimer(overrides: Partial<TimerEntry> = {}): TimerEntry {
-    return {
-      id: 'timer-1',
-      workflowId: 'workflow-1',
-      fireAt: currentTime + 5000,
-      kind: 'sleep',
-      ...overrides,
-    };
-  }
-
-  async function collectStorageKeys(): Promise<string[]> {
-    const keys: string[] = [];
-    for await (const key of storage.keys('')) {
-      keys.push(key);
-    }
-    return keys;
-  }
-
-  // -------------------------------------------------------------------------
-  // schedule()
-  // -------------------------------------------------------------------------
-
-  it('writes a timer entry to storage on schedule', async () => {
-    const entry = makeTimer();
-    await scheduler.schedule(entry);
-
-    const keys = await collectStorageKeys();
-    expect(keys.some((key) => key.startsWith('wf-deadline:'))).toBe(true);
-    expect(keys.some((key) => key.startsWith('timer-idx:'))).toBe(true);
-  });
-
-  it('writes the correct deadline key format', async () => {
-    const entry = makeTimer({ fireAt: 1005000 });
-    await scheduler.schedule(entry);
-
-    const keys = await collectStorageKeys();
-    const deadlineKey = keys.find((key) => key.startsWith('wf-deadline:'));
-    expect(deadlineKey).toBe('wf-deadline:0000000001005000:timer-1');
-  });
+  const makeTimer = (overrides: Partial<TimerEntry> = {}): TimerEntry =>
+    context.makeTimer(overrides);
+  const collectStorageKeys = () => context.collectStorageKeys();
 
   it('writes delayed-start timers under the delayed-start key prefix', async () => {
     const entry = makeTimer({
@@ -93,60 +99,19 @@ describe('ServiceWorkerScheduler', () => {
   });
 
   // -------------------------------------------------------------------------
-  // cancel()
+  // tick() — delayed-start (service-worker only)
   // -------------------------------------------------------------------------
-
-  it('cancel removes both deadline and index keys', async () => {
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
-    await scheduler.schedule(entry);
-
-    await scheduler.cancel(entry.id);
-
-    const keys = await collectStorageKeys();
-    expect(keys.some((key) => key.startsWith('wf-deadline:'))).toBe(false);
-    expect(keys.some((key) => key.startsWith('timer-idx:'))).toBe(false);
-  });
-
-  it('cancel is a no-op for a timer that was never scheduled', async () => {
-    await scheduler.cancel('nonexistent-timer');
-    await scheduler.tick(currentTime);
-    expect(firedEntries).toHaveLength(0);
-  });
-
-  it('cancel prevents a timer from firing', async () => {
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
-    await scheduler.schedule(entry);
-    await scheduler.cancel(entry.id);
-
-    await scheduler.tick(currentTime);
-
-    expect(firedEntries).toHaveLength(0);
-  });
-
-  // -------------------------------------------------------------------------
-  // tick()
-  // -------------------------------------------------------------------------
-
-  it('fires callback for expired timers when tick is called', async () => {
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
-    await scheduler.schedule(entry);
-
-    await scheduler.tick(currentTime);
-
-    expect(firedEntries).toHaveLength(1);
-    expect(firedEntries[0]!.id).toBe('timer-1');
-  });
 
   it('fires expired delayed-start timers when tick is called', async () => {
     const entry = makeTimer({
       id: 'delayed-start:workflow-1',
       workflowId: 'workflow-1',
-      fireAt: currentTime - 1000,
+      fireAt: now() - 1000,
       kind: 'delayed-start',
     });
     await scheduler.schedule(entry);
 
-    await scheduler.tick(currentTime);
+    await scheduler.tick(now());
 
     expect(firedEntries).toHaveLength(1);
     expect(firedEntries[0]!.id).toBe('delayed-start:workflow-1');
@@ -155,72 +120,23 @@ describe('ServiceWorkerScheduler', () => {
     expect(keys.some((key) => key.startsWith('wf-delayed:'))).toBe(false);
   });
 
-  it('does NOT fire callback for future timers', async () => {
-    const entry = makeTimer({ fireAt: currentTime + 5000 });
-    await scheduler.schedule(entry);
-
-    await scheduler.tick(currentTime);
-
-    expect(firedEntries).toHaveLength(0);
-  });
-
-  it('fires all expired timers in chronological order', async () => {
-    const entry1 = makeTimer({ id: 'timer-1', fireAt: currentTime - 3000 });
-    const entry2 = makeTimer({ id: 'timer-2', fireAt: currentTime - 1000 });
-    const entry3 = makeTimer({ id: 'timer-3', fireAt: currentTime - 2000 });
-
-    await scheduler.schedule(entry1);
-    await scheduler.schedule(entry2);
-    await scheduler.schedule(entry3);
-
-    await scheduler.tick(currentTime);
-
-    expect(firedEntries).toHaveLength(3);
-    expect(firedEntries[0]!.id).toBe('timer-1');
-    expect(firedEntries[1]!.id).toBe('timer-3');
-    expect(firedEntries[2]!.id).toBe('timer-2');
-  });
-
-  it('tick cleans up deadline and index keys after firing', async () => {
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
-    await scheduler.schedule(entry);
-
-    await scheduler.tick(currentTime);
-
-    const keys = await collectStorageKeys();
-    const deadlineKeys = keys.filter((key) => key.startsWith('wf-deadline:'));
-    const indexKeys = keys.filter((key) => key.startsWith('timer-idx:'));
-    expect(deadlineKeys).toHaveLength(0);
-    expect(indexKeys).toHaveLength(0);
-  });
-
-  it('tick uses getNow when no argument is provided', async () => {
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
-    await scheduler.schedule(entry);
-
-    await scheduler.tick();
-
-    expect(firedEntries).toHaveLength(1);
-    expect(firedEntries[0]!.id).toBe('timer-1');
-  });
-
   // -------------------------------------------------------------------------
-  // flush()
+  // flush() — poller stops after flush (service-worker only)
   // -------------------------------------------------------------------------
 
-  it('flush processes expired timers then stops', async () => {
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
+  it('flush stops the fallback poller so later timers do not fire', async () => {
+    const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
     scheduler.start();
-    await scheduler.flush(currentTime);
+    await scheduler.flush(now());
 
     expect(firedEntries).toHaveLength(1);
     expect(firedEntries[0]!.id).toBe('timer-1');
 
     // After flush, adding another expired timer and waiting should not fire it
     // because the scheduler has been stopped.
-    const entry2 = makeTimer({ id: 'timer-2', fireAt: currentTime - 500 });
+    const entry2 = makeTimer({ id: 'timer-2', fireAt: now() - 500 });
     await scheduler.schedule(entry2);
     await sleepForTesting(200);
     expect(firedEntries).toHaveLength(1);
@@ -246,7 +162,7 @@ describe('ServiceWorkerScheduler', () => {
       },
       registration,
       periodicSyncTag: 'custom-tag',
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
     scheduler.start();
@@ -271,10 +187,10 @@ describe('ServiceWorkerScheduler', () => {
       },
       registration,
       fallbackIntervalMilliseconds: 50,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
+    const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
     scheduler.start();
@@ -306,7 +222,7 @@ describe('ServiceWorkerScheduler', () => {
         firedEntries.push(entry);
       },
       registration,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
     scheduler.start();
@@ -326,10 +242,10 @@ describe('ServiceWorkerScheduler', () => {
         firedEntries.push(entry);
       },
       fallbackIntervalMilliseconds: 50,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
+    const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
     scheduler.start();
@@ -355,12 +271,12 @@ describe('ServiceWorkerScheduler', () => {
         }
       },
       fallbackIntervalMilliseconds: 50,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
     // Schedule two timers that are already expired
-    const entry1 = makeTimer({ id: 'timer-a', fireAt: currentTime - 2000 });
-    const entry2 = makeTimer({ id: 'timer-b', fireAt: currentTime - 1000 });
+    const entry1 = makeTimer({ id: 'timer-a', fireAt: now() - 2000 });
+    const entry2 = makeTimer({ id: 'timer-b', fireAt: now() - 1000 });
     await scheduler.schedule(entry1);
     await scheduler.schedule(entry2);
 
@@ -397,13 +313,13 @@ describe('ServiceWorkerScheduler', () => {
         firedEntries.push(entry);
       },
       fallbackIntervalMilliseconds: 50,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
     scheduler.start();
     scheduler.stop();
 
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
+    const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
     await sleepForTesting(200);
@@ -429,41 +345,18 @@ describe('ServiceWorkerScheduler', () => {
         firedEntries.push(entry);
       },
       fallbackIntervalMilliseconds: 50,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
     scheduler.start();
     scheduler[Symbol.dispose]();
 
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
+    const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
     await sleepForTesting(200);
 
     expect(firedEntries).toHaveLength(0);
-  });
-
-  // -------------------------------------------------------------------------
-  // Integration
-  // -------------------------------------------------------------------------
-
-  it('full integration: schedule, advance time via tick, verify fired', async () => {
-    const entry = makeTimer({ fireAt: currentTime + 5000 });
-    await scheduler.schedule(entry);
-
-    await scheduler.tick(currentTime);
-    expect(firedEntries).toHaveLength(0);
-
-    currentTime += 6000;
-    await scheduler.tick(currentTime);
-
-    expect(firedEntries).toHaveLength(1);
-    expect(firedEntries[0]!.id).toBe('timer-1');
-    expect(firedEntries[0]!.workflowId).toBe('workflow-1');
-
-    const keys = await collectStorageKeys();
-    const deadlineKeys = keys.filter((key) => key.startsWith('wf-deadline:'));
-    expect(deadlineKeys).toHaveLength(0);
   });
 
   it('start with registration but no periodicSync falls back to setTimeout', async () => {
@@ -477,10 +370,10 @@ describe('ServiceWorkerScheduler', () => {
       },
       registration,
       fallbackIntervalMilliseconds: 50,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
+    const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
     scheduler.start();
@@ -499,7 +392,7 @@ describe('ServiceWorkerScheduler', () => {
       onTimerFired: (entry) => {
         firedEntries.push(entry);
       },
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
     // Just verify it does not throw when starting without fallbackIntervalMilliseconds
@@ -516,13 +409,13 @@ describe('ServiceWorkerScheduler', () => {
         await sleepForTesting(1);
         asyncFired.push(entry);
       },
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
-    const entry = makeTimer({ fireAt: currentTime - 1000 });
+    const entry = makeTimer({ fireAt: now() - 1000 });
     await scheduler.schedule(entry);
 
-    await scheduler.tick(currentTime);
+    await scheduler.tick(now());
 
     expect(asyncFired).toHaveLength(1);
     expect(asyncFired[0]!.id).toBe('timer-1');
@@ -540,11 +433,11 @@ describe('ServiceWorkerScheduler', () => {
         throw new Error('tick failed');
       },
       fallbackIntervalMilliseconds: 20,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
     try {
-      await scheduler.schedule(makeTimer({ fireAt: currentTime - 1000 }));
+      await scheduler.schedule(makeTimer({ fireAt: now() - 1000 }));
       scheduler.start();
       await sleepForTesting(80);
 
@@ -579,7 +472,7 @@ describe('ServiceWorkerScheduler', () => {
       storage: failingStorage,
       onTimerFired: () => undefined,
       fallbackIntervalMilliseconds: 20,
-      getNow: () => currentTime,
+      getNow: () => now(),
     });
 
     try {

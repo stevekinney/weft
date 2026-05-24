@@ -8,16 +8,11 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { MetricsCollector } from '../../observability/metrics.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../../worker/protocol.ts';
-import { WorkerRegistry } from '../../worker/registry.ts';
-import { DeadlineTracker } from '../deadline-tracker.ts';
-import { TaskQueue } from '../task-queue.ts';
+import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import { handleWorkerWebSocketMessage } from './websocket-worker.ts';
 
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
-import type { ServerContext } from './context.ts';
 
 type FakeWs = {
   data: WebSocketData;
@@ -51,47 +46,13 @@ function createFakeWs(pathname = '/v1/tasks/default/stream', queue = 'default'):
   return ws;
 }
 
-function createMinimalContext(): ServerContext {
-  const registry = new WorkerRegistry();
-  return {
-    registry,
-    taskQueue: new TaskQueue(),
-    workerSockets: new Map(),
-    streamSockets: new Map(),
-    workerAffinity: new Map(),
-    workflowOperations: new Map(),
-    operationToWorkflow: new Map(),
-    pendingTimers: new Set(),
-    deadlineTracker: new DeadlineTracker(),
-    liveOperationRegistry: null as never,
-    liveRestBindings: null as never,
-    supportedAuthenticationSchemes: new Set() as never,
-    metricsCollector: new MetricsCollector(),
-    eventFeedBackend: null as never,
-    workflowEventFeed: null as never,
-    activeJsonRpcSessions: new Set(),
-    mcpSessionManager: null as never,
-    authenticatorPromise: null,
-    visibilityPollMs: 5000,
-    workerReconnectGracePeriodMs: 0,
-    pendingWorkerRequeues: new Map(),
-    scanRunning: false,
-    processingOperations: new Set(),
-    reconciliationRunning: false,
-  };
-}
-
-function createMinimalOptions(storage = new MemoryStorage()) {
-  return { engine: { storage }, port: 0 } as never;
-}
-
 const NOOP_CLEANUP = (_operationId: string) => {};
 
 describe('handleWorkerWebSocketMessage', () => {
   describe('invalid JSON', () => {
     it('sends protocolError and closes on non-JSON input', () => {
-      const context = createMinimalContext();
-      const options = createMinimalOptions();
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
       const ws = createFakeWs();
 
       handleWorkerWebSocketMessage(context, options, ws as never, 'not valid json', NOOP_CLEANUP);
@@ -106,8 +67,8 @@ describe('handleWorkerWebSocketMessage', () => {
 
   describe('register message', () => {
     it('registers worker and sends registerAck', () => {
-      const context = createMinimalContext();
-      const options = createMinimalOptions();
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
       const ws = createFakeWs();
 
       handleWorkerWebSocketMessage(
@@ -134,8 +95,8 @@ describe('handleWorkerWebSocketMessage', () => {
     });
 
     it('rejects register with unsupported protocol version', () => {
-      const context = createMinimalContext();
-      const options = createMinimalOptions();
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
       const ws = createFakeWs();
 
       handleWorkerWebSocketMessage(
@@ -162,8 +123,8 @@ describe('handleWorkerWebSocketMessage', () => {
       // Phase 4 regression. A worker advertising the retired bare-name protocol
       // (v1) must be rejected before any task is dispatched. The error message
       // must point at the protocol mismatch, not at a missing activity.
-      const context = createMinimalContext();
-      const options = createMinimalOptions();
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
       const ws = createFakeWs();
 
       handleWorkerWebSocketMessage(
@@ -194,8 +155,8 @@ describe('handleWorkerWebSocketMessage', () => {
     });
 
     it('rejects when worker sends non-register first message', () => {
-      const context = createMinimalContext();
-      const options = createMinimalOptions();
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
       const ws = createFakeWs();
 
       // heartbeat without prior registration
@@ -216,8 +177,8 @@ describe('handleWorkerWebSocketMessage', () => {
 
   describe('taskResult message', () => {
     it('completes task in registry and removes deadline tracker entry', () => {
-      const context = createMinimalContext();
-      const options = createMinimalOptions();
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
       const ws = createFakeWs();
 
       // Register worker first
@@ -260,8 +221,8 @@ describe('handleWorkerWebSocketMessage', () => {
     });
 
     it('calls cleanupWorkflowIndex with the operationId', () => {
-      const context = createMinimalContext();
-      const options = createMinimalOptions();
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
       const ws = createFakeWs();
 
       const cleaned: string[] = [];
@@ -303,8 +264,8 @@ describe('handleWorkerWebSocketMessage', () => {
 
   describe('heartbeat message', () => {
     it('updates registry heartbeat for registered worker', () => {
-      const context = createMinimalContext();
-      const options = createMinimalOptions();
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
       const ws = createFakeWs();
 
       handleWorkerWebSocketMessage(
@@ -336,8 +297,8 @@ describe('handleWorkerWebSocketMessage', () => {
 
   describe('non-worker connection', () => {
     it('returns immediately without processing for non-worker pathname', () => {
-      const context = createMinimalContext();
-      const options = createMinimalOptions();
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
       // Not a worker stream path
       const ws = createFakeWs('/v1/workflows/wf-1/stream', undefined as unknown as string);
       ws.data.connectionType = 'stream';

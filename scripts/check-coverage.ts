@@ -1369,6 +1369,15 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
   ],
   ['src/core/tenant-quotas/quota-manager-operations.ts', { lines: new Set([31, 33, 34, 35, 36]) }],
   [
+    // Shared dashboard Svelte test harness. Line 110 is the defensive guard
+    // that throws when a successful Bun.build reports zero outputs — an
+    // invariant Bun never violates, so the branch cannot be exercised. The
+    // allowance is scoped to that single line; every function is covered by
+    // svelte-test-harness.test-support.test.ts and the two component suites.
+    'src/dashboard/svelte-test-harness.test-support.ts',
+    { lines: new Set([110]) },
+  ],
+  [
     'src/dashboard/utilities/workflow-detail-timeline.ts',
     { lines: new Set([180, 185, 186, 209, 210]) },
   ],

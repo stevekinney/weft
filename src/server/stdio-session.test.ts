@@ -16,76 +16,13 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
-import {
-  createOperationRegistry,
-  type ErasedOperation,
-  type OperationDefinition,
-} from './operation-catalog.ts';
+import { makeOperation as makeOp } from './json-rpc-operation.test-support.ts';
+import { createOperationRegistry } from './operation-catalog.ts';
 import { runStdioSession, type StdioAdmission } from './stdio-session.ts';
+import { collectingWritable, readableFromLines } from './stdio-stream.test-support.ts';
 import { createInMemoryEventBackend, createWorkflowEventFeed } from './workflow-event-feed.ts';
 
 const fakeEngine = {} as unknown;
-
-function makeOp<I, O>(
-  overrides: Partial<OperationDefinition<I, O>> & {
-    name: string;
-    inputSchema: z.ZodType<I>;
-    outputSchema: z.ZodType<O>;
-    invoke: OperationDefinition<I, O>['invoke'];
-  },
-): ErasedOperation {
-  return {
-    summary: 'test op',
-    tags: [],
-    access: { kind: 'public' },
-    transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
-    unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
-    ...overrides,
-  } as unknown as ErasedOperation;
-}
-
-/** Build a ReadableStream<Uint8Array> from a list of framed strings. */
-function readableFromLines(lines: string[]): ReadableStream<Uint8Array> {
-  const encoder = new TextEncoder();
-  return new ReadableStream({
-    start(controller) {
-      for (const line of lines) {
-        controller.enqueue(encoder.encode(line));
-      }
-      controller.close();
-    },
-  });
-}
-
-/** Collect every chunk written to a WritableStream<Uint8Array> as lines. */
-function collectingWritable(): {
-  stream: WritableStream<Uint8Array>;
-  lines(): string[];
-} {
-  const decoder = new TextDecoder('utf-8');
-  let buffer = '';
-  const complete: string[] = [];
-  const stream = new WritableStream<Uint8Array>({
-    write(chunk) {
-      buffer += decoder.decode(chunk, { stream: true });
-      let newlineIndex = buffer.indexOf('\n');
-      while (newlineIndex !== -1) {
-        complete.push(buffer.slice(0, newlineIndex));
-        buffer = buffer.slice(newlineIndex + 1);
-        newlineIndex = buffer.indexOf('\n');
-      }
-    },
-    close() {
-      if (buffer.length > 0) complete.push(buffer);
-    },
-  });
-  return {
-    stream,
-    lines() {
-      return [...complete];
-    },
-  };
-}
 
 describe('runStdioSession — admission', () => {
   it('rejects when neither token nor admin flag supplied', async () => {
