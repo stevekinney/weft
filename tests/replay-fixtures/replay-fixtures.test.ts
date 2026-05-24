@@ -155,6 +155,11 @@ const scenarioRunners: Record<string, ScenarioRunner> = {
   'recovery-after-crash': runRecoveryAfterCrashFixture,
 };
 
+// withDeterministicRuntime mutates global crypto.randomUUID and Date.now for the
+// duration of the runner and restores them afterward, so overlapping invocations
+// would corrupt each other's stand-ins and silently change fixture bytes. The
+// it() blocks below are registered in for loops and bun:test runs them
+// sequentially; never wrap these calls in Promise.all or any concurrent combinator.
 async function runScenarioFromFixture(fixture: TraceFixture): Promise<ScenarioRun> {
   const runner = scenarioRunners[fixture.scenario];
 
