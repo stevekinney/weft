@@ -3,7 +3,7 @@
  *
  * Returns quota usage for a tenant. When the caller presents a JWT, access
  * is scoped to the tenant whose id matches the JWT's tenant claim — this
- * mirrors the legacy `handleGetTenantQuota` behavior exactly.
+ * shapes the tenant quota response for the REST surface.
  *
  * @module server/operations/get-tenant-quota
  */

@@ -2,7 +2,7 @@
  * `weft.schedules.get` operation + REST binding.
  *
  * Returns a single recurring schedule by id. Respects the JWT tenant
- * scope check that the legacy `handleGetSchedule` performed: when the
+ * scope check applied to schedule reads: when the
  * principal carries a JWT with a tenant claim, access is limited to
  * that tenant's schedules.
  *

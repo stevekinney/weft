@@ -31,7 +31,7 @@ const registry = createOperationRegistry([setWorkflowAttributesOperation]);
 const bindings = [setWorkflowAttributesRestBinding];
 
 describe('weft.workflows.attributes.set', () => {
-  it('sets attributes on a workflow and returns the legacy ok response', async () => {
+  it('sets attributes on a workflow and returns the ok response', async () => {
     const { engine, storage } = createEngine();
 
     const response = await handleRequest(

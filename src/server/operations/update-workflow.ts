@@ -10,7 +10,7 @@ import { isOperationFault, shapeRestFault } from './operation-helpers.ts';
 const DEFAULT_UPDATE_TIMEOUT_MS = 30_000;
 
 // `timeout` and `idempotencyKey` are intentionally `unknown` at the schema
-// boundary. Legacy REST silently ignored non-number `timeout` and non-string
+// boundary. REST silently ignores non-number `timeout` and non-string
 // `idempotencyKey`, falling back to defaults — Zod cannot reproduce that
 // "ignore-and-default" semantic. The same typeof checks live in `invoke()` so
 // REST and JSON-RPC callers share one contract.
@@ -44,7 +44,7 @@ export const updateWorkflowOperation = defineOperation<UpdateWorkflowInput, Upda
   invoke: async ({ input, engine }): Promise<UpdateWorkflowOutput> => {
     const typedEngine = engine as Engine;
 
-    // Legacy parity: non-number `timeout` and non-string `idempotencyKey` are
+    // non-number `timeout` and non-string `idempotencyKey` are
     // silently ignored (defaults apply). Validation happens here, not at the
     // schema boundary, so REST and JSON-RPC callers behave identically.
     const timeout = typeof input.timeout === 'number' ? input.timeout : DEFAULT_UPDATE_TIMEOUT_MS;
@@ -119,7 +119,7 @@ export const updateWorkflowRestBinding: UnknownRestBinding = {
     idempotencyKey: { kind: 'body-field', bodyField: 'idempotencyKey' },
   },
   extractInput: async (request, pathParams) => {
-    // Legacy parity: invalid or absent JSON body is ignored, defaults apply.
+    // invalid or absent JSON body is ignored, defaults apply.
     // Field-level typeof checks live in `invoke()` (the single cross-transport
     // validator) — extractInput just reads through.
     let payload: unknown;
@@ -135,7 +135,7 @@ export const updateWorkflowRestBinding: UnknownRestBinding = {
         idempotencyKey = record['idempotencyKey'];
       }
     } catch {
-      // Legacy behavior: invalid or absent JSON body is ignored.
+      // invalid or absent JSON body is ignored.
     }
 
     return {

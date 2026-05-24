@@ -26,10 +26,7 @@ import {
   shapeBulkJsonSuccess,
   validatedListFilterFromBulkInput,
 } from './bulk-operation-helpers.ts';
-import {
-  invalidParamsFault,
-  shapeLegacyRestFaultWithRawEngineFailureMessage,
-} from './operation-helpers.ts';
+import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 
 const bulkMutateWorkflowTagsInput = z
   .object({
@@ -150,5 +147,5 @@ export const bulkMutateWorkflowTagsRestBinding: UnknownRestBinding = {
   },
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: BulkMutateWorkflowTagsOutput) => shapeBulkJsonSuccess(output),
-  shapeFault: shapeLegacyRestFaultWithRawEngineFailureMessage,
+  shapeFault: shapeRestFault,
 };

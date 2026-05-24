@@ -9,10 +9,7 @@ import type { OperationDefinition } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { RestBinding } from '../rest-binding.ts';
-import {
-  jsonErrorResponse,
-  shapeLegacyRestFaultWithRawEngineFailureMessage,
-} from './operation-helpers.ts';
+import { jsonErrorResponse, shapeRestFault } from './operation-helpers.ts';
 
 const singleWorkflowTagMutationInput = z.object({
   workflowId: z.string().min(1),
@@ -114,14 +111,15 @@ function shapeSingleWorkflowTagMutationSuccess(output: SingleWorkflowTagMutation
 }
 
 function shapeSingleWorkflowTagMutationFault(fault: OperationFault): Response {
-  // Legacy tag routes report validation failures as 400 instead of the
-  // transport-neutral Unprocessable status, and they expose raw engine
-  // failure messages. Keep those REST-only differences explicit.
+  // Tag routes report validation failures as 400 rather than the
+  // transport-neutral Unprocessable status — a REST-only mapping kept
+  // explicit here. Every other fault, including the masked EngineFailure
+  // 500, goes through the canonical `shapeRestFault`.
   if (fault.code === 'Unprocessable') {
     return jsonErrorResponse(fault.message, 400);
   }
 
-  return shapeLegacyRestFaultWithRawEngineFailureMessage(fault);
+  return shapeRestFault(fault);
 }
 
 function mapTagMutationErrorToFault(error: unknown, workflowId: string): OperationFault {

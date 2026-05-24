@@ -29,8 +29,8 @@ import { invalidParamsFault } from './operation-helpers.ts';
  * runs.
  *
  * Not used by `purge-workflows.ts`: purge allows empty/unscoped filters and
- * shapes faults through `shapeRestFault` (sanitized) rather than the legacy
- * raw-message style.
+ * shapes faults through `shapeRestFault` (sanitized) rather than passing
+ * raw engine messages through unmasked.
  */
 export function validatedListFilterFromBulkInput(input: BulkListFilterInput): ListFilter {
   let tags: string[] | undefined;

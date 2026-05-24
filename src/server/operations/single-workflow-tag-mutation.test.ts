@@ -48,7 +48,7 @@ describe('single-workflow tag mutation helper', () => {
     expect(calls).toEqual([{ workflowId: 'workflow-1', tags: ['alpha', ' beta '] }]);
   });
 
-  it('keeps legacy REST validation failures at 400 with the flat error body', async () => {
+  it('maps tag validation failures to 400 with the flat error body', async () => {
     const operation = createSingleWorkflowTagMutationOperation({
       name: 'weft.workflows.tags.test',
       summary: 'Test workflow tag mutation',
@@ -73,7 +73,7 @@ describe('single-workflow tag mutation helper', () => {
     expect(await response.json()).toEqual({ error: 'Field "tags" must not contain empty tags' });
   });
 
-  it('keeps legacy not-found failures at 404 with the raw engine message', async () => {
+  it('maps not-found failures to 404 with the engine message', async () => {
     const operation = createSingleWorkflowTagMutationOperation({
       name: 'weft.workflows.tags.test',
       summary: 'Test workflow tag mutation',
@@ -100,7 +100,7 @@ describe('single-workflow tag mutation helper', () => {
     expect(await response.json()).toEqual({ error: 'workflow not found' });
   });
 
-  it('keeps unexpected engine failures at 500 with the raw engine message', async () => {
+  it('masks unexpected engine failures to a 500 generic error body', async () => {
     const operation = createSingleWorkflowTagMutationOperation({
       name: 'weft.workflows.tags.test',
       summary: 'Test workflow tag mutation',
@@ -124,7 +124,7 @@ describe('single-workflow tag mutation helper', () => {
     );
 
     expect(response.status).toBe(500);
-    expect(await response.json()).toEqual({ error: 'boom' });
+    expect(await response.json()).toEqual({ error: 'Internal server error' });
   });
 
   it('does not claim the bulk tag mutation route', async () => {

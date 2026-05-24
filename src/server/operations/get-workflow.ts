@@ -47,9 +47,9 @@ export const getWorkflowOperation = defineOperation<GetWorkflowInput, GetWorkflo
   access: { kind: 'public' },
   producibleFaults: ['NotFound'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
-  // REST mirrors legacy behavior (legacy silently tolerates extra top-
-  // level keys on GET — there's no body to reject). Top-level strip
-  // applies to the path-param + query-string derived input.
+  // GET has no body to reject, so REST silently tolerates extra top-
+  // level keys. Top-level strip applies to the path-param + query-string
+  // derived input.
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<WorkflowState> => {
     // The catalog stores `engine: unknown` so the pipeline is transport-
@@ -60,7 +60,7 @@ export const getWorkflowOperation = defineOperation<GetWorkflowInput, GetWorkflo
     if (state === null) {
       // Throw a fully-shaped `OperationFault` — `classifyEngineError`
       // recognizes it via `isOperationFault` and passes it through
-      // untouched, preserving the legacy error message verbatim.
+      // untouched, preserving the error message verbatim.
       const notFoundFault: OperationFault = {
         code: 'NotFound',
         message: `Workflow "${input.workflowId}" not found`,
@@ -74,8 +74,8 @@ export const getWorkflowOperation = defineOperation<GetWorkflowInput, GetWorkflo
 
 /**
  * Shape a successful `weft.workflows.get` result as a 200 with the
- * serialized state. Content-Type matches legacy exactly:
- * `application/json` (no charset parameter).
+ * serialized state. Content-Type is `application/json` (no charset
+ * parameter).
  */
 function shapeGetWorkflowSuccess(state: WorkflowState): Response {
   return new Response(JSON.stringify(state), {
@@ -85,12 +85,10 @@ function shapeGetWorkflowSuccess(state: WorkflowState): Response {
 }
 
 /**
- * Legacy-matching fault mapper. The only fault this operation emits
- * under normal conditions is `NotFound`; other codes fall through
- * to a generic `{ error: <message> }` shape at the matching HTTP
- * status. Status lookup reuses the canonical
- * `FAULT_CODE_TO_HTTP_STATUS` map so fault→status stays single-
- * sourced across the REST and JSON-RPC adapters.
+ * Fault mapper. The only fault this operation emits under normal
+ * conditions is `NotFound`; every fault goes through the canonical
+ * `shapeRestFault`, which masks `EngineFailure` to a generic 500 and
+ * maps other codes to their status via `FAULT_CODE_TO_HTTP_STATUS`.
  */
 function shapeGetWorkflowFault(fault: OperationFault): Response {
   return shapeRestFault(fault);
@@ -99,7 +97,7 @@ function shapeGetWorkflowFault(fault: OperationFault): Response {
 /**
  * RestBinding for `GET /v1/workflows/:id`. Pulls the workflow id from
  * the path param, invokes the operation, maps success/fault to the
- * legacy REST response shape.
+ * REST response shape.
  *
  * Typed as `UnknownRestBinding` at the module boundary so the router's
  * heterogeneous `ReadonlyArray<UnknownRestBinding>` storage doesn't

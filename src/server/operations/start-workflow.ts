@@ -25,7 +25,7 @@ import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 
-// Inputs are intentionally permissive at the schema boundary so legacy REST
+// Inputs are intentionally permissive at the schema boundary so REST
 // callers (and equivalent JSON-RPC callers) hit the same validation in
 // `invoke()` rather than being rejected by Zod with a different error path.
 // All field validation lives in `invoke()` to keep one cross-transport contract.
@@ -305,7 +305,7 @@ export const startWorkflowRestBinding: UnknownRestBinding = {
       throw invalidParamsFault('Invalid JSON body');
     }
 
-    // Legacy parity: arrays are typeof 'object', so they pass this guard and
+    // arrays are typeof 'object', so they pass this guard and
     // fall through to the "Missing required field: type" check in `invoke`
     // (the single cross-transport validator).
     if (typeof body !== 'object' || body === null) {

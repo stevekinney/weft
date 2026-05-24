@@ -244,7 +244,7 @@ describe('weft.workflows.bulk.delete', () => {
     });
   });
 
-  it('maps EngineFailure faults to the legacy 500 response body', async () => {
+  it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     const engine = createEngine();
     const failingOperation = {
       ...bulkDeleteWorkflowsOperation,
@@ -265,6 +265,6 @@ describe('weft.workflows.bulk.delete', () => {
 
     expect(response.status).toBe(500);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'delete failed' });
+    expect(await response.json()).toEqual({ error: 'Internal server error' });
   });
 });

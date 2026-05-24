@@ -53,7 +53,7 @@ describe('weft.reviews.get', () => {
     expect(await response.json()).toEqual(review);
   });
 
-  it('returns 404 with the legacy error body when the review does not exist', async () => {
+  it('returns 404 with the canonical error body when the review does not exist', async () => {
     const setup = createEngineWithStorage();
     engine = setup.engine;
 
@@ -72,7 +72,7 @@ describe('weft.reviews.get', () => {
     });
   });
 
-  it('maps EngineFailure faults to the legacy 500 response body', async () => {
+  it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     const setup = createEngineWithStorage();
     engine = setup.engine;
 

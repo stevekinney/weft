@@ -71,11 +71,10 @@ export const getCheckpointAtRestBinding: UnknownRestBinding = {
   extractInput: async (_request, pathParams) => {
     const stepParam = pathParams['step'] ?? '';
 
-    // Match the legacy route regex `(\d+)` exactly: only canonical
-    // decimal digits, no leading sign, no scientific notation, no
-    // hex prefix. `Number()` would happily coerce `1e2` to 100 and
-    // `0x10` to 16, accepting URLs the legacy regex rejected — a
-    // silent parity drift on top of the documented 404→400 shift.
+    // Accept only canonical decimal digits: no leading sign, no
+    // scientific notation, no hex prefix. `Number()` would happily
+    // coerce `1e2` to 100 and `0x10` to 16, accepting step URLs that
+    // should be rejected as malformed.
     if (!/^\d+$/.test(stepParam)) {
       const fault: OperationFault = {
         code: 'InvalidParams',

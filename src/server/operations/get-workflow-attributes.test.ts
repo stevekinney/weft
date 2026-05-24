@@ -57,7 +57,7 @@ describe('weft.workflows.attributes.get', () => {
     expect(await response.json()).toEqual(attributes);
   });
 
-  it('returns 404 with the legacy error body when attributes do not exist', async () => {
+  it('returns 404 with the canonical error body when attributes do not exist', async () => {
     const { engine } = createEngineWithStorage();
 
     const response = await handleRequest(
@@ -76,7 +76,7 @@ describe('weft.workflows.attributes.get', () => {
     });
   });
 
-  it('maps EngineFailure faults to the legacy 500 response body', async () => {
+  it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     const { engine } = createEngineWithStorage();
     const failingOperation = {
       ...getWorkflowAttributesOperation,

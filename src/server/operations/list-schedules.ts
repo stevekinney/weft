@@ -2,7 +2,7 @@
  * `weft.schedules.list` operation + REST binding.
  *
  * Lists recurring schedules with optional filtering. REST response matches
- * the legacy `handleListSchedules` shape: 200 with the paginated result,
+ * the `handleListSchedules` shape: 200 with the paginated result,
  * 400 for bad query params, or a JSON `{ error: <message> }` for other failures.
  *
  * @module server/operations/list-schedules
@@ -141,7 +141,7 @@ function applyPaginationFilter(filter: ScheduleFilter, input: ListSchedulesInput
 
 /**
  * Validate query parameters and build a `ScheduleFilter` from the operation
- * input. Field-validation order mirrors the legacy `parseScheduleListFilter`:
+ * input. Field-validation order:
  * status → workflowType → tenantId → (tenant-scope checks) → limit → offset.
  *
  * Tenant-scope enforcement happens after the tenantId field so that
@@ -175,7 +175,7 @@ export const listSchedulesOperation = defineOperation<ListSchedulesInput, ListSc
     const e = engine as Engine;
 
     // Build the ScheduleFilter from the validated input. Field-level
-    // validation mirrors the legacy `parseScheduleListFilter` exactly.
+    // validation order is pinned by the tests below.
     const accessOptions = resolveScheduleAccessOptions(principal);
     if (isOperationFault(accessOptions)) {
       throw accessOptions;

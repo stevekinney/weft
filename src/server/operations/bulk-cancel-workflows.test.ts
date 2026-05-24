@@ -250,7 +250,7 @@ describe('weft.workflows.bulk.cancel', () => {
     expect(await response.json()).toEqual({ error: 'requires any of: workflows:admin' });
   });
 
-  it('maps EngineFailure faults to the legacy 500 response body', async () => {
+  it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     const engine = createEngine();
     const failingOperation = {
       ...bulkCancelWorkflowsOperation,
@@ -275,6 +275,6 @@ describe('weft.workflows.bulk.cancel', () => {
 
     expect(response.status).toBe(500);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'cancel failed' });
+    expect(await response.json()).toEqual({ error: 'Internal server error' });
   });
 });

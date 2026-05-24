@@ -75,7 +75,7 @@ describe('weft.workflows.streams.chunks', () => {
   it.each(['not-a-number', '0x10', '1e3'])(
     'returns 400 with a precise message for an invalid `after` (%s)',
     async (badValue) => {
-      // Legacy parity: `parseOptionalSequenceCursor` rejects hex (0x10),
+      // `parseOptionalSequenceCursor` rejects hex (0x10),
       // scientific notation (1e3), and obviously non-numeric strings via the
       // same DECIMAL_INTEGER_PATTERN regex. Cover all three classes here so
       // a future change to the regex doesn't silently widen acceptance.
@@ -95,7 +95,7 @@ describe('weft.workflows.streams.chunks', () => {
   );
 
   it.each(['-2', '-3'])('returns 400 for an out-of-range `after` value (%s)', async (badValue) => {
-    // Legacy `parseOptionalSequenceCursor` rejects values < -1. Cover this
+    // `parseOptionalSequenceCursor` rejects values < -1. Cover this
     // explicitly so JSON-RPC callers can't bypass the rule by passing a
     // raw integer that the prior `z.number().int()` schema would have
     // accepted; the validator now lives in invoke().
@@ -113,7 +113,7 @@ describe('weft.workflows.streams.chunks', () => {
     });
   });
 
-  it('returns 400 for an empty `after` query parameter (legacy parity)', async () => {
+  it('returns 400 for an empty `after` query parameter', async () => {
     const engine = createEngineWithChunks();
 
     const response = await handleRequest(
@@ -127,7 +127,7 @@ describe('weft.workflows.streams.chunks', () => {
   });
 
   it('returns SSE when the Accept header requests text/event-stream', async () => {
-    // Legacy parity: when SSE is negotiated, the response body is the SSE
+    // when SSE is negotiated, the response body is the SSE
     // wire format and content-type is text/event-stream.
     const engine = createEngineWithChunks();
     const original = engine.getStreamChunks.bind(engine);
@@ -161,11 +161,10 @@ describe('weft.workflows.streams.chunks', () => {
     }
   });
 
-  it('sanitizes engine errors to 500 "Internal server error" (legacy parity)', async () => {
-    // Legacy `handleGetStreamChunks` had no try/catch; engine errors bubbled
-    // to `handleRequest`'s outer catch which sanitized the message before
-    // returning to the client. Pin that — raw engine messages can contain
-    // SQL fragments, file paths, etc., and must never reach a caller.
+  it('sanitizes engine errors to 500 "Internal server error"', async () => {
+    // Engine errors are masked before returning to the client. Pin that —
+    // raw engine messages can contain SQL fragments, file paths, etc., and
+    // must never reach a caller.
     const engine = createEngineWithChunks();
     const original = engine.getStreamChunks.bind(engine);
     engine.getStreamChunks = async () => {

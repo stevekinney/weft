@@ -1,8 +1,7 @@
 import { z } from 'zod';
 
-import type { OperationFault } from '../operation-fault.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeLegacyRestFaultWithRawEngineFailureMessage } from './operation-helpers.ts';
+import { shapeRestFault } from './operation-helpers.ts';
 import {
   createSingleWorkflowControlOperation,
   extractWorkflowIdFromPath,
@@ -32,11 +31,6 @@ export const cancelWorkflowOperation = createSingleWorkflowControlOperation<
   },
 });
 
-function shapeCancelWorkflowFault(fault: OperationFault): Response {
-  // Legacy cancel responses expose raw engine failure messages.
-  return shapeLegacyRestFaultWithRawEngineFailureMessage(fault);
-}
-
 export const cancelWorkflowRestBinding: UnknownRestBinding = {
   method: 'DELETE',
   path: '/v1/workflows/:id',
@@ -47,5 +41,5 @@ export const cancelWorkflowRestBinding: UnknownRestBinding = {
   },
   extractInput: async (_request, pathParams) => extractWorkflowIdFromPath(pathParams),
   success: { kind: 'empty', status: 204 },
-  shapeFault: shapeCancelWorkflowFault,
+  shapeFault: shapeRestFault,
 };

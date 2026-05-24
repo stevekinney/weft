@@ -1,8 +1,7 @@
 import { z } from 'zod';
 
-import type { OperationFault } from '../operation-fault.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeLegacyRestFaultWithRawEngineFailureMessage } from './operation-helpers.ts';
+import { shapeRestFault } from './operation-helpers.ts';
 import {
   createSingleWorkflowControlOperation,
   extractWorkflowIdFromPath,
@@ -43,11 +42,6 @@ function shapeSignalWorkflowSuccess(output: SignalWorkflowOutput): Response {
   });
 }
 
-function shapeSignalWorkflowFault(fault: OperationFault): Response {
-  // Legacy signal responses expose raw engine failure messages.
-  return shapeLegacyRestFaultWithRawEngineFailureMessage(fault);
-}
-
 export const signalWorkflowRestBinding: UnknownRestBinding = {
   method: 'POST',
   path: '/v1/workflows/:id/signal/:name',
@@ -73,5 +67,5 @@ export const signalWorkflowRestBinding: UnknownRestBinding = {
   },
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: SignalWorkflowOutput) => shapeSignalWorkflowSuccess(output),
-  shapeFault: shapeSignalWorkflowFault,
+  shapeFault: shapeRestFault,
 };

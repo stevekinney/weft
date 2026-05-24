@@ -41,7 +41,7 @@ describe('weft.retention.get', () => {
     expect(await response.json()).toEqual(expected);
   });
 
-  it('maps EngineFailure faults to the legacy 500 response body', async () => {
+  it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     engine = createEngine();
 
     const failingOperation = {

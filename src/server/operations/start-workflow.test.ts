@@ -77,9 +77,9 @@ describe('weft.workflows.start', () => {
   });
 
   it('returns 400 when the request body is JSON null', async () => {
-    // Legacy `handleStartWorkflow` rejects `null` (typeof 'object' && === null
-    // fails the guard) with "Request body must be a JSON object". This pins
-    // that path; arrays are handled by the next test as legacy parity.
+    // `null` is rejected (typeof 'object' && === null fails the guard) with
+    // "Request body must be a JSON object". This pins that path; arrays are
+    // handled by the next test.
     engine = createEngine();
 
     const response = await handleRequest(jsonRequest('POST', '/v1/workflows', null), engine, {
@@ -92,7 +92,7 @@ describe('weft.workflows.start', () => {
   });
 
   it('returns 400 with "Missing required field: type" when body is a JSON array', async () => {
-    // Legacy parity: arrays are typeof 'object' && !== null, so they pass the
+    // arrays are typeof 'object' && !== null, so they pass the
     // body-shape guard and fall through to the "type" required-field check
     // (arrays do not have a string `'type'` property). Matching this exactly
     // keeps REST and JSON-RPC clients on the same error path.

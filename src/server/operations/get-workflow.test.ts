@@ -67,7 +67,7 @@ describe('weft.workflows.get', () => {
     expect(await response.json()).toEqual({ error: 'Workflow "does-not-exist" not found' });
   });
 
-  it('maps EngineFailure faults to the legacy 500 response body', async () => {
+  it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     const engine = createEngine();
     const handle = await engine.start('hold', {}, {});
     await waitForWorkflowStatus(engine, handle.id, 'running');

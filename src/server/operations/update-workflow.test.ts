@@ -70,8 +70,8 @@ describe('weft.workflows.update', () => {
     }
   });
 
-  it('silently ignores non-number timeout and non-string idempotencyKey (legacy parity)', async () => {
-    // Legacy `handleUpdateWorkflow` only honored `timeout` if `typeof === 'number'`
+  it('silently ignores non-number timeout and non-string idempotencyKey', async () => {
+    // `timeout` is only honored if `typeof === 'number'`
     // and `idempotencyKey` if `typeof === 'string'`; anything else was ignored
     // and defaults applied. Pin this so JSON-RPC clients hit the same contract
     // as REST (instead of being rejected by Zod for the wrong type).

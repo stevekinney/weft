@@ -74,7 +74,7 @@ describe('weft.schedules.update', () => {
   });
 
   it('returns 400 when the request body is JSON null', async () => {
-    // Legacy `handleUpdateSchedule` rejected `null` (typeof 'object' && === null
+    // `null` is rejected (typeof 'object' && === null
     // fails the guard) with "Request body must be a JSON object".
     engine = createEngine();
 
@@ -89,7 +89,7 @@ describe('weft.schedules.update', () => {
   });
 
   it('returns 400 with "Missing required field: cronExpression" when body is a JSON array', async () => {
-    // Legacy parity: arrays are typeof 'object' && !== null, so they pass
+    // arrays are typeof 'object' && !== null, so they pass
     // the body-shape guard and fall through to the cronExpression check.
     engine = createEngine();
 
@@ -202,7 +202,7 @@ describe('weft.schedules.update', () => {
     );
   });
 
-  it('returns the raw engine error message on unexpected failures', async () => {
+  it('masks unexpected engine failures to a 500 generic error body', async () => {
     engine = createEngine();
     const originalUpdateSchedule = engine.updateSchedule.bind(engine);
 
@@ -218,7 +218,7 @@ describe('weft.schedules.update', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'update schedule exploded' });
+      expect(await response.json()).toEqual({ error: 'Internal server error' });
     } finally {
       engine.updateSchedule = originalUpdateSchedule;
     }

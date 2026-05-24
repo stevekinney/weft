@@ -12,7 +12,7 @@ export function isOperationFault(value: unknown): value is OperationFault {
 }
 
 /**
- * Build a JSON error response with the legacy shape `{ error: <message> }` and
+ * Build a JSON error response with the flat shape `{ error: <message> }` and
  * `Content-Type: application/json`. Used by per-operation `shapeFault`
  * implementations that need ad-hoc status codes outside the canonical map.
  */
@@ -24,7 +24,7 @@ export function jsonErrorResponse(message: string, status: number): Response {
 }
 
 /**
- * Construct an `InvalidParams` fault with the legacy `{ issues: [] }` data
+ * Construct an `InvalidParams` fault with the `{ issues: [] }` data
  * shape. This is the canonical 400-class fault for caller-input validation
  * errors raised inside `invoke()` or `extractInput()`.
  */
@@ -45,16 +45,5 @@ export function shapeRestFault(fault: OperationFault): Response {
   if (fault.code === 'EngineFailure') {
     return jsonErrorResponse('Internal server error', 500);
   }
-  return jsonErrorResponse(fault.message, FAULT_CODE_TO_HTTP_STATUS[fault.code]);
-}
-
-/**
- * Legacy REST fault shaper for routes whose pre-catalog behavior exposed the
- * raw engine error message in `{ error }` responses. This is intentionally
- * not the default because `EngineFailure` messages can contain internal
- * implementation details. Prefer {@link shapeRestFault} for new or canonical
- * REST bindings.
- */
-export function shapeLegacyRestFaultWithRawEngineFailureMessage(fault: OperationFault): Response {
   return jsonErrorResponse(fault.message, FAULT_CODE_TO_HTTP_STATUS[fault.code]);
 }

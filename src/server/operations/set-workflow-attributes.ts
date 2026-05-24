@@ -35,7 +35,7 @@ export const setWorkflowAttributesOperation = defineOperation<
     const e = engine as Engine;
 
     try {
-      // Legacy REST forwarded whatever lived under `attributes`
+      // REST forwards whatever lived under `attributes`
       // directly into `engine.setAttributes`, defaulting only on
       // null/undefined. Keep that contract intact here.
       await e.setAttributes(

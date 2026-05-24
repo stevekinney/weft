@@ -80,7 +80,7 @@ describe('weft.updates.result.get', () => {
   });
 
   it('returns 202 pending for a completely unknown update id', async () => {
-    // Legacy `handleGetUpdateResult` returned `202 {status:'pending'}`
+    // A pending update returns `202 {status:'pending'}`
     // for both "update created, no response yet" AND "update id has
     // never existed" — the engine surfaces both as a `null` result.
     // Pin that behavior here so a future change can't silently flip
@@ -102,7 +102,7 @@ describe('weft.updates.result.get', () => {
     expect(await response.json()).toEqual({ status: 'pending' });
   });
 
-  it('maps EngineFailure faults to the legacy 500 response body', async () => {
+  it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     const setup = createEngineWithStorage();
     engine = setup.engine;
 

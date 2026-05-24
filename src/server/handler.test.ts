@@ -897,9 +897,9 @@ describe('handleRequest', () => {
     ).toMatchObject({ status: 403 });
   });
 
-  it('GET /v1/tenants/:id/quota maps engine failures to 500 with the legacy body', async () => {
-    // After Wave 1 migration: EngineFailure from the operation invoke() is
-    // returned as a proper 500 fault response — no legacy re-throw path fires.
+  it('GET /v1/tenants/:id/quota masks engine failures to a 500 body', async () => {
+    // EngineFailure from the operation invoke() is returned as a masked
+    // 500 fault response.
     engine = new Engine({
       storage: new MemoryStorage(),
       tenantResolver: tenantFromInputField('tenantId'),
@@ -2156,8 +2156,9 @@ describe('handleRequest', () => {
     const response = await handleRequest(request('DELETE', '/v1/workflows/some-id'), engine);
 
     expect(response.status).toBe(500);
-    const body = (await json(response)) as { error: string };
-    expect(body.error).toContain('cancel failed internally');
+    // EngineFailure is masked to a generic body; the raw engine message
+    // never reaches REST clients.
+    expect(await json(response)).toEqual({ error: 'Internal server error' });
 
     engine.cancel = originalCancel;
   });
@@ -2212,8 +2213,7 @@ describe('handleRequest', () => {
     );
 
     expect(response.status).toBe(500);
-    const body = (await json(response)) as { error: string };
-    expect(body.error).toContain('unexpected signal error');
+    expect(await json(response)).toEqual({ error: 'Internal server error' });
 
     engine.signal = originalSignal;
   });
@@ -2361,8 +2361,7 @@ describe('handleRequest', () => {
     const response = await handleRequest(request('GET', `/v1/workflows/${id}/result`), engine);
 
     expect(response.status).toBe(500);
-    const body = (await json(response)) as { error: string };
-    expect(body.error).toContain('some unexpected error');
+    expect(await json(response)).toEqual({ error: 'Internal server error' });
 
     engine.getHandle = originalGetHandle;
   });
@@ -3216,6 +3215,9 @@ describe('handleRequest', () => {
       const storage = new MemoryStorage();
       engine = new Engine({ storage });
 
+      // Fixture for a review record persisted by an older runtime; the
+      // "legacy" ids name the historical-data scenario this test exercises
+      // (read path skips records missing canonical request metadata).
       await storage.put(
         'review-decision:legacy-review',
         encode({
@@ -3350,7 +3352,7 @@ describe('handleRequest', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await json(response)).toMatchObject({ error: 'review submission failed' });
+      expect(await json(response)).toEqual({ error: 'Internal server error' });
 
       engine.submitReview = originalSubmitReview;
     });
@@ -3568,7 +3570,7 @@ describe('handleRequest', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await json(response)).toMatchObject({ error: 'query exploded' });
+      expect(await json(response)).toEqual({ error: 'Internal server error' });
 
       engine.query = originalQuery;
     });

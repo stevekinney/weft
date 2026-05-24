@@ -141,7 +141,7 @@ function shapeAggregateWorkflowsSuccess(result: AggregateWorkflowsOutput): Respo
 
 function shapeAggregateWorkflowsFault(fault: OperationFault): Response {
   // Keep aggregate REST validation aligned with workflow listing: the
-  // transport-neutral fault is `Unprocessable`, but the legacy REST contract
+  // transport-neutral fault is `Unprocessable`, but the REST contract
   // documents invalid aggregate query input as HTTP 400.
   if (fault.code === 'Unprocessable') {
     return jsonErrorResponse(fault.message, 400);

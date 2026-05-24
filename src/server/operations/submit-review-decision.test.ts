@@ -29,7 +29,7 @@ const registry = createOperationRegistry([submitReviewDecisionOperation]);
 const bindings = [submitReviewDecisionRestBinding];
 
 describe('weft.reviews.decision.submit', () => {
-  it('submits a review decision and returns the legacy ok response', async () => {
+  it('submits a review decision and returns the ok response', async () => {
     const engine = createEngine();
     let capturedReviewId = '';
     let capturedOptions: unknown;
@@ -116,7 +116,7 @@ describe('weft.reviews.decision.submit', () => {
     }
   });
 
-  it('returns the raw engine message for unexpected 500 failures', async () => {
+  it('masks unexpected engine failures to a 500 generic error body', async () => {
     const engine = createEngine();
     const originalSubmitReview = engine.submitReview.bind(engine);
     engine.submitReview = async () => {
@@ -137,7 +137,7 @@ describe('weft.reviews.decision.submit', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'review submission failed' });
+      expect(await response.json()).toEqual({ error: 'Internal server error' });
     } finally {
       engine.submitReview = originalSubmitReview;
     }

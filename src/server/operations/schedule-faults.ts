@@ -1,7 +1,6 @@
 import type { ScheduleAccessOptions } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import type { Principal } from '../principal.ts';
-import { shapeLegacyRestFaultWithRawEngineFailureMessage } from './operation-helpers.ts';
 
 export const MISSING_SCHEDULE_TENANT_CLAIM_MESSAGE =
   'JWT-authenticated schedule requests require a tenantId, tenant_id, or tenant claim';
@@ -78,9 +77,4 @@ export function mapScheduleErrorToFault(scheduleId: string, error: unknown): Ope
     message,
     data: {},
   };
-}
-
-export function shapeScheduleFault(fault: OperationFault): Response {
-  // Schedule routes preserve legacy raw EngineFailure messages.
-  return shapeLegacyRestFaultWithRawEngineFailureMessage(fault);
 }

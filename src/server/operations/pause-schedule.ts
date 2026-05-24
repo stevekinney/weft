@@ -3,7 +3,8 @@ import { z } from 'zod';
 import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { mapScheduleErrorToFault, shapeScheduleFault } from './schedule-faults.ts';
+import { shapeRestFault } from './operation-helpers.ts';
+import { mapScheduleErrorToFault } from './schedule-faults.ts';
 
 const pauseScheduleInput = z.object({
   scheduleId: z.string().min(1),
@@ -48,5 +49,5 @@ export const pauseScheduleRestBinding: UnknownRestBinding = {
     scheduleId: pathParams['id'] ?? '',
   }),
   success: { kind: 'empty', status: 204 },
-  shapeFault: shapeScheduleFault,
+  shapeFault: shapeRestFault,
 };

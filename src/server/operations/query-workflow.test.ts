@@ -129,7 +129,7 @@ describe('weft.workflows.query', () => {
     expect(await response.json()).toEqual({ error: 'Request body must be a JSON object' });
   });
 
-  it('returns 501 with the legacy error body when queries are not supported', async () => {
+  it('returns 501 with the canonical error body when queries are not supported', async () => {
     const engine = createEngine();
     const originalQuery = engine.query.bind(engine);
     engine.query = async () => {
@@ -177,7 +177,7 @@ describe('weft.workflows.query', () => {
     expect(await response.json()).toEqual({ result: null });
   });
 
-  it('maps EngineFailure faults to the legacy 500 response body', async () => {
+  it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     const engine = createEngine();
     const failingOperation = {
       ...queryWorkflowOperation,
@@ -201,13 +201,11 @@ describe('weft.workflows.query', () => {
       },
     );
 
-    // Legacy `handleQueryWorkflow` echoed the raw engine error
-    // string into the 500 body via `errorResponse(message, 500)`.
-    // The migrated path preserves that byte-for-byte. Sanitizing
-    // internal errors is a deliberate behavior shift that lands in
-    // a follow-up PR.
+    // `EngineFailure` is masked by the canonical `shapeRestFault` to a
+    // generic "Internal server error" 500 so the raw engine message
+    // never reaches REST clients.
     expect(response.status).toBe(500);
     expect(response.headers.get('content-type')).toBe('application/json');
-    expect(await response.json()).toEqual({ error: 'secret internal detail' });
+    expect(await response.json()).toEqual({ error: 'Internal server error' });
   });
 });

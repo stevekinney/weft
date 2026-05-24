@@ -4,10 +4,7 @@ import type { Engine } from '../../core/engine.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import {
-  jsonErrorResponse,
-  shapeLegacyRestFaultWithRawEngineFailureMessage,
-} from './operation-helpers.ts';
+import { jsonErrorResponse, shapeRestFault } from './operation-helpers.ts';
 
 const getWorkflowResultInput = z.object({
   workflowId: z.string().min(1),
@@ -93,11 +90,10 @@ export const getWorkflowResultOperation = defineOperation<
         throw fault;
       }
 
-      // Pass the original error message through to `shapeFault` so the
-      // legacy 500 body (raw engine message) is preserved byte-for-byte.
-      // Sanitizing internal error strings is a defensible improvement
-      // but lands as a deliberate behavior shift in a separate PR, not
-      // piecemeal as part of an op-by-op migration.
+      // Carry the real engine message on the fault so JSON-RPC callers
+      // still receive it; the REST surface masks `EngineFailure` to a
+      // generic "Internal server error" 500 via `shapeRestFault`, so the
+      // raw message never reaches REST clients.
       const fault: OperationFault = {
         code: 'EngineFailure',
         message,
@@ -119,13 +115,10 @@ function shapeGetWorkflowResultFault(fault: OperationFault): Response {
   if (fault.code === 'Timeout') {
     return jsonErrorResponse('Timeout waiting for workflow result', 408);
   }
-  // Preserve the legacy 500 body verbatim (raw engine error
-  // message). Sanitizing internal errors is a deliberate behavior
-  // shift that lands in a follow-up PR, not piecemeal as part of
-  // operation migration. EngineFailure has no special override
-  // here — it falls through to the generic `error: fault.message`
-  // shape with the canonical 500 status from the fault map.
-  return shapeLegacyRestFaultWithRawEngineFailureMessage(fault);
+  // Every other fault goes through the canonical `shapeRestFault`, which
+  // masks EngineFailure to a generic "Internal server error" 500 and maps
+  // client faults to their status from the fault map.
+  return shapeRestFault(fault);
 }
 
 export const getWorkflowResultRestBinding: UnknownRestBinding = {

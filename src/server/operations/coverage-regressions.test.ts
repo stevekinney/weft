@@ -81,7 +81,7 @@ describe('operation coverage regressions', () => {
     );
   });
 
-  it('rejects legacy failure categories in bulk filters', () => {
+  it('rejects unknown failure categories in bulk filters', () => {
     expect(() =>
       parseRequiredBulkListFilter({
         filter: { status: 'failed', failureCategory: 'planning' },

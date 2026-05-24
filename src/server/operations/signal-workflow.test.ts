@@ -42,7 +42,7 @@ const registry = createOperationRegistry([signalWorkflowOperation]);
 const bindings = [signalWorkflowRestBinding];
 
 describe('weft.workflows.signal', () => {
-  it('signals a workflow and returns the legacy ok response', async () => {
+  it('signals a workflow and returns the ok response', async () => {
     const engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'signal-success' });
     await waitForStatus(engine, handle.id, 'running');
@@ -112,7 +112,7 @@ describe('weft.workflows.signal', () => {
     }
   });
 
-  it('returns the raw engine message for unexpected 500 failures', async () => {
+  it('masks unexpected engine failures to a 500 generic error body', async () => {
     const engine = createEngine();
     const originalSignal = engine.signal.bind(engine);
     engine.signal = async () => {
@@ -130,7 +130,7 @@ describe('weft.workflows.signal', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'unexpected signal error' });
+      expect(await response.json()).toEqual({ error: 'Internal server error' });
     } finally {
       engine.signal = originalSignal;
     }

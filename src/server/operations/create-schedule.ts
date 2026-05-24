@@ -4,12 +4,11 @@ import type { Engine } from '../../core/engine.ts';
 import type { ScheduleOptions } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
+import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import {
   isOperationFault,
   mapScheduleErrorToFault,
   resolveScheduleAccessOptions,
-  shapeScheduleFault,
 } from './schedule-faults.ts';
 
 const VALID_SCHEDULE_OVERLAP_POLICIES = new Set<NonNullable<ScheduleOptions['overlap']>>([
@@ -19,7 +18,7 @@ const VALID_SCHEDULE_OVERLAP_POLICIES = new Set<NonNullable<ScheduleOptions['ove
   'allow',
 ]);
 
-// Inputs are intentionally permissive at the schema boundary so legacy REST
+// Inputs are intentionally permissive at the schema boundary so REST
 // callers (and equivalent JSON-RPC callers) hit the same validation in
 // `invoke()` rather than being rejected by Zod with a different error path.
 // All field validation lives in `invoke()` to keep one cross-transport contract.
@@ -97,7 +96,7 @@ function validateOptionalScheduleFields(input: CreateScheduleInput): {
 }
 
 /**
- * Validate `CreateScheduleInput` fields in legacy order:
+ * Validate `CreateScheduleInput` fields in order:
  * type → cronExpression → id → overlap → backfill.
  *
  * Throws an `InvalidParams` fault on the first invalid field so both REST and
@@ -124,8 +123,8 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
     const typedEngine = engine as Engine;
 
     // All field validation lives here so REST and JSON-RPC clients both
-    // receive the legacy error messages verbatim. Order matches legacy
-    // `validateScheduleOptions`: type → cronExpression → id → overlap → backfill.
+    // receive the same error messages verbatim. Validation order:
+    // type → cronExpression → id → overlap → backfill.
     const validated = validateCreateScheduleInput(input);
 
     const accessOptions = resolveScheduleAccessOptions(principal);
@@ -181,7 +180,7 @@ export const createScheduleRestBinding: UnknownRestBinding = {
       throw invalidParamsFault('Invalid JSON body');
     }
 
-    // Legacy parity: arrays are typeof 'object' && !== null, so they pass
+    // arrays are typeof 'object' && !== null, so they pass
     // this guard and fall through to the type/cronExpression checks in
     // `invoke` (which is the single cross-transport validator).
     if (typeof body !== 'object' || body === null) {
@@ -199,5 +198,5 @@ export const createScheduleRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'json', status: 201 },
-  shapeFault: shapeScheduleFault,
+  shapeFault: shapeRestFault,
 };

@@ -3,12 +3,11 @@ import { z } from 'zod';
 import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
+import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import {
   isOperationFault,
   mapScheduleErrorToFault,
   resolveScheduleAccessOptions,
-  shapeScheduleFault,
 } from './schedule-faults.ts';
 
 // `cronExpression` is intentionally permissive at the schema boundary so REST
@@ -75,7 +74,7 @@ export const updateScheduleRestBinding: UnknownRestBinding = {
       throw invalidParamsFault('Invalid JSON body');
     }
 
-    // Legacy parity: arrays are typeof 'object' && !== null, so they pass
+    // arrays are typeof 'object' && !== null, so they pass
     // this guard and fall through to the cronExpression check in `invoke`.
     if (typeof body !== 'object' || body === null) {
       throw invalidParamsFault('Request body must be a JSON object');
@@ -88,5 +87,5 @@ export const updateScheduleRestBinding: UnknownRestBinding = {
     };
   },
   success: { kind: 'empty', status: 204 },
-  shapeFault: shapeScheduleFault,
+  shapeFault: shapeRestFault,
 };

@@ -11,9 +11,9 @@ import { createStoredChunkSSEStream, SSE_RESPONSE_HEADERS } from './sse-stream.t
 
 // `after` is permissive at the schema boundary so REST and JSON-RPC clients
 // share one validation path. extractInput passes through the raw query
-// string; invoke runs the legacy `parseOptionalSequenceCursor` so both
-// transports receive identical "Invalid after query parameter" messages
-// (and reject the same edge cases — < -1, hex, scientific notation).
+// string; invoke runs `parseOptionalSequenceCursor` so both transports
+// receive identical "Invalid after query parameter" messages (and reject
+// the same edge cases — < -1, hex, scientific notation).
 const getStreamChunksInput = z.object({
   workflowId: z.string().min(1),
   key: z.string().min(1),
@@ -40,7 +40,7 @@ export const getStreamChunksOperation = defineOperation<
     const e = engine as Engine;
 
     // REST passes the raw query string; JSON-RPC may pass an already-parsed
-    // number. Either way, run the legacy validator so both transports hit
+    // number. Either way, run the shared validator so both transports hit
     // the same "Invalid after query parameter" error path.
     let after: number | undefined;
     if (input.after !== undefined) {
@@ -60,8 +60,8 @@ export const getStreamChunksOperation = defineOperation<
     // Engine errors bubble — `executeOperation` wraps unhandled throws as a
     // sanitized `{ code: 'EngineFailure', message: 'internal error' }` fault
     // so raw engine messages (which may contain SQL, file paths, etc.) never
-    // reach the wire. `shapeFault` maps that to legacy "Internal server error"
-    // 500, matching the outer `handleRequest` catch the legacy code relied on.
+    // reach the wire. `shapeFault` maps that to a masked "Internal server
+    // error" 500.
     const chunks =
       after !== undefined
         ? await e.getStreamChunks(input.workflowId, input.key, { after })
@@ -75,17 +75,16 @@ function shapeGetStreamChunksFault(fault: OperationFault): Response {
     return jsonErrorResponse(fault.message, 400);
   }
   if (fault.code === 'EngineFailure') {
-    // Legacy `handleGetStreamChunks` had no try/catch; engine errors bubbled
-    // to `handleRequest`'s outer catch and became `Internal server error`.
-    // Match that sanitization so raw engine messages never reach clients.
+    // Mask engine errors to a generic 500 so raw engine messages never
+    // reach clients.
     return jsonErrorResponse('Internal server error', 500);
   }
   return jsonErrorResponse(fault.message, FAULT_CODE_TO_HTTP_STATUS[fault.code]);
 }
 
 /**
- * Negotiate JSON vs SSE based on `Accept`. The legacy handler preferred SSE
- * when `text/event-stream` was anywhere in `Accept`; otherwise it returned
+ * Negotiate JSON vs SSE based on `Accept`. Prefer SSE when
+ * `text/event-stream` is anywhere in `Accept`; otherwise return
  * `{ chunks }` as JSON. Cross-transport callers (JSON-RPC) always see JSON.
  */
 function shapeGetStreamChunksSuccess(output: GetStreamChunksOutput, request: Request): Response {

@@ -21,10 +21,7 @@ import {
   shapeBulkJsonSuccess,
   validatedListFilterFromBulkInput,
 } from './bulk-operation-helpers.ts';
-import {
-  invalidParamsFault,
-  shapeLegacyRestFaultWithRawEngineFailureMessage,
-} from './operation-helpers.ts';
+import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 
 const bulkCancelWorkflowsInput = bulkListFilterInputSchema.merge(bulkOperationControlInputSchema);
 const bulkCancelWorkflowsOutput = z.unknown();
@@ -85,5 +82,5 @@ export const bulkCancelWorkflowsRestBinding: UnknownRestBinding = {
   },
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: BulkCancelWorkflowsOutput) => shapeBulkJsonSuccess(output),
-  shapeFault: shapeLegacyRestFaultWithRawEngineFailureMessage,
+  shapeFault: shapeRestFault,
 };

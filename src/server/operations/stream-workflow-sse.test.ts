@@ -64,7 +64,7 @@ describe('weft.workflows.streams.sse', () => {
     }
   });
 
-  it('returns 406 when Accept header lacks text/event-stream (legacy parity)', async () => {
+  it('returns 406 when Accept header lacks text/event-stream', async () => {
     const engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'wf-sse-406' });
 
@@ -119,7 +119,7 @@ describe('weft.workflows.streams.sse', () => {
   });
 
   it('returns 404 (not 400) for missing-workflow + invalid Last-Event-ID', async () => {
-    // Legacy precedence: `handleStreamSSE` checked workflow existence BEFORE
+    // Precedence: workflow existence is checked BEFORE
     // parsing `Last-Event-ID`, so a missing workflow with a bad cursor
     // returned 404, not 400. Pin this so a future refactor that re-orders
     // those checks (e.g. parsing the cursor in extractInput) breaks loudly.
@@ -157,11 +157,10 @@ describe('weft.workflows.streams.sse', () => {
     });
   });
 
-  it('sanitizes engine errors to 500 "Internal server error" (legacy parity)', async () => {
-    // Legacy `handleStreamSSE` had no try/catch; engine errors bubbled to
-    // `handleRequest`'s outer catch which sanitized the message before
-    // returning to the client. Pin that — raw engine messages can contain
-    // SQL fragments, file paths, etc., and must never reach a caller.
+  it('sanitizes engine errors to 500 "Internal server error"', async () => {
+    // Engine errors are masked before returning to the client. Pin that —
+    // raw engine messages can contain SQL fragments, file paths, etc., and
+    // must never reach a caller.
     const engine = createEngine();
     const handle = await engine.start('hold', null, { id: 'wf-sse-fail' });
     const original = engine.getStreamChunks.bind(engine);

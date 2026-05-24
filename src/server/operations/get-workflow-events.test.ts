@@ -56,7 +56,7 @@ describe('weft.workflows.events.list', () => {
     expect(await response.json()).toEqual({ events: await engine.getEvents(handle.id) });
   });
 
-  it('returns 404 with the legacy error body when the workflow does not exist', async () => {
+  it('returns 404 with the canonical error body when the workflow does not exist', async () => {
     const { engine } = createEngineWithStorage();
 
     const response = await handleRequest(
@@ -73,7 +73,7 @@ describe('weft.workflows.events.list', () => {
     expect(await response.json()).toEqual({ error: 'Workflow "does-not-exist" not found' });
   });
 
-  it('maps EngineFailure faults to the legacy 500 response body', async () => {
+  it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     const { engine } = createEngineWithStorage();
     const failingOperation = {
       ...getWorkflowEventsOperation,

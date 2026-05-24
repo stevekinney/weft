@@ -4,10 +4,7 @@ import type { Engine } from '../../core/engine.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import {
-  invalidParamsFault,
-  shapeLegacyRestFaultWithRawEngineFailureMessage,
-} from './operation-helpers.ts';
+import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 
 const queryWorkflowInput = z.object({
   workflowId: z.string().min(1),
@@ -48,11 +45,10 @@ export const queryWorkflowOperation = defineOperation<QueryWorkflowInput, QueryW
         throw fault;
       }
 
-      // Pass the original error message through to `shapeFault` so
-      // the legacy 500 body (raw engine message) is preserved
-      // byte-for-byte. Sanitizing internal errors is a deliberate
-      // behavior shift that lands in a follow-up PR, not piecemeal
-      // as part of operation migration.
+      // Carry the real engine message on the fault so JSON-RPC callers
+      // still receive it; the REST surface masks `EngineFailure` to a
+      // generic "Internal server error" 500 via `shapeRestFault`, so the
+      // raw message never reaches REST clients.
       const fault: OperationFault = {
         code: 'EngineFailure',
         message,
@@ -70,14 +66,6 @@ function shapeQueryWorkflowSuccess(result: QueryWorkflowOutput): Response {
   });
 }
 
-function shapeQueryWorkflowFault(fault: OperationFault): Response {
-  // Preserve the legacy 500 body verbatim (raw engine error
-  // message). Sanitizing internal errors is a deliberate behavior
-  // shift that lands in a follow-up PR, not piecemeal as part of
-  // operation migration.
-  return shapeLegacyRestFaultWithRawEngineFailureMessage(fault);
-}
-
 export const queryWorkflowRestBinding: UnknownRestBinding = {
   method: 'GET',
   path: '/v1/workflows/:id/query/:name',
@@ -93,7 +81,7 @@ export const queryWorkflowRestBinding: UnknownRestBinding = {
   }),
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: QueryWorkflowOutput) => shapeQueryWorkflowSuccess(output),
-  shapeFault: shapeQueryWorkflowFault,
+  shapeFault: shapeRestFault,
 };
 
 export const queryWorkflowWithInputRestBinding: UnknownRestBinding = {
@@ -135,5 +123,5 @@ export const queryWorkflowWithInputRestBinding: UnknownRestBinding = {
   },
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: QueryWorkflowOutput) => shapeQueryWorkflowSuccess(output),
-  shapeFault: shapeQueryWorkflowFault,
+  shapeFault: shapeRestFault,
 };

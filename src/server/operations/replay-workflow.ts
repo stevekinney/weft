@@ -6,8 +6,8 @@
  * declared `authenticated` with a scope requirement to prevent anonymous
  * access to sensitive historical state.
  *
- * REST response mirrors the legacy `handleReplayWorkflowToStep` contract:
- * content-negotiated JSON or msgpack, 404 for missing workflow or step.
+ * REST response: content-negotiated JSON or msgpack, 404 for missing
+ * workflow or step.
  *
  * @module server/operations/replay-workflow
  */
@@ -50,7 +50,7 @@ export const replayWorkflowOperation = defineOperation<ReplayWorkflowInput, Repl
   invoke: async ({ input, engine }): Promise<ReplayWorkflowOutput> => {
     const e = engine as Engine;
 
-    // Confirm the workflow exists first (mirrors legacy 404 before step check).
+    // Confirm the workflow exists first: 404 takes precedence over the step check.
     const state = await e.get(input.workflowId);
     if (state === null) {
       const notFoundFault: OperationFault = {
@@ -86,8 +86,7 @@ function shapeReplayWorkflowFault(fault: OperationFault): Response {
 
 /**
  * Content-negotiate success: REST callers that `Accept: application/msgpack`
- * get msgpack encoding; everyone else gets JSON. This matches the legacy
- * `negotiatedResponse` behavior from `handleReplayWorkflowToStep`.
+ * get msgpack encoding; everyone else gets JSON.
  */
 function shapeReplayWorkflowSuccess(output: ReplayWorkflowOutput, request: Request): Response {
   return negotiatedResponse(request, output, 200);

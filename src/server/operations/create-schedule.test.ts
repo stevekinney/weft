@@ -85,7 +85,7 @@ describe('weft.schedules.create', () => {
   });
 
   it('returns 400 when the request body is JSON null', async () => {
-    // Legacy `handleCreateSchedule` rejected `null` (typeof 'object' && === null
+    // `null` is rejected (typeof 'object' && === null
     // fails the guard) with "Request body must be a JSON object".
     engine = createEngine();
 
@@ -99,7 +99,7 @@ describe('weft.schedules.create', () => {
   });
 
   it('returns 400 with "Missing required field: type" when body is a JSON array', async () => {
-    // Legacy parity: arrays are typeof 'object' && !== null, so they pass the
+    // arrays are typeof 'object' && !== null, so they pass the
     // body-shape guard and fall through to the "type" required-field check.
     engine = createEngine();
 
@@ -242,7 +242,7 @@ describe('weft.schedules.create', () => {
     );
   });
 
-  it('returns the raw engine error message on unexpected failures', async () => {
+  it('masks unexpected engine failures to a 500 generic error body', async () => {
     engine = createEngine();
     const originalSchedule = engine.schedule.bind(engine);
 
@@ -261,7 +261,7 @@ describe('weft.schedules.create', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'schedule exploded' });
+      expect(await response.json()).toEqual({ error: 'Internal server error' });
     } finally {
       engine.schedule = originalSchedule;
     }

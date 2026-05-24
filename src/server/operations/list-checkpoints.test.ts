@@ -84,7 +84,7 @@ describe('weft.workflows.checkpoints.list', () => {
   });
 
   it('returns 200 with an empty array for an unknown workflow id', async () => {
-    // Legacy `engine.listCheckpoints` returns `[]` rather than throwing
+    // `engine.listCheckpoints` returns `[]` rather than throwing
     // when the workflow does not exist — the migrated operation
     // preserves that contract verbatim. This test pins the behavior
     // so a future change in the engine can't silently flip the API
@@ -107,7 +107,7 @@ describe('weft.workflows.checkpoints.list', () => {
     expect(await response.json()).toEqual([]);
   });
 
-  it('maps EngineFailure faults to the legacy 500 response body', async () => {
+  it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     engine = createEngine();
 
     const failingOperation = {

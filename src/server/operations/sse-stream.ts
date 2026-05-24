@@ -60,7 +60,7 @@ export function createStoredChunkSSEStream(
   });
 }
 
-/** Standard headers for an SSE response. Cache-Control and Connection match the legacy. */
+/** Standard headers for an SSE response. */
 export const SSE_RESPONSE_HEADERS: Readonly<Record<string, string>> = {
   'Content-Type': 'text/event-stream',
   'Cache-Control': 'no-cache',

@@ -273,7 +273,7 @@ describe('storage REST operations', () => {
     expect(batchResponse.status).toBe(204);
     expect(decode(await rawStorage.get('from-control-route'))).toBe('control');
 
-    const legacyCollisionResponse = await handleRequest(
+    const collisionResponse = await handleRequest(
       request('/v1/storage/batch', {
         method: 'POST',
         body: JSON.stringify({ operations: [] }),
@@ -282,7 +282,7 @@ describe('storage REST operations', () => {
       engine,
       adminStorageOptions(),
     );
-    expect(legacyCollisionResponse.status).toBe(404);
+    expect(collisionResponse.status).toBe(404);
   });
 
   it('applies tenant-scoped batch writes and deletes without touching raw keys', async () => {

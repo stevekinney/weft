@@ -87,7 +87,7 @@ describe('weft.workflows.checkpoints.get', () => {
     expect(decoded).toEqual(expected);
   });
 
-  it('returns 400 with the legacy error body for an invalid step parameter', async () => {
+  it('returns 400 with the canonical error body for an invalid step parameter', async () => {
     engine = createEngine();
 
     const response = await handleRequest(
@@ -105,7 +105,7 @@ describe('weft.workflows.checkpoints.get', () => {
     expect(await response.json()).toEqual({ error: 'Invalid step: not-a-number' });
   });
 
-  it('returns 404 with the legacy error body when the checkpoint does not exist', async () => {
+  it('returns 404 with the canonical error body when the checkpoint does not exist', async () => {
     engine = createEngine();
     const handle = await engine.start('steps-then-wait', null, {
       id: 'wf-checkpoint-at-missing',
@@ -127,7 +127,7 @@ describe('weft.workflows.checkpoints.get', () => {
     });
   });
 
-  it('maps EngineFailure faults to the legacy 500 response body', async () => {
+  it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     engine = createEngine();
 
     const failingOperation = {

@@ -1,11 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import type { OperationFault } from '../operation-fault.ts';
-import {
-  invalidParamsFault,
-  shapeLegacyRestFaultWithRawEngineFailureMessage,
-  shapeRestFault,
-} from './operation-helpers.ts';
+import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 
 const operationsDirectory = new URL('.', import.meta.url);
 
@@ -56,36 +52,6 @@ describe('REST fault shaper regressions', () => {
       invalidParamsFaultValue.message,
     );
     await expectJsonErrorResponse(shapeRestFault(notFoundFault), 404, notFoundFault.message);
-  });
-
-  it('keeps the legacy raw-engine-message shaper explicit and separate', async () => {
-    const engineFailureFault: OperationFault = {
-      code: 'EngineFailure',
-      message: 'legacy raw engine failure',
-      data: {},
-    };
-    const invalidParamsFaultValue = invalidParamsFault('Legacy invalid params');
-    const notFoundFault: OperationFault = {
-      code: 'NotFound',
-      message: 'Legacy workflow not found',
-      data: { resource: 'workflow', identifier: 'workflow-2' },
-    };
-
-    await expectJsonErrorResponse(
-      shapeLegacyRestFaultWithRawEngineFailureMessage(engineFailureFault),
-      500,
-      engineFailureFault.message,
-    );
-    await expectJsonErrorResponse(
-      shapeLegacyRestFaultWithRawEngineFailureMessage(invalidParamsFaultValue),
-      400,
-      invalidParamsFaultValue.message,
-    );
-    await expectJsonErrorResponse(
-      shapeLegacyRestFaultWithRawEngineFailureMessage(notFoundFault),
-      404,
-      notFoundFault.message,
-    );
   });
 
   it('constructs invalid-params faults in the shared operation helpers', () => {

@@ -13,8 +13,8 @@ const TOKENS_STREAM_KEY = 'tokens';
 
 // `after` is permissive at the schema boundary so REST and JSON-RPC clients
 // share one validation path. extractInput passes through the raw header
-// string; invoke parses it AFTER the 404 workflow-existence check, matching
-// legacy `handleStreamSSE` precedence (workflow-not-found beats bad cursor).
+// string; invoke parses it AFTER the 404 workflow-existence check, so
+// workflow-not-found takes precedence over a bad cursor.
 const streamWorkflowSseInput = z.object({
   workflowId: z.string().min(1),
   after: z.unknown().optional(),
@@ -46,8 +46,8 @@ export const streamWorkflowSseOperation = defineOperation<
   invoke: async ({ input, engine }): Promise<StreamWorkflowSseOutput> => {
     const e = engine as Engine;
 
-    // 404 wins precedence over a bad cursor — legacy `handleStreamSSE`
-    // checked workflow existence before parsing `Last-Event-ID`.
+    // 404 wins precedence over a bad cursor: check workflow existence
+    // before parsing `Last-Event-ID`.
     const state = await e.get(input.workflowId);
     if (state === null) {
       const message = `Workflow "${input.workflowId}" not found`;
@@ -60,7 +60,7 @@ export const streamWorkflowSseOperation = defineOperation<
     }
 
     // REST passes the raw `Last-Event-ID` header string; JSON-RPC may pass an
-    // already-parsed number. Either way, run the legacy validator so both
+    // already-parsed number. Either way, run the shared validator so both
     // transports hit the same "Invalid Last-Event-ID header" error path.
     let after: number | undefined;
     if (input.after !== undefined) {
@@ -79,7 +79,7 @@ export const streamWorkflowSseOperation = defineOperation<
 
     // Engine errors bubble — `executeOperation` wraps unhandled throws as a
     // sanitized `EngineFailure` so raw engine messages never reach the wire.
-    // `shapeFault` maps that to legacy "Internal server error" 500.
+    // `shapeFault` maps that to a masked "Internal server error" 500.
     const chunks =
       after !== undefined
         ? await e.getStreamChunks(input.workflowId, TOKENS_STREAM_KEY, { after })
@@ -95,7 +95,7 @@ function shapeStreamWorkflowSseFault(fault: OperationFault): Response {
     return jsonErrorResponse(fault.message, 404);
   }
   if (fault.code === 'InvalidParams') {
-    // Legacy `handleStreamSSE` returned 406 for the Accept-header mismatch
+    // 406 is returned for the Accept-header mismatch
     // (a REST-only check). All other InvalidParams paths use 400.
     if (fault.message === ACCEPT_HEADER_MUST_INCLUDE_SSE) {
       return jsonErrorResponse(fault.message, 406);
@@ -103,9 +103,8 @@ function shapeStreamWorkflowSseFault(fault: OperationFault): Response {
     return jsonErrorResponse(fault.message, 400);
   }
   if (fault.code === 'EngineFailure') {
-    // Legacy `handleStreamSSE` had no try/catch; engine errors bubbled to
-    // `handleRequest`'s outer catch and became `Internal server error`.
-    // Match that sanitization so raw engine messages never reach clients.
+    // Mask engine errors to a generic 500 so raw engine messages never
+    // reach clients.
     return jsonErrorResponse('Internal server error', 500);
   }
   return jsonErrorResponse(fault.message, FAULT_CODE_TO_HTTP_STATUS[fault.code]);
@@ -114,7 +113,7 @@ function shapeStreamWorkflowSseFault(fault: OperationFault): Response {
 /**
  * Map a stored token chunk to the SSE `data:` text. Strings pass through
  * verbatim; objects with a non-empty `token` string property emit that
- * string. Anything else is dropped (legacy parity).
+ * string. Anything else is dropped.
  */
 function mapTokenChunkToText(chunk: StoredStreamChunk): string | null {
   if (typeof chunk.value === 'string') {
@@ -147,7 +146,7 @@ export const streamWorkflowSseRestBinding: UnknownRestBinding = {
     after: { kind: 'header', headerName: 'Last-Event-ID' },
   },
   extractInput: async (request, pathParams) => {
-    // Legacy 406: REST-only Accept negotiation. JSON-RPC clients never reach
+    // 406: REST-only Accept negotiation. JSON-RPC clients never reach
     // this path, so the check stays in extractInput rather than `invoke`.
     const accept = request.headers.get('Accept') ?? '';
     if (!accept.includes('text/event-stream')) {
@@ -155,8 +154,8 @@ export const streamWorkflowSseRestBinding: UnknownRestBinding = {
     }
 
     // Pass the raw `Last-Event-ID` header through; `invoke` parses and
-    // validates it AFTER the workflow-existence check so the legacy 404
-    // precedence over a bad cursor is preserved.
+    // validates it AFTER the workflow-existence check so 404 takes
+    // precedence over a bad cursor.
     const rawLastEventId = request.headers.get('Last-Event-ID');
     return {
       workflowId: pathParams['id'] ?? '',

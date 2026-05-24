@@ -44,7 +44,10 @@ function createEngine(storage = new MemoryStorage()): Engine {
   return engine;
 }
 
-async function startLegacyFailedWorkflow(
+// Reproduces a historically-persisted shape: a failed workflow whose state
+// record carries no `failureCategory` while the value lives only in a
+// separate attribute record. Exercises the read-side backfill path.
+async function startFailedWorkflowWithSplitFailureCategory(
   engine: Engine,
   storage: MemoryStorage,
   id: string,
@@ -138,7 +141,11 @@ describe('weft.workflows.list', () => {
   it('includes failureCategory from search attributes only when requested over REST', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine(storage);
-    await startLegacyFailedWorkflow(engine, storage, 'failed-with-legacy-category');
+    await startFailedWorkflowWithSplitFailureCategory(
+      engine,
+      storage,
+      'failed-with-split-failure-category',
+    );
 
     const defaultResponse = await handleRequest(
       new Request('http://localhost/v1/workflows?status=failed', { method: 'GET' }),
@@ -241,7 +248,7 @@ describe('weft.workflows.list', () => {
     expect(body.error).toContain('empty tags');
   });
 
-  it('maps EngineFailure faults to the legacy 500 response body', async () => {
+  it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     const engine = createEngine();
     const failingOperation = {
       ...listWorkflowsOperation,

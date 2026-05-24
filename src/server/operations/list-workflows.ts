@@ -172,7 +172,7 @@ function shapeListWorkflowsSuccess(result: ListWorkflowsOutput): Response {
 }
 
 function shapeListWorkflowsFault(fault: OperationFault): Response {
-  // Legacy workflow listing reports invalid filter values as 400 even when
+  // Workflow listing reports invalid filter values as 400 even when
   // the transport-neutral fault is `Unprocessable`.
   if (fault.code === 'Unprocessable') {
     return jsonErrorResponse(fault.message, 400);

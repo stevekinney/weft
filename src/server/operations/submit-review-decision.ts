@@ -5,7 +5,7 @@ import type { ReviewDecision, SubmitReviewOptions } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeLegacyRestFaultWithRawEngineFailureMessage } from './operation-helpers.ts';
+import { shapeRestFault } from './operation-helpers.ts';
 
 const VALID_DECISIONS = [
   'approved',
@@ -146,11 +146,6 @@ function shapeSubmitReviewDecisionSuccess(output: SubmitReviewDecisionOutput): R
   });
 }
 
-function shapeSubmitReviewDecisionFault(fault: OperationFault): Response {
-  // Legacy review-decision responses expose raw engine failure messages.
-  return shapeLegacyRestFaultWithRawEngineFailureMessage(fault);
-}
-
 export const submitReviewDecisionRestBinding: UnknownRestBinding = {
   method: 'POST',
   path: '/v1/reviews/:reviewId/decision',
@@ -179,5 +174,5 @@ export const submitReviewDecisionRestBinding: UnknownRestBinding = {
   },
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: SubmitReviewDecisionOutput) => shapeSubmitReviewDecisionSuccess(output),
-  shapeFault: shapeSubmitReviewDecisionFault,
+  shapeFault: shapeRestFault,
 };

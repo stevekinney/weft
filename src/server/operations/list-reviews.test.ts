@@ -137,6 +137,9 @@ describe('weft.reviews.list', () => {
     const setup = createEngineWithStorage();
     engine = setup.engine;
 
+    // Fixture for a review record persisted by an older runtime; the
+    // "legacy" ids name the historical-data scenario this test exercises
+    // (read path skips records missing canonical request metadata).
     await setup.storage.put(
       'review-decision:legacy-review',
       encode({
@@ -205,7 +208,7 @@ describe('weft.reviews.list', () => {
     );
   });
 
-  it('maps EngineFailure faults to the legacy 500 response body', async () => {
+  it('masks EngineFailure faults to a 500 with a generic error body', async () => {
     const setup = createEngineWithStorage();
     engine = setup.engine;
 

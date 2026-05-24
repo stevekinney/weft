@@ -7,7 +7,7 @@ import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 
 // `fromStep` is intentionally `unknown` at the schema boundary. The exact
-// legacy "Field 'fromStep' must be a non-negative safe integer" error path
+// "Field 'fromStep' must be a non-negative safe integer" error path
 // lives in `invoke()` so REST and JSON-RPC callers share one contract.
 const forkWorkflowInput = z.object({
   workflowId: z.string().min(1),
@@ -45,7 +45,7 @@ function validateForkInput(input: ForkWorkflowInput): { fromStep: number } | und
 /**
  * Map an engine error thrown by `engine.fork` to the canonical operation fault.
  *
- * Routing order (precedence preserved from legacy implementation):
+ * Routing order:
  *   1. 'fromStep' / 'Checkpoint not found at step' → InvalidParams (400)
  *   2. 'Checkpoint not found'                       → NotFound, resource: 'checkpoint'
  *   3. 'not found'                                  → NotFound, resource: 'workflow'
@@ -128,7 +128,7 @@ export const forkWorkflowRestBinding: UnknownRestBinding = {
       throw invalidParamsFault('Invalid JSON body');
     }
 
-    // Legacy parity: arrays are explicitly rejected here (handleForkWorkflow
+    // arrays are explicitly rejected here (handleForkWorkflow
     // uses the same `Array.isArray(body)` guard); `fromStep` validation lives
     // in `invoke` so REST and JSON-RPC share one error path.
     if (typeof body !== 'object' || body === null || Array.isArray(body)) {

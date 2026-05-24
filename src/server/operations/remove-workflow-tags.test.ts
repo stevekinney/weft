@@ -29,7 +29,7 @@ const registry = createOperationRegistry([removeWorkflowTagsOperation]);
 const bindings = [removeWorkflowTagsRestBinding];
 
 describe('weft.workflows.tags.remove', () => {
-  it('removes tags from a workflow and returns the legacy ok response', async () => {
+  it('removes tags from a workflow and returns the ok response', async () => {
     const engine = createEngine();
     const handle = await engine.start('echo', 'payload', {
       id: 'remove-tags-success',
@@ -97,7 +97,7 @@ describe('weft.workflows.tags.remove', () => {
     }
   });
 
-  it('returns the raw engine message for unexpected 500 failures', async () => {
+  it('masks unexpected engine failures to a 500 generic error body', async () => {
     const engine = createEngine();
     const originalRemoveTags = engine.removeTags.bind(engine);
     engine.removeTags = async () => {
@@ -115,7 +115,7 @@ describe('weft.workflows.tags.remove', () => {
       );
 
       expect(response.status).toBe(500);
-      expect(await response.json()).toEqual({ error: 'boom' });
+      expect(await response.json()).toEqual({ error: 'Internal server error' });
     } finally {
       engine.removeTags = originalRemoveTags;
     }
