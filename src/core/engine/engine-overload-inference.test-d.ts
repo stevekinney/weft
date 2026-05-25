@@ -44,7 +44,11 @@ const commit: Promise<BulkCancelResult> = engine.cancelAll(filter, commitOptions
 void commit;
 
 // The dry-run return type must NOT be assignable to the commit result — the two
-// overloads exist precisely to give distinct call-site types.
+// overloads exist precisely to give distinct call-site types. Read this together
+// with the positive `dryRun` assertion above: if the overloads ever collapsed
+// into a single signature returning the union, BOTH would error together (the
+// union is not assignable to either narrow type), so a both-fail signals the
+// overload split was lost rather than a mere assignment mistake.
 // @ts-expect-error: a dry-run result is not a BulkCancelResult.
 const mismatched: Promise<BulkCancelResult> = engine.cancelAll(filter, dryRunOptions);
 void mismatched;

@@ -37,3 +37,8 @@ void tenantHandle;
 // relocation silently widening or dropping the signature).
 // @ts-expect-error: execution requires (ownerWorkflowId, key).
 void state.execution<number>('wf-1');
+
+// The key parameter must stay `string`; widening it to `unknown` would remove
+// this error and weaken the public contract.
+// @ts-expect-error: the key argument must be a string, not a number.
+void state.execution<number>('wf-1', 42);
