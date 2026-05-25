@@ -1,15 +1,10 @@
-/* oxlint-disable max-lines -- Engine class (~960 lines) cannot be split without breaking chained-builder generic inference on Engine.create/withWorkflow/withActivity overloads; rejected alternative: interface declaration merging plus Object.assign(Engine.prototype, mixin) in sibling modules, which alters generated .d.ts output, drops JSDoc attachment, and creates a runtime-ordering hazard (callers can import Engine before mixin modules evaluate). Everything separable has been extracted; see ~5 sibling modules under src/core/engine/. */
+/* oxlint-disable max-lines -- Engine's public overload signatures (~191 lines: register/start/signal/update/query, the five bulk dry-run-vs-commit methods, schedule, and static create) plus member JSDoc (~130 lines) ARE the published declaration surface, gated byte-for-byte by verify:jsdoc:declarations and the scoped Engine class-block .d.ts oracle; the irreducible declaration floor alone (>=531 lines, counted with skipBlankLines:false skipComments:false) exceeds the 500 ceiling before any method body is counted. The aggressive class split was attempted (task 3765ffa6, documentation/engine-split-log/PR-33.md): a class-expression mixin regresses the emitted .d.ts (Engine extends a synthetic any-typed Engine_base intersection; schedule methods leave the Engine block), and a verbatim class move only relocates this suppression because max-lines is repo-wide; rejected. All extractable bodies live in ~90 sibling modules under src/core/engine/. */
 import { KEYS, type Storage as WeftStorage } from '../../storage/interface.ts';
 import { ActivityRegistry, type ActivityMetadata } from '../activity-registry.ts';
 import { AtomicState, type AtomicStateOptions } from '../atomic-state.ts';
 import type { StoredStreamChunk } from '../context.ts';
 import { createHandleCacheFinalizer } from '../engine-helpers.ts';
 import type { Interceptor } from '../interceptor.ts';
-import {
-  CURRENT_PERSISTED_DATA_SCHEMA_VERSION,
-  PERSISTED_DATA_SCHEMA_VERSION_KEY,
-  PersistedDataIncompatibleError,
-} from '../persisted-data-incompatible-error.ts';
 import { ReviewCoordinator, type ReviewRequest } from '../review/index.ts';
 import { Scheduler } from '../scheduler.ts';
 import { TenantQuotaManager } from '../tenant-quotas.ts';
@@ -116,6 +111,7 @@ import {
   type EngineCreateRuntimeOptions,
   type KnownWorkflowNames,
 } from './construction.ts';
+import { disposeEngine } from './disposal.ts';
 import {
   type ActivityDefinitionName,
   type EngineCreateOptions,
@@ -131,19 +127,16 @@ import {
 import {
   createCleanupIntervalTick,
   createQueuedInlineWorkflowStartHandler,
-  disposeEngineCleanupInterval,
   isActivityDefinition,
 } from './engine-runtime-helpers.ts';
+import type { EngineStateNamespace } from './engine-state-namespace.ts';
 import { EngineCreateNameMismatchError } from './errors.ts';
 import {
   createWorkflowHandleWithResultPromise as createWorkflowHandleWithResultPromiseFromInternals,
   getWorkflowResultPromise as getWorkflowResultPromiseFromInternals,
 } from './handle-result.ts';
 import { HANDLE_RESULT_PROMISE, ScheduleHandle, WorkflowHandle } from './handles.ts';
-import {
-  disposeQueuedInlineWorkflowStarts,
-  hasQueuedInlineWorkflowStart,
-} from './inline-launch-queue.ts';
+import { hasQueuedInlineWorkflowStart } from './inline-launch-queue.ts';
 import {
   handleStrategyMessage as handleStrategyMessageFromInternals,
   resumeParkedInlineWorkflow as resumeParkedInlineWorkflowFromInternals,
@@ -170,6 +163,7 @@ import {
   handleTimerFired as handleTimerFiredFromInternals,
   type TimeOperationCallbacks,
 } from './operations-time.ts';
+import { assertCompatiblePersistedDataVersion } from './persisted-data-version.ts';
 import { query as queryWorkflow } from './queries.ts';
 import {
   register as registerWorkflow,
@@ -250,36 +244,6 @@ export type {
   WorkflowFeedSelector,
 } from './workflow-feed.ts';
 
-/**
- * Admin-facing factories for storage-backed {@link AtomicState} handles.
- * Workflow code should prefer `ctx.state.*`; external maintenance and
- * administrative code can use `engine.state.*` with explicit scope inputs.
- *
- * @example
- * ```ts
- * import { Engine, type EngineStateNamespace } from 'weft';
- *
- * const engine = new Engine();
- * const state: EngineStateNamespace = engine.state;
- * const counter = state.tenant<number>('acme', 'count', { initial: 0 });
- * void counter;
- * ```
- */
-export interface EngineStateNamespace {
-  execution<T>(
-    ownerWorkflowId: string,
-    key: string,
-    options?: AtomicStateOptions<T>,
-  ): AtomicState<T>;
-  workflow<T>(
-    tenantId: string,
-    workflowType: string,
-    key: string,
-    options?: AtomicStateOptions<T>,
-  ): AtomicState<T>;
-  tenant<T>(tenantId: string, key: string, options?: AtomicStateOptions<T>): AtomicState<T>;
-}
-
 // Public type definitions and runtime helpers used by the Engine class were
 // extracted to sibling modules to keep this file under the lint threshold.
 // They are re-exported here to preserve the public API surface.
@@ -292,71 +256,13 @@ export {
   setNextEngineLeakWarningTokenForTesting,
   shouldEmitEngineLeakWarningForTesting,
 } from './engine-leak-warnings.ts';
+export type { EngineStateNamespace } from './engine-state-namespace.ts';
+export { assertCompatiblePersistedDataVersion };
 
 export const ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING = Symbol(
   'engineParkedWorkflowCountForTesting',
 );
 export const ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING = Symbol('engineSignalWaiterCountForTesting');
-
-/**
- * Read the persisted-data schema-version sentinel and throw
- * {@link PersistedDataIncompatibleError} when it is older (or newer) than the
- * engine's {@link CURRENT_PERSISTED_DATA_SCHEMA_VERSION}.
- *
- * Three cases:
- *
- * 1. Sentinel exists and matches: no-op.
- * 2. Sentinel exists but is missing, unparseable, or disagrees with the
- *    current version: throw `PersistedDataIncompatibleError`.
- * 3. Sentinel is absent. Only stamp the storage when it carries no user
- *    workflow data. Stamping a database that already holds workflow records,
- *    schedules, checkpoints, or any other `wf:` / `op:` / `schedule:` / `ev:`
- *    prefixed key would silently classify pre-versioned data (written by an
- *    older Weft binary or by the `new Engine({ storage })` constructor path
- *    before the sentinel was introduced) as schema-current and risk replaying
- *    incompatible records. When user data is already present without a
- *    sentinel, fail with `PersistedDataIncompatibleError(null, …)` so the
- *    operator can choose explicitly whether to wipe and start fresh.
- */
-const SCHEMA_VERSION_PATTERN = /^(?:0|[1-9]\d*)$/;
-const USER_DATA_PREFIXES = ['wf:', 'op:', 'schedule:', 'ev:', 'sig:', 'upd:', 'idx:'] as const;
-
-export async function assertCompatiblePersistedDataVersion(
-  storage: WeftStorage,
-  options: { allowLegacyData?: boolean } = {},
-): Promise<void> {
-  const raw = await storage.get(PERSISTED_DATA_SCHEMA_VERSION_KEY);
-  if (raw !== null) {
-    const text = new TextDecoder().decode(raw);
-    if (!SCHEMA_VERSION_PATTERN.test(text)) {
-      throw new PersistedDataIncompatibleError(null, CURRENT_PERSISTED_DATA_SCHEMA_VERSION);
-    }
-    const parsed = Number(text);
-    if (!Number.isSafeInteger(parsed)) {
-      throw new PersistedDataIncompatibleError(null, CURRENT_PERSISTED_DATA_SCHEMA_VERSION);
-    }
-    if (parsed !== CURRENT_PERSISTED_DATA_SCHEMA_VERSION) {
-      throw new PersistedDataIncompatibleError(parsed, CURRENT_PERSISTED_DATA_SCHEMA_VERSION);
-    }
-    return;
-  }
-  // No sentinel. Only stamp when storage is clean of user data unless the
-  // caller opted in. Any user-data prefix means the database was written by a
-  // pre-sentinel engine; the safe default is to reject so the operator chooses
-  // explicitly. `allowLegacyData: true` is the documented opt-in for the
-  // `new Engine({ storage })` → `Engine.create({ storage })` migration path.
-  if (!options.allowLegacyData) {
-    for (const prefix of USER_DATA_PREFIXES) {
-      for await (const _entry of storage.scan(prefix, { limit: 1 })) {
-        throw new PersistedDataIncompatibleError(null, CURRENT_PERSISTED_DATA_SCHEMA_VERSION);
-      }
-    }
-  }
-  await storage.put(
-    PERSISTED_DATA_SCHEMA_VERSION_KEY,
-    new TextEncoder().encode(String(CURRENT_PERSISTED_DATA_SCHEMA_VERSION)),
-  );
-}
 
 /**
  * Durable execution engine.
@@ -1308,57 +1214,7 @@ export class Engine<
     );
   }
   [Symbol.dispose](): void {
-    const internals = getInternals(this);
-    internals.alertManager?.[Symbol.dispose]();
-    internals.alertManager = null;
-    internals.abortController.abort();
-    for (const resolveSignalWaiter of internals.signalWaiters.values()) {
-      resolveSignalWaiter();
-    }
-    internals.signalWaiters.clear();
-    internals.signalWaitersByWorkflow.clear();
-    disposeQueuedInlineWorkflowStarts(internals);
-    internals.scheduler[Symbol.dispose]();
-    internals.strategy[Symbol.dispose]();
-    internals.activityWorkerDispatcher?.[Symbol.dispose]();
-    internals.activityWorkerDispatcher = null;
-    internals.inlineStrategy = null;
-    disposeEngineCleanupInterval(internals);
-    if (internals.retentionSweepInterval !== null) {
-      clearInterval(internals.retentionSweepInterval ?? undefined);
-      internals.retentionSweepInterval = null;
-    }
-    internals.nextRetentionSweepAt = null;
-    internals.handleCache.clear();
-    internals.resultResolvers.clear();
-    internals.updateWaiters.clear();
-    internals.updateWaitersByWorkflow.clear();
-    internals.reviewWaiters.clear();
-    internals.reviewWaitersByWorkflow.clear();
-    internals.reviewEscalationHandlers.clear();
-    internals.workflowReviewIds.clear();
-    internals.parkedInlineWorkflows.clear();
-    internals.terminalizingWorkflows.clear();
-    internals.reviewTimerIds.clear();
-    for (const controller of internals.pendingWebhooks) controller.abort();
-    internals.pendingWebhooks.clear();
-    internals.sleepResolvers.clear();
-    internals.sleepResolversByWorkflow.clear();
-    internals.checkpoints.clear();
-    internals.pendingExecutionStateOwnerId = undefined;
-    internals.workflowNestingDepths.clear();
-    internals.workflowHeaders.clear();
-    internals.pendingStarts.clear();
-    internals.pendingScheduleCreations.clear();
-    internals.eventLogHeads.clear();
-    internals.pendingTimelineEntries.clear();
-    internals.workflowVersionTuples.clear();
-    internals.workflowFeedListeners.clear();
-    internals.activityRegistriesByWorkflow.clear();
-    internals.workflowDefinitionsByName.clear();
-    internals.workflowTypeByWorkflowId.clear();
-    internals.broadcastChannel?.close();
-    internals.broadcastChannel = null;
+    disposeEngine(getInternals(this));
   }
   async [Symbol.asyncDispose](): Promise<void> {
     this[Symbol.dispose]();

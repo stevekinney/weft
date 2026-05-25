@@ -18,9 +18,8 @@ import type {
   ListFilter,
   ScheduleDefinition,
 } from '../types.ts';
-import { assertCompatiblePersistedDataVersion } from './index.ts';
 import { ScheduleHandle } from './handles.ts';
-import { Engine } from './index.ts';
+import { assertCompatiblePersistedDataVersion, Engine } from './index.ts';
 
 declare const engine: Engine;
 
@@ -30,11 +29,7 @@ const fromDefinition: Promise<ScheduleHandle> = engine.schedule(scheduleDefiniti
 void fromDefinition;
 
 // ---- schedule: positional overload --------------------------------------
-const fromPositional: Promise<ScheduleHandle> = engine.schedule(
-  'welcome',
-  { id: 1 },
-  '0 * * * *',
-);
+const fromPositional: Promise<ScheduleHandle> = engine.schedule('welcome', { id: 1 }, '0 * * * *');
 void fromPositional;
 
 // ---- bulk: dry-run overload returns the dry-run result -------------------

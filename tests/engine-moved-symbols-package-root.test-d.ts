@@ -6,8 +6,7 @@
 // must keep these reachable from `weft` with unchanged types. These are
 // type-only assertions — no runtime behavior.
 
-import { Engine, type EngineStateNamespace } from 'weft';
-import type { AtomicState } from 'weft';
+import { Engine, type AtomicState, type EngineStateNamespace } from 'weft';
 
 // `EngineStateNamespace` is public and `Engine.state` returns it. The getter's
 // type must remain assignable to the named interface, and the interface must
