@@ -31,10 +31,10 @@ const TARGET_WORKFLOWS_PER_SECOND = IS_CONSTRAINED_CODEX_RUNNER ? 500 : 10_000;
  * precondition: if the run dispatched far fewer workflows than even a slow
  * machine should in the configured window, load generation itself collapsed and
  * the RSS measurements are not meaningful. This invalidates the run rather than
- * silently passing on no load. The fraction is deliberately low so only a real
- * collapse trips it, never ordinary hardware variance.
+ * silently passing on no load. The floor below is deliberately low (~25% of the
+ * ideal `TARGET_WORKFLOWS_PER_SECOND` × `RUN_DURATION_MILLISECONDS` window) so
+ * only a real collapse trips it, never ordinary hardware variance.
  */
-const MINIMUM_WORKLOAD_COMPLETION_FRACTION = 0.25;
 const MAX_MEDIAN_RSS_GROWTH_BYTES_PER_SECOND = (IS_CONSTRAINED_CODEX_RUNNER ? 16 : 1) * 1024 * 1024;
 const MAX_MEDIAN_POST_WARMUP_RSS_RANGE_BYTES =
   (IS_CONSTRAINED_CODEX_RUNNER ? 128 : 8) * 1024 * 1024;
@@ -46,10 +46,10 @@ const SAMPLE_INTERVAL_MILLISECONDS = 500;
 const WARMUP_SAMPLES = 4;
 const WORKFLOW_BATCH_SIZE = 500;
 const RUN_DURATION_MILLISECONDS = 12_000;
+// Derived (not hardcoded) so it tracks both environment tiers — the constrained
+// Codex runner paces at 500/sec, so its floor is 1,500, not 30,000.
 const MINIMUM_TOTAL_WORKFLOWS = Math.floor(
-  TARGET_WORKFLOWS_PER_SECOND *
-    (RUN_DURATION_MILLISECONDS / 1000) *
-    MINIMUM_WORKLOAD_COMPLETION_FRACTION,
+  TARGET_WORKFLOWS_PER_SECOND * (RUN_DURATION_MILLISECONDS / 1000) * 0.25,
 );
 const TRIAL_COUNT = 3;
 const loadGrowthMemoryRunnerPath = fileURLToPath(
@@ -196,12 +196,9 @@ describe('Load-growth memory stability', () => {
         ].join('\n'),
       );
 
-      // Workload-completion precondition (NOT a throughput regression gate): if
-      // the run dispatched far fewer workflows than even a slow machine should
-      // in this window, load generation collapsed and the RSS measurements are
-      // not meaningful. This invalidates the run instead of passing on no load.
-      // Achieved throughput itself is logged above but intentionally not gated —
-      // see MINIMUM_WORKLOAD_COMPLETION_FRACTION.
+      // Workload-completion precondition (NOT a throughput gate — see the policy
+      // note on TARGET_WORKFLOWS_PER_SECOND): a run that dispatched almost no
+      // workflows means load generation collapsed, so its RSS numbers are moot.
       expect(medianTotalWorkflows).toBeGreaterThanOrEqual(MINIMUM_TOTAL_WORKFLOWS);
       expect(medianAbsoluteRssGrowthRatePerSecond).toBeLessThanOrEqual(
         MAX_MEDIAN_RSS_GROWTH_BYTES_PER_SECOND,

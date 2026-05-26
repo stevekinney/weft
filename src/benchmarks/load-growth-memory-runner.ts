@@ -26,9 +26,11 @@ export type LoadGrowthMemoryMeasurement = {
   targetWorkflowsPerSecond: number;
   /**
    * Unthrottled workflows/sec measured during warmup — this machine's actual
-   * ceiling, before pacing. Used to derive a machine-relative throughput floor
-   * so the benchmark catches a real throughput collapse without hard-failing
-   * capable-but-not-`targetWorkflowsPerSecond` developer hardware.
+   * ceiling, before pacing. Logged as diagnostic context (and structurally
+   * validated as a positive integer) so a human can see how far the paced,
+   * GC-sampled sustained rate sits below the machine's raw capacity. It is
+   * deliberately NOT used as a pass/fail throughput floor — see the policy note
+   * on `TARGET_WORKFLOWS_PER_SECOND` in `load-growth-memory.test.ts`.
    */
   calibratedWorkflowsPerSecond: number;
   sampleIntervalMilliseconds: number;
