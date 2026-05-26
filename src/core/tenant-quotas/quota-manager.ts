@@ -54,9 +54,13 @@ export class TenantQuotaManager {
     this.#getNow = getNow;
     this.#quotas = normalizeQuotaOptions(quotas);
 
-    if (this.#requiresConditionalBatch() && !storage.conditionalBatch) {
+    // Configuration-time validation: these quotas rely on compare-and-swap, so
+    // refuse construction when the backend's capabilities() reports no
+    // conditionalBatch support. Reading the honest capability (not method
+    // presence) is what lets a value-transforming decorator be respected.
+    if (this.#requiresConditionalBatch() && !storage.capabilities().conditionalBatch) {
       throw new Error(
-        'EngineOptions.quotas.maxConcurrentWorkflows, maxWorkflowCreationRate, and maxStorageBytes require a storage backend that implements conditionalBatch().',
+        'EngineOptions.quotas.maxConcurrentWorkflows, maxWorkflowCreationRate, and maxStorageBytes require a storage backend whose capabilities() reports conditionalBatch support.',
       );
     }
   }

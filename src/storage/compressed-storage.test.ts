@@ -167,6 +167,31 @@ describe('malformed inner payloads', () => {
   });
 });
 
+describe('capabilities()', () => {
+  it('downgrades conditionalBatch and boundedRangeDelete while passing the rest through', () => {
+    const inner = new MemoryStorage();
+    const storage = new CompressedStorage(inner);
+    const innerCapabilities = inner.capabilities();
+    const capabilities = storage.capabilities();
+
+    // Compression transforms value bytes, so compare-against-stored-bytes
+    // features are unsafe; the decorator forwards neither method.
+    expect(capabilities.conditionalBatch).toBe(false);
+    expect(capabilities.boundedRangeDelete).toBe(false);
+
+    // Visibility/atomicity are unaffected by per-value compression.
+    expect(capabilities.readAfterWrite).toBe(innerCapabilities.readAfterWrite);
+    expect(capabilities.scanConsistency).toBe(innerCapabilities.scanConsistency);
+    expect(capabilities.atomicBatch).toBe(innerCapabilities.atomicBatch);
+  });
+
+  it('does not expose a conditionalBatch method (opaque-value invariant)', () => {
+    const inner = new MemoryStorage();
+    const storage = new CompressedStorage(inner);
+    expect((storage as { conditionalBatch?: unknown }).conditionalBatch).toBeUndefined();
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Algorithm switching
 // ---------------------------------------------------------------------------

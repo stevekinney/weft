@@ -15,6 +15,7 @@
 import { KEYS, type BatchOperation, type Storage } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
+import { WeftError } from '../weft-error.ts';
 
 /**
  * Bumped whenever the index layout or population rules change. The engine
@@ -37,14 +38,14 @@ export const MAX_LIST_SCAN_ROWS = 1_000_000;
  * {@link MAX_LIST_SCAN_ROWS} allows. Transport layers map this to an
  * `Unprocessable` fault.
  */
-export class WorkflowListScanCapExceededError extends Error {
+export class WorkflowListScanCapExceededError extends WeftError<'WorkflowListScanCapExceededError'> {
   readonly cap: number;
 
   constructor(cap: number) {
     super(
+      'WorkflowListScanCapExceededError',
       `Listing workflows would exceed the scan cap of ${cap}. Narrow the filter or run the visibility-index backfill.`,
     );
-    this.name = 'WorkflowListScanCapExceededError';
     this.cap = cap;
   }
 }

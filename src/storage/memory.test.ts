@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from './memory';
+import { runStorageCapabilityConformance } from './storage-adapter.test-support.ts';
+
+runStorageCapabilityConformance('MemoryStorage', {
+  create: () => new MemoryStorage(),
+  expected: {
+    readAfterWrite: 'linearizable',
+    scanConsistency: 'snapshot',
+    atomicBatch: true,
+    conditionalBatch: true,
+    boundedRangeDelete: true,
+  },
+});
 
 /** Helper to encode a string as Uint8Array. */
 function encode(value: string): Uint8Array {

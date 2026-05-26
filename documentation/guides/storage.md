@@ -99,6 +99,49 @@ type BatchOperation =
 
 Adapters can opt into optional methods for performance and feature parity: `conditionalBatch` (compare-and-swap), `has`, `deletePrefix`, `keys`, `count`, `scoped`, and `query` (SQL passthrough, adapter-specific). Adapters that omit optional methods receive generic fallbacks via wrapper functions (`storageHas`, `storageKeys`, etc.).
 
+## Consistency & capabilities
+
+Every adapter implements `capabilities(): StorageCapabilities` — an honest, self-reported profile of what the backend actually guarantees. The engine reads these to decide what is safe, and one capability (`conditionalBatch`) is enforced at runtime.
+
+```ts partial
+type StorageCapabilities = {
+  readAfterWrite: 'linearizable' | 'session' | 'eventual';
+  scanConsistency: 'snapshot' | 'best-effort';
+  atomicBatch: boolean;
+  conditionalBatch: boolean;
+  boundedRangeDelete: boolean;
+};
+```
+
+The engine depends on four guarantees. **`atomicBatch`** keeps a checkpoint commit all-or-nothing. **`readAfterWrite`** lets a resume observe the checkpoint it just wrote. **`scanConsistency`** keeps visibility and index scans from seeing torn writes. **`conditionalBatch`** backs compare-and-swap state and tenant-quota reservation.
+
+The honest profile per built-in adapter:
+
+| Adapter               | readAfterWrite | scanConsistency | atomicBatch | conditionalBatch | boundedRangeDelete |
+| --------------------- | -------------- | --------------- | ----------- | ---------------- | ------------------ |
+| `MemoryStorage`       | `linearizable` | `snapshot`      | yes         | yes              | yes                |
+| `BunSQLiteStorage`    | `linearizable` | `snapshot`      | yes         | yes              | yes                |
+| `NodeSQLiteStorage`   | `linearizable` | `snapshot`      | yes         | yes              | no                 |
+| `LMDBStorage`         | `linearizable` | `snapshot`      | yes         | yes              | yes                |
+| `IndexedDBStorage`    | `linearizable` | `best-effort`   | yes         | yes              | yes                |
+| `TursoStorage`        | `session`      | `snapshot`      | yes         | yes              | yes                |
+| `HTTPStorage`         | `eventual`     | `best-effort`   | yes         | no (opt-in)      | no                 |
+| `WebExtensionStorage` | `session`      | `best-effort`   | yes         | no               | no                 |
+
+Three kinds of capability, treated differently:
+
+- **`conditionalBatch` is runtime-gated.** It is the only capability the engine enforces. A backend may legitimately omit compare-and-swap, so its absence has a clean failure path: the first feature that needs it (`AtomicState` updates, the `storage.conditionalBatch` server operation, CAS-requiring tenant quotas) throws a clear diagnostic naming the feature and the capability. `WebExtensionStorage` and `CompressedStorage` report `false` here. `HTTPStorage` reports `false` by default — the client cannot know whether the remote server's backend supports CAS, so a gated feature fails fast locally rather than via a remote `501`; pass `remoteConditionalBatch: true` when you have verified the server supports it.
+- **`atomicBatch`, `readAfterWrite`, and `scanConsistency` are trusted correctness contracts.** The engine reads them but does not verify them at runtime. If an adapter reports `atomicBatch: true` but applies batches non-atomically, the failure mode is checkpoint corruption — so adapter authors must report honestly.
+- **`boundedRangeDelete` is an operational hint.** It describes whether `deletePrefix()` is a single bounded range op or a scan-and-delete fallback (see the note below). It affects performance, not correctness, and nothing gates on it.
+
+> [!WARNING] Eventual read-after-write
+> `HTTPStorage` reports `readAfterWrite: eventual`: the client offers no read-your-writes guarantee, so a resume immediately after a checkpoint write may read stale state. There is no runtime gate for this. Operators choosing an eventual backend accept that visibility trade-off; the built-in `linearizable` single-process adapters do not have it.
+
+**The opaque-value invariant:** adapters and decorators must treat stored values as opaque bytes and must not inspect or depend on value contents — values may later be encrypted or compressed. The engine ranges only over keys, never value bytes. This is why `CompressedStorage`, which transforms value bytes, downgrades `conditionalBatch` to `false`: a caller-supplied `expectedValue` can never byte-match the compressed stored value.
+
+> [!NOTE] `boundedRangeDelete`
+> `true` means `deletePrefix()` is a single range-scoped delete (one SQL `DELETE`, an `IDBKeyRange` delete, or an LMDB range delete). `false` means the adapter falls back to the derived scan-and-delete loop — `deletePrefix()` still works, it just is not a single bounded operation.
+
 ## Key layout
 
 Weft encodes structure into hierarchical keys. The `KEYS` constants define the layout.

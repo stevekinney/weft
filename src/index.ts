@@ -13,6 +13,9 @@
  */
 
 export { VERSION } from './version.ts';
+// Error base + discriminant
+export { WeftError, isWeftError, isWeftErrorCode } from './core/weft-error.ts';
+export type { WeftErrorCode } from './core/weft-error.ts';
 // Core
 export {
   ActivityResolutionError,
@@ -203,18 +206,24 @@ export { CompressedStorage } from './storage/compressed-storage';
 // Storage — interface, KEYS, and zero-native-dep backends only.
 // Heavy or runtime-bound backends are subpath-only:
 //   weft/storage/sqlite | weft/storage/lmdb | weft/storage/turso
-export { KEYS, storageConditionalBatch, storageValuesEqual } from './storage/interface';
+export {
+  KEYS,
+  requireStorageCapability,
+  storageConditionalBatch,
+  storageValuesEqual,
+} from './storage/interface';
 export type {
   BatchOperation,
   ConditionalBatchCondition,
+  GatedStorageCapabilityKey,
   ScanOptions,
   Storage,
+  StorageCapabilities,
 } from './storage/interface';
 export { MemoryStorage } from './storage/memory';
 export { ScopedStorage, scopedStorage } from './storage/scoped-storage';
 export { jsonCodec, msgpackCodec, withCodec } from './storage/typed-storage';
 export type {
-  JsonValue,
   MessagePackValue,
   StorageCodec,
   StorageValueParser,

@@ -1185,7 +1185,7 @@ describe('RemoteWorker', () => {
     await worker.disconnect();
   });
 
-  it('can reconnect after dispose (AbortController is replaced)', async () => {
+  it('connect() rejects after dispose (disposal is terminal)', async () => {
     server = createTestServer();
 
     const worker = new RemoteWorker({
@@ -1201,11 +1201,12 @@ describe('RemoteWorker', () => {
     worker[Symbol.dispose]();
     expect(worker.connected).toBe(false);
 
-    // Reconnect — this would hang forever if the AbortController was not replaced
-    await worker.connect();
-    expect(worker.connected).toBe(true);
-
-    await worker.disconnect();
+    // Disposal is terminal: a disposed worker cannot be revived. Reconnection
+    // is supported only via disconnect() + connect(), not after dispose.
+    await expect(worker.connect()).rejects.toThrow(
+      'RemoteWorker has been disposed and cannot reconnect',
+    );
+    expect(worker.connected).toBe(false);
   });
 
   // ---------------------------------------------------------------------------
@@ -1594,6 +1595,964 @@ describe('RemoteWorker', () => {
     expect(receivedSignal!.aborted).toBe(false);
 
     expect(taskResult.status).toBe('completed');
+
+    await worker.disconnect();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Lifecycle hazards: connect() re-entrancy + taskResult resend on reconnect
+// ---------------------------------------------------------------------------
+
+/**
+ * Server harness that tracks every upgraded socket and the close count, and
+ * captures worker→server frames per connection. Lets re-entrancy tests assert
+ * that a superseded socket was actually closed and that no extra socket opened.
+ */
+function createTrackingServer(options?: {
+  autoRegisterAck?: boolean;
+  onMessage?: (ws: any, message: any, connectionIndex: number) => void;
+}): {
+  server: ReturnType<typeof Bun.serve>;
+  sockets: any[];
+  closeCount: () => number;
+  messages: any[];
+} {
+  const sockets: any[] = [];
+  const messages: any[] = [];
+  let closes = 0;
+
+  const server = Bun.serve({
+    port: 0,
+    fetch(request, srv) {
+      if (srv.upgrade(request, { data: undefined })) return undefined;
+      return new Response('ok');
+    },
+    websocket: {
+      open(ws) {
+        sockets.push(ws);
+      },
+      message(ws, message) {
+        const text = typeof message === 'string' ? message : new TextDecoder().decode(message);
+        const connectionIndex = sockets.indexOf(ws);
+        let parsed: any;
+        try {
+          parsed = JSON.parse(text);
+        } catch {
+          return;
+        }
+        messages.push(parsed);
+        const autoRegisterAck = options?.autoRegisterAck ?? true;
+        if (autoRegisterAck && parsed.type === 'register') {
+          ws.send(
+            JSON.stringify({
+              type: 'registerAck',
+              protocolVersion: 2,
+              workerId: parsed.workerId,
+              queue: parsed.queue ?? 'default',
+              activities: parsed.activities,
+              concurrency: parsed.concurrency ?? 10,
+            }),
+          );
+        }
+        options?.onMessage?.(ws, parsed, connectionIndex);
+      },
+      close(_ws) {
+        closes += 1;
+      },
+    },
+  });
+
+  return { server, sockets, closeCount: () => closes, messages };
+}
+
+/**
+ * A single long-lived server that acks every registration and routes frames by
+ * registration index (0-based, in order of `register` receipt). The supplied
+ * `onRegister` hook can deliver tasks and decide when to close a worker socket,
+ * so reconnect tests never have to stop/restart the listener (which races on
+ * port reuse). Frames other than `register` are recorded per registration index.
+ */
+function createReconnectServer(onRegister?: (ws: any, index: number) => void): {
+  server: ReturnType<typeof Bun.serve>;
+  /** Frames received on the Nth registration (always an array, even if empty). */
+  framesFor: (index: number) => any[];
+  /** Every frame across every registration. */
+  allFrames: () => any[];
+  /** The server-side socket for the Nth registration (for test-driven close). */
+  socketFor: (index: number) => any;
+  registerCount: () => number;
+} {
+  const messagesByRegistration: any[][] = [];
+  const socketsByRegistration: any[] = [];
+  let registers = 0;
+
+  const server = Bun.serve({
+    port: 0,
+    fetch(request, srv) {
+      if (srv.upgrade(request, { data: undefined })) return undefined;
+      return new Response('ok');
+    },
+    websocket: {
+      message(ws, message) {
+        const parsed = JSON.parse(String(message));
+        if (parsed.type === 'register') {
+          const idx = registers++;
+          (ws as any).__index = idx;
+          messagesByRegistration[idx] = messagesByRegistration[idx] ?? [];
+          socketsByRegistration[idx] = ws;
+          ws.send(
+            JSON.stringify({
+              type: 'registerAck',
+              protocolVersion: 2,
+              workerId: parsed.workerId,
+              queue: 'default',
+              activities: parsed.activities,
+              concurrency: 10,
+            }),
+          );
+          onRegister?.(ws, idx);
+        } else {
+          const idx = (ws as any).__index as number;
+          messagesByRegistration[idx] = messagesByRegistration[idx] ?? [];
+          messagesByRegistration[idx].push(parsed);
+        }
+      },
+      close(_ws) {},
+    },
+  });
+
+  return {
+    server,
+    framesFor: (index: number) => messagesByRegistration[index] ?? [],
+    allFrames: () => messagesByRegistration.flat(),
+    socketFor: (index: number) => socketsByRegistration[index],
+    registerCount: () => registers,
+  };
+}
+
+describe('RemoteWorker — connect() re-entrancy', () => {
+  let server: ReturnType<typeof Bun.serve> | undefined;
+
+  afterEach(() => {
+    restoreRealTimers();
+    if (server) {
+      server.stop(true);
+      server = undefined;
+    }
+  });
+
+  it('a second connect() while registration is pending settles the first promise', async () => {
+    let registerCount = 0;
+    let ackSocket: any;
+    const tracking = createTrackingServer({
+      autoRegisterAck: false,
+      onMessage(ws, parsed) {
+        if (parsed.type === 'register') {
+          registerCount += 1;
+          // Only ack the *second* registration so the first connect() is left
+          // pending until it is superseded.
+          if (registerCount === 2) ackSocket = ws;
+        }
+      },
+    });
+    server = tracking.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      activities: { processOrder: async (input) => input },
+    });
+
+    const first = worker.connect();
+    await waitForCondition(() => registerCount === 1, {
+      timeoutMs: 1_000,
+      label: 'first register received',
+    });
+
+    const second = worker.connect();
+
+    // The first promise must settle (reject) rather than hang forever.
+    const firstHang = sleepForTesting(250).then(() => {
+      throw new Error('first connect() remained pending after supersession');
+    });
+    await expect(Promise.race([first, firstHang])).rejects.toThrow(
+      'Superseded by a new connect() call',
+    );
+
+    await waitForCondition(() => registerCount === 2 && ackSocket !== undefined, {
+      timeoutMs: 1_000,
+      label: 'second register received',
+    });
+    ackSocket.send(
+      JSON.stringify({
+        type: 'registerAck',
+        protocolVersion: 2,
+        workerId: 'reentrancy-worker',
+        queue: 'default',
+        activities: [],
+        concurrency: 10,
+      }),
+    );
+
+    await expect(second).resolves.toBeUndefined();
+    expect(worker.connected).toBe(true);
+
+    await worker.disconnect();
+  });
+
+  it('a second connect() from a pending state closes the prior socket', async () => {
+    let registerCount = 0;
+    const tracking = createTrackingServer({
+      autoRegisterAck: false,
+      onMessage(ws, parsed) {
+        if (parsed.type === 'register') {
+          registerCount += 1;
+          // Ack only the second registration.
+          if (registerCount === 2) {
+            ws.send(
+              JSON.stringify({
+                type: 'registerAck',
+                protocolVersion: 2,
+                workerId: parsed.workerId,
+                queue: 'default',
+                activities: parsed.activities,
+                concurrency: 10,
+              }),
+            );
+          }
+        }
+      },
+    });
+    server = tracking.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      activities: { processOrder: async (input) => input },
+    });
+
+    const first = worker.connect();
+    await waitForCondition(() => registerCount === 1, {
+      timeoutMs: 1_000,
+      label: 'first register',
+    });
+    first.catch(() => {});
+
+    await worker.connect();
+    expect(worker.connected).toBe(true);
+
+    // The prior socket must have been closed by the re-entrancy teardown.
+    await waitForCondition(() => tracking.closeCount() >= 1, {
+      timeoutMs: 1_000,
+      label: 'prior socket closed',
+    });
+    expect(tracking.closeCount()).toBeGreaterThanOrEqual(1);
+
+    await worker.disconnect();
+  });
+
+  it('a redundant connect() on an already-connected worker is a no-op', async () => {
+    const tracking = createTrackingServer();
+    server = tracking.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      activities: { processOrder: async (input) => input },
+    });
+
+    await worker.connect();
+    expect(worker.connected).toBe(true);
+    expect(tracking.sockets.length).toBe(1);
+
+    // Redundant connect() must not open a second socket or close the live one.
+    await expect(worker.connect()).resolves.toBeUndefined();
+    // Give any stray socket activity a chance to surface.
+    await sleepForTesting(50);
+    expect(tracking.sockets.length).toBe(1);
+    expect(tracking.closeCount()).toBe(0);
+    expect(worker.connected).toBe(true);
+
+    await worker.disconnect();
+  });
+
+  it('a late registerAck from a superseded socket fires no handler', async () => {
+    let registerCount = 0;
+    let firstSocket: any;
+    let secondSocket: any;
+    const tracking = createTrackingServer({
+      autoRegisterAck: false,
+      onMessage(ws, parsed) {
+        if (parsed.type === 'register') {
+          registerCount += 1;
+          if (registerCount === 1) firstSocket = ws;
+          if (registerCount === 2) secondSocket = ws;
+        }
+      },
+    });
+    server = tracking.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      activities: { processOrder: async (input) => input },
+    });
+
+    const first = worker.connect();
+    await waitForCondition(() => firstSocket !== undefined, {
+      timeoutMs: 1_000,
+      label: 'first socket',
+    });
+    first.catch(() => {});
+
+    const second = worker.connect();
+    await waitForCondition(() => secondSocket !== undefined, {
+      timeoutMs: 1_000,
+      label: 'second socket',
+    });
+
+    // Deliver a late ack on the SUPERSEDED first socket. Its listeners were
+    // detached by the abort-before-attach teardown, so this must not resolve
+    // the second pending registration. The second connect() promise must still
+    // be pending after the stale ack.
+    let secondSettled = false;
+    void second.then(
+      () => (secondSettled = true),
+      () => (secondSettled = true),
+    );
+
+    firstSocket.send(
+      JSON.stringify({
+        type: 'registerAck',
+        protocolVersion: 2,
+        workerId: 'late',
+        queue: 'default',
+        activities: [],
+        concurrency: 10,
+      }),
+    );
+    await sleepForTesting(50);
+    expect(secondSettled).toBe(false);
+
+    // The second (current) socket's ack still works normally.
+    secondSocket.send(
+      JSON.stringify({
+        type: 'registerAck',
+        protocolVersion: 2,
+        workerId: 'current',
+        queue: 'default',
+        activities: [],
+        concurrency: 10,
+      }),
+    );
+    await expect(second).resolves.toBeUndefined();
+    expect(worker.connected).toBe(true);
+
+    await worker.disconnect();
+  });
+});
+
+describe('RemoteWorker — taskResult resend on reconnect', () => {
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  const originalWebSocket = globalThis.WebSocket;
+
+  afterEach(() => {
+    restoreRealTimers();
+    globalThis.WebSocket = originalWebSocket;
+    if (server) {
+      server.stop(true);
+      server = undefined;
+    }
+  });
+
+  it('buffers a result produced while the socket is down and flushes it on reconnect', async () => {
+    let resolveActivity: ((value: string) => void) | undefined;
+    const activityPromise = new Promise<string>((resolve) => {
+      resolveActivity = resolve;
+    });
+
+    // Keep the server listening across the disconnect; close only the worker's
+    // socket so reconnect to the same URL succeeds.
+    const harness = createReconnectServer((ws, idx) => {
+      if (idx === 0) {
+        ws.send(
+          JSON.stringify({
+            type: 'task',
+            operationId: 'op-buffer',
+            activityName: 'slow',
+            input: null,
+          }),
+        );
+      }
+    });
+    server = harness.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      activities: {
+        slow: async () => activityPromise,
+      },
+    });
+
+    await worker.connect();
+    await waitForCondition(() => worker.inFlight === 1, {
+      timeoutMs: 1_000,
+      label: 'activity in flight',
+    });
+
+    // Deterministically close the worker's socket now that the activity is
+    // confirmed in flight (no timer race).
+    harness.socketFor(0).close();
+    await waitForCondition(() => !worker.connected, {
+      timeoutMs: 1_000,
+      label: 'socket down',
+    });
+
+    // Complete the activity while the socket is down → result must be buffered.
+    resolveActivity!('buffered-value');
+    await waitForCondition(() => worker.inFlight === 0, {
+      timeoutMs: 1_000,
+      label: 'activity drained',
+    });
+    expect(harness.framesFor(0).some((m) => m.type === 'taskResult')).toBe(false);
+
+    // Reconnect to the same still-listening server.
+    await worker.connect();
+    await waitForCondition(() => harness.framesFor(1).some((m) => m.type === 'taskResult'), {
+      timeoutMs: 1_000,
+      label: 'buffered result flushed on reconnect',
+    });
+
+    const flushed = harness.framesFor(1).find((m) => m.type === 'taskResult');
+    expect(flushed.operationId).toBe('op-buffer');
+    expect(flushed.status).toBe('completed');
+    expect(flushed.value).toBe('buffered-value');
+
+    await worker.disconnect();
+  });
+
+  it('sends a result immediately when connected and registered (no later duplicate)', async () => {
+    const allFrames: any[] = [];
+    // Deliver the task only on the first registration so a later reconnect
+    // cannot re-deliver it; any second taskResult would have to come from the
+    // outbox re-flushing an already-sent result.
+    const harness = createReconnectServer((ws, idx) => {
+      if (idx === 0) {
+        ws.send(
+          JSON.stringify({
+            type: 'task',
+            operationId: 'op-immediate',
+            activityName: 'echo',
+            input: 'hi',
+          }),
+        );
+      }
+    });
+    server = harness.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      activities: { echo: async (input) => input },
+    });
+
+    await worker.connect();
+    await waitForCondition(() => harness.framesFor(0).some((m) => m.type === 'taskResult'), {
+      timeoutMs: 1_000,
+      label: 'immediate result',
+    });
+    allFrames.push(...harness.allFrames());
+    const count = allFrames.filter((m) => m.type === 'taskResult').length;
+    expect(count).toBe(1);
+
+    // A subsequent reconnect must not re-flush an already-sent result.
+    await worker.disconnect();
+    await worker.connect();
+    await sleepForTesting(50);
+    const total = harness.allFrames().filter((m) => m.type === 'taskResult').length;
+    expect(total).toBe(1);
+
+    await worker.disconnect();
+  });
+
+  it('buffers a failed result and flushes it on reconnect', async () => {
+    let resolveBlock: (() => void) | undefined;
+    const blockPromise = new Promise<void>((resolve) => {
+      resolveBlock = resolve;
+    });
+
+    const harness = createReconnectServer((ws, idx) => {
+      if (idx === 0) {
+        ws.send(
+          JSON.stringify({
+            type: 'task',
+            operationId: 'op-fail',
+            activityName: 'boom',
+            input: null,
+          }),
+        );
+      }
+    });
+    server = harness.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      activities: {
+        boom: async () => {
+          await blockPromise;
+          throw new Error('activity blew up');
+        },
+      },
+    });
+
+    await worker.connect();
+    await waitForCondition(() => worker.inFlight === 1, {
+      timeoutMs: 1_000,
+      label: 'boom in flight',
+    });
+    harness.socketFor(0).close();
+    await waitForCondition(() => !worker.connected, {
+      timeoutMs: 1_000,
+      label: 'socket down before failure',
+    });
+
+    resolveBlock!();
+    await waitForCondition(() => worker.inFlight === 0, {
+      timeoutMs: 1_000,
+      label: 'boom drained',
+    });
+    expect(harness.framesFor(0).some((m) => m.type === 'taskResult')).toBe(false);
+
+    await worker.connect();
+    await waitForCondition(() => harness.framesFor(1).some((m) => m.type === 'taskResult'), {
+      timeoutMs: 1_000,
+      label: 'failed result flushed',
+    });
+
+    const flushed = harness.framesFor(1).find((m) => m.type === 'taskResult');
+    expect(flushed.operationId).toBe('op-fail');
+    expect(flushed.status).toBe('failed');
+    expect(flushed.error).toBe('activity blew up');
+
+    await worker.disconnect();
+  });
+
+  it('does not enter the outbox when an activity resolves after dispose', async () => {
+    let resolveActivity: ((value: string) => void) | undefined;
+    const activityPromise = new Promise<string>((resolve) => {
+      resolveActivity = resolve;
+    });
+
+    const harness = createReconnectServer((ws, idx) => {
+      if (idx === 0) {
+        ws.send(
+          JSON.stringify({
+            type: 'task',
+            operationId: 'op-after-dispose',
+            activityName: 'slow',
+            input: null,
+          }),
+        );
+      }
+    });
+    server = harness.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      activities: { slow: async () => activityPromise },
+    });
+
+    await worker.connect();
+    await waitForCondition(() => worker.inFlight === 1, {
+      timeoutMs: 1_000,
+      label: 'slow in flight before dispose',
+    });
+    harness.socketFor(0).close();
+    await waitForCondition(() => !worker.connected, {
+      timeoutMs: 1_000,
+      label: 'socket down before dispose',
+    });
+
+    worker[Symbol.dispose]();
+    // Activity resolves AFTER disposal — its result must be dropped, not buffered.
+    resolveActivity!('too-late');
+    await sleepForTesting(50);
+
+    // Post-dispose connect() rejects (terminal contract); nothing flushes.
+    await expect(worker.connect()).rejects.toThrow(
+      'RemoteWorker has been disposed and cannot reconnect',
+    );
+    await sleepForTesting(50);
+    expect(harness.framesFor(1).some((m) => m.type === 'taskResult')).toBe(false);
+  });
+});
+
+describe('RemoteWorker — send-failure recovery and backpressure', () => {
+  let server: ReturnType<typeof Bun.serve> | undefined;
+  const originalWebSocket = globalThis.WebSocket;
+
+  afterEach(() => {
+    restoreRealTimers();
+    globalThis.WebSocket = originalWebSocket;
+    if (server) {
+      server.stop(true);
+      server = undefined;
+    }
+  });
+
+  /**
+   * Patch the global WebSocket with a wrapper whose `send()` throws once on
+   * demand while `readyState` still reports OPEN — the real "socket died in the
+   * gap after the readyState check" race, made deterministic.
+   */
+  function installSendThrottle(): { armThrow: () => void } {
+    const control = { shouldThrow: false };
+    class ThrowingWebSocket extends originalWebSocket {
+      override send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {
+        // Only sabotage taskResult frames so register/heartbeat sends still
+        // succeed; the race we model is a result send failing mid-flight.
+        const isTaskResult = typeof data === 'string' && data.includes('"type":"taskResult"');
+        if (control.shouldThrow && isTaskResult) {
+          control.shouldThrow = false;
+          throw new Error('simulated send failure');
+        }
+        super.send(data as any);
+      }
+    }
+    globalThis.WebSocket = ThrowingWebSocket as unknown as typeof WebSocket;
+    return { armThrow: () => (control.shouldThrow = true) };
+  }
+
+  it('recovers a result when send() throws in #sendTaskResult while OPEN', async () => {
+    const { armThrow } = installSendThrottle();
+
+    let resolveActivity: ((v: string) => void) | undefined;
+    const activityPromise = new Promise<string>((resolve) => (resolveActivity = resolve));
+
+    const harness = createReconnectServer((ws, idx) => {
+      if (idx === 0) {
+        ws.send(
+          JSON.stringify({
+            type: 'task',
+            operationId: 'op-throw',
+            activityName: 'slow',
+            input: null,
+          }),
+        );
+      }
+    });
+    server = harness.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      activities: { slow: async () => activityPromise },
+    });
+
+    await worker.connect();
+    await waitForCondition(() => worker.inFlight === 1, {
+      timeoutMs: 1_000,
+      label: 'slow in flight',
+    });
+
+    // Arm the throw so the upcoming taskResult send fails while OPEN.
+    armThrow();
+    resolveActivity!('recovered-value');
+
+    // The send failure must fail the socket (worker becomes disconnected).
+    await waitForCondition(() => !worker.connected, {
+      timeoutMs: 1_000,
+      label: 'socket failed after send throw',
+    });
+    expect(harness.framesFor(0).some((m) => m.type === 'taskResult')).toBe(false);
+
+    // Reconnect flushes the buffered result — no external trigger beyond connect().
+    await worker.connect();
+    await waitForCondition(() => harness.framesFor(1).some((m) => m.type === 'taskResult'), {
+      timeoutMs: 1_000,
+      label: 'result flushed after send-throw recovery',
+    });
+    const flushed = harness.framesFor(1).find((m) => m.type === 'taskResult');
+    expect(flushed.operationId).toBe('op-throw');
+    expect(flushed.status).toBe('completed');
+    expect(flushed.value).toBe('recovered-value');
+
+    await worker.disconnect();
+  });
+
+  it('rejects connect() when send() throws during the registerAck flush, then recovers', async () => {
+    const { armThrow } = installSendThrottle();
+
+    let resolveActivity: ((v: string) => void) | undefined;
+    const activityPromise = new Promise<string>((resolve) => (resolveActivity = resolve));
+
+    const harness = createReconnectServer((ws, idx) => {
+      if (idx === 0) {
+        ws.send(
+          JSON.stringify({
+            type: 'task',
+            operationId: 'op-flush-throw',
+            activityName: 'slow',
+            input: null,
+          }),
+        );
+      }
+    });
+    server = harness.server;
+
+    // Registration 0: deliver task, then drop so the result buffers.
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      activities: { slow: async () => activityPromise },
+    });
+    await worker.connect();
+    await waitForCondition(() => worker.inFlight === 1, {
+      timeoutMs: 1_000,
+      label: 'flush-throw in flight',
+    });
+    harness.socketFor(0).close();
+    await waitForCondition(() => !worker.connected, {
+      timeoutMs: 1_000,
+      label: 'socket down (flush-throw)',
+    });
+    resolveActivity!('flush-value');
+    await waitForCondition(() => worker.inFlight === 0, {
+      timeoutMs: 1_000,
+      label: 'flush-throw drained',
+    });
+
+    // Registration 1: ack arrives, but the flush send throws → connect() rejects.
+    armThrow();
+    await expect(worker.connect()).rejects.toThrow(
+      'reconnect required: result flush failed during registration',
+    );
+    expect(worker.connected).toBe(false);
+    expect(harness.framesFor(1).some((m) => m.type === 'taskResult')).toBe(false);
+
+    // Registration 2: a fresh connect() re-registers and flushes the survivor.
+    await worker.connect();
+    await waitForCondition(() => harness.framesFor(2).some((m) => m.type === 'taskResult'), {
+      timeoutMs: 1_000,
+      label: 'survivor flushed on retry',
+    });
+    const flushed = harness.framesFor(2).find((m) => m.type === 'taskResult');
+    expect(flushed.operationId).toBe('op-flush-throw');
+    expect(flushed.status).toBe('completed');
+
+    await worker.disconnect();
+  });
+
+  it('does not send a result before registration completes (open but not acked)', async () => {
+    const messagesByRegistration: any[][] = [];
+    let registers = 0;
+    let resolveActivity: ((v: string) => void) | undefined;
+    const activityPromise = new Promise<string>((resolve) => (resolveActivity = resolve));
+    let ackSecond: (() => void) | undefined;
+    let firstSocket: any;
+
+    // One long-lived server. Registration 0 is acked immediately and gets a
+    // task; registration 1's ack is withheld until the test triggers it, so we
+    // can observe the open-but-not-acked window.
+    server = Bun.serve({
+      port: 0,
+      fetch(request, srv) {
+        if (srv.upgrade(request, { data: undefined })) return undefined;
+        return new Response('ok');
+      },
+      websocket: {
+        message(ws, message) {
+          const parsed = JSON.parse(String(message));
+          if (parsed.type === 'register') {
+            const idx = registers++;
+            (ws as any).__index = idx;
+            messagesByRegistration[idx] = messagesByRegistration[idx] ?? [];
+            if (idx === 0) {
+              firstSocket = ws;
+              ws.send(
+                JSON.stringify({
+                  type: 'registerAck',
+                  protocolVersion: 2,
+                  workerId: parsed.workerId,
+                  queue: 'default',
+                  activities: parsed.activities,
+                  concurrency: 10,
+                }),
+              );
+              ws.send(
+                JSON.stringify({
+                  type: 'task',
+                  operationId: 'op-preack',
+                  activityName: 'slow',
+                  input: null,
+                }),
+              );
+            } else {
+              ackSecond = () =>
+                ws.send(
+                  JSON.stringify({
+                    type: 'registerAck',
+                    protocolVersion: 2,
+                    workerId: parsed.workerId,
+                    queue: 'default',
+                    activities: parsed.activities,
+                    concurrency: 10,
+                  }),
+                );
+            }
+          } else {
+            const idx = (ws as any).__index as number;
+            messagesByRegistration[idx] = messagesByRegistration[idx] ?? [];
+            messagesByRegistration[idx].push(parsed);
+          }
+        },
+        close(_ws) {},
+      },
+    });
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      activities: { slow: async () => activityPromise },
+    });
+    await worker.connect();
+    await waitForCondition(() => worker.inFlight === 1, {
+      timeoutMs: 1_000,
+      label: 'preack in flight',
+    });
+    firstSocket.close();
+    await waitForCondition(() => !worker.connected, {
+      timeoutMs: 1_000,
+      label: 'socket down (preack)',
+    });
+    resolveActivity!('preack-value');
+    await waitForCondition(() => worker.inFlight === 0, {
+      timeoutMs: 1_000,
+      label: 'preack drained',
+    });
+
+    const connectPromise = worker.connect();
+    await waitForCondition(() => ackSecond !== undefined, {
+      timeoutMs: 1_000,
+      label: 'second register received (pre-ack)',
+    });
+
+    const framesFor = (index: number): any[] => messagesByRegistration[index] ?? [];
+
+    // The socket is OPEN but not yet acked — no taskResult may have been sent.
+    await sleepForTesting(50);
+    expect(framesFor(1).some((m) => m.type === 'taskResult')).toBe(false);
+
+    // Now ack → the buffered result flushes.
+    ackSecond!();
+    await connectPromise;
+    await waitForCondition(() => framesFor(1).some((m) => m.type === 'taskResult'), {
+      timeoutMs: 1_000,
+      label: 'preack result flushed after ack',
+    });
+    const flushed = framesFor(1).find((m) => m.type === 'taskResult');
+    expect(flushed.operationId).toBe('op-preack');
+
+    await worker.disconnect();
+  });
+
+  it('declines a task without executing or emitting a frame when the buffer is full', async () => {
+    // A zero-capacity outbox is full from construction (isOutboxFull(0, 0) is
+    // true), so #executeTask hits the backpressure branch on the very first
+    // task — over a healthy, registered socket, with no flush and no timer
+    // race. This pins the decline branch itself (not a listener-detachment
+    // side effect): the activity body must never run, no taskResult frame is
+    // emitted, and the socket is failed so the server can redeliver.
+    let declinedRan = false;
+    const harness = createReconnectServer((ws, idx) => {
+      if (idx === 0) {
+        ws.send(
+          JSON.stringify({
+            type: 'task',
+            operationId: 'op-declined',
+            activityName: 'declined',
+            input: null,
+          }),
+        );
+      }
+    });
+    server = harness.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      maxBufferedResults: 0,
+      activities: {
+        declined: async () => {
+          declinedRan = true;
+          return 'should-not-run';
+        },
+      },
+    });
+
+    await worker.connect();
+    // The decline path fails the socket, so the worker disconnects without ever
+    // running the activity. Waiting on that observable condition (not a sleep)
+    // proves the branch fired.
+    await waitForCondition(() => !worker.connected, {
+      timeoutMs: 1_000,
+      label: 'socket failed by backpressure decline',
+    });
+
+    expect(declinedRan).toBe(false);
+    expect(worker.inFlight).toBe(0);
+    expect(harness.allFrames().some((m) => m.type === 'taskResult')).toBe(false);
+  });
+
+  it('a frame on a failed socket cannot mutate the new connection state', async () => {
+    const { armThrow } = installSendThrottle();
+    let failedSocket: any;
+    let resolveActivity: ((v: string) => void) | undefined;
+    const activityPromise = new Promise<string>((resolve) => (resolveActivity = resolve));
+
+    const harness = createReconnectServer((ws, idx) => {
+      if (idx === 0) {
+        failedSocket = ws;
+        ws.send(
+          JSON.stringify({
+            type: 'task',
+            operationId: 'op-failsock',
+            activityName: 'slow',
+            input: null,
+          }),
+        );
+      }
+    });
+    server = harness.server;
+
+    const worker = new RemoteWorker({
+      serverUrl: `ws://localhost:${server.port}`,
+      activities: { slow: async () => activityPromise },
+    });
+    await worker.connect();
+    await waitForCondition(() => worker.inFlight === 1, {
+      timeoutMs: 1_000,
+      label: 'failsock in flight',
+    });
+
+    armThrow();
+    resolveActivity!('v');
+    await waitForCondition(() => !worker.connected, {
+      timeoutMs: 1_000,
+      label: 'socket failed (failsock)',
+    });
+
+    // Reconnect to the same still-listening server.
+    await worker.connect();
+    await waitForCondition(() => worker.connected, {
+      timeoutMs: 1_000,
+      label: 'reconnected after failsock',
+    });
+
+    // The old (failed) socket's listeners were detached. A late `shutdown`
+    // frame on it would, if a listener were still attached, drive a graceful
+    // shutdown of the worker — so assert we stay connected.
+    if (failedSocket) {
+      try {
+        failedSocket.send(JSON.stringify({ type: 'shutdown' }));
+      } catch {
+        // Socket already closed server-side — fine.
+      }
+    }
+    await sleepForTesting(50);
+    expect(worker.connected).toBe(true);
 
     await worker.disconnect();
   });

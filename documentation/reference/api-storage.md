@@ -6,6 +6,7 @@ Weft's storage layer is a key-value interface with ordered range scans and atomi
 
 ```ts partial
 interface Storage extends Disposable {
+  capabilities(): StorageCapabilities;
   get(key: string): Promise<Uint8Array | null>;
   put(key: string, value: Uint8Array): Promise<void>;
   delete(key: string): Promise<void>;
@@ -14,6 +15,14 @@ interface Storage extends Disposable {
   query?<T>(sql: string, params?: unknown[]): Promise<T[]>;
 }
 ```
+
+### `capabilities()`
+
+```ts partial
+capabilities(): StorageCapabilities
+```
+
+Required on every adapter. Returns the backend's honest consistency and feature profile. The engine reads this to decide what is safe; `conditionalBatch` is enforced at runtime via `requireStorageCapability`. See [`StorageCapabilities`](#storagecapabilities) and the [Consistency & capabilities](../guides/storage.md#consistency-capabilities) guide.
 
 ### `get()`
 
@@ -78,6 +87,28 @@ type BatchOperation =
   | { type: 'put'; key: string; value: Uint8Array }
   | { type: 'delete'; key: string };
 ```
+
+### `StorageCapabilities`
+
+```ts partial
+type StorageCapabilities = {
+  readAfterWrite: 'linearizable' | 'session' | 'eventual';
+  scanConsistency: 'snapshot' | 'best-effort';
+  atomicBatch: boolean;
+  conditionalBatch: boolean;
+  boundedRangeDelete: boolean;
+};
+```
+
+The self-reported guarantee profile returned by [`capabilities()`](#capabilities). `conditionalBatch` is the only runtime-gated capability; `atomicBatch`/`readAfterWrite`/`scanConsistency` are trusted correctness contracts the engine does not verify, and `boundedRangeDelete` is an operational hint. The per-adapter matrix and the opaque-value invariant live in the [Consistency & capabilities](../guides/storage.md#consistency-capabilities) guide. Gate a feature with `requireStorageCapability(storage, 'conditionalBatch', featureName)`, whose capability parameter is typed [`GatedStorageCapabilityKey`](#gatedstoragecapabilitykey); it throws a clear diagnostic at first use when the capability is `false`.
+
+### `GatedStorageCapabilityKey`
+
+```ts partial
+type GatedStorageCapabilityKey = 'conditionalBatch';
+```
+
+The boolean capabilities the engine enforces at runtime via `requireStorageCapability`. Today this is only `'conditionalBatch'`. It is deliberately narrower than "every boolean capability": `atomicBatch`/`readAfterWrite`/`scanConsistency` are trusted contracts and `boundedRangeDelete` is an operational hint, so gating on them would be meaningless. A future gated capability is added to this type by an explicit edit.
 
 ### `ScanOptions`
 

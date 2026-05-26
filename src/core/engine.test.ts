@@ -5516,6 +5516,7 @@ describe('Engine', () => {
       const realStorage = new MemoryStorage();
       const deleteBatches: string[][] = [];
       const storage: WeftStorage = {
+        capabilities: realStorage.capabilities.bind(realStorage),
         get: realStorage.get.bind(realStorage),
         put: realStorage.put.bind(realStorage),
         delete: realStorage.delete.bind(realStorage),

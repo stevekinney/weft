@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'bun:test';
 
 import { BunSQLiteStorage } from './bun-sql';
+import { runStorageCapabilityConformance } from './storage-adapter.test-support.ts';
+
+runStorageCapabilityConformance('BunSQLiteStorage', {
+  create: () => new BunSQLiteStorage(':memory:'),
+  expected: {
+    readAfterWrite: 'linearizable',
+    scanConsistency: 'snapshot',
+    atomicBatch: true,
+    conditionalBatch: true,
+    boundedRangeDelete: true,
+  },
+});
 
 /** Helper to encode a string as Uint8Array. */
 function encode(value: string): Uint8Array {

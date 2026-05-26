@@ -10,6 +10,7 @@ import {
   type ConditionalBatchCondition,
   type ScanOptions,
   type Storage,
+  type StorageCapabilities,
 } from './interface.ts';
 import { scopedStorage } from './scoped-storage.ts';
 
@@ -32,6 +33,16 @@ import { scopedStorage } from './scoped-storage.ts';
 export type HTTPStorageOptions = {
   baseUrl: string | URL;
   headers?: Record<string, string>;
+  /**
+   * Whether the remote server's storage backend supports compare-and-swap.
+   * The client cannot detect this — it depends on the server's backend — so the
+   * honest default is `false`: a feature gated on `conditionalBatch` fails fast
+   * locally instead of issuing a request the server answers with `501`. Set
+   * `true` only when you have verified the remote backend implements it.
+   *
+   * @default false
+   */
+  remoteConditionalBatch?: boolean;
 };
 
 type HTTPBatchOperation =
@@ -172,10 +183,32 @@ async function* readNdjsonLines(response: Response): AsyncIterable<string> {
 export class HTTPStorage implements Storage {
   readonly #baseUrl: URL;
   readonly #headers: Record<string, string>;
+  readonly #remoteConditionalBatch: boolean;
 
   constructor(options: HTTPStorageOptions) {
     this.#baseUrl = options.baseUrl instanceof URL ? options.baseUrl : new URL(options.baseUrl);
     this.#headers = { ...options.headers };
+    this.#remoteConditionalBatch = options.remoteConditionalBatch ?? false;
+  }
+
+  capabilities(): StorageCapabilities {
+    // Remote KV over HTTP. The client offers no session affinity, token
+    // pinning, or documented read-your-writes guarantee, and scans stream
+    // NDJSON pages that can interleave with concurrent writes — so the honest
+    // floor is `eventual` / `best-effort`, independent of any stronger
+    // reference-server behavior. conditionalBatch support depends on the remote
+    // server's backend, which the client cannot detect; default to `false` so a
+    // gated feature fails fast locally instead of via a remote 501. Operators
+    // who verified remote CAS opt in via `remoteConditionalBatch: true`.
+    // deletePrefix uses the derived scan-and-delete fallback, so
+    // boundedRangeDelete is false.
+    return {
+      readAfterWrite: 'eventual',
+      scanConsistency: 'best-effort',
+      atomicBatch: true,
+      conditionalBatch: this.#remoteConditionalBatch,
+      boundedRangeDelete: false,
+    };
   }
 
   #url(path: string): URL {

@@ -14,6 +14,7 @@ import { z, type ZodIssue } from 'zod';
 import { FAILURE_CATEGORIES, isFailureCategory } from './failure-categories.ts';
 import type { FailureCategory, WorkflowStatus } from './types/identity.ts';
 import type { ListFilter } from './types/options.ts';
+import { WeftError } from './weft-error.ts';
 
 const WORKFLOW_STATUSES = [
   'pending',
@@ -123,7 +124,7 @@ function flattenIssue(issue: ZodIssue): FilterValidationIssue {
  * Carries flattened Zod issues so transport adapters can map directly to the
  * existing `InvalidParams` fault shape.
  */
-export class ListFilterValidationError extends Error {
+export class ListFilterValidationError extends WeftError<'ListFilterValidationError'> {
   readonly issues: ReadonlyArray<FilterValidationIssue>;
 
   constructor(issues: ReadonlyArray<FilterValidationIssue>) {
@@ -133,8 +134,7 @@ export class ListFilterValidationError extends Error {
         return path.length > 0 ? `${path}: ${issue.message}` : issue.message;
       })
       .join('; ');
-    super(summary.length > 0 ? summary : 'Invalid list filter');
-    this.name = 'ListFilterValidationError';
+    super('ListFilterValidationError', summary.length > 0 ? summary : 'Invalid list filter');
     this.issues = issues;
   }
 }

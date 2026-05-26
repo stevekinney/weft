@@ -8,7 +8,18 @@ import {
   withFailingIndexedDbOpen,
   withFakeIndexedDb,
 } from './indexeddb-fault-harness.test-support.ts';
-import { collect } from './storage-adapter.test-support.ts';
+import { collect, runStorageCapabilityConformance } from './storage-adapter.test-support.ts';
+
+runStorageCapabilityConformance('IndexedDBStorage', {
+  create: () => new IndexedDBStorage(`weft-caps-${String(Math.random()).slice(2)}`),
+  expected: {
+    readAfterWrite: 'linearizable',
+    scanConsistency: 'best-effort',
+    atomicBatch: true,
+    conditionalBatch: true,
+    boundedRangeDelete: true,
+  },
+});
 
 const INDEXED_DB_LARGE_SCAN_TIMEOUT_MS = 30_000;
 

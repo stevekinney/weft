@@ -10,6 +10,7 @@
 import type { BatchOperation, Storage } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
+import { WeftError } from '../weft-error.ts';
 import { ReviewRequestedEvent } from './events.ts';
 
 // ---------------------------------------------------------------------------
@@ -204,13 +205,12 @@ export type EscalationAction =
  * }
  * ```
  */
-export class ReviewTimeoutError extends Error {
+export class ReviewTimeoutError extends WeftError<'ReviewTimeoutError'> {
   readonly reviewId: string;
   readonly elapsed: number;
 
   constructor(reviewId: string, elapsed: number) {
-    super(`Review ${reviewId} timed out after ${elapsed}ms`);
-    this.name = 'ReviewTimeoutError';
+    super('ReviewTimeoutError', `Review ${reviewId} timed out after ${elapsed}ms`);
     this.reviewId = reviewId;
     this.elapsed = elapsed;
   }

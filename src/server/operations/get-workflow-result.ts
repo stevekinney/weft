@@ -66,11 +66,14 @@ export const getWorkflowResultOperation = defineOperation<
     const handle = e.getHandle(input.workflowId);
     const timeoutMilliseconds = 30_000;
 
+    // Clear the loser timer in `finally` so the common path (`handle.result()` wins)
+    // does not leak a dangling 30s timer that pins the rejection closure alive.
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
       const result = await Promise.race([
         handle.result(),
         new Promise<never>((_resolve, reject) => {
-          setTimeout(
+          timeoutId = setTimeout(
             () => reject(new Error('Timeout waiting for workflow result')),
             timeoutMilliseconds,
           );
@@ -100,6 +103,9 @@ export const getWorkflowResultOperation = defineOperation<
         data: {},
       };
       throw fault;
+    } finally {
+      // `clearTimeout(undefined)` is a safe no-op, so no guard is needed.
+      clearTimeout(timeoutId);
     }
   },
 });

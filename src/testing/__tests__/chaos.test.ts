@@ -88,8 +88,11 @@ describe('withChaos', () => {
     const elapsed = Date.now() - start;
 
     // Delay fault must actually delay — DELAY_FAULT_MS in chaos.ts is 50ms.
-    // A trivially-true ≥0 assertion would not catch a broken delay implementation.
-    expect(elapsed).toBeGreaterThanOrEqual(50);
+    // Assert a substantial floor (not a trivially-true ≥0) so a broken no-delay
+    // implementation still fails, but allow a small tolerance below the nominal 50ms:
+    // `setTimeout` timers can fire a hair early and `Date.now()` can undershoot from
+    // coarse resolution, so a real 50ms sleep occasionally measures ~48ms under load.
+    expect(elapsed).toBeGreaterThanOrEqual(40);
   });
 
   // -------------------------------------------------------------------------

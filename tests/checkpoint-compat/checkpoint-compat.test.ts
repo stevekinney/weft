@@ -10,22 +10,13 @@ import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../src/core/engine.ts';
-import type { WorkflowEvent, WorkflowState, WorkflowTimelineEntry } from '../../src/core/types.ts';
 import type { Storage } from '../../src/storage/interface.ts';
 import {
   registerScenarioHandlers,
   scenarioNames,
 } from '../../src/testing/replay-scenarios.test-support.ts';
 import { storageBackends, teardown } from '../../src/testing/storage-backends.ts';
-
-type TraceFixture = {
-  scenario: string;
-  description: string;
-  events: WorkflowEvent[];
-  timeline: WorkflowTimelineEntry[];
-  finalState: WorkflowState;
-  storage: Record<string, string>;
-};
+import type { TraceFixture } from '../../src/testing/trace-fixture-support.test-support.ts';
 
 const checkpointFixtureDirectory = 'tests/checkpoint-compat';
 const replayFixtureDirectory = 'tests/replay-fixtures';

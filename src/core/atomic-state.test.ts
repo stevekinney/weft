@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { createCoreStorageAdapter } from '../storage/storage-adapter.test-support.ts';
 import {
   AtomicState,
   AtomicStateChangeEvent,
@@ -16,6 +17,31 @@ import { decode } from './codec.ts';
 function createStorage() {
   return new MemoryStorage();
 }
+
+describe('AtomicState capability gate', () => {
+  it('throws a clear diagnostic when the backend lacks conditionalBatch', async () => {
+    // createCoreStorageAdapter reports capabilities().conditionalBatch === false.
+    using storage = createCoreStorageAdapter();
+    const state = new AtomicState<number>(storage, KEYS.stateExecution('wf-1', 'counter'), {
+      initial: 0,
+    });
+
+    await expect(state.set(1)).rejects.toThrow(
+      'Feature "AtomicState compare-and-swap" requires storage capability "conditionalBatch", but this storage backend does not provide it.',
+    );
+  });
+
+  it('throws on delete() too when the backend lacks conditionalBatch', async () => {
+    using storage = createCoreStorageAdapter();
+    const state = new AtomicState<number>(storage, KEYS.stateExecution('wf-1', 'counter'), {
+      initial: 0,
+    });
+
+    await expect(state.delete()).rejects.toThrow(
+      'Feature "AtomicState compare-and-swap" requires storage capability "conditionalBatch", but this storage backend does not provide it.',
+    );
+  });
+});
 
 describe('AtomicState', () => {
   it('returns construction initial only before the slot has ever been written', async () => {

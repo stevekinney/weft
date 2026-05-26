@@ -20,7 +20,12 @@
  *
  * @module weft/storage
  */
-import { KEYS, storageConditionalBatch, storageValuesEqual } from './interface';
+import {
+  KEYS,
+  requireStorageCapability,
+  storageConditionalBatch,
+  storageValuesEqual,
+} from './interface';
 import { MemoryStorage } from './memory';
 import { resolveStorage } from './resolve';
 import { ScopedStorage, scopedStorage } from './scoped-storage';
@@ -134,6 +139,18 @@ const exportedScopedStorageFactory = scopedStorage;
 const exportedStorageConditionalBatch = storageConditionalBatch;
 
 /**
+ * Re-exported {@link requireStorageCapability}. See the original declaration for full docs.
+ *
+ * @example
+ * ```ts
+ * import { MemoryStorage, requireStorageCapability } from 'weft/storage';
+ * await using storage = new MemoryStorage();
+ * requireStorageCapability(storage, 'conditionalBatch', 'compare-and-swap');
+ * ```
+ */
+const exportedRequireStorageCapability = requireStorageCapability;
+
+/**
  * Re-exported {@link storageValuesEqual}. See the original declaration for full docs.
  *
  * @example
@@ -171,11 +188,18 @@ const exportedTextValueStore = textValueStore;
  */
 const exportedWithCodec = withCodec;
 
-export type { BatchOperation, ConditionalBatchCondition, ScanOptions, Storage } from './interface';
+export type { JSONValue } from '../core/json.ts';
+export type {
+  BatchOperation,
+  ConditionalBatchCondition,
+  GatedStorageCapabilityKey,
+  ScanOptions,
+  Storage,
+  StorageCapabilities,
+} from './interface';
 export type { StorageConfiguration } from './resolve';
 export type { TextValueStore } from './text-value-store';
 export type {
-  JsonValue,
   MessagePackValue,
   StorageCodec,
   StorageValueParser,
@@ -187,6 +211,7 @@ export {
   exportedKeys as KEYS,
   exportedMemoryStorage as MemoryStorage,
   exportedMsgpackCodec as msgpackCodec,
+  exportedRequireStorageCapability as requireStorageCapability,
   exportedResolveStorage as resolveStorage,
   exportedScopedStorage as ScopedStorage,
   exportedScopedStorageFactory as scopedStorage,

@@ -30,6 +30,9 @@ function wrapStorageWithUpdateScanHook(
   onUpdateScan: (prefix: string, options?: ScanOptions) => Promise<void> | void,
 ): Storage {
   const wrapped: Storage = {
+    capabilities() {
+      return storage.capabilities();
+    },
     get(key) {
       return storage.get(key);
     },
@@ -72,6 +75,9 @@ function wrapStorageWithStaleWorkflowStateRead(storage: Storage): {
   let staleWorkflowStateRead: { key: string; value: Uint8Array } | null = null;
 
   const wrapped: Storage = {
+    capabilities() {
+      return storage.capabilities();
+    },
     async get(key) {
       if (staleWorkflowStateRead !== null && key === staleWorkflowStateRead.key) {
         const staleStateBytes = new Uint8Array(staleWorkflowStateRead.value);
@@ -131,6 +137,9 @@ function wrapStorageWithDelayedUpdateResponse(storage: Storage, result: unknown)
   let responseTimerWasScheduled = false;
 
   return {
+    capabilities() {
+      return storage.capabilities();
+    },
     async get(key) {
       if (key.startsWith('upr:')) {
         const updateId = key.slice('upr:'.length);
@@ -176,6 +185,9 @@ function wrapStorageWithPostDeleteUpdateResponse(storage: Storage, result: unkno
   let visibleUpdateResponseId: string | null = null;
 
   return {
+    capabilities() {
+      return storage.capabilities();
+    },
     async get(key) {
       if (key.startsWith('upr:')) {
         const updateId = key.slice('upr:'.length);

@@ -1,4 +1,5 @@
 import type { Engine } from '../core/engine.ts';
+import { WeftError } from '../core/weft-error.ts';
 import { JSON_RPC_ERROR_CODES, type JsonRpcId } from '../server/json-rpc-protocol.ts';
 import { isAuthenticated, type Principal } from '../server/principal.ts';
 import { McpToolExecutionError } from './access.ts';
@@ -230,36 +231,34 @@ function objectParams(params: unknown): Record<string, unknown> {
   throw new McpProtocolError(JSON_RPC_ERROR_CODES.INVALID_PARAMS, 'MCP params must be an object');
 }
 
-class McpProtocolError extends Error {
-  readonly code: number;
+class McpProtocolError extends WeftError<'McpProtocolError'> {
+  readonly jsonRpcCode: number;
   readonly data: unknown;
 
-  constructor(code: number, message: string, data?: unknown) {
-    super(message);
-    this.name = 'McpProtocolError';
-    this.code = code;
+  constructor(jsonRpcCode: number, message: string, data?: unknown) {
+    super('McpProtocolError', message);
+    this.jsonRpcCode = jsonRpcCode;
     this.data = data;
   }
 
   toResponse(id: JsonRpcId): McpResponse {
-    if (this.code === -32011) return forbidden(id, this.message);
+    if (this.jsonRpcCode === -32011) return forbidden(id, this.message);
     return {
       jsonrpc: '2.0',
       id,
       error:
         this.data === undefined
-          ? { code: this.code, message: this.message }
-          : { code: this.code, message: this.message, data: this.data },
+          ? { code: this.jsonRpcCode, message: this.message }
+          : { code: this.jsonRpcCode, message: this.message, data: this.data },
     };
   }
 }
 
-class McpResponseError extends Error {
+class McpResponseError extends WeftError<'McpResponseError'> {
   readonly response: McpResponse;
 
   constructor(response: McpResponse) {
-    super(response.error?.message ?? 'MCP response error');
-    this.name = 'McpResponseError';
+    super('McpResponseError', response.error?.message ?? 'MCP response error');
     this.response = response;
   }
 

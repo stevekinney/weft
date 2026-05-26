@@ -6,6 +6,7 @@ import {
   type ConditionalBatchCondition,
   type ScanOptions,
   type Storage,
+  type StorageCapabilities,
 } from './interface';
 import { assertReadOnlyQuery } from './read-only-query';
 import { scopedStorage } from './scoped-storage';
@@ -72,6 +73,21 @@ export class TursoStorage implements Storage {
     this.#client = createClient(
       options.authToken ? { url: options.url, authToken: options.authToken } : { url: options.url },
     );
+  }
+
+  capabilities(): StorageCapabilities {
+    // libSQL over a single client connection. Honest floor across supported
+    // configs (local `file:` and remote primary) is read-your-writes per
+    // connection — `session`, since a separate instance/replica may lag. Scans
+    // run inside a libSQL transaction (snapshot); batch() and the range
+    // deletePrefix are single transactional statements.
+    return {
+      readAfterWrite: 'session',
+      scanConsistency: 'snapshot',
+      atomicBatch: true,
+      conditionalBatch: true,
+      boundedRangeDelete: true,
+    };
   }
 
   async #ensureTable(): Promise<void> {

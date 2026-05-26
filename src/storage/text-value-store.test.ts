@@ -9,6 +9,7 @@ function createCoreStorageAdapter(): Storage {
   const storage = new MemoryStorage();
 
   return {
+    capabilities: storage.capabilities.bind(storage),
     get: storage.get.bind(storage),
     put: storage.put.bind(storage),
     delete: storage.delete.bind(storage),

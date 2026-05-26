@@ -11,6 +11,7 @@
  * remaining REST-only meta and discovery endpoints.
  */
 
+import { WeftError } from '../core/weft-error.ts';
 import type { OperationFault } from './operation-fault.ts';
 import type { HttpMethod } from './route-model.ts';
 
@@ -18,10 +19,9 @@ import type { HttpMethod } from './route-model.ts';
  * Thrown by `bindingPathMatches` when a URL path parameter contains malformed
  * percent-encoding. The top-level handler catches it and returns a 400.
  */
-export class MalformedRouteParameterError extends Error {
+export class MalformedRouteParameterError extends WeftError<'MalformedRouteParameterError'> {
   constructor() {
-    super('Malformed route parameter encoding');
-    this.name = 'MalformedRouteParameterError';
+    super('MalformedRouteParameterError', 'Malformed route parameter encoding');
   }
 }
 

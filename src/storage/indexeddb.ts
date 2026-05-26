@@ -6,6 +6,7 @@ import {
   type ConditionalBatchCondition,
   type ScanOptions,
   type Storage,
+  type StorageCapabilities,
 } from './interface';
 import { scopedStorage } from './scoped-storage';
 
@@ -127,6 +128,23 @@ export class IndexedDBStorage implements Storage {
   constructor(databaseName: string = 'weft') {
     this.#databaseName = databaseName;
     this.#databasePromise = this.#open();
+  }
+
+  capabilities(): StorageCapabilities {
+    // IndexedDB transactional same-origin store: same-instance reads observe
+    // committed writes (linearizable); batch() runs in one readwrite
+    // transaction; deletePrefix uses an IDBKeyRange delete. scan() iterates a
+    // live cursor in a readonly transaction that auto-commits whenever the
+    // microtask queue drains between async steps, so a concurrent external write
+    // CAN appear mid-iteration — the honest scan level is best-effort, not
+    // snapshot.
+    return {
+      readAfterWrite: 'linearizable',
+      scanConsistency: 'best-effort',
+      atomicBatch: true,
+      conditionalBatch: true,
+      boundedRangeDelete: true,
+    };
   }
 
   #open(): Promise<IDBDatabase> {

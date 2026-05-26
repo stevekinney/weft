@@ -6,6 +6,7 @@
  */
 
 import type { ConstraintDefinition } from '../constraint.ts';
+import { WeftError } from '../weft-error.ts';
 import type { ActivityDefinition, ActivityFunction } from './activity.ts';
 import { clonePlain } from './clone-plain.ts';
 import { deepFreeze } from './deep-freeze.ts';
@@ -55,10 +56,9 @@ import type { WorkflowFunction } from './workflow-function.ts';
  * }
  * ```
  */
-export class WorkflowBuilderError extends Error {
+export class WorkflowBuilderError extends WeftError<'WorkflowBuilderError'> {
   constructor(message: string) {
-    super(message);
-    this.name = 'WorkflowBuilderError';
+    super('WorkflowBuilderError', message);
   }
 }
 

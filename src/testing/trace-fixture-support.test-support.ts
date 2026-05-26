@@ -24,9 +24,46 @@
  * all current callers invoke it sequentially.
  */
 
+import type { WorkflowEvent, WorkflowState, WorkflowTimelineEntry } from '../core/types.ts';
 import type { MemoryStorage } from '../storage/memory.ts';
 
 type RandomUuid = ReturnType<Crypto['randomUUID']>;
+
+/**
+ * The shape of a replay trace fixture JSON file. This is the single source of
+ * truth for the fixture contract, shared by the generator
+ * (`scripts/regenerate-trace-fixtures.ts`) and the verifier
+ * (`tests/replay-fixtures/replay-fixtures.test.ts`).
+ *
+ * Note: `replayMetadata.version` is the fixture-metadata schema version and is
+ * deliberately distinct from the engine's `CURRENT_CHECKPOINT_SCHEMA_VERSION`.
+ * Extending this type never changes persisted checkpoint or event bytes.
+ */
+export type TraceFixture = {
+  scenario: string;
+  description: string;
+  events: WorkflowEvent[];
+  timeline: WorkflowTimelineEntry[];
+  finalState: WorkflowState;
+  storage: Record<string, string>;
+  /**
+   * Replay metadata for scenarios that produce more than one terminal
+   * workflow. Optional and additive: absent means single-workflow replay (run
+   * the scenario, compare `finalState`). Present means the verifier also
+   * asserts each additional terminal workflow's persisted state via
+   * `engine.get(state.id)`.
+   */
+  replayMetadata?: {
+    version: 1;
+    /**
+     * Terminal workflow states produced beyond `finalState` (for example, the
+     * forked child). Each is compared by id via `engine.get(state.id)`, so the
+     * comparison is order-independent: the array order is not asserted. Must be
+     * non-empty when `replayMetadata` is present.
+     */
+    additionalTerminalStates: WorkflowState[];
+  };
+};
 
 /** A sorted snapshot of MemoryStorage as [key, bytes] pairs (deterministic key order). */
 export function sortedStorageEntries(storage: MemoryStorage): Array<readonly [string, Uint8Array]> {

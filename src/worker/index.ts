@@ -1,8 +1,10 @@
+/* oxlint-disable max-lines -- RemoteWorker is a single cohesive WebSocket lifecycle state machine (connect re-entrancy, registration ack, heartbeat, drain/shutdown, task dispatch, and the new result-resend/backpressure recovery) whose transitions all mutate the same private socket/abort/heartbeat/outbox fields; the connection-related fix that pushed it past 500 lines came after extracting every separable concern into siblings (task-result-outbox.ts, activity-table.ts, options.ts incl. buildRegisterMessage); rejected: splitting the lifecycle methods into free functions threading 6+ private fields, which fragments the state machine and harms readability without reducing real complexity. */
 // ---------------------------------------------------------------------------
 // Remote worker client — connects to the server via WebSocket
 // ---------------------------------------------------------------------------
 
 import { sleep } from '../runtime/portable.ts';
+import { normalizeWorkerJsonValue, resolveActivityTable } from './activity-table.ts';
 import {
   buildComposedInterceptor,
   executeWithInterceptors,
@@ -10,19 +12,22 @@ import {
 } from './execute-with-interceptors.ts';
 import { HeartbeatManager } from './heartbeat.ts';
 import {
-  REMOTE_WORKER_PROTOCOL_VERSION,
-  isRemoteWorkerJsonValue,
+  buildRegisterMessage,
+  type InternalRemoteWorkerOptions,
+  type PendingRegistration,
+  type RemoteWorkerOptions,
+} from './options.ts';
+import {
   parseServerToWorkerMessage,
-  type RemoteWorkerCapabilities,
-  type RemoteWorkerJsonValue,
   type ServerToWorkerMessage,
   type TaskMessage,
+  type TaskResultMessage,
 } from './protocol.ts';
-import {
-  buildQualifiedActivityTable,
-  type RemoteWorkerActivityFunction,
-  type RemoteWorkerWorkflowDefinition,
-} from './workflow-activity-binding.ts';
+import { MAX_BUFFERED_TASK_RESULTS, TaskResultOutbox } from './task-result-outbox.ts';
+import type { RemoteWorkerActivityFunction } from './workflow-activity-binding.ts';
+
+export type { RemoteWorkerOptions } from './options.ts';
+export { isOutboxFull, MAX_BUFFERED_TASK_RESULTS } from './task-result-outbox.ts';
 
 export { HeartbeatManager } from './heartbeat.ts';
 export { LongPollWorker } from './long-poll.ts';
@@ -36,55 +41,6 @@ export {
   type RemoteWorkerActivityImplementation,
   type RemoteWorkerWorkflowDefinition,
 } from './workflow-activity-binding.ts';
-
-// ---------------------------------------------------------------------------
-// Types
-// ---------------------------------------------------------------------------
-
-/**
- * Options accepted by `new RemoteWorker(...)`.
- *
- * Workers may advertise their activities in two equivalent ways:
- *
- *   1. **Preferred — `workflows`**: a map of `workflowType → { name, activities }`.
- *      The SDK builds the qualified `${workflowType}.${activityName}` table that
- *      protocol v2 expects and validates that each outer key matches the inner
- *      `workflow.name`. This is the API the engine-side builder produces.
- *   2. **Legacy — `activities`**: a flat map whose keys are already qualified
- *      names. Useful for tests and ad-hoc workers that don't use the builder.
- *
- * Exactly one of `workflows` / `activities` must be provided.
- */
-export interface RemoteWorkerOptions {
-  serverUrl: string;
-  workerId?: string;
-  /**
-   * Map of workflow type → workflow definition. The SDK produces qualified
-   * activity names from this map and validates name grammar + key/name match.
-   */
-  workflows?: Record<string, RemoteWorkerWorkflowDefinition>;
-  /**
-   * Flat map of qualified activity name → executor. When supplied without
-   * `workflows`, the worker advertises these names verbatim.
-   */
-  activities?: Record<string, RemoteWorkerActivityFunction>;
-  concurrency?: number; // default: 10
-  queue?: string; // default: 'default'
-  disconnectTimeoutMs?: number; // default: 30_000
-  deploymentName?: string;
-  buildId?: string;
-  runtimeVersion?: string;
-  gitSha?: string;
-  startedAt?: number;
-  capabilities?: RemoteWorkerCapabilities;
-  /** Activity interceptors to run around each activity execution on this worker. */
-  interceptors?: import('../core/interceptor.ts').ActivityInterceptor[];
-}
-
-type PendingRegistration = {
-  resolve: () => void;
-  reject: (error: Error) => void;
-};
 
 // ---------------------------------------------------------------------------
 // RemoteWorker
@@ -139,14 +95,25 @@ export class RemoteWorker implements Disposable {
   #taskAbortControllers: Map<string, AbortController>;
   #composedInterceptor: ComposedInterceptor | null;
   #pendingRegistration: PendingRegistration | null;
+  /**
+   * Terminal-completion frames produced while the socket was unusable. Flushed
+   * on the next `registerAck`; survives across `connect()` calls (the whole
+   * point of resend on reconnect) and is cleared only on disposal.
+   */
+  #taskResultOutbox: TaskResultOutbox;
+  /** Set once in `[Symbol.dispose]`. Disposal is terminal: post-dispose `connect()` rejects. */
+  #disposed: boolean;
+  /** Resolved worker id (provided or generated), stable for the instance lifetime. */
+  #workerId: string;
 
-  constructor(options: RemoteWorkerOptions) {
+  constructor(options: InternalRemoteWorkerOptions) {
     this.#activityTable = resolveActivityTable(options);
+    this.#workerId = options.workerId ?? crypto.randomUUID();
     this.#options = {
       ...options,
       concurrency: options.concurrency ?? DEFAULT_CONCURRENCY,
       queue: options.queue ?? DEFAULT_QUEUE,
-      workerId: options.workerId ?? crypto.randomUUID(),
+      workerId: this.#workerId,
     };
     this.#ws = null;
     this.#inFlight = 0;
@@ -155,48 +122,59 @@ export class RemoteWorker implements Disposable {
     this.#taskAbortControllers = new Map();
     this.#composedInterceptor = buildComposedInterceptor(options.interceptors);
     this.#pendingRegistration = null;
+    this.#taskResultOutbox = new TaskResultOutbox(
+      options.maxBufferedResults ?? MAX_BUFFERED_TASK_RESULTS,
+    );
+    this.#disposed = false;
     this.#heartbeat = new HeartbeatManager(() => {
-      this.#sendMessage({ type: 'heartbeat', workerId: this.#options.workerId });
+      this.#sendMessage({ type: 'heartbeat', workerId: this.#workerId });
     }, HEARTBEAT_INTERVAL_MS);
   }
 
   /** Connect to the server and start processing tasks. */
   async connect(): Promise<void> {
+    // Disposal is terminal: a disposed worker cannot be revived. Reconnection
+    // after a graceful stop uses disconnect() + connect(), neither of which
+    // sets #disposed.
+    if (this.#disposed) {
+      throw new Error('RemoteWorker has been disposed and cannot reconnect');
+    }
+
     // Reset shutdown flag so a reconnection after graceful shutdown can
     // accept new tasks (the flag is set by #gracefulShutdown and never
     // cleared elsewhere).
     this.#shuttingDown = false;
 
+    // Re-entrancy guard. A redundant connect() on a healthy, registered worker
+    // is a no-op — closing the live socket would force avoidable redelivery of
+    // in-flight tasks. Any other state (registration still pending, or a
+    // half-open/closing socket) is torn down first so the prior connect()
+    // promise is settled and the prior socket + listeners are released.
+    if (
+      this.#ws !== null &&
+      this.#ws.readyState === WebSocket.OPEN &&
+      this.#pendingRegistration === null
+    ) {
+      return;
+    }
+    this.#teardownActiveConnection('Superseded by a new connect() call');
+
     return new Promise<void>((resolve, reject) => {
       const ws = new WebSocket(this.#options.serverUrl);
+      // Track the socket immediately (while still CONNECTING) so a re-entrant
+      // connect() or a #failSocket() before `open` can close it instead of
+      // leaking it. The `connected` getter and #readySocket() already gate on
+      // readyState === OPEN, so a CONNECTING socket here is correctly treated as
+      // not-yet-usable.
+      this.#ws = ws;
       this.#pendingRegistration = { resolve, reject };
 
       ws.addEventListener(
         'open',
         () => {
-          this.#ws = ws;
-          this.#sendMessage({
-            type: 'register',
-            protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
-            workerId: this.#options.workerId,
-            activities: Object.keys(this.#activityTable),
-            concurrency: this.#options.concurrency,
-            queue: this.#options.queue,
-            ...(this.#options.deploymentName !== undefined
-              ? { deploymentName: this.#options.deploymentName }
-              : {}),
-            ...(this.#options.buildId !== undefined ? { buildId: this.#options.buildId } : {}),
-            ...(this.#options.runtimeVersion !== undefined
-              ? { runtimeVersion: this.#options.runtimeVersion }
-              : {}),
-            ...(this.#options.gitSha !== undefined ? { gitSha: this.#options.gitSha } : {}),
-            ...(this.#options.startedAt !== undefined
-              ? { startedAt: this.#options.startedAt }
-              : {}),
-            ...(this.#options.capabilities !== undefined
-              ? { capabilities: this.#options.capabilities }
-              : {}),
-          });
+          this.#sendMessage(
+            buildRegisterMessage(this.#workerId, Object.keys(this.#activityTable), this.#options),
+          );
         },
         { signal: this.#abortController.signal },
       );
@@ -251,6 +229,11 @@ export class RemoteWorker implements Disposable {
   }
 
   [Symbol.dispose](): void {
+    // Disposal is terminal. Mark it before clearing the outbox so an activity
+    // that resolves after this point is dropped by #sendTaskResult rather than
+    // re-buffering a result disposal is discarding.
+    this.#disposed = true;
+    this.#taskResultOutbox.clear();
     this.#abortAllTasks();
     this.#rejectPendingRegistration('Worker disposed before worker registration completed');
     this.#abortController.abort();
@@ -338,15 +321,33 @@ export class RemoteWorker implements Disposable {
     if (this.#pendingRegistration === null) return;
 
     const pending = this.#pendingRegistration;
+    // Null the pending registration first so #readySocket() reports ready
+    // during the flush below.
     this.#pendingRegistration = null;
     this.#heartbeat.start();
-    pending.resolve();
+
+    // Re-send any results buffered while the socket was down. If the flush
+    // cannot complete (a send threw and #failSocket() tore the socket down),
+    // the connection is no longer usable, so reject this connect() rather than
+    // handing the caller a "connected" worker over a dead socket — they will
+    // retry connect() and the surviving buffered results flush then.
+    if (this.#flushTaskResultOutbox()) {
+      pending.resolve();
+    } else {
+      pending.reject(new Error('reconnect required: result flush failed during registration'));
+    }
   }
 
   #handleRegisterError(message: string): void {
     this.#rejectPendingRegistration(message);
     this.#heartbeat.stop();
-    this.#ws?.close();
+    // Close AND null #ws, consistent with every other close site. Leaving a
+    // CLOSING socket in #ws lets its later `close` event null out a socket a
+    // fast reconnect may have already assigned.
+    if (this.#ws !== null) {
+      this.#ws.close();
+      this.#ws = null;
+    }
   }
 
   #rejectPendingRegistration(message: string): void {
@@ -389,9 +390,25 @@ export class RemoteWorker implements Disposable {
   }
 
   async #executeTask(task: TaskMessage): Promise<void> {
+    // Backpressure: if unsent results have piled up to the ceiling, decline the
+    // task without executing it and without emitting any frame. Failing the
+    // socket halts further intake; the server's visibility timeout redelivers
+    // the un-acked task later. This bounds memory (the worker stops executing
+    // new work once the backlog is full) without ever dropping a completed
+    // result.
+    if (this.#taskResultOutbox.full) {
+      if (this.#taskResultOutbox.shouldWarnFull()) {
+        console.warn(
+          `[weft] RemoteWorker result buffer full (${this.#taskResultOutbox.size}); declining new tasks until the backlog drains`,
+        );
+      }
+      this.#failSocket();
+      return;
+    }
+
     const activityFunction = this.#activityTable[task.activityName];
     if (activityFunction === undefined) {
-      this.#sendMessage({
+      this.#sendTaskResult({
         type: 'taskResult',
         operationId: task.operationId,
         status: 'failed',
@@ -412,7 +429,7 @@ export class RemoteWorker implements Disposable {
         taskAbortController.signal,
       );
 
-      this.#sendMessage({
+      this.#sendTaskResult({
         type: 'taskResult',
         operationId: task.operationId,
         status: 'completed',
@@ -420,7 +437,7 @@ export class RemoteWorker implements Disposable {
       });
     } catch (error) {
       if (taskAbortController.signal.aborted) {
-        this.#sendMessage({
+        this.#sendTaskResult({
           type: 'taskResult',
           operationId: task.operationId,
           status: 'cancelled',
@@ -428,7 +445,7 @@ export class RemoteWorker implements Disposable {
           error: 'Task cancelled',
         });
       } else {
-        this.#sendMessage({
+        this.#sendTaskResult({
           type: 'taskResult',
           operationId: task.operationId,
           status: 'failed',
@@ -441,47 +458,126 @@ export class RemoteWorker implements Disposable {
     }
   }
 
+  /**
+   * The socket a `taskResult` may be sent over right now — open AND already
+   * registered — or `null` when no send is permitted. Returning the socket
+   * (rather than a boolean) lets callers send without a `?.` that would
+   * silently swallow a null `#ws` and drop the result.
+   */
+  #readySocket(): WebSocket | null {
+    if (
+      this.#ws !== null &&
+      this.#ws.readyState === WebSocket.OPEN &&
+      this.#pendingRegistration === null
+    ) {
+      return this.#ws;
+    }
+    return null;
+  }
+
+  /**
+   * Deliver a terminal task result, or buffer it for resend if the socket is
+   * not ready. A result produced while the socket is down (or before
+   * registration completes) must not be silently dropped — the server would
+   * redeliver via visibility timeout and the activity would re-execute.
+   */
+  #sendTaskResult(message: TaskResultMessage): void {
+    // An activity that resolves after disposal must not re-populate the outbox
+    // that disposal just cleared.
+    if (this.#disposed) return;
+
+    const socket = this.#readySocket();
+    if (socket !== null) {
+      try {
+        socket.send(JSON.stringify(message));
+        this.#taskResultOutbox.delete(message.operationId);
+        return;
+      } catch {
+        // The socket died in the gap after the readiness check (a real
+        // WebSocket race). Buffer the result and fail the socket so the
+        // reconnect path re-flushes it.
+        this.#taskResultOutbox.buffer(message);
+        this.#failSocket();
+        return;
+      }
+    }
+
+    this.#taskResultOutbox.buffer(message);
+  }
+
+  /**
+   * Flush buffered task results over the (just-registered) socket. Returns
+   * `true` if every buffered result was sent or the buffer was empty; `false`
+   * if a send failed, in which case the socket has been torn down via
+   * `#failSocket()` and the remaining results stay buffered for the next
+   * reconnect. Never throws.
+   */
+  #flushTaskResultOutbox(): boolean {
+    for (const message of this.#taskResultOutbox.drainOrder()) {
+      const socket = this.#readySocket();
+      if (socket === null) {
+        this.#failSocket();
+        return false;
+      }
+      try {
+        socket.send(JSON.stringify(message));
+        this.#taskResultOutbox.delete(message.operationId);
+      } catch {
+        this.#failSocket();
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Tear down the current socket from application logic (a send failed or the
+   * result backlog is full). Uses the same abort-before-replace discipline as
+   * `#teardownActiveConnection` so no late event from the failed socket can
+   * mutate worker state, and rejects any still-pending registration so a
+   * `connect()` whose socket fails before `registerAck` (e.g. a task that
+   * arrives full-buffer before registration completes) settles rather than
+   * hanging forever. Does not touch the outbox — buffered results survive.
+   */
+  #failSocket(): void {
+    this.#rejectPendingRegistration(
+      'WebSocket failed before worker registration completed; reconnect required',
+    );
+    const oldAbortController = this.#abortController;
+    this.#abortController = new AbortController();
+    oldAbortController.abort();
+    this.#heartbeat.stop();
+
+    if (this.#ws !== null) {
+      this.#ws.close();
+      this.#ws = null;
+    }
+  }
+
+  /**
+   * Settle and release the in-progress or established connection ahead of a new
+   * one. Rejects any pending registration (so a re-entrant connect() never
+   * leaves the first caller hanging) and detaches the prior socket's listeners
+   * by swapping the abort controller before the new socket attaches its own.
+   * Does not touch the outbox — buffered results survive across reconnects.
+   */
+  #teardownActiveConnection(reason: string): void {
+    this.#rejectPendingRegistration(reason);
+    this.#heartbeat.stop();
+
+    const oldAbortController = this.#abortController;
+    this.#abortController = new AbortController();
+    oldAbortController.abort();
+
+    if (this.#ws !== null) {
+      this.#ws.close();
+      this.#ws = null;
+    }
+  }
+
   #sendMessage(message: Record<string, unknown>): void {
     if (this.#ws !== null && this.#ws.readyState === WebSocket.OPEN) {
       this.#ws.send(JSON.stringify(message));
     }
   }
-}
-
-function normalizeWorkerJsonValue(value: unknown): RemoteWorkerJsonValue {
-  if (value === undefined) return null;
-  const encoded = JSON.stringify(value);
-  if (encoded === undefined) return null;
-  const parsed: unknown = JSON.parse(encoded);
-  return isRemoteWorkerJsonValue(parsed) ? parsed : null;
-}
-
-/**
- * Resolve the activity table the worker will advertise and dispatch against.
- *
- * Centralises the precondition checks so name-grammar violations and
- * key/name mismatches fail fast at construction time, before any WebSocket
- * connection is opened. Exactly one of `workflows` / `activities` must be set.
- */
-function resolveActivityTable(
-  options: RemoteWorkerOptions,
-): Record<string, RemoteWorkerActivityFunction> {
-  const hasWorkflows = options.workflows !== undefined;
-  const hasActivities = options.activities !== undefined;
-  if (hasWorkflows && hasActivities) {
-    throw new Error(
-      'RemoteWorker accepts either `workflows` or `activities`, not both — `workflows` is the canonical entry; remove `activities` when migrating.',
-    );
-  }
-  if (!hasWorkflows && !hasActivities) {
-    throw new Error(
-      'RemoteWorker requires either `workflows` (preferred) or `activities` (legacy) — both were omitted.',
-    );
-  }
-  if (options.workflows !== undefined) {
-    return buildQualifiedActivityTable(options.workflows);
-  }
-  // Legacy entry: callers pre-qualified the activity names themselves. We
-  // still trust the keys verbatim — Phase 5 sweeps these call sites.
-  return { ...options.activities };
 }

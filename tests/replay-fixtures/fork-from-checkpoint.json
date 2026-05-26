@@ -116,5 +116,27 @@
     "wf:wf-fork-original:timeline:0000000001": "iaRzdGVwAa1vcGVyYXRpb25UeXBlqGFjdGl2aXR5rm9wZXJhdGlvbkxhYmVsqWFub255bW91c6xpbnB1dFN1bW1hcnmpdW5kZWZpbmVkqXRpbWVzdGFtcACmc3RhdHVzqWNvbXBsZXRlZKx2ZXJzaW9uVHVwbGWBr3dvcmtmbG93VmVyc2lvbqExrW91dHB1dFN1bW1hcnmrInBoYXNlLW9uZSKoZHVyYXRpb24A",
     "wf:wf-fork-original:timeline:0000000002": "h6RzdGVwAq1vcGVyYXRpb25UeXBlq3dhaXQtc2lnbmFsrm9wZXJhdGlvbkxhYmVspmJyYW5jaKxpbnB1dFN1bW1hcnm3eyJzaWduYWxOYW1lIjoiYnJhbmNoIn2pdGltZXN0YW1wAKZzdGF0dXOncnVubmluZ6x2ZXJzaW9uVHVwbGWBr3dvcmtmbG93VmVyc2lvbqEx",
     "wf:wf-fork-original:timeline:0000000003": "iaRzdGVwA61vcGVyYXRpb25UeXBlq3dhaXQtc2lnbmFsrm9wZXJhdGlvbkxhYmVspmJyYW5jaKxpbnB1dFN1bW1hcnm3eyJzaWduYWxOYW1lIjoiYnJhbmNoIn2pdGltZXN0YW1wAKZzdGF0dXOpY29tcGxldGVkrHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTGtb3V0cHV0U3VtbWFyeaYibGVmdCKoZHVyYXRpb24A"
+  },
+  "replayMetadata": {
+    "version": 1,
+    "additionalTerminalStates": [
+      {
+        "id": "00000000-0000-4000-8000-000000000003",
+        "type": "fork-from-checkpoint",
+        "status": "completed",
+        "input": null,
+        "version": "1",
+        "executionStateOwnerId": "00000000-0000-4000-8000-000000000003",
+        "createdAt": 0,
+        "startedAt": 0,
+        "updatedAt": 0,
+        "forkedFrom": {
+          "workflowId": "wf-fork-original",
+          "step": 2
+        },
+        "result": "phase-one:right",
+        "terminalCleanupToken": "00000000-0000-4000-8000-00000000000a"
+      }
+    ]
   }
 }

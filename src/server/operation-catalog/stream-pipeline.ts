@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { WeftError } from '../../core/weft-error.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import {
   dispatchFailure,
@@ -20,10 +21,9 @@ import {
  * Error thrown when an element emitted by a subscription or stream fails
  * per-element schema validation.
  */
-export class SubscriptionElementValidationError extends Error {
+export class SubscriptionElementValidationError extends WeftError<'SubscriptionElementValidationError'> {
   constructor(public readonly fault: OperationFault) {
-    super('subscription element failed schema validation');
-    this.name = 'SubscriptionElementValidationError';
+    super('SubscriptionElementValidationError', 'subscription element failed schema validation');
   }
 }
 

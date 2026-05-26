@@ -6,6 +6,7 @@ import {
   type ConditionalBatchCondition,
   type ScanOptions,
   type Storage,
+  type StorageCapabilities,
 } from './interface';
 import { assertReadOnlyQuery } from './read-only-query';
 import { scopedStorage } from './scoped-storage';
@@ -133,6 +134,19 @@ export class BunSQLiteStorage implements Storage {
         }
       }
     });
+  }
+
+  capabilities(): StorageCapabilities {
+    // Single-process WAL SQLite: serialized writers, same-connection reads see
+    // committed data (linearizable); statements observe a snapshot; batch() runs
+    // in one transaction (atomic); deletePrefix is a single range DELETE.
+    return {
+      readAfterWrite: 'linearizable',
+      scanConsistency: 'snapshot',
+      atomicBatch: true,
+      conditionalBatch: true,
+      boundedRangeDelete: true,
+    };
   }
 
   async get(key: string): Promise<Uint8Array | null> {

@@ -14,29 +14,25 @@ import {
   type ActivityDefinition,
   type StepWorkflowContext,
   type WorkflowContext,
-  type WorkflowEvent,
   type WorkflowState,
-  type WorkflowTimelineEntry,
 } from '../src/core/types.ts';
 import { TestEngine } from '../src/testing/test-engine.ts';
 import {
   sortedStorageEntries,
   storageAsBase64Record,
   withDeterministicRuntime,
+  type TraceFixture,
 } from '../src/testing/trace-fixture-support.test-support.ts';
-
-type TraceFixture = {
-  scenario: string;
-  description: string;
-  events: WorkflowEvent[];
-  timeline: WorkflowTimelineEntry[];
-  finalState: WorkflowState;
-  storage: Record<string, string>;
-};
 
 type ScenarioRun = {
   engine: TestEngine;
   workflowId: string;
+  /**
+   * Terminal workflow ids produced beyond `workflowId` (for example, a forked
+   * child). When present, each is captured into
+   * `TraceFixture.replayMetadata.additionalTerminalStates`.
+   */
+  additionalTerminalWorkflowIds?: string[];
 };
 
 type ScenarioDefinition = {
@@ -92,6 +88,30 @@ async function waitForCheckpoint(engine: Engine, workflowId: string): Promise<vo
   }
 
   throw new Error(`Checkpoint was not recorded for workflow "${workflowId}"`);
+}
+
+/**
+ * Waits until a checkpoint at the given step exists. The fork scenario must
+ * fork at step 2 (after the durable activity, while suspended on the `branch`
+ * signal); waiting for any checkpoint (step 1) could fork from the wrong point
+ * and produce persisted state and deterministic ids that disagree with the
+ * write-path replay test, which waits for step 2. Both sides MUST agree.
+ */
+async function waitForCheckpointStep(
+  engine: Engine,
+  workflowId: string,
+  step: number,
+): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    const checkpoints = await engine.listCheckpoints(workflowId);
+    if (checkpoints.some((checkpoint) => checkpoint.step === step)) {
+      return;
+    }
+
+    await Bun.sleep(10);
+  }
+
+  throw new Error(`Checkpoint step ${step} was not recorded for workflow "${workflowId}"`);
 }
 
 async function pipeStageOne(_ctx: StepWorkflowContext, input: unknown): Promise<string> {
@@ -344,7 +364,7 @@ async function runForkFromCheckpoint(): Promise<ScenarioRun> {
   );
 
   const original = await engine.start('fork-from-checkpoint', null, { id: 'wf-fork-original' });
-  await waitForCheckpoint(engine, original.id);
+  await waitForCheckpointStep(engine, original.id, 2);
 
   const forked = await engine.fork('wf-fork-original');
   await engine.signal('wf-fork-original', 'branch', 'left');
@@ -352,7 +372,7 @@ async function runForkFromCheckpoint(): Promise<ScenarioRun> {
   await original.result();
   await forked.result();
 
-  return { engine, workflowId: original.id };
+  return { engine, workflowId: original.id, additionalTerminalWorkflowIds: [forked.id] };
 }
 
 async function runRecoveryAfterCrash(): Promise<ScenarioRun> {
@@ -448,7 +468,9 @@ const scenarios: ScenarioDefinition[] = [
 ];
 
 async function writeScenarioFixture(scenario: ScenarioDefinition): Promise<void> {
-  const { engine, workflowId } = await withDeterministicRuntime(scenario.run);
+  const { engine, workflowId, additionalTerminalWorkflowIds } = await withDeterministicRuntime(
+    scenario.run,
+  );
 
   try {
     const finalState = await engine.get(workflowId);
@@ -465,6 +487,20 @@ async function writeScenarioFixture(scenario: ScenarioDefinition): Promise<void>
       finalState,
       storage: storageAsBase64Record(entries),
     };
+
+    if (additionalTerminalWorkflowIds !== undefined) {
+      const additionalTerminalStates: WorkflowState[] = [];
+      for (const additionalId of additionalTerminalWorkflowIds) {
+        const additionalState = await engine.get(additionalId);
+        if (additionalState === null) {
+          throw new Error(
+            `Additional terminal workflow "${additionalId}" was not found after scenario "${scenario.name}"`,
+          );
+        }
+        additionalTerminalStates.push(additionalState);
+      }
+      fixture.replayMetadata = { version: 1, additionalTerminalStates };
+    }
 
     await Bun.write(
       `${replayFixtureDirectory}/${scenario.name}.json`,

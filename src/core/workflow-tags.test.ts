@@ -55,6 +55,10 @@ class WorkflowStateWriteTrackingStorage implements Storage {
     this.#trackedWorkflowKey = KEYS.workflow(workflowId);
   }
 
+  capabilities() {
+    return this.#storage.capabilities();
+  }
+
   async get(key: string): Promise<Uint8Array | null> {
     return this.#storage.get(key);
   }

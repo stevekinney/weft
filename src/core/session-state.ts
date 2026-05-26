@@ -1,4 +1,5 @@
 import { encode } from './codec.ts';
+import { WeftError } from './weft-error.ts';
 
 export const SESSION_STATE_LOCAL_KEY = 'stateSession';
 export const LEGACY_SESSION_STATE_LOCAL_KEY = 'sessionState';
@@ -8,10 +9,9 @@ export const MAX_SESSION_STATE_SERIALIZED_BYTES = 32 * 1024;
 
 const RESERVED_SESSION_STATE_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
-export class SessionStateValidationError extends Error {
+export class SessionStateValidationError extends WeftError<'SessionStateValidationError'> {
   constructor(message: string) {
-    super(message);
-    this.name = 'SessionStateValidationError';
+    super('SessionStateValidationError', message);
   }
 }
 

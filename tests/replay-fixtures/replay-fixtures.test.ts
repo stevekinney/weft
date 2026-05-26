@@ -6,10 +6,9 @@
  * change them; if a fixture changes, that is a regression.
  */
 
-import { afterEach, describe, expect, it, test } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../src/core/engine.ts';
-import type { WorkflowEvent, WorkflowState, WorkflowTimelineEntry } from '../../src/core/types.ts';
 import { MemoryStorage } from '../../src/storage/memory.ts';
 import { waitForCondition } from '../../src/testing/fake-timers.ts';
 import {
@@ -21,16 +20,8 @@ import {
   sortedStorageEntries,
   storageAsBase64Record,
   withDeterministicRuntime,
+  type TraceFixture,
 } from '../../src/testing/trace-fixture-support.test-support.ts';
-
-type TraceFixture = {
-  scenario: string;
-  description: string;
-  events: WorkflowEvent[];
-  timeline: WorkflowTimelineEntry[];
-  finalState: WorkflowState;
-  storage: Record<string, string>;
-};
 
 type ScenarioRun = {
   engine: TestEngine;
@@ -47,7 +38,9 @@ const fixtureFiles = [...glob.scanSync(replayFixtureDirectory)]
   .toSorted();
 const replayableScenarioFiles = [
   'child-workflow.json',
+  'fork-from-checkpoint.json',
   'pipe-three-stages.json',
+  'race-takes-first.json',
   'recovery-after-crash.json',
   'saga-with-compensation.json',
   'signal-and-wait.json',
@@ -80,6 +73,20 @@ async function waitForCheckpoint(engine: Engine, workflowId: string): Promise<vo
       return checkpoints.length > 0;
     },
     { timeoutMs: 500, intervalMs: 1, label: `checkpoint for ${workflowId}` },
+  );
+}
+
+async function waitForCheckpointStep(
+  engine: Engine,
+  workflowId: string,
+  step: number,
+): Promise<void> {
+  await waitForCondition(
+    async () => {
+      const checkpoints = await engine.listCheckpoints(workflowId);
+      return checkpoints.some((checkpoint) => checkpoint.step === step);
+    },
+    { timeoutMs: 500, intervalMs: 1, label: `checkpoint step ${step} for ${workflowId}` },
   );
 }
 
@@ -144,14 +151,41 @@ async function runRecoveryAfterCrashFixture(fixture: TraceFixture): Promise<Scen
   return { engine: recovered, workflowId };
 }
 
+// The fork is taken at checkpoint step 2 (after the durable activity, while the
+// workflow is suspended on the `branch` signal). Waiting only for the first
+// checkpoint (step 1) would fork from the wrong point and diverge the forked
+// id and storage bytes. The call sequence here mirrors the generator's
+// runForkFromCheckpoint exactly so the deterministic UUID counter allocates the
+// forked id `00000000-0000-4000-8000-000000000003`.
+async function runForkFromCheckpointFixture(fixture: TraceFixture): Promise<ScenarioRun> {
+  const engine = new TestEngine({ startTime: 0 });
+  registerScenarioHandlers(engine, 'fork-from-checkpoint');
+
+  const workflowId = fixture.finalState.id;
+  const original = await engine.start(fixture.scenario, fixture.finalState.input, {
+    id: workflowId,
+  });
+  await waitForCheckpointStep(engine, workflowId, 2);
+
+  const forked = await engine.fork(workflowId);
+  await engine.signal(workflowId, 'branch', 'left');
+  await engine.signal(forked.id, 'branch', 'right');
+  await original.result();
+  await forked.result();
+
+  return { engine, workflowId };
+}
+
 const scenarioRunners: Record<string, ScenarioRunner> = {
   'simple-sequential': runFixtureWorkflow,
   'two-parallel': runFixtureWorkflow,
+  'race-takes-first': runFixtureWorkflow,
   'signal-and-wait': runSignalAndWaitFixture,
   'sleep-and-resume': runSleepAndResumeFixture,
   'child-workflow': runFixtureWorkflow,
   'saga-with-compensation': runFixtureWorkflow,
   'pipe-three-stages': runFixtureWorkflow,
+  'fork-from-checkpoint': runForkFromCheckpointFixture,
   'recovery-after-crash': runRecoveryAfterCrashFixture,
 };
 
@@ -179,6 +213,15 @@ async function expectReplayToMatchFixture(fixtureFile: string): Promise<void> {
     await expect(engine.getEvents(workflowId)).resolves.toEqual(fixture.events);
     await expect(engine.getTimeline(workflowId)).resolves.toEqual(fixture.timeline);
     expect(storageAsBase64Record(sortedStorageEntries(engine.storage))).toEqual(fixture.storage);
+
+    if (fixture.replayMetadata !== undefined) {
+      // A present `replayMetadata` must carry at least one additional terminal
+      // state; an empty array would let this assertion block pass vacuously.
+      expect(fixture.replayMetadata.additionalTerminalStates.length).toBeGreaterThan(0);
+      for (const additionalState of fixture.replayMetadata.additionalTerminalStates) {
+        await expect(engine.get(additionalState.id)).resolves.toEqual(additionalState);
+      }
+    }
   } finally {
     engine[Symbol.dispose]();
   }
@@ -218,6 +261,17 @@ describe('storage format compatibility', () => {
       await expect(engine.getEvents(workflowId)).resolves.toEqual(fixture.events);
       await expect(engine.getTimeline(workflowId)).resolves.toEqual(fixture.timeline);
       await expect(engine.get(workflowId)).resolves.toEqual(fixture.finalState);
+
+      // Multi-terminal scenarios (for example, fork) persist additional
+      // terminal workflows beyond finalState. Without this assertion the suite
+      // would only validate the original workflow and silently miss a broken
+      // forked terminal state.
+      if (fixture.replayMetadata !== undefined) {
+        expect(fixture.replayMetadata.additionalTerminalStates.length).toBeGreaterThan(0);
+        for (const additionalState of fixture.replayMetadata.additionalTerminalStates) {
+          await expect(engine.get(additionalState.id)).resolves.toEqual(additionalState);
+        }
+      }
     });
   }
 });
@@ -228,18 +282,4 @@ describe('write-path replay', () => {
       await expectReplayToMatchFixture(fixtureFile);
     });
   }
-
-  test.skip('replays race-takes-first.json', () => {
-    // REPLAY-MISSING-METADATA: this fixture depends on host timer scheduling
-    // inside a race and does not yet encode enough metadata to make the winner
-    // deterministic without reusing the fixture generator runtime exactly.
-  });
-
-  test.skip('replays fork-from-checkpoint.json', () => {
-    // REPLAY-MISSING-METADATA: this fixture covers two terminal workflows
-    // produced by start(), fork(), and separate branch signals. The JSON
-    // fixture only names the original workflow as finalState, so the write-path
-    // contract needs explicit fork metadata before this can be a focused replay
-    // assertion instead of a copy of the generator.
-  });
 });

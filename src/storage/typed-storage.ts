@@ -3,6 +3,7 @@ import {
   encode as encodeMessagePack,
   validateCloneable,
 } from '../core/codec.ts';
+import type { JSONValue } from '../core/json.ts';
 
 import {
   storageCount,
@@ -51,45 +52,24 @@ export interface StorageCodec<Value> {
  *
  * Receives the raw decoded value (`unknown`) and must return the strongly-typed
  * `Value` — either by assertion after runtime validation or by throwing when the
- * shape is unexpected.  Omitting it leaves the codec untyped (`JsonValue` /
+ * shape is unexpected.  Omitting it leaves the codec untyped (`JSONValue` /
  * `MessagePackValue`).
  */
 export type StorageValueParser<Value> = (value: unknown) => Value;
 
-export type JsonPrimitive = boolean | null | number | string;
-
-/**
- * Recursive union of every value that `JSON.stringify` accepts and
- * `JSON.parse` can produce.
- *
- * Use this as the generic bound when you need a storage codec that only handles
- * plain JSON-serialisable data — numbers, strings, booleans, null, arrays, and
- * plain objects. For richer types (Date, Map, Uint8Array) prefer
- * {@link MessagePackValue}.
- *
- * @example
- * ```ts
- * import type { JsonValue } from 'weft';
- *
- * const value: JsonValue = {
- *   ok: true,
- *   rows: [{ id: 1, tags: ['a', 'b'] }],
- *   empty: null,
- * };
- * // BigInt, Date, and Map values would be type errors here.
- * void value;
- * ```
- */
-export type JsonValue = JsonPrimitive | JsonValue[] | { [key: string]: JsonValue };
 export type MessagePackPrimitive = bigint | boolean | null | number | string | undefined;
 
 /**
  * Recursive union of every value that MessagePack can encode and decode.
  *
- * A superset of {@link JsonValue} that additionally supports `Date`, `Map`,
- * `Set`, `Uint8Array`, `RegExp`, `Error`, `ArrayBuffer`, and `bigint`.  Prefer
- * this codec when your domain objects contain binary data or richly-typed
- * primitives that JSON cannot represent without custom serialisation.
+ * A superset of {@link JSONValue} that additionally supports `Date`, `Map`,
+ * `Set`, `Uint8Array`, `RegExp`, `Error`, `ArrayBuffer`, and `bigint`. Its
+ * array branch is `ReadonlyArray` (matching `JSONValue`), so every `JSONValue`
+ * — including `readonly` arrays and `as const` tuples — is assignable here and
+ * accepted by `msgpackCodec<Value extends MessagePackValue>`. The encoder only
+ * reads its input, so a readonly bound is sound. Prefer this codec when your
+ * domain objects contain binary data or richly-typed primitives that JSON
+ * cannot represent without custom serialisation.
  */
 export type MessagePackValue =
   | ArrayBuffer
@@ -97,7 +77,7 @@ export type MessagePackValue =
   | Error
   | Map<MessagePackValue, MessagePackValue>
   | MessagePackPrimitive
-  | MessagePackValue[]
+  | ReadonlyArray<MessagePackValue>
   | RegExp
   | Set<MessagePackValue>
   | Uint8Array
@@ -268,7 +248,7 @@ export function withCodec<Value>(
   return new CodecStorage(storage, codec);
 }
 
-function encodeJsonValue(value: JsonValue): Uint8Array {
+function encodeJsonValue(value: JSONValue): Uint8Array {
   try {
     const serializedValue = JSON.stringify(value);
     if (serializedValue === undefined) {
@@ -294,10 +274,10 @@ function encodeMessagePackValue(value: MessagePackValue): Uint8Array {
   return encodeMessagePack(value);
 }
 
-function decodeJsonValue(bytes: Uint8Array): JsonValue {
+function decodeJsonValue(bytes: Uint8Array): JSONValue {
   const decodedValue = JSON.parse(new TextDecoder().decode(bytes)) as unknown;
   // JSON.parse only produces JSON-compatible primitives, arrays, and plain objects.
-  return decodedValue as JsonValue;
+  return decodedValue as JSONValue;
 }
 
 function decodeMessagePackValue(bytes: Uint8Array): MessagePackValue {
@@ -315,7 +295,7 @@ function decodeMessagePackValue(bytes: Uint8Array): MessagePackValue {
 /**
  * Creates a {@link StorageCodec} that serialises values as UTF-8 JSON.
  *
- * Call without arguments to get a `StorageCodec<JsonValue>`.  Pass an optional
+ * Call without arguments to get a `StorageCodec<JSONValue>`.  Pass an optional
  * {@link StorageValueParser} to narrow the output to a concrete type — useful
  * when you have a Zod schema or manual shape check.
  *
@@ -338,18 +318,18 @@ function decodeMessagePackValue(bytes: Uint8Array): MessagePackValue {
  * console.log(p?.x); // 10
  * ```
  */
-export function jsonCodec(): StorageCodec<JsonValue>;
-export function jsonCodec<Value extends JsonValue>(
+export function jsonCodec(): StorageCodec<JSONValue>;
+export function jsonCodec<Value extends JSONValue>(
   parse: StorageValueParser<Value>,
 ): StorageCodec<Value>;
-export function jsonCodec<Value extends JsonValue>(
+export function jsonCodec<Value extends JSONValue>(
   parse?: StorageValueParser<Value>,
-): StorageCodec<JsonValue> | StorageCodec<Value> {
+): StorageCodec<JSONValue> | StorageCodec<Value> {
   return {
-    encode(value: JsonValue): Uint8Array {
+    encode(value: JSONValue): Uint8Array {
       return encodeJsonValue(value);
     },
-    decode(bytes: Uint8Array): JsonValue | Value {
+    decode(bytes: Uint8Array): JSONValue | Value {
       const decodedValue = decodeJsonValue(bytes);
       return parse ? parse(decodedValue) : decodedValue;
     },

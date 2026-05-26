@@ -1,4 +1,5 @@
 import { hashString } from '../../runtime/portable.ts';
+import { WeftError } from '../weft-error.ts';
 
 /**
  * Durable effect log for replay deduplication.
@@ -109,18 +110,18 @@ export type EffectLogLike = Pick<
  * }
  * ```
  */
-export class EffectReplayConflictError extends Error {
+export class EffectReplayConflictError extends WeftError<'EffectReplayConflictError'> {
   readonly effectName: string;
   readonly semanticHash: string;
 
   constructor(semanticHash: string, effectName: string) {
     super(
+      'EffectReplayConflictError',
       `Effect replay conflict: "${effectName}" (semantic hash ${semanticHash}) ` +
         `was in-flight when the process crashed. The outcome of the original call ` +
         `is unknown — re-executing a non-idempotent effect may cause duplicate effects. ` +
         `Inspect the effect log or route to human review before retrying.`,
     );
-    this.name = 'EffectReplayConflictError';
     this.effectName = effectName;
     this.semanticHash = semanticHash;
   }

@@ -30,6 +30,7 @@ import {
   connectFaultInjectingWorker,
   type FaultInjectingWorker,
 } from '../testing/worker-fault-injection.ts';
+import { RemoteWorker } from './index.ts';
 import type { ServerToWorkerMessage, TaskMessage } from './protocol.ts';
 
 type Setup = {
@@ -329,6 +330,75 @@ describe('RemoteWorker durability — transient reconnect continuity', () => {
     let resolved: unknown;
     const scenario3Deadline = Date.now() + 2_000;
     while (Date.now() < scenario3Deadline) {
+      resolved = await readResolvedRecord(setup.engine, operationId);
+      if (resolved !== undefined && resolved !== null) break;
+      await sleepForTesting(10);
+    }
+    expect(resolved !== undefined && resolved !== null).toBe(true);
+    await waitForInflightCleared(setup.engine, operationId);
+  });
+});
+
+describe('RemoteWorker durability — backpressure decline is redelivered', () => {
+  it('redelivers a task that a buffer-full RemoteWorker declines without executing', async () => {
+    // workerReconnectGracePeriodMs is short so the decline (which fails the SDK
+    // worker's socket) is treated as a disconnect and the task becomes eligible
+    // for redelivery quickly. visibilityTimeout is the redelivery ceiling.
+    const setup = createSetup({ workerReconnectGracePeriodMs: 30 });
+
+    // worker-A is the real RemoteWorker SDK with a zero-capacity result buffer:
+    // isOutboxFull(0, 0) is true, so it declines every task without executing
+    // it and without emitting a result frame — the backpressure decline branch.
+    let activityRan = false;
+    using workerA = new RemoteWorker({
+      serverUrl: setup.workerUrl,
+      workerId: 'sdk-worker-a',
+      maxBufferedResults: 0,
+      activities: {
+        echo: async (input: unknown) => {
+          activityRan = true;
+          return input;
+        },
+      },
+    });
+    await workerA.connect();
+
+    // Dispatch with only worker-A registered, so the first attempt lands on A,
+    // which declines it (buffer full) and fails its socket.
+    const operationId = 'backpressure-redelivery-op';
+    void setup.server.dispatchTask({
+      operationId,
+      activityName: 'echo',
+      input: { value: 'v' },
+      visibilityTimeout: 5_000,
+    });
+
+    // worker-A's socket fails as a result of the decline.
+    const aDeadline = Date.now() + 3_000;
+    while (Date.now() < aDeadline && workerA.connected) {
+      await sleepForTesting(10);
+    }
+    expect(workerA.connected).toBe(false);
+    // worker-A's activity must never have executed — it declined the task.
+    expect(activityRan).toBe(false);
+
+    // worker-B registers and receives the redelivery after A's lease expires.
+    const workerB = await connectAndRegisterWorker(setup, 'worker-b');
+    const dispatchToB = await workerB.nextServerMessage(isTask, { timeoutMs: 5_000 });
+    if (!isTask(dispatchToB)) throw new Error('expected task on B');
+    expect(dispatchToB.operationId).toBe(operationId);
+
+    workerB.send({ type: 'heartbeat', workerId: 'worker-b' });
+    workerB.send({
+      type: 'taskResult',
+      operationId,
+      status: 'completed',
+      value: 'v',
+    });
+
+    let resolved: unknown;
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
       resolved = await readResolvedRecord(setup.engine, operationId);
       if (resolved !== undefined && resolved !== null) break;
       await sleepForTesting(10);

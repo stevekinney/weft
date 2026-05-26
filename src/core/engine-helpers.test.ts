@@ -52,6 +52,7 @@ describe('engine helpers', () => {
   it('cleanupPartialStreamChunks reports storage batch failures through the callback', async () => {
     const realStorage = new MemoryStorage();
     const storage: WeftStorage = {
+      capabilities: realStorage.capabilities.bind(realStorage),
       get: realStorage.get.bind(realStorage),
       put: realStorage.put.bind(realStorage),
       delete: realStorage.delete.bind(realStorage),

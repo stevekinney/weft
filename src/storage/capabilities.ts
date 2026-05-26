@@ -1,0 +1,161 @@
+/**
+ * Storage consistency/feature capability types and the runtime gate that acts
+ * on them. Split out from `interface.ts` to keep that module focused. The
+ * `Storage` interface lives in `interface.ts` and imports these types; this
+ * module imports `Storage` type-only, so there is no runtime import cycle.
+ *
+ * @module storage/capabilities
+ */
+
+import type { Storage } from './interface.ts';
+
+/**
+ * Honest, self-reported consistency and feature profile for a {@link Storage}
+ * backend, returned by {@link Storage.capabilities}. Values describe the
+ * guarantees a backend actually provides, not what callers wish it provided.
+ *
+ * **Three kinds of capability, treated differently:**
+ * - **Runtime-gated:** `conditionalBatch` is the only capability the engine
+ *   enforces at runtime (see {@link requireStorageCapability}). A backend may
+ *   legitimately omit compare-and-swap, so its absence fails fast with a clear
+ *   diagnostic at the first feature that needs it.
+ * - **Trusted correctness contracts:** `atomicBatch`, `readAfterWrite`, and
+ *   `scanConsistency` are read by the engine but NOT verified at runtime. If a
+ *   backend reports `atomicBatch: true` but applies batches non-atomically, the
+ *   failure mode is checkpoint corruption, not a missing feature — honesty is
+ *   the adapter author's responsibility.
+ * - **Operational hint:** `boundedRangeDelete` is a strength-of-implementation
+ *   claim about `deletePrefix()` (a single bounded range op vs. a scan-and-delete
+ *   fallback). It affects performance, not correctness, and nothing gates on it.
+ *
+ * **Why the engine needs these.** Checkpoint commit relies on `atomicBatch`
+ * (all-or-nothing); resume relies on `readAfterWrite` (the just-written
+ * checkpoint must be observable on the next read); visibility/index scans rely
+ * on `scanConsistency` (a scan must not observe torn writes); compare-and-swap
+ * state and quota reservation rely on `conditionalBatch`.
+ *
+ * **Consistency-level scope.** All levels are scoped to a single `Storage`
+ * instance. The engine uses one storage instance shared across concurrent
+ * workflows, so `linearizable` is the value it relies on for built-in
+ * single-process backends.
+ *
+ * **Opaque-value invariant.** Storage adapters and decorators MUST treat stored
+ * values as opaque bytes and MUST NOT inspect or depend on value contents;
+ * values MAY later be encrypted or compressed. The engine ranges only over
+ * keys, never value bytes. A value-transforming decorator (e.g.
+ * `CompressedStorage`) MUST therefore downgrade `conditionalBatch` to `false`,
+ * because a caller-supplied `expectedValue` cannot byte-match the transformed
+ * stored value.
+ *
+ * @example
+ * ```ts
+ * import { MemoryStorage } from 'weft';
+ * import type { StorageCapabilities } from 'weft/storage/interface';
+ *
+ * await using storage = new MemoryStorage();
+ * const caps: StorageCapabilities = storage.capabilities();
+ * console.log(caps.conditionalBatch); // true
+ * console.log(caps.readAfterWrite);   // 'linearizable'
+ * ```
+ */
+export type StorageCapabilities = {
+  /**
+   * Visibility of a completed write to a later read, scoped to one `Storage`
+   * instance.
+   * - `linearizable`: a completed `put`/`batch` is observable by **any**
+   *   subsequent read through this instance, including reads issued by other
+   *   concurrent callers sharing the instance (single-process backends
+   *   serialize all callers).
+   * - `session`: only the **same caller's own** ordered operation chain is
+   *   guaranteed to read its writes; a concurrent caller sharing the instance,
+   *   or a separate instance/replica, may lag.
+   * - `eventual`: even a same-instance read may not observe a just-completed
+   *   write.
+   */
+  readAfterWrite: 'linearizable' | 'session' | 'eventual';
+  /**
+   * Consistency of a single `scan()` iteration relative to concurrent writes.
+   * - `snapshot`: the scan observes one point-in-time view; concurrent writes
+   *   never appear partially within the iteration.
+   * - `best-effort`: the scan may interleave with concurrent writes.
+   */
+  scanConsistency: 'snapshot' | 'best-effort';
+  /**
+   * `batch()` applies all operations atomically (all-or-nothing). Trusted
+   * correctness contract — a `true` value the engine relies on for checkpoint
+   * commit and does not verify at runtime.
+   */
+  atomicBatch: boolean;
+  /** `conditionalBatch()` compare-and-swap preconditions are supported. */
+  conditionalBatch: boolean;
+  /**
+   * `deletePrefix()` is implemented as a bounded range operation (a single
+   * range-scoped SQL `DELETE`, an `IDBKeyRange` delete, an LMDB range delete in
+   * one write transaction, or an in-memory range-bounded delete), NOT a
+   * client-side scan-then-delete loop. Adapters that only fall back to the
+   * derived `storageDeletePrefixCore` helper report `false` even though
+   * `deletePrefix()` works. This is a strength-of-implementation claim about the
+   * adapter's own method, not a guarantee about a remote backend behind it.
+   */
+  boundedRangeDelete: boolean;
+};
+
+/**
+ * The boolean capabilities the engine enforces at runtime via
+ * {@link requireStorageCapability}. Today this is only `conditionalBatch` —
+ * see the "three kinds of capability" note on {@link StorageCapabilities}. A
+ * future capability that needs gating is added here deliberately, keeping the
+ * type in lockstep with what is actually enforced rather than implying every
+ * boolean capability is gateable.
+ *
+ * @example
+ * ```ts
+ * import { MemoryStorage } from 'weft';
+ * import { requireStorageCapability } from 'weft/storage/interface';
+ * import type { GatedStorageCapabilityKey } from 'weft/storage/interface';
+ *
+ * await using storage = new MemoryStorage();
+ * // The third argument's type is GatedStorageCapabilityKey — only the
+ * // runtime-gated 'conditionalBatch' is accepted.
+ * const capability: GatedStorageCapabilityKey = 'conditionalBatch';
+ * requireStorageCapability(storage, capability, 'MyFeature compare-and-swap');
+ * ```
+ */
+export type GatedStorageCapabilityKey = 'conditionalBatch';
+
+/**
+ * Fail fast when a feature requires a runtime-gated storage capability the
+ * backend does not provide. Reads the honest {@link StorageCapabilities} report
+ * (not mere method presence), so a value-transforming decorator that downgrades
+ * a capability is respected. Call this at the first use of a feature — not at
+ * engine startup — so the diagnostic points at the operation that needs the
+ * guarantee.
+ *
+ * Only {@link GatedStorageCapabilityKey} capabilities are accepted: the
+ * non-gated `atomicBatch`/`readAfterWrite`/`scanConsistency` are trusted
+ * contracts the engine does not enforce, and `boundedRangeDelete` is an
+ * operational hint, so gating on any of them would be meaningless.
+ *
+ * @throws {Error} When `storage.capabilities()[capability]` is `false`.
+ *
+ * @example
+ * ```ts
+ * import { MemoryStorage } from 'weft';
+ * import { requireStorageCapability } from 'weft/storage/interface';
+ *
+ * await using storage = new MemoryStorage();
+ * requireStorageCapability(storage, 'conditionalBatch', 'AtomicState compare-and-swap');
+ * // Memory supports conditionalBatch, so this returns without throwing.
+ * ```
+ */
+export function requireStorageCapability(
+  storage: Storage,
+  capability: GatedStorageCapabilityKey,
+  featureName: string,
+): void {
+  if (!storage.capabilities()[capability]) {
+    throw new Error(
+      `Feature "${featureName}" requires storage capability "${capability}", but this storage backend does not provide it.`,
+    );
+  }
+}

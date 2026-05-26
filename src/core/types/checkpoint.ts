@@ -1,5 +1,6 @@
 import type { ContextOperationRequest } from '../context/operation-request.ts';
 import type { TenantContext } from '../tenant.ts';
+import { WeftError } from '../weft-error.ts';
 import type { FailureCategory, OperationId, WorkflowId } from './identity.ts';
 import type { Duration, RetryPolicy } from './retry-retention.ts';
 import type { SearchAttributeValue } from './search-attributes.ts';
@@ -61,13 +62,13 @@ export const CURRENT_CHECKPOINT_SCHEMA_VERSION = 2;
  * `schemaVersion` does not match the engine's current version. Pre-1.0
  * we refuse to load mismatched checkpoints rather than migrating.
  */
-export class CheckpointSchemaVersionError extends Error {
-  override readonly name = 'CheckpointSchemaVersionError';
+export class CheckpointSchemaVersionError extends WeftError<'CheckpointSchemaVersionError'> {
   constructor(
     public readonly found: number | 'pre-versioned',
     public readonly expected: number,
   ) {
     super(
+      'CheckpointSchemaVersionError',
       found === 'pre-versioned'
         ? `Checkpoint has no schemaVersion field (pre-versioned format); engine expects schemaVersion ${expected}. ` +
             `Pre-1.0: in-flight workflows must be drained before upgrade.`

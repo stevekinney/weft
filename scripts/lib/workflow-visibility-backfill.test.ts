@@ -236,6 +236,9 @@ class RacingStorage implements Storage {
     };
   }
 
+  capabilities() {
+    return this.#inner.capabilities();
+  }
   async get(key: string): Promise<Uint8Array | null> {
     return this.#inner.get(key);
   }
@@ -262,6 +265,15 @@ class RacingStorage implements Storage {
  * conditional writes.
  */
 class NoConditionalBatchStorage implements Storage {
+  capabilities() {
+    return {
+      readAfterWrite: 'linearizable' as const,
+      scanConsistency: 'snapshot' as const,
+      atomicBatch: true,
+      conditionalBatch: false,
+      boundedRangeDelete: false,
+    };
+  }
   async get(): Promise<Uint8Array | null> {
     return null;
   }

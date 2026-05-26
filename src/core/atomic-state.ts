@@ -1,6 +1,6 @@
 import { sleep as portableSleep } from '../runtime/portable.ts';
 import type { BatchOperation, Storage } from '../storage/interface.ts';
-import { KEYS, storageConditionalBatch } from '../storage/interface.ts';
+import { KEYS, requireStorageCapability, storageConditionalBatch } from '../storage/interface.ts';
 import {
   AtomicStateChangeEvent,
   AtomicStateConflictEvent,
@@ -16,6 +16,7 @@ import {
   type SleepFunction,
 } from './atomic-state-events.ts';
 import { decode, encode } from './codec.ts';
+import { WeftError } from './weft-error.ts';
 
 export {
   AtomicStateChangeEvent,
@@ -62,15 +63,15 @@ const RESERVED_ATOMIC_STATE_KEYS = new Set(['__proto__', 'constructor', 'prototy
  * }
  * ```
  */
-export class AtomicStateConflictError extends Error {
+export class AtomicStateConflictError extends WeftError<'AtomicStateConflictError'> {
   readonly stateKey: string;
   readonly attempts: number;
 
   constructor(stateKey: string, attempts: number) {
     super(
+      'AtomicStateConflictError',
       `AtomicState conflict: failed to update "${stateKey}" after ${String(attempts)} attempts`,
     );
-    this.name = 'AtomicStateConflictError';
     this.stateKey = stateKey;
     this.attempts = attempts;
   }
@@ -134,6 +135,7 @@ export async function commitAtomicStateValue<T>(
   expectedVersion: number,
   value: T,
 ): Promise<AtomicStateCommitResult<T>> {
+  requireStorageCapability(storage, 'conditionalBatch', 'AtomicState compare-and-swap');
   const nextVersion = expectedVersion + 1;
   const applied = await storageConditionalBatch(
     storage,
@@ -152,6 +154,7 @@ export async function commitAtomicStateDelete(
   dataKey: string,
   expectedVersion: number,
 ): Promise<AtomicStateCommitResult<never>> {
+  requireStorageCapability(storage, 'conditionalBatch', 'AtomicState compare-and-swap');
   const nextVersion = expectedVersion + 1;
   const applied = await storageConditionalBatch(
     storage,

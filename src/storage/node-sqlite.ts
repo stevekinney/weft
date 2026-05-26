@@ -18,6 +18,7 @@ import type {
   ConditionalBatchCondition,
   ScanOptions,
   Storage,
+  StorageCapabilities,
 } from './interface.ts';
 import { storageValuesEqual } from './interface.ts';
 import {
@@ -128,6 +129,21 @@ export class NodeSQLiteStorage implements Storage {
    */
   get scanStatementCacheSize(): number {
     return this.#scanStatements.size;
+  }
+
+  capabilities(): StorageCapabilities {
+    // Single-process WAL SQLite (better-sqlite3): serialized writers,
+    // same-connection reads see committed data (linearizable); snapshot scans;
+    // batch() runs in one transaction. This adapter omits its own deletePrefix
+    // and relies on the derived scan-and-delete fallback, so boundedRangeDelete
+    // is false.
+    return {
+      readAfterWrite: 'linearizable',
+      scanConsistency: 'snapshot',
+      atomicBatch: true,
+      conditionalBatch: true,
+      boundedRangeDelete: false,
+    };
   }
 
   constructor(

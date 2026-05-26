@@ -1,3 +1,5 @@
+import { WeftError } from '../weft-error.ts';
+
 /**
  * Thrown by {@link Engine.start} when a workflow with the requested ID already
  * exists in storage. Inspect the `workflowId` property to identify the
@@ -21,12 +23,11 @@
  * }
  * ```
  */
-export class WorkflowAlreadyExistsError extends Error {
+export class WorkflowAlreadyExistsError extends WeftError<'WorkflowAlreadyExistsError'> {
   readonly workflowId: string;
 
   constructor(workflowId: string) {
-    super(`Workflow with id "${workflowId}" already exists`);
-    this.name = 'WorkflowAlreadyExistsError';
+    super('WorkflowAlreadyExistsError', `Workflow with id "${workflowId}" already exists`);
     this.workflowId = workflowId;
   }
 }
@@ -45,10 +46,9 @@ export class WorkflowAlreadyExistsError extends Error {
  * }
  * ```
  */
-export class BulkDeleteRequiresTerminalWorkflowsError extends Error {
+export class BulkDeleteRequiresTerminalWorkflowsError extends WeftError<'BulkDeleteRequiresTerminalWorkflowsError'> {
   constructor() {
-    super('Bulk delete matches non-terminal workflows');
-    this.name = 'BulkDeleteRequiresTerminalWorkflowsError';
+    super('BulkDeleteRequiresTerminalWorkflowsError', 'Bulk delete matches non-terminal workflows');
   }
 }
 
@@ -66,10 +66,12 @@ export class BulkDeleteRequiresTerminalWorkflowsError extends Error {
  * }
  * ```
  */
-export class BulkOperationConfirmationError extends Error {
+export class BulkOperationConfirmationError extends WeftError<'BulkOperationConfirmationError'> {
   constructor() {
-    super('Bulk confirmation token does not match the current dry-run scope');
-    this.name = 'BulkOperationConfirmationError';
+    super(
+      'BulkOperationConfirmationError',
+      'Bulk confirmation token does not match the current dry-run scope',
+    );
   }
 }
 
@@ -109,7 +111,7 @@ function summarizeMissingWorkflowTypes(missingTypes: readonly string[]): string 
  * }
  * ```
  */
-export class WorkflowTypeNotRegisteredForRecoveryError extends Error {
+export class WorkflowTypeNotRegisteredForRecoveryError extends WeftError<'WorkflowTypeNotRegisteredForRecoveryError'> {
   readonly registeredTypes: readonly string[];
   readonly missingTypes: readonly string[];
   readonly missingWorkflowSamples: ReadonlyArray<MissingWorkflowSample>;
@@ -127,11 +129,11 @@ export class WorkflowTypeNotRegisteredForRecoveryError extends Error {
     const registeredTypes = [...parameters.registeredTypes].toSorted();
     const summarizedTypes = summarizeMissingWorkflowTypes(missingTypes);
     super(
+      'WorkflowTypeNotRegisteredForRecoveryError',
       `Cannot recover ${missingWorkflowCount} running workflow(s): workflow type(s) not registered: ${summarizedTypes}. ` +
         'Register the missing workflow types before calling `recoverAll()`, or pass ' +
         '`{ acknowledgeUnknownWorkflowTypes: true }` (dangerous — see migration docs).',
     );
-    this.name = 'WorkflowTypeNotRegisteredForRecoveryError';
     this.registeredTypes = registeredTypes;
     this.missingTypes = missingTypes;
     this.missingWorkflowSamples = parameters.missingWorkflows
@@ -162,16 +164,16 @@ export class WorkflowTypeNotRegisteredForRecoveryError extends Error {
  * }
  * ```
  */
-export class EngineCreateNameMismatchError extends Error {
+export class EngineCreateNameMismatchError extends WeftError<'EngineCreateNameMismatchError'> {
   readonly definitionKind: 'workflow' | 'activity';
   readonly expectedName: string;
   readonly actualName: string;
 
   constructor(definitionKind: 'workflow' | 'activity', expectedName: string, actualName: string) {
     super(
+      'EngineCreateNameMismatchError',
       `Engine.create() ${definitionKind} definition key "${expectedName}" does not match definition name "${actualName}"`,
     );
-    this.name = 'EngineCreateNameMismatchError';
     this.definitionKind = definitionKind;
     this.expectedName = expectedName;
     this.actualName = actualName;
@@ -197,12 +199,11 @@ export class EngineCreateNameMismatchError extends Error {
  * }
  * ```
  */
-export class WorkflowNotFoundError extends Error {
+export class WorkflowNotFoundError extends WeftError<'WorkflowNotFoundError'> {
   readonly workflowId: string;
 
   constructor(workflowId: string) {
-    super(`Workflow "${workflowId}" not found`);
-    this.name = 'WorkflowNotFoundError';
+    super('WorkflowNotFoundError', `Workflow "${workflowId}" not found`);
     this.workflowId = workflowId;
   }
 }
@@ -227,12 +228,11 @@ export class WorkflowNotFoundError extends Error {
  * }
  * ```
  */
-export class WorkflowNotRegisteredError extends Error {
+export class WorkflowNotRegisteredError extends WeftError<'WorkflowNotRegisteredError'> {
   readonly workflowType: string;
 
   constructor(workflowType: string) {
-    super(`No workflow registered with name "${workflowType}"`);
-    this.name = 'WorkflowNotRegisteredError';
+    super('WorkflowNotRegisteredError', `No workflow registered with name "${workflowType}"`);
     this.workflowType = workflowType;
   }
 }
@@ -258,18 +258,17 @@ export class WorkflowNotRegisteredError extends Error {
  * }
  * ```
  */
-export class ActivityResolutionError extends Error {
-  readonly code = 'ActivityResolutionError';
+export class ActivityResolutionError extends WeftError<'ActivityResolutionError'> {
   readonly workflowType: string;
   readonly activityName: string;
 
   constructor(workflowType: string, activityName: string) {
     super(
+      'ActivityResolutionError',
       `No activity registered with name "${activityName}" for workflow type "${workflowType}". ` +
         'Register the activity via `workflow({ name }).activities({ ... })` on the workflow that runs it, ' +
         'or via `engine.register(activityDefinition)` for the legacy global registry.',
     );
-    this.name = 'ActivityResolutionError';
     this.workflowType = workflowType;
     this.activityName = activityName;
   }
