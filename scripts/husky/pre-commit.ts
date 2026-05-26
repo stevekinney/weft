@@ -1,6 +1,14 @@
 #!/usr/bin/env bun
 import { $ } from 'bun';
+import { join } from 'node:path';
 
+import {
+  discoverTestFiles,
+  extractJunitFailureExcerpts,
+  renderTestOutcome,
+  runTestSuite,
+  tailBound,
+} from './run-tests.ts';
 import {
   error,
   getStagedFiles,
@@ -74,44 +82,49 @@ try {
 }
 
 // 5) test
-// Run tests but skip benchmark files. Performance benchmarks are sensitive
-// to system load and fail intermittently when run alongside 3,400+ other
-// tests. They are verified in CI and can be run in isolation via
-// `bun test src/benchmarks/`.
-//
-// Two benchmark-shaped suites live outside `src/benchmarks/` for historical
-// reasons and exhibit the same load sensitivity: they assert raw
-// throughput numbers (`bun-sql-benchmark.test.ts`) or depend on tight
-// timing windows (`bulk-operations.test.ts > snapshots workflow ids
-// before bulk signal …`). CI runs them in isolation; pre-commit excludes
-// them so a quality-of-throughput regression doesn't masquerade as a
-// failed local commit.
-const LOAD_SENSITIVE_TEST_PATHS = [
-  'src/storage/bun-sql-benchmark.test.ts',
-  'src/core/bulk-operations.test.ts',
-] as const;
+// Run the full suite (benchmarks and the two load-sensitive suites excluded by
+// `discoverTestFiles`). The runner captures Bun's JUnit report so a failure
+// names the offending `file > name`, and re-runs failing files once in
+// isolation to distinguish a load-sensitive failure from a real break. See
+// scripts/husky/run-tests.ts.
 info('Running test…');
-try {
-  const glob = new Bun.Glob('{src,tests}/**/*.test.ts');
-  const testFiles = [];
-  for await (const file of glob.scan('.')) {
-    // Normalize the path before any allow-list comparison: strip `./` prefix
-    // and collapse runs of slashes. Without this, a run-on-load-sensitive
-    // test could slip through if the glob ever returns `./src/...` or
-    // produces a path with redundant separators.
-    const normalized = file.replace(/^\.\//, '').replace(/\/+/g, '/');
-    if (normalized.includes('/benchmarks/')) continue;
-    if (
-      LOAD_SENSITIVE_TEST_PATHS.includes(normalized as (typeof LOAD_SENSITIVE_TEST_PATHS)[number])
-    )
-      continue;
-    testFiles.push(file);
+{
+  const testFiles = await discoverTestFiles();
+  const outcome = await runTestSuite(testFiles);
+  const { ok: testsOk, lines } = renderTestOutcome(outcome);
+  if (testsOk) {
+    success('test passed');
+  } else {
+    ok = false;
+    error('test failed');
+    for (const line of lines) error(line);
+
+    // Diagnostic surface, most-useful-first. The parsed summary above is
+    // best-effort; the JUnit excerpts and captured stderr are authoritative.
+    if (outcome.kind !== 'passed') {
+      const fullReport = outcome.retainedDirectory
+        ? await Bun.file(join(outcome.retainedDirectory, 'full.junit.xml'))
+            .text()
+            .catch(() => '')
+        : '';
+      for (const excerpt of extractJunitFailureExcerpts(fullReport)) {
+        info(`\n${excerpt.file} > ${excerpt.name} [${excerpt.kind}]`);
+        console.error(excerpt.detail);
+      }
+      const stderrTail = tailBound(outcome.output.stderr);
+      if (stderrTail.trim().length > 0) {
+        info('\nCaptured test output (stderr tail):');
+        console.error(stderrTail);
+      }
+      if (outcome.kind === 'failed' && outcome.isolationOutput) {
+        info('\nIsolation re-run output (stderr tail):');
+        console.error(tailBound(outcome.isolationOutput.stderr));
+      }
+      if (outcome.retainedDirectory) {
+        warning(`\nFull reports retained at: ${outcome.retainedDirectory}`);
+      }
+    }
   }
-  await $`bun test --timeout 15000 ${testFiles}`;
-  success('test passed');
-} catch {
-  error('test failed');
-  ok = false;
 }
 
 // 6) oxlint-disable ceiling + rationale check (mirrors the gate in `bun run lint`)

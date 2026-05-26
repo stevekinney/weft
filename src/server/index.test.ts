@@ -5833,7 +5833,21 @@ describe('retry policy respected on reassignment', () => {
       await waitForRealTimersForTesting(50);
 
       ws.close();
-      await waitForRealTimersForTesting(250);
+
+      // Poll for the delayed-redispatch error log rather than waiting a fixed
+      // 250ms and asserting immediately: under parallel load the backoff requeue
+      // can land later than any fixed window, which made this test flaky in the
+      // pre-commit full-suite run. The poll adapts to the real timing, and the
+      // full `toHaveBeenCalledWith` contract (including the Error argument) is
+      // still asserted afterward so polling can't mask a wrong-shaped call.
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some(
+            (call) =>
+              call[0] === '[weft] Delayed redispatch failed for "delayed-redispatch-fail-op":',
+          ),
+        { label: 'delayed redispatch error log' },
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Delayed redispatch failed for "delayed-redispatch-fail-op":',

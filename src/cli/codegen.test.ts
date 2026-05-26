@@ -620,7 +620,13 @@ describe('executeCodegen HTTP fetch path', () => {
 
 describe('generated .d.ts typecheck fixture', () => {
   it('compiles under strict TypeScript with `@ts-expect-error` lines satisfied', async () => {
-    const proc = Bun.spawn(['bunx', 'tsc', '-p', TYPECHECK_FIXTURE_DIR, '--noEmit'], {
+    // Resolve the TypeScript compiler from the fixture root and run it via
+    // `bun` directly, rather than `bunx tsc`. `bunx` adds ~1.7s of package
+    // resolution per call and offers nothing here; resolving the package entry
+    // works in this worktree's layout (no local node_modules — deps resolve from
+    // the project root) without relying on a PATH shim.
+    const tscPath = Bun.resolveSync('typescript/bin/tsc', TYPECHECK_FIXTURE_DIR);
+    const proc = Bun.spawn(['bun', tscPath, '-p', TYPECHECK_FIXTURE_DIR, '--noEmit'], {
       stdout: 'pipe',
       stderr: 'pipe',
     });
@@ -631,7 +637,11 @@ describe('generated .d.ts typecheck fixture', () => {
       throw new Error(`typecheck fixture failed (exit ${exitCode}):\n${stdout}\n${stderr}`);
     }
     expect(exitCode).toBe(0);
-  }, 60_000);
+    // The fixture imports `Engine` as a type only (see consumer.ts), so the
+    // compile loads type declarations rather than the full engine runtime
+    // closure. Measured ~3s isolated (down from 60–110s with a value import,
+    // which flaked under parallel load). 30s leaves ample headroom under load.
+  }, 30_000);
 });
 
 afterAll(() => {
