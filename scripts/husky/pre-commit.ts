@@ -90,14 +90,6 @@ const LOAD_SENSITIVE_TEST_PATHS = [
   'src/storage/bun-sql-benchmark.test.ts',
   'src/core/bulk-operations.test.ts',
 ] as const;
-// Nested git worktrees live inside the repo tree: Scrumlord task worktrees
-// under `tmp/worktrees/` and agent worktrees under `.claude/worktrees/`. Each
-// holds a full `src/` tree on an unrelated branch. `bun test <files>` treats
-// positional paths as prefix filters and still discovers tests tree-wide, so
-// without these excludes the run pulls in thousands of stale tests from those
-// worktrees — several legitimately fail and block every local commit. Ignore
-// them so pre-commit only runs the working tree's own tests.
-const WORKTREE_IGNORE_PATTERNS = ['**/tmp/worktrees/**', '**/.claude/worktrees/**'] as const;
 info('Running test…');
 try {
   const glob = new Bun.Glob('{src,tests}/**/*.test.ts');
@@ -108,7 +100,6 @@ try {
     // test could slip through if the glob ever returns `./src/...` or
     // produces a path with redundant separators.
     const normalized = file.replace(/^\.\//, '').replace(/\/+/g, '/');
-    if (normalized.includes('/worktrees/')) continue;
     if (normalized.includes('/benchmarks/')) continue;
     if (
       LOAD_SENSITIVE_TEST_PATHS.includes(normalized as (typeof LOAD_SENSITIVE_TEST_PATHS)[number])
@@ -116,11 +107,7 @@ try {
       continue;
     testFiles.push(file);
   }
-  const worktreeIgnoreArguments = WORKTREE_IGNORE_PATTERNS.flatMap((pattern) => [
-    '--path-ignore-patterns',
-    pattern,
-  ]);
-  await $`bun test --timeout 15000 ${worktreeIgnoreArguments} ${testFiles}`;
+  await $`bun test --timeout 15000 ${testFiles}`;
   success('test passed');
 } catch {
   error('test failed');

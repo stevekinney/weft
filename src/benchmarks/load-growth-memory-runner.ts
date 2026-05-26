@@ -102,8 +102,8 @@ async function completeWorkflowBatch(
 async function runWarmup(engine: RuntimeWorkflowEngine): Promise<number> {
   // The warmup runs unthrottled (no pacing sleep), so its rate is this
   // machine's real sustained ceiling. We time only the workflow-completion
-  // loop — the trailing settle/GC below is excluded — and return it as the
-  // calibration baseline for a machine-relative throughput floor.
+  // loop — the trailing settle/GC below is excluded — and return it as
+  // diagnostic context for the sustained run (logged, not used as a gate).
   const startedAt = performance.now();
 
   for (
