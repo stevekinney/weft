@@ -50,6 +50,10 @@ export type TestRunOutcome =
       kind: 'failed';
       failures: FailingTest[];
       output: CapturedOutput;
+      /** The full-run JUnit report text, so callers don't re-read it from disk. */
+      reportContent?: string;
+      /** Absolute path of the retained per-run directory (present only on failure). */
+      retainedDirectory?: string;
       /** Set when the JUnit report could not be read/parsed after a non-zero exit. */
       junitError?: string;
       /** Set when isolation ran but its own JUnit report was unavailable. */
@@ -61,6 +65,12 @@ export type TestRunOutcome =
       kind: 'failedButPassedInIsolation';
       failures: FailingTest[];
       output: CapturedOutput;
+      /** The full-run JUnit report text, so callers don't re-read it from disk. */
+      reportContent?: string;
+      /** Absolute path of the retained per-run directory (present only on failure). */
+      retainedDirectory?: string;
+      /** Isolation output — the run that proved the failure was context-sensitive. */
+      isolationOutput?: CapturedOutput;
     };
 
 /**
@@ -132,26 +142,36 @@ const NAMED_ENTITIES: Record<string, string> = {
   apos: "'",
 };
 
+/** A valid Unicode code point; out-of-range numeric references decode to nothing. */
+function codePointFromEntity(code: number): string | undefined {
+  // `String.fromCodePoint` throws RangeError outside [0, 0x10FFFF]; a corrupted
+  // report like `&#999999999999;` must not crash the best-effort parser.
+  if (!Number.isInteger(code) || code < 0 || code > 0x10ffff) return undefined;
+  return String.fromCodePoint(code);
+}
+
 /** Decode the XML entities Bun's JUnit reporter emits: named plus numeric (dec/hex). */
 function decodeXmlEntities(value: string): string {
   return value.replace(/&(#x[0-9a-fA-F]+|#\d+|[a-zA-Z]+);/g, (match, entity: string) => {
     if (entity.startsWith('#x') || entity.startsWith('#X')) {
-      const code = Number.parseInt(entity.slice(2), 16);
-      return Number.isNaN(code) ? match : String.fromCodePoint(code);
+      return codePointFromEntity(Number.parseInt(entity.slice(2), 16)) ?? match;
     }
     if (entity.startsWith('#')) {
-      const code = Number.parseInt(entity.slice(1), 10);
-      return Number.isNaN(code) ? match : String.fromCodePoint(code);
+      return codePointFromEntity(Number.parseInt(entity.slice(1), 10)) ?? match;
     }
     const named = NAMED_ENTITIES[entity];
     return named ?? match;
   });
 }
 
-/** Read an attribute value from a `<testcase …>` opening tag, decoded. Returns '' when absent. */
+/**
+ * Read an attribute value from a `<testcase …>` opening tag, decoded. Accepts
+ * double- or single-quoted values (XML permits both); returns '' when absent.
+ */
 function readAttribute(openingTag: string, attribute: string): string {
-  const match = openingTag.match(new RegExp(`\\b${attribute}="([^"]*)"`));
-  return match ? decodeXmlEntities(match[1] ?? '') : '';
+  const match = openingTag.match(new RegExp(`\\b${attribute}=(?:"([^"]*)"|'([^']*)')`));
+  if (!match) return '';
+  return decodeXmlEntities(match[1] ?? match[2] ?? '');
 }
 
 /**
@@ -385,7 +405,7 @@ const ISOLATION_REPORT = 'isolation.junit.xml';
 export async function runTestSuite(
   testFiles: string[],
   dependencies: RunTestSuiteDependencies = realDependencies,
-): Promise<TestRunOutcome & { retainedDirectory?: string }> {
+): Promise<TestRunOutcome> {
   // A bare `bun test` with no files runs the entire default set — never do that.
   if (testFiles.length === 0) return { kind: 'passed' };
 
@@ -418,7 +438,13 @@ export async function runTestSuite(
     // No parseable failing files, or a broad break spanning many files: don't
     // bother with isolation — surface the failure as-is.
     if (failingFiles.length === 0 || failingFiles.length >= ISOLATION_SKIP_FILE_THRESHOLD) {
-      return { kind: 'failed', failures, output, retainedDirectory: runDirectory };
+      return {
+        kind: 'failed',
+        failures,
+        output,
+        reportContent: fullReport,
+        retainedDirectory: runDirectory,
+      };
     }
 
     const isolationReportPath = join(runDirectory, ISOLATION_REPORT);
@@ -435,6 +461,8 @@ export async function runTestSuite(
         kind: 'failedButPassedInIsolation',
         failures,
         output,
+        reportContent: fullReport,
+        isolationOutput,
         retainedDirectory: runDirectory,
       };
     }
@@ -445,6 +473,7 @@ export async function runTestSuite(
         kind: 'failed',
         failures,
         output,
+        reportContent: fullReport,
         isolationJunitUnavailable: true,
         isolationOutput,
         retainedDirectory: runDirectory,
@@ -455,6 +484,7 @@ export async function runTestSuite(
       kind: 'failed',
       failures: stillFailing.length > 0 ? stillFailing : failures,
       output,
+      reportContent: fullReport,
       isolationOutput,
       retainedDirectory: runDirectory,
     };

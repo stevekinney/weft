@@ -2,9 +2,11 @@ import { describe, expect, it } from 'bun:test';
 
 import {
   buildTestCommand,
+  discoverTestFiles,
   extractJunitFailureExcerpts,
   formatFailingTests,
   ISOLATION_SKIP_FILE_THRESHOLD,
+  LOAD_SENSITIVE_TEST_PATHS,
   parseJunitFailures,
   renderTestOutcome,
   runTestSuite,
@@ -93,6 +95,21 @@ describe('parseJunitFailures', () => {
   it('does not throw on truncated XML (best-effort)', () => {
     const xml = '<testsuites><testsuite><testcase name="x" file="src/a.test.ts"><fail';
     expect(() => parseJunitFailures(xml)).not.toThrow();
+  });
+
+  it('does not throw on an out-of-range numeric character reference', () => {
+    // String.fromCodePoint throws RangeError above 0x10FFFF; a corrupted report
+    // must not crash the parser. The bogus entity is left as-is.
+    const xml = suite(
+      testcase({ name: 'bad &#999999999999;', file: 'src/a.test.ts' }, '<failure />'),
+    );
+    expect(() => parseJunitFailures(xml)).not.toThrow();
+    expect(parseJunitFailures(xml)[0].name).toContain('&#999999999999;');
+  });
+
+  it('reads single-quoted attribute values', () => {
+    const xml = `<testcase name='single quoted' file='src/a.test.ts'><failure /></testcase>`;
+    expect(parseJunitFailures(xml)).toEqual([{ file: 'src/a.test.ts', name: 'single quoted' }]);
   });
 
   it('parses regardless of attribute order', () => {
@@ -236,6 +253,33 @@ describe('renderTestOutcome', () => {
     expect(result.lines.join('\n')).toContain('no JUnit test-case failures');
     expect(result.lines.join('\n')).toContain('could not read JUnit report');
   });
+
+  it('reports the isolationJunitUnavailable case', () => {
+    const result = renderTestOutcome({
+      kind: 'failed',
+      failures: [{ file: 'src/a.test.ts', name: 'x' }],
+      output: { stdout: '', stderr: '' },
+      isolationJunitUnavailable: true,
+    });
+    expect(result.ok).toBe(false);
+    expect(result.lines.join('\n')).toContain('Isolation run failed but its JUnit was unavailable');
+  });
+});
+
+describe('discoverTestFiles', () => {
+  it('excludes benchmark and load-sensitive files', async () => {
+    const files = await discoverTestFiles();
+    expect(files.length).toBeGreaterThan(0);
+    expect(files.some((file) => file.includes('/benchmarks/'))).toBe(false);
+    for (const excluded of LOAD_SENSITIVE_TEST_PATHS) {
+      expect(files).not.toContain(excluded);
+    }
+  });
+
+  it('returns only .test.ts files', async () => {
+    const files = await discoverTestFiles();
+    expect(files.every((file) => file.endsWith('.test.ts'))).toBe(true);
+  });
 });
 
 describe('runTestSuite (injected dependencies)', () => {
@@ -298,6 +342,24 @@ describe('runTestSuite (injected dependencies)', () => {
     expect(outcome.kind).toBe('failedButPassedInIsolation');
     // retained on failure (not removed)
     expect(removed).toEqual([]);
+    if (outcome.kind === 'failedButPassedInIsolation') {
+      // carries the report it already read + the isolation run's output
+      expect(outcome.reportContent).toBe(report);
+      expect(outcome.isolationOutput).toBeDefined();
+      expect(outcome.retainedDirectory).toBe('/tmp/run');
+    }
+  });
+
+  it('skips isolation when failures have no parseable file attribute', async () => {
+    // A failing testcase with a name but no file → failingFiles is empty.
+    const report = suite(testcase({ name: 'nameless file' }, '<failure />'));
+    const { dependencies, commands } = makeDependencies({
+      runResults: [{ exitCode: 1 }],
+      reports: { full: report },
+    });
+    const outcome = await runTestSuite(['src/a.test.ts'], dependencies);
+    expect(outcome.kind).toBe('failed');
+    expect(commands).toHaveLength(1); // no isolation run
   });
 
   it('classifies a real break as failed using the isolation report', async () => {

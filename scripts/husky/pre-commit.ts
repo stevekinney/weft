@@ -1,6 +1,5 @@
 #!/usr/bin/env bun
 import { $ } from 'bun';
-import { join } from 'node:path';
 
 import {
   discoverTestFiles,
@@ -87,9 +86,11 @@ try {
 // names the offending `file > name`, and re-runs failing files once in
 // isolation to distinguish a load-sensitive failure from a real break. See
 // scripts/husky/run-tests.ts.
-info('Running test…');
 {
   const testFiles = await discoverTestFiles();
+  // The full run is captured (output appears on failure), so the terminal would
+  // otherwise go silent through the longest hook step. Say so up front.
+  info(`Running test… (${testFiles.length} files; output shown on failure)`);
   const outcome = await runTestSuite(testFiles);
   const { ok: testsOk, lines } = renderTestOutcome(outcome);
   if (testsOk) {
@@ -102,12 +103,9 @@ info('Running test…');
     // Diagnostic surface, most-useful-first. The parsed summary above is
     // best-effort; the JUnit excerpts and captured stderr are authoritative.
     if (outcome.kind !== 'passed') {
-      const fullReport = outcome.retainedDirectory
-        ? await Bun.file(join(outcome.retainedDirectory, 'full.junit.xml'))
-            .text()
-            .catch(() => '')
-        : '';
-      for (const excerpt of extractJunitFailureExcerpts(fullReport)) {
+      // `reportContent` is the full-run JUnit the runner already read — no
+      // second disk read (which could race cleanup and silently yield nothing).
+      for (const excerpt of extractJunitFailureExcerpts(outcome.reportContent ?? '')) {
         info(`\n${excerpt.file} > ${excerpt.name} [${excerpt.kind}]`);
         console.error(excerpt.detail);
       }
@@ -116,11 +114,16 @@ info('Running test…');
         info('\nCaptured test output (stderr tail):');
         console.error(stderrTail);
       }
-      if (outcome.kind === 'failed' && outcome.isolationOutput) {
-        info('\nIsolation re-run output (stderr tail):');
-        console.error(tailBound(outcome.isolationOutput.stderr));
+      if (outcome.isolationOutput) {
+        const isolationTail = tailBound(outcome.isolationOutput.stderr);
+        if (isolationTail.trim().length > 0) {
+          info('\nIsolation re-run output (stderr tail):');
+          console.error(isolationTail);
+        }
       }
-      if (outcome.retainedDirectory) {
+      // The retained reports help diagnose a *real* failure's stack traces; for
+      // a context-sensitive pass-in-isolation result the summary is the action.
+      if (outcome.kind === 'failed' && outcome.retainedDirectory) {
         warning(`\nFull reports retained at: ${outcome.retainedDirectory}`);
       }
     }
