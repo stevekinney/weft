@@ -55,7 +55,10 @@ function synthesizeTerminalEventFromState(state: WorkflowState): Event | null {
       // instead of the actual elapsed, which is a subtly different number
       // when the scheduler ticks past the deadline.
       const elapsed = state.updatedAt - getWorkflowExecutionStartedAt(state);
-      return new WorkflowTimedOutEvent(state.id, 'execution', elapsed);
+      // Thread the persisted termination reason so consumers that attach after
+      // termination (async iterator / observable replaying terminal state) see
+      // the same circuit-breaker discriminator the live dispatch carried.
+      return new WorkflowTimedOutEvent(state.id, 'execution', elapsed, state.terminationReason);
     }
     default:
       return null;

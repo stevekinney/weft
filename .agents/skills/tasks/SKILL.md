@@ -1,3 +1,10 @@
+---
+name: tasks
+description: >-
+  Use the `tasks` CLI when you need to inspect or update the local task graph for this project. The `tasks` CLI manages a local SQLite database of tasks, their relationships, and their lifecycle state. It also provides commands for synchronizing task state with Git branches and GitHub pull requests, recording incremental progress, and inspecting the current work in the context of the project.
+disable-model-invocation: false
+---
+
 # Tasks CLI
 
 Use the `tasks` CLI when you need to inspect or update the local task graph for this project.

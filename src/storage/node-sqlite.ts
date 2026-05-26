@@ -97,9 +97,11 @@ export { NodeSQLiteStorage as SQLiteStorage };
  *
  * Unlike BunSQLiteStorage, this adapter currently implements only the required
  * Storage methods (`get`, `put`, `delete`, `scan`, `batch`, and
- * `conditionalBatch`). The optional `has`, `keys`, `count`, `deletePrefix`,
- * `deleteRange`, and `scoped` helpers fall back to the generic implementations in
- * `weft/storage/interface`, and there is no SQL passthrough `query()` method.
+ * `conditionalBatch`). The optional `has`, `keys`, `count`, `deletePrefix`, and
+ * `scoped` helpers fall back to the generic implementations in
+ * `weft/storage/interface`; `deleteRange` falls back to `storageDeleteRange`
+ * (exported from `weft` / `weft/storage`). There is no SQL passthrough
+ * `query()` method.
  *
  * @example
  * ```ts

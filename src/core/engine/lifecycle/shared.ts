@@ -1,4 +1,5 @@
 import { KEYS, storageHas } from '../../../storage/interface.ts';
+import { EventLog } from '../../event-log.ts';
 import type { ComposedWorkflowInterceptor } from '../../interceptor.ts';
 import { coerceStartWorkflowTags } from '../../start-workflow-validation.ts';
 import { normalizeWorkflowTags } from '../../workflow-tags.ts';
@@ -81,6 +82,29 @@ export async function enforceHistoryPolicyBeforeReplay(
   }
   await callbacks.enforceHistoryCircuitBreaker(workflowId);
   return true;
+}
+
+/**
+ * {@link enforceHistoryPolicyBeforeReplay} for callers that have not already
+ * loaded the event-log head. Resolves the head from the engine's in-memory map
+ * (present for workflows this instance already tracks, e.g. locally-owned ones)
+ * and falls back to storage. Used by `resume` on its local-ownership paths,
+ * which return before reaching `resumeWorkflowFromStorage` (where the head is
+ * otherwise loaded for the guard) — without this the circuit breaker would be
+ * skipped for a locally-owned workflow left `running` with an oversized history.
+ */
+export async function enforceHistoryPolicyBeforeReplayById(
+  internals: EngineInternals,
+  workflowId: string,
+  callbacks: Pick<LifecycleCallbacks, 'enforceHistoryCircuitBreaker'>,
+): Promise<boolean> {
+  if (internals.options.historyPolicy.maxEvents === null) {
+    return false;
+  }
+  const head =
+    internals.eventLogHeads.get(workflowId) ??
+    (await new EventLog(internals.storage, workflowId).loadHead());
+  return enforceHistoryPolicyBeforeReplay(internals, workflowId, head, callbacks);
 }
 
 export function createWorkflowHandle(

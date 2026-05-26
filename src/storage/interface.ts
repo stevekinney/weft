@@ -63,9 +63,10 @@ export interface ScanOptions {
  * fast paths are `conditionalBatch`, `has`, `deletePrefix`, `deleteRange`,
  * `keys`, `count`, `scoped`, and `query`. Adapters that omit optional methods
  * get generic fallbacks via `storageHas`, `storageKeys`, `storageCount`,
- * `storageDeletePrefix`, `storageDeleteRange`, and `storageConditionalBatch`.
- * Callers should use those wrappers rather than calling optional methods
- * directly.
+ * `storageDeletePrefix`, and `storageConditionalBatch` (all from this module),
+ * plus `storageDeleteRange` (exported from `weft` / `weft/storage`, defined in
+ * `storage/delete-range.ts`). Callers should use those wrappers rather than
+ * calling optional methods directly.
  *
  * @example
  * ```ts

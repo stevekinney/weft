@@ -447,6 +447,123 @@ describe('history circuit breaker — pre-replay guard', () => {
     await recoverEngine.cancel(workflowId);
     recoverEngine[Symbol.dispose]();
   });
+
+  it('enforces the breaker on resume() even when the workflow is locally owned (guard runs before the ownership short-circuit)', async () => {
+    // Reproduces the bug where resume() returned early via the local-ownership
+    // path before reaching resumeWorkflowFromStorage, skipping the guard. Here
+    // the breaching workflow is left `running` on the SAME engine instance
+    // (write-path termination is made to fail), then resume() is called — the
+    // ownership check would otherwise short-circuit, but the pre-replay guard
+    // must still fire.
+    const underlying = new MemoryStorage();
+    let failTimedOutTransition = false;
+    const storage = {
+      capabilities: underlying.capabilities.bind(underlying),
+      conditionalBatch: underlying.conditionalBatch.bind(underlying),
+      delete: underlying.delete.bind(underlying),
+      get: underlying.get.bind(underlying),
+      put: underlying.put.bind(underlying),
+      scan: underlying.scan.bind(underlying),
+      batch: async (operations: Parameters<MemoryStorage['batch']>[0]) => {
+        const transitionsToTimedOut = operations.some((op) => {
+          if (op.type !== 'put' || !/^wf:[^:]+$/.test(op.key)) return false;
+          return (decode(op.value) as WorkflowState).status === 'timed-out';
+        });
+        if (failTimedOutTransition && transitionsToTimedOut) {
+          throw new Error('state write failed during circuit-breaker termination');
+        }
+        return underlying.batch(operations);
+      },
+      [Symbol.dispose]() {
+        underlying[Symbol.dispose]();
+      },
+    };
+
+    const engine = new Engine({ storage, history: { maxEvents: 2 } });
+    registerCountingWorkflow(engine, 10);
+    failTimedOutTransition = true;
+    const handle = await engine.start('counting', null);
+    suppressResult(handle);
+    await flush();
+    // Write-path termination failed → still running with an oversized head, and
+    // the engine instance now locally owns the (inline) workflow.
+    const stuck = await loadState(engine, handle.id);
+    expect(stuck.status).toBe('running');
+
+    // Resume on the SAME engine. Allow the timed-out transition to succeed now.
+    failTimedOutTransition = false;
+    const resumed = await engine.resume(handle.id);
+    suppressResult(resumed);
+    await flush();
+
+    const recovered = await loadState(engine, handle.id);
+    expect(recovered.status).toBe('timed-out');
+    expect(recovered.terminationReason).toBe(HISTORY_CIRCUIT_BREAKER_REASON);
+
+    engine[Symbol.dispose]();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Synthesized terminal event carries the reason (late-attaching consumers)
+// ---------------------------------------------------------------------------
+
+describe('history circuit breaker — synthesized terminal event', () => {
+  it('replays the circuit-breaker reason to a consumer that attaches after termination', async () => {
+    const engine = new Engine({ storage: new MemoryStorage(), history: { maxEvents: 2 } });
+    registerCountingWorkflow(engine, 10);
+
+    const handle = await engine.start('counting', null);
+    suppressResult(handle);
+    await flush();
+    const terminal = await loadState(engine, handle.id);
+    expect(terminal.status).toBe('timed-out');
+
+    // Attach a fresh handle AFTER termination; its async iterator synthesizes
+    // the terminal event from persisted state. It must carry the persisted
+    // terminationReason, matching the live dispatch.
+    const lateHandle = engine.getHandle(handle.id);
+    let synthesized: WorkflowTimedOutEvent | undefined;
+    for await (const event of lateHandle) {
+      if (event instanceof WorkflowTimedOutEvent) {
+        synthesized = event;
+        break;
+      }
+    }
+    expect(synthesized).toBeDefined();
+    expect(synthesized!.reason).toBe(HISTORY_CIRCUIT_BREAKER_REASON);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('a deadline-timeout synthesized event carries no reason', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const waiter = workflow({ name: 'waiter' }).execute(async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('never');
+      return 'never';
+    });
+    engine.register(waiter);
+
+    const handle = await engine.start('waiter', null, { executionTimeout: 5 });
+    suppressResult(handle);
+    await engine.timeout(handle.id);
+    await flush();
+    const terminal = await loadState(engine, handle.id);
+    expect(terminal.status).toBe('timed-out');
+
+    const lateHandle = engine.getHandle(handle.id);
+    let synthesized: WorkflowTimedOutEvent | undefined;
+    for await (const event of lateHandle) {
+      if (event instanceof WorkflowTimedOutEvent) {
+        synthesized = event;
+        break;
+      }
+    }
+    expect(synthesized).toBeDefined();
+    expect(synthesized!.reason).toBeUndefined();
+
+    engine[Symbol.dispose]();
+  });
 });
 
 // ---------------------------------------------------------------------------
