@@ -237,6 +237,12 @@ describe('worker execution isolation boundary', () => {
       label: 'boundary cancel signal waiter',
     });
     await cancelHandle.cancel();
+    // Wait for the signal waiter to be torn down before asserting rejection, so
+    // a left-alive waiter cannot be silently cleaned up by the afterEach dispose
+    // and mask a stuck workflow (mirrors the existing cancel test above).
+    await waitForCondition(() => workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]() === 0, {
+      label: 'boundary cancel waiter cleanup',
+    });
     await expect(cancelResult).rejects.toThrow('Workflow cancelled');
 
     // The invariant: across start, resume, and cancel, neither engine-side
