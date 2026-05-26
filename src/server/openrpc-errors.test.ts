@@ -10,7 +10,6 @@ import {
   MethodNotFoundDataSchema,
   NotFoundDataSchema,
   NotImplementedDataSchema,
-  RateLimitedDataSchema,
   SubscriptionOverflowDataSchema,
   TimeoutDataSchema,
   UnauthorizedDataSchema,
@@ -55,10 +54,6 @@ type _CheckTimeout = AssertMutuallyExtends<
   OperationFaultWithCode<'Timeout'>['data'],
   z.infer<typeof TimeoutDataSchema>
 >;
-type _CheckRateLimited = AssertMutuallyExtends<
-  OperationFaultWithCode<'RateLimited'>['data'],
-  z.infer<typeof RateLimitedDataSchema>
->;
 type _CheckNotImplemented = AssertMutuallyExtends<
   OperationFaultWithCode<'NotImplemented'>['data'],
   z.infer<typeof NotImplementedDataSchema>
@@ -97,7 +92,6 @@ const typeSyncChecks = [
   true,
   true,
   true,
-  true,
 ] satisfies [
   _CheckUnauthorized,
   _CheckForbidden,
@@ -105,7 +99,6 @@ const typeSyncChecks = [
   _CheckConflict,
   _CheckUnprocessable,
   _CheckTimeout,
-  _CheckRateLimited,
   _CheckNotImplemented,
   _CheckUnsupportedTransport,
   _CheckSubscriptionOverflow,
@@ -116,7 +109,7 @@ const typeSyncChecks = [
 
 describe('OpenRPC components.errors', () => {
   it('keeps the compile-time fault data schema sync checks active', () => {
-    expect(typeSyncChecks).toHaveLength(13);
+    expect(typeSyncChecks).toHaveLength(12);
   });
 
   it('emits exactly one error component per FaultCode with matching transport codes', () => {

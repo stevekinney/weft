@@ -1,5 +1,4 @@
 import type { AtomicStateOptions } from '../atomic-state.ts';
-import type { TenantContext } from '../tenant.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import type { ActivityCallOptions } from './activity.ts';
 import type { CheckpointState } from './checkpoint.ts';
@@ -15,7 +14,7 @@ import type { WorkflowOperation } from './workflow-function.ts';
  *
  * Returned by `handle.state()` and `engine.get(workflowId)`. Users observe
  * this shape — they don't construct it. Includes the input, current status,
- * tenant, attributes, retention policy snapshot, and lineage information,
+ * attributes, retention policy snapshot, and lineage information,
  * plus `failureCategory` (populated on failed workflows), version tuple
  * metadata, `forkedFrom` lineage metadata, and the optional
  * `executionDeadline`/`terminalCleanupToken` housekeeping fields.
@@ -61,13 +60,6 @@ export interface WorkflowState {
   updatedAt: number;
   terminalCleanupToken?: string;
   executionDeadline?: number;
-  /**
-   * Optional {@link TenantContext} resolved at start time by the engine's
-   * `tenantResolver`. Persisted here so it survives workflow recovery — the
-   * field is only present on workflows started while a resolver was
-   * configured and the resolver returned a value.
-   */
-  tenant?: TenantContext;
   /**
    * Lineage metadata recorded when this workflow was created by a fork from
    * another workflow checkpoint. Absent for workflows started normally.
@@ -162,8 +154,7 @@ export interface WorkflowSessionState<T> {
 
 /**
  * Options accepted by storage-backed workflow state handles such as
- * `ctx.state.execution(key, options)`, `ctx.state.workflow(key, options)`,
- * and `ctx.state.tenant(key, options)`.
+ * `ctx.state.execution(key, options)` and `ctx.state.workflow(key, options)`.
  *
  * @example
  * ```ts
@@ -227,7 +218,6 @@ export interface WorkflowStateNamespace {
   session<T>(key: string, options?: WorkflowSessionStateOptions<T>): WorkflowSessionState<T>;
   execution<T>(key: string, options?: WorkflowAtomicStateOptions<T>): WorkflowAtomicState<T>;
   workflow<T>(key: string, options?: WorkflowAtomicStateOptions<T>): WorkflowAtomicState<T>;
-  tenant<T>(key: string, options?: WorkflowAtomicStateOptions<T>): WorkflowAtomicState<T>;
 }
 
 // ---------------------------------------------------------------------------
@@ -238,8 +228,8 @@ export interface WorkflowStateNamespace {
  * Lightweight summary of a workflow returned by list operations. Contains
  * identity and lifecycle fields but not the full input, result, or checkpoint.
  * Use {@link Engine.get} to retrieve the complete {@link WorkflowState}. The
- * optional fields (`tenant`, `tenantId`, `executionDeadline`, and
- * `failureCategory`) are populated whenever the underlying `WorkflowState`
+ * optional fields (`executionDeadline` and `failureCategory`) are populated
+ * whenever the underlying `WorkflowState`
  * carries them. For failed workflows missing a state category, `failureCategory`
  * can also be backfilled from stored search attributes when list callers
  * explicitly request it. Notably absent from the summary: `input`, `result`,
@@ -251,12 +241,9 @@ export interface WorkflowSummary {
   type: string;
   status: WorkflowStatus;
   tags?: string[];
-  tenant?: TenantContext;
   version: string;
   createdAt: number;
   updatedAt: number;
-  /** Resolved tenant identifier projected from `WorkflowState.tenant?.id`. */
-  tenantId?: string;
   /** Execution deadline (ms epoch) if set on the workflow. */
   executionDeadline?: number;
   /** Failure category if set on the workflow state. */

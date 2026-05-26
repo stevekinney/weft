@@ -253,7 +253,7 @@ class AlertResolvedEvent extends Event {
 
 ### `ConstraintViolatedEvent`
 
-Emitted when a quota or constraint is violated (e.g., tenant workflow creation rate limit).
+Emitted when a constraint is violated (e.g., a workflow creation rate limit).
 
 ```ts partial
 class ConstraintViolatedEvent extends Event {

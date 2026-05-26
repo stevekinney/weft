@@ -101,7 +101,7 @@ export type WorkerDrainOptions = {
  *   equal opportunity regardless of load. Useful when tasks are uniform and you
  *   want deterministic distribution for debugging or fairness across workers.
  * - `'fair-share'` picks the worker whose in-flight count for the current
- *   `fairShareKey` (e.g. tenant id) is lowest, preventing any single tenant from
+ *   `fairShareKey` (e.g. customer id) is lowest, preventing any single key from
  *   monopolizing capacity when tasks are heterogeneous.
  */
 export type RoutingPolicy = 'least-loaded' | 'round-robin' | 'fair-share';
@@ -111,7 +111,7 @@ export interface RoutingOptions {
   sticky?: string;
   queue?: string;
   /**
-   * Partition key for `'fair-share'` routing. Typically a tenant or customer id.
+   * Partition key for `'fair-share'` routing. Typically a customer id.
    * Ignored by other policies. When omitted under `'fair-share'` the policy
    * degrades gracefully to `'least-loaded'`.
    */

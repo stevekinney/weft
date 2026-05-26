@@ -24,6 +24,15 @@ export type LoadGrowthMemoryMeasurement = {
   configuredDurationMilliseconds: number;
   measuredDurationMilliseconds: number;
   targetWorkflowsPerSecond: number;
+  /**
+   * Unthrottled workflows/sec measured during warmup — this machine's actual
+   * ceiling, before pacing. Logged as diagnostic context (and structurally
+   * validated as a positive integer) so a human can see how far the paced,
+   * GC-sampled sustained rate sits below the machine's raw capacity. It is
+   * deliberately NOT used as a pass/fail throughput floor — see the policy note
+   * on `TARGET_WORKFLOWS_PER_SECOND` in `load-growth-memory.test.ts`.
+   */
+  calibratedWorkflowsPerSecond: number;
   sampleIntervalMilliseconds: number;
   workflowBatchSize: number;
   warmupSamples: number;
@@ -90,7 +99,13 @@ async function completeWorkflowBatch(
   await Promise.all(handles.map((handle) => handle.result()));
 }
 
-async function runWarmup(engine: RuntimeWorkflowEngine): Promise<void> {
+async function runWarmup(engine: RuntimeWorkflowEngine): Promise<number> {
+  // The warmup runs unthrottled (no pacing sleep), so its rate is this
+  // machine's real sustained ceiling. We time only the workflow-completion
+  // loop — the trailing settle/GC below is excluded — and return it as
+  // diagnostic context for the sustained run (logged, not used as a gate).
+  const startedAt = performance.now();
+
   for (
     let workflowStartIndex = 0;
     workflowStartIndex < DEFAULT_WARMUP_WORKFLOWS;
@@ -103,11 +118,18 @@ async function runWarmup(engine: RuntimeWorkflowEngine): Promise<void> {
     await completeWorkflowBatch(engine, workflowStartIndex, workflowBatchSize);
   }
 
+  const elapsedMilliseconds = Math.max(1, performance.now() - startedAt);
+  const calibratedWorkflowsPerSecond = Math.round(
+    (DEFAULT_WARMUP_WORKFLOWS / elapsedMilliseconds) * 1000,
+  );
+
   await Bun.sleep(100);
 
   if (typeof Bun.gc === 'function') {
     Bun.gc(true);
   }
+
+  return calibratedWorkflowsPerSecond;
 }
 
 function snapshotRetainedMemory(profiler: MemoryProfiler): MemorySample {
@@ -239,7 +261,7 @@ export async function measureLoadGrowthMemory(
       ),
     );
 
-    await runWarmup(engine);
+    const calibratedWorkflowsPerSecond = await runWarmup(engine);
 
     const profiler = new MemoryProfiler();
     const { totalWorkflows, elapsedMilliseconds, samples } = await runSustainedLoad(
@@ -259,6 +281,7 @@ export async function measureLoadGrowthMemory(
         Math.round(elapsedMilliseconds),
       ),
       targetWorkflowsPerSecond: configuration.targetWorkflowsPerSecond,
+      calibratedWorkflowsPerSecond,
       sampleIntervalMilliseconds: DEFAULT_SAMPLE_INTERVAL_MILLISECONDS,
       workflowBatchSize: DEFAULT_BATCH_SIZE,
       warmupSamples: DEFAULT_WARMUP_SAMPLES,

@@ -100,7 +100,7 @@ for (const backend of storageBackends) {
       try {
         expect(storage.scoped).toBeDefined();
 
-        const scoped = storage.scoped?.('tenant');
+        const scoped = storage.scoped?.('scope');
         if (!scoped?.keys) {
           throw new Error('Scoped storage should expose keys(prefix, options?).');
         }
@@ -112,8 +112,8 @@ for (const backend of storageBackends) {
         expect(await collect(scoped.keys(''))).toEqual(['profile', 'scoped:item']);
         expect(await scoped.get('profile')).toEqual(encode('alice'));
         expect(await scoped.get('scoped:item')).toEqual(encode('value'));
-        expect(await storage.get('tenant:profile')).toEqual(encode('alice'));
-        expect(await storage.get('tenant:scoped:item')).toEqual(encode('value'));
+        expect(await storage.get('scope:profile')).toEqual(encode('alice'));
+        expect(await storage.get('scope:scoped:item')).toEqual(encode('value'));
       } finally {
         cleanup();
       }

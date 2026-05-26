@@ -48,7 +48,7 @@ describe('debug output sanitization', () => {
       ]),
       set: new Set(['4111-1111-1111-1111', 'kept']),
       amount: 42n,
-      symbol: Symbol.for('tenant'),
+      symbol: Symbol.for('marker'),
       callback: function namedHandler() {
         return undefined;
       },
@@ -71,7 +71,7 @@ describe('debug output sanitization', () => {
       },
       set: ['[REDACTED]', 'kept'],
       amount: '42',
-      symbol: 'Symbol(tenant)',
+      symbol: 'Symbol(marker)',
       callback: '[Function namedHandler]',
       instance: '[object Object]',
       plainNullPrototype: {

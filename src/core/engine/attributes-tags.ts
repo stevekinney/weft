@@ -32,7 +32,6 @@ const EMPTY_STORAGE_VALUE = new Uint8Array(0);
 type WorkflowStateUpdateOptions = {
   allowedStatuses?: readonly WorkflowStatus[];
   buildAdditionalOperations?: (previousState: WorkflowState, updatedAt: number) => BatchOperation[];
-  releaseTenantQuota?: boolean;
 };
 
 type WorkflowStateUpdateResult = {
@@ -148,20 +147,13 @@ export async function updateWorkflowState(
       updatedAt,
     };
     const additionalOperations = options.buildAdditionalOperations?.(state, updatedAt) ?? [];
-    const commitOptions =
-      options.releaseTenantQuota === true ? { releaseTenantQuota: true } : undefined;
 
-    await commitWorkflowStateOperations(
-      internals,
-      state,
-      [
-        ...buildTerminalWorkflowIndexOperations(state, updated),
-        { type: 'put', key: KEYS.workflow(workflowId), value: encode(updated) },
-        ...buildWorkflowVisibilityIndexTransition(workflowId, state, updated).batchOps,
-        ...additionalOperations,
-      ],
-      commitOptions,
-    );
+    await commitWorkflowStateOperations(internals, state, [
+      ...buildTerminalWorkflowIndexOperations(state, updated),
+      { type: 'put', key: KEYS.workflow(workflowId), value: encode(updated) },
+      ...buildWorkflowVisibilityIndexTransition(workflowId, state, updated).batchOps,
+      ...additionalOperations,
+    ]);
 
     return {
       previousState: state,

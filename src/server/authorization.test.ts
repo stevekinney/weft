@@ -101,6 +101,16 @@ describe('extractScopesFromClaims', () => {
     expect(scopes.size).toBe(1);
   });
 
+  it('ignores the retired quota:read scope without rejecting the token', () => {
+    // Multi-tenancy removal deleted the `quota:read` scope. Old API keys / JWTs
+    // that still carry it must keep authenticating — the retired scope is simply
+    // dropped, not treated as an authorization failure that locks out the token.
+    const scopes = extractScopesFromClaims({ scope: 'workflows:read quota:read' });
+    expect(scopes.has('workflows:read')).toBe(true);
+    expect(scopes.has('quota:read' as never)).toBe(false);
+    expect(scopes.size).toBe(1);
+  });
+
   it('returns an empty set when no scope source is present', () => {
     const scopes = extractScopesFromClaims({ sub: 's' });
     expect(scopes.size).toBe(0);

@@ -22,9 +22,6 @@ export function buildScheduleListSearchParams(filter?: ScheduleFilter): URLSearc
   if (filter?.workflowType !== undefined) {
     params.set('workflowType', filter.workflowType);
   }
-  if (filter?.tenantId !== undefined) {
-    params.set('tenantId', filter.tenantId);
-  }
   if (filter?.limit !== undefined) {
     params.set('limit', String(filter.limit));
   }

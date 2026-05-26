@@ -193,7 +193,6 @@ describe('API-key admission — resolver present', () => {
           method: 'jwt',
           scopes: new Set(),
           claims: undefined,
-          tenantId: undefined,
           subject: 'wrong-method',
           hasScope: () => false,
         }) as never, // Test-only shape to exercise the runtime guard
@@ -300,7 +299,6 @@ describe('API-key admission — resolver present', () => {
         method: 'api-key',
         scopes: new Set<AuthorizationScope>(['workflows:read']),
         claims: originalClaims,
-        tenantId: undefined,
         subject: 'claims-isolation-test',
         hasScope: () => false,
       }),
@@ -364,7 +362,6 @@ describe('deepFreeze cycle safety (Bugbot round 5)', () => {
         method: 'api-key',
         scopes: new Set<AuthorizationScope>([]),
         claims: cyclic as unknown as Record<string, unknown>,
-        tenantId: undefined,
         subject: 'cycle-test',
         hasScope: () => false,
       }),

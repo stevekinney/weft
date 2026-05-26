@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
-import { tenantFromInputField } from '../../core/tenant.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest, type HandlerOptions } from '../handler.ts';
+import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import { createScheduleOperation, createScheduleRestBinding } from './create-schedule.ts';
 import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.test-support.ts';
@@ -19,15 +18,6 @@ const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
 
 function createEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage() });
-  engine.register(echoWorkflow);
-  return engine;
-}
-
-function createTenantAwareEngine(): Engine {
-  const engine = new Engine({
-    storage: new MemoryStorage(),
-    tenantResolver: tenantFromInputField('tenantId'),
-  });
   engine.register(echoWorkflow);
   return engine;
 }
@@ -129,59 +119,6 @@ describe('weft.schedules.create', () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
       error: 'Field "overlap" must be one of skip, queue, cancel-running, allow',
-    });
-  });
-
-  it('returns 403 when a JWT-authenticated request is missing a tenant claim', async () => {
-    engine = createTenantAwareEngine();
-    const options: HandlerOptions = {
-      authContext: {
-        method: 'jwt',
-        claims: { sub: 'user-123' },
-      },
-      operationRegistry: registry,
-      restBindings: bindings,
-    };
-
-    const response = await handleRequest(
-      jsonRequest('POST', '/v1/schedules', {
-        type: 'echo',
-        cronExpression: '0 * * * *',
-      }),
-      engine,
-      options,
-    );
-
-    expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({
-      error: 'JWT-authenticated schedule requests require a tenantId, tenant_id, or tenant claim',
-    });
-  });
-
-  it('returns 403 when the schedule input targets a different tenant', async () => {
-    engine = createTenantAwareEngine();
-
-    const response = await handleRequest(
-      jsonRequest('POST', '/v1/schedules', {
-        type: 'echo',
-        input: { tenantId: 'globex', payload: 'tenant-b' },
-        cronExpression: '0 * * * *',
-        id: 'schedule-globex',
-      }),
-      engine,
-      {
-        authContext: {
-          method: 'jwt',
-          claims: { tenantId: 'acme' },
-        },
-        operationRegistry: registry,
-        restBindings: bindings,
-      },
-    );
-
-    expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({
-      error: 'Schedule creation is limited to the authenticated tenant',
     });
   });
 

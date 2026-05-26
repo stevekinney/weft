@@ -115,37 +115,6 @@ describe('faultToHttpResponse', () => {
     expect(body.error.data).toEqual({ operationName: 'weft.workflows.update' });
   });
 
-  it('RateLimited -> 429 and includes Retry-After header when retryAfterMs is set', async () => {
-    const response = faultToHttpResponse({
-      code: 'RateLimited',
-      message: 'rate limited',
-      data: { retryAfterMs: 5000 },
-    });
-    expect(response.status).toBe(429);
-    expect(response.headers.get('retry-after')).toBe('5');
-    const body = (await readBody(response)) as { error: { data: { retryAfterMs: number } } };
-    expect(body.error.data).toEqual({ retryAfterMs: 5000 });
-  });
-
-  it('RateLimited rounds retryAfterMs up to the nearest second (Math.ceil)', () => {
-    const response = faultToHttpResponse({
-      code: 'RateLimited',
-      message: 'rate limited',
-      data: { retryAfterMs: 1001 },
-    });
-    expect(response.headers.get('retry-after')).toBe('2');
-  });
-
-  it('RateLimited without retryAfterMs omits Retry-After header', async () => {
-    const response = faultToHttpResponse({
-      code: 'RateLimited',
-      message: 'rate limited',
-      data: {},
-    });
-    expect(response.status).toBe(429);
-    expect(response.headers.get('retry-after')).toBeNull();
-  });
-
   it('NotImplemented -> 501 with no data field in body', async () => {
     const response = faultToHttpResponse({
       code: 'NotImplemented',
@@ -199,44 +168,6 @@ describe('faultToHttpResponse', () => {
     expect(body.error.data).toBeUndefined();
   });
 
-  it('RateLimited with NaN retryAfterMs omits both the header and the body field', async () => {
-    const response = faultToHttpResponse({
-      code: 'RateLimited',
-      message: 'rate limited',
-      data: { retryAfterMs: Number.NaN },
-    });
-    expect(response.headers.get('retry-after')).toBeNull();
-    const body = (await readBody(response)) as { error: { data?: unknown } };
-    expect(body.error.data).toBeUndefined();
-  });
-
-  it('RateLimited with Infinity retryAfterMs omits Retry-After header', () => {
-    const response = faultToHttpResponse({
-      code: 'RateLimited',
-      message: 'rate limited',
-      data: { retryAfterMs: Number.POSITIVE_INFINITY },
-    });
-    expect(response.headers.get('retry-after')).toBeNull();
-  });
-
-  it('RateLimited with zero retryAfterMs omits Retry-After header (no useful retry hint)', () => {
-    const response = faultToHttpResponse({
-      code: 'RateLimited',
-      message: 'rate limited',
-      data: { retryAfterMs: 0 },
-    });
-    expect(response.headers.get('retry-after')).toBeNull();
-  });
-
-  it('RateLimited with negative retryAfterMs omits Retry-After header', () => {
-    const response = faultToHttpResponse({
-      code: 'RateLimited',
-      message: 'rate limited',
-      data: { retryAfterMs: -100 },
-    });
-    expect(response.headers.get('retry-after')).toBeNull();
-  });
-
   it('Timeout without operationName omits the data field in body', async () => {
     const response = faultToHttpResponse({
       code: 'Timeout',
@@ -254,17 +185,6 @@ describe('faultToHttpResponse', () => {
       code: 'Timeout',
       message: 'operation timed out',
       data: { operationName: undefined },
-    };
-    const response = faultToHttpResponse(fault);
-    const body = (await readBody(response)) as { error: { data?: unknown } };
-    expect(body.error.data).toBeUndefined();
-  });
-
-  it('RateLimited with retryAfterMs: undefined omits the data field (filter defined values)', async () => {
-    const fault: OperationFault = {
-      code: 'RateLimited',
-      message: 'rate limited',
-      data: { retryAfterMs: undefined },
     };
     const response = faultToHttpResponse(fault);
     const body = (await readBody(response)) as { error: { data?: unknown } };

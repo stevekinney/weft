@@ -1,4 +1,3 @@
-import type { TenantContext } from '../tenant.ts';
 import type { WorkflowDefinition } from './workflow-function.ts';
 
 // ---------------------------------------------------------------------------
@@ -96,8 +95,7 @@ export function schedule<TInput>(
 /**
  * Full persisted state of a recurring schedule. Returned by `engine.getSchedule(id)`.
  * Use {@link ScheduleSummary} (returned by list operations and `engine.getSchedule()`)
- * for the lightweight variant — it omits `input` and `tenant` to keep payloads
- * small and avoid exposing tenant context to unrelated callers.
+ * for the lightweight variant — it omits `input` to keep payloads small.
  */
 export interface ScheduleState {
   id: string;
@@ -113,14 +111,13 @@ export interface ScheduleState {
   nextFireAt: number | null;
   currentWorkflowId?: string;
   queuedRuns: number;
-  tenant?: TenantContext;
 }
 
 /**
  * Lightweight summary of a recurring schedule returned by list operations.
  * Contains cron expression, status, timing metadata, and the ID of the
  * currently running workflow (if any). For the full record including the
- * tenant field, use {@link ScheduleState}.
+ * `input`, use {@link ScheduleState}.
  */
 export interface ScheduleSummary {
   id: string;
@@ -138,23 +135,12 @@ export interface ScheduleSummary {
 }
 
 /**
- * Optional tenant-scoping parameter accepted by schedule management methods
- * (`pauseSchedule`, `resumeSchedule`, `cancelSchedule`, etc.). Pass `tenantId`
- * to ensure the operation is only applied to schedules belonging to that tenant.
- */
-export interface ScheduleAccessOptions {
-  tenantId?: string;
-}
-
-/**
  * Filter criteria for `engine.listSchedules`. All fields are optional.
- * `status` accepts one or more values; `tenantId` scopes results to a specific
- * tenant; `limit` and `offset` control pagination.
+ * `status` accepts one or more values; `limit` and `offset` control pagination.
  */
 export interface ScheduleFilter {
   status?: ScheduleStatus | ScheduleStatus[];
   workflowType?: string;
-  tenantId?: string;
   limit?: number;
   offset?: number;
 }

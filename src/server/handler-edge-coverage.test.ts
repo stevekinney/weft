@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../core/engine.ts';
 import { StartWorkflowValidationError } from '../core/start-workflow-validation.ts';
-import { tenantFromInputField } from '../core/tenant.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
@@ -22,7 +21,7 @@ function apiKeyAuth(): HandlerOptions {
       method: 'api-key' as const,
       principal: principalFromApiKey({
         subject: 'test',
-        scopes: ['quota:read', 'workflows:read', 'workflows:admin'],
+        scopes: ['workflows:read', 'workflows:admin'],
       }),
     },
   };
@@ -31,7 +30,6 @@ function apiKeyAuth(): HandlerOptions {
 function createEngine(): Engine {
   const engine = new Engine({
     storage: new MemoryStorage(),
-    tenantResolver: tenantFromInputField('tenantId'),
   });
 
   engine.register(echoWorkflow);
@@ -225,7 +223,7 @@ describe('handleRequest edge coverage', () => {
     expect(response.status).toBe(400);
     expect(await json(response)).toEqual({
       error:
-        'Field "filter" must include at least one of status, type, tags, attributes, tenantId, idPrefix (≥3 chars), or failureCategory paired with status',
+        'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
     });
 
     response = await handleRequest(
@@ -247,7 +245,7 @@ describe('handleRequest edge coverage', () => {
     expect(response.status).toBe(400);
     expect(await json(response)).toEqual({
       error:
-        'Field "filter" must include at least one of status, type, tags, attributes, tenantId, idPrefix (≥3 chars), or failureCategory paired with status',
+        'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
     });
 
     response = await handleRequest(
@@ -270,7 +268,7 @@ describe('handleRequest edge coverage', () => {
     expect(response.status).toBe(400);
     expect(await json(response)).toEqual({
       error:
-        'Field "filter" must include at least one of status, type, tags, attributes, tenantId, idPrefix (≥3 chars), or failureCategory paired with status',
+        'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
     });
 
     response = await handleRequest(
@@ -410,22 +408,13 @@ describe('handleRequest edge coverage', () => {
     expect(response.status).toBe(500);
   });
 
-  it('accepts a fallback tenant claim when tenant_id is blank and surfaces fork failures distinctly', async () => {
+  it('surfaces fork failures distinctly', async () => {
     engine = createEngine();
-    const options: HandlerOptions = {
-      authContext: {
-        method: 'jwt',
-        claims: { tenant_id: '   ', tenant: 'acme', scope: 'quota:read' },
-      },
-    };
-
-    let response = await handleRequest(request('GET', '/v1/tenants/acme/quota'), engine, options);
-    expect(response.status).toBe(200);
 
     engine.fork = async () => {
       throw new Error('workflow not found');
     };
-    response = await handleRequest(request('POST', '/v1/workflows/wf-1/fork'), engine);
+    let response = await handleRequest(request('POST', '/v1/workflows/wf-1/fork'), engine);
     expect(response.status).toBe(404);
 
     engine.fork = async () => {
@@ -435,7 +424,7 @@ describe('handleRequest edge coverage', () => {
     expect(response.status).toBe(500);
   });
 
-  it('covers schedule validation errors and tenant-claim guards across schedule routes', async () => {
+  it('covers schedule validation errors across schedule routes', async () => {
     engine = createEngine();
 
     let response = await handleRequest(
@@ -511,7 +500,7 @@ describe('handleRequest edge coverage', () => {
     response = await handleRequest(
       request(
         'GET',
-        '/v1/schedules?status=active&status=paused&workflowType=echo&tenantId=acme&limit=5001&offset=4',
+        '/v1/schedules?status=active&status=paused&workflowType=echo&limit=5001&offset=4',
       ),
       engine,
       apiKeyAuth(),
@@ -536,47 +525,6 @@ describe('handleRequest edge coverage', () => {
       offset: 0,
       limit: 0,
     });
-
-    const authOptions: HandlerOptions = {
-      authContext: {
-        method: 'jwt',
-        claims: { sub: 'user-123' },
-      },
-    };
-
-    response = await handleRequest(request('GET', '/v1/schedules/schedule-1'), engine, authOptions);
-    expect(response.status).toBe(403);
-
-    // A JWT principal missing the tenant claim is rejected with 403 on the
-    // mutation routes too, matching the read path above (now that schedule
-    // mutation routes forward JWT tenant scope into the operation pipeline).
-    const missingTenantClaimError = {
-      error: 'JWT-authenticated schedule requests require a tenantId, tenant_id, or tenant claim',
-    };
-
-    response = await handleRequest(
-      request('POST', '/v1/schedules/schedule-1/pause'),
-      engine,
-      authOptions,
-    );
-    expect(response.status).toBe(403);
-    expect(await json(response)).toEqual(missingTenantClaimError);
-
-    response = await handleRequest(
-      request('POST', '/v1/schedules/schedule-1/resume'),
-      engine,
-      authOptions,
-    );
-    expect(response.status).toBe(403);
-    expect(await json(response)).toEqual(missingTenantClaimError);
-
-    response = await handleRequest(
-      request('DELETE', '/v1/schedules/schedule-1'),
-      engine,
-      authOptions,
-    );
-    expect(response.status).toBe(403);
-    expect(await json(response)).toEqual(missingTenantClaimError);
 
     response = await handleRequest(
       new Request('http://localhost/v1/schedules/schedule-1', {
@@ -603,13 +551,6 @@ describe('handleRequest edge coverage', () => {
     response = await handleRequest(request('PATCH', '/v1/schedules/schedule-1', {}), engine);
     expect(response.status).toBe(400);
     expect(await json(response)).toEqual({ error: 'Missing required field: cronExpression' });
-
-    response = await handleRequest(
-      request('PATCH', '/v1/schedules/schedule-1', { cronExpression: '* * * * *' }),
-      engine,
-      authOptions,
-    );
-    expect(response.status).toBe(403);
   });
 
   it('maps schedule handler engine failures to their HTTP responses', async () => {
@@ -656,11 +597,5 @@ describe('handleRequest edge coverage', () => {
     };
     response = await handleRequest(request('POST', '/v1/schedules/schedule-1/resume'), engine);
     expect(response.status).toBe(409);
-
-    engine.cancelSchedule = async () => {
-      throw new Error('Authenticated tenant cannot access this schedule');
-    };
-    response = await handleRequest(request('DELETE', '/v1/schedules/schedule-1'), engine);
-    expect(response.status).toBe(403);
   });
 });

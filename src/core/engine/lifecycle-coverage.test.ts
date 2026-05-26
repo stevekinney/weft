@@ -337,7 +337,6 @@ describe('engine lifecycle coverage helpers', () => {
         { workflowVersion: '1' },
         { executionTimeout: Number.MAX_SAFE_INTEGER },
         undefined,
-        undefined,
         'workflow-timeout-overflow',
         undefined,
         createLifecycleCallbacks() as never,
@@ -367,13 +366,12 @@ describe('engine lifecycle coverage helpers', () => {
         null,
         { id: 'workflow-duplicate-start' },
         undefined,
-        undefined,
         createLifecycleCallbacks() as never,
       ),
     ).rejects.toThrow('Workflow with id "workflow-duplicate-start" already exists');
   });
 
-  it('creates pending workflow state with tuple metadata, tags, and tenant context', () => {
+  it('creates pending workflow state with tuple metadata and tags', () => {
     const state = createInitialWorkflowState(
       {
         options: { getNow: () => 10_000 },
@@ -388,7 +386,6 @@ describe('engine lifecycle coverage helpers', () => {
       },
       undefined,
       ['critical'],
-      { id: 'tenant-a' },
       'owner-workflow',
       { fireAt: 20_000, id: 'delay', kind: 'delayed-start', workflowId: 'workflow-pending-state' },
       createLifecycleCallbacks() as never,
@@ -400,7 +397,6 @@ describe('engine lifecycle coverage helpers', () => {
         executionStateOwnerId: 'owner-workflow',
         status: 'pending',
         tags: ['critical'],
-        tenant: { id: 'tenant-a' },
         toolVersions: ['search@3'],
         version: '2',
       }),
@@ -408,23 +404,18 @@ describe('engine lifecycle coverage helpers', () => {
     expect(state.startedAt).toBeUndefined();
   });
 
-  it('builds version tuples from tenant-specific registrations and stored state', () => {
+  it('builds version tuples from registrations and stored state', () => {
     const registration = {
-      version: 'fallback',
-      versionTupleForTenant: (tenant: { id: string } | undefined) => ({
-        agentVersion: tenant?.id ?? 'public',
-        workflowVersion: 'tenant-version',
-      }),
+      version: 'workflow-1',
     };
 
     expect(
       createWorkflowVersionTuple(
         {} as never,
         registration as never,
-        { id: 'tenant-a' },
         createLifecycleCallbacks() as never,
       ),
-    ).toEqual({ agentVersion: 'tenant-a', workflowVersion: 'tenant-version' });
+    ).toEqual({ workflowVersion: 'workflow-1' });
 
     expect(
       workflowVersionTupleFromState(
@@ -458,11 +449,6 @@ describe('engine lifecycle coverage helpers', () => {
         locals: { migrated: true },
       }),
       version: '2',
-      versionTupleForTenant: () => ({
-        agentVersion: 'agent-2',
-        toolVersions: ['newTool@2'],
-        workflowVersion: '2',
-      }),
     };
     const internals = {
       options: { getNow: () => 30_000 },
@@ -484,12 +470,12 @@ describe('engine lifecycle coverage helpers', () => {
     );
     expect(prepared.state).toEqual(
       expect.objectContaining({
-        agentVersion: 'agent-2',
-        toolVersions: ['newTool@2'],
         updatedAt: 30_000,
         version: '2',
       }),
     );
+    expect(prepared.state.agentVersion).toBeUndefined();
+    expect(prepared.state.toolVersions).toBeUndefined();
 
     await prepareResumeState(
       internals as never,
@@ -681,7 +667,6 @@ describe('engine lifecycle coverage helpers', () => {
       { value: 1 },
       checkpoint,
       25_000,
-      { id: 'tenant-a' },
       'owner-workflow',
       { version: '1' } as never,
       createLifecycleCallbacks({ dispatchEvent }) as never,
@@ -693,7 +678,6 @@ describe('engine lifecycle coverage helpers', () => {
         deadline: 25_000,
         headers: [['traceparent', '00-worker']],
         nestingDepth: 2,
-        tenant: { id: 'tenant-a' },
       }),
     );
     expect(internals.pendingNestingDepth).toBeUndefined();
@@ -752,7 +736,7 @@ describe('engine lifecycle coverage helpers', () => {
     const forkedState = createForkedWorkflowState(
       {} as never,
       'workflow-fork',
-      createWorkflowState('workflow-source', { tenant: { id: 'tenant-a' } }),
+      createWorkflowState('workflow-source'),
       {
         agentVersion: 'agent-1',
         toolVersions: ['tool@1'],
@@ -787,7 +771,6 @@ describe('engine lifecycle coverage helpers', () => {
       expect.objectContaining({
         agentVersion: 'agent-1',
         forkedFrom: lineage,
-        tenant: { id: 'tenant-a' },
         toolVersions: ['tool@1'],
         version: '2',
       }),
@@ -830,7 +813,7 @@ describe('engine lifecycle coverage helpers', () => {
     );
   });
 
-  it('launchWorkflowFromCheckpoint starts worker-mode workflows with headers, tenant, and deadlines', () => {
+  it('launchWorkflowFromCheckpoint starts worker-mode workflows with headers and deadlines', () => {
     const startWorkflowStrategy = mock(() => {});
     const dispatchEvent = mock(() => {});
     const internals = {
@@ -847,7 +830,6 @@ describe('engine lifecycle coverage helpers', () => {
     });
     const state = createWorkflowState('workflow-worker-launch', {
       executionDeadline: 9_000,
-      tenant: { id: 'tenant-a' },
       type: 'worker-launch',
     });
     const handle = { id: 'workflow-worker-launch' };
@@ -879,7 +861,6 @@ describe('engine lifecycle coverage helpers', () => {
         executionStateOwnerId: state.id,
         headers: [['x-test', '1']],
         input: state.input,
-        tenant: { id: 'tenant-a' },
         workflowId: state.id,
         workflowType: 'worker-launch',
       }),
@@ -905,7 +886,6 @@ describe('engine lifecycle coverage helpers', () => {
       workflowId,
       createWorkflowState(workflowId, {
         executionDeadline: 9_000,
-        tenant: { id: 'tenant-a' },
       }),
       createCheckpoint(workflowId, { accumulatedResults: [[0, 'cached']] }),
       {
@@ -1158,7 +1138,6 @@ describe('engine lifecycle coverage helpers', () => {
     const dispatchEvent = mock(() => {});
     const workflowState = createWorkflowState(workflowId, {
       executionDeadline: 15_000,
-      tenant: { id: 'tenant-b' },
       type: 'worker-resume',
     });
     const checkpoint = createCheckpoint(workflowId, {
@@ -1225,7 +1204,6 @@ describe('engine lifecycle coverage helpers', () => {
         headers: [['traceparent', '00-test']],
         input: workflowState.input,
         nestingDepth: 2,
-        tenant: { id: 'tenant-b' },
         workflowId,
         workflowType: 'worker-resume',
       }),
@@ -1283,7 +1261,6 @@ describe('engine lifecycle coverage helpers', () => {
       internals,
       'callback-order-workflow',
       { value: 1 },
-      undefined,
       undefined,
       undefined,
       callbacks,

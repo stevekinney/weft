@@ -1,11 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
-import { tenantFromInputField } from '../../core/tenant.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { handleRequest, type HandlerOptions } from '../handler.ts';
+import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import { invalidJsonRequest, jsonRequest } from './operation-test-helpers.test-support.ts';
 import { updateScheduleOperation, updateScheduleRestBinding } from './update-schedule.ts';
@@ -19,15 +18,6 @@ const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
 
 function createEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage() });
-  engine.register(echoWorkflow);
-  return engine;
-}
-
-function createTenantAwareEngine(): Engine {
-  const engine = new Engine({
-    storage: new MemoryStorage(),
-    tenantResolver: tenantFromInputField('tenantId'),
-  });
   engine.register(echoWorkflow);
   return engine;
 }
@@ -101,50 +91,6 @@ describe('weft.schedules.update', () => {
 
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({ error: 'Missing required field: cronExpression' });
-  });
-
-  it('returns 403 when a JWT-authenticated request is missing a tenant claim', async () => {
-    engine = createTenantAwareEngine();
-    const options: HandlerOptions = {
-      authContext: {
-        method: 'jwt',
-        claims: { sub: 'user-123' },
-      },
-      operationRegistry: registry,
-      restBindings: bindings,
-    };
-
-    const response = await handleRequest(
-      jsonRequest('PATCH', '/v1/schedules/schedule-update', { cronExpression: '30 * * * *' }),
-      engine,
-      options,
-    );
-
-    expect(response.status).toBe(403);
-    expect(await response.json()).toEqual({
-      error: 'JWT-authenticated schedule requests require a tenantId, tenant_id, or tenant claim',
-    });
-  });
-
-  it('returns 404 when a JWT-authenticated caller updates another tenant’s schedule', async () => {
-    engine = createTenantAwareEngine();
-    await engine.schedule('echo', { tenantId: 'globex' }, '0 * * * *', { id: 'schedule-globex' });
-
-    const response = await handleRequest(
-      jsonRequest('PATCH', '/v1/schedules/schedule-globex', { cronExpression: '30 * * * *' }),
-      engine,
-      {
-        authContext: {
-          method: 'jwt',
-          claims: { tenantId: 'acme' },
-        },
-        operationRegistry: registry,
-        restBindings: bindings,
-      },
-    );
-
-    expect(response.status).toBe(404);
-    expect(await response.json()).toEqual({ error: 'Schedule "schedule-globex" not found' });
   });
 
   it('returns 404 when the schedule does not exist', async () => {

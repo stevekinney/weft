@@ -2,12 +2,10 @@ import type { AlertingOptions } from '../../alerting/types.ts';
 import type { Storage as WeftStorage } from '../../storage/interface.ts';
 import type { CompressionOptions } from '../compression.ts';
 import type { Interceptor } from '../interceptor.ts';
-import type { TenantResolver } from '../tenant.ts';
 import type { FailureCategory, WorkflowStatus } from './identity.ts';
 import type { Duration, RetentionPolicy } from './retry-retention.ts';
 import type { SearchAttributeHandle, SearchAttributeValue } from './search-attributes.ts';
 import type { Serializer } from './serializer.ts';
-import type { TenantQuotaOptions } from './tenants.ts';
 
 // ---------------------------------------------------------------------------
 // Start options for engine.start()
@@ -89,9 +87,8 @@ export interface ForkOptions {
  * Configuration options for the {@link Engine} constructor.
  *
  * All fields are optional. Common overrides include `storage`, `retention`,
- * `development`, `serializer`, `compression`, `workerExecution`,
- * `alerts`, and `tenantResolver`/`quotas` for
- * multi-tenant deployments.
+ * `development`, `serializer`, `compression`, `workerExecution`, and
+ * `alerts`.
  *
  * @example
  * ```ts
@@ -161,19 +158,6 @@ export interface EngineOptions {
    * after passing it has no effect.
    */
   interceptors?: readonly Interceptor[];
-
-  /**
-   * Optional {@link TenantResolver} that populates `ctx.tenant` for every new
-   * workflow. When set, the engine calls `resolver.resolve(workflowId, input)`
-   * once at `start()` time and persists the returned context on the workflow
-   * state so it survives recovery. Leave unset for single-tenant deployments.
-   */
-  tenantResolver?: TenantResolver;
-  /**
-   * Optional per-tenant admission control limits enforced when a workflow is
-   * created for a resolved tenant.
-   */
-  quotas?: TenantQuotaOptions;
 }
 
 // ---------------------------------------------------------------------------
@@ -227,7 +211,6 @@ export interface TimeRange {
  * const engine = new Engine();
  * const filter: ListFilter = {
  *   status: ['running', 'failed'],
- *   tenantId: 'acme',
  *   createdAt: { gte: Date.now() - 60_000 },
  * };
  *
@@ -267,8 +250,6 @@ export interface ListFilter {
   updatedAt?: TimeRange;
   /** Range filter on `WorkflowState.executionDeadline` (ms epoch). */
   executionDeadline?: TimeRange;
-  /** Match workflows by `state.tenant?.id`. */
-  tenantId?: string | string[];
   /**
    * Match by the workflow's `failureCategory`. The engine uses the
    * `failureCategory` search-attribute index to narrow candidate workflow IDs,

@@ -78,7 +78,6 @@ export function createChildWorkflowOperationCallbacks<
         input,
         options,
         undefined,
-        undefined,
         createLifecycleCallbacks(engine),
       ),
     loadWorkflowState: (workflowId) => loadWorkflowState(getInternals(engine), workflowId),
@@ -162,7 +161,6 @@ export function createTimeOperationCallbacks<TWorkflows extends object, TActivit
       input,
       checkpoint,
       executionDeadline,
-      tenant,
       executionStateOwnerId,
       registration,
     ) =>
@@ -173,7 +171,6 @@ export function createTimeOperationCallbacks<TWorkflows extends object, TActivit
         input,
         checkpoint,
         executionDeadline,
-        tenant,
         executionStateOwnerId,
         registration,
         createLifecycleCallbacks(engine),

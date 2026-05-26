@@ -7,7 +7,6 @@ import {
   WorkflowNotRegisteredError,
 } from '../../core/engine/errors.ts';
 import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
-import { QuotaExceededError } from '../../core/tenant-quotas.ts';
 import type { DefinitionSchema, WorkflowContext, WorkflowDefinition } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
@@ -369,15 +368,6 @@ describe('catalogWorkflow', () => {
       {
         error: new StartWorkflowValidationError('Field "id" must be a string'),
         expectedCode: 'InvalidParams',
-      },
-      {
-        error: new QuotaExceededError({
-          tenantId: 'acme',
-          quota: 'maxConcurrentWorkflows',
-          currentUsage: 2,
-          limit: 1,
-        }),
-        expectedCode: 'RateLimited',
       },
       {
         error: new WorkflowNotRegisteredError('missing'),

@@ -86,7 +86,6 @@ function deepFreezeApiKeyPrincipal(principal: AuthenticatedPrincipal): Authentic
     method: 'api-key',
     scopes: guardedScopes,
     claims: cloneClaims(principal.claims),
-    tenantId: principal.tenantId,
     subject: principal.subject,
     hasScope(scope) {
       return guardedScopes.has(scope);

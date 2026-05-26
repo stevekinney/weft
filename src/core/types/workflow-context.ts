@@ -5,7 +5,6 @@ import type {
   StreamSink,
 } from '../context/types.ts';
 import type { HumanReviewOptions, HumanReviewResult } from '../review/index.ts';
-import type { TenantContext } from '../tenant.ts';
 import type { ActivityCallable, ActivityCallOptions } from './activity.ts';
 import type { WorkflowId } from './identity.ts';
 import type { QueryDefinition, SignalDefinition, UpdateDefinition } from './message-handles.ts';
@@ -110,19 +109,6 @@ export interface WorkflowContext<
   readonly signal: AbortSignal;
   readonly executionTimeRemaining: number;
   readonly startedAt: number;
-  /**
-   * The {@link TenantContext} this workflow is running
-   * on behalf of, populated from the engine's `tenantResolver` at start time
-   * and restored from persisted state on recovery. `undefined` when the
-   * engine has no resolver configured or the resolver returned `undefined`.
-   *
-   * Declared as `T | undefined` rather than `tenant?: T` so the field is
-   * always present on the type — the `Context` class implementation has a
-   * getter that returns `undefined` when absent, and under
-   * `exactOptionalPropertyTypes` the optional-key form would be a stricter
-   * contract that the getter can't satisfy.
-   */
-  readonly tenant: TenantContext | undefined;
   readonly state: WorkflowStateNamespace;
   // ---------------------------------------------------------------------
   // Workflow-scoped typed-key overloads. These fire first when the workflow

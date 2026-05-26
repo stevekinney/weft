@@ -34,27 +34,13 @@ export function createStateNamespace(
         key,
         options,
       ),
-    workflow: <T>(key: string, options?: WorkflowAtomicStateOptions<T>): WorkflowAtomicState<T> => {
-      const tenantId = requireTenantId(context, 'ctx.state.workflow()');
-      return new WorkflowAtomicStateHandle<T>(
-        { type: 'workflow', tenantId, workflowType: context.workflowType },
+    workflow: <T>(key: string, options?: WorkflowAtomicStateOptions<T>): WorkflowAtomicState<T> =>
+      new WorkflowAtomicStateHandle<T>(
+        { type: 'workflow', workflowType: context.workflowType },
         key,
         options,
-      );
-    },
-    tenant: <T>(key: string, options?: WorkflowAtomicStateOptions<T>): WorkflowAtomicState<T> => {
-      const tenantId = requireTenantId(context, 'ctx.state.tenant()');
-      return new WorkflowAtomicStateHandle<T>({ type: 'tenant', tenantId }, key, options);
-    },
+      ),
   };
-}
-
-function requireTenantId(context: Context, methodName: string): string {
-  const tenantId = context.tenant?.id;
-  if (tenantId === undefined || tenantId.length === 0) {
-    throw new Error(`${methodName} requires a tenant context.`);
-  }
-  return tenantId;
 }
 
 export class WorkflowAtomicStateHandle<T> extends EventTarget implements WorkflowAtomicState<T> {

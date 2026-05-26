@@ -154,48 +154,27 @@ describe('handleRunMessage', () => {
     expect(receivedInput).toEqual({ key: 'value' });
   });
 
-  it('passes a worker-side context as the first argument with tenant populated', async () => {
+  it('passes a worker-side context as the first argument', async () => {
     const context = createWorkflowRunnerContext();
-    let receivedContext: { workflowId: string; tenant?: { id: string } } | undefined;
+    let receivedContext: { workflowId: string } | undefined;
 
-    async function* tenantWorkflow(ctx: unknown, _input: unknown) {
-      receivedContext = ctx as { workflowId: string; tenant?: { id: string } };
+    async function* contextWorkflow(ctx: unknown, _input: unknown) {
+      receivedContext = ctx as { workflowId: string };
       return 'ok';
     }
 
     await handleRunMessage(
       context,
       {
-        workflowId: 'wf-with-tenant',
-        workflowType: 'tenant-test',
+        workflowId: 'wf-with-context',
+        workflowType: 'context-test',
         input: null,
-        tenant: { id: 'test', attributes: { plan: 'enterprise' } },
       },
-      () => tenantWorkflow,
+      () => contextWorkflow,
     );
 
     expect(receivedContext).toBeDefined();
-    expect(receivedContext!.workflowId).toBe('wf-with-tenant');
-    expect(receivedContext!.tenant?.id).toBe('test');
-  });
-
-  it('passes undefined tenant when no tenant is provided on the run message', async () => {
-    const context = createWorkflowRunnerContext();
-    let receivedContext: { tenant?: unknown } | undefined;
-
-    async function* tenantWorkflow(ctx: unknown, _input: unknown) {
-      receivedContext = ctx as { tenant?: unknown };
-      return 'ok';
-    }
-
-    await handleRunMessage(
-      context,
-      { workflowId: 'wf-no-tenant', workflowType: 'tenant-test', input: null },
-      () => tenantWorkflow,
-    );
-
-    expect(receivedContext).toBeDefined();
-    expect(receivedContext!.tenant).toBeUndefined();
+    expect(receivedContext!.workflowId).toBe('wf-with-context');
   });
 
   it('exposes an abort signal on the worker context that aborts on cancel', async () => {

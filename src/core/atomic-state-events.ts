@@ -53,15 +53,13 @@ export interface AtomicStateOptions<T = unknown> {
  *
  * const scope: AtomicStateScope = {
  *   type: 'workflow',
- *   tenantId: 'tenant-a',
  *   workflowType: 'invoice',
  * };
  * ```
  */
 export type AtomicStateScope =
   | { type: 'execution'; ownerWorkflowId: string }
-  | { type: 'workflow'; tenantId: string; workflowType: string }
-  | { type: 'tenant'; tenantId: string };
+  | { type: 'workflow'; workflowType: string };
 
 /**
  * Point-in-time read result for an {@link AtomicState} slot.
@@ -173,7 +171,7 @@ const fallbackObservableSymbol = Symbol.for('observable') as typeof Symbol.obser
  * import { AtomicState, OBSERVABLE_SYMBOL } from 'weft';
  * import { MemoryStorage } from 'weft/storage/memory';
  *
- * const state = new AtomicState<number>(new MemoryStorage(), 'state:tenant:acme:count');
+ * const state = new AtomicState<number>(new MemoryStorage(), 'state:workflow-scope:default:count');
  * const observable = state[OBSERVABLE_SYMBOL]();
  * void observable;
  * ```
@@ -219,7 +217,7 @@ export class AtomicStateChangeEvent<T> extends Event {
  * ```ts
  * import { AtomicStateConflictEvent } from 'weft';
  *
- * const event = new AtomicStateConflictEvent('state:tenant:tenant-a:count', 2);
+ * const event = new AtomicStateConflictEvent('state:workflow-scope:default:count', 2);
  * console.log(event.stateKey, event.attempt);
  * ```
  */
@@ -241,7 +239,7 @@ export class AtomicStateConflictEvent extends Event {
  * ```ts
  * import { AtomicStateExhaustedEvent } from 'weft';
  *
- * const event = new AtomicStateExhaustedEvent('state:tenant:tenant-a:count', 10);
+ * const event = new AtomicStateExhaustedEvent('state:workflow-scope:default:count', 10);
  * console.log(event.stateKey, event.attempts);
  * ```
  */

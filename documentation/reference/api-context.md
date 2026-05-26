@@ -20,16 +20,15 @@ Typically constructed by the engine -- you will not create `Context` instances d
 
 ### Read-only Properties
 
-| Property                 | Type                         | Description                                                                                                          |
-| ------------------------ | ---------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `workflowId`             | `string`                     | The workflow's unique identifier                                                                                     |
-| `workflowType`           | `string`                     | The registered workflow type name                                                                                    |
-| `startedAt`              | `number`                     | Epoch timestamp when the workflow started                                                                            |
-| `signal`                 | `AbortSignal`                | Abort signal -- fires when the workflow is cancelled                                                                 |
-| `executionTimeRemaining` | `number`                     | Milliseconds until execution deadline. `Infinity` if no deadline is set.                                             |
-| `tenant`                 | `TenantContext \| undefined` | Resolved tenant context when `EngineOptions.tenantResolver` is configured. `undefined` in single-tenant deployments. |
-| `stepIndex`              | `number`                     | Current step counter (incremented by each durable operation)                                                         |
-| `nestingDepth`           | `number`                     | How many levels deep this workflow is as a child workflow. `0` for top-level workflows.                              |
+| Property                 | Type          | Description                                                                             |
+| ------------------------ | ------------- | --------------------------------------------------------------------------------------- |
+| `workflowId`             | `string`      | The workflow's unique identifier                                                        |
+| `workflowType`           | `string`      | The registered workflow type name                                                       |
+| `startedAt`              | `number`      | Epoch timestamp when the workflow started                                               |
+| `signal`                 | `AbortSignal` | Abort signal -- fires when the workflow is cancelled                                    |
+| `executionTimeRemaining` | `number`      | Milliseconds until execution deadline. `Infinity` if no deadline is set.                |
+| `stepIndex`              | `number`      | Current step counter (incremented by each durable operation)                            |
+| `nestingDepth`           | `number`      | How many levels deep this workflow is as a child workflow. `0` for top-level workflows. |
 
 > [!NOTE]
 > `stepIndex` and `nestingDepth` are available on the concrete `Context` class for debugging purposes. They are not part of the `WorkflowContext` public interface defined in `types.ts`.
@@ -468,8 +467,7 @@ Return the workflow state namespace.
 
 - `ctx.state.session<T>(key, options?)` is checkpoint-local and synchronous. It is private to the current workflow instance.
 - `ctx.state.execution<T>(key, options?)` is storage-backed and shared by a parent workflow, durable child workflows, and concurrent branches in that execution tree.
-- `ctx.state.workflow<T>(key, options?)` is storage-backed and shared by every run of the current workflow type in the current tenant.
-- `ctx.state.tenant<T>(key, options?)` is storage-backed and shared by every workflow in the current tenant.
+- `ctx.state.workflow<T>(key, options?)` is storage-backed and shared by every run of the current workflow type.
 
 All factories accept `options.initial`, captured when the handle is constructed.
 Session handles expose synchronous `.get()`, `.set()`, `.update()`, `.delete()`,
@@ -485,8 +483,8 @@ engine.register(
       return { status: 'abandoned' };
     }
 
-    const tenantCharges = ctx.state.tenant<number>('chargeCount', { initial: 0 });
-    yield* tenantCharges.increment();
+    const typeCharges = ctx.state.workflow<number>('chargeCount', { initial: 0 });
+    yield* typeCharges.increment();
 
     const receipt = yield* ctx.run(chargeCard, order.token);
     return { status: 'charged', receipt };

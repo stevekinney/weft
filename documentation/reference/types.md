@@ -58,7 +58,6 @@ interface WorkflowContext {
   readonly signal: AbortSignal;
   readonly executionTimeRemaining: number;
   readonly startedAt: number;
-  readonly tenant: TenantContext | undefined;
   readonly state: WorkflowStateNamespace;
   run<TArguments extends unknown[], TResult>(
     fn: (...arguments_: TArguments) => Promise<TResult> | TResult,
@@ -148,7 +147,7 @@ type WorkflowPipeStageDefinition<TInput = unknown, TOutput = unknown> =
 ### `WorkflowStateNamespace`
 
 State factories exposed as `ctx.state`. Session state is checkpoint-local.
-Execution, workflow, and tenant state are storage-backed and must be yielded
+Execution and workflow state are storage-backed and must be yielded
 inside workflows.
 
 ```ts partial
@@ -156,14 +155,13 @@ interface WorkflowStateNamespace {
   session<T>(key: string, options?: { initial?: T }): WorkflowSessionState<T>;
   execution<T>(key: string, options?: WorkflowAtomicStateOptions<T>): WorkflowAtomicState<T>;
   workflow<T>(key: string, options?: WorkflowAtomicStateOptions<T>): WorkflowAtomicState<T>;
-  tenant<T>(key: string, options?: WorkflowAtomicStateOptions<T>): WorkflowAtomicState<T>;
 }
 ```
 
 ### `WorkflowAtomicStateOptions<T>`
 
-Options accepted by the storage-backed `ctx.state.execution`,
-`ctx.state.workflow`, and `ctx.state.tenant` factories.
+Options accepted by the storage-backed `ctx.state.execution`
+and `ctx.state.workflow` factories.
 
 ```ts partial
 type WorkflowAtomicStateOptions<T> = {
@@ -216,8 +214,8 @@ Weft exports the small Standard Schema helper surfaces from `weft/json-schema` s
 
 ### `WorkflowAtomicState<T>`
 
-Storage-backed durable state returned by `ctx.state.execution`,
-`ctx.state.workflow`, and `ctx.state.tenant`.
+Storage-backed durable state returned by `ctx.state.execution`
+and `ctx.state.workflow`.
 
 ```ts partial
 interface WorkflowAtomicState<T> {
@@ -494,8 +492,6 @@ interface EngineOptions {
   checkpointSizeWarningThreshold?: number;
   maxNestingDepth?: number;
   broadcastEvents?: boolean;
-  tenantResolver?: TenantResolver;
-  quotas?: TenantQuotaOptions;
   retention?: RetentionPolicy;
   compression?: CompressionOptions;
   workerExecution?: WorkerExecutionOptions;

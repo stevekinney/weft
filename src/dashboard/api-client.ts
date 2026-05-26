@@ -31,7 +31,6 @@ import type {
   ScheduleSummary,
   TaskDiagnosticsFilter,
   TaskDiagnosticsResponse,
-  TenantQuotaUsage,
   WorkerDrainMutationResponse,
   WorkflowEvent,
   WorkflowReplay,
@@ -72,9 +71,6 @@ export type {
   TaskDiagnosticsSummary,
   TaskQueueHealth,
   TaskQueueSchedulingPolicy,
-  TenantQuotaMetricUsage,
-  TenantQuotaUsage,
-  TenantWorkflowCreationRateUsage,
   TimeRange,
   WorkerCapabilities,
   WorkerDeploymentSummary,
@@ -268,11 +264,6 @@ export class ApiClient {
     const path = query ? `/schedules?${query}` : '/schedules';
 
     return request<PaginatedResult<ScheduleSummary>>(path);
-  }
-
-  /** Get current quota usage versus configured limits for a tenant. */
-  async getTenantQuotaUsage(tenantId: string): Promise<TenantQuotaUsage> {
-    return request<TenantQuotaUsage>(`/tenants/${encodeURIComponent(tenantId)}/quota`);
   }
 
   /** Submit a decision for a pending review. */

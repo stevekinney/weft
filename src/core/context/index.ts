@@ -83,9 +83,6 @@ export class Context implements WorkflowContext {
     const initialSessionState = normalizeSessionStateLocals(options.locals);
     initializeInternals(this, options, initialSessionState);
   }
-  get tenant(): import('../tenant.ts').TenantContext | undefined {
-    return getInternals(this).tenant;
-  }
   get executionTimeRemaining(): number {
     const internals = getInternals(this);
     if (internals.deadline === undefined) return Infinity;

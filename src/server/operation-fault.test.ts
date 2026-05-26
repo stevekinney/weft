@@ -25,7 +25,6 @@ describe('FaultCode mapping tables', () => {
       'Conflict',
       'Unprocessable',
       'Timeout',
-      'RateLimited',
       'NotImplemented',
       'UnsupportedTransport',
       'SubscriptionOverflow',
@@ -46,7 +45,6 @@ describe('FaultCode mapping tables', () => {
     expect(FAULT_CODE_TO_HTTP_STATUS.Conflict).toBe(409);
     expect(FAULT_CODE_TO_HTTP_STATUS.Unprocessable).toBe(422);
     expect(FAULT_CODE_TO_HTTP_STATUS.Timeout).toBe(408);
-    expect(FAULT_CODE_TO_HTTP_STATUS.RateLimited).toBe(429);
     expect(FAULT_CODE_TO_HTTP_STATUS.NotImplemented).toBe(501);
     expect(FAULT_CODE_TO_HTTP_STATUS.UnsupportedTransport).toBe(501);
     expect(FAULT_CODE_TO_HTTP_STATUS.SubscriptionOverflow).toBe(500);
@@ -62,7 +60,6 @@ describe('FaultCode mapping tables', () => {
     expect(FAULT_CODE_TO_JSON_RPC_CODE.Conflict).toBe(-32021);
     expect(FAULT_CODE_TO_JSON_RPC_CODE.Unprocessable).toBe(-32022);
     expect(FAULT_CODE_TO_JSON_RPC_CODE.Timeout).toBe(-32023);
-    expect(FAULT_CODE_TO_JSON_RPC_CODE.RateLimited).toBe(-32024);
     expect(FAULT_CODE_TO_JSON_RPC_CODE.NotImplemented).toBe(-32025);
     expect(FAULT_CODE_TO_JSON_RPC_CODE.UnsupportedTransport).toBe(-32030);
     expect(FAULT_CODE_TO_JSON_RPC_CODE.SubscriptionOverflow).toBe(-32031);
@@ -177,14 +174,5 @@ describe('OperationFault discriminated union', () => {
     };
     expect(fault.code).toBe('EngineFailure');
     expect(fault.data).toEqual({});
-  });
-
-  it('RateLimited fault may include retryAfterMs', () => {
-    const fault: OperationFault = {
-      code: 'RateLimited',
-      message: 'rate limited',
-      data: { retryAfterMs: 5000 },
-    };
-    expect(fault.data.retryAfterMs).toBe(5000);
   });
 });

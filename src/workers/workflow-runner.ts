@@ -3,7 +3,6 @@ import {
   classifyErrorAsFailureCategory,
   errorFromFailedOperationOutcome,
 } from '../core/failure-categories.ts';
-import type { TenantContext } from '../core/tenant.ts';
 import type {
   OperationOutcome,
   OperationRequest,
@@ -22,14 +21,9 @@ import type {
  * Subset of {@link WorkflowContext} that the worker-side runner can build
  * locally from the `run` message. Engine-side fields (`executionTimeRemaining`
  * in particular) are stub values because the worker has no clock authority —
- * any user code reading them will see static numbers, not live deadlines. The
- * tenant field is the load-bearing one: it's how multi-tenant agent handlers
- * see their tenant inside worker mode.
+ * any user code reading them will see static numbers, not live deadlines.
  */
-export type WorkerWorkflowContext = Pick<
-  WorkflowContext,
-  'workflowId' | 'tenant' | 'signal' | 'startedAt'
-> & {
+export type WorkerWorkflowContext = Pick<WorkflowContext, 'workflowId' | 'signal' | 'startedAt'> & {
   readonly state: WorkflowStateNamespace;
 };
 
@@ -38,7 +32,6 @@ interface RunMessageShape {
   workflowType: string;
   input: unknown;
   executionStateOwnerId?: string;
-  tenant?: TenantContext;
   deadline?: number;
   headers?: [string, string][];
 }
@@ -55,7 +48,6 @@ export function createWorkerWorkflowContext(
 ): WorkerWorkflowContext {
   return {
     workflowId: message.workflowId,
-    tenant: message.tenant,
     signal: controller.signal,
     startedAt: Date.now(),
     state: createWorkerStateNamespace(message),
@@ -79,27 +71,13 @@ function createWorkerStateNamespace(message: RunMessageShape): WorkflowStateName
         key,
         options,
       ),
-    workflow: <T>(key: string, options?: WorkflowAtomicStateOptions<T>) => {
-      const tenantId = requireWorkerTenantId(message, 'ctx.state.workflow()');
-      return new WorkflowAtomicStateHandle<T>(
-        { type: 'workflow', tenantId, workflowType: message.workflowType },
+    workflow: <T>(key: string, options?: WorkflowAtomicStateOptions<T>) =>
+      new WorkflowAtomicStateHandle<T>(
+        { type: 'workflow', workflowType: message.workflowType },
         key,
         options,
-      );
-    },
-    tenant: <T>(key: string, options?: WorkflowAtomicStateOptions<T>) => {
-      const tenantId = requireWorkerTenantId(message, 'ctx.state.tenant()');
-      return new WorkflowAtomicStateHandle<T>({ type: 'tenant', tenantId }, key, options);
-    },
+      ),
   };
-}
-
-function requireWorkerTenantId(message: RunMessageShape, methodName: string): string {
-  const tenantId = message.tenant?.id;
-  if (tenantId === undefined || tenantId.length === 0) {
-    throw new Error(`${methodName} requires a tenant context.`);
-  }
-  return tenantId;
 }
 
 // ---------------------------------------------------------------------------
@@ -129,7 +107,6 @@ export async function handleRunMessage(
     workflowType: string;
     input: unknown;
     executionStateOwnerId?: string;
-    tenant?: TenantContext;
     deadline?: number;
     headers?: [string, string][];
   },

@@ -64,11 +64,11 @@ export function matchDirectRoute(method: string, pathname: string): RouteMatch |
  * ```ts
  * import { extractRouteParameters } from 'weft/server/handler';
  *
- * const pattern = /^\/tenants\/([^/]+)\/workflows\/([^/]+)$/;
- * const match = pattern.exec('/tenants/acme/workflows/wf-42');
+ * const pattern = /^\/projects\/([^/]+)\/workflows\/([^/]+)$/;
+ * const match = pattern.exec('/projects/acme/workflows/wf-42');
  * if (match) {
- *   const params = extractRouteParameters(['tenantId', 'workflowId'], match);
- *   console.log(params); // { tenantId: 'acme', workflowId: 'wf-42' }
+ *   const params = extractRouteParameters(['projectId', 'workflowId'], match);
+ *   console.log(params); // { projectId: 'acme', workflowId: 'wf-42' }
  * }
  * ```
  */

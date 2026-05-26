@@ -21,17 +21,11 @@ const executionHandle: AtomicState<number> = state.execution<number>('wf-1', 'co
 });
 void executionHandle;
 
-// workflow(tenantId, workflowType, key, options?) => AtomicState<T>
-const workflowHandle: AtomicState<string> = state.workflow<string>('acme', 'welcome', 'last', {
+// workflow(workflowType, key, options?) => AtomicState<T>
+const workflowHandle: AtomicState<string> = state.workflow<string>('welcome', 'last', {
   initial: '',
 });
 void workflowHandle;
-
-// tenant(tenantId, key, options?) => AtomicState<T>
-const tenantHandle: AtomicState<boolean> = state.tenant<boolean>('acme', 'flag', {
-  initial: false,
-});
-void tenantHandle;
 
 // Missing required positional arguments must fail to compile (guards against a
 // relocation silently widening or dropping the signature).

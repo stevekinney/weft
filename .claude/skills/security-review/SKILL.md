@@ -37,6 +37,8 @@ The server routes through operation handlers plus transport-specific discovery e
 - [ ] No user-controlled strings are interpolated into storage keys without sanitization
 - [ ] Error messages do not leak internal state (stack traces, storage keys, file paths)
 - [ ] Discovery documents that emit absolute URLs use `publicOrigin` or trusted host validation, not arbitrary Host-header text
+- [ ] REST `EngineFailure` responses use the canonical masked body; raw engine messages stay out of HTTP responses
+- [ ] Schedule read and mutation routes forward JWT tenant claims into engine access checks; missing claims return 403 and cross-tenant IDs are masked as not found
 
 Routes that accept bodies include workflow start, signal, update, query, attributes, review decisions, bulk actions, JSON-RPC, HTTP storage, and MCP `POST /mcp`.
 

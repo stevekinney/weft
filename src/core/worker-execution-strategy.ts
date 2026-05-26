@@ -65,14 +65,6 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     sleepReferenceTime?: number;
     deadline?: number;
     headers?: [string, string][];
-    /**
-     * Resolved tenant context for the run. Forwarded to the worker via the
-     * `WorkerInboundMessage.tenant` field so worker-side handlers can read
-     * it from the first argument of their generator. Values inside
-     * `attributes` must be structured-clone safe (no functions or class
-     * instances) — see the JSDoc on `WorkerInboundMessage` for details.
-     */
-    tenant?: import('./tenant.ts').TenantContext;
   }): void {
     this.#cancelledWorkflowIds.delete(parameters.workflowId);
     this.#checkpointResumeState.resetWorkflow(parameters.workflowId);
@@ -90,9 +82,6 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     }
     if (parameters.headers) {
       message.headers = parameters.headers;
-    }
-    if (parameters.tenant !== undefined) {
-      message.tenant = parameters.tenant;
     }
     void this.#acquireAndSend(parameters.workflowId, message);
   }

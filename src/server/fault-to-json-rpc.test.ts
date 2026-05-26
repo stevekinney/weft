@@ -218,20 +218,6 @@ describe('faultToJsonRpcError', () => {
     expect(error.code).toBe(-32023);
   });
 
-  it('RateLimited -> -32024 with retry-after data merged', () => {
-    const error = faultToJsonRpcError({
-      code: 'RateLimited',
-      message: 'rate limited',
-      data: { retryAfterMs: 5000 },
-    });
-    expect(error.code).toBe(-32024);
-    expect(error.data).toMatchObject({
-      weftCode: 'RateLimited',
-      httpStatus: 429,
-      retryAfterMs: 5000,
-    });
-  });
-
   it('JSON-RPC error.data carries structured machine-readable detail. At minimum it includes the canonical Weft application code and the related HTTP status when the same failure is exposed over REST.', () => {
     const samples: OperationFault[] = [
       { code: 'Unauthorized', message: 'x', data: { reason: 'r' } },
@@ -251,15 +237,6 @@ describe('faultToJsonRpcError', () => {
     const error = faultToJsonRpcError({
       code: 'Timeout',
       message: 'timed out',
-      data: {},
-    });
-    expect(Object.keys(error.data).toSorted()).toEqual(['httpStatus', 'weftCode']);
-  });
-
-  it('RateLimited without retryAfterMs produces minimal data', () => {
-    const error = faultToJsonRpcError({
-      code: 'RateLimited',
-      message: 'rate limited',
       data: {},
     });
     expect(Object.keys(error.data).toSorted()).toEqual(['httpStatus', 'weftCode']);
@@ -314,34 +291,6 @@ describe('faultToJsonRpcError', () => {
     };
     const error = faultToJsonRpcError(fault);
     expect(Object.keys(error.data).toSorted()).toEqual(['httpStatus', 'weftCode']);
-  });
-
-  it('RateLimited with retryAfterMs: undefined produces minimal data', () => {
-    const fault: OperationFault = {
-      code: 'RateLimited',
-      message: 'rate limited',
-      data: { retryAfterMs: undefined },
-    };
-    const error = faultToJsonRpcError(fault);
-    expect(Object.keys(error.data).toSorted()).toEqual(['httpStatus', 'weftCode']);
-  });
-
-  it('RateLimited with NaN retryAfterMs omits the field from data (no null leak)', () => {
-    const error = faultToJsonRpcError({
-      code: 'RateLimited',
-      message: 'rate limited',
-      data: { retryAfterMs: Number.NaN },
-    });
-    expect('retryAfterMs' in error.data).toBe(false);
-  });
-
-  it('RateLimited with Infinity retryAfterMs omits the field from data', () => {
-    const error = faultToJsonRpcError({
-      code: 'RateLimited',
-      message: 'rate limited',
-      data: { retryAfterMs: Number.POSITIVE_INFINITY },
-    });
-    expect('retryAfterMs' in error.data).toBe(false);
   });
 
   it('envelope keys (weftCode, httpStatus) cannot be overwritten by future payload fields', () => {

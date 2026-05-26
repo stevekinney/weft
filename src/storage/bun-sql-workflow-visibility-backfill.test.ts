@@ -68,7 +68,6 @@ describe('BunSQLite workflow visibility backfill', () => {
         id: 'workflow-a',
         type: 'order-fulfillment',
         status: 'running',
-        tenant: { id: 'tenant-a' },
       }),
     );
     await seedWorkflow(
@@ -77,7 +76,6 @@ describe('BunSQLite workflow visibility backfill', () => {
         id: 'workflow-b',
         type: 'payment',
         status: 'completed',
-        tenant: { id: 'tenant-b' },
         executionDeadline: 1_700_000_010_000,
       }),
     );
@@ -99,7 +97,6 @@ describe('BunSQLite workflow visibility backfill', () => {
       keys: [
         KEYS.workflowVisibilityCreated(1_700_000_000_000, 'workflow-a'),
         KEYS.workflowVisibilityStatus('running', 'workflow-a'),
-        KEYS.workflowVisibilityTenant('tenant-a', 'workflow-a'),
         KEYS.workflowVisibilityType('order-fulfillment', 'workflow-a'),
         KEYS.workflowVisibilityUpdated(1_700_000_000_500, 'workflow-a'),
       ].toSorted(),
@@ -114,7 +111,6 @@ describe('BunSQLite workflow visibility backfill', () => {
         KEYS.workflowVisibilityCreated(1_700_000_000_000, 'workflow-b'),
         KEYS.workflowVisibilityDeadline(1_700_000_010_000, 'workflow-b'),
         KEYS.workflowVisibilityStatus('completed', 'workflow-b'),
-        KEYS.workflowVisibilityTenant('tenant-b', 'workflow-b'),
         KEYS.workflowVisibilityType('payment', 'workflow-b'),
         KEYS.workflowVisibilityUpdated(1_700_000_000_500, 'workflow-b'),
       ].toSorted(),
@@ -135,10 +131,6 @@ describe('BunSQLite workflow visibility backfill', () => {
     expect(await collectKeys(storage, 'wf-idx-type:')).toEqual([
       KEYS.workflowVisibilityType('order-fulfillment', 'workflow-a'),
       KEYS.workflowVisibilityType('payment', 'workflow-b'),
-    ]);
-    expect(await collectKeys(storage, 'wf-idx-tenant:')).toEqual([
-      KEYS.workflowVisibilityTenant('tenant-a', 'workflow-a'),
-      KEYS.workflowVisibilityTenant('tenant-b', 'workflow-b'),
     ]);
     expect(await collectKeys(storage, 'wf-idx-deadline:')).toEqual([
       KEYS.workflowVisibilityDeadline(1_700_000_010_000, 'workflow-b'),
@@ -167,7 +159,6 @@ describe('BunSQLite workflow visibility backfill', () => {
       storage,
       makeWorkflowState({
         id: 'workflow-a',
-        tenant: { id: 'tenant-a' },
         executionDeadline: 1_700_000_010_000,
       }),
     );
@@ -186,7 +177,6 @@ describe('BunSQLite workflow visibility backfill', () => {
     for (const prefix of [
       'wf-idx-status:',
       'wf-idx-type:',
-      'wf-idx-tenant:',
       'wf-idx-created:',
       'wf-idx-updated:',
       'wf-idx-deadline:',

@@ -20,7 +20,6 @@ export type TerminationCallbacks = {
   commitWorkflowStateOperations: (
     state: WorkflowState,
     operations: BatchOperation[],
-    options?: { releaseTenantQuota?: boolean },
   ) => Promise<void>;
   cleanupReviews: (workflowId: string) => Promise<void>;
 };

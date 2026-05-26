@@ -1,6 +1,5 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'bun:test';
 import { Engine } from '../core/engine.ts';
-import { tenantFromInputField } from '../core/tenant.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { query, workflow } from '../core/types.ts';
 import { handleRequest } from '../server/handler.ts';
@@ -439,12 +438,6 @@ let client: WeftClient;
 beforeAll(() => {
   engine = new Engine({
     storage: new MemoryStorage(),
-    tenantResolver: tenantFromInputField('tenantId'),
-    quotas: {
-      maxConcurrentWorkflows: 5,
-      maxStorageBytes: 1_000_000,
-      maxWorkflowCreationRate: { count: 10, window: '1m' },
-    },
   });
   engine.register(echoWorkflow);
   engine.register(clientContractEchoWorkflow);
@@ -461,7 +454,7 @@ beforeAll(() => {
           method: 'api-key',
           principal: principalFromApiKey({
             subject: 'http-client-test',
-            scopes: ['quota:read', 'reviews:read', 'system:read', 'workflows:read'],
+            scopes: ['reviews:read', 'system:read', 'workflows:read'],
           }),
         },
       });
@@ -516,7 +509,6 @@ describe('HttpClient', () => {
     expect(client.replayTo).toBeFunction();
     expect(client.listReviews).toBeFunction();
     expect(client.submitReview).toBeFunction();
-    expect(client.getQuotaUsage).toBeFunction();
     expect(client.getStreamChunks).toBeFunction();
     expect(client.fork).toBeFunction();
     expect(client.getRetentionOverview).toBeFunction();
@@ -732,24 +724,6 @@ describe('HttpClient', () => {
     });
   });
 
-  describe('getQuotaUsage', () => {
-    it('returns tenant quota usage from the server surface', async () => {
-      const handle = await client.start(
-        'echo',
-        { tenantId: 'acme', payload: 'quota-http' },
-        { id: 'http-quota-usage' },
-      );
-      await handle.result();
-
-      const usage = await client.getQuotaUsage('acme');
-      expect(usage.tenantId).toBe('acme');
-      expect(usage.storageBytes.used).toBeGreaterThan(0);
-      expect(usage.activeWorkflows.limit).toBe(5);
-      expect(usage.workflowCreationRate.limit).toBe(10);
-      expect(usage.workflowCreationRate.used).toBeGreaterThanOrEqual(1);
-    });
-  });
-
   describe('retention surface', () => {
     it('returns the retention overview from the HTTP server', async () => {
       const retentionEngine = new Engine({
@@ -881,7 +855,6 @@ describe('HttpClient', () => {
         'getEvents',
         'listReviews',
         'submitReview',
-        'getQuotaUsage',
         'getStreamChunks',
         'fork',
         'getRetentionOverview',
@@ -1133,6 +1106,21 @@ describe('HttpClient request surface', () => {
       status: 401,
       message: 'Unauthorized',
     });
+  });
+
+  it('converts a structured coordinated-update fault body to the human message', async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: { code: 'Unprocessable', message: 'bad payload' } }), {
+        status: 422,
+        headers: { 'Content-Type': 'application/json' },
+      })) as unknown as typeof fetch;
+
+    const httpClient = new HttpClient({ baseUrl: 'http://example.test' });
+
+    // The behavioral contract: the structured fault's human message reaches the
+    // `error` field and the call resolves rather than throwing.
+    const result = await httpClient.submitCoordinatedUpdate('wf-1', 'rename');
+    expect(result.error).toBe('bad payload');
   });
 
   it('throws a 404 client error when handle.result() points at a missing workflow', async () => {

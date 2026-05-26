@@ -49,7 +49,7 @@ export function createGetSystemMetricsOperation(options?: {
       kind: 'scoped',
       scopes: { kind: 'anyOf', scopes: ['system:read'] },
     },
-    producibleFaults: ['RateLimited'],
+    producibleFaults: [],
     discoverable: true,
     transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
     unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },

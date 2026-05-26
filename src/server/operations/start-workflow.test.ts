@@ -2,7 +2,6 @@ import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
 import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
-import { QuotaExceededError } from '../../core/tenant-quotas.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
@@ -203,37 +202,6 @@ describe('weft.workflows.start', () => {
 
       expect(response.status).toBe(400);
       expect(await response.json()).toEqual({ error: 'Field "id" must be a string' });
-    } finally {
-      engine.start = originalStart;
-    }
-  });
-
-  it('returns 429 when engine.start throws QuotaExceededError', async () => {
-    engine = createEngine();
-    const originalStart = engine.start.bind(engine);
-
-    try {
-      engine.start = async () => {
-        throw new QuotaExceededError({
-          tenantId: 'acme',
-          quota: 'maxConcurrentWorkflows',
-          currentUsage: 2,
-          limit: 1,
-        });
-      };
-
-      const response = await handleRequest(
-        jsonRequest('POST', '/v1/workflows', { type: 'echo' }),
-        engine,
-        { operationRegistry: registry, restBindings: bindings },
-      );
-
-      expect(response.status).toBe(429);
-      expect((await response.json()) as { error: string }).toEqual(
-        expect.objectContaining({
-          error: expect.stringContaining('Tenant quota exceeded'),
-        }),
-      );
     } finally {
       engine.start = originalStart;
     }

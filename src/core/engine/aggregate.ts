@@ -71,7 +71,6 @@ async function resolveDimensionKey(
 ): Promise<string | null> {
   if (groupBy === 'status') return state.status;
   if (groupBy === 'type') return state.type;
-  if (groupBy === 'tenant') return state.tenant?.id ?? null;
   // Read `failureCategory` from the loaded state so the aggregate buckets
   // every workflow under the same key the list-filter post-filter used.
   // The search-attribute store may be stale or absent for engine-managed

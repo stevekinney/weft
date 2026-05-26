@@ -93,7 +93,6 @@ export const listFilterObjectSchema = z
     createdAt: timeRangeSchema.optional(),
     updatedAt: timeRangeSchema.optional(),
     executionDeadline: timeRangeSchema.optional(),
-    tenantId: z.union([z.string().min(1), z.array(z.string().min(1)).min(1)]).optional(),
     failureCategory: z
       .union([failureCategorySchema, z.array(failureCategorySchema).min(1)])
       .optional(),

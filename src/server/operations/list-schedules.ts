@@ -21,7 +21,6 @@ import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
-import { isOperationFault, resolveScheduleAccessOptions } from './schedule-faults.ts';
 
 const VALID_SCHEDULE_STATUSES = new Set<string>(['active', 'paused', 'cancelled']);
 
@@ -32,13 +31,8 @@ function isValidScheduleStatus(value: string): value is ScheduleStatus {
 const listSchedulesInput = z.object({
   status: z.unknown().optional(),
   workflowType: z.unknown().optional(),
-  tenantId: z.unknown().optional(),
   limit: z.unknown().optional(),
   offset: z.unknown().optional(),
-  // JWT-authenticated tenant scope resolved by the authorize hook, not
-  // passed directly by the caller. Stored on input so the hook can
-  // inject it without touching the raw query string.
-  _resolvedTenantId: z.string().optional(),
 });
 
 const listSchedulesOutput = z.unknown();
@@ -66,57 +60,13 @@ function applyStatusFilter(filter: ScheduleFilter, input: ListSchedulesInput): v
   }
 }
 
-/** Apply workflowType and tenantId filter dimensions. */
-function applyScheduleTypeAndTenantFilter(filter: ScheduleFilter, input: ListSchedulesInput): void {
+/** Apply the workflowType filter dimension. */
+function applyScheduleTypeFilter(filter: ScheduleFilter, input: ListSchedulesInput): void {
   if (input.workflowType !== undefined) {
     if (typeof input.workflowType !== 'string') {
       throw invalidParamsFault('Query parameter "workflowType" must be a string');
     }
     filter.workflowType = input.workflowType;
-  }
-
-  if (input.tenantId !== undefined) {
-    if (typeof input.tenantId !== 'string') {
-      throw invalidParamsFault('Query parameter "tenantId" must be a string');
-    }
-    filter.tenantId = input.tenantId;
-  }
-}
-
-/**
- * Build a fresh `Forbidden` fault per throw. A shared module-level constant
- * would be exposed to any downstream catch handler that mutates the caught
- * value (e.g., attaching context), poisoning subsequent requests.
- */
-function tenantMismatchFault(): OperationFault {
-  return {
-    code: 'Forbidden',
-    message: 'Schedule access is limited to the authenticated tenant',
-    data: { reason: 'tenantId mismatch with JWT claim' },
-  };
-}
-
-/** Enforce JWT tenant scope after tenantId is set on the filter. */
-function applyTenantScope(
-  filter: ScheduleFilter,
-  input: ListSchedulesInput,
-  resolvedTenantId: string | undefined,
-): void {
-  if (
-    input._resolvedTenantId !== undefined &&
-    resolvedTenantId !== undefined &&
-    input._resolvedTenantId !== resolvedTenantId
-  ) {
-    throw tenantMismatchFault();
-  }
-
-  if (resolvedTenantId !== undefined) {
-    // If the caller also passed tenantId and it disagrees, that is a
-    // scope-mismatch — the tenant scope wins.
-    if (filter.tenantId !== undefined && filter.tenantId !== resolvedTenantId) {
-      throw tenantMismatchFault();
-    }
-    filter.tenantId = resolvedTenantId;
   }
 }
 
@@ -141,20 +91,12 @@ function applyPaginationFilter(filter: ScheduleFilter, input: ListSchedulesInput
 
 /**
  * Validate query parameters and build a `ScheduleFilter` from the operation
- * input. Field-validation order:
- * status → workflowType → tenantId → (tenant-scope checks) → limit → offset.
- *
- * Tenant-scope enforcement happens after the tenantId field so that
- * JWT-claim mismatches are caught before pagination params are validated.
+ * input. Field-validation order: status → workflowType → limit → offset.
  */
-function validateListSchedulesQuery(
-  input: ListSchedulesInput,
-  resolvedTenantId: string | undefined,
-): ScheduleFilter {
+function validateListSchedulesQuery(input: ListSchedulesInput): ScheduleFilter {
   const filter: ScheduleFilter = {};
   applyStatusFilter(filter, input);
-  applyScheduleTypeAndTenantFilter(filter, input);
-  applyTenantScope(filter, input, resolvedTenantId);
+  applyScheduleTypeFilter(filter, input);
   applyPaginationFilter(filter, input);
   return filter;
 }
@@ -171,17 +113,12 @@ export const listSchedulesOperation = defineOperation<ListSchedulesInput, ListSc
   discoverable: true,
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine, principal }): Promise<ListSchedulesOutput> => {
+  invoke: async ({ input, engine }): Promise<ListSchedulesOutput> => {
     const e = engine as Engine;
 
     // Build the ScheduleFilter from the validated input. Field-level
     // validation order is pinned by the tests below.
-    const accessOptions = resolveScheduleAccessOptions(principal);
-    if (isOperationFault(accessOptions)) {
-      throw accessOptions;
-    }
-    const resolvedTenantId = accessOptions?.tenantId;
-    const filter = validateListSchedulesQuery(input, resolvedTenantId);
+    const filter = validateListSchedulesQuery(input);
 
     return e.listSchedules(filter);
   },
@@ -199,7 +136,6 @@ export const listSchedulesRestBinding: UnknownRestBinding = {
   inputSources: {
     status: { kind: 'query', queryParam: 'status' },
     workflowType: { kind: 'query', queryParam: 'workflowType' },
-    tenantId: { kind: 'query', queryParam: 'tenantId' },
     limit: { kind: 'query', queryParam: 'limit' },
     offset: { kind: 'query', queryParam: 'offset' },
   },
@@ -216,9 +152,6 @@ export const listSchedulesRestBinding: UnknownRestBinding = {
 
     const workflowType = url.searchParams.get('workflowType');
     if (workflowType !== null) result.workflowType = workflowType;
-
-    const tenantId = url.searchParams.get('tenantId');
-    if (tenantId !== null) result.tenantId = tenantId;
 
     const limit = url.searchParams.get('limit');
     if (limit !== null) result.limit = limit;

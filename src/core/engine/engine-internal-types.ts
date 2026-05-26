@@ -2,7 +2,6 @@ import type { Storage as WeftStorage } from '../../storage/interface.ts';
 import type { ConstraintDefinition } from '../constraint.ts';
 import type { ExecutionStrategy } from '../execution-strategy.ts';
 import type { InlineExecutionStrategy } from '../inline-execution-strategy.ts';
-import type { TenantContext } from '../tenant.ts';
 import type {
   Checkpoint,
   DefinitionSchema,
@@ -12,7 +11,6 @@ import type {
   WorkflowFunction,
   WorkflowTimelineEntry,
 } from '../types.ts';
-import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 
 export interface RegistrationEntry {
   handler: WorkflowFunction;
@@ -25,9 +23,6 @@ export interface RegistrationEntry {
   searchAttributes?: SearchAttributeSchema;
   retention?: NormalizedRetentionPolicy;
   constraints?: ConstraintDefinition[];
-  versionTupleForTenant?: (
-    tenant: import('../tenant.ts').TenantContext | undefined,
-  ) => WorkflowVersionTuple;
 }
 
 export interface ResolvedOptions {
@@ -41,7 +36,6 @@ export interface ResolvedOptions {
   retentionSweepIntervalMs: number;
   retentionSweepBatchSize: number;
   getNow: () => number;
-  tenantResolver: import('../tenant.ts').TenantResolver | undefined;
 }
 
 export interface WorkflowResultWaiter {
@@ -72,5 +66,4 @@ export type QueuedInlineWorkflowExecutionStart = {
   nestingDepth: number;
   executionDeadline: number | undefined;
   executionStateOwnerId: string;
-  tenant: TenantContext | undefined;
 };

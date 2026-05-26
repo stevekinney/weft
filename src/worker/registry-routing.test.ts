@@ -137,16 +137,16 @@ describe('WorkerRegistry routing policies', () => {
   });
 
   describe('fair-share', () => {
-    it('spreads a tenant across workers', () => {
+    it('spreads a share across workers', () => {
       const { registry, workerIds } = makeRegistryWithWorkers(3, 'runAgent', {
         policy: 'fair-share',
       });
 
       const picks: string[] = [];
       for (let index = 0; index < 3; index += 1) {
-        const worker = registry.findWorker('runAgent', { fairShareKey: 'tenant-alpha' });
+        const worker = registry.findWorker('runAgent', { fairShareKey: 'share-alpha' });
         expect(worker).toBeDefined();
-        registry.assignTask(worker!.id, `op-${index}`, 30_000, 'tenant-alpha');
+        registry.assignTask(worker!.id, `op-${index}`, 30_000, 'share-alpha');
         picks.push(worker!.id);
       }
 
@@ -164,27 +164,27 @@ describe('WorkerRegistry routing policies', () => {
         policy: 'fair-share',
       });
 
-      // Pre-load worker-0 with two tenant-alpha tasks
-      registry.assignTask(workerIds[0]!, 'op-a', 30_000, 'tenant-alpha');
-      registry.assignTask(workerIds[0]!, 'op-b', 30_000, 'tenant-alpha');
+      // Pre-load worker-0 with two share-alpha tasks
+      registry.assignTask(workerIds[0]!, 'op-a', 30_000, 'share-alpha');
+      registry.assignTask(workerIds[0]!, 'op-b', 30_000, 'share-alpha');
 
-      const pick = registry.findWorker('runAgent', { fairShareKey: 'tenant-alpha' });
+      const pick = registry.findWorker('runAgent', { fairShareKey: 'share-alpha' });
       expect(pick?.id).toBe(workerIds[1]);
     });
 
-    it('does not confuse two tenants sharing workers', () => {
+    it('does not confuse two shares sharing workers', () => {
       const { registry, workerIds } = makeRegistryWithWorkers(2, 'runAgent', {
         policy: 'fair-share',
       });
 
-      // Stack tenant-alpha on worker-0 and tenant-beta on worker-1
-      registry.assignTask(workerIds[0]!, 'alpha-1', 30_000, 'tenant-alpha');
-      registry.assignTask(workerIds[0]!, 'alpha-2', 30_000, 'tenant-alpha');
-      registry.assignTask(workerIds[1]!, 'beta-1', 30_000, 'tenant-beta');
+      // Stack share-alpha on worker-0 and share-beta on worker-1
+      registry.assignTask(workerIds[0]!, 'alpha-1', 30_000, 'share-alpha');
+      registry.assignTask(workerIds[0]!, 'alpha-2', 30_000, 'share-alpha');
+      registry.assignTask(workerIds[1]!, 'beta-1', 30_000, 'share-beta');
 
-      // Tenant-gamma has no history — pick should use inFlight tiebreak, which
+      // Share-gamma has no history — pick should use inFlight tiebreak, which
       // makes worker-1 (1 inflight) win over worker-0 (2 inflight).
-      const pick = registry.findWorker('runAgent', { fairShareKey: 'tenant-gamma' });
+      const pick = registry.findWorker('runAgent', { fairShareKey: 'share-gamma' });
       expect(pick?.id).toBe(workerIds[1]);
     });
 
@@ -193,13 +193,13 @@ describe('WorkerRegistry routing policies', () => {
         policy: 'fair-share',
       });
 
-      registry.assignTask(workerIds[0]!, 'op-a', 30_000, 'tenant-alpha');
-      registry.assignTask(workerIds[0]!, 'op-b', 30_000, 'tenant-alpha');
+      registry.assignTask(workerIds[0]!, 'op-a', 30_000, 'share-alpha');
+      registry.assignTask(workerIds[0]!, 'op-b', 30_000, 'share-alpha');
       registry.completeTask('op-a');
       registry.completeTask('op-b');
 
       // After release, both workers tie at 0; least-loaded tiebreak by id wins.
-      const pick = registry.findWorker('runAgent', { fairShareKey: 'tenant-alpha' });
+      const pick = registry.findWorker('runAgent', { fairShareKey: 'share-alpha' });
       expect(pick?.id).toBe(workerIds[0]);
     });
 
@@ -239,17 +239,17 @@ describe('WorkerRegistry routing policies', () => {
           registry.taskAssigned(workerIds[0]!);
           registry.taskAssigned(workerIds[1]!);
         }
-        expect(registry.findWorker('sendEmail', { fairShareKey: 'tenant-x' })).toBeUndefined();
+        expect(registry.findWorker('sendEmail', { fairShareKey: 'share-x' })).toBeUndefined();
       });
 
       it(`${label} returns undefined when no worker advertises the activity`, () => {
         const { registry } = makeRegistryWithWorkers(2, 'sendEmail', options);
-        expect(registry.findWorker('nonexistent', { fairShareKey: 'tenant-x' })).toBeUndefined();
+        expect(registry.findWorker('nonexistent', { fairShareKey: 'share-x' })).toBeUndefined();
       });
 
       it(`${label} returns undefined when the registry is empty`, () => {
         const registry = new WorkerRegistry(options);
-        expect(registry.findWorker('sendEmail', { fairShareKey: 'tenant-x' })).toBeUndefined();
+        expect(registry.findWorker('sendEmail', { fairShareKey: 'share-x' })).toBeUndefined();
       });
     }
   });

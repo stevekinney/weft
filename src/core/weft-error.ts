@@ -35,7 +35,6 @@ export type WeftErrorCode =
   | 'WorkflowTimeoutError'
   | 'HttpClientError'
   | 'WorkerProtocolIncompatibleError'
-  | 'QuotaExceededError'
   | 'UpdateTimeoutError'
   | 'WorkflowTerminalError'
   | 'WorkflowBuilderError'
@@ -91,7 +90,6 @@ const publicWeftErrorCodeMap = {
   WorkflowTimeoutError: true,
   HttpClientError: true,
   WorkerProtocolIncompatibleError: true,
-  QuotaExceededError: true,
   UpdateTimeoutError: true,
   WorkflowTerminalError: true,
   WorkflowBuilderError: true,

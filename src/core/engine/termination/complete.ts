@@ -76,7 +76,6 @@ export async function terminateWorkflow(
       { status },
       {
         allowedStatuses: ['running', 'pending'],
-        releaseTenantQuota: true,
         buildAdditionalOperations: (_previousState, updatedAt) => {
           finalizePendingTimelineEntry(
             internals,
@@ -291,9 +290,7 @@ export async function completeWorkflow(
         );
       }
 
-      await callbacks.commitWorkflowStateOperations(state, completionOperations, {
-        releaseTenantQuota: true,
-      });
+      await callbacks.commitWorkflowStateOperations(state, completionOperations);
       return { duration };
     },
   );
@@ -327,7 +324,6 @@ export async function failWorkflow(
   }
   const failureResult = await updateWorkflowState(internals, workflowId, stateUpdate, {
     allowedStatuses: ['running', 'pending'],
-    releaseTenantQuota: true,
     buildAdditionalOperations: (_previousState, updatedAt) => {
       finalizePendingTimelineEntry(internals, workflowId, 'failed', error.message, updatedAt);
       const pendingTimelineOperation = buildPendingTimelineOperation(internals, workflowId);

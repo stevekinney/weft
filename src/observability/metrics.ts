@@ -261,7 +261,7 @@ function sumNumbers(values: number[]): number {
  * > {@link createMetricsCollectorExporter} only emits aggregate counters and
  * > histograms with no labels, which is safe to expose. **A custom
  * > `PrometheusExporter` that emits labels — especially labels containing
- * > tenant identifiers, user identifiers, request paths with IDs, or any
+ * > user identifiers, request paths with IDs, or any
  * > other PII — will leak that data to anyone who can reach the endpoint.**
  * >
  * > If your exporter emits sensitive labels, override the default by setting

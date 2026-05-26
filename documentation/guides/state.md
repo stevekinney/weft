@@ -21,7 +21,7 @@ Session state is useful for counters, flags, and small pieces of private workflo
 
 ## Durable State
 
-Execution, workflow, and tenant state handles live in storage and can be shared outside the current checkpoint. They use the same method names as session state, but their methods are workflow operations:
+Execution and workflow state handles live in storage and can be shared outside the current checkpoint. They use the same method names as session state, but their methods are workflow operations:
 
 ```typescript partial
 const findings = ctx.state.execution<{ articles: string[]; totalCost: number }>('findings', {
@@ -43,8 +43,7 @@ Use the narrowest scope that matches the job:
 | ------------- | ------------------------------------ | --------------------------------------------------------------------------------------------------- |
 | **Session**   | `ctx.state.session(key, options?)`   | Checkpoint-local state private to one workflow execution.                                           |
 | **Execution** | `ctx.state.execution(key, options?)` | Storage-backed state shared by a parent workflow, durable child workflows, and concurrent branches. |
-| **Workflow**  | `ctx.state.workflow(key, options?)`  | Storage-backed state shared by every run of the current workflow type within the current tenant.    |
-| **Tenant**    | `ctx.state.tenant(key, options?)`    | Storage-backed state shared by every workflow in the current tenant.                                |
+| **Workflow**  | `ctx.state.workflow(key, options?)`  | Storage-backed state shared by every run of the current workflow type.                              |
 
 Session state is cheapest because it is checkpoint-local. The other scopes are CAS-backed storage records and require `yield*` because the engine commits them as durable operations.
 
@@ -57,10 +56,7 @@ import { Engine } from 'weft';
 
 const engine = new Engine();
 
-const tenantCounter = engine.state.tenant<number>('acme', 'processedInvoices', { initial: 0 });
-await tenantCounter.increment();
-
-const workflowCounter = engine.state.workflow<number>('acme', 'invoice-review', 'processed', {
+const workflowCounter = engine.state.workflow<number>('invoice-review', 'processed', {
   initial: 0,
 });
 await workflowCounter.increment();
@@ -80,7 +76,7 @@ For `ctx.state.session`, `delete()` removes the stored value. After deletion, `g
 For durable `AtomicState` handles, `options.initial` is captured when the handle is constructed. `get()` returns that value only before the storage slot has ever been written. Once a durable value has been written or deleted, an absent value reads as `undefined`.
 
 ```typescript partial
-const counter = engine.state.tenant<number>('acme', 'counter', { initial: 0 });
+const counter = engine.state.workflow<number>('invoice-review', 'counter', { initial: 0 });
 
 await counter.get(); // 0
 await counter.set(1);
@@ -113,8 +109,7 @@ The built-in scopes use encoded storage keys:
 
 ```text
 state:execution:${ownerWorkflowId}:${key}
-state:workflow:${tenantId}:${workflowType}:${key}
-state:tenant:${tenantId}:${key}
+state:workflow-scope:default:${workflowType}:${key}
 ```
 
-Execution-scoped state is deleted when the owning execution is purged or terminal cleanup runs. Workflow- and tenant-scoped state persists until you explicitly delete it.
+Execution-scoped state is deleted when the owning execution is purged or terminal cleanup runs. Workflow-scoped state persists until you explicitly delete it.

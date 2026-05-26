@@ -66,7 +66,6 @@ const FAULT_DATA_EXTRACTORS: FaultExtractors = {
   Conflict: dataForConflict,
   NotFound: dataForNotFound,
   Timeout: dataForTimeout,
-  RateLimited: dataForRateLimited,
   UnsupportedTransport: dataForUnsupportedTransport,
   SubscriptionOverflow: dataForSubscriptionOverflow,
   InvalidParams: dataForInvalidParams,
@@ -104,16 +103,6 @@ function dataForTimeout(
   data: Extract<OperationFault, { code: 'Timeout' }>['data'],
 ): Record<string, unknown> {
   return data.operationName === undefined ? {} : { operationName: data.operationName };
-}
-
-function dataForRateLimited(
-  data: Extract<OperationFault, { code: 'RateLimited' }>['data'],
-): Record<string, unknown> {
-  // Only expose retryAfterMs when it's a finite positive number — NaN /
-  // Infinity would JSON-serialize to `null` and leave clients with a
-  // typed-as-number field whose wire value violates the type contract.
-  const ms = data.retryAfterMs;
-  return typeof ms === 'number' && Number.isFinite(ms) && ms > 0 ? { retryAfterMs: ms } : {};
 }
 
 function dataForUnsupportedTransport(

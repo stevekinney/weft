@@ -10,8 +10,6 @@
     ListFilter,
     RetentionOverview,
     ScheduleSummary,
-    TenantQuotaMetricUsage,
-    TenantQuotaUsage,
     WorkflowStatus,
     WorkflowSummary,
   } from '../api-client.ts';
@@ -28,11 +26,6 @@
   import EmptyState from '../components/empty-state.svelte';
   import WorkflowTableRow from '../fragments/workflow-table-row.svelte';
   import ScheduleList from '../fragments/schedule-list.svelte';
-  import {
-    computeTenantQuotaMeter,
-    formatTenantQuotaBytes,
-    formatTenantQuotaWindow,
-  } from '../utilities/tenant-quota.ts';
   import {
     buildWorkflowListFilter,
     loadWorkflowAggregate,
@@ -51,7 +44,6 @@
   let typeFilter = $state('');
   let selectedTags = $state<string[]>([]);
   let idPrefixFilter = $state('');
-  let tenantIdFilter = $state('');
   let failureCategoryFilters = $state<FailureCategory[]>([]);
   let createdAtGte: number | undefined = $state();
   let createdAtLte: number | undefined = $state();
@@ -74,17 +66,11 @@
   let statusAggregateLoading = $state(false);
   let statusAggregateError: string | null = $state(null);
   let statusAggregateGeneration = 0;
-  let tenantSuggestions: string[] = $state([]);
-  let tenantSuggestionsGeneration = 0;
   let total = $state(0);
   let loading = $state(true);
   let error: string | null = $state(null);
   let fetchGeneration = 0;
   let activeForegroundFetchGeneration: number | null = null;
-  let tenantQuotaId = $state('');
-  let tenantQuotaUsage = $state.raw<TenantQuotaUsage | null>(null);
-  let tenantQuotaLoading = $state(false);
-  let tenantQuotaError: string | null = $state(null);
   type BulkWorkflowAction = 'cancel' | 'signal' | 'delete' | 'tag:add' | 'tag:remove';
   type BulkSignalPayloadParseResult =
     | { ok: true; value: unknown }
@@ -131,7 +117,6 @@
     createdAt?: { gte?: number; lte?: number };
     updatedAt?: { gte?: number; lte?: number };
     executionDeadline?: { gte?: number; lte?: number };
-    tenantId?: string[];
     failureCategory?: FailureCategory[];
   }
 
@@ -180,15 +165,14 @@
 
   function currentFetchFilters(): FetchFilters {
     return {
-      ...visibilityFilters({ includeTenantId: true }),
+      ...visibilityFilters(),
       offset: currentOffset,
     };
   }
 
-  function visibilityFilters(options: { includeTenantId: boolean }): Omit<FetchFilters, 'offset'> {
+  function visibilityFilters(): Omit<FetchFilters, 'offset'> {
     const normalizedType = typeFilter.trim();
     const normalizedIdPrefix = idPrefixFilter.trim();
-    const normalizedTenantId = options.includeTenantId ? tenantIdFilter.trim() : '';
     return {
       status: statusFilter,
       type: normalizedType,
@@ -202,9 +186,6 @@
         : {}),
       ...(executionDeadlineGte !== undefined || executionDeadlineLte !== undefined
         ? { executionDeadline: { gte: executionDeadlineGte, lte: executionDeadlineLte } }
-        : {}),
-      ...(options.includeTenantId && normalizedTenantId.length > 0
-        ? { tenantId: [normalizedTenantId] }
         : {}),
       ...(failureCategoryFilters.length > 0 ? { failureCategory: failureCategoryFilters } : {}),
     };
@@ -306,14 +287,7 @@
 
   function aggregateFilters(): FetchFilters {
     return {
-      ...visibilityFilters({ includeTenantId: true }),
-      offset: 0,
-    };
-  }
-
-  function tenantSuggestionFilters(): FetchFilters {
-    return {
-      ...visibilityFilters({ includeTenantId: false }),
+      ...visibilityFilters(),
       offset: 0,
     };
   }
@@ -385,28 +359,6 @@
     }
   }
 
-  $effect(() => {
-    const filters = tenantSuggestionFilters();
-    const generation = ++tenantSuggestionsGeneration;
-
-    void loadTenantSuggestions(filters, generation);
-  });
-
-  async function loadTenantSuggestions(filters: FetchFilters, generation: number): Promise<void> {
-    try {
-      const aggregate = await loadWorkflowAggregate(apiClient, filters, 'tenant', 100);
-      if (generation === tenantSuggestionsGeneration) {
-        tenantSuggestions = aggregate.groups
-          .map((group) => group.key)
-          .filter((key): key is string => key !== null && key.length > 0);
-      }
-    } catch {
-      if (generation === tenantSuggestionsGeneration) {
-        tenantSuggestions = [];
-      }
-    }
-  }
-
   // ---------------------------------------------------------------------------
   // Pagination
   // ---------------------------------------------------------------------------
@@ -457,10 +409,6 @@
     resetBulkPreview();
   }
 
-  function formatTenantQuotaLimit(metric: TenantQuotaMetricUsage): string {
-    return metric.limit === null ? 'No limit' : String(metric.limit);
-  }
-
   const availableTagFilters = $derived.by(() => {
     const tags = new Set([...collectWorkflowTags(workflows), ...selectedTags]);
     return [...tags].toSorted((left, right) => left.localeCompare(right));
@@ -474,7 +422,7 @@
 
   const bulkFilter = $derived.by((): ListFilter => {
     const { limit: _dropLimit, offset: _dropOffset, ...filter } = buildWorkflowListFilter(
-      { ...visibilityFilters({ includeTenantId: true }), offset: 0 },
+      { ...visibilityFilters(), offset: 0 },
       0,
     );
     void _dropLimit;
@@ -487,7 +435,6 @@
       bulkFilter.type !== undefined ||
       (bulkFilter.tags?.length ?? 0) > 0 ||
       bulkFilter.idPrefix !== undefined ||
-      bulkFilter.tenantId !== undefined ||
       bulkFilter.failureCategory !== undefined ||
       bulkFilter.createdAt !== undefined ||
       bulkFilter.updatedAt !== undefined ||
@@ -569,15 +516,6 @@
     details.push({ label: 'Tag filter', value: filter.tags?.join(', ') ?? 'Any' });
     details.push({ label: 'ID prefix', value: filter.idPrefix ?? 'Any' });
     details.push({
-      label: 'Tenant filter',
-      value:
-        filter.tenantId === undefined
-          ? 'Any'
-          : Array.isArray(filter.tenantId)
-            ? filter.tenantId.join(', ')
-            : filter.tenantId,
-    });
-    details.push({
       label: 'Failure category',
       value: formatFailureCategoryFilter(filter.failureCategory),
     });
@@ -600,10 +538,6 @@
     details.push({
       label: 'Matched types',
       value: bulkPreview.scope.workflowTypes.join(', ') || 'None',
-    });
-    details.push({
-      label: 'Matched tenants',
-      value: bulkPreview.scope.tenantIds.join(', ') || 'Unscoped',
     });
     return details;
   });
@@ -639,9 +573,6 @@
       ...(filter.type === undefined ? {} : { type: filter.type }),
       ...(filter.tags === undefined ? {} : { tags: [...filter.tags] }),
       ...(filter.idPrefix === undefined ? {} : { idPrefix: filter.idPrefix }),
-      ...(filter.tenantId === undefined
-        ? {}
-        : { tenantId: Array.isArray(filter.tenantId) ? [...filter.tenantId] : filter.tenantId }),
       ...(filter.failureCategory === undefined
         ? {}
         : {
@@ -834,32 +765,6 @@
     }
   }
 
-  async function handleTenantQuotaSubmit(event: SubmitEvent): Promise<void> {
-    event.preventDefault();
-
-    if (tenantQuotaLoading) {
-      return;
-    }
-
-    const normalizedTenantId = tenantQuotaId.trim();
-    if (normalizedTenantId.length === 0) {
-      tenantQuotaError = 'Enter a tenant ID to inspect quota usage.';
-      tenantQuotaUsage = null;
-      return;
-    }
-
-    tenantQuotaLoading = true;
-    try {
-      tenantQuotaUsage = await apiClient.getTenantQuotaUsage(normalizedTenantId);
-      tenantQuotaError = null;
-    } catch (fetchError) {
-      tenantQuotaError = fetchError instanceof Error ? fetchError.message : String(fetchError);
-      tenantQuotaUsage = null;
-    } finally {
-      tenantQuotaLoading = false;
-    }
-  }
-
 </script>
 
 <Page title="Workflows">
@@ -929,22 +834,6 @@
         error={idPrefixError ?? undefined}
         oninput={resetFiltersAndBulkPreview}
       />
-    </div>
-    <div class="workflow-list-filter-group">
-      <Input
-        id="workflow-tenant-filter"
-        label="Tenant ID"
-        hideLabel
-        placeholder="Tenant ID"
-        bind:value={tenantIdFilter}
-        list="workflow-tenant-suggestions"
-        oninput={resetFiltersAndBulkPreview}
-      />
-      <datalist id="workflow-tenant-suggestions">
-        {#each tenantSuggestions as tenantSuggestion (tenantSuggestion)}
-          <option value={tenantSuggestion}></option>
-        {/each}
-      </datalist>
     </div>
   </div>
 
@@ -1028,108 +917,6 @@
             <strong>{row.count}</strong>
           </div>
         {/each}
-      </div>
-    {/if}
-  </Card>
-
-  <Card
-    title="Tenant quota inspector"
-    description="Check current tenant usage against configured workflow admission limits."
-    icon={activity(14)}
-  >
-    <form class="tenant-quota-form" onsubmit={handleTenantQuotaSubmit}>
-      <Input
-        id="tenant-quota-id"
-        label="Tenant ID"
-        placeholder="acme"
-        bind:value={tenantQuotaId}
-        description="Use a resolved tenant identifier to inspect active workflows, durable bytes, and workflow creation rate."
-      />
-      <div class="tenant-quota-actions">
-        <Button
-          type="submit"
-          variant="secondary"
-          size="md"
-          label="Inspect quotas"
-          loading={tenantQuotaLoading}
-        />
-      </div>
-    </form>
-
-    {#if tenantQuotaError}
-      <div class="tenant-quota-alert">
-        <Alert
-          variant="danger"
-          title="Quota lookup failed"
-          description={tenantQuotaError}
-        />
-      </div>
-    {/if}
-
-    {#if tenantQuotaUsage}
-      {@const activeWorkflowMeter = computeTenantQuotaMeter(tenantQuotaUsage.activeWorkflows)}
-      {@const storageBytesMeter = computeTenantQuotaMeter(tenantQuotaUsage.storageBytes)}
-      {@const workflowCreationRateMeter = computeTenantQuotaMeter(tenantQuotaUsage.workflowCreationRate)}
-
-      <div class="tenant-quota-grid" aria-live="polite">
-        <div class="tenant-quota-metric">
-          <div class="tenant-quota-metric-header">
-            <span class="tenant-quota-metric-label">Active workflows</span>
-            <span class="tenant-quota-metric-value">
-              {tenantQuotaUsage.activeWorkflows.used} / {formatTenantQuotaLimit(tenantQuotaUsage.activeWorkflows)}
-            </span>
-          </div>
-          <div class="tenant-quota-meter" aria-hidden="true">
-            <div
-              class="tenant-quota-meter-fill"
-              data-severity={activeWorkflowMeter.severity}
-              style={`width: ${activeWorkflowMeter.percentage}%`}
-            ></div>
-          </div>
-          <p class="tenant-quota-metric-note">
-            Currently active tenant workflows across pending and running states.
-          </p>
-        </div>
-
-        <div class="tenant-quota-metric">
-          <div class="tenant-quota-metric-header">
-            <span class="tenant-quota-metric-label">Durable storage</span>
-            <span class="tenant-quota-metric-value">
-              {formatTenantQuotaBytes(tenantQuotaUsage.storageBytes.used)} / {tenantQuotaUsage.storageBytes.limit === null
-                ? 'No limit'
-                : formatTenantQuotaBytes(tenantQuotaUsage.storageBytes.limit)}
-            </span>
-          </div>
-          <div class="tenant-quota-meter" aria-hidden="true">
-            <div
-              class="tenant-quota-meter-fill"
-              data-severity={storageBytesMeter.severity}
-              style={`width: ${storageBytesMeter.percentage}%`}
-            ></div>
-          </div>
-          <p class="tenant-quota-metric-note">
-            Durable bytes currently attributed to this tenant’s workflows.
-          </p>
-        </div>
-
-        <div class="tenant-quota-metric">
-          <div class="tenant-quota-metric-header">
-            <span class="tenant-quota-metric-label">Workflow creation rate</span>
-            <span class="tenant-quota-metric-value">
-              {tenantQuotaUsage.workflowCreationRate.used} / {formatTenantQuotaLimit(tenantQuotaUsage.workflowCreationRate)}
-            </span>
-          </div>
-          <div class="tenant-quota-meter" aria-hidden="true">
-            <div
-              class="tenant-quota-meter-fill"
-              data-severity={workflowCreationRateMeter.severity}
-              style={`width: ${workflowCreationRateMeter.percentage}%`}
-            ></div>
-          </div>
-          <p class="tenant-quota-metric-note">
-            {formatTenantQuotaWindow(tenantQuotaUsage.workflowCreationRate)}
-          </p>
-        </div>
       </div>
     {/if}
   </Card>
@@ -1522,96 +1309,6 @@
     display: flex;
     flex-direction: column;
     gap: var(--space-2, 0.5rem);
-  }
-
-  .tenant-quota-form {
-    display: grid;
-    gap: var(--space-3, 0.75rem);
-    align-items: end;
-  }
-
-  @media (min-width: 720px) {
-    .tenant-quota-form {
-      grid-template-columns: minmax(0, 1fr) auto;
-    }
-  }
-
-  .tenant-quota-actions {
-    display: flex;
-    align-items: center;
-    justify-content: flex-start;
-  }
-
-  .tenant-quota-alert {
-    margin-top: var(--space-3, 0.75rem);
-  }
-
-  .tenant-quota-grid {
-    margin-top: var(--space-4, 1rem);
-    display: grid;
-    gap: var(--space-4, 1rem);
-  }
-
-  @media (min-width: 960px) {
-    .tenant-quota-grid {
-      grid-template-columns: repeat(3, minmax(0, 1fr));
-    }
-  }
-
-  .tenant-quota-metric {
-    display: flex;
-    flex-direction: column;
-    gap: var(--space-2, 0.5rem);
-    padding: var(--space-3, 0.75rem);
-    border-radius: var(--radius-md, 0.375rem);
-    border: 1px solid var(--border-muted, #e5e7eb);
-    background: var(--surface, #fff);
-  }
-
-  .tenant-quota-metric-header {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: var(--space-3, 0.75rem);
-  }
-
-  .tenant-quota-metric-label {
-    font-size: var(--text-xs, 0.75rem);
-    font-weight: var(--font-medium, 500);
-    color: var(--text-muted, #6b7280);
-  }
-
-  .tenant-quota-metric-value {
-    font-size: var(--text-sm, 0.875rem);
-    font-weight: var(--font-medium, 500);
-    color: var(--text, #111827);
-  }
-
-  .tenant-quota-meter {
-    height: 0.5rem;
-    border-radius: 999px;
-    background: var(--surface-inset, #f3f4f6);
-    overflow: hidden;
-  }
-
-  .tenant-quota-meter-fill {
-    height: 100%;
-    border-radius: inherit;
-    background: var(--success, #16a34a);
-    transition: width var(--duration-fast, 150ms) var(--ease-standard, ease);
-  }
-
-  .tenant-quota-meter-fill[data-severity='warning'] {
-    background: var(--warning, #d97706);
-  }
-
-  .tenant-quota-meter-fill[data-severity='danger'] {
-    background: var(--error, #dc2626);
-  }
-
-  .tenant-quota-metric-note {
-    font-size: var(--text-xs, 0.75rem);
-    color: var(--text-muted, #6b7280);
   }
 
   .bulk-actions {

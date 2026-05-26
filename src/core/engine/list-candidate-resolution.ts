@@ -19,7 +19,6 @@ import { queryAttributeIndex, resolveConstrainedIds } from './workflow-state-str
 import {
   queryWorkflowIdPrefixCandidates,
   queryWorkflowStatusIndex,
-  queryWorkflowTenantIndex,
   queryWorkflowTimeRangeIndex,
   queryWorkflowTypeIndex,
 } from './workflow-visibility-queries.ts';
@@ -33,7 +32,6 @@ import {
 type ListFilterDimension =
   | 'status'
   | 'type'
-  | 'tenantId'
   | 'createdAt'
   | 'updatedAt'
   | 'executionDeadline'
@@ -57,13 +55,6 @@ function queryTypeDimension(
   value: NonNullable<ListFilter['type']>,
 ): Promise<Set<string>> {
   return queryWorkflowTypeIndex(internals.storage, value);
-}
-
-function queryTenantDimension(
-  internals: EngineInternals,
-  value: NonNullable<ListFilter['tenantId']>,
-): Promise<Set<string>> {
-  return queryWorkflowTenantIndex(internals.storage, value);
 }
 
 function queryCreatedAtDimension(
@@ -103,7 +94,6 @@ function queryIdPrefixDimension(
 const LIST_FILTER_DIMENSION_QUERIES = {
   status: queryStatusDimension,
   type: queryTypeDimension,
-  tenantId: queryTenantDimension,
   createdAt: queryCreatedAtDimension,
   updatedAt: queryUpdatedAtDimension,
   executionDeadline: queryExecutionDeadlineDimension,
@@ -157,7 +147,6 @@ export async function resolveListCandidateIds(
   const indexedDimensions: readonly ListFilterDimension[] = [
     'status',
     'type',
-    'tenantId',
     'createdAt',
     'updatedAt',
     'executionDeadline',

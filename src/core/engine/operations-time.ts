@@ -28,7 +28,6 @@ export type TimeOperationCallbacks = {
     input: unknown,
     checkpoint: Checkpoint,
     executionDeadline: number | undefined,
-    tenant: WorkflowState['tenant'],
     executionStateOwnerId: string,
     registration: RegistrationEntry,
   ) => void;
@@ -204,7 +203,6 @@ export async function startDelayedWorkflow(
     runningState.input,
     checkpoint,
     executionDeadline,
-    runningState.tenant,
     runningState.executionStateOwnerId ?? entry.workflowId,
     registration,
   );

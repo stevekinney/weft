@@ -24,8 +24,7 @@ import {
 /**
  * Factory that resolves a workflow type name to its handler. Handlers receive
  * a worker-side {@link WorkerWorkflowContext} as the first argument so they
- * can read `ctx.tenant` and `ctx.workflowId` exactly like inline-mode
- * handlers do.
+ * can read `ctx.workflowId` exactly like inline-mode handlers do.
  */
 export type WorkflowHandlerFactory = (
   type: string,

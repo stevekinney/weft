@@ -92,7 +92,7 @@ export interface ServeOptions {
    *
    * **Note on `'fair-share'`:** fair-share requires a `fairShareKey` to be
    * passed at dispatch time via {@link TaskDispatch.fairShareKey}. `serve()`
-   * does not currently derive that key from `ctx.tenant` automatically — call
+   * does not derive that key automatically — call
    * sites must thread it through each `dispatchTask()` call themselves. When
    * the key is omitted on a dispatch, the registry degrades gracefully to
    * least-loaded for that single call.
@@ -178,7 +178,7 @@ export interface TaskDispatch {
   /** Task priority. Higher values are dequeued first. Agent tasks default to 10. */
   priority?: number;
   /**
-   * Partition key for `'fair-share'` routing — typically a tenant or customer
+   * Partition key for `'fair-share'` routing — typically a customer
    * id. Ignored by other policies. When omitted under `'fair-share'`, the
    * registry degrades gracefully to `'least-loaded'` for that dispatch.
    */

@@ -25,8 +25,6 @@ Creates a new engine instance. All options are optional -- sensible defaults are
 | `checkpointSizeWarningThreshold` | `number`                   | `65_536`              | Byte threshold that triggers a `CheckpointSizeWarningEvent`                    |
 | `maxNestingDepth`                | `number`                   | `10`                  | Maximum allowed nesting depth for child workflows                              |
 | `broadcastEvents`                | `boolean`                  | `false`               | Enable `BroadcastChannel` for cross-worker event coordination                  |
-| `tenantResolver`                 | `TenantResolver`           | `undefined`           | Resolves tenant context from workflow start options for multi-tenant isolation |
-| `quotas`                         | `TenantQuotaOptions`       | `undefined`           | Per-tenant quota configuration for workflow creation rate limiting             |
 | `retention`                      | `RetentionPolicy`          | `undefined`           | Default retention policy for completed/failed/cancelled workflows              |
 | `compression`                    | `CompressionOptions`       | `undefined`           | Enable framed storage payload compression for checkpoints and activity results |
 | `workerExecution`                | `WorkerExecutionOptions`   | `undefined`           | Configuration for offloading workflow execution to Web Workers                 |
@@ -330,8 +328,6 @@ interface EngineOptions {
   checkpointSizeWarningThreshold?: number;
   maxNestingDepth?: number;
   broadcastEvents?: boolean;
-  tenantResolver?: TenantResolver;
-  quotas?: TenantQuotaOptions;
   retention?: RetentionPolicy;
   compression?: CompressionOptions;
   workerExecution?: WorkerExecutionOptions;
@@ -340,7 +336,7 @@ interface EngineOptions {
 }
 ```
 
-See [Configuration](./configuration.md) for defaults. See [types.md](./types.md) for the full field descriptions of multi-tenant and worker options.
+See [Configuration](./configuration.md) for defaults. See [types.md](./types.md) for the full field descriptions of worker options.
 
 ### `StartOptions`
 

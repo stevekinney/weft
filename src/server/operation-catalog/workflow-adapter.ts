@@ -6,7 +6,6 @@ import {
 } from '../../core/engine/errors.ts';
 import { runtimeWorkflowEngine } from '../../core/runtime-workflow-engine.ts';
 import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
-import { QuotaExceededError } from '../../core/tenant-quotas.ts';
 import type { WorkflowDefinition } from '../../core/types.ts';
 import type { AccessPolicy } from '../authorization.ts';
 import type { OperationFault } from '../operation-fault.ts';
@@ -92,9 +91,8 @@ export function catalogWorkflow<Input>(
     outputSchema: StartHandleSchema,
     access: copyAccessPolicy(options.access),
     // The adapter classifies engine errors into Conflict (workflow ID
-    // already exists) and RateLimited (tenant quota exceeded), in
-    // addition to the universal-default fault set.
-    producibleFaults: ['Conflict', 'RateLimited'],
+    // already exists), in addition to the universal-default fault set.
+    producibleFaults: ['Conflict'],
     transports: { ...options.transports },
     unknownKeyPolicy: { ...options.unknownKeyPolicy },
     ...(options.authorize === undefined ? {} : { authorize: options.authorize }),
@@ -127,14 +125,6 @@ export function catalogWorkflow<Input>(
         }
         if (error instanceof StartWorkflowValidationError) {
           throw invalidParamsFault(message);
-        }
-        if (error instanceof QuotaExceededError) {
-          const fault: OperationFault = {
-            code: 'RateLimited',
-            message,
-            data: {},
-          };
-          throw fault;
         }
 
         const fault: OperationFault = {

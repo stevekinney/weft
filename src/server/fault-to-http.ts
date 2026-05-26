@@ -6,9 +6,6 @@
  * fault discriminant verbatim so REST clients can switch on the same names
  * that JSON-RPC clients see in their `data.weftCode`.
  *
- * `Retry-After` is set on `RateLimited` faults that include `retryAfterMs`
- * (truncated to the nearest second per RFC 9110).
- *
  * Pure: no engine, no I/O, no logging. Errors visible to clients are
  * exactly what the fault carries; internal `EngineFailure` detail belongs
  * in server logs, not the response body.
@@ -20,18 +17,6 @@ export function faultToHttpResponse(fault: OperationFault): Response {
   const status = FAULT_CODE_TO_HTTP_STATUS[fault.code];
   const body = JSON.stringify({ error: shapeErrorBody(fault) });
   const headers = new Headers({ 'content-type': 'application/json; charset=utf-8' });
-
-  if (
-    fault.code === 'RateLimited' &&
-    typeof fault.data.retryAfterMs === 'number' &&
-    Number.isFinite(fault.data.retryAfterMs) &&
-    fault.data.retryAfterMs > 0
-  ) {
-    // Math.ceil so clients never retry too early. Guards above reject NaN /
-    // Infinity / negative / zero values that would produce an invalid
-    // delay-seconds header per RFC 9110.
-    headers.set('retry-after', String(Math.ceil(fault.data.retryAfterMs / 1000)));
-  }
 
   return new Response(body, { status, headers });
 }
@@ -50,24 +35,9 @@ function shapeErrorBody(fault: OperationFault): ErrorBody {
   if (fault.code === 'EngineFailure' || fault.code === 'NotImplemented') {
     return base;
   }
-  if (fault.code === 'RateLimited') return shapeRateLimitedBody(base, fault.data);
   if (fault.code === 'Timeout') return shapeTimeoutBody(base, fault.data);
   if (fault.code === 'NotFound') return shapeNotFoundBody(base, fault.data);
   return { ...base, data: fault.data };
-}
-
-function shapeRateLimitedBody(
-  base: ErrorBody,
-  data: Extract<OperationFault, { code: 'RateLimited' }>['data'],
-): ErrorBody {
-  // Only include retryAfterMs in the body when it's a finite positive
-  // number — NaN/Infinity would JSON-serialize to `null` and violate the
-  // typed-as-number contract.
-  const ms = data.retryAfterMs;
-  if (typeof ms === 'number' && Number.isFinite(ms) && ms > 0) {
-    return { ...base, data: { retryAfterMs: ms } };
-  }
-  return base;
 }
 
 function shapeTimeoutBody(

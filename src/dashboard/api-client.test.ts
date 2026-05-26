@@ -177,7 +177,7 @@ describe('ApiClient', () => {
       }
 
       if (url === '/v1/workflows/workflow%20id/attributes') {
-        return Response.json({ tenant: 'acme' });
+        return Response.json({ region: 'west' });
       }
 
       if (url === '/v1/reviews') {
@@ -192,14 +192,6 @@ describe('ApiClient', () => {
               createdAt: 1,
             },
           ],
-        });
-      }
-
-      if (url === '/v1/tenants/acme%2Fwest/quota') {
-        return Response.json({
-          workflowCreationRate: { used: 1, limit: 5, windowMilliseconds: 60_000 },
-          memory: { used: 1024, limit: 4096 },
-          storage: { used: 2048, limit: 8192 },
         });
       }
 
@@ -223,15 +215,10 @@ describe('ApiClient', () => {
     expect(await client.getWorkflowEvents('workflow id')).toEqual([
       { type: 'workflow.started', timestamp: 1, data: { step: 1 } },
     ]);
-    expect(await client.getWorkflowAttributes('workflow id')).toEqual({ tenant: 'acme' });
+    expect(await client.getWorkflowAttributes('workflow id')).toEqual({ region: 'west' });
     expect(await client.listPendingReviews()).toEqual([
       expect.objectContaining({ reviewId: 'review-1' }),
     ]);
-    expect(await client.getTenantQuotaUsage('acme/west')).toEqual(
-      expect.objectContaining({
-        workflowCreationRate: expect.objectContaining({ used: 1 }),
-      }),
-    );
     await client.submitReviewDecision('review/1', 'workflow id', decision);
     expect(await client.checkHealth()).toEqual({ status: 'ok' });
 
@@ -242,7 +229,6 @@ describe('ApiClient', () => {
       '/v1/workflows/workflow%20id/events',
       '/v1/workflows/workflow%20id/attributes',
       '/v1/reviews',
-      '/v1/tenants/acme%2Fwest/quota',
       '/v1/reviews/review%2F1/decision',
       '/v1/health',
     ]);
@@ -251,8 +237,8 @@ describe('ApiClient', () => {
     expect(requests[2]?.init?.method).toBe('POST');
     expect(requests[2]?.init?.headers).toBeDefined();
     expect(requests[2]?.init?.body).toBe(JSON.stringify({ payload: { ok: true } }));
-    expect(requests[7]?.init?.method).toBe('POST');
-    expect(requests[7]?.init?.body).toBe(
+    expect(requests[6]?.init?.method).toBe('POST');
+    expect(requests[6]?.init?.body).toBe(
       JSON.stringify({ ...decision, workflowId: 'workflow id' }),
     );
   });
@@ -447,7 +433,6 @@ describe('ApiClient', () => {
     const schedules = await client.listSchedules({
       status: ['active', 'paused'],
       workflowType: 'echo',
-      tenantId: 'acme',
       limit: 10,
       offset: 20,
     });
@@ -456,7 +441,6 @@ describe('ApiClient', () => {
     expect(requestedUrl).toContain('status=active');
     expect(requestedUrl).toContain('status=paused');
     expect(requestedUrl).toContain('workflowType=echo');
-    expect(requestedUrl).toContain('tenantId=acme');
     expect(requestedUrl).toContain('limit=10');
     expect(requestedUrl).toContain('offset=20');
     expect(schedules.items).toEqual([
@@ -488,7 +472,6 @@ describe('ApiClient', () => {
               filter: body['filter'],
               statuses: ['running'],
               workflowTypes: ['checkout'],
-              tenantIds: ['acme'],
               sampleWorkflowIds: ['wf-1', 'wf-2'],
               sampleLimit: 20,
             },
@@ -514,7 +497,6 @@ describe('ApiClient', () => {
               filter: body['filter'],
               statuses: ['running'],
               workflowTypes: ['checkout'],
-              tenantIds: ['acme'],
               sampleWorkflowIds: ['wf-1', 'wf-2'],
               sampleLimit: 20,
             },
@@ -538,7 +520,6 @@ describe('ApiClient', () => {
               filter: body['filter'],
               statuses: ['running'],
               workflowTypes: ['checkout'],
-              tenantIds: ['acme'],
               sampleWorkflowIds: ['wf-1', 'wf-2'],
               sampleLimit: 20,
             },
@@ -563,7 +544,6 @@ describe('ApiClient', () => {
               filter: body['filter'],
               statuses: ['running'],
               workflowTypes: ['checkout'],
-              tenantIds: ['acme'],
               sampleWorkflowIds: ['wf-1', 'wf-2'],
               sampleLimit: 20,
             },
@@ -587,7 +567,6 @@ describe('ApiClient', () => {
               filter: body['filter'],
               statuses: ['completed'],
               workflowTypes: ['checkout'],
-              tenantIds: [],
               sampleWorkflowIds: ['wf-1', 'wf-2'],
               sampleLimit: 20,
             },
@@ -611,7 +590,6 @@ describe('ApiClient', () => {
               filter: {},
               statuses: ['completed'],
               workflowTypes: ['checkout'],
-              tenantIds: [],
               sampleWorkflowIds: ['wf-1', 'wf-2'],
               sampleLimit: 20,
             },
@@ -635,7 +613,6 @@ describe('ApiClient', () => {
               filter: body['filter'],
               statuses: ['completed'],
               workflowTypes: ['checkout'],
-              tenantIds: [],
               sampleWorkflowIds: ['wf-1', 'wf-2'],
               sampleLimit: 20,
             },
@@ -659,7 +636,6 @@ describe('ApiClient', () => {
               filter: body['filter'],
               statuses: ['completed'],
               workflowTypes: ['checkout'],
-              tenantIds: [],
               sampleWorkflowIds: ['wf-1', 'wf-2'],
               sampleLimit: 20,
             },
@@ -730,7 +706,6 @@ describe('ApiClient', () => {
     );
 
     expect(preview.matched).toBe(2);
-    expect(preview.scope.tenantIds).toEqual(['acme']);
     expect(result.cancelled).toBe(2);
     expect(result.auditEvent?.requestId).toBe('cancel-request');
     expect(signalPreview.action).toBe('signal');
@@ -976,7 +951,6 @@ describe('ApiClient', () => {
     await client.listWorkflows({
       status: ['failed', 'timed-out'],
       idPrefix: 'order-',
-      tenantId: ['acme', 'globex'],
       failureCategory: ['resource', 'application'],
       createdAt: { gte: 1000, lt: 5000 },
       updatedAt: { gt: 2000 },
@@ -987,8 +961,6 @@ describe('ApiClient', () => {
     expect(requestedUrl).toContain('status=failed');
     expect(requestedUrl).toContain('status=timed-out');
     expect(requestedUrl).toContain('id_prefix=order-');
-    expect(requestedUrl).toContain('tenant_id=acme');
-    expect(requestedUrl).toContain('tenant_id=globex');
     expect(requestedUrl).toContain('failure_category=resource');
     expect(requestedUrl).toContain('failure_category=application');
     expect(requestedUrl).toContain('created_at_gte=1000');
@@ -1005,11 +977,10 @@ describe('ApiClient', () => {
     }) as typeof fetch;
 
     const client = new ApiClient();
-    await client.aggregateWorkflows({ tenantId: 'acme' }, 'status', 50);
+    await client.aggregateWorkflows({ status: ['running'] }, 'status', 50);
 
     expect(requestedUrl).toContain('/v1/workflows/aggregate?');
     expect(requestedUrl).toContain('group_by=status');
-    expect(requestedUrl).toContain('tenant_id=acme');
     expect(requestedUrl).toContain('limit=50');
   });
 

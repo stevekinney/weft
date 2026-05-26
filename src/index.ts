@@ -6,8 +6,7 @@
  * {@link Context}; the engine persists a checkpoint at every yield and
  * resumes from the last checkpoint on recovery.
  *
- * For end-to-end usage examples see the {@link Engine} class and the
- * {@link tenantFromInputField} helper.
+ * For end-to-end usage examples see the {@link Engine} class.
  *
  * @module weft
  */
@@ -16,6 +15,13 @@ export { VERSION } from './version.ts';
 // Error base + discriminant
 export { WeftError, isWeftError, isWeftErrorCode } from './core/weft-error.ts';
 export type { WeftErrorCode } from './core/weft-error.ts';
+// Wire fault code + failure-category mapping
+export {
+  FAULT_CODE_TO_FAILURE_CATEGORY,
+  failureCategoryForFaultCode,
+  isFaultCode,
+} from './core/fault-code.ts';
+export type { FaultCode } from './core/fault-code.ts';
 // Core
 export {
   ActivityResolutionError,
@@ -112,7 +118,6 @@ export type {
   ReviewListEntry,
   ReviewListFilter,
   ReviewStatus,
-  ScheduleAccessOptions,
   ScheduleDefinition,
   ScheduleFilter,
   ScheduleOptions,
@@ -130,11 +135,6 @@ export type {
   SignalPayload,
   StartOptions,
   SubmitReviewOptions,
-  TenantQuotaMetricUsage,
-  TenantQuotaOptions,
-  TenantQuotaUsage,
-  TenantWorkflowCreationRateLimit,
-  TenantWorkflowCreationRateUsage,
   UpdateDefinition,
   UpdateMap,
   UpdatePayload,
@@ -275,10 +275,6 @@ export type {
   WorkflowReduceInput,
   WorkflowReduceOptions,
 } from './core/types';
-
-export { tenantFromInputField } from './core/tenant';
-export type { TenantContext, TenantResolver } from './core/tenant';
-export { QuotaExceededError } from './core/tenant-quotas';
 
 export { StepContext, compileStepWorkflow, isAsyncGeneratorFunction } from './core/step-context';
 export type { StepWorkflowContext, StepWorkflowFunction } from './core/types';

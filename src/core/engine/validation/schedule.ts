@@ -3,14 +3,12 @@ import { isRecord } from '../../debug-output.ts';
 import { parseCronExpression } from '../../schedule.ts';
 import { coerceStartWorkflowId } from '../../start-workflow-validation.ts';
 import type {
-  ScheduleAccessOptions,
   ScheduleFilter,
   ScheduleOptions,
   ScheduleOverlapPolicy,
   ScheduleState,
   ScheduleStatus,
 } from '../../types.ts';
-import { isValidDecodedTenant } from '../validation.ts';
 
 export const SCHEDULE_STATUSES = new Set<ScheduleStatus>(['active', 'paused', 'cancelled']);
 export const SCHEDULE_OVERLAP_POLICIES = new Set<ScheduleOverlapPolicy>([
@@ -47,14 +45,6 @@ export function isValidScheduleIdentifier(value: unknown): value is string {
 
 export function coerceScheduleId(scheduleId: string, fieldName: string): string {
   return coerceStartWorkflowId(scheduleId, fieldName);
-}
-
-export function coerceScheduleTenantId(tenantId: string, fieldName: string): string {
-  if (typeof tenantId !== 'string' || tenantId.length === 0) {
-    throw new Error(`${fieldName} must be a non-empty string`);
-  }
-
-  return tenantId;
 }
 
 export function normalizeScheduleOptions(
@@ -99,27 +89,6 @@ export function normalizeScheduleOptions(
   return normalizedOptions;
 }
 
-export function normalizeScheduleAccessOptions(
-  accessOptions: ScheduleAccessOptions | undefined,
-): ScheduleAccessOptions | undefined {
-  if (accessOptions === undefined) {
-    return undefined;
-  }
-
-  if (typeof accessOptions !== 'object' || accessOptions === null) {
-    throw new Error('accessOptions must be an object when provided');
-  }
-
-  const { tenantId } = accessOptions;
-  if (tenantId === undefined) {
-    return {};
-  }
-
-  return {
-    tenantId: coerceScheduleTenantId(tenantId, 'accessOptions.tenantId'),
-  };
-}
-
 function validateScheduleFilterStatus(status: ScheduleFilter['status']): void {
   if (status === undefined) return;
   const statuses = Array.isArray(status) ? status : [status];
@@ -135,11 +104,6 @@ function validateScheduleFilterWorkflowType(workflowType: ScheduleFilter['workfl
   if (typeof workflowType !== 'string' || workflowType.length === 0) {
     throw new Error('filter.workflowType must be a non-empty string when provided');
   }
-}
-
-function validateScheduleFilterTenantId(tenantId: ScheduleFilter['tenantId']): void {
-  if (tenantId === undefined) return;
-  coerceScheduleTenantId(tenantId, 'filter.tenantId');
 }
 
 function validateScheduleFilterBound(
@@ -165,7 +129,6 @@ export function normalizeScheduleFilter(
 
   validateScheduleFilterStatus(filter.status);
   validateScheduleFilterWorkflowType(filter.workflowType);
-  validateScheduleFilterTenantId(filter.tenantId);
   validateScheduleFilterBound(filter.limit, 'limit');
   validateScheduleFilterBound(filter.offset, 'offset');
 
@@ -232,7 +195,6 @@ type ScheduleRuntimeFields = Pick<
   | 'nextFireAt'
   | 'currentWorkflowId'
   | 'queuedRuns'
-  | 'tenant'
 >;
 
 function decodeScheduleBackfill(
@@ -312,18 +274,6 @@ function decodeScheduleQueuedRuns(
   return queuedRuns;
 }
 
-function decodeScheduleTenant(
-  decoded: Record<string, unknown>,
-  scheduleId: string,
-): { ok: boolean; value?: ScheduleState['tenant'] } {
-  const tenant = decoded['tenant'];
-  if (!isValidDecodedTenant(tenant)) {
-    rejectInvalidScheduleRecord(scheduleId, 'with invalid tenant');
-    return { ok: false };
-  }
-  return { ok: true, value: tenant };
-}
-
 export function decodeScheduleRuntimeFields(
   decoded: Record<string, unknown>,
   scheduleId: string,
@@ -343,16 +293,14 @@ export function decodeScheduleRuntimeFields(
   const queuedRuns = decodeScheduleQueuedRuns(decoded, scheduleId);
   if (queuedRuns === null) return null;
 
-  const tenant = decodeScheduleTenant(decoded, scheduleId);
-  if (!tenant.ok) return null;
-
+  // Legacy schedule records may carry a `tenant` field; it is ignored
+  // (tolerate-and-drop) so old persisted schedules still decode.
   return {
     backfill,
     ...timestamps,
     nextFireAt: nextFireAt.value,
     ...(currentWorkflow.value !== undefined && { currentWorkflowId: currentWorkflow.value }),
     queuedRuns,
-    ...(tenant.value !== undefined && { tenant: tenant.value }),
   };
 }
 

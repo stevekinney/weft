@@ -74,10 +74,6 @@ import {
   getTaskDiagnosticsRestBinding,
 } from './operations/get-task-diagnostics.ts';
 import {
-  getTenantQuotaOperation,
-  getTenantQuotaRestBinding,
-} from './operations/get-tenant-quota.ts';
-import {
   getUpdateResultOperation,
   getUpdateResultRestBinding,
 } from './operations/get-update-result.ts';
@@ -270,7 +266,6 @@ export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   // Track 8 operation-backed routes
   listSchedulesRestBinding,
   getScheduleRestBinding,
-  getTenantQuotaRestBinding,
   replayWorkflowRestBinding,
   storageGetRestBinding,
   storagePutRestBinding,
@@ -439,7 +434,6 @@ export function createLiveOperationRegistry(
     // Track 8 operation-backed routes
     listSchedulesOperation,
     getScheduleOperation,
-    getTenantQuotaOperation,
     replayWorkflowOperation,
     storageGetOperation,
     storagePutOperation,

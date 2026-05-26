@@ -9,3 +9,11 @@ plugins = ["bun-plugin-svelte"]
 
 [test]
 coveragePathIgnorePatterns = ["scripts/check-coverage.ts"]
+# Nested git worktrees live inside the repo tree (Scrumlord task worktrees under
+# `tmp/worktrees/`, agent worktrees under `.claude/worktrees/`), each holding a
+# full `src/` tree on an unrelated branch. `bun test` discovers tests tree-wide
+# even when given explicit paths (positional paths are prefix filters), so
+# without this it runs thousands of stale tests from those worktrees. Ignoring
+# them here fixes every `bun test` invocation — the pre-commit hook, `--watch`,
+# and bare `bun test` runs from the project root alike.
+pathIgnorePatterns = ["**/tmp/worktrees/**", "**/.claude/worktrees/**"]

@@ -3,14 +3,12 @@ import { z } from 'zod';
 import type { Engine } from '../../core/engine.ts';
 import { decodeBase64ToBytes, encodeBytesToBase64 } from '../../storage/byte-encoding.ts';
 import {
-  encodeStorageKeyComponent,
   storageConditionalBatch,
   type BatchOperation,
   type ConditionalBatchCondition,
   type ScanOptions,
   type Storage,
 } from '../../storage/interface.ts';
-import { scopedStorage } from '../../storage/scoped-storage.ts';
 import type { AccessPolicy } from '../authorization.ts';
 import { raiseFault } from '../operation-catalog.ts';
 import { defineOperation } from '../operation-registry.ts';
@@ -113,19 +111,14 @@ function resolveAuthorizedStorage(
     });
   }
 
-  const tenantId = principal.tenantId?.trim();
-  if (tenantId !== undefined && tenantId.length > 0) {
-    return scopedStorage(engine.storage, `tenant:${encodeStorageKeyComponent(tenantId)}`);
-  }
-
   if (principal.hasScope('storage:admin')) {
     return engine.storage;
   }
 
   raiseFault(operation, {
     code: 'Forbidden',
-    message: 'Raw storage access requires storage:admin or a tenant-scoped principal.',
-    data: { reason: 'Raw storage access requires storage:admin or a tenant-scoped principal.' },
+    message: 'Raw storage access requires storage:admin.',
+    data: { reason: 'Raw storage access requires storage:admin.' },
   });
 }
 

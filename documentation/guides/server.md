@@ -70,6 +70,11 @@ interface WeftServer extends AsyncDisposable {
 
 `WeftServer` implements `AsyncDisposable`, so `await using` is required for correct async cleanup.
 
+Stopping the server also disposes the in-memory task queue. Pending task
+expiration timers are cleared, parked long-poll waiters settle with no task,
+and queued state is dropped without invoking completion callbacks against a
+disposed engine.
+
 ## REST API endpoints
 
 The server exposes a versioned REST API under `/v1/`. All endpoints return JSON by default, with content negotiation for MessagePack (`Accept: application/msgpack`).
@@ -108,15 +113,15 @@ The `id` and `executionTimeout` fields are optional. If `id` is omitted, one is 
 **List workflows:**
 
 ```
-GET /v1/workflows?status=running&type=order&tenant_id=acme&limit=50&offset=0
+GET /v1/workflows?status=running&type=order&limit=50&offset=0
 → { "items": [...], "total": 142, "offset": 0, "limit": 50 }
 ```
 
-Filter by `status`, `type`, `id_prefix`, `tenant_id`, `failure_category`, created/updated/deadline ranges, or [search attributes](./search-attributes.md) using `attribute.<name>` query parameters. Repeat `status`, `tenant_id`, and `failure_category` for OR filters. Add `include=failureCategory` when the response needs `WorkflowSummary.failureCategory`; the default list path avoids the extra projection work.
+Filter by `status`, `type`, `id_prefix`, `failure_category`, created/updated/deadline ranges, or [search attributes](./search-attributes.md) using `attribute.<name>` query parameters. Repeat `status` and `failure_category` for OR filters. Add `include=failureCategory` when the response needs `WorkflowSummary.failureCategory`; the default list path avoids the extra projection work.
 
-**Aggregate workflows:** `GET /v1/workflows/aggregate?group_by=status&tenant_id=acme` returns grouped counts such as `{ "total": 42, "groups": [{ "key": "running", "count": 24 }], "truncated": false }`.
+**Aggregate workflows:** `GET /v1/workflows/aggregate?group_by=status` returns grouped counts such as `{ "total": 42, "groups": [{ "key": "running", "count": 24 }], "truncated": false }`.
 
-Use aggregates for dashboard counts and tenant suggestions. Supported groupings are `status`, `type`, `tenant`, `failureCategory`, and `attribute:<name>`.
+Use aggregates for dashboard counts. Supported groupings are `status`, `type`, `failureCategory`, and `attribute:<name>`.
 
 **Get workflow state:**
 
@@ -206,6 +211,10 @@ Three WebSocket routes are available:
 
 - `/v1/workflows/:id/watch` --- observe workflow state changes in real time
 - `/v1/tasks/:queue/stream` --- [remote worker](./remote-workers.md) task dispatch
+
+HTTP long-poll task requests use the request's `AbortSignal`. If the client
+disconnects before or during the poll, the waiter settles promptly and does
+not claim a pending task for a caller that can no longer complete it.
 
 ## The `handleRequest()` function
 

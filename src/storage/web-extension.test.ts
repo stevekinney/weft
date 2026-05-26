@@ -522,7 +522,7 @@ describe('WebExtensionStorage', () => {
     });
     try {
       const storage = new WebExtensionStorage();
-      const scoped = storage.scoped('tenant:');
+      const scoped = storage.scoped('scope:');
       if (scoped.has === undefined || scoped.count === undefined || scoped.keys === undefined) {
         throw new Error('Scoped storage is missing derived operations.');
       }
@@ -530,7 +530,7 @@ describe('WebExtensionStorage', () => {
       await storage.put('plain', encode('no'));
 
       expect(await scoped.has('visible')).toBe(true);
-      expect(await storage.has('tenant:visible')).toBe(true);
+      expect(await storage.has('scope:visible')).toBe(true);
       expect(await scoped.count('')).toBe(1);
       expect(await collect(scoped.keys(''))).toEqual(['visible']);
 

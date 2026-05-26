@@ -57,8 +57,7 @@ export type EngineCreateOptions<
         recover: true;
         /**
          * Forwarded to `Engine.recoverAll`. Only use this during rolling
-         * deploys, explicit storage migrations, or intentional tenant
-         * partitioning.
+         * deploys or explicit storage migrations.
          */
         acknowledgeUnknownWorkflowTypes?: boolean;
       }

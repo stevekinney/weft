@@ -22,7 +22,6 @@ import type {
   SignalDefinition,
   StartOptions,
   SubmitReviewOptions,
-  TenantQuotaUsage,
   TypedListFilter,
   UpdateDefinition,
   WorkflowEvent,
@@ -36,7 +35,6 @@ import {
   cancelAllWorkflowRequests,
   deleteAllWorkflowRequests,
   forkWorkflowRequest,
-  getQuotaUsageRequest,
   getRetentionOverviewRequest,
   getStreamChunkRequests,
   getUpdateResultRequest,
@@ -384,10 +382,6 @@ export class HttpClient implements WeftClient {
 
   async submitReview(reviewId: string, options: SubmitReviewOptions): Promise<void> {
     return submitReviewRequest(this, reviewId, options);
-  }
-
-  async getQuotaUsage(tenantId: string): Promise<TenantQuotaUsage> {
-    return getQuotaUsageRequest(this, tenantId);
   }
 
   async getStreamChunks(

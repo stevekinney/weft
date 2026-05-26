@@ -9,7 +9,6 @@ import {
   EngineCreateNameMismatchError,
   HttpClientError,
   PersistedDataIncompatibleError,
-  QuotaExceededError,
   ReviewTimeoutError,
   UpdateTimeoutError,
   VersionMismatchError,
@@ -52,13 +51,6 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   HttpClientError: () => new HttpClientError(500, 'boom'),
   WorkerProtocolIncompatibleError: () =>
     new WorkerProtocolIncompatibleError({ expected: 2, received: 1 }),
-  QuotaExceededError: () =>
-    new QuotaExceededError({
-      tenantId: 'tenant-1',
-      quota: 'maxConcurrentWorkflows',
-      currentUsage: 2,
-      limit: 1,
-    }),
   UpdateTimeoutError: () => new UpdateTimeoutError('update-1', 5_000),
   WorkflowTerminalError: () => new WorkflowTerminalError('wf-1', 'completed'),
   WorkflowBuilderError: () => new WorkflowBuilderError('duplicate activities() call'),

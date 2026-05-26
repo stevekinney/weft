@@ -42,13 +42,13 @@ describe('buildErrorResponses', () => {
   });
 
   it('includes operation-specific statuses in addition to universal defaults', () => {
-    expect(
-      Object.keys(buildErrorResponses(operation(['Conflict', 'RateLimited']))).toSorted(),
-    ).toEqual(['400', '401', '403', '409', '429', '500']);
+    expect(Object.keys(buildErrorResponses(operation(['Conflict', 'Timeout']))).toSorted()).toEqual(
+      ['400', '401', '403', '408', '409', '500'],
+    );
   });
 
   it('references the shared Error component for every response schema', () => {
-    const responses = buildErrorResponses(operation(['Conflict', 'RateLimited']));
+    const responses = buildErrorResponses(operation(['Conflict', 'Timeout']));
 
     for (const response of Object.values(responses)) {
       expect(responseSchema(response)).toEqual({ $ref: '#/components/schemas/Error' });

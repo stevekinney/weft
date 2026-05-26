@@ -28,13 +28,12 @@ export function createScheduleCallbacks<TWorkflows extends object, TActivities e
   engine: Engine<TWorkflows, TActivities>,
 ): ScheduleCallbacks {
   return {
-    startWorkflow: async (type, input, options, tenantResolution, additionalStartOperations) => {
+    startWorkflow: async (type, input, options, additionalStartOperations) => {
       await startWorkflow(
         getInternals(engine),
         type,
         input,
         options,
-        tenantResolution,
         additionalStartOperations,
         createLifecycleCallbacks(engine),
       );

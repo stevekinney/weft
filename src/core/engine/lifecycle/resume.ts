@@ -90,7 +90,6 @@ function relaunchInlineWorkflowAfterResume(
     ...(latestState.executionDeadline !== undefined && {
       deadline: latestState.executionDeadline,
     }),
-    ...(latestState.tenant !== undefined && { tenant: latestState.tenant }),
   });
 
   if (internals.options.development) {
@@ -123,7 +122,6 @@ function relaunchWorkerWorkflowAfterResume(
       workflowStartHeaders.size > 0 && {
         headers: [...workflowStartHeaders],
       }),
-    ...(latestState.tenant !== undefined && { tenant: latestState.tenant }),
   });
 }
 

@@ -655,11 +655,11 @@ Restate competes on architecture and latency. Virtual Objects provide session-sc
 
 **Where Restate leads:** Virtual Objects provide built-in session affinity with co-located state—no sticky routing configuration needed. User code suspension during async waits (similar to Inngest) allows processes to be shut down during LLM calls.
 
-**Where Weft leads:** Checkpoint granularity and state model. Both engines leave agent-level concerns (budget enforcement, context window management, model routing) to userland; Weft's yield-level checkpointing means an agent loop built on `ctx.run()` recovers at the individual tool-call boundary rather than the journal-replay boundary. Weft's `ctx.state` ladder keeps session state checkpoint-local while execution, workflow, and tenant scopes use durable storage-backed state.
+**Where Weft leads:** Checkpoint granularity and state model. Both engines leave agent-level concerns (budget enforcement, context window management, model routing) to userland; Weft's yield-level checkpointing means an agent loop built on `ctx.run()` recovers at the individual tool-call boundary rather than the journal-replay boundary. Weft's `ctx.state` ladder keeps session state checkpoint-local while execution and workflow scopes use durable storage-backed state.
 
 ### Hatchet
 
-Hatchet positions as simpler Temporal with AI-first design. Native result streaming, FIFO/LIFO/Round Robin/Priority queue policies for multi-tenant fairness, built-in human-in-the-loop eventing, and Postgres-only self-hosting.
+Hatchet positions as simpler Temporal with AI-first design. Native result streaming, FIFO/LIFO/Round Robin/Priority queue policies for fair scheduling, built-in human-in-the-loop eventing, and Postgres-only self-hosting.
 
 **Where Hatchet leads:** Queue scheduling policies (priority, FIFO, round-robin) are more sophisticated than Weft's current least-loaded routing.
 

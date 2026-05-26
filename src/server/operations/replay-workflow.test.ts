@@ -104,7 +104,7 @@ describe('weft.workflows.replay authorization parity', () => {
     const engine = createReplayEngine();
     engines.push(engine);
     const workflowId = await createReplayWorkflow(engine);
-    const noScopeToken = await issueJwt(['quota:read']);
+    const noScopeToken = await issueJwt(['schedules:read']);
     const readToken = await issueJwt(['workflows:read']);
 
     const anonymousServer = serve({ engine, port: 0 });
@@ -210,7 +210,7 @@ describe('weft.workflows.replay authorization parity', () => {
       authenticatedEngine,
       'wf-replay-ws-authenticated',
     );
-    const noScopeToken = await issueJwt(['quota:read']);
+    const noScopeToken = await issueJwt(['schedules:read']);
     const readToken = await issueJwt(['workflows:read']);
     const authenticatedServer = serve({
       engine: authenticatedEngine,

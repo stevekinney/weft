@@ -28,11 +28,11 @@ describe('scopedStorage', () => {
       throw new Error('MemoryStorage should expose storage.scoped(prefix).');
     }
 
-    const scoped = storage.scoped('tenant');
+    const scoped = storage.scoped('scope');
 
     await scoped.put('profile', encode('alice'));
 
-    expect(decode((await storage.get('tenant:profile'))!)).toBe('alice');
+    expect(decode((await storage.get('scope:profile'))!)).toBe('alice');
     expect(decode((await scoped.get('profile'))!)).toBe('alice');
 
     const scannedEntries = await collect(scoped.scan(''));
@@ -63,11 +63,11 @@ describe('scopedStorage', () => {
       throw new Error('MemoryStorage should expose storage.scoped(prefix).');
     }
 
-    const scoped = storage.scoped('tenant');
+    const scoped = storage.scoped('scope');
 
     await storage.batch([
-      { type: 'put', key: 'tenant:item:1', value: encode('1') },
-      { type: 'put', key: 'tenant:item:2', value: encode('2') },
+      { type: 'put', key: 'scope:item:1', value: encode('1') },
+      { type: 'put', key: 'scope:item:2', value: encode('2') },
       { type: 'put', key: 'other:item:3', value: encode('3') },
     ]);
 
@@ -88,14 +88,14 @@ describe('scopedStorage', () => {
     }
 
     await writeEntries(storage, [
-      { type: 'put', key: 'tenant:item:1', value: encode('1') },
-      { type: 'put', key: 'tenant:item:2', value: encode('2') },
-      { type: 'put', key: 'tenant:item:3', value: encode('3') },
-      { type: 'put', key: 'tenant:item:4', value: encode('4') },
+      { type: 'put', key: 'scope:item:1', value: encode('1') },
+      { type: 'put', key: 'scope:item:2', value: encode('2') },
+      { type: 'put', key: 'scope:item:3', value: encode('3') },
+      { type: 'put', key: 'scope:item:4', value: encode('4') },
       { type: 'put', key: 'other:item:3', value: encode('outside') },
     ]);
 
-    const scoped = storage.scoped('tenant');
+    const scoped = storage.scoped('scope');
     if (!scoped.keys) {
       throw new Error('Scoped storage should expose keys(prefix, options?).');
     }
@@ -110,11 +110,11 @@ describe('scopedStorage', () => {
 
   it('scopedStorage(storage, prefix) falls back to core-five storage implementations', async () => {
     const storage = createCoreStorageAdapter();
-    const scoped = scopedStorage(storage, 'tenant');
+    const scoped = scopedStorage(storage, 'scope');
 
     await writeEntries(storage, [
-      { type: 'put', key: 'tenant:item:1', value: encode('1') },
-      { type: 'put', key: 'tenant:item:2', value: encode('2') },
+      { type: 'put', key: 'scope:item:1', value: encode('1') },
+      { type: 'put', key: 'scope:item:2', value: encode('2') },
       { type: 'put', key: 'other:item:3', value: encode('3') },
     ]);
 
@@ -127,20 +127,20 @@ describe('scopedStorage', () => {
 
   it('scopedStorage(storage, prefix) forwards put, delete, batch, count, and dispose for core adapters', async () => {
     const storage = createCoreStorageAdapter();
-    const scoped = scopedStorage(storage, 'tenant');
+    const scoped = scopedStorage(storage, 'scope');
 
     await scoped.put('single', encode('one'));
-    expect(decode((await storage.get('tenant:single'))!)).toBe('one');
+    expect(decode((await storage.get('scope:single'))!)).toBe('one');
 
     await scoped.delete('single');
-    expect(await storage.get('tenant:single')).toBeNull();
+    expect(await storage.get('scope:single')).toBeNull();
 
     await scoped.batch([
       { type: 'put', key: 'batch:a', value: encode('a') },
       { type: 'delete', key: 'batch:missing' },
     ]);
 
-    expect(await storage.get('tenant:batch:a')).toEqual(encode('a'));
+    expect(await storage.get('scope:batch:a')).toEqual(encode('a'));
     expect(await scoped.count('batch:')).toBe(1);
 
     expect(() => scoped[Symbol.dispose]()).not.toThrow();
@@ -148,18 +148,18 @@ describe('scopedStorage', () => {
 
   it('forwards delete, batch key rewriting, and dispose through a full adapter', async () => {
     const adapter = createFullStorageAdapter();
-    const scoped = scopedStorage(adapter.storage, 'tenant');
+    const scoped = scopedStorage(adapter.storage, 'scope');
 
     await scoped.batch([
       { type: 'put', key: 'item:1', value: encode('1') },
       { type: 'put', key: 'item:2', value: encode('2') },
     ]);
 
-    expect(await adapter.inner.get('tenant:item:1')).toEqual(encode('1'));
-    expect(await adapter.inner.get('tenant:item:2')).toEqual(encode('2'));
+    expect(await adapter.inner.get('scope:item:1')).toEqual(encode('1'));
+    expect(await adapter.inner.get('scope:item:2')).toEqual(encode('2'));
 
     await scoped.delete('item:1');
-    expect(await adapter.inner.get('tenant:item:1')).toBeNull();
+    expect(await adapter.inner.get('scope:item:1')).toBeNull();
 
     scoped[Symbol.dispose]();
     expect(adapter.wasDisposed()).toBe(true);

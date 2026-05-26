@@ -15,8 +15,7 @@
  * The same `now` snapshot is shared with the worker registry to keep
  * per-request data internally consistent.
  *
- * Access is `system:read`. The `TaskQueue` is server-wide infrastructure
- * and is never tenant-partitioned.
+ * Access is `system:read`. The `TaskQueue` is server-wide infrastructure.
  *
  * @module server/operations/list-task-queues
  */

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { Engine } from '../core/engine.ts';
 import { WorkflowCompletedEvent, WorkflowFailedEvent } from '../core/events.ts';
-import { tenantFromInputField } from '../core/tenant.ts';
 import type { ScheduleSummary, WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
 import { MemoryStorage } from '../storage/memory.ts';
@@ -36,12 +35,6 @@ const failingWorkflow = workflow({ name: 'failing' }).execute(async function* (
 function createTestEngine(): Engine {
   const engine = new Engine({
     storage: new MemoryStorage(),
-    tenantResolver: tenantFromInputField('tenantId'),
-    quotas: {
-      maxConcurrentWorkflows: 5,
-      maxStorageBytes: 1_000_000,
-      maxWorkflowCreationRate: { count: 10, window: '1m' },
-    },
   });
   engine.register(echoWorkflow);
   engine.register(clientContractEchoWorkflow);
@@ -118,7 +111,6 @@ describe('LocalClient', () => {
     expect(client.replayTo).toBeFunction();
     expect(client.listReviews).toBeFunction();
     expect(client.submitReview).toBeFunction();
-    expect(client.getQuotaUsage).toBeFunction();
     expect(client.getStreamChunks).toBeFunction();
     expect(client.fork).toBeFunction();
     expect(client.getRetentionOverview).toBeFunction();
@@ -340,20 +332,6 @@ describe('LocalClient', () => {
     it('returns null for an unknown update', async () => {
       const result = await client.getUpdateResult('nonexistent');
       expect(result).toBeNull();
-    });
-  });
-
-  describe('getQuotaUsage', () => {
-    it('returns tenant quota usage from the local engine surface', async () => {
-      const handle = await client.start('echo', { tenantId: 'acme', payload: 'quota-local' });
-      await handle.result();
-
-      const usage = await client.getQuotaUsage('acme');
-      expect(usage.tenantId).toBe('acme');
-      expect(usage.storageBytes.used).toBeGreaterThan(0);
-      expect(usage.activeWorkflows.limit).toBe(5);
-      expect(usage.workflowCreationRate.limit).toBe(10);
-      expect(usage.workflowCreationRate.used).toBeGreaterThanOrEqual(1);
     });
   });
 

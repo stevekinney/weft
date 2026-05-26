@@ -75,7 +75,7 @@ If the activity function throws, the result message carries `"status": "failed"`
 
 ## Activity interceptors
 
-You want to trace every remote activity with OpenTelemetry, log timing for the on-call dashboard, or validate that the headers coming across the wire include a tenant ID before anything touches your business logic. Sprinkling that code into every activity function is exactly the kind of duplication interceptors exist to solve.
+You want to trace every remote activity with OpenTelemetry, log timing for the on-call dashboard, or validate that the headers coming across the wire carry the metadata you expect before anything touches your business logic. Sprinkling that code into every activity function is exactly the kind of duplication interceptors exist to solve.
 
 Pass an array of `ActivityInterceptor` objects to `RemoteWorker`, and they wrap every task execution on this worker. The chain runs _after_ the task arrives off the WebSocket but _before_ your activity function sees the input, which means interceptors can read propagated headers, transform inputs, observe failures, and record timing without your activities knowing anything about them.
 
@@ -167,7 +167,7 @@ The registry supports three routing policies, configured via `serve({ routingPol
 
 - **`'least-loaded'`** (default) -- picks the worker with the lowest in-flight task count.
 - **`'round-robin'`** -- rotates through workers in registration order.
-- **`'fair-share'`** -- picks the worker with the fewest in-flight tasks for a given partition key (`fairShareKey`). Useful for tenant isolation: tasks from the same tenant go to the same worker when capacity allows, preventing one tenant's burst from starving others.
+- **`'fair-share'`** -- picks the worker with the fewest in-flight tasks for a given partition key (`fairShareKey`). Useful for workload isolation: tasks sharing a partition key go to the same worker when capacity allows, preventing one partition's burst from starving others.
 
 ```typescript
 interface RoutingOptions {

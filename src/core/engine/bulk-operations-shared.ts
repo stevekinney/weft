@@ -37,7 +37,6 @@ export type BulkWorkflowSnapshot = {
   type: string;
   status: WorkflowStatus;
   updatedAt: number;
-  tenantId?: string;
 };
 
 export type BulkOperationPreparation = {
@@ -140,11 +139,6 @@ function summarizeBulkOperationScope(
     filter,
     statuses: uniqueSorted(snapshots.map((snapshot) => snapshot.status)),
     workflowTypes: uniqueSorted(snapshots.map((snapshot) => snapshot.type)),
-    tenantIds: uniqueSorted(
-      snapshots
-        .map((snapshot) => snapshot.tenantId)
-        .filter((tenantId): tenantId is string => tenantId !== undefined),
-    ),
     sampleWorkflowIds,
     sampleLimit: BULK_OPERATION_SAMPLE_LIMIT,
   };
@@ -348,7 +342,6 @@ export function workflowStateToBulkSnapshot(state: WorkflowState): BulkWorkflowS
     type: state.type,
     status: state.status,
     updatedAt: state.updatedAt,
-    ...(state.tenant?.id === undefined ? {} : { tenantId: state.tenant.id }),
   };
 }
 

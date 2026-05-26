@@ -75,7 +75,7 @@ The slot has guardrails:
 - A workflow can store up to 256 session keys.
 - Total serialized session state for one workflow is capped at 32 KB.
 
-If you hit either size limit, use a different durability mechanism. `ctx.run()` is the right tool for activity results. Shared cross-workflow state belongs in [`ctx.state.execution`, `ctx.state.workflow`, or `ctx.state.tenant`](./state.md).
+If you hit either size limit, use a different durability mechanism. `ctx.run()` is the right tool for activity results. Shared cross-workflow state belongs in [`ctx.state.execution` or `ctx.state.workflow`](./state.md).
 
 ## Values Are Cloned
 

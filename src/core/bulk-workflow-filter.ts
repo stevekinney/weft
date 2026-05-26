@@ -5,7 +5,7 @@ import { normalizeWorkflowTags } from './workflow-tags.ts';
 const ID_PREFIX_MIN_LENGTH = 3;
 
 export const BULK_WORKFLOW_FILTER_ERROR_MESSAGE =
-  'Field "filter" must include at least one of status, type, tags, attributes, tenantId, idPrefix (≥3 chars), or failureCategory paired with status';
+  'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status';
 
 /**
  * Discriminant for the closed set of `ListFilter` dimensions that, on
@@ -13,7 +13,7 @@ export const BULK_WORKFLOW_FILTER_ERROR_MESSAGE =
  * and the three time-range fields are intentionally absent — they require
  * pairing with one of these scopes.
  */
-type BulkFilterDimension = 'status' | 'type' | 'tags' | 'attributes' | 'tenantId' | 'idPrefix';
+type BulkFilterDimension = 'status' | 'type' | 'tags' | 'attributes' | 'idPrefix';
 
 type BulkFilterDimensionCheck = (filter: ListFilter) => boolean;
 
@@ -38,14 +38,6 @@ function hasScopedAttributesFilter(filter: ListFilter): boolean {
   );
 }
 
-function hasScopedTenantFilter(filter: ListFilter): boolean {
-  if (filter.tenantId === undefined) return false;
-  if (Array.isArray(filter.tenantId)) {
-    return filter.tenantId.some((tenantId) => tenantId.trim().length > 0);
-  }
-  return filter.tenantId.trim().length > 0;
-}
-
 function hasScopedIdPrefix(filter: ListFilter): boolean {
   return filter.idPrefix !== undefined && filter.idPrefix.length >= ID_PREFIX_MIN_LENGTH;
 }
@@ -68,7 +60,6 @@ const BULK_FILTER_DIMENSION_CHECKS = {
   type: hasScopedTypeFilter,
   tags: hasScopedTagsFilter,
   attributes: hasScopedAttributesFilter,
-  tenantId: hasScopedTenantFilter,
   idPrefix: hasScopedIdPrefix,
 } satisfies Record<BulkFilterDimension, BulkFilterDimensionCheck>;
 
@@ -81,7 +72,6 @@ const BULK_FILTER_DIMENSION_CHECKS = {
  * - `type` (non-empty after trim).
  * - `tags` (at least one tag after normalization).
  * - `attributes` (at least one attribute predicate with a non-empty key).
- * - `tenantId` (non-empty string or non-empty array with at least one non-empty value).
  * - `idPrefix` (length ≥ 3 — short prefixes match too much to be a safe scope).
  * - `failureCategory` is **not** a valid scope on its own — it must be
  *   combined with a non-empty status filter. The engine doesn't enforce

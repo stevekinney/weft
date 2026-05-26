@@ -21,7 +21,6 @@ export interface WorkflowListFilters {
   createdAt?: TimeRange;
   updatedAt?: TimeRange;
   executionDeadline?: TimeRange;
-  tenantId?: string[];
   failureCategory?: FailureCategory[];
 }
 
@@ -55,9 +54,6 @@ export function buildWorkflowListFilter(
 
   const idPrefix = filters.idPrefix;
   if (idPrefix !== undefined && idPrefix.length > 0) listFilter.idPrefix = idPrefix;
-
-  const tenantId = singleOrArray(filters.tenantId);
-  if (tenantId !== undefined) listFilter.tenantId = tenantId;
 
   const failureCategory = singleOrArray(filters.failureCategory);
   if (failureCategory !== undefined) listFilter.failureCategory = failureCategory;
@@ -118,7 +114,7 @@ export async function loadWorkflowListData(
 /**
  * Call the aggregate endpoint with the same filter shape used by the
  * list view (sans pagination). The dashboard uses this to populate the
- * status-counts panel and the tenant-suggestion list.
+ * status-counts panel.
  */
 export async function loadWorkflowAggregate(
   apiClient: Pick<ApiClient, 'aggregateWorkflows'>,

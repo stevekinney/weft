@@ -413,7 +413,6 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
     const forwardedPrincipal = principalFromApiKey({
       subject: 'forwarded-subject',
       scopes: ['schedules:write'],
-      tenantId: 'tenant-42',
     });
 
     const request = new Request(`http://localhost/v1/test/principalspy/${handle.id}`, {
@@ -425,21 +424,21 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
       authContext: { method: 'api-key', principal: forwardedPrincipal },
     });
     expect(response.status).toBe(200);
-    // The sentinel tenantId proves this principal is the one we
+    // The sentinel subject proves this principal is the one we
     // forwarded, not a rebuilt one that would have defaulted to
-    // `{ subject: 'api-key-caller', scopes: [] }` with no tenant.
+    // `{ subject: 'api-key-caller', scopes: [] }`.
     // `toBe` guarantees identity (same object reference): the pipeline
     // must use the forwarded principal verbatim, not reconstruct it.
     expect(captured.principal).toBe(forwardedPrincipal);
     expect(captured.principal?.method).toBe('api-key');
-    // Narrow to AuthenticatedPrincipal before reading tenantId — the
-    // Principal union includes UnauthenticatedPrincipal which has no
-    // tenantId field. The `.toBe(forwardedPrincipal)` above already
-    // proves the object is the authenticated forwarded principal.
+    // Narrow to AuthenticatedPrincipal before reading the subject — the
+    // Principal union includes UnauthenticatedPrincipal. The
+    // `.toBe(forwardedPrincipal)` above already proves the object is the
+    // authenticated forwarded principal.
     if (captured.principal === undefined || captured.principal.method === 'unauthenticated') {
       throw new Error('expected forwarded authenticated principal');
     }
-    expect(captured.principal.tenantId).toBe('tenant-42');
+    expect(captured.principal.subject).toBe('forwarded-subject');
   });
 
   it('mtls authContext → principalFromMutualTls (method "mtls")', async () => {

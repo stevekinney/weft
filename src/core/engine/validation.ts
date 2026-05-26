@@ -91,33 +91,6 @@ export function normalizeBulkFilterNumber(
   return Math.floor(value);
 }
 
-/**
- * Type predicate that validates a decoded `tenant` field is shaped like a
- * {@link import('../tenant.ts').TenantContext}. Returns true only when `tenant`
- * is `undefined`, or an object with a non-empty string `id` and (when present)
- * an `attributes` object. Defensive because `state.tenant` is fed directly
- * surfaced to workflow code as `ctx.tenant`; a corrupt or tampered storage
- * record could otherwise inject a forged tenant identity into security
- * decisions.
- *
- * `null` is rejected intentionally — the canonical "no tenant" value is
- * `undefined`. A stored `null` indicates corruption.
- */
-export function isValidDecodedTenant(
-  value: unknown,
-): value is import('../tenant.ts').TenantContext | undefined {
-  if (value === undefined) return true;
-  if (value === null || typeof value !== 'object') return false;
-  const record = value as Record<string, unknown>;
-  const id = record['id'];
-  if (typeof id !== 'string' || id.length === 0) return false;
-  const attributes = record['attributes'];
-  if (attributes !== undefined && (attributes === null || typeof attributes !== 'object')) {
-    return false;
-  }
-  return true;
-}
-
 export function isValidDecodedTags(value: unknown): value is string[] | undefined {
   return value === undefined || isWorkflowTagArray(value);
 }
@@ -125,19 +98,11 @@ export function isValidDecodedTags(value: unknown): value is string[] | undefine
 export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
   // bytes were written by encode(WorkflowState) — shape is guaranteed by our own storage
   const state = decode(bytes) as WorkflowState;
-  // Defensive check on the security-relevant tenant field. Other fields are
-  // trusted by construction, but `tenant` feeds directly into workflow decision
-  // functions so we refuse to propagate a forged identity. On invalid shape we
-  // log a warning and fall back to `undefined` (the safe default) rather than
-  // throwing — refusing to decode would break recovery for unrelated workflows
-  // sharing the same storage backend.
-  if (!isValidDecodedTenant(state.tenant)) {
-    console.warn(
-      `[weft] Decoded workflow state for "${String(state.id)}" has an invalid tenant field; ` +
-        `falling back to undefined tenant. This usually indicates corruption or tampering of ` +
-        `the storage record.`,
-    );
-    delete state.tenant;
+  // Legacy records may carry a `tenant` field from before multi-tenancy was
+  // removed. It is no longer part of WorkflowState, so we tolerate-and-drop it
+  // here rather than hard-failing the decode of an older persisted record.
+  if ('tenant' in state) {
+    delete (state as Record<string, unknown>)['tenant'];
   }
   if (!isValidDecodedTags(state.tags)) {
     console.warn(

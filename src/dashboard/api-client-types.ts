@@ -39,7 +39,6 @@ export interface WorkflowSummary {
   version: string;
   createdAt: number;
   updatedAt: number;
-  tenantId?: string;
   executionDeadline?: number;
   failureCategory?: FailureCategory;
 }
@@ -82,19 +81,13 @@ export interface ListFilter {
   createdAt?: TimeRange;
   updatedAt?: TimeRange;
   executionDeadline?: TimeRange;
-  tenantId?: string | string[];
   failureCategory?: FailureCategory | FailureCategory[];
 }
 
 export type BulkWorkflowFilter = CoreListFilter;
 export type BulkTagMutationOperation = 'add' | 'remove';
 
-export type AggregateGroupBy =
-  | 'status'
-  | 'type'
-  | 'tenant'
-  | 'failureCategory'
-  | { attribute: string };
+export type AggregateGroupBy = 'status' | 'type' | 'failureCategory' | { attribute: string };
 
 export interface AggregateGroup {
   key: string | null;
@@ -207,9 +200,6 @@ export type {
   BulkTagResult,
   ScheduleFilter,
   ScheduleSummary,
-  TenantQuotaMetricUsage,
-  TenantQuotaUsage,
-  TenantWorkflowCreationRateUsage,
   WorkflowReplay,
   WorkflowTimelineEntry,
 } from '../core/types.ts';

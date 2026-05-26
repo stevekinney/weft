@@ -10,7 +10,6 @@ import {
   coerceStartWorkflowTimestamp,
   parseStartWorkflowDuration,
 } from '../../start-workflow-validation.ts';
-import type { TenantContext } from '../../tenant.ts';
 import type { Checkpoint, Duration, StartOptions, TimerEntry, WorkflowState } from '../../types.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
 import { WorkflowAlreadyExistsError, WorkflowNotRegisteredError } from '../errors.ts';
@@ -36,7 +35,7 @@ export async function start(
   options: StartOptions | undefined,
   callbacks: LifecycleCallbacks,
 ): Promise<WorkflowHandle> {
-  return startWorkflow(internals, type, input, options, undefined, undefined, callbacks);
+  return startWorkflow(internals, type, input, options, undefined, callbacks);
 }
 
 type StartWorkflowPreparation = {
@@ -90,22 +89,8 @@ function prepareStartWorkflow(
 
 async function persistStartBatch(
   internals: EngineInternals,
-  workflowId: string,
-  tenant: TenantContext | undefined,
   startOperations: BatchOperation[],
 ): Promise<void> {
-  if (tenant !== undefined) {
-    const tenantQuotaManager = internals.tenantQuotaManager;
-    await tenantQuotaManager.commitStartAdmission({
-      tenantId: tenant.id,
-      workflowId,
-      startOperations,
-      get estimatedStorageBytes() {
-        return tenantQuotaManager.estimateStartStorageBytes(workflowId, startOperations);
-      },
-    });
-    return;
-  }
   await internals.storage.batch(startOperations);
 }
 
@@ -120,7 +105,6 @@ export async function startWorkflow(
   type: string,
   input: unknown,
   options: StartOptions | undefined,
-  tenantOverride: { resolved: TenantContext | undefined } | undefined,
   additionalStartOperations: BatchOperation[] | undefined,
   callbacks: LifecycleCallbacks,
 ): Promise<WorkflowHandle> {
@@ -154,12 +138,7 @@ export async function startWorkflow(
       }
     }
 
-    // Resolve the tenant context before the first checkpoint is written so
-    // it gets persisted as part of the initial state blob.
-    const tenant = tenantOverride
-      ? tenantOverride.resolved
-      : await resolveTenantForStart(internals, workflowId, type, input, callbacks);
-    const versionTuple = createWorkflowVersionTuple(internals, registration, tenant, callbacks);
+    const versionTuple = createWorkflowVersionTuple(internals, registration, callbacks);
 
     const state = createInitialWorkflowState(
       internals,
@@ -169,7 +148,6 @@ export async function startWorkflow(
       versionTuple,
       options,
       preparation.normalizedTags,
-      tenant,
       executionStateOwnerId,
       delayedStartTimer,
       callbacks,
@@ -210,7 +188,7 @@ export async function startWorkflow(
       callbacks,
     );
 
-    await persistStartBatch(internals, workflowId, tenant, startOperations);
+    await persistStartBatch(internals, startOperations);
 
     const handle = createWorkflowHandle(internals, workflowId, callbacks);
     if (!delayedStartTimer) {
@@ -221,7 +199,6 @@ export async function startWorkflow(
         input,
         checkpoint,
         state.executionDeadline,
-        tenant,
         state.executionStateOwnerId ?? workflowId,
         registration,
         callbacks,
@@ -287,7 +264,6 @@ export function beginWorkflowExecution(
   input: unknown,
   checkpoint: Checkpoint,
   executionDeadline: number | undefined,
-  tenant: TenantContext | undefined,
   executionStateOwnerId: string,
   _registration: RegistrationEntry,
   callbacks: LifecycleCallbacks,
@@ -304,7 +280,6 @@ export function beginWorkflowExecution(
       nestingDepth,
       executionDeadline,
       executionStateOwnerId,
-      tenant,
     });
     return;
   }
@@ -319,7 +294,6 @@ export function beginWorkflowExecution(
     nestingDepth,
     executionDeadline,
     executionStateOwnerId,
-    tenant,
     callbacks,
   );
 }
@@ -390,7 +364,6 @@ export function createInitialWorkflowState(
   versionTuple: WorkflowVersionTuple,
   options: StartOptions | undefined,
   tags: string[] | undefined,
-  tenant: TenantContext | undefined,
   executionStateOwnerId: string,
   delayedStartTimer: TimerEntry | undefined,
   callbacks: LifecycleCallbacks,
@@ -418,30 +391,7 @@ export function createInitialWorkflowState(
     state.executionDeadline = executionDeadline;
   }
 
-  if (tenant !== undefined) {
-    state.tenant = tenant;
-  }
-
   return state;
-}
-
-/**
- * Resolve the tenant for a new workflow via the configured resolver. Returns
- * `undefined` when no resolver is set or the resolver itself returned
- * `undefined`. Thrown errors are surfaced to the caller of `start()` so
- * misconfigured resolvers fail loudly instead of silently bypassing tenancy.
- */
-export async function resolveTenantForStart(
-  internals: EngineInternals,
-  workflowId: string,
-  workflowType: string,
-  input: unknown,
-  _callbacks: LifecycleCallbacks,
-): Promise<TenantContext | undefined> {
-  const resolver = internals.options.tenantResolver;
-  if (!resolver) return undefined;
-  const resolved = await resolver.resolve(workflowId, input, workflowType);
-  return resolved;
 }
 
 export function createInitialCheckpoint(

@@ -1,6 +1,5 @@
 import { serializeCheckpoint } from '../../checkpoint.ts';
 import { encode } from '../../codec.ts';
-import type { TenantContext } from '../../tenant.ts';
 import type { Checkpoint, WorkflowState } from '../../types.ts';
 import {
   VersionMismatchError,
@@ -21,13 +20,8 @@ import { type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
 export function createWorkflowVersionTuple(
   _internals: EngineInternals,
   registration: RegistrationEntry,
-  tenant: TenantContext | undefined,
   _callbacks: LifecycleCallbacks,
 ): WorkflowVersionTuple {
-  if (registration.versionTupleForTenant) {
-    return registration.versionTupleForTenant(tenant);
-  }
-
   return {
     workflowVersion: registration.version,
   };
@@ -88,12 +82,7 @@ export function derivePreparedExecutionState(
     registration.version,
     !!registration.migrate,
   );
-  const registeredVersionTuple = createWorkflowVersionTuple(
-    internals,
-    registration,
-    state.tenant,
-    callbacks,
-  );
+  const registeredVersionTuple = createWorkflowVersionTuple(internals, registration, callbacks);
   const versionDiff = diffWorkflowVersionTuples(
     workflowVersionTupleFromState(internals, state, callbacks),
     registeredVersionTuple,

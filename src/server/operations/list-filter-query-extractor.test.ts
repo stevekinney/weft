@@ -24,7 +24,6 @@ describe('extractListFilterFromQuery', () => {
       type: 'order',
       tag: ['nightly', 'v2'],
       id_prefix: 'order-',
-      tenant_id: ['acme', 'globex'],
       failure_category: ['resource', 'application'],
       created_at_gte: '1000',
       created_at_lt: '5000',
@@ -37,7 +36,6 @@ describe('extractListFilterFromQuery', () => {
       type: 'order',
       tags: ['nightly', 'v2'],
       idPrefix: 'order-',
-      tenantId: ['acme', 'globex'],
       failureCategory: ['resource', 'application'],
       createdAt: { gte: 1000, lt: 5000 },
       updatedAt: { gt: 2000 },
@@ -45,15 +43,13 @@ describe('extractListFilterFromQuery', () => {
     });
   });
 
-  it('collapses single-value status/tenant/failureCategory to a scalar', () => {
+  it('collapses single-value status/failureCategory to a scalar', () => {
     const url = urlWith({
       status: 'failed',
-      tenant_id: 'acme',
       failure_category: 'resource',
     });
     expect(extractListFilterFromQuery(url)).toEqual({
       status: 'failed',
-      tenantId: 'acme',
       failureCategory: 'resource',
     });
   });

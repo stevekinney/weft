@@ -17,6 +17,7 @@ description: >-
 - Deduplicating server operation helpers, REST fault shapers, storage helpers, client delegation, or test-support utilities while keeping endpoint contracts unchanged.
 - Cleaning up API surface exports, lifecycle overloads, compression framing, visibility filters, or route helpers after review feedback.
 - Removing oxlint suppressions or splitting oversized modules while claiming public behavior, type inference, and dispatch ordering are unchanged.
+- Removing dead public options or stale deleted-module references after the owning feature has already been removed.
 
 ## Do not use
 
@@ -37,6 +38,7 @@ description: >-
 9. For oxlint-suppression retirement, remove the inventory entry only after the directive is gone or replaced by an inline rationale that passes `scripts/check-lint-disables.ts`.
 10. Compare documentation examples against the public API after the refactor.
 11. Keep compatibility by preserving behavior, not by adding shims or old import paths unless explicitly required.
+12. When removing a never-functional public option, delete the field, resolver default, guard tests, and public documentation together; record the breaking removal in `CHANGELOG.md` instead of adding a compatibility shim.
 
 ## Verification
 

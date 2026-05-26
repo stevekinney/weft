@@ -101,23 +101,16 @@ describe('engine state utilities', () => {
     expect(encodedValuesEqual({ value: 1 }, { value: 2 })).toBe(false);
   });
 
-  it('applies tenant, status, and workflow type schedule filters', () => {
-    const tenantSchedule = createScheduleState({ tenant: { id: 'tenant-a' } });
-    const publicSchedule = createScheduleState();
+  it('applies status and workflow type schedule filters', () => {
+    const schedule = createScheduleState();
 
-    expect(matchesScheduleFilter(tenantSchedule, undefined)).toBe(false);
-    expect(matchesScheduleFilter(tenantSchedule, { tenantId: 'tenant-b' })).toBe(false);
-    expect(matchesScheduleFilter(publicSchedule, { tenantId: 'tenant-a' })).toBe(false);
-    expect(matchesScheduleFilter(publicSchedule, { status: 'paused' })).toBe(false);
-    expect(matchesScheduleFilter(publicSchedule, { workflowType: 'other' })).toBe(false);
-    expect(
-      matchesScheduleFilter(tenantSchedule, { tenantId: 'tenant-a', status: ['active'] }),
-    ).toBe(true);
+    expect(matchesScheduleFilter(schedule, { status: 'paused' })).toBe(false);
+    expect(matchesScheduleFilter(schedule, { workflowType: 'other' })).toBe(false);
+    expect(matchesScheduleFilter(schedule, { status: ['active'] })).toBe(true);
   });
 
   it('rejects every indexed list-filter dimension independently', () => {
     const base = createWorkflowState({
-      tenant: { id: 'tenant-a' },
       createdAt: 100,
       updatedAt: 200,
       executionDeadline: 300,
@@ -133,16 +126,6 @@ describe('engine state utilities', () => {
 
     // type
     expect(matchesListFilter(base, { type: 'other-workflow' }, null, undefined)).toBe(false);
-
-    // tenantId (single + array)
-    expect(matchesListFilter(base, { tenantId: 'tenant-b' }, null, undefined)).toBe(false);
-    expect(matchesListFilter(base, { tenantId: ['tenant-b', 'tenant-c'] }, null, undefined)).toBe(
-      false,
-    );
-    // missing tenant on state rejects tenantId filter
-    expect(
-      matchesListFilter(createWorkflowState(), { tenantId: 'tenant-a' }, null, undefined),
-    ).toBe(false);
 
     // idPrefix
     expect(matchesListFilter(base, { idPrefix: 'zzz' }, null, undefined)).toBe(false);
@@ -195,7 +178,6 @@ describe('engine state utilities', () => {
         {
           status: ['running'],
           type: 'workflow',
-          tenantId: ['tenant-a'],
           idPrefix: 'workflow',
           createdAt: { gte: 100, lte: 100 },
           updatedAt: { gte: 200, lte: 200 },
@@ -209,31 +191,23 @@ describe('engine state utilities', () => {
   });
 
   it('rejects every indexed schedule-filter dimension independently', () => {
-    const tenantSchedule = createScheduleState({ tenant: { id: 'tenant-a' } });
-    const publicSchedule = createScheduleState();
-
-    // tenantId mismatch
-    expect(matchesScheduleFilter(tenantSchedule, undefined)).toBe(false);
-    expect(matchesScheduleFilter(tenantSchedule, { tenantId: 'tenant-b' })).toBe(false);
-    // tenant-less schedule rejects when a tenantId filter is provided
-    expect(matchesScheduleFilter(publicSchedule, { tenantId: 'tenant-a' })).toBe(false);
+    const schedule = createScheduleState();
 
     // status (single + array)
-    expect(matchesScheduleFilter(publicSchedule, { status: 'paused' })).toBe(false);
-    expect(matchesScheduleFilter(publicSchedule, { status: ['paused', 'cancelled'] })).toBe(false);
+    expect(matchesScheduleFilter(schedule, { status: 'paused' })).toBe(false);
+    expect(matchesScheduleFilter(schedule, { status: ['paused', 'cancelled'] })).toBe(false);
 
     // workflowType
-    expect(matchesScheduleFilter(publicSchedule, { workflowType: 'other' })).toBe(false);
+    expect(matchesScheduleFilter(schedule, { workflowType: 'other' })).toBe(false);
 
     // passes when every dimension matches
     expect(
-      matchesScheduleFilter(tenantSchedule, {
-        tenantId: 'tenant-a',
+      matchesScheduleFilter(schedule, {
         status: ['active'],
         workflowType: 'workflow',
       }),
     ).toBe(true);
-    expect(matchesScheduleFilter(publicSchedule, { status: 'active' })).toBe(true);
+    expect(matchesScheduleFilter(schedule, { status: 'active' })).toBe(true);
   });
 
   it('getTimelineOperationLabel returns the correct label for every ContextOperationRequest kind', () => {

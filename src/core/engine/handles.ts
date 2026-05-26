@@ -8,7 +8,6 @@ import { WorkflowTimeoutError } from '../timeouts.ts';
 import type {
   MessageName,
   QueryDefinition,
-  ScheduleAccessOptions,
   ScheduleSummary,
   SearchAttributeValue,
   SignalDefinition,
@@ -87,18 +86,11 @@ export interface WorkflowHandleEngine extends EventTarget {
 }
 
 export interface ScheduleHandleEngine {
-  pauseSchedule(scheduleId: string, accessOptions?: ScheduleAccessOptions): Promise<void>;
-  resumeSchedule(scheduleId: string, accessOptions?: ScheduleAccessOptions): Promise<void>;
-  cancelSchedule(scheduleId: string, accessOptions?: ScheduleAccessOptions): Promise<void>;
-  updateSchedule(
-    scheduleId: string,
-    newCronExpression: string,
-    accessOptions?: ScheduleAccessOptions,
-  ): Promise<void>;
-  getSchedule(
-    scheduleId: string,
-    accessOptions?: ScheduleAccessOptions,
-  ): Promise<ScheduleSummary | null>;
+  pauseSchedule(scheduleId: string): Promise<void>;
+  resumeSchedule(scheduleId: string): Promise<void>;
+  cancelSchedule(scheduleId: string): Promise<void>;
+  updateSchedule(scheduleId: string, newCronExpression: string): Promise<void>;
+  getSchedule(scheduleId: string): Promise<ScheduleSummary | null>;
 }
 
 /**
@@ -378,32 +370,30 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
 export class ScheduleHandle {
   readonly id: string;
   readonly #engine: ScheduleHandleEngine;
-  readonly #accessOptions: ScheduleAccessOptions | undefined;
 
-  constructor(id: string, engine: ScheduleHandleEngine, accessOptions?: ScheduleAccessOptions) {
+  constructor(id: string, engine: ScheduleHandleEngine) {
     this.id = id;
     this.#engine = engine;
-    this.#accessOptions = accessOptions;
   }
 
   async pause(): Promise<void> {
-    await this.#engine.pauseSchedule(this.id, this.#accessOptions);
+    await this.#engine.pauseSchedule(this.id);
   }
 
   async resume(): Promise<void> {
-    await this.#engine.resumeSchedule(this.id, this.#accessOptions);
+    await this.#engine.resumeSchedule(this.id);
   }
 
   async cancel(): Promise<void> {
-    await this.#engine.cancelSchedule(this.id, this.#accessOptions);
+    await this.#engine.cancelSchedule(this.id);
   }
 
   async update(newCronExpression: string): Promise<void> {
-    await this.#engine.updateSchedule(this.id, newCronExpression, this.#accessOptions);
+    await this.#engine.updateSchedule(this.id, newCronExpression);
   }
 
   async describe(): Promise<ScheduleSummary> {
-    const schedule = await this.#engine.getSchedule(this.id, this.#accessOptions);
+    const schedule = await this.#engine.getSchedule(this.id);
     if (!schedule) {
       throw new Error(`Schedule "${this.id}" not found`);
     }

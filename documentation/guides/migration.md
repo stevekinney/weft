@@ -60,7 +60,7 @@ const engine = await Engine.create({
 
 `Engine.create()` registers activities first, then workflows. Pass `recover: true` when this boot path should also run `recoverAll()` after registration. Map keys must match each definition's `name` field — `Engine.create({ workflows: { greet: farewellDefinition } })` throws `EngineCreateNameMismatchError` rather than silently registering `farewell` under the wrong key.
 
-The constructor and `register()` remain available for tests, multi-tenant setups, and dynamic plugin loading.
+The constructor and `register()` remain available for tests and dynamic plugin loading.
 
 ## AI Agent Surface Removal
 

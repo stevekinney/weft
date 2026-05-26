@@ -65,7 +65,6 @@ const listWorkflowsInput = z.object({
   createdAt: timeRangeSchema.optional(),
   updatedAt: timeRangeSchema.optional(),
   executionDeadline: timeRangeSchema.optional(),
-  tenantId: z.union([z.string(), z.array(z.string())]).optional(),
   failureCategory: z.union([failureCategorySchema, z.array(failureCategorySchema)]).optional(),
   include: listIncludeSchema.optional(),
 });

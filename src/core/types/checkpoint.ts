@@ -1,5 +1,4 @@
 import type { ContextOperationRequest } from '../context/operation-request.ts';
-import type { TenantContext } from '../tenant.ts';
 import { WeftError } from '../weft-error.ts';
 import type { FailureCategory, OperationId, WorkflowId } from './identity.ts';
 import type { Duration, RetryPolicy } from './retry-retention.ts';
@@ -178,14 +177,6 @@ export type WorkerInboundMessage =
       executionStateOwnerId?: string;
       deadline?: number;
       headers?: [string, string][];
-      /**
-       * Resolved tenant context for this workflow run, forwarded across the
-       * `postMessage` boundary. The `attributes` values MUST be
-       * structured-clone safe — functions, class instances, and DOM nodes
-       * will crash the transfer with `DataCloneError`. Stick to plain
-       * objects, arrays, strings, numbers, booleans, and null.
-       */
-      tenant?: TenantContext;
     }
   | {
       type: 'resume';

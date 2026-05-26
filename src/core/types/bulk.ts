@@ -35,7 +35,6 @@ export type BulkOperationAction =
  * const principal: BulkOperationPrincipal = {
  *   method: 'api-key',
  *   subject: 'operator@example.com',
- *   tenantId: 'acme',
  * };
  * void principal;
  * ```
@@ -43,7 +42,6 @@ export type BulkOperationAction =
 export type BulkOperationPrincipal = {
   method: string;
   subject?: string;
-  tenantId?: string;
 };
 
 /**
@@ -89,7 +87,6 @@ export type BulkOperationFilterSummary = {
  *   filter: { status: 'running' },
  *   statuses: ['running'],
  *   workflowTypes: ['checkout'],
- *   tenantIds: ['acme'],
  *   sampleWorkflowIds: ['wf-1', 'wf-2'],
  *   sampleLimit: 20,
  * };
@@ -101,7 +98,6 @@ export type BulkOperationScopeSummary = {
   filter: BulkOperationFilterSummary;
   statuses: WorkflowStatus[];
   workflowTypes: string[];
-  tenantIds: string[];
   sampleWorkflowIds: WorkflowId[];
   sampleLimit: number;
 };
@@ -123,7 +119,6 @@ export type BulkOperationScopeSummary = {
  *     filter: { status: 'running' },
  *     statuses: ['running'],
  *     workflowTypes: ['checkout'],
- *     tenantIds: [],
  *     sampleWorkflowIds: ['wf-1'],
  *     sampleLimit: 20,
  *   },
@@ -261,7 +256,6 @@ export type BulkSignalAllOptions = BulkSignalAllDryRunOptions | BulkSignalAllCom
  *     filter: { status: 'running' },
  *     statuses: ['running'],
  *     workflowTypes: ['checkout'],
- *     tenantIds: ['acme'],
  *     sampleWorkflowIds: ['wf-1'],
  *     sampleLimit: 20,
  *   },

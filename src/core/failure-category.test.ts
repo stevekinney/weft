@@ -83,22 +83,22 @@ describe('failureCategory on WorkflowState', () => {
     expect(state?.failureCategory).toBe('cancellation');
   });
 
-  it('sets failureCategory to "resource" for quota-shaped errors', async () => {
-    class QuotaExceededError extends Error {
+  it('sets failureCategory to "resource" for resource-exhaustion-shaped errors', async () => {
+    class ResourceExhaustedError extends Error {
       constructor() {
-        super('tenant quota exceeded');
-        this.name = 'QuotaExceededError';
+        super('resource exhausted');
+        this.name = 'ResourceExhaustedError';
       }
     }
 
     engine = new Engine();
-    const quotaCrashWorkflow = workflow({ name: 'quota-crash' }).execute(async function* () {
-      throw new QuotaExceededError();
+    const resourceCrashWorkflow = workflow({ name: 'resource-crash' }).execute(async function* () {
+      throw new ResourceExhaustedError();
     });
-    engine.register(quotaCrashWorkflow);
+    engine.register(resourceCrashWorkflow);
 
-    const handle = await engine.start('quota-crash', null, { id: 'wf-resource-fail' });
-    await expect(handle.result()).rejects.toThrow('tenant quota exceeded');
+    const handle = await engine.start('resource-crash', null, { id: 'wf-resource-fail' });
+    await expect(handle.result()).rejects.toThrow('resource exhausted');
 
     const state = await engine.get('wf-resource-fail');
     expect(state?.failureCategory).toBe('resource');

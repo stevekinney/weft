@@ -161,11 +161,14 @@ If an `as` cast is genuinely necessary (e.g., deserializing from storage where t
 - New REST or JSON-RPC operations must declare their access scope, operation name, transport availability, input source mapping, and fault shaping explicitly.
 - Operator diagnostics should keep metrics low-cardinality. Use bounded diagnostic endpoints for workflow IDs, operation IDs, worker IDs, queue names, and other high-cardinality evidence.
 - If a server operation is surfaced in the dashboard, update the dashboard API client types and tests together with the route or operation.
-- Workflow visibility changes must keep `engine.list`, `engine.aggregate`, REST query parsing, JSON-RPC inputs, dashboard filters, and bulk-action preview filters aligned. Pin failure-category filters, tenant/id-prefix filters, date ranges, aggregate grouping, and default ordering in tests.
+- Workflow visibility changes must keep `engine.list`, `engine.aggregate`, REST query parsing, JSON-RPC inputs, dashboard filters, and bulk-action preview filters aligned. Pin failure-category filters, id-prefix filters, date ranges, aggregate grouping, and default ordering in tests.
 - Existing Bun SQLite deployments need the workflow visibility backfill before older workflows can rely on indexed queries. Document the maintenance-window requirement, `--drop` rollback path, exit codes, and watermark behavior with any visibility-index change.
 - Failure categories are the execution taxonomy `application`, `timeout`, `cancellation`, `resource`, and `system`. Preserve read/query normalization for legacy persisted values, but do not reintroduce legacy values as accepted public filter input.
-- MCP discovery is public metadata that emits absolute URLs. Changes to `/.well-known/mcp.json`, `/openrpc.json` MCP metadata, or `/mcp` must cover `publicOrigin`/`trustedHosts`, authentication/session binding, and tenant-scoped resource access.
+- MCP discovery is public metadata that emits absolute URLs. Changes to `/.well-known/mcp.json`, `/openrpc.json` MCP metadata, or `/mcp` must cover `publicOrigin`/`trustedHosts`, and authentication/session binding.
 - Preserve legacy REST response contracts during cleanup refactors. Shared helpers are fine, but tests must pin any intentionally raw or masked error shape.
+- REST `EngineFailure` responses are masked by the canonical `shapeRestFault` path as `{ error: "Internal server error" }` with status `500`; JSON-RPC still receives the operation fault object. Preserve that split when refactoring operation helpers.
+- Schedule read/update/pause/resume/cancel operations must forward JWT tenant claims into engine access checks across REST and JSON-RPC. Missing tenant claims produce `403`; cross-tenant schedule IDs are masked as `404` without an existence oracle.
+- Task polling and shutdown changes must cover already-aborted request signals, disconnects during parked long-polls, task retention for dead pollers, and `server.stop()` disposal of queued timers/waiters.
 
 ### Testing Approach
 

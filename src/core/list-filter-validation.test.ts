@@ -87,33 +87,6 @@ describe('normalizeListFilter', () => {
     });
   });
 
-  describe('tenantId', () => {
-    it('accepts a single tenant', () => {
-      expect(normalizeListFilter({ tenantId: 'acme' }).tenantId).toBe('acme');
-    });
-
-    it('accepts an array of tenants', () => {
-      expect(normalizeListFilter({ tenantId: ['acme', 'globex'] }).tenantId).toEqual([
-        'acme',
-        'globex',
-      ]);
-    });
-
-    it('rejects an empty string', () => {
-      expect(() => normalizeListFilter({ tenantId: '' })).toThrow(ListFilterValidationError);
-    });
-
-    it('rejects an empty array', () => {
-      expect(() => normalizeListFilter({ tenantId: [] })).toThrow(ListFilterValidationError);
-    });
-
-    it('rejects arrays containing empty strings', () => {
-      expect(() => normalizeListFilter({ tenantId: ['acme', ''] })).toThrow(
-        ListFilterValidationError,
-      );
-    });
-  });
-
   describe('failureCategory', () => {
     it('accepts a single value from the enum', () => {
       expect(normalizeListFilter({ failureCategory: 'resource' }).failureCategory).toBe('resource');
@@ -141,7 +114,7 @@ describe('normalizeListFilter', () => {
   describe('error issues', () => {
     it('flattens multiple validation issues with paths', () => {
       try {
-        normalizeListFilter({ idPrefix: '', tenantId: '' });
+        normalizeListFilter({ idPrefix: '', type: '' });
         expect.unreachable('expected throw');
       } catch (error) {
         expect(error).toBeInstanceOf(ListFilterValidationError);
@@ -149,7 +122,7 @@ describe('normalizeListFilter', () => {
         expect(issues.length).toBeGreaterThanOrEqual(2);
         const paths = issues.map((issue) => issue.path.join('.'));
         expect(paths).toContain('idPrefix');
-        expect(paths).toContain('tenantId');
+        expect(paths).toContain('type');
       }
     });
   });

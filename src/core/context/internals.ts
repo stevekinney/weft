@@ -21,7 +21,6 @@ export interface ContextInternals {
   sleepReferenceTime: number | undefined;
   explainMode: boolean;
   nestingDepth: number;
-  tenant: import('../tenant.ts').TenantContext | undefined;
   executionStateOwnerId: string;
   resolveWorkflowType: ((target: string | Function) => string) | undefined;
 }
@@ -52,7 +51,6 @@ export function initializeInternals(
     sleepReferenceTime: options.sleepReferenceTime,
     explainMode: false,
     nestingDepth: options.nestingDepth ?? 0,
-    tenant: options.tenant,
     executionStateOwnerId: options.executionStateOwnerId ?? options.workflowId,
     resolveWorkflowType: options.resolveWorkflowType,
   };

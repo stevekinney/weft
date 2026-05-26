@@ -368,10 +368,8 @@ interface InFlightTask {
 ## Fleet and queue observability
 
 Two operator-facing endpoints expose the live worker fleet and the
-in-memory task queue state. Both require the `system:read` scope; tenant
-principals receive a 403. Workers and task queues are server-wide
-infrastructure, not tenant-partitioned, so there is no tenant filter to
-apply.
+in-memory task queue state. Both require the `system:read` scope.
+Workers and task queues are server-wide infrastructure.
 
 The read operations are reachable over
 [JSON-RPC](https://www.jsonrpc.org/specification)

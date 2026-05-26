@@ -14,6 +14,7 @@ description: >-
 - Adding or modifying shutdown, cancellation, retry, heartbeat, timeout, or reconnect behavior.
 - Introducing a promise that can outlive its owner or wait on an event from another process.
 - Fixing tests that rely on real sleeps, timing slack, or unbounded polling.
+- Changing server task polling, request `AbortSignal` handling, or `TaskQueue` disposal.
 
 ## Do not use
 
@@ -28,6 +29,8 @@ description: >-
 3. Reject or settle pending promises when the owner goes away; never leave callers waiting for an event that can no longer arrive.
 4. Prefer virtual time, explicit signals, and observable conditions over fixed `Bun.sleep()` delays.
 5. Cap polling and retry loops, then surface the final state when the cap is reached.
+6. Check `signal.aborted` before registering listeners or claiming work; an already-aborted signal will not fire another abort event.
+7. On server shutdown, clear timers, resolve parked waiters, and avoid invoking callbacks that would re-enter disposed engine or storage state.
 
 ### RemoteWorker reconnect work
 
@@ -38,5 +41,6 @@ description: >-
 
 - Add race regression tests for before-ack disposal, socket close, cancellation, and shutdown paths touched by the change.
 - For reconnect behavior, cover grace-window cancellation, visibility-timeout takeover, stale completion rejection, and server-restart redelivery.
+- For long-poll task queues, cover disconnect during wait, already-aborted signals, pending-task retention for dead callers, idempotent disposal, and timer cleanup.
 - Prove no test depends on unbounded waits or real-time sleeps.
 - Run the focused lifecycle or worker tests plus `bun run verify:no-test-sleeps` when relevant.

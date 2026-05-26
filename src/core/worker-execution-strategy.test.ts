@@ -220,45 +220,6 @@ describe('WorkerExecutionStrategy', () => {
       expect(worker._listeners.get('message')?.size).toBeGreaterThan(0);
     });
 
-    it('forwards tenant context onto the run message', async () => {
-      setup();
-
-      strategy.startWorkflow({
-        workflowId: 'wf-tenant',
-        workflowType: 'test',
-        input: { value: 1 },
-        checkpoint: new ArrayBuffer(0),
-        tenant: { id: 'acme', attributes: { tier: 'gold' } },
-      });
-
-      await sleepForTesting(10);
-
-      const worker = firstWorker();
-      const sentMessage = worker.postMessage.mock.calls[0]![0];
-      expect(sentMessage.type).toBe('run');
-      expect(sentMessage.tenant).toBeDefined();
-      expect(sentMessage.tenant.id).toBe('acme');
-      expect(sentMessage.tenant.attributes.tier).toBe('gold');
-    });
-
-    it('omits the tenant field when no tenant is provided', async () => {
-      setup();
-
-      strategy.startWorkflow({
-        workflowId: 'wf-no-tenant',
-        workflowType: 'test',
-        input: null,
-        checkpoint: new ArrayBuffer(0),
-      });
-
-      await sleepForTesting(10);
-
-      const worker = firstWorker();
-      const sentMessage = worker.postMessage.mock.calls[0]![0];
-      expect(sentMessage.type).toBe('run');
-      expect(sentMessage.tenant).toBeUndefined();
-    });
-
     it('emits a failed message if pool acquisition fails', async () => {
       mockWorkers = [];
       mockPool = createMockPool([]);

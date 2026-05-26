@@ -54,7 +54,6 @@ export function buildWorkflowFilterSearchParams(filter: ListFilter | undefined):
   appendOptionalSearchParam(params, 'type', filter.type);
   appendRepeatedSearchParam(params, 'tag', filter.tags);
   appendOptionalSearchParam(params, 'id_prefix', filter.idPrefix);
-  appendScalarOrRepeatedSearchParam(params, 'tenant_id', filter.tenantId);
   appendScalarOrRepeatedSearchParam(params, 'failure_category', filter.failureCategory);
   appendTimeRangeParams(params, 'created_at', filter.createdAt);
   appendTimeRangeParams(params, 'updated_at', filter.updatedAt);

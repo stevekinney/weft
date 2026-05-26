@@ -1,4 +1,5 @@
 import { requireStorageCapability, type StorageCapabilities } from './capabilities.ts';
+import { DEFAULT_SCOPE } from './default-scope.ts';
 import {
   storageCountCore,
   storageDeletePrefixCore,
@@ -8,6 +9,7 @@ import {
 
 export { requireStorageCapability } from './capabilities.ts';
 export type { GatedStorageCapabilityKey, StorageCapabilities } from './capabilities.ts';
+export { DEFAULT_SCOPE } from './default-scope.ts';
 
 /**
  * A single KV operation in a batch.
@@ -447,12 +449,6 @@ export const KEYS = {
     `upk:${encodeStorageKeyComponent(workflowId)}:${key}`,
   budget: (namespace: string, period: string, date: string) =>
     `budget:${namespace}:${period}:${date}`,
-  quotaActive: (tenantId: string) => `quota:${encodeStorageKeyComponent(tenantId)}:active`,
-  quotaStorage: (tenantId: string) => `quota:${encodeStorageKeyComponent(tenantId)}:storage`,
-  quotaWorkflowStorage: (tenantId: string, workflowId: string) =>
-    `quota:${encodeStorageKeyComponent(tenantId)}:storage:${encodeStorageKeyComponent(workflowId)}`,
-  quotaRate: (tenantId: string, windowMilliseconds: number) =>
-    `quota:${encodeStorageKeyComponent(tenantId)}:rate:${String(windowMilliseconds)}`,
   review: (workflowId: string, reviewId: string) =>
     `review:${encodeStorageKeyComponent(workflowId)}:${reviewId}`,
   workflowHeaders: (workflowId: string) => `wf-headers:${encodeStorageKeyComponent(workflowId)}`,
@@ -464,10 +460,8 @@ export const KEYS = {
     `archive:${encodeStorageKeyComponent(workflowId)}:${key}`,
   stateExecution: (ownerWorkflowId: string, key: string) =>
     `state:execution:${encodeStorageKeyComponent(ownerWorkflowId)}:${encodeStorageKeyComponent(key)}`,
-  stateWorkflow: (tenantId: string, workflowType: string, key: string) =>
-    `state:workflow:${encodeStorageKeyComponent(tenantId)}:${encodeStorageKeyComponent(workflowType)}:${encodeStorageKeyComponent(key)}`,
-  stateTenant: (tenantId: string, key: string) =>
-    `state:tenant:${encodeStorageKeyComponent(tenantId)}:${encodeStorageKeyComponent(key)}`,
+  stateWorkflow: (workflowType: string, key: string) =>
+    `state:workflow-scope:${DEFAULT_SCOPE}:${encodeStorageKeyComponent(workflowType)}:${encodeStorageKeyComponent(key)}`,
   streamChunkPrefix: (workflowId: string, key: string) =>
     `blob:${encodeStorageKeyComponent(workflowId)}:${key}:chunk:`,
   streamChunk: (workflowId: string, key: string, chunkIndex: number) =>
@@ -484,8 +478,6 @@ export const KEYS = {
     `wf-idx-status:${encodeStorageKeyComponent(status)}:${encodeStorageKeyComponent(workflowId)}`,
   workflowVisibilityType: (type: string, workflowId: string) =>
     `wf-idx-type:${encodeStorageKeyComponent(type)}:${encodeStorageKeyComponent(workflowId)}`,
-  workflowVisibilityTenant: (tenantId: string, workflowId: string) =>
-    `wf-idx-tenant:${encodeStorageKeyComponent(tenantId)}:${encodeStorageKeyComponent(workflowId)}`,
   workflowVisibilityCreated: (createdAt: number, workflowId: string) =>
     `wf-idx-created:${formatSortableTimestamp(createdAt)}:${encodeStorageKeyComponent(workflowId)}`,
   workflowVisibilityUpdated: (updatedAt: number, workflowId: string) =>

@@ -44,32 +44,31 @@ expects fields to be assigned in this sequence.
 | 28  | `workflowNestingDepths`           | data                                       |
 | 29  | `workflowHeaders`                 | data                                       |
 | 30  | `workflowStateWriteChains`        | data                                       |
-| 31  | `tenantQuotaManager`              | data                                       |
-| 32  | `heartbeatDetails`                | data                                       |
-| 33  | `pendingStarts`                   | data                                       |
-| 34  | `pendingScheduleCreations`        | data                                       |
-| 35  | `workflowsNeedingTerminalCleanup` | data                                       |
-| 36  | `cleanupInterval`                 | data (nullable)                            |
-| 37  | `retentionSweepInterval`          | data (nullable)                            |
-| 38  | `retentionSweepInFlight`          | data (nullable)                            |
-| 39  | `nextRetentionSweepAt`            | data (nullable)                            |
-| 40  | `reviewCoordinator`               | data                                       |
-| 41  | `reviewWaiters`                   | data                                       |
-| 42  | `reviewWaitersByWorkflow`         | data                                       |
-| 43  | `reviewEscalationHandlers`        | data                                       |
-| 44  | `workflowReviewIds`               | data                                       |
-| 45  | `parkedInlineWorkflows`           | data                                       |
-| 46  | `terminalizingWorkflows`          | data                                       |
-| 47  | `reviewTimerIds`                  | data                                       |
-| 48  | `pendingWebhooks`                 | data                                       |
-| 49  | `alertManager`                    | data (nullable)                            |
-| 50  | `agentWorkflowIds`                | inline initializer (`= new Set<string>()`) |
-| 51  | `eventLogHeads`                   | inline initializer (`= new Map()`)         |
-| 52  | `workflowFeedListeners`           | inline initializer (`= new Map()`)         |
-| 53  | `workflowVersionTuples`           | inline initializer (`= new Map()`)         |
-| 54  | `pendingTimelineEntries`          | data                                       |
+| 31  | `heartbeatDetails`                | data                                       |
+| 32  | `pendingStarts`                   | data                                       |
+| 33  | `pendingScheduleCreations`        | data                                       |
+| 34  | `workflowsNeedingTerminalCleanup` | data                                       |
+| 35  | `cleanupInterval`                 | data (nullable)                            |
+| 36  | `retentionSweepInterval`          | data (nullable)                            |
+| 37  | `retentionSweepInFlight`          | data (nullable)                            |
+| 38  | `nextRetentionSweepAt`            | data (nullable)                            |
+| 39  | `reviewCoordinator`               | data                                       |
+| 40  | `reviewWaiters`                   | data                                       |
+| 41  | `reviewWaitersByWorkflow`         | data                                       |
+| 42  | `reviewEscalationHandlers`        | data                                       |
+| 43  | `workflowReviewIds`               | data                                       |
+| 44  | `parkedInlineWorkflows`           | data                                       |
+| 45  | `terminalizingWorkflows`          | data                                       |
+| 46  | `reviewTimerIds`                  | data                                       |
+| 47  | `pendingWebhooks`                 | data                                       |
+| 48  | `alertManager`                    | data (nullable)                            |
+| 49  | `agentWorkflowIds`                | inline initializer (`= new Set<string>()`) |
+| 50  | `eventLogHeads`                   | inline initializer (`= new Map()`)         |
+| 51  | `workflowFeedListeners`           | inline initializer (`= new Map()`)         |
+| 52  | `workflowVersionTuples`           | inline initializer (`= new Map()`)         |
+| 53  | `pendingTimelineEntries`          | data                                       |
 
-**Note on inline-initializer fields (#50–#53)**: in the pre-PR-8 code these
+**Note on inline-initializer fields (#49–#52)**: in the pre-PR-8 code these
 ran automatically at instance-creation time, before the constructor body. In
 the WeakMap pattern they are populated explicitly in the constructor body
 near the other field assignments.

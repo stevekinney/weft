@@ -4,11 +4,7 @@ import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { shapeRestFault } from './operation-helpers.ts';
-import {
-  isOperationFault,
-  mapScheduleErrorToFault,
-  resolveScheduleAccessOptions,
-} from './schedule-faults.ts';
+import { mapScheduleErrorToFault } from './schedule-faults.ts';
 
 const resumeScheduleInput = z.object({
   scheduleId: z.string().min(1),
@@ -29,16 +25,11 @@ export const resumeScheduleOperation = defineOperation<ResumeScheduleInput, Resu
   producibleFaults: ['NotFound', 'Conflict'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine, principal }): Promise<ResumeScheduleOutput> => {
+  invoke: async ({ input, engine }): Promise<ResumeScheduleOutput> => {
     const typedEngine = engine as Engine;
 
-    const accessOptions = resolveScheduleAccessOptions(principal);
-    if (isOperationFault(accessOptions)) {
-      throw accessOptions;
-    }
-
     try {
-      await typedEngine.resumeSchedule(input.scheduleId, accessOptions);
+      await typedEngine.resumeSchedule(input.scheduleId);
       return undefined;
     } catch (error) {
       throw mapScheduleErrorToFault(input.scheduleId, error);

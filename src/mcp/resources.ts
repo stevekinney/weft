@@ -74,7 +74,7 @@ export async function listMcpResources(
   context: McpAccessContext,
 ): Promise<McpResourceDefinition[]> {
   assertScope(context, 'workflows:read', 'Listing workflow resources');
-  const workflows = await listVisibleWorkflows(context.engine, context.principal, {});
+  const workflows = await listVisibleWorkflows(context.engine, {});
   return workflows.items.map((workflow) => ({
     uri: workflowResourceUri(workflow.id, 'state'),
     name: `workflow_${workflow.id}`,
@@ -94,11 +94,11 @@ export async function readMcpResource(
   if (parsed === null) return null;
 
   if (parsed.kind === 'search') {
-    const result = await listVisibleWorkflows(context.engine, context.principal, parsed.filter);
+    const result = await listVisibleWorkflows(context.engine, parsed.filter);
     return jsonResource(uri, result);
   }
 
-  const state = await getVisibleWorkflowState(context.engine, context.principal, parsed.workflowId);
+  const state = await getVisibleWorkflowState(context.engine, parsed.workflowId);
   if (state === null) return null;
 
   switch (parsed.kind) {

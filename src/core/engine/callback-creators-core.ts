@@ -168,8 +168,8 @@ export function createTerminationCallbacksWith<
     loadWorkflowState: (workflowId) => loadWorkflowState(getInternals(engine), workflowId),
     runSerializedWorkflowStateWrite: (workflowId, writeOperation) =>
       runSerializedWorkflowStateWrite(getInternals(engine), workflowId, writeOperation),
-    commitWorkflowStateOperations: (state, operations, options) =>
-      commitWorkflowStateOperations(getInternals(engine), state, operations, options),
+    commitWorkflowStateOperations: (state, operations) =>
+      commitWorkflowStateOperations(getInternals(engine), state, operations),
     cleanupReviews: (workflowId) => cleanupReviews(getInternals(engine), workflowId),
   };
 }

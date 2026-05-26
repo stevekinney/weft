@@ -7,7 +7,6 @@ import { createHandleCacheFinalizer } from '../engine-helpers.ts';
 import type { Interceptor } from '../interceptor.ts';
 import { ReviewCoordinator, type ReviewRequest } from '../review/index.ts';
 import { Scheduler } from '../scheduler.ts';
-import { TenantQuotaManager } from '../tenant-quotas.ts';
 import {
   messageName,
   type AnyActivityDefinition,
@@ -42,7 +41,6 @@ import {
   type RetentionOverview,
   type ReviewListEntry,
   type ReviewListFilter,
-  type ScheduleAccessOptions,
   type ScheduleDefinition,
   type ScheduleFilter,
   type ScheduleOptions,
@@ -51,7 +49,6 @@ import {
   type SignalDefinition,
   type StartOptions,
   type SubmitReviewOptions,
-  type TenantQuotaUsage,
   type TypedListFilter,
   type UpdateDefinition,
   type WorkerOutboundMessage,
@@ -193,7 +190,6 @@ import {
   updateSchedule as updateScheduleFromInternals,
 } from './schedules.ts';
 import { signal as signalWorkflow } from './signals.ts';
-import { canAccessSchedule } from './state-utilities.ts';
 import { loadScheduleState, loadWorkflowState } from './storage-io.ts';
 import { getComposedWorkflowInterceptor, swallowPromiseRejection } from './strategy-helpers.ts';
 import {
@@ -208,7 +204,7 @@ import {
   update as updateFromInternals,
   type UpdateCallbacks,
 } from './updates.ts';
-import { coerceScheduleId, normalizeScheduleAccessOptions } from './validation/schedule.ts';
+import { coerceScheduleId } from './validation/schedule.ts';
 import {
   replayWorkflowFeed,
   snapshotWorkflowFeedTail,
@@ -478,11 +474,6 @@ export class Engine<
         queuedInlineWorkflowStartChannel,
       );
     }
-    getInternals(this).tenantQuotaManager = new TenantQuotaManager(
-      storage,
-      getNow,
-      options?.quotas,
-    );
     getInternals(this).heartbeatDetails = new Map();
     getInternals(this).pendingStarts = new Set();
     getInternals(this).pendingScheduleCreations = new Set();
@@ -592,14 +583,11 @@ export class Engine<
       ): AtomicState<T> =>
         new AtomicState<T>(storage, KEYS.stateExecution(ownerWorkflowId, key), options),
       workflow: <T>(
-        tenantId: string,
         workflowType: string,
         key: string,
         options?: AtomicStateOptions<T>,
       ): AtomicState<T> =>
-        new AtomicState<T>(storage, KEYS.stateWorkflow(tenantId, workflowType, key), options),
-      tenant: <T>(tenantId: string, key: string, options?: AtomicStateOptions<T>): AtomicState<T> =>
-        new AtomicState<T>(storage, KEYS.stateTenant(tenantId, key), options),
+        new AtomicState<T>(storage, KEYS.stateWorkflow(workflowType, key), options),
     };
   }
   async #handleStrategyMessage(message: WorkerOutboundMessage): Promise<void> {
@@ -770,7 +758,6 @@ export class Engine<
       input,
       options,
       undefined,
-      undefined,
       this.#createLifecycleCallbacks(),
     );
   }
@@ -911,23 +898,18 @@ export class Engine<
   ): Promise<BulkTagResult | BulkOperationDryRunResult> {
     return untagAllWorkflows(getInternals(this), filter, tags, options);
   }
-  async schedule<TInput>(
-    definition: ScheduleDefinition<TInput>,
-    accessOptions?: ScheduleAccessOptions,
-  ): Promise<ScheduleHandle>;
+  async schedule<TInput>(definition: ScheduleDefinition<TInput>): Promise<ScheduleHandle>;
   async schedule(
     type: string,
     input: unknown,
     cronExpression: string,
     options?: ScheduleOptions,
-    accessOptions?: ScheduleAccessOptions,
   ): Promise<ScheduleHandle>;
   async schedule(
     typeOrDefinition: string | ScheduleDefinition,
-    inputOrAccessOptions?: unknown,
+    input?: unknown,
     cronExpression?: string,
     options?: ScheduleOptions,
-    accessOptions?: ScheduleAccessOptions,
   ): Promise<ScheduleHandle> {
     if (typeof typeOrDefinition === 'object') {
       const definition = typeOrDefinition;
@@ -943,7 +925,6 @@ export class Engine<
           ...(definition.overlapPolicy !== undefined && { overlap: definition.overlapPolicy }),
           ...(definition.backfill !== undefined && { backfill: definition.backfill }),
         },
-        inputOrAccessOptions as ScheduleAccessOptions | undefined,
       );
     }
     if (cronExpression === undefined) {
@@ -952,46 +933,30 @@ export class Engine<
     return scheduleFromInternals(
       getInternals(this),
       typeOrDefinition,
-      inputOrAccessOptions,
+      input,
       cronExpression,
       options,
-      accessOptions,
     );
   }
-  async getSchedule(
-    scheduleId: string,
-    accessOptions?: ScheduleAccessOptions,
-  ): Promise<ScheduleSummary | null> {
+  async getSchedule(scheduleId: string): Promise<ScheduleSummary | null> {
     const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
-    const normalizedAccessOptions = normalizeScheduleAccessOptions(accessOptions);
     const state = await loadScheduleState(getInternals(this), normalizedScheduleId);
-    return state && canAccessSchedule(state, normalizedAccessOptions)
-      ? toScheduleSummary(state)
-      : null;
+    return state ? toScheduleSummary(state) : null;
   }
   async listSchedules(filter?: ScheduleFilter): Promise<PaginatedResult<ScheduleSummary>> {
     return listSchedulesFromInternals(getInternals(this), filter);
   }
-  async pauseSchedule(scheduleId: string, accessOptions?: ScheduleAccessOptions): Promise<void> {
-    return pauseScheduleFromInternals(getInternals(this), scheduleId, accessOptions);
+  async pauseSchedule(scheduleId: string): Promise<void> {
+    return pauseScheduleFromInternals(getInternals(this), scheduleId);
   }
-  async resumeSchedule(scheduleId: string, accessOptions?: ScheduleAccessOptions): Promise<void> {
-    return resumeScheduleFromInternals(getInternals(this), scheduleId, accessOptions);
+  async resumeSchedule(scheduleId: string): Promise<void> {
+    return resumeScheduleFromInternals(getInternals(this), scheduleId);
   }
-  async cancelSchedule(scheduleId: string, accessOptions?: ScheduleAccessOptions): Promise<void> {
-    return cancelScheduleFromInternals(getInternals(this), scheduleId, accessOptions);
+  async cancelSchedule(scheduleId: string): Promise<void> {
+    return cancelScheduleFromInternals(getInternals(this), scheduleId);
   }
-  async updateSchedule(
-    scheduleId: string,
-    newCronExpression: string,
-    accessOptions?: ScheduleAccessOptions,
-  ): Promise<void> {
-    return updateScheduleFromInternals(
-      getInternals(this),
-      scheduleId,
-      newCronExpression,
-      accessOptions,
-    );
+  async updateSchedule(scheduleId: string, newCronExpression: string): Promise<void> {
+    return updateScheduleFromInternals(getInternals(this), scheduleId, newCronExpression);
   }
   [HANDLE_RESULT_PROMISE](workflowId: string): Promise<unknown> {
     return getWorkflowResultPromiseFromInternals(getInternals(this), workflowId);
@@ -1076,9 +1041,6 @@ export class Engine<
   ): Promise<unknown> {
     return queryWorkflow(getInternals(this), workflowId, messageName(nameOrDefinition), input);
   }
-  async getQuotaUsage(tenantId: string): Promise<TenantQuotaUsage> {
-    return getInternals(this).tenantQuotaManager.getUsage(tenantId);
-  }
   async getStreamChunks(
     workflowId: string,
     key: string,
@@ -1103,7 +1065,7 @@ export class Engine<
    * registered workflow type on this engine.
    *
    * `acknowledgeUnknownWorkflowTypes` is a dangerous escape hatch for rolling
-   * deploys, explicit storage migrations, or intentional tenant partitioning.
+   * deploys or explicit storage migrations.
    * When set, unknown workflow types are skipped and reported through
    * {@link WorkflowRecoverySkippedEvent}.
    */

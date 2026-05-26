@@ -46,7 +46,7 @@ export type OpenApiOptions = {
   /**
    * REST bindings used to emit OpenAPI path items. Defaults to
    * `createLiveRestBindings()`. Servers that override their binding set
-   * (e.g. for tenant-scoped subsets) should pass the same set here so
+   * (e.g. for a restricted subset) should pass the same set here so
    * `/openapi.json` matches the live HTTP surface.
    */
   restBindings?: ReadonlyArray<UnknownRestBinding>;

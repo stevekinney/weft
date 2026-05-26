@@ -90,8 +90,8 @@ export const aggregateWorkflowsOperation = defineOperation<
 /**
  * REST encoding of `groupBy`: a single `group_by` query parameter. Values
  * matching `attribute:<name>` are parsed as the structured `{ attribute }`
- * shape; the four fixed literals (`status`, `type`, `tenant`,
- * `failureCategory`) pass through as-is.
+ * shape; the three fixed literals (`status`, `type`, `failureCategory`)
+ * pass through as-is.
  */
 function parseGroupByQuery(raw: string | null): AggregateGroupBy | null {
   if (raw === null) return null;
@@ -101,7 +101,7 @@ function parseGroupByQuery(raw: string | null): AggregateGroupBy | null {
     if (attribute.length === 0) return null;
     return { attribute };
   }
-  if (raw === 'status' || raw === 'type' || raw === 'tenant' || raw === 'failureCategory') {
+  if (raw === 'status' || raw === 'type' || raw === 'failureCategory') {
     return raw;
   }
   return null;
@@ -114,7 +114,7 @@ function extractAggregateWorkflowsInput(request: Request): AggregateWorkflowsInp
   const groupBy = parseGroupByQuery(groupByRaw);
   if (groupBy === null) {
     throw toUnprocessable(
-      'group_by must be one of "status", "type", "tenant", "failureCategory", or "attribute:<name>"',
+      'group_by must be one of "status", "type", "failureCategory", or "attribute:<name>"',
     );
   }
 
@@ -159,7 +159,6 @@ export const aggregateWorkflowsRestBinding: UnknownRestBinding = {
     type: { kind: 'query', queryParam: 'type' },
     tags: { kind: 'query', queryParam: 'tag', repeating: true },
     idPrefix: { kind: 'query', queryParam: 'id_prefix' },
-    tenantId: { kind: 'query', queryParam: 'tenant_id', repeating: true },
     limit: { kind: 'query', queryParam: 'limit' },
     groupBy: { kind: 'query', queryParam: 'group_by' },
   },

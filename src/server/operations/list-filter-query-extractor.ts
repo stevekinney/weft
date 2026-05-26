@@ -27,7 +27,6 @@ type ListFilterDimension =
   | 'tags'
   | 'attributes'
   | 'idPrefix'
-  | 'tenantId'
   | 'failureCategory'
   | 'createdAt'
   | 'updatedAt'
@@ -73,13 +72,6 @@ function parseIdPrefix(params: URLSearchParams): ListFilter['idPrefix'] | undefi
   return idPrefix === null ? undefined : idPrefix;
 }
 
-function parseTenantId(params: URLSearchParams): ListFilter['tenantId'] | undefined {
-  const tenantIds = params.getAll('tenant_id');
-  if (tenantIds.length === 0) return undefined;
-  if (tenantIds.length === 1) return tenantIds[0]!;
-  return tenantIds;
-}
-
 function parseFailureCategory(params: URLSearchParams): ListFilter['failureCategory'] | undefined {
   const categories = params.getAll('failure_category') as FailureCategory[];
   if (categories.length === 0) return undefined;
@@ -111,7 +103,6 @@ const LIST_FILTER_QUERY_PARSERS = {
   tags: parseTags,
   attributes: parseAttributes,
   idPrefix: parseIdPrefix,
-  tenantId: parseTenantId,
   failureCategory: parseFailureCategory,
   createdAt: parseCreatedAt,
   updatedAt: parseUpdatedAt,

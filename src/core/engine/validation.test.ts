@@ -5,7 +5,6 @@ import type { ScheduleState, WorkflowState } from '../types.ts';
 import {
   decodeWorkflowState,
   isSanitizedSearchAttributeValue,
-  isValidDecodedTenant,
   isWorkflowTimelineEntry,
   isWorkflowVersionTuple,
   normalizeBulkFilterNumber,
@@ -14,7 +13,6 @@ import {
   decodeScheduleIdentityFields,
   decodeScheduleRuntimeFields,
   isValidScheduleIdentifier,
-  normalizeScheduleAccessOptions,
   normalizeScheduleFilter,
   normalizeScheduleOptions,
 } from './validation/schedule.ts';
@@ -133,7 +131,7 @@ describe('engine validation helpers', () => {
     );
   });
 
-  it('normalizes schedule options and access options', () => {
+  it('normalizes schedule options', () => {
     expect(normalizeScheduleOptions(undefined)).toEqual({ overlap: 'skip', backfill: false });
     expect(() => normalizeScheduleOptions(null as never)).toThrow(
       'options must be an object when provided',
@@ -151,18 +149,6 @@ describe('engine validation helpers', () => {
       overlap: 'queue',
       backfill: true,
     });
-
-    expect(normalizeScheduleAccessOptions(undefined)).toBeUndefined();
-    expect(() => normalizeScheduleAccessOptions(null as never)).toThrow(
-      'accessOptions must be an object when provided',
-    );
-    expect(normalizeScheduleAccessOptions({})).toEqual({});
-    expect(() => normalizeScheduleAccessOptions({ tenantId: '' })).toThrow(
-      'accessOptions.tenantId must be a non-empty string',
-    );
-    expect(normalizeScheduleAccessOptions({ tenantId: 'tenant-1' })).toEqual({
-      tenantId: 'tenant-1',
-    });
   });
 
   it('normalizes schedule filters and rejects invalid shapes', () => {
@@ -176,9 +162,6 @@ describe('engine validation helpers', () => {
     expect(() => normalizeScheduleFilter({ workflowType: '' })).toThrow(
       'filter.workflowType must be a non-empty string when provided',
     );
-    expect(() => normalizeScheduleFilter({ tenantId: '' })).toThrow(
-      'filter.tenantId must be a non-empty string',
-    );
     expect(() => normalizeScheduleFilter({ limit: 1.5 })).toThrow(
       'filter.limit must be a non-negative safe integer when provided',
     );
@@ -189,25 +172,29 @@ describe('engine validation helpers', () => {
       normalizeScheduleFilter({
         status: ['active', 'paused'],
         workflowType: 'demo-workflow',
-        tenantId: 'tenant-1',
         limit: 5,
         offset: 1,
       }),
     ).toEqual({
       status: ['active', 'paused'],
       workflowType: 'demo-workflow',
-      tenantId: 'tenant-1',
       limit: 5,
       offset: 1,
     });
   });
 
-  it('validates decoded tenant values', () => {
-    expect(isValidDecodedTenant(undefined)).toBe(true);
-    expect(isValidDecodedTenant(null)).toBe(false);
-    expect(isValidDecodedTenant({})).toBe(false);
-    expect(isValidDecodedTenant({ id: 'tenant-1', attributes: null })).toBe(false);
-    expect(isValidDecodedTenant({ id: 'tenant-1', attributes: { region: 'us' } })).toBe(true);
+  it('tolerate-and-drops a legacy tenant field on a decoded workflow state', () => {
+    const legacyState = {
+      id: 'wf-legacy',
+      type: 'checkout',
+      status: 'running',
+      createdAt: 1,
+      updatedAt: 2,
+      tenant: { id: 'acme', attributes: { region: 'us' } },
+    };
+    const decoded = decodeWorkflowState(encode(legacyState));
+    expect('tenant' in decoded).toBe(false);
+    expect(decoded.id).toBe('wf-legacy');
   });
 
   it('drops malformed decoded tags while preserving the rest of workflow state', () => {
@@ -287,16 +274,9 @@ describe('engine validation helpers', () => {
       ).toBeNull();
       expect(
         decodeScheduleRuntimeFields(
-          createScheduleRecord({ tenant: { id: '', attributes: {} } }),
-          'schedule-id',
-        ),
-      ).toBeNull();
-      expect(
-        decodeScheduleRuntimeFields(
           createScheduleRecord({
             lastFireAt: 2,
             currentWorkflowId: 'child-workflow',
-            tenant: { id: 'tenant-1', attributes: { region: 'us' } },
           }),
           'schedule-id',
         ),
@@ -308,7 +288,6 @@ describe('engine validation helpers', () => {
         nextFireAt: 3,
         currentWorkflowId: 'child-workflow',
         queuedRuns: 0,
-        tenant: { id: 'tenant-1', attributes: { region: 'us' } },
       } satisfies Pick<
         ScheduleState,
         | 'backfill'
@@ -318,7 +297,6 @@ describe('engine validation helpers', () => {
         | 'nextFireAt'
         | 'currentWorkflowId'
         | 'queuedRuns'
-        | 'tenant'
       >);
       expect(warning).toHaveBeenCalled();
     } finally {

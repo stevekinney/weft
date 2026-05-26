@@ -165,8 +165,8 @@ describe('termination helpers', () => {
       loadWorkflowState: async (workflowId) => await loadWorkflowState(internals, workflowId),
       runSerializedWorkflowStateWrite: async (workflowId, writeOperation) =>
         await runSerializedWorkflowStateWrite(internals, workflowId, writeOperation),
-      commitWorkflowStateOperations: async (state, operations, options) =>
-        await commitWorkflowStateOperations(internals, state, operations, options),
+      commitWorkflowStateOperations: async (state, operations) =>
+        await commitWorkflowStateOperations(internals, state, operations),
     });
 
     await completeWorkflow(internals, handle.id, 'done', callbacks);
@@ -362,9 +362,9 @@ describe('termination helpers', () => {
       loadWorkflowState: async (workflowId) => await loadWorkflowState(internals, workflowId),
       runSerializedWorkflowStateWrite: async (workflowId, writeOperation) =>
         await runSerializedWorkflowStateWrite(internals, workflowId, writeOperation),
-      commitWorkflowStateOperations: async (state, operations, options) => {
+      commitWorkflowStateOperations: async (state, operations) => {
         events.push('commit');
-        await commitWorkflowStateOperations(internals, state, operations, options);
+        await commitWorkflowStateOperations(internals, state, operations);
       },
       dispatchEvent: () => events.push('dispatchEvent'),
       forwardEventToHandle: () => events.push('forwardEventToHandle'),

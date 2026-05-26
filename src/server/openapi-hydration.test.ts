@@ -168,9 +168,9 @@ describe('OpenAPI hydration', () => {
 
     // Responses cover the universal-default fault set + any operation-
     // specific producibleFaults. start-workflow declares Conflict (409)
-    // and RateLimited (429) explicitly.
+    // explicitly.
     const responses = startOperation!['responses'] as Record<string, unknown>;
-    for (const status of ['400', '401', '403', '409', '429', '500']) {
+    for (const status of ['400', '401', '403', '409', '500']) {
       expect(responses, `weft.workflows.start missing status ${status}`).toHaveProperty(status);
     }
   });

@@ -67,25 +67,6 @@ export async function queryWorkflowTypeIndex(storage: Storage, type: string): Pr
 }
 
 /**
- * Match every workflow whose `tenant?.id` is in `tenantIds`. Accepts either
- * a single id or an array.
- */
-export async function queryWorkflowTenantIndex(
-  storage: Storage,
-  tenantIds: string | readonly string[],
-): Promise<Set<string>> {
-  const list = typeof tenantIds === 'string' ? [tenantIds] : tenantIds;
-  const ids = new Set<string>();
-  for (const tenantId of list) {
-    const prefix = `wf-idx-tenant:${encodeStorageKeyComponent(tenantId)}:`;
-    for (const id of await collectWorkflowIdsFromIndex(storage, prefix)) {
-      ids.add(id);
-    }
-  }
-  return ids;
-}
-
-/**
  * Time-range scan over `wf-idx-{kind}:` (created, updated, or deadline).
  * Returns the candidate ids the engine post-filter will refine.
  */

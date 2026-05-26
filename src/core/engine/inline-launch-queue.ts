@@ -88,7 +88,6 @@ async function startQueuedInlineWorkflowExecution(
       start.nestingDepth,
       start.executionDeadline,
       start.executionStateOwnerId,
-      start.tenant,
     );
 
     await callbacks.processPendingUpdatesAfterInlineAdvance(start.workflowId);

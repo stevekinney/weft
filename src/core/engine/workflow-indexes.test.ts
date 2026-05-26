@@ -52,12 +52,6 @@ describe('deriveWorkflowVisibilityIndexKeys', () => {
     );
   });
 
-  it('includes the tenant index when the workflow has a tenant', () => {
-    const state = makeState({ tenant: { id: 'acme' } });
-    const keys = deriveWorkflowVisibilityIndexKeys(state);
-    expect(keys).toContain(KEYS.workflowVisibilityTenant('acme', state.id));
-  });
-
   it('includes the deadline index when executionDeadline is set', () => {
     const state = makeState({ executionDeadline: 1_700_000_999_999 });
     const keys = deriveWorkflowVisibilityIndexKeys(state);
@@ -67,14 +61,13 @@ describe('deriveWorkflowVisibilityIndexKeys', () => {
   it('omits optional dimensions when absent', () => {
     const keys = deriveWorkflowVisibilityIndexKeys(makeState());
     for (const key of keys) {
-      expect(key.startsWith('wf-idx-tenant:')).toBe(false);
       expect(key.startsWith('wf-idx-deadline:')).toBe(false);
     }
   });
 
   it('returns keys in a stable, sorted order', () => {
     const keys = deriveWorkflowVisibilityIndexKeys(
-      makeState({ tenant: { id: 'acme' }, executionDeadline: 1_700_000_999_999 }),
+      makeState({ executionDeadline: 1_700_000_999_999 }),
     );
     const sorted = [...keys].toSorted();
     expect(keys).toEqual(sorted);
@@ -83,7 +76,7 @@ describe('deriveWorkflowVisibilityIndexKeys', () => {
 
 describe('buildWorkflowVisibilityIndexOperations', () => {
   it('writes all index keys and a fresh manifest on first insert', () => {
-    const state = makeState({ tenant: { id: 'acme' } });
+    const state = makeState({ executionDeadline: 1_700_000_999_999 });
     const { batchOps, nextManifestKeys } = buildWorkflowVisibilityIndexOperations(
       state.id,
       null,
@@ -149,7 +142,7 @@ describe('buildWorkflowVisibilityIndexOperations', () => {
   });
 
   it('drops every key and the manifest when nextState is null', () => {
-    const state = makeState({ tenant: { id: 'acme' } });
+    const state = makeState({ executionDeadline: 1_700_000_999_999 });
     const manifest: WorkflowVisibilityManifest = {
       version: WORKFLOW_VISIBILITY_INDEX_VERSION,
       keys: deriveWorkflowVisibilityIndexKeys(state),
@@ -219,7 +212,7 @@ describe('buildWorkflowVisibilityIndexTransition', () => {
   });
 
   it('drops every key when transitioning to null with a previous state', () => {
-    const previousState = makeState({ tenant: { id: 'acme' } });
+    const previousState = makeState({ executionDeadline: 1_700_000_999_999 });
     const { batchOps, nextManifestKeys } = buildWorkflowVisibilityIndexTransition(
       previousState.id,
       previousState,

@@ -33,7 +33,6 @@ import type {
 } from '../interceptor.ts';
 import type { HumanReviewResult, ReviewCoordinator } from '../review/index.ts';
 import type { Scheduler } from '../scheduler.ts';
-import type { TenantQuotaManager } from '../tenant-quotas.ts';
 import type { Checkpoint } from '../types.ts';
 import type { UpdateCoordinator } from '../updates.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
@@ -124,7 +123,6 @@ export interface EngineInternals {
   workflowNestingDepths: Map<string, number>;
   workflowHeaders: Map<string, Map<string, string>>;
   workflowStateWriteChains: Map<string, Promise<void>>;
-  tenantQuotaManager: TenantQuotaManager;
   heartbeatDetails: Map<string, unknown>;
   pendingStarts: Set<string>;
   pendingScheduleCreations: Set<string>;

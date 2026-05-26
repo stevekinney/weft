@@ -2,7 +2,6 @@ import { describe, expect, it } from 'bun:test';
 
 import { TestEngine } from '../../testing/test-engine.ts';
 import { Engine } from '../engine.ts';
-import { tenantFromInputField } from '../tenant.ts';
 import { workflow, type WorkflowContext, type WorkflowReduceInput } from '../types.ts';
 
 async function* trimStageFn(_ctx: WorkflowContext, input: unknown) {
@@ -166,32 +165,6 @@ describe('workflow composition operators', () => {
     await expect(firstHandle.result()).resolves.toEqual({ echoed: 'alpha' });
 
     const secondHandle = await engine.start('second-parent', null);
-    await expect(secondHandle.result()).rejects.toThrow(
-      'Child workflow id collision for "shared-child" does not match the requested child workflow',
-    );
-  });
-
-  it('Track 7c: child workflow reuse does not cross tenant boundaries when only one parent has a tenant', async () => {
-    const engine = new Engine({ tenantResolver: tenantFromInputField('tenantId') });
-
-    const echoStage = workflow({ name: 'echo-stage' }).execute(async function* (
-      _ctx: WorkflowContext,
-      input: unknown,
-    ) {
-      return { echoed: input };
-    });
-
-    engine.register(echoStage);
-    engine.register(
-      workflow({ name: 'tenant-parent' }).execute(async function* (ctx: WorkflowContext) {
-        return yield* ctx.pipe([{ type: 'echo-stage', options: { id: 'shared-child' } }], 'alpha');
-      }),
-    );
-
-    const firstHandle = await engine.start('tenant-parent', {});
-    await expect(firstHandle.result()).resolves.toEqual({ echoed: 'alpha' });
-
-    const secondHandle = await engine.start('tenant-parent', { tenantId: 'acme' });
     await expect(secondHandle.result()).rejects.toThrow(
       'Child workflow id collision for "shared-child" does not match the requested child workflow',
     );

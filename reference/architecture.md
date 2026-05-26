@@ -653,11 +653,11 @@ Restate competes on architecture and latency. Virtual Objects provide session-sc
 
 **Where Restate leads:** Virtual Objects provide built-in session affinity with co-located state—no sticky routing configuration needed. User code suspension during async waits (similar to Inngest) allows processes to be shut down during LLM calls.
 
-**Where Weft leads:** Checkpoint granularity and state model. Both engines leave agent-level concerns (budget enforcement, context window management, model routing) to userland; Weft's yield-level checkpointing means an agent loop built on `ctx.run()` recovers at the individual tool-call boundary rather than the journal-replay boundary. Weft's `ctx.state` ladder keeps session state checkpoint-local while execution, workflow, and tenant scopes use durable storage-backed state.
+**Where Weft leads:** Checkpoint granularity and state model. Both engines leave agent-level concerns (budget enforcement, context window management, model routing) to userland; Weft's yield-level checkpointing means an agent loop built on `ctx.run()` recovers at the individual tool-call boundary rather than the journal-replay boundary. Weft's `ctx.state` ladder keeps session state checkpoint-local while execution and workflow scopes use durable storage-backed state.
 
 ### Hatchet
 
-Hatchet positions as simpler Temporal with AI-first design. Native result streaming, FIFO/LIFO/Round Robin/Priority queue policies for multi-tenant fairness, built-in human-in-the-loop eventing, and Postgres-only self-hosting.
+Hatchet positions as simpler Temporal with AI-first design. Native result streaming, FIFO/LIFO/Round Robin/Priority queue policies for fair scheduling, built-in human-in-the-loop eventing, and Postgres-only self-hosting.
 
 **Where Hatchet leads:** Queue scheduling policies (priority, FIFO, round-robin) are more sophisticated than Weft's current least-loaded routing.
 
@@ -3288,7 +3288,7 @@ interface ActivityInterception<TInput = unknown> {
   readonly attempt: number;
   readonly queue: string;
   input: TInput; // mutable: interceptors can transform input
-  headers: Map<string, string>; // propagated metadata (trace context, tenant IDs, scoped claims)
+  headers: Map<string, string>; // propagated metadata (trace context, scoped claims)
 }
 
 interface SleepInterception {
@@ -3322,7 +3322,7 @@ The `headers` field is a `Map<string, string>` that travels with each operation 
 - Engine serializes headers into `postMessage` (local Workers) or the WebSocket `task` message (remote Workers).
 - Activity interceptor reads headers from `ActivityExecutionInterception`.
 
-This is how trace context (W3C `traceparent`/`tracestate`), tenant IDs, short-lived authorization claims, and opaque credential references propagate without special-casing any of them. Do not put raw bearer tokens, encryption keys, or long-lived secrets in interceptor headers; resolve those inside the worker after validating the propagated claim.
+This is how trace context (W3C `traceparent`/`tracestate`), short-lived authorization claims, and opaque credential references propagate without special-casing any of them. Do not put raw bearer tokens, encryption keys, or long-lived secrets in interceptor headers; resolve those inside the worker after validating the propagated claim.
 
 #### Composition
 
@@ -3795,7 +3795,7 @@ Three files. Webpack bundling. `proxyActivities` ceremony. Separate worker proce
 - [x] **Handle registry uses `WeakRef`.** Engine doesn't prevent GC of dropped handles.
 - [x] **`Transferable` used for Worker communication.** Checkpoint `ArrayBuffer` is transferred, not copied, to/from Workers.
 - [x] **Memory per idle workflow ≤ 2KB.** Verified by benchmark with 100K concurrent workflows; `src/benchmarks/memory-per-workflow.test.ts` reports a max durable footprint of ~743 bytes/workflow and a max current checkpoint size of ~132 bytes/workflow.
-- [x] **No unbounded growth under load.** Short sustained-load regression benchmark keeps post-warmup RSS within a bounded band while sustaining >10K workflows/sec. `src/benchmarks/load-growth-memory.test.ts` now runs three fresh-subprocess trials against the SQLite storage backend, using zero terminal retention to isolate steady-state engine churn from intentionally retained history. The gate requires a median throughput above 10K workflows/sec, median RSS slope below 1MB/sec, median post-warmup RSS delta below 8MB, median post-warmup RSS band below 8MB, and every trial's post-warmup RSS delta/band below 64MB.
+- [x] **No unbounded growth under load.** Short sustained-load regression benchmark keeps post-warmup RSS within a bounded band under load driven at 10K workflows/sec. `src/benchmarks/load-growth-memory.test.ts` now runs three fresh-subprocess trials against the SQLite storage backend, using zero terminal retention to isolate steady-state engine churn from intentionally retained history. The gate asserts median RSS slope below 1MB/sec, median post-warmup RSS delta below 8MB, median post-warmup RSS band below 8MB, and every trial's post-warmup RSS delta/band below 64MB. Throughput is the _pacing_ rate the load is driven at, not a pass/fail bar: it is logged for diagnostics (the GC-sampled sustained path runs well below an unthrottled run, so an absolute floor would conflate hardware speed with memory health), and a low workload-completion precondition (at least 25% of the ideal dispatch count) invalidates a run whose load generation collapsed.
 
 ### Storage
 
@@ -4036,8 +4036,6 @@ Three files. Webpack bundling. `proxyActivities` ceremony. Separate worker proce
 The Temporal-derived pain points above are architecturally solved. This section tracks the remaining gaps versus the newer AI-native alternatives documented in the "Competitive Landscape" and "Honest Gaps" sections earlier in this document. Each item is a binary acceptance criterion, flipped to `[x]` when implemented and verified.
 
 - [x] **Serverless suspension primitive.** `ctx.suspendUntil(resumeToken)` in `src/core/context.ts` yields to `waitForSignal(resumeToken)`, persisting a checkpoint so the engine can drop the in-memory workflow until the resume signal arrives. Resume is via the existing `POST /v1/workflows/:id/signal/:token` endpoint (or `engine.signal(workflowId, resumeToken, payload)`). See tests in `src/core/suspend.test.ts` for multi-suspension flows. Worker execution also releases its active worker on a durable `wait-signal` checkpoint, letting the same worker process another workflow while the parked generator state stays in that worker process.
-- [x] **Multi-tenant context.** `TenantResolver` interface in `src/core/tenant.ts`; engine option `tenantResolver` populates `ctx.tenant: TenantContext | undefined` at workflow start and persists it on `WorkflowState.tenant` so it survives recovery. `tenantFromInputField(name)` is a convenience resolver for the common case.
-- [x] **Tenant context in worker-execution mode.** `WorkerInboundMessage.run` carries an optional `tenant` field across `postMessage`; `WorkerExecutionStrategy.startWorkflow` forwards the resolved tenant; and `src/workers/workflow-runner.ts` builds a worker-side `WorkerWorkflowContext` (`workflowId`, `tenant`, `signal`, `startedAt`) that is passed as the first argument to registered handlers. The constructor stop-gap is gone — `workerExecution` and `tenantResolver` can be combined. Engine-side fields like `executionTimeRemaining` are stub values inside the worker because the worker has no clock authority; user code that needs them should stay on inline mode. A regression test runs three workflows through a real `Worker` and asserts each tenant sees only its own resolved configuration and an unexpected tenant is rejected.
 - [x] **Routing policies.** `RoutingPolicy = 'least-loaded' | 'round-robin' | 'fair-share'` in `src/worker/registry.ts`. `WorkerRegistry` constructor accepts `{ policy }`; `findWorker(activity, { fairShareKey })` consults per-worker per-key counts. All three policies are plumbed end-to-end: `TaskDispatch.fairShareKey` is threaded through `dispatchTaskImpl` → `findWorker` → `assignTask` in `src/server/index.ts`, and a server-level integration test asserts fair-share distributes across keys when dispatched via `serve()`.
 - [x] **Task queue scheduling policies.** `TaskQueueOptions.schedulingPolicy: 'priority' | 'fifo' | 'lifo'` in `src/server/task-queue.ts`, default `'priority'` (current behavior). Plumbed through `serve({ schedulingPolicy })`.
 - [x] **Virtual-Object-style session state.** `ctx.state.session(key)` co-located with the sticky worker. Builds on existing `workerAffinity` in `src/server/index.ts`; session state survives worker restart via checkpoint.
@@ -4143,7 +4141,7 @@ Weft has durable `ctx.sleep()` for delays within a running workflow, but no way 
 - [x] **Schedules are listable and queryable.** `engine.listSchedules(filter?)` returns all active schedules with their next fire time, last fire time, and status.
 - [x] **`GET /v1/schedules` and `POST /v1/schedules` HTTP endpoints.** Full CRUD via REST. Dashboard shows schedule state, history, and next fire time.
 - [x] **`weft schedule` CLI subcommand.** `weft schedule list`, `weft schedule create`, `weft schedule pause <id>`, `weft schedule cancel <id>`.
-- [x] Tests cover: create/fire/cancel cycle, overlap policies, backfill after downtime, cron edge cases (Feb 29, DST transitions), multi-tenant schedule isolation.
+- [x] Tests cover: create/fire/cancel cycle, overlap policies, backfill after downtime, cron edge cases (Feb 29, DST transitions).
 
 #### 7b. Delayed start
 
@@ -4170,15 +4168,7 @@ Child workflows exist, but composing them into pipelines, fan-out/fan-in DAGs, o
 - [x] **`engine.purge(filter)` manually triggers cleanup.** For one-off housekeeping outside the automatic sweep.
 - [x] Dashboard shows retention policy per workflow type and next scheduled sweep.
 
-#### 7e. Per-tenant resource quotas
-
-- [x] **`EngineOptions.quotas` configures per-tenant limits.** Accepts `{ maxConcurrentWorkflows?: number, maxWorkflowCreationRate?: { count: number, window: Duration }, maxStorageBytes?: number }`.
-- [x] **Quota violations throw `QuotaExceededError`.** Error includes: which quota was violated, current usage, and the limit. Callers can catch and decide whether to queue, reject, or wait.
-- [x] **Quotas are enforced at `engine.start()` time.** Concurrent workflow count checked atomically with workflow creation. Rate limit uses a sliding window counter stored at `quota:{tenant}:rate:{window}`.
-- [x] **Quotas are queryable.** `engine.getQuotaUsage(tenantId)` returns current usage vs. limits. Exposed via `GET /v1/tenants/:id/quota`.
-- [x] **Quota usage visible in dashboard.** Per-tenant usage gauges with warning thresholds.
-
-#### 7f. Lightweight tagging
+#### 7e. Lightweight tagging
 
 - [x] **`StartOptions.tags` accepts `string[]`.** Tags are stored alongside workflow state and indexed for filtering. Unlike search attributes, tags require no schema declaration — they're free-form labels.
 - [x] **`handle.addTags(...tags)` and `handle.removeTags(...tags)` mutate tags on a running workflow.** Changes are durable immediately when the tag mutation is persisted.
@@ -4186,7 +4176,7 @@ Child workflows exist, but composing them into pipelines, fan-out/fan-in DAGs, o
 - [x] **Tags are distinct from search attributes.** Search attributes are typed, schema-declared, and support range queries. Tags are untyped, schema-free, and support only equality/intersection. Both are useful; neither replaces the other.
 - [x] Tags visible in dashboard workflow list as badges. Filterable via tag chips in the UI.
 
-#### 7g. Bulk operations
+#### 7f. Bulk operations
 
 - [x] **`engine.cancelAll(filter)` cancels all workflows matching a filter.** Returns `{ cancelled: number, failed: number, errors: Array<{ id, error }> }`. Filter supports the same shape as `engine.list()` (type, status, attributes, tags).
 - [x] **`engine.signalAll(filter, name, payload?)` sends a signal to all matching workflows.** Returns `{ signalled: number, failed: number }`.
@@ -4199,7 +4189,7 @@ Child workflows exist, but composing them into pipelines, fan-out/fan-in DAGs, o
 - [x] **Confirmed bulk operations persist audit records.** Audit events capture the credential-safe caller principal, action, request ID, filter summary, affected count, sampled IDs, and confirmation token.
 - [x] **Dashboard bulk actions require preview before commit.** Cancel, signal, delete, and tag mutations show the active scope and affected count before enabling confirmation.
 
-#### 7h. Workflow forking
+#### 7g. Workflow forking
 
 - [x] **`engine.fork(workflowId, options?)` creates a new workflow from an existing workflow's checkpoint.** The forked workflow starts from the same step with the same accumulated results, but gets a new ID and can diverge from that point. Original workflow is unaffected.
 - [x] **Fork options include `{ fromStep?: number }`.** Default: fork from the latest checkpoint. `fromStep` allows forking from a historical checkpoint (if checkpoint history is retained).
@@ -4207,7 +4197,7 @@ Child workflows exist, but composing them into pipelines, fan-out/fan-in DAGs, o
 - [x] **`POST /v1/workflows/:id/fork` HTTP endpoint.** Returns the new workflow handle.
 - [x] Tests cover: fork and diverge, fork from historical step, fork a completed workflow (starts from last checkpoint, re-runs terminal step), fork lineage chain (A → B → C).
 
-#### 7i. Event replay and time-travel debugging
+#### 7h. Event replay and time-travel debugging
 
 Weft already has a hash-chained event log — the data is there, but there's no query interface for inspecting or replaying it.
 
@@ -4218,7 +4208,7 @@ Weft already has a hash-chained event log — the data is there, but there's no 
 - [x] **`GET /v1/workflows/:id/timeline` HTTP endpoint.** Returns the structured timeline as JSON.
 - [x] **`weft timeline <workflowId>` CLI subcommand.** Prints the execution trace to stdout. `--step N` shows checkpoint state at step N. `--diff N M` shows the delta between two steps.
 
-#### 7j. Streaming resumption tokens
+#### 7i. Streaming resumption tokens
 
 Weft streams tokens over WebSocket with a reconnection buffer, but if the buffer has been flushed before the client reconnects, there's a gap.
 

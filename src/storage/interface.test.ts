@@ -294,7 +294,9 @@ describe('KEYS', () => {
     expect(KEYS.update(workflowId, 'update-1')).toBe(`upd:${encodedWorkflowId}:update-1`);
     expect(KEYS.updateResponse('update-1')).toBe('upr:update-1');
     expect(KEYS.updateIdempotency(workflowId, 'idem-1')).toBe(`upk:${encodedWorkflowId}:idem-1`);
-    expect(KEYS.budget('tenant-a', 'daily', '2026-04-14')).toBe('budget:tenant-a:daily:2026-04-14');
+    expect(KEYS.budget('account-a', 'daily', '2026-04-14')).toBe(
+      'budget:account-a:daily:2026-04-14',
+    );
     expect(KEYS.review(workflowId, 'review-1')).toBe(`review:${encodedWorkflowId}:review-1`);
     expect(KEYS.workflowHeaders(workflowId)).toBe(`wf-headers:${encodedWorkflowId}`);
     expect(KEYS.offload(workflowId, 'payload')).toBe(`offload:${encodedWorkflowId}:payload`);
@@ -302,10 +304,9 @@ describe('KEYS', () => {
     expect(KEYS.stateExecution(workflowId, 'cursor:1')).toBe(
       `state:execution:${encodedWorkflowId}:cursor%3A1`,
     );
-    expect(KEYS.stateWorkflow('tenant:1', 'invoice:review', 'cursor:1')).toBe(
-      'state:workflow:tenant%3A1:invoice%3Areview:cursor%3A1',
+    expect(KEYS.stateWorkflow('invoice:review', 'cursor:1')).toBe(
+      'state:workflow-scope:default:invoice%3Areview:cursor%3A1',
     );
-    expect(KEYS.stateTenant('tenant:1', 'cursor:1')).toBe('state:tenant:tenant%3A1:cursor%3A1');
     expect(KEYS.streamChunk(workflowId, 'stream', 7)).toBe(
       `blob:${encodedWorkflowId}:stream:chunk:0000000007`,
     );
@@ -325,9 +326,6 @@ describe('KEYS', () => {
     );
     expect(KEYS.workflowVisibilityType('order:fulfillment', workflowId)).toBe(
       `wf-idx-type:order%3Afulfillment:${encodedWorkflowId}`,
-    );
-    expect(KEYS.workflowVisibilityTenant('tenant:1', workflowId)).toBe(
-      `wf-idx-tenant:tenant%3A1:${encodedWorkflowId}`,
     );
     expect(KEYS.workflowVisibilityCreated(1_700_000_000_000, workflowId)).toBe(
       `wf-idx-created:0001700000000000:${encodedWorkflowId}`,

@@ -55,12 +55,12 @@ describe('WorkerRegistry', () => {
     });
 
     // Stack a few fair-share tasks on the worker we are about to remove.
-    registry.assignTask('worker-doomed', 'op-1', 30_000, 'tenant-alpha');
-    registry.assignTask('worker-doomed', 'op-2', 30_000, 'tenant-alpha');
-    registry.assignTask('worker-doomed', 'op-3', 30_000, 'tenant-beta');
+    registry.assignTask('worker-doomed', 'op-1', 30_000, 'share-alpha');
+    registry.assignTask('worker-doomed', 'op-2', 30_000, 'share-alpha');
+    registry.assignTask('worker-doomed', 'op-3', 30_000, 'share-beta');
 
     // And one task on the survivor so we can assert it isn't disturbed.
-    registry.assignTask('worker-survivor', 'op-survivor', 30_000, 'tenant-alpha');
+    registry.assignTask('worker-survivor', 'op-survivor', 30_000, 'share-alpha');
 
     registry.unregister('worker-doomed');
 
@@ -75,11 +75,11 @@ describe('WorkerRegistry', () => {
 
     // Fair-share counters for the unregistered worker are also gone — when
     // the survivor is the only candidate left, fair-share picks it for both
-    // tenant-alpha (despite already carrying one) and tenant-beta (zero).
-    const alphaPick = registry.findWorker('runAgent', { fairShareKey: 'tenant-alpha' });
+    // share-alpha (despite already carrying one) and share-beta (zero).
+    const alphaPick = registry.findWorker('runAgent', { fairShareKey: 'share-alpha' });
     expect(alphaPick?.id).toBe('worker-survivor');
 
-    const betaPick = registry.findWorker('runAgent', { fairShareKey: 'tenant-beta' });
+    const betaPick = registry.findWorker('runAgent', { fairShareKey: 'share-beta' });
     expect(betaPick?.id).toBe('worker-survivor');
   });
 

@@ -13,7 +13,6 @@ import type {
   ReviewListEntry,
   ReviewListFilter,
   SubmitReviewOptions,
-  TenantQuotaUsage,
 } from '../core/types.ts';
 import { HttpClientError, request } from './http-request.ts';
 import type { UpdateResult } from './interface.ts';
@@ -51,17 +50,6 @@ export async function submitReviewRequest(
       method: 'POST',
       body: JSON.stringify(options),
     },
-  );
-}
-
-export function getQuotaUsageRequest(
-  context: HttpClientRequestContext,
-  tenantId: string,
-): Promise<TenantQuotaUsage> {
-  return request<TenantQuotaUsage>(
-    context.baseUrl,
-    `/tenants/${encodeURIComponent(tenantId)}/quota`,
-    context.headers,
   );
 }
 

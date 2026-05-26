@@ -545,7 +545,7 @@ The `headers` field is a `Map<string, string>` that travels with each operation 
 - Engine serializes headers into `postMessage` (local Workers) or the WebSocket `task` message (remote Workers).
 - Activity interceptor reads headers from `ActivityExecutionInterception`.
 
-This is how trace context (W3C `traceparent`/`tracestate`), auth tokens, tenant IDs, and encryption keys propagate — without special-casing any of them.
+This is how trace context (W3C `traceparent`/`tracestate`), auth tokens, and encryption keys propagate — without special-casing any of them.
 
 #### Composition
 

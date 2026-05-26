@@ -56,7 +56,6 @@ export const bulkListFilterInputSchema = z.object({
   limit: z.number().int().min(0).optional(),
   offset: z.number().int().min(0).optional(),
   idPrefix: z.string().optional(),
-  tenantId: z.union([z.string(), z.array(z.string())]).optional(),
   failureCategory: z.union([failureCategorySchema, z.array(failureCategorySchema)]).optional(),
   createdAt: timeRangeSchema.optional(),
   updatedAt: timeRangeSchema.optional(),
@@ -209,7 +208,7 @@ function parseOptionalFilterNumber(
 /**
  * Ordered parsers for each filter dimension in `parseBulkListFilterFromBody`.
  * Precedence is visible in source order: status → type → tags → attributes →
- * limit → offset → idPrefix → tenantId → failureCategory → createdAt →
+ * limit → offset → idPrefix → failureCategory → createdAt →
  * updatedAt → executionDeadline.
  */
 const BULK_FILTER_DIMENSION_PARSERS: ReadonlyArray<
@@ -243,10 +242,6 @@ const BULK_FILTER_DIMENSION_PARSERS: ReadonlyArray<
   (filter, record) => {
     const idPrefix = record['idPrefix'];
     if (typeof idPrefix === 'string') filter.idPrefix = idPrefix;
-  },
-  (filter, record) => {
-    const tenantId = parseOptionalTenantId(record['tenantId']);
-    if (tenantId !== undefined) filter.tenantId = tenantId;
   },
   (filter, record) => {
     const failureCategory = parseOptionalFailureCategoryFilter(record['failureCategory']);
@@ -291,15 +286,6 @@ export function parseBulkListFilterFromBody(body: unknown): ListFilter {
     applyDimension(filter, filterRecord);
   }
   return filter;
-}
-
-function parseOptionalTenantId(value: unknown): string | string[] | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value === 'string') return value;
-  if (Array.isArray(value) && value.every((entry) => typeof entry === 'string')) {
-    return value;
-  }
-  throw new Error('Field "filter.tenantId" must be a string or an array of strings');
 }
 
 const TIME_RANGE_BOUNDS = ['gte', 'gt', 'lte', 'lt'] as const;
@@ -376,9 +362,6 @@ function applyExtendedBulkFilterFields(filter: ListFilter, input: BulkListFilter
   if (input.idPrefix !== undefined) {
     filter.idPrefix = input.idPrefix;
   }
-  if (input.tenantId !== undefined) {
-    filter.tenantId = input.tenantId;
-  }
   if (input.failureCategory !== undefined) {
     filter.failureCategory = input.failureCategory;
   }
@@ -450,7 +433,6 @@ function principalToBulkOperationPrincipal(principal: Principal): BulkOperationP
   return {
     method: principal.method,
     ...(principal.subject === undefined ? {} : { subject: principal.subject }),
-    ...(principal.tenantId === undefined ? {} : { tenantId: principal.tenantId }),
   };
 }
 

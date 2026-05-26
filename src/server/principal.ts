@@ -26,9 +26,9 @@ import {
 /**
  * Raw JWT payload — intentionally loose; individual claim access is
  * type-guarded at read sites. **Non-authoritative for authorization
- * decisions.** Use `principal.tenantId`, `principal.subject`, and
- * `principal.scopes` (all derived and normalized at construction time)
- * instead. The `claims` bag is preserved for debugging and pass-through.
+ * decisions.** Use `principal.subject` and `principal.scopes` (both
+ * derived and normalized at construction time) instead. The `claims`
+ * bag is preserved for debugging and pass-through.
  *
  * @example
  * ```ts
@@ -69,7 +69,6 @@ export type AuthenticatedPrincipal = {
   readonly method: 'jwt' | 'api-key' | 'mtls' | 'stdio-local';
   readonly scopes: ReadonlySet<AuthorizationScope>;
   readonly claims: JwtClaims | undefined;
-  readonly tenantId: string | undefined;
   readonly subject: string | undefined;
   hasScope(scope: AuthorizationScope): boolean;
 };
@@ -113,7 +112,6 @@ export type Principal = AuthenticatedPrincipal | UnauthenticatedPrincipal;
  *
  * const principal = principalFromJwtClaims({
  *   sub: 'user-123',
- *   tenantId: 'tenant-a',
  *   scope: 'workflows:read workflows:write',
  * });
  * console.log(principal.hasScope('workflows:read'));
@@ -121,14 +119,12 @@ export type Principal = AuthenticatedPrincipal | UnauthenticatedPrincipal;
  */
 export function principalFromJwtClaims(claims: JwtClaims): AuthenticatedPrincipal {
   const scopes = extractScopesFromClaims(claims);
-  const tenantId = extractTenantId(claims);
   const subject = typeof claims['sub'] === 'string' ? claims['sub'] : undefined;
 
   return {
     method: 'jwt',
     scopes,
     claims,
-    tenantId,
     subject,
     hasScope(scope) {
       return scopes.has(scope);
@@ -145,7 +141,6 @@ export function principalFromJwtClaims(claims: JwtClaims): AuthenticatedPrincipa
  *
  * const principal = principalFromApiKey({
  *   subject: 'automation',
- *   tenantId: 'tenant-a',
  *   scopes: ['workflows:read'],
  * });
  * console.log(principal.subject);
@@ -154,14 +149,12 @@ export function principalFromJwtClaims(claims: JwtClaims): AuthenticatedPrincipa
 export function principalFromApiKey(options: {
   subject: string;
   scopes: ReadonlyArray<AuthorizationScope>;
-  tenantId?: string;
 }): AuthenticatedPrincipal {
   const scopes = new Set<AuthorizationScope>(options.scopes);
   return {
     method: 'api-key',
     scopes,
     claims: undefined,
-    tenantId: options.tenantId,
     subject: options.subject,
     hasScope(scope) {
       return scopes.has(scope);
@@ -186,14 +179,12 @@ export function principalFromApiKey(options: {
 export function principalFromMutualTls(options: {
   subject: string;
   scopes: ReadonlyArray<AuthorizationScope>;
-  tenantId?: string;
 }): AuthenticatedPrincipal {
   const scopes = new Set<AuthorizationScope>(options.scopes);
   return {
     method: 'mtls',
     scopes,
     claims: undefined,
-    tenantId: options.tenantId,
     subject: options.subject,
     hasScope(scope) {
       return scopes.has(scope);
@@ -237,7 +228,6 @@ export function principalFromStdioLocal(): AuthenticatedPrincipal {
     method: 'stdio-local',
     scopes,
     claims: undefined,
-    tenantId: undefined,
     subject: 'stdio-local',
     hasScope(scope) {
       return scopes.has(scope);
@@ -250,18 +240,4 @@ const ANONYMOUS: UnauthenticatedPrincipal = { method: 'unauthenticated' };
 /** Type guard separating authenticated from unauthenticated principals. */
 export function isAuthenticated(principal: Principal): principal is AuthenticatedPrincipal {
   return principal.method !== 'unauthenticated';
-}
-
-function extractTenantId(claims: JwtClaims): string | undefined {
-  for (const key of ['tenantId', 'tenant_id', 'tenant'] as const) {
-    const value = claims[key];
-    if (typeof value !== 'string') continue;
-    // Treat whitespace-only as absent so downstream tenant-isolation logic
-    // never receives a blank tenantId that silently passes string checks.
-    // Consistent with `addStringClaimScopes` in `authorization-scope.ts`.
-    const trimmed = value.trim();
-    if (trimmed.length === 0) continue;
-    return trimmed;
-  }
-  return undefined;
 }

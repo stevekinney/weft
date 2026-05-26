@@ -55,7 +55,7 @@ The default has flipped because abandoned workflows are almost always a bug, not
 
 ## Acknowledging drift: `acknowledgeUnknownWorkflowTypes`
 
-Sometimes drift is intentional: a rolling deploy where old pods are still serving the workflow type the new pod doesn't know; a tenant migration where you're copying storage into a partial registry; a one-shot operator script that doesn't need to drive every workflow type the database holds.
+Sometimes drift is intentional: a rolling deploy where old pods are still serving the workflow type the new pod doesn't know; a storage migration where you're copying records into a partial registry; a one-shot operator script that doesn't need to drive every workflow type the database holds.
 
 For these cases, pass `acknowledgeUnknownWorkflowTypes: true`:
 

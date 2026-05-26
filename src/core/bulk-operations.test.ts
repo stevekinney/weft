@@ -1105,7 +1105,6 @@ describe('bulk workflow operations', () => {
           matched: 2,
           statuses: ['running'],
           workflowTypes: ['wait-for-signal'],
-          tenantIds: [],
         }),
       );
       const firstPreviewedWorkflow = await engine.get('bulk-preview-selected-a');
@@ -1307,7 +1306,6 @@ describe('bulk workflow operations', () => {
           principal: {
             method: 'api-key',
             subject: 'operator-1',
-            tenantId: 'tenant-1',
           },
           requestId: 'bulk-audit-request',
         },
@@ -1323,7 +1321,6 @@ describe('bulk workflow operations', () => {
           principal: {
             method: 'api-key',
             subject: 'operator-1',
-            tenantId: 'tenant-1',
           },
           sampleWorkflowIds: ['bulk-audit-selected-a', 'bulk-audit-selected-b'],
         }),

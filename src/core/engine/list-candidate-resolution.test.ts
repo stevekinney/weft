@@ -38,7 +38,7 @@ class ScanCountingStorage extends MemoryStorage {
 }
 
 function resourceFailure(): Error {
-  const error = new Error('quota exceeded');
+  const error = new Error('resource exhausted');
   error.name = 'ResourceExhaustedError';
   return error;
 }
@@ -60,7 +60,7 @@ async function createFailedWorkflows(engine: Engine): Promise<void> {
   await expect(applicationHandle.result()).rejects.toThrow('application failed');
 
   const resourceHandle = await engine.start('resource-failure', null, { id: 'resource-1' });
-  await expect(resourceHandle.result()).rejects.toThrow('quota exceeded');
+  await expect(resourceHandle.result()).rejects.toThrow('resource exhausted');
 
   const timeoutHandle = await engine.start('timeout-failure', null, { id: 'timeout-1' });
   await expect(timeoutHandle.result()).rejects.toThrow('timed out');

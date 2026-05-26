@@ -1589,7 +1589,7 @@ describe('worker WebSocket protocol', () => {
     // spread them evenly across the three workers — 2 per worker. If
     // routingPolicy were silently falling back to least-loaded, the first
     // dispatch would still tiebreak by id and the spread would happen by
-    // accident. So we also dispatch a second key (`tenant-beta`) to prove the
+    // accident. So we also dispatch a second key (`key-beta`) to prove the
     // *per-key* counters survive the round trip and influence the next
     // assignment for that key independently of the alpha tasks.
     for (let index = 0; index < 6; index += 1) {
@@ -1597,7 +1597,7 @@ describe('worker WebSocket protocol', () => {
         operationId: `alpha-${index}`,
         activityName: 'runAgent',
         input: null,
-        fairShareKey: 'tenant-alpha',
+        fairShareKey: 'key-alpha',
       });
       expect(dispatched).toBe(true);
     }
@@ -1616,7 +1616,7 @@ describe('worker WebSocket protocol', () => {
       }
     }
 
-    // Now dispatch a single tenant-beta task. The least-loaded fallback would
+    // Now dispatch a single key-beta task. The least-loaded fallback would
     // pick the first worker by id (all three carry 2 alpha tasks), but the
     // per-key fair-share counter for beta is 0 everywhere — fair-share's
     // tiebreak by id then puts it on `fair-share-worker-0`, which is what we
@@ -1626,7 +1626,7 @@ describe('worker WebSocket protocol', () => {
       operationId: 'beta-1',
       activityName: 'runAgent',
       input: null,
-      fairShareKey: 'tenant-beta',
+      fairShareKey: 'key-beta',
     });
     expect(dispatchedBeta).toBe(true);
     await waitForRealTimersForTesting(50);

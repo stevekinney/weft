@@ -80,7 +80,7 @@ export interface SignalInterception {
 /**
  * Context object passed to a workflow interceptor's `workflowStart` hook when
  * a new workflow begins executing. Useful for injecting trace headers or
- * enforcing tenant-level policies at start time.
+ * enforcing policies at start time.
  *
  * @example
  * ```ts

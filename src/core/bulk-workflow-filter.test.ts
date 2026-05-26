@@ -35,24 +35,6 @@ describe('hasScopedBulkWorkflowFilter — legacy scopes', () => {
   });
 });
 
-describe('hasScopedBulkWorkflowFilter — tenantId', () => {
-  it('accepts a single non-empty tenant id', () => {
-    expect(hasScopedBulkWorkflowFilter({ tenantId: 'acme' })).toBe(true);
-  });
-
-  it('accepts an array containing a non-empty tenant id', () => {
-    expect(hasScopedBulkWorkflowFilter({ tenantId: ['acme', 'globex'] })).toBe(true);
-  });
-
-  it('rejects a whitespace-only tenant id', () => {
-    expect(hasScopedBulkWorkflowFilter({ tenantId: '   ' })).toBe(false);
-  });
-
-  it('rejects an array of only whitespace tenant ids', () => {
-    expect(hasScopedBulkWorkflowFilter({ tenantId: ['  ', ''] })).toBe(false);
-  });
-});
-
 describe('hasScopedBulkWorkflowFilter — idPrefix', () => {
   it('accepts an idPrefix at the minimum length', () => {
     expect(hasScopedBulkWorkflowFilter({ idPrefix: 'abc' })).toBe(true);
@@ -99,8 +81,8 @@ describe('hasScopedBulkWorkflowFilter — time ranges alone', () => {
     expect(hasScopedBulkWorkflowFilter({ createdAt: { gte: 1 }, status: 'completed' })).toBe(true);
   });
 
-  it('accepts a time range combined with tenantId', () => {
-    expect(hasScopedBulkWorkflowFilter({ updatedAt: { lt: 100 }, tenantId: 'acme' })).toBe(true);
+  it('accepts a time range combined with type', () => {
+    expect(hasScopedBulkWorkflowFilter({ updatedAt: { lt: 100 }, type: 'checkout' })).toBe(true);
   });
 });
 

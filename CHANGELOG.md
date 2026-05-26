@@ -7,6 +7,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed — multi-tenancy (BREAKING)
+
+weft is now single-tenant by default. The open-source core exposes generic
+prefix-scoping primitives, not tenant policy. All built-in tenancy and per-tenant
+quota machinery has been removed. This is a breaking change to the public API,
+the wire contract, and the persisted-state shape.
+
+Removed public exports (from `weft`): `tenantFromInputField`, `TenantContext`,
+`TenantResolver`, `QuotaExceededError`, `TenantQuotaOptions`, `TenantQuotaUsage`,
+`TenantQuotaMetricUsage`, `TenantWorkflowCreationRateLimit`, and
+`TenantWorkflowCreationRateUsage`.
+
+Removed engine surface: `EngineOptions.tenantResolver`, `EngineOptions.quotas`,
+`engine.getQuotaUsage()`, `ctx.tenant`, and `ctx.state.tenant()`. The
+`ctx.state.workflow()` and `engine.state.workflow()` factories no longer take a
+tenant id — workflow-type-shared durable state is now namespaced under a constant
+default scope. `ListFilter.tenantId` and aggregate `groupBy: 'tenant'` are gone.
+
+Removed server surface: the `GET /v1/tenants/:id/quota` REST route, the
+`quota:read` authorization scope, the `RateLimited` fault code (and its HTTP 429
+mapping), and the JWT tenant-claim plumbing on the authenticated principal.
+Schedule operations no longer accept tenant access options or filter by tenant.
+
+Persisted state: the optional `tenant` field on workflow state and schedule
+records is no longer written. The checkpoint schema version is unchanged
+(`CURRENT_CHECKPOINT_SCHEMA_VERSION = 2`); a legacy `tenant` field on an older
+persisted record is tolerated and dropped on read, so existing workflows and
+schedules still decode and resume. State written under a previously configured
+tenant partition (`state:workflow:<tenantId>:…`, `state:tenant:<tenantId>:…`) is
+intentionally not migrated: migrating legacy partitions to the default scope
+requires operator involvement and should be planned as a separate operation.
+Workflow-shared state now lives under the `state:workflow-scope:` prefix, which
+is deliberately distinct from the legacy `state:workflow:<tenantId>:` layout so a
+historical tenant id equal to the default scope cannot alias into the new global
+namespace.
+
+Retained: `ScopedStorage` (the generic prefix-namespacing primitive) is
+unchanged. Workflow-owned state is still written under a constant default scope
+prefix rather than at the storage root, so a future re-partition is a key rename
+rather than a data migration.
+
 ### Changed — failure category semantics
 
 `FailureCategory` remains part of the public workflow visibility surface, but

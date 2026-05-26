@@ -38,7 +38,7 @@ describe('REST fault shaper regressions', () => {
       message: 'database password leaked by implementation detail',
       data: {},
     };
-    const invalidParamsFaultValue = invalidParamsFault('Filter must include a tenant');
+    const invalidParamsFaultValue = invalidParamsFault('Filter must include a status');
     const notFoundFault: OperationFault = {
       code: 'NotFound',
       message: 'Workflow not found',

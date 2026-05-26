@@ -74,9 +74,6 @@ export function deriveWorkflowVisibilityIndexKeys(state: WorkflowState): string[
     KEYS.workflowVisibilityCreated(state.createdAt, state.id),
     KEYS.workflowVisibilityUpdated(state.updatedAt, state.id),
   ];
-  if (state.tenant !== undefined) {
-    keys.push(KEYS.workflowVisibilityTenant(state.tenant.id, state.id));
-  }
   if (state.executionDeadline !== undefined) {
     keys.push(KEYS.workflowVisibilityDeadline(state.executionDeadline, state.id));
   }

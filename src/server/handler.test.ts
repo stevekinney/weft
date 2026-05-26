@@ -4,8 +4,6 @@ import { sleepForTesting, waitForCondition } from '../testing/fake-timers.ts';
 import { decode, encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
 import { StartWorkflowValidationError } from '../core/start-workflow-validation.ts';
-import { QuotaExceededError } from '../core/tenant-quotas.ts';
-import { tenantFromInputField } from '../core/tenant.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { UpdateCoordinator, WorkflowTerminalError } from '../core/updates.ts';
@@ -33,7 +31,7 @@ function apiKeyAuth() {
       method: 'api-key' as const,
       principal: principalFromApiKey({
         subject: 'test',
-        scopes: ['quota:read', 'workflows:read', 'workflows:admin'],
+        scopes: ['workflows:read', 'workflows:admin'],
       }),
     },
   };
@@ -158,16 +156,6 @@ const slowCleanupWorkflow = workflow({
 function createEngine(): Engine {
   const storage = new MemoryStorage();
   const engine = new Engine({ storage });
-  engine.register(echoWorkflow);
-  return engine;
-}
-
-function createTenantAwareEngine(): Engine {
-  const storage = new MemoryStorage();
-  const engine = new Engine({
-    storage,
-    tenantResolver: tenantFromInputField('tenantId'),
-  });
   engine.register(echoWorkflow);
   return engine;
 }
@@ -467,300 +455,6 @@ describe('handleRequest', () => {
       });
     });
 
-    it('JWT-authenticated schedule routes scope reads to the authenticated tenant', async () => {
-      engine = createTenantAwareEngine();
-      await engine.schedule('echo', { tenantId: 'acme', payload: 'tenant-a' }, '0 * * * *', {
-        id: 'schedule-acme',
-      });
-      await engine.schedule('echo', { tenantId: 'globex', payload: 'tenant-b' }, '0 * * * *', {
-        id: 'schedule-globex',
-      });
-
-      const authOptions = {
-        authContext: {
-          method: 'jwt' as const,
-          claims: { tenantId: 'acme' },
-        },
-      };
-
-      const listResponse = await handleRequest(
-        request('GET', '/v1/schedules'),
-        engine,
-        authOptions,
-      );
-      expect(listResponse.status).toBe(200);
-      expect(await json(listResponse)).toEqual(
-        expect.objectContaining({
-          items: [expect.objectContaining({ id: 'schedule-acme' })],
-          total: 1,
-          offset: 0,
-          limit: 1,
-        }),
-      );
-
-      const mismatchResponse = await handleRequest(
-        request('GET', '/v1/schedules?tenantId=globex'),
-        engine,
-        authOptions,
-      );
-      expect(mismatchResponse.status).toBe(403);
-      expect(await json(mismatchResponse)).toEqual({
-        error: 'Schedule access is limited to the authenticated tenant',
-      });
-
-      const getOtherTenantResponse = await handleRequest(
-        request('GET', '/v1/schedules/schedule-globex'),
-        engine,
-        authOptions,
-      );
-      expect(getOtherTenantResponse.status).toBe(404);
-      expect(await json(getOtherTenantResponse)).toEqual({
-        error: 'Schedule "schedule-globex" not found',
-      });
-    });
-
-    it('Wave B schedule mutation routes forward JWT tenant scope into the operation pipeline', async () => {
-      engine = createTenantAwareEngine();
-      await engine.schedule('echo', { tenantId: 'acme' }, '0 * * * *', { id: 'schedule-acme' });
-      await engine.schedule('echo', { tenantId: 'acme' }, '0 * * * *', {
-        id: 'schedule-acme-cancel',
-      });
-      await engine.schedule('echo', { tenantId: 'globex' }, '0 * * * *', {
-        id: 'schedule-globex',
-      });
-
-      const authOptions = {
-        authContext: {
-          method: 'jwt' as const,
-          claims: { tenantId: 'acme' },
-        },
-      };
-
-      // Own-tenant pause now succeeds: the JWT tenant scope is threaded into the
-      // engine call, so the owner's claim matches the schedule's tenant.
-      const pauseOwnResponse = await handleRequest(
-        request('POST', '/v1/schedules/schedule-acme/pause'),
-        engine,
-        authOptions,
-      );
-      expect(pauseOwnResponse.status).toBe(204);
-      expect(await engine.getSchedule('schedule-acme', { tenantId: 'acme' })).toEqual(
-        expect.objectContaining({ id: 'schedule-acme', status: 'paused' }),
-      );
-
-      // Own-tenant resume of the just-paused schedule.
-      const resumeOwnResponse = await handleRequest(
-        request('POST', '/v1/schedules/schedule-acme/resume'),
-        engine,
-        authOptions,
-      );
-      expect(resumeOwnResponse.status).toBe(204);
-      expect(await engine.getSchedule('schedule-acme', { tenantId: 'acme' })).toEqual(
-        expect.objectContaining({ id: 'schedule-acme', status: 'active' }),
-      );
-
-      // Own-tenant update.
-      const updateOwnResponse = await handleRequest(
-        request('PATCH', '/v1/schedules/schedule-acme', { cronExpression: '30 * * * *' }),
-        engine,
-        authOptions,
-      );
-      expect(updateOwnResponse.status).toBe(204);
-      expect(await engine.getSchedule('schedule-acme', { tenantId: 'acme' })).toEqual(
-        expect.objectContaining({ id: 'schedule-acme', cronExpression: '30 * * * *' }),
-      );
-
-      // Own-tenant cancel (terminal) against a dedicated acme schedule. A
-      // cross-tenant 404 alone would NOT prove cancel forwards scope, since the
-      // old `undefined` access option already produced 404 for any tenanted
-      // schedule — so this own-tenant 204 + cancelled assertion is required.
-      const cancelOwnResponse = await handleRequest(
-        request('DELETE', '/v1/schedules/schedule-acme-cancel'),
-        engine,
-        authOptions,
-      );
-      expect(cancelOwnResponse.status).toBe(204);
-      expect(await engine.getSchedule('schedule-acme-cancel', { tenantId: 'acme' })).toEqual(
-        expect.objectContaining({ id: 'schedule-acme-cancel', status: 'cancelled' }),
-      );
-
-      // The other tenant's schedule is untouched throughout.
-      expect(await engine.getSchedule('schedule-globex', { tenantId: 'globex' })).toEqual(
-        expect.objectContaining({
-          id: 'schedule-globex',
-          status: 'active',
-          cronExpression: '0 * * * *',
-        }),
-      );
-    });
-
-    it('schedule mutation routes reject cross-tenant access with 404', async () => {
-      engine = createTenantAwareEngine();
-      await engine.schedule('echo', { tenantId: 'acme' }, '0 * * * *', { id: 'schedule-acme' });
-      await engine.schedule('echo', { tenantId: 'globex' }, '0 * * * *', {
-        id: 'schedule-globex',
-      });
-
-      const authOptions = {
-        authContext: {
-          method: 'jwt' as const,
-          claims: { tenantId: 'acme' },
-        },
-      };
-
-      const pauseOther = await handleRequest(
-        request('POST', '/v1/schedules/schedule-globex/pause'),
-        engine,
-        authOptions,
-      );
-      expect(pauseOther.status).toBe(404);
-      expect(await json(pauseOther)).toEqual({ error: 'Schedule "schedule-globex" not found' });
-
-      const resumeOther = await handleRequest(
-        request('POST', '/v1/schedules/schedule-globex/resume'),
-        engine,
-        authOptions,
-      );
-      expect(resumeOther.status).toBe(404);
-      expect(await json(resumeOther)).toEqual({ error: 'Schedule "schedule-globex" not found' });
-
-      const updateOther = await handleRequest(
-        request('PATCH', '/v1/schedules/schedule-globex', { cronExpression: '30 * * * *' }),
-        engine,
-        authOptions,
-      );
-      expect(updateOther.status).toBe(404);
-      expect(await json(updateOther)).toEqual({ error: 'Schedule "schedule-globex" not found' });
-
-      const cancelOther = await handleRequest(
-        request('DELETE', '/v1/schedules/schedule-globex'),
-        engine,
-        authOptions,
-      );
-      expect(cancelOther.status).toBe(404);
-      expect(await json(cancelOther)).toEqual({ error: 'Schedule "schedule-globex" not found' });
-
-      // A genuinely-missing id returns the identical 404 + body shape, so a
-      // cross-tenant schedule is indistinguishable from a nonexistent one (no
-      // existence oracle).
-      const missing = await handleRequest(
-        request('POST', '/v1/schedules/schedule-nonexistent/pause'),
-        engine,
-        authOptions,
-      );
-      expect(missing.status).toBe(404);
-      expect(await json(missing)).toEqual({ error: 'Schedule "schedule-nonexistent" not found' });
-
-      // Tenant A could not mutate tenant B's schedule.
-      expect(await engine.getSchedule('schedule-globex', { tenantId: 'globex' })).toEqual(
-        expect.objectContaining({
-          id: 'schedule-globex',
-          status: 'active',
-          cronExpression: '0 * * * *',
-        }),
-      );
-    });
-
-    it('JWT-authenticated schedule creation binds the schedule to the authenticated tenant', async () => {
-      engine = createTenantAwareEngine();
-
-      const createOwnTenantResponse = await handleRequest(
-        request('POST', '/v1/schedules', {
-          type: 'echo',
-          input: { tenantId: 'acme', payload: 'tenant-a' },
-          cronExpression: '0 * * * *',
-          id: 'schedule-acme',
-        }),
-        engine,
-        {
-          authContext: {
-            method: 'jwt',
-            claims: { tenantId: 'acme' },
-          },
-        },
-      );
-      expect(createOwnTenantResponse.status).toBe(201);
-      expect(await engine.getSchedule('schedule-acme', { tenantId: 'acme' })).toEqual(
-        expect.objectContaining({ id: 'schedule-acme' }),
-      );
-
-      const mismatchedTenantResponse = await handleRequest(
-        request('POST', '/v1/schedules', {
-          type: 'echo',
-          input: { tenantId: 'globex', payload: 'tenant-b' },
-          cronExpression: '0 * * * *',
-          id: 'schedule-globex',
-        }),
-        engine,
-        {
-          authContext: {
-            method: 'jwt',
-            claims: { tenantId: 'acme' },
-          },
-        },
-      );
-      expect(mismatchedTenantResponse.status).toBe(403);
-      expect(await json(mismatchedTenantResponse)).toEqual({
-        error: 'Schedule creation is limited to the authenticated tenant',
-      });
-
-      const responseWithoutResolverTenant = await handleRequest(
-        request('POST', '/v1/schedules', {
-          type: 'echo',
-          input: { payload: 'no-tenant-field' },
-          cronExpression: '0 * * * *',
-          id: 'schedule-attached-by-auth',
-        }),
-        engine,
-        {
-          authContext: {
-            method: 'jwt',
-            claims: { tenantId: 'acme' },
-          },
-        },
-      );
-      expect(responseWithoutResolverTenant.status).toBe(201);
-      expect(await engine.getSchedule('schedule-attached-by-auth', { tenantId: 'acme' })).toEqual(
-        expect.objectContaining({ id: 'schedule-attached-by-auth' }),
-      );
-    });
-
-    it('JWT-authenticated schedule routes require a tenant claim', async () => {
-      engine = createTenantAwareEngine();
-      await engine.schedule('echo', { tenantId: 'acme' }, '0 * * * *', { id: 'schedule-acme' });
-
-      const response = await handleRequest(request('GET', '/v1/schedules'), engine, {
-        authContext: {
-          method: 'jwt',
-          claims: { sub: 'user-123' },
-        },
-      });
-
-      expect(response.status).toBe(403);
-      expect(await json(response)).toEqual({
-        error: 'JWT-authenticated schedule requests require a tenantId, tenant_id, or tenant claim',
-      });
-
-      const createResponse = await handleRequest(
-        request('POST', '/v1/schedules', {
-          type: 'echo',
-          input: { tenantId: 'acme' },
-          cronExpression: '0 * * * *',
-        }),
-        engine,
-        {
-          authContext: {
-            method: 'jwt',
-            claims: { sub: 'user-123' },
-          },
-        },
-      );
-      expect(createResponse.status).toBe(403);
-      expect(await json(createResponse)).toEqual({
-        error: 'JWT-authenticated schedule requests require a tenantId, tenant_id, or tenant claim',
-      });
-    });
-
     it('schedule item routes return 404 when the schedule does not exist', async () => {
       engine = createEngine();
 
@@ -887,138 +581,6 @@ describe('handleRequest', () => {
     expect(body.total).toBe(2);
   });
 
-  it('GET /v1/tenants/:id/quota returns tenant quota usage', async () => {
-    engine = new Engine({
-      storage: new MemoryStorage(),
-      tenantResolver: tenantFromInputField('tenantId'),
-      quotas: {
-        maxConcurrentWorkflows: 3,
-        maxStorageBytes: 16_384,
-        maxWorkflowCreationRate: { count: 5, window: '1m' },
-      },
-    });
-    engine.register(echoWorkflow);
-
-    await handleRequest(
-      request('POST', '/v1/workflows', { type: 'echo', input: { tenantId: 'acme', payload: 'x' } }),
-      engine,
-    );
-    await flush();
-
-    const response = await handleRequest(
-      request('GET', '/v1/tenants/acme/quota'),
-      engine,
-      apiKeyAuth(),
-    );
-
-    expect(response.status).toBe(200);
-    const body = (await json(response)) as {
-      tenantId: string;
-      storageBytes: { used: number; limit: number | null };
-      workflowCreationRate: { used: number; limit: number | null };
-    };
-    expect(body.tenantId).toBe('acme');
-    expect(body.storageBytes.used).toBeGreaterThan(0);
-    expect(body.storageBytes.limit).toBe(16_384);
-    expect(body.workflowCreationRate.used).toBe(1);
-    expect(body.workflowCreationRate.limit).toBe(5);
-  });
-
-  it('GET /v1/tenants/:id/quota validates tenant ids and JWT tenant claims', async () => {
-    engine = new Engine({
-      storage: new MemoryStorage(),
-      tenantResolver: tenantFromInputField('tenantId'),
-    });
-    engine.register(echoWorkflow);
-
-    // Blank tenantId validation requires the request to pass auth first.
-    expect(
-      await handleRequest(request('GET', '/v1/tenants/%20%20/quota'), engine, apiKeyAuth()),
-    ).toMatchObject({
-      status: 400,
-    });
-
-    // JWT authContext without claims is a contract violation — the production
-    // authenticator always populates claims. The handler throws + returns 500.
-    expect(
-      await handleRequest(request('GET', '/v1/tenants/acme/quota'), engine, {
-        authContext: { method: 'jwt' },
-      }),
-    ).toMatchObject({ status: 500 });
-
-    expect(
-      await handleRequest(request('GET', '/v1/tenants/acme/quota'), engine, {
-        authContext: { method: 'jwt', claims: {} },
-      }),
-    ).toMatchObject({ status: 403 });
-
-    // The tenant fallback uses the 'tenant' claim when 'tenantId' is whitespace-only.
-    // Add quota:read scope so the scoped-access check passes.
-    expect(
-      await handleRequest(request('GET', '/v1/tenants/acme/quota'), engine, {
-        authContext: {
-          method: 'jwt',
-          claims: { tenantId: '   ', tenant: 'acme', scope: 'quota:read' },
-        },
-      }),
-    ).toMatchObject({ status: 200 });
-
-    expect(
-      await handleRequest(request('GET', '/v1/tenants/acme/quota'), engine, {
-        authContext: {
-          method: 'jwt',
-          claims: { tenant_id: 'other-tenant' },
-        },
-      }),
-    ).toMatchObject({ status: 403 });
-  });
-
-  it('GET /v1/tenants/:id/quota masks engine failures to a 500 body', async () => {
-    // EngineFailure from the operation invoke() is returned as a masked
-    // 500 fault response.
-    engine = new Engine({
-      storage: new MemoryStorage(),
-      tenantResolver: tenantFromInputField('tenantId'),
-    });
-    engine.register(echoWorkflow);
-
-    const originalGetQuotaUsage = engine.getQuotaUsage.bind(engine);
-    engine.getQuotaUsage = async () => {
-      throw new Error('quota exploded');
-    };
-
-    let response: Response;
-    try {
-      response = await handleRequest(
-        request('GET', '/v1/tenants/acme/quota'),
-        engine,
-        apiKeyAuth(),
-      );
-    } finally {
-      engine.getQuotaUsage = originalGetQuotaUsage;
-    }
-
-    expect(response.status).toBe(500);
-    expect(await json(response)).toEqual({ error: 'Internal server error' });
-  });
-
-  it('GET /v1/tenants/:id/quota rejects blank tenant ids', async () => {
-    engine = new Engine({
-      storage: new MemoryStorage(),
-      tenantResolver: tenantFromInputField('tenantId'),
-    });
-    engine.register(echoWorkflow);
-
-    const response = await handleRequest(
-      request('GET', '/v1/tenants/%20%20/quota'),
-      engine,
-      apiKeyAuth(),
-    );
-
-    expect(response.status).toBe(400);
-    expect(await json(response)).toEqual({ error: 'Tenant id must be a non-empty string' });
-  });
-
   it('returns 400 for malformed percent-encoded route parameters', async () => {
     engine = createEngine();
 
@@ -1141,7 +703,7 @@ describe('handleRequest', () => {
   it('returns 400 for malformed percent-encoding in top-level route matching', async () => {
     engine = createEngine();
 
-    const response = await handleRequest(request('GET', '/v1/tenants/%E0%A4%A/quota'), engine);
+    const response = await handleRequest(request('GET', '/v1/workflows/%E0%A4%A/history'), engine);
 
     expect(response.status).toBe(400);
     expect(await json(response)).toEqual({ error: 'Malformed route parameter encoding' });
@@ -1656,7 +1218,7 @@ describe('handleRequest', () => {
       expect(missingFilterResponse.status).toBe(400);
       expect(await json(missingFilterResponse)).toEqual({
         error:
-          'Field "filter" must include at least one of status, type, tags, attributes, tenantId, idPrefix (≥3 chars), or failureCategory paired with status',
+          'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
       });
 
       const emptyTagsResponse = await handleRequest(
@@ -1670,7 +1232,7 @@ describe('handleRequest', () => {
       expect(emptyTagsResponse.status).toBe(400);
       expect(await json(emptyTagsResponse)).toEqual({
         error:
-          'Field "filter" must include at least one of status, type, tags, attributes, tenantId, idPrefix (≥3 chars), or failureCategory paired with status',
+          'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
       });
 
       const emptyAttributesResponse = await handleRequest(
@@ -1684,7 +1246,7 @@ describe('handleRequest', () => {
       expect(emptyAttributesResponse.status).toBe(400);
       expect(await json(emptyAttributesResponse)).toEqual({
         error:
-          'Field "filter" must include at least one of status, type, tags, attributes, tenantId, idPrefix (≥3 chars), or failureCategory paired with status',
+          'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
       });
 
       const blankAttributeKeyResponse = await handleRequest(
@@ -1698,7 +1260,7 @@ describe('handleRequest', () => {
       expect(blankAttributeKeyResponse.status).toBe(400);
       expect(await json(blankAttributeKeyResponse)).toEqual({
         error:
-          'Field "filter" must include at least one of status, type, tags, attributes, tenantId, idPrefix (≥3 chars), or failureCategory paired with status',
+          'Field "filter" must include at least one of status, type, tags, attributes, idPrefix (≥3 chars), or failureCategory paired with status',
       });
     });
   });
@@ -2155,31 +1717,6 @@ describe('handleRequest', () => {
 
     expect(response.status).toBe(400);
     expect(await json(response)).toEqual({ error: 'Field "id" must be a string' });
-
-    engine.start = originalStart;
-  });
-
-  it('POST /v1/workflows returns 429 when engine.start throws a quota error', async () => {
-    engine = createEngine();
-
-    const originalStart = engine.start.bind(engine);
-    engine.start = async () => {
-      throw new QuotaExceededError({
-        tenantId: 'acme',
-        quota: 'maxConcurrentWorkflows',
-        currentUsage: 2,
-        limit: 1,
-      });
-    };
-
-    const response = await handleRequest(
-      request('POST', '/v1/workflows', { type: 'echo', input: 'data' }),
-      engine,
-    );
-
-    expect(response.status).toBe(429);
-    const body = (await json(response)) as { error: string };
-    expect(body.error).toContain('Tenant quota exceeded');
 
     engine.start = originalStart;
   });

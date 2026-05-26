@@ -9,7 +9,6 @@
  * @module core/execution-strategy
  */
 
-import type { TenantContext } from './tenant.ts';
 import type { OperationOutcome, WorkerOutboundMessage } from './types.ts';
 
 export interface ExecutionStrategy extends Disposable, AsyncDisposable {
@@ -27,20 +26,6 @@ export interface ExecutionStrategy extends Disposable, AsyncDisposable {
     sleepReferenceTime?: number;
     deadline?: number;
     headers?: [string, string][];
-    /**
-     * The tenant context resolved by the engine's `tenantResolver` for this
-     * workflow, if any.
-     *
-     * Inline strategies expose this to workflow code via `ctx.tenant` by
-     * threading it through the `Context` constructor. Worker-based
-     * strategies (`WorkerExecutionStrategy`) currently DROP this value:
-     * the worker protocol does not yet carry tenant across the postMessage
-     * boundary, and the worker-side runner does not construct a Context
-     * with engine-side fields. Callers running in worker mode must not
-     * assume `ctx.tenant` is populated until that support lands. Tracked
-     * as a known limitation in `reference/IMPORTANT.md`.
-     */
-    tenant?: TenantContext;
   }): void;
 
   /**

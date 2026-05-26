@@ -6,17 +6,15 @@
  * - every data-driven operation is registered and addressable, and REST and
  *   JSON-RPC return the same result;
  * - scope-based authorization produces the same outcome over REST, JSON-RPC
- *   HTTP, JSON-RPC WebSocket, and JSON-RPC stdio;
- * - tenant isolation (the IDOR guard) holds on all four transports.
+ *   HTTP, JSON-RPC WebSocket, and JSON-RPC stdio.
  *
- * `weft.tenants.quota.get` is the representative scoped, tenant-aware operation
- * exercised here; per-operation contracts live in each operation's own test.
+ * `weft.system.metrics` is the representative scoped operation exercised here;
+ * per-operation contracts live in each operation's own test.
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
-import { tenantFromInputField } from '../../core/tenant.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
@@ -39,14 +37,9 @@ const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   return input;
 });
 
-function createTenantAwareEngine(): Engine {
+function createTestEngine(): Engine {
   const engine = new Engine({
     storage: new MemoryStorage(),
-    tenantResolver: tenantFromInputField('tenantId'),
-    quotas: {
-      maxConcurrentWorkflows: 2,
-      maxWorkflowCreationRate: { count: 5, window: '1m' },
-    },
   });
   engine.register(echoWorkflow);
   return engine;
@@ -101,7 +94,6 @@ describe('runtime operation cross-transport contract', () => {
     const expected = [
       'weft.schedules.list',
       'weft.schedules.get',
-      'weft.tenants.quota.get',
       'weft.workflows.replay',
       'weft.system.metrics',
     ];
@@ -109,26 +101,22 @@ describe('runtime operation cross-transport contract', () => {
       expect(liveRegistry.get(name)).toBeDefined();
     }
 
-    // `weft.tenants.quota.get` is addressable over both REST and JSON-RPC HTTP
+    // `weft.system.metrics` is addressable over both REST and JSON-RPC HTTP
     // and both transports reach the same engine result with the same shape.
-    const engine = createTenantAwareEngine();
+    const engine = createTestEngine();
     engines.push(engine);
     const server = serve({ engine, port: 0, auth: { jwt: { secret: TEST_SECRET } } });
     servers.push(server);
 
-    const token = await issueJwt(['quota:read'], { tenantId: 'acme' });
+    const token = await issueJwt(['system:read']);
 
-    const restResponse = await fetch(`${server.url}/v1/tenants/acme/quota`, {
+    const restResponse = await fetch(`${server.url}/v1/metrics/json`, {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(restResponse.status).toBe(200);
     const restBody = (await restResponse.json()) as Record<string, unknown>;
 
-    const jsonRpcResponse = await postJsonRpc(
-      server,
-      { method: 'weft.tenants.quota.get', params: { tenantId: 'acme' } },
-      token,
-    );
+    const jsonRpcResponse = await postJsonRpc(server, { method: 'weft.system.metrics' }, token);
     expect(jsonRpcResponse.status).toBe(200);
     const jsonRpcBody = (await jsonRpcResponse.json()) as { result: Record<string, unknown> };
 
@@ -138,21 +126,20 @@ describe('runtime operation cross-transport contract', () => {
   it('enforces scope-based authorization identically over REST, JSON-RPC HTTP, WebSocket, and stdio', async () => {
     // The scoped runtime operations declare scoped access in the live registry.
     const liveRegistry = createLiveOperationRegistry();
-    expect(liveRegistry.get('weft.tenants.quota.get')?.access.kind).toBe('scoped');
     expect(liveRegistry.get('weft.workflows.replay')?.access.kind).toBe('scoped');
     expect(liveRegistry.get('weft.system.metrics')?.access.kind).toBe('scoped');
 
-    const engine = createTenantAwareEngine();
+    const engine = createTestEngine();
     engines.push(engine);
     const server = serve({ engine, port: 0, auth: { jwt: { secret: TEST_SECRET } } });
     servers.push(server);
 
     // A principal authenticated with the wrong scope is rejected Forbidden on
     // every transport.
-    const wrongScopeToken = await issueJwt(['workflows:read'], { tenantId: 'acme' });
+    const wrongScopeToken = await issueJwt(['workflows:read']);
 
     // REST — Forbidden
-    const restResponse = await fetch(`${server.url}/v1/tenants/acme/quota`, {
+    const restResponse = await fetch(`${server.url}/v1/metrics/json`, {
       headers: { Authorization: `Bearer ${wrongScopeToken}` },
     });
     expect(restResponse.status).toBe(403);
@@ -160,7 +147,7 @@ describe('runtime operation cross-transport contract', () => {
     // JSON-RPC HTTP — Forbidden surfaced in the JSON-RPC error payload
     const jsonRpcResponse = await postJsonRpc(
       server,
-      { method: 'weft.tenants.quota.get', params: { tenantId: 'acme' } },
+      { method: 'weft.system.metrics' },
       wrongScopeToken,
     );
     expect(jsonRpcResponse.status).toBe(200);
@@ -185,8 +172,7 @@ describe('runtime operation cross-transport contract', () => {
         JSON.stringify({
           jsonrpc: '2.0',
           id: wsId,
-          method: 'weft.tenants.quota.get',
-          params: { tenantId: 'acme' },
+          method: 'weft.system.metrics',
         }),
       );
       const wsResponse = (await wsResponsePromise) as JsonRpcErrorResponse;
@@ -199,85 +185,15 @@ describe('runtime operation cross-transport contract', () => {
     const stdioPrincipal = principalFromJwtClaims({
       sub: 'cross-transport-test-user',
       scope: 'workflows:read',
-      tenantId: 'acme',
     });
     const stdioResult = await executeOperation(
-      'weft.tenants.quota.get',
-      { tenantId: 'acme' },
+      'weft.system.metrics',
+      {},
       { engine, registry: liveRegistry, principal: stdioPrincipal, transport: 'jsonRpcStdio' },
     );
     expect(stdioResult.ok).toBe(false);
     if (!stdioResult.ok) {
       expect(stdioResult.fault.code).toBe('Forbidden');
     }
-  });
-
-  it('rejects a JWT for tenant A reading tenant B with Forbidden on all four transports', async () => {
-    const engine = createTenantAwareEngine();
-    engines.push(engine);
-    // A token for tenant-a with quota:read — must not be able to read tenant-b.
-    const tenantAToken = await issueJwt(['quota:read'], { tenantId: 'tenant-a' });
-
-    const server = serve({ engine, port: 0, auth: { jwt: { secret: TEST_SECRET } } });
-    servers.push(server);
-
-    // REST — 403
-    const restResponse = await fetch(`${server.url}/v1/tenants/tenant-b/quota`, {
-      headers: { Authorization: `Bearer ${tenantAToken}` },
-    });
-    expect(restResponse.status).toBe(403);
-
-    // JSON-RPC HTTP — Forbidden
-    const jsonRpcResponse = await postJsonRpc(
-      server,
-      { method: 'weft.tenants.quota.get', params: { tenantId: 'tenant-b' } },
-      tenantAToken,
-    );
-    expect(jsonRpcResponse.status).toBe(200);
-    const jsonRpcBody = (await jsonRpcResponse.json()) as JsonRpcErrorResponse;
-    expect(jsonRpcBody.error?.data?.weftCode).toBe('Forbidden');
-    expect(jsonRpcBody.error?.data?.httpStatus).toBe(403);
-
-    // JSON-RPC WebSocket — Forbidden
-    const wsUrl = `${server.url.replace('http://', 'ws://')}/jsonrpc`;
-    const ws = await openWebSocket(wsUrl, tenantAToken);
-    try {
-      const wsResponsePromise = waitForMessage(
-        ws,
-        (parsed) =>
-          typeof parsed === 'object' &&
-          parsed !== null &&
-          (parsed as { id?: string }).id === 'idor-ws',
-      );
-      ws.send(
-        JSON.stringify({
-          jsonrpc: '2.0',
-          id: 'idor-ws',
-          method: 'weft.tenants.quota.get',
-          params: { tenantId: 'tenant-b' },
-        }),
-      );
-      const wsResponse = (await wsResponsePromise) as JsonRpcErrorResponse;
-      expect(wsResponse.error?.data?.weftCode).toBe('Forbidden');
-      expect(wsResponse.error?.data?.httpStatus).toBe(403);
-    } finally {
-      ws.close();
-    }
-
-    // stdio — executeOperation with the decoded JWT principal
-    const tenantAPrincipal = principalFromJwtClaims({
-      sub: 'user-a',
-      scope: 'quota:read',
-      tenantId: 'tenant-a',
-    });
-    const liveRegistry = createLiveOperationRegistry();
-    const stdioResult = await executeOperation(
-      'weft.tenants.quota.get',
-      { tenantId: 'tenant-b' },
-      { principal: tenantAPrincipal, engine, transport: 'jsonRpcStdio', registry: liveRegistry },
-    );
-    expect(stdioResult.ok).toBe(false);
-    if (stdioResult.ok) throw new Error('expected Forbidden');
-    expect(stdioResult.fault.code).toBe('Forbidden');
   });
 });

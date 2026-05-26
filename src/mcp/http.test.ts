@@ -2,10 +2,8 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
 import { Engine } from '../core/engine.ts';
-import { tenantFromInputField } from '../core/tenant.ts';
 import { activity, type DefinitionSchema, type WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
-import { signJWT } from '../server/authentication.ts';
 import { serve, type WeftServer } from '../server/index.ts';
 import { anonymousPrincipal, principalFromJwtClaims } from '../server/principal.ts';
 import { MemoryStorage } from '../storage/memory.ts';
@@ -15,7 +13,6 @@ import { createMcpSessionManager, McpSession, type McpSessionManager } from './s
 import { callMcpTool } from './tools.ts';
 
 const MCP_PROTOCOL_VERSION = '2025-11-25';
-const TEST_SECRET = 'mcp-test-secret-at-least-32-chars';
 const enginesToDispose: Engine[] = [];
 
 type JsonRpcEnvelope = {
@@ -33,7 +30,6 @@ type ToolCallResult = {
 function createEngine(): Engine {
   const engine = new Engine({
     storage: new MemoryStorage(),
-    tenantResolver: tenantFromInputField('tenantId'),
   });
   enginesToDispose.push(engine);
 
@@ -41,7 +37,7 @@ function createEngine(): Engine {
     name: 'greet-customer',
     description: 'Greet a customer by name.',
     inputSchema: z.object({
-      tenantId: z.string().optional(),
+      accountId: z.string().optional(),
       name: z.string(),
     }),
   }).execute(async function* (_context: WorkflowContext, input: { name: string }) {
@@ -53,12 +49,12 @@ function createEngine(): Engine {
     name: 'hold-for-cancel',
     description: 'Wait for a release signal.',
     inputSchema: z.object({
-      tenantId: z.string().optional(),
+      accountId: z.string().optional(),
       label: z.string().optional(),
     }),
   }).execute(async function* (
     context: WorkflowContext,
-    input: { tenantId?: string | undefined; label?: string | undefined },
+    input: { accountId?: string | undefined; label?: string | undefined },
   ) {
     let label = input.label ?? 'initial';
     context.onQuery('label', () => label);
@@ -720,199 +716,6 @@ describe('MCP Streamable HTTP transport', () => {
       params: {},
     });
     expect((tools.result as { tools: Array<{ name: string }> }).tools.length).toBeGreaterThan(0);
-  });
-
-  it('scopes workflow resources to the authenticated tenant stored on the MCP session', async () => {
-    const engine = createEngine();
-    const tenantA = await engine.start(
-      'greet-customer',
-      { tenantId: 'tenant-a', name: 'Ada' },
-      { id: 'tenant-a-workflow' },
-    );
-    const tenantB = await engine.start(
-      'greet-customer',
-      { tenantId: 'tenant-b', name: 'Grace' },
-      { id: 'tenant-b-workflow' },
-    );
-    const tenantASecond = await engine.start(
-      'greet-customer',
-      { tenantId: 'tenant-a', name: 'Katherine' },
-      { id: 'tenant-a-workflow-2' },
-    );
-    await tenantA.result();
-    await tenantB.result();
-    await tenantASecond.result();
-
-    const token = await signJWT(
-      {
-        sub: 'tenant-a-user',
-        tenantId: 'tenant-a',
-        scope: [
-          'workflows:read',
-          'workflows:write',
-          'signals:write',
-          'updates:write',
-          'queries:read',
-          'events:read',
-          'system:read',
-        ].join(' '),
-      },
-      TEST_SECRET,
-    );
-    const readOnlyToken = await signJWT(
-      {
-        sub: 'tenant-a-user',
-        tenantId: 'tenant-a',
-        scope: 'workflows:read',
-      },
-      TEST_SECRET,
-    );
-    const tenantBToken = await signJWT(
-      {
-        sub: 'tenant-b-user',
-        tenantId: 'tenant-b',
-        scope: [
-          'workflows:read',
-          'workflows:write',
-          'signals:write',
-          'updates:write',
-          'queries:read',
-          'events:read',
-          'system:read',
-        ].join(' '),
-      },
-      TEST_SECRET,
-    );
-
-    server = serve({
-      engine,
-      port: 0,
-      auth: { jwt: { secret: TEST_SECRET } },
-    });
-    const sessionId = await initialize(server, { authorization: `Bearer ${token}` });
-
-    const visible = await mcpJson(
-      server,
-      sessionId,
-      {
-        jsonrpc: '2.0',
-        id: 'list',
-        method: 'tools/call',
-        params: { name: 'list_workflows', arguments: {} },
-      },
-      { authorization: `Bearer ${token}` },
-    );
-    const listed = parseToolText(visible.result) as { items: Array<{ id: string }> };
-    const listedIds = listed.items.map((item) => item.id);
-    expect(listedIds.toSorted()).toEqual(['tenant-a-workflow', 'tenant-a-workflow-2']);
-
-    const secondVisiblePage = await mcpJson(
-      server,
-      sessionId,
-      {
-        jsonrpc: '2.0',
-        id: 'list-page',
-        method: 'tools/call',
-        params: { name: 'list_workflows', arguments: { limit: 1, offset: 1 } },
-      },
-      { authorization: `Bearer ${token}` },
-    );
-    const secondVisiblePageBody = parseToolText(secondVisiblePage.result) as {
-      items: Array<{ id: string }>;
-      total: number;
-      offset: number;
-      limit: number;
-    };
-    expect(secondVisiblePageBody).toMatchObject({
-      total: 2,
-      offset: 1,
-      limit: 1,
-    });
-    expect(secondVisiblePageBody.items).toHaveLength(1);
-    const secondVisiblePageItem = secondVisiblePageBody.items.at(0);
-    expect(secondVisiblePageItem).toBeDefined();
-    if (secondVisiblePageItem === undefined) {
-      throw new Error('Expected the second visible page to include one workflow');
-    }
-    expect(listedIds).toContain(secondVisiblePageItem.id);
-
-    const denied = await mcpJson(
-      server,
-      sessionId,
-      {
-        jsonrpc: '2.0',
-        id: 'tenant-b-read',
-        method: 'resources/read',
-        params: { uri: 'weft://workflows/tenant-b-workflow/state' },
-      },
-      { authorization: `Bearer ${token}` },
-    );
-    expect(denied.error?.code).toBe(-32002);
-
-    const mismatchedPrincipal = await mcpPost(
-      server,
-      sessionId,
-      {
-        jsonrpc: '2.0',
-        id: 'wrong-principal',
-        method: 'tools/list',
-        params: {},
-      },
-      { authorization: `Bearer ${tenantBToken}` },
-    );
-    expect(mismatchedPrincipal.status).toBe(403);
-
-    const readOnlyList = await mcpJson(
-      server,
-      sessionId,
-      {
-        jsonrpc: '2.0',
-        id: 'readonly-list',
-        method: 'tools/call',
-        params: { name: 'list_workflows', arguments: {} },
-      },
-      { authorization: `Bearer ${readOnlyToken}` },
-    );
-    const readOnlyListBody = parseToolText(readOnlyList.result) as {
-      items: Array<{ id: string }>;
-    };
-    expect(readOnlyListBody.items.map((item) => item.id).toSorted()).toEqual([
-      'tenant-a-workflow',
-      'tenant-a-workflow-2',
-    ]);
-
-    const readOnlyEvents = await mcpJson(
-      server,
-      sessionId,
-      {
-        jsonrpc: '2.0',
-        id: 'readonly-events',
-        method: 'resources/read',
-        params: { uri: 'weft://workflows/tenant-a-workflow/events' },
-      },
-      { authorization: `Bearer ${readOnlyToken}` },
-    );
-    expect(readOnlyEvents.error).toMatchObject({
-      code: -32011,
-      message: 'Reading workflow events requires events:read',
-    });
-
-    const readOnlyWrite = await mcpJson(
-      server,
-      sessionId,
-      {
-        jsonrpc: '2.0',
-        id: 'readonly-write',
-        method: 'tools/call',
-        params: {
-          name: 'start_workflow',
-          arguments: { type: 'greet-customer', input: { name: 'Ada' } },
-        },
-      },
-      { authorization: `Bearer ${readOnlyToken}` },
-    );
-    expect((readOnlyWrite.result as ToolCallResult).isError).toBe(true);
-    expect((readOnlyWrite.result as ToolCallResult).content[0]?.text).toContain('workflows:write');
   });
 
   it('denies anonymous direct-handler requests when authentication is required', async () => {

@@ -119,7 +119,7 @@ There's no replay happening here. Weft doesn't re-execute your workflow from the
 
 `engine.start()` kicks off a new execution and returns a handle. `handle.result()` waits for the workflow to finish and gives you the output. Without `options.id`, each call gets a fresh UUID; with a stable id, the second run of this script throws `WorkflowAlreadyExistsError` instead of double-starting — which is what the `try`/`catch` block handles by resuming the existing workflow.
 
-If you'd rather wire registration up yourself — useful for tests, multi-tenant setups, or dynamic plugin loading — `new Engine({ storage })`, `engine.register()`, and `await engine.recoverAll()` are the same primitives. Register every activity and workflow before recovering.
+If you'd rather wire registration up yourself — useful for tests or dynamic plugin loading — `new Engine({ storage })`, `engine.register()`, and `await engine.recoverAll()` are the same primitives. Register every activity and workflow before recovering.
 
 ## Adding a Sleep
 

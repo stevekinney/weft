@@ -10,7 +10,7 @@ import {
 
 describe('normalizeAggregateOptions', () => {
   it('accepts each fixed groupBy literal', () => {
-    for (const groupBy of ['status', 'type', 'tenant', 'failureCategory'] as const) {
+    for (const groupBy of ['status', 'type', 'failureCategory'] as const) {
       expect(normalizeAggregateOptions({ groupBy }).groupBy).toBe(groupBy);
     }
   });

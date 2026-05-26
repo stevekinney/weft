@@ -310,7 +310,20 @@ function isSameSessionOwner(left: Principal, right: Principal): boolean {
   if (left.method !== right.method) return false;
   if (!isAuthenticated(left) || !isAuthenticated(right)) return left.method === right.method;
   if (left.subject === undefined || right.subject === undefined) return false;
-  return left.subject === right.subject && left.tenantId === right.tenantId;
+  // Session identity binds the subject AND the authorization profile: a token
+  // for the same subject but a different scope set must not silently continue a
+  // session established under a narrower or broader profile. (This previously
+  // also compared a tenant id; with tenancy removed, the scope set is the
+  // remaining authorization dimension worth pinning.)
+  return left.subject === right.subject && haveSameScopes(left.scopes, right.scopes);
+}
+
+function haveSameScopes(left: ReadonlySet<string>, right: ReadonlySet<string>): boolean {
+  if (left.size !== right.size) return false;
+  for (const scope of left) {
+    if (!right.has(scope)) return false;
+  }
+  return true;
 }
 
 async function readBodyBounded(request: Request, maxBytes: number): Promise<Uint8Array> {

@@ -4,11 +4,7 @@ import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
-import {
-  isOperationFault,
-  mapScheduleErrorToFault,
-  resolveScheduleAccessOptions,
-} from './schedule-faults.ts';
+import { mapScheduleErrorToFault } from './schedule-faults.ts';
 
 // `cronExpression` is intentionally permissive at the schema boundary so REST
 // and JSON-RPC clients hit the same validation in `invoke()`. `scheduleId`
@@ -34,7 +30,7 @@ export const updateScheduleOperation = defineOperation<UpdateScheduleInput, null
   producibleFaults: ['NotFound', 'Conflict'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine, principal }): Promise<null> => {
+  invoke: async ({ input, engine }): Promise<null> => {
     const typedEngine = engine as Engine;
 
     // Validate cronExpression here so REST and JSON-RPC share one error path.
@@ -43,13 +39,8 @@ export const updateScheduleOperation = defineOperation<UpdateScheduleInput, null
     }
     const cronExpression = input.cronExpression;
 
-    const accessOptions = resolveScheduleAccessOptions(principal);
-    if (isOperationFault(accessOptions)) {
-      throw accessOptions;
-    }
-
     try {
-      await typedEngine.updateSchedule(input.scheduleId, cronExpression, accessOptions);
+      await typedEngine.updateSchedule(input.scheduleId, cronExpression);
       return null;
     } catch (error) {
       throw mapScheduleErrorToFault(input.scheduleId, error);

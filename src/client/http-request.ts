@@ -1,3 +1,5 @@
+import { failureCategoryForFaultCode, isFaultCode, type FaultCode } from '../core/fault-code.ts';
+import type { FailureCategory } from '../core/types/identity.ts';
 import { WeftError } from '../core/weft-error.ts';
 
 /**
@@ -24,6 +26,12 @@ export interface HttpClientOptions {
 /**
  * Error thrown when the server returns a non-2xx response.
  *
+ * When the server sends a structured fault body (`{ error: { code, message } }`),
+ * the wire fault `code` is surfaced as {@link HttpClientError.faultCode} and a
+ * derived {@link HttpClientError.category} so callers can branch programmatically
+ * instead of string-matching `message`. Both are `undefined` when the body is a
+ * plain `{ error: string }` or carries no recognized code.
+ *
  * @example
  * ```ts
  * import { HttpClient, HttpClientError } from 'weft';
@@ -33,17 +41,36 @@ export interface HttpClientOptions {
  *   await client.cancel('nonexistent-id');
  * } catch (err) {
  *   if (err instanceof HttpClientError) {
- *     console.error('HTTP', err.status, err.message);
+ *     if (err.faultCode === 'NotFound') {
+ *       // handle a missing resource specifically
+ *     } else if (err.category === 'resource') {
+ *       // back off on rate limits and capacity faults
+ *     }
+ *     console.error('HTTP', err.status, err.faultCode ?? err.message);
  *   }
  * }
  * ```
  */
 export class HttpClientError extends WeftError<'HttpClientError'> {
+  /** HTTP status code of the failed response. */
   readonly status: number;
+  /**
+   * The server's stable wire fault code, when the response carried a structured
+   * fault body. `undefined` for plain-string error bodies or unrecognized codes.
+   */
+  readonly faultCode?: FaultCode | undefined;
+  /**
+   * The {@link FailureCategory} derived from {@link faultCode}. Derived, not
+   * carried on the wire; `undefined` when `faultCode` is `undefined`.
+   */
+  readonly category?: FailureCategory | undefined;
 
-  constructor(status: number, message: string) {
+  constructor(status: number, message: string, options?: { faultCode?: FaultCode | undefined }) {
     super('HttpClientError', message);
     this.status = status;
+    this.faultCode = options?.faultCode;
+    this.category =
+      options?.faultCode === undefined ? undefined : failureCategoryForFaultCode(options.faultCode);
   }
 }
 
@@ -64,18 +91,52 @@ function buildRequestHeaders(
   return headers;
 }
 
-function isErrorBody(value: unknown): value is { error?: string } {
-  if (value === null || typeof value !== 'object') return false;
-  const error = (value as { error?: unknown }).error;
-  return error === undefined || typeof error === 'string';
+/** Flat error body shape from `shapeOperationFaultAsJson`: `{ error: string }`. */
+function isFlatErrorBody(value: unknown): value is { error: string } {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    typeof (value as { error?: unknown }).error === 'string'
+  );
 }
 
-async function parseErrorBody(response: Response): Promise<string> {
+/**
+ * Structured error body from `faultToHttpResponse`:
+ * `{ error: { code, message, data? } }`. The human `message` is required; the
+ * `code` is validated separately so an unrecognized (e.g. future) fault code
+ * still surfaces its message — only the typed {@link FaultCode} is withheld.
+ */
+function isStructuredErrorBody(
+  value: unknown,
+): value is { error: { code?: unknown; message: string } } {
+  if (value === null || typeof value !== 'object') return false;
+  const error = (value as { error?: unknown }).error;
+  if (error === null || typeof error !== 'object') return false;
+  return typeof (error as { message?: unknown }).message === 'string';
+}
+
+/**
+ * Parse a non-2xx response body into the human message and, when the server
+ * sent a structured fault with a recognized code, its wire {@link FaultCode}.
+ * A structured body with an unknown code still yields its message. Falls back
+ * to `response.statusText` when the body is missing, non-JSON, or carries no
+ * usable message.
+ */
+async function parseErrorBody(
+  response: Response,
+): Promise<{ message: string; faultCode?: FaultCode | undefined }> {
   try {
     const body: unknown = await response.json();
-    return isErrorBody(body) && body.error ? body.error : response.statusText;
+    if (isStructuredErrorBody(body)) {
+      const { code, message } = body.error;
+      return isFaultCode(code) ? { message, faultCode: code } : { message };
+    }
+    if (isFlatErrorBody(body) && body.error) {
+      return { message: body.error };
+    }
+    return { message: response.statusText };
   } catch {
-    return response.statusText;
+    return { message: response.statusText };
   }
 }
 
@@ -92,8 +153,8 @@ export async function request<T>(
     return null as T;
   }
   if (!response.ok) {
-    const message = await parseErrorBody(response);
-    throw new HttpClientError(response.status, message);
+    const { message, faultCode } = await parseErrorBody(response);
+    throw new HttpClientError(response.status, message, { faultCode });
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

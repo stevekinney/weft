@@ -172,7 +172,7 @@ describe('buildWorkflowListFilter', () => {
     });
   });
 
-  it('round-trips idPrefix, tenantId, failureCategory, and time ranges when set', () => {
+  it('round-trips idPrefix, failureCategory, and time ranges when set', () => {
     const filter = buildWorkflowListFilter(
       {
         status: 'failed',
@@ -180,7 +180,6 @@ describe('buildWorkflowListFilter', () => {
         tags: ['nightly'],
         offset: 0,
         idPrefix: 'order-',
-        tenantId: ['acme'],
         failureCategory: ['resource', 'application'],
         createdAt: { gte: 1000 },
         updatedAt: { lt: 5000 },
@@ -194,25 +193,10 @@ describe('buildWorkflowListFilter', () => {
       type: 'order',
       tags: ['nightly'],
       idPrefix: 'order-',
-      tenantId: 'acme',
       failureCategory: ['resource', 'application'],
       createdAt: { gte: 1000 },
       updatedAt: { lt: 5000 },
     });
-  });
-
-  it('collapses a single-element tenantId array to a string and keeps arrays of size >1', () => {
-    const single = buildWorkflowListFilter(
-      { status: 'all', type: '', tags: [], offset: 0, tenantId: ['acme'] },
-      20,
-    );
-    expect(single.tenantId).toBe('acme');
-
-    const many = buildWorkflowListFilter(
-      { status: 'all', type: '', tags: [], offset: 0, tenantId: ['acme', 'globex'] },
-      20,
-    );
-    expect(many.tenantId).toEqual(['acme', 'globex']);
   });
 
   it('drops empty time-range objects entirely', () => {
@@ -243,7 +227,6 @@ describe('loadWorkflowAggregate', () => {
         type: 'order',
         tags: ['nightly'],
         offset: 40,
-        tenantId: ['acme'],
         createdAt: { gte: 100 },
       },
       'status',
@@ -257,7 +240,6 @@ describe('loadWorkflowAggregate', () => {
         status: 'failed',
         type: 'order',
         tags: ['nightly'],
-        tenantId: 'acme',
         createdAt: { gte: 100 },
       }),
       'status',

@@ -2,14 +2,10 @@ import { KEYS, type BatchOperation } from '../../storage/interface.ts';
 import { encode } from '../codec.ts';
 import { buildTimerBatchOperations } from '../scheduler.ts';
 import { WorkflowTimeoutError } from '../timeouts.ts';
-import type { ScheduleAccessOptions, ScheduleState, WorkflowState } from '../types.ts';
+import type { ScheduleState, WorkflowState } from '../types.ts';
 import { getWorkflowExecutionStartedAt } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
-import {
-  canAccessSchedule,
-  createScheduleTimerId,
-  decodeWorkflowStartHeaders,
-} from './state-utilities.ts';
+import { createScheduleTimerId, decodeWorkflowStartHeaders } from './state-utilities.ts';
 import { decodeWorkflowState } from './validation.ts';
 import { decodeScheduleState } from './validation/schedule.ts';
 
@@ -70,22 +66,12 @@ export async function loadWorkflowResult(
   throw new Error(`Workflow "${workflowId}" is still ${state.status}`);
 }
 
-/** Commit workflow state operations, optionally releasing tenant quota atomically. */
+/** Commit workflow state operations. */
 export async function commitWorkflowStateOperations(
   internals: EngineInternals,
-  state: WorkflowState,
+  _state: WorkflowState,
   operations: BatchOperation[],
-  options?: { releaseTenantQuota?: boolean },
 ): Promise<void> {
-  if (options?.releaseTenantQuota && state.tenant !== undefined) {
-    await internals.tenantQuotaManager.commitTerminalTransition({
-      tenantId: state.tenant.id,
-      workflowId: state.id,
-      operations,
-    });
-    return;
-  }
-
   await internals.storage.batch(operations);
 }
 
@@ -98,14 +84,13 @@ export async function loadScheduleState(
   return bytes ? decodeScheduleState(bytes) : null;
 }
 
-/** Load a schedule state and enforce schedule access filtering. */
+/** Load a schedule state. */
 export async function requireScheduleState(
   internals: EngineInternals,
   scheduleId: string,
-  accessOptions?: ScheduleAccessOptions,
 ): Promise<ScheduleState> {
   const state = await loadScheduleState(internals, scheduleId);
-  if (!state || !canAccessSchedule(state, accessOptions)) {
+  if (!state) {
     throw new Error(`Schedule "${scheduleId}" not found`);
   }
   return state;

@@ -8,7 +8,7 @@
  * reported at the response top level so it does not drift per-worker.
  *
  * Access is `system:read` because the registry is server-wide
- * infrastructure, not tenant-scoped data — tenant principals see 403.
+ * infrastructure.
  *
  * The operation is constructed via a factory that closes over a
  * `WorkerRegistry` and an injectable `clock`. Tests use a deterministic

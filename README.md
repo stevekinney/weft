@@ -69,7 +69,7 @@ That's the core loop: `workflow({ name })` is a **chained builder** that co-loca
 
 `Engine.create()` does the registration dance for you: it constructs the engine and registers each workflow in the `workflows` map, pulling in all the activities each workflow declares. Pass `recover: true` when booting against durable storage so `engine.recoverAll()` runs after registration and any workflows still running from a previous process pick up where they left off.
 
-If you'd rather wire things up by hand — useful for tests, multi-tenant setups, or adding new workflows after the engine starts up — `new Engine({ storage })`, `engine.register(workflow)` or `engine.registerWorkflows({ ... })`, and `await engine.recoverAll()` are the underlying primitives. Each `engine.register(workflow)` call returns the engine with that workflow's name and types baked in, so `engine.start('welcome', ...)` autocompletes immediately.
+If you'd rather wire things up by hand — useful for tests, isolating engines onto separate storage scopes via `ScopedStorage`, or adding new workflows after the engine starts up — `new Engine({ storage })`, `engine.register(workflow)` or `engine.registerWorkflows({ ... })`, and `await engine.recoverAll()` are the underlying primitives. Each `engine.register(workflow)` call returns the engine with that workflow's name and types baked in, so `engine.start('welcome', ...)` autocompletes immediately.
 
 > [!NOTE]
 > The chained builder also accepts `.signals({...})`, `.updates({...})`, `.queries({...})`, and `.searchAttributes({...})`. Each can be called at most once before `.execute(fn)`; the type system flips a phantom flag so a duplicate call fails to typecheck, and the runtime mirrors the same invariant. These maps don't introduce new runtime gating — they're type hints that thread into `ctx.run()`, `ctx.waitForSignal()`, `ctx.waitForUpdate()`, and friends so your editor autocompletes and your code typechecks. The underlying dispatch paths are unchanged.
@@ -173,7 +173,7 @@ const orders = await engine.list({
 });
 ```
 
-Workflow visibility extends the same list surface with operator filters for `idPrefix`, `tenantId`, failure categories, created/updated/deadline ranges, and status arrays. Use `engine.aggregate()` or `GET /v1/workflows/aggregate` for grouped counts by status, type, tenant, failure category, or a search attribute. Existing Bun SQLite deployments should run the [workflow visibility backfill](documentation/guides/workflow-visibility-backfill.md) before relying on the indexed fast path for older workflows.
+Workflow visibility extends the same list surface with operator filters for `idPrefix`, failure categories, created/updated/deadline ranges, and status arrays. Use `engine.aggregate()` or `GET /v1/workflows/aggregate` for grouped counts by status, type, failure category, or a search attribute. Existing Bun SQLite deployments should run the [workflow visibility backfill](documentation/guides/workflow-visibility-backfill.md) before relying on the indexed fast path for older workflows.
 
 ### Human-in-the-Loop Review
 
@@ -271,25 +271,6 @@ await worker.start();
 ### Browser Support
 
 The core engine runs inside a Web Worker, with a Service Worker acting as the durable persistence layer over `IndexedDB`. Browser-compatible workflow logic ships across server and browser without modification—useful for offline-first apps that need durable client-side workflows. Activities, storage adapters, and other environment-bound pieces still need browser-safe implementations: use `IndexedDBStorage` or `WebExtensionStorage` instead of SQLite storage, swap server-only activities for `fetch`-based equivalents, and so on. See the [Service Worker guide](documentation/guides/service-worker.md) for the browser runtime wiring.
-
-### Multi-Tenancy
-
-Built-in tenant resolution and per-tenant quotas. Resolve tenants from any field on the workflow input, then attach quotas to control workflow creation rate, concurrency, or storage usage per tenant.
-
-```typescript
-import { Engine, tenantFromInputField } from 'weft';
-
-const engine = new Engine({
-  tenantResolver: tenantFromInputField('customerId'),
-  quotas: {
-    maxConcurrentWorkflows: 100,
-    maxWorkflowCreationRate: { count: 60, window: '1m' },
-    maxStorageBytes: 50_000_000,
-  },
-});
-```
-
-The [Multi-Tenancy guide](documentation/guides/multi-tenancy.md) covers tenant resolution, quota enforcement, storage isolation, remote workers, and security boundaries.
 
 ### Observability
 
@@ -491,7 +472,7 @@ Guides:
 - [Workflows](documentation/guides/workflows.md), [Activities](documentation/guides/activities.md), [Storage](documentation/guides/storage.md), [Server](documentation/guides/server.md)
 - [Signals and Queries](documentation/guides/signals-and-queries.md), [Synchronous Updates](documentation/guides/synchronous-updates.md)
 - [Durable Timers](documentation/guides/durable-timers.md), [Timeouts](documentation/guides/timeouts.md), [Parallel Execution](documentation/guides/parallel-execution.md)
-- [Search Attributes](documentation/guides/search-attributes.md), [Workflow Visibility Backfill](documentation/guides/workflow-visibility-backfill.md), [Multi-Tenancy](documentation/guides/multi-tenancy.md), [State](documentation/guides/state.md), [Session State](documentation/guides/session-state.md), [Events](documentation/guides/events.md)
+- [Search Attributes](documentation/guides/search-attributes.md), [Workflow Visibility Backfill](documentation/guides/workflow-visibility-backfill.md), [State](documentation/guides/state.md), [Session State](documentation/guides/session-state.md), [Events](documentation/guides/events.md)
 - [Interceptors](documentation/guides/interceptors.md), [Observability](documentation/guides/observability.md), [Testing](documentation/guides/testing.md)
 - [Workflow Versioning](documentation/guides/workflow-versioning.md), [Remote Workers](documentation/guides/remote-workers.md), [Service Worker](documentation/guides/service-worker.md), [Resource Management](documentation/guides/resource-management.md)
 

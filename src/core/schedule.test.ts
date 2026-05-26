@@ -17,7 +17,6 @@ import {
   getNextCronOccurrence,
   parseCronExpression,
 } from './schedule.ts';
-import { tenantFromInputField, type TenantResolver } from './tenant.ts';
 import {
   schedule as defineSchedule,
   workflow as defineWorkflow,
@@ -31,15 +30,10 @@ type Clock = {
   now: number;
 };
 
-function createEngine(
-  clock: Clock,
-  storage = new MemoryStorage(),
-  tenantResolver?: TenantResolver,
-) {
+function createEngine(clock: Clock, storage = new MemoryStorage()) {
   return new Engine({
     storage,
     getNow: () => clock.now,
-    ...(tenantResolver !== undefined && { tenantResolver }),
   });
 }
 
@@ -1396,69 +1390,5 @@ describe('recurring schedules', () => {
     );
 
     expect(nextFireAt).toBe(Date.parse('2026-11-01T06:30:00.000Z'));
-  });
-
-  it('Tests cover: multi-tenant schedule isolation.', async () => {
-    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
-    const storage = new MemoryStorage();
-    const engine = createEngine(clock, storage, tenantFromInputField('tenantId'));
-    const observedTenants: string[] = [];
-
-    registerWorkflow(
-      engine,
-      'tenant-aware-schedule',
-      async function* (ctx: WorkflowContext, input: { tenantId: string }) {
-        observedTenants.push(`${ctx.tenant?.id}:${input.tenantId}`);
-        return ctx.tenant?.id ?? 'missing';
-      },
-    );
-
-    const alphaSchedule = await engine.schedule(
-      'tenant-aware-schedule',
-      { tenantId: 'alpha' },
-      '* * * * *',
-      { id: 'tenant-alpha' },
-    );
-    const betaSchedule = await engine.schedule(
-      'tenant-aware-schedule',
-      { tenantId: 'beta' },
-      '* * * * *',
-      { id: 'tenant-beta' },
-    );
-    expect(await engine.getSchedule('tenant-alpha')).toBeNull();
-    expect(await engine.getSchedule('tenant-alpha', { tenantId: 'alpha' })).toMatchObject({
-      id: 'tenant-alpha',
-    });
-    const unscopedSchedules = await engine.listSchedules();
-    const alphaSchedules = await engine.listSchedules({ tenantId: 'alpha' });
-    expect(unscopedSchedules.items).toEqual([]);
-    expect(alphaSchedules.items).toEqual([expect.objectContaining({ id: 'tenant-alpha' })]);
-
-    const descriptions: ScheduleSummary[] = [
-      await alphaSchedule.describe(),
-      await betaSchedule.describe(),
-    ];
-
-    engine[Symbol.dispose]();
-
-    const recoveredEngine = createEngine(clock, storage);
-    registerWorkflow(
-      recoveredEngine,
-      'tenant-aware-schedule',
-      async function* (ctx: WorkflowContext, input: { tenantId: string }) {
-        observedTenants.push(`${ctx.tenant?.id}:${input.tenantId}`);
-        return ctx.tenant?.id ?? 'missing';
-      },
-    );
-
-    await tickEngine(
-      recoveredEngine,
-      clock,
-      Math.max(...descriptions.map((description) => requireNextFireAt(description))),
-    );
-
-    expect(observedTenants.toSorted()).toEqual(['alpha:alpha', 'beta:beta']);
-
-    recoveredEngine[Symbol.dispose]();
   });
 });

@@ -214,7 +214,7 @@ function enforceProducibleFaults(
     throw new UndeclaredFaultError(operation.name, code);
   }
   // Production: log only. Original fault is preserved on the wire so
-  // clients keep their actionable RateLimited / Conflict semantics.
+  // clients keep their actionable Conflict semantics.
   console.warn(
     `[weft] Operation "${operation.name}" raised undeclared fault "${code}". ` +
       "Add it to the operation's `producibleFaults` array or migrate the throw to " +
@@ -264,7 +264,6 @@ const FAULT_CODES = {
   Conflict: true,
   Unprocessable: true,
   Timeout: true,
-  RateLimited: true,
   NotImplemented: true,
   UnsupportedTransport: true,
   SubscriptionOverflow: true,

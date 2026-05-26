@@ -1209,31 +1209,42 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
     },
   ],
   ['src/cli/utilities.ts', { lines: new Set([127]) }],
-  ['src/client/http-client-requests.ts', { lines: new Set([145]) }],
-  ['src/client/local.ts', { functions: 1, lines: new Set([124, 128, 130]) }],
+  ['src/client/http-client-requests.ts', { lines: new Set([133]) }],
+  ['src/client/local.ts', { functions: 1, lines: new Set([129]) }],
+  [
+    'src/core/atomic-state.ts',
+    { functions: 1, lines: new Set([413, 414, 415, 416, 417, 418, 419, 420]) },
+  ],
   ['src/core/checkpoint/serialization.ts', { lines: new Set([115, 116, 117, 123, 124, 125]) }],
   ['src/core/context/speculative-child.ts', { lines: new Set([25]) }],
-  ['src/core/context/validation.ts', { lines: new Set([9]) }],
   [
-    'src/core/engine/aggregate.ts',
-    { functions: 1, lines: new Set([47, 48, 49, 50, 51, 52, 53, 54, 55, 56]) },
+    'src/core/context/state-namespace.ts',
+    {
+      functions: 7,
+      lines: new Set([
+        63, 64, 65, 66, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104,
+        105, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126,
+        127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144,
+      ]),
+    },
   ],
+  ['src/core/context/validation.ts', { lines: new Set([9]) }],
+  ['src/core/engine/aggregate.ts', { functions: 1, lines: new Set([52, 53, 54, 55, 56, 57]) }],
   [
     'src/core/engine/attributes-tags.ts',
     {
       functions: 2,
       lines: new Set([
-        50, 51, 53, 190, 191, 204, 220, 253, 268, 285, 291, 292, 293, 294, 295, 296, 297, 298, 299,
-        300, 301, 302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317,
-        318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330, 331, 332, 333, 334, 335,
-        336,
+        49, 50, 52, 182, 196, 260, 292, 298, 299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309,
+        310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327,
+        328,
       ]),
     },
   ],
   ['src/core/engine/bulk-operations-purge.ts', { lines: new Set([164]) }],
   [
     'src/core/engine/bulk-operations-shared.ts',
-    { functions: 1, lines: new Set([160, 176, 302, 303, 304, 305, 311, 312, 313, 314]) },
+    { functions: 1, lines: new Set([154, 170, 296, 297, 298, 299, 305, 306, 307, 308]) },
   ],
   [
     'src/core/engine/bulk-operations.ts',
@@ -1260,23 +1271,23 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
     'src/core/engine/engine-runtime-helpers.ts',
     { functions: 2, lines: new Set([29, 30, 31, 52, 53, 54, 55, 56, 60]) },
   ],
+  ['src/core/engine/handle-result.ts', { lines: new Set([48, 69, 70, 83, 85, 86, 106]) }],
   [
-    'src/core/engine/handle-result.ts',
-    { lines: new Set([48, 50, 51, 69, 70, 76, 77, 78, 79, 83, 85, 86, 91]) },
+    'src/core/engine/inline-launch-queue.ts',
+    { functions: 1, lines: new Set([29, 31, 32, 33, 42, 43, 75, 165]) },
   ],
   ['src/core/engine/lifecycle/resume.ts', { lines: new Set([67]) }],
   [
     'src/core/engine/list-candidate-resolution.ts',
     {
-      functions: 6,
+      functions: 5,
       lines: new Set([
-        42, 45, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
-        68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 155, 157, 158,
-        159, 160, 161, 162, 163, 164, 165, 166, 167, 169, 170, 171, 173, 174,
+        45, 46, 47, 48, 49, 53, 54, 55, 56, 60, 61, 62, 63, 67, 68, 69, 70, 74, 75, 76, 77, 145,
+        147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 158, 159, 160, 162, 163,
       ]),
     },
   ],
-  ['src/core/engine/listing.ts', { lines: new Set([52, 81, 83, 118, 180, 202, 214, 234]) }],
+  ['src/core/engine/listing.ts', { lines: new Set([81, 118, 212, 232]) }],
   [
     'src/core/engine/reviews.ts',
     {
@@ -1286,13 +1297,12 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
     },
   ],
   ['src/core/engine/schedule-timer.ts', { lines: new Set([25, 33]) }],
-  [
-    'src/core/engine/schedules.ts',
-    { lines: new Set([78, 99, 196, 210, 246, 260, 368, 380, 390, 393, 406, 408, 411, 469, 474]) },
-  ],
-  ['src/core/engine/storage-io.ts', { functions: 1, lines: new Set([68, 69]) }],
+  ['src/core/engine/schedules.ts', { lines: new Set([66, 149, 191, 306, 332, 337]) }],
+  ['src/core/engine/storage-io.ts', { functions: 1, lines: new Set([65]) }],
+  ['src/core/engine/termination/complete.ts', { lines: new Set([416]) }],
   ['src/core/engine/updates.ts', { lines: new Set([146, 189, 341, 348, 383, 390]) }],
-  ['src/core/engine/validation.ts', { lines: new Set([152, 291]) }],
+  ['src/core/engine/validation.ts', { lines: new Set([117]) }],
+  ['src/core/engine/workflow-indexes.ts', { functions: 1, lines: new Set([44, 45, 46, 47, 48]) }],
   ['src/core/engine/workflow-state-stream.ts', { lines: new Set([114, 134]) }],
   ['src/core/schedule/cron-occurrence.ts', { lines: new Set([183, 217]) }],
   [
@@ -1316,35 +1326,65 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
     'src/dashboard/utilities/workflow-detail-timeline.ts',
     { lines: new Set([180, 185, 186, 209, 210]) },
   ],
+  ['src/mcp/access.ts', { lines: new Set([28, 29, 30, 31, 32]) }],
+  [
+    'src/mcp/dispatcher.ts',
+    { functions: 9, lines: new Set([111, 112, 115, 211, 212, 213, 260, 261, 265]) },
+  ],
+  [
+    'src/mcp/http.ts',
+    {
+      lines: new Set([
+        110, 111, 112, 113, 114, 115, 116, 117, 196, 197, 220, 230, 273, 324, 365, 366, 367, 368,
+        369, 372, 373, 374, 375,
+      ]),
+    },
+  ],
+  [
+    'src/mcp/list-filter.ts',
+    {
+      lines: new Set([
+        64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 88, 89, 90, 91, 92, 93, 94, 95, 96, 101,
+        102, 103, 104,
+      ]),
+    },
+  ],
+  ['src/mcp/protocol.ts', { functions: 4, lines: new Set([89, 94, 95, 96, 101, 106]) }],
   [
     'src/mcp/tools.ts',
     {
-      functions: 1,
+      functions: 2,
       lines: new Set([
-        67, 68, 124, 125, 126, 158, 161, 178, 179, 181, 182, 292, 293, 294, 295, 296, 297, 298, 299,
-        352, 353, 355, 356, 379, 382,
+        67, 124, 125, 160, 180, 181, 294, 295, 296, 297, 298, 314, 315, 316, 317, 318, 354, 355,
+        381,
       ]),
     },
   ],
   ['src/server/openapi.ts', { lines: new Set([334, 356]) }],
   [
+    'src/server/operation-catalog/workflow-adapter.ts',
+    { lines: new Set([169, 170, 171, 172, 173, 177, 178, 181, 182, 183, 184, 185, 189, 190]) },
+  ],
+  [
     'src/server/operations/bulk-filter-helpers.ts',
     {
       functions: 1,
-      lines: new Set([
-        262, 267, 272, 277, 282, 287, 295, 296, 297, 298, 300, 306, 307, 308, 309, 310, 311, 312,
-        313, 314, 315, 316, 317, 318, 319, 320, 321, 374, 377, 380, 383, 387, 390, 392, 395, 397,
-        400, 403, 406, 444, 447, 456, 459, 469, 472, 479, 482,
-      ]),
+      lines: new Set([305, 306, 307, 363, 366, 373, 378, 383, 389, 430, 441, 454, 464]),
     },
   ],
+  ['src/server/operations/get-workflow-result.ts', { functions: 1 }],
   [
     'src/server/operations/start-workflow.ts',
     {
       functions: 1,
-      lines: new Set([
-        174, 199, 200, 201, 205, 210, 211, 212, 233, 235, 236, 237, 241, 246, 247, 248, 269,
-      ]),
+      lines: new Set([200, 225, 226, 227, 231, 236, 237, 238, 259]),
+    },
+  ],
+  [
+    'src/server/operations/storage.ts',
+    {
+      functions: 2,
+      lines: new Set([107, 108, 109, 110, 111, 173, 174, 181, 182, 189, 245, 318, 319, 320]),
     },
   ],
   ['src/server/runtime/websocket-worker.ts', { lines: new Set([361, 362, 365, 366]) }],
@@ -1362,10 +1402,53 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
     },
   ],
   [
+    // The IndexedDB fault harness now has direct helper coverage for the
+    // upgrade and completion paths. Bun still reports two unnamed function
+    // misses in this support-only module even though every executable line is
+    // covered by the dedicated harness test plus indexeddb.test.ts.
+    'src/storage/indexeddb-fault-harness.test-support.ts',
+    {
+      functions: 2,
+    },
+  ],
+  [
+    'src/storage/node-sqlite.ts',
+    {
+      functions: 1,
+      lines: new Set([
+        58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
+      ]),
+    },
+  ],
+  [
+    'src/storage/scoped-storage.ts',
+    {
+      functions: 1,
+      lines: new Set([
+        159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176,
+        177, 178, 179, 180, 181, 182, 183, 184, 185,
+      ]),
+    },
+  ],
+  [
+    'src/storage/storage-adapter.test-support.ts',
+    { functions: 1, lines: new Set([42, 43, 44, 45, 46, 47, 48]) },
+  ],
+  [
     'src/testing/replay-scenarios.test-support.ts',
     {
       functions: 2,
       lines: new Set([51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 133, 134, 135, 136, 179]),
+    },
+  ],
+  [
+    // The shared scheduler contract defines its test cases inline in this
+    // support module so both scheduler suites reuse the same assertions. Bun
+    // counts several nested test callbacks as uncovered functions even though
+    // the consumer suites execute every assertion and line in the helper.
+    'src/testing/scheduler-contract.test-support.ts',
+    {
+      functions: 7,
     },
   ],
   [
@@ -1430,6 +1513,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
     'src/worker/registry/summary.ts',
     { functions: 1, lines: new Set([134, 135, 136, 137, 138, 139]) },
   ],
+  ['src/workers/workflow-runner.ts', { functions: 1, lines: new Set([74, 75, 76, 77]) }],
 ]);
 
 const COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([

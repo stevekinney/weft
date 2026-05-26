@@ -5,11 +5,7 @@ import type { ScheduleOptions } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
-import {
-  isOperationFault,
-  mapScheduleErrorToFault,
-  resolveScheduleAccessOptions,
-} from './schedule-faults.ts';
+import { mapScheduleErrorToFault } from './schedule-faults.ts';
 
 const VALID_SCHEDULE_OVERLAP_POLICIES = new Set<NonNullable<ScheduleOptions['overlap']>>([
   'skip',
@@ -119,18 +115,13 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
   producibleFaults: ['NotFound', 'Conflict'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine, principal }): Promise<CreateScheduleOutput> => {
+  invoke: async ({ input, engine }): Promise<CreateScheduleOutput> => {
     const typedEngine = engine as Engine;
 
     // All field validation lives here so REST and JSON-RPC clients both
     // receive the same error messages verbatim. Validation order:
     // type → cronExpression → id → overlap → backfill.
     const validated = validateCreateScheduleInput(input);
-
-    const accessOptions = resolveScheduleAccessOptions(principal);
-    if (isOperationFault(accessOptions)) {
-      throw accessOptions;
-    }
 
     const options: ScheduleOptions = {
       ...(validated.id !== undefined ? { id: validated.id } : {}),
@@ -144,7 +135,6 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
         input.input,
         validated.cronExpression,
         options,
-        accessOptions,
       );
       return { id: handle.id };
     } catch (error) {

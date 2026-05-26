@@ -178,11 +178,6 @@ export interface ContextOptions {
    */
   executionStateOwnerId?: string;
   /**
-   * The {@link TenantContext} resolved for this workflow, if any. Made
-   * available to workflow code via `ctx.tenant`.
-   */
-  tenant?: import('../tenant.ts').TenantContext;
-  /**
    * Reference timestamp used to compute `scheduledFireAt` for sleep operations.
    * When resuming from a checkpoint, this should be the checkpoint's `createdAt`.
    */

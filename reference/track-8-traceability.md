@@ -46,7 +46,7 @@ A row is `closeable: true` iff one of these branches holds.
 
 These rules govern which routes belong on the cataloged transport-parity surface and which are intentionally REST-only or anonymous.
 
-- **Cataloged runtime operations** must support REST + JSON-RPC HTTP + JSON-RPC WebSocket + JSON-RPC stdio. The data-driven operations include `weft.schedules.list`, `weft.schedules.get`, `weft.tenants.quota.get`, `weft.workflows.replay`, and `weft.system.metrics`, alongside the rest of the cataloged surface (verified by `grep -hE "name: 'weft\." src/server/operations/*.ts | sort -u | wc -l`).
+- **Cataloged runtime operations** must support REST + JSON-RPC HTTP + JSON-RPC WebSocket + JSON-RPC stdio. The data-driven operations include `weft.schedules.list`, `weft.schedules.get`, `weft.workflows.replay`, and `weft.system.metrics`, alongside the rest of the cataloged surface (verified by `grep -hE "name: 'weft\." src/server/operations/*.ts | sort -u | wc -l`).
 
   > **Note**: `src/server/operations/` also contains four helper modules — `operation-helpers.ts`, `bulk-filter-helpers.ts`, `sse-stream.ts`, `schedule-faults.ts` — that do not call `defineOperation` and are not counted as operations.
 

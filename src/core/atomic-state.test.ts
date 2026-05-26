@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../storage/interface.ts';
+import { DEFAULT_SCOPE, KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { createCoreStorageAdapter } from '../storage/storage-adapter.test-support.ts';
 import {
@@ -10,6 +10,7 @@ import {
   AtomicStateConflictEvent,
   AtomicStateExhaustedEvent,
   OBSERVABLE_SYMBOL,
+  atomicStateDataKey,
   atomicStateVersionKey,
 } from './atomic-state.ts';
 import { decode } from './codec.ts';
@@ -171,5 +172,42 @@ describe('AtomicState', () => {
 
     expect(events[0]).toBeInstanceOf(AtomicStateConflictEvent);
     expect(events[1]).toBeInstanceOf(AtomicStateExhaustedEvent);
+  });
+});
+
+// Acceptance-critical invariant: workflow-owned durable state is written under
+// a constant default scope prefix, never at the storage root. weft is
+// single-tenant, but the scope component is kept so a future re-partition is a
+// key rename, not a data migration. If this changes, it must be a deliberate,
+// versioned storage migration — not an accident.
+describe('workflow-scoped state default-scope invariant', () => {
+  it('keys workflow-shared state under state:workflow-scope:<DEFAULT_SCOPE>:, never at root', () => {
+    const dataKey = atomicStateDataKey({ type: 'workflow', workflowType: 'invoice' }, 'cursor');
+    expect(dataKey).toBe(`state:workflow-scope:${DEFAULT_SCOPE}:invoice:cursor`);
+    expect(dataKey.startsWith(`state:workflow-scope:${DEFAULT_SCOPE}:`)).toBe(true);
+    // The key must carry the scope component — not collapse to a root-level
+    // `state:workflow-scope:invoice:cursor` form.
+    expect(dataKey).not.toBe('state:workflow-scope:invoice:cursor');
+  });
+
+  it('cannot alias a legacy state:workflow:<tenantId>: key even when the tenant id equals DEFAULT_SCOPE', () => {
+    // Pre-removal, workflow-shared state was keyed `state:workflow:<tenantId>:…`.
+    // A deployment whose tenant id happened to equal DEFAULT_SCOPE ('default')
+    // would alias into the new global namespace if we reused the `state:workflow:`
+    // prefix. The `state:workflow-scope:` segment makes that structurally
+    // impossible: the new key never starts with the legacy prefix.
+    const dataKey = atomicStateDataKey({ type: 'workflow', workflowType: 'invoice' }, 'cursor');
+    const legacyKeyForTenantNamedDefault = `state:workflow:${DEFAULT_SCOPE}:invoice:cursor`;
+    expect(dataKey).not.toBe(legacyKeyForTenantNamedDefault);
+    expect(dataKey.startsWith('state:workflow:')).toBe(false);
+  });
+
+  it('keeps execution-scoped state owner-partitioned and distinct from workflow scope', () => {
+    const executionKey = atomicStateDataKey(
+      { type: 'execution', ownerWorkflowId: 'wf-1' },
+      'cursor',
+    );
+    expect(executionKey).toBe('state:execution:wf-1:cursor');
+    expect(executionKey.startsWith('state:workflow-scope:')).toBe(false);
   });
 });

@@ -43,15 +43,15 @@ function joinScopePrefixes(leftPrefix: string, rightPrefix: string): string {
  * import { MemoryStorage, ScopedStorage } from 'weft';
  *
  * await using raw = new MemoryStorage();
- * const tenantA = new ScopedStorage(raw, 'tenant:a');
- * const tenantB = new ScopedStorage(raw, 'tenant:b');
+ * const scopeA = new ScopedStorage(raw, 'scope:a');
+ * const scopeB = new ScopedStorage(raw, 'scope:b');
  *
- * await tenantA.put('setting', new TextEncoder().encode('dark'));
- * await tenantB.put('setting', new TextEncoder().encode('light'));
+ * await scopeA.put('setting', new TextEncoder().encode('dark'));
+ * await scopeB.put('setting', new TextEncoder().encode('light'));
  *
- * // Keys are isolated — tenantA cannot see tenantB's data
- * console.log(await tenantA.has('setting')); // true
- * console.log(await tenantB.get('setting')); // Uint8Array for 'light'
+ * // Keys are isolated — scopeA cannot see scopeB's data
+ * console.log(await scopeA.has('setting')); // true
+ * console.log(await scopeB.get('setting')); // Uint8Array for 'light'
  * ```
  */
 export class ScopedStorage implements Storage {

@@ -40,7 +40,7 @@ describe('ParamSource discriminated union', () => {
     const path: ParamSource = { kind: 'path', pathParam: 'id' };
     const query: ParamSource = { kind: 'query', queryParam: 'limit' };
     const queryRepeating: ParamSource = { kind: 'query', queryParam: 'tag', repeating: true };
-    const header: ParamSource = { kind: 'header', headerName: 'x-tenant-id' };
+    const header: ParamSource = { kind: 'header', headerName: 'x-request-id' };
     const body: ParamSource = { kind: 'body' };
     const bodyField: ParamSource = { kind: 'body-field', bodyField: 'workflowType' };
     // Compile-time exhaustiveness: if `ParamSource` grows a new variant,

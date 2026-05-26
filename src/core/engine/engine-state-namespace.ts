@@ -11,7 +11,7 @@ import type { AtomicState, AtomicStateOptions } from '../atomic-state.ts';
  *
  * const engine = new Engine();
  * const state: EngineStateNamespace = engine.state;
- * const counter = state.tenant<number>('acme', 'count', { initial: 0 });
+ * const counter = state.workflow<number>('invoice', 'count', { initial: 0 });
  * void counter;
  * ```
  */
@@ -21,11 +21,5 @@ export interface EngineStateNamespace {
     key: string,
     options?: AtomicStateOptions<T>,
   ): AtomicState<T>;
-  workflow<T>(
-    tenantId: string,
-    workflowType: string,
-    key: string,
-    options?: AtomicStateOptions<T>,
-  ): AtomicState<T>;
-  tenant<T>(tenantId: string, key: string, options?: AtomicStateOptions<T>): AtomicState<T>;
+  workflow<T>(workflowType: string, key: string, options?: AtomicStateOptions<T>): AtomicState<T>;
 }

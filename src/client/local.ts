@@ -37,7 +37,6 @@ import type {
   SignalDefinition,
   StartOptions,
   SubmitReviewOptions,
-  TenantQuotaUsage,
   TypedListFilter,
   UpdateDefinition,
   WorkflowEvent,
@@ -280,10 +279,6 @@ export class LocalClient implements WeftClient {
 
   async submitReview(reviewId: string, options: SubmitReviewOptions): Promise<void> {
     return this.#engine.submitReview(reviewId, options);
-  }
-
-  async getQuotaUsage(tenantId: string): Promise<TenantQuotaUsage> {
-    return this.#engine.getQuotaUsage(tenantId);
   }
 
   async getStreamChunks(

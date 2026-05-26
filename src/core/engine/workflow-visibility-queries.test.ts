@@ -6,7 +6,6 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import {
   queryWorkflowIdPrefixCandidates,
   queryWorkflowStatusIndex,
-  queryWorkflowTenantIndex,
   queryWorkflowTimeRangeIndex,
   queryWorkflowTypeIndex,
 } from './workflow-visibility-queries.ts';
@@ -45,27 +44,6 @@ describe('queryWorkflowTypeIndex', () => {
 
     const ids = await queryWorkflowTypeIndex(storage, 'order');
     expect(ids).toEqual(new Set(['wf-a', 'wf b']));
-  });
-});
-
-describe('queryWorkflowTenantIndex', () => {
-  it('accepts a single tenant id', async () => {
-    await using storage = new MemoryStorage();
-    await seedIndex(storage, KEYS.workflowVisibilityTenant('acme', 'wf-1'));
-    await seedIndex(storage, KEYS.workflowVisibilityTenant('globex', 'wf-2'));
-
-    expect(await queryWorkflowTenantIndex(storage, 'acme')).toEqual(new Set(['wf-1']));
-  });
-
-  it('unions multiple tenant ids', async () => {
-    await using storage = new MemoryStorage();
-    await seedIndex(storage, KEYS.workflowVisibilityTenant('acme', 'wf-1'));
-    await seedIndex(storage, KEYS.workflowVisibilityTenant('globex', 'wf-2'));
-    await seedIndex(storage, KEYS.workflowVisibilityTenant('initech', 'wf-3'));
-
-    expect(await queryWorkflowTenantIndex(storage, ['acme', 'globex'])).toEqual(
-      new Set(['wf-1', 'wf-2']),
-    );
   });
 });
 

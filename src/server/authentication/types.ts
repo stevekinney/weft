@@ -40,7 +40,7 @@ export type JWTAlgorithm = HMACAlgorithm | RSAAlgorithm | ECDSAAlgorithm;
  *
  * Supply either `secret` (for HMAC algorithms) or `publicKey` (for RSA/ECDSA).
  * Optional `issuer`, `audience`, and `clockTolerance` fields guard against
- * cross-tenant token reuse and clock-skew rejection.
+ * token reuse and clock-skew rejection.
  *
  * @example
  * ```ts

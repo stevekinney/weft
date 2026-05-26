@@ -14,7 +14,6 @@ import {
   coerceStartWorkflowTimestamp,
   StartWorkflowValidationError,
 } from '../../core/start-workflow-validation.ts';
-import { QuotaExceededError } from '../../core/tenant-quotas.ts';
 import type {
   SearchAttributeSchema,
   SearchAttributeValue,
@@ -88,8 +87,7 @@ function validateStartWorkflowInput(
  *   1. WorkflowNotRegisteredError   → InvalidParams
  *   2. WorkflowAlreadyExistsError   → Conflict
  *   3. StartWorkflowValidationError → InvalidParams
- *   4. QuotaExceededError           → RateLimited
- *   5. otherwise                    → EngineFailure
+ *   4. otherwise                    → EngineFailure
  */
 function resolveStartWorkflowAccess(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
@@ -108,14 +106,6 @@ function resolveStartWorkflowAccess(error: unknown): never {
   if (error instanceof StartWorkflowValidationError) {
     throw invalidParamsFault(message);
   }
-  if (error instanceof QuotaExceededError) {
-    const fault: OperationFault = {
-      code: 'RateLimited',
-      message,
-      data: {},
-    };
-    throw fault;
-  }
 
   const fault: OperationFault = {
     code: 'EngineFailure',
@@ -133,7 +123,7 @@ export const startWorkflowOperation = defineOperation<StartWorkflowInput, StartW
   inputSchema: startWorkflowInput,
   outputSchema: startWorkflowOutput,
   access: { kind: 'public' },
-  producibleFaults: ['RateLimited', 'Conflict'],
+  producibleFaults: ['Conflict'],
   transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<StartWorkflowOutput> => {

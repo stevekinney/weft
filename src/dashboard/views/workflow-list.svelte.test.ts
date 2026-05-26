@@ -26,7 +26,6 @@ type WorkflowListApiClient = Pick<
   | 'listWorkflows'
   | 'listSchedules'
   | 'getRetentionOverview'
-  | 'getTenantQuotaUsage'
   | 'previewBulkCancelWorkflows'
   | 'commitBulkCancelWorkflows'
   | 'previewBulkDeleteWorkflows'
@@ -77,7 +76,6 @@ async function loadWorkflowListHarnessModule(): Promise<SvelteClientModule> {
       | 'listWorkflows'
       | 'listSchedules'
       | 'getRetentionOverview'
-      | 'getTenantQuotaUsage'
       | 'previewBulkCancelWorkflows'
       | 'commitBulkCancelWorkflows'
       | 'previewBulkDeleteWorkflows'
@@ -170,7 +168,6 @@ function createPreview(requestId: string): BulkOperationDryRunResult {
       filter: { status: 'running' },
       statuses: ['running'],
       workflowTypes: ['checkout'],
-      tenantIds: ['tenant-a'],
       sampleWorkflowIds: ['workflow-1', 'workflow-2'],
       sampleLimit: 20,
     },
@@ -215,7 +212,6 @@ function createWorkflowListApiClient(
         limit: 20,
       } satisfies PaginatedResult<ScheduleSummary>),
     getRetentionOverview: () => Promise.resolve(createRetentionOverview()),
-    getTenantQuotaUsage: () => Promise.reject(new Error('not used by workflow-list tests')),
     previewBulkCancelWorkflows: (_filter: ListFilter, requestId?: string) =>
       Promise.resolve(createPreview(requestId ?? 'bulk:test-request')),
     commitBulkCancelWorkflows: () =>
@@ -292,12 +288,11 @@ function inputByPlaceholder(placeholder: string): HTMLInputElement {
 
 function filterContains(
   filter: AggregateFilter | undefined,
-  expected: Pick<AggregateFilter, 'idPrefix' | 'tenantId' | 'failureCategory' | 'createdAt'>,
+  expected: Pick<AggregateFilter, 'idPrefix' | 'failureCategory' | 'createdAt'>,
 ): boolean {
   if (filter === undefined) return false;
   return (
     filter?.idPrefix === expected.idPrefix &&
-    filter.tenantId === expected.tenantId &&
     filter.failureCategory === expected.failureCategory &&
     filter.createdAt?.gte === expected.createdAt?.gte &&
     filter.createdAt?.lte === expected.createdAt?.lte
@@ -477,8 +472,6 @@ describe('WorkflowList view', () => {
       await clickButton('Preview');
 
       expect(document.body.textContent).toContain('Preview ready: cancel will affect 2 workflows.');
-      expect(document.body.textContent).toContain('Matched tenants');
-      expect(document.body.textContent).toContain('tenant-a');
       expect(buttonWithText('Cancel 2 workflows').disabled).toBe(false);
 
       const actionSelect = document.querySelector<HTMLSelectElement>('#bulk-action');
@@ -752,7 +745,6 @@ describe('WorkflowList view', () => {
     const { cleanup } = await mountWorkflowList(apiClient);
     try {
       await changeInputValue(inputByPlaceholder('Filter by ID prefix...'), 'order-');
-      await changeInputValue(inputByPlaceholder('Tenant ID'), 'tenant-a');
       await clickButton('Application');
       await changeInputValue(
         document.querySelector<HTMLInputElement>('#created-at-gte')!,
@@ -763,7 +755,6 @@ describe('WorkflowList view', () => {
       expect(lastFilter).toEqual(
         expect.objectContaining({
           idPrefix: 'order-',
-          tenantId: 'tenant-a',
           failureCategory: 'application',
           createdAt: { gte: new Date('2026-05-13T09:30').getTime() },
           limit: 20,
@@ -773,29 +764,15 @@ describe('WorkflowList view', () => {
 
       const expectedAggregateFilter = {
         idPrefix: 'order-',
-        tenantId: 'tenant-a',
         failureCategory: 'application',
         createdAt: { gte: new Date('2026-05-13T09:30').getTime() },
-      } satisfies Pick<AggregateFilter, 'idPrefix' | 'tenantId' | 'failureCategory' | 'createdAt'>;
+      } satisfies Pick<AggregateFilter, 'idPrefix' | 'failureCategory' | 'createdAt'>;
       expect(
         aggregateCalls.some(
           (call) =>
             call.groupBy === 'status' &&
             call.limit === undefined &&
             filterContains(call.filter, expectedAggregateFilter),
-        ),
-      ).toBe(true);
-      expect(
-        aggregateCalls.some(
-          (call) =>
-            call.groupBy === 'tenant' &&
-            call.limit === 100 &&
-            filterContains(call.filter, {
-              idPrefix: 'order-',
-              failureCategory: 'application',
-              createdAt: { gte: new Date('2026-05-13T09:30').getTime() },
-            }) &&
-            call.filter?.tenantId === undefined,
         ),
       ).toBe(true);
 

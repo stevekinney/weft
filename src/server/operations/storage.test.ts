@@ -50,26 +50,12 @@ function request(path: string, init?: RequestInit): Request {
   return new Request(`http://localhost${path}`, init);
 }
 
-function tenantStorageOptions() {
+function writeOnlyStorageOptions() {
   return {
     authContext: {
       method: 'api-key' as const,
       principal: principalFromApiKey({
-        subject: 'tenant-caller',
-        tenantId: 'acme',
-        scopes: ['storage:read', 'storage:write'],
-      }),
-    },
-  };
-}
-
-function writeOnlyTenantStorageOptions() {
-  return {
-    authContext: {
-      method: 'api-key' as const,
-      principal: principalFromApiKey({
-        subject: 'write-only-tenant-caller',
-        tenantId: 'acme',
+        subject: 'write-only-caller',
         scopes: ['storage:write'],
       }),
     },
@@ -162,30 +148,29 @@ describe('storage REST operations', () => {
     });
   });
 
-  it('reads and writes bytes through tenant-scoped storage', async () => {
+  it('reads and writes bytes through admin storage', async () => {
     const rawStorage = new MemoryStorage();
     const engine = new Engine({ storage: rawStorage });
 
     const putResponse = await handleRequest(
-      request('/v1/storage/workflow-key', { method: 'PUT', body: encode('tenant value') }),
+      request('/v1/storage/workflow-key', { method: 'PUT', body: encode('stored value') }),
       engine,
-      tenantStorageOptions(),
+      adminStorageOptions(),
     );
     expect(putResponse.status).toBe(204);
 
-    expect(await rawStorage.get('workflow-key')).toBeNull();
-    expect(decode(await rawStorage.get('tenant:acme:workflow-key'))).toBe('tenant value');
+    expect(decode(await rawStorage.get('workflow-key'))).toBe('stored value');
 
     const getResponse = await handleRequest(
       request('/v1/storage/workflow-key', { method: 'GET' }),
       engine,
-      tenantStorageOptions(),
+      adminStorageOptions(),
     );
     expect(getResponse.status).toBe(200);
-    expect(decode(new Uint8Array(await getResponse.arrayBuffer()))).toBe('tenant value');
+    expect(decode(new Uint8Array(await getResponse.arrayBuffer()))).toBe('stored value');
   });
 
-  it('requires storage admin scope for unscoped access', async () => {
+  it('requires storage admin scope for raw access', async () => {
     const engine = new Engine({ storage: new MemoryStorage() });
     const response = await handleRequest(
       request('/v1/storage/workflow-key', { method: 'GET' }),
@@ -204,41 +189,31 @@ describe('storage REST operations', () => {
     expect(response.status).toBe(403);
   });
 
-  it('treats blank tenant principals as unscoped instead of deriving a shared tenant prefix', async () => {
+  it('denies raw storage writes without storage admin scope', async () => {
     const rawStorage = new MemoryStorage();
     const engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
-      request('/v1/storage/acme:data', { method: 'PUT', body: encode('blank tenant') }),
+      request('/v1/storage/acme:data', { method: 'PUT', body: encode('value') }),
       engine,
-      {
-        authContext: {
-          method: 'api-key' as const,
-          principal: principalFromApiKey({
-            subject: 'blank-tenant-caller',
-            tenantId: '',
-            scopes: ['storage:write'],
-          }),
-        },
-      },
+      writeOnlyStorageOptions(),
     );
 
     expect(response.status).toBe(403);
-    expect(await rawStorage.get('tenant:acme:data')).toBeNull();
     expect(await rawStorage.get('acme:data')).toBeNull();
   });
 
-  it('streams tenant-scoped scan results as NDJSON', async () => {
+  it('streams scan results as NDJSON', async () => {
     const rawStorage = new MemoryStorage();
-    await rawStorage.put('tenant:acme:wf:a', encode('a'));
-    await rawStorage.put('tenant:acme:wf:b', encode('b'));
-    await rawStorage.put('tenant:other:wf:c', encode('c'));
+    await rawStorage.put('wf:a', encode('a'));
+    await rawStorage.put('wf:b', encode('b'));
+    await rawStorage.put('other:c', encode('c'));
     const engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
       request('/v1/storage?prefix=wf:', { method: 'GET' }),
       engine,
-      tenantStorageOptions(),
+      adminStorageOptions(),
     );
 
     expect(response.status).toBe(200);
@@ -326,10 +301,9 @@ describe('storage REST operations', () => {
     expect(collisionResponse.status).toBe(404);
   });
 
-  it('applies tenant-scoped batch writes and deletes without touching raw keys', async () => {
+  it('applies batch writes and deletes through the server route', async () => {
     const rawStorage = new MemoryStorage();
-    await rawStorage.put('tenant:acme:wf:delete', encode('old'));
-    await rawStorage.put('wf:delete', encode('raw'));
+    await rawStorage.put('wf:delete', encode('old'));
     const engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
@@ -344,19 +318,16 @@ describe('storage REST operations', () => {
         headers: { 'content-type': 'application/json' },
       }),
       engine,
-      tenantStorageOptions(),
+      adminStorageOptions(),
     );
 
     expect(response.status).toBe(204);
-    expect(decode(await rawStorage.get('tenant:acme:wf:new'))).toBe('new');
-    expect(await rawStorage.get('tenant:acme:wf:delete')).toBeNull();
-    expect(decode(await rawStorage.get('wf:delete'))).toBe('raw');
+    expect(decode(await rawStorage.get('wf:new'))).toBe('new');
+    expect(await rawStorage.get('wf:delete')).toBeNull();
   });
 
-  it('evaluates tenant-scoped conditional batch conditions against tenant keys only', async () => {
+  it('evaluates conditional batch conditions against stored keys', async () => {
     const rawStorage = new MemoryStorage();
-    await rawStorage.put('wf:key', encode('raw'));
-    await rawStorage.put('tenant:other:wf:key', encode('other'));
     const engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
@@ -364,24 +335,22 @@ describe('storage REST operations', () => {
         method: 'POST',
         body: JSON.stringify({
           conditions: [{ key: 'wf:key', expectedValue: null }],
-          operations: [{ type: 'put', key: 'wf:key', value: btoa('tenant') }],
+          operations: [{ type: 'put', key: 'wf:key', value: btoa('value') }],
         }),
         headers: { 'content-type': 'application/json' },
       }),
       engine,
-      tenantStorageOptions(),
+      adminStorageOptions(),
     );
 
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ applied: true });
-    expect(decode(await rawStorage.get('tenant:acme:wf:key'))).toBe('tenant');
-    expect(decode(await rawStorage.get('tenant:other:wf:key'))).toBe('other');
-    expect(decode(await rawStorage.get('wf:key'))).toBe('raw');
+    expect(decode(await rawStorage.get('wf:key'))).toBe('value');
   });
 
   it('denies conditional batches for write-only callers because conditions reveal stored values', async () => {
     const rawStorage = new MemoryStorage();
-    await rawStorage.put('tenant:acme:wf:key', encode('existing'));
+    await rawStorage.put('wf:key', encode('existing'));
     const engine = new Engine({ storage: rawStorage });
 
     const response = await handleRequest(
@@ -394,14 +363,14 @@ describe('storage REST operations', () => {
         headers: { 'content-type': 'application/json' },
       }),
       engine,
-      writeOnlyTenantStorageOptions(),
+      writeOnlyStorageOptions(),
     );
 
     expect(response.status).toBe(403);
     const body = (await response.json()) as { error?: string };
     expect(body.error).toContain('storage:admin');
     expect(body.error).toContain('storage:read');
-    expect(decode(await rawStorage.get('tenant:acme:wf:key'))).toBe('existing');
+    expect(decode(await rawStorage.get('wf:key'))).toBe('existing');
   });
 
   it('applies conditional batches atomically through the server route', async () => {

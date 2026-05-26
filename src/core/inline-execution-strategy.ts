@@ -17,7 +17,6 @@ import {
   classifyErrorAsFailureCategory,
   errorFromFailedOperationOutcome,
 } from './failure-categories.ts';
-import type { TenantContext } from './tenant.ts';
 import type {
   FailureCategory,
   OperationOutcome,
@@ -59,7 +58,6 @@ type InlineStartWorkflowParameters = {
   sleepReferenceTime?: number;
   deadline?: number;
   headers?: [string, string][];
-  tenant?: TenantContext;
 };
 
 function createInlineContextOptions(
@@ -86,7 +84,6 @@ function createInlineContextOptions(
       searchAttributeSchema: registration.searchAttributes,
     }),
     ...(parameters.deadline !== undefined && { deadline: parameters.deadline }),
-    ...(parameters.tenant !== undefined && { tenant: parameters.tenant }),
   };
 }
 

@@ -32,7 +32,6 @@ export {
   createInitialWorkflowState,
   parseStartOptionDuration,
   resolveScheduledStartAt,
-  resolveTenantForStart,
   start,
   startWorkflow,
 } from './lifecycle/start.ts';

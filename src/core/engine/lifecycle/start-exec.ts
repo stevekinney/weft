@@ -1,5 +1,4 @@
 import { serializeCheckpoint } from '../../checkpoint.ts';
-import type { TenantContext } from '../../tenant.ts';
 import type { Checkpoint } from '../../types.ts';
 import type { EngineInternals } from '../internals.ts';
 import { type LifecycleCallbacks } from './shared.ts';
@@ -49,7 +48,6 @@ export function startWorkflowExecution(
   nestingDepth: number,
   executionDeadline: number | undefined,
   executionStateOwnerId: string,
-  tenant: TenantContext | undefined,
   _callbacks?: LifecycleCallbacks,
 ): void {
   // Skip the map entry for the common non-nested case — readers fall back
@@ -73,6 +71,5 @@ export function startWorkflowExecution(
     ...(internals.workflowHeaders.has(workflowId) && {
       headers: [...internals.workflowHeaders.get(workflowId)!],
     }),
-    ...(tenant !== undefined && { tenant }),
   });
 }

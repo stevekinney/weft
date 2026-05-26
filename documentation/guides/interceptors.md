@@ -86,7 +86,7 @@ The `input` field is mutable by design---interceptors can validate, transform, o
 
 The `headers` field is how metadata crosses thread and network boundaries. A workflow interceptor sets headers on `ActivityInterception` before calling `next()`. The engine serializes those headers into the `postMessage` (local workers) or WebSocket message (remote workers). The activity interceptor reads them from `ActivityExecutionInterception`.
 
-This is the mechanism for trace context, tenant IDs, short-lived authorization claims, and opaque credential references---metadata you need to pass from the workflow side to the activity side. Do not propagate raw bearer tokens, encryption keys, or other long-lived secrets through interceptor headers. Resolve those from a worker-side secret store after validating the tenant and claim. See the [observability guide](./observability.md) for the canonical example.
+This is the mechanism for trace context, short-lived authorization claims, and opaque credential references---metadata you need to pass from the workflow side to the activity side. Do not propagate raw bearer tokens, encryption keys, or other long-lived secrets through interceptor headers. Resolve those from a worker-side secret store after validating the claim. See the [observability guide](./observability.md) for the canonical example.
 
 ## Writing an interceptor
 

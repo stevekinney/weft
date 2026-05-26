@@ -448,7 +448,7 @@ describe('executeOperation — step 6: authorize hook', () => {
         access: { kind: 'authenticated' },
         authorize: async ({ input }) => {
           if (input.workflowId === 'forbidden') {
-            return { allowed: false, reason: 'workflow not in tenant' };
+            return { allowed: false, reason: 'workflow not permitted' };
           }
           return { allowed: true };
         },
@@ -471,7 +471,7 @@ describe('executeOperation — step 6: authorize hook', () => {
     if (denied.ok) throw new Error('expected fault');
     expect(denied.fault.code).toBe('Forbidden');
     if (denied.fault.code !== 'Forbidden') throw new Error('shape');
-    expect(denied.fault.data.reason).toContain('workflow not in tenant');
+    expect(denied.fault.data.reason).toContain('workflow not permitted');
   });
 
   it('hook throw -> EngineFailure (no internal detail leaked)', async () => {
@@ -583,11 +583,11 @@ describe('classifyEngineError', () => {
 
   it('classifies an Error with "already exists" message as Conflict with a generic message', () => {
     const fault = classifyEngineError(
-      new Error('schedule with id "sched-1" already exists in tenant secret-tenant'),
+      new Error('schedule with id "sched-1" already exists at /var/secret/path'),
     );
     expect(fault.code).toBe('Conflict');
     expect(fault.message).toBe('conflict');
-    expect(fault.message).not.toContain('secret-tenant');
+    expect(fault.message).not.toContain('/var/secret/path');
   });
 
   it('classifies WorkflowNotRegisteredError as InvalidParams instead of NotFound', () => {
@@ -692,7 +692,6 @@ describe('classifyEngineError', () => {
       'Conflict',
       'Unprocessable',
       'Timeout',
-      'RateLimited',
       'NotImplemented',
       'UnsupportedTransport',
       'SubscriptionOverflow',
@@ -1361,20 +1360,20 @@ describe('classifyEngineError — producibleFaults enforcement', () => {
     };
     try {
       const fault: OperationFault = {
-        code: 'RateLimited',
-        message: 'slow down',
-        data: { retryAfterMs: 100 },
+        code: 'Timeout',
+        message: 'too slow',
+        data: { operationName: 'weft.test.prodlegacy' },
       };
       const result = classifyEngineError(fault, {
         name: 'weft.test.prodlegacy',
       });
       // Production preserves the original fault on the wire so clients
       // keep their actionable semantics.
-      expect(result.code).toBe('RateLimited');
-      expect(result.message).toBe('slow down');
+      expect(result.code).toBe('Timeout');
+      expect(result.message).toBe('too slow');
       // ...AND the warning fires for monitoring.
       const matching = warnings.filter(
-        (w) => w.includes('weft.test.prodlegacy') && w.includes('RateLimited'),
+        (w) => w.includes('weft.test.prodlegacy') && w.includes('Timeout'),
       );
       expect(matching).toHaveLength(1);
     } finally {

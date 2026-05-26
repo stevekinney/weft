@@ -108,7 +108,7 @@ See `src/core/session-state.ts` for the implementation.
 
 ## Interceptors and Middleware
 
-Interceptors are composable hooks that wrap context operations (`ctx.run()`, `ctx.sleep()`, `ctx.review()`, etc.) for cross-cutting concerns. They compose via `next()` delegation (like Koa middleware) and are registered on the engine, not on individual workflows. The `headers` Map propagates metadata---trace context, tenant IDs, short-lived claims, and opaque credential references---across thread and network boundaries. Observability, validation, encryption, and auth propagation are all built on this foundation.
+Interceptors are composable hooks that wrap context operations (`ctx.run()`, `ctx.sleep()`, `ctx.review()`, etc.) for cross-cutting concerns. They compose via `next()` delegation (like Koa middleware) and are registered on the engine, not on individual workflows. The `headers` Map propagates metadata---trace context, short-lived claims, and opaque credential references---across thread and network boundaries. Observability, validation, encryption, and auth propagation are all built on this foundation.
 
 See [Interceptors guide](../guides/interceptors.md).
 

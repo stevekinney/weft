@@ -2,10 +2,8 @@ import type { BatchOperation } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
 import { getNextCronOccurrence, parseCronExpression } from '../schedule.ts';
-import type { TenantContext } from '../tenant.ts';
 import type {
   PaginatedResult,
-  ScheduleAccessOptions,
   ScheduleFilter,
   ScheduleOptions,
   ScheduleState,
@@ -26,7 +24,6 @@ import {
   coerceScheduleId,
   decodeScheduleState,
   isValidScheduleIdentifier,
-  normalizeScheduleAccessOptions,
   normalizeScheduleFilter,
   normalizeScheduleOptions,
 } from './validation/schedule.ts';
@@ -43,7 +40,6 @@ export type ScheduleCallbacks = {
     type: string,
     input: unknown,
     options: { id: string },
-    tenantResolution: { resolved: TenantContext | undefined },
     additionalStartOperations?: BatchOperation[],
   ) => Promise<void>;
   loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null | undefined>;
@@ -56,41 +52,12 @@ export type ScheduleCallbacks = {
   flushQueuedInlineWorkflowStartsDirectly: () => Promise<void>;
 };
 
-async function resolveScheduleTenant(
-  internals: EngineInternals,
-  scheduleId: string,
-  workflowType: string,
-  input: unknown,
-  accessOptions: ScheduleAccessOptions | undefined,
-): Promise<TenantContext | undefined> {
-  const resolvedTenant = await internals.options.tenantResolver?.resolve(
-    scheduleId,
-    input,
-    workflowType,
-  );
-
-  if (accessOptions?.tenantId === undefined) {
-    return resolvedTenant;
-  }
-
-  if (resolvedTenant === undefined) {
-    return { id: accessOptions.tenantId };
-  }
-
-  if (resolvedTenant.id !== accessOptions.tenantId) {
-    throw new Error('Schedule creation is limited to the authenticated tenant');
-  }
-
-  return resolvedTenant;
-}
-
 export async function schedule(
   internals: EngineInternals,
   type: string,
   input: unknown,
   cronExpression: string,
   options?: ScheduleOptions,
-  accessOptions?: ScheduleAccessOptions,
 ): Promise<ScheduleHandle> {
   if (!internals.registrations.has(type)) {
     throw new WorkflowNotRegisteredError(type);
@@ -99,7 +66,6 @@ export async function schedule(
     throw new Error('cronExpression must be a string');
   }
   const normalizedOptions = normalizeScheduleOptions(options);
-  const normalizedAccessOptions = normalizeScheduleAccessOptions(accessOptions);
   parseCronExpression(cronExpression);
   const scheduleId = normalizedOptions.id ?? crypto.randomUUID();
   if (internals.pendingScheduleCreations.has(scheduleId)) {
@@ -111,13 +77,6 @@ export async function schedule(
       throw new Error(`Schedule with id "${scheduleId}" already exists`);
     }
     const now = internals.options.getNow();
-    const tenant = await resolveScheduleTenant(
-      internals,
-      scheduleId,
-      type,
-      input,
-      normalizedAccessOptions,
-    );
     const state: ScheduleState = {
       id: scheduleId,
       workflowType: type,
@@ -130,14 +89,9 @@ export async function schedule(
       updatedAt: now,
       nextFireAt: getNextCronOccurrence(cronExpression, now),
       queuedRuns: 0,
-      ...(tenant !== undefined && { tenant }),
     };
     await writeScheduleState(internals, state);
-    return new ScheduleHandle(
-      scheduleId,
-      internals.engine,
-      tenant ? { tenantId: tenant.id } : undefined,
-    );
+    return new ScheduleHandle(scheduleId, internals.engine);
   } finally {
     internals.pendingScheduleCreations.delete(scheduleId);
   }
@@ -154,7 +108,7 @@ export async function listSchedules(
     if (scheduleKeySuffix.includes(':')) continue;
     const state = decodeScheduleState(value);
     if (!state || !matchesScheduleFilter(state, normalizedFilter)) continue;
-    const { tenant: _tenant, input: _input, ...summary } = state;
+    const { input: _input, ...summary } = state;
     items.push(summary);
   }
 
@@ -162,22 +116,13 @@ export async function listSchedules(
 }
 
 export function toScheduleSummary(state: ScheduleState): ScheduleSummary {
-  const { tenant: _tenant, input: _input, ...summary } = state;
+  const { input: _input, ...summary } = state;
   return summary;
 }
 
-export async function pauseSchedule(
-  internals: EngineInternals,
-  scheduleId: string,
-  accessOptions?: ScheduleAccessOptions,
-): Promise<void> {
+export async function pauseSchedule(internals: EngineInternals, scheduleId: string): Promise<void> {
   const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
-  const normalizedAccessOptions = normalizeScheduleAccessOptions(accessOptions);
-  const state = await requireScheduleState(
-    internals,
-    normalizedScheduleId,
-    normalizedAccessOptions,
-  );
+  const state = await requireScheduleState(internals, normalizedScheduleId);
   if (state.status !== 'active') return;
   await internals.scheduler.cancel(
     createScheduleTimerId(normalizedScheduleId),
@@ -197,15 +142,9 @@ export async function pauseSchedule(
 export async function resumeSchedule(
   internals: EngineInternals,
   scheduleId: string,
-  accessOptions?: ScheduleAccessOptions,
 ): Promise<void> {
   const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
-  const normalizedAccessOptions = normalizeScheduleAccessOptions(accessOptions);
-  const state = await requireScheduleState(
-    internals,
-    normalizedScheduleId,
-    normalizedAccessOptions,
-  );
+  const state = await requireScheduleState(internals, normalizedScheduleId);
   if (state.status === 'cancelled') {
     throw new Error(`Schedule "${normalizedScheduleId}" has been cancelled and cannot be resumed`);
   }
@@ -223,15 +162,9 @@ export async function resumeSchedule(
 export async function cancelSchedule(
   internals: EngineInternals,
   scheduleId: string,
-  accessOptions?: ScheduleAccessOptions,
 ): Promise<void> {
   const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
-  const normalizedAccessOptions = normalizeScheduleAccessOptions(accessOptions);
-  const state = await requireScheduleState(
-    internals,
-    normalizedScheduleId,
-    normalizedAccessOptions,
-  );
+  const state = await requireScheduleState(internals, normalizedScheduleId);
   if (state.status === 'active') {
     await internals.scheduler.cancel(
       createScheduleTimerId(normalizedScheduleId),
@@ -252,19 +185,13 @@ export async function updateSchedule(
   internals: EngineInternals,
   scheduleId: string,
   newCronExpression: string,
-  accessOptions?: ScheduleAccessOptions,
 ): Promise<void> {
   const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
-  const normalizedAccessOptions = normalizeScheduleAccessOptions(accessOptions);
   if (typeof newCronExpression !== 'string') {
     throw new Error('newCronExpression must be a string');
   }
   parseCronExpression(newCronExpression);
-  const state = await requireScheduleState(
-    internals,
-    normalizedScheduleId,
-    normalizedAccessOptions,
-  );
+  const state = await requireScheduleState(internals, normalizedScheduleId);
   if (state.status === 'active') {
     await internals.scheduler.cancel(
       createScheduleTimerId(normalizedScheduleId),
@@ -314,7 +241,6 @@ export async function startScheduledRun(
     state.workflowType,
     state.input,
     { id: workflowId },
-    { resolved: state.tenant },
     scheduleRunOperations,
   );
   return workflowId;

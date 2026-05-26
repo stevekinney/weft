@@ -20,7 +20,6 @@ const attributeDimensionSchema = z.object({ attribute: z.string().min(1) }).stri
 const groupBySchema = z.union([
   z.literal('status'),
   z.literal('type'),
-  z.literal('tenant'),
   z.literal('failureCategory'),
   attributeDimensionSchema,
 ]);
@@ -29,12 +28,7 @@ const groupBySchema = z.union([
  * Group-by dimension for `engine.aggregate()`. Either a fixed structural
  * dimension or an arbitrary search-attribute name.
  */
-export type AggregateGroupBy =
-  | 'status'
-  | 'type'
-  | 'tenant'
-  | 'failureCategory'
-  | { attribute: string };
+export type AggregateGroupBy = 'status' | 'type' | 'failureCategory' | { attribute: string };
 
 /**
  * Validated options for `engine.aggregate()`. `limit` bounds the number

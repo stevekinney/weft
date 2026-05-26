@@ -75,19 +75,6 @@ function adminStorageOptions() {
   };
 }
 
-function tenantStorageOptions() {
-  return {
-    authContext: {
-      method: 'api-key' as const,
-      principal: principalFromApiKey({
-        subject: 'http-storage-tenant-test',
-        tenantId: 'acme',
-        scopes: ['storage:read', 'storage:write'],
-      }),
-    },
-  };
-}
-
 describe('HTTPStorage', () => {
   it('reads bytes and maps 404 to null', async () => {
     const restoreFetch = installFetch(async (input) => {
@@ -151,15 +138,15 @@ describe('HTTPStorage', () => {
       await storage.put('plain:key', encode('value'));
       await storage.delete('plain:key');
 
-      const scoped = storage.scoped('tenant:');
+      const scoped = storage.scoped('scope:');
       await scoped.put('workflow', encode('scoped'));
-      expect(decode(await scoped.get('workflow'))).toBe('value:tenant:workflow');
+      expect(decode(await scoped.get('workflow'))).toBe('value:scope:workflow');
 
       expect(requests.map((request) => `${request.method} ${request.url}`)).toEqual([
         'PUT https://example.test/root/v1/storage/plain%3Akey',
         'DELETE https://example.test/root/v1/storage/plain%3Akey',
-        'PUT https://example.test/root/v1/storage/tenant%3Aworkflow',
-        'GET https://example.test/root/v1/storage/tenant%3Aworkflow',
+        'PUT https://example.test/root/v1/storage/scope%3Aworkflow',
+        'GET https://example.test/root/v1/storage/scope%3Aworkflow',
       ]);
       expect(requests[0]?.headers.get('content-type')).toBe('application/octet-stream');
       expect(await requests[0]?.text()).toBe('value');
@@ -364,34 +351,6 @@ describe('HTTPStorage', () => {
       expect(decode(await storage.get('wfx'))).toBe('adjacent');
       expect(decode(await storage.get('other'))).toBe('c');
       expect(await storage.deletePrefix('missing:')).toBe(0);
-    } finally {
-      restoreFetch();
-    }
-  });
-
-  it('talks to tenant-scoped REST handlers end to end', async () => {
-    const rawStorage = new MemoryStorage();
-    await rawStorage.put('wf:raw', encode('raw'));
-    await rawStorage.put('tenant:acme:wf:visible', encode('visible'));
-    await rawStorage.put('tenant:other:wf:hidden', encode('hidden'));
-    const engine = new Engine({ storage: rawStorage });
-    const restoreFetch = installFetch((input, init) =>
-      handleRequest(new Request(input, init), engine, tenantStorageOptions()),
-    );
-    try {
-      const storage = new HTTPStorage({ baseUrl: 'http://localhost' });
-
-      await storage.put('wf:new', encode('new'));
-
-      expect(await storage.get('wf:raw')).toBeNull();
-      expect(decode(await storage.get('wf:visible'))).toBe('visible');
-      expect(decode(await rawStorage.get('tenant:acme:wf:new'))).toBe('new');
-      expect(decode(await rawStorage.get('wf:raw'))).toBe('raw');
-      const scannedEntries = await collect(storage.scan('wf:'));
-      expect(scannedEntries.map(([key, value]) => [key, decode(value)])).toEqual([
-        ['wf:new', 'new'],
-        ['wf:visible', 'visible'],
-      ]);
     } finally {
       restoreFetch();
     }

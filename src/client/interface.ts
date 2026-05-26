@@ -30,7 +30,6 @@ import type {
   SignalDefinition,
   StartOptions,
   SubmitReviewOptions,
-  TenantQuotaUsage,
   TypedListFilter,
   UpdateDefinition,
   WorkflowEvent,
@@ -298,9 +297,6 @@ export interface WeftClient {
 
   /** Submit a decision for a pending review. */
   submitReview(reviewId: string, options: SubmitReviewOptions): Promise<void>;
-
-  /** Retrieve current quota usage versus configured limits for a tenant. */
-  getQuotaUsage(tenantId: string): Promise<TenantQuotaUsage>;
 
   /** Read stream chunks back from storage for a completed stream operation. */
   getStreamChunks(

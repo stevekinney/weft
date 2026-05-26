@@ -5,7 +5,6 @@ import { definitionSchemaToJsonSchema } from '../core/types/definition-schema-to
 import type { DefinitionSchema } from '../core/types/definition-schema.ts';
 import {
   McpToolExecutionError,
-  applyPrincipalTenantToInput,
   assertScope,
   getVisibleWorkflowState,
   listVisibleWorkflows,
@@ -147,7 +146,7 @@ function buildToolImplementations(engine: Engine): ToolImplementation[] {
       },
       call: async (argumentsValue, context) => {
         assertScope(context, 'workflows:write', 'Calling workflow tools');
-        const input = applyPrincipalTenantToInput(context.principal, argumentsValue);
+        const input = argumentsValue;
         const workflowId = crypto.randomUUID();
         context.session.trackRequest(context.requestId, workflowId);
         try {
@@ -202,7 +201,7 @@ function builtInTools(): ToolImplementation[] {
         assertScope(context, 'workflows:write', 'Starting workflows');
         const args = requireObject(argumentsValue);
         const type = requireString(args['type'], 'type');
-        const input = applyPrincipalTenantToInput(context.principal, args['input'] ?? {});
+        const input = args['input'] ?? {};
         const options = typeof args['id'] === 'string' ? { id: args['id'] } : undefined;
         const handle = await runtimeWorkflowEngine(context.engine).start(type, input, options);
         return { workflowId: handle.id };
@@ -316,7 +315,7 @@ function builtInTools(): ToolImplementation[] {
         assertScope(context, 'workflows:read', 'Listing workflows');
         const parsed = parseMcpListFilter(requireObject(argumentsValue));
         if (!parsed.ok) throw new McpToolExecutionError(parsed.message);
-        const result = await listVisibleWorkflows(context.engine, context.principal, parsed.filter);
+        const result = await listVisibleWorkflows(context.engine, parsed.filter);
         return result;
       },
     },
@@ -336,7 +335,7 @@ function builtInTools(): ToolImplementation[] {
 }
 
 async function requireVisibleWorkflow(context: McpAccessContext, workflowId: string) {
-  const state = await getVisibleWorkflowState(context.engine, context.principal, workflowId);
+  const state = await getVisibleWorkflowState(context.engine, workflowId);
   if (state === null) throw new McpToolExecutionError(`Workflow "${workflowId}" not found`);
   return state;
 }

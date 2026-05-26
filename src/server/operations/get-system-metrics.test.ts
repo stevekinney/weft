@@ -241,13 +241,14 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
   it('uses the fallback HTTP mapper for non-special-cased faults', async () => {
     engine = createEngine();
 
-    const rateLimitedOperation = {
+    const faultingOperation = {
       ...createGetSystemMetricsOperation(),
+      producibleFaults: ['Unprocessable'] as const,
       invoke: async () => {
         throw {
-          code: 'RateLimited',
-          message: 'slow down',
-          data: { retryAfterMs: 250 },
+          code: 'Unprocessable',
+          message: 'cannot process',
+          data: { reason: 'cannot process' },
         } satisfies OperationFault;
       },
     };
@@ -256,14 +257,14 @@ describe('weft.system.metrics — factory variant (with collector)', () => {
       new Request('http://localhost/v1/metrics/json', { method: 'GET' }),
       engine,
       {
-        operationRegistry: createOperationRegistry([rateLimitedOperation]),
+        operationRegistry: createOperationRegistry([faultingOperation]),
         restBindings: [defaultBinding],
         ...metricsAuthContext(),
       },
     );
 
-    expect(response.status).toBe(429);
-    expect(await response.json()).toEqual({ error: 'slow down' });
+    expect(response.status).toBe(422);
+    expect(await response.json()).toEqual({ error: 'cannot process' });
   });
 
   it('returns Unauthorized when called with no credentials via executeOperation', async () => {

@@ -1,7 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../../storage/memory.ts';
-import type { TenantResolver } from '../../tenant.ts';
 import {
   DEFAULT_RETENTION_SWEEP_BATCH_SIZE,
   DEFAULT_RETENTION_SWEEP_INTERVAL_MS,
@@ -23,7 +22,6 @@ describe('resolveEngineOptions', () => {
     expect(resolved.checkpointSizeWarningThreshold).toBe(65_536);
     expect(resolved.maxNestingDepth).toBe(10);
     expect(resolved.broadcastEvents).toBe(false);
-    expect(resolved.tenantResolver).toBeUndefined();
     expect(resolved.retentionSweepIntervalMs).toBe(DEFAULT_RETENTION_SWEEP_INTERVAL_MS);
     expect(resolved.retentionSweepBatchSize).toBe(DEFAULT_RETENTION_SWEEP_BATCH_SIZE);
     expect(resolved.storage).toBe(storage);
@@ -40,9 +38,6 @@ describe('resolveEngineOptions', () => {
       timedOut: '30m',
     } satisfies RetentionPolicy;
     const suppliedInterval = '15s' satisfies Duration;
-    const tenantResolver: TenantResolver = {
-      resolve: () => ({ id: 'tenant-a' }),
-    };
 
     const resolved = resolveEngineOptions(
       storage,
@@ -55,7 +50,6 @@ describe('resolveEngineOptions', () => {
         retention: suppliedRetention,
         retentionSweepInterval: suppliedInterval,
         retentionSweepBatchSize: 42,
-        tenantResolver,
       },
       getNow,
     );
@@ -65,7 +59,6 @@ describe('resolveEngineOptions', () => {
     expect(resolved.checkpointSizeWarningThreshold).toBe(131_072);
     expect(resolved.maxNestingDepth).toBe(6);
     expect(resolved.broadcastEvents).toBe(true);
-    expect(resolved.tenantResolver).toBe(tenantResolver);
     expect(resolved.retention).toEqual(
       normalizeRetentionPolicy(suppliedRetention, 'options.retention'),
     );

@@ -87,54 +87,32 @@ function clearPendingChildExecutionContext(
   }
 }
 
-function tenantIdsMatch(
-  existingTenantId: string | undefined,
-  parentTenantId: string | undefined,
-): boolean {
-  if (existingTenantId === undefined && parentTenantId === undefined) return true;
-  if (existingTenantId === undefined || parentTenantId === undefined) return false;
-  return existingTenantId === parentTenantId;
-}
-
 function existingChildMatchesRequest(
   existingState: WorkflowState,
-  parentState: WorkflowState | null,
   operation: ChildWorkflowOperation,
   executionStateOwnerId: string,
 ): boolean {
   return (
     existingState.type === operation.workflowType &&
     encodedValuesEqual(existingState.input, operation.input) &&
-    tenantIdsMatch(existingState.tenant?.id, parentState?.tenant?.id) &&
     existingState.executionStateOwnerId === executionStateOwnerId
   );
 }
 
 async function resolveCollisionChildHandle(
-  workflowId: string,
   childWorkflowId: string,
   operation: ChildWorkflowOperation,
   executionStateOwnerId: string,
   collisionError: WorkflowAlreadyExistsError,
   callbacks: Pick<ChildWorkflowOperationCallbacks, 'getHandle' | 'loadWorkflowState'>,
 ): Promise<WorkflowHandle> {
-  const [existingState, currentParentState] = await Promise.all([
-    callbacks.loadWorkflowState(childWorkflowId),
-    callbacks.loadWorkflowState(workflowId),
-  ]);
+  const existingState = await callbacks.loadWorkflowState(childWorkflowId);
 
   if (!existingState) {
     throw collisionError;
   }
 
-  if (
-    !existingChildMatchesRequest(
-      existingState,
-      currentParentState,
-      operation,
-      executionStateOwnerId,
-    )
-  ) {
+  if (!existingChildMatchesRequest(existingState, operation, executionStateOwnerId)) {
     throw new Error(
       `Child workflow id collision for "${childWorkflowId}" does not match the requested child workflow`,
       { cause: collisionError },
@@ -146,7 +124,6 @@ async function resolveCollisionChildHandle(
 
 async function dispatchChildWorkflowStart(
   internals: EngineInternals,
-  workflowId: string,
   childWorkflowId: string,
   operation: ChildWorkflowOperation,
   context: PendingChildExecutionContext,
@@ -162,7 +139,6 @@ async function dispatchChildWorkflowStart(
       throw error;
     }
     return resolveCollisionChildHandle(
-      workflowId,
       childWorkflowId,
       operation,
       context.pendingExecutionStateOwnerId,
@@ -197,7 +173,6 @@ export async function executeChildWorkflow(
     };
     const childHandle = await dispatchChildWorkflowStart(
       internals,
-      workflowId,
       childWorkflowId,
       operation,
       context,

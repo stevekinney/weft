@@ -5,12 +5,8 @@
  * Field-validation order in source (lines 74–149):
  *   1. status         — must be one of active|paused|cancelled per entry
  *   2. workflowType   — must be a string when provided
- *   3. tenantId       — must be a string when provided
- *   4. (tenant-scope) — after tenantId is bound, enforce JWT scope; mismatched
- *                       tenantId surfaces as a `Forbidden` fault before
- *                       pagination is validated
- *   5. limit          — must be a positive integer when provided
- *   6. offset         — must be a non-negative integer when provided
+ *   3. limit          — must be a positive integer when provided
+ *   4. offset         — must be a non-negative integer when provided
  *
  * Adjacent-pair tests assert that when two consecutive fields are invalid the
  * error for the earlier-listed field surfaces first. The all-bad test passes

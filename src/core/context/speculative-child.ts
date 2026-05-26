@@ -24,7 +24,6 @@ function assignOptionalContextOptions(options: ContextOptions, internals: Contex
   if (internals.searchAttributeSchema !== undefined) {
     options.searchAttributeSchema = internals.searchAttributeSchema;
   }
-  if (internals.tenant !== undefined) options.tenant = internals.tenant;
   if (internals.sleepReferenceTime !== undefined) {
     options.sleepReferenceTime = internals.sleepReferenceTime;
   }

@@ -36,7 +36,7 @@ describe('findWorker characterization', () => {
     expect(registry.findWorker('a', { queue: 'q' })?.id).toBe('spare');
   });
 
-  it('tenant-scope (queue) filter excludes workers on other queues', () => {
+  it('share-scope (queue) filter excludes workers on other queues', () => {
     const registry = new WorkerRegistry();
     registry.register({ id: 'wrong-queue', queue: 'other', activities: ['a'], concurrency: 5 });
     registry.register({ id: 'right-queue', queue: 'target', activities: ['a'], concurrency: 5 });
@@ -109,14 +109,14 @@ describe('findWorker characterization', () => {
 describe('pickFairShare characterization', () => {
   it('equal-score tie-breaker: lowest inFlight wins, then lexicographic id', () => {
     const registry = new WorkerRegistry({ policy: 'fair-share' });
-    // All three have keyLoad=0 for 'tenant-x'; inFlight differs
+    // All three have keyLoad=0 for 'share-x'; inFlight differs
     registry.register({ id: 'w-c', queue: 'q', activities: ['a'], concurrency: 10 });
     registry.register({ id: 'w-a', queue: 'q', activities: ['a'], concurrency: 10 });
     registry.register({ id: 'w-b', queue: 'q', activities: ['a'], concurrency: 10 });
     registry.taskAssigned('w-c'); // 1 in-flight
     // w-a and w-b both at 0 — w-a wins by id
 
-    expect(registry.findWorker('a', { fairShareKey: 'tenant-x' })?.id).toBe('w-a');
+    expect(registry.findWorker('a', { fairShareKey: 'share-x' })?.id).toBe('w-a');
   });
 
   it('drained workers are not scored', () => {
@@ -125,7 +125,7 @@ describe('pickFairShare characterization', () => {
     registry.register({ id: 'active', queue: 'q', activities: ['a'], concurrency: 5 });
     registry.markWorkerDraining('drained', { updatedAt: 1000 });
 
-    expect(registry.findWorker('a', { fairShareKey: 'tenant-x' })?.id).toBe('active');
+    expect(registry.findWorker('a', { fairShareKey: 'share-x' })?.id).toBe('active');
   });
 
   it('capacity boundary: full workers are excluded from scoring', () => {
@@ -134,7 +134,7 @@ describe('pickFairShare characterization', () => {
     registry.register({ id: 'spare', queue: 'q', activities: ['a'], concurrency: 5 });
     registry.taskAssigned('full');
 
-    expect(registry.findWorker('a', { fairShareKey: 'tenant-x' })?.id).toBe('spare');
+    expect(registry.findWorker('a', { fairShareKey: 'share-x' })?.id).toBe('spare');
   });
 
   it('score function over curated workload snapshot: key-load dominates', () => {
@@ -142,17 +142,17 @@ describe('pickFairShare characterization', () => {
     registry.register({ id: 'heavy-key', queue: 'q', activities: ['a'], concurrency: 10 });
     registry.register({ id: 'light-key', queue: 'q', activities: ['a'], concurrency: 10 });
 
-    // heavy-key has 2 tasks for tenant-alpha but only 2 overall
-    registry.assignTask('heavy-key', 'op-1', 30_000, 'tenant-alpha');
-    registry.assignTask('heavy-key', 'op-2', 30_000, 'tenant-alpha');
-    // light-key has 0 tasks for tenant-alpha but 5 overall (different key)
+    // heavy-key has 2 tasks for share-alpha but only 2 overall
+    registry.assignTask('heavy-key', 'op-1', 30_000, 'share-alpha');
+    registry.assignTask('heavy-key', 'op-2', 30_000, 'share-alpha');
+    // light-key has 0 tasks for share-alpha but 5 overall (different key)
     for (let index = 0; index < 5; index += 1) {
-      registry.assignTask('light-key', `other-${index}`, 30_000, 'tenant-beta');
+      registry.assignTask('light-key', `other-${index}`, 30_000, 'share-beta');
     }
 
-    // keyLoad (tenant-alpha) for light-key is 0 vs 2 for heavy-key
+    // keyLoad (share-alpha) for light-key is 0 vs 2 for heavy-key
     // Even though light-key has higher overall inFlight, keyLoad wins
-    expect(registry.findWorker('a', { fairShareKey: 'tenant-alpha' })?.id).toBe('light-key');
+    expect(registry.findWorker('a', { fairShareKey: 'share-alpha' })?.id).toBe('light-key');
   });
 
   it('fair-share degrades to least-loaded when fairShareKey is omitted', () => {

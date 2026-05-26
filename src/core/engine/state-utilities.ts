@@ -4,7 +4,6 @@ import { isRecord, safeDebugStringify, sanitizeDebugValueForDisplay } from '../d
 import type {
   ListFilter,
   PaginatedResult,
-  ScheduleAccessOptions,
   ScheduleFilter,
   ScheduleState,
   ScheduleSummary,
@@ -277,18 +276,11 @@ function matchesListFilterStatus(state: WorkflowState, filter: ListFilter): bool
   return statuses.includes(state.status);
 }
 
-function matchesListFilterTenant(state: WorkflowState, filter: ListFilter): boolean {
-  if (filter.tenantId === undefined) return true;
-  const tenantIds = Array.isArray(filter.tenantId) ? filter.tenantId : [filter.tenantId];
-  return state.tenant !== undefined && tenantIds.includes(state.tenant.id);
-}
-
 function matchesListFilterIdentity(state: WorkflowState, filter: ListFilter): boolean {
   return (
     matchesListFilterStatus(state, filter) &&
     (filter.type === undefined || state.type === filter.type) &&
-    (filter.idPrefix === undefined || state.id.startsWith(filter.idPrefix)) &&
-    matchesListFilterTenant(state, filter)
+    (filter.idPrefix === undefined || state.id.startsWith(filter.idPrefix))
   );
 }
 
@@ -407,18 +399,10 @@ export function encodedValuesEqual(left: unknown, right: unknown): boolean {
   return true;
 }
 
-function matchesScheduleTenant(state: ScheduleState, filter: ScheduleFilter | undefined): boolean {
-  if (state.tenant?.id !== undefined) {
-    return filter?.tenantId !== undefined && state.tenant.id === filter.tenantId;
-  }
-  return filter?.tenantId === undefined;
-}
-
 export function matchesScheduleFilter(
   state: ScheduleState,
   filter: ScheduleFilter | undefined,
 ): boolean {
-  if (!matchesScheduleTenant(state, filter)) return false;
   if (filter?.status !== undefined) {
     const statuses = Array.isArray(filter.status) ? filter.status : [filter.status];
     if (!statuses.includes(state.status)) return false;
@@ -479,17 +463,6 @@ export function parseTerminalCleanupTimerId(
   }
 
   return null;
-}
-
-export function canAccessSchedule(
-  state: ScheduleState,
-  accessOptions: ScheduleAccessOptions | undefined,
-): boolean {
-  if (state.tenant?.id === undefined) {
-    return accessOptions?.tenantId === undefined;
-  }
-
-  return accessOptions?.tenantId === state.tenant.id;
 }
 
 export function clearScheduleCurrentWorkflow(state: ScheduleState): ScheduleState {

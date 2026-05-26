@@ -148,7 +148,6 @@ export function resolveEngineOptions(
   return {
     storage,
     getNow,
-    tenantResolver: options?.tenantResolver,
     ...resolveBooleanDefaults(options),
     ...resolveNumericDefaults(options),
     ...resolveRetentionFields(options),

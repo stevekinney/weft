@@ -8,9 +8,6 @@
  * - Limit capped at 1000 (no error for large values).
  * - Offset must be non-negative.
  * - Unauthenticated principal returns Unauthorized.
- * - JWT without tenant claim returns Forbidden.
- * - _resolvedTenantId mismatch with JWT tenant claim returns Forbidden.
- * - tenantId filter that disagrees with JWT resolved tenant returns Forbidden.
  * - EngineFailure fault shaper returns 500.
  *
  * REST tests inject an authContext with an api-key principal so the
@@ -26,7 +23,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
-import { anonymousPrincipal, principalFromApiKey, principalFromJwtClaims } from '../principal.ts';
+import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
 import { listSchedulesOperation, listSchedulesRestBinding } from './list-schedules.ts';
 
@@ -110,13 +107,13 @@ describe('weft.schedules.list', () => {
     expect(body.error).toContain('status');
   });
 
-  it('rejects non-string workflowType and tenantId values via executeOperation', async () => {
+  it('rejects non-string workflowType values via executeOperation', async () => {
     engine = createEngine();
 
     const liveRegistry = createLiveOperationRegistry();
     const principal = principalFromApiKey({ subject: 'svc', scopes: [] });
 
-    let result = await executeOperation(
+    const result = await executeOperation(
       'weft.schedules.list',
       { workflowType: 42 },
       { principal, engine, transport: 'jsonRpcStdio', registry: liveRegistry },
@@ -125,16 +122,6 @@ describe('weft.schedules.list', () => {
     if (result.ok) throw new Error('expected invalid workflowType fault');
     expect(result.fault.code).toBe('InvalidParams');
     expect(result.fault.message).toBe('Query parameter "workflowType" must be a string');
-
-    result = await executeOperation(
-      'weft.schedules.list',
-      { tenantId: 42 },
-      { principal, engine, transport: 'jsonRpcStdio', registry: liveRegistry },
-    );
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected invalid tenantId fault');
-    expect(result.fault.code).toBe('InvalidParams');
-    expect(result.fault.message).toBe('Query parameter "tenantId" must be a string');
   });
 
   it('accepts valid status values: active, paused, cancelled', async () => {
@@ -224,66 +211,6 @@ describe('weft.schedules.list', () => {
     expect(result.ok).toBe(false);
     if (result.ok) throw new Error('expected rejection');
     expect(result.fault.code).toBe('Unauthorized');
-  });
-
-  it('rejects a JWT without a tenant claim with Forbidden', async () => {
-    engine = createEngine();
-
-    // JWT principal with no tenantId claim → resolveScheduleAccessOptions returns Forbidden
-    const principal = principalFromJwtClaims({ sub: 'user', scope: 'workflows:read' });
-    const liveRegistry = createLiveOperationRegistry();
-
-    const result = await executeOperation(
-      'weft.schedules.list',
-      {},
-      { principal, engine, transport: 'jsonRpcStdio', registry: liveRegistry },
-    );
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected rejection');
-    expect(result.fault.code).toBe('Forbidden');
-  });
-
-  it('rejects _resolvedTenantId mismatch with JWT tenant claim with Forbidden', async () => {
-    engine = createEngine();
-
-    const principal = principalFromJwtClaims({
-      sub: 'user',
-      scope: 'workflows:read',
-      tenantId: 'tenant-a',
-    });
-    const liveRegistry = createLiveOperationRegistry();
-
-    const result = await executeOperation(
-      'weft.schedules.list',
-      { _resolvedTenantId: 'tenant-b' },
-      { principal, engine, transport: 'jsonRpcStdio', registry: liveRegistry },
-    );
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected rejection');
-    expect(result.fault.code).toBe('Forbidden');
-  });
-
-  it('rejects tenantId filter that disagrees with resolved JWT tenant with Forbidden', async () => {
-    engine = createEngine();
-
-    const principal = principalFromJwtClaims({
-      sub: 'user',
-      scope: 'workflows:read',
-      tenantId: 'tenant-a',
-    });
-    const liveRegistry = createLiveOperationRegistry();
-
-    const result = await executeOperation(
-      'weft.schedules.list',
-      { tenantId: 'tenant-b' },
-      { principal, engine, transport: 'jsonRpcStdio', registry: liveRegistry },
-    );
-
-    expect(result.ok).toBe(false);
-    if (result.ok) throw new Error('expected rejection');
-    expect(result.fault.code).toBe('Forbidden');
   });
 
   it('maps EngineFailure faults to 500 with "Internal server error"', async () => {

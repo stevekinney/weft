@@ -214,7 +214,6 @@ describe('engine time operation helpers', () => {
       state.input,
       checkpoint,
       2_500,
-      undefined,
       'owner-workflow',
       registration,
     );

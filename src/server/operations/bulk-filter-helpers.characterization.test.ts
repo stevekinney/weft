@@ -9,11 +9,10 @@
  *   5. limit
  *   6. offset
  *   7. idPrefix
- *   8. tenantId
- *   9. failureCategory
- *  10. createdAt
- *  11. updatedAt
- *  12. executionDeadline
+ *   8. failureCategory
+ *   9. createdAt
+ *  10. updatedAt
+ *  11. executionDeadline
  *
  * Adjacent-pair tests assert that when two consecutive fields are invalid, the
  * error for the earlier-listed field surfaces first. The all-bad test passes
@@ -64,19 +63,12 @@ describe('parseBulkListFilterFromBody — validation precedence', () => {
     );
   });
 
-  // --- adjacent pair: offset before tenantId ---
-  // idPrefix is not validated (any string accepted), so skip to tenantId
-  it('reports offset error before tenantId error when both are invalid', () => {
-    expect(() => parseBulkListFilterFromBody(wrap({ offset: -1, tenantId: 42 }))).toThrow(
-      'Field "filter.offset" must be a non-negative number',
-    );
-  });
-
-  // --- adjacent pair: tenantId before failureCategory ---
-  it('reports tenantId error before failureCategory error when both are invalid', () => {
+  // --- adjacent pair: offset before failureCategory ---
+  // idPrefix is not validated (any string accepted), so skip to failureCategory
+  it('reports offset error before failureCategory error when both are invalid', () => {
     expect(() =>
-      parseBulkListFilterFromBody(wrap({ tenantId: 42, failureCategory: 'not-a-category' })),
-    ).toThrow('Field "filter.tenantId" must be a string or an array of strings');
+      parseBulkListFilterFromBody(wrap({ offset: -1, failureCategory: 'not-a-category' })),
+    ).toThrow('Field "filter.offset" must be a non-negative number');
   });
 
   // --- adjacent pair: createdAt before updatedAt ---
@@ -104,7 +96,6 @@ describe('parseBulkListFilterFromBody — validation precedence', () => {
           attributes: 'not-an-array',
           limit: -1,
           offset: -1,
-          tenantId: 42,
           createdAt: 'bad',
           updatedAt: 'bad',
           executionDeadline: 'bad',

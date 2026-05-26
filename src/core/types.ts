@@ -17,7 +17,6 @@ export * from './types/search-attributes.ts';
 export * from './types/serializer.ts';
 export * from './types/standard-schema-validate.ts';
 export * from './types/state.ts';
-export * from './types/tenants.ts';
 export * from './types/workflow-builder-helpers.ts';
 export * from './types/workflow-builder-runtime.ts';
 export * from './types/workflow-builder.ts';

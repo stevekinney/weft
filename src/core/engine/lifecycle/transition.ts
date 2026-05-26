@@ -336,7 +336,6 @@ export function createForkedWorkflowState(
     ...(versionTuple.toolVersions !== undefined && {
       toolVersions: versionTuple.toolVersions,
     }),
-    ...(sourceState.tenant !== undefined && { tenant: sourceState.tenant }),
     forkedFrom: lineage,
   };
 }
@@ -419,7 +418,6 @@ function launchInlineWorkflowFromCheckpoint(
     }),
     sleepReferenceTime: checkpoint.createdAt,
     ...(state.executionDeadline !== undefined && { deadline: state.executionDeadline }),
-    ...(state.tenant !== undefined && { tenant: state.tenant }),
   });
 
   if (internals.options.development) {
@@ -451,7 +449,6 @@ function launchWorkerWorkflowFromCheckpoint(
     ...(internals.workflowHeaders.has(workflowId) && {
       headers: [...internals.workflowHeaders.get(workflowId)!],
     }),
-    ...(state.tenant !== undefined && { tenant: state.tenant }),
   });
 }
 
@@ -467,7 +464,7 @@ export function launchWorkflowFromCheckpoint(
   internals.checkpoints.set(workflowId, checkpoint);
   internals.workflowVersionTuples.set(
     workflowId,
-    createWorkflowVersionTuple(internals, registration, state.tenant, callbacks),
+    createWorkflowVersionTuple(internals, registration, callbacks),
   );
 
   const handle = createWorkflowHandle(internals, workflowId, callbacks);
