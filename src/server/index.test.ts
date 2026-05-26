@@ -5398,6 +5398,7 @@ describe('concurrent scanner deduplication', () => {
     let blockedOperationBatch = false;
 
     const delayedStorage: WeftStorage = {
+      capabilities: innerStorage.capabilities.bind(innerStorage),
       get: innerStorage.get.bind(innerStorage),
       put: innerStorage.put.bind(innerStorage),
       delete: innerStorage.delete.bind(innerStorage),

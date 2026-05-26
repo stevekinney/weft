@@ -133,6 +133,16 @@ describe('NodeSQLiteStorage with mocked better-sqlite3', () => {
 
     const storage = new NodeSQLiteStorage(':memory:', FakeDatabase);
 
+    // Honest capability row: linearizable WAL SQLite, but no own deletePrefix
+    // (derived fallback) so boundedRangeDelete is false.
+    expect(storage.capabilities()).toEqual({
+      readAfterWrite: 'linearizable',
+      scanConsistency: 'snapshot',
+      atomicBatch: true,
+      conditionalBatch: true,
+      boundedRangeDelete: false,
+    });
+
     expect(await storage.get('missing')).toBeNull();
 
     await storage.put('a:1', new Uint8Array([1]));

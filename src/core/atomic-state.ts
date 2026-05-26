@@ -1,6 +1,6 @@
 import { sleep as portableSleep } from '../runtime/portable.ts';
 import type { BatchOperation, Storage } from '../storage/interface.ts';
-import { KEYS, storageConditionalBatch } from '../storage/interface.ts';
+import { KEYS, requireStorageCapability, storageConditionalBatch } from '../storage/interface.ts';
 import {
   AtomicStateChangeEvent,
   AtomicStateConflictEvent,
@@ -135,6 +135,7 @@ export async function commitAtomicStateValue<T>(
   expectedVersion: number,
   value: T,
 ): Promise<AtomicStateCommitResult<T>> {
+  requireStorageCapability(storage, 'conditionalBatch', 'AtomicState compare-and-swap');
   const nextVersion = expectedVersion + 1;
   const applied = await storageConditionalBatch(
     storage,
@@ -153,6 +154,7 @@ export async function commitAtomicStateDelete(
   dataKey: string,
   expectedVersion: number,
 ): Promise<AtomicStateCommitResult<never>> {
+  requireStorageCapability(storage, 'conditionalBatch', 'AtomicState compare-and-swap');
   const nextVersion = expectedVersion + 1;
   const applied = await storageConditionalBatch(
     storage,

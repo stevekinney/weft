@@ -89,6 +89,47 @@ function adminStorageOptions() {
 }
 
 describe('storage REST operations', () => {
+  it('returns a 501 NotImplemented when the backend lacks conditionalBatch', async () => {
+    const inner = new MemoryStorage();
+    // A backend that has the bound conditionalBatch method but honestly reports
+    // no support — proves the operation gates on capabilities(), not method
+    // presence. Delegates every method to a real MemoryStorage.
+    const storageWithoutConditionalBatch = {
+      capabilities: () => ({ ...inner.capabilities(), conditionalBatch: false }),
+      get: inner.get.bind(inner),
+      put: inner.put.bind(inner),
+      delete: inner.delete.bind(inner),
+      scan: inner.scan.bind(inner),
+      batch: inner.batch.bind(inner),
+      conditionalBatch: inner.conditionalBatch.bind(inner),
+      has: inner.has.bind(inner),
+      deletePrefix: inner.deletePrefix.bind(inner),
+      keys: inner.keys.bind(inner),
+      count: inner.count.bind(inner),
+      scoped: inner.scoped.bind(inner),
+      [Symbol.dispose]: inner[Symbol.dispose].bind(inner),
+    };
+    using engine = new Engine({ storage: storageWithoutConditionalBatch });
+
+    const response = await handleRequest(
+      request('/v1/storage/-/conditional-batch', {
+        method: 'POST',
+        body: JSON.stringify({
+          conditions: [{ key: 'wf:key', expectedValue: null }],
+          operations: [{ type: 'put', key: 'wf:key', value: btoa('value') }],
+        }),
+        headers: { 'content-type': 'application/json' },
+      }),
+      engine,
+      adminStorageOptions(),
+    );
+
+    expect(response.status).toBe(501);
+    const body = (await response.json()) as { error?: string };
+    expect(body.error).toBeDefined();
+    expect(body.error).toContain('capabilities().conditionalBatch');
+  });
+
   it('exposes raw storage operations through REST only', () => {
     const registry = createLiveOperationRegistry();
     const storageOperationNames = [

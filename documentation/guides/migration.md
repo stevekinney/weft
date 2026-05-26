@@ -5,6 +5,35 @@ This guide walks through the upgrade path for in-flight breaking changes. Pre-1.
 > [!NOTE]
 > Once everyone on a given upgrade has migrated, the corresponding section of this guide can be archived. Treat it as a working document, not historical record.
 
+## `Storage` Requires a `capabilities()` Method
+
+The `Storage` interface now requires `capabilities(): StorageCapabilities`, a self-reported profile of the backend's consistency and feature guarantees. Every built-in adapter already implements it; this only affects custom adapters and inline `Storage` test doubles.
+
+```typescript partial
+import type { Storage, StorageCapabilities } from 'weft';
+
+class MyStorage implements Storage {
+  capabilities(): StorageCapabilities {
+    return {
+      readAfterWrite: 'linearizable', // 'linearizable' | 'session' | 'eventual'
+      scanConsistency: 'snapshot', // 'snapshot' | 'best-effort'
+      atomicBatch: true, // batch() is all-or-nothing
+      conditionalBatch: true, // compare-and-swap is supported
+      boundedRangeDelete: true, // deletePrefix() is a single range op
+    };
+  }
+  // get/put/delete/scan/batch/[Symbol.dispose] as before…
+}
+```
+
+**Choosing values honestly:** report what your backend actually provides, not what you wish it did. `atomicBatch` and the consistency levels are trusted contracts the engine does not verify at runtime — a `true` you cannot back up means checkpoint corruption, not a caught error. If your backend lacks compare-and-swap, report `conditionalBatch: false`; the first feature that needs it then fails fast with:
+
+```text
+Feature "AtomicState compare-and-swap" requires storage capability "conditionalBatch", but this storage backend does not provide it.
+```
+
+If you wrap another `Storage`, delegate `capabilities()` to the inner store — and downgrade `conditionalBatch`/`boundedRangeDelete` to `false` if your wrapper transforms value bytes (as `CompressedStorage` does), per the opaque-value invariant. See the [Consistency & capabilities](./storage.md#consistency-capabilities) guide for the full contract and the built-in adapter matrix.
+
 ## `recoverAll` Throws on Unknown Workflow Types
 
 `engine.recoverAll()` used to silently skip running workflows whose type was not registered on the current engine. Storage that referenced a retired or renamed workflow type would boot cleanly and leave those workflows abandoned mid-flight.

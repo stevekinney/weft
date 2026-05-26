@@ -21,6 +21,15 @@ function createCoreStorageAdapter(): Storage {
   const storage = new MemoryStorage();
 
   return {
+    // Core-five adapter: omits the optional methods AND honestly reports the
+    // capabilities it lacks (no compare-and-swap, no bounded range delete).
+    capabilities: () => ({
+      readAfterWrite: 'linearizable',
+      scanConsistency: 'snapshot',
+      atomicBatch: true,
+      conditionalBatch: false,
+      boundedRangeDelete: false,
+    }),
     get: storage.get.bind(storage),
     put: storage.put.bind(storage),
     delete: storage.delete.bind(storage),
@@ -135,6 +144,13 @@ describe('storage helper fallbacks', () => {
     let deletePrefixCalls = 0;
 
     const storage: Storage = {
+      capabilities: () => ({
+        readAfterWrite: 'linearizable',
+        scanConsistency: 'snapshot',
+        atomicBatch: true,
+        conditionalBatch: true,
+        boundedRangeDelete: true,
+      }),
       get: async () => {
         throw new Error('storage.get should not be used when has() is available');
       },
@@ -189,17 +205,43 @@ describe('storageValuesEqual', () => {
 });
 
 describe('storageConditionalBatch', () => {
-  it('throws when the backend does not support conditionalBatch', async () => {
+  it('throws when the backend declares no conditionalBatch capability', async () => {
+    // createCoreStorageAdapter reports capabilities().conditionalBatch === false.
     const storage = createCoreStorageAdapter();
 
     await expect(storageConditionalBatch(storage, [], [])).rejects.toThrow(
-      'This storage backend does not support conditionalBatch(), which is required for this operation.',
+      'Feature "storageConditionalBatch" requires storage capability "conditionalBatch", but this storage backend does not provide it.',
+    );
+  });
+
+  it('throws when capability is declared but the method is missing', async () => {
+    // A dishonest adapter: claims the capability without implementing it.
+    const storage: Storage = {
+      ...createCoreStorageAdapter(),
+      capabilities: () => ({
+        readAfterWrite: 'linearizable',
+        scanConsistency: 'snapshot',
+        atomicBatch: true,
+        conditionalBatch: true,
+        boundedRangeDelete: false,
+      }),
+    };
+
+    await expect(storageConditionalBatch(storage, [], [])).rejects.toThrow(
+      'This storage backend reports conditionalBatch capability but does not implement the conditionalBatch() method.',
     );
   });
 
   it('delegates to the adapter when conditionalBatch is available', async () => {
     const storage: Storage = {
       ...createCoreStorageAdapter(),
+      capabilities: () => ({
+        readAfterWrite: 'linearizable',
+        scanConsistency: 'snapshot',
+        atomicBatch: true,
+        conditionalBatch: true,
+        boundedRangeDelete: false,
+      }),
       conditionalBatch: async (conditions, operations) =>
         conditions.length === 1 && operations.length === 1,
     };

@@ -47,10 +47,7 @@ const binaryValueSchema = z.instanceof(Uint8Array).meta({ type: 'string', format
 
 const storageGetInput = z.object({ key: z.string().min(1) });
 
-const storagePutInput = z.object({
-  key: z.string().min(1),
-  value: binaryValueSchema,
-});
+const storagePutInput = z.object({ key: z.string().min(1), value: binaryValueSchema });
 
 const storageDeleteInput = z.object({ key: z.string().min(1) });
 
@@ -380,6 +377,8 @@ export const storageConditionalBatchOperation = defineOperation<
   access: storageConditionalBatchAccess,
   discoverable: true,
   transports: httpOnlyStorageTransports,
+  producibleFaults: ['NotImplemented'], // backend reports no conditionalBatch
+
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine, principal }) => {
     const storage = resolveAuthorizedStorage(
@@ -387,6 +386,14 @@ export const storageConditionalBatchOperation = defineOperation<
       principal,
       storageConditionalBatchOperation,
     );
+    // Shaped fault instead of leaking the low-level storageConditionalBatch throw.
+    if (!storage.capabilities().conditionalBatch) {
+      raiseFault(storageConditionalBatchOperation, {
+        code: 'NotImplemented',
+        message: 'This storage backend reports capabilities().conditionalBatch: false.',
+        data: {},
+      });
+    }
     const applied = await storageConditionalBatch(
       storage,
       input.conditions.map(decodeCondition),

@@ -14,7 +14,12 @@ import {
   resolveCompressionOptions,
 } from '../core/compression.ts';
 
-import { type BatchOperation, type ScanOptions, type Storage } from './interface.ts';
+import {
+  type BatchOperation,
+  type ScanOptions,
+  type Storage,
+  type StorageCapabilities,
+} from './interface.ts';
 
 /**
  * {@link Storage} decorator that transparently compresses payloads above a
@@ -64,6 +69,24 @@ export class CompressedStorage implements Storage {
         configurable: true,
       });
     }
+  }
+
+  capabilities(): StorageCapabilities {
+    // Compression transforms value bytes, so a caller-supplied expectedValue
+    // can never byte-match the compressed stored value — conditionalBatch is
+    // semantically broken through this decorator (and not forwarded). The
+    // decorator also does not forward deletePrefix. Both are forced false; the
+    // visibility/atomicity properties are unchanged by per-value compression, so
+    // they pass through from the inner store. This is the opaque-value invariant
+    // enforced at the type level.
+    const inner = this.#inner.capabilities();
+    return {
+      readAfterWrite: inner.readAfterWrite,
+      scanConsistency: inner.scanConsistency,
+      atomicBatch: inner.atomicBatch,
+      conditionalBatch: false,
+      boundedRangeDelete: false,
+    };
   }
 
   async get(key: string): Promise<Uint8Array | null> {

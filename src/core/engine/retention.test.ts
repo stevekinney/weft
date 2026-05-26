@@ -49,6 +49,7 @@ describe('retention helpers', () => {
     const underlyingStorage = new MemoryStorage();
     const purgeError = new Error('scan failed during retention sweep');
     const storage = {
+      capabilities: underlyingStorage.capabilities.bind(underlyingStorage),
       batch: underlyingStorage.batch.bind(underlyingStorage),
       conditionalBatch: underlyingStorage.conditionalBatch.bind(underlyingStorage),
       delete: underlyingStorage.delete.bind(underlyingStorage),

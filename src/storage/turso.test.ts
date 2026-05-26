@@ -1,6 +1,29 @@
 import { describe, expect, it } from 'bun:test';
 
+import { createDiskBackedTestFixture } from '../testing/storage-backends.ts';
+import { runStorageCapabilityConformance } from './storage-adapter.test-support.ts';
 import { TursoStorage } from './turso';
+
+runStorageCapabilityConformance('TursoStorage', {
+  // Local libSQL file mode on a real on-disk database so concurrent
+  // conditionalBatch transactions share state (a `file::memory:` DB isolates
+  // per connection). The adapter honestly reports the `session` floor that also
+  // covers the remote-primary configuration.
+  create: () => {
+    const fixture = createDiskBackedTestFixture({ prefix: 'turso-capabilities', suffix: '.db' });
+    return new TursoStorage({ url: `file:${fixture.path}` });
+  },
+  expected: {
+    readAfterWrite: 'session',
+    scanConsistency: 'snapshot',
+    atomicBatch: true,
+    conditionalBatch: true,
+    boundedRangeDelete: true,
+  },
+  // Single libSQL connection serializes write transactions; concurrent CAS
+  // contention is covered sequentially in conditional-batch.test.ts.
+  supportsConcurrentWrites: false,
+});
 
 /** Helper to encode a string as Uint8Array. */
 function encode(value: string): Uint8Array {

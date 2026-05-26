@@ -8,6 +8,7 @@ import {
   type ConditionalBatchCondition,
   type ScanOptions,
   type Storage,
+  type StorageCapabilities,
 } from './interface';
 import { scopedStorage } from './scoped-storage';
 
@@ -46,6 +47,19 @@ export class LMDBStorage implements Storage {
     if (this.#isClosed) {
       throw new Error('LMDBStorage is closed');
     }
+  }
+
+  capabilities(): StorageCapabilities {
+    // LMDB MVCC, single writer, memory-mapped: a committed write is visible to
+    // later reads (linearizable); read transactions are point-in-time snapshots;
+    // batch() and the range deletePrefix run inside one write transaction.
+    return {
+      readAfterWrite: 'linearizable',
+      scanConsistency: 'snapshot',
+      atomicBatch: true,
+      conditionalBatch: true,
+      boundedRangeDelete: true,
+    };
   }
 
   async get(key: string): Promise<Uint8Array | null> {

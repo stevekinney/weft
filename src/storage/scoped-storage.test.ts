@@ -165,3 +165,19 @@ describe('scopedStorage', () => {
     expect(adapter.wasDisposed()).toBe(true);
   });
 });
+
+describe('scopedStorage capabilities()', () => {
+  it('delegates verbatim to the inner store', () => {
+    const inner = new MemoryStorage();
+    const scoped = scopedStorage(inner, 'tenant');
+    expect(scoped.capabilities()).toEqual(inner.capabilities());
+  });
+
+  it('reflects a downgraded inner capability profile unchanged', () => {
+    const core = createCoreStorageAdapter();
+    const scoped = scopedStorage(core, 'tenant');
+    // ScopedStorage only rewrites keys, so it must not alter any capability.
+    expect(scoped.capabilities()).toEqual(core.capabilities());
+    expect(scoped.capabilities().conditionalBatch).toBe(false);
+  });
+});

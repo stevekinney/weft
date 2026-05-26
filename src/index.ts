@@ -206,12 +206,19 @@ export { CompressedStorage } from './storage/compressed-storage';
 // Storage — interface, KEYS, and zero-native-dep backends only.
 // Heavy or runtime-bound backends are subpath-only:
 //   weft/storage/sqlite | weft/storage/lmdb | weft/storage/turso
-export { KEYS, storageConditionalBatch, storageValuesEqual } from './storage/interface';
+export {
+  KEYS,
+  requireStorageCapability,
+  storageConditionalBatch,
+  storageValuesEqual,
+} from './storage/interface';
 export type {
   BatchOperation,
+  BooleanStorageCapabilityKey,
   ConditionalBatchCondition,
   ScanOptions,
   Storage,
+  StorageCapabilities,
 } from './storage/interface';
 export { MemoryStorage } from './storage/memory';
 export { ScopedStorage, scopedStorage } from './storage/scoped-storage';

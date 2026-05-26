@@ -6,6 +6,7 @@ Weft's storage layer is a key-value interface with ordered range scans and atomi
 
 ```ts partial
 interface Storage extends Disposable {
+  capabilities(): StorageCapabilities;
   get(key: string): Promise<Uint8Array | null>;
   put(key: string, value: Uint8Array): Promise<void>;
   delete(key: string): Promise<void>;
@@ -14,6 +15,14 @@ interface Storage extends Disposable {
   query?<T>(sql: string, params?: unknown[]): Promise<T[]>;
 }
 ```
+
+### `capabilities()`
+
+```ts partial
+capabilities(): StorageCapabilities
+```
+
+Required on every adapter. Returns the backend's honest consistency and feature profile. The engine reads this to decide what is safe; `conditionalBatch` is enforced at runtime via `requireStorageCapability`. See [`StorageCapabilities`](#storagecapabilities) and the [Consistency & capabilities](../guides/storage.md#consistency-capabilities) guide.
 
 ### `get()`
 
@@ -78,6 +87,20 @@ type BatchOperation =
   | { type: 'put'; key: string; value: Uint8Array }
   | { type: 'delete'; key: string };
 ```
+
+### `StorageCapabilities`
+
+```ts partial
+type StorageCapabilities = {
+  readAfterWrite: 'linearizable' | 'session' | 'eventual';
+  scanConsistency: 'snapshot' | 'best-effort';
+  atomicBatch: boolean;
+  conditionalBatch: boolean;
+  boundedRangeDelete: boolean;
+};
+```
+
+The self-reported guarantee profile returned by [`capabilities()`](#capabilities). `conditionalBatch` is runtime-gated; the rest are trusted contracts the engine does not verify. The per-adapter matrix and the opaque-value invariant live in the [Consistency & capabilities](../guides/storage.md#consistency-capabilities) guide. Gate a feature on a boolean capability with `requireStorageCapability(storage, 'conditionalBatch', featureName)`, which throws a clear diagnostic at first use when the capability is `false`.
 
 ### `ScanOptions`
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import type { BatchOperation } from './interface.ts';
+import { assertCapabilitiesShape } from './storage-adapter.test-support.ts';
 import { WebExtensionStorage } from './web-extension.ts';
 
 function encode(value: string): Uint8Array {
@@ -144,6 +145,39 @@ function installStorageNamespace(
 }
 
 describe('WebExtensionStorage', () => {
+  it('reports its honest capability row (no conditionalBatch, scan-and-delete prefix)', async () => {
+    const area = new FakeStorageArea();
+    const restore = installStorageNamespace('browser', area);
+    try {
+      const storage = new WebExtensionStorage();
+      assertCapabilitiesShape(storage);
+      expect(storage.capabilities()).toEqual({
+        readAfterWrite: 'session',
+        scanConsistency: 'best-effort',
+        atomicBatch: true,
+        conditionalBatch: false,
+        boundedRangeDelete: false,
+      });
+      // Read-after-write at the session level: the instance reads its own write.
+      await storage.put('raw:key', encode('written'));
+      expect(decode(await storage.get('raw:key'))).toBe('written');
+    } finally {
+      restore();
+    }
+  });
+
+  it('does not expose conditionalBatch (capabilities reports false)', async () => {
+    const area = new FakeStorageArea();
+    const restore = installStorageNamespace('browser', area);
+    try {
+      const storage = new WebExtensionStorage();
+      expect(storage.capabilities().conditionalBatch).toBe(false);
+      expect((storage as { conditionalBatch?: unknown }).conditionalBatch).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
   it('stores bytes and scans keys through browser.storage', async () => {
     const area = new FakeStorageArea();
     const restore = installStorageNamespace('browser', area);

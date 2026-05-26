@@ -455,6 +455,7 @@ describe('ServiceWorkerScheduler — implementation-specific', () => {
     console.error = errorSpy as typeof console.error;
 
     const failingStorage: Storage = {
+      capabilities: realStorage.capabilities.bind(realStorage),
       get: realStorage.get.bind(realStorage),
       put: realStorage.put.bind(realStorage),
       delete: realStorage.delete.bind(realStorage),

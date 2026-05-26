@@ -6,6 +6,7 @@ import {
   type ConditionalBatchCondition,
   type ScanOptions,
   type Storage,
+  type StorageCapabilities,
 } from './interface';
 import { scopedStorage } from './scoped-storage';
 
@@ -37,6 +38,20 @@ export class MemoryStorage implements Storage {
 
   constructor() {
     this.#data = new Map();
+  }
+
+  capabilities(): StorageCapabilities {
+    // In-process Map with synchronous mutation: every read observes every prior
+    // write (linearizable). scan() materializes a sorted key snapshot before
+    // yielding, so concurrent mutation is not observed mid-iteration. batch()
+    // applies synchronously (atomic). deletePrefix is a range-bounded delete.
+    return {
+      readAfterWrite: 'linearizable',
+      scanConsistency: 'snapshot',
+      atomicBatch: true,
+      conditionalBatch: true,
+      boundedRangeDelete: true,
+    };
   }
 
   #matchesPrefix(key: string, prefix: string, prefixEnd: string): boolean {

@@ -991,6 +991,16 @@ describe('tenant resource quotas', () => {
   it('requires conditionalBatch support for storage byte quotas', () => {
     const memoryStorage = new MemoryStorage();
     const storageWithoutConditionalBatch: WeftStorage = {
+      // Honestly reports conditionalBatch: false even though the bound
+      // MemoryStorage method exists — proves the quota gate trusts the
+      // capability report, not method presence.
+      capabilities: () => ({
+        readAfterWrite: 'linearizable',
+        scanConsistency: 'snapshot',
+        atomicBatch: true,
+        conditionalBatch: false,
+        boundedRangeDelete: false,
+      }),
       get: memoryStorage.get.bind(memoryStorage),
       put: memoryStorage.put.bind(memoryStorage),
       delete: memoryStorage.delete.bind(memoryStorage),
@@ -1003,7 +1013,7 @@ describe('tenant resource quotas', () => {
       () =>
         new TenantQuotaManager(storageWithoutConditionalBatch, Date.now, { maxStorageBytes: 1 }),
     ).toThrow(
-      'EngineOptions.quotas.maxConcurrentWorkflows, maxWorkflowCreationRate, and maxStorageBytes require a storage backend that implements conditionalBatch().',
+      'EngineOptions.quotas.maxConcurrentWorkflows, maxWorkflowCreationRate, and maxStorageBytes require a storage backend whose capabilities() reports conditionalBatch support.',
     );
   });
 });

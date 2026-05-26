@@ -54,6 +54,7 @@ describe('engine callback creators', () => {
     } as never;
     const realStorage = internals.storage;
     internals.storage = {
+      capabilities: realStorage.capabilities.bind(realStorage),
       delete: realStorage.delete.bind(realStorage),
       get: realStorage.get.bind(realStorage),
       put: realStorage.put.bind(realStorage),

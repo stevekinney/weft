@@ -8,6 +8,7 @@ import {
   type ConditionalBatchCondition,
   type ScanOptions,
   type Storage,
+  type StorageCapabilities,
 } from './interface.ts';
 
 function normalizeScopePrefix(prefix: string): string {
@@ -106,6 +107,12 @@ export class ScopedStorage implements Storage {
     }
 
     return innerOptions;
+  }
+
+  capabilities(): StorageCapabilities {
+    // Pure key-rewriting pass-through: every consistency and feature guarantee
+    // is exactly the inner store's. Delegate verbatim.
+    return this.#storage.capabilities();
   }
 
   scoped(prefix: string): ScopedStorage {

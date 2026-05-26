@@ -10,6 +10,7 @@ import {
   type BatchOperation,
   type ScanOptions,
   type Storage,
+  type StorageCapabilities,
 } from './interface.ts';
 import { scopedStorage } from './scoped-storage.ts';
 
@@ -254,6 +255,25 @@ export class WebExtensionStorage implements Storage {
     this.#driver = resolveStorageArea(this.#namespace, this.#area);
     this.#changeListener = () => {};
     this.#namespace.storage?.onChanged?.addListener?.(this.#changeListener);
+  }
+
+  capabilities(): StorageCapabilities {
+    // browser.storage / chrome.storage async KV, no transactions. batch()
+    // rewrites the full keyspace under an in-process mutation lock with a single
+    // storage `set()` call: the set applies atomically or its promise rejects,
+    // so the batch is all-or-nothing (atomicBatch: true). There is no native
+    // compare-and-swap (conditionalBatch: false). Same-instance reads observe
+    // this instance's own writes (session); a separate extension context may
+    // lag, and there is no scan-time transaction isolation (best-effort).
+    // deletePrefix uses the derived scan-and-delete fallback, so
+    // boundedRangeDelete is false.
+    return {
+      readAfterWrite: 'session',
+      scanConsistency: 'best-effort',
+      atomicBatch: true,
+      conditionalBatch: false,
+      boundedRangeDelete: false,
+    };
   }
 
   async #getItems(keys?: string | string[] | null): Promise<Record<string, unknown>> {

@@ -1,9 +1,13 @@
+import { requireStorageCapability, type StorageCapabilities } from './capabilities.ts';
 import {
   storageCountCore,
   storageDeletePrefixCore,
   storageHasCore,
   storageKeysCore,
 } from './derived-operations.ts';
+
+export { requireStorageCapability } from './capabilities.ts';
+export type { BooleanStorageCapabilityKey, StorageCapabilities } from './capabilities.ts';
 
 /**
  * A single KV operation in a batch.
@@ -72,6 +76,14 @@ export interface ScanOptions {
  * ```
  */
 export interface Storage extends Disposable {
+  /**
+   * Self-report the backend's consistency and feature guarantees. Required on
+   * every adapter so the engine and feature gates can act on an honest,
+   * declarative profile rather than duck-typing optional methods. See
+   * {@link StorageCapabilities} for the contract each field promises and which
+   * fields are runtime-gated versus trusted.
+   */
+  capabilities(): StorageCapabilities;
   get(key: string): Promise<Uint8Array | null>;
   put(key: string, value: Uint8Array): Promise<void>;
   delete(key: string): Promise<void>;
@@ -296,9 +308,13 @@ export async function storageConditionalBatch(
   conditions: ConditionalBatchCondition[],
   operations: BatchOperation[],
 ): Promise<boolean> {
+  // Trust the declared capability, not method presence: an adapter that has the
+  // method but honestly reports conditionalBatch: false (e.g. a remote HTTP
+  // backend known to lack CAS) must not silently execute the swap.
+  requireStorageCapability(storage, 'conditionalBatch', 'storageConditionalBatch');
   if (!storage.conditionalBatch) {
     throw new Error(
-      'This storage backend does not support conditionalBatch(), which is required for this operation.',
+      'This storage backend reports conditionalBatch capability but does not implement the conditionalBatch() method.',
     );
   }
 

@@ -67,6 +67,7 @@ describe('Engine dispatches CleanupWarningEvent on cleanup errors', () => {
 
     // We need a storage proxy that fails when scanning for updates
     const storage: WeftStorage = {
+      capabilities: realStorage.capabilities.bind(realStorage),
       get: realStorage.get.bind(realStorage),
       put: realStorage.put.bind(realStorage),
       delete: realStorage.delete.bind(realStorage),
@@ -120,6 +121,7 @@ describe('Engine dispatches CleanupWarningEvent on cleanup errors', () => {
     const originalBatch = realStorage.batch.bind(realStorage);
 
     const storage: WeftStorage = {
+      capabilities: realStorage.capabilities.bind(realStorage),
       get: realStorage.get.bind(realStorage),
       put: realStorage.put.bind(realStorage),
       delete: realStorage.delete.bind(realStorage),

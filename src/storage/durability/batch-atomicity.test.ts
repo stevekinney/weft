@@ -12,12 +12,38 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
+import type { StorageCapabilities } from '../interface.ts';
 import {
   availableAdapterSpecs,
   closeIfOpen,
   FixtureScope,
   type OpenedAdapter,
 } from './adapter-spec.test-support.ts';
+
+/** Expected capability row per durable adapter exercised by this suite. */
+const expectedCapabilitiesBySpec: Record<string, StorageCapabilities> = {
+  BunSQLiteStorage: {
+    readAfterWrite: 'linearizable',
+    scanConsistency: 'snapshot',
+    atomicBatch: true,
+    conditionalBatch: true,
+    boundedRangeDelete: true,
+  },
+  NodeSQLiteStorage: {
+    readAfterWrite: 'linearizable',
+    scanConsistency: 'snapshot',
+    atomicBatch: true,
+    conditionalBatch: true,
+    boundedRangeDelete: false,
+  },
+  TursoStorage: {
+    readAfterWrite: 'session',
+    scanConsistency: 'snapshot',
+    atomicBatch: true,
+    conditionalBatch: true,
+    boundedRangeDelete: true,
+  },
+};
 
 for (const spec of availableAdapterSpecs()) {
   describe(`batch atomicity — ${spec.name}`, () => {
@@ -29,6 +55,23 @@ for (const spec of availableAdapterSpecs()) {
 
     afterEach(() => {
       scope.cleanup();
+    });
+
+    it('reports its durable consistency contract through capabilities()', async () => {
+      const directory = scope.makeTempDirectory('capabilities');
+      const adapter = await spec.open(join(directory, 'weft.db'));
+      try {
+        const expected = expectedCapabilitiesBySpec[spec.name];
+        if (expected === undefined) {
+          throw new Error(`No expected capability row for adapter spec "${spec.name}".`);
+        }
+        expect(adapter.storage.capabilities()).toEqual(expected);
+        // The batch-atomicity proof below exercises the atomicBatch contract
+        // these durable adapters all declare true.
+        expect(adapter.storage.capabilities().atomicBatch).toBe(true);
+      } finally {
+        await closeIfOpen(adapter);
+      }
     });
 
     it('a failing entry inside batch() rolls back all entries in the same transaction', async () => {

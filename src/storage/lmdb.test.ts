@@ -2,6 +2,22 @@ import { afterEach, describe, expect, it } from 'bun:test';
 
 import { createDiskBackedTestFixture } from '../testing/storage-backends.ts';
 import { LMDBStorage } from './lmdb';
+import { runStorageCapabilityConformance } from './storage-adapter.test-support.ts';
+
+runStorageCapabilityConformance('LMDBStorage', {
+  create: () =>
+    new LMDBStorage(createDiskBackedTestFixture({ prefix: 'lmdb-caps', recursive: true }).path),
+  expected: {
+    readAfterWrite: 'linearizable',
+    scanConsistency: 'snapshot',
+    atomicBatch: true,
+    conditionalBatch: true,
+    boundedRangeDelete: true,
+  },
+  // LMDB serializes writers (single write transaction); concurrent CAS contention
+  // is not a supported access pattern, so skip that case. The mismatch case still runs.
+  supportsConcurrentWrites: false,
+});
 
 /** Helper to encode a string as Uint8Array. */
 function encode(value: string): Uint8Array {
