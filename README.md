@@ -351,9 +351,6 @@ try {
 } catch (error) {
   if (!isWeftError(error)) throw error; // not ours — rethrow
 
-  // Same-realm: narrow to a specific class.
-  // Cross-realm or duplicate-module loads: prefer the `code`, where
-  // `instanceof` is unreliable. `isWeftErrorCode` narrows to the public union.
   if (isWeftErrorCode(error.code)) {
     switch (error.code) {
       case 'WorkflowAlreadyExistsError':
@@ -365,6 +362,17 @@ try {
         console.error(`[${error.code}] ${error.message}`);
     }
   }
+}
+```
+
+`isWeftError` is an `instanceof` check — the right tool in the common case where the error came from the same module instance. If an error can reach you across a realm or a duplicate module load (multiple copies of `weft` in one process), `instanceof` is unreliable; skip `isWeftError` and branch on `error.code` directly, since the string `code` survives those boundaries:
+
+```typescript
+import { isWeftErrorCode } from 'weft';
+
+function isAlreadyRunning(error: unknown): boolean {
+  const code = (error as { code?: unknown }).code;
+  return isWeftErrorCode(code) && code === 'WorkflowAlreadyExistsError';
 }
 ```
 

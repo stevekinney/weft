@@ -22,6 +22,9 @@ import {
   WorkflowTimeoutError,
   WorkflowTypeNotRegisteredForRecoveryError,
 } from '../index.ts';
+// StandardSchemaValidationError is public via the `weft/json-schema` subpath,
+// not the root entry — so it belongs in WeftErrorCode and is imported here.
+import { StandardSchemaValidationError } from '../json-schema.ts';
 import { WeftError, isWeftError, isWeftErrorCode, type WeftErrorCode } from './weft-error.ts';
 
 /**
@@ -63,6 +66,12 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   EffectReplayConflictError: () => new EffectReplayConflictError('hash-abc', 'charge'),
   ReviewTimeoutError: () => new ReviewTimeoutError('review-1', 1_000),
   AtomicStateConflictError: () => new AtomicStateConflictError('counter', 3),
+  StandardSchemaValidationError: () =>
+    new StandardSchemaValidationError({
+      fieldName: 'input',
+      operation: 'start',
+      issues: [{ message: 'Expected a string.', path: '/email' }],
+    }),
 };
 
 describe('WeftError', () => {
@@ -95,6 +104,19 @@ describe('WeftError', () => {
       });
     });
   }
+});
+
+describe('WeftError subclasses preserve domain state', () => {
+  it('keeps constructor-supplied properties on the instance', () => {
+    expect(new WorkflowAlreadyExistsError('wf-1').workflowId).toBe('wf-1');
+    expect(new WorkflowTerminalError('wf-1', 'completed').status).toBe('completed');
+    expect(new HttpClientError(503, 'down').status).toBe(503);
+  });
+
+  it('interpolates dynamic values into the message', () => {
+    expect(new WorkflowTimeoutError('wf-1', 'execution', 1_000).message).toContain('1000ms');
+    expect(new ActivityResolutionError('checkout', 'charge').message).toContain('charge');
+  });
 });
 
 describe('isWeftError', () => {

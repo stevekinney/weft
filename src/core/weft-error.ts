@@ -42,7 +42,8 @@ export type WeftErrorCode =
   | 'VersionMismatchError'
   | 'EffectReplayConflictError'
   | 'ReviewTimeoutError'
-  | 'AtomicStateConflictError';
+  | 'AtomicStateConflictError'
+  | 'StandardSchemaValidationError';
 
 /**
  * Generic abstract base for all Weft library errors. The `TCode` parameter
@@ -98,6 +99,7 @@ const publicWeftErrorCodeMap = {
   EffectReplayConflictError: true,
   ReviewTimeoutError: true,
   AtomicStateConflictError: true,
+  StandardSchemaValidationError: true,
 } satisfies Record<WeftErrorCode, true>;
 
 const PUBLIC_WEFT_ERROR_CODES = new Set<string>(Object.keys(publicWeftErrorCodeMap));
