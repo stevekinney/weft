@@ -346,12 +346,21 @@ export type RunTestSuiteDependencies = {
 
 const realDependencies: RunTestSuiteDependencies = {
   runCommand: async (args) => {
-    const result = await $`bun ${args}`.quiet().nothrow();
-    return {
-      exitCode: result.exitCode,
-      stdout: result.stdout.toString(),
-      stderr: result.stderr.toString(),
-    };
+    // The run is captured (`.quiet()`), so output appears only on failure. Emit
+    // a heartbeat dot every few seconds so the longest hook step doesn't look
+    // like a hung process while it runs.
+    const heartbeat = setInterval(() => process.stderr.write('.'), 3000);
+    try {
+      const result = await $`bun ${args}`.quiet().nothrow();
+      return {
+        exitCode: result.exitCode,
+        stdout: result.stdout.toString(),
+        stderr: result.stderr.toString(),
+      };
+    } finally {
+      clearInterval(heartbeat);
+      process.stderr.write('\n');
+    }
   },
   makeRunDirectory: () => mkdtemp(join(tmpdir(), 'weft-precommit-')),
   readReport: async (path) => {
