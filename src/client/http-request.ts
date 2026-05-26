@@ -102,22 +102,25 @@ function isFlatErrorBody(value: unknown): value is { error: string } {
 
 /**
  * Structured error body from `faultToHttpResponse`:
- * `{ error: { code, message, data? } }`, where `code` is a known {@link FaultCode}.
+ * `{ error: { code, message, data? } }`. The human `message` is required; the
+ * `code` is validated separately so an unrecognized (e.g. future) fault code
+ * still surfaces its message — only the typed {@link FaultCode} is withheld.
  */
 function isStructuredErrorBody(
   value: unknown,
-): value is { error: { code: FaultCode; message: string } } {
+): value is { error: { code?: unknown; message: string } } {
   if (value === null || typeof value !== 'object') return false;
   const error = (value as { error?: unknown }).error;
   if (error === null || typeof error !== 'object') return false;
-  const { code, message } = error as { code?: unknown; message?: unknown };
-  return isFaultCode(code) && typeof message === 'string';
+  return typeof (error as { message?: unknown }).message === 'string';
 }
 
 /**
  * Parse a non-2xx response body into the human message and, when the server
- * sent a structured fault, its wire {@link FaultCode}. Falls back to
- * `response.statusText` when the body is missing, non-JSON, or unrecognized.
+ * sent a structured fault with a recognized code, its wire {@link FaultCode}.
+ * A structured body with an unknown code still yields its message. Falls back
+ * to `response.statusText` when the body is missing, non-JSON, or carries no
+ * usable message.
  */
 async function parseErrorBody(
   response: Response,
@@ -125,7 +128,8 @@ async function parseErrorBody(
   try {
     const body: unknown = await response.json();
     if (isStructuredErrorBody(body)) {
-      return { message: body.error.message, faultCode: body.error.code };
+      const { code, message } = body.error;
+      return isFaultCode(code) ? { message, faultCode: code } : { message };
     }
     if (isFlatErrorBody(body) && body.error) {
       return { message: body.error };

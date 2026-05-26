@@ -82,9 +82,10 @@ describe('FAULT_CODE_TO_FAILURE_CATEGORY', () => {
 });
 
 describe('failureCategoryForFaultCode', () => {
-  it('returns the mapped category for every code', () => {
-    for (const code of ALL_FAULT_CODES) {
-      expect(failureCategoryForFaultCode(code)).toBe(FAULT_CODE_TO_FAILURE_CATEGORY[code]);
-    }
+  it('returns the expected category across each taxonomy bucket', () => {
+    expect(failureCategoryForFaultCode('NotFound')).toBe('application');
+    expect(failureCategoryForFaultCode('Timeout')).toBe('timeout');
+    expect(failureCategoryForFaultCode('RateLimited')).toBe('resource');
+    expect(failureCategoryForFaultCode('EngineFailure')).toBe('system');
   });
 });

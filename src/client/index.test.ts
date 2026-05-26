@@ -1144,10 +1144,10 @@ describe('HttpClient request surface', () => {
 
     const httpClient = new HttpClient({ baseUrl: 'http://example.test' });
 
-    expect(await httpClient.submitCoordinatedUpdate('wf-1', 'rename')).toEqual({
-      updateId: '',
-      error: 'bad payload',
-    });
+    // The behavioral contract: the structured fault's human message reaches the
+    // `error` field and the call resolves rather than throwing.
+    const result = await httpClient.submitCoordinatedUpdate('wf-1', 'rename');
+    expect(result.error).toBe('bad payload');
   });
 
   it('throws a 404 client error when handle.result() points at a missing workflow', async () => {

@@ -105,10 +105,10 @@ describe('request() error-body parsing', () => {
     expect(error.faultCode).toBeUndefined();
   });
 
-  it('ignores an unrecognized fault code and falls back to statusText', async () => {
-    // Inner `message` is present but `code` is not a known FaultCode, so the
-    // structured guard rejects it; the flat guard also rejects (error is an
-    // object, not a string), leaving the statusText fallback.
+  it('surfaces the message but no faultCode for an unrecognized (future) code', async () => {
+    // A structured body whose `code` is not a known FaultCode still yields its
+    // human message — only the typed faultCode/category are withheld, so a
+    // forward-compatible server fault does not lose its message to statusText.
     const error = await captureError(
       new Response(JSON.stringify({ error: { code: 'Teapot', message: 'short and stout' } }), {
         status: 418,
@@ -118,6 +118,66 @@ describe('request() error-body parsing', () => {
     );
     expect(error.faultCode).toBeUndefined();
     expect(error.category).toBeUndefined();
-    expect(error.message).toBe("I'm a teapot");
+    expect(error.message).toBe('short and stout');
+  });
+
+  it('ignores the structured data field', async () => {
+    const error = await captureError(
+      new Response(
+        JSON.stringify({ error: { code: 'NotFound', message: 'gone', data: { resource: 'wf' } } }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    expect(error.faultCode).toBe('NotFound');
+    expect(error.message).toBe('gone');
+    expect('data' in error).toBe(false);
+  });
+
+  it('falls back to statusText when a structured body has a code but no message', async () => {
+    const error = await captureError(
+      new Response(JSON.stringify({ error: { code: 'NotFound' } }), {
+        status: 404,
+        statusText: 'Not Found',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(error.faultCode).toBeUndefined();
+    expect(error.message).toBe('Not Found');
+  });
+
+  it('falls back to statusText for a null error field', async () => {
+    const error = await captureError(
+      new Response(JSON.stringify({ error: null }), {
+        status: 500,
+        statusText: 'Internal Server Error',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(error.message).toBe('Internal Server Error');
+    expect(error.faultCode).toBeUndefined();
+  });
+
+  it('falls back to statusText for a flat body with an empty error string', async () => {
+    const error = await captureError(
+      new Response(JSON.stringify({ error: '' }), {
+        status: 500,
+        statusText: 'Internal Server Error',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(error.message).toBe('Internal Server Error');
+    expect(error.faultCode).toBeUndefined();
+  });
+
+  it('falls back to statusText for a JSON body with no error field', async () => {
+    const error = await captureError(
+      new Response(JSON.stringify({ detail: 'something else' }), {
+        status: 500,
+        statusText: 'Internal Server Error',
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(error.message).toBe('Internal Server Error');
+    expect(error.faultCode).toBeUndefined();
   });
 });
