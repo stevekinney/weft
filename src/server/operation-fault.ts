@@ -33,21 +33,13 @@
  * See Track 8 design decision 4.
  */
 
-/** Stable code names. The full vocabulary is closed for v1. */
-export type FaultCode =
-  | 'Unauthorized'
-  | 'Forbidden'
-  | 'NotFound'
-  | 'Conflict'
-  | 'Unprocessable'
-  | 'Timeout'
-  | 'RateLimited'
-  | 'NotImplemented'
-  | 'UnsupportedTransport'
-  | 'SubscriptionOverflow'
-  | 'InvalidParams'
-  | 'MethodNotFound'
-  | 'EngineFailure';
+// `FaultCode` is defined in `core` so the client can consume it off the wire
+// without importing from `server`. Imported for use within this module and
+// re-exported so existing server call sites importing it from here are
+// unaffected.
+import type { FaultCode } from '../core/fault-code.ts';
+
+export type { FaultCode };
 
 /** Transport identifiers as seen by `executeOperation`. */
 export type TransportKind = 'http-rest' | 'jsonRpcHttp' | 'jsonRpcWebSocket' | 'jsonRpcStdio';

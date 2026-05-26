@@ -16,6 +16,13 @@ export { VERSION } from './version.ts';
 // Error base + discriminant
 export { WeftError, isWeftError, isWeftErrorCode } from './core/weft-error.ts';
 export type { WeftErrorCode } from './core/weft-error.ts';
+// Wire fault code + failure-category mapping
+export {
+  FAULT_CODE_TO_FAILURE_CATEGORY,
+  failureCategoryForFaultCode,
+  isFaultCode,
+} from './core/fault-code.ts';
+export type { FaultCode } from './core/fault-code.ts';
 // Core
 export {
   ActivityResolutionError,
