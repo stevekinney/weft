@@ -339,6 +339,37 @@ For chaos testing, `withChaos()` wraps activities with configurable transient fa
 
 `bun build --compile` produces standalone executables for darwin-arm64, darwin-x64, linux-x64, linux-arm64, and windows-x64. The engine, server, dashboard, and your workflow code embed into a single file with zero runtime dependencies—download, run, done.
 
+### Error Handling
+
+Every error Weft throws extends `WeftError`, so a single `instanceof` check catches them all, and each carries a stable string `code` equal to its class name:
+
+```typescript
+import { isWeftError, isWeftErrorCode } from 'weft';
+
+try {
+  await engine.start('checkout', { orderId: 'order-1' }, { id: 'order-1' });
+} catch (error) {
+  if (!isWeftError(error)) throw error; // not ours — rethrow
+
+  // Same-realm: narrow to a specific class.
+  // Cross-realm or duplicate-module loads: prefer the `code`, where
+  // `instanceof` is unreliable. `isWeftErrorCode` narrows to the public union.
+  if (isWeftErrorCode(error.code)) {
+    switch (error.code) {
+      case 'WorkflowAlreadyExistsError':
+        // idempotent retry — already running
+        break;
+      case 'WorkflowNotRegisteredError':
+        throw error; // a programming error, not a runtime condition
+      default:
+        console.error(`[${error.code}] ${error.message}`);
+    }
+  }
+}
+```
+
+The exported `WeftErrorCode` union lists every code that belongs to a public, exported error class; those codes are stable contract and safe to `switch` on exhaustively. Errors that are internal to Weft also extend `WeftError` but carry codes intentionally left out of `WeftErrorCode` — `isWeftErrorCode` returns `false` for them — so internal codes may change between releases without breaking your types.
+
 ## Installation
 
 ```bash

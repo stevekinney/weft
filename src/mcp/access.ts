@@ -1,5 +1,6 @@
 import type { Engine } from '../core/engine.ts';
 import type { ListFilter, PaginatedResult, WorkflowState, WorkflowSummary } from '../core/types.ts';
+import { WeftError } from '../core/weft-error.ts';
 import type { AuthorizationScope } from '../server/authorization-scope.ts';
 import { isAuthenticated, type Principal } from '../server/principal.ts';
 
@@ -11,10 +12,9 @@ export type McpAccessContext = {
 };
 
 /** Error surfaced as a tool-level failure rather than a protocol failure. */
-export class McpToolExecutionError extends Error {
+export class McpToolExecutionError extends WeftError<'McpToolExecutionError'> {
   constructor(message: string) {
-    super(message);
-    this.name = 'McpToolExecutionError';
+    super('McpToolExecutionError', message);
   }
 }
 

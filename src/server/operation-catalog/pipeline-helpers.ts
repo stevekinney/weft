@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { WeftError } from '../../core/weft-error.ts';
+
 import {
   WorkflowAlreadyExistsError,
   WorkflowNotFoundError,
@@ -174,19 +176,19 @@ export function classifyEngineError(
  * surfaces it as a generic `EngineFailure` so test failures point at the
  * declaration mismatch rather than silently passing through.
  */
-class UndeclaredFaultError extends Error {
+class UndeclaredFaultError extends WeftError<'UndeclaredFaultError'> {
   readonly operationName: string;
-  readonly code: string;
+  readonly faultCode: string;
 
-  constructor(operationName: string, code: string) {
+  constructor(operationName: string, faultCode: string) {
     super(
-      `[weft] Operation "${operationName}" raised undeclared fault "${code}". ` +
+      'UndeclaredFaultError',
+      `[weft] Operation "${operationName}" raised undeclared fault "${faultCode}". ` +
         "Add it to the operation's `producibleFaults` array or migrate the throw to " +
         '`raiseFault(operation, fault)`.',
     );
-    this.name = 'UndeclaredFaultError';
     this.operationName = operationName;
-    this.code = code;
+    this.faultCode = faultCode;
   }
 }
 

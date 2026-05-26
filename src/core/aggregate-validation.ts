@@ -13,6 +13,8 @@
 
 import { z, type ZodIssue } from 'zod';
 
+import { WeftError } from './weft-error.ts';
+
 const attributeDimensionSchema = z.object({ attribute: z.string().min(1) }).strict();
 
 const groupBySchema = z.union([
@@ -96,7 +98,7 @@ function flattenIssue(issue: ZodIssue): AggregateOptionsValidationIssue {
  * Carries flattened Zod issues so transport adapters can map directly to
  * the existing `InvalidParams` fault shape.
  */
-export class AggregateOptionsValidationError extends Error {
+export class AggregateOptionsValidationError extends WeftError<'AggregateOptionsValidationError'> {
   readonly issues: ReadonlyArray<AggregateOptionsValidationIssue>;
 
   constructor(issues: ReadonlyArray<AggregateOptionsValidationIssue>) {
@@ -106,8 +108,10 @@ export class AggregateOptionsValidationError extends Error {
         return path.length > 0 ? `${path}: ${issue.message}` : issue.message;
       })
       .join('; ');
-    super(summary.length > 0 ? summary : 'Invalid aggregate options');
-    this.name = 'AggregateOptionsValidationError';
+    super(
+      'AggregateOptionsValidationError',
+      summary.length > 0 ? summary : 'Invalid aggregate options',
+    );
     this.issues = issues;
   }
 }
@@ -117,14 +121,14 @@ export class AggregateOptionsValidationError extends Error {
  * keys than {@link MAX_AGGREGATE_DISTINCT_KEYS}. Caller is expected to
  * narrow the filter or pick a lower-cardinality `groupBy`.
  */
-export class AggregateDistinctKeyCapExceededError extends Error {
+export class AggregateDistinctKeyCapExceededError extends WeftError<'AggregateDistinctKeyCapExceededError'> {
   readonly cap: number;
 
   constructor(cap: number) {
     super(
+      'AggregateDistinctKeyCapExceededError',
       `Aggregate query would exceed the distinct-key cap of ${cap}. Narrow the filter or choose a lower-cardinality groupBy.`,
     );
-    this.name = 'AggregateDistinctKeyCapExceededError';
     this.cap = cap;
   }
 }

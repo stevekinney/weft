@@ -1,5 +1,6 @@
 import type { Engine } from '../core/engine.ts';
 import type { WeftEventMap } from '../core/events.ts';
+import { WeftError } from '../core/weft-error.ts';
 import type { JsonRpcId } from '../server/json-rpc-protocol.ts';
 import type { Principal } from '../server/principal.ts';
 import { requestIdKey, type McpResponse } from './protocol.ts';
@@ -49,10 +50,9 @@ export type McpSessionManagerOptions = {
   readonly currentTimeMilliseconds?: () => number;
 };
 
-export class McpSessionLimitExceededError extends Error {
+export class McpSessionLimitExceededError extends WeftError<'McpSessionLimitExceededError'> {
   constructor() {
-    super('Too many MCP sessions');
-    this.name = 'McpSessionLimitExceededError';
+    super('McpSessionLimitExceededError', 'Too many MCP sessions');
   }
 }
 

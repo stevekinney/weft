@@ -1,3 +1,4 @@
+import { WeftError } from '../weft-error.ts';
 import type {
   DefinitionSchema,
   StandardSchemaV1,
@@ -70,7 +71,7 @@ export interface StandardSchemaValidationContext {
  * void error;
  * ```
  */
-export class StandardSchemaValidationError extends Error {
+export class StandardSchemaValidationError extends WeftError<'StandardSchemaValidationError'> {
   readonly fieldName: string;
   readonly operation: string | undefined;
   readonly issues: ReadonlyArray<ValidationIssue>;
@@ -80,8 +81,10 @@ export class StandardSchemaValidationError extends Error {
     operation: string | undefined;
     issues: ReadonlyArray<ValidationIssue>;
   }) {
-    super(buildErrorMessage(parameters.fieldName, parameters.operation, parameters.issues));
-    this.name = 'StandardSchemaValidationError';
+    super(
+      'StandardSchemaValidationError',
+      buildErrorMessage(parameters.fieldName, parameters.operation, parameters.issues),
+    );
     this.fieldName = parameters.fieldName;
     this.operation = parameters.operation;
     this.issues = parameters.issues;

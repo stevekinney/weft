@@ -21,6 +21,7 @@
  * the client omits content-length or lies.
  */
 
+import { WeftError } from '../core/weft-error.ts';
 import {
   dispatchJsonRpc,
   type DispatchJsonRpcContext,
@@ -80,7 +81,7 @@ export async function handleJsonRpcHttpRequest(
   try {
     bodyBytes = await readBodyBounded(request, maxBytes);
   } catch (error) {
-    if (error instanceof BodyTooLargeError) return textResponse('Payload Too Large', 413);
+    if (error instanceof RequestBodyTooLargeError) return textResponse('Payload Too Large', 413);
     // Stream error reading the body — treat as transport-level failure.
     return textResponse('Bad Request', 400);
   }
@@ -155,10 +156,9 @@ function isJsonContentType(contentType: string): boolean {
   return type.trim() === 'application/json';
 }
 
-class BodyTooLargeError extends Error {
+class RequestBodyTooLargeError extends WeftError<'RequestBodyTooLargeError'> {
   constructor() {
-    super('body exceeds max bytes');
-    this.name = 'BodyTooLargeError';
+    super('RequestBodyTooLargeError', 'body exceeds max bytes');
   }
 }
 
@@ -169,7 +169,7 @@ class BodyTooLargeError extends Error {
  * allocation via `request.text()`.
  *
  * Returns the concatenated bytes; caller decodes with `TextDecoder`.
- * Throws `BodyTooLargeError` on overflow — caller maps to 413.
+ * Throws `RequestBodyTooLargeError` on overflow — caller maps to 413.
  */
 async function readBodyBounded(request: Request, maxBytes: number): Promise<Uint8Array> {
   const body = request.body;
@@ -186,7 +186,7 @@ async function readBodyBounded(request: Request, maxBytes: number): Promise<Uint
       if (total > maxBytes) {
         // Abort the stream as soon as we exceed the limit.
         await reader.cancel();
-        throw new BodyTooLargeError();
+        throw new RequestBodyTooLargeError();
       }
       chunks.push(value);
     }

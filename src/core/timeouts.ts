@@ -12,6 +12,7 @@ import { KEYS, resolvePrefixRangeEnd } from '../storage/interface';
 import { decode, encode } from './codec';
 import { normalizeStorageTimestamp, parseDuration } from './scheduler';
 import type { Duration, WorkflowId } from './types';
+import { WeftError } from './weft-error';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -155,14 +156,16 @@ export function timeRemaining(deadline: number | undefined, now: number): number
  * }
  * ```
  */
-export class WorkflowTimeoutError extends Error {
+export class WorkflowTimeoutError extends WeftError<'WorkflowTimeoutError'> {
   readonly workflowId: string;
   readonly timeoutType: 'execution' | 'run';
   readonly elapsed: number;
 
   constructor(workflowId: string, timeoutType: 'execution' | 'run', elapsed: number) {
-    super(`Workflow "${workflowId}" exceeded ${timeoutType} timeout after ${elapsed}ms`);
-    this.name = 'WorkflowTimeoutError';
+    super(
+      'WorkflowTimeoutError',
+      `Workflow "${workflowId}" exceeded ${timeoutType} timeout after ${elapsed}ms`,
+    );
     this.workflowId = workflowId;
     this.timeoutType = timeoutType;
     this.elapsed = elapsed;

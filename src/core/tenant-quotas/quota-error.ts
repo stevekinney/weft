@@ -1,3 +1,5 @@
+import { WeftError } from '../weft-error.ts';
+
 /**
  * Thrown by the engine during `engine.start` when a tenant's configured quota
  * is breached. Inspect `quota` to see which limit was hit
@@ -22,7 +24,7 @@
  * }
  * ```
  */
-export class QuotaExceededError extends Error {
+export class QuotaExceededError extends WeftError<'QuotaExceededError'> {
   readonly tenantId: string;
   readonly quota: 'maxConcurrentWorkflows' | 'maxWorkflowCreationRate' | 'maxStorageBytes';
   readonly currentUsage: number;
@@ -43,9 +45,9 @@ export class QuotaExceededError extends Error {
         : '';
 
     super(
+      'QuotaExceededError',
       `Tenant quota exceeded for "${tenantId}": ${quota} current usage ${currentUsage} exceeds limit ${limit}${windowDescription}`,
     );
-    this.name = 'QuotaExceededError';
     this.tenantId = tenantId;
     this.quota = quota;
     this.currentUsage = currentUsage;

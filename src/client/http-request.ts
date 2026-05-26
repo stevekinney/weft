@@ -1,3 +1,5 @@
+import { WeftError } from '../core/weft-error.ts';
+
 /**
  * Configuration for the HTTP client.
  *
@@ -36,12 +38,11 @@ export interface HttpClientOptions {
  * }
  * ```
  */
-export class HttpClientError extends Error {
+export class HttpClientError extends WeftError<'HttpClientError'> {
   readonly status: number;
 
   constructor(status: number, message: string) {
-    super(message);
-    this.name = 'HttpClientError';
+    super('HttpClientError', message);
     this.status = status;
   }
 }

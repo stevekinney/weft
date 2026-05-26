@@ -13,6 +13,8 @@
  * @module worker/worker-protocol-incompatible-error
  */
 
+import { WeftError } from '../core/weft-error.ts';
+
 /**
  * Build the canonical user-facing message for a protocol-version mismatch.
  *
@@ -46,13 +48,12 @@ export function workerProtocolIncompatibleMessage(versions: {
  * throw new WorkerProtocolIncompatibleError({ expected: 2, received: 1 });
  * ```
  */
-export class WorkerProtocolIncompatibleError extends Error {
+export class WorkerProtocolIncompatibleError extends WeftError<'WorkerProtocolIncompatibleError'> {
   readonly expectedProtocolVersion: number;
   readonly receivedProtocolVersion: number | undefined;
 
   constructor(versions: { expected: number; received: number | undefined }) {
-    super(workerProtocolIncompatibleMessage(versions));
-    this.name = 'WorkerProtocolIncompatibleError';
+    super('WorkerProtocolIncompatibleError', workerProtocolIncompatibleMessage(versions));
     this.expectedProtocolVersion = versions.expected;
     this.receivedProtocolVersion = versions.received;
   }

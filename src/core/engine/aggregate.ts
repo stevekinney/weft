@@ -18,6 +18,7 @@ import {
 import { decode } from '../codec.ts';
 import { normalizeListFilter } from '../list-filter-validation.ts';
 import type { ListFilter, SearchAttributeValue, WorkflowState } from '../types.ts';
+import { WeftError } from '../weft-error.ts';
 import { normalizeWorkflowTags } from '../workflow-tags.ts';
 import type { EngineInternals } from './internals.ts';
 import { resolveListCandidateIds } from './list-candidate-resolution.ts';
@@ -88,14 +89,14 @@ async function resolveDimensionKey(
  * attribute that no registration declares. Maps to an `Unprocessable`
  * fault at the operation boundary.
  */
-export class UnknownAggregateAttributeError extends Error {
+export class UnknownAggregateAttributeError extends WeftError<'UnknownAggregateAttributeError'> {
   readonly attribute: string;
 
   constructor(attribute: string) {
     super(
+      'UnknownAggregateAttributeError',
       `Unknown search attribute "${attribute}". Aggregate groupBy requires a declared attribute.`,
     );
-    this.name = 'UnknownAggregateAttributeError';
     this.attribute = attribute;
   }
 }

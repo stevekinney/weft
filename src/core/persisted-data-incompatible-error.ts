@@ -1,3 +1,5 @@
+import { WeftError } from './weft-error.ts';
+
 /**
  * Thrown by {@link Engine.create} (and other storage-opening entry points) when
  * a persisted Weft database carries a schema version older than the engine
@@ -25,17 +27,17 @@
  * }
  * ```
  */
-export class PersistedDataIncompatibleError extends Error {
+export class PersistedDataIncompatibleError extends WeftError<'PersistedDataIncompatibleError'> {
   readonly foundVersion: number | null;
   readonly expectedVersion: number;
 
   constructor(foundVersion: number | null, expectedVersion: number) {
     super(
+      'PersistedDataIncompatibleError',
       `Persisted workflow data was written by an older Weft version (schema ${
         foundVersion === null ? 'pre-versioned' : `v${foundVersion}`
       }, current v${expectedVersion}) and is incompatible with the workflow-builder refactor. Delete the database or start fresh.`,
     );
-    this.name = 'PersistedDataIncompatibleError';
     this.foundVersion = foundVersion;
     this.expectedVersion = expectedVersion;
   }

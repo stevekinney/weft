@@ -8,6 +8,7 @@
  */
 
 import { buildScheduleListSearchParams } from '../client/schedule-list-search-params.ts';
+import { WeftError } from '../core/weft-error.ts';
 import type {
   AggregateFilter,
   AggregateGroupBy,
@@ -90,12 +91,11 @@ export type {
   WorkflowTypeRetentionPolicy,
 } from './api-client-types.ts';
 
-export class ApiError extends Error {
+export class ApiError extends WeftError<'ApiError'> {
   readonly status: number;
 
   constructor(status: number, message: string) {
-    super(message);
-    this.name = 'ApiError';
+    super('ApiError', message);
     this.status = status;
   }
 }

@@ -10,6 +10,7 @@
 
 import type { BatchOperation } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
+import { WeftError } from './weft-error.ts';
 import type { WorkflowVersionDiff } from './workflow-version-tuple.ts';
 import { formatWorkflowVersionDiff } from './workflow-version-tuple.ts';
 
@@ -289,7 +290,7 @@ export type ShapeDiffOptions = {
  * }
  * ```
  */
-export class VersionMismatchError extends Error {
+export class VersionMismatchError extends WeftError<'VersionMismatchError'> {
   readonly workflowId: string;
   readonly storedVersion: string;
   readonly registeredVersion: string;
@@ -310,6 +311,7 @@ export class VersionMismatchError extends Error {
       : undefined;
 
     super(
+      'VersionMismatchError',
       createVersionMismatchMessage({
         workflowId,
         workflowType,
@@ -319,7 +321,6 @@ export class VersionMismatchError extends Error {
         versionDiff,
       }),
     );
-    this.name = 'VersionMismatchError';
     this.workflowId = workflowId;
     this.workflowType = workflowType;
     this.storedVersion = storedVersion;

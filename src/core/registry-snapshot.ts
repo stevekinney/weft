@@ -25,6 +25,7 @@ import type { Engine } from './engine.ts';
 import { definitionSchemaToJsonSchema } from './types/definition-schema-to-json.ts';
 import type { DefinitionSchema } from './types/definition-schema.ts';
 import type { RegisteredWorkflowDefinition } from './types/workflow-registry.ts';
+import { WeftError } from './weft-error.ts';
 
 /**
  * Current registry contract version. Future incompatible changes to the
@@ -81,7 +82,7 @@ export type RegistrySnapshot = {
  * error` so a misbehaving registration cannot leak schema layout to clients
  * that only have `system:read`.
  */
-export class RegistrySchemaConversionError extends Error {
+export class RegistrySchemaConversionError extends WeftError<'RegistrySchemaConversionError'> {
   readonly entityKind: 'workflow' | 'activity';
   readonly entityName: string;
   readonly direction: 'inputSchema' | 'outputSchema';
@@ -93,10 +94,11 @@ export class RegistrySchemaConversionError extends Error {
     cause: unknown,
   ) {
     const causeMessage = cause instanceof Error ? cause.message : String(cause);
-    super(`Failed to convert ${direction} for ${entityKind} "${entityName}": ${causeMessage}`, {
-      cause,
-    });
-    this.name = 'RegistrySchemaConversionError';
+    super(
+      'RegistrySchemaConversionError',
+      `Failed to convert ${direction} for ${entityKind} "${entityName}": ${causeMessage}`,
+      { cause },
+    );
     this.entityKind = entityKind;
     this.entityName = entityName;
     this.direction = direction;

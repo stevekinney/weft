@@ -1,5 +1,6 @@
 import { parseDuration } from './scheduler.ts';
 import type { Duration } from './types.ts';
+import { WeftError } from './weft-error.ts';
 import { assertValidWorkflowId } from './workflow-identifiers.ts';
 
 export const MAX_WORKFLOW_TAGS = 32;
@@ -8,10 +9,9 @@ export const MAX_WORKFLOW_TAG_BYTES = 128;
 const textEncoder = new TextEncoder();
 const EXCLUSIVE_START_WORKFLOW_OPTIONS_ERROR = 'Provide only one of startAt or startAfter';
 
-export class StartWorkflowValidationError extends Error {
+export class StartWorkflowValidationError extends WeftError<'StartWorkflowValidationError'> {
   constructor(message: string) {
-    super(message);
-    this.name = 'StartWorkflowValidationError';
+    super('StartWorkflowValidationError', message);
   }
 }
 

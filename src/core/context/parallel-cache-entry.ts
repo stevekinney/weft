@@ -12,6 +12,8 @@
  * for the durability contract.
  */
 
+import { WeftError } from '../weft-error.ts';
+
 /**
  * One slot in a {@link ParallelOperationCacheEntry}'s `branches` table.
  *
@@ -60,8 +62,10 @@ export type ParallelOperationCacheEntry = {
  * Indicates non-deterministic workflow code — branches must be stable
  * across retries.
  */
-export class BranchTopologyChangedError extends Error {
-  override readonly name = 'BranchTopologyChangedError';
+export class BranchTopologyChangedError extends WeftError<'BranchTopologyChangedError'> {
+  constructor(message: string) {
+    super('BranchTopologyChangedError', message);
+  }
 }
 
 function isValidVariant(value: unknown): value is 'all' | 'race' | 'run-all' {

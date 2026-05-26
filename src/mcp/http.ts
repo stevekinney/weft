@@ -1,4 +1,5 @@
 import type { Engine } from '../core/engine.ts';
+import { WeftError } from '../core/weft-error.ts';
 import { anonymousPrincipal, isAuthenticated, type Principal } from '../server/principal.ts';
 import { dispatchMcpMessage } from './dispatcher.ts';
 import {
@@ -46,10 +47,9 @@ export type McpHttpRequestOptions = {
   readonly trustedHosts?: ReadonlyArray<string>;
 };
 
-class BodyTooLargeError extends Error {
+class McpBodyTooLargeError extends WeftError<'McpBodyTooLargeError'> {
   constructor() {
-    super('body too large');
-    this.name = 'BodyTooLargeError';
+    super('McpBodyTooLargeError', 'body too large');
   }
 }
 
@@ -159,9 +159,12 @@ async function readMcpJsonBody(
     const bytes = await readBodyBounded(options.request, maxBodyBytes);
     return parseMcpMessage(new TextDecoder().decode(bytes));
   } catch (error) {
-    return new Response(error instanceof BodyTooLargeError ? 'Payload Too Large' : 'Bad Request', {
-      status: error instanceof BodyTooLargeError ? 413 : 400,
-    });
+    return new Response(
+      error instanceof McpBodyTooLargeError ? 'Payload Too Large' : 'Bad Request',
+      {
+        status: error instanceof McpBodyTooLargeError ? 413 : 400,
+      },
+    );
   }
 }
 
@@ -323,7 +326,7 @@ async function readBodyBounded(request: Request, maxBytes: number): Promise<Uint
       total += result.value.byteLength;
       if (total > maxBytes) {
         await reader.cancel();
-        throw new BodyTooLargeError();
+        throw new McpBodyTooLargeError();
       }
       chunks.push(result.value);
     }

@@ -12,6 +12,7 @@ import type { BatchOperation, Storage } from '../storage/interface';
 import { KEYS } from '../storage/interface';
 import { decode, encode } from './codec';
 import type { WorkflowStatus } from './types';
+import { WeftError } from './weft-error.ts';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -68,12 +69,11 @@ export interface UpdateRequestOptions {
  * }
  * ```
  */
-export class UpdateTimeoutError extends Error {
+export class UpdateTimeoutError extends WeftError<'UpdateTimeoutError'> {
   readonly updateId: string;
 
   constructor(updateId: string, timeout: number) {
-    super(`Update ${updateId} timed out after ${timeout}ms`);
-    this.name = 'UpdateTimeoutError';
+    super('UpdateTimeoutError', `Update ${updateId} timed out after ${timeout}ms`);
     this.updateId = updateId;
   }
 }
@@ -102,15 +102,15 @@ export class UpdateTimeoutError extends Error {
  * }
  * ```
  */
-export class WorkflowTerminalError extends Error {
+export class WorkflowTerminalError extends WeftError<'WorkflowTerminalError'> {
   readonly workflowId: string;
   readonly status: WorkflowStatus;
 
   constructor(workflowId: string, status: WorkflowStatus) {
     super(
+      'WorkflowTerminalError',
       `Cannot send update to workflow "${workflowId}": workflow is in terminal state "${status}"`,
     );
-    this.name = 'WorkflowTerminalError';
     this.workflowId = workflowId;
     this.status = status;
   }

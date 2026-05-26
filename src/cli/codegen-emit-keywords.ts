@@ -6,6 +6,8 @@
  * @module cli/codegen-emit-keywords
  */
 
+import { WeftError } from '../core/weft-error.ts';
+
 // Annotation-only keywords: documentation, defaults, and validation
 // constraints (string length, numeric bounds, array/object size).
 // They do not constrain the TypeScript shape, so combinator,
@@ -55,10 +57,9 @@ export const ARRAY_SUPPORTED_KEYS = ['type', 'items', 'prefixItems', 'additional
  * is willing to stand behind (e.g. recursion overflow). Callers must
  * translate this to a user-facing diagnostic.
  */
-export class CodegenEmitError extends Error {
+export class CodegenEmitError extends WeftError<'CodegenEmitError'> {
   constructor(message: string) {
-    super(message);
-    this.name = 'CodegenEmitError';
+    super('CodegenEmitError', message);
   }
 }
 
