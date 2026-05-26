@@ -31,13 +31,19 @@ The main thread runs the HTTP server, the API router, and the scheduler. It does
 
 Four reasons, in order of importance.
 
-**Fault isolation.** If a workflow throws an unhandled error or enters an infinite loop, it crashes _its_ worker---not the HTTP server. The main thread detects the crash, marks the workflow as failed, and spins up a fresh worker. Your API stays responsive even when workflow code misbehaves.
+**Fault isolation.** If a workflow throws an unhandled error or crashes its worker, the failure stays contained to _that_ worker---not the HTTP server. The main thread detects the crash, marks the workflow as failed, and discards the worker so the pool never reuses it. Your API stays responsive even when workflow code misbehaves. (A CPU-bound infinite loop still ties up the worker it runs on; Weft contains crashes and thrown errors, but does not yet ship a runaway-loop watchdog that preempts a wedged worker.)
 
 **True parallelism.** JavaScript is single-threaded per event loop. Web Workers give you actual OS threads. A workflow computing something CPU-heavy doesn't block other workflows or the API server.
 
 **Portability.** The `Worker` API is identical in Bun and in browsers. The same isolation model works in both environments with zero code changes. This is the core "web native" win---you're not locked into a server-only execution model.
 
 **Memory control.** Bun's `smol: true` option for Workers reduces the memory footprint per worker, which is useful when running many concurrent workflows on a single machine.
+
+## The boundary is `ExecutionStrategy`, not the Worker itself
+
+Workflows are user-supplied code, so "where does the workflow generator step?" is a trust decision. Weft makes that decision in exactly one place: `ExecutionStrategy` (`src/core/execution-strategy.ts`). It is the untrusted-workflow isolation boundary, and the Worker is _today's_ transport for it---not the boundary itself. `InlineExecutionStrategy` steps the generator in the engine's own isolate (trusted workflows only); `WorkerExecutionStrategy` steps it inside a Web Worker, talking to the engine purely through `postMessage`, so untrusted code never runs in the engine isolate. Because the interface returns `void` and couples only through serializable messages, the same seam could later host an out-of-process or remote workflow worker without changing the engine.
+
+That future transport is _not_ the RemoteWorker WebSocket protocol ([remote-worker-protocol.md](../reference/remote-worker-protocol.md)): that protocol is one-shot activity dispatch and is unsuitable for the stateful checkpoint/resume cycle a workflow needs. The full security contract---memory isolation, no engine-heap access, and crash containment, with its honest caveats---lives in the runtime reference under "`ExecutionStrategy` is the untrusted-workflow isolation boundary."
 
 ## Replacing the Temporal sandbox
 

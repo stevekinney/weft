@@ -141,3 +141,107 @@ describe('worker execution signal suspension', () => {
     expect(workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
   });
 });
+
+// Regression guard for the untrusted-workflow isolation boundary: under the
+// worker execution strategy, no workflow generator may step in the engine
+// isolate. The engine still *registers* a handler for each workflow type, but
+// it must never *invoke* that registered handler — the Worker runs its own
+// copy. We prove this with engine-only sentinels that the engine-side handlers
+// would flip if they ever ran. The Worker's copy of `simple`
+// (`test-browser-worker.ts`) returns `{ input, computed: 42 }`, while the
+// engine-side copies below return a marker value and flip a sentinel; observing
+// the Worker's result with the sentinels untouched proves the boundary held.
+//
+// The sentinels live only in this engine-side closure and are asserted in the
+// engine isolate. We deliberately do not rely on a sentinel surviving the
+// `createWorkerEntryUrl` `Function.prototype.toString` worker boundary (a
+// closure sentinel would not survive it; a module-level sentinel could be
+// duplicated per isolate), which is exactly the leak this test must not depend on.
+describe('worker execution isolation boundary', () => {
+  let engine: Engine | undefined;
+
+  afterEach(() => {
+    engine?.[Symbol.dispose]();
+    engine = undefined;
+  });
+
+  it('never invokes the engine-isolate workflow handler across start, resume, and cancel', async () => {
+    let engineSimpleHandlerRan = false;
+    let engineWaitHandlerRan = false;
+
+    // Engine-side registrations whose bodies flip a sentinel if they are ever
+    // stepped in the engine isolate. Under the worker strategy these must never
+    // run; the Worker executes its own copies of the same workflow types.
+    const engineSimpleWorkflow = workflow({ name: 'simple' }).execute(async function* (
+      _ctx: WorkflowContext,
+    ) {
+      engineSimpleHandlerRan = true;
+      return { ranIn: 'engine-isolate' };
+    });
+    const engineWaitWorkflow = workflow({ name: 'wait-signal-then-complete' }).execute(
+      async function* (_ctx: WorkflowContext) {
+        engineWaitHandlerRan = true;
+        return { ranIn: 'engine-isolate' };
+      },
+    );
+
+    const workerEngine = new Engine({
+      storage: new MemoryStorage(),
+      workerExecution: { workerUrl, poolSize: 1 },
+    });
+    workerEngine.register(engineSimpleWorkflow);
+    workerEngine.register(engineWaitWorkflow);
+    engine = workerEngine;
+
+    // start -> resume: the Worker's `wait-signal-then-complete` parks on a
+    // signal, then resumes when the engine delivers it. The engine drives the
+    // run/resume lifecycle through the strategy without stepping its generator.
+    const parkedHandle = await workerEngine.start(
+      'wait-signal-then-complete',
+      { signalName: 'resume', label: 'boundary' },
+      { id: 'boundary-resume' },
+    );
+    const parkedResult = parkedHandle.result();
+    await waitForCondition(() => workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]() === 1, {
+      label: 'boundary signal waiter',
+    });
+    await workerEngine.signal('boundary-resume', 'resume', { status: 'ready' });
+    await expect(withTimeout(parkedResult, 1000, 'boundary resume workflow')).resolves.toEqual({
+      input: { signalName: 'resume', label: 'boundary' },
+      payload: { status: 'ready' },
+      workflowId: 'boundary-resume',
+    });
+
+    // start -> complete: the Worker's `simple` returns `computed: 42`. If the
+    // engine-side handler had run instead, the result would be the engine
+    // marker and the sentinel would be set.
+    const simpleHandle = await workerEngine.start(
+      'simple',
+      { label: 'boundary' },
+      { id: 'boundary-simple' },
+    );
+    await expect(
+      withTimeout(simpleHandle.result(), 1000, 'boundary simple workflow'),
+    ).resolves.toEqual({ input: { label: 'boundary' }, computed: 42 });
+
+    // start -> cancel: cancellation must reach the engine's terminal cancelled
+    // state (not "completed"), again without stepping the workflow generator in
+    // the engine isolate.
+    const cancelHandle = await workerEngine.start(
+      'wait-signal-then-complete',
+      { signalName: 'resume', label: 'cancel' },
+      { id: 'boundary-cancel' },
+    );
+    const cancelResult = cancelHandle.result();
+    await waitForCondition(() => workerEngine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]() === 1, {
+      label: 'boundary cancel signal waiter',
+    });
+    await cancelHandle.cancel();
+    await expect(cancelResult).rejects.toThrow('Workflow cancelled');
+
+    // The invariant: across start, resume, and cancel, neither engine-side
+    // handler ever stepped in the engine isolate.
+    expect(engineSimpleHandlerRan).toBe(false);
+    expect(engineWaitHandlerRan).toBe(false);
+  });
+});
