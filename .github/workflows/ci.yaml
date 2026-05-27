@@ -48,6 +48,16 @@ jobs:
             src/dashboard/fragments/schedule-list.test.ts \
             src/dashboard/components/date-range-picker.svelte.test.ts \
             src/dashboard/views/workflow-list.svelte.test.ts
+  service-worker-browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+      - run: bunx playwright install --with-deps chromium
+      - run: bun run test:service-worker-browser
   build:
     runs-on: ubuntu-latest
     steps:

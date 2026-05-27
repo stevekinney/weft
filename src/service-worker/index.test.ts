@@ -135,6 +135,27 @@ describe('createFetchHandler', () => {
     expect(new URL(delegated!.url).pathname.startsWith('/api/')).toBe(false);
   });
 
+  it('preserves POST request bodies when delegating through the path prefix', async () => {
+    const event: MockFetchEvent = {
+      request: new Request('https://example.com/weft/v1/workflows', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: 'checkout', input: { cartId: 'cart-1' } }),
+      }),
+      respondWith: mock(() => {}),
+    };
+
+    const delegated = buildDelegatedRequest(event as any, normalizePathPrefix('/weft/'));
+
+    expect(delegated).not.toBeNull();
+    expect(new URL(delegated!.url).pathname).toBe('/v1/workflows');
+    expect(delegated!.headers.get('Content-Type')).toBe('application/json');
+    await expect(delegated!.json()).resolves.toEqual({
+      type: 'checkout',
+      input: { cartId: 'cart-1' },
+    });
+  });
+
   it('handles trailing slash in pathPrefix', () => {
     const handler = createFetchHandler({
       engine: mockEngine as any,

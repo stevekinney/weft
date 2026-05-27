@@ -113,9 +113,8 @@ export function buildDelegatedRequest(
   const strippedPathname = '/' + url.pathname.slice(pathPrefix.length);
   const strippedUrl = new URL(strippedPathname, url.origin);
   strippedUrl.search = url.search;
-  return new Request(strippedUrl.toString(), {
-    method: event.request.method,
-    headers: event.request.headers,
-    body: event.request.body,
-  });
+  const request = event.request.clone();
+  // Preserve the original Request contract, including streamed bodies,
+  // abort signals, credentials, redirect mode, and browser-required duplex.
+  return new Request(strippedUrl.toString(), request);
 }
