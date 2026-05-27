@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { randomUUID } from 'node:crypto';
 
 import { NodeSQLiteStorage } from './node-sqlite.ts';
 
@@ -167,7 +168,7 @@ describe('NodeSQLiteStorage', () => {
 
     try {
       const { NodeSQLiteStorage: MissingDependencyStorage } = await import(
-        `./node-sqlite.ts?missingDependency=${Date.now()}`
+        `./node-sqlite.ts?missingDependency=${randomUUID()}`
       );
 
       expect(() => new MissingDependencyStorage(':memory:')).toThrow(MISSING_BETTER_SQLITE_ERROR);
@@ -192,7 +193,7 @@ describe('NodeSQLiteStorage', () => {
 
     try {
       const { NodeSQLiteStorage: NativeLoadFailureStorage } = await import(
-        `./node-sqlite.ts?nativeLoadFailure=${Date.now()}`
+        `./node-sqlite.ts?nativeLoadFailure=${randomUUID()}`
       );
 
       expect(() => new NativeLoadFailureStorage(':memory:')).toThrow(MISSING_BETTER_SQLITE_ERROR);
