@@ -32,7 +32,22 @@ jobs:
         with:
           bun-version: 1.3.13
       - run: bun install --frozen-lockfile
-      - run: bun test --bail --timeout 15000 --path-ignore-patterns '**/benchmarks/**'
+      - run: |
+          bun test --bail --timeout 15000 \
+            --path-ignore-patterns '**/benchmarks/**' \
+            --path-ignore-patterns 'src/dashboard/dashboard-serving.test.ts' \
+            --path-ignore-patterns 'src/dashboard/svelte-test-harness.test-support.test.ts' \
+            --path-ignore-patterns 'src/dashboard/fragments/workflow-execution-timeline.svelte.test.ts' \
+            --path-ignore-patterns 'src/dashboard/fragments/schedule-list.test.ts' \
+            --path-ignore-patterns 'src/dashboard/components/date-range-picker.svelte.test.ts' \
+            --path-ignore-patterns 'src/dashboard/views/workflow-list.svelte.test.ts'
+          bun test --bail --timeout 15000 --parallel=1 \
+            src/dashboard/dashboard-serving.test.ts \
+            src/dashboard/svelte-test-harness.test-support.test.ts \
+            src/dashboard/fragments/workflow-execution-timeline.svelte.test.ts \
+            src/dashboard/fragments/schedule-list.test.ts \
+            src/dashboard/components/date-range-picker.svelte.test.ts \
+            src/dashboard/views/workflow-list.svelte.test.ts
   build:
     runs-on: ubuntu-latest
     steps:
