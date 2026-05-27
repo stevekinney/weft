@@ -12,6 +12,7 @@ import type { OpenApiSecuritySchemeName } from '../openapi.ts';
 import type { createLiveOperationRegistry, createLiveRestBindings } from '../rest-bindings.ts';
 import type { TaskQueue } from '../task-queue.ts';
 import type { WorkflowEventFeed } from '../workflow-event-feed.ts';
+import type { ResolvedCorsPolicy } from './cors.ts';
 
 /**
  * Internal closure state for a single `serve()` invocation.
@@ -37,6 +38,8 @@ export interface ServerContext {
   readonly liveOperationRegistry: ReturnType<typeof createLiveOperationRegistry>;
   readonly liveRestBindings: ReturnType<typeof createLiveRestBindings>;
   readonly supportedAuthenticationSchemes: ReadonlySet<OpenApiSecuritySchemeName>;
+  /** Resolved CORS policy, or `null` when `serve()` was called without `cors` (same-origin only). */
+  readonly corsPolicy: ResolvedCorsPolicy | null;
   /** Server-owned process-local metrics collector used by runtime diagnostics. */
   readonly metricsCollector: MetricsCollector;
   readonly eventFeedBackend: ReturnType<typeof createEngineEventFeedBackend>;

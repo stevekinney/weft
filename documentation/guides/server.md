@@ -31,6 +31,7 @@ interface ServeOptions {
   development?: boolean; // enable Bun's development mode (HMR, source maps)
   dashboard?: unknown; // dashboard HTML/module import served at /
   auth?: AuthConfig; // API key or JWT authentication configuration
+  cors?: CorsOptions; // cross-origin policy for browser clients; omit for same-origin only
   unauthenticatedAccess?: 'warn' | 'allow' | 'reject'; // startup policy when auth is omitted
   visibilityPollIntervalMs?: number; // task visibility scanner interval; default: 5000
   workerReconnectGracePeriodMs?: number; // reconnect grace before requeue; default: 100
@@ -62,6 +63,44 @@ const server = serve({
 ```
 
 The built-in API-key configuration grants the configured key the default authenticated scope set. JWT and custom authenticators can provide narrower scope sets such as `workflows:read`, `workflows:write`, `workflows:admin`, and `system:read`; requests missing the required scope fail with `401` or `403` before the operation runs.
+
+## Cross-Origin Resource Sharing (CORS)
+
+The dashboard and the [Service Worker browser runtime](#service-worker) are browser clients. When they run on the **same origin** as the API—the default when the CLI serves the dashboard from `/`, or when a reverse proxy puts the UI and API behind one hostname—no CORS configuration is needed, and Weft ships nothing by default: `serve()` emits no `Access-Control-*` headers and only same-origin browser requests succeed. **The default is deliberately restrictive; Weft never sends `Access-Control-Allow-Origin: *`.**
+
+Configure `cors` only when a browser client calls the API from a **different origin** (a dashboard hosted separately, a web app embedding Weft's API, or a Service Worker registered under another origin):
+
+```typescript partial
+import { Engine } from 'weft';
+import { serve } from 'weft/server';
+
+const engine = new Engine({ storage });
+
+const server = serve({
+  engine,
+  auth: { apiKeys: [process.env.WEFT_API_KEY!] },
+  cors: {
+    allowedOrigins: ['https://dashboard.example.com'],
+    credentials: true, // allow the browser to send the Authorization header / cookies
+  },
+});
+```
+
+With `cors` set, `serve()`:
+
+- answers CORS preflight (`OPTIONS`) requests **before** authentication—browsers never attach credentials to a preflight, so it must not be auth-gated;
+- adds `Access-Control-Allow-Origin` (echoing the exact request origin) plus `Vary: Origin` to responses for allowed origins;
+- when `auth` is configured, automatically advertises `Authorization` in `Access-Control-Allow-Headers` so authenticated browser clients can preflight successfully;
+- rejects cross-origin **WebSocket** upgrades (`/jsonrpc`, `/v1/.../stream`, `/watch`) from disallowed origins with `403`, because CORS does not govern the WebSocket handshake.
+
+Origins are matched as canonical origin tuples (scheme, host, port), so case, default-port elision, and trailing slashes do not cause mismatches. The literal `Origin: null` (sandboxed iframes, `file://`) never matches.
+
+Two combinations fail fast—`serve()` throws before binding the port:
+
+- `credentials: true` with `allowedOrigins: ['*']`. A wildcard origin is illegal for credentialed CORS; list explicit origins instead.
+- `allowedOrigins: ['*']` together with an `Authorization` entry in `allowedHeaders`. That would let any web origin send bearer tokens and read the response—almost never intended. Use an explicit allowlist, or drop `Authorization` from `allowedHeaders` if the wildcard is genuinely meant for a public, unauthenticated API.
+
+A wildcard origin is allowed only for a public, non-credentialed API that does not accept an `Authorization` header. For everything else, list the exact origins your browser clients are served from.
 
 ## Dashboard
 

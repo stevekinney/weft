@@ -5,6 +5,7 @@ import { finalizeWebSocketUpgrade } from '../json-rpc-transport-helpers.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
 import { parseOptionalSequenceCursor } from '../sequence-cursor.ts';
 import type { ServerContext } from './context.ts';
+import { isOriginAllowed } from './cors.ts';
 
 export const WORKER_STREAM_RE = /^\/v1\/tasks\/([\w-]+)\/stream$/;
 
@@ -62,6 +63,22 @@ export function classifyConnection(
   return { connectionType: 'generic' };
 }
 
+/**
+ * Whether a WebSocket upgrade must be refused on origin grounds. CORS does not
+ * govern the WebSocket handshake — the browser sends `Origin` but does not
+ * enforce the server's CORS headers — so when a CORS policy is configured we
+ * reject cross-origin upgrades from disallowed origins ourselves, before
+ * `server.upgrade()`. A missing `Origin` (native clients, server-to-server) is
+ * allowed; only a present-and-disallowed origin is a cross-origin browser
+ * upgrade we refuse.
+ */
+function rejectsCrossOriginUpgrade(context: ServerContext, request: Request): boolean {
+  const origin = request.headers.get('origin');
+  return (
+    context.corsPolicy !== null && origin !== null && !isOriginAllowed(context.corsPolicy, origin)
+  );
+}
+
 export function handleWebSocketUpgrade(
   server: ReturnType<typeof Bun.serve>,
   context: ServerContext,
@@ -70,11 +87,14 @@ export function handleWebSocketUpgrade(
   url: URL,
   authContext?: AuthContext,
 ): Response | undefined | null {
-  void context;
   void options;
 
   if (request.headers.get('upgrade') !== 'websocket') {
     return null;
+  }
+
+  if (rejectsCrossOriginUpgrade(context, request)) {
+    return new Response('Cross-origin WebSocket upgrade not allowed', { status: 403 });
   }
 
   const classification = classifyConnection(url);

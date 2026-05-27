@@ -22,6 +22,7 @@ import {
   handleServerFetchRequest,
 } from './runtime/authentication-bridge.ts';
 import type { ServerContext } from './runtime/context.ts';
+import { resolveCorsPolicy, validateCorsOptions } from './runtime/cors.ts';
 import {
   registerWorkflowEventLifecycle,
   type EventBroadcastingHandle,
@@ -129,6 +130,11 @@ export function resolveNetworkConfig(options: ServeOptions): ResolvedNetworkConf
   if (options.auth) {
     validateAuthConfig(options.auth);
   }
+  if (options.cors) {
+    // Fail fast before binding: a wildcard origin paired with credentials or
+    // an Authorization allowed-header is rejected here.
+    validateCorsOptions(options.cors);
+  }
   assertAuthenticationPosture(options);
   const port = options.port ?? 7233;
   const hostname = options.hostname ?? '0.0.0.0';
@@ -175,6 +181,10 @@ export function buildServerContext(
     }),
     liveRestBindings: createLiveRestBindings(),
     supportedAuthenticationSchemes: deriveSupportedOpenApiSecuritySchemes(options.auth),
+    // Resolve the CORS policy once. When `auth` is configured, force
+    // `Authorization` into the advertised allowed-headers so authenticated
+    // browser clients can preflight successfully. `null` means no CORS.
+    corsPolicy: options.cors ? resolveCorsPolicy(options.cors, options.auth !== undefined) : null,
     metricsCollector: serverMetricsCollector,
     eventFeedBackend,
     workflowEventFeed: createWorkflowEventFeed(eventFeedBackend),
