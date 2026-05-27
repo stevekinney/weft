@@ -176,14 +176,16 @@ await $`bunx tsc --declaration --emitDeclarationOnly --project tsconfig.build.js
 // *.test-support.ts fixed it; this assertion keeps it fixed.
 //
 // We match real module specifiers (import/export-from/require/dynamic-import),
-// not raw substrings, so a token appearing inside a string or comment does not
-// false-positive, and we compare by package root so `bun:test` and any subpath
-// like `fake-indexeddb/auto` are both caught. The forbidden set is curated
-// rather than derived from every devDependency: several devDependencies
-// (better-sqlite3, svelte, valibot) are deliberately present in dist/, so a
-// blanket "no devDependency in dist" rule would false-positive on them. These
-// three are the test-only modules with no legitimate path into shipped output;
-// add to the list if a new test-only runtime dependency is introduced.
+// not raw substrings, and we compare by package root so `bun:test` and any
+// subpath like `fake-indexeddb/auto` are both caught. Comments are stripped
+// first, because `tsc` emits JSDoc into `.d.ts` files — a shipped doc example
+// like `import { JSDOM } from 'jsdom'` is a mention, not a real dependency, and
+// must not fail the build. The forbidden set is curated rather than derived
+// from every devDependency: several devDependencies (better-sqlite3, svelte,
+// valibot) are deliberately present in dist/, so a blanket "no devDependency in
+// dist" rule would false-positive on them. These three are the test-only
+// modules with no legitimate path into shipped output; add to the list if a new
+// test-only runtime dependency is introduced.
 async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
   const forbiddenPackageRoots = ['bun:test', 'fake-indexeddb', 'jsdom'];
 
@@ -192,6 +194,13 @@ async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
   // (the form the original leak used — `import 'fake-indexeddb/auto'`).
   const specifierPattern =
     /(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)(["'])([^"']+)\1/g;
+
+  // Remove block and line comments so a token inside JSDoc/comments (which tsc
+  // copies into `.d.ts`) is not mistaken for a real import. Build output never
+  // contains a `//` or `/* */` sequence inside a string literal, so this is
+  // safe for emitted code even though it would be unsound on arbitrary source.
+  const stripComments = (source: string): string =>
+    source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 
   const packageRootOf = (specifier: string): string => {
     if (specifier.startsWith('@')) {
@@ -205,7 +214,7 @@ async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
   const distGlob = new Bun.Glob('dist/**/*.{js,d.ts}');
 
   for await (const distPath of distGlob.scan('.')) {
-    const contents = await Bun.file(distPath).text();
+    const contents = stripComments(await Bun.file(distPath).text());
     for (const [, , specifier] of contents.matchAll(specifierPattern)) {
       if (forbiddenPackageRoots.includes(packageRootOf(specifier))) {
         offenders.push({ file: distPath, specifier });
