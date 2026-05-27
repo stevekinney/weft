@@ -21,6 +21,8 @@ pathIgnorePatterns = ["**/tmp/worktrees/**", "**/.claude/worktrees/**"]
 # globalThis.indexedDB (via fake-indexeddb) so the storage suites and their
 # fault harness reach the global without each test file importing the shim and
 # risking order-dependent flakiness. Non-test helpers still import it
-# explicitly. Lives under tests/ (not src/) so it never ships in dist/. See
-# tests/test-preload.ts.
+# explicitly. Lives under tests/ (not src/) so it never ships in dist/. The
+# path resolves relative to this file (the package root), not the invocation
+# cwd, so it holds for the pre-commit hook, `--watch`, and coverage runs alike.
+# See tests/test-preload.ts.
 preload = ["./tests/test-preload.ts"]

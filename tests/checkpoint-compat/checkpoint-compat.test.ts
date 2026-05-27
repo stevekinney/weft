@@ -5,8 +5,6 @@
  * change them; if a fixture changes, that is a regression.
  */
 
-import 'fake-indexeddb/auto';
-
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../src/core/engine.ts';
