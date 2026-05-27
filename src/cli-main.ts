@@ -84,7 +84,11 @@ if (parsedArguments.command === 'serve') {
     void server
       .stop()
       .then(async () => {
-        await removeRunLockfile(server.url);
+        try {
+          await removeRunLockfile(server.url);
+        } catch (error) {
+          console.error('[weft] Failed to remove run lockfile:', error);
+        }
         storage[Symbol.dispose]();
         process.exit(0);
       })
@@ -98,7 +102,11 @@ if (parsedArguments.command === 'serve') {
     void server
       .stop()
       .then(async () => {
-        await removeRunLockfile(server.url);
+        try {
+          await removeRunLockfile(server.url);
+        } catch (error) {
+          console.error('[weft] Failed to remove run lockfile:', error);
+        }
         storage[Symbol.dispose]();
         process.exit(0);
       })
