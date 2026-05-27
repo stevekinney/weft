@@ -168,4 +168,37 @@ await Bun.build({
 
 await $`bunx tsc --declaration --emitDeclarationOnly --project tsconfig.build.json`;
 
+// Guard: nothing test-only may ship in the published package. Test-support
+// helpers under src/ that import dev-only modules (bun:test, fake-indexeddb)
+// used to leak into dist/ because the build excludes by filename suffix
+// (*.test-support.ts), not by reachability — a plainly named helper would
+// compile and ship a require() against a devDependency. Renaming the offenders
+// to *.test-support.ts fixed it; this assertion keeps it fixed. A reintroduced
+// leak fails the build rather than reaching a consumer's bundler.
+async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
+  const forbidden = ['bun:test', 'fake-indexeddb'];
+  const offenders: { file: string; token: string }[] = [];
+  const distGlob = new Bun.Glob('dist/**/*.{js,d.ts}');
+
+  for await (const distPath of distGlob.scan('.')) {
+    const contents = await Bun.file(distPath).text();
+    for (const token of forbidden) {
+      if (contents.includes(token)) offenders.push({ file: distPath, token });
+    }
+  }
+
+  if (offenders.length > 0) {
+    console.error('Build produced dist/ artifacts that reference test-only dependencies:');
+    for (const { file, token } of offenders) {
+      console.error(`  ${file} references "${token}"`);
+    }
+    console.error(
+      'Rename the offending helper to *.test-support.ts so the build excludes it from dist/.',
+    );
+    process.exit(1);
+  }
+}
+
+await assertNoTestOnlyDependenciesInDist();
+
 console.log('Build complete!');
