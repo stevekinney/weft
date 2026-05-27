@@ -43,8 +43,10 @@ const MAX_WORKER_RECONNECT_GRACE_PERIOD_MS = 5_000;
 const AUTHENTICATION_REQUIRED_ENVIRONMENT_VARIABLE = 'WEFT_SERVER_AUTHENTICATION_REQUIRED';
 const NO_AUTHENTICATION_WARNING =
   '[weft] WARNING: server started with NO authentication; all non-public operations are publicly accessible. Configure serve({ auth }) to lock down, or set unauthenticatedAccess: "reject" in production to fail closed.';
-const NO_AUTHENTICATION_ERROR =
+const NO_AUTHENTICATION_REJECT_ERROR =
   '[weft] Refusing to start server with no authentication. Configure serve({ auth }) or set unauthenticatedAccess: "allow" only for trusted local development.';
+const NO_AUTHENTICATION_ENVIRONMENT_ERROR =
+  '[weft] Refusing to start server with no authentication because WEFT_SERVER_AUTHENTICATION_REQUIRED requires authentication. Configure serve({ auth }) or unset WEFT_SERVER_AUTHENTICATION_REQUIRED only for trusted local development.';
 const TRUTHY_AUTHENTICATION_REQUIREMENT_VALUES = new Set(['1', 'true', 'yes', 'on']);
 const FALSY_AUTHENTICATION_REQUIREMENT_VALUES = new Set(['0', 'false', 'no', 'off']);
 
@@ -62,8 +64,9 @@ export function clampWorkerReconnectGracePeriod(value: number | undefined): numb
 }
 
 function authenticationRequiredByEnvironment(rawValue: string | undefined): boolean {
-  if (rawValue === undefined || rawValue === '') return false;
-  const normalizedValue = rawValue.toLowerCase();
+  if (rawValue === undefined) return false;
+  const normalizedValue = rawValue.trim().toLowerCase();
+  if (normalizedValue === '') return false;
   if (TRUTHY_AUTHENTICATION_REQUIREMENT_VALUES.has(normalizedValue)) return true;
   if (FALSY_AUTHENTICATION_REQUIREMENT_VALUES.has(normalizedValue)) return false;
   throw new Error(
@@ -75,11 +78,14 @@ export function assertAuthenticationPosture(
   options: ServeOptions,
   environmentRequirement = Bun.env[AUTHENTICATION_REQUIRED_ENVIRONMENT_VARIABLE],
 ): void {
+  if (options.auth) return;
   const environmentRequiresAuthentication =
     authenticationRequiredByEnvironment(environmentRequirement);
-  if (options.auth) return;
-  if (options.unauthenticatedAccess === 'reject' || environmentRequiresAuthentication) {
-    throw new Error(NO_AUTHENTICATION_ERROR);
+  if (environmentRequiresAuthentication) {
+    throw new Error(NO_AUTHENTICATION_ENVIRONMENT_ERROR);
+  }
+  if (options.unauthenticatedAccess === 'reject') {
+    throw new Error(NO_AUTHENTICATION_REJECT_ERROR);
   }
   if (options.unauthenticatedAccess === 'allow') return;
   console.warn(NO_AUTHENTICATION_WARNING);

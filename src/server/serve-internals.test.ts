@@ -50,7 +50,7 @@ describe('clampWorkerReconnectGracePeriod', () => {
 });
 
 describe('assertAuthenticationPosture', () => {
-  it.each(['1', 'true', 'yes', 'on'])(
+  it.each(['1', 'true', 'yes', 'on', ' true '])(
     'rejects missing auth when WEFT_SERVER_AUTHENTICATION_REQUIRED=%s',
     (environmentRequirement) => {
       expect(() =>
@@ -59,7 +59,7 @@ describe('assertAuthenticationPosture', () => {
     },
   );
 
-  it.each(['0', 'false', 'no', 'off', undefined, ''])(
+  it.each(['0', 'false', 'no', 'off', '', ' false '])(
     'does not require auth when WEFT_SERVER_AUTHENTICATION_REQUIRED=%s',
     (environmentRequirement) => {
       const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
@@ -74,6 +74,26 @@ describe('assertAuthenticationPosture', () => {
       }
     },
   );
+
+  it('treats an omitted environment requirement as absent', () => {
+    const previousRequirement = Bun.env['WEFT_SERVER_AUTHENTICATION_REQUIRED'];
+    const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      delete Bun.env['WEFT_SERVER_AUTHENTICATION_REQUIRED'];
+      assertAuthenticationPosture(minimalServeOptions());
+      expect(warningSpy).toHaveBeenCalledWith(
+        expect.stringContaining('server started with NO authentication'),
+      );
+    } finally {
+      if (previousRequirement === undefined) {
+        delete Bun.env['WEFT_SERVER_AUTHENTICATION_REQUIRED'];
+      } else {
+        Bun.env['WEFT_SERVER_AUTHENTICATION_REQUIRED'] = previousRequirement;
+      }
+      warningSpy.mockRestore();
+    }
+  });
 
   it('rejects invalid environment requirement values', () => {
     expect(() => assertAuthenticationPosture(minimalServeOptions(), 'sometimes')).toThrow(
@@ -95,13 +115,27 @@ describe('assertAuthenticationPosture', () => {
     }
   });
 
+  it('does not parse the environment requirement when auth is configured', () => {
+    const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      assertAuthenticationPosture(
+        { ...minimalServeOptions(), auth: { apiKeys: ['test-key'] } },
+        'sometimes',
+      );
+      expect(warningSpy).not.toHaveBeenCalled();
+    } finally {
+      warningSpy.mockRestore();
+    }
+  });
+
   it('does not let explicit allow override an environment requirement', () => {
     expect(() =>
       assertAuthenticationPosture(
         { ...minimalServeOptions(), unauthenticatedAccess: 'allow' },
         '1',
       ),
-    ).toThrow('Refusing to start server with no authentication');
+    ).toThrow('WEFT_SERVER_AUTHENTICATION_REQUIRED requires authentication');
   });
 
   it('rejects before network configuration can be resolved', () => {
