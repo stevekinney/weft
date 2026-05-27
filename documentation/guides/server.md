@@ -28,6 +28,7 @@ interface ServeOptions {
   development?: boolean; // enable Bun's development mode (HMR, source maps)
   dashboard?: unknown; // dashboard HTML/module import served at /
   auth?: AuthConfig; // API key or JWT authentication configuration
+  unauthenticatedAccess?: 'warn' | 'allow' | 'reject'; // startup policy when auth is omitted
   visibilityPollIntervalMs?: number; // task visibility scanner interval; default: 5000
   workerReconnectGracePeriodMs?: number; // reconnect grace before requeue; default: 100
   routingPolicy?: RoutingPolicy; // task dispatch policy for remote workers; default: 'least-loaded'
@@ -36,7 +37,28 @@ interface ServeOptions {
 }
 ```
 
+When [`auth`](../reference/configuration.md#serveoptions) is omitted, [`serve()`](../reference/api-server.md#serve) starts in an open local-development mode and logs a loud startup warning because every non-public operation is reachable by anyone who can connect to the server. Production wrappers should pass `unauthenticatedAccess: 'reject'` or set [`WEFT_SERVER_AUTHENTICATION_REQUIRED=1`](../reference/configuration.md#environment-variables); either setting makes `serve()` fail before binding unless `auth` is configured. Use `unauthenticatedAccess: 'allow'` only when an intentionally open local process boundary should start without a warning.
+
 `workerReconnectGracePeriodMs` is clamped to `0..5000`. The default `100` ms gives a worker that drops and reconnects with the same `workerId` a short window to keep its in-flight task assignments; set it to `0` when tests or embedded servers need close handling to requeue immediately.
+
+## Authentication
+
+Use [`auth`](../reference/configuration.md#serveoptions) to lock down the [REST](../reference/api-server.md#rest-api-routes), [JSON-RPC](../getting-started/transports.md#json-rpc-over-http-post-apijsonrpc), [WebSocket](../getting-started/transports.md#json-rpc-over-websocket-ws-apijsonrpc), worker, and [MCP](../getting-started/transports.md#mcp-over-streamable-http-and-stdio) surfaces. Public discovery and health routes remain public, while operation routes enforce the scope policy declared by the operation catalog.
+
+```typescript partial
+import { Engine } from 'weft';
+import { serve } from 'weft/server';
+
+const engine = new Engine({ storage });
+
+const server = serve({
+  engine,
+  auth: { apiKeys: [process.env.WEFT_API_KEY!] },
+  unauthenticatedAccess: 'reject',
+});
+```
+
+The built-in API-key configuration grants the configured key the default authenticated scope set. JWT and custom authenticators can provide narrower scope sets such as `workflows:read`, `workflows:write`, `workflows:admin`, and `system:read`; requests missing the required scope fail with `401` or `403` before the operation runs.
 
 ## Dashboard
 

@@ -10,6 +10,13 @@ const prometheusExporter = createMetricsCollectorExporter(new MetricsCollector()
 const serveOptions: ServeOptions = { engine, prometheusExporter };
 void serveOptions;
 
+const lockedDownServeOptions: ServeOptions = {
+  engine,
+  auth: { apiKeys: ['test-key'] },
+  unauthenticatedAccess: 'reject',
+};
+void lockedDownServeOptions;
+
 // @ts-expect-error `metricsCollector` is no longer a public server option.
 const legacyServeOptions: ServeOptions = { engine, metricsCollector: new MetricsCollector() };
 void legacyServeOptions;

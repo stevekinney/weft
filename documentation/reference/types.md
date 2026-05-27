@@ -922,6 +922,10 @@ interface ServeOptions {
   engine: Engine;
   port?: number;
   hostname?: string;
+  development?: boolean;
+  dashboard?: unknown;
+  auth?: AuthConfig;
+  unauthenticatedAccess?: 'warn' | 'allow' | 'reject';
 }
 ```
 

@@ -163,6 +163,64 @@ describe('serve', () => {
     expect(server.port).toBeGreaterThan(0);
   });
 
+  it('warns loudly when started without authentication', () => {
+    const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    engine = createEngine();
+
+    try {
+      server = serve({ engine, port: 0 });
+
+      expect(warningSpy).toHaveBeenCalledWith(
+        expect.stringContaining('server started with NO authentication'),
+      );
+      expect(warningSpy).toHaveBeenCalledWith(
+        expect.stringContaining('all non-public operations are publicly accessible'),
+      );
+    } finally {
+      warningSpy.mockRestore();
+    }
+  });
+
+  it('refuses to start without authentication when unauthenticated access is rejected', () => {
+    const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    engine = createEngine();
+
+    try {
+      expect(() => serve({ engine, port: 0, unauthenticatedAccess: 'reject' })).toThrow(
+        'Refusing to start server with no authentication',
+      );
+      expect(warningSpy).not.toHaveBeenCalled();
+    } finally {
+      warningSpy.mockRestore();
+    }
+  });
+
+  it('allows explicitly unauthenticated local servers without warning', () => {
+    const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    engine = createEngine();
+
+    try {
+      server = serve({ engine, port: 0, unauthenticatedAccess: 'allow' });
+
+      expect(warningSpy).not.toHaveBeenCalled();
+    } finally {
+      warningSpy.mockRestore();
+    }
+  });
+
+  it('does not warn when authentication is configured', () => {
+    const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
+    engine = createEngine();
+
+    try {
+      server = serve({ engine, port: 0, auth: { apiKeys: ['test-key'] } });
+
+      expect(warningSpy).not.toHaveBeenCalled();
+    } finally {
+      warningSpy.mockRestore();
+    }
+  });
+
   it('serves public MCP discovery that matches the live MCP transport', async () => {
     const originalNodeEnv = Bun.env['NODE_ENV'];
     Bun.env['NODE_ENV'] = 'development';

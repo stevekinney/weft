@@ -65,6 +65,19 @@ export {
 export const DASHBOARD_PAGE_ROUTES: readonly string[] = DASHBOARD_MOUNT_PATTERNS;
 
 /**
+ * Startup policy for `serve()` when no `auth` configuration is supplied.
+ *
+ * @example
+ * ```ts
+ * import type { UnauthenticatedAccessPolicy } from 'weft/server';
+ *
+ * const unauthenticatedAccess: UnauthenticatedAccessPolicy = 'reject';
+ * void unauthenticatedAccess;
+ * ```
+ */
+export type UnauthenticatedAccessPolicy = 'warn' | 'allow' | 'reject';
+
+/**
  * Configuration object for the `serve()` function.
  *
  * At minimum supply an `engine` and optionally a `port`.  Authentication,
@@ -98,6 +111,13 @@ export interface ServeOptions {
   dashboard?: unknown;
   /** Authentication configuration. When provided, all non-public endpoints require valid credentials. */
   auth?: AuthConfig;
+  /**
+   * Startup policy when `auth` is omitted. Defaults to `'warn'`, which starts
+   * the server and logs a loud warning. Set `'reject'` for production
+   * deployments so an omitted auth configuration fails closed before binding.
+   * Set `'allow'` only for explicitly trusted local process boundaries.
+   */
+  unauthenticatedAccess?: UnauthenticatedAccessPolicy;
   /** How often (in ms) the server scans `op:inflight:*` for expired visibility deadlines. Defaults to 5 000. */
   visibilityPollIntervalMs?: number;
   /**

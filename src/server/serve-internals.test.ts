@@ -4,7 +4,12 @@ import {
   minimalServeOptions,
   minimalServerContext,
 } from './runtime/server-context.test-support.ts';
-import { clampWorkerReconnectGracePeriod, registerStackDisposers } from './serve-internals.ts';
+import {
+  assertAuthenticationPosture,
+  clampWorkerReconnectGracePeriod,
+  registerStackDisposers,
+  resolveNetworkConfig,
+} from './serve-internals.ts';
 
 import type { EventBroadcastingHandle } from './index.ts';
 
@@ -41,6 +46,68 @@ describe('clampWorkerReconnectGracePeriod', () => {
 
   it('floors fractional values', () => {
     expect(clampWorkerReconnectGracePeriod(123.7)).toBe(123);
+  });
+});
+
+describe('assertAuthenticationPosture', () => {
+  it.each(['1', 'true', 'yes', 'on'])(
+    'rejects missing auth when WEFT_SERVER_AUTHENTICATION_REQUIRED=%s',
+    (environmentRequirement) => {
+      expect(() =>
+        assertAuthenticationPosture(minimalServeOptions(), environmentRequirement),
+      ).toThrow('Refusing to start server with no authentication');
+    },
+  );
+
+  it.each(['0', 'false', 'no', 'off', undefined, ''])(
+    'does not require auth when WEFT_SERVER_AUTHENTICATION_REQUIRED=%s',
+    (environmentRequirement) => {
+      const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+      try {
+        assertAuthenticationPosture(minimalServeOptions(), environmentRequirement);
+        expect(warningSpy).toHaveBeenCalledWith(
+          expect.stringContaining('server started with NO authentication'),
+        );
+      } finally {
+        warningSpy.mockRestore();
+      }
+    },
+  );
+
+  it('rejects invalid environment requirement values', () => {
+    expect(() => assertAuthenticationPosture(minimalServeOptions(), 'sometimes')).toThrow(
+      'Invalid WEFT_SERVER_AUTHENTICATION_REQUIRED value "sometimes"',
+    );
+  });
+
+  it('lets auth satisfy an environment requirement', () => {
+    const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      assertAuthenticationPosture(
+        { ...minimalServeOptions(), auth: { apiKeys: ['test-key'] } },
+        '1',
+      );
+      expect(warningSpy).not.toHaveBeenCalled();
+    } finally {
+      warningSpy.mockRestore();
+    }
+  });
+
+  it('does not let explicit allow override an environment requirement', () => {
+    expect(() =>
+      assertAuthenticationPosture(
+        { ...minimalServeOptions(), unauthenticatedAccess: 'allow' },
+        '1',
+      ),
+    ).toThrow('Refusing to start server with no authentication');
+  });
+
+  it('rejects before network configuration can be resolved', () => {
+    expect(() =>
+      resolveNetworkConfig({ ...minimalServeOptions(), unauthenticatedAccess: 'reject' }),
+    ).toThrow('Refusing to start server with no authentication');
   });
 });
 

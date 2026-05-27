@@ -37,6 +37,7 @@ interface ServeOptions {
   development?: boolean;
   dashboard?: unknown;
   auth?: AuthConfig;
+  unauthenticatedAccess?: 'warn' | 'allow' | 'reject';
   visibilityPollIntervalMs?: number;
   workerReconnectGracePeriodMs?: number;
   routingPolicy?: RoutingPolicy;
@@ -45,21 +46,24 @@ interface ServeOptions {
 }
 ```
 
-| Field                          | Type                 | Default          | Description                                                              |
-| ------------------------------ | -------------------- | ---------------- | ------------------------------------------------------------------------ |
-| `engine`                       | `Engine`             | (required)       | The engine instance to expose over HTTP                                  |
-| `port`                         | `number`             | `7233`           | TCP port to listen on                                                    |
-| `hostname`                     | `string`             | `'0.0.0.0'`      | Hostname/IP to bind to                                                   |
-| `development`                  | `boolean`            | `false`          | Enable development mode with verbose error responses                     |
-| `dashboard`                    | `unknown`            | `undefined`      | Dashboard HTML/module import served at `/` when supplied                 |
-| `auth`                         | `AuthConfig`         | `undefined`      | Authentication configuration (JWT, mTLS, or custom)                      |
-| `visibilityPollIntervalMs`     | `number`             | `5000`           | Polling interval for task visibility timeout checks                      |
-| `workerReconnectGracePeriodMs` | `number`             | `100`            | Milliseconds before a disconnected worker's in-flight tasks are requeued |
-| `routingPolicy`                | `RoutingPolicy`      | `'least-loaded'` | Worker routing policy                                                    |
-| `schedulingPolicy`             | `SchedulingPolicy`   | `'priority'`     | Scheduling policy for task dispatch                                      |
-| `prometheusExporter`           | `PrometheusExporter` | `undefined`      | Exporter that produces the response body for `/v1/metrics`               |
+| Field                          | Type                            | Default          | Description                                                              |
+| ------------------------------ | ------------------------------- | ---------------- | ------------------------------------------------------------------------ |
+| `engine`                       | `Engine`                        | (required)       | The engine instance to expose over HTTP                                  |
+| `port`                         | `number`                        | `7233`           | TCP port to listen on                                                    |
+| `hostname`                     | `string`                        | `'0.0.0.0'`      | Hostname/IP to bind to                                                   |
+| `development`                  | `boolean`                       | `false`          | Enable development mode with verbose error responses                     |
+| `dashboard`                    | `unknown`                       | `undefined`      | Dashboard HTML/module import served at `/` when supplied                 |
+| `auth`                         | `AuthConfig`                    | `undefined`      | Authentication configuration (JWT, mTLS, or custom)                      |
+| `unauthenticatedAccess`        | `'warn' \| 'allow' \| 'reject'` | `'warn'`         | Startup policy when `auth` is omitted                                    |
+| `visibilityPollIntervalMs`     | `number`                        | `5000`           | Polling interval for task visibility timeout checks                      |
+| `workerReconnectGracePeriodMs` | `number`                        | `100`            | Milliseconds before a disconnected worker's in-flight tasks are requeued |
+| `routingPolicy`                | `RoutingPolicy`                 | `'least-loaded'` | Worker routing policy                                                    |
+| `schedulingPolicy`             | `SchedulingPolicy`              | `'priority'`     | Scheduling policy for task dispatch                                      |
+| `prometheusExporter`           | `PrometheusExporter`            | `undefined`      | Exporter that produces the response body for `/v1/metrics`               |
 
 See [configuration.md](./configuration.md) for `AuthConfig`, `RoutingPolicy`, and `SchedulingPolicy` details.
+
+When `auth` is omitted, [`serve()`](#serve) defaults to `unauthenticatedAccess: 'warn'`: it starts, logs a startup warning, and leaves non-public operations reachable to any network client. Set `unauthenticatedAccess: 'reject'` or [`WEFT_SERVER_AUTHENTICATION_REQUIRED=1`](./configuration.md#environment-variables) in production so startup fails before binding unless an `auth` configuration is present. Set `unauthenticatedAccess: 'allow'` only for intentionally open local process boundaries; it does not override `WEFT_SERVER_AUTHENTICATION_REQUIRED`.
 
 `workerReconnectGracePeriodMs` is clamped to `0..5000`. A same-`workerId` reconnect inside the window cancels the pending requeue and keeps the worker's in-flight assignments. `0` disables the grace period and requeues synchronously from the close handler.
 

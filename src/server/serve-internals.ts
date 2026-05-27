@@ -40,6 +40,13 @@ const RECONCILIATION_MULTIPLIER = 12;
 
 const DEFAULT_WORKER_RECONNECT_GRACE_PERIOD_MS = 100;
 const MAX_WORKER_RECONNECT_GRACE_PERIOD_MS = 5_000;
+const AUTHENTICATION_REQUIRED_ENVIRONMENT_VARIABLE = 'WEFT_SERVER_AUTHENTICATION_REQUIRED';
+const NO_AUTHENTICATION_WARNING =
+  '[weft] WARNING: server started with NO authentication; all non-public operations are publicly accessible. Configure serve({ auth }) to lock down, or set unauthenticatedAccess: "reject" in production to fail closed.';
+const NO_AUTHENTICATION_ERROR =
+  '[weft] Refusing to start server with no authentication. Configure serve({ auth }) or set unauthenticatedAccess: "allow" only for trusted local development.';
+const TRUTHY_AUTHENTICATION_REQUIREMENT_VALUES = new Set(['1', 'true', 'yes', 'on']);
+const FALSY_AUTHENTICATION_REQUIREMENT_VALUES = new Set(['0', 'false', 'no', 'off']);
 
 /**
  * Clamp a user-supplied `workerReconnectGracePeriodMs` into `[0, 5_000]`.
@@ -52,6 +59,30 @@ export function clampWorkerReconnectGracePeriod(value: number | undefined): numb
   if (value < 0) return 0;
   if (value > MAX_WORKER_RECONNECT_GRACE_PERIOD_MS) return MAX_WORKER_RECONNECT_GRACE_PERIOD_MS;
   return Math.floor(value);
+}
+
+function authenticationRequiredByEnvironment(rawValue: string | undefined): boolean {
+  if (rawValue === undefined || rawValue === '') return false;
+  const normalizedValue = rawValue.toLowerCase();
+  if (TRUTHY_AUTHENTICATION_REQUIREMENT_VALUES.has(normalizedValue)) return true;
+  if (FALSY_AUTHENTICATION_REQUIREMENT_VALUES.has(normalizedValue)) return false;
+  throw new Error(
+    `[weft] Invalid ${AUTHENTICATION_REQUIRED_ENVIRONMENT_VARIABLE} value "${rawValue}". Use one of: 1, true, yes, on, 0, false, no, off.`,
+  );
+}
+
+export function assertAuthenticationPosture(
+  options: ServeOptions,
+  environmentRequirement = Bun.env[AUTHENTICATION_REQUIRED_ENVIRONMENT_VARIABLE],
+): void {
+  const environmentRequiresAuthentication =
+    authenticationRequiredByEnvironment(environmentRequirement);
+  if (options.auth) return;
+  if (options.unauthenticatedAccess === 'reject' || environmentRequiresAuthentication) {
+    throw new Error(NO_AUTHENTICATION_ERROR);
+  }
+  if (options.unauthenticatedAccess === 'allow') return;
+  console.warn(NO_AUTHENTICATION_WARNING);
 }
 
 /**
@@ -92,6 +123,7 @@ export function resolveNetworkConfig(options: ServeOptions): ResolvedNetworkConf
   if (options.auth) {
     validateAuthConfig(options.auth);
   }
+  assertAuthenticationPosture(options);
   const port = options.port ?? 7233;
   const hostname = options.hostname ?? '0.0.0.0';
   const development = options.development ?? false;

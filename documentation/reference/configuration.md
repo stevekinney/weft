@@ -151,6 +151,7 @@ interface ServeOptions {
   development?: boolean;
   dashboard?: unknown;
   auth?: AuthConfig;
+  unauthenticatedAccess?: 'warn' | 'allow' | 'reject';
   visibilityPollIntervalMs?: number;
   routingPolicy?: RoutingPolicy;
   schedulingPolicy?: SchedulingPolicy;
@@ -158,20 +159,23 @@ interface ServeOptions {
 }
 ```
 
-| Field                      | Type                 | Default          | Description                                                |
-| -------------------------- | -------------------- | ---------------- | ---------------------------------------------------------- |
-| `engine`                   | `Engine`             | (required)       | The engine instance to expose over HTTP                    |
-| `port`                     | `number`             | `7233`           | TCP port to listen on                                      |
-| `hostname`                 | `string`             | `'0.0.0.0'`      | Hostname/IP to bind to                                     |
-| `development`              | `boolean`            | `false`          | Enable development mode with verbose error responses       |
-| `dashboard`                | `unknown`            | `undefined`      | Dashboard HTML/module import served at `/` when supplied   |
-| `auth`                     | `AuthConfig`         | `undefined`      | Authentication configuration (JWT, mTLS, or custom)        |
-| `visibilityPollIntervalMs` | `number`             | `5000`           | Polling interval for task visibility timeout checks        |
-| `routingPolicy`            | `RoutingPolicy`      | `'least-loaded'` | Worker routing policy                                      |
-| `schedulingPolicy`         | `SchedulingPolicy`   | `'priority'`     | Scheduling policy for task dispatch                        |
-| `prometheusExporter`       | `PrometheusExporter` | `undefined`      | Exporter that produces the response body for `/v1/metrics` |
+| Field                      | Type                            | Default          | Description                                                |
+| -------------------------- | ------------------------------- | ---------------- | ---------------------------------------------------------- |
+| `engine`                   | `Engine`                        | (required)       | The engine instance to expose over HTTP                    |
+| `port`                     | `number`                        | `7233`           | TCP port to listen on                                      |
+| `hostname`                 | `string`                        | `'0.0.0.0'`      | Hostname/IP to bind to                                     |
+| `development`              | `boolean`                       | `false`          | Enable development mode with verbose error responses       |
+| `dashboard`                | `unknown`                       | `undefined`      | Dashboard HTML/module import served at `/` when supplied   |
+| `auth`                     | `AuthConfig`                    | `undefined`      | Authentication configuration (JWT, mTLS, or custom)        |
+| `unauthenticatedAccess`    | `'warn' \| 'allow' \| 'reject'` | `'warn'`         | Startup policy when `auth` is omitted                      |
+| `visibilityPollIntervalMs` | `number`                        | `5000`           | Polling interval for task visibility timeout checks        |
+| `routingPolicy`            | `RoutingPolicy`                 | `'least-loaded'` | Worker routing policy                                      |
+| `schedulingPolicy`         | `SchedulingPolicy`              | `'priority'`     | Scheduling policy for task dispatch                        |
+| `prometheusExporter`       | `PrometheusExporter`            | `undefined`      | Exporter that produces the response body for `/v1/metrics` |
 
 The returned `WeftServer` exposes the resolved `port`, `hostname`, and `url`, along with a `stop()` method and `AsyncDisposable` support.
+
+When `auth` is omitted, [`serve()`](./api-server.md#serve) defaults to `unauthenticatedAccess: 'warn'`: it logs a startup warning and runs open for local development. Set `unauthenticatedAccess: 'reject'` or [`WEFT_SERVER_AUTHENTICATION_REQUIRED=1`](#environment-variables) for production deployments so startup fails before binding unless `auth` is configured. `auth` satisfies the requirement; `unauthenticatedAccess: 'allow'` suppresses the local warning but does not override `WEFT_SERVER_AUTHENTICATION_REQUIRED`.
 
 **Example:**
 
@@ -190,17 +194,18 @@ console.log(`Weft server running at ${server.url}`);
 
 Weft's library API does not require environment variables. These variables are read by user-facing runtime, CLI, or conformance paths when you opt into those features. Internal benchmark, coverage, and smoke-test toggles are intentionally documented near the tests and scripts that consume them instead of in this runtime configuration reference.
 
-| Variable                                  | Consumed by                                   | Description                                                                                                                                                       |
-| ----------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `WEFT_DEFAULT_STORAGE_PATH`               | `src/storage/auto.ts`                         | Default SQLite path used by automatic storage resolution when no explicit storage path is supplied.                                                               |
-| `WEFT_STRICT_FAULTS`                      | `src/server/operation-catalog/raise-fault.ts` | Set to `1` to use strict server fault details even when `NODE_ENV` is `production`.                                                                               |
-| `WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN` | `src/server/handler/route-dispatch.ts`        | Local development or CI escape hatch for serving browser-facing API catalog routes without a trusted same-origin request; do not use as production configuration. |
-| `WEFT_TOKEN`                              | `src/cli/codegen.ts`                          | Bearer token fallback for `weft codegen --server` when `--token` is omitted.                                                                                      |
-| `WEFT_WORKER_URL`                         | `src/cli/conformance.ts`                      | Temporary WebSocket task-stream URL injected into worker commands launched by `weft conformance`.                                                                 |
-| `WEFT_WORKER_QUEUE`                       | `src/cli/conformance.ts`                      | Queue name injected into worker commands launched by `weft conformance`.                                                                                          |
-| `WEFT_WORKER_ACTIVITIES`                  | `src/cli/conformance.ts`                      | Comma-separated activity names the conformance worker must expose.                                                                                                |
-| `WEFT_WORKER_PROTOCOL_VERSION`            | `src/cli/conformance.ts`                      | Remote worker protocol version expected by the conformance harness.                                                                                               |
-| `WEFT_CONFORMANCE_HEARTBEAT_INTERVAL_MS`  | `src/cli/conformance.ts`                      | Heartbeat interval injected into repository conformance fixtures; custom workers can ignore it unless needed.                                                     |
+| Variable                                  | Consumed by                                   | Description                                                                                                                                                                                                                         |
+| ----------------------------------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `WEFT_DEFAULT_STORAGE_PATH`               | `src/storage/auto.ts`                         | Default SQLite path used by automatic storage resolution when no explicit storage path is supplied.                                                                                                                                 |
+| `WEFT_SERVER_AUTHENTICATION_REQUIRED`     | `src/server/serve-internals.ts`               | Set to `1`, `true`, `yes`, or `on` to make `serve()` fail closed when no `auth` configuration is supplied. Set to `0`, `false`, `no`, or `off` to leave the `unauthenticatedAccess` option in control. Invalid values fail startup. |
+| `WEFT_STRICT_FAULTS`                      | `src/server/operation-catalog/raise-fault.ts` | Set to `1` to use strict server fault details even when `NODE_ENV` is `production`.                                                                                                                                                 |
+| `WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN` | `src/server/handler/route-dispatch.ts`        | Local development or CI escape hatch for serving browser-facing API catalog routes without a trusted same-origin request; do not use as production configuration.                                                                   |
+| `WEFT_TOKEN`                              | `src/cli/codegen.ts`                          | Bearer token fallback for `weft codegen --server` when `--token` is omitted.                                                                                                                                                        |
+| `WEFT_WORKER_URL`                         | `src/cli/conformance.ts`                      | Temporary WebSocket task-stream URL injected into worker commands launched by `weft conformance`.                                                                                                                                   |
+| `WEFT_WORKER_QUEUE`                       | `src/cli/conformance.ts`                      | Queue name injected into worker commands launched by `weft conformance`.                                                                                                                                                            |
+| `WEFT_WORKER_ACTIVITIES`                  | `src/cli/conformance.ts`                      | Comma-separated activity names the conformance worker must expose.                                                                                                                                                                  |
+| `WEFT_WORKER_PROTOCOL_VERSION`            | `src/cli/conformance.ts`                      | Remote worker protocol version expected by the conformance harness.                                                                                                                                                                 |
+| `WEFT_CONFORMANCE_HEARTBEAT_INTERVAL_MS`  | `src/cli/conformance.ts`                      | Heartbeat interval injected into repository conformance fixtures; custom workers can ignore it unless needed.                                                                                                                       |
 
 ---
 
