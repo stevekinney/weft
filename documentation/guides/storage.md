@@ -30,7 +30,7 @@ Use the narrowest adapter that matches where the engine runs:
 | ---------------------- | ----------------- | ----------- | ------------------------------ | ---------------- | ----------------------------------------- |
 | `MemoryStorage`        | All               | No          | Candidate-stable for tests/dev | None             | Tests/demos only—data lost on restart.    |
 | `SQLiteStorage` (Bun)  | Bun               | Yes         | Candidate-stable, provisional  | None             | Default for the Bun runtime.              |
-| `SQLiteStorage` (Node) | Node >= 22        | Yes         | Candidate-stable, provisional  | None             | Default for the Node runtime.             |
+| `SQLiteStorage` (Node) | Node >= 22        | Yes         | Candidate-stable, provisional  | `better-sqlite3` | Default for the Node runtime.             |
 | `LMDBStorage`          | Bun/Node          | Yes         | Candidate-stable, provisional  | `lmdb`           | High-throughput memory-mapped key-value.  |
 | `TursoStorage`         | Bun/Node          | Yes         | Experimental                   | `@libsql/client` | Stable tier is pending conformance proof. |
 | `IndexedDBStorage`     | Browser           | Yes         | Experimental                   | None             | Browser native; no SQL passthrough.       |
@@ -331,7 +331,7 @@ Wraps any `Storage` implementation. Disposing the `CompressedStorage` disposes t
 
 ## Troubleshooting
 
-**Missing optional dependencies (`lmdb`, `@libsql/client`).** `LMDBStorage` and `TursoStorage` import their dependencies lazily. If the package isn't installed, you'll see an error like `Cannot find module 'lmdb'` or `Cannot find module '@libsql/client'` when you first call `resolveStorage` or instantiate the adapter. Install with `bun add lmdb` or `bun add @libsql/client`.
+**Missing optional dependencies (`better-sqlite3`, `lmdb`, `@libsql/client`).** `NodeSQLiteStorage`, `LMDBStorage`, and `TursoStorage` import their dependencies lazily. If the package isn't installed, you'll see an error when you first call `resolveStorage` or instantiate the adapter. Install the adapter you selected with `bun add better-sqlite3`, `bun add lmdb`, or `bun add @libsql/client`.
 
 **`weft/storage/auto` in a browser bundler.** The module statically imports Node built-ins, so bundlers like Vite or webpack will fail or warn when targeting the browser. Switch to `weft/storage/indexeddb` directly, or use `setupServiceWorker()` from `weft/service-worker`. If you need a single configuration that works across runtimes including browsers, use `resolveStorage({ type: 'auto' })` instead—it lazy-loads adapters and includes browser fallbacks.
 

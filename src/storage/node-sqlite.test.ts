@@ -1,6 +1,9 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 
 import { NodeSQLiteStorage } from './node-sqlite.ts';
+
+const MISSING_BETTER_SQLITE_ERROR =
+  'NodeSQLiteStorage requires the optional peer dependency "better-sqlite3". Install it in your application with: bun add better-sqlite3 (or npm install better-sqlite3).';
 
 // better-sqlite3 uses native bindings that aren't supported in Bun.
 // These tests are designed to run under Node.js. When running under Bun,
@@ -151,9 +154,56 @@ function createFakeDatabaseConstructor() {
 }
 
 describe('NodeSQLiteStorage', () => {
+  it('throws a clear runtime error when the better-sqlite3 package is missing', async () => {
+    mock.module('node:module', () => ({
+      createRequire:
+        () =>
+        (specifier: string): never => {
+          const error = new Error(`Cannot find module '${specifier}'`) as Error & { code: string };
+          error.code = 'MODULE_NOT_FOUND';
+          throw error;
+        },
+    }));
+
+    try {
+      const { NodeSQLiteStorage: MissingDependencyStorage } = await import(
+        `./node-sqlite.ts?missingDependency=${Date.now()}`
+      );
+
+      expect(() => new MissingDependencyStorage(':memory:')).toThrow(MISSING_BETTER_SQLITE_ERROR);
+    } finally {
+      mock.restore();
+    }
+  });
+
+  it('throws a clear runtime error when better-sqlite3 fails while opening the database', async () => {
+    mock.module('node:module', () => ({
+      createRequire: () => (): new (path: string) => unknown =>
+        class NativeLoadFailureDatabase {
+          constructor() {
+            const error = new Error("'better-sqlite3' is not yet supported in Bun.") as Error & {
+              code: string;
+            };
+            error.code = 'ERR_DLOPEN_FAILED';
+            throw error;
+          }
+        },
+    }));
+
+    try {
+      const { NodeSQLiteStorage: NativeLoadFailureStorage } = await import(
+        `./node-sqlite.ts?nativeLoadFailure=${Date.now()}`
+      );
+
+      expect(() => new NativeLoadFailureStorage(':memory:')).toThrow(MISSING_BETTER_SQLITE_ERROR);
+    } finally {
+      mock.restore();
+    }
+  });
+
   if (IS_BUN) {
-    it('throws a clear error when better-sqlite3 is unavailable under Bun', () => {
-      expect(() => new NodeSQLiteStorage(':memory:')).toThrow(/better-sqlite3/);
+    it('throws a clear runtime error when better-sqlite3 is unavailable', () => {
+      expect(() => new NodeSQLiteStorage(':memory:')).toThrow(MISSING_BETTER_SQLITE_ERROR);
     });
   }
 });

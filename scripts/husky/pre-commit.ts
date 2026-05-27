@@ -2,6 +2,7 @@
 import { $ } from 'bun';
 
 import {
+  discoverSerialTestFiles,
   discoverTestFiles,
   extractJunitFailureExcerpts,
   renderTestOutcome,
@@ -80,6 +81,47 @@ try {
   ok = false;
 }
 
+function reportTestOutcome(outcome: Awaited<ReturnType<typeof runTestSuite>>): boolean {
+  const { ok: testsOk, lines } = renderTestOutcome(outcome);
+  if (testsOk) {
+    success('test passed');
+    return true;
+  }
+
+  error('test failed');
+  for (const line of lines) error(line);
+
+  // Diagnostic surface, most-useful-first. The parsed summary above is
+  // best-effort; the JUnit excerpts and captured stderr are authoritative.
+  if (outcome.kind !== 'passed') {
+    // `reportContent` is the full-run JUnit the runner already read — no
+    // second disk read (which could race cleanup and silently yield nothing).
+    for (const excerpt of extractJunitFailureExcerpts(outcome.reportContent ?? '')) {
+      info(`\n${excerpt.file} > ${excerpt.name} [${excerpt.kind}]`);
+      console.error(excerpt.detail);
+    }
+    const stderrTail = tailBound(outcome.output.stderr);
+    if (stderrTail.trim().length > 0) {
+      info('\nCaptured test output (stderr tail):');
+      console.error(stderrTail);
+    }
+    if (outcome.isolationOutput) {
+      const isolationTail = tailBound(outcome.isolationOutput.stderr);
+      if (isolationTail.trim().length > 0) {
+        info('\nIsolation re-run output (stderr tail):');
+        console.error(isolationTail);
+      }
+    }
+    // The retained reports help diagnose a *real* failure's stack traces; for
+    // a context-sensitive pass-in-isolation result the summary is the action.
+    if (outcome.kind === 'failed' && outcome.retainedDirectory) {
+      warning(`\nFull reports retained at: ${outcome.retainedDirectory}`);
+    }
+  }
+
+  return false;
+}
+
 // 5) test
 // Run the full suite (benchmarks and the two load-sensitive suites excluded by
 // `discoverTestFiles`). The runner captures Bun's JUnit report so a failure
@@ -92,40 +134,16 @@ try {
   // otherwise go silent through the longest hook step. Say so up front.
   info(`Running test… (${testFiles.length} files; output shown on failure)`);
   const outcome = await runTestSuite(testFiles);
-  const { ok: testsOk, lines } = renderTestOutcome(outcome);
-  if (testsOk) {
-    success('test passed');
-  } else {
+  if (!reportTestOutcome(outcome)) {
     ok = false;
-    error('test failed');
-    for (const line of lines) error(line);
+  }
 
-    // Diagnostic surface, most-useful-first. The parsed summary above is
-    // best-effort; the JUnit excerpts and captured stderr are authoritative.
-    if (outcome.kind !== 'passed') {
-      // `reportContent` is the full-run JUnit the runner already read — no
-      // second disk read (which could race cleanup and silently yield nothing).
-      for (const excerpt of extractJunitFailureExcerpts(outcome.reportContent ?? '')) {
-        info(`\n${excerpt.file} > ${excerpt.name} [${excerpt.kind}]`);
-        console.error(excerpt.detail);
-      }
-      const stderrTail = tailBound(outcome.output.stderr);
-      if (stderrTail.trim().length > 0) {
-        info('\nCaptured test output (stderr tail):');
-        console.error(stderrTail);
-      }
-      if (outcome.isolationOutput) {
-        const isolationTail = tailBound(outcome.isolationOutput.stderr);
-        if (isolationTail.trim().length > 0) {
-          info('\nIsolation re-run output (stderr tail):');
-          console.error(isolationTail);
-        }
-      }
-      // The retained reports help diagnose a *real* failure's stack traces; for
-      // a context-sensitive pass-in-isolation result the summary is the action.
-      if (outcome.kind === 'failed' && outcome.retainedDirectory) {
-        warning(`\nFull reports retained at: ${outcome.retainedDirectory}`);
-      }
+  const serialTestFiles = await discoverSerialTestFiles();
+  if (serialTestFiles.length > 0) {
+    info(`Running serial dashboard tests… (${serialTestFiles.length} files)`);
+    const serialOutcome = await runTestSuite(serialTestFiles, undefined, { parallel: false });
+    if (!reportTestOutcome(serialOutcome)) {
+      ok = false;
     }
   }
 }

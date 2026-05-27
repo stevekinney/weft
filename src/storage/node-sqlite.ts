@@ -55,6 +55,35 @@ type BetterSqliteConstructor = new (path: string) => BetterSqliteDatabase;
 /** Lazily resolved `better-sqlite3` constructor. */
 let DatabaseConstructor: BetterSqliteConstructor | undefined;
 
+function createMissingBetterSqlite3Error(cause: unknown): Error {
+  return new Error(
+    'NodeSQLiteStorage requires the optional peer dependency "better-sqlite3". ' +
+      'Install it in your application with: bun add better-sqlite3 (or npm install better-sqlite3).',
+    { cause },
+  );
+}
+
+function isBetterSqlite3LoadFailure(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+
+  const errorCode = (error as Error & { code?: unknown }).code;
+
+  if (errorCode === 'MODULE_NOT_FOUND') {
+    return (
+      error.message.includes("'better-sqlite3'") ||
+      error.message.includes('"better-sqlite3"') ||
+      error.message.includes("'bindings'") ||
+      error.message.includes('"bindings"')
+    );
+  }
+
+  if (errorCode === 'ERR_DLOPEN_FAILED') {
+    return error.message.includes('better-sqlite3');
+  }
+
+  return false;
+}
+
 function loadBetterSqlite3(): BetterSqliteConstructor {
   if (DatabaseConstructor) return DatabaseConstructor;
 
@@ -69,11 +98,7 @@ function loadBetterSqlite3(): BetterSqliteConstructor {
       default?: BetterSqliteConstructor;
     } & BetterSqliteConstructor;
   } catch (error) {
-    throw new Error(
-      'NodeSQLiteStorage requires the "better-sqlite3" package. ' +
-        'Install it with: bun add better-sqlite3 (or npm install better-sqlite3).',
-      { cause: error },
-    );
+    throw createMissingBetterSqlite3Error(error);
   }
 
   DatabaseConstructor = typeof mod.default === 'function' ? mod.default : mod;
@@ -148,12 +173,18 @@ export class NodeSQLiteStorage implements Storage {
     };
   }
 
-  constructor(
-    path: string = ':memory:',
-    databaseConstructor: BetterSqliteConstructor = loadBetterSqlite3(),
-  ) {
-    const Database = databaseConstructor;
-    this.#database = new Database(path);
+  constructor(path: string = ':memory:', databaseConstructor?: BetterSqliteConstructor) {
+    const Database = databaseConstructor ?? loadBetterSqlite3();
+
+    try {
+      this.#database = new Database(path);
+    } catch (error) {
+      if (databaseConstructor === undefined && isBetterSqlite3LoadFailure(error)) {
+        throw createMissingBetterSqlite3Error(error);
+      }
+
+      throw error;
+    }
 
     this.#database.pragma('journal_mode = WAL');
     this.#database.pragma('synchronous = NORMAL');

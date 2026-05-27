@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   buildTestCommand,
   createRealDependencies,
+  discoverSerialTestFiles,
   discoverTestFiles,
   extractJunitFailureExcerpts,
   formatFailingTests,
@@ -14,6 +15,7 @@ import {
   parseJunitFailures,
   renderTestOutcome,
   runTestSuite,
+  SERIAL_TEST_PATHS,
   STALE_DIRECTORY_AGE_MS,
   sweepStalePrecommitDirectories,
   tailBound,
@@ -282,6 +284,18 @@ describe('discoverTestFiles', () => {
     }
   });
 
+  it('excludes serial dashboard files from the parallel set', async () => {
+    const files = await discoverTestFiles();
+    for (const excluded of SERIAL_TEST_PATHS) {
+      expect(files).not.toContain(excluded);
+    }
+  });
+
+  it('discovers serial dashboard files separately', async () => {
+    const files = await discoverSerialTestFiles();
+    expect(files).toEqual([...SERIAL_TEST_PATHS]);
+  });
+
   it('returns only .test.ts files', async () => {
     const files = await discoverTestFiles();
     expect(files.every((file) => file.endsWith('.test.ts'))).toBe(true);
@@ -334,6 +348,14 @@ describe('runTestSuite (injected dependencies)', () => {
     const { dependencies, removed } = makeDependencies({ runResults: [{ exitCode: 0 }] });
     expect(await runTestSuite(['src/a.test.ts'], dependencies)).toEqual({ kind: 'passed' });
     expect(removed).toEqual(['/tmp/run']);
+  });
+
+  it('passes --parallel=1 when a serial run is requested', async () => {
+    const { dependencies, commands } = makeDependencies({ runResults: [{ exitCode: 0 }] });
+    expect(await runTestSuite(['src/a.test.ts'], dependencies, { parallel: false })).toEqual({
+      kind: 'passed',
+    });
+    expect(commands[0]).toContain('--parallel=1');
   });
 
   it('classifies a load-sensitive failure as failedButPassedInIsolation', async () => {

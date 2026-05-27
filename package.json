@@ -201,7 +201,7 @@
     "prepare": "husky",
     "prepublishOnly": "bun run validate",
     "start": "bun run src/index.ts",
-    "test": "bun test --timeout 15000 --path-ignore-patterns='src/benchmarks/**' && bun test src/benchmarks --timeout 15000 --parallel=1",
+    "test": "bun test --timeout 15000 --path-ignore-patterns='src/benchmarks/**' --path-ignore-patterns='src/dashboard/dashboard-serving.test.ts' --path-ignore-patterns='src/dashboard/svelte-test-harness.test-support.test.ts' --path-ignore-patterns='src/dashboard/fragments/workflow-execution-timeline.svelte.test.ts' --path-ignore-patterns='src/dashboard/fragments/schedule-list.test.ts' --path-ignore-patterns='src/dashboard/components/date-range-picker.svelte.test.ts' --path-ignore-patterns='src/dashboard/views/workflow-list.svelte.test.ts' && bun test ./src/dashboard/dashboard-serving.test.ts ./src/dashboard/svelte-test-harness.test-support.test.ts ./src/dashboard/fragments/workflow-execution-timeline.svelte.test.ts ./src/dashboard/fragments/schedule-list.test.ts ./src/dashboard/components/date-range-picker.svelte.test.ts ./src/dashboard/views/workflow-list.svelte.test.ts --timeout 15000 --parallel=1 && bun test src/benchmarks --timeout 15000 --parallel=1",
     "test:coverage": "WEFT_COVERAGE_MODE=1 bun test --timeout 15000 --coverage",
     "typecheck": "tsc --noEmit",
     "typecheck:package-root": "bun run build && tsc --noEmit -p tsconfig.package-test-d.json",
@@ -263,6 +263,7 @@
   "peerDependencies": {
     "@libsql/client": "^0.17.2",
     "@opentelemetry/api": "^1.0.0",
+    "better-sqlite3": "^12.8.0",
     "lmdb": "^3.5.2"
   },
   "peerDependenciesMeta": {
@@ -270,6 +271,9 @@
       "optional": true
     },
     "@opentelemetry/api": {
+      "optional": true
+    },
+    "better-sqlite3": {
       "optional": true
     },
     "lmdb": {
