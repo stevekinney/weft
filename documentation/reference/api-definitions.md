@@ -23,6 +23,19 @@ Bare activity functions passed to `activity(fn)` must be named. Workflow calls u
 
 In addition to the fields shown above, `ActivityDefinition` accepts `idempotent?: boolean` (informs saga and validation guidance), `verify`, `visibilityTimeout`, `compensate`, `resourceScope`, and a function-form `idempotencyKey`. See the JSDoc on `ActivityDefinition` for the full surface.
 
+`verify` receives `(result, context)`. `context.phase` is either `post-execution-validation` or `pre-dispatch-reconciliation`. Boolean return values are compatibility aliases only for post-execution validation. Pre-dispatch reconciliation must return an explicit Tier-0 state:
+
+```ts
+type ActivityVerificationResult<TOutput> =
+  | boolean
+  | 'not-completed'
+  | 'completed-result-unavailable'
+  | 'indeterminate'
+  | { status: 'completed-with-result'; result: TOutput };
+```
+
+`completed-result-unavailable`, `indeterminate`, verifier throws, corrupt reconciliation records, and legacy boolean pre-dispatch answers fail closed instead of redispatching a keyed activity.
+
 See [the activities guide](../guides/activities.md) for usage patterns and motivation.
 
 ## Workflows

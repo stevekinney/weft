@@ -119,7 +119,10 @@ async function* example(ctx: Context) {
 }
 ```
 
-The `timeout` kills the activity after the specified duration. The `queue` routes the activity to a specific worker queue (useful for rate limiting or resource isolation). The `idempotencyKey` ensures that if the same logical operation is attempted twice, Weft deduplicates it.
+The `timeout` kills the activity after the specified duration. The `queue` routes the activity to a specific worker queue (useful for rate limiting or resource isolation). The `idempotencyKey` lets Weft replay a completed reconciliation marker without rerunning the activity. When recovery only finds an ambiguous prior start marker, Weft fails closed unless the activity definition provides a Tier-0 verifier that can prove the external result or safe redispatch. It is not an exactly-once guarantee for external systems.
+
+> [!WARNING]
+> Activities are at-least-once side effects. Payment providers, queues, email APIs, and databases still need their own idempotency keys. Weft can replay a completed result it durably recorded, or ask your verifier whether a prior keyed side effect completed, but it cannot undo an external side effect that finished before Weft recorded the outcome.
 
 ## Activity definitions
 
@@ -129,14 +132,28 @@ When you find yourself specifying the same retry policy and timeout at every cal
 interface ActivityDefinition<TInput, TOutput> {
   name: string;
   execute: ActivityFunction<TInput, TOutput>;
+  verify?: (
+    result: TOutput | undefined,
+    context: ActivityVerificationContext<TInput>,
+  ) => Promise<ActivityVerificationResult<TOutput>> | ActivityVerificationResult<TOutput>;
   retry?: RetryPolicy;
   timeout?: Duration;
   queue?: string;
   idempotent?: boolean;
+  idempotencyKey?: (input: TInput) => string;
 }
 ```
 
 See [the activity definition reference](../reference/api-definitions.md#activity-definitions) for advanced fields: `verify`, `visibilityTimeout`, `compensate`, `resourceScope`, and function-form `idempotencyKey`.
+
+`verify` has two phases. During normal post-execution validation, return `true` to accept the activity result or `false` to reject it. During `pre-dispatch-reconciliation`, return one of the Tier-0 states:
+
+- `not-completed`: the external system reports no completed side effect, so Weft may dispatch the activity.
+- `{ status: 'completed-with-result', result }`: the external system reports completion and can reconstruct the workflow result.
+- `completed-result-unavailable`: the side effect completed, but the workflow result cannot be reconstructed.
+- `indeterminate`: the verifier cannot prove whether the side effect completed.
+
+The last two states fail closed and do not redispatch the activity. A keyed activity that has a prior dispatch marker but no Tier-0 verifier also fails closed; retry policy does not turn that into a silent redispatch.
 
 Here is what that looks like in practice.
 

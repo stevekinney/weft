@@ -24,6 +24,9 @@ export {
 export type { FaultCode } from './core/fault-code.ts';
 // Core
 export {
+  ActivityReconciliationCapabilityError,
+  ActivityReconciliationConflictError,
+  ActivityReconciliationIndeterminateError,
   ActivityResolutionError,
   BulkDeleteRequiresTerminalWorkflowsError,
   BulkOperationConfirmationError,
@@ -63,6 +66,9 @@ export type {
   ActivityMapInput,
   ActivityObjectInput,
   ActivityResultFor,
+  ActivityVerificationContext,
+  ActivityVerificationPhase,
+  ActivityVerificationResult,
   AnyActivityDefinition,
   AnyWorkflowDefinition,
   ArchiveAdapter,

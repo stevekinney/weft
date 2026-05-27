@@ -43,6 +43,9 @@ export type WeftErrorCode =
   | 'ReviewTimeoutError'
   | 'AtomicStateConflictError'
   | 'StandardSchemaValidationError'
+  | 'ActivityReconciliationCapabilityError'
+  | 'ActivityReconciliationConflictError'
+  | 'ActivityReconciliationIndeterminateError'
   | 'PayloadSizeExceededError';
 
 /**
@@ -99,6 +102,9 @@ const publicWeftErrorCodeMap = {
   ReviewTimeoutError: true,
   AtomicStateConflictError: true,
   StandardSchemaValidationError: true,
+  ActivityReconciliationCapabilityError: true,
+  ActivityReconciliationConflictError: true,
+  ActivityReconciliationIndeterminateError: true,
   PayloadSizeExceededError: true,
 } satisfies Record<WeftErrorCode, true>;
 

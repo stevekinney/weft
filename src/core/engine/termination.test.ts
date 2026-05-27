@@ -408,10 +408,17 @@ describe('termination helpers', () => {
     for (let index = 0; index < 1_001; index++) {
       await storage.put(KEYS.signal(workflowId, 'release', `signal-${index}`), new Uint8Array([1]));
     }
+    await storage.put(
+      KEYS.activityReconciliation(workflowId, 'charge-card', 'digest'),
+      new Uint8Array([1]),
+    );
 
     await cleanupWorkflowStorage({ storage } as never, workflowId, false);
 
     expect(await storage.get(KEYS.signal(workflowId, 'release', 'signal-0'))).toBeNull();
     expect(await storage.get(KEYS.signal(workflowId, 'release', 'signal-1000'))).toBeNull();
+    expect(
+      await storage.get(KEYS.activityReconciliation(workflowId, 'charge-card', 'digest')),
+    ).toBeNull();
   });
 });

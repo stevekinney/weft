@@ -34,6 +34,8 @@ export type ContextOperationRequest =
       input: unknown;
       callerStack?: string;
       options?: Record<string, unknown>;
+      /** Dispatch attempt used for worker payloads, interceptors, and reconciliation verifiers. */
+      attempt?: number;
       /** Serialized interceptor headers (Map entries) for remote worker propagation. */
       headers?: [string, string][];
     }

@@ -392,14 +392,9 @@ function formatSortableTimestamp(timestamp: number): string {
  *
  * @example
  * ```ts
- * import { workflow, KEYS, MemoryStorage } from 'weft';
+ * import { KEYS } from 'weft/storage/interface';
  *
- * await using storage = new MemoryStorage();
- * const workflowKey = KEYS.workflow('my-workflow-id');
- * const checkpointKey = KEYS.checkpoint('my-workflow-id');
- * console.log(workflowKey);    // 'wf:my-workflow-id'
- * console.log(checkpointKey);  // 'wf:my-workflow-id:ckpt'
- * console.log(KEYS.deadline(Date.now(), 'wf-1'));
+ * console.log(KEYS.workflow('workflow-id'));
  * ```
  */
 export const KEYS = {
@@ -425,6 +420,14 @@ export const KEYS = {
   operationResolvedByTimePrefix: () => 'op:resolved-by-time:',
   operationResolvedByTime: (resolvedAt: number, id: string) =>
     `op:resolved-by-time:${formatSortableTimestamp(resolvedAt)}:${encodeStorageKeyComponent(id)}`,
+  activityReconciliationPrefix: (workflowId: string) =>
+    `actrec:v1:${encodeStorageKeyComponent(workflowId)}:`,
+  activityReconciliation: (
+    workflowId: string,
+    activityName: string,
+    idempotencyKeyDigest: string,
+  ) =>
+    `actrec:v1:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(activityName)}:${idempotencyKeyDigest}`,
   eventPrefix: (workflowId: string) => `ev:${encodeStorageKeyComponent(workflowId)}:`,
   event: (workflowId: string, sequence: number) =>
     `ev:${encodeStorageKeyComponent(workflowId)}:${String(sequence).padStart(10, '0')}`,
@@ -476,9 +479,8 @@ export const KEYS = {
   budgetCharged: (operationId: string) => `budget-charged:${operationId}`,
   toolEffect: (workflowId: string, agentId: string, semanticHash: string) =>
     `tool-effect:${encodeStorageKeyComponent(workflowId)}:${agentId}:${semanticHash}`,
-  // Visibility indexes. Sortable-padded timestamps lex-sort correctly under
-  // forward and reverse scans. See `src/core/engine/workflow-indexes.ts` for
-  // the lifecycle wiring and the per-workflow manifest contract.
+  // Visibility index timestamps lex-sort correctly under forward and reverse
+  // scans. See `workflow-indexes.ts` for the per-workflow manifest contract.
   workflowVisibilityStatus: (status: string, workflowId: string) =>
     `wf-idx-status:${encodeStorageKeyComponent(status)}:${encodeStorageKeyComponent(workflowId)}`,
   workflowVisibilityType: (type: string, workflowId: string) =>

@@ -339,6 +339,7 @@ function workflowPurgePrefixes(workflowId: string): string[] {
     `state:execution:${encodedWorkflowId}:`,
     `tool-effect:${encodedWorkflowId}:`,
     `upk:${encodedWorkflowId}:`,
+    `actrec:v1:${encodedWorkflowId}:`,
   ];
 }
 

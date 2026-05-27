@@ -177,6 +177,7 @@ export async function cleanupWorkflowStorage(
   // after the workflow terminates - leaving them behind would leak linearly with
   // effect volume across the engine's lifetime.
   const prefixes: string[] = [
+    KEYS.activityReconciliationPrefix(workflowId),
     `sig:${encodedWorkflowId}:`,
     `state:execution:${encodedWorkflowId}:`,
     `tool-effect:${encodedWorkflowId}:`,
