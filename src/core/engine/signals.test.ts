@@ -2,6 +2,7 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { encode } from '../codec.ts';
 import type { SignalReceivedInterception } from '../interceptor/interception-contexts.ts';
 import type { WorkflowState } from '../types.ts';
 import {
@@ -50,6 +51,12 @@ function createSignalCallbacks(
     resumeParkedInlineWorkflow: mock(async () => {}),
     ...overrides,
   };
+}
+
+class NoConditionalBatchMemoryStorage extends MemoryStorage {
+  override capabilities() {
+    return { ...super.capabilities(), conditionalBatch: false };
+  }
 }
 
 describe('engine signals', () => {
@@ -137,6 +144,152 @@ describe('engine signals', () => {
 
     expect(await storage.get(KEYS.terminalCleanupNeeded('workflow-empty'))).toBeNull();
     expect(await storage.get(KEYS.terminalCleanupNeeded('workflow-terminal'))).toBeNull();
+  });
+
+  it('deduplicates signal deliveries with the same signalId and persists the accepted response', async () => {
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    const callbacks = createSignalCallbacks();
+
+    await signal(internals as never, 'workflow-idempotent', 'release', 'first', callbacks, {
+      signalId: 'signal-1',
+    });
+    await signal(internals as never, 'workflow-idempotent', 'release', 'second', callbacks, {
+      signalId: 'signal-1',
+    });
+
+    expect(callbacks.dispatchEvent).toHaveBeenCalledTimes(1);
+    expect(await consumeSignal(internals as never, 'workflow-idempotent', 'release')).toEqual({
+      found: true,
+      payload: 'first',
+    });
+    expect(await consumeSignal(internals as never, 'workflow-idempotent', 'release')).toEqual({
+      found: false,
+    });
+    expect(
+      await storage.get(KEYS.signalAcceptedResponse('workflow-idempotent', 'release', 'signal-1')),
+    ).not.toBeNull();
+  });
+
+  it('keeps signalId retries idempotent after the buffered signal is consumed', async () => {
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    const callbacks = createSignalCallbacks();
+
+    await signal(internals as never, 'workflow-consumed', 'release', 'first', callbacks, {
+      signalId: 'signal:1',
+    });
+    expect(await consumeSignal(internals as never, 'workflow-consumed', 'release')).toEqual({
+      found: true,
+      payload: 'first',
+    });
+    expect(callbacks.dispatchEvent).toHaveBeenCalledTimes(1);
+
+    await signal(internals as never, 'workflow-consumed', 'release', 'duplicate', callbacks, {
+      signalId: 'signal:1',
+    });
+
+    expect(callbacks.dispatchEvent).toHaveBeenCalledTimes(1);
+    expect(await consumeSignal(internals as never, 'workflow-consumed', 'release')).toEqual({
+      found: false,
+    });
+  });
+
+  it('rejects signalId delivery before tracking cleanup when conditionalBatch is unavailable', async () => {
+    const storage = new NoConditionalBatchMemoryStorage();
+    const internals = createSignalInternals(storage);
+    const callbacks = createSignalCallbacks();
+
+    await expect(
+      signal(internals as never, 'workflow-no-conditional-batch', 'release', 'first', callbacks, {
+        signalId: 'no-conditional-batch',
+      }),
+    ).rejects.toThrow('requires storage capability "conditionalBatch"');
+
+    expect(internals.workflowsNeedingTerminalCleanup.has('workflow-no-conditional-batch')).toBe(
+      false,
+    );
+    expect(
+      await storage.get(KEYS.terminalCleanupNeeded('workflow-no-conditional-batch')),
+    ).toBeNull();
+    expect(
+      await consumeSignal(internals as never, 'workflow-no-conditional-batch', 'release'),
+    ).toEqual({
+      found: false,
+    });
+  });
+
+  it('rejects oversize signalIds before persistence', async () => {
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    const callbacks = createSignalCallbacks();
+    const oversizeSignalId = 'x'.repeat(129);
+
+    await expect(
+      signal(internals as never, 'workflow-oversize-signal-id', 'release', 'first', callbacks, {
+        signalId: oversizeSignalId,
+      }),
+    ).rejects.toThrow('signalId must be at most 128 bytes');
+    expect(
+      await storage.get(
+        KEYS.signalAcceptedResponse('workflow-oversize-signal-id', 'release', oversizeSignalId),
+      ),
+    ).toBeNull();
+    expect(
+      await consumeSignal(internals as never, 'workflow-oversize-signal-id', 'release'),
+    ).toEqual({
+      found: false,
+    });
+  });
+
+  it('rejects oversize default signalIds before buffering multiple deliveries', async () => {
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    const callbacks = createSignalCallbacks();
+    const oversizeSignalId = 'x'.repeat(129);
+
+    await expect(
+      bufferSignalPayloads(
+        internals as never,
+        'workflow-oversize-default-signal-id',
+        [
+          { signalName: 'first', payload: 'one' },
+          { signalName: 'second', payload: 'two' },
+        ],
+        callbacks,
+        { signalId: oversizeSignalId },
+      ),
+    ).rejects.toThrow('signalId must be at most 128 bytes');
+    expect(
+      await consumeSignal(internals as never, 'workflow-oversize-default-signal-id', 'first'),
+    ).toEqual({
+      found: false,
+    });
+    expect(
+      await consumeSignal(internals as never, 'workflow-oversize-default-signal-id', 'second'),
+    ).toEqual({
+      found: false,
+    });
+  });
+
+  it('does not redeliver when the signal exists but the accepted response must be repaired', async () => {
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    const callbacks = createSignalCallbacks();
+    await storage.put(KEYS.signal('workflow-repair', 'release', 'signal-1'), encode('first'));
+
+    await signal(internals as never, 'workflow-repair', 'release', 'second', callbacks, {
+      signalId: 'signal-1',
+    });
+
+    expect(callbacks.dispatchEvent).not.toHaveBeenCalled();
+    expect(
+      await storage.get(KEYS.signalAcceptedResponse('workflow-repair', 'release', 'signal-1')),
+    ).not.toBeNull();
+    expect(await consumeSignal(internals as never, 'workflow-repair', 'release')).toEqual({
+      found: true,
+      payload: 'first',
+    });
   });
 
   it('releases only matching signal waiters', () => {

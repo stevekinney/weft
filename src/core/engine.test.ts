@@ -36,7 +36,7 @@ import type {
   WorkflowContext,
   WorkflowState,
 } from './types.ts';
-import { activity, workflow } from './types.ts';
+import { activity, signal, workflow } from './types.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -2138,6 +2138,24 @@ describe('Engine', () => {
     await handle.signal('my-signal', 'payload');
     const result = await handle.result();
     expect(result).toBe('got: payload');
+    engine[Symbol.dispose]();
+  });
+
+  it('preserves signal payloads that overlap signal delivery options', async () => {
+    const objectSignal = signal<{ signalId: string }>('object-signal');
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'object-signal-payload' }).execute(async function* (ctx: WorkflowContext) {
+        const value = yield* ctx.waitForSignal(objectSignal);
+        return value.signalId;
+      }),
+    );
+
+    const handle = await engine.start('object-signal-payload', null);
+    await flush();
+
+    await engine.signal(handle.id, objectSignal, { signalId: 'payload-value' });
+    await expect(handle.result()).resolves.toBe('payload-value');
     engine[Symbol.dispose]();
   });
 

@@ -79,6 +79,7 @@ declare const handle: {
   signal(
     definition: SignalDefinition<{ approved: boolean }>,
     input: { approved: boolean },
+    options?: { signalId?: string },
   ): Promise<void>;
   update(
     definition: UpdateDefinition<{ reviewer: string }, { accepted: boolean }>,
@@ -90,7 +91,8 @@ declare const handle: {
   ): Promise<{ state: string }>;
 };
 
-await handle.signal(approval, { approved: true });
+await handle.signal(approval, { approved: true }, { signalId: 'approval-123' });
+// Duplicate retries with the same signalId return the same successful acknowledgement.
 const result = await handle.update(approve, { reviewer: 'alice' });
 const current = await handle.query(orderStatus, { verbose: false });
 

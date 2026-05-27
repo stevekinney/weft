@@ -47,6 +47,7 @@ import {
   type ScheduleSummary,
   type SearchAttributeValue,
   type SignalDefinition,
+  type SignalDeliveryOptions,
   type StartOptions,
   type SubmitReviewOptions,
   type TypedListFilter,
@@ -977,27 +978,41 @@ export class Engine<
     workflowId: string,
     name: SignalDefinition<TInput>,
     payload: TInput,
+    options?: SignalDeliveryOptions,
   ): Promise<void>;
-  async signal(workflowId: string, name: string, payload?: unknown): Promise<void>;
+  async signal(
+    workflowId: string,
+    name: string,
+    payload?: unknown,
+    options?: SignalDeliveryOptions,
+  ): Promise<void>;
   async signal(
     workflowId: string,
     nameOrDefinition: MessageName,
     payload?: unknown,
+    options?: SignalDeliveryOptions,
   ): Promise<void> {
-    return signalWorkflow(getInternals(this), workflowId, messageName(nameOrDefinition), payload, {
-      loadWorkflowState: (id) => loadWorkflowState(getInternals(this), id),
-      dispatchEvent: (event) => this.dispatchEvent(event),
-      broadcast: (message) => this.#broadcast(message),
-      getComposedInterceptor: () => getComposedWorkflowInterceptor(getInternals(this)),
-      resumeParkedInlineWorkflow: (id) =>
-        swallowPromiseRejection(
-          resumeParkedInlineWorkflowFromInternals(
-            getInternals(this),
-            id,
-            this.#createInlineParkingCallbacks(),
+    return signalWorkflow(
+      getInternals(this),
+      workflowId,
+      messageName(nameOrDefinition),
+      payload,
+      {
+        loadWorkflowState: (id) => loadWorkflowState(getInternals(this), id),
+        dispatchEvent: (event) => this.dispatchEvent(event),
+        broadcast: (message) => this.#broadcast(message),
+        getComposedInterceptor: () => getComposedWorkflowInterceptor(getInternals(this)),
+        resumeParkedInlineWorkflow: (id) =>
+          swallowPromiseRejection(
+            resumeParkedInlineWorkflowFromInternals(
+              getInternals(this),
+              id,
+              this.#createInlineParkingCallbacks(),
+            ),
           ),
-        ),
-    });
+      },
+      options,
+    );
   }
   async update(
     workflowId: string,

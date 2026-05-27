@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { WorkflowContext } from '../core/types.ts';
+import { signal } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import type { WeftClient } from './interface.ts';
@@ -7,6 +8,8 @@ import type { WeftClient } from './interface.ts';
 type ClientContractWorkflowTypes = {
   echo: string;
   waiting: string;
+  waitingObject: string;
+  waitingTwice: string;
 };
 
 type ClientContractTestOptions = {
@@ -34,8 +37,30 @@ export const clientContractWaitingWorkflow = workflow({
     payload,
   }));
 
-  const signal = yield* ctx.waitForSignal<string>('continue');
-  return `${String(input)}:${signal}`;
+  const receivedSignal = yield* ctx.waitForSignal<string>('continue');
+  return `${String(input)}:${receivedSignal}`;
+});
+
+const clientContractContinueSignal = signal('continue');
+const clientContractObjectSignal = signal<{ signalId: string }>('object-signal');
+
+export const clientContractWaitingTwiceWorkflow = workflow({
+  name: 'client-contract-waiting-twice',
+}).execute(async function* (ctx: WorkflowContext, input: unknown) {
+  ctx.expose({ ready: () => true });
+
+  yield* ctx.waitForSignal(clientContractContinueSignal);
+  yield* ctx.waitForSignal(clientContractContinueSignal);
+  return `${String(input)}:done`;
+});
+
+export const clientContractWaitingObjectWorkflow = workflow({
+  name: 'client-contract-waiting-object',
+}).execute(async function* (ctx: WorkflowContext, input: unknown) {
+  ctx.expose({ ready: () => true });
+
+  const payload = yield* ctx.waitForSignal(clientContractObjectSignal);
+  return `${String(input)}:${payload.signalId}`;
 });
 
 export async function waitForQueryReadyForTesting(
@@ -117,6 +142,47 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
 
       await handle.signal('continue', 'done');
       await expect(handle.result()).resolves.toBe('tagged:done');
+    });
+
+    it('deduplicates typed zero-payload signalIds through client and handle methods', async () => {
+      const client = getClient();
+      const handle = await client.start(workflowTypes.waitingTwice, 'signal-id', {
+        id: `${idPrefix}-signal-id`,
+      });
+
+      await waitForRunning?.(handle.id);
+      await waitForQueryReadyForTesting(client, handle.id);
+
+      await client.signal(handle.id, clientContractContinueSignal, undefined, {
+        signalId: 'first',
+      });
+      await client.signal(handle.id, clientContractContinueSignal, undefined, {
+        signalId: 'first',
+      });
+      await handle.signal(clientContractContinueSignal, undefined, { signalId: 'second' });
+
+      await expect(handle.result()).resolves.toBe('signal-id:done');
+    });
+
+    it('preserves typed signal payloads that overlap delivery options', async () => {
+      const client = getClient();
+      const clientHandle = await client.start(workflowTypes.waitingObject, 'client', {
+        id: `${idPrefix}-signal-options-payload-client`,
+      });
+      const handleHandle = await client.start(workflowTypes.waitingObject, 'handle', {
+        id: `${idPrefix}-signal-options-payload-handle`,
+      });
+
+      await waitForRunning?.(clientHandle.id);
+      await waitForRunning?.(handleHandle.id);
+      await waitForQueryReadyForTesting(client, clientHandle.id);
+      await waitForQueryReadyForTesting(client, handleHandle.id);
+
+      await client.signal(clientHandle.id, clientContractObjectSignal, { signalId: 'payload' });
+      await handleHandle.signal(clientContractObjectSignal, { signalId: 'payload' });
+
+      await expect(clientHandle.result()).resolves.toBe('client:payload');
+      await expect(handleHandle.result()).resolves.toBe('handle:payload');
     });
 
     it('creates, describes, updates, resumes, and cancels schedules', async () => {

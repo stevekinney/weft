@@ -20,6 +20,7 @@ import type {
   ScheduleSummary,
   SearchAttributeValue,
   SignalDefinition,
+  SignalDeliveryOptions,
   StartOptions,
   SubmitReviewOptions,
   TypedListFilter,
@@ -192,9 +193,24 @@ export class HttpClient implements WeftClient {
   }
 
   async signal(id: string, name: SignalDefinition): Promise<void>;
-  async signal<TInput>(id: string, name: SignalDefinition<TInput>, payload: TInput): Promise<void>;
-  async signal(id: string, name: string, payload?: unknown): Promise<void>;
-  async signal(id: string, nameOrDefinition: MessageName, payload?: unknown): Promise<void> {
+  async signal<TInput>(
+    id: string,
+    name: SignalDefinition<TInput>,
+    payload: TInput,
+    options?: SignalDeliveryOptions,
+  ): Promise<void>;
+  async signal(
+    id: string,
+    name: string,
+    payload?: unknown,
+    options?: SignalDeliveryOptions,
+  ): Promise<void>;
+  async signal(
+    id: string,
+    nameOrDefinition: MessageName,
+    payload?: unknown,
+    options?: SignalDeliveryOptions,
+  ): Promise<void> {
     const name = messageName(nameOrDefinition);
     await request<unknown>(
       this.baseUrl,
@@ -202,7 +218,7 @@ export class HttpClient implements WeftClient {
       this.headers,
       {
         method: 'POST',
-        body: JSON.stringify({ payload }),
+        body: JSON.stringify({ payload, ...options }),
       },
     );
   }

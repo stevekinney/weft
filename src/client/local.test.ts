@@ -7,6 +7,8 @@ import { MemoryStorage } from '../storage/memory.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import {
   clientContractEchoWorkflow,
+  clientContractWaitingObjectWorkflow,
+  clientContractWaitingTwiceWorkflow,
   clientContractWaitingWorkflow,
   runWeftClientContractTests,
 } from './client-contract.test-support.ts';
@@ -38,7 +40,9 @@ function createTestEngine(): Engine {
   });
   engine.register(echoWorkflow);
   engine.register(clientContractEchoWorkflow);
+  engine.register(clientContractWaitingObjectWorkflow);
   engine.register(clientContractWaitingWorkflow);
+  engine.register(clientContractWaitingTwiceWorkflow);
   engine.register(failingWorkflow);
   return engine;
 }
@@ -82,6 +86,8 @@ describe('LocalClient', () => {
     workflowTypes: {
       echo: 'client-contract-echo',
       waiting: 'client-contract-waiting',
+      waitingObject: 'client-contract-waiting-object',
+      waitingTwice: 'client-contract-waiting-twice',
     },
     waitForRunning: (workflowId) => waitForWorkflowStatus(engine, workflowId, 'running'),
   });

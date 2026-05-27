@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+import { isSignalIdWithinByteLimit } from '../../core/signal-id.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { shapeRestFault } from './operation-helpers.ts';
 import {
@@ -11,6 +12,11 @@ const signalWorkflowInput = z.object({
   workflowId: z.string().min(1),
   signalName: z.string().min(1),
   payload: z.unknown().optional(),
+  signalId: z
+    .string()
+    .min(1)
+    .refine(isSignalIdWithinByteLimit, 'signalId must be at most 128 bytes')
+    .optional(),
 });
 const signalWorkflowOutput = z.object({
   ok: z.literal(true),
@@ -30,7 +36,12 @@ export const signalWorkflowOperation = createSingleWorkflowControlOperation<
   outputSchema: signalWorkflowOutput as z.ZodType<SignalWorkflowOutput>,
   producibleFaults: ['NotFound'],
   invoke: async ({ input, engine }): Promise<SignalWorkflowOutput> => {
-    await engine.signal(input.workflowId, input.signalName, input.payload);
+    await engine.signal(
+      input.workflowId,
+      input.signalName,
+      input.payload,
+      input.signalId === undefined ? undefined : { signalId: input.signalId },
+    );
     return { ok: true };
   },
 });
@@ -58,11 +69,16 @@ export const signalWorkflowRestBinding: UnknownRestBinding = {
       typeof body === 'object' && body !== null
         ? (body as Record<string, unknown>)['payload']
         : undefined;
+    const signalId =
+      typeof body === 'object' && body !== null
+        ? (body as Record<string, unknown>)['signalId']
+        : undefined;
 
     return {
       ...extractWorkflowIdFromPath(pathParams),
       signalName: pathParams['name'] ?? '',
       payload,
+      ...(signalId === undefined ? {} : { signalId }),
     };
   },
   success: { kind: 'json', status: 200 },

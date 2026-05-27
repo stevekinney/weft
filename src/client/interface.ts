@@ -28,6 +28,7 @@ import type {
   ScheduleSummary,
   SearchAttributeValue,
   SignalDefinition,
+  SignalDeliveryOptions,
   StartOptions,
   SubmitReviewOptions,
   TypedListFilter,
@@ -80,8 +81,12 @@ export interface ClientHandle extends TypedEventTarget<WeftEventMap>, Disposable
 
   /** Send a named signal with an optional payload. */
   signal(name: SignalDefinition): Promise<void>;
-  signal<TInput>(name: SignalDefinition<TInput>, payload: TInput): Promise<void>;
-  signal(name: string, payload?: unknown): Promise<void>;
+  signal<TInput>(
+    name: SignalDefinition<TInput>,
+    payload: TInput,
+    options?: SignalDeliveryOptions,
+  ): Promise<void>;
+  signal(name: string, payload?: unknown, options?: SignalDeliveryOptions): Promise<void>;
 
   /** Submit a synchronous update and return the handler's result. */
   update<TOutput>(
@@ -227,8 +232,18 @@ export interface WeftClient {
 
   /** Send a named signal to a workflow. */
   signal(id: string, name: SignalDefinition): Promise<void>;
-  signal<TInput>(id: string, name: SignalDefinition<TInput>, payload: TInput): Promise<void>;
-  signal(id: string, name: string, payload?: unknown): Promise<void>;
+  signal<TInput>(
+    id: string,
+    name: SignalDefinition<TInput>,
+    payload: TInput,
+    options?: SignalDeliveryOptions,
+  ): Promise<void>;
+  signal(
+    id: string,
+    name: string,
+    payload?: unknown,
+    options?: SignalDeliveryOptions,
+  ): Promise<void>;
 
   /** Query a named read-only accessor on a running workflow. */
   query<TOutput>(id: string, name: QueryDefinition<void, TOutput>): Promise<TOutput>;

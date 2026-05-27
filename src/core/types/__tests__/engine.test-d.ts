@@ -14,6 +14,7 @@
 // `WorkflowAlreadyRegistered<TName>` guard on a freshly-typed `Engine`.
 
 import { Engine } from '../../engine/index.ts';
+import { signal } from '../message-handles.ts';
 import { workflow } from '../workflow-function.ts';
 
 // ---------------------------------------------------------------------------
@@ -42,6 +43,9 @@ const engineWithBoth = engineWithOnboarding.register(ordering);
 // typecheck on the engine returned by the chained `register` calls.
 void engineWithBoth.start('onboarding', { name: 'Ada' });
 void engineWithBoth.start('ordering', { id: 1 });
+
+const release = signal('engine-test-release');
+void engineWithBoth.signal('workflow-id', release, undefined, { signalId: 'release-1' });
 
 // engine.start with an unknown workflow name is a type error.
 // @ts-expect-error: 'unknown-workflow' is not in the typed registry.

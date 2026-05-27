@@ -11,6 +11,7 @@ import type {
   ScheduleSummary,
   SearchAttributeValue,
   SignalDefinition,
+  SignalDeliveryOptions,
   UpdateDefinition,
   WorkflowState,
 } from '../types.ts';
@@ -70,7 +71,12 @@ export const HANDLE_RESULT_PROMISE = Symbol('handleResultPromise');
 export interface WorkflowHandleEngine extends EventTarget {
   [HANDLE_RESULT_PROMISE](workflowId: string): Promise<unknown>;
   cancel(workflowId: string): Promise<void>;
-  signal(workflowId: string, name: string, payload?: unknown): Promise<void>;
+  signal(
+    workflowId: string,
+    name: string,
+    payload?: unknown,
+    options?: SignalDeliveryOptions,
+  ): Promise<void>;
   update(
     workflowId: string,
     name: string,
@@ -165,10 +171,18 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
   }
 
   async signal(name: SignalDefinition): Promise<void>;
-  async signal<TInput>(name: SignalDefinition<TInput>, payload: TInput): Promise<void>;
-  async signal(name: string, payload?: unknown): Promise<void>;
-  async signal(nameOrDefinition: MessageName, payload?: unknown): Promise<void> {
-    return this.#engine.signal(this.id, messageName(nameOrDefinition), payload);
+  async signal<TInput>(
+    name: SignalDefinition<TInput>,
+    payload: TInput,
+    options?: SignalDeliveryOptions,
+  ): Promise<void>;
+  async signal(name: string, payload?: unknown, options?: SignalDeliveryOptions): Promise<void>;
+  async signal(
+    nameOrDefinition: MessageName,
+    payload?: unknown,
+    options?: SignalDeliveryOptions,
+  ): Promise<void> {
+    return this.#engine.signal(this.id, messageName(nameOrDefinition), payload, options);
   }
 
   async update<TOutput>(

@@ -5,6 +5,7 @@ import type {
   ScheduleSummary,
   SearchAttributeValue,
   SignalDefinition,
+  SignalDeliveryOptions,
   UpdateDefinition,
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
@@ -12,7 +13,12 @@ import type { ClientHandle, ClientScheduleHandle } from './interface.ts';
 
 export interface WorkflowHandleDelegationClient {
   cancel(id: string): Promise<void>;
-  signal(id: string, name: string, payload?: unknown): Promise<void>;
+  signal(
+    id: string,
+    name: string,
+    payload?: unknown,
+    options?: SignalDeliveryOptions,
+  ): Promise<void>;
   update(
     id: string,
     name: string,
@@ -44,10 +50,21 @@ export abstract class WorkflowHandleDelegation<
   }
 
   async signal(name: SignalDefinition): Promise<void>;
-  async signal<TInput>(name: SignalDefinition<TInput>, payload: TInput): Promise<void>;
-  async signal(name: string, payload?: unknown): Promise<void>;
-  async signal(nameOrDefinition: MessageName, payload?: unknown): Promise<void> {
-    return this.client.signal(this.id, messageName(nameOrDefinition), payload);
+  async signal<TInput>(
+    name: SignalDefinition<TInput>,
+    payload: TInput,
+    options?: SignalDeliveryOptions,
+  ): Promise<void>;
+  async signal(name: string, payload?: unknown, options?: SignalDeliveryOptions): Promise<void>;
+  async signal(
+    nameOrDefinition: MessageName,
+    payload?: unknown,
+    options?: SignalDeliveryOptions,
+  ): Promise<void> {
+    if (options === undefined) {
+      return this.client.signal(this.id, messageName(nameOrDefinition), payload);
+    }
+    return this.client.signal(this.id, messageName(nameOrDefinition), payload, options);
   }
 
   async update<TOutput>(

@@ -105,7 +105,7 @@ export interface Storage extends Disposable {
   count?(prefix: string): Promise<number>;
   scoped?(prefix: string): Storage;
 
-  /** Optional SQL passthrough for dashboard/debugging (SQLite only). */
+  /** Optional SQL passthrough for dashboard/debugging. */
   query?<T>(sql: string, params?: unknown[]): Promise<T[]>;
 }
 
@@ -167,9 +167,7 @@ export function matchesScanOptions(key: string, options: ScanOptions = {}): bool
  *
  * const a = new Uint8Array([1, 2, 3]);
  * const b = new Uint8Array([1, 2, 3]);
- * const c = new Uint8Array([1, 2, 4]);
  * console.log(storageValuesEqual(a, b)); // true
- * console.log(storageValuesEqual(a, c)); // false
  * console.log(storageValuesEqual(a, null)); // false
  * ```
  */
@@ -222,7 +220,6 @@ export async function storageHas(storage: Storage, key: string): Promise<boolean
  * import { storageKeys } from 'weft/storage/interface';
  *
  * await using storage = new MemoryStorage();
- * await storage.put('wf:abc', new Uint8Array([1]));
  * for await (const key of storageKeys(storage, 'wf:')) {
  *   console.log(key); // 'wf:abc'
  * }
@@ -434,7 +431,11 @@ export const KEYS = {
   eventHead: (workflowId: string) => `ev:${encodeStorageKeyComponent(workflowId)}:head`,
   eventWatermark: (workflowId: string) => `ev:${encodeStorageKeyComponent(workflowId)}:watermark`,
   signal: (workflowId: string, name: string, id: string) =>
-    `sig:${encodeStorageKeyComponent(workflowId)}:${name}:${id}`,
+    `sig:${encodeStorageKeyComponent(workflowId)}:${name}:${encodeStorageKeyComponent(id)}`,
+  signalAcceptedResponsePrefix: (workflowId: string) =>
+    `sigres:v1:${encodeStorageKeyComponent(workflowId)}:`,
+  signalAcceptedResponse: (workflowId: string, name: string, signalId: string) =>
+    `sigres:v1:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(name)}:${encodeStorageKeyComponent(signalId)}`,
   deadline: (deadline: number, workflowId: string) =>
     `wf-deadline:${formatSortableTimestamp(deadline)}:${encodeStorageKeyComponent(workflowId)}`,
   terminalCleanup: (fireAt: number, timerId: string) =>

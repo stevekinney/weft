@@ -141,6 +141,7 @@ export type {
   SearchAttributeValue,
   Serializer,
   SignalDefinition,
+  SignalDeliveryOptions,
   SignalMap,
   SignalPayload,
   StartOptions,

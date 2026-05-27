@@ -449,8 +449,12 @@ describe('KEYS', () => {
     expect(KEYS.eventPrefix(workflowId)).toBe(`ev:${encodedWorkflowId}:`);
     expect(KEYS.event(workflowId, 9)).toBe(`ev:${encodedWorkflowId}:0000000009`);
     expect(KEYS.eventHead(workflowId)).toBe(`ev:${encodedWorkflowId}:head`);
-    expect(KEYS.signal(workflowId, 'approve', 'signal-1')).toBe(
-      `sig:${encodedWorkflowId}:approve:signal-1`,
+    expect(KEYS.signal(workflowId, 'approve', 'signal:1')).toBe(
+      `sig:${encodedWorkflowId}:approve:signal%3A1`,
+    );
+    expect(KEYS.signalAcceptedResponsePrefix(workflowId)).toBe(`sigres:v1:${encodedWorkflowId}:`);
+    expect(KEYS.signalAcceptedResponse(workflowId, 'approve', 'signal:1')).toBe(
+      `sigres:v1:${encodedWorkflowId}:approve:signal%3A1`,
     );
     expect(KEYS.deadline(5_000, workflowId)).toBe(
       `wf-deadline:0000000000005000:${encodedWorkflowId}`,

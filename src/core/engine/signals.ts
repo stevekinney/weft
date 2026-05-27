@@ -1,10 +1,16 @@
 import type { BatchOperation } from '../../storage/interface.ts';
-import { KEYS, encodeStorageKeyComponent } from '../../storage/interface.ts';
-import { decode } from '../codec.ts';
+import {
+  KEYS,
+  encodeStorageKeyComponent,
+  requireStorageCapability,
+  storageConditionalBatch,
+} from '../../storage/interface.ts';
+import { decode, encode } from '../codec.ts';
 import { SignalReceivedEvent } from '../events.ts';
 import type { ComposedWorkflowInterceptor } from '../interceptor.ts';
 import { encodePayloadWithinLimit } from '../payload-size.ts';
-import type { WorkflowState } from '../types.ts';
+import { validateSignalId } from '../signal-id.ts';
+import type { SignalDeliveryOptions, WorkflowState } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 import { isTerminalWorkflowStatus } from './validation.ts';
 
@@ -20,6 +26,7 @@ export type SignalCallbacks = {
 
 export type BufferedSignalOptions = {
   emitPublicEvent?: boolean;
+  signalId?: string;
 };
 
 export type BufferedSignalDelivery = {
@@ -36,6 +43,7 @@ export type ConsumedSignalResult =
     };
 
 const EMPTY_STORAGE_VALUE = new Uint8Array(0);
+const SIGNAL_ACCEPTED_RESPONSE = { ok: true } as const;
 
 export async function signal(
   internals: EngineInternals,
@@ -43,6 +51,7 @@ export async function signal(
   name: string,
   payload: unknown,
   callbacks: SignalCallbacks,
+  options: SignalDeliveryOptions = {},
 ): Promise<void> {
   const deliverSignal = async (
     targetWorkflowId: string,
@@ -54,6 +63,7 @@ export async function signal(
       targetWorkflowId,
       [{ signalName, payload: signalPayload }],
       callbacks,
+      options,
     );
   };
 
@@ -120,6 +130,7 @@ export async function bufferSignalPayloads(
   workflowId: string,
   deliveries: BufferedSignalDelivery[],
   callbacks: SignalCallbacks,
+  defaultOptions: SignalDeliveryOptions = {},
 ): Promise<void> {
   if (deliveries.length === 0) {
     return;
@@ -130,13 +141,23 @@ export async function bufferSignalPayloads(
     return;
   }
 
+  const signalId = getSingleSignalId(deliveries, defaultOptions);
+  validateSignalIdsBeforeKeyConstruction(deliveries, defaultOptions, signalId);
+  if (signalId !== undefined) {
+    requireStorageCapability(internals.storage, 'conditionalBatch', 'signal idempotency');
+  }
+
   // Encode each payload once, enforcing the size cap on the result, and reuse
   // the bytes for the write. An oversize payload throws out of this map before
   // the operations array is assigned, so the whole buffer aborts with nothing
   // written.
-  const operations: BatchOperation[] = deliveries.map(({ signalName, payload }) => ({
+  const operations: BatchOperation[] = deliveries.map(({ signalName, payload, options }) => ({
     type: 'put',
-    key: KEYS.signal(workflowId, signalName, crypto.randomUUID()),
+    key: KEYS.signal(
+      workflowId,
+      signalName,
+      options?.signalId ?? defaultOptions.signalId ?? crypto.randomUUID(),
+    ),
     value: encodePayloadWithinLimit(
       payload,
       internals.options.payloadSizePolicy.maxBytes,
@@ -150,6 +171,30 @@ export async function bufferSignalPayloads(
       key: KEYS.terminalCleanupNeeded(workflowId),
       value: EMPTY_STORAGE_VALUE,
     });
+  }
+
+  if (signalId !== undefined) {
+    const delivery = deliveries[0]!;
+    const acceptedResponseKey = KEYS.signalAcceptedResponse(
+      workflowId,
+      delivery.signalName,
+      signalId,
+    );
+    const acceptedResponse = encode(SIGNAL_ACCEPTED_RESPONSE);
+    if ((await internals.storage.get(acceptedResponseKey)) !== null) {
+      return;
+    }
+    const committed = await storageConditionalBatch(
+      internals.storage,
+      [{ key: KEYS.signal(workflowId, delivery.signalName, signalId), expectedValue: null }],
+      [...operations, { type: 'put', key: acceptedResponseKey, value: acceptedResponse }],
+    );
+    if (!committed) {
+      await ensureDuplicateSignalAcceptedResponse(internals, acceptedResponseKey, acceptedResponse);
+      return;
+    }
+    deliverBufferedSignals(internals, workflowId, deliveries, callbacks);
+    return;
   }
 
   await internals.storage.batch(operations);
@@ -212,6 +257,45 @@ export async function consumeSignal(
     return { found: true, payload: decode(value) };
   }
   return { found: false };
+}
+
+function getSingleSignalId(
+  deliveries: readonly BufferedSignalDelivery[],
+  defaultOptions: SignalDeliveryOptions,
+): string | undefined {
+  if (deliveries.length !== 1) return undefined;
+  return deliveries[0]?.options?.signalId ?? defaultOptions.signalId;
+}
+
+function validateSignalIdsBeforeKeyConstruction(
+  deliveries: readonly BufferedSignalDelivery[],
+  defaultOptions: SignalDeliveryOptions,
+  singleSignalId: string | undefined,
+): void {
+  if (singleSignalId !== undefined) {
+    validateSignalId(singleSignalId);
+    return;
+  }
+
+  for (const delivery of deliveries) {
+    const deliverySignalId = delivery.options?.signalId ?? defaultOptions.signalId;
+    if (deliverySignalId !== undefined) {
+      validateSignalId(deliverySignalId);
+    }
+  }
+}
+
+async function ensureDuplicateSignalAcceptedResponse(
+  internals: EngineInternals,
+  acceptedResponseKey: string,
+  acceptedResponse: Uint8Array,
+): Promise<void> {
+  if ((await internals.storage.get(acceptedResponseKey)) !== null) return;
+  await storageConditionalBatch(
+    internals.storage,
+    [{ key: acceptedResponseKey, expectedValue: null }],
+    [{ type: 'put', key: acceptedResponseKey, value: acceptedResponse }],
+  );
 }
 
 /** Register a waiter key in a workflow-keyed reverse index. */

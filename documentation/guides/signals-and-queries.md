@@ -45,9 +45,12 @@ You can also signal through the handle directly.
 
 ```typescript partial
 await handle.signal(approvalSignal, { approved: true });
+await engine.signal(handle.id, approvalSignal, { approved: true }, { signalId: 'approval-123' });
 ```
 
 Both forms do the same thing. The handle version is convenient when you already have a reference; the engine version is useful when you only have a workflow ID (for example, from a webhook handler or a message queue consumer).
+
+When retrying a sender request, pass a stable `signalId`. Weft uses it as an idempotency key for that workflow and signal name: the first delivery is accepted once, and duplicate retries return the same successful acknowledgement instead of queuing the signal again. This requires a storage adapter that supports `conditionalBatch`; plain signals without `signalId` continue to work without that capability.
 
 ## Signal durability
 
