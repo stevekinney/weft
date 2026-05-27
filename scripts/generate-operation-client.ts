@@ -45,10 +45,13 @@ export function createWeftClient(connection: WeftClientConnection = {}): WeftCli
   return createCatalogWeftClient<CatalogOperationTypes>(CATALOG_OPERATION_NAMES, connection);
 }
 `;
-  return format(source, {
-    ...(await resolveConfig(OPERATION_CLIENT_PATH)),
-    filepath: OPERATION_CLIENT_PATH,
-  });
+  const prettierConfiguration = await resolveConfig(OPERATION_CLIENT_PATH);
+  return format(
+    source,
+    prettierConfiguration === null
+      ? { filepath: OPERATION_CLIENT_PATH }
+      : { ...prettierConfiguration, filepath: OPERATION_CLIENT_PATH },
+  );
 }
 
 if (import.meta.main) {

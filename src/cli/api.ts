@@ -113,9 +113,23 @@ function describeOperation(name: string, json: boolean): CommandOutput {
   if (operation === undefined) return usageError(formatUnknownOperation(name));
   if (json) return { stdout: JSON.stringify(operation, null, 2), exitCode: 0 };
   return {
-    stdout: JSON.stringify(operation, null, 2),
+    stdout: formatOperationDescription(operation),
     exitCode: 0,
   };
+}
+
+function formatOperationDescription(operation: CatalogOperationSnapshot): string {
+  return [
+    `Name: ${operation.name}`,
+    `Summary: ${operation.summary}`,
+    `Kind: ${operation.kind}`,
+    `Scope: ${formatAccess(operation)}`,
+    `Transport: ${operation.transports.jsonRpcHttp ? 'json-rpc-http' : 'unsupported'}`,
+    `Safety: ${operation.destructive ? 'destructive' : 'safe'}`,
+    `Input schema: ${JSON.stringify(operation.inputSchema, null, 2)}`,
+    `Output schema: ${JSON.stringify(operation.outputSchema, null, 2)}`,
+    `Faults: ${JSON.stringify(operation.producibleFaults, null, 2)}`,
+  ].join('\n');
 }
 
 async function readInput(

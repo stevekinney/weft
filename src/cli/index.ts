@@ -21,6 +21,7 @@ export {
 export { parseCliArguments } from './parse-arguments.ts';
 export { executeSchedule } from './schedule.ts';
 export { createStorage } from './storage-factory.ts';
+export { findCliSubcommandName } from './subcommand-detection.ts';
 export { executeTimeline } from './timeline.ts';
 export type { CliCommand, CommandOutput, StorageBackend } from './types.ts';
 export { collectDiffLines, splitGlobPattern } from './utilities.ts';

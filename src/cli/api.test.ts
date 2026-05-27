@@ -10,6 +10,7 @@ import { resolveCliConnection } from './connection.ts';
 import { createWeftClient } from './generated/operation-client.generated.ts';
 import { jsonRpcEndpoint } from './json-rpc-client.ts';
 import { parseCliArguments } from './parse-arguments.ts';
+import { findCliSubcommandName } from './subcommand-detection.ts';
 
 describe('api argument parser', () => {
   it('parses list, describe, input, and confirmation flags', () => {
@@ -29,6 +30,16 @@ describe('api argument parser', () => {
       help: false,
       json: false,
     });
+
+    expect(parseCliArguments(['--describe', 'weft.workflows.list', 'api'])).toEqual({
+      command: 'api',
+      describe: 'weft.workflows.list',
+      list: false,
+      yes: false,
+      help: false,
+      json: false,
+    });
+    expect(findCliSubcommandName(['--describe', 'api', 'doctor'])).toBe('doctor');
 
     expect(
       parseCliArguments([
@@ -81,6 +92,19 @@ describe('api command', () => {
       name: 'weft.workflows.cancel',
       destructive: true,
     });
+
+    const readableDescription = await executeApi({
+      command: 'api',
+      describe: 'weft.workflows.cancel',
+      list: false,
+      yes: false,
+      help: false,
+      json: false,
+    });
+    expect(readableDescription.exitCode).toBe(0);
+    expect(readableDescription.stdout).toContain('Name: weft.workflows.cancel');
+    expect(readableDescription.stdout).toContain('Safety: destructive');
+    expect(() => JSON.parse(readableDescription.stdout)).toThrow();
   });
 
   it('blocks destructive operations unless --yes is present', async () => {

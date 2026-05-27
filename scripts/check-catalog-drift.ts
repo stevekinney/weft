@@ -12,10 +12,13 @@ const CATALOG_SNAPSHOT_PATH = 'src/cli/generated/operation-catalog.snapshot.json
 const OPERATION_CLIENT_PATH = 'src/cli/generated/operation-client.generated.ts';
 
 const snapshot = createCatalogSnapshot();
-const expected = await format(stringifyCatalogSnapshot(snapshot), {
-  ...(await resolveConfig(CATALOG_SNAPSHOT_PATH)),
-  filepath: CATALOG_SNAPSHOT_PATH,
-});
+const snapshotPrettierConfiguration = await resolveConfig(CATALOG_SNAPSHOT_PATH);
+const expected = await format(
+  stringifyCatalogSnapshot(snapshot),
+  snapshotPrettierConfiguration === null
+    ? { filepath: CATALOG_SNAPSHOT_PATH }
+    : { ...snapshotPrettierConfiguration, filepath: CATALOG_SNAPSHOT_PATH },
+);
 const currentFile = Bun.file(CATALOG_SNAPSHOT_PATH);
 const current = (await currentFile.exists()) ? await currentFile.text() : '';
 

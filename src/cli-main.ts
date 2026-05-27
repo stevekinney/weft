@@ -14,6 +14,7 @@ import {
   executeTimeline,
   executeValidate,
   executeVersionCheck,
+  findCliSubcommandName,
   HELP_TEXT,
   parseCliArguments,
   removeRunLockfile,
@@ -32,7 +33,7 @@ const parsedArguments = (() => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Error: ${message}`);
-    process.exit(Bun.argv.slice(2).includes('api') ? 3 : 1);
+    process.exit(findCliSubcommandName(Bun.argv.slice(2)) === 'api' ? 3 : 1);
   }
 })();
 
