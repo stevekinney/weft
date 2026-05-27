@@ -1,3 +1,7 @@
+// Installs globalThis.indexedDB; must run before the harness below calls
+// indexedDB.open(). Bun runs all test files in one process, so without this the
+// test depends on a sibling file importing it first — the order-dependent
+// ReferenceError this import fixes. Do not remove or reorder below the harness.
 import 'fake-indexeddb/auto';
 
 import { describe, expect, it } from 'bun:test';
