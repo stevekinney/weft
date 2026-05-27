@@ -71,7 +71,18 @@ try {
   ok = false;
 }
 
-// 4) typecheck
+// 4) catalog generation checks
+info('Running catalog generation checks…');
+try {
+  await $`bun run scripts/check-catalog-completeness.ts`;
+  await $`bun run scripts/check-catalog-drift.ts`;
+  success('catalog generation checks passed');
+} catch {
+  error('catalog generation checks failed');
+  ok = false;
+}
+
+// 5) typecheck
 info('Running typecheck…');
 try {
   await $`bun run typecheck`;
@@ -122,7 +133,7 @@ function reportTestOutcome(outcome: Awaited<ReturnType<typeof runTestSuite>>): b
   return false;
 }
 
-// 5) test
+// 6) test
 // Run the full suite (benchmarks and the two load-sensitive suites excluded by
 // `discoverTestFiles`). The runner captures Bun's JUnit report so a failure
 // names the offending `file > name`, and re-runs failing files once in
@@ -148,7 +159,7 @@ function reportTestOutcome(outcome: Awaited<ReturnType<typeof runTestSuite>>): b
   }
 }
 
-// 6) oxlint-disable ceiling + rationale check (mirrors the gate in `bun run lint`)
+// 7) oxlint-disable ceiling + rationale check (mirrors the gate in `bun run lint`)
 info('Running oxlint-disable check…');
 try {
   await $`bun scripts/check-lint-disables.ts`;
@@ -160,7 +171,7 @@ try {
   ok = false;
 }
 
-// 7) JSDoc manifest audit (only when source/scripts/package.json changed)
+// 8) JSDoc manifest audit (only when source/scripts/package.json changed)
 const stagedTouchesPublicSurface = staged.some(
   (file) =>
     file.startsWith('src/') ||
@@ -187,7 +198,7 @@ if (stagedTouchesPublicSurface) {
   info('Skipping JSDoc audit (no public surface changes staged)');
 }
 
-// 8) lint-staged (format staged files; always last)
+// 9) lint-staged (format staged files; always last)
 info('Running lint-staged…');
 try {
   await $`bunx lint-staged`;

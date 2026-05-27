@@ -1,9 +1,14 @@
 #!/usr/bin/env bun
 
+export { executeApi } from './api.ts';
 export { executeCodegen } from './codegen.ts';
 export { executeConformance } from './conformance.ts';
+export { removeRunLockfile, writeRunLockfile } from './connection.ts';
 export { executeDoctor } from './doctor.ts';
+export { createWeftClient } from './generated/operation-client.generated.ts';
+export type { CatalogOperationName, WeftClient } from './generated/operation-client.generated.ts';
 export {
+  API_HELP_TEXT,
   CODEGEN_HELP_TEXT,
   CONFORMANCE_HELP_TEXT,
   DOCTOR_HELP_TEXT,

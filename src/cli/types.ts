@@ -37,6 +37,20 @@ export type CliCommand =
       json: boolean;
     }
   | {
+      command: 'api';
+      operationName?: string;
+      server?: string;
+      token?: string;
+      profile?: string;
+      input?: string;
+      inputFile?: string;
+      list: boolean;
+      describe?: string;
+      yes: boolean;
+      help: boolean;
+      json: boolean;
+    }
+  | {
       command: 'conformance';
       timeoutMs: number;
       help: boolean;
