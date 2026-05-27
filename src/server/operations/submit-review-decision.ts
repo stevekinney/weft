@@ -118,6 +118,7 @@ export const submitReviewDecisionOperation = defineOperation<
   name: 'weft.reviews.decision.submit',
   mcpExposable: false,
   summary: 'Submit a decision for a human review',
+  destructive: false,
   tags: ['Reviews'],
   inputSchema: submitReviewDecisionInput,
   outputSchema: submitReviewDecisionOutput as z.ZodType<SubmitReviewDecisionOutput>,

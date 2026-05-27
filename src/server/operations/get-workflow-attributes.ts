@@ -22,6 +22,7 @@ export const getWorkflowAttributesOperation = defineOperation<
   name: 'weft.workflows.attributes.get',
   mcpExposable: false,
   summary: 'Get workflow attributes by id',
+  destructive: false,
   tags: ['Attributes'],
   inputSchema: getWorkflowAttributesInput,
   outputSchema: getWorkflowAttributesOutput as z.ZodType<GetWorkflowAttributesOutput>,

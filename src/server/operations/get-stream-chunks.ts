@@ -30,6 +30,7 @@ export const getStreamChunksOperation = defineOperation<
   name: 'weft.workflows.streams.chunks',
   mcpExposable: false,
   summary: 'Read stored stream chunks for a workflow stream key',
+  destructive: false,
   tags: ['Streams'],
   inputSchema: getStreamChunksInput,
   outputSchema: z.object({ chunks: z.array(z.unknown()) }) as z.ZodType<GetStreamChunksOutput>,

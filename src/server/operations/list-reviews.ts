@@ -44,6 +44,7 @@ export const listReviewsOperation = defineOperation<ListReviewsInput, ListReview
   name: 'weft.reviews.list',
   mcpExposable: false,
   summary: 'List human review requests',
+  destructive: false,
   tags: ['Reviews'],
   inputSchema: listReviewsInput,
   outputSchema: listReviewsOutput as z.ZodType<ListReviewsOutput>,

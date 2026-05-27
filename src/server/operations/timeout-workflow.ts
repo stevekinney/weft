@@ -19,6 +19,7 @@ export const timeoutWorkflowOperation = createSingleWorkflowControlOperation<
 >({
   name: 'weft.workflows.timeout',
   summary: 'Force-timeout a workflow',
+  destructive: true,
   tags: ['Workflows'],
   inputSchema: timeoutWorkflowInput,
   outputSchema: z.null(),

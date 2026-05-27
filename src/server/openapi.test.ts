@@ -275,6 +275,7 @@ describe('emitBindings — body-accepting methods', () => {
       const operation = defineOperation({
         name: 'weft.test.bodysuffix',
         mcpExposable: false,
+        destructive: false,
         summary: 'body-accepting test op',
         inputSchema: z.object({ payload: z.unknown() }),
         outputSchema: z.unknown(),
@@ -313,6 +314,7 @@ describe('emitBindings — body-accepting methods', () => {
     const operation = defineOperation({
       name: 'weft.test.getread',
       mcpExposable: false,
+      destructive: false,
       summary: 'get-only test op',
       inputSchema: z.object({ id: z.string() }),
       outputSchema: z.unknown(),
@@ -345,6 +347,7 @@ describe('emitBindings — body-accepting methods', () => {
     const operation = defineOperation({
       name: 'weft.test.hiddenhealth',
       mcpExposable: false,
+      destructive: false,
       summary: 'hidden health binding',
       inputSchema: z.object({}),
       outputSchema: z.object({ ok: z.boolean() }),
@@ -378,6 +381,7 @@ describe('emitBindings — body-accepting methods', () => {
     const operation = defineOperation({
       name: 'weft.test.visiblehealth',
       mcpExposable: false,
+      destructive: false,
       summary: 'visible health binding',
       inputSchema: z.object({}),
       outputSchema: z.object({ ok: z.boolean() }),
@@ -411,6 +415,7 @@ describe('emitBindings — body-accepting methods', () => {
     const operation = defineOperation({
       name: 'weft.test.visibleopenapi',
       mcpExposable: false,
+      destructive: false,
       summary: 'visible OpenAPI binding',
       inputSchema: z.object({}),
       outputSchema: z.object({ ok: z.boolean() }),
@@ -444,6 +449,7 @@ describe('emitBindings — body-accepting methods', () => {
     const operation = defineOperation({
       name: 'weft.storage.throwingoutput',
       mcpExposable: false,
+      destructive: false,
       summary: 'throwing-output test op',
       inputSchema: z.object({ key: z.string() }),
       outputSchema: {

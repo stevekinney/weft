@@ -124,6 +124,7 @@ export function createListWorkersOperation(options?: ListWorkersOptions) {
     name: 'weft.workers.list',
     mcpExposable: false,
     summary: 'List connected workers, their advertised activities, and saturation',
+    destructive: false,
     tags: ['System'],
     inputSchema: listWorkersInput,
     outputSchema: listWorkersOutput,

@@ -55,6 +55,7 @@ function makeOp<I, O>(
   return {
     summary: 'test op',
     tags: [],
+    destructive: false,
     access: { kind: 'public' },
     transports: { http: true, jsonRpcHttp: true, jsonRpcWebSocket: true, jsonRpcStdio: true },
     unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },

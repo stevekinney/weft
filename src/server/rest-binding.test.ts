@@ -23,6 +23,7 @@ import {
 const startWorkflowOperation = defineOperation({
   name: 'weft.workflows.start',
   mcpExposable: false,
+  destructive: false,
   summary: 'Start a workflow',
   inputSchema: z.object({
     workflowType: z.string(),
@@ -185,6 +186,7 @@ describe('isRestBindingCompatibleWithOperation', () => {
     const wsOnly = defineOperation({
       name: 'weft.workflows.subscribe',
       mcpExposable: false,
+      destructive: false,
       summary: 'Subscribe (not REST-mountable)',
       inputSchema: z.object({}),
       outputSchema: z.object({}),

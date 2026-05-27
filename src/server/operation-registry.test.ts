@@ -103,6 +103,7 @@ describe('defineOperation + createOperationRegistry (compile-time interop)', () 
     const op = defineOperation({
       name: 'weft.test.echo',
       mcpExposable: false,
+      destructive: false,
       summary: 'echo',
       inputSchema: z.object({ value: z.string() }),
       outputSchema: z.object({ echoed: z.string() }),
@@ -141,6 +142,7 @@ describe('defineOperation (typed builder)', () => {
     const op = defineOperation({
       name: 'weft.test.echo',
       mcpExposable: false,
+      destructive: false,
       summary: 'echo the input',
       inputSchema: z.object({ value: z.string() }),
       outputSchema: z.object({ echoed: z.string() }),
@@ -159,6 +161,7 @@ describe('defineOperation (typed builder)', () => {
       defineOperation({
         name: 'BadName',
         mcpExposable: false,
+        destructive: false,
         summary: 's',
         inputSchema: z.object({}),
         outputSchema: z.object({}),
@@ -174,6 +177,7 @@ describe('defineOperation (typed builder)', () => {
     const op = defineOperation({
       name: 'weft.test.tagged',
       mcpExposable: false,
+      destructive: false,
       summary: 's',
       tags: ['workflows', 'beta'],
       inputSchema: z.object({}),
@@ -191,6 +195,7 @@ describe('defineOperation (typed builder)', () => {
     const op = defineOperation({
       name: 'weft.test.tagscopy',
       mcpExposable: false,
+      destructive: false,
       summary: 's',
       tags: callerTags,
       inputSchema: z.object({}),
@@ -209,6 +214,7 @@ describe('defineOperation (typed builder)', () => {
     const op = defineOperation({
       name: 'weft.test.authorized',
       mcpExposable: false,
+      destructive: false,
       summary: 's',
       inputSchema: z.object({}),
       outputSchema: z.object({}),
@@ -232,6 +238,7 @@ describe('defineOperation (typed builder)', () => {
     const op = defineOperation({
       name: 'weft.test.scopedcopy',
       mcpExposable: false,
+      destructive: false,
       summary: 's',
       inputSchema: z.object({}),
       outputSchema: z.object({}),
@@ -256,6 +263,7 @@ describe('defineOperation (typed builder)', () => {
     const op = defineOperation({
       name: 'weft.test.optauthcopy',
       mcpExposable: false,
+      destructive: false,
       summary: 's',
       inputSchema: z.object({}),
       outputSchema: z.object({}),
@@ -281,6 +289,7 @@ describe('defineOperation (typed builder)', () => {
     const op = defineOperation({
       name: 'weft.test.alternativescopy',
       mcpExposable: false,
+      destructive: false,
       summary: 's',
       inputSchema: z.object({}),
       outputSchema: z.object({}),

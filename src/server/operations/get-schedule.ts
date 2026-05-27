@@ -28,6 +28,7 @@ export const getScheduleOperation = defineOperation<GetScheduleInput, GetSchedul
   name: 'weft.schedules.get',
   mcpExposable: false,
   summary: 'Get a recurring schedule by id',
+  destructive: false,
   tags: ['Schedules'],
   inputSchema: getScheduleInput,
   outputSchema: getScheduleOutput as z.ZodType<GetScheduleOutput>,

@@ -98,6 +98,25 @@ function assertKindAndEventSchemaAgree(operation: RegistrableOperation): void {
   }
 }
 
+/**
+ * Mirror the required `destructive` field at runtime. The TypeScript type
+ * forces every `defineOperation` caller to declare it, but
+ * `createOperationRegistry` accepts any `RegistrableOperation`-shaped value —
+ * including hand-rolled object literals from test fixtures or third-party
+ * adapters that bypass `defineOperation`. A missing or non-boolean
+ * `destructive` would let an operation slip past the explicit-declaration
+ * quality floor that the CLI confirmation gate, dashboard bulk-action
+ * confirmations, and MCP exposure all depend on. Reject at assembly so the
+ * error points at the registry, not at the first request.
+ */
+function assertDestructiveDeclared(operation: RegistrableOperation): void {
+  if (typeof operation.destructive !== 'boolean') {
+    throw new Error(
+      `operation "${operation.name}" must declare an explicit boolean "destructive" flag (got ${typeof operation.destructive}). Every operation has to state whether it irreversibly mutates state — there is no implicit default. Mark cancel/purge/bulk-delete/raw-storage-write style operations true and read-only operations false.`,
+    );
+  }
+}
+
 function assertMcpMetadataAgrees(operation: RegistrableOperation): void {
   if (!operation.mcpExposable) return;
   if (operation.mcpTool === undefined) {
@@ -138,6 +157,7 @@ export function createOperationRegistry(
     validateOperationName(operation.name);
     assertSafeDeclaredKeys(operation);
     assertKindAndEventSchemaAgree(operation);
+    assertDestructiveDeclared(operation);
     assertMcpMetadataAgrees(operation);
     byName.set(operation.name, freezeOperation(operation));
   }

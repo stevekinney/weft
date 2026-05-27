@@ -20,6 +20,7 @@ export const getRetentionOverviewOperation = defineOperation<
   name: 'weft.retention.get',
   mcpExposable: false,
   summary: 'Get retention policy overview',
+  destructive: false,
   tags: ['System'],
   inputSchema: getRetentionOverviewInput,
   outputSchema: getRetentionOverviewOutput as z.ZodType<GetRetentionOverviewOutput>,

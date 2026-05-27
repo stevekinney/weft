@@ -23,6 +23,7 @@ export const getWorkflowTimelineOperation = defineOperation<
   name: 'weft.workflows.timeline.get',
   mcpExposable: false,
   summary: 'Get the structured execution timeline for a workflow',
+  destructive: false,
   tags: ['Checkpoints'],
   inputSchema: getWorkflowTimelineInput,
   outputSchema: getWorkflowTimelineOutput as z.ZodType<GetWorkflowTimelineOutput>,

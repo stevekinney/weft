@@ -31,6 +31,7 @@ export const streamWorkflowSseOperation = defineOperation<
   mcpExposable: false,
   kind: 'stream',
   summary: 'Stream workflow tokens as Server-Sent Events',
+  destructive: false,
   tags: ['Streams'],
   inputSchema: streamWorkflowSseInput,
   outputSchema: z.object({ chunks: z.array(z.unknown()) }) as z.ZodType<StreamWorkflowSseOutput>,

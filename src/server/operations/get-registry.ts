@@ -61,6 +61,7 @@ export const getRegistryOperation = defineOperation<GetRegistryInput, GetRegistr
   name: 'weft.system.registry',
   mcpExposable: false,
   summary: 'Get a snapshot of registered workflows and activities with their JSON Schemas',
+  destructive: false,
   tags: ['System'],
   inputSchema: getRegistryInput,
   outputSchema: getRegistryOutput as z.ZodType<GetRegistryOutput>,

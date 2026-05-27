@@ -17,6 +17,7 @@ describe('single-workflow control operation helpers', () => {
     const operation = createSingleWorkflowControlOperation({
       name: 'weft.workflows.cancel',
       summary: 'Cancel a running workflow',
+      destructive: false,
       tags: ['Workflows'],
       inputSchema,
       outputSchema: z.undefined(),
@@ -44,6 +45,7 @@ describe('single-workflow control operation helpers', () => {
     const operation = createSingleWorkflowControlOperation({
       name: 'weft.workflows.resume',
       summary: 'Resume a suspended workflow',
+      destructive: false,
       tags: ['Workflows'],
       inputSchema,
       outputSchema: z.object({ id: z.string() }),

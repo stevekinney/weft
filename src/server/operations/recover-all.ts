@@ -26,6 +26,7 @@ export const recoverAllOperation = defineOperation<RecoverAllInput, RecoverAllOu
   name: 'weft.recover.all',
   mcpExposable: false,
   summary: 'Recover all interrupted workflows',
+  destructive: true,
   tags: ['System'],
   inputSchema: recoverAllInput,
   outputSchema: recoverAllOutput,

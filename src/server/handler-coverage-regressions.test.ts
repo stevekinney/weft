@@ -51,6 +51,7 @@ describe('handleRequest coverage regressions', () => {
     const bindingOperation = defineOperation({
       name: 'weft.test.routeshadow',
       mcpExposable: false,
+      destructive: false,
       summary: 'shadow route',
       inputSchema: z.object({ resource: z.string() }),
       outputSchema: z.object({ resource: z.string() }),
@@ -83,6 +84,7 @@ describe('handleRequest coverage regressions', () => {
     const bindingOperation = defineOperation({
       name: 'weft.test.badroute',
       mcpExposable: false,
+      destructive: false,
       summary: 'bad route',
       inputSchema: z.object({ id: z.string() }),
       outputSchema: z.object({ ok: z.literal(true) }),
@@ -119,6 +121,7 @@ describe('handleRequest coverage regressions', () => {
     const bindingOperation = defineOperation({
       name: 'weft.test.malformedfault',
       mcpExposable: false,
+      destructive: false,
       summary: 'malformed fault',
       inputSchema: z.object({}),
       outputSchema: z.object({ ok: z.literal(true) }),

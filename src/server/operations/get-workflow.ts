@@ -41,6 +41,7 @@ export const getWorkflowOperation = defineOperation<GetWorkflowInput, GetWorkflo
   name: 'weft.workflows.get',
   mcpExposable: false,
   summary: 'Get workflow state by id',
+  destructive: false,
   tags: ['Workflows'],
   inputSchema: getWorkflowInput,
   outputSchema: getWorkflowOutput as z.ZodType<GetWorkflowOutput>,

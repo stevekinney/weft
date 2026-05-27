@@ -22,6 +22,7 @@ export const getWorkflowEventsOperation = defineOperation<
   name: 'weft.workflows.events.list',
   mcpExposable: false,
   summary: 'Get workflow events by id',
+  destructive: false,
   tags: ['Events'],
   inputSchema: getWorkflowEventsInput,
   outputSchema: getWorkflowEventsOutput as z.ZodType<GetWorkflowEventsOutput>,

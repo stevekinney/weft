@@ -25,6 +25,7 @@ function makeOperation(options: {
     return defineOperation({
       name: options.name,
       mcpExposable: false,
+      destructive: false,
       kind: 'stream',
       summary: 'test operation',
       tags: ['Tests'],
@@ -43,6 +44,7 @@ function makeOperation(options: {
   return defineOperation({
     name: options.name,
     mcpExposable: false,
+    destructive: false,
     summary: 'test operation',
     tags: ['Tests'],
     inputSchema: options.inputSchema,

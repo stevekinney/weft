@@ -116,6 +116,7 @@ export function createGetTaskDiagnosticsOperation(options: GetTaskDiagnosticsOpt
     name: 'weft.tasks.diagnostics',
     mcpExposable: false,
     summary: 'Get bounded task latency and stuck-work diagnostics',
+    destructive: false,
     tags: ['Observability'],
     inputSchema: getTaskDiagnosticsInput,
     outputSchema: getTaskDiagnosticsOutput,

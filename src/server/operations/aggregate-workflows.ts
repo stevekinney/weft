@@ -52,6 +52,7 @@ export const aggregateWorkflowsOperation = defineOperation<
   name: 'weft.workflows.aggregate',
   mcpExposable: false,
   summary: 'Aggregate workflows by a single dimension',
+  destructive: false,
   tags: ['Workflows'],
   inputSchema: aggregateWorkflowsInput,
   outputSchema: aggregateWorkflowsOutput as z.ZodType<AggregateWorkflowsOutput>,

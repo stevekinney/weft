@@ -34,6 +34,7 @@ export const updateWorkflowOperation = defineOperation<UpdateWorkflowInput, Upda
   name: 'weft.workflows.update',
   mcpExposable: false,
   summary: 'Send a synchronous update to a workflow',
+  destructive: true,
   tags: ['Updates'],
   inputSchema: updateWorkflowInput,
   outputSchema: updateWorkflowOutput,

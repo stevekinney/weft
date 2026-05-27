@@ -50,6 +50,7 @@ export const workflowEventsSubscriptionOperation = defineOperation<
   mcpExposable: false,
   kind: 'subscription',
   summary: 'Subscribe to workflow events with replay-from-cursor',
+  destructive: false,
   tags: ['Events'],
   inputSchema: workflowEventsSubscriptionInput,
   outputSchema: workflowEventsSubscriptionEnvelope,

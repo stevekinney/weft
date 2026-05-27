@@ -275,6 +275,7 @@ describe('Track 8 acceptance coverage', () => {
       defineOperation({
         name: 'weft.test.mutate',
         mcpExposable: false,
+        destructive: false,
         summary: 'mutating test operation',
         inputSchema: z.object({ value: z.string() }),
         outputSchema: z.object({ mutated: z.string() }),

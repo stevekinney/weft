@@ -108,6 +108,7 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
   name: 'weft.schedules.create',
   mcpExposable: false,
   summary: 'Create a recurring schedule',
+  destructive: false,
   tags: ['Schedules'],
   inputSchema: createScheduleInput,
   outputSchema: createScheduleOutput,

@@ -18,6 +18,7 @@ export const pauseScheduleOperation = defineOperation<PauseScheduleInput, PauseS
   name: 'weft.schedules.pause',
   mcpExposable: false,
   summary: 'Pause a recurring schedule',
+  destructive: false,
   tags: ['Schedules'],
   inputSchema: pauseScheduleInput,
   outputSchema: pauseScheduleOutput as z.ZodType<PauseScheduleOutput>,

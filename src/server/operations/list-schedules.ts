@@ -105,6 +105,7 @@ export const listSchedulesOperation = defineOperation<ListSchedulesInput, ListSc
   name: 'weft.schedules.list',
   mcpExposable: false,
   summary: 'List recurring schedules',
+  destructive: false,
   tags: ['Schedules'],
   inputSchema: listSchedulesInput,
   outputSchema: listSchedulesOutput as z.ZodType<ListSchedulesOutput>,

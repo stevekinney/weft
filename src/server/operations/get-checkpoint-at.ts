@@ -24,6 +24,7 @@ export const getCheckpointAtOperation = defineOperation<
   name: 'weft.workflows.checkpoints.get',
   mcpExposable: false,
   summary: 'Get a specific checkpoint by step number',
+  destructive: false,
   tags: ['Checkpoints'],
   inputSchema: getCheckpointAtInput,
   outputSchema: getCheckpointAtOutput as z.ZodType<GetCheckpointAtOutput>,

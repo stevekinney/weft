@@ -18,6 +18,7 @@ export const cancelScheduleOperation = defineOperation<CancelScheduleInput, Canc
   name: 'weft.schedules.cancel',
   mcpExposable: false,
   summary: 'Cancel a recurring schedule',
+  destructive: true,
   tags: ['Schedules'],
   inputSchema: cancelScheduleInput,
   outputSchema: cancelScheduleOutput as z.ZodType<CancelScheduleOutput>,

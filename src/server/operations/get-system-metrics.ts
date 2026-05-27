@@ -42,6 +42,7 @@ export function createGetSystemMetricsOperation(options?: {
     name: 'weft.system.metrics',
     mcpExposable: false,
     summary: 'Get JSON-shaped system metrics',
+    destructive: false,
     tags: ['Observability'],
     inputSchema: getSystemMetricsInput,
     outputSchema: getSystemMetricsOutput as z.ZodType<GetSystemMetricsOutput>,

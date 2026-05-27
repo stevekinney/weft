@@ -36,6 +36,7 @@ export const replayWorkflowOperation = defineOperation<ReplayWorkflowInput, Repl
   name: 'weft.workflows.replay',
   mcpExposable: false,
   summary: 'Replay a workflow to a historical checkpoint step',
+  destructive: false,
   tags: ['Checkpoints'],
   inputSchema: replayWorkflowInput,
   outputSchema: replayWorkflowOutput as z.ZodType<ReplayWorkflowOutput>,
