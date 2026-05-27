@@ -169,28 +169,54 @@ await Bun.build({
 await $`bunx tsc --declaration --emitDeclarationOnly --project tsconfig.build.json`;
 
 // Guard: nothing test-only may ship in the published package. Test-support
-// helpers under src/ that import dev-only modules (bun:test, fake-indexeddb)
-// used to leak into dist/ because the build excludes by filename suffix
-// (*.test-support.ts), not by reachability — a plainly named helper would
-// compile and ship a require() against a devDependency. Renaming the offenders
-// to *.test-support.ts fixed it; this assertion keeps it fixed. A reintroduced
-// leak fails the build rather than reaching a consumer's bundler.
+// helpers under src/ that import dev-only modules used to leak into dist/
+// because the build excludes by filename suffix (*.test-support.ts), not by
+// reachability — a plainly named helper would compile and ship an import of a
+// devDependency a consumer never installs. Renaming the offenders to
+// *.test-support.ts fixed it; this assertion keeps it fixed.
+//
+// We match real module specifiers (import/export-from/require/dynamic-import),
+// not raw substrings, so a token appearing inside a string or comment does not
+// false-positive, and we compare by package root so `bun:test` and any subpath
+// like `fake-indexeddb/auto` are both caught. The forbidden set is curated
+// rather than derived from every devDependency: several devDependencies
+// (better-sqlite3, svelte, valibot) are deliberately present in dist/, so a
+// blanket "no devDependency in dist" rule would false-positive on them. These
+// three are the test-only modules with no legitimate path into shipped output;
+// add to the list if a new test-only runtime dependency is introduced.
 async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
-  const forbidden = ['bun:test', 'fake-indexeddb'];
-  const offenders: { file: string; token: string }[] = [];
+  const forbiddenPackageRoots = ['bun:test', 'fake-indexeddb', 'jsdom'];
+
+  // Capture the specifier from every form that pulls in a module: `from '…'`,
+  // `require('…')`, dynamic `import('…')`, and bare side-effect `import '…'`
+  // (the form the original leak used — `import 'fake-indexeddb/auto'`).
+  const specifierPattern =
+    /(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)(["'])([^"']+)\1/g;
+
+  const packageRootOf = (specifier: string): string => {
+    if (specifier.startsWith('@')) {
+      const [scope, name] = specifier.split('/');
+      return name ? `${scope}/${name}` : specifier;
+    }
+    return specifier.split('/')[0];
+  };
+
+  const offenders: { file: string; specifier: string }[] = [];
   const distGlob = new Bun.Glob('dist/**/*.{js,d.ts}');
 
   for await (const distPath of distGlob.scan('.')) {
     const contents = await Bun.file(distPath).text();
-    for (const token of forbidden) {
-      if (contents.includes(token)) offenders.push({ file: distPath, token });
+    for (const [, , specifier] of contents.matchAll(specifierPattern)) {
+      if (forbiddenPackageRoots.includes(packageRootOf(specifier))) {
+        offenders.push({ file: distPath, specifier });
+      }
     }
   }
 
   if (offenders.length > 0) {
-    console.error('Build produced dist/ artifacts that reference test-only dependencies:');
-    for (const { file, token } of offenders) {
-      console.error(`  ${file} references "${token}"`);
+    console.error('Build produced dist/ artifacts that import test-only dependencies:');
+    for (const { file, specifier } of offenders) {
+      console.error(`  ${file} imports "${specifier}"`);
     }
     console.error(
       'Rename the offending helper to *.test-support.ts so the build excludes it from dist/.',
