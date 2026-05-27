@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'bun:test';
-import 'fake-indexeddb/auto';
 
 import { IndexedDBStorage } from './indexeddb';
 
