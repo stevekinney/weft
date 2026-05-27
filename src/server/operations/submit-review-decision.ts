@@ -118,7 +118,10 @@ export const submitReviewDecisionOperation = defineOperation<
   name: 'weft.reviews.decision.submit',
   mcpExposable: false,
   summary: 'Submit a decision for a human review',
-  destructive: false,
+  // Submitting an approve/reject decision durably resumes the workflow down
+  // the corresponding branch; the decision cannot be retracted. Same finality
+  // as a signal, so it is destructive.
+  destructive: true,
   tags: ['Reviews'],
   inputSchema: submitReviewDecisionInput,
   outputSchema: submitReviewDecisionOutput as z.ZodType<SubmitReviewDecisionOutput>,

@@ -37,6 +37,7 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.workflows.update': true,
   'weft.recover.all': true,
   'weft.schedules.cancel': true,
+  'weft.reviews.decision.submit': true,
   'weft.workflows.bulk.cancel': true,
   'weft.workflows.bulk.delete': true,
   'weft.workflows.bulk.signal': true,
@@ -73,7 +74,6 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.retention.get': false,
   'weft.reviews.get': false,
   'weft.reviews.list': false,
-  'weft.reviews.decision.submit': false,
   'weft.schedules.create': false,
   'weft.schedules.update': false,
   'weft.schedules.get': false,
@@ -91,66 +91,19 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.storage.scan': false,
 };
 
-function liveOperationNames(): string[] {
-  return createLiveOperationRegistry()
-    .list()
-    .map((operation) => operation.name)
-    .toSorted();
-}
-
 describe('operation destructive classification', () => {
-  it('declares destructive for every live operation, exhaustively', () => {
-    const names = liveOperationNames();
-    const expectedNames = Object.keys(EXPECTED_DESTRUCTIVE).toSorted();
-
-    // Both directions: no live operation missing from the expected map, and
-    // no stale expected entry that no longer exists in the registry.
-    expect(names).toEqual(expectedNames);
-  });
-
-  it('every live operation carries an explicit boolean destructive flag', () => {
-    for (const operation of createLiveOperationRegistry().list()) {
-      expect(typeof operation.destructive).toBe('boolean');
-    }
-  });
-
-  it('matches the pinned classification for each operation', () => {
+  it('classifies every live operation exhaustively and correctly', () => {
+    // A single whole-map comparison covers all three failure modes at once:
+    // a new operation missing from the expected map, a stale expected entry
+    // no longer in the registry, and any operation whose flag drifts from the
+    // pinned value. (Every value in EXPECTED_DESTRUCTIVE is a boolean, so the
+    // comparison also proves each live flag is a boolean.) On failure, Bun's
+    // object diff names the exact offending operation and its values.
     const actual: Record<string, boolean> = {};
     for (const operation of createLiveOperationRegistry().list()) {
       actual[operation.name] = operation.destructive;
     }
-    // Compare whole maps: a single diff surfaces both the offending operation
-    // and its expected-vs-actual value, and avoids a possibly-undefined index
-    // access under noUncheckedIndexedAccess.
     expect(actual).toEqual({ ...EXPECTED_DESTRUCTIVE });
-  });
-
-  it('flags the known destructive operations true', () => {
-    const registry = createLiveOperationRegistry();
-    for (const name of [
-      'weft.workflows.cancel',
-      'weft.workflows.purge',
-      'weft.workflows.bulk.delete',
-      'weft.recover.all',
-      'weft.storage.delete',
-      'weft.workers.drain',
-    ]) {
-      expect(registry.get(name)?.destructive).toBe(true);
-    }
-  });
-
-  it('flags the known read-only operations false', () => {
-    const registry = createLiveOperationRegistry();
-    for (const name of [
-      'weft.workflows.get',
-      'weft.workflows.list',
-      'weft.workflows.aggregate',
-      'weft.system.registry',
-      'weft.system.metrics',
-      'weft.storage.get',
-    ]) {
-      expect(registry.get(name)?.destructive).toBe(false);
-    }
   });
 });
 

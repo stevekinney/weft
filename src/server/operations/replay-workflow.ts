@@ -36,6 +36,9 @@ export const replayWorkflowOperation = defineOperation<ReplayWorkflowInput, Repl
   name: 'weft.workflows.replay',
   mcpExposable: false,
   summary: 'Replay a workflow to a historical checkpoint step',
+  // Not destructive: this is a side-effecting read (workflows:read scope, GET
+  // binding). It reconstructs historical state via replayTo() and returns a
+  // WorkflowReplay value — the live workflow is never mutated or rewound.
   destructive: false,
   tags: ['Checkpoints'],
   inputSchema: replayWorkflowInput,
