@@ -54,6 +54,12 @@ export interface CorsOptions {
    * "any origin" and is only legal when `credentials` is not `true`.
    *
    * Omitting this (or an empty array) allows no cross-origin requests.
+   *
+   * Note: the array form canonicalizes both the allowlist and the incoming
+   * origin (so case, default-port elision, and trailing slashes do not matter).
+   * The predicate form receives the **raw** `Origin` header value with no
+   * canonicalization — apply `canonicalizeOrigin` yourself if you need the same
+   * normalization for case-insensitive or default-port comparisons.
    */
   readonly allowedOrigins?: ReadonlyArray<string> | ((origin: string) => boolean);
   /** Methods advertised in preflight responses. Defaults to the common verbs plus `OPTIONS`. */
@@ -80,8 +86,13 @@ const WILDCARD_ORIGIN = '*';
 export type ResolvedCorsPolicy = {
   readonly matchOrigin: (origin: string) => boolean;
   readonly allowsAnyOrigin: boolean;
+  /** Pre-joined `Access-Control-Allow-Methods` value emitted in preflight responses. */
   readonly allowedMethodsHeader: string;
+  /** Uppercased method names, for O(1) validation of the preflight's requested method. */
+  readonly allowedMethodSet: ReadonlySet<string>;
+  /** Pre-joined `Access-Control-Allow-Headers` value emitted in preflight responses. */
   readonly allowedHeadersHeader: string;
+  /** Lowercased header names, for O(1) validation of the preflight's requested headers. */
   readonly allowedHeaderSet: ReadonlySet<string>;
   readonly exposedHeadersHeader: string | null;
   readonly credentials: boolean;
@@ -159,7 +170,11 @@ export function resolveCorsPolicy(
   ) {
     headerList.push('Authorization');
   }
+  // CORS header and method names are case-insensitive per the Fetch spec, so
+  // the lookup sets normalize case once here and compare normalized at request
+  // time. Headers lowercase, methods uppercase (their conventional forms).
   const allowedHeaderSet = new Set(headerList.map((header) => header.toLowerCase()));
+  const allowedMethodSet = new Set(methods.map((method) => method.toUpperCase()));
 
   const exposed = options.exposedHeaders ?? [];
 
@@ -167,6 +182,7 @@ export function resolveCorsPolicy(
     matchOrigin: match,
     allowsAnyOrigin: allowsAny,
     allowedMethodsHeader: methods.join(', '),
+    allowedMethodSet,
     allowedHeadersHeader: headerList.join(', '),
     allowedHeaderSet,
     exposedHeadersHeader: exposed.length > 0 ? exposed.join(', ') : null,
@@ -222,25 +238,26 @@ export function buildPreflightResponse(policy: ResolvedCorsPolicy, request: Requ
     'Cache-Control': 'no-store',
   };
 
+  const denied = new Response(null, { status: 204, headers: baseHeaders });
+
   const origin = request.headers.get('origin');
+  if (origin === null || !isOriginAllowed(policy, origin)) {
+    return denied;
+  }
+
   const requestedMethod = request.headers.get('access-control-request-method');
+  if (requestedMethod === null || !policy.allowedMethodSet.has(requestedMethod.toUpperCase())) {
+    return denied;
+  }
+
   const requestedHeaders = parseRequestedHeaders(
     request.headers.get('access-control-request-headers'),
   );
-
-  const permitted =
-    origin !== null &&
-    isOriginAllowed(policy, origin) &&
-    requestedMethod !== null &&
-    policy.allowedMethodsHeader
-      .split(', ')
-      .some((method) => method.toUpperCase() === requestedMethod.toUpperCase()) &&
-    requestedHeaders.every((header) => policy.allowedHeaderSet.has(header));
-
-  if (!permitted || origin === null) {
-    return new Response(null, { status: 204, headers: baseHeaders });
+  if (!requestedHeaders.every((header) => policy.allowedHeaderSet.has(header))) {
+    return denied;
   }
 
+  // Origin is narrowed to `string` here by the guards above.
   const headers: Record<string, string> = {
     ...baseHeaders,
     'Access-Control-Allow-Origin': allowOriginValue(policy, origin),

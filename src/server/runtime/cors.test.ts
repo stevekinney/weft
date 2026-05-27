@@ -217,15 +217,28 @@ describe('decorateResponseWithCors', () => {
     );
   });
 
-  it('appends Origin to an existing Vary header without clobbering it', () => {
+  it('appends Origin to an existing Vary header without clobbering it, mutating in place', () => {
     const policy = resolveCorsPolicy({ allowedOrigins: ['https://a.test'] });
     const response = new Response('ok', { headers: { Vary: 'Accept-Encoding' } });
-    decorateResponseWithCors(
+    const result = decorateResponseWithCors(
       policy,
       new Request('http://api.test/v1', { headers: { origin: 'https://a.test' } }),
       response,
     );
-    expect(response.headers.get('Vary')).toBe('Accept-Encoding, Origin');
+    // The decorator mutates and returns the same Response; assert identity so a
+    // future move to an immutable (new-Response) implementation cannot pass
+    // silently.
+    expect(result).toBe(response);
+    expect(result.headers.get('Vary')).toBe('Accept-Encoding, Origin');
+  });
+
+  it('does not duplicate Origin in Vary when decorated twice', () => {
+    const policy = resolveCorsPolicy({ allowedOrigins: ['https://a.test'] });
+    const request = new Request('http://api.test/v1', { headers: { origin: 'https://a.test' } });
+    const response = new Response('ok');
+    decorateResponseWithCors(policy, request, response);
+    decorateResponseWithCors(policy, request, response);
+    expect(response.headers.get('Vary')).toBe('Origin');
   });
 });
 
@@ -259,6 +272,14 @@ describe('validateCorsOptions', () => {
 
   it('rejects a wildcard origin paired with an Authorization allowed-header', () => {
     const options: CorsOptions = { allowedOrigins: ['*'], allowedHeaders: ['Authorization'] };
+    expect(() => validateCorsOptions(options)).toThrow(/bearer tokens/);
+  });
+
+  it('rejects a wildcard origin when allowedHeaders is omitted (Authorization is in defaults)', () => {
+    // The most likely misconfiguration: `allowedOrigins: ['*']` with no
+    // explicit allowedHeaders falls back to DEFAULT_ALLOWED_HEADERS, which
+    // includes Authorization — so the guard must still fire.
+    const options: CorsOptions = { allowedOrigins: ['*'] };
     expect(() => validateCorsOptions(options)).toThrow(/bearer tokens/);
   });
 

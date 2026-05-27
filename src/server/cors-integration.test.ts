@@ -141,6 +141,53 @@ describe('serve({ cors }) — actual responses', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('access-control-allow-origin')).toBeNull();
   });
+
+  it('emits Access-Control-Allow-Origin: * for a non-credentialed wildcard policy', async () => {
+    engine = createEngine();
+    server = serve({
+      engine,
+      port: 0,
+      cors: { allowedOrigins: ['*'], allowedHeaders: ['Content-Type'] },
+    });
+
+    const response = await fetch(`${server.url}/v1/health`, {
+      headers: { Origin: 'https://any-origin.example.com' },
+    });
+
+    expect(response.headers.get('access-control-allow-origin')).toBe('*');
+    expect(response.headers.get('access-control-allow-credentials')).toBeNull();
+  });
+
+  it('honors a predicate allowedOrigins end-to-end', async () => {
+    engine = createEngine();
+    server = serve({
+      engine,
+      port: 0,
+      cors: { allowedOrigins: (origin) => origin.endsWith('.example.com') },
+    });
+
+    const allowed = await fetch(`${server.url}/v1/health`, {
+      headers: { Origin: 'https://app.example.com' },
+    });
+    expect(allowed.headers.get('access-control-allow-origin')).toBe('https://app.example.com');
+
+    const rejected = await fetch(`${server.url}/v1/health`, {
+      headers: { Origin: 'https://evil.test' },
+    });
+    expect(rejected.headers.get('access-control-allow-origin')).toBeNull();
+  });
+
+  it('emits no CORS headers for an Origin: null request', async () => {
+    engine = createEngine();
+    server = serve({
+      engine,
+      port: 0,
+      cors: { allowedOrigins: ['*'], allowedHeaders: ['Content-Type'] },
+    });
+
+    const response = await fetch(`${server.url}/v1/health`, { headers: { Origin: 'null' } });
+    expect(response.headers.get('access-control-allow-origin')).toBeNull();
+  });
 });
 
 describe('serve() — safe default (no cors)', () => {
@@ -225,5 +272,25 @@ describe('serve({ cors }) — WebSocket origin enforcement', () => {
     });
 
     expect(response.status).toBe(403);
+  });
+
+  it('does not reject a WebSocket upgrade from an allowed origin at the CORS layer', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0, cors: { allowedOrigins: ['https://app.example.com'] } });
+
+    const response = await fetch(`${server.url}/jsonrpc`, {
+      headers: {
+        Origin: 'https://app.example.com',
+        Upgrade: 'websocket',
+        Connection: 'Upgrade',
+        'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==',
+        'Sec-WebSocket-Version': '13',
+      },
+    });
+
+    // The key invariant is that the CORS origin gate does not block an allowed
+    // origin — the upgrade may complete (101) or fail later for unrelated
+    // handshake reasons, but it must not be the 403 the gate emits.
+    expect(response.status).not.toBe(403);
   });
 });
