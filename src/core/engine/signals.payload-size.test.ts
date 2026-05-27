@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.ts';
+import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 import { Engine } from '../engine.ts';
 import { PayloadSizeExceededError } from '../payload-size.ts';
 import { workflow, type WorkflowContext } from '../types.ts';

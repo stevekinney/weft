@@ -68,7 +68,7 @@ export function validateHandshakeHeaders(
  *
  * @example
  * ```ts
- * import type { ParsedFrame, OPCODE_TEXT } from './worker-fault-injection-frames.ts';
+ * import type { ParsedFrame, OPCODE_TEXT } from './worker-fault-injection-frames.test-support.ts';
  * declare const frame: ParsedFrame;
  * if (frame.opcode === 0x1) void frame.payload;
  * ```
@@ -85,7 +85,7 @@ export type ParsedFrame = {
  *
  * @example
  * ```ts
- * import { concatChunks } from './worker-fault-injection-frames.ts';
+ * import { concatChunks } from './worker-fault-injection-frames.test-support.ts';
  * const merged = concatChunks(new Uint8Array([1, 2]), new Uint8Array([3]));
  * ```
  */
@@ -103,7 +103,7 @@ export function concatChunks(left: Uint8Array, right: Uint8Array): Uint8Array {
  *
  * @example
  * ```ts
- * import { tryParseFrame } from './worker-fault-injection-frames.ts';
+ * import { tryParseFrame } from './worker-fault-injection-frames.test-support.ts';
  * const frame = tryParseFrame(new Uint8Array([0x81, 0x00]));
  * ```
  */
@@ -149,7 +149,7 @@ export function tryParseFrame(buffer: Uint8Array): ParsedFrame | null {
  *
  * @example
  * ```ts
- * import { maskPayload } from './worker-fault-injection-frames.ts';
+ * import { maskPayload } from './worker-fault-injection-frames.test-support.ts';
  * const masked = maskPayload(new Uint8Array([1]), new Uint8Array([0xff, 0, 0, 0]));
  * ```
  */
@@ -167,7 +167,7 @@ export function maskPayload(payload: Uint8Array, mask: Uint8Array): Uint8Array {
  *
  * @example
  * ```ts
- * import { buildClientFrame, OPCODE_TEXT } from './worker-fault-injection-frames.ts';
+ * import { buildClientFrame, OPCODE_TEXT } from './worker-fault-injection-frames.test-support.ts';
  * const frame = buildClientFrame(OPCODE_TEXT, new TextEncoder().encode('hello'));
  * ```
  */

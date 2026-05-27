@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { waitForRealTimersForTesting } from '../testing/fake-timers.ts';
+import { waitForRealTimersForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';

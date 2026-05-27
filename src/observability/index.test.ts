@@ -16,7 +16,7 @@ import type {
 import type { WorkflowContext } from '../core/types';
 import { workflow } from '../core/types/workflow-function.ts';
 import { MemoryStorage } from '../storage/memory';
-import { flush } from '../testing/storage-backends';
+import { flush } from '../testing/storage-backends.test-support';
 import { createObservabilityInterceptors } from './index';
 import { MetricsCollector } from './metrics';
 import type {

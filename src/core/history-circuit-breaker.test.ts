@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import { decode, encode } from './codec.ts';
 import { Engine } from './engine.ts';
 import { normalizeHistoryPolicy } from './engine/validation.ts';

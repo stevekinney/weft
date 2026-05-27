@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 /**
  * Tests for WorkflowState.failureCategory — populated on all failed workflows
  * and indexed so it can be queried via engine.list({ attributes: ... }).

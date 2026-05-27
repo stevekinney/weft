@@ -7,7 +7,7 @@ import { workflow } from '../core/types/workflow-function.ts';
 import { serve, type WeftServer } from '../server/index.ts';
 import { anonymousPrincipal, principalFromJwtClaims } from '../server/principal.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import { waitForCondition } from '../testing/fake-timers.ts';
+import { waitForCondition } from '../testing/fake-timers.test-support.ts';
 import { handleMcpHttpRequest } from './http.ts';
 import { createMcpSessionManager, McpSession, type McpSessionManager } from './session.ts';
 import { callMcpTool } from './tools.ts';

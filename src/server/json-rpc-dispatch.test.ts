@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 /**
  * Tests for `dispatchJsonRpc` — the transport-neutral JSON-RPC dispatcher
  * that every JSON-RPC transport adapter (HTTP POST, WebSocket frame,

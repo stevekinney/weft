@@ -1,4 +1,4 @@
-import { waitForCondition } from '../testing/fake-timers.ts';
+import { waitForCondition } from '../testing/fake-timers.test-support.ts';
 /**
  * Phase 15 — Integration tests for the `handleRequest` pipeline path.
  *

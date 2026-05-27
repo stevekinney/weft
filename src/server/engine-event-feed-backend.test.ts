@@ -1,4 +1,4 @@
-import { sleepForTesting, waitForCondition } from '../testing/fake-timers.ts';
+import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
 /**
  * Tests for `createEngineEventFeedBackend` — the production
  * `WorkflowEventFeedBackend` implementation that wraps engine-owned

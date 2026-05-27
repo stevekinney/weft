@@ -1132,8 +1132,8 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = new Map<string, CoverageAllowa
       ]),
     },
   ],
-  ['src/testing/fake-timers.ts', { lines: new Set([232]) }],
-  ['src/testing/storage-backends.ts', { lines: new Set([71, 72, 73]) }],
+  ['src/testing/fake-timers.test-support.ts', { lines: new Set([232]) }],
+  ['src/testing/storage-backends.test-support.ts', { lines: new Set([71, 72, 73]) }],
   [
     'src/worker/protocol.ts',
     { lines: new Set([774, 775, 776, 777, 782, 783, 784, 785, 790, 791, 792, 793]) },
@@ -1474,7 +1474,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
     },
   ],
   [
-    'src/testing/worker-fault-injection-frames.ts',
+    'src/testing/worker-fault-injection-frames.test-support.ts',
     {
       functions: 2,
       lines: new Set([
@@ -1493,7 +1493,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
     },
   ],
   [
-    'src/testing/worker-fault-injection.ts',
+    'src/testing/worker-fault-injection.test-support.ts',
     {
       functions: 15,
       lines: new Set([

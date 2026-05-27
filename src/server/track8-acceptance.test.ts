@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { z } from 'zod';
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { createDiskBackedTestFixture } from '../testing/storage-backends.ts';
+import { createDiskBackedTestFixture } from '../testing/storage-backends.test-support.ts';
 import { LMDBStorage } from './lmdb';
 import { runStorageCapabilityConformance } from './storage-adapter.test-support.ts';
 

@@ -1,7 +1,12 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { waitForever } from '../testing/fake-timers.ts';
+import { waitForever } from '../testing/fake-timers.test-support.ts';
 
-import { collectKeys, flush, storageBackends, teardown } from '../testing/storage-backends.ts';
+import {
+  collectKeys,
+  flush,
+  storageBackends,
+  teardown,
+} from '../testing/storage-backends.test-support.ts';
 import { Engine } from './engine.ts';
 import { workflow, type SearchAttributeSchema, type WorkflowContext } from './types.ts';
 

@@ -2,14 +2,14 @@ import { afterEach, describe, expect, it, mock } from 'bun:test';
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { restoreRealTimers, useFakeTimers } from './fake-timers.ts';
+import { restoreRealTimers, useFakeTimers } from './fake-timers.test-support.ts';
 import {
   createDiskBackedTestFixture,
   flush,
   sqliteDatabaseSidecarSuffixes,
   teardown,
   waitForWorkflowStatus,
-} from './storage-backends.ts';
+} from './storage-backends.test-support.ts';
 
 afterEach(() => {
   restoreRealTimers();

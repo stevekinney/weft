@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../storage/memory.ts';
-import { sleepForTesting } from '../testing/fake-timers.ts';
-import { flush } from '../testing/storage-backends.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { flush } from '../testing/storage-backends.test-support.ts';
 import {
   clearEngineLeakWarningTokenForTesting,
   Engine,

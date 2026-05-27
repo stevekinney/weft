@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting, waitForever } from '../testing/fake-timers.ts';
+import { sleepForTesting, waitForever } from '../testing/fake-timers.test-support.ts';
 
 import { KEYS } from '../storage/interface.ts';
 import { TestEngine } from '../testing/test-engine.ts';

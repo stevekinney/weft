@@ -4,7 +4,7 @@ import { Engine } from '../../core/engine.ts';
 import type { WorkflowContext, WorkflowState, WorkflowStatus } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { restoreRealTimers, useFakeTimers } from '../../testing/fake-timers.ts';
+import { restoreRealTimers, useFakeTimers } from '../../testing/fake-timers.test-support.ts';
 import {
   invalidJsonRequest,
   jsonRequest,

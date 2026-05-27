@@ -1,6 +1,6 @@
 import type { Engine } from '../../core/engine.ts';
 import type { WorkflowStatus } from '../../core/types.ts';
-import { waitForCondition } from '../../testing/fake-timers.ts';
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 
 type WaitForWorkflowStatusOptions = {
   intervalMilliseconds?: number;

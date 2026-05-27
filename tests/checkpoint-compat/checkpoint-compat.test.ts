@@ -13,7 +13,7 @@ import {
   registerScenarioHandlers,
   scenarioNames,
 } from '../../src/testing/replay-scenarios.test-support.ts';
-import { storageBackends, teardown } from '../../src/testing/storage-backends.ts';
+import { storageBackends, teardown } from '../../src/testing/storage-backends.test-support.ts';
 import type { TraceFixture } from '../../src/testing/trace-fixture-support.test-support.ts';
 
 const checkpointFixtureDirectory = 'tests/checkpoint-compat';

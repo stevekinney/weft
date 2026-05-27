@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting, waitForRealTimersForTesting } from '../testing/fake-timers.ts';
+import {
+  sleepForTesting,
+  waitForRealTimersForTesting,
+} from '../testing/fake-timers.test-support.ts';
 
 import { KEYS, type BatchOperation, type ScanOptions, type Storage } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';

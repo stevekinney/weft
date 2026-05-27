@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { Context } from './context.ts';
 import { InlineExecutionStrategy } from './inline-execution-strategy.ts';

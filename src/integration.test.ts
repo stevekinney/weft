@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting } from './testing/fake-timers.ts';
+import { sleepForTesting } from './testing/fake-timers.test-support.ts';
 
 import { workflow } from './core/types/workflow-function.ts';
 import { Engine, MemoryStorage, WorkflowCompletedEvent, WorkflowStartedEvent } from './index';

@@ -12,7 +12,8 @@
  * devDependency and the build's `rootDir` is `./src`, so keeping the preload
  * out of `src/` guarantees it never ships in `dist/`.
  *
- * Test helpers that are NOT test files (e.g. `src/testing/storage-backends.ts`)
+ * Test helpers that are NOT test files (e.g.
+ * `src/testing/storage-backends.test-support.ts`)
  * still import the shim explicitly: they can be imported from contexts the test
  * preload does not cover, so their dependency must be self-contained.
  */

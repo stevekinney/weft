@@ -4,7 +4,7 @@ import {
   restoreRealTimers,
   sleepForTesting,
   useFakeTimers,
-} from '../testing/fake-timers.ts';
+} from '../testing/fake-timers.test-support.ts';
 
 import type { WorkerPool } from '../workers/pool.ts';
 import type { WorkerOutboundMessage } from './types.ts';

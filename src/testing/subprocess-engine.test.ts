@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 
 import { HttpClient } from '../client/http-client.ts';
 import type { WorkflowState } from '../core/types.ts';
-import { sleepForTesting } from './fake-timers.ts';
+import { sleepForTesting } from './fake-timers.test-support.ts';
 import {
   killAndReboot,
   spawnServerSubprocess,

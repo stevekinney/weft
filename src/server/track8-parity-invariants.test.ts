@@ -4,7 +4,7 @@ import {
   assertIdenticalFaultCode,
   assertIdenticalJson,
   assertShapeEquivalent,
-} from './track8-parity-invariants.ts';
+} from './track8-parity-invariants.test-support.ts';
 
 describe('track8 parity invariants', () => {
   it('accepts identical JSON payloads', () => {

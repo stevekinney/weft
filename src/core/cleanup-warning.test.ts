@@ -1,9 +1,9 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { waitForever } from '../testing/fake-timers.ts';
+import { waitForever } from '../testing/fake-timers.test-support.ts';
 
 import type { Storage as WeftStorage } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import { flush } from '../testing/storage-backends.ts';
+import { flush } from '../testing/storage-backends.test-support.ts';
 import { Engine } from './engine.ts';
 import { CleanupWarningEvent } from './events.ts';
 import type { WorkflowContext } from './types.ts';

@@ -2,7 +2,7 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.ts';
+import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 import { Engine } from '../engine.ts';
 import type { WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';

@@ -1,5 +1,5 @@
 import { describe, expect, it, mock, spyOn } from 'bun:test';
-import { sleepForTesting, withTimeout } from '../testing/fake-timers.ts';
+import { sleepForTesting, withTimeout } from '../testing/fake-timers.test-support.ts';
 
 import type { ScanOptions, Storage as WeftStorage } from '../storage/interface.ts';
 import { encodeStorageKeyComponent, KEYS } from '../storage/interface.ts';

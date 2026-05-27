@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting, waitForCondition } from '../testing/fake-timers.ts';
+import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
 
 import { decode, encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';

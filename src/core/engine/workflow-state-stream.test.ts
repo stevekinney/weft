@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { flush } from '../../testing/storage-backends.ts';
+import { flush } from '../../testing/storage-backends.test-support.ts';
 import type { ListFilter, WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
 import { Engine } from './index.ts';

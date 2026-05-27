@@ -8,7 +8,7 @@ import {
   restoreRealTimers,
   sleepForTesting,
   useFakeTimers,
-} from '../testing/fake-timers.ts';
+} from '../testing/fake-timers.test-support.ts';
 import {
   type MemorySample,
   MemoryProfiler,

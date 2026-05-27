@@ -3,7 +3,7 @@ import {
   sleepForTesting,
   waitForCondition,
   waitForRealTimersForTesting,
-} from '../../testing/fake-timers.ts';
+} from '../../testing/fake-timers.test-support.ts';
 
 import type { BatchOperation, ScanOptions } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';

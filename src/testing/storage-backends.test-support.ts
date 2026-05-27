@@ -16,7 +16,7 @@ import {
 import { LMDBStorage } from '../storage/lmdb.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { TursoStorage } from '../storage/turso.ts';
-import { sleepForTesting, yieldToEventLoop } from './fake-timers.ts';
+import { sleepForTesting, yieldToEventLoop } from './fake-timers.test-support.ts';
 
 /**
  * A factory function that creates a fresh storage instance and returns

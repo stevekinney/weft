@@ -7,7 +7,7 @@
  * reselection on a later attempt is documented as out-of-scope in
  * `onTaskResultMessage`'s ownership-guard comment), transient reconnect
  * continuity, and server-restart-while-leased recovery. The fault-injecting helper at
- * `../testing/worker-fault-injection.ts` gives tests byte-level control of the
+ * `../testing/worker-fault-injection.test-support.ts` gives tests byte-level control of the
  * WebSocket so partition and abrupt-close behaviors are reproducible.
  */
 
@@ -20,7 +20,7 @@ import { Engine } from '../core/engine.ts';
 import { serve, type ServeOptions, type WeftServer } from '../server/index.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import {
   killAndReboot,
   spawnServerSubprocess,
@@ -29,7 +29,7 @@ import {
 import {
   connectFaultInjectingWorker,
   type FaultInjectingWorker,
-} from '../testing/worker-fault-injection.ts';
+} from '../testing/worker-fault-injection.test-support.ts';
 import { RemoteWorker } from './index.ts';
 import type { ServerToWorkerMessage, TaskMessage } from './protocol.ts';
 

@@ -13,7 +13,7 @@ import {
   waitForever,
   withTimeout,
   yieldToEventLoop,
-} from './fake-timers.ts';
+} from './fake-timers.test-support.ts';
 
 describe('fake timer testing helpers', () => {
   afterEach(() => {

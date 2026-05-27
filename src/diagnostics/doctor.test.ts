@@ -12,7 +12,7 @@ import { MemoryStorage } from '../storage/memory.ts';
 import {
   createDiskBackedTestFixture,
   sqliteDatabaseSidecarSuffixes,
-} from '../testing/storage-backends.ts';
+} from '../testing/storage-backends.test-support.ts';
 import { collectDiagnostics } from './doctor.ts';
 
 // ---------------------------------------------------------------------------

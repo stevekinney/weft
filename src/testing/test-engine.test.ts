@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { restoreRealTimers, sleepForTesting, useFakeTimers } from './fake-timers.ts';
+import { restoreRealTimers, sleepForTesting, useFakeTimers } from './fake-timers.test-support.ts';
 
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';

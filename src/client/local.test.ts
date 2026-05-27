@@ -4,7 +4,7 @@ import { WorkflowCompletedEvent, WorkflowFailedEvent } from '../core/events.ts';
 import type { ScheduleSummary, WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import {
   clientContractEchoWorkflow,
   clientContractWaitingWorkflow,

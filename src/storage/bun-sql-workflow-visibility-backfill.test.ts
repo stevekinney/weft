@@ -16,7 +16,7 @@ import {
   createDiskBackedTestFixture,
   sqliteDatabaseSidecarSuffixes,
   type DiskBackedTestFixture,
-} from '../testing/storage-backends.ts';
+} from '../testing/storage-backends.test-support.ts';
 import { KEYS } from './interface.ts';
 
 import { BunSQLiteStorage } from './bun-sql.ts';

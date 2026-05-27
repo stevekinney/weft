@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 /**
  * End-to-end integration — `serve()` routes POST `/jsonrpc` into the
  * JSON-RPC HTTP adapter against the live operation registry.

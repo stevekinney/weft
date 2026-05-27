@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 /**
  * End-to-end integration tests for `runStdioSession` wired to a real
  * `Engine` instance and the production `createEngineEventFeedBackend`.

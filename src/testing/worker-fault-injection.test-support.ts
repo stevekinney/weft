@@ -29,7 +29,7 @@ import {
   writePongFrame,
   writeTextFrame,
   type ParsedFrame,
-} from './worker-fault-injection-frames.ts';
+} from './worker-fault-injection-frames.test-support.ts';
 
 /** Handler for inbound server → worker protocol messages. */
 export type ServerToWorkerHandler = (m: ServerToWorkerMessage) => void;

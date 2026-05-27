@@ -4,7 +4,7 @@ import {
   createDiskBackedTestFixture,
   sqliteDatabaseSidecarSuffixes,
   storageBackends,
-} from '../testing/storage-backends.ts';
+} from '../testing/storage-backends.test-support.ts';
 import { TursoStorage } from './turso.ts';
 
 function encode(value: string): Uint8Array {

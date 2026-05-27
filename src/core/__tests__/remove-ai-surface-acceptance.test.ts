@@ -13,7 +13,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.ts';
+import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { computeSemanticHash, EffectLog } from '../effect-log/index.ts';
 import { ReviewTimeoutError } from '../review/index.ts';

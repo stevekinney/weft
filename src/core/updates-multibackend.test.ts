@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { waitForever } from '../testing/fake-timers.ts';
+import { waitForever } from '../testing/fake-timers.test-support.ts';
 
 import { KEYS } from '../storage/interface.ts';
 import {
@@ -7,7 +7,7 @@ import {
   storageBackends,
   teardown,
   waitForWorkflowStatus,
-} from '../testing/storage-backends.ts';
+} from '../testing/storage-backends.test-support.ts';
 import { encode } from './codec.ts';
 import { Engine } from './engine.ts';
 import type { WorkflowContext } from './types.ts';

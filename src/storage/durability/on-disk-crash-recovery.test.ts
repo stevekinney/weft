@@ -37,7 +37,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
 import type { WorkflowContext } from '../../core/types.ts';
-import { sleepForTesting } from '../../testing/fake-timers.ts';
+import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 import { BunSQLiteStorage } from '../bun-sql.ts';
 import { KEYS as STORAGE_KEYS } from '../interface.ts';
 

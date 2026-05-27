@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
-import { storageBackends, teardown } from '../testing/storage-backends.ts';
+import { storageBackends, teardown } from '../testing/storage-backends.test-support.ts';
 import { Engine } from './engine.ts';
 import type { WorkflowInterceptor, WorkflowStartInterception } from './interceptor.ts';
 import type { WorkflowContext } from './types.ts';

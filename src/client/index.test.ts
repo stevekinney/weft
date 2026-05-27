@@ -5,7 +5,7 @@ import { query, workflow } from '../core/types.ts';
 import { handleRequest } from '../server/handler.ts';
 import { principalFromApiKey } from '../server/principal.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import {
   clientContractEchoWorkflow,
   clientContractWaitingWorkflow,

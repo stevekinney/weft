@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { Engine } from '../core/engine.ts';
 import type {
@@ -25,7 +25,7 @@ import {
   assertIdenticalJson,
   assertShapeEquivalent,
   type ParityInvariants,
-} from './track8-parity-invariants.ts';
+} from './track8-parity-invariants.test-support.ts';
 import { createWorkflowEventFeed } from './workflow-event-feed.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (

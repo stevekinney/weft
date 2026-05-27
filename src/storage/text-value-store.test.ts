@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { storageBackends, teardown } from '../testing/storage-backends.ts';
+import { storageBackends, teardown } from '../testing/storage-backends.test-support.ts';
 import type { Storage } from './interface.ts';
 import { MemoryStorage } from './memory.ts';
 import { textValueStore } from './text-value-store.ts';

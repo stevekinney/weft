@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
-import { restoreRealTimers, sleepForTesting, useFakeTimers } from '../testing/fake-timers.ts';
+import {
+  restoreRealTimers,
+  sleepForTesting,
+  useFakeTimers,
+} from '../testing/fake-timers.test-support.ts';
 
 import type { PendingTask, TaskResult } from './task-queue-types.ts';
 import { TaskQueue } from './task-queue.ts';

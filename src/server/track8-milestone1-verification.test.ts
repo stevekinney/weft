@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 /**
  * Track 8 acceptance — verifies that `serve()` wires the live
  * `OperationRegistry` + `REST_BINDINGS` into `handleRequest`, and that

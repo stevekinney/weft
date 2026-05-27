@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
-import { waitForRealTimersForTesting } from '../testing/fake-timers.ts';
+import { waitForRealTimersForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { decode, encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';

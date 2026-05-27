@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import type { WeftClient } from './interface.ts';
 
 type ClientContractWorkflowTypes = {

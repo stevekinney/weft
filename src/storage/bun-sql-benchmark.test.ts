@@ -9,7 +9,7 @@ import {
 import {
   createDiskBackedTestFixture,
   sqliteDatabaseSidecarSuffixes,
-} from '../testing/storage-backends.ts';
+} from '../testing/storage-backends.test-support.ts';
 import { BunSQLiteStorage } from './bun-sql';
 
 /** Generate a realistic ~2KB value (typical checkpoint size). */

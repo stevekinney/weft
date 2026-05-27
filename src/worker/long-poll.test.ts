@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import type { ActivityInterceptor } from '../core/interceptor.ts';
-import { createDeferred, withTimeout } from '../testing/fake-timers.ts';
+import { createDeferred, withTimeout } from '../testing/fake-timers.test-support.ts';
 import { LongPollWorker } from './long-poll.ts';
 
 // ---------------------------------------------------------------------------

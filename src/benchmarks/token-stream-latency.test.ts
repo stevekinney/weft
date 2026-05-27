@@ -6,7 +6,7 @@ import { workflow } from '../core/types/workflow-function.ts';
 import type { WeftServer } from '../server/index.ts';
 import { serve } from '../server/index.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import { waitForRealTimersForTesting } from '../testing/fake-timers.ts';
+import { waitForRealTimersForTesting } from '../testing/fake-timers.test-support.ts';
 import { isCoverageInstrumentationEnabled } from './coverage-mode.ts';
 
 class TokenEvent extends Event {

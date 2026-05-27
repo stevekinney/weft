@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import type { ActivityInterceptor } from '../core/interceptor.ts';
-import { restoreRealTimers, sleepForTesting, waitForCondition } from '../testing/fake-timers.ts';
+import {
+  restoreRealTimers,
+  sleepForTesting,
+  waitForCondition,
+} from '../testing/fake-timers.test-support.ts';
 import { RemoteWorker } from './index.ts';
 
 // ---------------------------------------------------------------------------

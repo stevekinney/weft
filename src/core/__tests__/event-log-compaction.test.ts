@@ -10,7 +10,7 @@ import { describe, expect, it, mock } from 'bun:test';
 import { hashBytes } from '../../runtime/portable.ts';
 import { KEYS, type BatchOperation, type Storage } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.ts';
+import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import {

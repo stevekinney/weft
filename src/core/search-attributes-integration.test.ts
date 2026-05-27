@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { KEYS } from '../storage/interface.ts';
 import {
@@ -8,7 +8,7 @@ import {
   storageBackends,
   storageHas,
   teardown,
-} from '../testing/storage-backends.ts';
+} from '../testing/storage-backends.test-support.ts';
 import { decode } from './codec.ts';
 import { Engine } from './engine.ts';
 import { searchAttribute } from './search-attributes.ts';

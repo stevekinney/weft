@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { waitForCondition } from '../testing/fake-timers.ts';
-import { flush } from '../testing/storage-backends.ts';
+import { waitForCondition } from '../testing/fake-timers.test-support.ts';
+import { flush } from '../testing/storage-backends.test-support.ts';
 
 import {
   encodeStorageKeyComponent,

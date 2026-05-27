@@ -1,5 +1,9 @@
 import { describe, expect, it, spyOn } from 'bun:test';
-import { flushMicrotasks, waitForCondition, yieldToEventLoop } from '../testing/fake-timers.ts';
+import {
+  flushMicrotasks,
+  waitForCondition,
+  yieldToEventLoop,
+} from '../testing/fake-timers.test-support.ts';
 
 import type { BatchOperation } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';

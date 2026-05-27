@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../../testing/fake-timers.ts';
+import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 /**
  * `weft.workflows.bulk.signal` operation + REST binding — behavior tests.
  */

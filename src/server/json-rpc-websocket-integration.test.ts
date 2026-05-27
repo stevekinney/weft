@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 /**
  * End-to-end integration — `serve()` WebSocket /jsonrpc endpoint wired to
  * the JSON-RPC WebSocket session adapter.

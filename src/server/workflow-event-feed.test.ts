@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 /**
  * Tests for `WorkflowEventFeed` — the transport-neutral event-replay
  * plus live-tail abstraction that REST SSE, WebSocket watch/stream,

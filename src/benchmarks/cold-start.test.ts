@@ -1,4 +1,4 @@
-import { waitForRealTimersForTesting } from '../testing/fake-timers.ts';
+import { waitForRealTimersForTesting } from '../testing/fake-timers.test-support.ts';
 /**
  * Cold start benchmarks for Weft.
  *

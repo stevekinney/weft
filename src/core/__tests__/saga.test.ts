@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../../testing/fake-timers.ts';
+import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 /**
  * Tests for ctx.saga() — sequential activity execution with reverse compensation.
  *

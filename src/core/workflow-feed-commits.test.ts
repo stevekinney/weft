@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../testing/fake-timers.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 /**
  * Engine-level unit tests for the unified workflow-feed commit API:
  * `replayWorkflowFeed`, `snapshotWorkflowFeedTail`, and

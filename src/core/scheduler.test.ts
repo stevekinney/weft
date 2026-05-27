@@ -4,7 +4,7 @@ import {
   flushMicrotasks,
   restoreRealTimers,
   useFakeTimers,
-} from '../testing/fake-timers.ts';
+} from '../testing/fake-timers.test-support.ts';
 import {
   createSchedulerContractContext,
   describeSchedulerContract,

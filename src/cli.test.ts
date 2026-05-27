@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { waitForCondition } from './testing/fake-timers.ts';
+import { waitForCondition } from './testing/fake-timers.test-support.ts';
 
 import { existsSync, mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';

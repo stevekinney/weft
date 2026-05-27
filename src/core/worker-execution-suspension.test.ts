@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { waitForCondition, withTimeout } from '../testing/fake-timers.ts';
+import { waitForCondition, withTimeout } from '../testing/fake-timers.test-support.ts';
 
 import { encodeStorageKeyComponent, KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { storageBackends } from '../testing/storage-backends.ts';
+import { storageBackends } from '../testing/storage-backends.test-support.ts';
 import { storageDeleteRange, type DeleteRangeOptions } from './delete-range.ts';
 import { KEYS } from './interface.ts';
 
