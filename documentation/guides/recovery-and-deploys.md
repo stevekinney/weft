@@ -4,6 +4,8 @@ Weft promises that workflows survive process death. The mechanism is `engine.rec
 
 This guide is about what happens when recovery and your deploy lifecycle disagree — when storage holds workflows whose code is no longer in the new build, when you're rolling pods one at a time, or when you genuinely want to abandon old workflows and need to do it on purpose.
 
+For the Tier-0 contract that defines future activity reconciliation, signal idempotency, concurrent-resume ownership, and persisted-format rollout rules, see [Tier-0 Behavioral Contract](../architecture/tier-0-behavioral-contract.md).
+
 ## The default: loud failure on unknown types
 
 If `recoverAll()` finds a running workflow whose type isn't registered on the engine, it throws `WorkflowTypeNotRegisteredForRecoveryError` before resuming anything. No partial recovery, no quiet skip, no zombie workflows hanging around in storage with no process to drive them.

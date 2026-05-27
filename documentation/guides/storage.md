@@ -115,6 +115,8 @@ type StorageCapabilities = {
 
 The engine depends on four guarantees. **`atomicBatch`** keeps a checkpoint commit all-or-nothing. **`readAfterWrite`** lets a resume observe the checkpoint it just wrote. **`scanConsistency`** keeps visibility and index scans from seeing torn writes. **`conditionalBatch`** backs compare-and-swap state, including storage-backed workflow state and operations that must commit only if the current value still matches the caller's expectation.
 
+The Tier-0 failure-semantics contract relies on this capability split for activity reconciliation, signal idempotency, and checkpoint ownership. See [Tier-0 Behavioral Contract](../architecture/tier-0-behavioral-contract.md) for the implementation gates.
+
 The honest profile per built-in adapter:
 
 | Adapter               | readAfterWrite | scanConsistency | atomicBatch | conditionalBatch | boundedRangeDelete |
