@@ -715,7 +715,10 @@ describe('crash recovery', () => {
 
     expect(events).toHaveLength(1);
     expect(events[0]!.workflowId).toBe('wf-event');
-    expect(events[0]!.fromStep).toBeGreaterThanOrEqual(0);
+    // The workflow ran one activity (step 0) and checkpointed before blocking on
+    // the signal, so recovery resumes from step 1 — pin the exact value rather
+    // than a `>= 0` floor that would pass even if resume accounting regressed.
+    expect(events[0]!.fromStep).toBe(1);
 
     // Clean up — send signal so workflow completes
     await engine2.signal('wf-event', 'go', null);
@@ -748,8 +751,10 @@ describe('crash recovery', () => {
     expect(bytes).not.toBeNull();
 
     const checkpoint = deserializeCheckpoint(bytes!);
-    // 3 activities = 3 yield boundaries = step should be >= 3
-    expect(checkpoint.step).toBeGreaterThanOrEqual(3);
+    // 3 activities = 3 yield boundaries, so the final checkpoint lands at exactly
+    // step 3. Pin it: a `>= 3` floor would not catch an off-by-one that advanced
+    // the step too far.
+    expect(checkpoint.step).toBe(3);
 
     engine[Symbol.dispose]();
   });
@@ -819,8 +824,10 @@ describe('crash recovery', () => {
     const logBeforeRestart = new EventLogClass(storage, 'wf-el-resume');
     const headBeforeRestart = await logBeforeRestart.loadHead();
 
-    // There must be at least one event from engine1's checkpoint write.
-    expect(headBeforeRestart.sequence).toBeGreaterThanOrEqual(0);
+    // engine1 wrote one activity checkpoint before crashing: the start event is
+    // sequence 0 and that checkpoint is sequence 1, so the head sits at exactly
+    // 1. Pin it rather than a `>= 0` floor that any non-empty log would satisfy.
+    expect(headBeforeRestart.sequence).toBe(1);
 
     // --- Engine 2: resume the same workflow ---
     const engine2 = new Engine({ storage });
