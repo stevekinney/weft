@@ -91,7 +91,10 @@ describe('WorkflowAtomicStateHandle', () => {
         snapshot(0, 1),
         commit(false, undefined, 1), // version moved underneath us → retry
         snapshot(5, 2),
-        commit(true, 6, 3),
+        // The committed `value` is deliberately different from the updater's
+        // result (5 + 1 = 6) to prove update() returns the value it computed,
+        // not whatever the commit response happens to echo back.
+        commit(true, 999, 3),
       ],
     );
 
