@@ -83,30 +83,19 @@ export function typedEngineView<TViewWorkflows extends object, TViewActivities e
   return engine as never;
 }
 
-let memoryStorageFallbackWarningOverrideForTesting: boolean | undefined;
-
 /**
  * Whether to warn when an `Engine` falls back to {@link MemoryStorage}. Gated
  * to development so production never logs it: the explicit `development: true`
  * option, or the same environment signals as the other engine dev-warnings
- * (`WEFT_DEV_WARNINGS=1` / `NODE_ENV=development`).
+ * (`WEFT_DEV_WARNINGS=1` / `NODE_ENV=development`). No test override is needed —
+ * the gate is just an option plus two env vars, so tests drive it directly.
  */
 function shouldWarnOnMemoryStorageFallback(options?: EngineConstructorOptions): boolean {
-  if (memoryStorageFallbackWarningOverrideForTesting !== undefined) {
-    return memoryStorageFallbackWarningOverrideForTesting;
-  }
   return (
     options?.development === true ||
     Bun.env['WEFT_DEV_WARNINGS'] === '1' ||
     Bun.env['NODE_ENV'] === 'development'
   );
-}
-
-/** Test-only override for the MemoryStorage-fallback warning's development gate. */
-export function setMemoryStorageFallbackWarningOverrideForTesting(
-  value: boolean | undefined,
-): void {
-  memoryStorageFallbackWarningOverrideForTesting = value;
 }
 
 export function resolveEngineStorage(options?: EngineConstructorOptions): WeftStorage {
