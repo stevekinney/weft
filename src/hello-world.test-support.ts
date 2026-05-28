@@ -1,28 +1,13 @@
 /**
- * In-repo fixture copies of the `hello-world` example workflow and activity.
+ * Single source of truth bridge: the canonical hello-world workflow and activity
+ * live in the consumer example `examples/hello-world/src/index.ts` (which imports
+ * from the published `weft` package). In-repo tests (`src/examples.test.ts`) and
+ * the CLI smoke harness (`scripts/cli-smoke-main.ts`) re-export them from here
+ * rather than keeping a second copy, so the fixture can never drift from the
+ * example a consumer actually sees.
  *
- * The consumer-facing version lives in `examples/hello-world/` and imports from
- * the published `weft` package. This module exists so in-repo tests
- * (`src/examples.test.ts`) and the CLI smoke harness (`scripts/cli-smoke-main.ts`)
- * can exercise the same definitions without depending on the example workspace's
- * `weft` package resolution — it imports the engine relatively instead. The
+ * This is not a backwards-compat barrel — it exists only to bridge the import-path
+ * gap (the example uses `from 'weft'`; in-repo callers need a relative path). The
  * `.test-support.ts` suffix keeps it out of the build (`dist/`).
  */
-import { activity, workflow } from './index.ts';
-
-export const formatGreetingActivity = activity({
-  name: 'formatGreeting',
-  idempotent: true,
-  execute: async (input: string) => {
-    const subject = input.trim() || 'world';
-    return {
-      greeting: `hello ${subject}`,
-    };
-  },
-});
-
-export const helloWorldWorkflow = workflow({ name: 'helloWorld' })
-  .activities({ formatGreeting: formatGreetingActivity })
-  .execute(async function* (context, input: string) {
-    return yield* context.run('formatGreeting', input);
-  });
+export { formatGreetingActivity, helloWorldWorkflow } from '../examples/hello-world/src/index.ts';

@@ -6,7 +6,7 @@
     "lint": "oxlint --type-aware --tsconfig ./tsconfig.json src",
     "start": "bun run src/index.ts",
     "typecheck": "tsc --noEmit",
-    "verify": "bun run typecheck && bun run lint"
+    "verify": "bun run typecheck && bun run lint && bun run start"
   },
   "dependencies": {
     "weft": "file:../.."

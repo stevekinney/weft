@@ -1,35 +1,10 @@
 /**
- * In-repo fixture copy of the `customer-profile` example workflow and activity.
- *
- * Mirrors `examples/customer-profile/`'s consumer definitions but imports the
- * engine relatively so `src/examples.test.ts` can run it without the example
- * workspace's `weft` package resolution. The `.test-support.ts` suffix keeps it
- * out of the build (`dist/`). See {@link file://./hello-world.test-support.ts}.
+ * Single source of truth bridge for the customer-profile example — see
+ * {@link file://./hello-world.test-support.ts} for the rationale. The canonical
+ * definitions live in `examples/hello-world/src/index.ts`; this file re-exports
+ * them so in-repo tests share the exact code a consumer sees.
  */
-import { activity, workflow } from './index.ts';
-
-interface CustomerProfileInput {
-  customerId: string;
-}
-
-interface CustomerProfileOutput {
-  customerId: string;
-  loyaltyTier: string;
-}
-
-export const loadCustomerProfileActivity = activity({
-  name: 'loadCustomerProfile',
-  idempotent: true,
-  execute: async (input: CustomerProfileInput): Promise<CustomerProfileOutput> => {
-    return {
-      customerId: input.customerId,
-      loyaltyTier: 'gold',
-    };
-  },
-});
-
-export const customerProfileWorkflow = workflow({ name: 'customerProfile' })
-  .activities({ loadCustomerProfile: loadCustomerProfileActivity })
-  .execute(async function* (context, input: CustomerProfileInput) {
-    return yield* context.run('loadCustomerProfile', input);
-  });
+export {
+  customerProfileWorkflow,
+  loadCustomerProfileActivity,
+} from '../examples/hello-world/src/index.ts';

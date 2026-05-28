@@ -1532,6 +1532,23 @@ describe('executeValidate', () => {
     expect(result.stdout).toContain('examples/order-processing/src/workflows/order.ts');
   });
 
+  it('expands a single glob to its matching files in alphabetical order', async () => {
+    // The order-processing example is the multi-file glob target, so it pins the
+    // within-glob sort contract (a single glob's matches are emitted sorted,
+    // independent of filesystem enumeration order).
+    const result = await executeValidate({
+      entryPaths: ['examples/order-processing/src/**/*.ts'],
+      json: true,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const entryPaths = (
+      JSON.parse(result.stdout) as { entries: Array<{ entryPath: string }> }
+    ).entries.map((entry) => entry.entryPath);
+    expect(entryPaths.length).toBeGreaterThan(1);
+    expect(entryPaths).toEqual([...entryPaths].toSorted());
+  });
+
   it('expands absolute glob patterns for bundled example validation', async () => {
     const result = await executeValidate({
       entryPaths: [

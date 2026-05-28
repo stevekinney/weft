@@ -96,3 +96,16 @@ jobs:
         working-directory: examples/checkout
       - run: bun run verify
         working-directory: examples/checkout
+  hello-world-example:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun install --frozen-lockfile
+        working-directory: examples/hello-world
+      - run: bun run verify
+        working-directory: examples/hello-world
