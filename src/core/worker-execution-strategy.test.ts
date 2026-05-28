@@ -954,11 +954,13 @@ describe('WorkerExecutionStrategy', () => {
           throw new Error('strategy never registered a message listener');
         }
 
-        // Let any pending unhandled rejection surface on the next macrotask. A
-        // zero-delay tick waits for the actual event-loop turn (deterministic)
-        // instead of a fixed wall-clock duration.
-        function nextTick() {
-          return new Promise((resolve) => setTimeout(resolve, 0));
+        // Let any pending unhandled rejection surface before exit, without a
+        // wall-clock guess: drain the nextTick + microtask queues, then take one
+        // zero-delay macrotask turn — the real event-loop boundary at which an
+        // unhandledRejection would fire, deterministic regardless of CPU load.
+        async function settleRejections() {
+          await new Promise((resolve) => process.nextTick(resolve));
+          await new Promise((resolve) => setTimeout(resolve, 0));
         }
 
         strategy.startWorkflow({
@@ -982,10 +984,7 @@ describe('WorkerExecutionStrategy', () => {
           );
         }
 
-        // Drain microtasks, then take one macrotask turn so a rejected handler
-        // promise has a chance to surface as an unhandledRejection before exit.
-        for (let drain = 0; drain < 50; drain++) await Promise.resolve();
-        await nextTick();
+        await settleRejections();
         strategy[Symbol.dispose]();
         process.exit(0);
       `;
