@@ -1,10 +1,36 @@
 /**
- * Single source of truth bridge for the customer-profile example — see
- * {@link file://./hello-world.test-support.ts} for the rationale. The canonical
- * definitions live in `examples/hello-world/src/index.ts`; this file re-exports
- * them so in-repo tests share the exact code a consumer sees.
+ * In-repo fixture copy of the `customer-profile` example workflow and activity.
+ * Imports the engine relatively (`./index.ts`) for the same reason as
+ * {@link file://./hello-world.test-support.ts}: the consumer example resolves
+ * `from 'weft'` only inside its own installed workspace, so the in-repo fixture
+ * keeps its own relative-import copy rather than re-exporting across the boundary
+ * (which would break the root `tsc`/`bun test` jobs). Build-excluded via the
+ * `.test-support.ts` suffix.
  */
-export {
-  customerProfileWorkflow,
-  loadCustomerProfileActivity,
-} from '../examples/hello-world/src/index.ts';
+import { activity, workflow } from './index.ts';
+
+interface CustomerProfileInput {
+  customerId: string;
+}
+
+interface CustomerProfileOutput {
+  customerId: string;
+  loyaltyTier: string;
+}
+
+export const loadCustomerProfileActivity = activity({
+  name: 'loadCustomerProfile',
+  idempotent: true,
+  execute: async (input: CustomerProfileInput): Promise<CustomerProfileOutput> => {
+    return {
+      customerId: input.customerId,
+      loyaltyTier: 'gold',
+    };
+  },
+});
+
+export const customerProfileWorkflow = workflow({ name: 'customerProfile' })
+  .activities({ loadCustomerProfile: loadCustomerProfileActivity })
+  .execute(async function* (context, input: CustomerProfileInput) {
+    return yield* context.run('loadCustomerProfile', input);
+  });

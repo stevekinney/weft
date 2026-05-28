@@ -1,13 +1,33 @@
 /**
- * Single source of truth bridge: the canonical hello-world workflow and activity
- * live in the consumer example `examples/hello-world/src/index.ts` (which imports
- * from the published `weft` package). In-repo tests (`src/examples.test.ts`) and
- * the CLI smoke harness (`scripts/cli-smoke-main.ts`) re-export them from here
- * rather than keeping a second copy, so the fixture can never drift from the
- * example a consumer actually sees.
+ * In-repo fixture copy of the `hello-world` example workflow and activity.
  *
- * This is not a backwards-compat barrel — it exists only to bridge the import-path
- * gap (the example uses `from 'weft'`; in-repo callers need a relative path). The
- * `.test-support.ts` suffix keeps it out of the build (`dist/`).
+ * The consumer-facing version lives in `examples/hello-world/` and imports from
+ * the published `weft` package. This module deliberately keeps its own copy that
+ * imports the engine relatively (`./index.ts`) so in-repo tests
+ * (`src/examples.test.ts`) and the CLI smoke harness (`scripts/cli-smoke-main.ts`)
+ * load it without the example workspace's `weft` resolution — which is only
+ * present after that workspace is `bun install`ed and is therefore unavailable in
+ * the root `tsc`/`bun test` jobs. Re-exporting from the example instead drags
+ * `from 'weft'` into the root program and breaks CI. The small duplication is the
+ * intentional cost of the in-repo-fixture vs. consumer-example split.
+ *
+ * The `.test-support.ts` suffix keeps it out of the build (`dist/`).
  */
-export { formatGreetingActivity, helloWorldWorkflow } from '../examples/hello-world/src/index.ts';
+import { activity, workflow } from './index.ts';
+
+export const formatGreetingActivity = activity({
+  name: 'formatGreeting',
+  idempotent: true,
+  execute: async (input: string) => {
+    const subject = input.trim() || 'world';
+    return {
+      greeting: `hello ${subject}`,
+    };
+  },
+});
+
+export const helloWorldWorkflow = workflow({ name: 'helloWorld' })
+  .activities({ formatGreeting: formatGreetingActivity })
+  .execute(async function* (context, input: string) {
+    return yield* context.run('formatGreeting', input);
+  });
