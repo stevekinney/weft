@@ -260,7 +260,13 @@ describe('InlineExecutionStrategy', () => {
           checkpoint: new ArrayBuffer(0),
         });
 
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        // Drain microtasks, then take one macrotask turn so the rejected async
+        // handler promise has a chance to surface as an unhandledRejection
+        // before we dispose and exit. A zero-delay tick waits for the real
+        // event-loop turn rather than a fixed wall-clock delay (the old
+        // setTimeout(50) flaked under CI load).
+        for (let drain = 0; drain < 50; drain++) await Promise.resolve();
+        await new Promise((resolve) => setTimeout(resolve, 0));
         strategy[Symbol.dispose]();
         process.exit(0);
       `;

@@ -943,6 +943,24 @@ describe('WorkerExecutionStrategy', () => {
           throw new Error('handler failed');
         });
 
+        // Deterministic readiness signal: spin the microtask queue until the
+        // strategy has registered its 'message' listener, rather than guessing
+        // a wall-clock delay (the old setTimeout(20) flaked under CI load).
+        async function waitForMessageListener() {
+          for (let attempt = 0; attempt < 10_000; attempt++) {
+            if ((worker.listeners.get('message')?.size ?? 0) > 0) return;
+            await Promise.resolve();
+          }
+          throw new Error('strategy never registered a message listener');
+        }
+
+        // Let any pending unhandled rejection surface on the next macrotask. A
+        // zero-delay tick waits for the actual event-loop turn (deterministic)
+        // instead of a fixed wall-clock duration.
+        function nextTick() {
+          return new Promise((resolve) => setTimeout(resolve, 0));
+        }
+
         strategy.startWorkflow({
           workflowId: 'wf-1',
           workflowType: 'test',
@@ -950,7 +968,7 @@ describe('WorkerExecutionStrategy', () => {
           checkpoint: new ArrayBuffer(0),
         });
 
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await waitForMessageListener();
 
         for (const listener of worker.listeners.get('message') ?? []) {
           listener(
@@ -964,7 +982,10 @@ describe('WorkerExecutionStrategy', () => {
           );
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        // Drain microtasks, then take one macrotask turn so a rejected handler
+        // promise has a chance to surface as an unhandledRejection before exit.
+        for (let drain = 0; drain < 50; drain++) await Promise.resolve();
+        await nextTick();
         strategy[Symbol.dispose]();
         process.exit(0);
       `;
