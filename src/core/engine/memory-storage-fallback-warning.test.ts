@@ -4,16 +4,19 @@
  * first-time user who crashes and restarts understands why their in-memory
  * workflow state vanished.
  *
- * The dev gate is just the `development` option plus two env vars, so these
- * tests drive it directly: each clears `NODE_ENV`/`WEFT_DEV_WARNINGS` to a known
- * baseline and restores them afterward, so a development shell running the suite
- * cannot mask the production-default (no-warn) path.
+ * The dev gate is the `development` option plus two env vars, so these tests
+ * drive it directly: each clears `NODE_ENV`/`WEFT_DEV_WARNINGS` to a known
+ * baseline and restores them afterward (so a development shell can't mask the
+ * production-default no-warn path), and resets the one-shot warning latch.
  */
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 
 import { CompressedStorage } from '../../storage/compressed-storage.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { resolveEngineStorage } from './construction.ts';
+import {
+  resetMemoryStorageFallbackWarningForTesting,
+  resolveEngineStorage,
+} from './construction.ts';
 
 const FALLBACK_PATTERN = /no `storage` configured.*MemoryStorage/s;
 
@@ -30,14 +33,16 @@ function restore(key: string, value: string | undefined): void {
 
 describe('MemoryStorage fallback warning', () => {
   beforeEach(() => {
-    // Known production-like baseline: neither dev signal set.
+    // Known production-like baseline: neither dev signal set, latch reset.
     delete Bun.env['NODE_ENV'];
     delete Bun.env['WEFT_DEV_WARNINGS'];
+    resetMemoryStorageFallbackWarningForTesting();
   });
 
   afterEach(() => {
     restore('NODE_ENV', savedNodeEnv);
     restore('WEFT_DEV_WARNINGS', savedDevWarnings);
+    resetMemoryStorageFallbackWarningForTesting();
   });
 
   it('warns when WEFT_DEV_WARNINGS=1 and no storage is configured', () => {
@@ -64,6 +69,18 @@ describe('MemoryStorage fallback warning', () => {
     }
   });
 
+  it('warns at most once across repeated fallbacks (no log spam)', () => {
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      resolveEngineStorage({ development: true });
+      resolveEngineStorage({ development: true });
+      resolveEngineStorage({ development: true });
+      expect(warn).toHaveBeenCalledTimes(1);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it('stays silent in the production default (no dev signal, no storage)', () => {
     const warn = spyOn(console, 'warn').mockImplementation(() => {});
     try {
@@ -82,6 +99,18 @@ describe('MemoryStorage fallback warning', () => {
       const storage = resolveEngineStorage({ storage: provided, development: true });
       expect(storage).toBe(provided);
       expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it('falls back to MemoryStorage when storage is null (untyped JS callers)', () => {
+    const warn = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // An untyped JS caller can pass `null`; it must coalesce to the fallback
+      // just like `undefined`, matching the original `?? new MemoryStorage()`.
+      const storage = resolveEngineStorage({ storage: null } as never);
+      expect(storage).toBeInstanceOf(MemoryStorage);
     } finally {
       warn.mockRestore();
     }
