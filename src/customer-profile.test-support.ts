@@ -1,4 +1,12 @@
-import { activity, workflow } from '../src/index.ts';
+/**
+ * In-repo fixture copy of the `customer-profile` example workflow and activity.
+ *
+ * Mirrors `examples/customer-profile/`'s consumer definitions but imports the
+ * engine relatively so `src/examples.test.ts` can run it without the example
+ * workspace's `weft` package resolution. The `.test-support.ts` suffix keeps it
+ * out of the build (`dist/`). See {@link file://./hello-world.test-support.ts}.
+ */
+import { activity, workflow } from './index.ts';
 
 interface CustomerProfileInput {
   customerId: string;
@@ -25,8 +33,3 @@ export const customerProfileWorkflow = workflow({ name: 'customerProfile' })
   .execute(async function* (context, input: CustomerProfileInput) {
     return yield* context.run('loadCustomerProfile', input);
   });
-
-export default {
-  customerProfileWorkflow,
-  loadCustomerProfileActivity,
-};

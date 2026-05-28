@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 
-import { helloWorldWorkflow } from '../examples/hello-world.ts';
 import { createStorage } from '../src/cli/index.ts';
 import { Engine } from '../src/core/engine.ts';
+import { helloWorldWorkflow } from '../src/hello-world.test-support.ts';
 import { serve } from '../src/server/index.ts';
 
 const portArgument = Bun.argv.find((argument) => argument.startsWith('--port='));
