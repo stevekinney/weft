@@ -81,7 +81,10 @@ const server = serve({
   auth: { apiKeys: [process.env.WEFT_API_KEY!] },
   cors: {
     allowedOrigins: ['https://dashboard.example.com'],
-    credentials: true, // allow the browser to send the Authorization header / cookies
+    // Set credentials only when the browser must send cookies / HTTP auth via
+    // `fetch(..., { credentials: 'include' })`. A bearer `Authorization` header
+    // is governed by allowedHeaders, not by this flag.
+    credentials: true,
   },
 });
 ```

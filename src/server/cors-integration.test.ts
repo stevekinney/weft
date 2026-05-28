@@ -244,6 +244,24 @@ describe('serve({ cors }) — fail-fast validation', () => {
       engine[Symbol.dispose]();
     }
   });
+
+  it('throws on a wildcard origin under configured auth even when allowedHeaders omits Authorization', () => {
+    const engine = createEngine();
+    try {
+      // auth auto-adds Authorization to the effective allowed-headers, so the
+      // wildcard origin must still be rejected before binding.
+      expect(() =>
+        serve({
+          engine,
+          port: 0,
+          auth: { apiKeys: ['secret-key'] },
+          cors: { allowedOrigins: ['*'], allowedHeaders: ['Content-Type'] },
+        }),
+      ).toThrow(/bearer tokens/);
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
 });
 
 describe('serve({ cors }) — WebSocket origin enforcement', () => {

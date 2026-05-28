@@ -132,8 +132,10 @@ export function resolveNetworkConfig(options: ServeOptions): ResolvedNetworkConf
   }
   if (options.cors) {
     // Fail fast before binding: a wildcard origin paired with credentials or
-    // an Authorization allowed-header is rejected here.
-    validateCorsOptions(options.cors);
+    // an Authorization allowed-header is rejected here. The auth flag mirrors
+    // resolveCorsPolicy's Authorization auto-add, so a wildcard origin under
+    // configured auth is rejected even when allowedHeaders omits Authorization.
+    validateCorsOptions(options.cors, options.auth !== undefined);
   }
   assertAuthenticationPosture(options);
   const port = options.port ?? 7233;

@@ -329,8 +329,16 @@ function appendVary(headers: Headers, token: string): void {
  *   - `credentials: true` combined with a wildcard origin (illegal per spec);
  *   - a wildcard origin paired with an `Authorization` allowed-header (lets any
  *     origin read responses to bearer-token requests — almost never intended).
+ *
+ * `authConfigured` must mirror what `serve()` passes as `requireAuthorizationHeader`
+ * to {@link resolveCorsPolicy}: when `auth` is set, `Authorization` is auto-added
+ * to the effective allowed-headers, so the wildcard + `Authorization` check has to
+ * account for that even when the operator did not list it explicitly. Validating
+ * against `options.allowedHeaders` alone would let `cors: { allowedOrigins: ['*'],
+ * allowedHeaders: ['Content-Type'] }` pass under `auth` and then resolve to a policy
+ * that allows bearer tokens under a wildcard origin.
  */
-export function validateCorsOptions(options: CorsOptions): void {
+export function validateCorsOptions(options: CorsOptions, authConfigured = false): void {
   const allowed = options.allowedOrigins;
   const isWildcard =
     Array.isArray(allowed) && allowed.length === 1 && allowed[0] === WILDCARD_ORIGIN;
@@ -344,11 +352,15 @@ export function validateCorsOptions(options: CorsOptions): void {
     );
   }
   const headers = options.allowedHeaders ?? DEFAULT_ALLOWED_HEADERS;
-  if (headers.some((header) => header.toLowerCase() === 'authorization')) {
+  const allowsAuthorizationHeader =
+    authConfigured || headers.some((header) => header.toLowerCase() === 'authorization');
+  if (allowsAuthorizationHeader) {
     throw new Error(
       'serve({ cors }): allowedOrigins ["*"] combined with an Authorization allowed-header lets ' +
         'any web origin send bearer tokens and read the response. List explicit origins, or drop ' +
-        'Authorization from allowedHeaders if the wildcard is truly intended for a public API.',
+        'Authorization from allowedHeaders if the wildcard is truly intended for a public API. ' +
+        '(When serve({ auth }) is configured, Authorization is always an allowed header, so a ' +
+        'wildcard origin is rejected regardless of allowedHeaders.)',
     );
   }
 }

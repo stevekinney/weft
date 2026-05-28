@@ -283,6 +283,17 @@ describe('validateCorsOptions', () => {
     expect(() => validateCorsOptions(options)).toThrow(/bearer tokens/);
   });
 
+  it('rejects a wildcard origin under configured auth even when allowedHeaders omits Authorization', () => {
+    // resolveCorsPolicy auto-adds Authorization when auth is configured, so the
+    // validator must account for that effective header set — otherwise this
+    // exact config would pass validation and then resolve to a wildcard origin
+    // that accepts bearer tokens.
+    const options: CorsOptions = { allowedOrigins: ['*'], allowedHeaders: ['Content-Type'] };
+    expect(() => validateCorsOptions(options, /* authConfigured */ true)).toThrow(/bearer tokens/);
+    // Without auth, the same config is a legitimate public, non-credentialed API.
+    expect(() => validateCorsOptions(options, /* authConfigured */ false)).not.toThrow();
+  });
+
   it('accepts a wildcard origin for a public, non-credentialed, no-Authorization policy', () => {
     const options: CorsOptions = {
       allowedOrigins: ['*'],
