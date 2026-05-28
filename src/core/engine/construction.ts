@@ -83,8 +83,50 @@ export function typedEngineView<TViewWorkflows extends object, TViewActivities e
   return engine as never;
 }
 
+let memoryStorageFallbackWarningOverrideForTesting: boolean | undefined;
+
+/**
+ * Whether to warn when an `Engine` falls back to {@link MemoryStorage}. Gated
+ * to development so production never logs it: the explicit `development: true`
+ * option, or the same environment signals as the other engine dev-warnings
+ * (`WEFT_DEV_WARNINGS=1` / `NODE_ENV=development`).
+ */
+function shouldWarnOnMemoryStorageFallback(options?: EngineConstructorOptions): boolean {
+  if (memoryStorageFallbackWarningOverrideForTesting !== undefined) {
+    return memoryStorageFallbackWarningOverrideForTesting;
+  }
+  return (
+    options?.development === true ||
+    Bun.env['WEFT_DEV_WARNINGS'] === '1' ||
+    Bun.env['NODE_ENV'] === 'development'
+  );
+}
+
+/** Test-only override for the MemoryStorage-fallback warning's development gate. */
+export function setMemoryStorageFallbackWarningOverrideForTesting(
+  value: boolean | undefined,
+): void {
+  memoryStorageFallbackWarningOverrideForTesting = value;
+}
+
 export function resolveEngineStorage(options?: EngineConstructorOptions): WeftStorage {
-  const baseStorage = options?.storage ?? new MemoryStorage();
+  let baseStorage = options?.storage;
+  if (baseStorage === undefined) {
+    // No storage configured: workflow state lives only in memory and is lost
+    // when the process exits. Warn in development so a first-time user who
+    // crashes and restarts understands why their workflows vanished; stay
+    // silent in production, where MemoryStorage may be a deliberate choice.
+    if (shouldWarnOnMemoryStorageFallback(options)) {
+      console.warn(
+        '[weft] Engine started with no `storage` configured — falling back to MemoryStorage. ' +
+          'Workflow state is held only in memory and is lost when the process exits, so a crash ' +
+          'or restart discards every in-flight workflow. Pass a durable adapter (e.g. ' +
+          'SQLiteStorage) via `new Engine({ storage })` for anything beyond tests and local dev. ' +
+          '(This warning appears only in development.)',
+      );
+    }
+    baseStorage = new MemoryStorage();
+  }
   if (!options?.compression) return baseStorage;
   return new CompressedStorage(baseStorage, options.compression);
 }
