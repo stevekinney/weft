@@ -107,7 +107,7 @@ export interface DurableSemaphoreOptions {
   permits?: number;
   /**
    * Default lease duration in milliseconds applied to an acquired permit when
-   * an explicit `leaseMs` is not supplied to `acquire`. A permit whose lease
+   * an explicit `leaseMs` is not supplied to `tryAcquire`. A permit whose lease
    * expires may be reclaimed by another contender, which is what frees the lock
    * when a holder crashes without releasing. Defaults to `30_000`.
    */

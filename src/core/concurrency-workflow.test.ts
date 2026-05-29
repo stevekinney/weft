@@ -37,6 +37,7 @@ async function flush(): Promise<void> {
 }
 
 afterEach(() => {
+  activeEngine?.[Symbol.dispose]();
   activeEngine = undefined;
   restoreRealTimers();
 });
@@ -148,8 +149,6 @@ describe('durable mutex inside workflows', () => {
 
     // Strict serialization and FIFO order: a fully exits before b enters.
     expect(order).toEqual(['a:enter', 'a:exit', 'b:enter', 'b:exit']);
-
-    engine[Symbol.dispose]();
   });
 
   it('frees a crashed holder via lease expiry without deadlocking, and is recovery-safe', async () => {
@@ -221,8 +220,6 @@ describe('durable mutex inside workflows', () => {
     const handles = await recovered.recoverAll();
     expect(handles).toEqual([]);
     recovered[Symbol.dispose]();
-
-    engine[Symbol.dispose]();
   });
 });
 
@@ -297,7 +294,5 @@ describe('durable semaphore inside workflows', () => {
     // the same time.
     expect(peakConcurrent).toBeLessThanOrEqual(PERMITS);
     expect(peakConcurrent).toBeGreaterThan(0);
-
-    engine[Symbol.dispose]();
   });
 });

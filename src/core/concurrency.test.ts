@@ -106,7 +106,7 @@ describe('lock-record reducers', () => {
       expect(reclaimed.record.holders).toEqual([{ holderId: 'b', leaseExpiresAt: 7_000 }]);
     });
 
-    it('keeps a lease that has not yet expired (boundary is exclusive of now)', () => {
+    it('keeps a lease that has not yet expired (boundary: leaseExpiresAt <= now is expired)', () => {
       const held: LockRecord = { holders: [{ holderId: 'a', leaseExpiresAt: 2_000 }], waiters: [] };
       const blocked = reduceAcquire(held, {
         holderId: 'b',
@@ -114,7 +114,7 @@ describe('lock-record reducers', () => {
         leaseMs: 5_000,
         permits: 1,
       });
-      // leaseExpiresAt === now means still expired (boundary), so it IS reclaimed.
+      // leaseExpiresAt === now means the lease has expired (inclusive boundary), so it IS reclaimed.
       expect(blocked.attempt.acquired).toBe(true);
 
       const stillHeld = reduceAcquire(
