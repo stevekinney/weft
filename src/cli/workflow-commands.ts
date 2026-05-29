@@ -109,9 +109,10 @@ async function executeWorkflowList(
     .filter((row): row is WorkflowSummaryRow => row !== undefined);
   if (rows.length === 0) return { stdout: 'No workflows found.', exitCode: 0 };
 
-  const header = ['ID', 'TYPE', 'STATUS', 'CREATED'];
   const table = [
-    header.join('  '),
+    // Pad each header cell to match the corresponding data column width so
+    // the header aligns with the data rows.
+    ['ID'.padEnd(36), 'TYPE'.padEnd(20), 'STATUS'.padEnd(12), 'CREATED'].join('  '),
     ...rows.map((row) =>
       [
         truncateToWidth(row.id, 36).padEnd(36),

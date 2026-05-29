@@ -103,6 +103,9 @@ describe('weft workflow start/get/events', () => {
       } satisfies WorkflowCommand);
       expect(table.exitCode).toBe(0);
       expect(table.stdout).toContain('wf-ls-1');
+      // Verify header is padded to match data columns (ID=36, TYPE=20, STATUS=12).
+      const firstLine = table.stdout.split('\n')[0]!;
+      expect(firstLine.startsWith('ID' + ' '.repeat(34))).toBe(true);
 
       const json = await executeWorkflow({
         ...base,
