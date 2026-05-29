@@ -290,6 +290,37 @@ export async function completeAsyncActivity(
 }
 
 /**
+ * Drive a generator that may yield promises — the workflow interceptor's
+ * `activity` hook returns such a generator. Forwards rejections into the
+ * generator so try/catch/finally blocks inside the interceptor run correctly
+ * instead of being abandoned.
+ *
+ * Placed here (alongside async activity completion) because it is used
+ * exclusively in the async-activity execution path inside `executeActivity`.
+ */
+export async function driveWorkflowInterceptorGenerator(
+  generator: Generator<unknown, unknown, unknown>,
+): Promise<unknown> {
+  let current: IteratorResult<unknown, unknown> = generator.next();
+  while (!current.done) {
+    const yielded = current.value;
+    if (yielded instanceof Promise) {
+      let resolved: unknown;
+      try {
+        resolved = await yielded;
+      } catch (error) {
+        current = generator.throw(error);
+        continue;
+      }
+      current = generator.next(resolved);
+    } else {
+      current = generator.next(yielded);
+    }
+  }
+  return current.value;
+}
+
+/**
  * Fail a deferred activity out-of-band with `error`. The error is thrown into
  * the workflow generator at the parked step — identical to an inline activity
  * that threw — so the workflow's own try/catch and any configured retry policy

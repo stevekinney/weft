@@ -5,6 +5,7 @@ import {
   ActivityReconciliationConflictError,
   ActivityReconciliationIndeterminateError,
   ActivityResolutionError,
+  AsyncActivityTokenNotFoundError,
   AtomicStateConflictError,
   BulkDeleteRequiresTerminalWorkflowsError,
   BulkOperationConfirmationError,
@@ -76,6 +77,7 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
       operation: 'start',
       issues: [{ message: 'Expected a string.', path: '/email' }],
     }),
+  AsyncActivityTokenNotFoundError: () => new AsyncActivityTokenNotFoundError('token-abc'),
 };
 
 describe('WeftError', () => {

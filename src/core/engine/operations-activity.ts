@@ -15,6 +15,7 @@ import {
 import {
   AsyncActivityDeferral,
   deriveAsyncActivityToken,
+  driveWorkflowInterceptorGenerator,
   parkDeferredAsyncActivity,
 } from './async-activity-completion.ts';
 import { ActivityResolutionError } from './errors.ts';
@@ -77,18 +78,9 @@ function resolveActivityViaRegistries(
   if (workflowType !== undefined) {
     const perWorkflow = internals.activityRegistriesByWorkflow.get(workflowType);
     if (perWorkflow !== undefined) {
-      // Builder-registered workflow — per-workflow registry is consulted first
-      // so a name declared in `.activities({ ... })` is the authoritative
-      // implementation. When the per-workflow registry doesn't carry the
-      // name, fall back to the global registry: this preserves the
-      // legitimate mixed-registration pattern (a builder workflow referencing
-      // a separately-registered global activity, common during the
-      // transitional bridge and for shared helpers used by multiple
-      // workflows). Codex's review flagged the typo-into-global risk; the
-      // tradeoff lands on "preserve legitimate mixed usage" because the
-      // typo case requires a global same-name to exist, which is uncommon,
-      // and the alternative breaks the established test fleet patterns.
-      // Phase 6C revisits this when the global registry is removed entirely.
+      // Per-workflow registry wins; fall back to global to support the
+      // mixed-registration pattern (builder workflow + shared global activity).
+      // Phase 6C removes the global registry entirely.
       const perWorkflowFn = perWorkflow.resolve(activityName);
       if (perWorkflowFn) {
         return { fn: perWorkflowFn, workflowType };
@@ -327,28 +319,9 @@ export async function executeActivity(
     }
 
     const generator = composedWorkflow.activity(interception, execute);
-    let current: IteratorResult<unknown, unknown> = generator.next();
-    while (!current.done) {
-      const yielded = current.value;
-      if (yielded instanceof Promise) {
-        // Forward rejections into the generator so interceptor try/catch/finally
-        // blocks (e.g. span cleanup) run instead of abandoning the generator.
-        let resolved: unknown;
-        try {
-          resolved = await yielded;
-        } catch (error) {
-          current = generator.throw(error);
-          continue;
-        }
-        current = generator.next(resolved);
-      } else {
-        current = generator.next(yielded);
-      }
-    }
-
+    const value = await driveWorkflowInterceptorGenerator(generator);
     copyActivityHeadersToOperation(operation, interception.headers);
-
-    return current.value;
+    return value;
   }
 
   const headers = new Map<string, string>();
