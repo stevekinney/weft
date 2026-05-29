@@ -208,6 +208,26 @@ function isCompletionShell(value: string): value is CompletionShell {
   return VALID_COMPLETION_SHELLS.has(value);
 }
 
+/**
+ * Resolve and validate the `--shell` value for completions.
+ * When `isHelp` is true, validation is skipped and a sensible default is used
+ * because the shell value is irrelevant when showing help text.
+ */
+function resolveCompletionShell(rawShell: string | undefined, isHelp: boolean): CompletionShell {
+  if (isHelp) {
+    return rawShell !== undefined && isCompletionShell(rawShell) ? rawShell : 'zsh';
+  }
+  if (rawShell === undefined) {
+    throw new Error('completions: --shell is required (zsh, bash, or fish)');
+  }
+  if (!isCompletionShell(rawShell)) {
+    throw new Error(
+      `completions: unsupported shell '${rawShell}'. Must be one of: zsh, bash, fish`,
+    );
+  }
+  return rawShell;
+}
+
 /** Parse `weft completions generate|install --shell <shell>`. */
 export function parseCompletionsArguments(args: string[]): CliCommand {
   const { values, positionals } = parseArgs({
@@ -220,27 +240,14 @@ export function parseCompletionsArguments(args: string[]): CliCommand {
     allowPositionals: true,
   });
 
-  const action = positionals[0] ?? (values.help ? 'generate' : undefined);
+  const isHelp = values.help ?? false;
+  const action = positionals[0] ?? (isHelp ? 'generate' : undefined);
   if (action !== 'generate' && action !== 'install') {
     throw new Error('completions: expected a subcommand: generate or install');
   }
 
-  const shellValue = values.shell;
-  if (shellValue === undefined) {
-    throw new Error('completions: --shell is required (zsh, bash, or fish)');
-  }
-  if (!isCompletionShell(shellValue)) {
-    throw new Error(
-      `completions: unsupported shell '${shellValue}'. Must be one of: zsh, bash, fish`,
-    );
-  }
-
-  return {
-    command: 'completions',
-    action,
-    shell: shellValue,
-    help: values.help ?? false,
-  };
+  const shell = resolveCompletionShell(values.shell, isHelp);
+  return { command: 'completions', action, shell, help: isHelp };
 }
 
 function requirePositional(value: string | undefined, command: string, usage: string): string {

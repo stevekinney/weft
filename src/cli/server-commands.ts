@@ -47,15 +47,27 @@ function metaEndpoint(server: URL, path: string): URL {
   return endpoint;
 }
 
-async function probeHealth(server: URL): Promise<{ healthy: boolean; detail: string }> {
+type HealthResult =
+  | { healthy: true; detail: string; connectionError: false }
+  | { healthy: false; detail: string; connectionError: boolean };
+
+async function probeHealth(server: URL): Promise<HealthResult> {
   try {
     const response = await fetch(metaEndpoint(server, 'v1/health'), { method: 'GET' });
     if (!response.ok) {
-      return { healthy: false, detail: `server returned status ${response.status}` };
+      return {
+        healthy: false,
+        detail: `server returned status ${response.status}`,
+        connectionError: false,
+      };
     }
-    return { healthy: true, detail: 'ok' };
+    return { healthy: true, detail: 'ok', connectionError: false };
   } catch (error) {
-    return { healthy: false, detail: error instanceof Error ? error.message : String(error) };
+    return {
+      healthy: false,
+      detail: error instanceof Error ? error.message : String(error),
+      connectionError: true,
+    };
   }
 }
 
@@ -64,6 +76,9 @@ async function executeServerHealth(command: ServerCommand, server: URL): Promise
     ? await waitForHealth(server, command.waitTimeoutMs)
     : await probeHealth(server);
 
+  // Exit code 0: healthy; 1: unreachable/unhealthy response; 2: connection error (no response at all)
+  const exitCode = result.healthy ? 0 : result.connectionError ? 2 : 1;
+
   if (command.json) {
     return {
       stdout: prettyJson({
@@ -71,7 +86,7 @@ async function executeServerHealth(command: ServerCommand, server: URL): Promise
         healthy: result.healthy,
         detail: result.detail,
       }),
-      exitCode: result.healthy ? 0 : 1,
+      exitCode,
     };
   }
 
@@ -85,14 +100,11 @@ async function executeServerHealth(command: ServerCommand, server: URL): Promise
   return {
     stdout: '',
     stderr: command.quiet ? '' : `${server.toString()} is unreachable: ${result.detail}`,
-    exitCode: 1,
+    exitCode,
   };
 }
 
-async function waitForHealth(
-  server: URL,
-  timeoutMs: number,
-): Promise<{ healthy: boolean; detail: string }> {
+async function waitForHealth(server: URL, timeoutMs: number): Promise<HealthResult> {
   const deadline = Date.now() + timeoutMs;
   let last = await probeHealth(server);
   while (!last.healthy && Date.now() < deadline) {
@@ -156,7 +168,7 @@ async function executeServerInfo(command: ServerCommand, server: URL): Promise<C
   const health = await probeHealth(server);
   const serverOperationNames = health.healthy ? await fetchServerOperationNames(server) : undefined;
   const additionalOperations = additionalServerOperations(serverOperationNames);
-  const exitCode = health.healthy ? 0 : 1;
+  const exitCode = health.healthy ? 0 : health.connectionError ? 2 : 1;
 
   if (command.json) {
     return {

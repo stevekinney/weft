@@ -152,8 +152,20 @@ describe('completions argument parsing', () => {
     });
   });
 
-  it('requires a shell', () => {
+  it('requires a shell (without --help)', () => {
     expect(() => parseCliArguments(['completions', 'generate'])).toThrow(/--shell is required/);
+  });
+
+  it('allows --help without --shell', () => {
+    expect(parseCliArguments(['completions', '--help'])).toMatchObject({
+      command: 'completions',
+      help: true,
+    });
+    expect(parseCliArguments(['completions', 'generate', '--help'])).toMatchObject({
+      command: 'completions',
+      action: 'generate',
+      help: true,
+    });
   });
 
   it('rejects an unsupported shell', () => {

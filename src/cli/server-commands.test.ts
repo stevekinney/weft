@@ -32,9 +32,9 @@ describe('weft server health', () => {
     }
   });
 
-  it('returns non-zero when the server is unreachable', async () => {
+  it('returns exit 2 on a connection error (no server at address)', async () => {
     const result = await executeServer(healthCommand({ server: 'http://127.0.0.1:1/' }));
-    expect(result.exitCode).toBe(1);
+    expect(result.exitCode).toBe(2);
     expect(result.stderr).toContain('unreachable');
   });
 
@@ -54,7 +54,8 @@ describe('weft server health', () => {
     const unreachable = await executeServer(
       healthCommand({ server: 'http://127.0.0.1:1/', wait: true, waitTimeoutMs: 300 }),
     );
-    expect(unreachable.exitCode).toBe(1);
+    // Port 1 refuses connections — every probe is a connection error → exit 2.
+    expect(unreachable.exitCode).toBe(2);
   });
 
   it('emits JSON when requested', async () => {

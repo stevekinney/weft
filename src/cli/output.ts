@@ -27,11 +27,6 @@ export const color = {
   bold: (text: string) => (supportsColor() ? `\x1b[1m${text}\x1b[0m` : text),
 };
 
-/** Serialize a single value as a JSON line (no ANSI, trailing newline omitted). */
-export function jsonLine(value: unknown): string {
-  return JSON.stringify(value);
-}
-
 /** Serialize an array of values as NDJSON: one compact JSON object per line. */
 export function ndjson(values: readonly unknown[]): string {
   return values.map((value) => JSON.stringify(value)).join('\n');
@@ -74,12 +69,6 @@ export function truncateToWidth(value: string, width: number): string {
   if (!Number.isFinite(width) || width <= 0 || value.length <= width) return value;
   if (width <= 1) return value.slice(0, width);
   return `${value.slice(0, width - 1)}…`;
-}
-
-/** Resolve the active terminal width, defaulting to 80 columns off a TTY. */
-export function terminalWidth(stream: { columns?: number } | undefined = process.stdout): number {
-  const columns = stream?.columns;
-  return typeof columns === 'number' && columns > 0 ? columns : 80;
 }
 
 /**
