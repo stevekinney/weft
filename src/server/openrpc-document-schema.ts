@@ -25,6 +25,7 @@ const OpenRpcMcpMethodMetadataSchema = z.strictObject({
 export const OpenRpcMethodSchema = z.strictObject({
   name: z.string(),
   summary: z.string().optional(),
+  description: z.string().optional(),
   tags: z.array(z.strictObject({ name: z.string() })).optional(),
   paramStructure: z.literal('by-name'),
   params: z.array(ContentDescriptorSchema),

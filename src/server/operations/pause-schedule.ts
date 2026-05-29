@@ -18,6 +18,10 @@ export const pauseScheduleOperation = defineOperation<PauseScheduleInput, PauseS
   name: 'weft.schedules.pause',
   mcpExposable: false,
   summary: 'Pause a recurring schedule',
+  description:
+    'Pause a recurring schedule by `scheduleId` so it stops launching new workflows while ' +
+    'retaining its definition. Reversible via resume. Faults with NotFound when no schedule ' +
+    'with the given id exists.',
   destructive: false,
   tags: ['Schedules'],
   inputSchema: pauseScheduleInput,

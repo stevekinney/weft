@@ -21,6 +21,11 @@ export const cancelWorkflowOperation = createSingleWorkflowControlOperation<
 >({
   name: 'weft.workflows.cancel',
   summary: 'Cancel a running workflow',
+  description:
+    'Request cancellation of a running workflow by `id`. Cancellation is cooperative: the ' +
+    'workflow observes a cancellation signal and unwinds via its own cleanup logic, so this ' +
+    'is irreversible from the caller perspective. Faults with NotFound when the workflow is ' +
+    'not visible.',
   destructive: true,
   tags: ['Workflows'],
   inputSchema: cancelWorkflowInput,

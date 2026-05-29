@@ -327,6 +327,7 @@ function buildBindingEntry(
       ...buildErrorResponses(operation),
     },
   };
+  if (operation.description !== undefined) entry['description'] = operation.description;
   if (parameters.length > 0) entry['parameters'] = parameters;
 
   const requestBody = buildRequestBody(binding, operation, schemaHelper);

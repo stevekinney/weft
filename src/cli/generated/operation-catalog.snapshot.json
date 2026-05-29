@@ -64,6 +64,7 @@
       "name": "weft.reviews.decision.submit",
       "kind": "unary",
       "summary": "Submit a decision for a human review",
+      "description": "Submit an approve/reject (or option) decision for a pending human review, resuming the waiting workflow down the corresponding branch. The decision is final and cannot be retracted — the same finality as a signal. Faults with NotFound when the review is not visible.",
       "tags": ["Reviews"],
       "destructive": true,
       "access": {
@@ -107,6 +108,7 @@
       "name": "weft.reviews.get",
       "kind": "unary",
       "summary": "Get a specific review for a workflow",
+      "description": "Read a single human review request for a workflow by its identifiers, including the review prompt, available options, and current decision state. Read-only. Faults with NotFound when the review is not visible.",
       "tags": ["Reviews"],
       "destructive": false,
       "access": {
@@ -140,6 +142,7 @@
       "name": "weft.reviews.list",
       "kind": "unary",
       "summary": "List human review requests",
+      "description": "List pending human-in-the-loop review requests, optionally filtered by workflow. Read-only. Returns each review request with its prompt, options, and originating workflow so an operator or agent can decide on it via the review-decision operation.",
       "tags": ["Reviews"],
       "destructive": false,
       "access": {
@@ -312,6 +315,7 @@
       "name": "weft.schedules.cancel",
       "kind": "unary",
       "summary": "Cancel a recurring schedule",
+      "description": "Permanently cancel a recurring schedule by `scheduleId` so it stops launching new workflows. Irreversible — recreate the schedule to resume the cadence. Already-started workflows are unaffected. Faults with NotFound when no schedule with the given id exists.",
       "tags": ["Schedules"],
       "destructive": true,
       "access": {
@@ -341,6 +345,7 @@
       "name": "weft.schedules.create",
       "kind": "unary",
       "summary": "Create a recurring schedule",
+      "description": "Create a schedule that starts a workflow on a recurring cadence. Requires a schedule `id`, the target workflow `type`, and a recurrence specification (cron expression or interval); accepts the workflow `input` and start options. Returns the created schedule id. Faults with Conflict when a schedule with the same id already exists and InvalidParams for a malformed recurrence specification.",
       "tags": ["Schedules"],
       "destructive": false,
       "access": {
@@ -385,6 +390,7 @@
       "name": "weft.schedules.get",
       "kind": "unary",
       "summary": "Get a recurring schedule by id",
+      "description": "Read a single recurring schedule by `id`, including its recurrence specification, target workflow type, paused state, and next-run information. Read-only. Faults with NotFound when no schedule with the given id exists.",
       "tags": ["Schedules"],
       "destructive": false,
       "access": {
@@ -414,6 +420,7 @@
       "name": "weft.schedules.list",
       "kind": "unary",
       "summary": "List recurring schedules",
+      "description": "List recurring schedules with pagination. Read-only. Returns each schedule with its recurrence specification, target workflow type, and paused state.",
       "tags": ["Schedules"],
       "destructive": false,
       "access": {
@@ -442,6 +449,7 @@
       "name": "weft.schedules.pause",
       "kind": "unary",
       "summary": "Pause a recurring schedule",
+      "description": "Pause a recurring schedule by `scheduleId` so it stops launching new workflows while retaining its definition. Reversible via resume. Faults with NotFound when no schedule with the given id exists.",
       "tags": ["Schedules"],
       "destructive": false,
       "access": {
@@ -471,6 +479,7 @@
       "name": "weft.schedules.resume",
       "kind": "unary",
       "summary": "Resume a recurring schedule",
+      "description": "Resume a paused recurring schedule by `scheduleId` so it begins launching workflows on its cadence again. Faults with NotFound when no schedule with the given id exists.",
       "tags": ["Schedules"],
       "destructive": false,
       "access": {
@@ -500,6 +509,7 @@
       "name": "weft.schedules.update",
       "kind": "unary",
       "summary": "Update a recurring schedule",
+      "description": "Update an existing recurring schedule by `id`, replacing its recurrence specification, target workflow input, or start options. Returns null on success. Faults with NotFound when no schedule with the given id exists and InvalidParams for a malformed recurrence specification.",
       "tags": ["Schedules"],
       "destructive": false,
       "access": {
@@ -1380,6 +1390,7 @@
       "name": "weft.workers.drain",
       "kind": "unary",
       "summary": "Mark a connected worker as draining",
+      "description": "Mark a connected worker as draining by `workerId` so the engine stops dispatching new tasks to it while in-flight tasks finish, with an optional `reason`. Used for graceful shutdown and rolling deploys; clear the marker with the worker-resume operation. Faults with NotFound when no worker with the given id is connected.",
       "tags": ["System"],
       "destructive": true,
       "access": {
@@ -1466,6 +1477,7 @@
       "name": "weft.workers.list",
       "kind": "unary",
       "summary": "List connected workers, their advertised activities, and saturation",
+      "description": "List workers currently connected to the engine, including each worker id, its advertised activities and workflows, drain state, and saturation. Read-only. Use this to observe the worker fleet before draining or rebalancing.",
       "tags": ["System"],
       "destructive": false,
       "access": {
@@ -2797,6 +2809,7 @@
       "name": "weft.workflows.cancel",
       "kind": "unary",
       "summary": "Cancel a running workflow",
+      "description": "Request cancellation of a running workflow by `id`. Cancellation is cooperative: the workflow observes a cancellation signal and unwinds via its own cleanup logic, so this is irreversible from the caller perspective. Faults with NotFound when the workflow is not visible.",
       "tags": ["Workflows"],
       "destructive": true,
       "access": {
@@ -3042,6 +3055,7 @@
       "name": "weft.workflows.get",
       "kind": "unary",
       "summary": "Get workflow state by id",
+      "description": "Read the current state of a single workflow by `id`, including its status, timestamps, tags, and search attributes. Read-only. Faults with NotFound when no workflow with the given id is visible.",
       "tags": ["Workflows"],
       "destructive": false,
       "access": {
@@ -3071,6 +3085,7 @@
       "name": "weft.workflows.list",
       "kind": "unary",
       "summary": "List workflows",
+      "description": "List workflows visible to the caller, optionally filtered by status, type, tags, id prefix, failure category, and time range, with pagination via `limit`/`offset`. Read-only. Returns the matching workflow summaries in the engine default ordering.",
       "tags": ["Workflows"],
       "destructive": false,
       "access": {
@@ -3359,6 +3374,7 @@
       "name": "weft.workflows.query",
       "kind": "unary",
       "summary": "Query workflow state by id",
+      "description": "Run a named read-only query handler against a workflow and return its result. Requires the workflow `id` and the query `name`; `input` is optional. Queries do not mutate workflow state. Faults with NotFound when the workflow is not visible.",
       "tags": ["Workflows"],
       "destructive": false,
       "access": {
@@ -3393,6 +3409,7 @@
       "name": "weft.workflows.replay",
       "kind": "unary",
       "summary": "Replay a workflow to a historical checkpoint step",
+      "description": "Reconstruct the historical state of a workflow at a given checkpoint step and return a replay view. This is a read-only reconstruction via the engine replay machinery — the live workflow is never mutated or rewound. Faults with NotFound when the workflow or checkpoint step is not visible.",
       "tags": ["Checkpoints"],
       "destructive": false,
       "access": {
@@ -3462,6 +3479,7 @@
       "name": "weft.workflows.resume",
       "kind": "unary",
       "summary": "Resume a suspended workflow",
+      "description": "Resume a workflow that is suspended (for example, paused awaiting a human review or an operator hold) by `workflowId`, returning the workflow `id`. Faults with NotFound when the workflow is not visible.",
       "tags": ["Workflows"],
       "destructive": false,
       "access": {
@@ -3500,6 +3518,7 @@
       "name": "weft.workflows.signal",
       "kind": "unary",
       "summary": "Send a signal to a workflow",
+      "description": "Deliver a named signal with an optional payload to a running workflow. Requires the workflow `id` and the signal `name`; `payload` is optional. Signals are fire-and-forget from the caller perspective and do not return a handler result. Faults with NotFound when the workflow is not visible and InvalidParams when the payload exceeds the size limit.",
       "tags": ["Signals"],
       "destructive": true,
       "access": {
@@ -3548,6 +3567,7 @@
       "name": "weft.workflows.start",
       "kind": "unary",
       "summary": "Start a new workflow",
+      "description": "Start a new workflow execution of a registered type. Requires `type` (the registered workflow type name) and accepts an optional `input` payload plus start options: `id` (client-supplied workflow id), `executionTimeout`, `startAt`/`startAfter` (mutually exclusive scheduling), `tags`, and `searchAttributes`. Returns the workflow `id`. Faults with InvalidParams for an unregistered type or malformed options, and Conflict when a workflow with the same id already exists.",
       "tags": ["Workflows"],
       "destructive": false,
       "access": {
@@ -3797,6 +3817,7 @@
       "name": "weft.workflows.timeout",
       "kind": "unary",
       "summary": "Force-timeout a workflow",
+      "description": "Force a running workflow into the timed-out terminal state by `id`, as if its execution timeout had elapsed. Irreversible. Use for operator intervention on stuck workflows. Faults with NotFound when the workflow is not visible.",
       "tags": ["Workflows"],
       "destructive": true,
       "access": {
@@ -3828,6 +3849,7 @@
       "name": "weft.workflows.update",
       "kind": "unary",
       "summary": "Send a synchronous update to a workflow",
+      "description": "Invoke a named update handler on a workflow and wait for its result. Requires the workflow `id` and the update `name`; `payload` is optional. Unlike signals, updates return the handler result synchronously. Faults with NotFound when the workflow is not visible and InvalidParams when the payload exceeds the size limit.",
       "tags": ["Updates"],
       "destructive": true,
       "access": {

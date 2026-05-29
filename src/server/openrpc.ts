@@ -73,6 +73,7 @@ type ContentDescriptor = {
 type OpenRpcMethod = {
   name: string;
   summary?: string;
+  description?: string;
   tags?: Array<{ name: string }>;
   paramStructure: 'by-name';
   params: ContentDescriptor[];
@@ -264,6 +265,7 @@ function buildMethod(operation: ErasedOperation): OpenRpcMethod {
     'x-weft-paramsSchema': paramsSchema,
   };
   if (operation.summary) method.summary = operation.summary;
+  if (operation.description !== undefined) method.description = operation.description;
   if (operation.tags.length > 0) {
     method.tags = [...operation.tags].toSorted(compareStrings).map((name) => ({ name }));
   }

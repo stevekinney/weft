@@ -18,6 +18,9 @@ export const resumeScheduleOperation = defineOperation<ResumeScheduleInput, Resu
   name: 'weft.schedules.resume',
   mcpExposable: false,
   summary: 'Resume a recurring schedule',
+  description:
+    'Resume a paused recurring schedule by `scheduleId` so it begins launching workflows on ' +
+    'its cadence again. Faults with NotFound when no schedule with the given id exists.',
   destructive: false,
   tags: ['Schedules'],
   inputSchema: resumeScheduleInput,

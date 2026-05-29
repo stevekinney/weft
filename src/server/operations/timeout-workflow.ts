@@ -19,6 +19,10 @@ export const timeoutWorkflowOperation = createSingleWorkflowControlOperation<
 >({
   name: 'weft.workflows.timeout',
   summary: 'Force-timeout a workflow',
+  description:
+    'Force a running workflow into the timed-out terminal state by `id`, as if its execution ' +
+    'timeout had elapsed. Irreversible. Use for operator intervention on stuck workflows. ' +
+    'Faults with NotFound when the workflow is not visible.',
   destructive: true,
   tags: ['Workflows'],
   inputSchema: timeoutWorkflowInput,

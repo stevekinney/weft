@@ -23,6 +23,11 @@ export const updateScheduleOperation = defineOperation<UpdateScheduleInput, null
   name: 'weft.schedules.update',
   mcpExposable: false,
   summary: 'Update a recurring schedule',
+  description:
+    'Update an existing recurring schedule by `id`, replacing its recurrence specification, ' +
+    'target workflow input, or start options. Returns null on success. Faults with NotFound ' +
+    'when no schedule with the given id exists and InvalidParams for a malformed recurrence ' +
+    'specification.',
   destructive: false,
   tags: ['Schedules'],
   inputSchema: updateScheduleInput,

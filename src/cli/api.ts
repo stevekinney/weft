@@ -122,6 +122,9 @@ function formatOperationDescription(operation: CatalogOperationSnapshot): string
   return [
     `Name: ${operation.name}`,
     `Summary: ${operation.summary}`,
+    // Longer-form prose when the operation declares it; otherwise the short
+    // summary stands in so `--describe` always shows a Description line.
+    `Description: ${operation.description ?? operation.summary}`,
     `Kind: ${operation.kind}`,
     `Scope: ${formatAccess(operation)}`,
     `Transport: ${operation.transports.jsonRpcHttp ? 'json-rpc-http' : 'unsupported'}`,

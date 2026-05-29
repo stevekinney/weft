@@ -22,6 +22,8 @@ export type CatalogOperationSnapshot = {
   readonly name: string;
   readonly kind: OperationKind;
   readonly summary: string;
+  /** Optional longer-form prose; present only for the interactive subset. */
+  readonly description?: string;
   readonly tags: ReadonlyArray<string>;
   readonly destructive: boolean;
   readonly access: CatalogAccessSnapshot;
@@ -61,6 +63,7 @@ function operationToSnapshot(operation: ErasedOperation): CatalogOperationSnapsh
     name: operation.name,
     kind: operation.kind ?? 'unary',
     summary: operation.summary,
+    ...(operation.description === undefined ? {} : { description: operation.description }),
     tags: [...operation.tags].toSorted(compareStrings),
     destructive: operation.destructive ?? false,
     access: accessToSnapshot(operation.access),

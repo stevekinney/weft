@@ -105,6 +105,9 @@ export const listSchedulesOperation = defineOperation<ListSchedulesInput, ListSc
   name: 'weft.schedules.list',
   mcpExposable: false,
   summary: 'List recurring schedules',
+  description:
+    'List recurring schedules with pagination. Read-only. Returns each schedule with its ' +
+    'recurrence specification, target workflow type, and paused state.',
   destructive: false,
   tags: ['Schedules'],
   inputSchema: listSchedulesInput,

@@ -118,6 +118,11 @@ export const submitReviewDecisionOperation = defineOperation<
   name: 'weft.reviews.decision.submit',
   mcpExposable: false,
   summary: 'Submit a decision for a human review',
+  description:
+    'Submit an approve/reject (or option) decision for a pending human review, resuming the ' +
+    'waiting workflow down the corresponding branch. The decision is final and cannot be ' +
+    'retracted — the same finality as a signal. Faults with NotFound when the review is not ' +
+    'visible.',
   // Submitting an approve/reject decision durably resumes the workflow down
   // the corresponding branch; the decision cannot be retracted. Same finality
   // as a signal, so it is destructive.

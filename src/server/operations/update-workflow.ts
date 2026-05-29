@@ -38,6 +38,11 @@ export const updateWorkflowOperation = defineOperation<UpdateWorkflowInput, Upda
   name: 'weft.workflows.update',
   mcpExposable: false,
   summary: 'Send a synchronous update to a workflow',
+  description:
+    'Invoke a named update handler on a workflow and wait for its result. Requires the ' +
+    'workflow `id` and the update `name`; `payload` is optional. Unlike signals, updates ' +
+    'return the handler result synchronously. Faults with NotFound when the workflow is not ' +
+    'visible and InvalidParams when the payload exceeds the size limit.',
   destructive: true,
   tags: ['Updates'],
   inputSchema: updateWorkflowInput,

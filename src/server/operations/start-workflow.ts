@@ -119,6 +119,13 @@ export const startWorkflowOperation = defineOperation<StartWorkflowInput, StartW
   name: 'weft.workflows.start',
   mcpExposable: false,
   summary: 'Start a new workflow',
+  description:
+    'Start a new workflow execution of a registered type. Requires `type` (the registered ' +
+    'workflow type name) and accepts an optional `input` payload plus start options: `id` ' +
+    '(client-supplied workflow id), `executionTimeout`, `startAt`/`startAfter` (mutually ' +
+    'exclusive scheduling), `tags`, and `searchAttributes`. Returns the workflow `id`. Faults ' +
+    'with InvalidParams for an unregistered type or malformed options, and Conflict when a ' +
+    'workflow with the same id already exists.',
   destructive: false,
   tags: ['Workflows'],
   inputSchema: startWorkflowInput,

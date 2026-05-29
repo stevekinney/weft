@@ -82,6 +82,11 @@ export function createDrainWorkerOperation(options?: WorkerDrainOperationOptions
     name: 'weft.workers.drain',
     mcpExposable: false,
     summary: 'Mark a connected worker as draining',
+    description:
+      'Mark a connected worker as draining by `workerId` so the engine stops dispatching new ' +
+      'tasks to it while in-flight tasks finish, with an optional `reason`. Used for graceful ' +
+      'shutdown and rolling deploys; clear the marker with the worker-resume operation. Faults ' +
+      'with NotFound when no worker with the given id is connected.',
     destructive: true,
     tags: ['System'],
     inputSchema: workerDrainInput,

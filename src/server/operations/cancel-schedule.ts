@@ -18,6 +18,10 @@ export const cancelScheduleOperation = defineOperation<CancelScheduleInput, Canc
   name: 'weft.schedules.cancel',
   mcpExposable: false,
   summary: 'Cancel a recurring schedule',
+  description:
+    'Permanently cancel a recurring schedule by `scheduleId` so it stops launching new ' +
+    'workflows. Irreversible — recreate the schedule to resume the cadence. Already-started ' +
+    'workflows are unaffected. Faults with NotFound when no schedule with the given id exists.',
   destructive: true,
   tags: ['Schedules'],
   inputSchema: cancelScheduleInput,

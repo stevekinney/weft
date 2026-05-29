@@ -107,6 +107,54 @@ describe('api command', () => {
     expect(() => JSON.parse(readableDescription.stdout)).toThrow();
   });
 
+  it('shows the longer-form description for an operation that declares one', async () => {
+    // weft.workflows.cancel is in the interactive subset and declares a
+    // multi-sentence description that is longer than its short summary.
+    const result = await executeApi({
+      command: 'api',
+      describe: 'weft.workflows.cancel',
+      list: false,
+      yes: false,
+      help: false,
+      json: false,
+    });
+    expect(result.exitCode).toBe(0);
+
+    const summaryLine = result.stdout.split('\n').find((line) => line.startsWith('Summary: '));
+    const descriptionLine = result.stdout
+      .split('\n')
+      .find((line) => line.startsWith('Description: '));
+    expect(summaryLine).toBeDefined();
+    expect(descriptionLine).toBeDefined();
+    // The description line carries the longer-form prose, distinct from and
+    // longer than the short summary line.
+    expect(descriptionLine).not.toBe(summaryLine?.replace('Summary:', 'Description:'));
+    expect((descriptionLine ?? '').length).toBeGreaterThan((summaryLine ?? '').length);
+  });
+
+  it('falls back to the summary when an operation declares no description', async () => {
+    // weft.storage.get is not in the interactive subset and declares no
+    // description, so --describe must echo the summary on the Description line.
+    const result = await executeApi({
+      command: 'api',
+      describe: 'weft.storage.get',
+      list: false,
+      yes: false,
+      help: false,
+      json: false,
+    });
+    expect(result.exitCode).toBe(0);
+
+    const lines = result.stdout.split('\n');
+    const summaryLine = lines.find((line) => line.startsWith('Summary: '));
+    const descriptionLine = lines.find((line) => line.startsWith('Description: '));
+    expect(summaryLine).toBeDefined();
+    expect(descriptionLine).toBeDefined();
+    const summaryText = (summaryLine ?? '').slice('Summary: '.length);
+    const descriptionText = (descriptionLine ?? '').slice('Description: '.length);
+    expect(descriptionText).toBe(summaryText);
+  });
+
   it('blocks destructive operations unless --yes is present', async () => {
     const result = await executeApi({
       command: 'api',

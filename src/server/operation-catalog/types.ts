@@ -125,6 +125,15 @@ type OperationDefinitionBase<Input, Output> = {
   readonly mcpExposable: boolean;
   readonly mcpTool?: McpToolMetadata;
   readonly summary: string;
+  /**
+   * Optional longer-form prose describing what the operation does, its key
+   * inputs, and notable faults or preconditions. `summary` stays the short
+   * one-liner; `description` is the paragraph that surfaces in OpenAPI /
+   * OpenRPC operation descriptions, the CLI `weft api --describe` view, and
+   * MCP-facing discovery metadata. Optional: only the interactively-used
+   * subset of operations populate it. `summary` remains mandatory for all.
+   */
+  readonly description?: string;
   readonly tags: ReadonlyArray<string>;
   /**
    * Whether invoking this operation irreversibly mutates state or is
@@ -231,6 +240,8 @@ type RegistrableOperationBase = {
   readonly mcpExposable: boolean;
   readonly mcpTool?: McpToolMetadata;
   readonly summary: string;
+  /** See {@link OperationDefinitionBase.description}. Optional longer-form prose. */
+  readonly description?: string;
   readonly tags: ReadonlyArray<string>;
   /** See {@link OperationDefinitionBase.destructive}. Required, no default. */
   readonly destructive: boolean;

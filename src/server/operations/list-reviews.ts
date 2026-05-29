@@ -44,6 +44,10 @@ export const listReviewsOperation = defineOperation<ListReviewsInput, ListReview
   name: 'weft.reviews.list',
   mcpExposable: false,
   summary: 'List human review requests',
+  description:
+    'List pending human-in-the-loop review requests, optionally filtered by workflow. ' +
+    'Read-only. Returns each review request with its prompt, options, and originating ' +
+    'workflow so an operator or agent can decide on it via the review-decision operation.',
   destructive: false,
   tags: ['Reviews'],
   inputSchema: listReviewsInput,

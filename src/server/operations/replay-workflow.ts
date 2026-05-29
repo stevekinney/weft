@@ -36,6 +36,11 @@ export const replayWorkflowOperation = defineOperation<ReplayWorkflowInput, Repl
   name: 'weft.workflows.replay',
   mcpExposable: false,
   summary: 'Replay a workflow to a historical checkpoint step',
+  description:
+    'Reconstruct the historical state of a workflow at a given checkpoint step and return a ' +
+    'replay view. This is a read-only reconstruction via the engine replay machinery — the ' +
+    'live workflow is never mutated or rewound. Faults with NotFound when the workflow or ' +
+    'checkpoint step is not visible.',
   // Not destructive: this is a side-effecting read (workflows:read scope, GET
   // binding). It reconstructs historical state via replayTo() and returns a
   // WorkflowReplay value — the live workflow is never mutated or rewound.

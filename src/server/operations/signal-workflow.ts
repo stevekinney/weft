@@ -31,6 +31,11 @@ export const signalWorkflowOperation = createSingleWorkflowControlOperation<
 >({
   name: 'weft.workflows.signal',
   summary: 'Send a signal to a workflow',
+  description:
+    'Deliver a named signal with an optional payload to a running workflow. Requires the ' +
+    'workflow `id` and the signal `name`; `payload` is optional. Signals are fire-and-forget ' +
+    'from the caller perspective and do not return a handler result. Faults with NotFound when ' +
+    'the workflow is not visible and InvalidParams when the payload exceeds the size limit.',
   destructive: true,
   tags: ['Signals'],
   inputSchema: signalWorkflowInput,

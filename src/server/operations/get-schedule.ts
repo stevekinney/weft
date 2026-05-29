@@ -28,6 +28,10 @@ export const getScheduleOperation = defineOperation<GetScheduleInput, GetSchedul
   name: 'weft.schedules.get',
   mcpExposable: false,
   summary: 'Get a recurring schedule by id',
+  description:
+    'Read a single recurring schedule by `id`, including its recurrence specification, target ' +
+    'workflow type, paused state, and next-run information. Read-only. Faults with NotFound ' +
+    'when no schedule with the given id exists.',
   destructive: false,
   tags: ['Schedules'],
   inputSchema: getScheduleInput,

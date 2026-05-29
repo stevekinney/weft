@@ -77,6 +77,10 @@ export const listWorkflowsOperation = defineOperation<ListWorkflowsInput, ListWo
   name: 'weft.workflows.list',
   mcpExposable: false,
   summary: 'List workflows',
+  description:
+    'List workflows visible to the caller, optionally filtered by status, type, tags, id ' +
+    'prefix, failure category, and time range, with pagination via `limit`/`offset`. ' +
+    'Read-only. Returns the matching workflow summaries in the engine default ordering.',
   destructive: false,
   tags: ['Workflows'],
   inputSchema: listWorkflowsInput,

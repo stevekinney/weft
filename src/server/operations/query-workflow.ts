@@ -20,6 +20,10 @@ export const queryWorkflowOperation = defineOperation<QueryWorkflowInput, QueryW
   name: 'weft.workflows.query',
   mcpExposable: false,
   summary: 'Query workflow state by id',
+  description:
+    'Run a named read-only query handler against a workflow and return its result. Requires ' +
+    'the workflow `id` and the query `name`; `input` is optional. Queries do not mutate ' +
+    'workflow state. Faults with NotFound when the workflow is not visible.',
   destructive: false,
   tags: ['Workflows'],
   inputSchema: queryWorkflowInput,

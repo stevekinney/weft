@@ -124,6 +124,10 @@ export function createListWorkersOperation(options?: ListWorkersOptions) {
     name: 'weft.workers.list',
     mcpExposable: false,
     summary: 'List connected workers, their advertised activities, and saturation',
+    description:
+      'List workers currently connected to the engine, including each worker id, its advertised ' +
+      'activities and workflows, drain state, and saturation. Read-only. Use this to observe ' +
+      'the worker fleet before draining or rebalancing.',
     destructive: false,
     tags: ['System'],
     inputSchema: listWorkersInput,

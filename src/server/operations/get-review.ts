@@ -20,6 +20,10 @@ export const getReviewOperation = defineOperation<GetReviewInput, GetReviewOutpu
   name: 'weft.reviews.get',
   mcpExposable: false,
   summary: 'Get a specific review for a workflow',
+  description:
+    'Read a single human review request for a workflow by its identifiers, including the ' +
+    'review prompt, available options, and current decision state. Read-only. Faults with ' +
+    'NotFound when the review is not visible.',
   destructive: false,
   tags: ['Reviews'],
   inputSchema: getReviewInput,

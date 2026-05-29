@@ -51,6 +51,12 @@ type OperationDefinitionInputBase<Input, Output> = {
   readonly mcpExposable: boolean;
   readonly mcpTool?: OperationDefinition<Input, Output>['mcpTool'];
   readonly summary: string;
+  /**
+   * Optional longer-form prose. See {@link OperationDefinition} for the
+   * contract and the surfaces (OpenAPI, OpenRPC, CLI `--describe`, MCP
+   * discovery) that read it. `summary` stays mandatory and short.
+   */
+  readonly description?: string;
   readonly tags?: ReadonlyArray<string>;
   /**
    * Whether invoking this operation irreversibly mutates state. Required —
@@ -127,6 +133,7 @@ export function defineOperation<Input, Output>(
       ? {}
       : { mcpTool: { workflowType: input.mcpTool.workflowType } }),
     summary: input.summary,
+    ...(input.description === undefined ? {} : { description: input.description }),
     tags: [...(input.tags ?? [])],
     destructive: input.destructive,
     inputSchema: input.inputSchema,

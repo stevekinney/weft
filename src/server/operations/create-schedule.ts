@@ -108,6 +108,12 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
   name: 'weft.schedules.create',
   mcpExposable: false,
   summary: 'Create a recurring schedule',
+  description:
+    'Create a schedule that starts a workflow on a recurring cadence. Requires a schedule ' +
+    '`id`, the target workflow `type`, and a recurrence specification (cron expression or ' +
+    'interval); accepts the workflow `input` and start options. Returns the created schedule ' +
+    'id. Faults with Conflict when a schedule with the same id already exists and InvalidParams ' +
+    'for a malformed recurrence specification.',
   destructive: false,
   tags: ['Schedules'],
   inputSchema: createScheduleInput,

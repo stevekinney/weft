@@ -21,6 +21,8 @@ type SingleWorkflowControlOperationConfiguration<
 > = {
   readonly name: string;
   readonly summary: string;
+  /** Optional longer-form prose surfaced in discovery documents and the CLI. */
+  readonly description?: string;
   readonly tags: ReadonlyArray<string>;
   /** Whether this control operation irreversibly mutates state. Required. */
   readonly destructive: boolean;
@@ -41,6 +43,7 @@ export function createSingleWorkflowControlOperation<
     name: configuration.name,
     mcpExposable: false,
     summary: configuration.summary,
+    ...(configuration.description === undefined ? {} : { description: configuration.description }),
     tags: configuration.tags,
     destructive: configuration.destructive,
     inputSchema: configuration.inputSchema,

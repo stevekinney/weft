@@ -41,6 +41,10 @@ export const getWorkflowOperation = defineOperation<GetWorkflowInput, GetWorkflo
   name: 'weft.workflows.get',
   mcpExposable: false,
   summary: 'Get workflow state by id',
+  description:
+    'Read the current state of a single workflow by `id`, including its status, timestamps, ' +
+    'tags, and search attributes. Read-only. Faults with NotFound when no workflow with the ' +
+    'given id is visible.',
   destructive: false,
   tags: ['Workflows'],
   inputSchema: getWorkflowInput,
