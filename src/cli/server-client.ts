@@ -22,7 +22,11 @@ import {
   type CatalogOperationName,
   type CatalogOperationTypes,
 } from './generated/operation-client.generated.ts';
-import { CatalogClientError, createCatalogWeftClient } from './operation-client-runtime.ts';
+import {
+  CatalogClientError,
+  createCatalogWeftClient,
+  httpJsonRpcTransport,
+} from './operation-client-runtime.ts';
 import { messageOf } from './output.ts';
 
 /** Successful or failed result of a catalog operation call, never thrown. */
@@ -45,7 +49,7 @@ export async function callCatalogOperation<Name extends CatalogOperationName>(
 ): Promise<CatalogCallResult<CatalogOperationTypes[Name]['output']>> {
   const client = createCatalogWeftClient<CatalogOperationTypes>(
     CATALOG_OPERATION_NAMES,
-    connection,
+    httpJsonRpcTransport(connection),
   );
   try {
     const value = await client[operationName](input);

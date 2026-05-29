@@ -8,6 +8,13 @@
  * @module client/local
  */
 
+import {
+  CATALOG_OPERATION_NAMES,
+  type CatalogOperationName,
+  type CatalogOperationTypes,
+  type WeftClient as CatalogOperations,
+} from '../cli/generated/operation-client.generated.ts';
+import { createCatalogWeftClient } from '../cli/operation-client-runtime.ts';
 import type { Engine, WorkflowHandle } from '../core/engine.ts';
 import type { WeftEventMap } from '../core/events.ts';
 import {
@@ -52,6 +59,7 @@ import type {
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
 import { ScheduleHandleDelegation, WorkflowHandleDelegation } from './handle-delegation.ts';
+import { inProcessCatalogTransport } from './in-process-operations.ts';
 import type {
   ClientHandle,
   ClientScheduleHandle,
@@ -140,6 +148,8 @@ class LocalScheduleHandle extends ScheduleHandleDelegation<LocalClient> {
  */
 export class LocalClient implements WeftClient {
   readonly #engine: RuntimeWorkflowEngine;
+  /** Typed low-level accessor for every catalog operation, routed in-process. */
+  readonly operations: CatalogOperations;
 
   /**
    * Out-of-band ("async") activity completion. An activity that called
@@ -170,6 +180,17 @@ export class LocalClient implements WeftClient {
       complete: (token, result) => this.#engine.completeAsyncActivity(token, result),
       completeExceptionally: (token, error) => this.#engine.failAsyncActivity(token, error),
     };
+    this.operations = createCatalogWeftClient<CatalogOperationTypes>(
+      CATALOG_OPERATION_NAMES,
+      inProcessCatalogTransport(engine),
+    );
+  }
+
+  call<Name extends CatalogOperationName>(
+    name: Name,
+    input: CatalogOperationTypes[Name]['input'],
+  ): Promise<CatalogOperationTypes[Name]['output']> {
+    return this.operations[name](input);
   }
 
   async start<TName extends KnownWorkflowName>(

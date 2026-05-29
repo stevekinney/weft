@@ -25,6 +25,7 @@ export async function createOperationClientSource(snapshot: CatalogSnapshot): Pr
 
 import {
   createCatalogWeftClient,
+  httpJsonRpcTransport,
   type CatalogWeftClient,
   type WeftClientConnection,
 } from '../operation-client-runtime.ts';
@@ -42,7 +43,10 @@ ${entries.join('\n')}
 export type WeftClient = CatalogWeftClient<CatalogOperationTypes>;
 
 export function createWeftClient(connection: WeftClientConnection = {}): WeftClient {
-  return createCatalogWeftClient<CatalogOperationTypes>(CATALOG_OPERATION_NAMES, connection);
+  return createCatalogWeftClient<CatalogOperationTypes>(
+    CATALOG_OPERATION_NAMES,
+    httpJsonRpcTransport(connection),
+  );
 }
 `;
   const prettierConfiguration = await resolveConfig(OPERATION_CLIENT_PATH);

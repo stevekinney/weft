@@ -1,3 +1,10 @@
+import {
+  CATALOG_OPERATION_NAMES,
+  type CatalogOperationName,
+  type CatalogOperationTypes,
+  type WeftClient as CatalogOperations,
+} from '../cli/generated/operation-client.generated.ts';
+import { createCatalogWeftClient } from '../cli/operation-client-runtime.ts';
 import type { StoredStreamChunk } from '../core/context.ts';
 import type {
   AttributeFilterKey,
@@ -54,6 +61,7 @@ import {
   untagAllWorkflowRequests,
 } from './http-client-requests.ts';
 import { HttpHandle } from './http-handle.ts';
+import { httpClientCatalogTransport } from './http-operations.ts';
 import { request, resolveHttpClientConnection, type HttpClientOptions } from './http-request.ts';
 import { HttpScheduleHandle } from './http-schedule-handle.ts';
 import type {
@@ -92,6 +100,7 @@ import { buildStartBody, scheduleSpecToWireFields } from './start-body.ts';
  * ```ts
  * import { HttpClient } from 'weft';
  *
+ * // Explicit address and token.
  * const client = new HttpClient({
  *   baseUrl: 'http://localhost:3000',
  *   headers: { Authorization: 'Bearer my-token' },
@@ -99,15 +108,10 @@ import { buildStartBody, scheduleSpecToWireFields } from './start-body.ts';
  * const handle = await client.start('greet', { name: 'Alice' });
  * const result = await handle.result();
  * void result;
- * ```
  *
- * @example
- * ```ts
- * import { HttpClient } from 'weft';
- *
- * // Reads WEFT_ADDR and WEFT_TOKEN from the environment.
- * const client = new HttpClient();
- * void client;
+ * // Or resolve WEFT_ADDR / WEFT_TOKEN from the environment.
+ * const envClient = new HttpClient();
+ * void envClient;
  * ```
  */
 export class HttpClient implements WeftClient {
@@ -115,11 +119,24 @@ export class HttpClient implements WeftClient {
   readonly baseUrl: string;
   /** @internal Exposed for handle access. */
   readonly headers: Record<string, string>;
+  /** Typed low-level accessor for every catalog operation over JSON-RPC. */
+  readonly operations: CatalogOperations;
 
   constructor(options: HttpClientOptions = {}) {
     const connection = resolveHttpClientConnection(options);
     this.baseUrl = connection.baseUrl;
     this.headers = connection.headers;
+    this.operations = createCatalogWeftClient<CatalogOperationTypes>(
+      CATALOG_OPERATION_NAMES,
+      httpClientCatalogTransport(this.baseUrl, this.headers),
+    );
+  }
+
+  call<Name extends CatalogOperationName>(
+    name: Name,
+    input: CatalogOperationTypes[Name]['input'],
+  ): Promise<CatalogOperationTypes[Name]['output']> {
+    return this.operations[name](input);
   }
 
   async start<TName extends KnownWorkflowName>(
