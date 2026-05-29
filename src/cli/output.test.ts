@@ -50,10 +50,14 @@ describe('output helpers', () => {
   it('formatDuration does not produce invalid strings at bucket boundaries', () => {
     // 119.6s has 119 whole seconds = 1m 59s, NOT 1m 60s
     expect(formatDuration(119_600)).toBe('1m 59s');
-    // 59.999s has 59 whole seconds — must stay in the seconds bucket as "59s", NOT "60s"
+    // 59.999s has 59 whole seconds — must stay as "59s", NOT "60s"
     expect(formatDuration(59_999)).toBe('59s');
     // 60s exactly enters the minutes bucket
     expect(formatDuration(60_000)).toBe('1m 0s');
+    // 9.999s has 9 whole seconds — must stay as "9.9s", NOT "10.0s"
+    expect(formatDuration(9_999)).toBe('9.9s');
+    // 10s exactly enters the whole-seconds display
+    expect(formatDuration(10_000)).toBe('10s');
   });
 
   it('truncates to terminal width with an ellipsis', () => {

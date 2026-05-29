@@ -66,11 +66,13 @@ export function formatDuration(milliseconds: number): string {
   // boundaries (e.g. 59.999s rounding to "60s", or 119.6s producing "1m 60s").
   const totalWholeSeconds = Math.floor(totalSeconds);
   if (totalWholeSeconds < 60) {
-    // Use integer-floor boundary checks to prevent rounding past a bucket
-    // (e.g. 59.999s must display "59s", not "60s").
-    const displaySeconds =
-      totalWholeSeconds < 10 ? `${totalSeconds.toFixed(1)}s` : `${totalWholeSeconds}s`;
-    return displaySeconds;
+    if (totalWholeSeconds < 10) {
+      // Show one decimal place but clamp to the whole-second floor so rounding
+      // can never cross bucket boundaries (e.g. 9.999s → "9.9s", not "10.0s").
+      const clamped = Math.min(totalSeconds, totalWholeSeconds + 0.9);
+      return `${clamped.toFixed(1)}s`;
+    }
+    return `${totalWholeSeconds}s`;
   }
   const totalMinutes = Math.floor(totalWholeSeconds / 60);
   const seconds = totalWholeSeconds - totalMinutes * 60;

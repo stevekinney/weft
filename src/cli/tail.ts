@@ -161,9 +161,15 @@ export async function streamWorkflowEvents(options: TailStreamOptions): Promise<
         const chunk = await reader.read();
         if (chunk.done) return 0;
         value = chunk.value;
-      } catch {
-        // Reader cancelled (abort) or stream errored mid-read: end cleanly.
-        return 0;
+      } catch (error) {
+        // Reader cancelled by abort signal: end cleanly.
+        if (options.signal.aborted) return 0;
+        // Stream errored mid-read (e.g. network reset, server crash): report it.
+        const reportError = options.reportError ?? options.write;
+        reportError(
+          `tail: stream error: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        return 2;
       }
       if (value === undefined) return 0;
       buffer += decoder.decode(value, { stream: true });

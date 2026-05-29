@@ -24,18 +24,20 @@ const HEALTH_POLL_INTERVAL_MS = 250;
 
 /** Execute `weft server health` or `weft server info`. */
 export async function executeServer(command: ServerCommand): Promise<CommandOutput> {
-  const serverUrl = await resolveServerUrl(command);
-  if (command.action === 'health') return executeServerHealth(command, serverUrl);
-  return executeServerInfo(command, serverUrl);
+  const { server, token } = await resolveServerConnection(command);
+  if (command.action === 'health') return executeServerHealth(command, server, token);
+  return executeServerInfo(command, server, token);
 }
 
-async function resolveServerUrl(command: ServerCommand): Promise<URL> {
+async function resolveServerConnection(
+  command: ServerCommand,
+): Promise<{ server: URL; token: string | undefined }> {
   const connection = await resolveCliConnection({
     ...(command.server === undefined ? {} : { server: command.server }),
     ...(command.token === undefined ? {} : { token: command.token }),
     ...(command.profile === undefined ? {} : { profile: command.profile }),
   });
-  return connection.server;
+  return { server: connection.server, token: connection.token };
 }
 
 function metaEndpoint(server: URL, path: string): URL {
@@ -47,13 +49,22 @@ function metaEndpoint(server: URL, path: string): URL {
   return endpoint;
 }
 
+function authHeaders(token: string | undefined): Headers {
+  const headers = new Headers();
+  if (token !== undefined && token !== '') headers.set('authorization', `Bearer ${token}`);
+  return headers;
+}
+
 type HealthResult =
   | { healthy: true; detail: string; connectionError: false }
   | { healthy: false; detail: string; connectionError: boolean };
 
-async function probeHealth(server: URL): Promise<HealthResult> {
+async function probeHealth(server: URL, token: string | undefined): Promise<HealthResult> {
   try {
-    const response = await fetch(metaEndpoint(server, 'v1/health'), { method: 'GET' });
+    const response = await fetch(metaEndpoint(server, 'v1/health'), {
+      method: 'GET',
+      headers: authHeaders(token),
+    });
     if (!response.ok) {
       return {
         healthy: false,
@@ -71,10 +82,14 @@ async function probeHealth(server: URL): Promise<HealthResult> {
   }
 }
 
-async function executeServerHealth(command: ServerCommand, server: URL): Promise<CommandOutput> {
+async function executeServerHealth(
+  command: ServerCommand,
+  server: URL,
+  token: string | undefined,
+): Promise<CommandOutput> {
   const result = command.wait
-    ? await waitForHealth(server, command.waitTimeoutMs)
-    : await probeHealth(server);
+    ? await waitForHealth(server, token, command.waitTimeoutMs)
+    : await probeHealth(server, token);
 
   // Exit code 0: healthy; 1: unreachable/unhealthy response; 2: connection error (no response at all)
   const exitCode = result.healthy ? 0 : result.connectionError ? 2 : 1;
@@ -104,12 +119,16 @@ async function executeServerHealth(command: ServerCommand, server: URL): Promise
   };
 }
 
-async function waitForHealth(server: URL, timeoutMs: number): Promise<HealthResult> {
+async function waitForHealth(
+  server: URL,
+  token: string | undefined,
+  timeoutMs: number,
+): Promise<HealthResult> {
   const deadline = Date.now() + timeoutMs;
-  let last = await probeHealth(server);
+  let last = await probeHealth(server, token);
   while (!last.healthy && Date.now() < deadline) {
     await Bun.sleep(HEALTH_POLL_INTERVAL_MS);
-    last = await probeHealth(server);
+    last = await probeHealth(server, token);
   }
   return last;
 }
@@ -120,9 +139,15 @@ function isOpenRpcDocument(value: unknown): value is OpenRpcDocument {
   return typeof value === 'object' && value !== null;
 }
 
-async function fetchServerOperationNames(server: URL): Promise<ReadonlyArray<string> | undefined> {
+async function fetchServerOperationNames(
+  server: URL,
+  token: string | undefined,
+): Promise<ReadonlyArray<string> | undefined> {
   try {
-    const response = await fetch(metaEndpoint(server, 'openrpc.json'), { method: 'GET' });
+    const response = await fetch(metaEndpoint(server, 'openrpc.json'), {
+      method: 'GET',
+      headers: authHeaders(token),
+    });
     if (!response.ok) return undefined;
     const body = (await response.json()) as unknown;
     if (!isOpenRpcDocument(body) || !Array.isArray(body.methods)) return undefined;
@@ -164,9 +189,15 @@ function formatServerInfoLines(
   return lines;
 }
 
-async function executeServerInfo(command: ServerCommand, server: URL): Promise<CommandOutput> {
-  const health = await probeHealth(server);
-  const serverOperationNames = health.healthy ? await fetchServerOperationNames(server) : undefined;
+async function executeServerInfo(
+  command: ServerCommand,
+  server: URL,
+  token: string | undefined,
+): Promise<CommandOutput> {
+  const health = await probeHealth(server, token);
+  const serverOperationNames = health.healthy
+    ? await fetchServerOperationNames(server, token)
+    : undefined;
   const additionalOperations = additionalServerOperations(serverOperationNames);
   const exitCode = health.healthy ? 0 : health.connectionError ? 2 : 1;
 
