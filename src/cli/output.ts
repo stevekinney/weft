@@ -127,12 +127,18 @@ export async function confirmDestructive(options: {
 
 async function defaultReadLine(): Promise<string> {
   const reader = Bun.stdin.stream().getReader();
+  const decoder = new TextDecoder();
+  let accumulated = '';
   try {
-    const { value, done } = await reader.read();
-    if (done || value === undefined) return '';
-    const text = new TextDecoder().decode(value);
-    const newlineIndex = text.indexOf('\n');
-    return newlineIndex === -1 ? text : text.slice(0, newlineIndex);
+    // ReadableStream chunks may not align to line boundaries, so loop until a
+    // newline is found or the stream ends.
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done || value === undefined) return accumulated;
+      accumulated += decoder.decode(value, { stream: true });
+      const newlineIndex = accumulated.indexOf('\n');
+      if (newlineIndex !== -1) return accumulated.slice(0, newlineIndex);
+    }
   } finally {
     reader.releaseLock();
   }
