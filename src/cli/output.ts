@@ -62,9 +62,16 @@ export function formatDuration(milliseconds: number): string {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return '-';
   if (milliseconds < 1000) return `${Math.round(milliseconds)}ms`;
   const totalSeconds = milliseconds / 1000;
-  if (totalSeconds < 60) return `${totalSeconds.toFixed(totalSeconds < 10 ? 1 : 0)}s`;
-  // Use Math.floor for seconds to avoid rounding carry (e.g. 119.6s → 1m 60s).
+  // Use integer-seconds arithmetic throughout to avoid rounding across bucket
+  // boundaries (e.g. 59.999s rounding to "60s", or 119.6s producing "1m 60s").
   const totalWholeSeconds = Math.floor(totalSeconds);
+  if (totalWholeSeconds < 60) {
+    // Use integer-floor boundary checks to prevent rounding past a bucket
+    // (e.g. 59.999s must display "59s", not "60s").
+    const displaySeconds =
+      totalWholeSeconds < 10 ? `${totalSeconds.toFixed(1)}s` : `${totalWholeSeconds}s`;
+    return displaySeconds;
+  }
   const totalMinutes = Math.floor(totalWholeSeconds / 60);
   const seconds = totalWholeSeconds - totalMinutes * 60;
   if (totalMinutes < 60) return `${totalMinutes}m ${seconds}s`;

@@ -47,11 +47,13 @@ describe('output helpers', () => {
     expect(formatDuration(-1)).toBe('-');
   });
 
-  it('formatDuration does not produce invalid strings like 1m 60s at rounding boundary', () => {
-    // 119.6s would round to 120s = 2m 0s, NOT 1m 60s
+  it('formatDuration does not produce invalid strings at bucket boundaries', () => {
+    // 119.6s has 119 whole seconds = 1m 59s, NOT 1m 60s
     expect(formatDuration(119_600)).toBe('1m 59s');
-    // 59.5s should stay in the seconds bucket (< 60s threshold)
-    expect(formatDuration(59_999)).toBe('60s');
+    // 59.999s has 59 whole seconds — must stay in the seconds bucket as "59s", NOT "60s"
+    expect(formatDuration(59_999)).toBe('59s');
+    // 60s exactly enters the minutes bucket
+    expect(formatDuration(60_000)).toBe('1m 0s');
   });
 
   it('truncates to terminal width with an ellipsis', () => {
