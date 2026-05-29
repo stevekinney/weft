@@ -8,7 +8,9 @@
  *      bypass. Auth-event auditing happens inside the authenticator itself.
  *   2. **Rate limiting** — throttles per principal-or-IP key, returning 429 with
  *      `Retry-After` once a key exceeds its window budget. Public-path requests
- *      and servers without a `rateLimit` are never throttled.
+ *      and servers without a `rateLimit` are never throttled. Failed-auth
+ *      requests are also checked against the IP-keyed limiter so that
+ *      credential-stuffing floods are shed before returning the 401.
  *
  * @internal
  */
@@ -128,6 +130,10 @@ function enforceRateLimit(
  * Run the request gate: authenticate, then rate-limit. Returns a short-circuit
  * `response` (401 or 429) when either step rejects, otherwise `response: null`
  * with the resolved authentication outcome.
+ *
+ * Failed-auth requests are checked against the IP-keyed limiter before the 401
+ * is returned so that credential-stuffing floods consume the rate-limit budget
+ * and are eventually shed with a 429 instead of burning CPU indefinitely.
  */
 export async function gateRequest(
   server: ReturnType<typeof Bun.serve>,
@@ -136,6 +142,13 @@ export async function gateRequest(
 ): Promise<{ response: Response | null; authentication: AuthenticationOutcome }> {
   const authentication = await authenticateRequest(context, request);
   if (authentication.response !== null) {
+    // Auth failed. Apply the IP-keyed rate limiter to failed-auth requests so
+    // that credential-stuffing or wrong-key floods consume the window budget.
+    // If the IP is already over budget, return 429 instead of 401.
+    const failedAuthThrottle = enforceRateLimit(context, server, request, undefined, false);
+    if (failedAuthThrottle !== null) {
+      return { response: failedAuthThrottle, authentication };
+    }
     return { response: authentication.response, authentication };
   }
   // Throttle authenticated (and unauthenticated-but-non-public) requests once a

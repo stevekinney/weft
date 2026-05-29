@@ -102,6 +102,33 @@ describe('serve() with rate limiting', () => {
     // No server was created; stub the afterEach handle so cleanup is a no-op.
     server = { stop: async () => {} } as WeftServer;
   });
+
+  it('rate-limits credential-stuffing floods (failed-auth requests) by IP', async () => {
+    engine = createEngine();
+    server = serve({
+      engine,
+      port: 0,
+      auth: { apiKeys: [TEST_API_KEY] },
+      rateLimit: { maxRequests: 2, windowMs: 60_000 },
+    });
+
+    const statuses: number[] = [];
+    for (let i = 0; i < 6; i++) {
+      const response = await fetch(`${server.url}/v1/workflows`, {
+        headers: { 'X-API-Key': 'wrong-key' },
+      });
+      statuses.push(response.status);
+      await response.body?.cancel();
+    }
+
+    // The first two failed-auth requests consume the window budget (returned as
+    // 401 while the budget remains). Once the budget is exhausted, subsequent
+    // requests from the same IP are shed with 429.
+    const rejected = statuses.filter((status) => status === 401);
+    const throttled = statuses.filter((status) => status === 429);
+    expect(rejected.length).toBe(2);
+    expect(throttled.length).toBe(4);
+  });
 });
 
 describe('serve() auth audit trail', () => {
