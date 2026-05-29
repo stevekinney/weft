@@ -14,8 +14,7 @@ description: >-
 - Renaming fields in persisted or replayed shapes, such as `input` to `arguments`.
 - Changing semantic hash inputs, canonicalization, serialization, or codec behavior.
 - Updating `JSONValue`, tool-call, tool-result, checkpoint, storage, or effect-log data.
-- Adding storage primitives that can delete persisted ranges, especially `deleteRange` bounds, prefix intersection, event-log compaction watermarks, or watermark truncation semantics.
-- Changing history policy, payload-size admission, archive export, Worker replay signatures, checkpoint failure metadata, or event-log verification.
+- Adding storage primitives that can delete persisted ranges, especially `deleteRange` bounds, prefix intersection, or watermark truncation semantics.
 - Adding compatibility with another package while Weft still owns the runtime contract.
 - Generating or validating cross-process declarations from registry snapshots, or wrapping byte-oriented storage for string-oriented consumers.
 - Normalizing failure-category values, changing workflow visibility index keys, or changing framed compressed-storage payloads.
@@ -37,8 +36,6 @@ description: >-
 7. For compression changes, keep the two-byte framing contract pinned so gzip, brotli, and uncompressed values remain distinguishable without storage-side metadata.
 8. Keep external compatibility structural and dev/test-only; do not import sibling package runtime types into Weft runtime source.
 9. For bounded storage deletion, prove the operation cannot become an unbounded wipe through malformed options, negative limits, reverse iteration, or scoped-storage prefix smuggling.
-10. For event-log compaction, prove the watermark and checkpoint commit are atomic, verification seeds from the watermark, the surviving tail still matches the head, and `history.maxEvents` continues to count lifetime sequence.
-11. For `payloadSize.maxBytes`, prove oversize workflow inputs, signal payloads, and activity results fail before durable writes while already-persisted data remains replayable under the current policy.
 
 ## Verification
 

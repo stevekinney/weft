@@ -15,7 +15,6 @@ description: >-
 - Covering subprocess durability, WAL checkpoint behavior, native transaction atomicity, RemoteWorker reconnect/takeover paths, or byte-level WebSocket fault injection.
 - Covering codegen declaration output, doctest extraction, skip-count parsing, or generated fixture typechecking.
 - Covering workflow visibility indexes, aggregate distinct-key caps, failure-category query aliases, backfill watermarks, or Bun SQLite smoke paths.
-- Covering event-log compaction watermark verification, Worker replay signatures, Worker protocol guards, payload-size admission, or post-build distribution guards.
 - Covering `.test-support.ts` harness modules whose consumers execute the behavior but Bun reports nested callback or unnamed-function misses.
 - Deciding whether a coverage allowance is justified.
 - Building a structural test double to reach a branch hidden by normal constructors or registries.
@@ -39,7 +38,6 @@ description: >-
 9. Keep allowlist entries narrow, documented, and removable; remove stale allowances when coverage becomes real.
 10. For support-module instrumentation gaps, first add direct helper tests or fix the fake harness semantics. Only then add function-only allowances that name the Bun instrumentation limitation and leave line/branch coverage strict.
 11. Remove stale allowances for deleted files immediately; absence from LCOV is not evidence that an allowance is still useful.
-12. For test-only helper moves, keep helpers in `.test-support.ts` or another build-excluded shape, then run `bun run build` so the dist guard proves `bun:test`, `fake-indexeddb`, and `jsdom` did not leak into published files.
 
 ## Verification
 
