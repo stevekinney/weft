@@ -173,6 +173,12 @@ export function parseWorkflowArguments(args: string[]): CliCommand {
   if (builder === undefined) {
     throw new Error('workflow: expected a subcommand: ls, get, events, start, cancel, or signal');
   }
+  // When --help is requested, skip required-positional validation — help text
+  // is shown before the command executes. Use 'ls' (no required positionals)
+  // as the action placeholder regardless of what the user typed.
+  if (values.help) {
+    return { command: 'workflow', action: 'ls', ...workflowConnectionFields(values) };
+  }
   return builder(values, positionals.slice(1));
 }
 

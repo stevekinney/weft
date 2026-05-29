@@ -27,14 +27,25 @@ export const color = {
   bold: (text: string) => (supportsColor() ? `\x1b[1m${text}\x1b[0m` : text),
 };
 
-/** Serialize an array of values as NDJSON: one compact JSON object per line. */
+/**
+ * Serialize an array of values as NDJSON: one compact JSON object per line.
+ * Entries that `JSON.stringify` cannot encode (e.g. `undefined`, functions)
+ * are skipped so the output is always valid NDJSON.
+ */
 export function ndjson(values: readonly unknown[]): string {
-  return values.map((value) => JSON.stringify(value)).join('\n');
+  return values
+    .map((value) => JSON.stringify(value))
+    .filter((line): line is string => line !== undefined)
+    .join('\n');
 }
 
-/** Pretty-print a single value as indented JSON for non-list `--json` output. */
+/**
+ * Pretty-print a single value as indented JSON for non-list `--json` output.
+ * Returns `'null'` when `JSON.stringify` yields `undefined` (e.g. for void
+ * results) so the contract of returning a valid JSON string is always upheld.
+ */
 export function prettyJson(value: unknown): string {
-  return JSON.stringify(value, null, 2);
+  return JSON.stringify(value, null, 2) ?? 'null';
 }
 
 /** Render a Unix-millisecond timestamp as an ISO string, or `-` when absent. */
@@ -52,8 +63,10 @@ export function formatDuration(milliseconds: number): string {
   if (milliseconds < 1000) return `${Math.round(milliseconds)}ms`;
   const totalSeconds = milliseconds / 1000;
   if (totalSeconds < 60) return `${totalSeconds.toFixed(totalSeconds < 10 ? 1 : 0)}s`;
-  const totalMinutes = Math.floor(totalSeconds / 60);
-  const seconds = Math.round(totalSeconds - totalMinutes * 60);
+  // Use Math.floor for seconds to avoid rounding carry (e.g. 119.6s → 1m 60s).
+  const totalWholeSeconds = Math.floor(totalSeconds);
+  const totalMinutes = Math.floor(totalWholeSeconds / 60);
+  const seconds = totalWholeSeconds - totalMinutes * 60;
   if (totalMinutes < 60) return `${totalMinutes}m ${seconds}s`;
   const hours = Math.floor(totalMinutes / 60);
   const minutes = totalMinutes - hours * 60;
@@ -74,11 +87,11 @@ export function truncateToWidth(value: string, width: number): string {
 /**
  * Confirmation gate for destructive operations.
  *
- * - `assumeYes` (the `--yes`/`-y` flag) bypasses the prompt entirely.
- * - On a non-interactive stdin without `--yes`, returns `denied` so the caller
+ * - `assumeYes` (the `--yes`/`-y` flag) bypasses the prompt entirely and returns `'confirmed'`.
+ * - On a non-interactive stdin without `--yes`, returns `'non-interactive'` so the caller
  *   can exit 1 with a clear message rather than hanging on a prompt.
  * - On a TTY, prints `prompt` and reads a line; defaults to No unless the reply
- *   starts with `y`/`Y`.
+ *   starts with `y`/`Y`. Returns `'confirmed'` or `'denied'` accordingly.
  */
 export async function confirmDestructive(options: {
   readonly prompt: string;

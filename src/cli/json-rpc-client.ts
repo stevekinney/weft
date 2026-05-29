@@ -68,5 +68,12 @@ function isJsonRpcError(value: unknown): value is { readonly error: JsonRpcError
 }
 
 function isJsonRpcSuccess(value: unknown): value is { readonly result?: unknown } {
-  return typeof value === 'object' && value !== null && 'jsonrpc' in value && !('error' in value);
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'jsonrpc' in value &&
+    (value as Record<string, unknown>)['jsonrpc'] === '2.0' &&
+    'id' in value &&
+    !('error' in value)
+  );
 }

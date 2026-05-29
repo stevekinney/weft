@@ -5,6 +5,7 @@ import {
   formatDuration,
   formatTimestamp,
   ndjson,
+  prettyJson,
   truncateToWidth,
 } from './output.ts';
 
@@ -15,6 +16,21 @@ describe('output helpers', () => {
     expect(lines).toHaveLength(2);
     expect(JSON.parse(lines[0]!)).toEqual({ a: 1 });
     expect(JSON.parse(lines[1]!)).toEqual({ b: 2 });
+  });
+
+  it('ndjson skips undefined entries so output is always valid NDJSON', () => {
+    const text = ndjson([{ a: 1 }, undefined, { b: 2 }]);
+    const lines = text.split('\n');
+    // undefined is filtered out — only the two objects remain
+    expect(lines).toHaveLength(2);
+    expect(JSON.parse(lines[0]!)).toEqual({ a: 1 });
+    expect(JSON.parse(lines[1]!)).toEqual({ b: 2 });
+  });
+
+  it('prettyJson returns valid JSON string (including for undefined/void values)', () => {
+    expect(prettyJson({ ok: true })).toBe(JSON.stringify({ ok: true }, null, 2));
+    // JSON.stringify(undefined) returns undefined; prettyJson must return a string.
+    expect(prettyJson(undefined)).toBe('null');
   });
 
   it('formats timestamps as ISO and falls back to a dash', () => {
@@ -29,6 +45,13 @@ describe('output helpers', () => {
     expect(formatDuration(90_000)).toBe('1m 30s');
     expect(formatDuration(3_900_000)).toBe('1h 5m');
     expect(formatDuration(-1)).toBe('-');
+  });
+
+  it('formatDuration does not produce invalid strings like 1m 60s at rounding boundary', () => {
+    // 119.6s would round to 120s = 2m 0s, NOT 1m 60s
+    expect(formatDuration(119_600)).toBe('1m 59s');
+    // 59.5s should stay in the seconds bucket (< 60s threshold)
+    expect(formatDuration(59_999)).toBe('60s');
   });
 
   it('truncates to terminal width with an ellipsis', () => {

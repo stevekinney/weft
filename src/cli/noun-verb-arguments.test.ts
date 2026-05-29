@@ -108,8 +108,20 @@ describe('workflow argument parsing', () => {
     });
   });
 
-  it('requires a workflow id for get', () => {
+  it('requires a workflow id for get (without --help)', () => {
     expect(() => parseCliArguments(['workflow', 'get'])).toThrow(/missing required argument/);
+  });
+
+  it('allows --help without required positionals for subcommands that need them', () => {
+    // weft workflow get --help should show help, not throw "missing required argument"
+    expect(parseCliArguments(['workflow', 'get', '--help'])).toMatchObject({
+      command: 'workflow',
+      help: true,
+    });
+    expect(parseCliArguments(['workflow', 'cancel', '--help'])).toMatchObject({
+      command: 'workflow',
+      help: true,
+    });
   });
 
   it('rejects ambiguous input sources', () => {

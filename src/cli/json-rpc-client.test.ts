@@ -47,4 +47,12 @@ describe('sendJsonRpcRequest', () => {
     if (result.ok) throw new Error('expected error');
     expect(result.error.code).toBe(-32601);
   });
+
+  it('rejects an unrelated JSON object as an invalid response (not a valid JSON-RPC envelope)', async () => {
+    // Objects that merely have a `jsonrpc` field but no `id` are not valid success envelopes.
+    stub = serveRaw({ jsonrpc: '2.0', status: 'ok' });
+    await expect(
+      sendJsonRpcRequest({ server: stub.url }, 'weft.workflows.cancel', {}, 'x'),
+    ).rejects.toThrow('Invalid JSON-RPC response');
+  });
 });
