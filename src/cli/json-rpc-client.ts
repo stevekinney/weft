@@ -1,4 +1,4 @@
-import { resolveCliConnection, type CliConnectionOptions } from './connection.ts';
+import { resolveConnection, type ConnectionOptions } from '../connection.ts';
 
 export type JsonRpcErrorObject = {
   readonly code: number;
@@ -11,12 +11,12 @@ export type JsonRpcCallResult =
   | { readonly ok: false; readonly error: JsonRpcErrorObject };
 
 export async function sendJsonRpcRequest(
-  connectionOptions: CliConnectionOptions,
+  connectionOptions: ConnectionOptions,
   method: string,
   params: unknown,
   id: string,
 ): Promise<JsonRpcCallResult> {
-  const connection = await resolveCliConnection(connectionOptions);
+  const connection = resolveConnection(connectionOptions);
   const response = await fetch(jsonRpcEndpoint(connection.server), {
     method: 'POST',
     headers: requestHeaders(connection.token),

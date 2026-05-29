@@ -1,4 +1,4 @@
-import type { CliConnectionOptions } from './connection.ts';
+import type { ConnectionOptions } from '../connection.ts';
 import { sendJsonRpcRequest, type JsonRpcErrorObject } from './json-rpc-client.ts';
 
 /** JSON-RPC reserved code returned when a server does not know an operation. */
@@ -43,7 +43,7 @@ export type CatalogWeftClient<Operations extends CatalogOperationTypes> = {
   ) => Promise<Operations[Name]['output']>;
 };
 
-export type WeftClientConnection = CliConnectionOptions;
+export type WeftClientConnection = ConnectionOptions;
 
 export function createCatalogWeftClient<Operations extends CatalogOperationTypes>(
   operationNames: readonly (keyof Operations & string)[],

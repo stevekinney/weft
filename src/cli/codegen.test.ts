@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { composeRegistryUrl, executeCodegen } from './codegen.ts';
+import { CODEGEN_HELP_TEXT } from './help-text.ts';
 import { parseCliArguments } from './parse-arguments.ts';
 
 const FIXTURE_DIR = resolve(import.meta.dir, '__fixtures__/codegen');
@@ -31,20 +32,22 @@ describe('codegen parser', () => {
     ).toThrow(/--server and --from cannot be used together/);
   });
 
-  it('rejects when neither --server nor --from is provided', () => {
-    expect(() => parseCliArguments(['codegen', '--out', 'o.d.ts'])).toThrow(
-      /exactly one of --server or --from/,
-    );
+  it('allows omitting --server so connection configuration can resolve it', () => {
+    const parsed = parseCliArguments(['codegen', '--out', 'o.d.ts']);
+    if (parsed.command !== 'codegen') throw new Error('expected codegen command');
+    expect(parsed.server).toBeUndefined();
+    expect(parsed.from).toBeUndefined();
+    expect(parsed.out).toBe('o.d.ts');
   });
 
   it('rejects when --out is missing', () => {
     expect(() => parseCliArguments(['codegen', '--from', 'r.json'])).toThrow(/--out is required/);
   });
 
-  it('rejects --token without --server', () => {
+  it('rejects --token when reading from a file', () => {
     expect(() =>
       parseCliArguments(['codegen', '--from', 'r.json', '--out', 'o.d.ts', '--token', 'abc']),
-    ).toThrow(/--token requires --server/);
+    ).toThrow(/--token cannot be used with --from/);
   });
 
   it('short-circuits on --help without requiring other flags', () => {
@@ -115,6 +118,17 @@ describe('codegen parser', () => {
     expect(parsed.server).toBe('http://example/base');
     expect(parsed.out).toBe('/tmp/x.d.ts');
     expect(parsed.token).toBe('abc');
+  });
+});
+
+describe('codegen help text', () => {
+  it('documents shared connection resolution and from-file token restrictions', () => {
+    expect(CODEGEN_HELP_TEXT).toContain('weft codegen --out <file>');
+    expect(CODEGEN_HELP_TEXT).toContain('WEFT_ADDR');
+    expect(CODEGEN_HELP_TEXT).toContain('WEFT_TOKEN');
+    expect(CODEGEN_HELP_TEXT).toContain('~/.weft/config');
+    expect(CODEGEN_HELP_TEXT).toContain('Cannot be');
+    expect(CODEGEN_HELP_TEXT).toContain('combined with --from');
   });
 });
 
@@ -448,6 +462,58 @@ describe('executeCodegen HTTP fetch path', () => {
       if (prior === undefined) delete Bun.env['WEFT_TOKEN'];
       else Bun.env['WEFT_TOKEN'] = prior;
       await server.stop(true);
+    }
+  });
+
+  it('uses WEFT_ADDR and WEFT_TOKEN through the shared connection resolver', async () => {
+    let observedAuth: string | null | undefined;
+    let observedUrl: string | undefined;
+    const server = serveOnce((request) => {
+      observedAuth = request.headers.get('authorization');
+      observedUrl = request.url;
+      return new Response(Bun.file(REGISTRY_FIXTURE), {
+        headers: { 'content-type': 'application/json' },
+      });
+    });
+    const priorAddress = Bun.env['WEFT_ADDR'];
+    const priorToken = Bun.env['WEFT_TOKEN'];
+    Bun.env['WEFT_ADDR'] = server.url.toString();
+    Bun.env['WEFT_TOKEN'] = 'environment-token';
+    try {
+      const dir = makeTempDir();
+      const out = join(dir, 'weft.d.ts');
+      const result = await executeCodegen({ out, timeoutMs: 30_000 });
+      expect(result.exitCode).toBe(0);
+      expect(observedAuth).toBe('Bearer environment-token');
+      expect(observedUrl).toBe(new URL('/api/v1/registry', server.url).toString());
+    } finally {
+      if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
+      else Bun.env['WEFT_ADDR'] = priorAddress;
+      if (priorToken === undefined) delete Bun.env['WEFT_TOKEN'];
+      else Bun.env['WEFT_TOKEN'] = priorToken;
+      await server.stop(true);
+    }
+  });
+
+  it('reports malformed connection configuration as a user diagnostic', async () => {
+    const home = makeTempDir();
+    writeFileSync(join(home, 'config'), 'server = "missing-closing-quote');
+    const out = join(home, 'weft.d.ts');
+    const priorHome = Bun.env['WEFT_HOME'];
+    const priorAddress = Bun.env['WEFT_ADDR'];
+    Bun.env['WEFT_HOME'] = home;
+    delete Bun.env['WEFT_ADDR'];
+
+    try {
+      const result = await executeCodegen({ out, timeoutMs: 30_000 });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('codegen: Failed to read connection configuration');
+      expect(existsSync(out)).toBe(false);
+    } finally {
+      if (priorHome === undefined) delete Bun.env['WEFT_HOME'];
+      else Bun.env['WEFT_HOME'] = priorHome;
+      if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
+      else Bun.env['WEFT_ADDR'] = priorAddress;
     }
   });
 

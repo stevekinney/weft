@@ -35,14 +35,11 @@ function validateCodegenFlags(values: CodegenParsedValues): void {
   if (values.server !== undefined && values.from !== undefined) {
     throw new Error('codegen: --server and --from cannot be used together');
   }
-  if (values.server === undefined && values.from === undefined) {
-    throw new Error('codegen: exactly one of --server or --from must be provided');
-  }
   if (values.out === undefined || values.out === '') {
     throw new Error('codegen: --out is required');
   }
-  if (values.token !== undefined && values.server === undefined) {
-    throw new Error('codegen: --token requires --server');
+  if (values.token !== undefined && values.from !== undefined) {
+    throw new Error('codegen: --token cannot be used with --from');
   }
 }
 

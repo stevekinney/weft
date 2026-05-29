@@ -18,6 +18,7 @@ import { basename, dirname } from 'node:path';
 
 import { z } from 'zod';
 
+import { ConnectionConfigurationError, resolveConnection } from '../connection.ts';
 import {
   REGISTRY_VERSION,
   type RegistryActivityEntry,
@@ -69,6 +70,8 @@ export type CodegenOptions = {
   /** When true, emit a single JSON object on stdout for machine consumers. */
   json?: boolean;
 };
+
+type CodegenConnection = { baseUrl: string; token: string | undefined };
 
 /**
  * Run the codegen pipeline end-to-end. Returns a {@link CommandOutput}
@@ -148,10 +151,32 @@ async function loadSnapshot(options: CodegenOptions): Promise<Result<unknown>> {
   if (options.from !== undefined) {
     return loadSnapshotFromFile(options.from);
   }
-  if (options.server !== undefined) {
-    return loadSnapshotFromServer(options.server, options.token, options.timeoutMs);
+
+  const connectionResult = resolveCodegenConnection(options);
+  if (!connectionResult.ok) return connectionResult;
+  return loadSnapshotFromServer(
+    connectionResult.value.baseUrl,
+    connectionResult.value.token,
+    options.timeoutMs,
+  );
+}
+
+function resolveCodegenConnection(options: CodegenOptions): Result<CodegenConnection> {
+  try {
+    const connection = resolveConnection({
+      ...(options.server !== undefined ? { server: options.server } : {}),
+      ...(options.token !== undefined ? { token: options.token } : {}),
+    });
+    return {
+      ok: true,
+      value: { baseUrl: connection.server.toString(), token: connection.token },
+    };
+  } catch (error) {
+    if (error instanceof ConnectionConfigurationError) {
+      return { ok: false, error: `codegen: ${error.message}` };
+    }
+    throw error;
   }
-  return { ok: false, error: 'codegen: exactly one of --server or --from must be provided' };
 }
 
 async function loadSnapshotFromFile(path: string): Promise<Result<unknown>> {
@@ -186,9 +211,8 @@ export function composeRegistryUrl(serverUrl: string): URL {
   return url;
 }
 
-function buildRequestHeaders(explicitToken: string | undefined): Headers {
+function buildRequestHeaders(token: string | undefined): Headers {
   const headers = new Headers({ Accept: 'application/json' });
-  const token = explicitToken ?? Bun.env['WEFT_TOKEN'];
   if (token !== undefined && token !== '') {
     headers.set('Authorization', `Bearer ${token}`);
   }
@@ -239,7 +263,7 @@ async function parseRegistryResponse(
 
 async function loadSnapshotFromServer(
   serverUrl: string,
-  explicitToken: string | undefined,
+  token: string | undefined,
   timeoutMs: number,
 ): Promise<Result<unknown>> {
   let resolvedUrl: URL;
@@ -247,13 +271,13 @@ async function loadSnapshotFromServer(
     resolvedUrl = composeRegistryUrl(serverUrl);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    return { ok: false, error: `codegen: invalid --server URL '${serverUrl}': ${message}` };
+    return { ok: false, error: `codegen: invalid server URL '${serverUrl}': ${message}` };
   }
 
   let response: Response;
   try {
     response = await fetch(resolvedUrl, {
-      headers: buildRequestHeaders(explicitToken),
+      headers: buildRequestHeaders(token),
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {

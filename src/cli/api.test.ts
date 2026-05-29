@@ -3,10 +3,10 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { resolveConnection } from '../connection.ts';
 import { Engine } from '../core/engine.ts';
 import { serve } from '../server/index.ts';
 import { executeApi } from './api.ts';
-import { resolveCliConnection } from './connection.ts';
 import { createWeftClient } from './generated/operation-client.generated.ts';
 import { jsonRpcEndpoint } from './json-rpc-client.ts';
 import { parseCliArguments } from './parse-arguments.ts';
@@ -273,7 +273,7 @@ describe('api connection resolution', () => {
     );
 
     try {
-      const connection = await resolveCliConnection({});
+      const connection = resolveConnection({});
       expect(connection.server.toString()).toBe('http://profile.example:9000/');
       expect(connection.token).toBe('profile-secret');
     } finally {
@@ -293,7 +293,7 @@ describe('api connection resolution', () => {
     await Bun.write(join(home, 'run'), `${JSON.stringify({ server: 'http://127.0.0.1:4321' })}\n`);
 
     try {
-      const connection = await resolveCliConnection({});
+      const connection = resolveConnection({});
       expect(connection.server.toString()).toBe('http://127.0.0.1:4321/');
     } finally {
       if (priorHome === undefined) delete Bun.env['WEFT_HOME'];
@@ -312,7 +312,7 @@ describe('api connection resolution', () => {
     await Bun.write(join(home, 'run'), '{');
 
     try {
-      const connection = await resolveCliConnection({});
+      const connection = resolveConnection({});
       expect(connection.server.toString()).toBe('http://localhost:7233/');
     } finally {
       if (priorHome === undefined) delete Bun.env['WEFT_HOME'];

@@ -469,6 +469,13 @@ export type { HttpClientOptions } from './client/index';
 export type { ClientHandle, UpdateResult, WeftClient } from './client/interface';
 export { LocalClient } from './client/local';
 
+export {
+  ConnectionConfigurationError,
+  DEFAULT_WEFT_ADDRESS,
+  resolveConnection,
+} from './connection';
+export type { ConnectionOptions, ResolvedConnection } from './connection';
+
 export { collectDiagnostics } from './diagnostics/doctor';
 export {
   formatBytes,

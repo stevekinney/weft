@@ -17,8 +17,19 @@ import { WeftError } from '../core/weft-error.ts';
  * ```
  */
 export interface HttpClientOptions {
-  /** Base URL of the Weft server (e.g. `http://localhost:3000`). */
-  baseUrl: string;
+  /**
+   * Base URL of the Weft server (e.g. `http://localhost:3000`). Defaults to
+   * `WEFT_ADDR`, then the `~/.weft/config` profile, then `http://localhost:7233`
+   * when omitted.
+   */
+  baseUrl?: string;
+  /**
+   * Bearer token sent as `Authorization: Bearer <token>`. Defaults to
+   * `WEFT_TOKEN` or the profile token when omitted. An explicit
+   * `headers.Authorization` always wins; pass an empty string to suppress a
+   * resolved token entirely.
+   */
+  token?: string;
   /** Optional headers to include on every request (e.g. auth tokens). */
   headers?: Record<string, string>;
 }

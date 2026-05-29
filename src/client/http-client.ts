@@ -1,3 +1,4 @@
+import { resolveConnection } from '../connection.ts';
 import type { StoredStreamChunk } from '../core/context.ts';
 import type {
   AttributeFilterKey,
@@ -83,6 +84,14 @@ function scheduleSpecToWireFields(spec: string | ScheduleSpec): Record<string, u
  *   response from `submitCoordinatedUpdate` is translated into a
  *   `CoordinatedUpdateResult` with an `error` field rather than throwing.
  *
+ * **Connection resolution**
+ *
+ * With no `baseUrl`/`token`, the client resolves the server address and bearer
+ * token through {@link resolveConnection}: explicit options, then `WEFT_ADDR`/
+ * `WEFT_TOKEN`, then the `~/.weft/config` profile, then `http://localhost:7233`.
+ * The CLI-only run lockfile is not consulted. A caller-supplied
+ * `headers.Authorization` always takes precedence over a resolved token.
+ *
  * @example
  * ```ts
  * import { HttpClient } from 'weft';
@@ -95,6 +104,15 @@ function scheduleSpecToWireFields(spec: string | ScheduleSpec): Record<string, u
  * const result = await handle.result();
  * void result;
  * ```
+ *
+ * @example
+ * ```ts
+ * import { HttpClient } from 'weft';
+ *
+ * // Reads WEFT_ADDR and WEFT_TOKEN from the environment.
+ * const client = new HttpClient();
+ * void client;
+ * ```
  */
 export class HttpClient implements WeftClient {
   /** @internal Exposed for handle access. */
@@ -102,9 +120,23 @@ export class HttpClient implements WeftClient {
   /** @internal Exposed for handle access. */
   readonly headers: Record<string, string>;
 
-  constructor(options: HttpClientOptions) {
-    this.baseUrl = options.baseUrl.replace(/\/+$/, '');
-    this.headers = options.headers ?? {};
+  constructor(options: HttpClientOptions = {}) {
+    const connection = resolveConnection({
+      includeRunLockfile: false,
+      ...(options.baseUrl !== undefined ? { server: options.baseUrl } : {}),
+      ...(options.token !== undefined ? { token: options.token } : {}),
+    });
+    this.baseUrl = connection.server.toString().replace(/\/+$/, '');
+
+    const headers = new Headers(options.headers);
+    if (
+      connection.token !== undefined &&
+      connection.token !== '' &&
+      !headers.has('Authorization')
+    ) {
+      headers.set('Authorization', `Bearer ${connection.token}`);
+    }
+    this.headers = Object.fromEntries(headers.entries());
   }
 
   async start(type: string, input: unknown, options?: StartOptions): Promise<ClientHandle> {

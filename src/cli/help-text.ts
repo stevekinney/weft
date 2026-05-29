@@ -254,6 +254,7 @@ export const CODEGEN_HELP_TEXT = `
 weft codegen - Generate TypeScript declarations from a registry snapshot
 
 Usage:
+  weft codegen --out <file> [options]
   weft codegen --server <url> --out <file> [options]
   weft codegen --from <path> --out <file> [options]
 
@@ -264,13 +265,11 @@ runs with unchanged input do not rewrite the output file.
 
 Options:
       --server <url>     Base URL of a running Weft server. The CLI appends
-                         /v1/registry to whatever path you supply, so
-                         http://host/base becomes http://host/base/v1/registry
+                         /api/v1/registry to whatever path you supply, so
+                         http://host/base becomes http://host/base/api/v1/registry
       --from <path>      Read the registry snapshot from a local JSON file
-      --token <token>    Bearer token sent as Authorization header. Requires
-                         --server. Falls back to the WEFT_TOKEN environment
-                         variable when --token is not provided. A persistent
-                         credentials file is not supported in this version
+      --token <token>    Bearer token sent as Authorization header. Cannot be
+                         combined with --from
   -o, --out <file>       Output .d.ts path. Parent directory must already exist
       --timeout <ms>     Network timeout in milliseconds (default: 30000;
                          must be a positive integer)
@@ -278,6 +277,11 @@ Options:
                          consumers; errors become {"ok":false,"error":...}
                          on stderr
   -h, --help             Show this help message
+
+Connection resolution:
+  Live HTTP fetches use --server and --token when provided, then WEFT_ADDR and
+  WEFT_TOKEN, then the ~/.weft/config profile, then http://localhost:7233.
+  Vendored snapshots supplied with --from do not read connection settings.
 
 Exit codes:
   0   Success or no changes needed (file is up to date)

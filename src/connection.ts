@@ -1,0 +1,296 @@
+/**
+ * Shared Weft server connection resolution for the HTTP client and CLI commands.
+ *
+ * A single resolver backs every entry point so `WEFT_ADDR`, `WEFT_TOKEN`,
+ * `~/.weft/config` profiles, the local run lockfile, and the development default
+ * are interpreted identically whether you construct an {@link HttpClient} or run
+ * `weft api`/`weft codegen`.
+ *
+ * Resolution order for the server address is explicit option, then `WEFT_ADDR`,
+ * then the selected profile's `server`, then the run lockfile written by
+ * `weft serve`, then `http://localhost:7233`. Token resolution prefers the
+ * explicit option, then `WEFT_TOKEN`, then the profile token (with `env:` and
+ * `tokenEnv` indirection).
+ *
+ * @module connection
+ */
+
+import { existsSync, readFileSync } from 'node:fs';
+
+import { mkdir, rm } from 'node:fs/promises';
+
+/**
+ * Inputs accepted by {@link resolveConnection}.
+ *
+ * @example
+ * ```ts
+ * import { resolveConnection, type ConnectionOptions } from 'weft';
+ *
+ * const options: ConnectionOptions = {
+ *   server: 'https://weft.example.com',
+ *   token: 'secret-token',
+ * };
+ *
+ * const connection = resolveConnection(options);
+ * console.log(connection.server.toString());
+ * ```
+ */
+export type ConnectionOptions = {
+  readonly server?: string;
+  readonly token?: string;
+  readonly profile?: string;
+  /**
+   * Consult the local run lockfile written by `weft serve` as a fallback server
+   * address. Defaults to `true` for CLI developer convenience; library clients
+   * pass `false` so resolution stays explicit-options/env/profile/default.
+   */
+  readonly includeRunLockfile?: boolean;
+};
+
+/**
+ * Resolved Weft server connection settings.
+ *
+ * @example
+ * ```ts
+ * import { resolveConnection, type ResolvedConnection } from 'weft';
+ *
+ * const connection: ResolvedConnection = resolveConnection({
+ *   server: 'https://weft.example.com',
+ *   token: 'secret-token',
+ * });
+ *
+ * console.log(connection.token);
+ * ```
+ */
+export type ResolvedConnection = {
+  readonly server: URL;
+  readonly token?: string;
+};
+
+/**
+ * Default local Weft server address used when nothing else resolves.
+ *
+ * @example
+ * ```ts
+ * import { DEFAULT_WEFT_ADDRESS } from 'weft';
+ *
+ * console.log(DEFAULT_WEFT_ADDRESS); // "http://localhost:7233"
+ * ```
+ */
+export const DEFAULT_WEFT_ADDRESS = 'http://localhost:7233';
+
+/**
+ * Raised when a present `~/.weft/config` file cannot be parsed. A missing file
+ * is not an error; a malformed one is surfaced so callers do not silently
+ * connect to the wrong server.
+ *
+ * @example
+ * ```ts
+ * import { ConnectionConfigurationError, resolveConnection } from 'weft';
+ *
+ * try {
+ *   resolveConnection();
+ * } catch (error) {
+ *   if (error instanceof ConnectionConfigurationError) {
+ *     console.error(error.message);
+ *   }
+ * }
+ * ```
+ */
+export class ConnectionConfigurationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ConnectionConfigurationError';
+  }
+}
+
+type WeftProfile = {
+  readonly server?: string;
+  readonly token?: string;
+  readonly tokenEnv?: string;
+};
+
+type WeftConfiguration = {
+  readonly defaultProfile?: string;
+  readonly profiles?: Record<string, WeftProfile>;
+};
+
+type WeftRunLockfile = {
+  readonly server?: string;
+  readonly url?: string;
+};
+
+/**
+ * Resolve Weft server connection settings from explicit options, environment
+ * variables, `~/.weft/config`, the local run lockfile, and the development
+ * default.
+ *
+ * Resolution is synchronous so it can run inside the {@link HttpClient}
+ * constructor and CLI command handlers alike.
+ *
+ * @example
+ * ```ts
+ * import { resolveConnection } from 'weft';
+ *
+ * const connection = resolveConnection({ server: 'https://weft.example.com' });
+ * console.log(connection.server.toString()); // "https://weft.example.com/"
+ * ```
+ */
+export function resolveConnection(options: ConnectionOptions = {}): ResolvedConnection {
+  const context = resolveConnectionContext(options);
+  const server = resolveServerString(context);
+  // A profile or lockfile token is only safe to apply when an explicit option
+  // or `WEFT_ADDR` did not steer the request to a different server.
+  const serverIsOverridden = options.server !== undefined || Bun.env['WEFT_ADDR'] !== undefined;
+  const fallbackProfile = serverIsOverridden ? undefined : context.profile;
+  const token = resolveToken(options.token ?? Bun.env['WEFT_TOKEN'], fallbackProfile);
+
+  return {
+    server: new URL(server),
+    ...(token === undefined ? {} : { token }),
+  };
+}
+
+type ConnectionContext = {
+  readonly options: ConnectionOptions;
+  readonly profile?: WeftProfile;
+  readonly runLockfile?: WeftRunLockfile;
+};
+
+function resolveConnectionContext(options: ConnectionOptions): ConnectionContext {
+  const configuration = readWeftConfiguration();
+  const profileName = options.profile ?? Bun.env['WEFT_PROFILE'] ?? configuration.defaultProfile;
+  const profile = profileName === undefined ? undefined : configuration.profiles?.[profileName];
+  const runLockfile = options.includeRunLockfile === false ? undefined : readRunLockfile();
+  return {
+    options,
+    ...(profile === undefined ? {} : { profile }),
+    ...(runLockfile === undefined ? {} : { runLockfile }),
+  };
+}
+
+function resolveServerString(context: ConnectionContext): string {
+  return (
+    context.options.server ??
+    Bun.env['WEFT_ADDR'] ??
+    context.profile?.server ??
+    context.runLockfile?.server ??
+    context.runLockfile?.url ??
+    DEFAULT_WEFT_ADDRESS
+  );
+}
+
+/** Record the address of a running server so later CLI commands can find it. */
+export async function writeRunLockfile(server: string): Promise<void> {
+  await mkdir(weftHome(), { recursive: true });
+  await Bun.write(runLockfilePath(), `${JSON.stringify({ server }, null, 2)}\n`);
+}
+
+/** Remove the run lockfile when the recorded server shuts down. */
+export async function removeRunLockfile(server: string): Promise<void> {
+  const lockfile = readRunLockfile();
+  if (lockfile === undefined) return;
+  if ((lockfile.server ?? lockfile.url) !== server) return;
+  await rm(runLockfilePath(), { force: true });
+}
+
+function readWeftConfiguration(): WeftConfiguration {
+  const path = configurationPath();
+  if (!existsSync(path)) return {};
+  let parsed: unknown;
+  try {
+    parsed = Bun.TOML.parse(readFileSync(path, 'utf8'));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new ConnectionConfigurationError(
+      `Failed to read connection configuration at ${path}: ${message}`,
+    );
+  }
+  return normalizeConfiguration(parsed);
+}
+
+function readRunLockfile(): WeftRunLockfile | undefined {
+  const path = runLockfilePath();
+  if (!existsSync(path)) return undefined;
+  const text = readFileSync(path, 'utf8').trim();
+  if (text === '') return undefined;
+  try {
+    return normalizeRunLockfile(JSON.parse(text) as unknown);
+  } catch {
+    return undefined;
+  }
+}
+
+function normalizeConfiguration(value: unknown): WeftConfiguration {
+  if (!isRecord(value)) return {};
+  const profiles = normalizeProfiles(value['profiles']);
+  const defaultProfile = stringValue(value['defaultProfile'] ?? value['default_profile']);
+  return {
+    ...(defaultProfile === undefined ? {} : { defaultProfile }),
+    profiles,
+  };
+}
+
+function normalizeProfiles(value: unknown): Record<string, WeftProfile> {
+  const profiles: Record<string, WeftProfile> = {};
+  if (!isRecord(value)) return profiles;
+  for (const [name, profile] of Object.entries(value)) {
+    const normalized = normalizeProfile(profile);
+    if (normalized !== undefined) profiles[name] = normalized;
+  }
+  return profiles;
+}
+
+function normalizeProfile(value: unknown): WeftProfile | undefined {
+  if (!isRecord(value)) return undefined;
+  const server = stringValue(value['server']);
+  const token = stringValue(value['token']);
+  const tokenEnv = stringValue(value['tokenEnv'] ?? value['token_env']);
+  return {
+    ...(server === undefined ? {} : { server }),
+    ...(token === undefined ? {} : { token }),
+    ...(tokenEnv === undefined ? {} : { tokenEnv }),
+  };
+}
+
+function normalizeRunLockfile(value: unknown): WeftRunLockfile | undefined {
+  if (!isRecord(value)) return undefined;
+  const server = stringValue(value['server']);
+  const url = stringValue(value['url']);
+  if (server === undefined && url === undefined) return undefined;
+  return {
+    ...(server === undefined ? {} : { server }),
+    ...(url === undefined ? {} : { url }),
+  };
+}
+
+function resolveToken(
+  token: string | undefined,
+  profile: WeftProfile | undefined,
+): string | undefined {
+  const directToken = token ?? profile?.token;
+  if (directToken?.startsWith('env:')) return Bun.env[directToken.slice('env:'.length)];
+  if (directToken !== undefined) return directToken;
+  if (profile?.tokenEnv !== undefined) return Bun.env[profile.tokenEnv];
+  return undefined;
+}
+
+function configurationPath(): string {
+  return `${weftHome()}/config`;
+}
+
+function runLockfilePath(): string {
+  return `${weftHome()}/run`;
+}
+
+function weftHome(): string {
+  return Bun.env['WEFT_HOME'] ?? `${Bun.env['HOME'] ?? '.'}/.weft`;
+}
+
+function stringValue(value: unknown): string | undefined {
+  return typeof value === 'string' && value !== '' ? value : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}

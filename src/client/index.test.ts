@@ -933,6 +933,126 @@ describe('HttpClient request surface', () => {
     assertForkCall(fetchCalls);
   });
 
+  it('uses WEFT_ADDR and WEFT_TOKEN when constructed without explicit options', async () => {
+    const fetchCalls: FetchCall[] = [];
+    const priorAddress = Bun.env['WEFT_ADDR'];
+    const priorToken = Bun.env['WEFT_TOKEN'];
+    Bun.env['WEFT_ADDR'] = 'http://environment.test///';
+    Bun.env['WEFT_TOKEN'] = 'environment-token';
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({ url: requestInputToUrl(input), init });
+      return jsonResponse({ id: 'wf-env' });
+    }) as unknown as typeof fetch;
+
+    try {
+      const httpClient = new HttpClient();
+      await httpClient.start('echo', 'hello');
+
+      expect(fetchCalls[0]?.url).toBe('http://environment.test/v1/workflows');
+      expect(new Headers(fetchCalls[0]?.init?.headers).get('Authorization')).toBe(
+        'Bearer environment-token',
+      );
+    } finally {
+      if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
+      else Bun.env['WEFT_ADDR'] = priorAddress;
+      if (priorToken === undefined) delete Bun.env['WEFT_TOKEN'];
+      else Bun.env['WEFT_TOKEN'] = priorToken;
+    }
+  });
+
+  it('uses explicit client options before environment values', async () => {
+    const fetchCalls: FetchCall[] = [];
+    const priorAddress = Bun.env['WEFT_ADDR'];
+    const priorToken = Bun.env['WEFT_TOKEN'];
+    Bun.env['WEFT_ADDR'] = 'http://environment.test';
+    Bun.env['WEFT_TOKEN'] = 'environment-token';
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({ url: requestInputToUrl(input), init });
+      return jsonResponse({ id: 'wf-explicit' });
+    }) as unknown as typeof fetch;
+
+    try {
+      const httpClient = new HttpClient({
+        baseUrl: 'http://explicit.test',
+        token: 'explicit-token',
+      });
+      await httpClient.start('echo', 'hello');
+
+      expect(fetchCalls[0]?.url).toBe('http://explicit.test/v1/workflows');
+      expect(new Headers(fetchCalls[0]?.init?.headers).get('Authorization')).toBe(
+        'Bearer explicit-token',
+      );
+    } finally {
+      if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
+      else Bun.env['WEFT_ADDR'] = priorAddress;
+      if (priorToken === undefined) delete Bun.env['WEFT_TOKEN'];
+      else Bun.env['WEFT_TOKEN'] = priorToken;
+    }
+  });
+
+  it('uses an explicit empty token to suppress environment authorization', async () => {
+    const fetchCalls: FetchCall[] = [];
+    const priorAddress = Bun.env['WEFT_ADDR'];
+    const priorToken = Bun.env['WEFT_TOKEN'];
+    Bun.env['WEFT_ADDR'] = 'http://environment.test';
+    Bun.env['WEFT_TOKEN'] = 'environment-token';
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({ url: requestInputToUrl(input), init });
+      return jsonResponse({ id: 'wf-empty-token' });
+    }) as unknown as typeof fetch;
+
+    try {
+      const httpClient = new HttpClient({
+        baseUrl: 'http://explicit.test',
+        token: '',
+      });
+      await httpClient.start('echo', 'hello');
+
+      expect(fetchCalls[0]?.url).toBe('http://explicit.test/v1/workflows');
+      expect(new Headers(fetchCalls[0]?.init?.headers).get('Authorization')).toBeNull();
+    } finally {
+      if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
+      else Bun.env['WEFT_ADDR'] = priorAddress;
+      if (priorToken === undefined) delete Bun.env['WEFT_TOKEN'];
+      else Bun.env['WEFT_TOKEN'] = priorToken;
+    }
+  });
+
+  it('preserves caller Authorization headers over resolved tokens', async () => {
+    const fetchCalls: FetchCall[] = [];
+    const priorAddress = Bun.env['WEFT_ADDR'];
+    const priorToken = Bun.env['WEFT_TOKEN'];
+    Bun.env['WEFT_ADDR'] = 'http://environment.test';
+    Bun.env['WEFT_TOKEN'] = 'environment-token';
+
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      fetchCalls.push({ url: requestInputToUrl(input), init });
+      return jsonResponse({ id: 'wf-header-token' });
+    }) as unknown as typeof fetch;
+
+    try {
+      const httpClient = new HttpClient({
+        baseUrl: 'http://explicit.test',
+        token: 'resolved-token',
+        headers: { Authorization: 'Bearer caller-token' },
+      });
+      await httpClient.start('echo', 'hello');
+
+      expect(fetchCalls[0]?.url).toBe('http://explicit.test/v1/workflows');
+      expect(new Headers(fetchCalls[0]?.init?.headers).get('Authorization')).toBe(
+        'Bearer caller-token',
+      );
+    } finally {
+      if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
+      else Bun.env['WEFT_ADDR'] = priorAddress;
+      if (priorToken === undefined) delete Bun.env['WEFT_TOKEN'];
+      else Bun.env['WEFT_TOKEN'] = priorToken;
+    }
+  });
+
   it('serializes bulk workflow methods into the expected HTTP requests', async () => {
     const fetchCalls: FetchCall[] = [];
     const responses = [
