@@ -3,25 +3,33 @@
 import {
   API_HELP_TEXT,
   CODEGEN_HELP_TEXT,
+  COMPLETIONS_HELP_TEXT,
   CONFORMANCE_HELP_TEXT,
   createStorage,
   DOCTOR_HELP_TEXT,
   executeApi,
   executeCodegen,
+  executeCompletions,
   executeConformance,
   executeDoctor,
   executeSchedule,
+  executeServer,
+  executeTail,
   executeTimeline,
   executeValidate,
   executeVersionCheck,
+  executeWorkflow,
   findCliSubcommandName,
   HELP_TEXT,
   parseCliArguments,
   removeRunLockfile,
   SCHEDULE_HELP_TEXT,
+  SERVER_HELP_TEXT,
+  TAIL_HELP_TEXT,
   TIMELINE_HELP_TEXT,
   VALIDATE_HELP_TEXT,
   VERSION_CHECK_HELP_TEXT,
+  WORKFLOW_HELP_TEXT,
   writeRunLockfile,
 } from './cli/index.ts';
 import { Engine } from './core/engine.ts';
@@ -192,6 +200,46 @@ if (parsedArguments.command === 'serve') {
   }
 
   const result = await executeApi(parsedArguments);
+  if (result.stderr) console.error(result.stderr);
+  if (result.stdout) console.log(result.stdout);
+  process.exit(result.exitCode);
+} else if (parsedArguments.command === 'server') {
+  if (parsedArguments.help) {
+    console.log(SERVER_HELP_TEXT);
+    process.exit(0);
+  }
+
+  const result = await executeServer(parsedArguments);
+  if (result.stderr) console.error(result.stderr);
+  if (result.stdout) console.log(result.stdout);
+  process.exit(result.exitCode);
+} else if (parsedArguments.command === 'workflow') {
+  if (parsedArguments.help) {
+    console.log(WORKFLOW_HELP_TEXT);
+    process.exit(0);
+  }
+
+  const result = await executeWorkflow(parsedArguments);
+  if (result.stderr) console.error(result.stderr);
+  if (result.stdout) console.log(result.stdout);
+  process.exit(result.exitCode);
+} else if (parsedArguments.command === 'tail') {
+  if (parsedArguments.help) {
+    console.log(TAIL_HELP_TEXT);
+    process.exit(0);
+  }
+
+  const result = await executeTail(parsedArguments);
+  if (result.stderr) console.error(result.stderr);
+  if (result.stdout) console.log(result.stdout);
+  process.exit(result.exitCode);
+} else if (parsedArguments.command === 'completions') {
+  if (parsedArguments.help) {
+    console.log(COMPLETIONS_HELP_TEXT);
+    process.exit(0);
+  }
+
+  const result = await executeCompletions(parsedArguments);
   if (result.stderr) console.error(result.stderr);
   if (result.stdout) console.log(result.stdout);
   process.exit(result.exitCode);

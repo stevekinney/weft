@@ -17,6 +17,12 @@ export const CLI_FLAG_VALUE_OPTIONS = new Set([
   '--input-file',
   '--describe',
   '--profile',
+  '--shell',
+  '--type',
+  '--status',
+  '--limit',
+  '--id',
+  '--wait-timeout',
 ]);
 
 export function findCliSubcommandName(args: readonly string[]): string | undefined {

@@ -29,7 +29,12 @@ export async function sendJsonRpcRequest(
   });
   const body = (await response.json()) as unknown;
   if (isJsonRpcError(body)) return { ok: false, error: body.error };
-  if (isJsonRpcResult(body)) return { ok: true, result: body.result };
+  // A success envelope carries `jsonrpc`/`id` but `result` may be absent when
+  // the operation returns void — `JSON.stringify` drops an `undefined` result
+  // key server-side. Treat any non-error envelope as a success.
+  if (isJsonRpcSuccess(body)) {
+    return { ok: true, result: 'result' in body ? body.result : undefined };
+  }
   throw new Error(`Invalid JSON-RPC response from ${connection.server.toString()}`);
 }
 
@@ -62,6 +67,6 @@ function isJsonRpcError(value: unknown): value is { readonly error: JsonRpcError
   );
 }
 
-function isJsonRpcResult(value: unknown): value is { readonly result: unknown } {
-  return typeof value === 'object' && value !== null && 'result' in value;
+function isJsonRpcSuccess(value: unknown): value is { readonly result?: unknown } {
+  return typeof value === 'object' && value !== null && 'jsonrpc' in value && !('error' in value);
 }

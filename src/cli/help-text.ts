@@ -13,6 +13,10 @@ Commands:
   validate        Lint workflow registrations for design-time anti-patterns
   codegen         Generate TypeScript declarations from a registry snapshot
   api             Inspect and invoke catalog operations on a running server
+  server          Inspect a running server's health and operation surface
+  workflow        List, inspect, start, signal, and cancel workflows on a server
+  tail            Stream a workflow's events as Server-Sent Events
+  completions     Generate or install shell completion scripts
 
 Serve Options:
   -p, --port <port>           Server port (default: 7233)
@@ -151,6 +155,93 @@ JSON output:
 Checks performed:
   unbounded-retry               Activity retry.maxAttempts is Infinity
   stateful-without-compensator  Non-idempotent activity has no compensate fn
+`;
+
+export const SERVER_HELP_TEXT = `
+weft server - Inspect a running server's health and operation surface
+
+Usage:
+  weft server health [options]
+  weft server info [options]
+
+Options:
+      --server <url>       Server URL (default: WEFT_ADDR, profile, run lockfile, or localhost)
+      --token <token>      Bearer token (default: WEFT_TOKEN)
+      --profile <name>     Profile from ~/.weft/config
+      --wait               (health) Poll until the server is reachable
+      --wait-timeout <ms>  (health) Maximum time to wait, in milliseconds (default: 30000)
+  -j, --json               Emit machine-readable JSON output
+  -q, --quiet              Suppress success/error text (use the exit code)
+  -h, --help               Show this help message
+
+Exit codes:
+  0   Healthy
+  1   Unreachable / unhealthy
+  2   Connection error
+`;
+
+export const WORKFLOW_HELP_TEXT = `
+weft workflow - List, inspect, start, signal, and cancel workflows on a server
+
+Usage:
+  weft workflow ls [--type <type>] [--status <status>] [--limit <n>] [options]
+  weft workflow get <workflow-id> [options]
+  weft workflow events <workflow-id> [options]
+  weft workflow start <workflow-type> [--input <json> | --input-file <path|->] [--id <id>] [options]
+  weft workflow cancel <workflow-id> [--yes] [--dry-run] [options]
+  weft workflow signal <workflow-id> <signal-name> [--input <json> | --input-file <path|->] [options]
+
+Options:
+      --server <url>       Server URL (default: WEFT_ADDR, profile, run lockfile, or localhost)
+      --token <token>      Bearer token (default: WEFT_TOKEN)
+      --profile <name>     Profile from ~/.weft/config
+      --type <type>        (ls) Filter by workflow type
+      --status <status>    (ls) Filter by workflow status
+      --limit <n>          (ls) Maximum number of rows
+      --input <json>       (start/signal) JSON input payload
+      --input-file <path>  (start/signal) Read JSON input from a file, or '-' for stdin
+      --id <id>            (start) Explicit workflow id
+  -y, --yes                (cancel) Confirm without prompting
+      --dry-run            (cancel) Print affected count without cancelling
+  -j, --json               Emit machine-readable output (NDJSON for lists)
+  -q, --quiet              Print ids only / suppress success text
+  -h, --help               Show this help message
+
+Exit codes:
+  0   Success
+  1   Operation failed or destructive operation was not confirmed
+  2   Connection error
+  3   Usage or input error
+  4   Operation unavailable on this server (version skew)
+`;
+
+export const TAIL_HELP_TEXT = `
+weft tail - Stream a workflow's events as Server-Sent Events
+
+Usage:
+  weft tail <workflow-id> [options]
+
+Options:
+      --server <url>       Server URL (default: WEFT_ADDR, profile, run lockfile, or localhost)
+      --token <token>      Bearer token (default: WEFT_TOKEN)
+      --profile <name>     Profile from ~/.weft/config
+  -j, --json               Emit one JSON object per line (NDJSON)
+  -q, --quiet              Do not echo events to stdout
+  -h, --help               Show this help message
+
+Press Ctrl-C to stop tailing; the stream ends cleanly with exit code 0.
+`;
+
+export const COMPLETIONS_HELP_TEXT = `
+weft completions - Generate or install shell completion scripts
+
+Usage:
+  weft completions generate --shell <zsh|bash|fish>
+  weft completions install --shell <zsh|bash|fish>
+
+Options:
+      --shell <shell>      Target shell: zsh, bash, or fish (required)
+  -h, --help               Show this help message
 `;
 
 export const CODEGEN_HELP_TEXT = `

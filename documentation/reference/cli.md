@@ -207,6 +207,108 @@ weft schedule cancel <schedule-id> --database ./weft.db
 | `--json`      | `-j`  | `false`     | Output as JSON                                                |
 | `--help`      | `-h`  |             | Show help message                                             |
 
+### server
+
+Inspect a running server over HTTP. These commands target a server (via `--server`, the `WEFT_ADDR` environment variable, a `--profile`, or the run lockfile written by `weft serve`) rather than a local database file.
+
+```bash
+weft server health --server http://localhost:7233
+weft server health --wait --wait-timeout 60000   # block until the server is up (deploy scripts)
+weft server info --json
+```
+
+`health` probes `GET /v1/health` and maps reachability to the exit code: `0` healthy, `1` unreachable, `2` connection error. `--wait` polls until the server responds or the timeout elapses, which deploy scripts use to gate on readiness. `info` additionally reports how many operations the server advertises in its `/openrpc.json` document that this CLI's bundled catalog does not know about, surfaced as "N additional operations available via weft api" so a newer server's surface is discoverable.
+
+**Options:**
+
+| Flag             | Short | Default | Description                                          |
+| ---------------- | ----- | ------- | ---------------------------------------------------- |
+| `--server`       |       |         | Server URL (default: `WEFT_ADDR`, profile, lockfile) |
+| `--token`        |       |         | Bearer token (default: `WEFT_TOKEN`)                 |
+| `--profile`      |       |         | Profile from `~/.weft/config`                        |
+| `--wait`         |       | `false` | (`health`) Poll until the server is reachable        |
+| `--wait-timeout` |       | `30000` | (`health`) Maximum wait, in milliseconds             |
+| `--json`         | `-j`  | `false` | Emit machine-readable JSON                           |
+| `--quiet`        | `-q`  | `false` | Suppress success/error text (use the exit code)      |
+| `--help`         | `-h`  |         | Show help message                                    |
+
+### workflow
+
+List, inspect, start, signal, and cancel workflows on a running server. Every action routes through the generated typed operation client, so the command surface can never reference an operation the catalog does not define.
+
+```bash
+weft workflow ls --status running --limit 20
+weft workflow get <workflow-id> --json
+weft workflow events <workflow-id>
+weft workflow start checkout --input '{"cart":"abc"}' --id order-123
+weft workflow signal <workflow-id> approve --input 'true'
+weft workflow cancel <workflow-id> --yes
+weft workflow cancel <workflow-id> --dry-run
+```
+
+On a TTY, lists render as a table and single objects as indented JSON; `--json` emits NDJSON for lists (one object per line) and a single JSON object otherwise. The destructive `cancel` prompts for confirmation on a TTY (default No), is bypassed by `--yes`, prints the affected count under `--dry-run`, and on a non-interactive shell without `--yes` exits `1` without cancelling anything.
+
+**Options:**
+
+| Flag           | Short | Default | Description                                           |
+| -------------- | ----- | ------- | ----------------------------------------------------- |
+| `--server`     |       |         | Server URL (default: `WEFT_ADDR`, profile, lockfile)  |
+| `--token`      |       |         | Bearer token (default: `WEFT_TOKEN`)                  |
+| `--profile`    |       |         | Profile from `~/.weft/config`                         |
+| `--type`       |       |         | (`ls`) Filter by workflow type                        |
+| `--status`     |       |         | (`ls`) Filter by workflow status                      |
+| `--limit`      |       |         | (`ls`) Maximum number of rows                         |
+| `--input`      |       |         | (`start`/`signal`) JSON input payload                 |
+| `--input-file` |       |         | (`start`/`signal`) Read JSON input from a file or `-` |
+| `--id`         |       |         | (`start`) Explicit workflow id                        |
+| `--yes`        | `-y`  | `false` | (`cancel`) Confirm without prompting                  |
+| `--dry-run`    |       | `false` | (`cancel`) Print affected count without cancelling    |
+| `--json`       | `-j`  | `false` | Emit machine-readable output (NDJSON for lists)       |
+| `--quiet`      | `-q`  | `false` | Print ids only / suppress success text                |
+| `--help`       | `-h`  |         | Show help message                                     |
+
+Exit codes follow the operate/inspect convention: `0` success, `1` operation failed or destructive op not confirmed, `2` connection error, `3` usage or input error, `4` operation unavailable on this server (version skew).
+
+### tail
+
+Stream a workflow's token events from the server's Server-Sent Events endpoint (`GET /v1/workflows/:id/sse`).
+
+```bash
+weft tail <workflow-id>
+weft tail <workflow-id> --json
+```
+
+Each frame is printed as one line: a TTY-formatted event on a terminal, or a compact JSON object under `--json` (valid NDJSON). The stream ends on the server's `done` event or when you press Ctrl-C, which resolves cleanly with exit code `0`.
+
+**Options:**
+
+| Flag        | Short | Default | Description                                          |
+| ----------- | ----- | ------- | ---------------------------------------------------- |
+| `--server`  |       |         | Server URL (default: `WEFT_ADDR`, profile, lockfile) |
+| `--token`   |       |         | Bearer token (default: `WEFT_TOKEN`)                 |
+| `--profile` |       |         | Profile from `~/.weft/config`                        |
+| `--json`    | `-j`  | `false` | Emit one JSON object per line (NDJSON)               |
+| `--quiet`   | `-q`  | `false` | Do not echo events to stdout                         |
+| `--help`    | `-h`  |         | Show help message                                    |
+
+### completions
+
+Generate or install a shell completion script for the `weft` CLI.
+
+```bash
+weft completions generate --shell zsh
+weft completions install --shell fish
+```
+
+`generate` prints the script to stdout; pipe it into your shell configuration. `install` writes it to the conventional per-shell completion directory and prints the path plus any one-time activation step.
+
+**Options:**
+
+| Flag      | Short | Default | Description                                       |
+| --------- | ----- | ------- | ------------------------------------------------- |
+| `--shell` |       |         | Target shell: `zsh`, `bash`, or `fish` (required) |
+| `--help`  | `-h`  |         | Show help message                                 |
+
 ### timeline
 
 Show the execution timeline for a workflow.

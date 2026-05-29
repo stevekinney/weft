@@ -4,6 +4,12 @@ import type { ScheduleOverlapPolicy } from '../core/types.ts';
 import { parseApiArguments } from './api-arguments.ts';
 import { parseCodegenArguments } from './codegen-arguments.ts';
 import { formatUnknownCommandError } from './command-suggestions.ts';
+import {
+  parseCompletionsArguments,
+  parseServerArguments,
+  parseTailArguments,
+  parseWorkflowArguments,
+} from './noun-verb-arguments.ts';
 import { CLI_FLAG_VALUE_OPTIONS } from './subcommand-detection.ts';
 import type {
   CliCommand,
@@ -25,6 +31,10 @@ const KNOWN_SUBCOMMANDS = new Set([
   'schedule',
   'codegen',
   'api',
+  'server',
+  'workflow',
+  'tail',
+  'completions',
 ]);
 const VALID_STORAGE_BACKENDS = new Set(['sqlite', 'lmdb', 'memory']);
 const SCHEDULE_ACTIONS = new Set(['list', 'create', 'pause', 'resume', 'cancel']);
@@ -40,6 +50,10 @@ const SUBCOMMAND_PARSERS: Record<string, (args: string[]) => CliCommand> = {
   schedule: parseScheduleArguments,
   codegen: parseCodegenArguments,
   api: parseApiArguments,
+  server: parseServerArguments,
+  workflow: parseWorkflowArguments,
+  tail: parseTailArguments,
+  completions: parseCompletionsArguments,
 };
 
 const KNOWN_SUBCOMMAND_LIST = [...KNOWN_SUBCOMMANDS];

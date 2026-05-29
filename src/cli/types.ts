@@ -96,7 +96,115 @@ export type CliCommand =
       scheduleId: string;
       help: boolean;
       json: boolean;
+    }
+  | {
+      command: 'server';
+      action: 'health' | 'info';
+      server?: string;
+      token?: string;
+      profile?: string;
+      wait: boolean;
+      waitTimeoutMs: number;
+      help: boolean;
+      json: boolean;
+      quiet: boolean;
+    }
+  | {
+      command: 'workflow';
+      action: 'ls';
+      server?: string;
+      token?: string;
+      profile?: string;
+      type?: string;
+      status?: string;
+      limit?: number;
+      help: boolean;
+      json: boolean;
+      quiet: boolean;
+    }
+  | {
+      command: 'workflow';
+      action: 'get' | 'events';
+      server?: string;
+      token?: string;
+      profile?: string;
+      workflowId: string;
+      help: boolean;
+      json: boolean;
+      quiet: boolean;
+    }
+  | {
+      command: 'workflow';
+      action: 'start';
+      server?: string;
+      token?: string;
+      profile?: string;
+      workflowType: string;
+      input?: string;
+      inputFile?: string;
+      id?: string;
+      help: boolean;
+      json: boolean;
+      quiet: boolean;
+    }
+  | {
+      command: 'workflow';
+      action: 'cancel';
+      server?: string;
+      token?: string;
+      profile?: string;
+      workflowId: string;
+      yes: boolean;
+      dryRun: boolean;
+      help: boolean;
+      json: boolean;
+      quiet: boolean;
+    }
+  | {
+      command: 'workflow';
+      action: 'signal';
+      server?: string;
+      token?: string;
+      profile?: string;
+      workflowId: string;
+      signalName: string;
+      input?: string;
+      inputFile?: string;
+      help: boolean;
+      json: boolean;
+      quiet: boolean;
+    }
+  | {
+      command: 'tail';
+      server?: string;
+      token?: string;
+      profile?: string;
+      workflowId?: string;
+      help: boolean;
+      json: boolean;
+      quiet: boolean;
+    }
+  | {
+      command: 'completions';
+      action: 'install' | 'generate';
+      shell: CompletionShell;
+      help: boolean;
     };
+
+/** Supported shells for `weft completions`. */
+export type CompletionShell = 'zsh' | 'bash' | 'fish';
+
+/** Parsed `weft server` command variants. */
+export type ServerCommand = Extract<CliCommand, { command: 'server' }>;
+
+/** Parsed `weft workflow` command variants. */
+export type WorkflowCommand = Extract<CliCommand, { command: 'workflow' }>;
+
+/** Parsed `weft tail` command. */
+export type TailCommand = Extract<CliCommand, { command: 'tail' }>;
+
+/** Parsed `weft completions` command. */
+export type CompletionsCommand = Extract<CliCommand, { command: 'completions' }>;
 
 /** Parsed schedule command variants. */
 export type ScheduleCommand = Extract<CliCommand, { command: 'schedule' }>;
