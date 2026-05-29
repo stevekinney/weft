@@ -236,7 +236,7 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     // caught up against an already-dead connection's snapshot.
     const generation = this.#connectGeneration;
     try {
-      await this.#reconcileHistory();
+      await this.#reconcileHistory(generation);
     } finally {
       this.#catchUpInFlight = false;
       if (!this.#closed && generation !== this.#connectGeneration) {
@@ -254,9 +254,10 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   /**
    * Fetch persisted history, emit the events past `#deliveredCount`, then drain
    * the live frames buffered during the fetch (dropping the ones the replayed
-   * history already covered). Bails out early if the stream closes mid-way.
+   * history already covered). Bails out early if the stream closes mid-way, or
+   * if a reconnect made this catch-up's generation stale during the fetch.
    */
-  async #reconcileHistory(): Promise<void> {
+  async #reconcileHistory(generation: number): Promise<void> {
     let history: WorkflowEvent[] = [];
     try {
       history = await this.#fetchHistory(this.#workflowId);
@@ -267,6 +268,15 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
       history = [];
     }
     if (this.#closed) return;
+
+    // A reconnect happened while we awaited history. This snapshot was taken
+    // against the dropped socket, and `#pendingLive` now holds frames from the
+    // new socket. Abandon this pass without emitting history or draining the
+    // buffer — neither `#deliveredCount` nor `#pendingLive` is touched, so the
+    // fresh re-run (scheduled by #catchUp's finally) reconciles everything from
+    // a correct cursor. Emitting here would inflate `#deliveredCount` with the
+    // new socket's live frames and make the re-run skip gap events.
+    if (generation !== this.#connectGeneration) return;
 
     // Emit history beyond what was already delivered. History and live frames
     // share one ordered sequence, so `#deliveredCount` is the cursor.

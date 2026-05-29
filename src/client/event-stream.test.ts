@@ -321,6 +321,74 @@ describe('WorkflowEventSubscription', () => {
     expect(subscription.closeReason).toBe('workflow-terminal');
   });
 
+  it('does not inflate the history cursor when a new socket delivers live frames during a stale fetch', async () => {
+    // Regression: when S1 drops mid-fetch and S2 delivers live frames before the
+    // stale fetch resolves, the stale catch-up must NOT emit history or drain the
+    // buffered S2 frames — doing so would inflate #deliveredCount and make the
+    // fresh catch-up skip gap events and duplicate the S2 frames. The stale pass
+    // abandons cleanly and the fresh re-run reconciles from a correct cursor.
+    const server = new FakeWebSocketServer();
+    const received: WorkflowEvent[] = [];
+
+    let historyCalls = 0;
+    const firstFetchStarted = Promise.withResolvers<void>();
+    const releaseFirstFetch = Promise.withResolvers<void>();
+    const history: EventHistoryFetcher = async () => {
+      historyCalls += 1;
+      if (historyCalls === 1) {
+        firstFetchStarted.resolve();
+        await releaseFirstFetch.promise;
+        // S1-era snapshot: only the first event existed when S1 connected.
+        return [event('workflow:started')];
+      }
+      // Fresh S2 catch-up: the full ordered sequence — the gap event emitted
+      // while disconnected and the live frame S2 delivered during the stale
+      // fetch are both persisted and present here.
+      return [
+        event('workflow:started'),
+        event('activity:started'),
+        event('signal:received', { name: 's2' }),
+        event('workflow:completed'),
+      ];
+    };
+
+    const subscription = new WorkflowEventSubscription(
+      'ws://test/watch',
+      {},
+      'wf-xgen',
+      history,
+      (e) => received.push(e),
+      { webSocketFactory: server.factory, reconnectBackoffMs: 1 },
+    );
+
+    // S1 open, first fetch in flight.
+    await firstFetchStarted.promise;
+    expect(server.sockets.length).toBe(1);
+
+    // Drop S1; S2 reconnects (its catch-up is blocked by the in-flight guard).
+    server.latest().drop();
+    await waitFor(() => server.sockets.length === 2 && server.latest().opened);
+
+    // S2 delivers a live frame while the stale fetch is still pending — it is
+    // buffered in #pendingLive (catch-up is in flight).
+    server.latest().deliver(event('signal:received', { name: 's2' }));
+
+    // Release the stale fetch; the stale pass must abandon, and the fresh re-run
+    // delivers the full sequence exactly once each — no skipped gap, no dupes.
+    releaseFirstFetch.resolve();
+
+    await waitFor(() => received.length === 4);
+    expect(received.map((e) => e.type)).toEqual([
+      'workflow:started',
+      'activity:started',
+      'signal:received',
+      'workflow:completed',
+    ]);
+    // The s2 signal appears exactly once (not duplicated by the fresh history).
+    expect(received.filter((e) => e.type === 'signal:received')).toHaveLength(1);
+    expect(subscription.closeReason).toBe('workflow-terminal');
+  });
+
   it('terminates after reconnect attempts are exhausted', async () => {
     const server = new FakeWebSocketServer();
     server.autoOpen = false; // never connect, so every socket immediately drops
