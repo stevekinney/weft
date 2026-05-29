@@ -367,6 +367,10 @@ export type {
   AtomicStateSubscription,
   SleepFunction,
 } from './core/atomic-state';
+// Durable concurrency primitives — mutex/semaphore built on AtomicState CAS.
+export { DurableMutex, DurableSemaphore, initialLockRecord } from './core/concurrency';
+// prettier-ignore
+export type { AcquireAttempt,AcquireWithSlot,CasSlot,DurableSemaphoreOptions,LockHolder,LockRecord,RenewWithSlot } from './core/concurrency';
 
 export { handleRequest } from './server/handler';
 export type { SchedulingPolicy } from './server/task-queue-types';

@@ -497,7 +497,7 @@ Guides:
 - [Durable Timers](documentation/guides/durable-timers.md), [Timeouts](documentation/guides/timeouts.md), [Parallel Execution](documentation/guides/parallel-execution.md)
 - [Search Attributes](documentation/guides/search-attributes.md), [Workflow Visibility Backfill](documentation/guides/workflow-visibility-backfill.md), [State](documentation/guides/state.md), [Session State](documentation/guides/session-state.md), [Events](documentation/guides/events.md)
 - [Interceptors](documentation/guides/interceptors.md), [Observability](documentation/guides/observability.md), [Testing](documentation/guides/testing.md)
-- [Workflow Versioning](documentation/guides/workflow-versioning.md), [Remote Workers](documentation/guides/remote-workers.md), [Service Worker](documentation/guides/service-worker.md), [Resource Management](documentation/guides/resource-management.md)
+- [Workflow Versioning](documentation/guides/workflow-versioning.md), [Remote Workers](documentation/guides/remote-workers.md), [Service Worker](documentation/guides/service-worker.md), [Resource Management](documentation/guides/resource-management.md), [Concurrency: Mutex and Semaphore](documentation/guides/concurrency.md)
 
 Architecture and reference:
 
