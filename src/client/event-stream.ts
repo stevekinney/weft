@@ -17,9 +17,10 @@
  * events that happened before the socket connected, and a dropped socket can
  * miss events while disconnected. To close both gaps the subscription fetches
  * the persisted event history (`getEvents`) on every (re)connect and emits any
- * events past the last one already delivered, deduplicating by sequence index.
- * Reconnect attempts back off and are capped so a wedged server cannot spin
- * forever.
+ * events past the count already delivered, then drops any live frame buffered
+ * during the fetch that the replayed history already covered (the overlap
+ * window). Reconnect attempts back off and are capped so a wedged server cannot
+ * spin forever.
  *
  * **Clean close.** `close()` closes the socket and resolves the iterable.
  * Terminal workflow events (`completed`, `failed`, `cancelled`, `timed-out`)

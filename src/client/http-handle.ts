@@ -6,10 +6,11 @@ import { HttpClientError, request } from './http-request.ts';
 
 /**
  * Server-mode workflow handle. Lifecycle events are delivered push-based over
- * the JSON-RPC WebSocket subscription (`weft.workflows.subscribe`) rather than
- * by polling `getEvents()` on a timer — listeners fire the moment an event lands
- * on the server. Each delivered event is re-dispatched as a `CustomEvent` whose
- * `detail` is the event's `data`, matching the long-standing handle contract.
+ * the server's per-workflow `/v1/workflows/:id/watch` WebSocket channel rather
+ * than by polling `getEvents()` on a timer — listeners fire the moment an event
+ * lands on the server. Each delivered event is re-dispatched as a `CustomEvent`
+ * whose `detail` is the event's `data`, matching the long-standing handle
+ * contract.
  */
 export class HttpHandle extends WorkflowHandleDelegation<HttpClient> {
   readonly #events = new EventTarget();
