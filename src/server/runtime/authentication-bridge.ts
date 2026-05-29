@@ -133,7 +133,9 @@ async function dispatchServerFetchRequest(
 
   // Authenticate, then rate-limit. Either step can short-circuit with a
   // response (401 / 429); otherwise the gate yields the resolved auth context.
-  const gate = await gateRequest(server, context, request);
+  // Pass originalRequest for IP lookup — the rewritten request from
+  // stripApiPrefix loses Bun's socket handle, so requestIP returns null on it.
+  const gate = await gateRequest(server, context, request, originalRequest);
   if (gate.response !== null) {
     return gate.response;
   }
