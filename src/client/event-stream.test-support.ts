@@ -11,7 +11,7 @@
  */
 
 import type { WorkflowEvent } from '../core/types.ts';
-import type { StreamSocket, WebSocketFactory } from './event-stream.ts';
+import type { StreamSocket, WebSocketFactory } from './event-stream-transport.ts';
 
 type Listeners = {
   open: Array<() => void>;

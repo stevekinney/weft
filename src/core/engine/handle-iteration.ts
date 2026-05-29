@@ -1,3 +1,4 @@
+import { WORKFLOW_TERMINAL_EVENT_TYPES } from '../events/workflow-events.ts';
 import type { WorkflowState } from '../types.ts';
 
 type WorkflowHandleEventQueue = {
@@ -15,12 +16,9 @@ const WORKFLOW_HANDLE_NON_TERMINAL_EVENT_TYPES = [
   'signal:received',
 ] as const;
 
-const WORKFLOW_HANDLE_TERMINAL_EVENT_TYPES = [
-  'workflow:completed',
-  'workflow:failed',
-  'workflow:cancelled',
-  'workflow:timed-out',
-] as const;
+// The terminal lifecycle types come from the shared source of truth so the
+// engine's handle iterator and both client transports stay in lockstep.
+const WORKFLOW_HANDLE_TERMINAL_EVENT_TYPES = WORKFLOW_TERMINAL_EVENT_TYPES;
 
 export async function* createWorkflowHandleEventIterator(
   handle: EventTarget,

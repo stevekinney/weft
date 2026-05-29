@@ -1,12 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 import type { WorkflowEvent } from '../core/types.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { workflowWatchWebSocketUrl } from './event-stream-transport.ts';
 import { FakeWebSocketServer } from './event-stream.test-support.ts';
-import {
-  WorkflowEventSubscription,
-  workflowWatchWebSocketUrl,
-  type EventHistoryFetcher,
-} from './event-stream.ts';
+import { WorkflowEventSubscription, type EventHistoryFetcher } from './event-stream.ts';
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -166,6 +163,43 @@ describe('WorkflowEventSubscription', () => {
     await waitFor(() => received.length === 2);
     expect(received.map((e) => e.type)).toEqual(['signal:received', 'signal:received']);
     subscription.close();
+  });
+
+  it('does not buffer events for a callback-only subscriber (no unbounded growth)', async () => {
+    // Regression: HttpHandle.addEventListener uses only the push callback and
+    // never iterates. Emitted events must not pile up in the iterator buffer for
+    // the subscription's lifetime. Observable proxy: after delivering events with
+    // no active iterator, starting one must not replay the already-pushed events.
+    const server = new FakeWebSocketServer();
+    const pushed: string[] = [];
+    const subscription = new WorkflowEventSubscription(
+      'ws://test/watch',
+      {},
+      'wf-leak',
+      noHistory,
+      (e) => pushed.push(e.type),
+      { webSocketFactory: server.factory },
+    );
+
+    await waitFor(() => server.sockets.length === 1 && server.latest().opened);
+    // Deliver several events while nobody is iterating.
+    server.latest().deliver(event('activity:started'));
+    server.latest().deliver(event('activity:completed'));
+    server.latest().deliver(event('signal:received', { name: 'a' }));
+    await waitFor(() => pushed.length === 3);
+    expect(pushed).toEqual(['activity:started', 'activity:completed', 'signal:received']);
+
+    // Now start iterating; only events delivered after iteration began appear —
+    // the three earlier events were never buffered.
+    const iterated: string[] = [];
+    const consume = (async () => {
+      for await (const e of subscription) iterated.push(e.type);
+    })();
+    server.latest().deliver(event('workflow:completed', { result: 'ok' }));
+    await consume;
+
+    expect(iterated).toEqual(['workflow:completed']);
+    expect(subscription.closeReason).toBe('workflow-terminal');
   });
 
   it('async-iterates events and terminates on a terminal event', async () => {

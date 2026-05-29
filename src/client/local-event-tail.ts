@@ -13,15 +13,9 @@
  */
 
 import type { Engine } from '../core/engine.ts';
+import { WORKFLOW_TERMINAL_EVENT_TYPES } from '../core/events/workflow-events.ts';
 import type { WorkflowEvent } from '../core/types.ts';
 import type { WorkflowEventTail } from './interface.ts';
-
-const TERMINAL_EVENT_TYPES = new Set<string>([
-  'workflow:completed',
-  'workflow:failed',
-  'workflow:cancelled',
-  'workflow:timed-out',
-]);
 
 /**
  * Serialize a dispatched engine `Event` into a {@link WorkflowEvent}. Mirrors
@@ -73,7 +67,7 @@ export function createLocalWorkflowEventTail(
         for (let next = await iterator.next(); next.done !== true; next = await iterator.next()) {
           const event = serializeEngineEvent(next.value);
           yield event;
-          if (TERMINAL_EVENT_TYPES.has(event.type)) return;
+          if (WORKFLOW_TERMINAL_EVENT_TYPES.has(event.type)) return;
         }
       } finally {
         close();

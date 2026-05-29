@@ -2,7 +2,7 @@ import { resolveConnection } from '../connection.ts';
 import { failureCategoryForFaultCode, isFaultCode, type FaultCode } from '../core/fault-code.ts';
 import type { FailureCategory } from '../core/types/identity.ts';
 import { WeftError } from '../core/weft-error.ts';
-import type { WebSocketFactory } from './event-stream.ts';
+import type { WebSocketFactory } from './event-stream-transport.ts';
 
 /**
  * Configuration for the HTTP client.

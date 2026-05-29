@@ -173,6 +173,20 @@ export class WorkflowTimedOutEvent extends Event {
 }
 
 /**
+ * The workflow lifecycle event types that terminate a workflow. Derived from
+ * the terminal event classes so the set cannot drift from their declared
+ * `type`s. The single source of truth for "is this event terminal?" across the
+ * engine's handle iterator and both client transports' live event streams — add
+ * a new terminal event class here and every consumer picks it up.
+ */
+export const WORKFLOW_TERMINAL_EVENT_TYPES: ReadonlySet<string> = new Set<string>([
+  WorkflowCompletedEvent.type,
+  WorkflowFailedEvent.type,
+  WorkflowCancelledEvent.type,
+  WorkflowTimedOutEvent.type,
+]);
+
+/**
  * Fired whenever a workflow resumes execution — after a signal, update, sleep,
  * activity completion, or process restart recovery.
  *
