@@ -150,6 +150,26 @@ describe('weft.schedules.update', () => {
     );
   });
 
+  it('returns 400 when the interval expression is invalid', async () => {
+    engine = createEngine();
+    await engine.schedule('echo', null, '0 * * * *', { id: 'schedule-update-invalid-interval' });
+
+    const response = await handleRequest(
+      jsonRequest('PATCH', '/v1/schedules/schedule-update-invalid-interval', {
+        every: 'not-a-duration',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    expect((await response.json()) as { error: string }).toEqual(
+      expect.objectContaining({
+        error: expect.stringContaining('interval'),
+      }),
+    );
+  });
+
   it('masks unexpected engine failures to a 500 generic error body', async () => {
     engine = createEngine();
     const originalUpdateSchedule = engine.updateSchedule.bind(engine);

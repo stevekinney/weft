@@ -111,6 +111,23 @@ describe('create-schedule — validation precedence', () => {
     });
   });
 
+  // --- engine-level interval validation reaches the REST boundary as 400 ---
+  it('returns 400 when the interval expression is syntactically invalid', async () => {
+    engine = createEngine();
+    const response = await handleRequest(
+      jsonRequest('POST', '/v1/schedules', {
+        type: 'echo',
+        every: 'not-a-duration',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    expect(response.status).toBe(400);
+    expect((await response.json()) as { error: string }).toMatchObject({
+      error: expect.stringContaining('interval'),
+    });
+  });
+
   // --- all-bad: first field (type) wins ---
   it('reports type error when all fields are invalid', async () => {
     engine = createEngine();

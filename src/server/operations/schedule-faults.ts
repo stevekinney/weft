@@ -31,7 +31,8 @@ export function mapScheduleErrorToFault(scheduleId: string, error: unknown): Ope
     message.includes('Missing required field') ||
     normalizedMessage.includes('must be') ||
     normalizedMessage.includes('no workflow registered') ||
-    normalizedMessage.includes('cron')
+    normalizedMessage.includes('cron') ||
+    normalizedMessage.includes('interval')
   ) {
     return {
       code: 'InvalidParams',
