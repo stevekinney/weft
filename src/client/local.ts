@@ -371,9 +371,7 @@ export class LocalClient implements WeftClient {
     return this.#engine.getEvents(id);
   }
 
-  tail(id: string, _options?: TailOptions): WorkflowEventTail {
-    // `fromCursor` is a server-transport resumption concern; the in-process
-    // engine feed is already live, so library mode ignores it.
+  tail(id: string): WorkflowEventTail {
     return createLocalWorkflowEventTail(this.#rawEngine, id);
   }
 

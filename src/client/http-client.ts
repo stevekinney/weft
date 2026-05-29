@@ -428,9 +428,9 @@ export class HttpClient implements WeftClient {
     );
   }
 
-  tail(id: string, _options?: TailOptions): WorkflowEventTail {
-    // `fromCursor` is unused here — the subscription always catches up from
-    // persisted history on connect, so resumption is automatic.
+  tail(id: string): WorkflowEventTail {
+    // The subscription always catches up from persisted history on connect, so
+    // resumption from an arbitrary point is automatic — no cursor is needed.
     return this.openEventSubscription(id, () => {});
   }
 

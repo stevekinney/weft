@@ -74,13 +74,32 @@ const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_RECONNECT_BACKOFF_MS = 50;
 
 /**
- * Build the `ws(s)://…/v1/workflows/:id/watch` URL for a workflow's live event
- * channel from an `http(s)://…` base URL.
+ * Build the absolute `ws(s)://…/v1/workflows/:id/watch` URL for a workflow's
+ * live event channel from a client base URL.
+ *
+ * An absolute `http(s)://…` base URL has its scheme swapped to `ws(s):`. A
+ * relative base URL (`''`, `'/'`, `'/weft'` — the forms browser and
+ * service-worker deployments use, where REST `fetch` resolves against the page
+ * origin) is resolved against `globalThis.location` so the result is always the
+ * absolute URL the `WebSocket` constructor requires. When no `location` is
+ * available (e.g. a non-browser runtime given a relative base), the relative
+ * base is returned unchanged — the same input REST `fetch` would also reject.
  */
 export function workflowWatchWebSocketUrl(baseUrl: string, workflowId: string): string {
   const trimmed = baseUrl.replace(/\/+$/, '');
-  const wsBase = trimmed.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
-  return `${wsBase}/v1/workflows/${encodeURIComponent(workflowId)}/watch`;
+  const path = `/v1/workflows/${encodeURIComponent(workflowId)}/watch`;
+
+  if (/^https?:/i.test(trimmed)) {
+    const wsBase = trimmed.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+    return `${wsBase}${path}`;
+  }
+
+  // Relative base: resolve against the page origin, mirroring how the REST
+  // `fetch` path resolves relative `baseUrl` values in the browser.
+  const origin = globalThis.location?.origin;
+  if (origin === undefined) return `${trimmed}${path}`;
+  const wsOrigin = origin.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+  return `${wsOrigin}${trimmed}${path}`;
 }
 
 /** The minimal client context a workflow event subscription needs. */
@@ -113,11 +132,25 @@ export function createWorkflowEventSubscription(
   );
 }
 
-/** The default factory: Bun's `WebSocket`, which accepts custom upgrade headers. */
+/** True when running under Bun, whose `WebSocket` accepts custom upgrade headers. */
+const isBunRuntime = typeof globalThis.Bun !== 'undefined';
+
+/**
+ * The default factory. Under Bun the second `WebSocket` argument is an options
+ * bag that accepts custom upgrade headers, so auth headers ride the handshake.
+ * In the browser the second argument is `protocols` (a string or string array)
+ * and passing an options object would break the connection — and the browser
+ * WebSocket cannot send custom headers at all — so we construct with the URL
+ * alone. Tests that replace the factory bypass this entirely.
+ */
 const defaultWebSocketFactory: WebSocketFactory = (url, headers) => {
-  // Bun supports custom WebSocket upgrade headers; the DOM lib only types the
-  // header-less browser constructor, so we narrow to Bun's two-arg overload at
-  // construction time. Tests that replace the factory bypass this entirely.
+  if (!isBunRuntime) {
+    // Browser / service-worker: header-less constructor. Cross-origin auth must
+    // ride a cookie or query param the server accepts, not a WebSocket header.
+    return new WebSocket(url);
+  }
+  // Bun's two-arg overload is not in the DOM lib types, so narrow to it at
+  // construction time. The cast is confined to the Bun branch.
   const Constructor = WebSocket as unknown as {
     new (url: string, options: { headers: Record<string, string> }): WebSocket;
   };
@@ -160,9 +193,14 @@ function parseWatchFrame(raw: unknown): WorkflowEvent | null {
 
 /**
  * A live workflow-event subscription over the `/watch` WebSocket channel.
- * Delivers events to a push callback and to any number of async iterators,
- * catching up from persisted history on every (re)connect and transparently
- * reconnecting when the socket drops.
+ * Delivers events to a push callback and to a single async iterator, catching
+ * up from persisted history on every (re)connect and transparently reconnecting
+ * when the socket drops.
+ *
+ * The iterator is single-consumer: it drains one shared buffer and parks one
+ * waker, so a second concurrent `for await` over the same subscription would
+ * steal events and clobber the waker. Open a fresh subscription per consumer
+ * instead of iterating one twice.
  */
 export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   readonly #url: string;
@@ -188,6 +226,14 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   // post-catch-up drain drop the overlap.
   #catchUpInFlight = false;
   #pendingLive: WorkflowEvent[] = [];
+  // Monotonic id incremented on every (re)connect. A catch-up tagged with a
+  // stale generation belongs to a socket that has since dropped; when it
+  // finishes it must hand off to a fresh catch-up for the current socket rather
+  // than declaring the stream caught up. Without this, a drop mid-fetch (the
+  // 50ms default backoff is shorter than a typical history round-trip) would
+  // leave the in-flight guard set, the reconnect's catch-up a no-op, and the
+  // events between the stale snapshot and the new socket permanently missed.
+  #connectGeneration = 0;
   // Async-iterator plumbing: buffered events plus a parked waker.
   readonly #buffer: WorkflowEvent[] = [];
   #waker: (() => void) | null = null;
@@ -252,6 +298,9 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     socket.addEventListener('open', () => {
       if (this.#closed || this.#socket !== socket) return;
       this.#reconnectAttempts = 0;
+      // Tag this connection so a catch-up still in flight from a dropped socket
+      // knows it is stale and must hand off to a fresh catch-up for this socket.
+      this.#connectGeneration += 1;
       // Catch up on any events emitted before this socket connected (or missed
       // while it was disconnected) before relying on live frames.
       void this.#catchUp();
@@ -276,39 +325,60 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     if (this.#catchUpInFlight || this.#closed) return;
     this.#catchUpInFlight = true;
     this.#pendingLive = [];
+    // Pin the connection this catch-up is reconciling against. If the socket
+    // drops and reconnects while we await history, this generation goes stale
+    // and we must re-run for the new socket instead of declaring the stream
+    // caught up against an already-dead connection's snapshot.
+    const generation = this.#connectGeneration;
     try {
-      let history: WorkflowEvent[] = [];
-      try {
-        history = await this.#fetchHistory(this.#workflowId);
-      } catch {
-        // A failed catch-up must not kill the stream; fall through so any live
-        // frames buffered during the fetch still drain, and the next reconnect
-        // retries the catch-up.
-        history = [];
-      }
-      if (this.#closed) return;
-
-      // Emit history beyond what was already delivered. History and live frames
-      // share one ordered sequence, so `#deliveredCount` is the cursor.
-      const newHistory = history.slice(this.#deliveredCount);
-      for (const event of newHistory) {
-        this.#emit(event);
-        if (this.#closed) return;
-      }
-
-      // Drain live frames that arrived during the fetch, dropping any that the
-      // history we just emitted already covered (the overlap window).
-      const buffered = this.#pendingLive;
-      this.#pendingLive = [];
-      for (const live of buffered) {
-        if (this.#closed) return;
-        if (newHistory.some((historic) => eventsEqual(historic, live))) continue;
-        this.#emit(live);
-      }
+      await this.#reconcileHistory();
     } finally {
       this.#catchUpInFlight = false;
-      // The stream is now live: history drained, live frames flowing.
-      this.#markConnected();
+      if (!this.#closed && generation !== this.#connectGeneration) {
+        // A reconnect happened mid-flight; this catch-up reconciled against the
+        // dropped socket. Re-run for the current socket so events between the
+        // stale snapshot and the new connection are not lost.
+        void this.#catchUp();
+      } else {
+        // The stream is now live: history drained, live frames flowing.
+        this.#markConnected();
+      }
+    }
+  }
+
+  /**
+   * Fetch persisted history, emit the events past `#deliveredCount`, then drain
+   * the live frames buffered during the fetch (dropping the ones the replayed
+   * history already covered). Bails out early if the stream closes mid-way.
+   */
+  async #reconcileHistory(): Promise<void> {
+    let history: WorkflowEvent[] = [];
+    try {
+      history = await this.#fetchHistory(this.#workflowId);
+    } catch {
+      // A failed catch-up must not kill the stream; fall through so any live
+      // frames buffered during the fetch still drain, and the next reconnect
+      // retries the catch-up.
+      history = [];
+    }
+    if (this.#closed) return;
+
+    // Emit history beyond what was already delivered. History and live frames
+    // share one ordered sequence, so `#deliveredCount` is the cursor.
+    const newHistory = history.slice(this.#deliveredCount);
+    for (const event of newHistory) {
+      this.#emit(event);
+      if (this.#closed) return;
+    }
+
+    // Drain live frames that arrived during the fetch, dropping any that the
+    // history we just emitted already covered (the overlap window).
+    const buffered = this.#pendingLive;
+    this.#pendingLive = [];
+    for (const live of buffered) {
+      if (this.#closed) return;
+      if (newHistory.some((historic) => eventsEqual(historic, live))) continue;
+      this.#emit(live);
     }
   }
 

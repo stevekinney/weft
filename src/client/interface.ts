@@ -87,16 +87,6 @@ export type UnknownNameWhenRegistryEmpty<TName extends string> = [KnownWorkflowN
 // Streaming surface — push-based live event tail
 // ---------------------------------------------------------------------------
 
-/** Options shared by the live-event streaming surface. */
-export type TailOptions = {
-  /**
-   * Resume the tail from this opaque cursor instead of replaying from the
-   * beginning. Server mode threads this to the feed's replay-from-cursor
-   * handoff; library mode ignores it (engine events are already live).
-   */
-  readonly fromCursor?: string;
-};
-
 /**
  * A live workflow-event tail. Async-iterate it to consume events as they are
  * produced; the iteration terminates cleanly when the workflow reaches a
@@ -228,7 +218,7 @@ export interface ClientHandle<TResult = unknown>
    * server mode this rides the WebSocket watch channel (no polling); in library
    * mode it bridges the engine's event stream directly.
    */
-  tail(options?: TailOptions): WorkflowEventTail;
+  tail(): WorkflowEventTail;
 
   /**
    * Resolves once this handle's live event subscription is connected, opening
@@ -452,12 +442,12 @@ export interface WeftClient {
   /**
    * Open a live, push-based tail of a workflow's events. Async-iterate the
    * returned {@link WorkflowEventTail} to consume events as they happen. In
-   * server mode this rides the JSON-RPC WebSocket subscription (replacing the
-   * old 2-second poll); in library mode it bridges the engine's event stream
-   * directly. Both transports deliver the same {@link WorkflowEvent} records and
-   * terminate cleanly on completion or close.
+   * server mode this rides the per-workflow `/v1/workflows/:id/watch` WebSocket
+   * channel (replacing the old 2-second poll); in library mode it bridges the
+   * engine's event stream directly. Both transports deliver the same
+   * {@link WorkflowEvent} records and terminate cleanly on completion or close.
    */
-  tail(id: string, options?: TailOptions): WorkflowEventTail;
+  tail(id: string): WorkflowEventTail;
 
   /**
    * Get the structured execution timeline for a workflow.

@@ -10,16 +10,11 @@ import type {
   UpdateDefinition,
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
-import type {
-  ClientHandle,
-  ClientScheduleHandle,
-  TailOptions,
-  WorkflowEventTail,
-} from './interface.ts';
+import type { ClientHandle, ClientScheduleHandle, WorkflowEventTail } from './interface.ts';
 
 export interface WorkflowHandleDelegationClient {
   cancel(id: string): Promise<void>;
-  tail(id: string, options?: TailOptions): WorkflowEventTail;
+  tail(id: string): WorkflowEventTail;
   signal(
     id: string,
     name: string,
@@ -119,8 +114,8 @@ export abstract class WorkflowHandleDelegation<
     return this.client.removeTags(this.id, ...tags);
   }
 
-  tail(options?: TailOptions): WorkflowEventTail {
-    return this.client.tail(this.id, options);
+  tail(): WorkflowEventTail {
+    return this.client.tail(this.id);
   }
 
   /**

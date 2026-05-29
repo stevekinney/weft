@@ -31,6 +31,48 @@ describe('workflowWatchWebSocketUrl', () => {
       'wss://example.test/v1/workflows/a%2Fb/watch',
     );
   });
+
+  it('resolves a relative base URL against the page origin so the socket URL is absolute', () => {
+    const originalLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'https://app.test' },
+    });
+    try {
+      // The empty, root, and sub-path bases are the forms browser and
+      // service-worker deployments use, where REST `fetch` resolves relatively.
+      expect(workflowWatchWebSocketUrl('', 'wf-1')).toBe('wss://app.test/v1/workflows/wf-1/watch');
+      expect(workflowWatchWebSocketUrl('/', 'wf-1')).toBe('wss://app.test/v1/workflows/wf-1/watch');
+      expect(workflowWatchWebSocketUrl('/weft', 'wf-1')).toBe(
+        'wss://app.test/weft/v1/workflows/wf-1/watch',
+      );
+    } finally {
+      if (originalLocation === undefined) {
+        delete (globalThis as { location?: unknown }).location;
+      } else {
+        Object.defineProperty(globalThis, 'location', originalLocation);
+      }
+    }
+  });
+
+  it('rewrites an http page origin to ws when resolving a relative base URL', () => {
+    const originalLocation = Object.getOwnPropertyDescriptor(globalThis, 'location');
+    Object.defineProperty(globalThis, 'location', {
+      configurable: true,
+      value: { origin: 'http://localhost:7233' },
+    });
+    try {
+      expect(workflowWatchWebSocketUrl('/weft', 'wf-1')).toBe(
+        'ws://localhost:7233/weft/v1/workflows/wf-1/watch',
+      );
+    } finally {
+      if (originalLocation === undefined) {
+        delete (globalThis as { location?: unknown }).location;
+      } else {
+        Object.defineProperty(globalThis, 'location', originalLocation);
+      }
+    }
+  });
 });
 
 describe('WorkflowEventSubscription', () => {
@@ -143,6 +185,63 @@ describe('WorkflowEventSubscription', () => {
       'activity:completed',
       'workflow:completed',
     ]);
+    expect(subscription.closeReason).toBe('workflow-terminal');
+  });
+
+  it('re-runs catch-up when the socket drops while the first history fetch is in flight', async () => {
+    // Regression: a socket dropping mid-catch-up must not leave the stream stuck
+    // on a stale snapshot. The first catch-up reconciles against the dropped
+    // socket; once it resolves it must hand off to a fresh catch-up for the
+    // reconnected socket so events missed in between are still delivered.
+    const server = new FakeWebSocketServer();
+    const received: WorkflowEvent[] = [];
+
+    // Gate the first history fetch so the test can drop the socket while it is
+    // pending. Later fetches resolve immediately with the fuller history.
+    let historyCalls = 0;
+    const firstFetchStarted = Promise.withResolvers<void>();
+    const releaseFirstFetch = Promise.withResolvers<void>();
+    const history: EventHistoryFetcher = async () => {
+      historyCalls += 1;
+      if (historyCalls === 1) {
+        firstFetchStarted.resolve();
+        await releaseFirstFetch.promise;
+        // Stale snapshot captured against the now-dropped socket.
+        return [event('workflow:started')];
+      }
+      // Fresh catch-up after reconnect sees the event missed during the gap.
+      return [event('workflow:started'), event('activity:completed'), event('workflow:completed')];
+    };
+
+    const subscription = new WorkflowEventSubscription(
+      'ws://test/watch',
+      {},
+      'wf-race',
+      history,
+      (e) => received.push(e),
+      { webSocketFactory: server.factory, reconnectBackoffMs: 1 },
+    );
+
+    // First socket opened and its catch-up is awaiting history.
+    await firstFetchStarted.promise;
+    expect(server.sockets.length).toBe(1);
+
+    // Drop the socket while the first fetch is still pending; the subscription
+    // reconnects, but the new socket's catch-up is blocked by the in-flight guard.
+    server.latest().drop();
+    await waitFor(() => server.sockets.length === 2 && server.latest().opened);
+
+    // Now let the stale first fetch resolve. The fix re-runs catch-up for the
+    // reconnected socket, delivering the events missed during the gap.
+    releaseFirstFetch.resolve();
+
+    await waitFor(() => received.length === 3);
+    expect(received.map((e) => e.type)).toEqual([
+      'workflow:started',
+      'activity:completed',
+      'workflow:completed',
+    ]);
+    expect(historyCalls).toBeGreaterThanOrEqual(2);
     expect(subscription.closeReason).toBe('workflow-terminal');
   });
 
