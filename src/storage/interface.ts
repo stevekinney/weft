@@ -385,7 +385,11 @@ const formatSortableTimestamp = (timestamp: number): string => String(timestamp)
  * Key layout constants for hierarchical key encoding. Timestamps are
  * zero-padded to 16 digits for lexicographic ordering.
  *
- * @example `KEYS.workflow('workflow-id')` → `wf:<encoded-id>`
+ * @example
+ * ```ts
+ * import { KEYS } from 'weft/storage/interface';
+ * KEYS.workflow('workflow-id');
+ * ```
  */
 export const KEYS = {
   workflow: (id: string) => `wf:${encodeStorageKeyComponent(id)}`,

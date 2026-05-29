@@ -330,8 +330,10 @@ export async function completeAsyncActivity(
  * generator so try/catch/finally blocks inside the interceptor run correctly
  * instead of being abandoned.
  *
- * Placed here (alongside async activity completion) because it is used
- * exclusively in the async-activity execution path inside `executeActivity`.
+ * Placed here to reduce the line count of operations-activity.ts (which was
+ * approaching the 500-line lint ceiling). The function is used only from
+ * `executeActivity` in operations-activity.ts and has no coupling to the async
+ * activity completion logic — it is a general generator-driving utility.
  */
 export async function driveWorkflowInterceptorGenerator(
   generator: Generator<unknown, unknown, unknown>,
