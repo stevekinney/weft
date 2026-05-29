@@ -17,14 +17,24 @@
 
 import { resolveCliConnection } from './connection.ts';
 import { CATALOG_OPERATION_NAMES } from './generated/operation-client.generated.ts';
-import { prettyJson } from './output.ts';
+import { messageOf, prettyJson } from './output.ts';
 import type { CommandOutput, ServerCommand } from './types.ts';
 
 const HEALTH_POLL_INTERVAL_MS = 250;
 
 /** Execute `weft server health` or `weft server info`. */
 export async function executeServer(command: ServerCommand): Promise<CommandOutput> {
-  const { server, token } = await resolveServerConnection(command);
+  let resolved: { server: URL; token: string | undefined };
+  try {
+    resolved = await resolveServerConnection(command);
+  } catch (error) {
+    return {
+      stdout: '',
+      stderr: `server: connection error: ${messageOf(error)}`,
+      exitCode: 2,
+    };
+  }
+  const { server, token } = resolved;
   if (command.action === 'health') return executeServerHealth(command, server, token);
   return executeServerInfo(command, server, token);
 }

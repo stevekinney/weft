@@ -206,7 +206,16 @@ export async function executeTail(command: TailCommand): Promise<CommandOutput> 
     ...(command.token === undefined ? {} : { token: command.token }),
     ...(command.profile === undefined ? {} : { profile: command.profile }),
   };
-  const resolved = await resolveCliConnection(connection);
+  let resolved: Awaited<ReturnType<typeof resolveCliConnection>>;
+  try {
+    resolved = await resolveCliConnection(connection);
+  } catch (error) {
+    return {
+      stdout: '',
+      stderr: `tail: connection error: ${messageOf(error)}`,
+      exitCode: 2,
+    };
+  }
   const controller = new AbortController();
   const onSigint = () => controller.abort();
   process.on('SIGINT', onSigint);
