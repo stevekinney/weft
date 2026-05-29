@@ -181,15 +181,18 @@ describe('async activity completion', () => {
 
     // Second engine: recover from the same storage. The deferred activity
     // re-runs during replay and re-registers the SAME deterministic token.
+    // The activity:async-pending event is NOT re-emitted on replay (idempotency
+    // guard) — the token is already registered by recoverPendingAsyncActivities
+    // before the workflow replays. Callers that need the token after a restart
+    // should read it from the persisted storage record or from the first run.
     const recoveredEngine = new Engine({ storage });
     recoveredEngine.register(orderWorkflow);
 
-    const recoveredTokenPromise = nextAsyncPendingToken(recoveredEngine);
     const handles = await recoveredEngine.recoverAll();
     expect(handles.map((handle) => handle.id)).toContain(workflowId);
 
-    const recoveredToken = await recoveredTokenPromise;
-    expect(recoveredToken).toBe(firstToken);
+    // The token remains valid and resolvable via the original token value.
+    expect(await storage.get(KEYS.asyncActivity(workflowId, firstToken))).not.toBeNull();
 
     // The callback arriving after the restart, using the original token,
     // completes the right activity and resumes the workflow.

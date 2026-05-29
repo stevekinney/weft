@@ -34,6 +34,7 @@ import { ActivityAsyncPendingEvent } from '../events.ts';
 import type { OperationOutcome } from '../types.ts';
 import { WeftError } from '../weft-error.ts';
 import type { EngineInternals } from './internals.ts';
+import { finalizePendingTimelineEntry } from './termination/complete.ts';
 
 const ASYNC_ACTIVITY_TOKEN_PREFIX = 'async-act:v1';
 
@@ -172,25 +173,30 @@ function persistPendingAsyncActivity(
 
 /**
  * Register a deferred activity: record it in memory and durably, then announce
- * the token via {@link ActivityAsyncPendingEvent}. Idempotent on `token` so a
- * replayed deferral does not duplicate the durable record or re-emit a
- * confusing event for an entry that already exists with the same identity.
+ * the token via {@link ActivityAsyncPendingEvent}. Idempotent on `token`: if the
+ * token is already registered (e.g. because `recoverPendingAsyncActivities` loaded
+ * it before the workflow replayed and re-deferred), the durable record is
+ * refreshed but the event is NOT re-emitted, preventing duplicate side-effects
+ * (e.g. re-sending a webhook notification) on replay.
  */
 export async function registerPendingAsyncActivity(
   internals: EngineInternals,
   pending: PendingAsyncActivity,
 ): Promise<void> {
+  const alreadyRegistered = internals.pendingAsyncActivities.has(pending.token);
   internals.pendingAsyncActivities.set(pending.token, pending);
   await persistPendingAsyncActivity(internals.storage, pending);
-  internals.engine.dispatchEvent(
-    new ActivityAsyncPendingEvent(
-      pending.token,
-      pending.operationId,
-      pending.workflowId,
-      pending.activityName,
-      pending.attempt,
-    ),
-  );
+  if (!alreadyRegistered) {
+    internals.engine.dispatchEvent(
+      new ActivityAsyncPendingEvent(
+        pending.token,
+        pending.operationId,
+        pending.workflowId,
+        pending.activityName,
+        pending.attempt,
+      ),
+    );
+  }
 }
 
 /**
@@ -241,6 +247,15 @@ export async function recoverPendingAsyncActivities(internals: EngineInternals):
  * the durable record. Returns the consumed record, or throws
  * {@link AsyncActivityTokenNotFoundError} when the token is unknown or already
  * consumed (tokens are single-use).
+ *
+ * Note: there is a narrow window during `recoverAll()` between
+ * `recoverPendingAsyncActivities` (which loads tokens into memory) and the
+ * completion of workflow replay (which adopts the workflow generator). If
+ * `completeAsyncActivity` is called in that window, `feedOperationResult` will
+ * silently no-op because the generator isn't adopted yet. The token is then
+ * permanently consumed, stranding the workflow. Callers should wait for
+ * `recoverAll()` to settle before resuming async activities after a restart.
+ * A proper deferred-resume queue is a follow-up concern.
  */
 async function consumePendingAsyncActivity(
   internals: EngineInternals,
@@ -260,6 +275,11 @@ async function consumePendingAsyncActivity(
  * workflow. Shared by the completion and failure entry points so both paths
  * consume the token (single-use) before resuming and route through the same
  * `feedOperationResult` the inline activity pipeline uses.
+ *
+ * Also finalizes the pending timeline entry for this workflow step so the
+ * activity's row is not left as 'running' in the persisted timeline — the
+ * same step `completeOperation`/`failOperation` in operations-router.ts take
+ * for the normal (inline) completion path.
  */
 async function resolvePendingAsyncActivity(
   internals: EngineInternals,
@@ -268,6 +288,11 @@ async function resolvePendingAsyncActivity(
   feedOperationResult: (workflowId: string, outcome: OperationOutcome) => void,
 ): Promise<void> {
   const pending = await consumePendingAsyncActivity(internals, token);
+  if (outcome.status === 'completed') {
+    finalizePendingTimelineEntry(internals, pending.workflowId, 'completed', outcome.value);
+  } else {
+    finalizePendingTimelineEntry(internals, pending.workflowId, 'failed', outcome.error);
+  }
   feedOperationResult(pending.workflowId, outcome);
 }
 

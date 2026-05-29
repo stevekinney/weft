@@ -70,9 +70,10 @@ export interface ActivityContext {
    * `engine.failAsyncActivity(token, error)` (or the matching
    * `client.activity.*` methods).
    *
-   * The returned task token is durable and deterministic: it is announced on
-   * the engine as an `activity:async-pending` event, survives engine restart,
-   * and is re-minted identically when the activity replays after recovery.
+   * The durable task token is announced on the engine as an
+   * `activity:async-pending` event (listen for it to receive the token).
+   * The token is deterministic and survives engine restart: it is re-minted
+   * identically when the activity replays after recovery.
    *
    * `completeAsync()` never returns normally — it throws an internal sentinel
    * that the engine recognizes to park the activity. Call it as the last
