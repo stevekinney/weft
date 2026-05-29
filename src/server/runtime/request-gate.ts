@@ -79,18 +79,34 @@ export async function authenticateRequest(
 }
 
 /**
- * Stable rate-limit key for a request. Prefers the authenticated principal's
- * subject (so a single principal is throttled across IPs); falls back to the
- * client address from `server.requestIP()`, and finally to a shared
- * `unidentified` bucket when neither is available.
+ * Derive the subject from an auth context for rate-limit keying. Mirrors the
+ * logic in `subjectFromResult` in `authentication/index.ts`: prefers the
+ * forwarded principal's `subject` (API-key auth), then falls back to the JWT
+ * `sub` claim (JWT auth), and leaves it undefined for mTLS or claimless
+ * admissions.
+ */
+function subjectFromAuthContext(authContext: AuthContext | undefined): string | undefined {
+  if (authContext?.principal?.subject !== undefined) {
+    return authContext.principal.subject;
+  }
+  const sub = authContext?.claims?.['sub'];
+  return typeof sub === 'string' && sub.length > 0 ? sub : undefined;
+}
+
+/**
+ * Stable rate-limit key for a request. Prefers the authenticated subject
+ * (so a single principal is throttled across IPs, regardless of whether they
+ * authenticated via API key or JWT); falls back to the client address from
+ * `server.requestIP()`, and finally to a shared `unidentified` bucket when
+ * neither is available.
  */
 function rateLimitKeyForRequest(
   server: ReturnType<typeof Bun.serve>,
   request: Request,
   authContext: AuthContext | undefined,
 ): string {
-  const subject = authContext?.principal?.subject;
-  if (subject !== undefined && subject.length > 0) {
+  const subject = subjectFromAuthContext(authContext);
+  if (subject !== undefined) {
     return `principal:${subject}`;
   }
   const address = server.requestIP(request)?.address;

@@ -5,7 +5,10 @@ import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import type { AuthAuditEvent } from '../authentication.ts';
+import { signJWT } from '../authentication.ts';
 import { serve, type WeftServer } from '../index.ts';
+
+const TEST_JWT_SECRET = 'rate-limit-test-secret-must-be-long-enough!';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
   _ctx: WorkflowContext,
@@ -118,6 +121,42 @@ describe('serve() with rate limiting', () => {
     ).toThrow();
     // No server was created; stub the afterEach handle so cleanup is a no-op.
     server = { stop: async () => {} } as WeftServer;
+  });
+
+  it('rate-limits JWT-authenticated requests by subject (not by IP)', async () => {
+    engine = createEngine();
+    server = serve({
+      engine,
+      port: 0,
+      auth: { jwt: { secret: TEST_JWT_SECRET } },
+      rateLimit: { maxRequests: 3, windowMs: 60_000 },
+    });
+
+    const tokenForSubjectA = await signJWT({ sub: 'user-A' }, TEST_JWT_SECRET, 'HS256');
+    const tokenForSubjectB = await signJWT({ sub: 'user-B' }, TEST_JWT_SECRET, 'HS256');
+
+    const statusesA: number[] = [];
+    const statusesB: number[] = [];
+
+    // Flood 6 requests for subject A — first 3 allowed, rest throttled.
+    for (let i = 0; i < 6; i++) {
+      const response = await fetch(`${server.url}/v1/workflows`, {
+        headers: { Authorization: `Bearer ${tokenForSubjectA}` },
+      });
+      statusesA.push(response.status);
+      await response.body?.cancel();
+    }
+    // Subject B should have its own independent budget (3 allowed).
+    for (let i = 0; i < 3; i++) {
+      const response = await fetch(`${server.url}/v1/workflows`, {
+        headers: { Authorization: `Bearer ${tokenForSubjectB}` },
+      });
+      statusesB.push(response.status);
+      await response.body?.cancel();
+    }
+
+    expect(statusesA.filter((s) => s === 429).length).toBe(3); // 6 - 3 allowed = 3 throttled
+    expect(statusesB.every((s) => s !== 429)).toBe(true); // B has its own budget
   });
 
   it('rate-limits credential-stuffing floods (failed-auth requests) by IP', async () => {
