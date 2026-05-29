@@ -15,6 +15,7 @@ import type {
   WorkflowState,
 } from '../types.ts';
 import { buildWorkflowTagIndexOperations, normalizeWorkflowTags } from '../workflow-tags.ts';
+import { asyncActivityWorkflowPrefix } from './async-activity-completion.ts';
 import { forgetCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts';
 import type { EngineInternals } from './internals.ts';
 import { streamWorkflowStates } from './listing.ts';
@@ -347,7 +348,7 @@ function workflowPurgePrefixes(workflowId: string): string[] {
     `tool-effect:${encodedWorkflowId}:`,
     `upk:${encodedWorkflowId}:`,
     `actrec:v1:${encodedWorkflowId}:`,
-    KEYS.asyncActivityWorkflowPrefix(workflowId),
+    asyncActivityWorkflowPrefix(workflowId),
     `sigres:v1:${encodedWorkflowId}:`,
   ];
 }

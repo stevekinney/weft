@@ -382,14 +382,10 @@ export function tryDecodeStorageKeyComponent(value: string): string | null {
 const formatSortableTimestamp = (timestamp: number): string => String(timestamp).padStart(16, '0');
 
 /**
- * Key layout constants for hierarchical key encoding. All timestamps are
- * zero-padded to 16 digits for correct lexicographic ordering.
+ * Key layout constants for hierarchical key encoding. Timestamps are
+ * zero-padded to 16 digits for lexicographic ordering.
  *
- * @example
- * ```ts
- * import { KEYS } from 'weft/storage/interface';
- * console.log(KEYS.workflow('workflow-id'));
- * ```
+ * @example `KEYS.workflow('workflow-id')` → `wf:<encoded-id>`
  */
 export const KEYS = {
   workflow: (id: string) => `wf:${encodeStorageKeyComponent(id)}`,
@@ -416,8 +412,6 @@ export const KEYS = {
     `op:resolved-by-time:${formatSortableTimestamp(resolvedAt)}:${encodeStorageKeyComponent(id)}`,
   asyncActivity: (workflowId: string, token: string) =>
     `async-act:v1:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(token)}`,
-  asyncActivityWorkflowPrefix: (workflowId: string) =>
-    `async-act:v1:${encodeStorageKeyComponent(workflowId)}:`,
   activityReconciliationPrefix: (workflowId: string) =>
     `actrec:v1:${encodeStorageKeyComponent(workflowId)}:`,
   activityReconciliation: (

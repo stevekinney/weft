@@ -211,6 +211,7 @@ import {
 import {
   cancelWorkflow as cancelWorkflowFromTermination,
   cleanupWaiters as cleanupWaitersFromTermination,
+  finalizePendingTimelineEntry,
   timeoutWorkflow as timeoutWorkflowFromTermination,
   type TerminationCallbacks,
 } from './termination.ts';
@@ -1153,6 +1154,8 @@ export class Engine<
       token,
       result,
       (workflowId, outcome) => feedOperationResult(getInternals(this), workflowId, outcome),
+      (workflowId, status, output) =>
+        finalizePendingTimelineEntry(getInternals(this), workflowId, status, output),
     );
   }
 
@@ -1172,6 +1175,8 @@ export class Engine<
       error,
       (workflowId, outcome, originalReason) =>
         feedOperationResult(getInternals(this), workflowId, outcome, originalReason),
+      (workflowId, status, output) =>
+        finalizePendingTimelineEntry(getInternals(this), workflowId, status, output),
     );
   }
   async cancel(workflowId: string): Promise<void> {

@@ -28,13 +28,12 @@
  * construction path.
  */
 
-import { KEYS, type Storage } from '../../storage/interface.ts';
+import { KEYS, encodeStorageKeyComponent, type Storage } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
 import { ActivityAsyncPendingEvent } from '../events.ts';
 import type { OperationOutcome } from '../types.ts';
 import { WeftError } from '../weft-error.ts';
 import type { EngineInternals } from './internals.ts';
-import { finalizePendingTimelineEntry } from './termination/complete.ts';
 
 const ASYNC_ACTIVITY_TOKEN_PREFIX = 'async-act:v1';
 
@@ -45,6 +44,15 @@ const ASYNC_ACTIVITY_TOKEN_PREFIX = 'async-act:v1';
  * scopes the global recovery scan to record keys only.
  */
 const ASYNC_ACTIVITY_KEY_PREFIX = 'async-act:v1:';
+
+/**
+ * Per-workflow prefix for all async-activity storage keys. Used by cleanup and
+ * purge paths that need to sweep every async-activity record for a workflow
+ * without enumerating individual tokens.
+ */
+export function asyncActivityWorkflowPrefix(workflowId: string): string {
+  return `${ASYNC_ACTIVITY_KEY_PREFIX}${encodeStorageKeyComponent(workflowId)}:`;
+}
 
 /**
  * Sentinel thrown by `ActivityContext.completeAsync()` to signal that the
@@ -279,23 +287,20 @@ async function consumePendingAsyncActivity(
  * consume the token (single-use) before resuming and route through the same
  * `feedOperationResult` the inline activity pipeline uses.
  *
- * Also finalizes the pending timeline entry for this workflow step so the
- * activity's row is not left as 'running' in the persisted timeline — the
- * same step `completeOperation`/`failOperation` in operations-router.ts take
- * for the normal (inline) completion path.
+ * The caller must supply `finalizeTimeline` to transition the pending timeline
+ * entry from 'running' to 'completed'/'failed', matching the normal inline
+ * activity completion path in operations-router.ts.
  */
 async function resolvePendingAsyncActivity(
   internals: EngineInternals,
   token: string,
   outcome: OperationOutcome,
   feedOperationResult: (workflowId: string, outcome: OperationOutcome) => void,
+  finalizeTimeline: (workflowId: string, status: 'completed' | 'failed', output: unknown) => void,
 ): Promise<void> {
   const pending = await consumePendingAsyncActivity(internals, token);
-  if (outcome.status === 'completed') {
-    finalizePendingTimelineEntry(internals, pending.workflowId, 'completed', outcome.value);
-  } else {
-    finalizePendingTimelineEntry(internals, pending.workflowId, 'failed', outcome.error);
-  }
+  const timelineOutput = outcome.status === 'completed' ? outcome.value : outcome.error;
+  finalizeTimeline(pending.workflowId, outcome.status, timelineOutput);
   feedOperationResult(pending.workflowId, outcome);
 }
 
@@ -308,12 +313,14 @@ export async function completeAsyncActivity(
   token: string,
   result: unknown,
   feedOperationResult: (workflowId: string, outcome: OperationOutcome) => void,
+  finalizeTimeline: (workflowId: string, status: 'completed' | 'failed', output: unknown) => void,
 ): Promise<void> {
   await resolvePendingAsyncActivity(
     internals,
     token,
     { status: 'completed', value: result },
     feedOperationResult,
+    finalizeTimeline,
   );
 }
 
@@ -363,9 +370,11 @@ export async function failAsyncActivity(
     outcome: OperationOutcome,
     originalReason?: { value: unknown },
   ) => void,
+  finalizeTimeline: (workflowId: string, status: 'completed' | 'failed', output: unknown) => void,
 ): Promise<void> {
   const pending = await consumePendingAsyncActivity(internals, token);
   const message = error instanceof Error ? error.message : String(error);
+  finalizeTimeline(pending.workflowId, 'failed', message);
   feedOperationResult(
     pending.workflowId,
     {
