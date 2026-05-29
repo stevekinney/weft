@@ -25,6 +25,7 @@ import type {
   ReviewListFilter,
   ScheduleFilter,
   ScheduleOptions,
+  ScheduleSpec,
   ScheduleSummary,
   SearchAttributeValue,
   SignalDefinition,
@@ -152,8 +153,8 @@ export interface ClientScheduleHandle extends Disposable {
   /** Cancel this schedule. */
   cancel(): Promise<void>;
 
-  /** Update the schedule's cron expression. */
-  update(newCronExpression: string): Promise<void>;
+  /** Update the schedule's recurrence specification (cron string or interval spec). */
+  update(newSpec: string | ScheduleSpec): Promise<void>;
 
   /** Read the latest persisted summary for this schedule. */
   describe(): Promise<ScheduleSummary | null>;
@@ -193,11 +194,11 @@ export interface WeftClient {
   /** Start a new workflow and return a handle to it. */
   start(type: string, input: unknown, options?: StartOptions): Promise<ClientHandle>;
 
-  /** Register a recurring schedule and return a handle to it. */
+  /** Register a recurring schedule (cron string or interval spec) and return a handle to it. */
   schedule(
     type: string,
     input: unknown,
-    cronExpression: string,
+    spec: string | ScheduleSpec,
     options?: ScheduleOptions,
   ): Promise<ClientScheduleHandle>;
 
@@ -227,8 +228,8 @@ export interface WeftClient {
   /** Cancel a recurring schedule. */
   cancelSchedule(id: string): Promise<void>;
 
-  /** Update a recurring schedule's cron expression. */
-  updateSchedule(id: string, newCronExpression: string): Promise<void>;
+  /** Update a recurring schedule's recurrence specification (cron string or interval spec). */
+  updateSchedule(id: string, newSpec: string | ScheduleSpec): Promise<void>;
 
   /** Send a named signal to a workflow. */
   signal(id: string, name: SignalDefinition): Promise<void>;

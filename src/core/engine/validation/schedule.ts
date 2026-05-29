@@ -1,11 +1,13 @@
 import { decode } from '../../codec.ts';
 import { isRecord } from '../../debug-output.ts';
 import { parseCronExpression } from '../../schedule.ts';
+import { parseDuration } from '../../scheduler.ts';
 import { coerceStartWorkflowId } from '../../start-workflow-validation.ts';
 import type {
   ScheduleFilter,
   ScheduleOptions,
   ScheduleOverlapPolicy,
+  ScheduleSpec,
   ScheduleState,
   ScheduleStatus,
 } from '../../types.ts';
@@ -89,6 +91,64 @@ export function normalizeScheduleOptions(
   return normalizedOptions;
 }
 
+/**
+ * A recurrence specification normalized into the discriminated cadence the
+ * engine persists. Interval periods are resolved to whole milliseconds.
+ */
+export type NormalizedScheduleSpec =
+  | { kind: 'cron'; cronExpression: string }
+  | { kind: 'interval'; intervalMs: number };
+
+function normalizeIntervalEvery(every: unknown): { kind: 'interval'; intervalMs: number } {
+  if (typeof every !== 'string' && typeof every !== 'number') {
+    throw new Error(
+      'Schedule interval "every" must be a duration string or a number of milliseconds',
+    );
+  }
+  let milliseconds: number;
+  try {
+    milliseconds = parseDuration(every);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid schedule interval "every": ${message}`, { cause: error });
+  }
+  const intervalMs = Math.ceil(milliseconds);
+  if (!Number.isSafeInteger(intervalMs) || intervalMs <= 0) {
+    throw new Error('Schedule interval "every" must resolve to a positive number of milliseconds');
+  }
+  return { kind: 'interval', intervalMs };
+}
+
+function normalizeCronSpec(cronExpression: unknown): { kind: 'cron'; cronExpression: string } {
+  if (typeof cronExpression !== 'string') {
+    throw new Error('Schedule "cron" must be a string');
+  }
+  parseCronExpression(cronExpression);
+  return { kind: 'cron', cronExpression };
+}
+
+/**
+ * Normalize a schedule recurrence specification into the persisted cadence. A
+ * bare string is treated as a cron expression (preserving the original
+ * cron-only API). An object must supply exactly one of `cron` or `every`.
+ */
+export function normalizeScheduleSpec(spec: string | ScheduleSpec): NormalizedScheduleSpec {
+  if (typeof spec === 'string') {
+    return normalizeCronSpec(spec);
+  }
+  if (typeof spec !== 'object' || spec === null) {
+    throw new Error('Schedule spec must be a cron string or an object with "cron" or "every"');
+  }
+
+  const hasCron = 'cron' in spec && spec.cron !== undefined;
+  const hasEvery = 'every' in spec && spec.every !== undefined;
+  if (hasCron === hasEvery) {
+    throw new Error('Schedule spec must specify exactly one of "cron" or "every"');
+  }
+
+  return hasEvery ? normalizeIntervalEvery(spec.every) : normalizeCronSpec(spec.cron);
+}
+
 function validateScheduleFilterStatus(status: ScheduleFilter['status']): void {
   if (status === undefined) return;
   const statuses = Array.isArray(status) ? status : [status];
@@ -144,9 +204,46 @@ export function rejectInvalidScheduleRecord(scheduleId: string | undefined, mess
   return null;
 }
 
-export function decodeScheduleIdentityFields(
+function decodeScheduleCadence(
   decoded: Record<string, unknown>,
-): Pick<ScheduleState, 'id' | 'workflowType' | 'cronExpression' | 'status' | 'overlap'> | null {
+  scheduleId: string,
+): { cronExpression?: string; intervalMs?: number } | null {
+  const cronExpression = decoded['cronExpression'];
+  const intervalMs = decoded['intervalMs'];
+  const hasCron = cronExpression !== undefined;
+  const hasInterval = intervalMs !== undefined;
+
+  if (hasCron === hasInterval) {
+    return rejectInvalidScheduleRecord(
+      scheduleId,
+      'with conflicting or missing cadence (expected exactly one of cronExpression or intervalMs)',
+    );
+  }
+
+  if (hasInterval) {
+    if (typeof intervalMs !== 'number' || !Number.isSafeInteger(intervalMs) || intervalMs <= 0) {
+      return rejectInvalidScheduleRecord(scheduleId, 'with invalid intervalMs');
+    }
+    return { intervalMs };
+  }
+
+  if (typeof cronExpression !== 'string') {
+    return rejectInvalidScheduleRecord(scheduleId, 'with invalid cronExpression');
+  }
+  try {
+    parseCronExpression(cronExpression);
+  } catch {
+    return rejectInvalidScheduleRecord(scheduleId, 'with invalid cronExpression');
+  }
+  return { cronExpression };
+}
+
+export function decodeScheduleIdentityFields(decoded: Record<string, unknown>):
+  | (Pick<ScheduleState, 'id' | 'workflowType' | 'status' | 'overlap'> & {
+      cronExpression?: string;
+      intervalMs?: number;
+    })
+  | null {
   const id = decoded['id'];
   if (!isValidScheduleIdentifier(id)) {
     return rejectInvalidScheduleRecord(undefined, 'with invalid id');
@@ -157,14 +254,9 @@ export function decodeScheduleIdentityFields(
     return rejectInvalidScheduleRecord(id, 'with invalid workflowType');
   }
 
-  const cronExpression = decoded['cronExpression'];
-  if (typeof cronExpression !== 'string') {
-    return rejectInvalidScheduleRecord(id, 'with invalid cronExpression');
-  }
-  try {
-    parseCronExpression(cronExpression);
-  } catch {
-    return rejectInvalidScheduleRecord(id, 'with invalid cronExpression');
+  const cadence = decodeScheduleCadence(decoded, id);
+  if (!cadence) {
+    return null;
   }
 
   const status = decoded['status'];
@@ -180,9 +272,9 @@ export function decodeScheduleIdentityFields(
   return {
     id,
     workflowType,
-    cronExpression,
     status,
     overlap,
+    ...cadence,
   };
 }
 

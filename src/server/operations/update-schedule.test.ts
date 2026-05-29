@@ -78,9 +78,9 @@ describe('weft.schedules.update', () => {
     expect(await response.json()).toEqual({ error: 'Request body must be a JSON object' });
   });
 
-  it('returns 400 with "Missing required field: cronExpression" when body is a JSON array', async () => {
+  it('returns 400 with "Missing required field: cronExpression or every" when body is a JSON array', async () => {
     // arrays are typeof 'object' && !== null, so they pass
-    // the body-shape guard and fall through to the cronExpression check.
+    // the body-shape guard and fall through to the cadence check.
     engine = createEngine();
 
     const response = await handleRequest(
@@ -90,7 +90,9 @@ describe('weft.schedules.update', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Missing required field: cronExpression' });
+    expect(await response.json()).toEqual({
+      error: 'Missing required field: cronExpression or every',
+    });
   });
 
   it('returns 404 when the schedule does not exist', async () => {

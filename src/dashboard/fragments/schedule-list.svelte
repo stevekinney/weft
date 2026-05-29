@@ -21,7 +21,11 @@
       </div>
 
       <div class="schedule-meta text-muted">
-        <span>Cron {item.cronExpression}</span>
+        {#if item.intervalMs !== undefined}
+          <span>Every {item.intervalMs}ms</span>
+        {:else}
+          <span>Cron {item.cronExpression}</span>
+        {/if}
         <span>Last fired {formatTimestamp(item.lastFireAt)}</span>
         <span>Next fire {formatTimestamp(item.nextFireAt)}</span>
       </div>

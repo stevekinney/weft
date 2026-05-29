@@ -358,7 +358,10 @@
         "properties": {
           "backfill": {},
           "cronExpression": {
-            "description": "Cron expression. Runtime validation requires a non-empty string."
+            "description": "Cron expression. Supply exactly one of cronExpression or every; runtime validation requires a non-empty string."
+          },
+          "every": {
+            "description": "Interval period (duration string or milliseconds). Supply exactly one of cronExpression or every."
           },
           "id": {},
           "input": {},
@@ -367,7 +370,7 @@
             "description": "Workflow type name. Runtime validation requires a non-empty string."
           }
         },
-        "required": ["type", "cronExpression"],
+        "required": ["type"],
         "type": "object"
       },
       "outputSchema": {
@@ -516,14 +519,17 @@
         "additionalProperties": false,
         "properties": {
           "cronExpression": {
-            "description": "Cron expression. Runtime validation requires a non-empty string."
+            "description": "Cron expression. Supply exactly one of cronExpression or every; runtime validation requires a non-empty string."
+          },
+          "every": {
+            "description": "Interval period (duration string or milliseconds). Supply exactly one of cronExpression or every."
           },
           "scheduleId": {
             "minLength": 1,
             "type": "string"
           }
         },
-        "required": ["scheduleId", "cronExpression"],
+        "required": ["scheduleId"],
         "type": "object"
       },
       "outputSchema": {

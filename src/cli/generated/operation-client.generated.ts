@@ -105,7 +105,8 @@ export type CatalogOperationTypes = {
   'weft.schedules.create': {
     readonly input: {
       readonly backfill?: unknown;
-      readonly cronExpression: unknown;
+      readonly cronExpression?: unknown;
+      readonly every?: unknown;
       readonly id?: unknown;
       readonly input?: unknown;
       readonly overlap?: unknown;
@@ -140,7 +141,11 @@ export type CatalogOperationTypes = {
     readonly faults: 'Conflict' | 'NotFound';
   };
   'weft.schedules.update': {
-    readonly input: { readonly cronExpression: unknown; readonly scheduleId: string };
+    readonly input: {
+      readonly cronExpression?: unknown;
+      readonly every?: unknown;
+      readonly scheduleId: string;
+    };
     readonly output: null;
     readonly faults: 'Conflict' | 'NotFound';
   };

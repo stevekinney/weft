@@ -32,6 +32,7 @@ import type {
   ReviewListFilter,
   ScheduleFilter,
   ScheduleOptions,
+  ScheduleSpec,
   ScheduleSummary,
   SearchAttributeValue,
   SignalDefinition,
@@ -142,10 +143,10 @@ export class LocalClient implements WeftClient {
   async schedule(
     type: string,
     input: unknown,
-    cronExpression: string,
+    spec: string | ScheduleSpec,
     options?: ScheduleOptions,
   ): Promise<ClientScheduleHandle> {
-    const handle = await this.#engine.schedule(type, input, cronExpression, options);
+    const handle = await this.#engine.schedule(type, input, spec, options);
     return new LocalScheduleHandle(handle.id, this);
   }
 
@@ -183,8 +184,8 @@ export class LocalClient implements WeftClient {
     return this.#engine.cancelSchedule(id);
   }
 
-  async updateSchedule(id: string, newCronExpression: string): Promise<void> {
-    return this.#engine.updateSchedule(id, newCronExpression);
+  async updateSchedule(id: string, newSpec: string | ScheduleSpec): Promise<void> {
+    return this.#engine.updateSchedule(id, newSpec);
   }
 
   async signal(id: string, name: SignalDefinition): Promise<void>;

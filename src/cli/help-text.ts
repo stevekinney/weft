@@ -110,14 +110,20 @@ weft schedule - Manage recurring schedules
 Usage:
   weft schedule list [options]
   weft schedule create <workflowType> <cronExpression> [options]
+  weft schedule create <workflowType> --every <duration> [options]
   weft schedule pause <scheduleId> [options]
   weft schedule resume <scheduleId> [options]
   weft schedule cancel <scheduleId> [options]
+
+Provide a cron expression positional OR an --every interval (e.g. "30s", "1h"),
+but not both. Interval schedules fire one period after creation, then every
+period after that.
 
 Options:
   -d, --database <path>     Database file path (default: ./weft.db)
   -s, --storage <backend>   Storage backend: sqlite, lmdb (default: sqlite)
   -w, --workflows <path>    Path to workflow registrations module (required for create)
+      --every <duration>    Interval cadence for create (e.g. 30s, 5m, 1h); mutually exclusive with the cron positional
       --input <json>        JSON input payload for create (default: null)
       --id <id>             Custom schedule id for create
       --overlap <policy>    Overlap policy: skip, queue, cancel-running, allow

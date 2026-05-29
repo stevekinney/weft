@@ -8,6 +8,7 @@ import { WorkflowTimeoutError } from '../timeouts.ts';
 import type {
   MessageName,
   QueryDefinition,
+  ScheduleSpec,
   ScheduleSummary,
   SearchAttributeValue,
   SignalDefinition,
@@ -98,7 +99,7 @@ export interface ScheduleHandleEngine {
   pauseSchedule(scheduleId: string): Promise<void>;
   resumeSchedule(scheduleId: string): Promise<void>;
   cancelSchedule(scheduleId: string): Promise<void>;
-  updateSchedule(scheduleId: string, newCronExpression: string): Promise<void>;
+  updateSchedule(scheduleId: string, newSpec: string | ScheduleSpec): Promise<void>;
   getSchedule(scheduleId: string): Promise<ScheduleSummary | null>;
 }
 
@@ -405,8 +406,8 @@ export class ScheduleHandle {
     await this.#engine.cancelSchedule(this.id);
   }
 
-  async update(newCronExpression: string): Promise<void> {
-    await this.#engine.updateSchedule(this.id, newCronExpression);
+  async update(newSpec: string | ScheduleSpec): Promise<void> {
+    await this.#engine.updateSchedule(this.id, newSpec);
   }
 
   async describe(): Promise<ScheduleSummary> {

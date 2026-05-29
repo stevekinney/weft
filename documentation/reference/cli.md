@@ -188,24 +188,28 @@ Manage durable schedules.
 ```bash
 weft schedule list --database ./weft.db
 weft schedule create my-workflow "0 * * * *" --database ./weft.db --workflows ./src/workflows.ts
+weft schedule create my-workflow --every 1h --database ./weft.db --workflows ./src/workflows.ts
 weft schedule pause <schedule-id> --database ./weft.db
 weft schedule resume <schedule-id> --database ./weft.db
 weft schedule cancel <schedule-id> --database ./weft.db
 ```
 
+A schedule fires either on a cron cadence (the positional cron expression) or at a fixed interval (`--every`), but not both. Interval schedules fire one period after creation, then every period after that, and reuse the same overlap and backfill machinery as cron schedules.
+
 **Options:**
 
-| Flag          | Short | Default     | Description                                                   |
-| ------------- | ----- | ----------- | ------------------------------------------------------------- |
-| `--database`  | `-d`  | `./weft.db` | SQLite database file path                                     |
-| `--storage`   | `-s`  | `sqlite`    | Storage backend: `sqlite` or `lmdb`                           |
-| `--workflows` | `-w`  |             | Workflow registration module, required for create             |
-| `--input`     |       | `null`      | JSON input payload for create                                 |
-| `--id`        |       |             | Custom schedule ID for create                                 |
-| `--overlap`   |       |             | Overlap policy: `skip`, `queue`, `cancel-running`, or `allow` |
-| `--backfill`  |       | `false`     | Run missed ticks on recovery                                  |
-| `--json`      | `-j`  | `false`     | Output as JSON                                                |
-| `--help`      | `-h`  |             | Show help message                                             |
+| Flag          | Short | Default     | Description                                                                                       |
+| ------------- | ----- | ----------- | ------------------------------------------------------------------------------------------------- |
+| `--database`  | `-d`  | `./weft.db` | SQLite database file path                                                                         |
+| `--storage`   | `-s`  | `sqlite`    | Storage backend: `sqlite` or `lmdb`                                                               |
+| `--workflows` | `-w`  |             | Workflow registration module, required for create                                                 |
+| `--every`     |       |             | Interval cadence for create (e.g. `30s`, `5m`, `1h`); mutually exclusive with the cron positional |
+| `--input`     |       | `null`      | JSON input payload for create                                                                     |
+| `--id`        |       |             | Custom schedule ID for create                                                                     |
+| `--overlap`   |       |             | Overlap policy: `skip`, `queue`, `cancel-running`, or `allow`                                     |
+| `--backfill`  |       | `false`     | Run missed ticks on recovery                                                                      |
+| `--json`      | `-j`  | `false`     | Output as JSON                                                                                    |
+| `--help`      | `-h`  |             | Show help message                                                                                 |
 
 ### timeline
 

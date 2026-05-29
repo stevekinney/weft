@@ -11,10 +11,18 @@ import type {
   ScheduleMutationCommand,
 } from './types.ts';
 
+function formatScheduleCadence(schedule: { cronExpression?: string; intervalMs?: number }): string {
+  if (schedule.intervalMs !== undefined) {
+    return `every ${schedule.intervalMs}ms`;
+  }
+  return schedule.cronExpression ?? 'unknown';
+}
+
 function formatScheduleLine(schedule: {
   id: string;
   workflowType: string;
-  cronExpression: string;
+  cronExpression?: string;
+  intervalMs?: number;
   status: string;
   nextFireAt: number | null;
 }): string {
@@ -22,7 +30,7 @@ function formatScheduleLine(schedule: {
     schedule.id,
     schedule.workflowType,
     schedule.status,
-    schedule.cronExpression,
+    formatScheduleCadence(schedule),
     schedule.nextFireAt === null ? 'none' : new Date(schedule.nextFireAt).toISOString(),
   ].join(' | ');
 }
@@ -49,7 +57,7 @@ async function executeScheduleList(
     : result.items.length === 0
       ? 'No schedules found.'
       : [
-          'ID | Workflow Type | Status | Cron | Next Fire',
+          'ID | Workflow Type | Status | Cadence | Next Fire',
           ...result.items.map(formatScheduleLine),
         ].join('\n');
 
@@ -65,8 +73,13 @@ function getScheduleCreateValidationError(options: ScheduleCreateCommand): strin
     return 'Error: missing required argument <workflowType> for schedule create';
   }
 
-  if (!options.cronExpression) {
-    return 'Error: missing required argument <cronExpression> for schedule create';
+  const hasCron = typeof options.cronExpression === 'string' && options.cronExpression.length > 0;
+  const hasEvery = options.every !== undefined;
+  if (hasCron && hasEvery) {
+    return 'Error: provide exactly one of <cronExpression> or --every, not both';
+  }
+  if (!hasCron && !hasEvery) {
+    return 'Error: provide a <cronExpression> argument or an --every <duration> flag for schedule create';
   }
 
   return null;
@@ -119,16 +132,12 @@ async function executeScheduleCreate(
     return { stdout: '', stderr: parsedInput.message, exitCode: 1 };
   }
 
-  const handle = await engine.schedule(
-    options.workflowType,
-    parsedInput.value,
-    options.cronExpression,
-    {
-      ...(options.id !== undefined ? { id: options.id } : {}),
-      ...(options.overlap !== undefined ? { overlap: options.overlap } : {}),
-      ...(options.backfill ? { backfill: true } : {}),
-    },
-  );
+  const spec = options.every !== undefined ? { every: options.every } : options.cronExpression;
+  const handle = await engine.schedule(options.workflowType, parsedInput.value, spec, {
+    ...(options.id !== undefined ? { id: options.id } : {}),
+    ...(options.overlap !== undefined ? { overlap: options.overlap } : {}),
+    ...(options.backfill ? { backfill: true } : {}),
+  });
 
   const schedule = await handle.describe();
   return {

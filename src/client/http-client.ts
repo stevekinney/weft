@@ -17,6 +17,7 @@ import type {
   ReviewListFilter,
   ScheduleFilter,
   ScheduleOptions,
+  ScheduleSpec,
   ScheduleSummary,
   SearchAttributeValue,
   SignalDefinition,
@@ -54,6 +55,21 @@ import type { ClientHandle, ClientScheduleHandle, UpdateResult, WeftClient } fro
 import { buildScheduleListSearchParams } from './schedule-list-search-params.ts';
 import { buildWorkflowListSearchParams } from './search-params.ts';
 import { buildStartBody } from './start-body.ts';
+
+/**
+ * Translate a schedule recurrence specification into the wire body fields the
+ * REST/JSON-RPC schedule operations accept. A bare string is sent as
+ * `cronExpression`; an interval spec is sent as `every`.
+ */
+function scheduleSpecToWireFields(spec: string | ScheduleSpec): Record<string, unknown> {
+  if (typeof spec === 'string') {
+    return { cronExpression: spec };
+  }
+  if (spec.every !== undefined) {
+    return { every: spec.every };
+  }
+  return { cronExpression: spec.cron };
+}
 
 /**
  * Remote Weft client backed by HTTP requests.
@@ -104,13 +120,13 @@ export class HttpClient implements WeftClient {
   async schedule(
     type: string,
     input: unknown,
-    cronExpression: string,
+    spec: string | ScheduleSpec,
     options?: ScheduleOptions,
   ): Promise<ClientScheduleHandle> {
     const body: Record<string, unknown> = {
       type,
       input,
-      cronExpression,
+      ...scheduleSpecToWireFields(spec),
     };
     if (options?.id !== undefined) body['id'] = options.id;
     if (options?.overlap !== undefined) body['overlap'] = options.overlap;
@@ -185,10 +201,10 @@ export class HttpClient implements WeftClient {
     });
   }
 
-  async updateSchedule(id: string, newCronExpression: string): Promise<void> {
+  async updateSchedule(id: string, newSpec: string | ScheduleSpec): Promise<void> {
     return request<void>(this.baseUrl, `/schedules/${encodeURIComponent(id)}`, this.headers, {
       method: 'PATCH',
-      body: JSON.stringify({ cronExpression: newCronExpression }),
+      body: JSON.stringify(scheduleSpecToWireFields(newSpec)),
     });
   }
 

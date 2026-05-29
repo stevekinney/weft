@@ -132,6 +132,7 @@ export type {
   ScheduleFilter,
   ScheduleOptions,
   ScheduleOverlapPolicy,
+  ScheduleSpec,
   ScheduleState,
   ScheduleStatus,
   ScheduleSummary,

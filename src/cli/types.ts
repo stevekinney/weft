@@ -81,6 +81,7 @@ export type CliCommand =
       workflows: string;
       workflowType: string;
       cronExpression: string;
+      every?: string;
       input: string;
       id?: string;
       overlap?: ScheduleOverlapPolicy;

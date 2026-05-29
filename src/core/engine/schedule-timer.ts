@@ -1,6 +1,6 @@
-import { collectDueCronOccurrences, getNextCronOccurrence } from '../schedule.ts';
 import type { ScheduleState, TimerEntry } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
+import { collectDueScheduleOccurrences, getNextScheduleOccurrence } from './schedule-occurrence.ts';
 import type { ScheduleCallbacks } from './schedules.ts';
 import { loadScheduleState, writeScheduleState } from './storage-io.ts';
 
@@ -65,13 +65,11 @@ function planScheduleTimerWork(
   entry: TimerEntry,
   now: number,
 ): ScheduleTimerWork | null {
-  const dueOccurrences = collectDueCronOccurrences(
-    state.cronExpression,
+  const dueOccurrences = collectDueScheduleOccurrences(
+    state,
     state.nextFireAt,
     Math.max(now, entry.fireAt),
-    {
-      maxOccurrences: state.backfill ? MAX_SCHEDULE_BACKFILL_OCCURRENCES_PER_TICK : 2,
-    },
+    state.backfill ? MAX_SCHEDULE_BACKFILL_OCCURRENCES_PER_TICK : 2,
   );
   if (dueOccurrences.length === 0) return null;
 
@@ -97,11 +95,11 @@ function resolveNextScheduleFireAt(
   now: number,
 ): number {
   if (work.skipMissedOccurrences) {
-    return getNextCronOccurrence(state.cronExpression, now);
+    return getNextScheduleOccurrence(state, now);
   }
 
   const anchorOccurrence = work.occurrencesToProcess.at(-1) ?? work.dueOccurrences.at(-1)!;
-  return getNextCronOccurrence(state.cronExpression, anchorOccurrence);
+  return getNextScheduleOccurrence(state, anchorOccurrence);
 }
 
 async function processScheduleTimerOccurrences(
@@ -141,7 +139,7 @@ async function pauseScheduleAfterTimerFailure(
     ...state,
     status: 'paused',
     updatedAt: errorNow,
-    nextFireAt: getNextCronOccurrence(state.cronExpression, errorNow),
+    nextFireAt: getNextScheduleOccurrence(state, errorNow),
   };
   await writeScheduleState(internals, pausedState, { includeTimer: false });
   console.error(`[weft] Paused schedule "${pausedState.id}" after timer processing failed:`, error);

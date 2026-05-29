@@ -398,7 +398,7 @@ describe('recurring schedules', () => {
     });
 
     await expect(scheduleWithoutCron('missing-cron-echo', null)).rejects.toThrow(
-      'cronExpression must be provided when scheduling by workflow type.',
+      'A cron string or schedule spec must be provided when scheduling by workflow type.',
     );
 
     engine[Symbol.dispose]();
@@ -1354,8 +1354,9 @@ describe('recurring schedules', () => {
     const pausedSchedule = await schedule.describe();
     expect(pausedSchedule.status).toBe('paused');
     expect(pausedSchedule.updatedAt).toBe(stableNow);
+    expect(pausedSchedule.cronExpression).toBeDefined();
     expect(pausedSchedule.nextFireAt).toBe(
-      getNextCronOccurrence(pausedSchedule.cronExpression, pausedSchedule.updatedAt),
+      getNextCronOccurrence(pausedSchedule.cronExpression!, pausedSchedule.updatedAt),
     );
 
     consoleErrorSpy.mockRestore();

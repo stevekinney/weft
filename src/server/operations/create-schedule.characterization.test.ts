@@ -70,7 +70,9 @@ describe('create-schedule — validation precedence', () => {
       { operationRegistry: registry, restBindings: bindings },
     );
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Missing required field: cronExpression' });
+    expect(await response.json()).toEqual({
+      error: 'Missing required field: cronExpression or every',
+    });
   });
 
   // --- adjacent pair: id before overlap ---

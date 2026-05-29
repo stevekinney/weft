@@ -303,6 +303,7 @@ function parseScheduleCliValues(args: string[]) {
       database: { type: 'string', short: 'd', default: './weft.db' },
       storage: { type: 'string', short: 's', default: 'sqlite' },
       workflows: { type: 'string', short: 'w', default: '' },
+      every: { type: 'string' },
       input: { type: 'string', default: 'null' },
       id: { type: 'string' },
       overlap: { type: 'string' },
@@ -427,6 +428,7 @@ function buildScheduleCreateCommand(
     workflows: defaultString(values.workflows, ''),
     workflowType: defaultString(positionals[0], ''),
     cronExpression: defaultString(positionals[1], ''),
+    ...(values.every !== undefined ? { every: values.every } : {}),
     input: defaultString(values.input, 'null'),
     ...buildScheduleCreateOptionalFields(values),
     backfill: defaultBoolean(values.backfill),
@@ -461,7 +463,23 @@ function parseScheduleArguments(args: string[]): CliCommand {
   const actionPositionals = positionals.slice(1);
 
   if (action === 'create') {
-    assertExactSchedulePositionals(action, actionPositionals, 2, '<workflowType> <cronExpression>');
+    // With --every the cadence comes from the flag, so only <workflowType> is a
+    // positional. Without it, the cron string is the second positional.
+    if (values.every !== undefined) {
+      assertExactSchedulePositionals(
+        action,
+        actionPositionals,
+        1,
+        '<workflowType> --every <duration>',
+      );
+    } else {
+      assertExactSchedulePositionals(
+        action,
+        actionPositionals,
+        2,
+        '<workflowType> <cronExpression>',
+      );
+    }
     return buildScheduleCreateCommand(values, actionPositionals);
   }
 

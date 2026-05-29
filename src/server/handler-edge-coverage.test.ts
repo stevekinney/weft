@@ -473,7 +473,9 @@ describe('handleRequest edge coverage', () => {
       engine,
     );
     expect(response.status).toBe(400);
-    expect(await json(response)).toEqual({ error: 'Missing required field: cronExpression' });
+    expect(await json(response)).toEqual({
+      error: 'Missing required field: cronExpression or every',
+    });
 
     response = await handleRequest(
       new Request('http://localhost/v1/schedules', {
@@ -550,7 +552,9 @@ describe('handleRequest edge coverage', () => {
 
     response = await handleRequest(request('PATCH', '/v1/schedules/schedule-1', {}), engine);
     expect(response.status).toBe(400);
-    expect(await json(response)).toEqual({ error: 'Missing required field: cronExpression' });
+    expect(await json(response)).toEqual({
+      error: 'Missing required field: cronExpression or every',
+    });
   });
 
   it('maps schedule handler engine failures to their HTTP responses', async () => {

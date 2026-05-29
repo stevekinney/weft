@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
-import type { ScheduleOptions } from '../../core/types.ts';
+import type { ScheduleOptions, ScheduleSpec } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
@@ -22,7 +22,16 @@ const createScheduleInput = z.object({
   type: z.unknown().describe('Workflow type name. Runtime validation requires a non-empty string.'),
   cronExpression: z
     .unknown()
-    .describe('Cron expression. Runtime validation requires a non-empty string.'),
+    .optional()
+    .describe(
+      'Cron expression. Supply exactly one of cronExpression or every; runtime validation requires a non-empty string.',
+    ),
+  every: z
+    .unknown()
+    .optional()
+    .describe(
+      'Interval period (duration string or milliseconds). Supply exactly one of cronExpression or every.',
+    ),
   input: z.unknown().optional(),
   id: z.unknown().optional(),
   overlap: z.unknown().optional(),
@@ -38,24 +47,53 @@ export type CreateScheduleOutput = z.infer<typeof createScheduleOutput>;
 
 type ValidatedCreateScheduleInput = {
   type: string;
-  cronExpression: string;
+  spec: ScheduleSpec;
   id: string | undefined;
   overlap: NonNullable<ScheduleOptions['overlap']> | undefined;
   backfill: boolean | undefined;
 };
 
-/** Validate the required string fields type and cronExpression. */
+/** Validate the required `type` field and the mutually exclusive cadence (cronExpression or every). */
 function validateRequiredScheduleFields(input: CreateScheduleInput): {
   type: string;
-  cronExpression: string;
+  spec: ScheduleSpec;
 } {
   if (typeof input.type !== 'string' || input.type.length === 0) {
     throw invalidParamsFault('Missing required field: type');
   }
-  if (typeof input.cronExpression !== 'string' || input.cronExpression.length === 0) {
-    throw invalidParamsFault('Missing required field: cronExpression');
+  return { type: input.type, spec: validateScheduleCadence(input) };
+}
+
+/**
+ * Validate the schedule cadence. Exactly one of `cronExpression` (non-empty
+ * string) or `every` (duration string or positive number) must be supplied. The
+ * actual cron/interval parsing happens in the engine so both transports share
+ * the same downstream validation messages.
+ */
+function validateScheduleCadence(input: {
+  cronExpression?: unknown;
+  every?: unknown;
+}): ScheduleSpec {
+  const hasCron = input.cronExpression !== undefined;
+  const hasEvery = input.every !== undefined;
+
+  if (hasCron && hasEvery) {
+    throw invalidParamsFault('Provide exactly one of cronExpression or every, not both');
   }
-  return { type: input.type, cronExpression: input.cronExpression };
+
+  if (hasEvery) {
+    if (typeof input.every !== 'string' && typeof input.every !== 'number') {
+      throw invalidParamsFault(
+        'Field "every" must be a duration string or a number of milliseconds',
+      );
+    }
+    return { every: input.every };
+  }
+
+  if (typeof input.cronExpression !== 'string' || input.cronExpression.length === 0) {
+    throw invalidParamsFault('Missing required field: cronExpression or every');
+  }
+  return { cron: input.cronExpression };
 }
 
 /** Validate optional schedule fields id, overlap, and backfill. */
@@ -93,15 +131,15 @@ function validateOptionalScheduleFields(input: CreateScheduleInput): {
 
 /**
  * Validate `CreateScheduleInput` fields in order:
- * type → cronExpression → id → overlap → backfill.
+ * type → cadence (cronExpression or every) → id → overlap → backfill.
  *
  * Throws an `InvalidParams` fault on the first invalid field so both REST and
  * JSON-RPC callers receive the same error messages.
  */
 function validateCreateScheduleInput(input: CreateScheduleInput): ValidatedCreateScheduleInput {
-  const { type, cronExpression } = validateRequiredScheduleFields(input);
+  const { type, spec } = validateRequiredScheduleFields(input);
   const { id, overlap, backfill } = validateOptionalScheduleFields(input);
-  return { type, cronExpression, id, overlap, backfill };
+  return { type, spec, id, overlap, backfill };
 }
 
 export const createScheduleOperation = defineOperation<CreateScheduleInput, CreateScheduleOutput>({
@@ -121,7 +159,7 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
 
     // All field validation lives here so REST and JSON-RPC clients both
     // receive the same error messages verbatim. Validation order:
-    // type → cronExpression → id → overlap → backfill.
+    // type → cadence (cronExpression or every) → id → overlap → backfill.
     const validated = validateCreateScheduleInput(input);
 
     const options: ScheduleOptions = {
@@ -134,7 +172,7 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
       const handle = await typedEngine.schedule(
         validated.type,
         input.input,
-        validated.cronExpression,
+        validated.spec,
         options,
       );
       return { id: handle.id };
@@ -158,6 +196,7 @@ export const createScheduleRestBinding: UnknownRestBinding = {
   inputSources: {
     type: { kind: 'body-field', bodyField: 'type' },
     cronExpression: { kind: 'body-field', bodyField: 'cronExpression' },
+    every: { kind: 'body-field', bodyField: 'every' },
     input: { kind: 'body-field', bodyField: 'input' },
     id: { kind: 'body-field', bodyField: 'id' },
     overlap: { kind: 'body-field', bodyField: 'overlap' },
@@ -172,16 +211,21 @@ export const createScheduleRestBinding: UnknownRestBinding = {
     }
 
     // arrays are typeof 'object' && !== null, so they pass
-    // this guard and fall through to the type/cronExpression checks in
+    // this guard and fall through to the type/cadence checks in
     // `invoke` (which is the single cross-transport validator).
     if (typeof body !== 'object' || body === null) {
       throw invalidParamsFault('Request body must be a JSON object');
     }
 
     const record = body as Record<string, unknown>;
+    // Read own properties only so an array body (whose prototype carries an
+    // `every` method) does not masquerade as an interval spec.
     return {
       type: record['type'],
-      cronExpression: record['cronExpression'],
+      cronExpression: Object.hasOwn(record, 'cronExpression')
+        ? record['cronExpression']
+        : undefined,
+      every: Object.hasOwn(record, 'every') ? record['every'] : undefined,
       input: record['input'],
       id: record['id'],
       overlap: record['overlap'],

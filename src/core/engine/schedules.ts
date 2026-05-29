@@ -1,11 +1,11 @@
 import type { BatchOperation } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
-import { getNextCronOccurrence, parseCronExpression } from '../schedule.ts';
 import type {
   PaginatedResult,
   ScheduleFilter,
   ScheduleOptions,
+  ScheduleSpec,
   ScheduleState,
   ScheduleSummary,
   WorkflowState,
@@ -13,6 +13,7 @@ import type {
 import { WorkflowNotRegisteredError } from './errors.ts';
 import { ScheduleHandle } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
+import { getNextScheduleOccurrence } from './schedule-occurrence.ts';
 import {
   clearScheduleCurrentWorkflow,
   createScheduleTimerId,
@@ -26,6 +27,7 @@ import {
   isValidScheduleIdentifier,
   normalizeScheduleFilter,
   normalizeScheduleOptions,
+  normalizeScheduleSpec,
 } from './validation/schedule.ts';
 
 export { handleScheduleTimer } from './schedule-timer.ts';
@@ -56,17 +58,14 @@ export async function schedule(
   internals: EngineInternals,
   type: string,
   input: unknown,
-  cronExpression: string,
+  spec: string | ScheduleSpec,
   options?: ScheduleOptions,
 ): Promise<ScheduleHandle> {
   if (!internals.registrations.has(type)) {
     throw new WorkflowNotRegisteredError(type);
   }
-  if (typeof cronExpression !== 'string') {
-    throw new Error('cronExpression must be a string');
-  }
+  const normalizedSpec = normalizeScheduleSpec(spec);
   const normalizedOptions = normalizeScheduleOptions(options);
-  parseCronExpression(cronExpression);
   const scheduleId = normalizedOptions.id ?? crypto.randomUUID();
   if (internals.pendingScheduleCreations.has(scheduleId)) {
     throw new Error(`Schedule with id "${scheduleId}" already exists`);
@@ -77,17 +76,21 @@ export async function schedule(
       throw new Error(`Schedule with id "${scheduleId}" already exists`);
     }
     const now = internals.options.getNow();
+    const cadenceFields =
+      normalizedSpec.kind === 'interval'
+        ? { intervalMs: normalizedSpec.intervalMs }
+        : { cronExpression: normalizedSpec.cronExpression };
     const state: ScheduleState = {
       id: scheduleId,
       workflowType: type,
       input,
-      cronExpression,
+      ...cadenceFields,
       status: 'active',
       overlap: normalizedOptions.overlap,
       backfill: normalizedOptions.backfill,
       createdAt: now,
       updatedAt: now,
-      nextFireAt: getNextCronOccurrence(cronExpression, now),
+      nextFireAt: getNextScheduleOccurrence({ ...cadenceFields, createdAt: now }, now),
       queuedRuns: 0,
     };
     await writeScheduleState(internals, state);
@@ -133,7 +136,7 @@ export async function pauseSchedule(internals: EngineInternals, scheduleId: stri
     ...state,
     status: 'paused',
     updatedAt: now,
-    nextFireAt: getNextCronOccurrence(state.cronExpression, now),
+    nextFireAt: getNextScheduleOccurrence(state, now),
     queuedRuns: 0,
   };
   await writeScheduleState(internals, updatedState, { includeTimer: false });
@@ -154,7 +157,7 @@ export async function resumeSchedule(
     ...state,
     status: 'active',
     updatedAt: now,
-    nextFireAt: getNextCronOccurrence(state.cronExpression, now),
+    nextFireAt: getNextScheduleOccurrence(state, now),
   };
   await writeScheduleState(internals, updatedState);
 }
@@ -184,13 +187,10 @@ export async function cancelSchedule(
 export async function updateSchedule(
   internals: EngineInternals,
   scheduleId: string,
-  newCronExpression: string,
+  newSpec: string | ScheduleSpec,
 ): Promise<void> {
   const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
-  if (typeof newCronExpression !== 'string') {
-    throw new Error('newCronExpression must be a string');
-  }
-  parseCronExpression(newCronExpression);
+  const normalizedSpec = normalizeScheduleSpec(newSpec);
   const state = await requireScheduleState(internals, normalizedScheduleId);
   if (state.status === 'active') {
     await internals.scheduler.cancel(
@@ -199,11 +199,28 @@ export async function updateSchedule(
     );
   }
   const now = internals.options.getNow();
+  // Replace the cadence wholesale so switching kinds (cron <-> interval) never
+  // leaves a stale field behind. Interval cadence re-anchors at the update time.
+  // Strip both cadence fields from the carried-over state first, then attach
+  // only the one the new spec selects (exactOptionalPropertyTypes forbids
+  // carrying an explicit `undefined`).
+  const {
+    cronExpression: _droppedCron,
+    intervalMs: _droppedInterval,
+    ...stateWithoutCadence
+  } = state;
+  const cadenceFields =
+    normalizedSpec.kind === 'interval'
+      ? { intervalMs: normalizedSpec.intervalMs }
+      : { cronExpression: normalizedSpec.cronExpression };
   const updatedState: ScheduleState = {
-    ...state,
-    cronExpression: newCronExpression,
+    ...stateWithoutCadence,
+    ...cadenceFields,
     updatedAt: now,
-    nextFireAt: state.status === 'cancelled' ? null : getNextCronOccurrence(newCronExpression, now),
+    nextFireAt:
+      state.status === 'cancelled'
+        ? null
+        : getNextScheduleOccurrence({ ...cadenceFields, createdAt: now }, now),
   };
   await writeScheduleState(internals, updatedState, { includeTimer: state.status === 'active' });
 }

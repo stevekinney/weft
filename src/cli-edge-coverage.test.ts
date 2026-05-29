@@ -225,7 +225,8 @@ describe('CLI edge coverage', () => {
       }),
     ).toEqual({
       stdout: '',
-      stderr: 'Error: missing required argument <cronExpression> for schedule create',
+      stderr:
+        'Error: provide a <cronExpression> argument or an --every <duration> flag for schedule create',
       exitCode: 1,
     });
 

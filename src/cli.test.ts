@@ -2128,7 +2128,7 @@ describe('executeSchedule', () => {
       });
       expect(listResult.exitCode).toBe(0);
       expect(listResult.stdout).toContain('existing-schedule');
-      expect(listResult.stdout).toContain('ID | Workflow Type | Status | Cron | Next Fire');
+      expect(listResult.stdout).toContain('ID | Workflow Type | Status | Cadence | Next Fire');
 
       const createResult = await executeSchedule({
         command: 'schedule',
@@ -2343,7 +2343,8 @@ describe('executeSchedule', () => {
       } as ScheduleCreateCommand);
       expect(missingCronExpressionResult).toEqual({
         stdout: '',
-        stderr: 'Error: missing required argument <cronExpression> for schedule create',
+        stderr:
+          'Error: provide a <cronExpression> argument or an --every <duration> flag for schedule create',
         exitCode: 1,
       });
 

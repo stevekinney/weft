@@ -1,23 +1,62 @@
 import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
+import type { ScheduleSpec } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import { mapScheduleErrorToFault } from './schedule-faults.ts';
 
-// `cronExpression` is intentionally permissive at the schema boundary so REST
-// and JSON-RPC clients hit the same validation in `invoke()`. `scheduleId`
-// comes from the path on REST (and is required at the schema level for
-// JSON-RPC); we keep the min-length guard.
+// `cronExpression`/`every` are intentionally permissive at the schema boundary
+// so REST and JSON-RPC clients hit the same validation in `invoke()`.
+// `scheduleId` comes from the path on REST (and is required at the schema level
+// for JSON-RPC); we keep the min-length guard.
 const updateScheduleInput = z.object({
   scheduleId: z.string().min(1),
   cronExpression: z
     .unknown()
-    .describe('Cron expression. Runtime validation requires a non-empty string.'),
+    .optional()
+    .describe(
+      'Cron expression. Supply exactly one of cronExpression or every; runtime validation requires a non-empty string.',
+    ),
+  every: z
+    .unknown()
+    .optional()
+    .describe(
+      'Interval period (duration string or milliseconds). Supply exactly one of cronExpression or every.',
+    ),
 });
 
 export type UpdateScheduleInput = z.infer<typeof updateScheduleInput>;
+
+/**
+ * Validate the mutually exclusive cadence on an update request. Exactly one of
+ * `cronExpression` (non-empty string) or `every` (duration string or number)
+ * must be supplied. Cron/interval parsing happens in the engine so REST and
+ * JSON-RPC share one downstream error path.
+ */
+function validateUpdateScheduleCadence(input: UpdateScheduleInput): ScheduleSpec {
+  const hasCron = input.cronExpression !== undefined;
+  const hasEvery = input.every !== undefined;
+
+  if (hasCron && hasEvery) {
+    throw invalidParamsFault('Provide exactly one of cronExpression or every, not both');
+  }
+
+  if (hasEvery) {
+    if (typeof input.every !== 'string' && typeof input.every !== 'number') {
+      throw invalidParamsFault(
+        'Field "every" must be a duration string or a number of milliseconds',
+      );
+    }
+    return { every: input.every };
+  }
+
+  if (typeof input.cronExpression !== 'string' || input.cronExpression.length === 0) {
+    throw invalidParamsFault('Missing required field: cronExpression or every');
+  }
+  return { cron: input.cronExpression };
+}
 
 export const updateScheduleOperation = defineOperation<UpdateScheduleInput, null>({
   name: 'weft.schedules.update',
@@ -34,14 +73,11 @@ export const updateScheduleOperation = defineOperation<UpdateScheduleInput, null
   invoke: async ({ input, engine }): Promise<null> => {
     const typedEngine = engine as Engine;
 
-    // Validate cronExpression here so REST and JSON-RPC share one error path.
-    if (typeof input.cronExpression !== 'string' || input.cronExpression.length === 0) {
-      throw invalidParamsFault('Missing required field: cronExpression');
-    }
-    const cronExpression = input.cronExpression;
+    // Validate the cadence here so REST and JSON-RPC share one error path.
+    const spec = validateUpdateScheduleCadence(input);
 
     try {
-      await typedEngine.updateSchedule(input.scheduleId, cronExpression);
+      await typedEngine.updateSchedule(input.scheduleId, spec);
       return null;
     } catch (error) {
       throw mapScheduleErrorToFault(input.scheduleId, error);
@@ -57,6 +93,7 @@ export const updateScheduleRestBinding: UnknownRestBinding = {
   inputSources: {
     scheduleId: { kind: 'path', pathParam: 'id' },
     cronExpression: { kind: 'body-field', bodyField: 'cronExpression' },
+    every: { kind: 'body-field', bodyField: 'every' },
   },
   extractInput: async (request, pathParams) => {
     let body: unknown;
@@ -67,15 +104,20 @@ export const updateScheduleRestBinding: UnknownRestBinding = {
     }
 
     // arrays are typeof 'object' && !== null, so they pass
-    // this guard and fall through to the cronExpression check in `invoke`.
+    // this guard and fall through to the cadence check in `invoke`.
     if (typeof body !== 'object' || body === null) {
       throw invalidParamsFault('Request body must be a JSON object');
     }
 
     const record = body as Record<string, unknown>;
+    // Read own properties only so an array body (whose prototype carries an
+    // `every` method) does not masquerade as an interval spec.
     return {
       scheduleId: pathParams['id'] ?? '',
-      cronExpression: record['cronExpression'],
+      cronExpression: Object.hasOwn(record, 'cronExpression')
+        ? record['cronExpression']
+        : undefined,
+      every: Object.hasOwn(record, 'every') ? record['every'] : undefined,
     };
   },
   success: { kind: 'empty', status: 204 },

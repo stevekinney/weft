@@ -2,6 +2,7 @@ import type { WeftEventMap } from '../core/events.ts';
 import type {
   MessageName,
   QueryDefinition,
+  ScheduleSpec,
   ScheduleSummary,
   SearchAttributeValue,
   SignalDefinition,
@@ -141,7 +142,7 @@ export interface ScheduleHandleDelegationClient {
   pauseSchedule(id: string): Promise<void>;
   resumeSchedule(id: string): Promise<void>;
   cancelSchedule(id: string): Promise<void>;
-  updateSchedule(id: string, newCronExpression: string): Promise<void>;
+  updateSchedule(id: string, newSpec: string | ScheduleSpec): Promise<void>;
   getSchedule(id: string): Promise<ScheduleSummary | null>;
 }
 
@@ -168,8 +169,8 @@ export abstract class ScheduleHandleDelegation<
     return this.client.cancelSchedule(this.id);
   }
 
-  async update(newCronExpression: string): Promise<void> {
-    return this.client.updateSchedule(this.id, newCronExpression);
+  async update(newSpec: string | ScheduleSpec): Promise<void> {
+    return this.client.updateSchedule(this.id, newSpec);
   }
 
   async describe(): Promise<ScheduleSummary | null> {

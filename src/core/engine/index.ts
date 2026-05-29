@@ -49,6 +49,7 @@ import {
   type ScheduleDefinition,
   type ScheduleFilter,
   type ScheduleOptions,
+  type ScheduleSpec,
   type ScheduleSummary,
   type SearchAttributeValue,
   type SignalDefinition,
@@ -937,24 +938,28 @@ export class Engine<
   async schedule(
     type: string,
     input: unknown,
-    cronExpression: string,
+    spec: string | ScheduleSpec,
     options?: ScheduleOptions,
   ): Promise<ScheduleHandle>;
   async schedule(
     typeOrDefinition: string | ScheduleDefinition,
     input?: unknown,
-    cronExpression?: string,
+    spec?: string | ScheduleSpec,
     options?: ScheduleOptions,
   ): Promise<ScheduleHandle> {
     if (typeof typeOrDefinition === 'object') {
       const definition = typeOrDefinition;
       const workflowType =
         typeof definition.workflow === 'string' ? definition.workflow : definition.workflow.name;
+      const definitionSpec: ScheduleSpec =
+        definition.every !== undefined
+          ? { every: definition.every }
+          : { cron: definition.cron ?? '' };
       return scheduleFromInternals(
         getInternals(this),
         workflowType,
         definition.input,
-        definition.cron,
+        definitionSpec,
         {
           ...(definition.id !== undefined && { id: definition.id }),
           ...(definition.overlapPolicy !== undefined && { overlap: definition.overlapPolicy }),
@@ -962,16 +967,12 @@ export class Engine<
         },
       );
     }
-    if (cronExpression === undefined) {
-      throw new Error('cronExpression must be provided when scheduling by workflow type.');
+    if (spec === undefined) {
+      throw new Error(
+        'A cron string or schedule spec must be provided when scheduling by workflow type.',
+      );
     }
-    return scheduleFromInternals(
-      getInternals(this),
-      typeOrDefinition,
-      input,
-      cronExpression,
-      options,
-    );
+    return scheduleFromInternals(getInternals(this), typeOrDefinition, input, spec, options);
   }
   async getSchedule(scheduleId: string): Promise<ScheduleSummary | null> {
     const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
@@ -990,8 +991,8 @@ export class Engine<
   async cancelSchedule(scheduleId: string): Promise<void> {
     return cancelScheduleFromInternals(getInternals(this), scheduleId);
   }
-  async updateSchedule(scheduleId: string, newCronExpression: string): Promise<void> {
-    return updateScheduleFromInternals(getInternals(this), scheduleId, newCronExpression);
+  async updateSchedule(scheduleId: string, newSpec: string | ScheduleSpec): Promise<void> {
+    return updateScheduleFromInternals(getInternals(this), scheduleId, newSpec);
   }
   [HANDLE_RESULT_PROMISE](workflowId: string): Promise<unknown> {
     return getWorkflowResultPromiseFromInternals(getInternals(this), workflowId);

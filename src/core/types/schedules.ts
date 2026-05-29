@@ -1,3 +1,4 @@
+import type { Duration } from './retry-retention.ts';
 import type { WorkflowDefinition } from './workflow-function.ts';
 
 // ---------------------------------------------------------------------------
@@ -30,10 +31,30 @@ export type ScheduleStatus = 'active' | 'paused' | 'cancelled';
 export type ScheduleOverlapPolicy = 'skip' | 'queue' | 'cancel-running' | 'allow';
 
 /**
+ * Recurrence specification for a schedule. A schedule fires either on a cron
+ * cadence (`{ cron: '0 9 * * *' }`) or at a fixed interval
+ * (`{ every: '1h' }`). Exactly one of `cron` or `every` must be supplied.
+ *
+ * Interval schedules are anchored at the schedule's creation time and fire one
+ * `every` period later, then every period after that. They reuse the same
+ * overlap and backfill machinery as cron schedules.
+ *
+ * @example
+ * ```ts
+ * import type { ScheduleSpec } from 'weft';
+ *
+ * const cronSpec: ScheduleSpec = { cron: '0 9 * * *' };
+ * const intervalSpec: ScheduleSpec = { every: '1h' };
+ * void [cronSpec, intervalSpec];
+ * ```
+ */
+export type ScheduleSpec = { cron: string; every?: never } | { every: Duration; cron?: never };
+
+/**
  * Options accepted by {@link Engine.schedule}. `id` assigns a deterministic
- * schedule identifier; `overlap` controls what happens when a cron tick fires
- * while a previous run is still active; `backfill` triggers immediate runs for
- * any cron ticks that were missed since the schedule was created.
+ * schedule identifier; `overlap` controls what happens when a tick fires while a
+ * previous run is still active; `backfill` triggers immediate runs for any ticks
+ * that were missed since the schedule was created.
  *
  * @example
  * ```ts
@@ -53,7 +74,8 @@ export interface ScheduleOptions {
 }
 
 /**
- * Declarative recurring schedule definition returned by {@link schedule}.
+ * Declarative recurring schedule definition returned by {@link schedule}. Supply
+ * exactly one of `cron` (cron cadence) or `every` (fixed interval).
  *
  * @example
  * ```ts
@@ -65,16 +87,22 @@ export interface ScheduleOptions {
  *   input: { day: 'today' },
  *   overlapPolicy: 'skip',
  * });
+ *
+ * const heartbeat: ScheduleDefinition<null> = schedule({
+ *   workflow: 'heartbeat',
+ *   every: '30s',
+ *   input: null,
+ * });
+ * void heartbeat;
  * ```
  */
-export interface ScheduleDefinition<TInput = unknown> {
+export type ScheduleDefinition<TInput = unknown> = ScheduleSpec & {
   workflow: string | WorkflowDefinition<TInput>;
-  cron: string;
   input: TInput;
   id?: string;
   overlapPolicy?: ScheduleOverlapPolicy;
   backfill?: boolean;
-}
+};
 
 /**
  * Create a recurring schedule definition for `engine.schedule(definition)`.
@@ -101,7 +129,17 @@ export interface ScheduleState {
   id: string;
   workflowType: string;
   input: unknown;
-  cronExpression: string;
+  /**
+   * Cron expression driving the cadence for cron-based schedules. Present when
+   * `intervalMs` is absent; the two are mutually exclusive.
+   */
+  cronExpression?: string;
+  /**
+   * Fixed interval in milliseconds for interval-based schedules. Occurrences are
+   * anchored at `createdAt` and fire one interval later, then every interval
+   * after that. Present when `cronExpression` is absent.
+   */
+  intervalMs?: number;
   status: ScheduleStatus;
   overlap: ScheduleOverlapPolicy;
   backfill: boolean;
@@ -122,7 +160,10 @@ export interface ScheduleState {
 export interface ScheduleSummary {
   id: string;
   workflowType: string;
-  cronExpression: string;
+  /** Cron expression for cron-based schedules; absent for interval schedules. */
+  cronExpression?: string;
+  /** Interval period in milliseconds for interval-based schedules; absent for cron schedules. */
+  intervalMs?: number;
   status: ScheduleStatus;
   overlap: ScheduleOverlapPolicy;
   backfill: boolean;
