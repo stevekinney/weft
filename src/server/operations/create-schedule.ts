@@ -5,7 +5,7 @@ import type { ScheduleOptions, ScheduleSpec } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
-import { mapScheduleErrorToFault } from './schedule-faults.ts';
+import { mapScheduleErrorToFault, validateScheduleInputCadence } from './schedule-faults.ts';
 
 const VALID_SCHEDULE_OVERLAP_POLICIES = new Set<NonNullable<ScheduleOptions['overlap']>>([
   'skip',
@@ -61,39 +61,7 @@ function validateRequiredScheduleFields(input: CreateScheduleInput): {
   if (typeof input.type !== 'string' || input.type.length === 0) {
     throw invalidParamsFault('Missing required field: type');
   }
-  return { type: input.type, spec: validateScheduleCadence(input) };
-}
-
-/**
- * Validate the schedule cadence. Exactly one of `cronExpression` (non-empty
- * string) or `every` (duration string or positive number) must be supplied. The
- * actual cron/interval parsing happens in the engine so both transports share
- * the same downstream validation messages.
- */
-function validateScheduleCadence(input: {
-  cronExpression?: unknown;
-  every?: unknown;
-}): ScheduleSpec {
-  const hasCron = input.cronExpression !== undefined;
-  const hasEvery = input.every !== undefined;
-
-  if (hasCron && hasEvery) {
-    throw invalidParamsFault('Provide exactly one of cronExpression or every, not both');
-  }
-
-  if (hasEvery) {
-    if (typeof input.every !== 'string' && typeof input.every !== 'number') {
-      throw invalidParamsFault(
-        'Field "every" must be a duration string or a number of milliseconds',
-      );
-    }
-    return { every: input.every };
-  }
-
-  if (typeof input.cronExpression !== 'string' || input.cronExpression.length === 0) {
-    throw invalidParamsFault('Missing required field: cronExpression or every');
-  }
-  return { cron: input.cronExpression };
+  return { type: input.type, spec: validateScheduleInputCadence(input) };
 }
 
 /** Validate optional schedule fields id, overlap, and backfill. */

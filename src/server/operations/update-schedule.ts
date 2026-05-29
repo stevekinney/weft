@@ -1,11 +1,10 @@
 import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
-import type { ScheduleSpec } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
-import { mapScheduleErrorToFault } from './schedule-faults.ts';
+import { mapScheduleErrorToFault, validateScheduleInputCadence } from './schedule-faults.ts';
 
 // `cronExpression`/`every` are intentionally permissive at the schema boundary
 // so REST and JSON-RPC clients hit the same validation in `invoke()`.
@@ -29,35 +28,6 @@ const updateScheduleInput = z.object({
 
 export type UpdateScheduleInput = z.infer<typeof updateScheduleInput>;
 
-/**
- * Validate the mutually exclusive cadence on an update request. Exactly one of
- * `cronExpression` (non-empty string) or `every` (duration string or number)
- * must be supplied. Cron/interval parsing happens in the engine so REST and
- * JSON-RPC share one downstream error path.
- */
-function validateUpdateScheduleCadence(input: UpdateScheduleInput): ScheduleSpec {
-  const hasCron = input.cronExpression !== undefined;
-  const hasEvery = input.every !== undefined;
-
-  if (hasCron && hasEvery) {
-    throw invalidParamsFault('Provide exactly one of cronExpression or every, not both');
-  }
-
-  if (hasEvery) {
-    if (typeof input.every !== 'string' && typeof input.every !== 'number') {
-      throw invalidParamsFault(
-        'Field "every" must be a duration string or a number of milliseconds',
-      );
-    }
-    return { every: input.every };
-  }
-
-  if (typeof input.cronExpression !== 'string' || input.cronExpression.length === 0) {
-    throw invalidParamsFault('Missing required field: cronExpression or every');
-  }
-  return { cron: input.cronExpression };
-}
-
 export const updateScheduleOperation = defineOperation<UpdateScheduleInput, null>({
   name: 'weft.schedules.update',
   mcpExposable: false,
@@ -74,7 +44,7 @@ export const updateScheduleOperation = defineOperation<UpdateScheduleInput, null
     const typedEngine = engine as Engine;
 
     // Validate the cadence here so REST and JSON-RPC share one error path.
-    const spec = validateUpdateScheduleCadence(input);
+    const spec = validateScheduleInputCadence(input);
 
     try {
       await typedEngine.updateSchedule(input.scheduleId, spec);
