@@ -45,8 +45,8 @@ describe('executeCompletions', () => {
 
   it('install writes the script to a per-shell path', async () => {
     const home = await mkdtemp(join(tmpdir(), 'weft-completions-'));
-    const priorHome = process.env['HOME'];
-    process.env['HOME'] = home;
+    const priorHome = Bun.env['HOME'];
+    Bun.env['HOME'] = home;
     try {
       const result = await executeCompletions({
         command: 'completions',
@@ -60,8 +60,8 @@ describe('executeCompletions', () => {
       const written = await readFile(expectedPath, 'utf8');
       expect(written).toContain('complete -c weft');
     } finally {
-      if (priorHome === undefined) delete process.env['HOME'];
-      else process.env['HOME'] = priorHome;
+      if (priorHome === undefined) delete Bun.env['HOME'];
+      else Bun.env['HOME'] = priorHome;
     }
   });
 });

@@ -23,6 +23,7 @@ import {
   type CatalogOperationTypes,
 } from './generated/operation-client.generated.ts';
 import { CatalogClientError, createCatalogWeftClient } from './operation-client-runtime.ts';
+import { messageOf } from './output.ts';
 
 /** Successful or failed result of a catalog operation call, never thrown. */
 export type CatalogCallResult<Output> =
@@ -69,8 +70,4 @@ export function failureExitCode(kind: 'connection' | 'compat' | 'operation'): nu
   if (kind === 'connection') return 2;
   if (kind === 'compat') return 4;
   return 1;
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

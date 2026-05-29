@@ -15,7 +15,7 @@
  */
 
 import { resolveCliConnection, type CliConnectionOptions } from './connection.ts';
-import { color } from './output.ts';
+import { color, messageOf } from './output.ts';
 import type { CommandOutput, TailCommand } from './types.ts';
 
 /** A single parsed SSE frame surfaced to the tail sink. */
@@ -113,7 +113,9 @@ async function connectSse(options: TailStreamOptions): Promise<ConnectOutcome> {
 
   if (!response.ok || response.body === null) {
     reportError(`tail: server returned status ${response.status}`);
-    return { kind: 'done', exitCode: response.status === 404 ? 1 : 2 };
+    // HTTP error responses are operation failures (exit 1), not connection errors
+    // (exit 2). Exit 2 is reserved for when the server cannot be reached at all.
+    return { kind: 'done', exitCode: 1 };
   }
   return { kind: 'stream', body: response.body };
 }
@@ -226,8 +228,4 @@ export async function executeTail(command: TailCommand): Promise<CommandOutput> 
   } finally {
     process.off('SIGINT', onSigint);
   }
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }

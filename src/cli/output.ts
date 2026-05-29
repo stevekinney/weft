@@ -134,3 +134,8 @@ async function defaultReadLine(): Promise<string> {
     reader.releaseLock();
   }
 }
+
+/** Extract a human-readable message from an unknown error value. */
+export function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}

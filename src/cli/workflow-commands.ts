@@ -15,6 +15,7 @@ import type { CliConnectionOptions } from './connection.ts';
 import {
   confirmDestructive,
   formatTimestamp,
+  messageOf,
   ndjson,
   prettyJson,
   truncateToWidth,
@@ -281,8 +282,4 @@ function failure(result: {
     stderr: `${prefix}${result.message}`,
     exitCode: failureExitCode(result.kind),
   };
-}
-
-function messageOf(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
