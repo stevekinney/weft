@@ -71,6 +71,9 @@ describe('activity()', () => {
     const context: ActivityContext = {
       signal: new AbortController().signal,
       heartbeat: () => {},
+      completeAsync: (): never => {
+        throw new Error('completeAsync should not be called in this test');
+      },
     };
 
     const recordHeartbeat = createConfiguredActivity({
