@@ -8,9 +8,11 @@
  *
  * Resolution order for the server address is explicit option, then `WEFT_ADDR`,
  * then the selected profile's `server`, then the run lockfile written by
- * `weft serve`, then `http://localhost:7233`. Token resolution prefers the
- * explicit option, then `WEFT_TOKEN`, then the profile token (with `env:` and
- * `tokenEnv` indirection).
+ * `weft serve` (CLI only — see `includeRunLockfile`), then
+ * `http://localhost:7233`. Token resolution prefers the explicit option, then
+ * `WEFT_TOKEN`, then the profile token (with `env:` and `tokenEnv` indirection).
+ * A profile token is only applied when neither an explicit `server` option nor
+ * `WEFT_ADDR` redirected the request to a different destination.
  *
  * @module connection
  */
@@ -122,8 +124,8 @@ type WeftRunLockfile = {
 
 /**
  * Resolve Weft server connection settings from explicit options, environment
- * variables, `~/.weft/config`, the local run lockfile, and the development
- * default.
+ * variables, `~/.weft/config`, the local run lockfile (when
+ * `includeRunLockfile` is not `false`), and the development default.
  *
  * Resolution is synchronous so it can run inside the {@link HttpClient}
  * constructor and CLI command handlers alike.
