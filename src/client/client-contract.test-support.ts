@@ -78,8 +78,128 @@ export async function waitForQueryReadyForTesting(
   throw new Error(`Workflow ${workflowId} did not expose query handlers`);
 }
 
+/**
+ * Resolve when the workflow emits `type`, or reject if the deadline passes.
+ * The deadline doubles as a regression guard: a value well under the old
+ * 2-second poll interval proves events are delivered push-based, not polled.
+ */
+function waitForHandleEvent(
+  handle: { addEventListener: (type: string, listener: (event: Event) => void) => void },
+  type: string,
+  timeoutMs: number,
+): Promise<Event> {
+  return new Promise<Event>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`workflow event "${type}" did not arrive within ${timeoutMs}ms`));
+    }, timeoutMs);
+    handle.addEventListener(type, (event) => {
+      clearTimeout(timer);
+      resolve(event);
+    });
+  });
+}
+
 export function runWeftClientContractTests(options: ClientContractTestOptions): void {
   const { getClient, idPrefix, label, waitForRunning, workflowTypes } = options;
+
+  describe(`${label}: shared streaming contract`, () => {
+    it('delivers handle.addEventListener events push-based, not on a 2s poll', async () => {
+      const client = getClient();
+      const handle = await client.start(workflowTypes.waiting, 'stream', {
+        id: `${idPrefix}-stream-listener`,
+      });
+
+      await waitForRunning?.(handle.id);
+      await waitForQueryReadyForTesting(client, handle.id);
+
+      // A 1-second budget is comfortably under the 2-second poll cadence the
+      // old HttpHandle used, so this fails loudly if streaming regresses to
+      // polling. Attach the listener, wait for the stream to be live (so no
+      // event is missed in the connect window), then signal.
+      const completed = waitForHandleEvent(handle, 'workflow:completed', 1000);
+      await handle.whenConnected();
+      await handle.signal('continue', 'done');
+      const event = await completed;
+      expect(event.type).toBe('workflow:completed');
+
+      expect(await handle.result()).toBe('stream:done');
+    });
+
+    it('client.tail async-iterates events and terminates cleanly on completion', async () => {
+      const client = getClient();
+      const handle = await client.start(workflowTypes.waiting, 'tail', {
+        id: `${idPrefix}-tail`,
+      });
+
+      await waitForRunning?.(handle.id);
+      await waitForQueryReadyForTesting(client, handle.id);
+
+      const tail = client.tail(handle.id);
+      const seen: string[] = [];
+      const consume = (async () => {
+        for await (const event of tail) {
+          seen.push(event.type);
+        }
+      })();
+
+      // Wait for the tail to be live before advancing the workflow so no event
+      // is missed in the connect window.
+      await tail.whenConnected();
+      await handle.signal('continue', 'done');
+
+      // The tail must terminate on its own when the workflow completes; if it
+      // hangs, this race rejects so the test fails instead of timing out.
+      await Promise.race([
+        consume,
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(
+            () =>
+              reject(
+                new Error(
+                  `client.tail did not terminate on completion; seen=${JSON.stringify(seen)}`,
+                ),
+              ),
+            2000,
+          ),
+        ),
+      ]);
+
+      expect(seen).toContain('workflow:completed');
+      expect(await handle.result()).toBe('tail:done');
+    });
+
+    it('handle.tail yields events through the same surface as client.tail', async () => {
+      const client = getClient();
+      const handle = await client.start(workflowTypes.waiting, 'handle-tail', {
+        id: `${idPrefix}-handle-tail`,
+      });
+
+      await waitForRunning?.(handle.id);
+      await waitForQueryReadyForTesting(client, handle.id);
+
+      const tail = handle.tail();
+      const seen: string[] = [];
+      const consume = (async () => {
+        for await (const event of tail) {
+          seen.push(event.type);
+        }
+      })();
+
+      await tail.whenConnected();
+      await handle.signal('continue', 'done');
+      await Promise.race([
+        consume,
+        new Promise<never>((_resolve, reject) =>
+          setTimeout(
+            () => reject(new Error(`handle.tail did not terminate; seen=${JSON.stringify(seen)}`)),
+            2000,
+          ),
+        ),
+      ]);
+
+      expect(seen).toContain('workflow:completed');
+    });
+  });
 
   describe(`${label}: shared WeftClient contract`, () => {
     it('passes query input and update payloads through client and handle methods', async () => {

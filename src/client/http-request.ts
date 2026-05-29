@@ -2,6 +2,7 @@ import { resolveConnection } from '../connection.ts';
 import { failureCategoryForFaultCode, isFaultCode, type FaultCode } from '../core/fault-code.ts';
 import type { FailureCategory } from '../core/types/identity.ts';
 import { WeftError } from '../core/weft-error.ts';
+import type { WebSocketFactory } from './event-stream.ts';
 
 /**
  * Configuration for the HTTP client.
@@ -33,6 +34,13 @@ export interface HttpClientOptions {
   token?: string;
   /** Optional headers to include on every request (e.g. auth tokens). */
   headers?: Record<string, string>;
+  /**
+   * Override the WebSocket constructor used for live event streaming
+   * (`tail()` / push-based `handle.addEventListener`). Production omits this and
+   * the global `WebSocket` is used; tests inject a fake to drive the
+   * subscription protocol without a real socket.
+   */
+  webSocketFactory?: WebSocketFactory;
 }
 
 /**

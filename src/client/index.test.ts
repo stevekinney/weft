@@ -3,7 +3,7 @@ import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { query, workflow } from '../core/types.ts';
 import { handleRequest } from '../server/handler.ts';
-import { principalFromApiKey } from '../server/principal.ts';
+import { serve, type WeftServer } from '../server/index.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import {
@@ -12,7 +12,9 @@ import {
   clientContractWaitingTwiceWorkflow,
   clientContractWaitingWorkflow,
   runWeftClientContractTests,
+  waitForQueryReadyForTesting,
 } from './client-contract.test-support.ts';
+import { FakeWebSocketServer } from './event-stream.test-support.ts';
 import { HttpClient, HttpClientError } from './index.ts';
 import type { WeftClient } from './interface.ts';
 
@@ -433,8 +435,14 @@ function assertForkCall(fetchCalls: FetchCall[]): void {
   expect(JSON.parse(forkBody)).toEqual({ fromStep: 2 });
 }
 
+// A static API key whose principal carries the scopes the streaming
+// subscription (`workflows:read`) and the REST surface need. The same
+// `Authorization: Bearer` header flows through both `fetch` and the WebSocket
+// upgrade, so live event streaming authenticates over the real `serve()` stack.
+const CONTRACT_API_KEY = 'http-client-contract-key';
+
 let engine: Engine;
-let server: ReturnType<typeof Bun.serve>;
+let server: WeftServer;
 let client: WeftClient;
 
 beforeAll(() => {
@@ -448,28 +456,26 @@ beforeAll(() => {
   engine.register(clientContractWaitingTwiceWorkflow);
   engine.register(clientContractSearchAttributesWorkflow);
 
-  server = Bun.serve({
+  // Use the full `serve()` stack (not a bare `Bun.serve({ fetch })`) so the
+  // JSON-RPC WebSocket subscription handler is wired and `HttpClient` streaming
+  // works end-to-end against a real server.
+  server = serve({
+    engine,
     port: 0, // random available port
-    async fetch(request) {
-      // Inject a broad api-key principal so authenticated operations work
-      // in this test environment which does not configure a real auth server.
-      return handleRequest(request, engine, {
-        authContext: {
-          method: 'api-key',
-          principal: principalFromApiKey({
-            subject: 'http-client-test',
-            scopes: ['reviews:read', 'system:read', 'workflows:read'],
-          }),
-        },
-      });
+    auth: {
+      apiKeys: [CONTRACT_API_KEY],
+      defaultApiKeyScopes: ['reviews:read', 'system:read', 'workflows:read'],
     },
   });
 
-  client = new HttpClient({ baseUrl: `http://localhost:${server.port}` });
+  client = new HttpClient({
+    baseUrl: server.url,
+    headers: { Authorization: `Bearer ${CONTRACT_API_KEY}` },
+  });
 });
 
 afterAll(async () => {
-  server.stop(true);
+  await server.stop();
   await engine[Symbol.asyncDispose]();
 });
 
@@ -884,17 +890,84 @@ describe('HttpClient', () => {
   });
 });
 
+describe('HttpClient live event streaming (end-to-end)', () => {
+  async function waitForStreaming(predicate: () => boolean, timeoutMs: number): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+    while (!predicate()) {
+      if (Date.now() > deadline) throw new Error('timed out waiting for streaming predicate');
+      await sleepForTesting(5);
+    }
+  }
+
+  it('resumes the event stream after the underlying socket drops', async () => {
+    // Wrap the real Bun WebSocket so the test can reach in and drop the active
+    // socket, proving the subscription reconnects and keeps delivering events.
+    const liveSockets: WebSocket[] = [];
+    const reconnectingClient = new HttpClient({
+      baseUrl: server.url,
+      headers: { Authorization: `Bearer ${CONTRACT_API_KEY}` },
+      webSocketFactory: (url, headers) => {
+        const Constructor = WebSocket as unknown as {
+          new (url: string, options: { headers: Record<string, string> }): WebSocket;
+        };
+        const socket = new Constructor(url, { headers });
+        liveSockets.push(socket);
+        return socket;
+      },
+    });
+
+    const handle = await reconnectingClient.start('client-contract-waiting-twice', 'resume', {
+      id: 'http-stream-reconnect',
+    });
+    await waitForQueryReadyForTesting(reconnectingClient, handle.id);
+
+    const seen: string[] = [];
+    const tail = reconnectingClient.tail(handle.id);
+    const consume = (async () => {
+      for await (const event of tail) seen.push(event.type);
+    })();
+    await tail.whenConnected();
+
+    // First signal: delivered live over the original socket.
+    await handle.signal('continue', undefined, { signalId: 'first' });
+    await waitForStreaming(() => seen.includes('signal:received'), 2000);
+
+    // Drop the live socket; the subscription must reconnect on its own.
+    expect(liveSockets.length).toBeGreaterThanOrEqual(1);
+    liveSockets[liveSockets.length - 1]!.close();
+    // Wait for the reconnect to produce a new socket and for it to actually
+    // open, so the second signal's events are delivered over the live socket.
+    await waitForStreaming(() => liveSockets.length >= 2, 3000);
+    await waitForStreaming(
+      () => liveSockets[liveSockets.length - 1]!.readyState === WebSocket.OPEN,
+      3000,
+    );
+
+    // Second signal completes the workflow; the resumed stream must deliver
+    // the terminal event and the tail must terminate cleanly.
+    await handle.signal('continue', undefined, { signalId: 'second' });
+    await Promise.race([
+      consume,
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(
+          () => reject(new Error(`resumed stream did not complete; seen=${JSON.stringify(seen)}`)),
+          3000,
+        ),
+      ),
+    ]);
+
+    expect(seen).toContain('workflow:completed');
+    expect(await handle.result()).toBe('resume:done');
+  });
+});
+
 describe('HttpClient request surface', () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
-  const originalSetInterval = globalThis.setInterval;
-  const originalClearInterval = globalThis.clearInterval;
 
   afterEach(() => {
     globalThis.fetch = originalFetch;
     console.warn = originalWarn;
-    globalThis.setInterval = originalSetInterval;
-    globalThis.clearInterval = originalClearInterval;
   });
 
   function jsonResponse(body: unknown, status = 200): Response {
@@ -1264,112 +1337,87 @@ describe('HttpClient request surface', () => {
     await expect(handle.result()).rejects.toBeInstanceOf(HttpClientError);
   });
 
-  it('polls handle events, closes on terminal events, and warns when polling fails', async () => {
-    let intervalCallback: (() => void) | undefined;
-    let clearedIntervals = 0;
-    const warnings: unknown[][] = [];
-    const responses = [
-      jsonResponse({ id: 'wf-terminal' }),
-      jsonResponse({
-        events: [{ type: 'workflow:completed', data: { result: 'done' } }],
-      }),
-      jsonResponse({ id: 'wf-warning' }),
-    ];
-
-    globalThis.fetch = (async () => {
-      const response = responses.shift();
-      if (response) {
-        return response;
-      }
-      throw new Error('poll failed');
+  it('pushes handle events over the watch channel and closes on terminal events', async () => {
+    // `start` POST returns the id; the streaming catch-up `getEvents` GET
+    // returns an empty history so only the live frame is delivered.
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = requestInputToUrl(input);
+      if (url.includes('/events')) return jsonResponse({ events: [] });
+      return jsonResponse({ id: 'wf-terminal' });
     }) as unknown as typeof fetch;
-    console.warn = (...arguments_) => {
-      warnings.push(arguments_);
-    };
-    globalThis.setInterval = ((callback: TimerHandler) => {
-      intervalCallback = callback as () => void;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    }) as unknown as typeof setInterval;
-    globalThis.clearInterval = (() => {
-      clearedIntervals++;
-    }) as typeof clearInterval;
+    const wsServer = new FakeWebSocketServer();
 
-    const httpClient = new HttpClient({ baseUrl: 'http://example.test' });
+    const httpClient = new HttpClient({
+      baseUrl: 'http://example.test',
+      webSocketFactory: wsServer.factory,
+    });
 
     const handle = await httpClient.start('echo', 'hello');
     const terminalEvent = await new Promise<Event>((resolve) => {
       handle.addEventListener('workflow:completed', resolve as EventListener);
+      void (async () => {
+        // The subscription opens lazily on addEventListener; once the socket
+        // is open and catch-up has run, deliver the live terminal event.
+        const deadline = Date.now() + 1000;
+        while (wsServer.sockets.length === 0 || !wsServer.latest().opened) {
+          if (Date.now() > deadline) throw new Error('subscription never opened');
+          await sleepForTesting(2);
+        }
+        await sleepForTesting(5); // let the catch-up fetch settle
+        wsServer.latest().deliver({
+          type: 'workflow:completed',
+          timestamp: 1,
+          data: { result: 'done' },
+        });
+      })();
     });
 
     expect(terminalEvent).toBeInstanceOf(CustomEvent);
     expect((terminalEvent as CustomEvent).detail).toEqual({ result: 'done' });
-    expect(clearedIntervals).toBe(1);
-
-    const warningHandle = await httpClient.start('echo', 'warn');
-    warningHandle.addEventListener('workflow:started', (() => {}) as EventListener);
-    await intervalCallback?.();
-    await sleepForTesting(0);
-
-    expect(warnings[0]?.[0]).toBe('[weft] Event poll error:');
+    // The terminal event auto-closes the subscription and its socket.
+    expect(wsServer.latest().closed).toBe(true);
   });
 
-  it('closes a handle when the workflow disappears after previously-emitted events', async () => {
-    let intervalCallback: (() => void) | undefined;
-    let clearedIntervals = 0;
-    const responses = [
-      jsonResponse({ id: 'wf-disappear' }),
-      jsonResponse({
-        events: [{ type: 'workflow:started', data: { phase: 'first' } }],
-      }),
-      new Response(JSON.stringify({ error: 'missing' }), { status: 404 }),
-      new Response(JSON.stringify({ error: 'missing' }), { status: 404 }),
-    ];
+  it('opens at most one subscription regardless of listener count', async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (requestInputToUrl(input).includes('/events')) return jsonResponse({ events: [] });
+      return jsonResponse({ id: 'wf-shared' });
+    }) as unknown as typeof fetch;
+    const wsServer = new FakeWebSocketServer();
 
-    globalThis.fetch = (async () =>
-      responses.shift() ?? new Response(null, { status: 500 })) as unknown as typeof fetch;
-    globalThis.setInterval = ((callback: TimerHandler) => {
-      intervalCallback = callback as () => void;
-      return 1 as unknown as ReturnType<typeof setInterval>;
-    }) as unknown as typeof setInterval;
-    globalThis.clearInterval = (() => {
-      clearedIntervals++;
-    }) as typeof clearInterval;
-
-    const httpClient = new HttpClient({ baseUrl: 'http://example.test' });
+    const httpClient = new HttpClient({
+      baseUrl: 'http://example.test',
+      webSocketFactory: wsServer.factory,
+    });
     const handle = await httpClient.start('echo', 'hello');
 
-    await new Promise<void>((resolve) => {
-      handle.addEventListener('workflow:started', () => resolve());
-    });
-    await intervalCallback?.();
-    await sleepForTesting(0);
+    handle.addEventListener('workflow:started', () => {});
+    handle.addEventListener('workflow:completed', () => {});
 
-    expect(clearedIntervals).toBe(1);
+    await sleepForTesting(5);
+    expect(wsServer.sockets).toHaveLength(1);
   });
 
-  it('removes listeners and disposes a handle without extra network requests', async () => {
-    let intervalIdentifier: ReturnType<typeof setInterval> | undefined;
-    let clearedIntervals = 0;
+  it('removes listeners and disposes a handle, closing the subscription', async () => {
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      if (requestInputToUrl(input).includes('/events')) return jsonResponse({ events: [] });
+      return jsonResponse({ id: 'wf-dispose' });
+    }) as unknown as typeof fetch;
+    const wsServer = new FakeWebSocketServer();
 
-    globalThis.fetch = (async () => jsonResponse({ id: 'wf-dispose' })) as unknown as typeof fetch;
-    globalThis.setInterval = (() => {
-      intervalIdentifier = 99 as unknown as ReturnType<typeof setInterval>;
-      return intervalIdentifier;
-    }) as unknown as typeof setInterval;
-    globalThis.clearInterval = ((timer: Timer) => {
-      expect(timer).toBe(intervalIdentifier!);
-      clearedIntervals++;
-    }) as unknown as typeof clearInterval;
-
-    const httpClient = new HttpClient({ baseUrl: 'http://example.test' });
+    const httpClient = new HttpClient({
+      baseUrl: 'http://example.test',
+      webSocketFactory: wsServer.factory,
+    });
     const handle = await httpClient.start('echo', 'hello');
     const listener = (() => {}) as EventListener;
 
     handle.addEventListener('workflow:started', listener);
+    await sleepForTesting(5);
     handle.removeEventListener('workflow:started', listener);
     handle[Symbol.dispose]();
 
-    expect(clearedIntervals).toBe(1);
+    expect(wsServer.latest().closed).toBe(true);
   });
 
   it('exercises HttpScheduleHandle.describe() directly against a mocked remote response', async () => {

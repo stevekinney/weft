@@ -84,6 +84,53 @@ export type UnknownNameWhenRegistryEmpty<TName extends string> = [KnownWorkflowN
   : never;
 
 // ---------------------------------------------------------------------------
+// Streaming surface — push-based live event tail
+// ---------------------------------------------------------------------------
+
+/** Options shared by the live-event streaming surface. */
+export type TailOptions = {
+  /**
+   * Resume the tail from this opaque cursor instead of replaying from the
+   * beginning. Server mode threads this to the feed's replay-from-cursor
+   * handoff; library mode ignores it (engine events are already live).
+   */
+  readonly fromCursor?: string;
+};
+
+/**
+ * A live workflow-event tail. Async-iterate it to consume events as they are
+ * produced; the iteration terminates cleanly when the workflow reaches a
+ * terminal state, the server closes the stream, or {@link WorkflowEventTail.close}
+ * is called.
+ *
+ * @example
+ * ```ts
+ * import { workflow, Engine, MemoryStorage, LocalClient } from 'weft';
+ *
+ * await using engine = new Engine({ storage: new MemoryStorage() });
+ * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));
+ * const client = new LocalClient(engine);
+ * const handle = await client.start('ping', null);
+ * for await (const event of client.tail(handle.id)) {
+ *   console.log(event.type);
+ * }
+ * ```
+ */
+export interface WorkflowEventTail extends AsyncIterable<WorkflowEvent> {
+  /** Stop the tail and release its resources. Idempotent. */
+  close(): void;
+
+  /**
+   * Resolves once the tail is live and ready to deliver events (or when it has
+   * terminated). Await this before triggering work whose events you intend to
+   * observe, so nothing is missed in the window before the underlying transport
+   * connects. In library mode it resolves immediately — the in-process engine
+   * stream is live from construction.
+   */
+  whenConnected(): Promise<void>;
+}
+
+// ---------------------------------------------------------------------------
 // Client handle — lightweight reference to a running workflow
 // ---------------------------------------------------------------------------
 
@@ -174,6 +221,23 @@ export interface ClientHandle<TResult = unknown>
 
   /** Remove free-form tags from this workflow. */
   removeTags(...tags: string[]): Promise<void>;
+
+  /**
+   * Open a live, push-based tail of this workflow's events. Async-iterate the
+   * returned {@link WorkflowEventTail} to consume events as they happen. In
+   * server mode this rides the WebSocket watch channel (no polling); in library
+   * mode it bridges the engine's event stream directly.
+   */
+  tail(options?: TailOptions): WorkflowEventTail;
+
+  /**
+   * Resolves once this handle's live event subscription is connected, opening
+   * it if necessary. Await this after attaching `addEventListener` listeners
+   * and before triggering work whose events you intend to observe, so nothing
+   * is missed in the window before the underlying transport connects. In
+   * library mode it resolves immediately — engine events are already live.
+   */
+  whenConnected(): Promise<void>;
 }
 
 /**
@@ -384,6 +448,16 @@ export interface WeftClient {
 
   /** Get the event history for a workflow. */
   getEvents(id: string): Promise<WorkflowEvent[]>;
+
+  /**
+   * Open a live, push-based tail of a workflow's events. Async-iterate the
+   * returned {@link WorkflowEventTail} to consume events as they happen. In
+   * server mode this rides the JSON-RPC WebSocket subscription (replacing the
+   * old 2-second poll); in library mode it bridges the engine's event stream
+   * directly. Both transports deliver the same {@link WorkflowEvent} records and
+   * terminate cleanly on completion or close.
+   */
+  tail(id: string, options?: TailOptions): WorkflowEventTail;
 
   /**
    * Get the structured execution timeline for a workflow.

@@ -503,6 +503,11 @@ describe('LocalClient delegation surface', () => {
       setAttributes: mock(async () => undefined),
       addTags: mock(async () => undefined),
       removeTags: mock(async () => undefined),
+      tail: mock(() => ({
+        close() {},
+        whenConnected: () => Promise.resolve(),
+        async *[Symbol.asyncIterator]() {},
+      })),
     };
 
     class TestWorkflowHandle extends WorkflowHandleDelegation {

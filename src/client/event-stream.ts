@@ -1,0 +1,417 @@
+/**
+ * Live workflow-event streaming for {@link HttpClient}.
+ *
+ * The server broadcasts a workflow's lifecycle events over a per-workflow
+ * WebSocket channel at `/v1/workflows/:id/watch` (see the server's
+ * `wireEventBroadcasting`). Each frame is a JSON {@link WorkflowEvent}
+ * (`{ type, timestamp, data }`) — the same shape `getEvents()` returns and the
+ * dashboard already consumes. This module opens that channel and exposes the
+ * events through two surfaces:
+ *
+ *   - a push callback (`onEvent`) used by {@link HttpHandle.addEventListener}
+ *     so listeners fire the moment an event lands instead of on a 2-second
+ *     poll cadence, and
+ *   - an {@link AsyncIterable} used by `client.tail(id)` / `handle.tail()`.
+ *
+ * **Catch-up + reconnect.** The watch channel is live-only — it does not replay
+ * events that happened before the socket connected, and a dropped socket can
+ * miss events while disconnected. To close both gaps the subscription fetches
+ * the persisted event history (`getEvents`) on every (re)connect and emits any
+ * events past the last one already delivered, deduplicating by sequence index.
+ * Reconnect attempts back off and are capped so a wedged server cannot spin
+ * forever.
+ *
+ * **Clean close.** `close()` closes the socket and resolves the iterable.
+ * Terminal workflow events (`completed`, `failed`, `cancelled`, `timed-out`)
+ * auto-close the stream so `for await` consumers terminate when the workflow
+ * finishes.
+ *
+ * @module client/event-stream
+ */
+
+import type { WorkflowEvent } from '../core/types.ts';
+
+/** Reason a {@link WorkflowEventSubscription} terminated. */
+export type StreamCloseReason = 'workflow-terminal' | 'client-closed' | 'reconnect-exhausted';
+
+/** Fetches a workflow's persisted event history for connect/reconnect catch-up. */
+export type EventHistoryFetcher = (workflowId: string) => Promise<WorkflowEvent[]>;
+
+/** Options for opening a workflow event subscription. */
+export type WorkflowEventStreamOptions = {
+  /** Maximum reconnect attempts after a dropped socket. Default 5. */
+  readonly maxReconnectAttempts?: number;
+  /** Base reconnect backoff in milliseconds. Default 50. */
+  readonly reconnectBackoffMs?: number;
+  /**
+   * Constructor override for the underlying socket. Tests inject a fake here;
+   * production omits it and the global `WebSocket` is used.
+   */
+  readonly webSocketFactory?: WebSocketFactory;
+};
+
+/** Minimal socket surface the subscription drives. Matches `WebSocket`. */
+export type StreamSocket = {
+  close(code?: number, reason?: string): void;
+  addEventListener(type: 'open', listener: () => void): void;
+  addEventListener(type: 'message', listener: (event: { data: unknown }) => void): void;
+  addEventListener(type: 'close', listener: () => void): void;
+  addEventListener(type: 'error', listener: (event: unknown) => void): void;
+};
+
+/** Builds a {@link StreamSocket} for a `ws(s)://…/watch` URL with headers. */
+export type WebSocketFactory = (url: string, headers: Record<string, string>) => StreamSocket;
+
+const TERMINAL_EVENT_TYPES = new Set<string>([
+  'workflow:completed',
+  'workflow:failed',
+  'workflow:cancelled',
+  'workflow:timed-out',
+]);
+
+const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
+const DEFAULT_RECONNECT_BACKOFF_MS = 50;
+
+/**
+ * Build the `ws(s)://…/v1/workflows/:id/watch` URL for a workflow's live event
+ * channel from an `http(s)://…` base URL.
+ */
+export function workflowWatchWebSocketUrl(baseUrl: string, workflowId: string): string {
+  const trimmed = baseUrl.replace(/\/+$/, '');
+  const wsBase = trimmed.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
+  return `${wsBase}/v1/workflows/${encodeURIComponent(workflowId)}/watch`;
+}
+
+/** The minimal client context a workflow event subscription needs. */
+export type EventStreamContext = {
+  readonly baseUrl: string;
+  readonly headers: Record<string, string>;
+  /** Fetches a workflow's persisted event history for connect/reconnect catch-up. */
+  getEvents(workflowId: string): Promise<WorkflowEvent[]>;
+  readonly streamOptions: WorkflowEventStreamOptions;
+};
+
+/**
+ * Open a live {@link WorkflowEventSubscription} for a workflow over the `/watch`
+ * WebSocket channel, wiring the watch URL and the `getEvents` catch-up fetch
+ * from the given client context. Shared by `HttpHandle` (push-based
+ * `addEventListener`) and `HttpClient.tail`.
+ */
+export function createWorkflowEventSubscription(
+  context: EventStreamContext,
+  workflowId: string,
+  onEvent: (event: WorkflowEvent) => void,
+): WorkflowEventSubscription {
+  return new WorkflowEventSubscription(
+    workflowWatchWebSocketUrl(context.baseUrl, workflowId),
+    context.headers,
+    workflowId,
+    (id) => context.getEvents(id),
+    onEvent,
+    context.streamOptions,
+  );
+}
+
+/** The default factory: Bun's `WebSocket`, which accepts custom upgrade headers. */
+const defaultWebSocketFactory: WebSocketFactory = (url, headers) => {
+  // Bun supports custom WebSocket upgrade headers; the DOM lib only types the
+  // header-less browser constructor, so we narrow to Bun's two-arg overload at
+  // construction time. Tests that replace the factory bypass this entirely.
+  const Constructor = WebSocket as unknown as {
+    new (url: string, options: { headers: Record<string, string> }): WebSocket;
+  };
+  return new Constructor(url, { headers });
+};
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+/**
+ * Structural equality for deduping the catch-up/live overlap window. Events
+ * carry no stable id, so a `type` + serialized-`data` comparison is the
+ * pragmatic identity. `timestamp` is excluded because the live frame and the
+ * persisted history record are stamped independently and can differ by a few
+ * milliseconds for the same logical event.
+ */
+function eventsEqual(a: WorkflowEvent, b: WorkflowEvent): boolean {
+  return a.type === b.type && JSON.stringify(a.data) === JSON.stringify(b.data);
+}
+
+/** Parse a watch-channel frame into a {@link WorkflowEvent}, or null if malformed. */
+function parseWatchFrame(raw: unknown): WorkflowEvent | null {
+  if (typeof raw !== 'string') return null;
+  let frame: unknown;
+  try {
+    frame = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (!isRecord(frame)) return null;
+  const { type } = frame;
+  if (typeof type !== 'string') return null;
+  return {
+    type,
+    timestamp: typeof frame['timestamp'] === 'number' ? frame['timestamp'] : Date.now(),
+    data: isRecord(frame['data']) ? frame['data'] : {},
+  };
+}
+
+/**
+ * A live workflow-event subscription over the `/watch` WebSocket channel.
+ * Delivers events to a push callback and to any number of async iterators,
+ * catching up from persisted history on every (re)connect and transparently
+ * reconnecting when the socket drops.
+ */
+export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
+  readonly #url: string;
+  readonly #headers: Record<string, string>;
+  readonly #workflowId: string;
+  readonly #fetchHistory: EventHistoryFetcher;
+  readonly #factory: WebSocketFactory;
+  readonly #maxReconnectAttempts: number;
+  readonly #reconnectBackoffMs: number;
+  readonly #onEvent: (event: WorkflowEvent) => void;
+
+  #socket: StreamSocket | null = null;
+  #closed = false;
+  // Count of events already delivered. The watch channel emits events in the
+  // same order `getEvents` persists them, so a monotonic delivered-count is a
+  // sufficient cursor for "how far into the history has this subscription got".
+  #deliveredCount = 0;
+  #reconnectAttempts = 0;
+  #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  // While catch-up is fetching/emitting history, live frames are buffered here
+  // rather than delivered directly. A live frame that also appears in the
+  // fetched history would otherwise be delivered twice; buffering lets the
+  // post-catch-up drain drop the overlap.
+  #catchUpInFlight = false;
+  #pendingLive: WorkflowEvent[] = [];
+  // Async-iterator plumbing: buffered events plus a parked waker.
+  readonly #buffer: WorkflowEvent[] = [];
+  #waker: (() => void) | null = null;
+  #closeReason: StreamCloseReason | null = null;
+  // Resolves once the socket has opened and its first catch-up has completed,
+  // so callers can wait for the stream to be live before advancing a workflow
+  // (the watch channel does not replay events emitted before it connected).
+  readonly #connected: ReturnType<typeof Promise.withResolvers<void>> = Promise.withResolvers();
+  #connectedSettled = false;
+
+  constructor(
+    url: string,
+    headers: Record<string, string>,
+    workflowId: string,
+    fetchHistory: EventHistoryFetcher,
+    onEvent: (event: WorkflowEvent) => void,
+    options?: WorkflowEventStreamOptions,
+  ) {
+    this.#url = url;
+    this.#headers = headers;
+    this.#workflowId = workflowId;
+    this.#fetchHistory = fetchHistory;
+    this.#onEvent = onEvent;
+    this.#factory = options?.webSocketFactory ?? defaultWebSocketFactory;
+    this.#maxReconnectAttempts = options?.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
+    this.#reconnectBackoffMs = options?.reconnectBackoffMs ?? DEFAULT_RECONNECT_BACKOFF_MS;
+    this.#connect();
+  }
+
+  /** Why the stream terminated, or `null` while it is still open. */
+  get closeReason(): StreamCloseReason | null {
+    return this.#closeReason;
+  }
+
+  /**
+   * Resolves once the stream is live (socket open and first catch-up done), or
+   * when it terminates — whichever comes first. Await this before driving a
+   * workflow whose events you intend to observe, so no event is missed in the
+   * window before the watch socket connects.
+   */
+  whenConnected(): Promise<void> {
+    return this.#connected.promise;
+  }
+
+  #markConnected(): void {
+    if (this.#connectedSettled) return;
+    this.#connectedSettled = true;
+    this.#connected.resolve();
+  }
+
+  #connect(): void {
+    if (this.#closed) return;
+    let socket: StreamSocket;
+    try {
+      socket = this.#factory(this.#url, this.#headers);
+    } catch {
+      this.#scheduleReconnect();
+      return;
+    }
+    this.#socket = socket;
+
+    socket.addEventListener('open', () => {
+      if (this.#closed || this.#socket !== socket) return;
+      this.#reconnectAttempts = 0;
+      // Catch up on any events emitted before this socket connected (or missed
+      // while it was disconnected) before relying on live frames.
+      void this.#catchUp();
+    });
+
+    socket.addEventListener('message', (event) => {
+      if (this.#socket !== socket) return;
+      const parsed = parseWatchFrame(event.data);
+      if (parsed !== null) this.#deliverLive(parsed);
+    });
+
+    socket.addEventListener('close', () => {
+      if (this.#socket === socket) this.#handleSocketDrop();
+    });
+
+    socket.addEventListener('error', () => {
+      // `error` is always followed by `close`; reconnect is handled there.
+    });
+  }
+
+  async #catchUp(): Promise<void> {
+    if (this.#catchUpInFlight || this.#closed) return;
+    this.#catchUpInFlight = true;
+    this.#pendingLive = [];
+    try {
+      let history: WorkflowEvent[] = [];
+      try {
+        history = await this.#fetchHistory(this.#workflowId);
+      } catch {
+        // A failed catch-up must not kill the stream; fall through so any live
+        // frames buffered during the fetch still drain, and the next reconnect
+        // retries the catch-up.
+        history = [];
+      }
+      if (this.#closed) return;
+
+      // Emit history beyond what was already delivered. History and live frames
+      // share one ordered sequence, so `#deliveredCount` is the cursor.
+      const newHistory = history.slice(this.#deliveredCount);
+      for (const event of newHistory) {
+        this.#emit(event);
+        if (this.#closed) return;
+      }
+
+      // Drain live frames that arrived during the fetch, dropping any that the
+      // history we just emitted already covered (the overlap window).
+      const buffered = this.#pendingLive;
+      this.#pendingLive = [];
+      for (const live of buffered) {
+        if (this.#closed) return;
+        if (newHistory.some((historic) => eventsEqual(historic, live))) continue;
+        this.#emit(live);
+      }
+    } finally {
+      this.#catchUpInFlight = false;
+      // The stream is now live: history drained, live frames flowing.
+      this.#markConnected();
+    }
+  }
+
+  #deliverLive(event: WorkflowEvent): void {
+    // Buffer live frames while catch-up drains history so the overlap window is
+    // deduped; otherwise deliver immediately.
+    if (this.#catchUpInFlight) {
+      this.#pendingLive.push(event);
+      return;
+    }
+    this.#emit(event);
+  }
+
+  #emit(event: WorkflowEvent): void {
+    this.#deliveredCount += 1;
+    try {
+      this.#onEvent(event);
+    } catch {
+      // A listener throwing must not corrupt the stream.
+    }
+    this.#buffer.push(event);
+    this.#wake();
+    if (TERMINAL_EVENT_TYPES.has(event.type)) {
+      this.#terminate('workflow-terminal');
+    }
+  }
+
+  #handleSocketDrop(): void {
+    this.#socket = null;
+    if (this.#closed) return;
+    this.#scheduleReconnect();
+  }
+
+  #scheduleReconnect(): void {
+    if (this.#closed) return;
+    if (this.#reconnectAttempts >= this.#maxReconnectAttempts) {
+      this.#terminate('reconnect-exhausted');
+      return;
+    }
+    this.#reconnectAttempts += 1;
+    const delay = this.#reconnectBackoffMs * this.#reconnectAttempts;
+    this.#reconnectTimer = setTimeout(() => {
+      this.#reconnectTimer = null;
+      this.#connect();
+    }, delay);
+  }
+
+  #terminate(reason: StreamCloseReason): void {
+    if (this.#closed) return;
+    this.#closed = true;
+    this.#closeReason = reason;
+    // Unblock anyone awaiting connection — the stream will deliver nothing more.
+    this.#markConnected();
+    if (this.#reconnectTimer !== null) {
+      clearTimeout(this.#reconnectTimer);
+      this.#reconnectTimer = null;
+    }
+    const socket = this.#socket;
+    this.#socket = null;
+    if (socket !== null) {
+      try {
+        socket.close();
+      } catch {
+        // Closing an already-dead socket is a no-op for our purposes.
+      }
+    }
+    this.#wake();
+  }
+
+  #wake(): void {
+    const waker = this.#waker;
+    if (waker !== null) {
+      this.#waker = null;
+      waker();
+    }
+  }
+
+  /**
+   * Close the subscription cleanly: close the socket and resolve any active
+   * async iteration. Idempotent.
+   */
+  close(): void {
+    this.#terminate('client-closed');
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterator<WorkflowEvent> {
+    try {
+      while (true) {
+        while (this.#buffer.length > 0) {
+          yield this.#buffer.shift()!;
+        }
+        if (this.#closed) return;
+        await this.#waitForEvent();
+      }
+    } finally {
+      // A consumer that breaks out of `for await` closes the subscription so
+      // the socket does not leak.
+      this.close();
+    }
+  }
+
+  #waitForEvent(): Promise<void> {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    this.#waker = resolve;
+    return promise;
+  }
+}

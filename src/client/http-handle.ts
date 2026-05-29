@@ -1,63 +1,47 @@
 import type { WeftEventMap } from '../core/events.ts';
-import type { WorkflowEvent } from '../core/types.ts';
+import type { WorkflowEventSubscription } from './event-stream.ts';
 import { WorkflowHandleDelegation } from './handle-delegation.ts';
 import type { HttpClient } from './http-client.ts';
 import { HttpClientError, request } from './http-request.ts';
 
+/**
+ * Server-mode workflow handle. Lifecycle events are delivered push-based over
+ * the JSON-RPC WebSocket subscription (`weft.workflows.subscribe`) rather than
+ * by polling `getEvents()` on a timer — listeners fire the moment an event lands
+ * on the server. Each delivered event is re-dispatched as a `CustomEvent` whose
+ * `detail` is the event's `data`, matching the long-standing handle contract.
+ */
 export class HttpHandle extends WorkflowHandleDelegation<HttpClient> {
   readonly #events = new EventTarget();
-  #pollTimer: ReturnType<typeof setInterval> | null = null;
-  #lastEventIndex = 0;
-  #pollInFlight = false;
+  #subscription: WorkflowEventSubscription | null = null;
   #closed = false;
 
-  #ensurePolling(): void {
-    if (this.#closed || this.#pollTimer !== null) return;
-    this.#pollTimer = setInterval(() => void this.#pollEvents(), 2_000);
-    void this.#pollEvents();
-  }
-
-  static readonly #TERMINAL_EVENTS = new Set<WorkflowEvent['type']>([
-    'workflow:completed',
-    'workflow:failed',
-    'workflow:cancelled',
-    'workflow:timed-out',
-  ]);
-
-  async #pollEvents(): Promise<void> {
-    if (this.#pollInFlight) return;
-    this.#pollInFlight = true;
-    try {
-      const events = await this.client.getEvents(this.id);
-      if (events.length === 0 && this.#lastEventIndex > 0) {
-        const state = await this.client.get(this.id);
-        if (state === null) {
-          this.close();
-          return;
-        }
-      }
-      const newEvents = events.slice(this.#lastEventIndex);
-      for (const event of newEvents) {
-        this.#lastEventIndex++;
+  #ensureSubscribed(): WorkflowEventSubscription | null {
+    if (this.#closed) return null;
+    if (this.#subscription === null) {
+      this.#subscription = this.client.openEventSubscription(this.id, (event) => {
         this.#events.dispatchEvent(new CustomEvent(event.type, { detail: event.data }));
-        if (HttpHandle.#TERMINAL_EVENTS.has(event.type)) {
-          this.close();
-          return;
-        }
-      }
-    } catch (error) {
-      console.warn('[weft] Event poll error:', error);
-    } finally {
-      this.#pollInFlight = false;
+      });
     }
+    return this.#subscription;
   }
 
-  /** Stop event polling and release resources. Cannot be restarted. */
+  /**
+   * Resolves once the handle's live event subscription is connected, so a
+   * caller can attach listeners and then trigger work without missing the
+   * events emitted in the window before the socket connects. Opens the
+   * subscription if it is not already open.
+   */
+  override whenConnected(): Promise<void> {
+    return this.#ensureSubscribed()?.whenConnected() ?? Promise.resolve();
+  }
+
+  /** Stop the event subscription and release resources. Cannot be restarted. */
   close(): void {
     this.#closed = true;
-    if (this.#pollTimer !== null) {
-      clearInterval(this.#pollTimer);
-      this.#pollTimer = null;
+    if (this.#subscription !== null) {
+      this.#subscription.close();
+      this.#subscription = null;
     }
   }
 
@@ -87,7 +71,7 @@ export class HttpHandle extends WorkflowHandleDelegation<HttpClient> {
     listener: EventListenerOrEventListenerObject,
     options?: boolean | AddEventListenerOptions,
   ): void {
-    this.#ensurePolling();
+    this.#ensureSubscribed();
     this.#events.addEventListener(type, listener, options);
   }
 

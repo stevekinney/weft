@@ -12,8 +12,11 @@ import type {
   RetentionOverview,
   ReviewListEntry,
   ReviewListFilter,
+  SearchAttributeValue,
   SignalDeliveryOptions,
   SubmitReviewOptions,
+  WorkflowReplay,
+  WorkflowTimelineEntry,
 } from '../core/types.ts';
 import { HttpClientError, request } from './http-request.ts';
 import type { UpdateResult } from './interface.ts';
@@ -201,6 +204,80 @@ export async function submitCoordinatedUpdateRequest(
     }
     throw error;
   }
+}
+
+export function getAttributesRequest(
+  context: HttpClientRequestContext,
+  id: string,
+): Promise<Record<string, SearchAttributeValue> | null> {
+  return request<Record<string, SearchAttributeValue> | null>(
+    context.baseUrl,
+    `/workflows/${encodeURIComponent(id)}/attributes`,
+    context.headers,
+  );
+}
+
+export async function setAttributesRequest(
+  context: HttpClientRequestContext,
+  id: string,
+  attributes: Record<string, SearchAttributeValue>,
+): Promise<void> {
+  await request<unknown>(
+    context.baseUrl,
+    `/workflows/${encodeURIComponent(id)}/attributes`,
+    context.headers,
+    { method: 'PATCH', body: JSON.stringify({ attributes }) },
+  );
+}
+
+export async function addTagsRequest(
+  context: HttpClientRequestContext,
+  id: string,
+  tags: string[],
+): Promise<void> {
+  await request<unknown>(
+    context.baseUrl,
+    `/workflows/${encodeURIComponent(id)}/tags`,
+    context.headers,
+    { method: 'POST', body: JSON.stringify({ tags }) },
+  );
+}
+
+export async function removeTagsRequest(
+  context: HttpClientRequestContext,
+  id: string,
+  tags: string[],
+): Promise<void> {
+  await request<unknown>(
+    context.baseUrl,
+    `/workflows/${encodeURIComponent(id)}/tags`,
+    context.headers,
+    { method: 'DELETE', body: JSON.stringify({ tags }) },
+  );
+}
+
+export async function getTimelineRequest(
+  context: HttpClientRequestContext,
+  id: string,
+): Promise<WorkflowTimelineEntry[]> {
+  const response = await request<WorkflowTimelineEntry[] | null>(
+    context.baseUrl,
+    `/workflows/${encodeURIComponent(id)}/timeline`,
+    context.headers,
+  );
+  return response ?? [];
+}
+
+export function replayToRequest(
+  context: HttpClientRequestContext,
+  id: string,
+  step: number,
+): Promise<WorkflowReplay | null> {
+  return request<WorkflowReplay | null>(
+    context.baseUrl,
+    `/workflows/${encodeURIComponent(id)}/replay/${step}`,
+    context.headers,
+  );
 }
 
 export async function getUpdateResultRequest(

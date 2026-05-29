@@ -44,15 +44,26 @@ import type {
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
 import {
+  createWorkflowEventSubscription,
+  type WorkflowEventStreamOptions,
+  type WorkflowEventSubscription,
+} from './event-stream.ts';
+import {
+  addTagsRequest,
   cancelAllWorkflowRequests,
   deleteAllWorkflowRequests,
   forkWorkflowRequest,
+  getAttributesRequest,
   getRetentionOverviewRequest,
   getStreamChunkRequests,
+  getTimelineRequest,
   getUpdateResultRequest,
   listReviewRequests,
   purgeWorkflowRequests,
   queryWorkflowRequest,
+  removeTagsRequest,
+  replayToRequest,
+  setAttributesRequest,
   signalAllWorkflowRequests,
   signalWorkflowRequest,
   submitCoordinatedUpdateRequest,
@@ -68,9 +79,11 @@ import type {
   ClientHandle,
   ClientScheduleHandle,
   KnownWorkflowName,
+  TailOptions,
   UnknownNameWhenRegistryEmpty,
   UpdateResult,
   WeftClient,
+  WorkflowEventTail,
 } from './interface.ts';
 import { buildScheduleListSearchParams } from './schedule-list-search-params.ts';
 import { buildWorkflowListSearchParams } from './search-params.ts';
@@ -121,6 +134,7 @@ export class HttpClient implements WeftClient {
   readonly headers: Record<string, string>;
   /** Typed low-level accessor for every catalog operation over JSON-RPC. */
   readonly operations: CatalogOperations;
+  readonly #streamOptions: WorkflowEventStreamOptions;
 
   constructor(options: HttpClientOptions = {}) {
     const connection = resolveHttpClientConnection(options);
@@ -130,6 +144,8 @@ export class HttpClient implements WeftClient {
       CATALOG_OPERATION_NAMES,
       httpClientCatalogTransport(this.baseUrl, this.headers),
     );
+    this.#streamOptions =
+      options.webSocketFactory === undefined ? {} : { webSocketFactory: options.webSocketFactory };
   }
 
   call<Name extends CatalogOperationName>(
@@ -365,47 +381,19 @@ export class HttpClient implements WeftClient {
   }
 
   async getAttributes(id: string): Promise<Record<string, SearchAttributeValue> | null> {
-    return request<Record<string, SearchAttributeValue> | null>(
-      this.baseUrl,
-      `/workflows/${encodeURIComponent(id)}/attributes`,
-      this.headers,
-    );
+    return getAttributesRequest(this, id);
   }
 
   async setAttributes(id: string, attributes: Record<string, SearchAttributeValue>): Promise<void> {
-    await request<unknown>(
-      this.baseUrl,
-      `/workflows/${encodeURIComponent(id)}/attributes`,
-      this.headers,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ attributes }),
-      },
-    );
+    return setAttributesRequest(this, id, attributes);
   }
 
   async addTags(id: string, ...tags: string[]): Promise<void> {
-    await request<unknown>(
-      this.baseUrl,
-      `/workflows/${encodeURIComponent(id)}/tags`,
-      this.headers,
-      {
-        method: 'POST',
-        body: JSON.stringify({ tags }),
-      },
-    );
+    return addTagsRequest(this, id, tags);
   }
 
   async removeTags(id: string, ...tags: string[]): Promise<void> {
-    await request<unknown>(
-      this.baseUrl,
-      `/workflows/${encodeURIComponent(id)}/tags`,
-      this.headers,
-      {
-        method: 'DELETE',
-        body: JSON.stringify({ tags }),
-      },
-    );
+    return removeTagsRequest(this, id, tags);
   }
 
   async getEvents(id: string): Promise<WorkflowEvent[]> {
@@ -418,21 +406,40 @@ export class HttpClient implements WeftClient {
     return response.events;
   }
 
-  async getTimeline(id: string): Promise<WorkflowTimelineEntry[]> {
-    const response = await request<WorkflowTimelineEntry[] | null>(
-      this.baseUrl,
-      `/workflows/${encodeURIComponent(id)}/timeline`,
-      this.headers,
+  /**
+   * @internal Open a live event subscription over the `/watch` WebSocket
+   * channel. Shared by {@link HttpHandle} (push-based `addEventListener`) and
+   * {@link tail}. The subscription catches up from `getEvents` on every
+   * (re)connect, so it covers events emitted before it connected.
+   */
+  openEventSubscription(
+    id: string,
+    onEvent: (event: WorkflowEvent) => void,
+  ): WorkflowEventSubscription {
+    return createWorkflowEventSubscription(
+      {
+        baseUrl: this.baseUrl,
+        headers: this.headers,
+        getEvents: (w) => this.getEvents(w),
+        streamOptions: this.#streamOptions,
+      },
+      id,
+      onEvent,
     );
-    return response ?? [];
+  }
+
+  tail(id: string, _options?: TailOptions): WorkflowEventTail {
+    // `fromCursor` is unused here — the subscription always catches up from
+    // persisted history on connect, so resumption is automatic.
+    return this.openEventSubscription(id, () => {});
+  }
+
+  async getTimeline(id: string): Promise<WorkflowTimelineEntry[]> {
+    return getTimelineRequest(this, id);
   }
 
   async replayTo(id: string, step: number): Promise<WorkflowReplay | null> {
-    return request<WorkflowReplay | null>(
-      this.baseUrl,
-      `/workflows/${encodeURIComponent(id)}/replay/${step}`,
-      this.headers,
-    );
+    return replayToRequest(this, id, step);
   }
 
   async listReviews(filter?: ReviewListFilter): Promise<ReviewListEntry[]> {
