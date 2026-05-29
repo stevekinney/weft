@@ -123,7 +123,10 @@ Two consequences to design around:
 - **Hold longer than the lease and you can lose it.** If your critical section may run longer than `leaseMs`, renew the lease periodically so a contender does not reclaim a still-active permit. Yield `mutex.renew(slot, { holderId: ctx.workflowId, now })` on an interval well inside `leaseMs`; it returns `true` while you still hold the permit and `false` if your lease already lapsed and someone else took the lock — at which point you should re-acquire or bail out.
 - **Pick a lease longer than your poll interval.** A waiter polling every five seconds against a one-second lease would thrash. Keep `leaseMs` well above the poll interval.
 
-There is no permanent deadlock: a crashed holder's lease always expires, and `recoverAll()` after a restart replays cleanly because the lock record is ordinary CAS state with nothing process-bound in it.
+Leases prevent permanent deadlock from a crashed _holder_: the next contender reclaims the expired permit on its next `tryAcquire`, and `recoverAll()` after a restart replays cleanly because the lock record is ordinary CAS state with nothing process-bound in it.
+
+> [!NOTE] Stale waiters
+> A waiter that crashes _before_ it acquires (after `tryAcquire` enqueued it but before it reaches the head of the queue) leaves a permanent entry in `waiters`. Unlike holders, waiters have no expiry. If the entry is at the head of the queue and a permit is free, it blocks all subsequent waiters indefinitely. Use the admin-side `release` (see below) with the stale waiter's `holderId` to remove it from the queue: `release` strips the id from both `holders` and `waiters`.
 
 ## Releasing from Outside a Workflow
 
