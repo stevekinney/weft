@@ -12,10 +12,21 @@
  */
 
 import type { CatalogTransport } from '../cli/operation-client-runtime.ts';
+import { isFaultCode } from '../core/fault-code.ts';
 import { HttpClientError } from './http-request.ts';
 
 type JsonRpcSuccess = { readonly result: unknown };
-type JsonRpcFailure = { readonly error: { readonly code: number; readonly message: string } };
+type JsonRpcFailure = {
+  readonly error: {
+    readonly code: number;
+    readonly message: string;
+    readonly data?: {
+      readonly weftCode?: unknown;
+      readonly httpStatus?: unknown;
+      readonly [key: string]: unknown;
+    };
+  };
+};
 
 function isJsonRpcFailure(value: unknown): value is JsonRpcFailure {
   return (
@@ -39,6 +50,14 @@ function isJsonRpcSuccess(value: unknown): value is JsonRpcSuccess {
  *
  * A JSON-RPC error envelope is surfaced as an {@link HttpClientError} so faults
  * reach callers through the same error type the ergonomic HTTP methods use.
+ *
+ * The JSON-RPC endpoint always responds with HTTP 200 — even for operation
+ * faults — so the status for `HttpClientError` is taken from
+ * `error.data.httpStatus` in the envelope rather than `response.status`.
+ * Transport-level errors (405 Method Not Allowed, 415 Unsupported Media Type,
+ * 413 Payload Too Large, auth short-circuits) return non-JSON bodies;
+ * `response.json()` is wrapped in a try/catch to surface those as
+ * `HttpClientError` rather than a raw `SyntaxError`.
  */
 export function httpClientCatalogTransport(
   baseUrl: string,
@@ -56,10 +75,29 @@ export function httpClientCatalogTransport(
         id: operationName,
       }),
     });
-    const body = (await response.json()) as unknown;
-    if (isJsonRpcFailure(body)) {
-      throw new HttpClientError(response.status, body.error.message);
+
+    // Transport-level failures (405, 415, 413, auth short-circuits) return
+    // non-JSON text bodies. Catch any parse failure and surface as HttpClientError.
+    let body: unknown;
+    try {
+      body = await response.json();
+    } catch {
+      throw new HttpClientError(
+        response.status,
+        response.statusText || `HTTP ${response.status} from ${endpoint}`,
+      );
     }
+
+    if (isJsonRpcFailure(body)) {
+      const { message, data } = body.error;
+      // The /jsonrpc endpoint always returns HTTP 200, even for operation faults.
+      // The true HTTP-equivalent status lives in error.data.httpStatus; fall back
+      // to response.status (which will be 200) only if the envelope omits it.
+      const httpStatus = typeof data?.httpStatus === 'number' ? data.httpStatus : response.status;
+      const faultCode = isFaultCode(data?.weftCode) ? data.weftCode : undefined;
+      throw new HttpClientError(httpStatus, message, { faultCode });
+    }
+
     if (isJsonRpcSuccess(body)) return body.result;
     throw new HttpClientError(response.status, `Invalid JSON-RPC response from ${endpoint}`);
   };

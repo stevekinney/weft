@@ -158,4 +158,36 @@ describe('HttpClient catalog operations', () => {
       client.operations['weft.workflows.get']({ workflowId: 'catalog-ops-missing' }),
     ).rejects.toThrow();
   });
+
+  it('uses data.httpStatus from the JSON-RPC error envelope, not the always-200 HTTP response', async () => {
+    // The /jsonrpc endpoint always returns HTTP 200 on operation faults.
+    // HttpClientError.status must reflect the fault's logical HTTP status
+    // taken from error.data.httpStatus in the envelope (e.g. 404 for NotFound).
+    try {
+      await client.operations['weft.workflows.get']({ workflowId: 'catalog-ops-status-check' });
+      throw new Error('Expected operation to throw');
+    } catch (err) {
+      const { HttpClientError } = await import('./http-request.ts');
+      expect(err).toBeInstanceOf(HttpClientError);
+      if (err instanceof HttpClientError) {
+        // NotFound maps to HTTP 404, not 200.
+        expect(err.status).toBe(404);
+        expect(err.faultCode).toBe('NotFound');
+      }
+    }
+  });
+
+  it('surfaces transport-level non-JSON responses as HttpClientError', async () => {
+    // A URL that does not speak JSON-RPC returns a plain-text body. The transport
+    // must surface it as HttpClientError rather than letting response.json() throw
+    // a raw SyntaxError.
+    const { httpClientCatalogTransport } = await import('./http-operations.ts');
+    const { HttpClientError } = await import('./http-request.ts');
+    // Point at /v1 which returns non-JSON for an unexpected POST.
+    const nonJsonTransport = httpClientCatalogTransport(`${server.url}/v1`, {
+      Authorization: 'Bearer catalog-ops-secret',
+    });
+    const err = await nonJsonTransport('weft.system.metrics', {}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(HttpClientError);
+  });
 });
