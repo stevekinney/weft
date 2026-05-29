@@ -314,3 +314,16 @@ export const DEFAULT_PUBLIC_PATHS = [
   '/asyncapi.json',
 ];
 export const DEFAULT_CLOCK_TOLERANCE = 60;
+
+/**
+ * Normalize the request pathname for consistent public-path lookup: strip
+ * trailing slashes (except bare `/`) so that `/v1/health` and `/v1/health/`
+ * resolve to the same key.
+ *
+ * Used by both the authenticator and the request-gate rate-limiting step so
+ * that public-path detection stays consistent across both modules.
+ */
+export function normalizeRequestPathname(request: Request): string {
+  const url = new URL(request.url);
+  return url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
+}

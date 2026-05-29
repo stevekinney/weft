@@ -15,6 +15,7 @@ import { defaultAuthAuditSink, emitAuthAuditEvent, type AuthAuditSink } from './
 import { importJWTKey, verifyJWT } from './crypto.ts';
 import {
   DEFAULT_PUBLIC_PATHS,
+  normalizeRequestPathname,
   type AuthConfig,
   type Authenticator,
   type AuthResult,
@@ -104,11 +105,6 @@ function assertNoConflictingMethods(config: AuthConfig): void {
         'so the JWT method would be unreachable.',
     );
   }
-}
-
-function normalizePathname(request: Request): string {
-  const url = new URL(request.url);
-  return url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
 }
 
 type ApiKeyAdmissionOptions = {
@@ -228,7 +224,7 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
   return async (request: Request): Promise<AuthResult> => {
     // Public-path bypass is not an authentication decision — no credential is
     // examined — so it is intentionally not audited.
-    if (publicPaths.has(normalizePathname(request))) {
+    if (publicPaths.has(normalizeRequestPathname(request))) {
       return { authenticated: true, method: 'public' };
     }
 

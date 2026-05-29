@@ -16,7 +16,7 @@
  */
 
 import type { AuthContext } from '../authentication.ts';
-import { DEFAULT_PUBLIC_PATHS } from '../authentication/types.ts';
+import { DEFAULT_PUBLIC_PATHS, normalizeRequestPathname } from '../authentication/types.ts';
 import type { ServerContext } from './context.ts';
 
 const DEFAULT_PUBLIC_PATH_SET = new Set(DEFAULT_PUBLIC_PATHS);
@@ -37,15 +37,6 @@ export type AuthenticationOutcome = {
   publicBypass: boolean;
 };
 
-/**
- * Normalize the request pathname for consistent public-path lookup: strip
- * trailing slashes (except bare `/`), matching the authenticator's own logic.
- */
-function normalizePathname(request: Request): string {
-  const url = new URL(request.url);
-  return url.pathname.length > 1 ? url.pathname.replace(/\/+$/, '') : url.pathname;
-}
-
 export async function authenticateRequest(
   context: ServerContext,
   request: Request,
@@ -53,7 +44,7 @@ export async function authenticateRequest(
   if (!context.authenticatorPromise) {
     // No authenticator is configured. Rate limiting still respects the default
     // public-path list so health, metrics, and discovery probes are exempt.
-    const publicBypass = DEFAULT_PUBLIC_PATH_SET.has(normalizePathname(request));
+    const publicBypass = DEFAULT_PUBLIC_PATH_SET.has(normalizeRequestPathname(request));
     return { response: null, publicBypass };
   }
 
