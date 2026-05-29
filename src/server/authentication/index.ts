@@ -11,6 +11,7 @@
 
 import type { AuthorizationScope } from '../authorization-scope.ts';
 import { tryAdmitApiKey } from './api-key.ts';
+import { defaultAuthAuditSink, emitAuthAuditEvent, type AuthAuditSink } from './audit.ts';
 import { importJWTKey, verifyJWT } from './crypto.ts';
 import {
   DEFAULT_PUBLIC_PATHS,
@@ -20,7 +21,27 @@ import {
   type JWTConfig,
 } from './types.ts';
 
+export {
+  defaultAuthAuditSink,
+  emitAuthAuditEvent,
+  type AuthAuditContext,
+  type AuthAuditEvent,
+  type AuthAuditSink,
+} from './audit.ts';
 export { importJWTKey, signJWT, verifyJWT } from './crypto.ts';
+export {
+  createRateLimiter,
+  validateRateLimitConfig,
+  type RateLimitConfig,
+  type RateLimitDecision,
+  type RateLimiter,
+} from './rate-limiter.ts';
+export { isSensitiveHeader, redactCredential, redactHeaders } from './redaction.ts';
+export {
+  createRotatingApiKeyStore,
+  type ApiKeyRegistration,
+  type RotatingApiKeyStore,
+} from './rotating-api-key-store.ts';
 export {
   DEFAULT_CLOCK_TOLERANCE,
   DEFAULT_PUBLIC_PATHS,
@@ -202,8 +223,11 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
   const defaultApiKeyScopes = config.defaultApiKeyScopes ?? [];
   const jwtKey = config.jwt ? await importJWTKey(config.jwt) : null;
   const publicPaths = new Set(config.publicPaths ?? DEFAULT_PUBLIC_PATHS);
+  const auditSink: AuthAuditSink = config.auditSink ?? defaultAuthAuditSink;
 
   return async (request: Request): Promise<AuthResult> => {
+    // Public-path bypass is not an authentication decision — no credential is
+    // examined — so it is intentionally not audited.
     if (publicPaths.has(normalizePathname(request))) {
       return { authenticated: true, method: 'public' };
     }
@@ -213,19 +237,69 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
       apiKeySet,
       defaultApiKeyScopes,
     });
-    if (apiKeyAttempt.result !== null) return apiKeyAttempt.result;
+    if (apiKeyAttempt.result !== null) {
+      return auditDecision(auditSink, request, apiKeyAttempt.result);
+    }
 
     const jwtAttempt = await authenticateViaJwt(request, jwtKey, config.jwt);
-    if (jwtAttempt.result !== null) return jwtAttempt.result;
+    if (jwtAttempt.result !== null) {
+      return auditDecision(auditSink, request, jwtAttempt.result);
+    }
 
     const explicitAuthAttempted =
       apiKeyAttempt.explicitAuthAttempted || jwtAttempt.explicitAuthAttempted;
     if (config.mtls && !explicitAuthAttempted) {
-      return { authenticated: true, method: 'mtls' };
+      return auditDecision(auditSink, request, { authenticated: true, method: 'mtls' });
     }
 
-    return { authenticated: false, error: 'No valid credentials provided' };
+    return auditDecision(auditSink, request, {
+      authenticated: false,
+      error: 'No valid credentials provided',
+    });
   };
+}
+
+/**
+ * Emit one audit event for a finalized authentication decision and return the
+ * result unchanged. Centralizes the success/failure mapping so every terminal
+ * return in the authenticator is audited identically. Never logs the presented
+ * credential in cleartext — only its one-way fingerprint, derived inside
+ * `emitAuthAuditEvent`.
+ */
+function auditDecision(sink: AuthAuditSink, request: Request, result: AuthResult): AuthResult {
+  if (result.authenticated) {
+    emitAuthAuditEvent(sink, {
+      outcome: 'success',
+      method: result.method,
+      subject: subjectFromResult(result),
+      request,
+    });
+  } else {
+    emitAuthAuditEvent(sink, {
+      outcome: 'failure',
+      method: 'unknown',
+      subject: undefined,
+      request,
+      reason: result.error,
+      presentedCredential: extractApiKey(request),
+    });
+  }
+  return result;
+}
+
+/**
+ * Derive the principal subject from a successful {@link AuthResult} for the
+ * audit record. Prefers the forwarded principal's `subject`, falling back to a
+ * JWT `sub` claim, and leaving it undefined for mTLS / claimless admissions.
+ */
+function subjectFromResult(
+  result: Extract<AuthResult, { authenticated: true }>,
+): string | undefined {
+  if (result.principal?.subject !== undefined) {
+    return result.principal.subject;
+  }
+  const sub = result.claims?.['sub'];
+  return typeof sub === 'string' ? sub : undefined;
 }
 
 /**

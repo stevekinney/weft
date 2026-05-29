@@ -9,7 +9,13 @@ import { decode } from '../core/codec.ts';
 import { createMcpSessionManager } from '../mcp/session.ts';
 import { createMetricsCollectorExporter, MetricsCollector } from '../observability/metrics.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
-import { buildTLSOptions, createAuthenticator, validateAuthConfig } from './authentication.ts';
+import {
+  buildTLSOptions,
+  createAuthenticator,
+  createRateLimiter,
+  validateAuthConfig,
+  validateRateLimitConfig,
+} from './authentication.ts';
 import { DeadlineTracker } from './deadline-tracker.ts';
 import { createEngineEventFeedBackend } from './engine-event-feed-backend.ts';
 import type { ServeOptions } from './index.ts';
@@ -130,6 +136,12 @@ export function resolveNetworkConfig(options: ServeOptions): ResolvedNetworkConf
   if (options.auth) {
     validateAuthConfig(options.auth);
   }
+  if (options.rateLimit) {
+    // Fail fast before binding: a non-positive window or budget is a
+    // misconfiguration that would otherwise admit an always-zero or
+    // accidentally-unlimited limiter.
+    validateRateLimitConfig(options.rateLimit);
+  }
   if (options.cors) {
     // Fail fast before binding: a wildcard origin paired with credentials or
     // an Authorization allowed-header is rejected here. The auth flag mirrors
@@ -195,6 +207,7 @@ export function buildServerContext(
     // The authenticator is initialized asynchronously (key import) but the
     // promise is created eagerly and resolved before the first request completes.
     authenticatorPromise: options.auth ? createAuthenticator(options.auth) : null,
+    rateLimiter: options.rateLimit ? createRateLimiter(options.rateLimit) : null,
     visibilityPollMs: options.visibilityPollIntervalMs ?? 5_000,
     workerReconnectGracePeriodMs: clampWorkerReconnectGracePeriod(
       options.workerReconnectGracePeriodMs,
@@ -331,6 +344,8 @@ export function registerStackDisposers(
     // long-poll waiters with null so no timer fires and no poll promise leaks
     // against a stopped server.
     context.taskQueue[Symbol.dispose]();
+    // Release the rate limiter's per-key window map.
+    context.rateLimiter?.dispose();
   });
 }
 

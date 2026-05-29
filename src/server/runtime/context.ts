@@ -3,7 +3,7 @@ import type { ServerWebSocket } from 'bun';
 import type { McpSessionManager } from '../../mcp/session.ts';
 import type { MetricsCollector } from '../../observability/metrics.ts';
 import type { WorkerRegistry } from '../../worker/registry.ts';
-import type { Authenticator } from '../authentication.ts';
+import type { Authenticator, RateLimiter } from '../authentication.ts';
 import type { DeadlineTracker } from '../deadline-tracker.ts';
 import type { createEngineEventFeedBackend } from '../engine-event-feed-backend.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
@@ -47,6 +47,12 @@ export interface ServerContext {
   readonly activeJsonRpcSessions: Set<JsonRpcWebSocketSession>;
   readonly mcpSessionManager: McpSessionManager;
   readonly authenticatorPromise: Promise<Authenticator> | null;
+  /**
+   * Per-key request rate limiter, or `null` when `serve()` was called without
+   * `rateLimit`. Keyed by authenticated principal subject when available, else
+   * by client address. Disposed on `server.stop()`.
+   */
+  readonly rateLimiter: RateLimiter | null;
   /** Visibility poll interval in milliseconds. */
   readonly visibilityPollMs: number;
   /**

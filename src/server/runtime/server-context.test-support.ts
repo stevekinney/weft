@@ -49,6 +49,7 @@ export function minimalServerContext(
     activeJsonRpcSessions: new Set(),
     mcpSessionManager: null as never,
     authenticatorPromise: null,
+    rateLimiter: null,
     visibilityPollMs: 5000,
     workerReconnectGracePeriodMs: 0,
     pendingWorkerRequeues: new Map(),

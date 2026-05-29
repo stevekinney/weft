@@ -1,0 +1,152 @@
+/**
+ * Request admission gate: authentication then per-key rate limiting.
+ *
+ * Extracted from the server fetch dispatcher so the dispatch path stays small.
+ * `gateRequest` runs the two short-circuiting steps a request must pass before
+ * any handler sees it:
+ *   1. **Authentication** — produces the auth context, a 401, or a public-path
+ *      bypass. Auth-event auditing happens inside the authenticator itself.
+ *   2. **Rate limiting** — throttles per principal-or-IP key, returning 429 with
+ *      `Retry-After` once a key exceeds its window budget. Public-path requests
+ *      and servers without a `rateLimit` are never throttled.
+ *
+ * @internal
+ */
+
+import type { AuthContext } from '../authentication.ts';
+import type { ServerContext } from './context.ts';
+
+/**
+ * Outcome of {@link authenticateRequest}: the resolved auth context (absent for
+ * public-path bypass and unauthenticated servers), a short-circuit `response`
+ * (a 401 on rejection, else `null`), and whether the request hit a public path.
+ */
+export type AuthenticationOutcome = {
+  authContext?: AuthContext;
+  response: Response | null;
+  /**
+   * `true` when the request matched a configured public path and bypassed
+   * authentication. The rate-limit step uses this to exempt health, metrics,
+   * and discovery probes from per-key throttling.
+   */
+  publicBypass: boolean;
+};
+
+export async function authenticateRequest(
+  context: ServerContext,
+  request: Request,
+): Promise<AuthenticationOutcome> {
+  if (!context.authenticatorPromise) {
+    return { response: null, publicBypass: false };
+  }
+
+  const authenticator = await context.authenticatorPromise;
+  const authResult = await authenticator(request);
+  if (authResult.authenticated) {
+    if (authResult.method === 'public') {
+      return { response: null, publicBypass: true };
+    }
+
+    return {
+      authContext: {
+        method: authResult.method,
+        ...(authResult.claims !== undefined ? { claims: authResult.claims } : {}),
+        ...(authResult.principal !== undefined ? { principal: authResult.principal } : {}),
+      },
+      response: null,
+      publicBypass: false,
+    };
+  }
+
+  return {
+    response: new Response(JSON.stringify({ error: authResult.error }), {
+      status: 401,
+      headers: {
+        'Content-Type': 'application/json',
+        'WWW-Authenticate': 'Bearer',
+      },
+    }),
+    publicBypass: false,
+  };
+}
+
+/**
+ * Stable rate-limit key for a request. Prefers the authenticated principal's
+ * subject (so a single principal is throttled across IPs); falls back to the
+ * client address from `server.requestIP()`, and finally to a shared
+ * `unidentified` bucket when neither is available.
+ */
+function rateLimitKeyForRequest(
+  server: ReturnType<typeof Bun.serve>,
+  request: Request,
+  authContext: AuthContext | undefined,
+): string {
+  const subject = authContext?.principal?.subject;
+  if (subject !== undefined && subject.length > 0) {
+    return `principal:${subject}`;
+  }
+  const address = server.requestIP(request)?.address;
+  if (address !== undefined && address.length > 0) {
+    return `ip:${address}`;
+  }
+  return 'unidentified';
+}
+
+/**
+ * Apply the configured rate limiter to a request and return a `429` response
+ * when the request's key is over budget, or `null` to let it proceed. Public
+ * bypass requests (health, metrics, discovery) and servers without a limiter
+ * are never throttled. The `429` carries `Retry-After` and `X-RateLimit-*`
+ * headers and a masked, credential-free body.
+ */
+function enforceRateLimit(
+  context: ServerContext,
+  server: ReturnType<typeof Bun.serve>,
+  request: Request,
+  authContext: AuthContext | undefined,
+  publicBypass: boolean,
+): Response | null {
+  if (context.rateLimiter === null || publicBypass) {
+    return null;
+  }
+  const decision = context.rateLimiter.check(rateLimitKeyForRequest(server, request, authContext));
+  if (decision.allowed) {
+    return null;
+  }
+  return new Response(JSON.stringify({ error: 'Too Many Requests' }), {
+    status: 429,
+    headers: {
+      'Content-Type': 'application/json',
+      'Retry-After': String(decision.retryAfterSeconds),
+      'X-RateLimit-Limit': String(decision.limit),
+      'X-RateLimit-Remaining': String(decision.remaining),
+    },
+  });
+}
+
+/**
+ * Run the request gate: authenticate, then rate-limit. Returns a short-circuit
+ * `response` (401 or 429) when either step rejects, otherwise `response: null`
+ * with the resolved authentication outcome.
+ */
+export async function gateRequest(
+  server: ReturnType<typeof Bun.serve>,
+  context: ServerContext,
+  request: Request,
+): Promise<{ response: Response | null; authentication: AuthenticationOutcome }> {
+  const authentication = await authenticateRequest(context, request);
+  if (authentication.response !== null) {
+    return { response: authentication.response, authentication };
+  }
+  // Throttle authenticated (and unauthenticated-but-non-public) requests once a
+  // per-key budget is exceeded. Runs after auth so it can key by principal
+  // subject; before any handler so a flood is shed before doing real work.
+  const rateLimited = enforceRateLimit(
+    context,
+    server,
+    request,
+    authentication.authContext,
+    authentication.publicBypass,
+  );
+  return { response: rateLimited, authentication };
+}

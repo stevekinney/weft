@@ -9,7 +9,7 @@ import { DASHBOARD_MOUNT_PATTERNS } from '../dashboard/route-table.ts';
 import type { PrometheusExporter } from '../observability/metrics.ts';
 import type { RoutingPolicy } from '../worker/registry.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
-import type { AuthConfig } from './authentication.ts';
+import type { AuthConfig, RateLimitConfig } from './authentication.ts';
 import type { DiscoveryInfo } from './discovery-info.ts';
 import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
 import { createServerWebSocketHandlers } from './runtime/authentication-bridge.ts';
@@ -43,6 +43,23 @@ export {
 } from './runtime/event-broadcasting.ts';
 
 export type { CorsOptions } from './runtime/cors.ts';
+
+export {
+  createRateLimiter,
+  createRotatingApiKeyStore,
+  defaultAuthAuditSink,
+  isSensitiveHeader,
+  redactCredential,
+  redactHeaders,
+  validateRateLimitConfig,
+  type ApiKeyRegistration,
+  type AuthAuditEvent,
+  type AuthAuditSink,
+  type RateLimitConfig,
+  type RateLimitDecision,
+  type RateLimiter,
+  type RotatingApiKeyStore,
+} from './authentication.ts';
 
 /**
  * Static route patterns at which the dashboard shell is served, derived
@@ -114,6 +131,20 @@ export interface ServeOptions {
   dashboard?: unknown;
   /** Authentication configuration. When provided, all non-public endpoints require valid credentials. */
   auth?: AuthConfig;
+  /**
+   * In-process request rate limiting. When provided, the server throttles
+   * requests per key — the authenticated principal's subject when available,
+   * otherwise the client address — returning HTTP `429` with `Retry-After`
+   * once a key exceeds its window budget. Public-path requests (health,
+   * metrics, discovery) and CORS preflight are exempt.
+   *
+   * **This is a single-process load-shedding guardrail, not a distributed
+   * quota.** Behind multiple instances each process keeps its own counters;
+   * deployments needing a global budget should still front Weft with a
+   * shared reverse-proxy limiter. Omitting `rateLimit` disables limiting (the
+   * historical behavior). See {@link RateLimitConfig}.
+   */
+  rateLimit?: RateLimitConfig;
   /**
    * Cross-Origin Resource Sharing policy for browser clients (the dashboard
    * and the Service Worker / IndexedDB browser runtime) that call the server

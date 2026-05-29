@@ -1,5 +1,6 @@
 import type { AuthorizationScope } from '../authorization-scope.ts';
 import type { AuthenticatedPrincipal } from '../principal.ts';
+import type { AuthAuditSink } from './audit.ts';
 
 // ---------------------------------------------------------------------------
 // JWT algorithm types
@@ -158,6 +159,16 @@ export type AuthConfig = {
    * are authoritative for keys it admits). Defaults to `[]`.
    */
   defaultApiKeyScopes?: ReadonlyArray<AuthorizationScope>;
+  /**
+   * Sink for the authentication audit trail. The authenticator emits one
+   * structured {@link AuthAuditSink} event per non-public decision (admission
+   * or rejection), carrying the authenticated subject, method, and outcome —
+   * never the presented credential. Public-path bypasses are not audited.
+   * Defaults to a sink that writes one JSON line per event to the console
+   * (`console.info` for success, `console.warn` for failure). Set to a custom
+   * sink to forward audit records to a SIEM, or to a no-op to disable auditing.
+   */
+  auditSink?: AuthAuditSink;
 };
 
 // ---------------------------------------------------------------------------

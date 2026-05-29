@@ -64,6 +64,64 @@ const server = serve({
 
 The built-in API-key configuration grants the configured key the default authenticated scope set. JWT and custom authenticators can provide narrower scope sets such as `workflows:read`, `workflows:write`, `workflows:admin`, and `system:read`; requests missing the required scope fail with `401` or `403` before the operation runs.
 
+### Audit trail
+
+Every non-public authentication decision—admission or rejection—emits one structured audit event. By default the event is written as a single JSON line to the console (`console.info` for success, `console.warn` for failure) under the discriminator `weft.auth-audit`, carrying the authenticated `subject`, `method`, request `path`, `httpMethod`, `outcome`, and—on failure—a one-way `credentialFingerprint`. The presented credential itself is **never** logged. Supply `auth.auditSink` to forward events to a SIEM instead:
+
+```typescript partial
+const server = serve({
+  engine,
+  auth: {
+    apiKeys: [process.env.WEFT_API_KEY!],
+    auditSink: (event) => myStructuredLogger.info('auth', event),
+  },
+});
+```
+
+Public-path bypasses (health, metrics, discovery) are not audited—no credential is examined.
+
+### Credential redaction
+
+`redactCredential` and `redactHeaders` (exported from `weft/server`) mask `Authorization`, `X-API-Key`, `Cookie`, and `Proxy-Authorization` values before they reach a log line. Reach for them whenever you log request headers in custom middleware: a masked value keeps a short, non-reversible fingerprint for correlation without exposing the secret.
+
+## Rate limiting
+
+Set `rateLimit` to shed a flood from a single principal or IP. The limiter is a fixed-window counter keyed by the authenticated principal's `subject` when available, otherwise the client address. Once a key exceeds its budget within the window, the request gets a `429` with `Retry-After` and `X-RateLimit-*` headers; public-path requests and CORS preflight are exempt.
+
+```typescript partial
+const server = serve({
+  engine,
+  auth: { apiKeys: [process.env.WEFT_API_KEY!] },
+  rateLimit: { maxRequests: 100, windowMs: 60_000 },
+});
+```
+
+> [!WARNING] This is a single-process guardrail, not a distributed quota.
+> Behind multiple instances each process keeps its own counters. Deployments that need a global budget should still front Weft with a shared reverse-proxy limiter—the in-process limiter exists so a single instance cannot be trivially flooded even when no proxy is present.
+
+## Rotating API keys
+
+Static `apiKeys` are fixed for the lifetime of a `serve()` call, so rotating them means a config change and a restart. `createRotatingApiKeyStore` (from `weft/server`) closes that gap: it is a mutable, in-process key registry the authenticator consults on every request through the `resolveApiKeyPrincipal` hook. Add the replacement key, let it run alongside the outgoing one, then revoke the old key—all without downtime. During the overlap window both keys authenticate.
+
+```typescript partial
+import { createRotatingApiKeyStore, serve } from 'weft/server';
+
+const keys = createRotatingApiKeyStore();
+keys.add('key-v1', { subject: 'service-account', scopes: ['workflows:read'] });
+
+const server = serve({
+  engine,
+  auth: { resolveApiKeyPrincipal: keys.resolve },
+});
+
+// Later, rotate without restarting:
+keys.add('key-v2', { subject: 'service-account', scopes: ['workflows:read'] });
+// ...migrate clients to key-v2, then:
+keys.revoke('key-v1');
+```
+
+Each key may also carry an absolute `expiresAt` timestamp, after which it is rejected automatically without an explicit `revoke`.
+
 ## Cross-Origin Resource Sharing (CORS)
 
 The dashboard and the [Service Worker browser runtime](#service-worker) are browser clients. When they run on the **same origin** as the API—the default when the CLI serves the dashboard from `/`, or when a reverse proxy puts the UI and API behind one hostname—no CORS configuration is needed, and Weft ships nothing by default: `serve()` emits no `Access-Control-*` headers and only same-origin browser requests succeed. **The default is deliberately restrictive; Weft never sends `Access-Control-Allow-Origin: *`.**

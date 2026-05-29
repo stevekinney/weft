@@ -20,6 +20,7 @@ import type { OpenApiSecuritySchemeName } from '../openapi.ts';
 import { API_PREFIX } from '../route-model.ts';
 import type { ServerContext } from './context.ts';
 import { buildPreflightResponse, decorateResponseWithCors, isPreflightRequest } from './cors.ts';
+import { gateRequest } from './request-gate.ts';
 import { handleTaskPollRequest, handleTaskResultRequest } from './task-polling.ts';
 import { reassignOrExpireTask } from './task-reconciliation.ts';
 import { addStreamSocket, removeStreamSocket, replayTokenStream } from './websocket-stream.ts';
@@ -45,45 +46,6 @@ export function deriveSupportedOpenApiSecuritySchemes(
     schemes.add('apiKeyAuth');
   }
   return schemes;
-}
-
-export async function authenticateRequest(
-  context: ServerContext,
-  request: Request,
-): Promise<{
-  authContext?: AuthContext;
-  response: Response | null;
-}> {
-  if (!context.authenticatorPromise) {
-    return { response: null };
-  }
-
-  const authenticator = await context.authenticatorPromise;
-  const authResult = await authenticator(request);
-  if (authResult.authenticated) {
-    if (authResult.method === 'public') {
-      return { response: null };
-    }
-
-    return {
-      authContext: {
-        method: authResult.method,
-        ...(authResult.claims !== undefined ? { claims: authResult.claims } : {}),
-        ...(authResult.principal !== undefined ? { principal: authResult.principal } : {}),
-      },
-      response: null,
-    };
-  }
-
-  return {
-    response: new Response(JSON.stringify({ error: authResult.error }), {
-      status: 401,
-      headers: {
-        'Content-Type': 'application/json',
-        'WWW-Authenticate': 'Bearer',
-      },
-    }),
-  };
 }
 
 /**
@@ -169,10 +131,13 @@ async function dispatchServerFetchRequest(
   const request = stripApiPrefix(originalRequest);
   const url = new URL(request.url);
 
-  const authentication = await authenticateRequest(context, request);
-  if (authentication.response) {
-    return authentication.response;
+  // Authenticate, then rate-limit. Either step can short-circuit with a
+  // response (401 / 429); otherwise the gate yields the resolved auth context.
+  const gate = await gateRequest(server, context, request);
+  if (gate.response !== null) {
+    return gate.response;
   }
+  const authentication = gate.authentication;
 
   // `handleWebSocketUpgrade` resolves the principal only for
   // `/jsonrpc` connections and only after the Upgrade-header
