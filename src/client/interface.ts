@@ -35,11 +35,40 @@ import type {
   TypedListFilter,
   UpdateDefinition,
   WorkflowEvent,
+  WorkflowInput,
+  WorkflowOutput,
+  WorkflowRegistry,
   WorkflowReplay,
   WorkflowState,
   WorkflowSummary,
   WorkflowTimelineEntry,
 } from '../core/types.ts';
+
+// ---------------------------------------------------------------------------
+// Registry-driven typing for client call sites
+// ---------------------------------------------------------------------------
+
+/**
+ * Workflow names known to the augmented {@link WorkflowRegistry}. Empty
+ * (`never`) until a project augments the registry — typically by running
+ * `weft codegen` and including the generated `.d.ts` in its compilation. The
+ * client's typed `start`/`schedule` overloads key off this set, so without
+ * codegen they degrade to the permissive string-name overloads.
+ */
+export type KnownWorkflowName = Extract<keyof WorkflowRegistry, string>;
+
+/**
+ * Resolves to `TName` only when the {@link WorkflowRegistry} carries no known
+ * names (codegen has not run, or no workflow types were emitted). This gates
+ * the permissive string-name `start`/`schedule` overload so that, once the
+ * registry is populated, callers must pass a registered name (or fall through
+ * to the typed overload). Mirrors the engine's
+ * `UnknownWorkflowNameWhenDefaultRegistryIsEmpty` gate, scoped to the global
+ * registry the client consumes.
+ */
+export type UnknownNameWhenRegistryEmpty<TName extends string> = [KnownWorkflowName] extends [never]
+  ? TName
+  : never;
 
 // ---------------------------------------------------------------------------
 // Client handle — lightweight reference to a running workflow
@@ -69,13 +98,20 @@ import type {
  * const result = await handle.result();
  * console.log(result); // 'pong'
  * ```
+ *
+ * The `TResult` parameter carries the workflow's output type. It defaults to
+ * `unknown`, so untyped (string-name) call sites are unaffected. When a
+ * project augments {@link WorkflowRegistry} (typically via `weft codegen`),
+ * the typed `start` overload returns `ClientHandle<WorkflowOutput<...>>` and
+ * `result()` is narrowed to that workflow's output.
  */
-export interface ClientHandle extends TypedEventTarget<WeftEventMap>, Disposable {
+export interface ClientHandle<TResult = unknown>
+  extends TypedEventTarget<WeftEventMap>, Disposable {
   /** The workflow's unique identifier. */
   readonly id: string;
 
   /** Resolves when the workflow completes (or rejects on failure). */
-  result(): Promise<unknown>;
+  result(): Promise<TResult>;
 
   /** Cancel this workflow. */
   cancel(): Promise<void>;
@@ -191,12 +227,42 @@ export type UpdateResult = {
  * ```
  */
 export interface WeftClient {
-  /** Start a new workflow and return a handle to it. */
-  start(type: string, input: unknown, options?: StartOptions): Promise<ClientHandle>;
+  /**
+   * Start a new workflow and return a handle to it.
+   *
+   * When the {@link WorkflowRegistry} is augmented (e.g. via `weft codegen`),
+   * the workflow name narrows `input` to that workflow's input type and the
+   * returned handle's `result()` to its output type. Without augmentation the
+   * permissive string-name overload applies, so the client stays usable with
+   * plain string names and no hard dependency on codegen.
+   */
+  start<TName extends KnownWorkflowName>(
+    type: TName,
+    input: WorkflowInput<WorkflowRegistry, TName>,
+    options?: StartOptions,
+  ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
+  start<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
+    input: unknown,
+    options?: StartOptions,
+  ): Promise<ClientHandle>;
 
-  /** Register a recurring schedule (cron string or interval spec) and return a handle to it. */
-  schedule(
-    type: string,
+  /**
+   * Register a recurring schedule (cron string or interval spec) and return a
+   * handle to it.
+   *
+   * Like {@link WeftClient.start}, the workflow name narrows `input` to the
+   * registered workflow's input type when the {@link WorkflowRegistry} is
+   * augmented; otherwise the string-name overload applies.
+   */
+  schedule<TName extends KnownWorkflowName>(
+    type: TName,
+    input: WorkflowInput<WorkflowRegistry, TName>,
+    spec: string | ScheduleSpec,
+    options?: ScheduleOptions,
+  ): Promise<ClientScheduleHandle>;
+  schedule<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
     input: unknown,
     spec: string | ScheduleSpec,
     options?: ScheduleOptions,

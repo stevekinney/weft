@@ -42,6 +42,9 @@ import type {
   TypedListFilter,
   UpdateDefinition,
   WorkflowEvent,
+  WorkflowInput,
+  WorkflowOutput,
+  WorkflowRegistry,
   WorkflowReplay,
   WorkflowState,
   WorkflowSummary,
@@ -49,7 +52,14 @@ import type {
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
 import { ScheduleHandleDelegation, WorkflowHandleDelegation } from './handle-delegation.ts';
-import type { ClientHandle, ClientScheduleHandle, UpdateResult, WeftClient } from './interface.ts';
+import type {
+  ClientHandle,
+  ClientScheduleHandle,
+  KnownWorkflowName,
+  UnknownNameWhenRegistryEmpty,
+  UpdateResult,
+  WeftClient,
+} from './interface.ts';
 
 // ---------------------------------------------------------------------------
 // LocalHandle — wraps Engine's WorkflowHandle
@@ -162,11 +172,33 @@ export class LocalClient implements WeftClient {
     };
   }
 
+  async start<TName extends KnownWorkflowName>(
+    type: TName,
+    input: WorkflowInput<WorkflowRegistry, TName>,
+    options?: StartOptions,
+  ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
+  async start<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
+    input: unknown,
+    options?: StartOptions,
+  ): Promise<ClientHandle>;
   async start(type: string, input: unknown, options?: StartOptions): Promise<ClientHandle> {
     const handle = await this.#engine.start(type, input, options);
     return new LocalHandle(handle, this);
   }
 
+  async schedule<TName extends KnownWorkflowName>(
+    type: TName,
+    input: WorkflowInput<WorkflowRegistry, TName>,
+    spec: string | ScheduleSpec,
+    options?: ScheduleOptions,
+  ): Promise<ClientScheduleHandle>;
+  async schedule<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
+    input: unknown,
+    spec: string | ScheduleSpec,
+    options?: ScheduleOptions,
+  ): Promise<ClientScheduleHandle>;
   async schedule(
     type: string,
     input: unknown,

@@ -28,6 +28,9 @@ import type {
   TypedListFilter,
   UpdateDefinition,
   WorkflowEvent,
+  WorkflowInput,
+  WorkflowOutput,
+  WorkflowRegistry,
   WorkflowReplay,
   WorkflowState,
   WorkflowSummary,
@@ -52,7 +55,14 @@ import {
 import { HttpHandle } from './http-handle.ts';
 import { request, type HttpClientOptions } from './http-request.ts';
 import { HttpScheduleHandle } from './http-schedule-handle.ts';
-import type { ClientHandle, ClientScheduleHandle, UpdateResult, WeftClient } from './interface.ts';
+import type {
+  ClientHandle,
+  ClientScheduleHandle,
+  KnownWorkflowName,
+  UnknownNameWhenRegistryEmpty,
+  UpdateResult,
+  WeftClient,
+} from './interface.ts';
 import { buildScheduleListSearchParams } from './schedule-list-search-params.ts';
 import { buildWorkflowListSearchParams } from './search-params.ts';
 import { buildStartBody } from './start-body.ts';
@@ -139,6 +149,16 @@ export class HttpClient implements WeftClient {
     this.headers = Object.fromEntries(headers.entries());
   }
 
+  async start<TName extends KnownWorkflowName>(
+    type: TName,
+    input: WorkflowInput<WorkflowRegistry, TName>,
+    options?: StartOptions,
+  ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
+  async start<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
+    input: unknown,
+    options?: StartOptions,
+  ): Promise<ClientHandle>;
   async start(type: string, input: unknown, options?: StartOptions): Promise<ClientHandle> {
     const body = buildStartBody(type, input, options);
     const response = await request<{ id: string }>(this.baseUrl, '/workflows', this.headers, {
@@ -149,6 +169,18 @@ export class HttpClient implements WeftClient {
     return new HttpHandle(response.id, this);
   }
 
+  async schedule<TName extends KnownWorkflowName>(
+    type: TName,
+    input: WorkflowInput<WorkflowRegistry, TName>,
+    spec: string | ScheduleSpec,
+    options?: ScheduleOptions,
+  ): Promise<ClientScheduleHandle>;
+  async schedule<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
+    input: unknown,
+    spec: string | ScheduleSpec,
+    options?: ScheduleOptions,
+  ): Promise<ClientScheduleHandle>;
   async schedule(
     type: string,
     input: unknown,

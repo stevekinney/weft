@@ -571,6 +571,16 @@ describe('emitRegistryDeclaration', () => {
     expect(output.endsWith('\n')).toBe(true);
   });
 
+  it('documents in the banner that the augmentation types both engine and client call sites', () => {
+    // The emitted `WorkflowRegistry` augmentation is the single source of
+    // truth for `engine.start`, the client (`WeftClient.start`/`schedule`),
+    // and `result()` output narrowing. The banner records that intent so the
+    // generated file is self-explanatory and consumers know it is not
+    // engine-only.
+    const output = emitRegistryDeclaration(buildSnapshot());
+    expect(output).toContain('type engine and client call sites');
+  });
+
   it('is byte-identical across two runs with the same input', () => {
     const snapshot = buildSnapshot({
       workflows: {

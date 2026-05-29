@@ -147,6 +147,17 @@ describe('LocalClient', () => {
       const result = await handle.result();
       expect(result).toBe(42);
     });
+
+    it('works with arbitrary string workflow names when WorkflowRegistry is not augmented', async () => {
+      // Without `weft codegen` the global `WorkflowRegistry` is empty, so the
+      // typed `start` overload contributes no known names and the permissive
+      // string-name overload applies. Registry-driven typing must therefore be
+      // a no-op at runtime: the client stays usable with plain string names and
+      // an `unknown` input, with no hard dependency on generated declarations.
+      const handle = await client.start('echo', { arbitrary: 'payload' });
+      const result = await handle.result();
+      expect(result).toEqual({ arbitrary: 'payload' });
+    });
   });
 
   describe('get', () => {

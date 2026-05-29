@@ -8,7 +8,9 @@ import {
   workflow,
   type AnyActivityDefinition,
   type AnyWorkflowDefinition,
+  type ClientHandle,
   type InferActivityEntry,
+  type WeftClient,
   type WorkflowContext,
   type WorkflowDefinition,
   type WorkflowHandle,
@@ -177,6 +179,38 @@ void verifyModuleAugmentedStart;
 
 // @ts-expect-error workflow names must be present in the augmented registry or registered.
 void engine.start('runtime-discovered', { id: 'dynamic' });
+
+// The same module augmentation (the surface `weft codegen` emits) also types
+// the CLIENT. A `WeftClient` narrows `start`/`schedule` input to the
+// augmented workflow's input type and the returned handle's `result()` to its
+// output type — proving per-workflow typed client methods, not just engine
+// methods, flow from the generated `WorkflowRegistry` declaration.
+declare const typedClient: WeftClient;
+
+async function verifyModuleAugmentedClientStart(): Promise<void> {
+  // @ts-expect-error client start input must match the module-augmented input type.
+  void typedClient.start('moduleAugmentedWelcome', { id: 'wrong' });
+
+  const handle = await typedClient.start('moduleAugmentedWelcome', { name: 'Grace' });
+
+  // The handle is parameterized by the augmented workflow's output type.
+  const typedHandle: ClientHandle<WelcomeOutput> = handle;
+  void typedHandle;
+
+  const output = await handle.result();
+  // `result()` resolves to the augmented output type, so property access is safe.
+  output.greeting.toUpperCase();
+  const outputCheck: Equals<typeof output, WelcomeOutput> = true;
+  void outputCheck;
+}
+void verifyModuleAugmentedClientStart;
+
+async function verifyModuleAugmentedClientSchedule(): Promise<void> {
+  // @ts-expect-error client schedule input must match the module-augmented input type.
+  void typedClient.schedule('moduleAugmentedWelcome', { id: 'wrong' }, '0 9 * * 1');
+  await typedClient.schedule('moduleAugmentedWelcome', { name: 'Grace' }, '0 9 * * 1');
+}
+void verifyModuleAugmentedClientSchedule;
 
 // Activity name brand-rejection at the `engine.register` boundary was
 // intentionally removed when the global `ActivityTypes` augmentation went

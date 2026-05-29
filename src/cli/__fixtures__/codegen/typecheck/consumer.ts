@@ -15,6 +15,7 @@
 // reports TS2339 — the check is non-vacuous).
 
 import type { Engine } from 'weft';
+import type { WeftClient } from 'weft/client';
 
 declare const engine: Engine;
 
@@ -28,3 +29,28 @@ void knownWorkflow;
 
 // @ts-expect-error workflow input must match the augmented input type.
 void engine.start('welcome', { wrongShape: true });
+
+// The same generated augmentation also types the CLIENT surface. A client
+// typed as `WeftClient` narrows `start`'s input to the registered workflow's
+// input schema and `handle.result()` to its output schema — proving the
+// generated `.d.ts` covers client call sites, not just `engine.start`.
+declare const client: WeftClient;
+
+async function knownWorkflowViaClient(): Promise<void> {
+  const handle = await client.start('welcome', { name: 'Steve' });
+  const output = await handle.result();
+  output.greeting.toUpperCase();
+}
+void knownWorkflowViaClient;
+
+// @ts-expect-error client workflow input must match the augmented input type.
+void client.start('welcome', { wrongShape: true });
+
+// Schedules consume the same registry-driven input typing.
+async function scheduledWorkflowViaClient(): Promise<void> {
+  await client.schedule('welcome', { name: 'Steve' }, '0 9 * * 1');
+}
+void scheduledWorkflowViaClient;
+
+// @ts-expect-error client schedule input must match the augmented input type.
+void client.schedule('welcome', { wrongShape: true }, '0 9 * * 1');
