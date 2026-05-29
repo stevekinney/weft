@@ -179,7 +179,7 @@ export async function cleanupWorkflowStorage(
   // effect volume across the engine's lifetime.
   const prefixes: string[] = [
     KEYS.activityReconciliationPrefix(workflowId),
-    `async-act:v1:${encodedWorkflowId}:`,
+    KEYS.asyncActivityWorkflowPrefix(workflowId),
     KEYS.signalAcceptedResponsePrefix(workflowId),
     `sig:${encodedWorkflowId}:`,
     `state:execution:${encodedWorkflowId}:`,

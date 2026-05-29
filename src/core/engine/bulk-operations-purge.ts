@@ -347,7 +347,7 @@ function workflowPurgePrefixes(workflowId: string): string[] {
     `tool-effect:${encodedWorkflowId}:`,
     `upk:${encodedWorkflowId}:`,
     `actrec:v1:${encodedWorkflowId}:`,
-    `async-act:v1:${encodedWorkflowId}:`,
+    KEYS.asyncActivityWorkflowPrefix(workflowId),
     `sigres:v1:${encodedWorkflowId}:`,
   ];
 }

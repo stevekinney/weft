@@ -246,7 +246,8 @@ export async function executeActivity(
   // Build an ActivityContext so the activity function can send heartbeats and
   // defer to out-of-band completion. The async-completion token is derived from
   // the deterministic workflow step (not the per-yield operationId), so it is
-  // stable across crash/replay.
+  // stable across crash/replay. The step is always set when the operation is
+  // created via ctx.run(); a missing step is a caller contract violation.
   const abortController = internals.inlineStrategy?.getAbortController(workflowId);
   const asyncToken = deriveAsyncActivityToken(workflowId, operation.step ?? 0, attempt);
   const activityContext: ActivityContext = {

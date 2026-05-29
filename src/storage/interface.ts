@@ -416,6 +416,8 @@ export const KEYS = {
     `op:resolved-by-time:${formatSortableTimestamp(resolvedAt)}:${encodeStorageKeyComponent(id)}`,
   asyncActivity: (workflowId: string, token: string) =>
     `async-act:v1:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(token)}`,
+  asyncActivityWorkflowPrefix: (workflowId: string) =>
+    `async-act:v1:${encodeStorageKeyComponent(workflowId)}:`,
   activityReconciliationPrefix: (workflowId: string) =>
     `actrec:v1:${encodeStorageKeyComponent(workflowId)}:`,
   activityReconciliation: (

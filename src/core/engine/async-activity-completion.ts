@@ -265,8 +265,11 @@ async function consumePendingAsyncActivity(
   if (!pending) {
     throw new AsyncActivityTokenNotFoundError(token);
   }
-  internals.pendingAsyncActivities.delete(token);
+  // Delete the durable record first so that if storage rejects the in-memory
+  // token is not silently lost. If storage.delete fails, the token remains in
+  // memory and the caller can retry.
   await internals.storage.delete(KEYS.asyncActivity(pending.workflowId, token));
+  internals.pendingAsyncActivities.delete(token);
   return pending;
 }
 
