@@ -64,12 +64,29 @@ describe('serve() with rate limiting', () => {
     expect(body.error).toBe('Too Many Requests');
   });
 
-  it('exempts public paths (health) from rate limiting', async () => {
+  it('exempts public paths (health) from rate limiting when auth is configured', async () => {
     engine = createEngine();
     server = serve({
       engine,
       port: 0,
       auth: { apiKeys: [TEST_API_KEY] },
+      rateLimit: { maxRequests: 1, windowMs: 60_000 },
+    });
+
+    // Far more health probes than the budget — none should be throttled.
+    for (let i = 0; i < 5; i++) {
+      const response = await fetch(`${server.url}/v1/health`);
+      expect(response.status).not.toBe(429);
+      await response.body?.cancel();
+    }
+  });
+
+  it('exempts public paths (health) from rate limiting even without auth configured', async () => {
+    engine = createEngine();
+    server = serve({
+      engine,
+      port: 0,
+      // No auth — rate limiter must still exempt public paths independently.
       rateLimit: { maxRequests: 1, windowMs: 60_000 },
     });
 
