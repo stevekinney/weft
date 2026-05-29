@@ -58,6 +58,10 @@ describe('output helpers', () => {
     expect(formatDuration(9_999)).toBe('9.9s');
     // 10s exactly enters the whole-seconds display
     expect(formatDuration(10_000)).toBe('10s');
+    // 999.5ms has 999 whole ms — must stay as "999ms", NOT "1000ms"
+    expect(formatDuration(999.5)).toBe('999ms');
+    // 1000ms exactly enters the seconds bucket
+    expect(formatDuration(1000)).toBe('1.0s');
   });
 
   it('truncates to terminal width with an ellipsis', () => {

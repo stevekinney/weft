@@ -60,7 +60,10 @@ export function formatTimestamp(value: unknown): string {
  */
 export function formatDuration(milliseconds: number): string {
   if (!Number.isFinite(milliseconds) || milliseconds < 0) return '-';
-  if (milliseconds < 1000) return `${Math.round(milliseconds)}ms`;
+  // Use integer-millisecond floor for bucket boundary to prevent "1000ms"
+  // when milliseconds is fractional (e.g. 999.5 rounds to 1000 with Math.round).
+  const wholeMilliseconds = Math.floor(milliseconds);
+  if (wholeMilliseconds < 1000) return `${wholeMilliseconds}ms`;
   const totalSeconds = milliseconds / 1000;
   // Use integer-seconds arithmetic throughout to avoid rounding across bucket
   // boundaries (e.g. 59.999s rounding to "60s", or 119.6s producing "1m 60s").
