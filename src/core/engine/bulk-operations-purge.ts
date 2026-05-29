@@ -209,6 +209,11 @@ export async function purgeWorkflow(
   forgetCommittedCheckpointBytes(internals, workflowId);
   internals.checkpoints.delete(workflowId);
   internals.heartbeatDetails.delete(workflowId);
+  for (const [token, pending] of internals.pendingAsyncActivities) {
+    if (pending.workflowId === workflowId) {
+      internals.pendingAsyncActivities.delete(token);
+    }
+  }
   internals.eventLogHeads.delete(workflowId);
   internals.workflowVersionTuples.delete(workflowId);
   internals.handleCache.delete(workflowId);
@@ -342,6 +347,7 @@ function workflowPurgePrefixes(workflowId: string): string[] {
     `tool-effect:${encodedWorkflowId}:`,
     `upk:${encodedWorkflowId}:`,
     `actrec:v1:${encodedWorkflowId}:`,
+    `async-act:v1:${encodedWorkflowId}:`,
     `sigres:v1:${encodedWorkflowId}:`,
   ];
 }

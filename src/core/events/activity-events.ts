@@ -63,6 +63,51 @@ export class ActivityCompletedEvent extends Event {
 }
 
 /**
+ * Fired on the {@link Engine} when an activity defers to out-of-band completion
+ * by calling `ctx.completeAsync()` from its {@link ActivityContext}. The
+ * `token` is the durable, deterministic task token an external system passes to
+ * `engine.completeAsyncActivity(token, result)` /
+ * `engine.failAsyncActivity(token, error)` (or the matching
+ * `client.activity.*` methods) to resume the workflow. The token survives
+ * engine restart, so a callback that arrives after a crash still resolves the
+ * right activity.
+ *
+ * @example
+ * ```ts
+ * import { Engine, ActivityAsyncPendingEvent } from 'weft';
+ *
+ * const engine = new Engine();
+ * engine.addEventListener('activity:async-pending', (e: Event) => {
+ *   const ev = e as ActivityAsyncPendingEvent;
+ *   console.log('awaiting external completion of', ev.activityName, 'token', ev.token);
+ * });
+ * ```
+ */
+export class ActivityAsyncPendingEvent extends Event {
+  static readonly type = 'activity:async-pending' as const;
+  readonly token: string;
+  readonly operationId: string;
+  readonly workflowId: string;
+  readonly activityName: string;
+  readonly attempt: number;
+
+  constructor(
+    token: string,
+    operationId: string,
+    workflowId: string,
+    activityName: string,
+    attempt: number,
+  ) {
+    super(ActivityAsyncPendingEvent.type);
+    this.token = token;
+    this.operationId = operationId;
+    this.workflowId = workflowId;
+    this.activityName = activityName;
+    this.attempt = attempt;
+  }
+}
+
+/**
  * Fired on the {@link Engine} when an activity execution throws an error.
  * Check `e.attempt` to distinguish first-attempt failures from retries.
  * Read `e.error` for the thrown error object. `attempt` is 1-indexed —

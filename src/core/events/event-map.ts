@@ -1,5 +1,6 @@
 import type { ReviewCompletedEvent, ReviewRequestedEvent } from '../review/events.ts';
 import type {
+  ActivityAsyncPendingEvent,
   ActivityCompletedEvent,
   ActivityFailedEvent,
   ActivityStartedEvent,
@@ -56,6 +57,7 @@ export type WeftEventMap = {
   'activity:started': ActivityStartedEvent;
   'activity:completed': ActivityCompletedEvent;
   'activity:failed': ActivityFailedEvent;
+  'activity:async-pending': ActivityAsyncPendingEvent;
   'signal:received': SignalReceivedEvent;
   'signal:delivered': SignalDeliveredEvent;
   'human-review:requested': ReviewRequestedEvent;

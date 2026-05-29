@@ -130,8 +130,35 @@ class LocalScheduleHandle extends ScheduleHandleDelegation<LocalClient> {
 export class LocalClient implements WeftClient {
   readonly #engine: RuntimeWorkflowEngine;
 
+  /**
+   * Out-of-band ("async") activity completion. An activity that called
+   * `ActivityContext.completeAsync()` parks its workflow until an external
+   * system resolves it by task token through these methods.
+   *
+   * @example
+   * ```ts
+   * import { Engine, LocalClient } from 'weft';
+   *
+   * const engine = new Engine();
+   * const client = new LocalClient(engine);
+   * // `token` came from the engine's `activity:async-pending` event.
+   * // await client.activity.complete(token, { ok: true });
+   * void client;
+   * ```
+   */
+  readonly activity: {
+    /** Complete a deferred activity by token, resuming its workflow with `result`. */
+    complete(token: string, result: unknown): Promise<void>;
+    /** Fail a deferred activity by token; the error is thrown into its workflow. */
+    completeExceptionally(token: string, error: unknown): Promise<void>;
+  };
+
   constructor(engine: Engine) {
     this.#engine = runtimeWorkflowEngine(engine);
+    this.activity = {
+      complete: (token, result) => this.#engine.completeAsyncActivity(token, result),
+      completeExceptionally: (token, error) => this.#engine.failAsyncActivity(token, error),
+    };
   }
 
   async start(type: string, input: unknown, options?: StartOptions): Promise<ClientHandle> {

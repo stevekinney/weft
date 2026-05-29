@@ -124,6 +124,16 @@ export interface EngineInternals {
   workflowHeaders: Map<string, Map<string, string>>;
   workflowStateWriteChains: Map<string, Promise<void>>;
   heartbeatDetails: Map<string, unknown>;
+  /**
+   * Activities that called `ctx.completeAsync()` and are awaiting out-of-band
+   * completion via `engine.completeAsyncActivity` / `failAsyncActivity`, keyed
+   * by their durable task token. Mirrored to storage (`KEYS.asyncActivity`) and
+   * reloaded by `recoverAll()`. See `async-activity-completion.ts`.
+   */
+  pendingAsyncActivities: Map<
+    string,
+    import('./async-activity-completion.ts').PendingAsyncActivity
+  >;
   pendingStarts: Set<string>;
   pendingScheduleCreations: Set<string>;
   workflowsNeedingTerminalCleanup: Set<string>;

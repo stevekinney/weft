@@ -12,6 +12,11 @@ import {
   writeActivityReconciliationTransition,
   type ActivityReconciliationMetadata,
 } from './activity-reconciliation.ts';
+import {
+  AsyncActivityDeferral,
+  deriveAsyncActivityToken,
+  parkDeferredAsyncActivity,
+} from './async-activity-completion.ts';
 import { ActivityResolutionError } from './errors.ts';
 import type { EngineInternals } from './internals.ts';
 import type { SpeculativeExecutionState } from './speculative-execution-state.ts';
@@ -242,12 +247,19 @@ export async function executeActivity(
 ): Promise<unknown> {
   const activityInput = operation.input;
 
-  // Build an ActivityContext so the activity function can send heartbeats.
+  // Build an ActivityContext so the activity function can send heartbeats and
+  // defer to out-of-band completion. The async-completion token is derived from
+  // the deterministic workflow step (not the per-yield operationId), so it is
+  // stable across crash/replay.
   const abortController = internals.inlineStrategy?.getAbortController(workflowId);
+  const asyncToken = deriveAsyncActivityToken(workflowId, operation.step ?? 0, attempt);
   const activityContext: ActivityContext = {
     signal: abortController?.signal ?? new AbortController().signal,
     heartbeat: (details?: unknown) => {
       internals.heartbeatDetails.set(workflowId, details);
+    },
+    completeAsync: () => {
+      throw new AsyncActivityDeferral(asyncToken);
     },
   };
 
@@ -458,7 +470,25 @@ export async function processActivityOperation(
   operation: ActivityOperation,
   callbacks: ActivityOperationCallbacks,
 ): Promise<void> {
-  return callbacks.runOperationWithResult(workflowId, operation, () =>
-    executeActivityOperationResult(internals, workflowId, operation, callbacks),
-  );
+  // An activity that calls `ActivityContext.completeAsync()` throws
+  // `AsyncActivityDeferral`. Catch it here so the operation neither completes
+  // nor fails: park the pending token durably and hand `runOperationWithResult`
+  // a promise that never settles, leaving the workflow suspended until an
+  // out-of-band completion resumes it.
+  return callbacks.runOperationWithResult(workflowId, operation, async () => {
+    try {
+      return await executeActivityOperationResult(internals, workflowId, operation, callbacks);
+    } catch (error) {
+      if (error instanceof AsyncActivityDeferral) {
+        return parkDeferredAsyncActivity(internals, error, {
+          workflowId,
+          activityName: operation.activityName,
+          operationId: operation.operationId,
+          step: operation.step ?? 0,
+          attempt: getActivityAttempt(operation),
+        });
+      }
+      throw error;
+    }
+  });
 }

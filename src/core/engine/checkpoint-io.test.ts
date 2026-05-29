@@ -126,6 +126,7 @@ function createCleanupInternals(storage: MemoryStorage, checkpoint: Checkpoint):
     ...createCheckpointInternals(storage, checkpoint),
     cancelHandlersByWorkflow: new Map(),
     heartbeatDetails: new Map(),
+    pendingAsyncActivities: new Map(),
     parkedInlineWorkflows: new Set(),
     reviewEscalationHandlers: new Map(),
     reviewTimerIds: new Map(),

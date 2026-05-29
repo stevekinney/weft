@@ -179,6 +179,7 @@ export async function cleanupWorkflowStorage(
   // effect volume across the engine's lifetime.
   const prefixes: string[] = [
     KEYS.activityReconciliationPrefix(workflowId),
+    `async-act:v1:${encodedWorkflowId}:`,
     KEYS.signalAcceptedResponsePrefix(workflowId),
     `sig:${encodedWorkflowId}:`,
     `state:execution:${encodedWorkflowId}:`,
@@ -246,6 +247,11 @@ export function cleanupTerminalWorkflowMemory(
   forgetCommittedCheckpointBytes(internals, workflowId);
   internals.checkpoints.delete(workflowId);
   internals.heartbeatDetails.delete(workflowId);
+  for (const [token, pending] of internals.pendingAsyncActivities) {
+    if (pending.workflowId === workflowId) {
+      internals.pendingAsyncActivities.delete(token);
+    }
+  }
   internals.eventLogHeads.delete(workflowId);
   internals.pendingTimelineEntries.delete(workflowId);
   internals.parkedInlineWorkflows.delete(workflowId);

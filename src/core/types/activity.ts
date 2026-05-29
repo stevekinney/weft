@@ -61,6 +61,39 @@ export type ActivityFunction<TInput = unknown, TOutput = unknown> = (
 export interface ActivityContext {
   signal: AbortSignal;
   heartbeat(details?: unknown): void;
+  /**
+   * Defer this activity to out-of-band completion. Calling `completeAsync()`
+   * hands the work off to an external system — a webhook, a human callback, a
+   * third-party async job — and suspends the workflow at this step until
+   * something outside the engine resolves the activity by its task token via
+   * `engine.completeAsyncActivity(token, result)` /
+   * `engine.failAsyncActivity(token, error)` (or the matching
+   * `client.activity.*` methods).
+   *
+   * The returned task token is durable and deterministic: it is announced on
+   * the engine as an `activity:async-pending` event, survives engine restart,
+   * and is re-minted identically when the activity replays after recovery.
+   *
+   * `completeAsync()` never returns normally — it throws an internal sentinel
+   * that the engine recognizes to park the activity. Call it as the last
+   * statement of (or `return` it from) the activity, and do not catch the
+   * thrown sentinel.
+   *
+   * @example
+   * ```ts
+   * import { activity, type ActivityContext } from 'weft';
+   *
+   * const awaitWebhook = activity({
+   *   name: 'awaitWebhook',
+   *   execute: async (input: { callbackUrl: string }, ctx?: ActivityContext) => {
+   *     await fetch(input.callbackUrl, { method: 'POST' });
+   *     return ctx!.completeAsync();
+   *   },
+   * });
+   * void awaitWebhook;
+   * ```
+   */
+  completeAsync(): never;
 }
 
 // ---------------------------------------------------------------------------

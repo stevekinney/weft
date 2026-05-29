@@ -36,6 +36,12 @@ export type ContextOperationRequest =
       options?: Record<string, unknown>;
       /** Dispatch attempt used for worker payloads, interceptors, and reconciliation verifiers. */
       attempt?: number;
+      /**
+       * Deterministic workflow step index for this activity call. Stable across
+       * replay (unlike `operationId`, which is regenerated each yield), so it
+       * anchors the durable async-completion task token to a fixed activity.
+       */
+      step?: number;
       /** Serialized interceptor headers (Map entries) for remote worker propagation. */
       headers?: [string, string][];
     }
