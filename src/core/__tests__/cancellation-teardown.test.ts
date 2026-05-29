@@ -175,6 +175,29 @@ describe('ctx.onCancel()', () => {
     engine[Symbol.dispose]();
   });
 
+  it('does not call handlers when cancellation loses the terminal race', async () => {
+    const engine = new Engine();
+    let cancelFired = false;
+
+    const fastWorkflow = workflow({ name: 'on-cancel-race-no-fire' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      ctx.onCancel(() => {
+        cancelFired = true;
+      });
+      return 'done';
+    });
+    engine.register(fastWorkflow);
+
+    const handle = await engine.start('on-cancel-race-no-fire', null);
+    await expect(handle.result()).resolves.toBe('done');
+
+    await engine.cancel(handle.id);
+    expect(cancelFired).toBe(false);
+
+    engine[Symbol.dispose]();
+  });
+
   it('does not call the handler when the workflow times out', async () => {
     const engine = new Engine();
     let cancelFired = false;
