@@ -126,6 +126,48 @@ describe('WorkflowEventSubscription', () => {
     expect(subscription.closeReason).toBe('workflow-terminal');
   });
 
+  it('overlap dedup is consuming: keeps a second identical live frame that history did not cover', async () => {
+    // Regression: the overlap-window dedup must consume each history entry at
+    // most once. Two structurally identical live frames buffered during the
+    // fetch, where history covers only one, must not both be dropped — the
+    // genuinely new second frame has to survive.
+    const server = new FakeWebSocketServer();
+    const received: WorkflowEvent[] = [];
+
+    const fetchStarted = Promise.withResolvers<void>();
+    const releaseFetch = Promise.withResolvers<void>();
+    const history: EventHistoryFetcher = async () => {
+      fetchStarted.resolve();
+      await releaseFetch.promise;
+      // History covers exactly one of the two identical live frames.
+      return [event('signal:received', { name: 'tick' })];
+    };
+
+    const subscription = new WorkflowEventSubscription(
+      'ws://test/watch',
+      {},
+      'wf-dedup',
+      history,
+      (e) => received.push(e),
+      { webSocketFactory: server.factory },
+    );
+
+    // Socket is open and the catch-up fetch is in flight; both identical frames
+    // land in the live buffer before history resolves.
+    await fetchStarted.promise;
+    await waitFor(() => server.sockets.length === 1 && server.latest().opened);
+    server.latest().deliver(event('signal:received', { name: 'tick' }));
+    server.latest().deliver(event('signal:received', { name: 'tick' }));
+
+    releaseFetch.resolve();
+
+    // History emits one; one buffered frame overlaps and is dropped; the second
+    // identical frame is genuinely new and must still be delivered.
+    await waitFor(() => received.length === 2);
+    expect(received.map((e) => e.type)).toEqual(['signal:received', 'signal:received']);
+    subscription.close();
+  });
+
   it('async-iterates events and terminates on a terminal event', async () => {
     const server = new FakeWebSocketServer();
     const subscription = new WorkflowEventSubscription(

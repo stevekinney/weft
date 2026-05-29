@@ -372,12 +372,23 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     }
 
     // Drain live frames that arrived during the fetch, dropping any that the
-    // history we just emitted already covered (the overlap window).
+    // history we just emitted already covered (the overlap window). The dedup is
+    // *consuming*: each history entry can cancel at most one live frame, so two
+    // structurally identical events (e.g. two rapid signals with the same name
+    // and payload) where only one is a true overlap duplicate keep the genuinely
+    // new one instead of both being dropped.
     const buffered = this.#pendingLive;
     this.#pendingLive = [];
+    const historyConsumed: boolean[] = Array.from(newHistory, () => false);
     for (const live of buffered) {
       if (this.#closed) return;
-      if (newHistory.some((historic) => eventsEqual(historic, live))) continue;
+      const overlapIndex = newHistory.findIndex(
+        (historic, index) => !historyConsumed[index] && eventsEqual(historic, live),
+      );
+      if (overlapIndex !== -1) {
+        historyConsumed[overlapIndex] = true;
+        continue;
+      }
       this.#emit(live);
     }
   }
