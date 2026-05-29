@@ -6,8 +6,33 @@ import {
   formatTimestamp,
   ndjson,
   prettyJson,
+  supportsColor,
   truncateToWidth,
 } from './output.ts';
+
+describe('supportsColor', () => {
+  it('FORCE_COLOR=0 does not enable color (per FORCE_COLOR spec)', () => {
+    const priorValue = Bun.env['FORCE_COLOR'];
+    Bun.env['FORCE_COLOR'] = '0';
+    try {
+      expect(supportsColor({ isTTY: false })).toBe(false);
+    } finally {
+      if (priorValue === undefined) delete Bun.env['FORCE_COLOR'];
+      else Bun.env['FORCE_COLOR'] = priorValue;
+    }
+  });
+
+  it('FORCE_COLOR=1 enables color', () => {
+    const priorValue = Bun.env['FORCE_COLOR'];
+    Bun.env['FORCE_COLOR'] = '1';
+    try {
+      expect(supportsColor({ isTTY: false })).toBe(true);
+    } finally {
+      if (priorValue === undefined) delete Bun.env['FORCE_COLOR'];
+      else Bun.env['FORCE_COLOR'] = priorValue;
+    }
+  });
+});
 
 describe('output helpers', () => {
   it('serializes NDJSON one object per line', () => {
