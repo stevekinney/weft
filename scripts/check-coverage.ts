@@ -168,16 +168,6 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
     },
   ],
   [
-    'src/core/engine/checkpoint-io.ts',
-    {
-      lines: new Set([
-        338, 339, 341, 342, 343, 344, 345, 347, 348, 349, 351, 352, 353, 354, 355, 356, 357, 359,
-        360, 361, 362, 363, 364, 365, 369, 370, 371, 372, 373, 374, 375, 377, 378, 379, 380, 381,
-        382, 383, 384, 385, 386, 387, 388, 389, 390, 391,
-      ]),
-    },
-  ],
-  [
     'src/core/engine/child-workflow.ts',
     {
       lines: new Set([99, 122]),
@@ -576,18 +566,6 @@ const COVERAGE_ALLOWANCE_OVERRIDES = new Map<string, CoverageAllowance>([
     },
   ],
   [
-    'src/core/context/state-namespace.ts',
-    {
-      functions: 7,
-      lines: new Set([
-        77, 78, 79, 80, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115,
-        116, 117, 118, 119, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137,
-        138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155,
-        156, 157, 158,
-      ]),
-    },
-  ],
-  [
     'src/core/context/parallel-operations.ts',
     {
       functions: 1,
@@ -882,16 +860,6 @@ const COVERAGE_ALLOWANCE_OVERRIDES = new Map<string, CoverageAllowance>([
     {
       functions: 1,
       lines: new Set([67, 68, 69, 70, 107, 109, 110, 111, 112, 113, 114, 116, 117, 118, 121]),
-    },
-  ],
-  [
-    'src/storage/http.ts',
-    {
-      functions: 7,
-      lines: new Set([
-        230, 231, 232, 233, 269, 270, 271, 272, 273, 274, 275, 276, 277, 278, 279, 280, 281, 282,
-        283, 284, 285, 286, 287, 288, 289, 290, 291, 292, 293, 294, 295, 296, 300, 301, 302, 303,
-      ]),
     },
   ],
   [
@@ -1228,17 +1196,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
     },
   ],
   ['src/core/context/speculative-child.ts', { lines: new Set([25]) }],
-  [
-    'src/core/context/state-namespace.ts',
-    {
-      functions: 7,
-      lines: new Set([
-        63, 64, 65, 66, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104,
-        105, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126,
-        127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142, 143, 144,
-      ]),
-    },
-  ],
   ['src/core/context/validation.ts', { lines: new Set([9]) }],
   ['src/core/engine/aggregate.ts', { functions: 1, lines: new Set([52, 53, 54, 55, 56, 57]) }],
   [
@@ -1264,18 +1221,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
   ['src/core/engine/callback-creators-bundles.ts', { functions: 1 }],
   ['src/core/engine/callback-creators-core.ts', { functions: 3 }],
   ['src/core/engine/callback-creators-router-registry.ts', { lines: new Set([26, 27, 29]) }],
-  [
-    'src/core/engine/checkpoint-io.ts',
-    {
-      functions: 1,
-      lines: new Set([
-        260, 261, 262, 263, 264, 265, 266, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318,
-        319, 320, 321, 322, 338, 339, 341, 342, 343, 344, 345, 347, 348, 349, 351, 352, 353, 354,
-        355, 356, 357, 359, 360, 361, 362, 363, 364, 365, 369, 370, 371, 372, 373, 374, 375, 377,
-        378, 379, 380, 381, 382, 383, 384, 385, 386, 387, 388, 389, 390, 391,
-      ]),
-    },
-  ],
   ['src/core/engine/child-workflow.ts', { lines: new Set([96, 104, 128, 139]) }],
   ['src/core/engine/constraints.ts', { lines: new Set([60, 65, 93, 94, 95]) }],
   [

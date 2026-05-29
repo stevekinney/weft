@@ -77,6 +77,7 @@ export const listWorkflowsOperation = defineOperation<ListWorkflowsInput, ListWo
   name: 'weft.workflows.list',
   mcpExposable: false,
   summary: 'List workflows',
+  destructive: false,
   tags: ['Workflows'],
   inputSchema: listWorkflowsInput,
   outputSchema: listWorkflowsOutput as z.ZodType<ListWorkflowsOutput>,

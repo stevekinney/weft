@@ -639,9 +639,92 @@ describe('serve', () => {
       expect(response.status).toBe(401);
       expect(await response.text()).toBe('Authentication context invalid');
       expect(errorSpy).toHaveBeenCalledWith(
-        '[weft] /jsonrpc WS upgrade principal resolution failed',
+        '[weft] WebSocket upgrade principal resolution failed',
         expect.any(Error),
       );
+    } finally {
+      principalSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('resolves the principal during a worker WebSocket upgrade', async () => {
+    // The worker stream endpoint authorizes registration against the connection
+    // principal, so the upgrade must resolve one (previously only /jsonrpc did).
+    // A resolver throw on this path proves the principal is wired through — if
+    // it were skipped, the upgrade would not surface the 401.
+    engine = createEngine();
+    server = serve({
+      engine,
+      port: 0,
+      auth: {
+        apiKeys: ['weft_key_valid123456789012345678901'],
+      },
+    });
+
+    const principalSpy = spyOn(handlerModule, 'authContextToPrincipal').mockImplementation(() => {
+      throw new Error('invalid auth context');
+    });
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const response = await fetch(`${server.url}/v1/tasks/default/stream`, {
+        method: 'GET',
+        headers: {
+          upgrade: 'websocket',
+          connection: 'Upgrade',
+          'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+          'sec-websocket-version': '13',
+          'x-api-key': 'weft_key_valid123456789012345678901',
+        },
+      });
+
+      expect(response.status).toBe(401);
+      expect(await response.text()).toBe('Authentication context invalid');
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[weft] WebSocket upgrade principal resolution failed',
+        expect.any(Error),
+      );
+    } finally {
+      principalSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
+  it('keeps JSON-RPC HTTP principal resolution inside the JSON-RPC error boundary', async () => {
+    engine = createEngine();
+    server = serve({
+      engine,
+      port: 0,
+      auth: {
+        apiKeys: ['weft_key_valid123456789012345678901'],
+      },
+    });
+
+    const principalSpy = spyOn(handlerModule, 'authContextToPrincipal').mockImplementation(() => {
+      throw new Error('invalid auth context');
+    });
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+    try {
+      const response = await fetch(`${server.url}/jsonrpc`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': 'weft_key_valid123456789012345678901',
+        },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'engine.list', id: 1 }),
+      });
+
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({
+        jsonrpc: '2.0',
+        error: { code: -32603, message: 'Internal error' },
+        id: null,
+      });
+      expect(errorSpy).toHaveBeenCalledWith('Unhandled error in /jsonrpc', {
+        error: expect.any(Error),
+      });
     } finally {
       principalSpy.mockRestore();
       errorSpy.mockRestore();
@@ -3105,7 +3188,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
     const pollResponse = await fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=1000`);
     expect(pollResponse.status).toBe(200);
-    const task = (await pollResponse.json()) as { operationId: string };
+    const task = (await pollResponse.json()) as { operationId: string; workerId: string };
     expect(task.operationId).toBe('long-poll-diagnostics-op');
 
     const resultResponse = await fetch(`${server.url}/v1/tasks/default/result`, {
@@ -3113,6 +3196,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         operationId: 'long-poll-diagnostics-op',
+        workerId: task.workerId,
         status: 'completed',
         value: { result: 42 },
       }),

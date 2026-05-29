@@ -15,6 +15,7 @@ import {
   PersistedDataIncompatibleError,
   ReviewTimeoutError,
   UpdateTimeoutError,
+  UpdateValidationError,
   VersionMismatchError,
   WorkerProtocolIncompatibleError,
   WorkflowAlreadyExistsError,
@@ -56,6 +57,8 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   WorkerProtocolIncompatibleError: () =>
     new WorkerProtocolIncompatibleError({ expected: 2, received: 1 }),
   UpdateTimeoutError: () => new UpdateTimeoutError('update-1', 5_000),
+  UpdateValidationError: () =>
+    new UpdateValidationError('setAge', [{ message: 'must be non-negative' }]),
   WorkflowTerminalError: () => new WorkflowTerminalError('wf-1', 'completed'),
   WorkflowBuilderError: () => new WorkflowBuilderError('duplicate activities() call'),
   VersionMismatchError: () => new VersionMismatchError('wf-1', 'checkout', '1.0.0', '2.0.0'),

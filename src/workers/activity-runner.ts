@@ -60,6 +60,8 @@ export interface ActivityExecutionResult {
   status: 'completed' | 'failed';
   value?: unknown;
   error?: string;
+  /** Error constructor name used by retry classification and diagnostics. */
+  errorName?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -102,6 +104,7 @@ export async function executeActivity(
       operationId: request.operationId,
       status: 'failed',
       error: `Activity "${request.activityName}" aborted before execution`,
+      errorName: 'AbortError',
     };
   }
 
@@ -118,6 +121,7 @@ export async function executeActivity(
       operationId: request.operationId,
       status: 'failed',
       error: `Activity "${request.activityName}" failed (attempt ${request.attempt}): ${formatError(error)}`,
+      ...(error instanceof Error ? { errorName: error.name } : {}),
     };
   }
 }

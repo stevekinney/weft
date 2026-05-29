@@ -1,3 +1,4 @@
+import type { ComposedWorkflowInterceptor } from '../interceptor.ts';
 import type { HumanReviewOptions, HumanReviewResult } from '../review/index.ts';
 import { normalizeSessionStateLocals } from '../session-state.ts';
 import type {
@@ -31,7 +32,7 @@ import * as durableOperations from './durable-operations.ts';
 import { getInternals, initializeInternals } from './internals.ts';
 import type { ContextOperationRequest } from './operation-request.ts';
 import * as parallelOperations from './parallel-operations.ts';
-import { createRunActivityRequest } from './run-operation.ts';
+import { runActivityWithRetry } from './run-operation.ts';
 import * as sagaHelpers from './saga.ts';
 import * as speculateOperations from './speculate-operations.ts';
 import {
@@ -56,6 +57,13 @@ export type {
   StreamReference,
   StreamSink,
 } from './types.ts';
+
+export function setContextWorkflowInterceptor(
+  context: Context,
+  workflowInterceptor: ComposedWorkflowInterceptor | null,
+): void {
+  getInternals(context).workflowInterceptor = workflowInterceptor;
+}
 
 /**
  * Concrete workflow execution context injected as the first argument of every
@@ -116,6 +124,11 @@ export class Context implements WorkflowContext {
     const internals = getInternals(this);
     internals.updateHandlers ??= new Map();
     return internals.updateHandlers;
+  }
+  get updateValidators(): Map<string, (payload: unknown) => unknown> {
+    const internals = getInternals(this);
+    internals.updateValidators ??= new Map();
+    return internals.updateValidators;
   }
   get queryHandlers(): Map<string, (input: unknown) => unknown> {
     const internals = getInternals(this);
@@ -189,18 +202,24 @@ export class Context implements WorkflowContext {
       | (((input: TInput) => Promise<TResult> | TResult) & { execute?: never }),
     ...rest: unknown[]
   ): Generator<ContextOperationRequest, TResult, unknown> {
-    const { request, step, hasCachedResult, cachedResult } = createRunActivityRequest<TResult>(
-      this,
-      activity,
-      rest,
-    );
-    if (hasCachedResult) return cachedResult as TResult;
-    const result = yield request;
-    this.accumulatedResults.set(step, result);
-    return result as TResult;
+    return yield* runActivityWithRetry(this, activity, rest);
   }
   *sleep(duration: Duration): Generator<ContextOperationRequest, void, unknown> {
-    return yield* durableOperations.sleep(this, getInternals(this), duration);
+    const internals = getInternals(this);
+    const prepared = durableOperations.prepareSleepOperation(internals, duration);
+    if (prepared.cached) return;
+    const execute = () => durableOperations.completePreparedSleepOperation(this, prepared);
+    if (!internals.workflowInterceptor) {
+      return yield* execute();
+    }
+    return yield* internals.workflowInterceptor.sleep(
+      {
+        workflowId: this.workflowId,
+        duration: prepared.milliseconds,
+        headers: new Map<string, string>(),
+      },
+      execute,
+    ) as Generator<ContextOperationRequest, void, unknown>;
   }
   *suspendUntil<T = unknown>(resumeToken: string): Generator<ContextOperationRequest, T, unknown> {
     return yield* this.waitForSignal<T>(resumeToken);
@@ -212,11 +231,24 @@ export class Context implements WorkflowContext {
   *waitForSignal<T = unknown>(
     nameOrDefinition: MessageName,
   ): Generator<ContextOperationRequest, T, unknown> {
-    return yield* durableOperations.waitForSignal<T>(
-      this,
-      getInternals(this),
-      messageName(nameOrDefinition),
-    );
+    const internals = getInternals(this);
+    const signalName = messageName(nameOrDefinition);
+    const execute = () => durableOperations.waitForSignal<T>(this, internals, signalName);
+    if (internals.accumulatedResults?.has(internals.stepIndex)) {
+      return yield* execute();
+    }
+    if (!internals.workflowInterceptor) {
+      return yield* execute();
+    }
+    return (yield* internals.workflowInterceptor.waitForSignal(
+      {
+        workflowId: this.workflowId,
+        signalName,
+        payload: undefined,
+        headers: new Map<string, string>(),
+      },
+      execute,
+    ) as Generator<ContextOperationRequest, unknown, unknown>) as T;
   }
   waitForUpdate<TInput, TOutput>(
     definition: UpdateDefinition<TInput, TOutput>,
@@ -412,10 +444,19 @@ export class Context implements WorkflowContext {
   onUpdate<TInput, TOutput>(
     definition: UpdateDefinition<TInput, TOutput>,
     handler: (payload: TInput) => TOutput | Promise<TOutput>,
+    options?: contextUpdates.UpdateHandlerOptions,
   ): void;
-  onUpdate(name: string, handler: (payload: unknown) => unknown): void;
-  onUpdate(nameOrDefinition: MessageName, handler: (payload: unknown) => unknown): void {
-    contextUpdates.onUpdate(getInternals(this), messageName(nameOrDefinition), handler);
+  onUpdate(
+    name: string,
+    handler: (payload: unknown) => unknown,
+    options?: contextUpdates.UpdateHandlerOptions,
+  ): void;
+  onUpdate(
+    nameOrDefinition: MessageName,
+    handler: (payload: unknown) => unknown,
+    options?: contextUpdates.UpdateHandlerOptions,
+  ): void {
+    contextUpdates.onUpdate(getInternals(this), messageName(nameOrDefinition), handler, options);
   }
   onQuery<TInput, TOutput>(
     definition: QueryDefinition<TInput, TOutput>,

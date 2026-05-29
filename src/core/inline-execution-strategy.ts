@@ -11,12 +11,13 @@
  */
 
 import type { ContextOperationRequest, ContextOptions } from './context.ts';
-import { Context } from './context.ts';
+import { Context, setContextWorkflowInterceptor } from './context.ts';
 import type { ExecutionStrategy } from './execution-strategy.ts';
 import {
   classifyErrorAsFailureCategory,
   errorFromFailedOperationOutcome,
 } from './failure-categories.ts';
+import type { ComposedWorkflowInterceptor } from './interceptor.ts';
 import type {
   FailureCategory,
   OperationOutcome,
@@ -41,6 +42,7 @@ export interface InlineExecutionDependencies {
   resolveWorkflowType?: (target: string | Function) => string;
   maxNestingDepth: number;
   development?: boolean;
+  getComposedWorkflowInterceptor?: () => ComposedWorkflowInterceptor | null;
   registerCancelHandler?: (workflowId: string, handler: () => Promise<void> | void) => () => void;
 }
 
@@ -140,6 +142,8 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     const context = new Context(
       createInlineContextOptions(this.#dependencies, registration, parameters, workflowAbort),
     );
+    const workflowInterceptor = this.#dependencies.getComposedWorkflowInterceptor?.() ?? null;
+    setContextWorkflowInterceptor(context, workflowInterceptor);
 
     if (this.#dependencies.development) {
       context.explain(true);

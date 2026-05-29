@@ -241,9 +241,47 @@ class MockHandleImplementation<TInput, TResult> implements MockHandle<TInput, TR
  */
 export class ActivityMockRegistry {
   #mocks: Map<Function, MockedActivity>;
+  #cleanupHooks: Map<Function, () => void>;
 
   constructor() {
     this.#mocks = new Map();
+    this.#cleanupHooks = new Map();
+  }
+
+  /**
+   * Register a cleanup callback to run when `restore(activity)` or
+   * `restoreAll()` removes the mock for `activity`. Used by {@link TestEngine}
+   * to undo the surrogate activity registration it installs on the engine, so
+   * `restoreAll()` does not leave stale registrations behind. The callback runs
+   * at most once per registration and is then discarded.
+   *
+   * If a cleanup hook is already registered for `activity` (for example, when
+   * the same activity is mocked twice without an intervening `restore()`), the
+   * existing hook is kept and the new one is ignored. This preserves the
+   * original-registration snapshot captured by the first mock, so re-mocking
+   * never overwrites the restorer with one that points at a surrogate.
+   */
+  onRestore(activity: Function, cleanup: () => void): void {
+    if (this.#cleanupHooks.has(activity)) return;
+    this.#cleanupHooks.set(activity, cleanup);
+  }
+
+  /** Whether a cleanup hook is currently registered for `activity`. */
+  hasRestoreHook(activity: Function): boolean {
+    return this.#cleanupHooks.has(activity);
+  }
+
+  #runCleanupHook(activity: Function): void {
+    const cleanup = this.#cleanupHooks.get(activity);
+    if (!cleanup) return;
+    this.#cleanupHooks.delete(activity);
+    cleanup();
+  }
+
+  #runAllCleanupHooks(): void {
+    const cleanups = Array.from(this.#cleanupHooks.values());
+    this.#cleanupHooks.clear();
+    for (const cleanup of cleanups) cleanup();
   }
 
   mock<TResult>(
@@ -282,10 +320,12 @@ export class ActivityMockRegistry {
 
   restore(activity: Function): void {
     this.#mocks.delete(activity);
+    this.#runCleanupHook(activity);
   }
 
   restoreAll(): void {
     this.#mocks.clear();
+    this.#runAllCleanupHooks();
   }
 
   /**

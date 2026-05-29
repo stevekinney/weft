@@ -36,6 +36,7 @@ export const bulkCancelWorkflowsOperation = defineOperation<
   name: 'weft.workflows.bulk.cancel',
   mcpExposable: false,
   summary: 'Cancel workflows in bulk',
+  destructive: true,
   tags: ['Workflows'],
   inputSchema: bulkCancelWorkflowsInput,
   outputSchema: bulkCancelWorkflowsOutput as z.ZodType<BulkCancelWorkflowsOutput>,

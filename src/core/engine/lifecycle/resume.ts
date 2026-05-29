@@ -1,6 +1,6 @@
 import { KEYS } from '../../../storage/interface.ts';
 import { deserializeCheckpoint, serializeCheckpoint } from '../../checkpoint.ts';
-import { Context } from '../../context.ts';
+import { Context, setContextWorkflowInterceptor } from '../../context.ts';
 import { EventLog, type EventHeadRecord } from '../../event-log.ts';
 import { WorkflowResumedEvent } from '../../events.ts';
 import type { Checkpoint, WorkflowState } from '../../types.ts';
@@ -10,6 +10,7 @@ import { rememberCommittedCheckpointBytes } from '../checkpoint-commit-snapshots
 import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { loadWorkflowState } from '../storage-io.ts';
+import { getComposedWorkflowInterceptor } from '../strategy-helpers.ts';
 import { decodeWorkflowState } from '../validation.ts';
 import { prepareResumeState } from './persist.ts';
 import {
@@ -79,6 +80,7 @@ function relaunchInlineWorkflowAfterResume(
   // Keep the final running-state check and the re-entry into user code
   // in the same serialized section so cancel/timeout cannot commit a
   // terminal state and still let a parked workflow continue.
+  //
   const accumulatedResults = new Map<number, unknown>(resumeCheckpoint.accumulatedResults);
   const workflowAbort = new AbortController();
 
@@ -103,6 +105,7 @@ function relaunchInlineWorkflowAfterResume(
       deadline: latestState.executionDeadline,
     }),
   });
+  setContextWorkflowInterceptor(context, getComposedWorkflowInterceptor(internals));
 
   if (internals.options.development) {
     context.explain(true);

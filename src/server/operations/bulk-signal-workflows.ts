@@ -39,6 +39,7 @@ export const bulkSignalWorkflowsOperation = defineOperation<
   name: 'weft.workflows.bulk.signal',
   mcpExposable: false,
   summary: 'Signal workflows in bulk',
+  destructive: true,
   tags: ['Workflows'],
   inputSchema: bulkSignalWorkflowsInput,
   outputSchema: bulkSignalWorkflowsOutput as z.ZodType<BulkSignalWorkflowsOutput>,

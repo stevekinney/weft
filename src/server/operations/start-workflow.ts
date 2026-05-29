@@ -119,6 +119,7 @@ export const startWorkflowOperation = defineOperation<StartWorkflowInput, StartW
   name: 'weft.workflows.start',
   mcpExposable: false,
   summary: 'Start a new workflow',
+  destructive: false,
   tags: ['Workflows'],
   inputSchema: startWorkflowInput,
   outputSchema: startWorkflowOutput,

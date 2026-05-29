@@ -47,6 +47,7 @@ export const bulkMutateWorkflowTagsOperation = defineOperation<
   name: 'weft.workflows.bulk.tags',
   mcpExposable: false,
   summary: 'Add or remove workflow tags in bulk',
+  destructive: true,
   tags: ['Workflows'],
   inputSchema: bulkMutateWorkflowTagsInput,
   outputSchema: bulkMutateWorkflowTagsOutput as z.ZodType<BulkMutateWorkflowTagsOutput>,

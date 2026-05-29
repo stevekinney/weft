@@ -21,6 +21,7 @@ export const cancelWorkflowOperation = createSingleWorkflowControlOperation<
 >({
   name: 'weft.workflows.cancel',
   summary: 'Cancel a running workflow',
+  destructive: true,
   tags: ['Workflows'],
   inputSchema: cancelWorkflowInput,
   outputSchema: cancelWorkflowOutput as z.ZodType<CancelWorkflowOutput>,

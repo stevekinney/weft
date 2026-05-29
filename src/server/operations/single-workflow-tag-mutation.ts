@@ -26,6 +26,8 @@ export type SingleWorkflowTagMutationOutput = z.infer<typeof singleWorkflowTagMu
 type SingleWorkflowTagMutationOperationConfiguration = {
   readonly name: string;
   readonly summary: string;
+  /** Whether this tag mutation irreversibly mutates state. Required. */
+  readonly destructive: boolean;
   readonly mutateTags: (
     engine: Engine,
     workflowId: string,
@@ -46,6 +48,7 @@ export function createSingleWorkflowTagMutationOperation(
     mcpExposable: false,
     summary: configuration.summary,
     tags: ['Tags'],
+    destructive: configuration.destructive,
     inputSchema: singleWorkflowTagMutationInput,
     outputSchema: singleWorkflowTagMutationOutput,
     access: { kind: 'public' },

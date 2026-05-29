@@ -188,7 +188,7 @@ await $`bunx tsc --declaration --emitDeclarationOnly --project tsconfig.build.js
 // modules with no legitimate path into shipped output; add to the list if a new
 // test-only runtime dependency is introduced.
 async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
-  const forbiddenPackageRoots = ['bun:test', 'fake-indexeddb', 'jsdom'];
+  const forbiddenPackageRoots = ['bun:test', 'fake-indexeddb', 'jsdom', 'playwright'];
 
   // Capture the specifier from every form that pulls in a module: `from '…'`,
   // `require('…')`, dynamic `import('…')`, and bare side-effect `import '…'`

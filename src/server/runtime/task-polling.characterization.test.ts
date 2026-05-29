@@ -8,6 +8,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { principalFromApiKey } from '../principal.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import { handleTaskPollRequest, handleTaskResultRequest } from './task-polling.ts';
 
@@ -17,6 +18,10 @@ function createMinimalContext() {
 }
 
 const createMinimalOptions = minimalServeOptions;
+const WORKER_PRINCIPAL = principalFromApiKey({
+  subject: 'worker-key',
+  scopes: ['workers:write'],
+});
 
 function makePostRequest(body: unknown): Request {
   return new Request('http://localhost/v1/tasks/op-123/result', {
@@ -138,6 +143,26 @@ describe('handleTaskResultRequest', () => {
 });
 
 describe('handleTaskPollRequest', () => {
+  it('requires the worker write scope when a principal is present', async () => {
+    const context = minimalServerContext();
+    const options = minimalServeOptions();
+    const request = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
+      method: 'GET',
+    });
+    const url = new URL(request.url);
+
+    const response = await handleTaskPollRequest(
+      context,
+      options,
+      request,
+      url,
+      principalFromApiKey({ subject: 'client-key', scopes: ['workflows:read'] }),
+    );
+
+    expect(response?.status).toBe(403);
+    expect(await response?.json()).toEqual({ error: 'Forbidden' });
+  });
+
   it('threads request.signal into poll so a disconnected client settles with 204', async () => {
     const context = minimalServerContext();
     const options = minimalServeOptions();
@@ -157,5 +182,130 @@ describe('handleTaskPollRequest', () => {
     const response = await responsePromise;
     // task === null branch: no task claimed, no worker dispatch.
     expect(response?.status).toBe(204);
+  });
+
+  it('returns the generated long-poll workerId with a claimed task', async () => {
+    const context = minimalServerContext();
+    const options = minimalServeOptions();
+    context.taskQueue.enqueue('default', {
+      operationId: 'op-claim',
+      activityName: 'charge',
+      input: { amount: 42 },
+    });
+    const request = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
+      method: 'GET',
+    });
+    const url = new URL(request.url);
+
+    const response = await handleTaskPollRequest(context, options, request, url, WORKER_PRINCIPAL);
+
+    expect(response?.status).toBe(200);
+    const body = await response?.json();
+    expect(body.workerId).toMatch(/^longpoll-/);
+  });
+
+  it('rejects task results that do not match the long-poll in-flight workerId', async () => {
+    const context = minimalServerContext();
+    const options = minimalServeOptions();
+    context.taskQueue.enqueue('default', {
+      operationId: 'op-owned',
+      activityName: 'charge',
+      input: { amount: 42 },
+    });
+
+    const pollRequest = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
+      method: 'GET',
+    });
+    const pollResponse = await handleTaskPollRequest(
+      context,
+      options,
+      pollRequest,
+      new URL(pollRequest.url),
+      WORKER_PRINCIPAL,
+    );
+    const task = await pollResponse?.json();
+
+    const rejected = await handleTaskResultRequest(
+      context,
+      options,
+      makePostRequest({
+        operationId: 'op-owned',
+        status: 'completed',
+        value: 42,
+        workerId: 'longpoll-attacker',
+      }),
+      makeUrl('/v1/tasks/default/result'),
+      WORKER_PRINCIPAL,
+    );
+
+    expect(rejected?.status).toBe(403);
+
+    const accepted = await handleTaskResultRequest(
+      context,
+      options,
+      makePostRequest({
+        operationId: 'op-owned',
+        status: 'completed',
+        value: 42,
+        workerId: task.workerId,
+      }),
+      makeUrl('/v1/tasks/default/result'),
+      WORKER_PRINCIPAL,
+    );
+    expect(accepted?.status).toBe(200);
+  });
+
+  it('rejects an in-flight result that omits the workerId', async () => {
+    const context = minimalServerContext();
+    const options = minimalServeOptions();
+    context.taskQueue.enqueue('default', {
+      operationId: 'op-missing-worker',
+      activityName: 'charge',
+      input: { amount: 42 },
+    });
+
+    const pollRequest = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
+      method: 'GET',
+    });
+    await handleTaskPollRequest(
+      context,
+      options,
+      pollRequest,
+      new URL(pollRequest.url),
+      WORKER_PRINCIPAL,
+    );
+
+    // A claimed task has an owner; a result that does not echo the workerId is
+    // rejected rather than treated as a wildcard match.
+    const rejected = await handleTaskResultRequest(
+      context,
+      options,
+      makePostRequest({ operationId: 'op-missing-worker', status: 'completed', value: 42 }),
+      makeUrl('/v1/tasks/default/result'),
+      WORKER_PRINCIPAL,
+    );
+    expect(rejected?.status).toBe(403);
+  });
+
+  it('accepts a result with no in-flight record without an ownership check', async () => {
+    const context = minimalServerContext();
+    const options = minimalServeOptions();
+
+    // No task was ever claimed, so there is no in-flight record to own. The
+    // completion lands as a no-op on already-settled/unknown work; the ownership
+    // guard is intentionally skipped because there is no owner to match against.
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      makePostRequest({
+        operationId: 'op-never-claimed',
+        status: 'completed',
+        value: 42,
+        workerId: 'longpoll-whatever',
+      }),
+      makeUrl('/v1/tasks/default/result'),
+      WORKER_PRINCIPAL,
+    );
+    expect(response?.status).toBe(200);
   });
 });

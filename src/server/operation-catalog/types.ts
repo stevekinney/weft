@@ -126,6 +126,21 @@ type OperationDefinitionBase<Input, Output> = {
   readonly mcpTool?: McpToolMetadata;
   readonly summary: string;
   readonly tags: ReadonlyArray<string>;
+  /**
+   * Whether invoking this operation irreversibly mutates state or is
+   * otherwise hard to undo (cancel, purge, bulk-delete, raw storage writes,
+   * recover-all, worker drain). Consumers read this single source of truth
+   * instead of maintaining their own allowlists: the CLI `weft api` escape
+   * hatch refuses destructive operations without explicit confirmation,
+   * dashboard bulk actions gate their confirmations on it, and MCP exposure
+   * uses it to decide what to surface. Read-only operations (`get-*`,
+   * `list-*`, `aggregate`, `registry`, `metrics`) are `false`.
+   *
+   * Required with no implicit default so every new operation is forced to
+   * make the call explicitly — the same quality-floor pattern as the
+   * lint-disable rationale rule.
+   */
+  readonly destructive: boolean;
   readonly inputSchema: z.ZodType<Input>;
   /**
    * For unary operations, validates the returned value. For subscriptions,
@@ -217,6 +232,8 @@ type RegistrableOperationBase = {
   readonly mcpTool?: McpToolMetadata;
   readonly summary: string;
   readonly tags: ReadonlyArray<string>;
+  /** See {@link OperationDefinitionBase.destructive}. Required, no default. */
+  readonly destructive: boolean;
   readonly inputSchema: z.ZodType;
   readonly outputSchema: z.ZodType;
   readonly access: AccessPolicy;

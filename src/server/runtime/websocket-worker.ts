@@ -13,9 +13,11 @@ import {
   type TaskResultMessage,
   type WorkerToServerMessage,
 } from '../../worker/protocol.ts';
+import type { WorkerRegistrationInfo } from '../../worker/registry.ts';
 import { workerProtocolIncompatibleMessage } from '../../worker/worker-protocol-incompatible-error.ts';
 import type { ServeOptions } from '../index.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
+import { isAuthenticated } from '../principal.ts';
 import {
   isInflightRecord,
   readInflightRecord,
@@ -108,11 +110,55 @@ function rejectProtocolMessage(
   closeWorkerSocket(ws, WORKER_PROTOCOL_CLOSE_CODE, code);
 }
 
+/**
+ * Whether the connection's principal is allowed to register a worker. An
+ * absent principal means authentication is disabled on this server, so the
+ * registration is allowed; a present principal must carry `workers:write`.
+ */
+function principalMayRegisterWorker(principal: WebSocketData['principal']): boolean {
+  if (principal === undefined) return true;
+  return isAuthenticated(principal) && principal.hasScope('workers:write');
+}
+
+/**
+ * Build the registry descriptor from a register message, including only the
+ * optional metadata fields the worker actually supplied so the registry never
+ * stores `undefined` values.
+ */
+function buildWorkerRegistrationInfo(
+  message: RegisterMessage,
+  queue: string,
+  concurrency: number,
+): WorkerRegistrationInfo {
+  return {
+    id: message.workerId,
+    queue,
+    activities: [...message.activities],
+    concurrency,
+    ...(message.deploymentName !== undefined ? { deploymentName: message.deploymentName } : {}),
+    ...(message.buildId !== undefined ? { buildId: message.buildId } : {}),
+    ...(message.runtimeVersion !== undefined ? { runtimeVersion: message.runtimeVersion } : {}),
+    ...(message.gitSha !== undefined ? { gitSha: message.gitSha } : {}),
+    ...(message.startedAt !== undefined ? { startedAt: message.startedAt } : {}),
+    ...(message.capabilities !== undefined ? { capabilities: message.capabilities } : {}),
+  };
+}
+
 function registerWorker(
   context: ServerContext,
   ws: ServerWebSocket<WebSocketData>,
   message: RegisterMessage,
 ): void {
+  if (!principalMayRegisterWorker(ws.data.principal)) {
+    rejectRegistration(
+      ws,
+      'invalid_registration',
+      'Worker registration requires the workers:write scope',
+      message.protocolVersion,
+    );
+    return;
+  }
+
   const rawConcurrency = message.concurrency ?? DEFAULT_WORKER_CONCURRENCY;
   const clampedConcurrency = Math.min(
     Math.max(1, Math.floor(rawConcurrency)),
@@ -133,18 +179,7 @@ function registerWorker(
   ws.data.workerId = message.workerId;
   ws.data.workerRegistered = true;
   ws.data.workerProtocolVersion = message.protocolVersion;
-  context.registry.register({
-    id: message.workerId,
-    queue,
-    activities: [...message.activities],
-    concurrency: clampedConcurrency,
-    ...(message.deploymentName !== undefined ? { deploymentName: message.deploymentName } : {}),
-    ...(message.buildId !== undefined ? { buildId: message.buildId } : {}),
-    ...(message.runtimeVersion !== undefined ? { runtimeVersion: message.runtimeVersion } : {}),
-    ...(message.gitSha !== undefined ? { gitSha: message.gitSha } : {}),
-    ...(message.startedAt !== undefined ? { startedAt: message.startedAt } : {}),
-    ...(message.capabilities !== undefined ? { capabilities: message.capabilities } : {}),
-  });
+  context.registry.register(buildWorkerRegistrationInfo(message, queue, clampedConcurrency));
   context.workerSockets.set(message.workerId, ws);
   sendWorkerProtocolMessage(ws, {
     type: 'registerAck',
@@ -209,6 +244,7 @@ function onTaskResultMessage(
       ...(inflightRecord === null ? {} : { record: inflightRecord }),
       resolvedAt,
       resolutionReason: resolvedStatus,
+      ...(message.status === 'completed' ? { value: message.value } : { error: message.error }),
     });
     if (inflightRecord !== null) {
       recordTaskExecutionLatencyMetric(context.metricsCollector, inflightRecord, resolvedAt);

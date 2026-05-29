@@ -17,6 +17,7 @@ import { decode, encode } from '../core/codec.ts';
 import type { RetryPolicy } from '../core/types.ts';
 import type { Storage } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
+import { buildResolvedRecord } from './task-resolved-record.ts';
 
 // ---------------------------------------------------------------------------
 // Task state type
@@ -91,6 +92,8 @@ export interface ResolvedRecord {
   operationId: string;
   status: 'completed' | 'failed';
   resolvedAt: number;
+  value?: unknown;
+  error?: string | undefined;
   activityName?: string | undefined;
   queue?: string | undefined;
   workerId?: string | undefined;
@@ -116,6 +119,8 @@ export interface TransitionInflightToResolvedOptions {
   resolutionReason?: TaskResolutionReason;
   resolvedAt?: number;
   record?: InflightRecord;
+  value?: unknown;
+  error?: string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -425,35 +430,21 @@ export async function transitionInflightToResolved(
   const resolutionReason =
     options.resolutionReason ?? (status === 'completed' ? 'completed' : 'failed');
 
-  const resolvedRecord: ResolvedRecord = {
+  const resolvedRecord = buildResolvedRecord({
     operationId,
     status,
     resolvedAt,
-    ...(normalizedRecord === null
-      ? {}
-      : {
-          activityName: normalizedRecord.activityName,
-          queue: normalizedRecord.queue,
-          workerId: normalizedRecord.workerId,
-          attempt: normalizedRecord.attempt,
-          visibilityTimeout: normalizedRecord.visibilityTimeout,
-          ...(normalizedRecord.workflowId === undefined
-            ? {}
-            : { workflowId: normalizedRecord.workflowId }),
-          firstQueuedAt: normalizedRecord.firstQueuedAt,
-          lastQueuedAt: normalizedRecord.lastQueuedAt,
-          lastDispatchedAt: normalizedRecord.lastDispatchedAt,
-          startedAt: normalizedRecord.startedAt,
-          completedAt: resolvedAt,
-          lastHeartbeatAt: normalizedRecord.lastHeartbeatAt,
-          retryCount: normalizedRecord.retryCount,
-          requeueCount: normalizedRecord.requeueCount,
-          lastRequeueReason: normalizedRecord.lastRequeueReason,
-          resolutionReason,
-          queueLatencyMs: calculateQueueLatencyMs(normalizedRecord),
-          executionLatencyMs: calculateExecutionLatencyMs(normalizedRecord, resolvedAt),
-        }),
-  };
+    normalizedRecord,
+    resolutionReason,
+    value: options.value,
+    error: options.error,
+    queueLatencyMs:
+      normalizedRecord === null ? undefined : calculateQueueLatencyMs(normalizedRecord),
+    executionLatencyMs:
+      normalizedRecord === null
+        ? undefined
+        : calculateExecutionLatencyMs(normalizedRecord, resolvedAt),
+  });
 
   const encodedResolvedRecord = encode(resolvedRecord);
   await storage.batch([

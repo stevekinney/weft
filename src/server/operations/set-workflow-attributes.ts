@@ -25,6 +25,10 @@ export const setWorkflowAttributesOperation = defineOperation<
   name: 'weft.workflows.attributes.set',
   mcpExposable: false,
   summary: 'Update search attributes for a workflow',
+  // Not destructive: search attributes are operational metadata, not execution
+  // state, and an overwrite is trivially reversible by setting them again. It
+  // does not advance or terminate the workflow. Consistent with tags.add/remove.
+  destructive: false,
   tags: ['Attributes'],
   inputSchema: setWorkflowAttributesInput,
   outputSchema: setWorkflowAttributesOutput as z.ZodType<SetWorkflowAttributesOutput>,

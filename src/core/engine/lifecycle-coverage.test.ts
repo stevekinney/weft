@@ -895,7 +895,9 @@ describe('engine lifecycle coverage helpers', () => {
     const continueWorkflow = mock(() => {});
     const internals = {
       checkpoints: new Map<string, Checkpoint>(),
+      composedWorkflowInterceptor: undefined,
       inlineStrategy: { adoptWorkflow, continueWorkflow },
+      interceptors: [],
       options: { development: true, getNow: () => 1_000 },
       strategy: { startWorkflow: mock(() => {}) },
       workflowHeaders: new Map<string, Map<string, string>>(),

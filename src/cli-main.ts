@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
 
 import {
+  API_HELP_TEXT,
   CODEGEN_HELP_TEXT,
   CONFORMANCE_HELP_TEXT,
   createStorage,
   DOCTOR_HELP_TEXT,
+  executeApi,
   executeCodegen,
   executeConformance,
   executeDoctor,
@@ -12,12 +14,15 @@ import {
   executeTimeline,
   executeValidate,
   executeVersionCheck,
+  findCliSubcommandName,
   HELP_TEXT,
   parseCliArguments,
+  removeRunLockfile,
   SCHEDULE_HELP_TEXT,
   TIMELINE_HELP_TEXT,
   VALIDATE_HELP_TEXT,
   VERSION_CHECK_HELP_TEXT,
+  writeRunLockfile,
 } from './cli/index.ts';
 import { Engine } from './core/engine.ts';
 import { serve } from './server/index.ts';
@@ -28,7 +33,7 @@ const parsedArguments = (() => {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`Error: ${message}`);
-    process.exit(1);
+    process.exit(findCliSubcommandName(Bun.argv.slice(2)) === 'api' ? 3 : 1);
   }
 })();
 
@@ -66,6 +71,7 @@ if (parsedArguments.command === 'serve') {
     port: Number(parsedArguments.port),
     dashboard,
   });
+  await writeRunLockfile(server.url);
 
   console.log(`Weft running on ${server.url}`);
   if (dashboard !== null) {
@@ -78,7 +84,12 @@ if (parsedArguments.command === 'serve') {
     console.log('\nShutting down...');
     void server
       .stop()
-      .then(() => {
+      .then(async () => {
+        try {
+          await removeRunLockfile(server.url);
+        } catch (error) {
+          console.error('[weft] Failed to remove run lockfile:', error);
+        }
         storage[Symbol.dispose]();
         process.exit(0);
       })
@@ -91,7 +102,12 @@ if (parsedArguments.command === 'serve') {
   process.on('SIGTERM', () => {
     void server
       .stop()
-      .then(() => {
+      .then(async () => {
+        try {
+          await removeRunLockfile(server.url);
+        } catch (error) {
+          console.error('[weft] Failed to remove run lockfile:', error);
+        }
         storage[Symbol.dispose]();
         process.exit(0);
       })
@@ -166,6 +182,16 @@ if (parsedArguments.command === 'serve') {
   }
 
   const result = await executeCodegen(parsedArguments);
+  if (result.stderr) console.error(result.stderr);
+  if (result.stdout) console.log(result.stdout);
+  process.exit(result.exitCode);
+} else if (parsedArguments.command === 'api') {
+  if (parsedArguments.help) {
+    console.log(API_HELP_TEXT);
+    process.exit(0);
+  }
+
+  const result = await executeApi(parsedArguments);
   if (result.stderr) console.error(result.stderr);
   if (result.stdout) console.log(result.stdout);
   process.exit(result.exitCode);

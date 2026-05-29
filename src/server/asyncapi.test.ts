@@ -31,6 +31,7 @@ type AsyncApiDocument = {
 const PRIVATE_STREAM_OPERATION: ErasedOperation = {
   name: 'weft.private.stream',
   mcpExposable: false,
+  destructive: false,
   kind: 'stream',
   summary: 'Private test stream',
   tags: ['Tests'],

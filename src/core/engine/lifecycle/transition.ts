@@ -1,6 +1,6 @@
 import { KEYS, requireStorageCapability } from '../../../storage/interface.ts';
 import { deserializeCheckpoint, serializeCheckpoint } from '../../checkpoint.ts';
-import { Context } from '../../context.ts';
+import { Context, setContextWorkflowInterceptor } from '../../context.ts';
 import { EMPTY_EVENT_HEAD } from '../../event-log.ts';
 import { WorkflowRecoverySkippedEvent, WorkflowStartedEvent } from '../../events.ts';
 import type { Checkpoint, ForkOptions, WorkflowState } from '../../types.ts';
@@ -11,6 +11,7 @@ import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.t
 import type { EngineInternals } from '../internals.ts';
 import { normalizeForkStep, selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
 import { loadWorkflowState } from '../storage-io.ts';
+import { getComposedWorkflowInterceptor } from '../strategy-helpers.ts';
 import { decodeWorkflowState } from '../validation.ts';
 import {
   buildForkBatchOperations,
@@ -332,6 +333,7 @@ function launchInlineWorkflowFromCheckpoint(
     sleepReferenceTime: checkpoint.createdAt,
     ...(state.executionDeadline !== undefined && { deadline: state.executionDeadline }),
   });
+  setContextWorkflowInterceptor(context, getComposedWorkflowInterceptor(internals));
 
   if (internals.options.development) {
     context.explain(true);

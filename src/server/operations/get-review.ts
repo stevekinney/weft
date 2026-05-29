@@ -20,6 +20,7 @@ export const getReviewOperation = defineOperation<GetReviewInput, GetReviewOutpu
   name: 'weft.reviews.get',
   mcpExposable: false,
   summary: 'Get a specific review for a workflow',
+  destructive: false,
   tags: ['Reviews'],
   inputSchema: getReviewInput,
   outputSchema: getReviewOutput as z.ZodType<GetReviewOutput>,

@@ -122,6 +122,32 @@ describe('Context', () => {
       expect(result.value).toBe('cached-result');
     });
 
+    it('on recovery skips completed retry backoff sleeps after a cached retried activity', () => {
+      const accumulatedResults = new Map<number, unknown>();
+      accumulatedResults.set(0, 'cached-result');
+      accumulatedResults.set(1, undefined);
+      const context = createContext({
+        accumulatedResults,
+        locals: {
+          __weftActivityRetryState: {
+            version: 1,
+            attempts: {},
+            completedRetrySleeps: { '0': 1 },
+          },
+        },
+      });
+
+      const retriedActivity = context.run(greet, 'Alice');
+      const retriedResult = retriedActivity.next();
+      expect(retriedResult.done).toBe(true);
+      expect(retriedResult.value).toBe('cached-result');
+      expect(context.stepIndex).toBe(2);
+
+      const nextActivity = context.run(sendEmail, 'bob@example.com');
+      const request = expectRequest(nextActivity.next(), 'activity');
+      expect(request.activityName).toBe('sendEmail');
+    });
+
     it('on recovery returns cached undefined without yielding', () => {
       const accumulatedResults = new Map<number, unknown>();
       accumulatedResults.set(0, undefined);

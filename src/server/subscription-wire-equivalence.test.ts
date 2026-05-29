@@ -239,6 +239,7 @@ describe('subscription wire-format fixtures — new-error-contract', () => {
     const failingOp = defineOperation({
       name: 'weft.workflows.events',
       mcpExposable: false,
+      destructive: false,
       kind: 'subscription',
       summary: 'fixture: rejects every element',
       inputSchema: z.object({
@@ -318,6 +319,7 @@ describe('subscription wire-format fixtures — new-error-contract', () => {
     const throwingOp = defineOperation({
       name: 'weft.workflows.events',
       mcpExposable: false,
+      destructive: false,
       kind: 'subscription',
       summary: 'fixture: iterable throws',
       inputSchema: z.object({

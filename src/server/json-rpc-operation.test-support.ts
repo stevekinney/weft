@@ -30,6 +30,7 @@ export function makeOperation<I, O>(
 ): ErasedOperation {
   return {
     mcpExposable: false,
+    destructive: false,
     summary: 'test op',
     tags: [],
     access: { kind: 'public' },

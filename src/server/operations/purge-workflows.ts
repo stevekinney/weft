@@ -25,6 +25,7 @@ export const purgeWorkflowsOperation = defineOperation<PurgeWorkflowsInput, Purg
   name: 'weft.workflows.purge',
   mcpExposable: false,
   summary: 'Purge terminal workflows',
+  destructive: true,
   tags: ['Workflows'],
   inputSchema: bulkListFilterInputSchema,
   outputSchema: purgeWorkflowsOutput as z.ZodType<PurgeWorkflowsOutput>,

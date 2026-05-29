@@ -260,7 +260,13 @@ describe('InlineExecutionStrategy', () => {
           checkpoint: new ArrayBuffer(0),
         });
 
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        // Let a rejected async-handler promise surface as an unhandledRejection
+        // before we dispose and exit, without a wall-clock guess: drain the
+        // nextTick + microtask queues, then take one zero-delay macrotask turn —
+        // the real event-loop boundary at which the rejection would fire,
+        // deterministic regardless of CPU load (the old setTimeout(50) flaked).
+        await new Promise((resolve) => process.nextTick(resolve));
+        await new Promise((resolve) => setTimeout(resolve, 0));
         strategy[Symbol.dispose]();
         process.exit(0);
       `;

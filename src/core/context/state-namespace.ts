@@ -21,10 +21,19 @@ import type { ContextOperationRequest } from './operation-request.ts';
 import * as stateSessionHelpers from './session-state.ts';
 import { captureCallerStack } from './validation.ts';
 
+interface WorkflowAtomicStateOperationCache {
+  nextStep(): number;
+  has(step: number): boolean;
+  get<TResult>(step: number): TResult;
+  set(step: number, value: unknown): void;
+}
+
 export function createStateNamespace(
   context: Context,
   internals: ContextInternals,
 ): WorkflowStateNamespace {
+  const operationCache = createContextStateOperationCache(context, internals);
+
   return {
     session: <T>(key: string, options?: WorkflowSessionStateOptions<T>): WorkflowSessionState<T> =>
       stateSessionHelpers.stateSession(context, internals, key, options),
@@ -33,13 +42,29 @@ export function createStateNamespace(
         { type: 'execution', ownerWorkflowId: internals.executionStateOwnerId },
         key,
         options,
+        operationCache,
       ),
     workflow: <T>(key: string, options?: WorkflowAtomicStateOptions<T>): WorkflowAtomicState<T> =>
       new WorkflowAtomicStateHandle<T>(
         { type: 'workflow', workflowType: context.workflowType },
         key,
         options,
+        operationCache,
       ),
+  };
+}
+
+function createContextStateOperationCache(
+  context: Context,
+  internals: ContextInternals,
+): WorkflowAtomicStateOperationCache {
+  return {
+    nextStep: () => internals.stepIndex++,
+    has: (step) => internals.accumulatedResults?.has(step) ?? false,
+    get: <TResult>(step: number) => internals.accumulatedResults?.get(step) as TResult,
+    set: (step, value) => {
+      context.accumulatedResults.set(step, value);
+    },
   };
 }
 
@@ -49,14 +74,21 @@ export class WorkflowAtomicStateHandle<T> extends EventTarget implements Workflo
   readonly #dataKey: string;
   readonly #maxRetries: number;
   readonly #options: Pick<WorkflowAtomicStateOptions<T>, 'initial'> | undefined;
+  readonly #operationCache: WorkflowAtomicStateOperationCache | undefined;
 
-  constructor(scope: AtomicStateScope, key: string, options?: WorkflowAtomicStateOptions<T>) {
+  constructor(
+    scope: AtomicStateScope,
+    key: string,
+    options?: WorkflowAtomicStateOptions<T>,
+    operationCache?: WorkflowAtomicStateOperationCache,
+  ) {
     super();
     this.#scope = scope;
     this.#key = key;
     this.#dataKey = atomicStateDataKey(scope, key);
     this.#maxRetries = options?.maxRetries ?? 10;
     this.#options = options && 'initial' in options ? { initial: options.initial } : undefined;
+    this.#operationCache = operationCache;
   }
 
   *get(): Generator<ContextOperationRequest, T | undefined, unknown> {
@@ -146,15 +178,14 @@ export class WorkflowAtomicStateHandle<T> extends EventTarget implements Workflo
   }
 
   *#read(): Generator<ContextOperationRequest, AtomicStateSnapshot<T>, unknown> {
-    const result = yield {
+    return yield* this.#executeOperation<AtomicStateSnapshot<T>>({
       type: 'state-read',
       operationId: crypto.randomUUID(),
       scope: this.#scope,
       key: this.#key,
       ...(this.#options !== undefined ? { initial: this.#options.initial } : {}),
       callerStack: captureCallerStack(),
-    };
-    return result as AtomicStateSnapshot<T>;
+    });
   }
 
   *#commit(
@@ -162,7 +193,7 @@ export class WorkflowAtomicStateHandle<T> extends EventTarget implements Workflo
     mode: 'set' | 'delete',
     value?: T,
   ): Generator<ContextOperationRequest, AtomicStateCommitResult<T>, unknown> {
-    const result = yield {
+    return yield* this.#executeOperation<AtomicStateCommitResult<T>>({
       type: 'state-commit',
       operationId: crypto.randomUUID(),
       scope: this.#scope,
@@ -171,7 +202,25 @@ export class WorkflowAtomicStateHandle<T> extends EventTarget implements Workflo
       mode,
       ...(mode === 'set' ? { value } : {}),
       callerStack: captureCallerStack(),
-    };
-    return result as AtomicStateCommitResult<T>;
+    });
+  }
+
+  *#executeOperation<TResult>(
+    operation: ContextOperationRequest,
+  ): Generator<ContextOperationRequest, TResult, unknown> {
+    const operationCache = this.#operationCache;
+    if (operationCache === undefined) {
+      const result = yield operation;
+      return result as TResult;
+    }
+
+    const step = operationCache.nextStep();
+    if (operationCache.has(step)) {
+      return operationCache.get<TResult>(step);
+    }
+
+    const result = yield operation;
+    operationCache.set(step, result);
+    return result as TResult;
   }
 }

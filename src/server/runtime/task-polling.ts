@@ -1,4 +1,5 @@
 import type { ServeOptions } from '../index.ts';
+import { isAuthenticated, type Principal } from '../principal.ts';
 import type { PendingTask } from '../task-queue-types.ts';
 import type { InflightRecord } from '../task-state.ts';
 import {
@@ -32,9 +33,16 @@ async function parseTaskResultBody(request: Request): Promise<Record<string, unk
 type ValidatedTaskResult = {
   operationId: string;
   status: 'completed' | 'failed';
+  workerId: string | undefined;
   value: unknown;
   error: string | undefined;
 };
+
+function authorizeWorkerPrincipal(principal: Principal | undefined): Response | null {
+  if (principal === undefined) return null;
+  if (isAuthenticated(principal) && principal.hasScope('workers:write')) return null;
+  return Response.json({ error: 'Forbidden' }, { status: 403 });
+}
 
 /**
  * Validate and extract typed fields from a parsed task-result body.
@@ -57,6 +65,7 @@ function validateTaskResultBody(body: Record<string, unknown>): ValidatedTaskRes
   return {
     operationId,
     status,
+    workerId: typeof body['workerId'] === 'string' ? body['workerId'] : undefined,
     value: body['value'],
     error: typeof body['error'] === 'string' ? body['error'] : undefined,
   };
@@ -70,20 +79,21 @@ async function applyTaskResult(
   context: ServerContext,
   options: ServeOptions,
   result: ValidatedTaskResult,
+  inflightRecord: InflightRecord | null,
 ): Promise<void> {
   const { operationId, status, value, error } = result;
 
-  context.taskQueue.complete({ operationId, status, value, error });
-  context.deadlineTracker.remove(operationId);
-
   const resolvedStatus = status === 'failed' ? 'failed' : ('completed' as const);
   try {
-    const inflightRecord = await readInflightRecord(options.engine.storage, operationId);
+    context.taskQueue.complete({ operationId, status, value, error });
+    context.deadlineTracker.remove(operationId);
+
     const resolvedAt = Date.now();
     await transitionInflightToResolved(options.engine.storage, operationId, resolvedStatus, {
       ...(inflightRecord === null ? {} : { record: inflightRecord }),
       resolvedAt,
       resolutionReason: resolvedStatus,
+      ...(status === 'completed' ? { value } : { error }),
     });
     if (inflightRecord !== null) {
       recordTaskExecutionLatencyMetric(context.metricsCollector, inflightRecord, resolvedAt);
@@ -127,7 +137,7 @@ export async function markTaskClaimedByLongPollWorker(
   options: ServeOptions,
   queue: string,
   task: PendingTask,
-): Promise<void> {
+): Promise<string> {
   const inflightRecord = createLongPollInflightRecord(queue, task);
   context.deadlineTracker.add({
     operationId: task.operationId,
@@ -140,6 +150,7 @@ export async function markTaskClaimedByLongPollWorker(
   );
   recordTaskQueueLatencyMetric(context.metricsCollector, normalizedInflightRecord);
   recordTaskBacklogMetric(context.metricsCollector, context.taskQueue);
+  return normalizedInflightRecord.workerId;
 }
 
 export async function handleTaskPollRequest(
@@ -147,6 +158,7 @@ export async function handleTaskPollRequest(
   options: ServeOptions,
   request: Request,
   url: URL,
+  principal?: Principal,
 ): Promise<Response | null> {
   if (request.method !== 'GET') {
     return null;
@@ -160,6 +172,9 @@ export async function handleTaskPollRequest(
   if (!pollMatch?.[1]) {
     return null;
   }
+
+  const authorizationResponse = authorizeWorkerPrincipal(principal);
+  if (authorizationResponse !== null) return authorizationResponse;
 
   const queue = decodeURIComponent(pollMatch[1]);
   const activities = url.searchParams.getAll('activity');
@@ -178,8 +193,8 @@ export async function handleTaskPollRequest(
 
   const task = await context.taskQueue.poll(queue, activities, timeout, request.signal);
   if (task !== null) {
-    await markTaskClaimedByLongPollWorker(context, options, queue, task);
-    return Response.json(task);
+    const workerId = await markTaskClaimedByLongPollWorker(context, options, queue, task);
+    return Response.json({ ...task, workerId });
   }
 
   return new Response(null, { status: 204 });
@@ -190,6 +205,7 @@ export async function handleTaskResultRequest(
   options: ServeOptions,
   request: Request,
   url: URL,
+  principal?: Principal,
 ): Promise<Response | null> {
   if (request.method !== 'POST') {
     return null;
@@ -199,6 +215,9 @@ export async function handleTaskResultRequest(
   if (!completeMatch?.[1]) {
     return null;
   }
+
+  const authorizationResponse = authorizeWorkerPrincipal(principal);
+  if (authorizationResponse !== null) return authorizationResponse;
 
   const body = await parseTaskResultBody(request);
   if (body === null) {
@@ -210,6 +229,20 @@ export async function handleTaskResultRequest(
     return validated;
   }
 
-  await applyTaskResult(context, options, validated);
+  // Ownership guard. When the task is still in flight, the submitter must echo
+  // the exact workerId the server handed out on claim — a missing workerId
+  // (`undefined`) is rejected rather than treated as a wildcard match. A null
+  // record means the task already resolved/expired/was reclaimed, so there is
+  // no owner to match against; the completion lands on whatever the queue does
+  // with an unknown operationId (a no-op for already-settled work).
+  const inflightRecord = await readInflightRecord(options.engine.storage, validated.operationId);
+  if (
+    inflightRecord !== null &&
+    (validated.workerId === undefined || inflightRecord.workerId !== validated.workerId)
+  ) {
+    return Response.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  await applyTaskResult(context, options, validated, inflightRecord);
   return Response.json({ ok: true });
 }

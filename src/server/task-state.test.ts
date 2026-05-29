@@ -543,7 +543,10 @@ describe('task state invariant (server integration)', () => {
     await sleepForTesting(50);
 
     // Claim via long-poll → inflight
-    await fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=1000`);
+    const claimResponse = await fetch(
+      `${server.url}/v1/tasks/default?activity=charge&timeout=1000`,
+    );
+    const task = (await claimResponse.json()) as { workerId: string };
     await sleepForTesting(50);
 
     // Complete via POST → resolved
@@ -552,6 +555,7 @@ describe('task state invariant (server integration)', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         operationId: 'lp-done-1',
+        workerId: task.workerId,
         status: 'completed',
         value: 'done',
       }),

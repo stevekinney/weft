@@ -38,6 +38,7 @@ export const AUTHORIZATION_SCOPES = [
   'storage:read',
   'storage:write',
   'storage:admin',
+  'workers:write',
   'system:read',
   'system:admin',
 ] as const;

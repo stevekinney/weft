@@ -17,6 +17,9 @@ describe('single-workflow control operation helpers', () => {
     const operation = createSingleWorkflowControlOperation({
       name: 'weft.workflows.cancel',
       summary: 'Cancel a running workflow',
+      // Matches the real weft.workflows.cancel classification, and asserts the
+      // factory plumbs `destructive` straight through to the definition.
+      destructive: true,
       tags: ['Workflows'],
       inputSchema,
       outputSchema: z.undefined(),
@@ -25,6 +28,8 @@ describe('single-workflow control operation helpers', () => {
         throw new Error('workflow not found');
       },
     });
+
+    expect(operation.destructive).toBe(true);
 
     const result = operation.invoke({
       input: { workflowId: 'missing-workflow' },
@@ -44,6 +49,7 @@ describe('single-workflow control operation helpers', () => {
     const operation = createSingleWorkflowControlOperation({
       name: 'weft.workflows.resume',
       summary: 'Resume a suspended workflow',
+      destructive: false,
       tags: ['Workflows'],
       inputSchema,
       outputSchema: z.object({ id: z.string() }),

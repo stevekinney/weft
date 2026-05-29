@@ -31,6 +31,7 @@ export const signalWorkflowOperation = createSingleWorkflowControlOperation<
 >({
   name: 'weft.workflows.signal',
   summary: 'Send a signal to a workflow',
+  destructive: true,
   tags: ['Signals'],
   inputSchema: signalWorkflowInput,
   outputSchema: signalWorkflowOutput as z.ZodType<SignalWorkflowOutput>,

@@ -10,6 +10,7 @@ function operation(producibleFaults?: readonly FaultCode[]): ErasedOperation {
   const base = {
     name: 'weft.test.errors',
     mcpExposable: false,
+    destructive: false,
     summary: 'test operation',
     tags: [],
     inputSchema: z.object({}),

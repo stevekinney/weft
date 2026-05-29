@@ -61,6 +61,7 @@ function makeOp(
 ): RegistrableOperation {
   return {
     mcpExposable: false,
+    destructive: false,
     summary: 'test op',
     tags: [],
     access: { kind: 'public' },
@@ -472,6 +473,7 @@ describe('generateOpenRpcDocument — MCP metadata', () => {
       makeOp({
         name: 'weft.workflows.checkout.start',
         mcpExposable: true,
+        destructive: false,
         mcpTool: { workflowType: 'checkout-flow' },
         inputSchema: z.object({ orderId: z.string() }),
         outputSchema: z.object({ workflowId: z.string(), status: z.string() }),
@@ -480,6 +482,7 @@ describe('generateOpenRpcDocument — MCP metadata', () => {
       makeOp({
         name: 'weft.workflows.internal.start',
         mcpExposable: false,
+        destructive: false,
         inputSchema: z.object({ id: z.string() }),
         outputSchema: z.object({ workflowId: z.string(), status: z.string() }),
       }),
@@ -522,6 +525,7 @@ describe('generateOpenRpcDocument — MCP metadata', () => {
       makeOp({
         name: 'weft.workflows.checkout.start',
         mcpExposable: true,
+        destructive: false,
         mcpTool: { workflowType: 'checkout_flow' },
         inputSchema: z.object({ orderId: z.string() }),
         outputSchema: z.object({ workflowId: z.string(), status: z.string() }),
@@ -530,6 +534,7 @@ describe('generateOpenRpcDocument — MCP metadata', () => {
       makeOp({
         name: 'weft.workflows.refund.start',
         mcpExposable: true,
+        destructive: false,
         mcpTool: { workflowType: 'checkout-flow' },
         inputSchema: z.object({ refundId: z.string() }),
         outputSchema: z.object({ workflowId: z.string(), status: z.string() }),
@@ -567,6 +572,7 @@ describe('generateOpenRpcDocument — MCP metadata', () => {
       makeOp({
         name: 'weft.workflows.missing.start',
         mcpExposable: true,
+        destructive: false,
         mcpTool: { workflowType: 'missing-workflow' },
         inputSchema: z.object({ id: z.string() }),
         outputSchema: z.object({ workflowId: z.string(), status: z.string() }),

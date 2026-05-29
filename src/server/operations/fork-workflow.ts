@@ -86,6 +86,7 @@ export const forkWorkflowOperation = defineOperation<ForkWorkflowInput, ForkWork
   name: 'weft.workflows.fork',
   mcpExposable: false,
   summary: 'Fork a workflow from a checkpoint',
+  destructive: false,
   tags: ['Workflows'],
   inputSchema: forkWorkflowInput,
   outputSchema: forkWorkflowOutput,

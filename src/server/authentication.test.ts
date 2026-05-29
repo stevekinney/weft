@@ -880,22 +880,38 @@ describe('serve() with authentication', () => {
     expect(response.headers.get('WWW-Authenticate')).toBe('Bearer');
   });
 
-  it('authenticates long-poll task endpoints', async () => {
+  it('requires worker write scope for long-poll task endpoints', async () => {
     engine = createEngine();
     server = serve({ engine, port: 0, auth: { apiKeys: [TEST_API_KEY] } });
 
-    // Without auth
     const noAuthResponse = await fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=50`);
     expect(noAuthResponse.status).toBe(401);
 
-    // With auth
-    const authResponse = await fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=50`, {
-      headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+    const forbiddenResponse = await fetch(
+      `${server.url}/v1/tasks/default?activity=charge&timeout=50`,
+      {
+        headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+      },
+    );
+    expect(forbiddenResponse.status).toBe(403);
+
+    await server.stop();
+    server = serve({
+      engine,
+      port: 0,
+      auth: { apiKeys: [TEST_API_KEY], defaultApiKeyScopes: ['workers:write'] },
     });
-    expect(authResponse.status).toBe(204);
+
+    const allowedResponse = await fetch(
+      `${server.url}/v1/tasks/default?activity=charge&timeout=50`,
+      {
+        headers: { Authorization: `Bearer ${TEST_API_KEY}` },
+      },
+    );
+    expect(allowedResponse.status).toBe(204);
   });
 
-  it('authenticates task result endpoints', async () => {
+  it('requires worker write scope for task result endpoints', async () => {
     engine = createEngine();
     server = serve({ engine, port: 0, auth: { apiKeys: [TEST_API_KEY] } });
 
@@ -906,7 +922,7 @@ describe('serve() with authentication', () => {
     });
     expect(noAuthResponse.status).toBe(401);
 
-    const authResponse = await fetch(`${server.url}/v1/tasks/default/result`, {
+    const forbiddenResponse = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -914,7 +930,24 @@ describe('serve() with authentication', () => {
       },
       body: JSON.stringify({ operationId: 'op-1', status: 'completed', value: 42 }),
     });
-    expect(authResponse.status).toBe(200);
+    expect(forbiddenResponse.status).toBe(403);
+
+    await server.stop();
+    server = serve({
+      engine,
+      port: 0,
+      auth: { apiKeys: [TEST_API_KEY], defaultApiKeyScopes: ['workers:write'] },
+    });
+
+    const allowedResponse = await fetch(`${server.url}/v1/tasks/default/result`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${TEST_API_KEY}`,
+      },
+      body: JSON.stringify({ operationId: 'op-1', status: 'completed', value: 42 }),
+    });
+    expect(allowedResponse.status).toBe(200);
   });
 
   it('requires system read scope for task diagnostics REST requests', async () => {

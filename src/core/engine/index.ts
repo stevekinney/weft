@@ -1,6 +1,11 @@
 /* oxlint-disable max-lines -- Engine's public overload signatures (~191 lines: register/start/signal/update/query, the five bulk dry-run-vs-commit methods, schedule, and static create) plus member JSDoc (~130 lines) ARE the published declaration surface, gated byte-for-byte by verify:jsdoc:declarations and the scoped Engine class-block .d.ts oracle; the irreducible declaration floor alone (>=531 lines, counted with skipBlankLines:false skipComments:false) exceeds the 500 ceiling before any method body is counted. The aggressive class split was attempted (task 3765ffa6, documentation/engine-split-log/PR-33.md): a class-expression mixin regresses the emitted .d.ts (Engine extends a synthetic any-typed Engine_base intersection; schedule methods leave the Engine block), and a verbatim class move only relocates this suppression because max-lines is repo-wide; rejected. All extractable bodies live in ~90 sibling modules under src/core/engine/. */
 import { KEYS, type Storage as WeftStorage } from '../../storage/interface.ts';
-import { ActivityRegistry, type ActivityMetadata } from '../activity-registry.ts';
+import {
+  ActivityRegistry,
+  type ActivityMetadata,
+  type ActivityRegistrationOptions,
+  type RegisteredActivityFunction,
+} from '../activity-registry.ts';
 import { AtomicState, type AtomicStateOptions } from '../atomic-state.ts';
 import type { StoredStreamChunk } from '../context.ts';
 import { createHandleCacheFinalizer } from '../engine-helpers.ts';
@@ -436,6 +441,7 @@ export class Engine<
       development: resolvedOptions.development,
       broadcastEvents: resolvedOptions.broadcastEvents,
       getRegistration: getInternals(this).registrations.get.bind(getInternals(this).registrations),
+      getComposedWorkflowInterceptor: () => getComposedWorkflowInterceptor(getInternals(this)),
       resolveWorkflowType: this.#resolveWorkflowTypeTarget.bind(this),
       registerCancelHandler: (workflowId, handler) =>
         registerCancelHandler(getInternals(this), workflowId, handler),
@@ -749,6 +755,22 @@ export class Engine<
     definition: TDefinition,
   ): void {
     getInternals(this).activityRegistry.register(definition.name, definition);
+  }
+
+  protected resolveRegisteredActivity(name: string): RegisteredActivityFunction | undefined {
+    return getInternals(this).activityRegistry.resolve(name);
+  }
+
+  protected registerActivityFunction(
+    name: string,
+    fn: Function,
+    options?: ActivityRegistrationOptions,
+  ): void {
+    getInternals(this).activityRegistry.register(name, fn, options);
+  }
+
+  protected unregisterRegisteredActivity(name: string): void {
+    getInternals(this).activityRegistry.unregister(name);
   }
 
   getWorkflowDefinition(type: string): RegisteredWorkflowDefinition | undefined {

@@ -33,6 +33,18 @@ Experimental surfaces can continue changing before they graduate. That includes 
 - Security disclosure process is published.
 - Getting-started documentation uses only commands and APIs shipped in the package.
 - Launch-blocking regression tests are either passing or replaced by explicit tracked work with owner sign-off.
+- The browser surfaces clear the [real-browser promotion gate](#browser-surface-promotion-gate) below.
+
+## Browser-Surface Promotion Gate
+
+The browser adapters (IndexedDB, WebExtension) and the Service Worker runtime stay **experimental** until their real-browser smoke tests are green in a **required** CI gate. Real-browser coverage is the explicit, single criterion that graduates them to stable: green unit tests against a fake IndexedDB or a stubbed `chrome.storage` driver are not sufficient evidence that the durability and lifecycle guarantees hold in an actual browser.
+
+The mechanics are already wired:
+
+- The `browser-smoke` job in [`.github/workflows/ci.yaml`](../.github/workflows/ci.yaml) provisions a pinned Chromium through Playwright (`bunx playwright install --with-deps chromium`) and runs all three real-browser smoke suites — IndexedDB durability, Service Worker lifecycle, and WebExtension storage — under `bun:test` via a single `test:browser-smoke` entry point. Each suite drives that pinned Chromium directly (Playwright supplies the binary; the suites themselves are Bun tests, not `@playwright/test` runs), so `bun:test` stays the sole test runner.
+- The job ships **non-blocking** (`continue-on-error: true`) while the tests bake, because newly introduced real-browser tests are flaky and runner browser provisioning varies.
+
+Graduation happens in one explicit step: once `browser-smoke` has been reliably green for roughly two weeks, drop `continue-on-error` so the job becomes a **required** check. The moment a browser surface's smoke coverage is enforced by that required gate, it is eligible to move from the experimental list above into the stable tier. Until then, treat every browser surface as experimental regardless of how its non-browser unit tests look.
 
 ## Release Posture
 

@@ -2,7 +2,12 @@ import type { ContextOperationRequest } from '../context.ts';
 import { UpdateCompletedEvent, UpdateReceivedEvent } from '../events.ts';
 import { isGeneratorResult } from '../step-context.ts';
 import type { CoordinatedUpdateResult } from '../types.ts';
-import { UpdateTimeoutError, type UpdateRequest, type UpdateResponse } from '../updates.ts';
+import {
+  UpdateTimeoutError,
+  UpdateValidationError,
+  type UpdateRequest,
+  type UpdateResponse,
+} from '../updates.ts';
 import type { EngineInternals } from './internals.ts';
 import { trackWaiterKey, untrackWaiterKey } from './signals.ts';
 
@@ -50,6 +55,9 @@ export async function update(
   callbacks: UpdateCallbacks,
 ): Promise<unknown> {
   const timeout = options?.timeout ?? 30_000;
+
+  // Run pre-acceptance validator before any durable action.
+  await runUpdateValidator(internals, workflowId, name, payload);
 
   // Reject updates to workflows in terminal states
   await callbacks.guardTerminalWorkflow(workflowId);
@@ -222,6 +230,9 @@ export async function submitCoordinatedUpdate(
       return { updateId: existing.updateId, result: existing.result };
     }
   }
+
+  // Run pre-acceptance validator before any durable action.
+  await runUpdateValidator(internals, workflowId, name, payload);
 
   // Reject updates to workflows in terminal states
   await callbacks.guardTerminalWorkflow(workflowId);
@@ -429,4 +440,61 @@ export async function invokeUpdateHandler(
     );
   }
   return await result;
+}
+
+/**
+ * Run the pre-acceptance validator for an update, if one is registered.
+ * Throws `UpdateValidationError` if the validator rejects (by throwing or by
+ * returning a Standard Schema `{ issues: [...] }` failure result).
+ */
+async function runUpdateValidator(
+  internals: EngineInternals,
+  workflowId: string,
+  name: string,
+  payload: unknown,
+): Promise<void> {
+  const validator = internals.inlineStrategy?.getContext(workflowId)?.updateValidators.get(name);
+  if (validator === undefined) return;
+
+  let result: unknown;
+  try {
+    result = await validator(payload);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new UpdateValidationError(name, [{ message }]);
+  }
+
+  const issues = extractStandardSchemaIssues(result);
+  if (issues !== null && issues.length > 0) {
+    throw new UpdateValidationError(name, issues);
+  }
+}
+
+/**
+ * Extract issues from a Standard Schema v1 failure result, or null if absent.
+ * No string-`message` entries yields `[]`; callers reject only on a non-empty
+ * array, so `null` and `[]` both mean acceptance. Preserves `path` (RFC 6901).
+ */
+export function extractStandardSchemaIssues(
+  result: unknown,
+): Array<{ message: string; path?: string }> | null {
+  if (result === null || typeof result !== 'object' || !('issues' in result)) return null;
+  const { issues } = result as { issues: unknown };
+  if (!Array.isArray(issues)) return null;
+  return issues.flatMap((issue: unknown) => {
+    if (issue === null || typeof issue !== 'object') return [];
+    const obj = issue as Record<string, unknown>;
+    if (typeof obj['message'] !== 'string') return [];
+    const entry: { message: string; path?: string } = { message: obj['message'] };
+    if (Array.isArray(obj['path']) && obj['path'].length > 0) {
+      entry.path = (obj['path'] as unknown[]).reduce((p: string, seg: unknown) => {
+        const k =
+          seg !== null && typeof seg === 'object' && 'key' in (seg as Record<string, unknown>)
+            ? String((seg as { key: unknown }).key)
+            : String(seg);
+        return p + '/' + k.replace(/~/g, '~0').replace(/\//g, '~1');
+      }, '');
+    }
+    return [entry];
+  });
 }

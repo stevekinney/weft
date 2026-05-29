@@ -24,6 +24,7 @@ export const resumeWorkflowOperation = createSingleWorkflowControlOperation<
 >({
   name: 'weft.workflows.resume',
   summary: 'Resume a suspended workflow',
+  destructive: false,
   tags: ['Workflows'],
   inputSchema: resumeWorkflowInput,
   outputSchema: resumeWorkflowOutput,

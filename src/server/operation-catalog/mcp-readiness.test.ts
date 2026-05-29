@@ -62,6 +62,7 @@ describe('mcpExposable ratchet', () => {
         name: 'weft.test.mcpexposablepass',
         summary: 'fixture',
         mcpExposable: true,
+        destructive: false,
         mcpTool: { workflowType: 'fixture-workflow' },
         inputSchema: z.object({ field: z.string() }),
         outputSchema: z.object({}),
@@ -79,6 +80,7 @@ describe('mcpExposable ratchet', () => {
         name: 'weft.test.mcpexposablestrict',
         summary: 'fixture',
         mcpExposable: true,
+        destructive: false,
         mcpTool: { workflowType: 'fixture-workflow' },
         inputSchema: z.object({}).strict(),
         outputSchema: z.object({}),
@@ -96,6 +98,7 @@ describe('mcpExposable ratchet', () => {
         name: 'weft.test.mcpexposablefail',
         summary: 'fixture',
         mcpExposable: true,
+        destructive: false,
         mcpTool: { workflowType: 'fixture-workflow' },
         // The opt-in default — fields wide-open, no declared shape. An
         // MCP-exposed operation must declare its actual contract.
@@ -115,6 +118,7 @@ describe('mcpExposable ratchet', () => {
         name: 'weft.test.mcpexposablemissingmetadata',
         summary: 'fixture',
         mcpExposable: true,
+        destructive: false,
         inputSchema: z.object({ field: z.string() }),
         outputSchema: z.object({}),
         access: { kind: 'public' },

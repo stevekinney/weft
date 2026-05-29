@@ -52,6 +52,13 @@ type OperationDefinitionInputBase<Input, Output> = {
   readonly mcpTool?: OperationDefinition<Input, Output>['mcpTool'];
   readonly summary: string;
   readonly tags?: ReadonlyArray<string>;
+  /**
+   * Whether invoking this operation irreversibly mutates state. Required —
+   * there is deliberately no default, so every operation author must make
+   * the call explicitly. See {@link OperationDefinition} for the contract
+   * and the consumers that read it.
+   */
+  readonly destructive: boolean;
   readonly inputSchema: z.ZodType<Input>;
   readonly outputSchema: z.ZodType<Output>;
   readonly access: AccessPolicy;
@@ -121,6 +128,7 @@ export function defineOperation<Input, Output>(
       : { mcpTool: { workflowType: input.mcpTool.workflowType } }),
     summary: input.summary,
     tags: [...(input.tags ?? [])],
+    destructive: input.destructive,
     inputSchema: input.inputSchema,
     outputSchema: input.outputSchema,
     ...(input.producibleFaults === undefined

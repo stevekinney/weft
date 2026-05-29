@@ -1,8 +1,10 @@
 import { parseArgs } from 'node:util';
 
 import type { ScheduleOverlapPolicy } from '../core/types.ts';
+import { parseApiArguments } from './api-arguments.ts';
 import { parseCodegenArguments } from './codegen-arguments.ts';
 import { formatUnknownCommandError } from './command-suggestions.ts';
+import { CLI_FLAG_VALUE_OPTIONS } from './subcommand-detection.ts';
 import type {
   CliCommand,
   PersistentStorageBackend,
@@ -22,22 +24,7 @@ const KNOWN_SUBCOMMANDS = new Set([
   'timeline',
   'schedule',
   'codegen',
-]);
-const FLAG_VALUE_OPTIONS = new Set([
-  '-p',
-  '-d',
-  '-s',
-  '-w',
-  '-o',
-  '--port',
-  '--database',
-  '--storage',
-  '--workflows',
-  '--timeout',
-  '--server',
-  '--from',
-  '--token',
-  '--out',
+  'api',
 ]);
 const VALID_STORAGE_BACKENDS = new Set(['sqlite', 'lmdb', 'memory']);
 const SCHEDULE_ACTIONS = new Set(['list', 'create', 'pause', 'resume', 'cancel']);
@@ -52,6 +39,7 @@ const SUBCOMMAND_PARSERS: Record<string, (args: string[]) => CliCommand> = {
   timeline: parseTimelineArguments,
   schedule: parseScheduleArguments,
   codegen: parseCodegenArguments,
+  api: parseApiArguments,
 };
 
 const KNOWN_SUBCOMMAND_LIST = [...KNOWN_SUBCOMMANDS];
@@ -65,7 +53,7 @@ function findSubcommand(args: string[]): ParsedSubcommand {
   for (let index = 0; index < args.length; index++) {
     const arg = args[index]!;
     if (arg.startsWith('-')) {
-      if (FLAG_VALUE_OPTIONS.has(arg)) {
+      if (CLI_FLAG_VALUE_OPTIONS.has(arg)) {
         index++;
       }
       continue;

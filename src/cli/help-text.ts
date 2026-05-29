@@ -12,6 +12,7 @@ Commands:
   version:check   Check workflow version compatibility
   validate        Lint workflow registrations for design-time anti-patterns
   codegen         Generate TypeScript declarations from a registry snapshot
+  api             Inspect and invoke catalog operations on a running server
 
 Serve Options:
   -p, --port <port>           Server port (default: 7233)
@@ -20,6 +21,33 @@ Serve Options:
   -w, --workflows <path>      Path to workflow module to register on startup
       --no-ui                 Disable the dashboard UI
   -h, --help                  Show this help message
+`;
+
+export const API_HELP_TEXT = `
+weft api - Inspect and invoke catalog operations on a running server
+
+Usage:
+  weft api --list [options]
+  weft api --describe <operation-name> [options]
+  weft api <operation-name> [--input <json> | --input-file <path|->] [options]
+
+Options:
+      --server <url>       Server URL (default: WEFT_ADDR, profile, run lockfile, or localhost)
+      --token <token>      Bearer token (default: WEFT_TOKEN)
+      --profile <name>     Profile from ~/.weft/config (default: WEFT_PROFILE or default_profile)
+      --input <json>       JSON object input for the operation
+      --input-file <path>  Read JSON object input from a file, or '-' for stdin
+      --list               List catalog operations
+      --describe <name>    Print one operation's schema and metadata
+      --yes                Confirm destructive operations without prompting
+  -j, --json               Emit machine-readable JSON output
+  -h, --help               Show this help message
+
+Exit codes:
+  0   Success
+  1   Operation failed or destructive operation was not confirmed
+  2   Connection error
+  3   Usage or input validation error
 `;
 
 export const CONFORMANCE_HELP_TEXT = `

@@ -49,6 +49,13 @@ export interface RemoteWorkerOptions {
   gitSha?: string;
   startedAt?: number;
   capabilities?: RemoteWorkerCapabilities;
+  /**
+   * Headers sent with the WebSocket upgrade request, such as `Authorization`.
+   * When the server enforces authentication, registration requires credentials
+   * with the `workers:write` scope; supply them here. This relies on Bun's
+   * WebSocket constructor header extension and does not apply in browsers.
+   */
+  headers?: Record<string, string>;
   /** Activity interceptors to run around each activity execution on this worker. */
   interceptors?: ActivityInterceptor[];
 }

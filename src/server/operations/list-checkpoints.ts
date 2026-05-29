@@ -23,6 +23,7 @@ export const listCheckpointsOperation = defineOperation<
   name: 'weft.workflows.checkpoints.list',
   mcpExposable: false,
   summary: 'List checkpoint history for a workflow',
+  destructive: false,
   tags: ['Checkpoints'],
   inputSchema: listCheckpointsInput,
   outputSchema: listCheckpointsOutput as z.ZodType<ListCheckpointsOutput>,

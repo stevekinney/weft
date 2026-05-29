@@ -7,14 +7,17 @@ import type { ContextOperationRequest } from './operation-request.ts';
 import type { OffloadReference, StreamReference, StreamSink } from './types.ts';
 import { captureCallerStack } from './validation.ts';
 
-export function* sleep(
-  context: Context,
+export type PreparedSleepOperation =
+  | { cached: true }
+  | { cached: false; milliseconds: number; request: ContextOperationRequest; step: number };
+
+export function prepareSleepOperation(
   internals: ContextInternals,
   duration: Duration,
-): Generator<ContextOperationRequest, void, unknown> {
+): PreparedSleepOperation {
   const step = internals.stepIndex++;
 
-  if (internals.accumulatedResults?.has(step)) return;
+  if (internals.accumulatedResults?.has(step)) return { cached: true };
 
   const milliseconds = parseDuration(duration);
 
@@ -29,15 +32,36 @@ export function* sleep(
   const referenceTime = internals.sleepReferenceTime ?? internals.getNow();
   internals.sleepReferenceTime = undefined;
 
-  yield {
-    type: 'sleep',
-    operationId,
-    duration: milliseconds,
-    scheduledFireAt: referenceTime + milliseconds,
-    callerStack,
+  return {
+    cached: false,
+    milliseconds,
+    request: {
+      type: 'sleep',
+      operationId,
+      duration: milliseconds,
+      scheduledFireAt: referenceTime + milliseconds,
+      callerStack,
+    },
+    step,
   };
+}
 
-  context.accumulatedResults.set(step, undefined);
+export function* completePreparedSleepOperation(
+  context: Context,
+  prepared: Exclude<PreparedSleepOperation, { cached: true }>,
+): Generator<ContextOperationRequest, void, unknown> {
+  yield prepared.request;
+  context.accumulatedResults.set(prepared.step, undefined);
+}
+
+export function* sleep(
+  context: Context,
+  internals: ContextInternals,
+  duration: Duration,
+): Generator<ContextOperationRequest, void, unknown> {
+  const prepared = prepareSleepOperation(internals, duration);
+  if (prepared.cached) return;
+  yield* completePreparedSleepOperation(context, prepared);
 }
 
 export function* waitForSignal<T = unknown>(

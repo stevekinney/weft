@@ -9,6 +9,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../../worker/protocol.ts';
+import { principalFromApiKey } from '../principal.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import { handleWorkerWebSocketMessage } from './websocket-worker.ts';
 
@@ -48,6 +49,10 @@ function createFakeWs(pathname = '/v1/tasks/default/stream', queue = 'default'):
 
 const NOOP_CLEANUP = (_operationId: string) => {};
 
+function workerPrincipal() {
+  return principalFromApiKey({ subject: 'worker-key', scopes: ['workers:write'] });
+}
+
 describe('handleWorkerWebSocketMessage', () => {
   describe('invalid JSON', () => {
     it('sends protocolError and closes on non-JSON input', () => {
@@ -66,6 +71,63 @@ describe('handleWorkerWebSocketMessage', () => {
   });
 
   describe('register message', () => {
+    it('rejects authenticated worker registration without the worker write scope', () => {
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
+      const ws = createFakeWs();
+      ws.data.principal = principalFromApiKey({
+        subject: 'client-key',
+        scopes: ['workflows:read'],
+      });
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'register',
+          protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+          workerId: 'w-no-scope',
+          activities: ['doWork'],
+          concurrency: 3,
+        }),
+        NOOP_CLEANUP,
+      );
+
+      expect(ws.sentMessages).toHaveLength(1);
+      const message = JSON.parse(ws.sentMessages[0]!);
+      expect(message.type).toBe('registerError');
+      expect(message.message).toContain('workers:write');
+      expect(context.registry.getWorker('w-no-scope')).toBeUndefined();
+      expect(ws.closeCode).toBeDefined();
+    });
+
+    it('accepts authenticated worker registration with the worker write scope', () => {
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
+      const ws = createFakeWs();
+      ws.data.principal = workerPrincipal();
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'register',
+          protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+          workerId: 'w-worker-scope',
+          activities: ['doWork'],
+          concurrency: 3,
+        }),
+        NOOP_CLEANUP,
+      );
+
+      expect(ws.sentMessages).toHaveLength(1);
+      const ack = JSON.parse(ws.sentMessages[0]!);
+      expect(ack.type).toBe('registerAck');
+      expect(context.registry.getWorker('w-worker-scope')).toBeDefined();
+    });
+
     it('registers worker and sends registerAck', () => {
       const context = minimalServerContext();
       const options = minimalServeOptions();

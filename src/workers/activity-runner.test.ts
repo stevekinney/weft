@@ -56,6 +56,26 @@ describe('executeActivity', () => {
     expect(result.operationId).toBe('op-3');
     expect(result.status).toBe('failed');
     expect(result.error).toContain('something broke');
+    expect(result.errorName).toBe('Error');
+  });
+
+  it('preserves custom error names for retry classification', async () => {
+    const request: ActivityExecutionRequest = {
+      operationId: 'op-validation',
+      activityName: 'validateInput',
+      input: null,
+      attempt: 1,
+    };
+
+    const result = await executeActivity(request, () => {
+      const error = new Error('bad input');
+      error.name = 'ValidationError';
+      throw error;
+    });
+
+    expect(result.status).toBe('failed');
+    expect(result.error).toContain('bad input');
+    expect(result.errorName).toBe('ValidationError');
   });
 
   it('returns failed with error message when async function rejects', async () => {
@@ -107,6 +127,7 @@ describe('executeActivity', () => {
     expect(result.operationId).toBe('op-6');
     expect(result.status).toBe('failed');
     expect(result.error).toContain('aborted');
+    expect(result.errorName).toBe('AbortError');
   });
 
   it('includes activity name in error for context', async () => {

@@ -23,6 +23,7 @@ export const updateScheduleOperation = defineOperation<UpdateScheduleInput, null
   name: 'weft.schedules.update',
   mcpExposable: false,
   summary: 'Update a recurring schedule',
+  destructive: false,
   tags: ['Schedules'],
   inputSchema: updateScheduleInput,
   outputSchema: z.null(),

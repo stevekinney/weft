@@ -3,8 +3,10 @@ import { authContextToPrincipal } from '../handler.ts';
 import type { ServeOptions } from '../index.ts';
 import { finalizeWebSocketUpgrade } from '../json-rpc-transport-helpers.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
+import { isAuthenticated } from '../principal.ts';
 import { parseOptionalSequenceCursor } from '../sequence-cursor.ts';
 import type { ServerContext } from './context.ts';
+import { isOriginAllowed } from './cors.ts';
 
 export const WORKER_STREAM_RE = /^\/v1\/tasks\/([\w-]+)\/stream$/;
 
@@ -62,6 +64,68 @@ export function classifyConnection(
   return { connectionType: 'generic' };
 }
 
+/**
+ * Whether a WebSocket upgrade must be refused on origin grounds. CORS does not
+ * govern the WebSocket handshake — the browser sends `Origin` but does not
+ * enforce the server's CORS headers — so when a CORS policy is configured we
+ * reject cross-origin upgrades from disallowed origins ourselves, before
+ * `server.upgrade()`. A missing `Origin` (native clients, server-to-server) is
+ * allowed; only a present-and-disallowed origin is a cross-origin browser
+ * upgrade we refuse.
+ */
+function rejectsCrossOriginUpgrade(context: ServerContext, request: Request): boolean {
+  const origin = request.headers.get('origin');
+  return (
+    context.corsPolicy !== null && origin !== null && !isOriginAllowed(context.corsPolicy, origin)
+  );
+}
+
+/**
+ * Resolved principal state for a WebSocket upgrade request.
+ * - `{ ok: true, principal }` — proceed; `principal` is the resolved value (may be undefined)
+ * - `{ ok: false, response }` — reject the upgrade with this response
+ */
+type PrincipalResolution =
+  | { ok: true; principal: WebSocketData['principal'] }
+  | { ok: false; response: Response };
+
+/**
+ * Resolve the connection principal and enforce scope for connection types that
+ * make authorization decisions after the upgrade.
+ *
+ * - Stream/watch sockets are one-way transports and do not consume a principal.
+ * - Worker connections require `workers:write` when auth is configured.
+ * - Returns `{ ok: false }` to reject the upgrade with a 401/403 response.
+ */
+function resolvePrincipalForUpgrade(
+  connectionType: WebSocketData['connectionType'] | undefined,
+  authContext: AuthContext | undefined,
+): PrincipalResolution {
+  if (connectionType !== 'jsonrpc' && connectionType !== 'worker') {
+    return { ok: true, principal: undefined };
+  }
+  if (authContext === undefined) {
+    return { ok: true, principal: undefined };
+  }
+  let principal: WebSocketData['principal'];
+  try {
+    principal = authContextToPrincipal(authContext);
+  } catch (error) {
+    console.error('[weft] WebSocket upgrade principal resolution failed', error);
+    return { ok: false, response: new Response('Authentication context invalid', { status: 401 }) };
+  }
+  // Enforce workers:write at upgrade time so a no-scope credential cannot even
+  // establish a worker WebSocket, regardless of post-upgrade checks.
+  if (
+    connectionType === 'worker' &&
+    isAuthenticated(principal) &&
+    !principal.hasScope('workers:write')
+  ) {
+    return { ok: false, response: new Response('Insufficient scope', { status: 403 }) };
+  }
+  return { ok: true, principal };
+}
+
 export function handleWebSocketUpgrade(
   server: ReturnType<typeof Bun.serve>,
   context: ServerContext,
@@ -70,11 +134,14 @@ export function handleWebSocketUpgrade(
   url: URL,
   authContext?: AuthContext,
 ): Response | undefined | null {
-  void context;
   void options;
 
   if (request.headers.get('upgrade') !== 'websocket') {
     return null;
+  }
+
+  if (rejectsCrossOriginUpgrade(context, request)) {
+    return new Response('Cross-origin WebSocket upgrade not allowed', { status: 403 });
   }
 
   const classification = classifyConnection(url);
@@ -82,23 +149,11 @@ export function handleWebSocketUpgrade(
     return new Response('Invalid encoded WebSocket path', { status: 400 });
   }
 
-  // Resolve the principal ONLY for /jsonrpc connections. Other WS
-  // endpoints (`/v1/workflows/:id/stream`, `/watch`, `/v1/tasks/:q/stream`)
-  // do not consume a `Principal`, so running `authContextToPrincipal`
-  // for them would convert a client-side auth error (e.g.,
-  // malformed JWT) into a spurious failure on paths that never
-  // needed the principal in the first place. A resolver throw is
-  // an authentication failure — return 401 so clients with
-  // retry-on-5xx logic don't loop.
-  let principal: WebSocketData['principal'] | undefined;
-  if (classification.connectionType === 'jsonrpc' && authContext !== undefined) {
-    try {
-      principal = authContextToPrincipal(authContext);
-    } catch (error) {
-      console.error('[weft] /jsonrpc WS upgrade principal resolution failed', error);
-      return new Response('Authentication context invalid', { status: 401 });
-    }
+  const resolution = resolvePrincipalForUpgrade(classification.connectionType, authContext);
+  if (!resolution.ok) {
+    return resolution.response;
   }
+  const { principal } = resolution;
 
   const resumeFromParam = url.searchParams.get('resumeFrom');
   const resumeFromResult = parseOptionalSequenceCursor(

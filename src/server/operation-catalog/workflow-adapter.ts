@@ -87,6 +87,9 @@ export function catalogWorkflow<Input>(
     ...(options.mcpExposable ? { mcpTool: { workflowType: options.workflowType } } : {}),
     summary: presentation.summary,
     tags: presentation.tags,
+    // Cataloged workflows are always start operations: additive (they create a
+    // new workflow instance) and never mutate or destroy existing state.
+    destructive: false,
     inputSchema: presentation.inputSchema,
     outputSchema: StartHandleSchema,
     access: copyAccessPolicy(options.access),

@@ -3,8 +3,8 @@ import { describe, expect, it } from 'bun:test';
 import {
   customerProfileWorkflow,
   loadCustomerProfileActivity,
-} from '../examples/customer-profile.ts';
-import { formatGreetingActivity, helloWorldWorkflow } from '../examples/hello-world.ts';
+} from './customer-profile.test-support.ts';
+import { formatGreetingActivity, helloWorldWorkflow } from './hello-world.test-support.ts';
 
 describe('bundled examples', () => {
   it('trims greeting subjects before formatting the hello-world example output', async () => {

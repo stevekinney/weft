@@ -242,6 +242,23 @@ describe('activity operation helpers', () => {
     ).rejects.toThrow('No activity worker dispatcher available for "missing-dispatcher"');
   });
 
+  it('rehydrates worker activity failure names', async () => {
+    const internals = createInternals({
+      activityWorkerDispatcher: {
+        execute: async () => ({
+          operationId: 'op-validation',
+          status: 'failed',
+          error: 'validation failed',
+          errorName: 'ValidationError',
+        }),
+      },
+    });
+
+    await expect(
+      invokeWorkerActivity(internals as never, 'op-validation', 'validate', 'payload', 1),
+    ).rejects.toMatchObject({ name: 'ValidationError', message: 'validation failed' });
+  });
+
   it('copies activity-interceptor headers onto the operation before returning', async () => {
     const operation = createActivityOperation({
       fn: () => 'activity-result',
@@ -290,6 +307,46 @@ describe('activity operation helpers', () => {
 
     expect(result).toBe('workflow-result');
     expect(operation.headers).toEqual([['x-trace-id', 'workflow']]);
+  });
+
+  it('forwards activity rejections into the workflow interceptor so finally blocks run', async () => {
+    const operation = createActivityOperation({
+      fn: () => {
+        throw new Error('activity boom');
+      },
+    });
+
+    let finallyRan = false;
+    let caughtInGenerator: unknown;
+
+    await expect(
+      executeActivity(
+        createInternals() as never,
+        'workflow-id',
+        operation,
+        createCallbacks({
+          getComposedWorkflowInterceptor: () =>
+            ({
+              *activity(
+                interception: ActivityInterception,
+                next: (interception: ActivityInterception) => Generator<unknown, unknown, unknown>,
+              ) {
+                try {
+                  return yield* next(interception);
+                } catch (error) {
+                  caughtInGenerator = error;
+                  throw error;
+                } finally {
+                  finallyRan = true;
+                }
+              },
+            }) as never,
+        }),
+      ),
+    ).rejects.toThrow('activity boom');
+
+    expect(finallyRan).toBe(true);
+    expect(caughtInGenerator).toBeInstanceOf(Error);
   });
 
   it('records verification promises on speculative execution state', async () => {

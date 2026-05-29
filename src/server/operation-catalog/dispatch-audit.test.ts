@@ -96,6 +96,7 @@ describe('operation dispatch audit — discriminated union compile-time guarante
     const operation = defineOperation({
       name: 'weft.audit.streamtrace',
       mcpExposable: false,
+      destructive: false,
       kind: 'stream',
       summary: 'fixture',
       inputSchema: z.object({}),
@@ -119,6 +120,7 @@ describe('operation dispatch audit — discriminated union compile-time guarante
     const operation = defineOperation({
       name: 'weft.audit.subtrace',
       mcpExposable: false,
+      destructive: false,
       kind: 'subscription',
       summary: 'fixture',
       inputSchema: z.object({}),
@@ -302,6 +304,7 @@ function createTraceOperation() {
   return defineOperation({
     name: 'weft.audit.trace',
     mcpExposable: false,
+    destructive: false,
     summary: 'Audit pipeline trace markers',
     inputSchema: z.object({ value: z.string() }),
     outputSchema: z.object({ echoed: z.string() }),

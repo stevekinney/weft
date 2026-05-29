@@ -943,6 +943,26 @@ describe('WorkerExecutionStrategy', () => {
           throw new Error('handler failed');
         });
 
+        // Deterministic readiness signal: spin the microtask queue until the
+        // strategy has registered its 'message' listener, rather than guessing
+        // a wall-clock delay (the old setTimeout(20) flaked under CI load).
+        async function waitForMessageListener() {
+          for (let attempt = 0; attempt < 10_000; attempt++) {
+            if ((worker.listeners.get('message')?.size ?? 0) > 0) return;
+            await Promise.resolve();
+          }
+          throw new Error('strategy never registered a message listener');
+        }
+
+        // Let any pending unhandled rejection surface before exit, without a
+        // wall-clock guess: drain the nextTick + microtask queues, then take one
+        // zero-delay macrotask turn — the real event-loop boundary at which an
+        // unhandledRejection would fire, deterministic regardless of CPU load.
+        async function settleRejections() {
+          await new Promise((resolve) => process.nextTick(resolve));
+          await new Promise((resolve) => setTimeout(resolve, 0));
+        }
+
         strategy.startWorkflow({
           workflowId: 'wf-1',
           workflowType: 'test',
@@ -950,7 +970,7 @@ describe('WorkerExecutionStrategy', () => {
           checkpoint: new ArrayBuffer(0),
         });
 
-        await new Promise((resolve) => setTimeout(resolve, 20));
+        await waitForMessageListener();
 
         for (const listener of worker.listeners.get('message') ?? []) {
           listener(
@@ -964,7 +984,7 @@ describe('WorkerExecutionStrategy', () => {
           );
         }
 
-        await new Promise((resolve) => setTimeout(resolve, 50));
+        await settleRejections();
         strategy[Symbol.dispose]();
         process.exit(0);
       `;

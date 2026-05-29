@@ -202,7 +202,11 @@ export async function invokeWorkerActivity(
     attempt,
   });
   if (result.status === 'failed') {
-    throw new Error(result.error);
+    const error = new Error(result.error);
+    if (result.errorName !== undefined) {
+      error.name = result.errorName;
+    }
+    throw error;
   }
 
   return result.value;
@@ -278,27 +282,31 @@ export async function executeActivity(
             input,
           );
 
-  // If there are activity interceptors, use cached composition
   const composedActivity = callbacks.getComposedActivityInterceptor();
-  if (composedActivity) {
+  const executeWithActivityInterceptors = async (
+    activityName: string,
+    input: unknown,
+    headers: Map<string, string>,
+  ): Promise<unknown> => {
+    if (!composedActivity) {
+      return invokeActivity(activityName, input);
+    }
+
     const activityInterception = {
       workflowId,
-      activityName: operation.activityName,
-      input: activityInput,
+      activityName,
+      input,
       attempt,
-      headers: new Map<string, string>(),
+      headers,
     };
 
     const result = await composedActivity.execute(activityInterception, async (interception) => {
-      return invokeActivity(operation.activityName, interception.input);
+      return invokeActivity(activityName, interception.input);
     });
 
-    copyActivityHeadersToOperation(operation, activityInterception.headers);
-
     return result;
-  }
+  };
 
-  // If there are workflow interceptors with activity hooks, use cached composition
   const composedWorkflow = callbacks.getComposedWorkflowInterceptor();
   if (composedWorkflow) {
     const interception = {
@@ -310,15 +318,32 @@ export async function executeActivity(
     };
 
     function* execute(): Generator<unknown, unknown, unknown> {
-      const result = invokeActivity(operation.activityName, interception.input);
-      yield result;
-      return result;
+      const result = executeWithActivityInterceptors(
+        operation.activityName,
+        interception.input,
+        interception.headers,
+      );
+      return yield result;
     }
 
     const generator = composedWorkflow.activity(interception, execute);
     let current: IteratorResult<unknown, unknown> = generator.next();
     while (!current.done) {
-      current = generator.next(current.value);
+      const yielded = current.value;
+      if (yielded instanceof Promise) {
+        // Forward rejections into the generator so interceptor try/catch/finally
+        // blocks (e.g. span cleanup) run instead of abandoning the generator.
+        let resolved: unknown;
+        try {
+          resolved = await yielded;
+        } catch (error) {
+          current = generator.throw(error);
+          continue;
+        }
+        current = generator.next(resolved);
+      } else {
+        current = generator.next(yielded);
+      }
     }
 
     copyActivityHeadersToOperation(operation, interception.headers);
@@ -326,7 +351,14 @@ export async function executeActivity(
     return current.value;
   }
 
-  return invokeActivity(operation.activityName, activityInput);
+  const headers = new Map<string, string>();
+  const result = await executeWithActivityInterceptors(
+    operation.activityName,
+    activityInput,
+    headers,
+  );
+  copyActivityHeadersToOperation(operation, headers);
+  return result;
 }
 
 export async function executeActivityOperationResult(

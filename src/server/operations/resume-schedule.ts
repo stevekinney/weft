@@ -18,6 +18,7 @@ export const resumeScheduleOperation = defineOperation<ResumeScheduleInput, Resu
   name: 'weft.schedules.resume',
   mcpExposable: false,
   summary: 'Resume a recurring schedule',
+  destructive: false,
   tags: ['Schedules'],
   inputSchema: resumeScheduleInput,
   outputSchema: resumeScheduleOutput as z.ZodType<ResumeScheduleOutput>,

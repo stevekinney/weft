@@ -54,16 +54,15 @@ Routes that accept bodies include workflow start, signal, update, query, attribu
 
 ### 3. Workflow Trust Boundary
 
-**Files**: `src/core/engine.ts`, `src/core/context.ts`, `src/core/checkpoint.ts`, `src/core/worker-execution-strategy.ts`
+**Files**: `src/core/engine.ts`, `src/core/context.ts`, `src/core/checkpoint.ts`
 
 User-defined workflow functions run inside the engine. They should not be able to:
 
 - [ ] Access engine internals or other workflows' state
 - [ ] Corrupt checkpoint data (verify checkpoint writes are atomic)
 - [ ] Inject arbitrary data that gets `eval()`'d or `new Function()`'d on replay
-- [ ] Cause unbounded memory growth through oversized checkpoint payloads; `payloadSize.maxBytes` must reject workflow inputs, signal payloads, and activity results before any durable write
+- [ ] Cause unbounded memory growth through oversized checkpoint payloads
 - [ ] Escape the workflow context to access the underlying storage directly
-- [ ] Bypass the explicit trust posture: untrusted workflow code uses `workflowExecutionMode: 'worker'` with bounded turn timeouts and protocol-message sizes, while `workflowExecutionMode: 'inline'` rejects `workerExecution`
 
 ### 4. Storage and Serialization
 
@@ -74,7 +73,6 @@ User-defined workflow functions run inside the engine. They should not be able t
 - [ ] Storage keys constructed from user input (workflow IDs, attribute names) are bounded in length and character set
 - [ ] Bounded range deletes go through `storageDeleteRange()` or the same normalized bounds; unbounded deletion must use explicit `deletePrefix()`, never a malformed `deleteRange()`
 - [ ] Bounded delete tests cover empty options rejection, invalid negative limits, impossible bound intersections, and scoped-storage prefix-smuggling attempts
-- [ ] Event-log compaction deletes only behind a confirmed checkpoint and writes the watermark atomically with that checkpoint commit; archive adapters are best-effort post-commit sinks, not durability barriers
 - [ ] Batch operations in storage cannot be used to overwrite keys belonging to other workflows
 - [ ] IndexedDB storage (`src/storage/indexeddb.ts`) applies the same key validation
 

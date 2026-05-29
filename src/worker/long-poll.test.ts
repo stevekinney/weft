@@ -129,11 +129,13 @@ describe('LongPollWorker', () => {
     const completedTasks: any[] = [];
     const taskCompleted = createDeferred();
     let pollCount = 0;
+    const observedAuthorizationHeaders: Array<string | null> = [];
 
     server = Bun.serve({
       port: 0,
       async fetch(request) {
         const url = new URL(request.url);
+        observedAuthorizationHeaders.push(request.headers.get('authorization'));
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
           pollCount++;
@@ -145,6 +147,7 @@ describe('LongPollWorker', () => {
           if (pollCount === 1) {
             return Response.json({
               operationId: 'op-1',
+              workerId: 'longpoll-worker-1',
               activityName: 'processOrder',
               input: { orderId: 42 },
             });
@@ -165,6 +168,7 @@ describe('LongPollWorker', () => {
 
     const worker = new LongPollWorker({
       serverUrl: `http://localhost:${server.port}`,
+      headers: { Authorization: 'Bearer worker-key' },
       activities: {
         processOrder: async (input: any) => ({ processed: true, orderId: input.orderId }),
       },
@@ -181,8 +185,10 @@ describe('LongPollWorker', () => {
     expect(completedTasks.length).toBeGreaterThanOrEqual(1);
     const taskCompletion = completedTasks.find((t) => t.operationId === 'op-1');
     expect(taskCompletion).toBeDefined();
+    expect(taskCompletion.workerId).toBe('longpoll-worker-1');
     expect(taskCompletion.status).toBe('completed');
     expect(taskCompletion.value).toEqual({ processed: true, orderId: 42 });
+    expect(observedAuthorizationHeaders).toContain('Bearer worker-key');
   });
 
   it('sends completion to POST /api/v1/tasks/:queue/result when activity throws', async () => {
@@ -200,6 +206,7 @@ describe('LongPollWorker', () => {
           if (pollCount === 1) {
             return Response.json({
               operationId: 'op-err-1',
+              workerId: 'longpoll-err-worker',
               activityName: 'failingActivity',
               input: null,
             });
@@ -239,6 +246,8 @@ describe('LongPollWorker', () => {
     expect(errorCompletion).toBeDefined();
     expect(errorCompletion.status).toBe('failed');
     expect(errorCompletion.error).toBe('activity failed');
+    // The failure path echoes the claimed workerId so the ownership guard accepts it.
+    expect(errorCompletion.workerId).toBe('longpoll-err-worker');
   });
 
   it('handles non-ok poll responses by backing off', async () => {

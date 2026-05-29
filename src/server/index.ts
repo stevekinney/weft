@@ -13,6 +13,7 @@ import type { AuthConfig } from './authentication.ts';
 import type { DiscoveryInfo } from './discovery-info.ts';
 import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
 import { createServerWebSocketHandlers } from './runtime/authentication-bridge.ts';
+import type { CorsOptions } from './runtime/cors.ts';
 import {
   wireEventBroadcasting,
   type EventBroadcastingHandle,
@@ -40,6 +41,8 @@ export {
   wireEventBroadcasting,
   type EventBroadcastingHandle,
 } from './runtime/event-broadcasting.ts';
+
+export type { CorsOptions } from './runtime/cors.ts';
 
 /**
  * Static route patterns at which the dashboard shell is served, derived
@@ -111,6 +114,19 @@ export interface ServeOptions {
   dashboard?: unknown;
   /** Authentication configuration. When provided, all non-public endpoints require valid credentials. */
   auth?: AuthConfig;
+  /**
+   * Cross-Origin Resource Sharing policy for browser clients (the dashboard
+   * and the Service Worker / IndexedDB browser runtime) that call the server
+   * from a different origin. **Omitting `cors` is the safe default: the server
+   * emits no `Access-Control-*` headers and only same-origin browser requests
+   * succeed — it never defaults to `Access-Control-Allow-Origin: *`.** When set,
+   * `serve()` answers CORS preflight (`OPTIONS`) requests and decorates
+   * responses for allowed origins, and rejects cross-origin WebSocket upgrades
+   * from disallowed origins. Validated synchronously: a wildcard origin with
+   * `credentials: true`, or with an `Authorization` allowed-header, throws
+   * before the port binds. See {@link CorsOptions}.
+   */
+  cors?: CorsOptions;
   /**
    * Startup policy when `auth` is omitted. Defaults to `'warn'`, which starts
    * the server and logs a loud warning. Set `'reject'` for production

@@ -20,6 +20,7 @@ export const queryWorkflowOperation = defineOperation<QueryWorkflowInput, QueryW
   name: 'weft.workflows.query',
   mcpExposable: false,
   summary: 'Query workflow state by id',
+  destructive: false,
   tags: ['Workflows'],
   inputSchema: queryWorkflowInput,
   outputSchema: queryWorkflowOutput as z.ZodType<QueryWorkflowOutput>,

@@ -5,7 +5,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { ActivityWorkerDispatcher } from '../../workers/activity-worker-dispatcher.ts';
 import { WorkerPool } from '../../workers/pool.ts';
 import { InlineExecutionStrategy } from '../inline-execution-strategy.ts';
-import type { Interceptor } from '../interceptor.ts';
+import type { ComposedWorkflowInterceptor, Interceptor } from '../interceptor.ts';
 import {
   DEFAULT_RETENTION_SWEEP_BATCH_SIZE,
   DEFAULT_RETENTION_SWEEP_INTERVAL_MS,
@@ -83,8 +83,68 @@ export function typedEngineView<TViewWorkflows extends object, TViewActivities e
   return engine as never;
 }
 
+let didWarnOnMemoryStorageFallback = false;
+
+/**
+ * Read an environment variable without assuming a runtime. The engine
+ * constructor runs in Bun, Node, and the browser/Service Worker, so a bare
+ * `Bun.env[...]` (or `process.env[...]`) would throw a ReferenceError where
+ * that global is absent. Returns `undefined` when no environment object exists.
+ */
+function readEnvironmentVariable(name: string): string | undefined {
+  if (typeof Bun !== 'undefined') {
+    return Bun.env[name];
+  }
+  if (typeof process !== 'undefined') {
+    return process.env[name];
+  }
+  return undefined;
+}
+
+/**
+ * Whether to warn when an `Engine` falls back to {@link MemoryStorage}. Gated
+ * to development so production never logs it: the explicit `development: true`
+ * option, or the same environment signals as the other engine dev-warnings
+ * (`WEFT_DEV_WARNINGS=1` / `NODE_ENV=development`). No test override is needed —
+ * the gate is just an option plus two env vars, so tests drive it directly.
+ */
+function shouldWarnOnMemoryStorageFallback(options?: EngineConstructorOptions): boolean {
+  return (
+    options?.development === true ||
+    readEnvironmentVariable('WEFT_DEV_WARNINGS') === '1' ||
+    readEnvironmentVariable('NODE_ENV') === 'development'
+  );
+}
+
+/** Test-only reset of the one-shot MemoryStorage-fallback warning latch. */
+export function resetMemoryStorageFallbackWarningForTesting(): void {
+  didWarnOnMemoryStorageFallback = false;
+}
+
 export function resolveEngineStorage(options?: EngineConstructorOptions): WeftStorage {
-  const baseStorage = options?.storage ?? new MemoryStorage();
+  // `?? null`-style coalescing: a `null` storage (untyped JS callers) falls back
+  // just like `undefined`, matching the original `options?.storage ?? …` and the
+  // `defaultTo` helper's documented behavior.
+  const providedStorage = options?.storage ?? undefined;
+  let baseStorage = providedStorage;
+  if (baseStorage === undefined) {
+    // No storage configured: workflow state lives only in memory and is lost
+    // when the process exits. Warn in development so a first-time user who
+    // crashes and restarts understands why their workflows vanished; stay
+    // silent in production, where MemoryStorage may be a deliberate choice.
+    // The latch keeps repeated Engine constructions from spamming the log.
+    if (!didWarnOnMemoryStorageFallback && shouldWarnOnMemoryStorageFallback(options)) {
+      didWarnOnMemoryStorageFallback = true;
+      console.warn(
+        '[weft] Engine started with no `storage` configured — falling back to MemoryStorage. ' +
+          'Workflow state is held only in memory and is lost when the process exits, so a crash ' +
+          'or restart discards every in-flight workflow. Pass a durable adapter (e.g. ' +
+          'SQLiteStorage) via `new Engine({ storage })` for anything beyond tests and local dev. ' +
+          '(This warning appears only in development.)',
+      );
+    }
+    baseStorage = new MemoryStorage();
+  }
   if (!options?.compression) return baseStorage;
   return new CompressedStorage(baseStorage, options.compression);
 }
@@ -280,6 +340,7 @@ export function createExecutionStrategyBundle(parameters: {
   development: boolean;
   broadcastEvents: boolean;
   getRegistration: (workflowType: string) => RegistrationEntry | undefined;
+  getComposedWorkflowInterceptor?: () => ComposedWorkflowInterceptor | null;
   resolveWorkflowType: (target: string | Function) => string;
   registerCancelHandler?: (workflowId: string, handler: () => Promise<void> | void) => () => void;
 }): ExecutionStrategyBundle {
@@ -290,6 +351,7 @@ export function createExecutionStrategyBundle(parameters: {
     development,
     broadcastEvents,
     getRegistration,
+    getComposedWorkflowInterceptor,
     resolveWorkflowType,
     registerCancelHandler,
   } = parameters;
@@ -318,6 +380,7 @@ export function createExecutionStrategyBundle(parameters: {
   }
   const inlineStrategy = new InlineExecutionStrategy({
     getRegistration,
+    ...(getComposedWorkflowInterceptor !== undefined && { getComposedWorkflowInterceptor }),
     getNow,
     maxNestingDepth,
     development,

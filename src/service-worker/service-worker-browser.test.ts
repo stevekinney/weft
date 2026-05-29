@@ -6,8 +6,7 @@ import { fileURLToPath } from 'node:url';
 
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright';
 
-const shouldRunBrowserSmoke =
-  Bun.env['WEFT_BROWSER_SMOKE'] === '1' || Bun.env['WEFT_CHROMIUM_SERVICE_WORKER_SMOKE'] === '1';
+const shouldRunBrowserSmoke = Bun.env['WEFT_BROWSER_SMOKE'] === '1';
 
 const browserSmokeTest = shouldRunBrowserSmoke ? it : it.skip;
 const repositoryRoot = new URL('../..', import.meta.url);

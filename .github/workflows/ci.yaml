@@ -36,6 +36,9 @@ jobs:
           bun test --bail --timeout 15000 \
             --path-ignore-patterns '**/benchmarks/**' \
             --path-ignore-patterns 'examples/checkout/**' \
+            --path-ignore-patterns 'src/service-worker/service-worker-browser.test.ts' \
+            --path-ignore-patterns 'src/storage/indexeddb-browser.test.ts' \
+            --path-ignore-patterns 'src/storage/web-extension-browser.test.ts' \
             --path-ignore-patterns 'src/dashboard/dashboard-serving.test.ts' \
             --path-ignore-patterns 'src/dashboard/svelte-test-harness.test-support.test.ts' \
             --path-ignore-patterns 'src/dashboard/fragments/workflow-execution-timeline.svelte.test.ts' \
@@ -49,16 +52,41 @@ jobs:
             src/dashboard/fragments/schedule-list.test.ts \
             src/dashboard/components/date-range-picker.svelte.test.ts \
             src/dashboard/views/workflow-list.svelte.test.ts
-  service-worker-browser:
+  # Real-browser smoke tests (IndexedDB durability, Service Worker runtime,
+  # WebExtension storage) run here against Playwright's pinned Chromium. The job
+  # is intentionally NON-BLOCKING (continue-on-error) while these tests bake:
+  # new real-browser tests are flaky to introduce and runner browser
+  # provisioning varies. Once the job has been green for ~2 weeks, drop
+  # continue-on-error to flip it into a required gate. That required-gate state
+  # is the documented criterion for graduating the browser adapters and the
+  # Service Worker runtime from experimental to stable — see the
+  # "Browser-Surface Promotion Gate" section of documentation/roadmap-to-1.0.md.
+  browser-smoke:
     runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: oven-sh/setup-bun@v1
         with:
           bun-version: 1.3.13
       - run: bun install --frozen-lockfile
-      - run: bunx playwright install --with-deps chromium
-      - run: bun run test:service-worker-browser
+      # Cache Playwright's pinned browser binary (keyed on the lockfile, which
+      # pins the playwright version). The Linux system libraries are NOT stored
+      # under ~/.cache/ms-playwright, so they are (re)installed on every run via
+      # `install-deps`; only the multi-hundred-MB browser download is cached.
+      - uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
+      - if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: bunx playwright install --with-deps chromium
+      - if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: bunx playwright install-deps chromium
+      - run: bun run test:browser-smoke
   build:
     runs-on: ubuntu-latest
     steps:
@@ -96,3 +124,16 @@ jobs:
         working-directory: examples/checkout
       - run: bun run verify
         working-directory: examples/checkout
+  hello-world-example:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: 1.3.13
+      - run: bun install --frozen-lockfile
+      - run: bun run build
+      - run: bun install --frozen-lockfile
+        working-directory: examples/hello-world
+      - run: bun run verify
+        working-directory: examples/hello-world

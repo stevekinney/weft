@@ -51,6 +51,24 @@ const DEFAULT_QUEUE = 'default';
 const HEARTBEAT_INTERVAL_MS = 10_000;
 const DEFAULT_DISCONNECT_TIMEOUT_MS = 30_000;
 
+type BunWebSocketConstructor = {
+  new (url: string): WebSocket;
+  new (url: string, options: { headers: Record<string, string> }): WebSocket;
+};
+
+function createWorkerWebSocket(
+  url: string,
+  headers: Record<string, string> | undefined,
+): WebSocket {
+  if (headers === undefined) return new WebSocket(url);
+
+  // Bun supports custom WebSocket upgrade headers; the DOM lib only types the
+  // browser constructor overload, so the worker client narrows to Bun's shape
+  // at construction time while preserving tests that replace global WebSocket.
+  const Constructor = WebSocket as unknown as BunWebSocketConstructor;
+  return new Constructor(url, { headers });
+}
+
 /**
  * WebSocket-based remote worker that connects to the Weft server and executes
  * activities on behalf of the engine.
@@ -160,7 +178,7 @@ export class RemoteWorker implements Disposable {
     this.#teardownActiveConnection('Superseded by a new connect() call');
 
     return new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(this.#options.serverUrl);
+      const ws = createWorkerWebSocket(this.#options.serverUrl, this.#options.headers);
       // Track the socket immediately (while still CONNECTING) so a re-entrant
       // connect() or a #failSocket() before `open` can close it instead of
       // leaking it. The `connected` getter and #readySocket() already gate on

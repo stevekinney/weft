@@ -1,0 +1,3874 @@
+{
+  "generatedBy": "weft catalog snapshot",
+  "version": 1,
+  "operations": [
+    {
+      "name": "weft.recover.all",
+      "kind": "unary",
+      "summary": "Recover all interrupted workflows",
+      "tags": ["System"],
+      "destructive": true,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "recovered": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": ["recovered"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.retention.get",
+      "kind": "unary",
+      "summary": "Get retention policy overview",
+      "tags": ["System"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.reviews.decision.submit",
+      "kind": "unary",
+      "summary": "Submit a decision for a human review",
+      "tags": ["Reviews"],
+      "destructive": true,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "decision": {},
+          "feedback": {},
+          "reviewId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "reviewer": {},
+          "workflowId": {}
+        },
+        "required": ["reviewId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": ["ok"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.reviews.get",
+      "kind": "unary",
+      "summary": "Get a specific review for a workflow",
+      "tags": ["Reviews"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reviewId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId", "reviewId"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.reviews.list",
+      "kind": "unary",
+      "summary": "List human review requests",
+      "tags": ["Reviews"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["reviews:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reviewType": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "enum": ["pending", "completed"],
+            "type": "string"
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "anyOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "allowPartial": {
+                      "type": "boolean"
+                    },
+                    "artifact": {},
+                    "createdAt": {
+                      "type": "number"
+                    },
+                    "reviewId": {
+                      "type": "string"
+                    },
+                    "reviewType": {
+                      "type": "string"
+                    },
+                    "reviewers": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "status": {
+                      "const": "pending",
+                      "type": "string"
+                    },
+                    "timeout": {
+                      "type": "number"
+                    },
+                    "webhookUrl": {
+                      "type": "string"
+                    },
+                    "workflowId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "reviewId",
+                    "workflowId",
+                    "artifact",
+                    "reviewType",
+                    "reviewers",
+                    "allowPartial",
+                    "createdAt"
+                  ],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "allowPartial": {
+                      "type": "boolean"
+                    },
+                    "artifact": {},
+                    "createdAt": {
+                      "type": "number"
+                    },
+                    "decision": {
+                      "enum": ["approved", "rejected", "needs-changes"],
+                      "type": "string"
+                    },
+                    "feedback": {
+                      "type": "string"
+                    },
+                    "reviewId": {
+                      "type": "string"
+                    },
+                    "reviewType": {
+                      "type": "string"
+                    },
+                    "reviewer": {
+                      "type": "string"
+                    },
+                    "reviewers": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "sectionDecisions": {
+                      "additionalProperties": {
+                        "enum": ["approved", "rejected"],
+                        "type": "string"
+                      },
+                      "propertyNames": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "status": {
+                      "const": "completed",
+                      "type": "string"
+                    },
+                    "timeout": {
+                      "type": "number"
+                    },
+                    "timestamp": {
+                      "type": "number"
+                    },
+                    "webhookUrl": {
+                      "type": "string"
+                    },
+                    "workflowId": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "status",
+                    "reviewId",
+                    "workflowId",
+                    "artifact",
+                    "reviewType",
+                    "reviewers",
+                    "allowPartial",
+                    "createdAt",
+                    "decision",
+                    "reviewer",
+                    "timestamp"
+                  ],
+                  "type": "object"
+                }
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "required": ["items"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.schedules.cancel",
+      "kind": "unary",
+      "summary": "Cancel a recurring schedule",
+      "tags": ["Schedules"],
+      "destructive": true,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict", "NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "scheduleId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["scheduleId"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.schedules.create",
+      "kind": "unary",
+      "summary": "Create a recurring schedule",
+      "tags": ["Schedules"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict", "NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "backfill": {},
+          "cronExpression": {
+            "description": "Cron expression. Runtime validation requires a non-empty string."
+          },
+          "id": {},
+          "input": {},
+          "overlap": {},
+          "type": {
+            "description": "Workflow type name. Runtime validation requires a non-empty string."
+          }
+        },
+        "required": ["type", "cronExpression"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.schedules.get",
+      "kind": "unary",
+      "summary": "Get a recurring schedule by id",
+      "tags": ["Schedules"],
+      "destructive": false,
+      "access": {
+        "kind": "authenticated"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict", "NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "scheduleId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["scheduleId"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.schedules.list",
+      "kind": "unary",
+      "summary": "List recurring schedules",
+      "tags": ["Schedules"],
+      "destructive": false,
+      "access": {
+        "kind": "authenticated"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {},
+          "offset": {},
+          "status": {},
+          "workflowType": {}
+        },
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.schedules.pause",
+      "kind": "unary",
+      "summary": "Pause a recurring schedule",
+      "tags": ["Schedules"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict", "NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "scheduleId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["scheduleId"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.schedules.resume",
+      "kind": "unary",
+      "summary": "Resume a recurring schedule",
+      "tags": ["Schedules"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict", "NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "scheduleId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["scheduleId"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.schedules.update",
+      "kind": "unary",
+      "summary": "Update a recurring schedule",
+      "tags": ["Schedules"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict", "NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cronExpression": {
+            "description": "Cron expression. Runtime validation requires a non-empty string."
+          },
+          "scheduleId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["scheduleId", "cronExpression"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "type": "null"
+      }
+    },
+    {
+      "name": "weft.storage.batch",
+      "kind": "unary",
+      "summary": "Apply a raw storage batch",
+      "tags": ["Storage"],
+      "destructive": true,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["storage:admin", "storage:write"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": false,
+        "jsonRpcStdio": false,
+        "jsonRpcWebSocket": false
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "operations": {
+            "items": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "key": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "put",
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["type", "key", "value"],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "key": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "delete",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["type", "key"],
+                  "type": "object"
+                }
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "required": ["operations"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "type": "null"
+      }
+    },
+    {
+      "name": "weft.storage.conditionalbatch",
+      "kind": "unary",
+      "summary": "Apply a raw storage conditional batch",
+      "tags": ["Storage"],
+      "destructive": true,
+      "access": {
+        "kind": "scopedAlternatives",
+        "alternatives": [["storage:admin"], ["storage:read", "storage:write"]]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": false,
+        "jsonRpcStdio": false,
+        "jsonRpcWebSocket": false
+      },
+      "producibleFaults": ["NotImplemented"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "conditions": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "expectedValue": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "key": {
+                  "minLength": 1,
+                  "type": "string"
+                }
+              },
+              "required": ["key", "expectedValue"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "operations": {
+            "items": {
+              "oneOf": [
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "key": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "put",
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["type", "key", "value"],
+                  "type": "object"
+                },
+                {
+                  "additionalProperties": false,
+                  "properties": {
+                    "key": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "type": {
+                      "const": "delete",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["type", "key"],
+                  "type": "object"
+                }
+              ]
+            },
+            "type": "array"
+          }
+        },
+        "required": ["conditions", "operations"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          }
+        },
+        "required": ["applied"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.storage.delete",
+      "kind": "unary",
+      "summary": "Delete a raw storage value",
+      "tags": ["Storage"],
+      "destructive": true,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["storage:admin", "storage:write"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": false,
+        "jsonRpcStdio": false,
+        "jsonRpcWebSocket": false
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["key"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "type": "null"
+      }
+    },
+    {
+      "name": "weft.storage.get",
+      "kind": "unary",
+      "summary": "Get a raw storage value",
+      "tags": ["Storage"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["storage:admin", "storage:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": false,
+        "jsonRpcStdio": false,
+        "jsonRpcWebSocket": false
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["key"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "anyOf": [
+          {
+            "format": "binary",
+            "type": "string"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    {
+      "name": "weft.storage.put",
+      "kind": "unary",
+      "summary": "Put a raw storage value",
+      "tags": ["Storage"],
+      "destructive": true,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["storage:admin", "storage:write"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": false,
+        "jsonRpcStdio": false,
+        "jsonRpcWebSocket": false
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "value": {
+            "format": "binary",
+            "type": "string"
+          }
+        },
+        "required": ["key", "value"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "type": "null"
+      }
+    },
+    {
+      "name": "weft.storage.scan",
+      "kind": "unary",
+      "summary": "Scan raw storage values",
+      "tags": ["Storage"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["storage:admin", "storage:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": false,
+        "jsonRpcStdio": false,
+        "jsonRpcWebSocket": false
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "gt": {
+            "type": "string"
+          },
+          "gte": {
+            "type": "string"
+          },
+          "limit": {
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "type": "integer"
+          },
+          "lt": {
+            "type": "string"
+          },
+          "lte": {
+            "type": "string"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "reverse": {
+            "type": "boolean"
+          }
+        },
+        "required": ["prefix"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.system.metrics",
+      "kind": "unary",
+      "summary": "Get JSON-shaped system metrics",
+      "tags": ["Observability"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.system.registry",
+      "kind": "unary",
+      "summary": "Get a snapshot of registered workflows and activities with their JSON Schemas",
+      "tags": ["System"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "activities": {},
+          "registryVersion": {
+            "const": 1,
+            "type": "number"
+          },
+          "workflows": {}
+        },
+        "required": ["registryVersion", "workflows", "activities"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.task.queues.list",
+      "kind": "unary",
+      "summary": "List task queues with backlog, waiting pollers, and per-queue saturation",
+      "tags": ["System"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "backlog": {
+                  "type": "number"
+                },
+                "connectedWorkers": {
+                  "type": "number"
+                },
+                "inFlight": {
+                  "type": "number"
+                },
+                "oldestEnqueuedAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "oldestQueuedAgeMs": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "queue": {
+                  "type": "string"
+                },
+                "schedulingPolicy": {
+                  "enum": ["priority", "fifo", "lifo"],
+                  "type": "string"
+                },
+                "waitingPollers": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "queue",
+                "backlog",
+                "oldestEnqueuedAt",
+                "oldestQueuedAgeMs",
+                "waitingPollers",
+                "schedulingPolicy",
+                "inFlight",
+                "connectedWorkers"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": ["items"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.tasks.diagnostics",
+      "kind": "unary",
+      "summary": "Get bounded task latency and stuck-work diagnostics",
+      "tags": ["Observability"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "operationId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "queue": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "retryStormMinimumAttempts": {
+            "default": 3,
+            "maximum": 9007199254740991,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "staleHeartbeatAfterMs": {
+            "default": 60000,
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "staleQueuedAfterMs": {
+            "default": 60000,
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": [
+          "staleQueuedAfterMs",
+          "staleHeartbeatAfterMs",
+          "retryStormMinimumAttempts",
+          "limit"
+        ],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "activityName": {
+                  "type": "string"
+                },
+                "evidence": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "executionLatencyMs": {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "heartbeatAgeMs": {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "kind": {
+                  "enum": [
+                    "stuck-queued",
+                    "stale-inflight",
+                    "retry-storm",
+                    "all-workers-at-capacity"
+                  ],
+                  "type": "string"
+                },
+                "lastRequeueReason": {
+                  "enum": ["visibility-timeout", "worker-disconnect"],
+                  "type": "string"
+                },
+                "operationId": {
+                  "type": "string"
+                },
+                "queue": {
+                  "type": "string"
+                },
+                "queueLatencyMs": {
+                  "minimum": 0,
+                  "type": "number"
+                },
+                "requeueCount": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "resolutionReason": {
+                  "type": "string"
+                },
+                "retryCount": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "state": {
+                  "enum": ["queued", "inflight", "resolved", "capacity"],
+                  "type": "string"
+                },
+                "workerId": {
+                  "type": "string"
+                },
+                "workflowId": {
+                  "type": "string"
+                }
+              },
+              "required": ["kind", "state", "retryCount", "requeueCount", "evidence"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "limit": {
+            "maximum": 200,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "summary": {
+            "additionalProperties": false,
+            "properties": {
+              "allWorkersAtCapacity": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "retryStorms": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "staleInflight": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "stuckQueued": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["stuckQueued", "staleInflight", "retryStorms", "allWorkersAtCapacity"],
+            "type": "object"
+          }
+        },
+        "required": ["items", "summary", "limit"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.updates.result.get",
+      "kind": "unary",
+      "summary": "Get the result of an update request",
+      "tags": ["Updates"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "updateId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["updateId"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.worker.deployments.drain",
+      "kind": "unary",
+      "summary": "Mark a worker deployment as draining",
+      "tags": ["System"],
+      "destructive": true,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:admin"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "deploymentName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "reason": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["deploymentName"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "affectedWorkers": {
+                "type": "number"
+              },
+              "health": {
+                "enum": ["active", "draining", "drained"],
+                "type": "string"
+              },
+              "inFlight": {
+                "type": "number"
+              },
+              "target": {
+                "const": "worker",
+                "type": "string"
+              },
+              "workerId": {
+                "type": "string"
+              }
+            },
+            "required": ["target", "workerId", "affectedWorkers", "inFlight", "health"],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "affectedWorkers": {
+                "type": "number"
+              },
+              "deploymentName": {
+                "type": "string"
+              },
+              "health": {
+                "enum": ["active", "draining", "drained"],
+                "type": "string"
+              },
+              "inFlight": {
+                "type": "number"
+              },
+              "target": {
+                "const": "deployment",
+                "type": "string"
+              }
+            },
+            "required": ["target", "deploymentName", "affectedWorkers", "inFlight", "health"],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    {
+      "name": "weft.worker.deployments.resume",
+      "kind": "unary",
+      "summary": "Clear a worker deployment drain marker",
+      "tags": ["System"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:admin"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "deploymentName": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["deploymentName"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "affectedWorkers": {
+                "type": "number"
+              },
+              "health": {
+                "enum": ["active", "draining", "drained"],
+                "type": "string"
+              },
+              "inFlight": {
+                "type": "number"
+              },
+              "target": {
+                "const": "worker",
+                "type": "string"
+              },
+              "workerId": {
+                "type": "string"
+              }
+            },
+            "required": ["target", "workerId", "affectedWorkers", "inFlight", "health"],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "affectedWorkers": {
+                "type": "number"
+              },
+              "deploymentName": {
+                "type": "string"
+              },
+              "health": {
+                "enum": ["active", "draining", "drained"],
+                "type": "string"
+              },
+              "inFlight": {
+                "type": "number"
+              },
+              "target": {
+                "const": "deployment",
+                "type": "string"
+              }
+            },
+            "required": ["target", "deploymentName", "affectedWorkers", "inFlight", "health"],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    {
+      "name": "weft.workers.drain",
+      "kind": "unary",
+      "summary": "Mark a connected worker as draining",
+      "tags": ["System"],
+      "destructive": true,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:admin"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "reason": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "workerId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workerId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "affectedWorkers": {
+                "type": "number"
+              },
+              "health": {
+                "enum": ["active", "draining", "drained"],
+                "type": "string"
+              },
+              "inFlight": {
+                "type": "number"
+              },
+              "target": {
+                "const": "worker",
+                "type": "string"
+              },
+              "workerId": {
+                "type": "string"
+              }
+            },
+            "required": ["target", "workerId", "affectedWorkers", "inFlight", "health"],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "affectedWorkers": {
+                "type": "number"
+              },
+              "deploymentName": {
+                "type": "string"
+              },
+              "health": {
+                "enum": ["active", "draining", "drained"],
+                "type": "string"
+              },
+              "inFlight": {
+                "type": "number"
+              },
+              "target": {
+                "const": "deployment",
+                "type": "string"
+              }
+            },
+            "required": ["target", "deploymentName", "affectedWorkers", "inFlight", "health"],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    {
+      "name": "weft.workers.list",
+      "kind": "unary",
+      "summary": "List connected workers, their advertised activities, and saturation",
+      "tags": ["System"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {},
+        "type": "object"
+      },
+      "outputSchema": {
+        "$defs": {
+          "__schema0": {
+            "anyOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "type": "array"
+              },
+              {
+                "additionalProperties": {
+                  "$ref": "#/$defs/__schema0"
+                },
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            ]
+          }
+        },
+        "additionalProperties": false,
+        "properties": {
+          "deployments": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "activeWorkers": {
+                  "type": "number"
+                },
+                "buildId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "deploymentName": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "drainedWorkers": {
+                  "type": "number"
+                },
+                "drainingWorkers": {
+                  "type": "number"
+                },
+                "gitSha": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "health": {
+                  "enum": ["active", "draining", "drained"],
+                  "type": "string"
+                },
+                "inFlight": {
+                  "type": "number"
+                },
+                "oldestStartedAt": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "runtimeVersion": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "workers": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "deploymentName",
+                "buildId",
+                "runtimeVersion",
+                "gitSha",
+                "health",
+                "workers",
+                "activeWorkers",
+                "drainingWorkers",
+                "drainedWorkers",
+                "inFlight",
+                "oldestStartedAt"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "activities": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "availableCapacity": {
+                  "type": "number"
+                },
+                "buildId": {
+                  "type": "string"
+                },
+                "capabilities": {
+                  "additionalProperties": {
+                    "$ref": "#/$defs/__schema0"
+                  },
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "concurrency": {
+                  "type": "number"
+                },
+                "connectedAt": {
+                  "type": "number"
+                },
+                "deploymentName": {
+                  "type": "string"
+                },
+                "gitSha": {
+                  "type": "string"
+                },
+                "health": {
+                  "enum": ["active", "draining", "drained"],
+                  "type": "string"
+                },
+                "heartbeatAgeMs": {
+                  "type": "number"
+                },
+                "id": {
+                  "type": "string"
+                },
+                "inFlight": {
+                  "type": "number"
+                },
+                "lastHeartbeatAt": {
+                  "type": "number"
+                },
+                "queue": {
+                  "type": "string"
+                },
+                "runtimeVersion": {
+                  "type": "string"
+                },
+                "startedAt": {
+                  "type": "number"
+                }
+              },
+              "required": [
+                "id",
+                "queue",
+                "activities",
+                "concurrency",
+                "inFlight",
+                "availableCapacity",
+                "connectedAt",
+                "lastHeartbeatAt",
+                "heartbeatAgeMs",
+                "startedAt",
+                "capabilities",
+                "health"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "routingPolicy": {
+            "enum": ["least-loaded", "round-robin", "fair-share"],
+            "type": "string"
+          }
+        },
+        "required": ["items", "deployments", "routingPolicy"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workers.resume",
+      "kind": "unary",
+      "summary": "Clear a connected worker drain marker",
+      "tags": ["System"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["system:admin"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workerId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workerId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "oneOf": [
+          {
+            "additionalProperties": false,
+            "properties": {
+              "affectedWorkers": {
+                "type": "number"
+              },
+              "health": {
+                "enum": ["active", "draining", "drained"],
+                "type": "string"
+              },
+              "inFlight": {
+                "type": "number"
+              },
+              "target": {
+                "const": "worker",
+                "type": "string"
+              },
+              "workerId": {
+                "type": "string"
+              }
+            },
+            "required": ["target", "workerId", "affectedWorkers", "inFlight", "health"],
+            "type": "object"
+          },
+          {
+            "additionalProperties": false,
+            "properties": {
+              "affectedWorkers": {
+                "type": "number"
+              },
+              "deploymentName": {
+                "type": "string"
+              },
+              "health": {
+                "enum": ["active", "draining", "drained"],
+                "type": "string"
+              },
+              "inFlight": {
+                "type": "number"
+              },
+              "target": {
+                "const": "deployment",
+                "type": "string"
+              }
+            },
+            "required": ["target", "deploymentName", "affectedWorkers", "inFlight", "health"],
+            "type": "object"
+          }
+        ]
+      }
+    },
+    {
+      "name": "weft.workflows.aggregate",
+      "kind": "unary",
+      "summary": "Aggregate workflows by a single dimension",
+      "tags": ["Workflows"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Unprocessable"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "gt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "gte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "key": {
+                  "anyOf": [
+                    {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    {}
+                  ]
+                },
+                "lt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "lte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "value": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "type": "boolean"
+                    },
+                    {},
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                }
+              },
+              "required": ["key"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "createdAt": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "executionDeadline": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "failureCategory": {
+            "anyOf": [
+              {
+                "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            ]
+          },
+          "groupBy": {
+            "anyOf": [
+              {
+                "const": "status",
+                "type": "string"
+              },
+              {
+                "const": "type",
+                "type": "string"
+              },
+              {
+                "const": "failureCategory",
+                "type": "string"
+              },
+              {
+                "additionalProperties": false,
+                "properties": {
+                  "attribute": {
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": ["attribute"],
+                "type": "object"
+              }
+            ]
+          },
+          "idPrefix": {
+            "minLength": 1,
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 10000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": ["pending", "running", "completed", "failed", "cancelled", "timed-out"],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": ["pending", "running", "completed", "failed", "cancelled", "timed-out"],
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            ]
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "updatedAt": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": ["groupBy"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "groups": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "count": {
+                  "maximum": 9007199254740991,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "key": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": ["key", "count"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "total": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        },
+        "required": ["total", "groups", "truncated"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workflows.attributes.get",
+      "kind": "unary",
+      "summary": "Get workflow attributes by id",
+      "tags": ["Attributes"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.attributes.set",
+      "kind": "unary",
+      "summary": "Update search attributes for a workflow",
+      "tags": ["Attributes"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {},
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": ["ok"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workflows.bulk.cancel",
+      "kind": "unary",
+      "summary": "Cancel workflows in bulk",
+      "tags": ["Workflows"],
+      "destructive": true,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["workflows:admin"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "gt": {},
+                "gte": {},
+                "key": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "lt": {},
+                "lte": {},
+                "value": {}
+              },
+              "required": ["key"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "confirmationToken": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "createdAt": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "executionDeadline": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "failureCategory": {
+            "anyOf": [
+              {},
+              {
+                "items": {},
+                "type": "array"
+              }
+            ]
+          },
+          "idPrefix": {
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "offset": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requestId": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {},
+              {
+                "items": {},
+                "type": "array"
+              }
+            ]
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.bulk.delete",
+      "kind": "unary",
+      "summary": "Delete terminal workflows in bulk",
+      "tags": ["Workflows"],
+      "destructive": true,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["workflows:admin"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Unprocessable"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "gt": {},
+                "gte": {},
+                "key": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "lt": {},
+                "lte": {},
+                "value": {}
+              },
+              "required": ["key"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "confirmationToken": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "createdAt": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "executionDeadline": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "failureCategory": {
+            "anyOf": [
+              {},
+              {
+                "items": {},
+                "type": "array"
+              }
+            ]
+          },
+          "idPrefix": {
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "offset": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "requestId": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {},
+              {
+                "items": {},
+                "type": "array"
+              }
+            ]
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.bulk.signal",
+      "kind": "unary",
+      "summary": "Signal workflows in bulk",
+      "tags": ["Workflows"],
+      "destructive": true,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["workflows:admin"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "gt": {},
+                "gte": {},
+                "key": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "lt": {},
+                "lte": {},
+                "value": {}
+              },
+              "required": ["key"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "confirmationToken": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "createdAt": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "executionDeadline": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "failureCategory": {
+            "anyOf": [
+              {},
+              {
+                "items": {},
+                "type": "array"
+              }
+            ]
+          },
+          "idPrefix": {
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "name": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "offset": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "payload": {},
+          "requestId": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {},
+              {
+                "items": {},
+                "type": "array"
+              }
+            ]
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "required": ["name"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.bulk.tags",
+      "kind": "unary",
+      "summary": "Add or remove workflow tags in bulk",
+      "tags": ["Workflows"],
+      "destructive": true,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["workflows:admin"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "confirmationToken": {
+            "maxLength": 256,
+            "minLength": 1,
+            "type": "string"
+          },
+          "dryRun": {
+            "type": "boolean"
+          },
+          "filter": {
+            "additionalProperties": false,
+            "properties": {
+              "attributes": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gt": {},
+                    "gte": {},
+                    "key": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "lt": {},
+                    "lte": {},
+                    "value": {}
+                  },
+                  "required": ["key"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "createdAt": {
+                "additionalProperties": false,
+                "properties": {
+                  "gt": {
+                    "type": "number"
+                  },
+                  "gte": {
+                    "type": "number"
+                  },
+                  "lt": {
+                    "type": "number"
+                  },
+                  "lte": {
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              },
+              "executionDeadline": {
+                "additionalProperties": false,
+                "properties": {
+                  "gt": {
+                    "type": "number"
+                  },
+                  "gte": {
+                    "type": "number"
+                  },
+                  "lt": {
+                    "type": "number"
+                  },
+                  "lte": {
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              },
+              "failureCategory": {
+                "anyOf": [
+                  {},
+                  {
+                    "items": {},
+                    "type": "array"
+                  }
+                ]
+              },
+              "idPrefix": {
+                "type": "string"
+              },
+              "limit": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "offset": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "anyOf": [
+                  {},
+                  {
+                    "items": {},
+                    "type": "array"
+                  }
+                ]
+              },
+              "tags": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "type": {
+                "type": "string"
+              },
+              "updatedAt": {
+                "additionalProperties": false,
+                "properties": {
+                  "gt": {
+                    "type": "number"
+                  },
+                  "gte": {
+                    "type": "number"
+                  },
+                  "lt": {
+                    "type": "number"
+                  },
+                  "lte": {
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
+          "operation": {
+            "enum": ["add", "remove"],
+            "type": "string"
+          },
+          "requestId": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": ["tags", "operation"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.cancel",
+      "kind": "unary",
+      "summary": "Cancel a running workflow",
+      "tags": ["Workflows"],
+      "destructive": true,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.checkpoints.get",
+      "kind": "unary",
+      "summary": "Get a specific checkpoint by step number",
+      "tags": ["Checkpoints"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "step": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId", "step"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.checkpoints.list",
+      "kind": "unary",
+      "summary": "List checkpoint history for a workflow",
+      "tags": ["Checkpoints"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.events",
+      "kind": "subscription",
+      "summary": "Subscribe to workflow events with replay-from-cursor",
+      "tags": ["Events"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["workflows:read"]
+      },
+      "transports": {
+        "http": false,
+        "jsonRpcHttp": false,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": false
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fromCursor": {
+            "type": "string"
+          },
+          "selector": {
+            "default": "events",
+            "enum": ["events", "tokens"],
+            "type": "string"
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId", "selector"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "subscriptionId": {
+            "type": "string"
+          }
+        },
+        "required": ["subscriptionId", "cursor"],
+        "type": "object"
+      },
+      "eventSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "emittedAtMs": {
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": {},
+          "selector": {
+            "enum": ["events", "tokens"],
+            "type": "string"
+          },
+          "sequence": {
+            "type": "number"
+          },
+          "workflowId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "workflowId",
+          "selector",
+          "sequence",
+          "cursor",
+          "emittedAtMs",
+          "payload"
+        ],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workflows.events.list",
+      "kind": "unary",
+      "summary": "Get workflow events by id",
+      "tags": ["Events"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.fork",
+      "kind": "unary",
+      "summary": "Fork a workflow from a checkpoint",
+      "tags": ["Workflows"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fromStep": {},
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workflows.get",
+      "kind": "unary",
+      "summary": "Get workflow state by id",
+      "tags": ["Workflows"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.list",
+      "kind": "unary",
+      "summary": "List workflows",
+      "tags": ["Workflows"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Unprocessable"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "gt": {},
+                "gte": {},
+                "key": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "lt": {},
+                "lte": {},
+                "value": {}
+              },
+              "required": ["key"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "createdAt": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "executionDeadline": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "failureCategory": {
+            "anyOf": [
+              {},
+              {
+                "items": {},
+                "type": "array"
+              }
+            ]
+          },
+          "idPrefix": {
+            "type": "string"
+          },
+          "include": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            ]
+          },
+          "limit": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "offset": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "anyOf": [
+              {},
+              {
+                "items": {},
+                "type": "array"
+              }
+            ]
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.purge",
+      "kind": "unary",
+      "summary": "Purge terminal workflows",
+      "tags": ["Workflows"],
+      "destructive": true,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "attributes": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "gt": {},
+                "gte": {},
+                "key": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "lt": {},
+                "lte": {},
+                "value": {}
+              },
+              "required": ["key"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "createdAt": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "executionDeadline": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "failureCategory": {
+            "anyOf": [
+              {},
+              {
+                "items": {},
+                "type": "array"
+              }
+            ]
+          },
+          "idPrefix": {
+            "type": "string"
+          },
+          "limit": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "offset": {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "anyOf": [
+              {},
+              {
+                "items": {},
+                "type": "array"
+              }
+            ]
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
+            "type": "string"
+          },
+          "updatedAt": {
+            "additionalProperties": false,
+            "properties": {
+              "gt": {
+                "type": "number"
+              },
+              "gte": {
+                "type": "number"
+              },
+              "lt": {
+                "type": "number"
+              },
+              "lte": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.query",
+      "kind": "unary",
+      "summary": "Query workflow state by id",
+      "tags": ["Workflows"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotImplemented"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "input": {},
+          "queryName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId", "queryName"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.replay",
+      "kind": "unary",
+      "summary": "Replay a workflow to a historical checkpoint step",
+      "tags": ["Checkpoints"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["workflows:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict", "NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "step": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ]
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId", "step"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.result.get",
+      "kind": "unary",
+      "summary": "Get workflow result by id",
+      "tags": ["Workflows"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound", "Timeout", "Unprocessable"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.resume",
+      "kind": "unary",
+      "summary": "Resume a suspended workflow",
+      "tags": ["Workflows"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict", "NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workflows.signal",
+      "kind": "unary",
+      "summary": "Send a signal to a workflow",
+      "tags": ["Signals"],
+      "destructive": true,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "payload": {},
+          "signalId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "signalName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId", "signalName"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": ["ok"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workflows.start",
+      "kind": "unary",
+      "summary": "Start a new workflow",
+      "tags": ["Workflows"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "executionTimeout": {},
+          "id": {},
+          "idempotencyKey": {},
+          "input": {},
+          "searchAttributes": {},
+          "startAfter": {},
+          "startAt": {},
+          "tags": {},
+          "type": {
+            "description": "Workflow type name. Runtime validation requires a non-empty string."
+          }
+        },
+        "required": ["type"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workflows.streams.chunks",
+      "kind": "unary",
+      "summary": "Read stored stream chunks for a workflow stream key",
+      "tags": ["Streams"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {},
+          "key": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId", "key"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "chunks": {
+            "items": {},
+            "type": "array"
+          }
+        },
+        "required": ["chunks"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workflows.streams.sse",
+      "kind": "stream",
+      "summary": "Stream workflow tokens as Server-Sent Events",
+      "tags": ["Streams"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "after": {},
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "chunks": {
+            "items": {},
+            "type": "array"
+          }
+        },
+        "required": ["chunks"],
+        "type": "object"
+      },
+      "eventSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "sequence": {
+            "type": "number"
+          },
+          "value": {}
+        },
+        "required": ["sequence", "value"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workflows.tags.add",
+      "kind": "unary",
+      "summary": "Add workflow tags",
+      "tags": ["Tags"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound", "Unprocessable"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "tags": {},
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": ["ok"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workflows.tags.remove",
+      "kind": "unary",
+      "summary": "Remove workflow tags",
+      "tags": ["Tags"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound", "Unprocessable"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "tags": {},
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": ["ok"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workflows.timeline.get",
+      "kind": "unary",
+      "summary": "Get the structured execution timeline for a workflow",
+      "tags": ["Checkpoints"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.timeout",
+      "kind": "unary",
+      "summary": "Force-timeout a workflow",
+      "tags": ["Workflows"],
+      "destructive": true,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "type": "null"
+      }
+    },
+    {
+      "name": "weft.workflows.update",
+      "kind": "unary",
+      "summary": "Send a synchronous update to a workflow",
+      "tags": ["Updates"],
+      "destructive": true,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Timeout", "Unprocessable"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "idempotencyKey": {},
+          "payload": {},
+          "timeout": {},
+          "updateName": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId", "updateName"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "result": {},
+          "updateId": {
+            "type": "string"
+          }
+        },
+        "required": ["updateId", "result"],
+        "type": "object"
+      }
+    }
+  ]
+}

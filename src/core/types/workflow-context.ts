@@ -4,6 +4,7 @@ import type {
   StreamReference,
   StreamSink,
 } from '../context/types.ts';
+import type { UpdateHandlerOptions } from '../context/updates.ts';
 import type { HumanReviewOptions, HumanReviewResult } from '../review/index.ts';
 import type { ActivityCallable, ActivityCallOptions } from './activity.ts';
 import type { WorkflowId } from './identity.ts';
@@ -279,12 +280,18 @@ export interface WorkflowContext<
     ) =>
       | Parameters<UpdatePayload<TUpdates[TName]>['respond']>[0]
       | Promise<Parameters<UpdatePayload<TUpdates[TName]>['respond']>[0]>,
+    options?: UpdateHandlerOptions,
   ): void;
   onUpdate<TInput, TOutput>(
     definition: UpdateDefinition<TInput, TOutput>,
     handler: (payload: TInput) => TOutput | Promise<TOutput>,
+    options?: UpdateHandlerOptions,
   ): void;
-  onUpdate(name: string, handler: (payload: unknown) => unknown): void;
+  onUpdate(
+    name: string,
+    handler: (payload: unknown) => unknown,
+    options?: UpdateHandlerOptions,
+  ): void;
   // Workflow-scoped typed-key onQuery overload.
   onQuery<TName extends keyof TQueries & string>(
     name: TName,

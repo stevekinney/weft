@@ -114,6 +114,13 @@ function catalogCheckoutWorkflow() {
 }
 
 describe('catalogWorkflow', () => {
+  it('marks cataloged workflows non-destructive (start operations are additive)', () => {
+    // catalogWorkflow-built operations are created per deployment and never
+    // appear in the live registry, so the registry exhaustiveness test cannot
+    // cover them. Pin the factory's hardcoded value directly.
+    expect(catalogCheckoutWorkflow().destructive).toBe(false);
+  });
+
   it('starts the workflow and returns only the start handle', async () => {
     const engine = createEngine();
     registerCheckoutWorkflow(engine);

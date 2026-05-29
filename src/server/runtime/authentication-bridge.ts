@@ -19,6 +19,7 @@ import {
 import type { OpenApiSecuritySchemeName } from '../openapi.ts';
 import { API_PREFIX } from '../route-model.ts';
 import type { ServerContext } from './context.ts';
+import { buildPreflightResponse, decorateResponseWithCors, isPreflightRequest } from './cors.ts';
 import { handleTaskPollRequest, handleTaskResultRequest } from './task-polling.ts';
 import { reassignOrExpireTask } from './task-reconciliation.ts';
 import { addStreamSocket, removeStreamSocket, replayTokenStream } from './websocket-stream.ts';
@@ -119,7 +120,44 @@ function stripApiPrefix(request: Request): Request {
   return new Request(url, request);
 }
 
+/**
+ * Resolve the principal handed to the long-poll task endpoints. Only `/v1/tasks/`
+ * routes consume it, and only when an auth context exists, so other paths skip
+ * `authContextToPrincipal` and avoid turning a client auth error into a spurious
+ * failure on routes that never needed the principal.
+ */
+function resolveTaskPrincipal(
+  authContext: AuthContext | undefined,
+  url: URL,
+): ReturnType<typeof authContextToPrincipal> | undefined {
+  if (authContext === undefined || !url.pathname.startsWith('/v1/tasks/')) return undefined;
+  return authContextToPrincipal(authContext);
+}
+
 export async function handleServerFetchRequest(
+  server: ReturnType<typeof Bun.serve>,
+  context: ServerContext,
+  options: ServerFetchOptions,
+  originalRequest: Request,
+): Promise<Response | undefined> {
+  // CORS preflight is answered before authentication: browsers never attach
+  // credentials to an `OPTIONS` preflight, so auth-gating it would reject every
+  // legitimate cross-origin request. The handler is stateless and bounded.
+  if (context.corsPolicy !== null && isPreflightRequest(originalRequest)) {
+    return buildPreflightResponse(context.corsPolicy, originalRequest);
+  }
+
+  const response = await dispatchServerFetchRequest(server, context, options, originalRequest);
+
+  // Decorate actual (non-preflight) responses with CORS headers for allowed
+  // origins. `undefined` (no response produced) is passed through untouched.
+  if (context.corsPolicy !== null && response !== undefined) {
+    return decorateResponseWithCors(context.corsPolicy, originalRequest, response);
+  }
+  return response;
+}
+
+async function dispatchServerFetchRequest(
   server: ReturnType<typeof Bun.serve>,
   context: ServerContext,
   options: ServerFetchOptions,
@@ -174,12 +212,25 @@ export async function handleServerFetchRequest(
     });
   }
 
-  const taskPollResponse = await handleTaskPollRequest(context, options, request, url);
+  const taskPrincipal = resolveTaskPrincipal(authentication.authContext, url);
+  const taskPollResponse = await handleTaskPollRequest(
+    context,
+    options,
+    request,
+    url,
+    taskPrincipal,
+  );
   if (taskPollResponse !== null) {
     return taskPollResponse;
   }
 
-  const taskResultResponse = await handleTaskResultRequest(context, options, request, url);
+  const taskResultResponse = await handleTaskResultRequest(
+    context,
+    options,
+    request,
+    url,
+    taskPrincipal,
+  );
   if (taskResultResponse !== null) {
     return taskResultResponse;
   }

@@ -42,6 +42,7 @@ export function minimalServerContext(
     liveOperationRegistry: null as never,
     liveRestBindings: null as never,
     supportedAuthenticationSchemes: new Set() as never,
+    corsPolicy: null,
     metricsCollector: new MetricsCollector(),
     eventFeedBackend: null as never,
     workflowEventFeed: null as never,

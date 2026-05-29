@@ -22,6 +22,8 @@ type SingleWorkflowControlOperationConfiguration<
   readonly name: string;
   readonly summary: string;
   readonly tags: ReadonlyArray<string>;
+  /** Whether this control operation irreversibly mutates state. Required. */
+  readonly destructive: boolean;
   readonly inputSchema: z.ZodType<Input>;
   readonly outputSchema: z.ZodType<Output>;
   readonly producibleFaults: ReadonlyArray<FaultCode>;
@@ -40,6 +42,7 @@ export function createSingleWorkflowControlOperation<
     mcpExposable: false,
     summary: configuration.summary,
     tags: configuration.tags,
+    destructive: configuration.destructive,
     inputSchema: configuration.inputSchema,
     outputSchema: configuration.outputSchema,
     access: { kind: 'public' },

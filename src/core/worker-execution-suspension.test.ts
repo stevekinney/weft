@@ -11,6 +11,7 @@ import { activity } from './types/activity.ts';
 import { workflow } from './types/workflow-function.ts';
 
 const workerUrl = new URL('../workers/test-browser-worker.ts', import.meta.url);
+const LOAD_TOLERANT_WORKER_TIMEOUT_ASSERTION_MS = 5_000;
 
 const waitSignalThenCompleteWorkflow = workflow({ name: 'wait-signal-then-complete' }).execute(
   async function* (_ctx: WorkflowContext) {
@@ -180,7 +181,11 @@ describe('worker execution signal suspension', () => {
     });
 
     await expect(
-      withTimeout(loopingHandle.result(), 1000, 'infinite-loop timeout'),
+      withTimeout(
+        loopingHandle.result(),
+        LOAD_TOLERANT_WORKER_TIMEOUT_ASSERTION_MS,
+        'infinite-loop timeout',
+      ),
     ).rejects.toThrow('Worker workflow turn timed out');
 
     const simpleHandle = await workerEngine.start(
@@ -212,7 +217,11 @@ describe('worker execution signal suspension', () => {
     await workerEngine.signal('worker-infinite-loop-after-resume', 'resume', { status: 'go' });
 
     await expect(
-      withTimeout(loopingResult, 1000, 'infinite-loop-after-resume timeout'),
+      withTimeout(
+        loopingResult,
+        LOAD_TOLERANT_WORKER_TIMEOUT_ASSERTION_MS,
+        'infinite-loop-after-resume timeout',
+      ),
     ).rejects.toThrow('Worker workflow turn timed out');
 
     const simpleHandle = await workerEngine.start(

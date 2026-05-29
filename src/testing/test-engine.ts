@@ -8,10 +8,16 @@
  * @module testing/test-engine
  */
 
+import type {
+  ActivityMetadata,
+  ActivityRegistrationOptions,
+  RegisteredActivityFunction,
+} from '../core/activity-registry.ts';
 import { Engine } from '../core/engine.ts';
 import { runtimeWorkflowEngine } from '../core/runtime-workflow-engine.ts';
 import { parseDuration } from '../core/scheduler.ts';
 import type { Duration } from '../core/types.ts';
+import { activity as defineActivity } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import type { ChaosScenario, FailureCategory } from './chaos.ts';
 import { withChaos } from './chaos.ts';
@@ -73,6 +79,26 @@ export interface RunNResult {
   consistency: number;
   /** Count of failures bucketed by failure category. */
   categories: Record<FailureCategory, number>;
+}
+
+interface ActivityRegistrationSnapshot {
+  readonly fn: RegisteredActivityFunction;
+  readonly options: ActivityRegistrationOptions;
+}
+
+function activityRegistrationOptionsFromMetadata(
+  metadata: ActivityMetadata,
+): ActivityRegistrationOptions {
+  return {
+    queue: metadata.queue,
+    ...(metadata.description === undefined ? {} : { description: metadata.description }),
+    ...(metadata.tags === undefined ? {} : { tags: [...metadata.tags] }),
+    ...(metadata.inputSchema === undefined ? {} : { inputSchema: metadata.inputSchema }),
+    ...(metadata.outputSchema === undefined ? {} : { outputSchema: metadata.outputSchema }),
+    ...(metadata.retry === undefined ? {} : { retry: metadata.retry }),
+    ...(metadata.timeout === undefined ? {} : { timeout: metadata.timeout }),
+    ...(metadata.idempotent === undefined ? {} : { idempotent: metadata.idempotent }),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +228,60 @@ export class TestEngine extends Engine {
     activity: (() => Promise<TResult> | TResult) | ((input: TInput) => Promise<TResult> | TResult),
     implementation: MockActivityFunction<TInput, TResult>,
   ): MockHandle<TInput, TResult> {
-    return this.#mocks.mock(activity, implementation);
+    const activityName = activity.name || 'anonymous';
+
+    // Re-mocking an already-mocked activity only swaps the implementation: the
+    // surrogate's `execute` reads `this.#mocks.get(activity)` dynamically, and
+    // the original-registration snapshot was already captured by the first
+    // mock. Re-capturing here would snapshot the surrogate (with default
+    // metadata) and corrupt the eventual restore, so we skip it.
+    if (this.#mocks.hasRestoreHook(activity)) {
+      return this.#mocks.mock(activity, implementation);
+    }
+
+    const previousRegistration = this.#captureActivityRegistration(activityName);
+    const handle = this.#mocks.mock(activity, implementation);
+    const mockedActivity = defineActivity({
+      name: activityName,
+      execute: async (input: TInput) => {
+        const mocked = this.#mocks.get(activity);
+        if (mocked) {
+          return (await mocked.implementation(input)) as TResult;
+        }
+        return await activity(input);
+      },
+    });
+    (this.register as (definition: typeof mockedActivity) => unknown)(mockedActivity);
+    this.#mocks.onRestore(activity, () =>
+      this.#restoreActivityRegistration(activityName, previousRegistration),
+    );
+    return handle;
+  }
+
+  #restoreActivityRegistration(
+    activityName: string,
+    previousRegistration: ActivityRegistrationSnapshot | undefined,
+  ): void {
+    if (previousRegistration) {
+      this.registerActivityFunction(
+        activityName,
+        previousRegistration.fn,
+        previousRegistration.options,
+      );
+    } else {
+      this.unregisterRegisteredActivity(activityName);
+    }
+  }
+
+  #captureActivityRegistration(activityName: string): ActivityRegistrationSnapshot | undefined {
+    const fn = this.resolveRegisteredActivity(activityName);
+    const metadata = this.getActivityDefinition(activityName);
+    if (!fn || !metadata) return undefined;
+
+    return {
+      fn,
+      options: activityRegistrationOptionsFromMetadata(metadata),
+    };
   }
 
   // ---------------------------------------------------------------------------

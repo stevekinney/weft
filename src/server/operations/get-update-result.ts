@@ -23,6 +23,7 @@ export const getUpdateResultOperation = defineOperation<
   name: 'weft.updates.result.get',
   mcpExposable: false,
   summary: 'Get the result of an update request',
+  destructive: false,
   tags: ['Updates'],
   inputSchema: getUpdateResultInput,
   outputSchema: getUpdateResultOutput as z.ZodType<GetUpdateResultOutput>,

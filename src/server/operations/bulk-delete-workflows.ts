@@ -41,6 +41,7 @@ export const bulkDeleteWorkflowsOperation = defineOperation<
   name: 'weft.workflows.bulk.delete',
   mcpExposable: false,
   summary: 'Delete terminal workflows in bulk',
+  destructive: true,
   tags: ['Workflows'],
   inputSchema: bulkDeleteWorkflowsInput,
   outputSchema: bulkDeleteWorkflowsOutput as z.ZodType<BulkDeleteWorkflowsOutput>,

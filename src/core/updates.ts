@@ -79,6 +79,62 @@ export class UpdateTimeoutError extends WeftError<'UpdateTimeoutError'> {
 }
 
 /**
+ * Thrown when an update is rejected by its pre-acceptance validator — before
+ * the payload is durably written or the workflow observes it. Inspect
+ * `updateName` to see which update was rejected and `issues` for the
+ * structured validation messages.
+ *
+ * @example
+ * ```ts
+ * import { workflow, Engine, UpdateValidationError, update } from 'weft';
+ *
+ * const setAge = update<{ age: number }, void>('setAge');
+ * const engine = new Engine();
+ * engine.register(
+ *   workflow({ name: 'guarded' }).execute(async function* (ctx) {
+ *     ctx.onUpdate(setAge, () => undefined, {
+ *       validator: (v): unknown => {
+ *         const age = (v as Record<string, unknown>)['age'];
+ *         if (typeof age !== 'number' || age < 0) {
+ *           return { issues: [{ message: 'age must be a non-negative number' }] };
+ *         }
+ *         return undefined;
+ *       },
+ *     });
+ *     await new Promise(() => {}); // park forever
+ *   }),
+ * );
+ * const handle = await engine.start('guarded', null);
+ * try {
+ *   await handle.update(setAge, { age: -1 });
+ * } catch (err) {
+ *   if (err instanceof UpdateValidationError) {
+ *     console.error(err.issues[0]?.message); // 'age must be a non-negative number'
+ *   }
+ * }
+ * ```
+ */
+export class UpdateValidationError extends WeftError<'UpdateValidationError'> {
+  readonly updateName: string;
+  /**
+   * Structured validation issues from the pre-acceptance validator. Each issue
+   * carries a human-readable `message` and an optional RFC 6901 JSON Pointer
+   * `path` indicating which field in the update payload failed validation.
+   */
+  readonly issues: ReadonlyArray<{ readonly message: string; readonly path?: string }>;
+
+  constructor(
+    updateName: string,
+    issues: ReadonlyArray<{ readonly message: string; readonly path?: string }>,
+  ) {
+    const summary = issues.map((i) => i.message).join('; ');
+    super('UpdateValidationError', `Update "${updateName}" rejected by validator: ${summary}`);
+    this.updateName = updateName;
+    this.issues = issues;
+  }
+}
+
+/**
  * Thrown when an update is sent to a workflow that is already in a terminal
  * state (completed, failed, cancelled, or timed-out). Check `workflowId` and
  * `status` to understand which workflow rejected the update.
