@@ -54,6 +54,14 @@ import type {
  * `weft codegen` and including the generated `.d.ts` in its compilation. The
  * client's typed `start`/`schedule` overloads key off this set, so without
  * codegen they degrade to the permissive string-name overloads.
+ *
+ * `weft codegen` only ever emits explicit string-literal entries, so in
+ * practice this resolves to a finite union of registered names. If a project
+ * hand-augments `WorkflowRegistry` with an index signature
+ * (`[name: string]: ...`), `KnownWorkflowName` widens to `string` and the
+ * typed overload accepts any name with that entry's input type — the same
+ * behavior the engine exhibits, and a deliberate consequence of opting into a
+ * permissive augmentation.
  */
 export type KnownWorkflowName = Extract<keyof WorkflowRegistry, string>;
 
@@ -104,6 +112,13 @@ export type UnknownNameWhenRegistryEmpty<TName extends string> = [KnownWorkflowN
  * project augments {@link WorkflowRegistry} (typically via `weft codegen`),
  * the typed `start` overload returns `ClientHandle<WorkflowOutput<...>>` and
  * `result()` is narrowed to that workflow's output.
+ *
+ * The narrowing is a compile-time projection of the registered output schema,
+ * exactly as `engine.start` returns a typed `WorkflowHandle<TOutput>` over a
+ * runtime handle whose `result()` is structurally `Promise<unknown>`. The
+ * concrete handles (`LocalHandle`, `HttpHandle`) stay non-generic; the static
+ * type reflects the schema the project opted into via codegen, not an extra
+ * runtime guarantee.
  */
 export interface ClientHandle<TResult = unknown>
   extends TypedEventTarget<WeftEventMap>, Disposable {
