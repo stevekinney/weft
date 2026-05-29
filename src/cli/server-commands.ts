@@ -38,15 +38,6 @@ async function resolveServerUrl(command: ServerCommand): Promise<URL> {
   return connection.server;
 }
 
-function healthEndpoint(server: URL): URL {
-  const endpoint = new URL(server.toString());
-  const basePath = endpoint.pathname.endsWith('/') ? endpoint.pathname : `${endpoint.pathname}/`;
-  endpoint.pathname = `${basePath}v1/health`.replaceAll(/\/+/g, '/');
-  endpoint.search = '';
-  endpoint.hash = '';
-  return endpoint;
-}
-
 function metaEndpoint(server: URL, path: string): URL {
   const endpoint = new URL(server.toString());
   const basePath = endpoint.pathname.endsWith('/') ? endpoint.pathname : `${endpoint.pathname}/`;
@@ -58,7 +49,7 @@ function metaEndpoint(server: URL, path: string): URL {
 
 async function probeHealth(server: URL): Promise<{ healthy: boolean; detail: string }> {
   try {
-    const response = await fetch(healthEndpoint(server), { method: 'GET' });
+    const response = await fetch(metaEndpoint(server, 'v1/health'), { method: 'GET' });
     if (!response.ok) {
       return { healthy: false, detail: `server returned status ${response.status}` };
     }

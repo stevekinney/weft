@@ -118,6 +118,24 @@ describe('streamWorkflowEvents', () => {
     });
     expect(exitCode).toBe(1);
   });
+
+  it('routes errors to reportError, not the event sink', async () => {
+    const events: string[] = [];
+    const errors: string[] = [];
+    const exitCode = await streamWorkflowEvents({
+      url: new URL('http://localhost/v1/workflows/wf/sse'),
+      signal: new AbortController().signal,
+      write: (line) => events.push(line),
+      reportError: (line) => errors.push(line),
+      json: true,
+      fetchImpl: async () => {
+        throw new Error('refused');
+      },
+    });
+    expect(exitCode).toBe(2);
+    expect(events).toHaveLength(0);
+    expect(errors[0]).toContain('connection failed');
+  });
 });
 
 describe('weft tail', () => {

@@ -33,7 +33,10 @@ export type TailStreamOptions = {
   readonly url: URL;
   readonly token?: string;
   readonly signal: AbortSignal;
+  /** Sink for streamed events (stdout, suppressed under `--quiet`). */
   readonly write: (line: string) => void;
+  /** Sink for connection/status errors (stderr, never suppressed). Defaults to `write`. */
+  readonly reportError?: (line: string) => void;
   readonly json: boolean;
   readonly fetchImpl?: TailFetch;
 };
@@ -98,17 +101,18 @@ async function connectSse(options: TailStreamOptions): Promise<ConnectOutcome> {
     headers.set('authorization', `Bearer ${options.token}`);
   }
 
+  const reportError = options.reportError ?? options.write;
   let response: Response;
   try {
     response = await fetchImpl(options.url, { method: 'GET', headers, signal: options.signal });
   } catch (error) {
     if (options.signal.aborted) return { kind: 'done', exitCode: 0 };
-    options.write(`tail: connection failed: ${messageOf(error)}`);
+    reportError(`tail: connection failed: ${messageOf(error)}`);
     return { kind: 'done', exitCode: 2 };
   }
 
   if (!response.ok || response.body === null) {
-    options.write(`tail: server returned status ${response.status}`);
+    reportError(`tail: server returned status ${response.status}`);
     return { kind: 'done', exitCode: response.status === 404 ? 1 : 2 };
   }
   return { kind: 'stream', body: response.body };
@@ -199,7 +203,6 @@ export async function executeTail(command: TailCommand): Promise<CommandOutput> 
   const onSigint = () => controller.abort();
   process.on('SIGINT', onSigint);
 
-  const lines: string[] = [];
   try {
     const exitCode = await streamWorkflowEvents({
       url: sseEndpoint(resolved.server, command.workflowId),
@@ -207,8 +210,10 @@ export async function executeTail(command: TailCommand): Promise<CommandOutput> 
       signal: controller.signal,
       write: (line) => {
         if (!command.quiet) process.stdout.write(`${line}\n`);
-        lines.push(line);
       },
+      // Connection/status errors always reach stderr, even under --quiet, so a
+      // failed tail is never silent.
+      reportError: (line) => process.stderr.write(`${line}\n`),
       json: command.json,
     });
     return { stdout: '', exitCode };
