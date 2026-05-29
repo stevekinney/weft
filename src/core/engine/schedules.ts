@@ -213,9 +213,16 @@ export async function updateSchedule(
     normalizedSpec.kind === 'interval'
       ? { intervalMs: normalizedSpec.intervalMs }
       : { cronExpression: normalizedSpec.cronExpression };
+  // For interval specs the occurrence grid is anchored at `createdAt`. Re-anchor
+  // to `now` (the update time) so the timer's subsequent `getNextScheduleOccurrence`
+  // calls use the same origin as the `nextFireAt` computed here. Without this,
+  // the first fire after the update is correct but later fires drift back to the
+  // original creation-time grid.
+  const anchorFields = normalizedSpec.kind === 'interval' ? { createdAt: now } : {};
   const updatedState: ScheduleState = {
     ...stateWithoutCadence,
     ...cadenceFields,
+    ...anchorFields,
     updatedAt: now,
     nextFireAt:
       state.status === 'cancelled'

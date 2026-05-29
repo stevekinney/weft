@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
 import { yieldToEventLoop } from '../../testing/fake-timers.test-support.ts';
@@ -73,9 +73,15 @@ async function releaseRunningWorkflows(engine: Engine): Promise<void> {
 }
 
 describe('interval schedules', () => {
+  let engine: Engine;
+
+  afterEach(() => {
+    engine[Symbol.dispose]();
+  });
+
   it('createSchedule accepts an interval spec and computes the first fire one period after creation', async () => {
     const clock = { now: START };
-    const engine = createEngine(clock);
+    engine = createEngine(clock);
     registerWorkflow(engine, 'interval-echo', async function* () {
       return 'done';
     });
@@ -96,13 +102,11 @@ describe('interval schedules', () => {
     });
     expect(summary.cronExpression).toBeUndefined();
     expect(summary.nextFireAt).toBe(START + 5 * MINUTE);
-
-    engine[Symbol.dispose]();
   });
 
   it('fires at successive interval boundaries under TestEngine-style virtual time control', async () => {
     const clock = { now: START };
-    const engine = createEngine(clock);
+    engine = createEngine(clock);
     const fired: number[] = [];
 
     registerWorkflow(engine, 'interval-tick', async function* () {
@@ -122,13 +126,11 @@ describe('interval schedules', () => {
     expect(fired).toEqual([START + 5 * MINUTE, START + 10 * MINUTE, START + 15 * MINUTE]);
     const finalSummary = await handle.describe();
     expect(finalSummary.nextFireAt).toBe(START + 20 * MINUTE);
-
-    engine[Symbol.dispose]();
   });
 
   it('accepts a numeric millisecond interval', async () => {
     const clock = { now: START };
-    const engine = createEngine(clock);
+    engine = createEngine(clock);
     registerWorkflow(engine, 'interval-ms', async function* () {
       return 'done';
     });
@@ -136,13 +138,11 @@ describe('interval schedules', () => {
     const handle = await engine.schedule('interval-ms', null, { every: 90_000 }, { id: 'ms' });
     const summary = await handle.describe();
     expect(summary.nextFireAt).toBe(START + 90_000);
-
-    engine[Symbol.dispose]();
   });
 
   it('honors the skip overlap policy without a separate code path', async () => {
     const clock = { now: START };
-    const engine = createEngine(clock);
+    engine = createEngine(clock);
 
     registerWorkflow(engine, 'interval-overlap-skip', async function* (ctx: WorkflowContext) {
       yield* ctx.waitForSignal('release');
@@ -167,12 +167,11 @@ describe('interval schedules', () => {
     expect(await listRunningWorkflowIds(engine)).toHaveLength(1);
 
     await releaseRunningWorkflows(engine);
-    engine[Symbol.dispose]();
   });
 
   it('honors the allow overlap policy without a separate code path', async () => {
     const clock = { now: START };
-    const engine = createEngine(clock);
+    engine = createEngine(clock);
 
     registerWorkflow(engine, 'interval-overlap-allow', async function* (ctx: WorkflowContext) {
       yield* ctx.waitForSignal('release');
@@ -196,7 +195,6 @@ describe('interval schedules', () => {
     expect(await listRunningWorkflowIds(engine)).toHaveLength(2);
 
     await releaseRunningWorkflows(engine);
-    engine[Symbol.dispose]();
   });
 
   it('honors backfill on recovery using the same machinery cron uses', async () => {
@@ -204,6 +202,10 @@ describe('interval schedules', () => {
     const clock = { now: START };
     const executions: string[] = [];
 
+    // firstEngine is created and disposed within the test body because it
+    // simulates a process restart — a second engine picks up from the same
+    // storage. `engine` (the afterEach target) is set to the long-lived
+    // secondEngine so cleanup always runs even if an assertion throws.
     const firstEngine = createEngine(clock, storage);
     registerWorkflow(firstEngine, 'interval-backfill', async function* (_ctx, input: string) {
       executions.push(input);
@@ -224,24 +226,22 @@ describe('interval schedules', () => {
     firstEngine[Symbol.dispose]();
 
     // Recover and jump three intervals forward in one tick.
-    const secondEngine = createEngine(clock, storage);
-    registerWorkflow(secondEngine, 'interval-backfill', async function* (_ctx, input: string) {
+    engine = createEngine(clock, storage);
+    registerWorkflow(engine, 'interval-backfill', async function* (_ctx, input: string) {
       executions.push(input);
       return input;
     });
 
-    await tickEngine(secondEngine, clock, START + 3 * MINUTE);
+    await tickEngine(engine, clock, START + 3 * MINUTE);
 
     expect(executions.filter((input) => input === 'catch-up')).toHaveLength(3);
-    const recovered = await secondEngine.getSchedule(created.id);
+    const recovered = await engine.getSchedule(created.id);
     expect(recovered?.nextFireAt).toBe(START + 4 * MINUTE);
-
-    secondEngine[Symbol.dispose]();
   });
 
   it('accepts an interval through the declarative schedule definition helper', async () => {
     const clock = { now: START };
-    const engine = createEngine(clock);
+    engine = createEngine(clock);
     const executions: string[] = [];
 
     const scheduledWorkflow = defineWorkflow({ name: 'interval-definition' }).execute(
@@ -265,13 +265,11 @@ describe('interval schedules', () => {
 
     await tickEngine(engine, clock, requireNextFireAt(summary));
     expect(executions).toEqual(['from-definition']);
-
-    engine[Symbol.dispose]();
   });
 
   it('pause and resume recompute the interval next fire from the current time', async () => {
     const clock = { now: START };
-    const engine = createEngine(clock);
+    engine = createEngine(clock);
     registerWorkflow(engine, 'interval-pause', async function* () {
       return 'done';
     });
@@ -298,13 +296,11 @@ describe('interval schedules', () => {
     const resumed = await handle.describe();
     expect(resumed.status).toBe('active');
     expect(resumed.nextFireAt).toBe(getNextIntervalOccurrence(START, 10 * MINUTE, clock.now));
-
-    engine[Symbol.dispose]();
   });
 
   it('update switches a cron schedule to an interval and back, replacing the cadence cleanly', async () => {
     const clock = { now: START };
-    const engine = createEngine(clock);
+    engine = createEngine(clock);
     registerWorkflow(engine, 'interval-update', async function* () {
       return 'done';
     });
@@ -326,13 +322,46 @@ describe('interval schedules', () => {
     const asCron = await handle.describe();
     expect(asCron.intervalMs).toBeUndefined();
     expect(asCron.cronExpression).toBe('0 * * * *');
+  });
 
-    engine[Symbol.dispose]();
+  it('interval fires at the correct grid after a cron-to-interval update (anchor re-set to update time)', async () => {
+    // Regression: before the fix, nextFireAt was computed using `now` as the
+    // anchor but the persisted state kept the original `createdAt`. The first
+    // fire was correct; subsequent fires drifted back to the old creation-time
+    // grid. Now `createdAt` is updated to `now` when switching to an interval
+    // spec, so all fires stay on the same grid anchored at the update time.
+    const clock = { now: START };
+    engine = createEngine(clock);
+    const fired: number[] = [];
+
+    registerWorkflow(engine, 'interval-anchor-drift', async function* () {
+      fired.push(clock.now);
+      return 'done';
+    });
+
+    // Start with a cron schedule, then switch to an interval at T+1 minute.
+    const handle = await engine.schedule('interval-anchor-drift', null, '*/5 * * * *', {
+      id: 'anchor-drift',
+    });
+
+    const updateTime = START + MINUTE;
+    clock.now = updateTime;
+    await handle.update({ every: '3m' });
+
+    // First fire: 3 minutes after the update.
+    await tickToNextFire(engine, clock, handle);
+
+    // Second fire: should be 3 minutes after the first, not 3 minutes after
+    // the original `createdAt`. Before the fix this produced START+4m instead
+    // of START+7m because the timer re-anchored on the old `createdAt`.
+    await tickToNextFire(engine, clock, handle);
+
+    expect(fired).toEqual([updateTime + 3 * MINUTE, updateTime + 6 * MINUTE]);
   });
 
   it('rejects an invalid interval spec', async () => {
     const clock = { now: START };
-    const engine = createEngine(clock);
+    engine = createEngine(clock);
     registerWorkflow(engine, 'interval-invalid', async function* () {
       return 'done';
     });
@@ -344,7 +373,5 @@ describe('interval schedules', () => {
     await expect(engine.schedule('interval-invalid', null, { every: 0 })).rejects.toThrow(
       'Schedule interval "every" must resolve to a positive number of milliseconds',
     );
-
-    engine[Symbol.dispose]();
   });
 });
