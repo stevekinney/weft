@@ -577,8 +577,14 @@ describe('executeCodegen HTTP fetch path', () => {
     const out = join(home, 'weft.d.ts');
     const priorHome = Bun.env['WEFT_HOME'];
     const priorAddress = Bun.env['WEFT_ADDR'];
+    const priorProfile = Bun.env['WEFT_PROFILE'];
     Bun.env['WEFT_HOME'] = home;
     delete Bun.env['WEFT_ADDR'];
+    // resolveConnectionContext reads WEFT_PROFILE before the config's
+    // default_profile, so an externally-set WEFT_PROFILE would select a profile
+    // other than "main" and break this test in CI/dev environments. Clear it so
+    // the malformed URL resolves from the config's "main" profile as intended.
+    delete Bun.env['WEFT_PROFILE'];
     try {
       const result = await executeCodegen({ out, timeoutMs: 30_000 });
       expect(result.exitCode).toBe(1);
@@ -590,6 +596,8 @@ describe('executeCodegen HTTP fetch path', () => {
       else Bun.env['WEFT_HOME'] = priorHome;
       if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
       else Bun.env['WEFT_ADDR'] = priorAddress;
+      if (priorProfile === undefined) delete Bun.env['WEFT_PROFILE'];
+      else Bun.env['WEFT_PROFILE'] = priorProfile;
     }
   });
 
