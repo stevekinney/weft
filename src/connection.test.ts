@@ -263,4 +263,39 @@ describe('resolveConnection', () => {
       restoreEnv(snapshot);
     }
   });
+
+  it('throws ConnectionConfigurationError naming the offending value on a malformed server URL', () => {
+    const snapshot = snapshotEnv('WEFT_ADDR', 'WEFT_HOME');
+    const home = makeHome();
+    Bun.env['WEFT_HOME'] = home;
+    delete Bun.env['WEFT_ADDR'];
+    try {
+      expect(() => resolveConnection({ server: 'not a url' })).toThrow(
+        ConnectionConfigurationError,
+      );
+      expect(() => resolveConnection({ server: 'not a url' })).toThrow(
+        /Invalid server URL 'not a url'/,
+      );
+    } finally {
+      restoreEnv(snapshot);
+    }
+  });
+
+  it('names the profile server in the error when a profile resolves a malformed URL', () => {
+    const snapshot = snapshotEnv('WEFT_ADDR', 'WEFT_TOKEN', 'WEFT_PROFILE', 'WEFT_HOME');
+    const home = makeHome();
+    Bun.env['WEFT_HOME'] = home;
+    delete Bun.env['WEFT_ADDR'];
+    delete Bun.env['WEFT_TOKEN'];
+    delete Bun.env['WEFT_PROFILE'];
+    writeConfig(
+      home,
+      ['default_profile = "main"', '', '[profiles.main]', 'server = "http://[::bad"'].join('\n'),
+    );
+    try {
+      expect(() => resolveConnection()).toThrow(/Invalid server URL 'http:\/\/\[::bad'/);
+    } finally {
+      restoreEnv(snapshot);
+    }
+  });
 });

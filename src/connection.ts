@@ -145,9 +145,26 @@ export function resolveConnection(options: ConnectionOptions = {}): ResolvedConn
   const token = resolveToken(options.token ?? Bun.env['WEFT_TOKEN'], fallbackProfile);
 
   return {
-    server: new URL(server),
+    server: parseServerUrl(server),
     ...(token === undefined ? {} : { token }),
   };
+}
+
+/**
+ * Parse the resolved server string into a {@link URL}. A malformed value is a
+ * user-caused configuration error regardless of which source it came from
+ * (explicit option, `WEFT_ADDR`, profile `server`, or the run lockfile), so it
+ * surfaces as a {@link ConnectionConfigurationError} carrying the offending
+ * string rather than a bare `TypeError`. Callers that shape user diagnostics
+ * (for example `weft codegen`) can then report the actual invalid value.
+ */
+function parseServerUrl(server: string): URL {
+  try {
+    return new URL(server);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    throw new ConnectionConfigurationError(`Invalid server URL '${server}': ${reason}`);
+  }
 }
 
 /**

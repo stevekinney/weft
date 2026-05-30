@@ -531,17 +531,16 @@ describe('executeCodegen HTTP fetch path', () => {
     const priorAddress = Bun.env['WEFT_ADDR'];
     delete Bun.env['WEFT_ADDR'];
     try {
-      // `resolveConnection` constructs `new URL(server)`, which throws a
-      // `TypeError` for a malformed value. `executeCodegen` must translate that
-      // into a clean diagnostic rather than rejecting.
+      // `resolveConnection` raises a `ConnectionConfigurationError` for a
+      // malformed server value; `executeCodegen` must translate that into a
+      // clean diagnostic naming the offending URL rather than rejecting.
       const result = await executeCodegen({
         server: 'not a url',
         out,
         timeoutMs: 30_000,
       });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('codegen: invalid server URL');
-      expect(result.stderr).toContain('not a url');
+      expect(result.stderr).toContain("codegen: Invalid server URL 'not a url'");
       expect(existsSync(out)).toBe(false);
     } finally {
       if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
@@ -557,9 +556,38 @@ describe('executeCodegen HTTP fetch path', () => {
     try {
       const result = await executeCodegen({ out, timeoutMs: 30_000 });
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('codegen: invalid server URL');
+      expect(result.stderr).toContain("codegen: Invalid server URL ':::not-a-url:::'");
       expect(existsSync(out)).toBe(false);
     } finally {
+      if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
+      else Bun.env['WEFT_ADDR'] = priorAddress;
+    }
+  });
+
+  it('names the actual invalid URL when it comes from a profile (not --server/WEFT_ADDR)', async () => {
+    // Regression for the misleading empty-URL diagnostic: when neither --server
+    // nor WEFT_ADDR is set, the malformed URL resolves from the profile, and the
+    // diagnostic must still report the offending value rather than an empty
+    // string.
+    const home = makeTempDir();
+    writeFileSync(
+      join(home, 'config'),
+      ['default_profile = "main"', '', '[profiles.main]', 'server = "http://[::bad"'].join('\n'),
+    );
+    const out = join(home, 'weft.d.ts');
+    const priorHome = Bun.env['WEFT_HOME'];
+    const priorAddress = Bun.env['WEFT_ADDR'];
+    Bun.env['WEFT_HOME'] = home;
+    delete Bun.env['WEFT_ADDR'];
+    try {
+      const result = await executeCodegen({ out, timeoutMs: 30_000 });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain("codegen: Invalid server URL 'http://[::bad'");
+      expect(result.stderr).not.toContain("URL ''");
+      expect(existsSync(out)).toBe(false);
+    } finally {
+      if (priorHome === undefined) delete Bun.env['WEFT_HOME'];
+      else Bun.env['WEFT_HOME'] = priorHome;
       if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
       else Bun.env['WEFT_ADDR'] = priorAddress;
     }
