@@ -17,13 +17,15 @@ import type { WorkflowEvent } from '../core/types.ts';
  *
  * @example
  * ```ts
- * import { workflow, Engine, MemoryStorage, LocalClient } from 'weft';
+ * import { workflow, Engine, MemoryStorage, LocalClient, type WorkflowEventTail } from 'weft';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));
  * const client = new LocalClient(engine);
  * const handle = await client.start('ping', null);
- * for await (const event of client.tail(handle.id)) {
+ * const tail: WorkflowEventTail = client.tail(handle.id);
+ * await tail.whenConnected();
+ * for await (const event of tail) {
  *   console.log(event.type);
  * }
  * ```
