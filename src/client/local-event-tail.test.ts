@@ -199,6 +199,52 @@ describe('createLocalWorkflowEventTail', () => {
     expect(seen).toEqual([]);
   });
 
+  it('whenConnected() resolves on close even while the catch-up fetch is still pending', async () => {
+    // Regression (Copilot follow-up): the contract says whenConnected resolves
+    // when the tail terminates. close() must settle it rather than leave the
+    // caller hanging on a never-resolving getEvents.
+    const handle = new FakeWorkflowHandle();
+    const neverResolves = new Promise<void>(() => {});
+    const tail = createLocalWorkflowEventTail(
+      fakeEngine(handle, { gate: neverResolves }),
+      'wf-close-pending',
+    );
+
+    tail.close();
+    // Must resolve (from close), not hang on the gated fetch.
+    await Promise.race([
+      tail.whenConnected(),
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error('whenConnected hung after close')), 1000),
+      ),
+    ]);
+  });
+
+  it('close() while idle terminates the tail promptly (pump does not hang)', async () => {
+    // Regression (Cursor Bugbot follow-up): if the engine iterator is parked with
+    // no events arriving, close() must unblock the pump (it races next() against a
+    // close signal) so iteration ends rather than hanging on a next() that never
+    // settles.
+    const handle = new FakeWorkflowHandle();
+    const tail = createLocalWorkflowEventTail(fakeEngine(handle), 'wf-idle-close');
+
+    await tail.whenConnected();
+    // No events have been (or will be) dispatched; the pump is parked. Begin
+    // iterating, then close — the iteration must end promptly.
+    const seen: string[] = [];
+    const consume = (async () => {
+      for await (const e of tail) seen.push(e.type);
+    })();
+    tail.close();
+    await Promise.race([
+      consume,
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error('idle close did not terminate iteration')), 1000),
+      ),
+    ]);
+    expect(seen).toEqual([]);
+  });
+
   it('replays persisted history on connect (events emitted before the tail opened)', async () => {
     // Regression (Copilot follow-up): the local tail must replay persisted
     // history like the HTTP tail, so a tail opened after events were already

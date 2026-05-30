@@ -76,6 +76,20 @@ export function createLocalWorkflowEventTail(
   let pumpError: unknown = null;
   let closed = false;
   let waker: (() => void) | null = null;
+  // Resolves when the connect catch-up has run OR the tail is closed, whichever
+  // comes first, so `whenConnected()` honors the contract ("resolves when the
+  // tail terminates") instead of hanging on a pending `getEvents` after close.
+  const ready = Promise.withResolvers<void>();
+  let readySettled = false;
+  function settleReady(): void {
+    if (readySettled) return;
+    readySettled = true;
+    ready.resolve();
+  }
+  // A close signal the pump races its `iterator.next()` against, so a `close()`
+  // while the engine iterator is parked (no events arriving) unblocks the pump
+  // promptly instead of leaving it suspended on a `next()` that may never settle.
+  const closeSignal = Promise.withResolvers<void>();
 
   function wake(): void {
     const resolve = waker;
@@ -110,6 +124,11 @@ export function createLocalWorkflowEventTail(
     // The engine handle's async iterator removes its listeners in its own
     // `finally`; calling `return()` drives that teardown.
     void iterator.return?.(undefined);
+    // Unblock the pump if it is parked on `iterator.next()` with no events
+    // arriving, and settle `whenConnected()` so a caller awaiting it after close
+    // does not hang on a still-pending catch-up fetch.
+    closeSignal.resolve();
+    settleReady();
     wake();
   }
 
@@ -120,10 +139,19 @@ export function createLocalWorkflowEventTail(
   // listeners before this function returns; that closes the gap where events
   // emitted between `client.tail(id)` and the start of iteration would otherwise
   // be missed (the HTTP tail buffers from construction too).
+  const CLOSED = Symbol('closed');
   const pump = (async (): Promise<void> => {
     try {
-      for (let next = await iterator.next(); next.done !== true; next = await iterator.next()) {
+      while (true) {
         if (closed) return;
+        // Race the next engine event against close, so a `close()` while the
+        // engine iterator is parked (no events arriving) unblocks the pump rather
+        // than leaving it suspended on a `next()` that may never settle.
+        const next = await Promise.race([iterator.next(), closeSignal.promise.then(() => CLOSED)]);
+        // `typeof === 'symbol'` narrows out the close sentinel; close() won.
+        if (typeof next === 'symbol') return;
+        if (closed) return;
+        if (next.done === true) return;
         deliverLive(serializeEngineEvent(next.value));
         if (terminated) return;
       }
@@ -173,7 +201,10 @@ export function createLocalWorkflowEventTail(
     }
     wake();
   })();
-  void connected.catch(() => {});
+  void connected
+    .catch(() => {})
+    // The stream is live once catch-up has run; unblock `whenConnected()`.
+    .finally(() => settleReady());
 
   return {
     close,
@@ -181,8 +212,9 @@ export function createLocalWorkflowEventTail(
     // (matching the HTTP tail, where `whenConnected` resolves after the first
     // catch-up). Resolving only after catch-up — rather than immediately — means
     // a caller that awaits it before triggering work still sees the replayed
-    // history ahead of any live frame.
-    whenConnected: () => connected,
+    // history ahead of any live frame. `close()` settles it too, so awaiting it
+    // after close does not hang on a still-pending catch-up fetch.
+    whenConnected: () => ready.promise,
     async *[Symbol.asyncIterator](): AsyncIterator<WorkflowEvent> {
       try {
         while (true) {

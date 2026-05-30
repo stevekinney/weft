@@ -15,11 +15,14 @@
  * fetches the persisted event history (`getEvents`) on every (re)connect, emits
  * the events past a confirmed-contiguous history watermark, then drops any live
  * frame buffered during the fetch that the replayed history already covered (the
- * overlap window). Delivery is at-least-once: a failed fetch or a
- * compaction-re-based history array may re-deliver a frame once but never
- * silently skips one (see `#historyWatermark`). Reconnect attempts back off and
- * are capped; the cap is honored even for open-then-close sockets, since the
- * counter resets only after a catch-up proves the connection healthy (`#catchUp`).
+ * overlap window). Delivery is at-least-once: a failed fetch or a shorter
+ * compaction-rebased history array may re-deliver a frame once rather than lose
+ * it. The lone exception is a sequence-less-cursor edge under event-log
+ * compaction — a compacted+regrown log of unchanged length — documented on
+ * `#historyWatermark`; closing it needs a server-exposed event sequence.
+ * Reconnect attempts back off and are capped; the cap is honored even for
+ * open-then-close sockets, since the counter resets only after a catch-up proves
+ * the connection healthy (`#catchUp`).
  *
  * **Clean close.** `close()` closes the socket and resolves the iterable.
  * Terminal workflow events (`completed`, `failed`, `cancelled`, `timed-out`)
@@ -103,10 +106,19 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   //     re-appearing in the next history is re-delivered (at-least-once) rather
   //     than skipped.
   //   - It never exceeds the surviving history length, so event-log compaction
-  //     re-basing the array shorter cannot inflate it and make a later
-  //     `slice` skip newly persisted events.
+  //     re-basing the array *shorter* cannot inflate it and make a later `slice`
+  //     skip newly persisted events.
   // The watch channel delivers events in `getEvents` order, so an array length is
-  // a sound contiguous cursor. Delivery is at-least-once: never silently skip.
+  // a sound contiguous cursor in the common (no-compaction) case, and delivery is
+  // at-least-once there.
+  //
+  // The one residual gap is fundamental to a sequence-less cursor: if compaction
+  // trims exactly as many leading records as the suffix grows by between two
+  // catch-ups, the array length is unchanged and `slice(watermark)` skips the new
+  // tail. `WorkflowEvent` carries no stable sequence id to disambiguate that, so
+  // closing it requires a server-exposed event sequence — a wider change tracked
+  // separately. Live frames arriving on the open socket are unaffected; only the
+  // reconnect catch-up against an exactly-offset compacted+regrown log is at risk.
   #historyWatermark = 0;
   #reconnectAttempts = 0;
   #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
