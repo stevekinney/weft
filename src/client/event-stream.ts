@@ -324,17 +324,18 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     const newHistory = compactionRebased ? history : history.slice(this.#historyWatermark);
     for (const event of newHistory) {
       this.#emit(event);
-      if (this.#closed) return false;
     }
 
     // Drain the live frames buffered during the fetch, dropping the overlap with
     // the history just replayed; the rest are genuinely new and are emitted in
     // order. This runs even on a failed fetch so frames buffered during it are
-    // not stranded (with empty history they all pass through as new).
+    // not stranded (with empty history they all pass through as new). `#emit`
+    // no-ops once the stream is closed, so a terminal event mid-replay does not
+    // strand the remaining genuinely-new frames — they are still attempted in
+    // order and harmlessly skipped only after the stream has actually ended.
     const buffered = this.#pendingLive;
     this.#pendingLive = [];
     for (const live of dropOverlappingLiveFrames(newHistory, buffered)) {
-      if (this.#closed) return false;
       this.#emit(live);
     }
 
@@ -359,6 +360,10 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   }
 
   #emit(event: WorkflowEvent): void {
+    // Once the stream has terminated (e.g. a terminal event earlier in this same
+    // reconcile pass closed it), emitting is a no-op — the consumer has been told
+    // the stream ended, so a late frame must not slip through.
+    if (this.#closed) return;
     // The history cursor is advanced once per successful reconcile (to the
     // reconciled array length), not here per-event — emitting must not inflate it
     // with duplicate replays or between-catch-up live frames (see

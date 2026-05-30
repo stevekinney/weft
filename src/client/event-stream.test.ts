@@ -169,6 +169,49 @@ describe('WorkflowEventSubscription', () => {
     subscription.close();
   });
 
+  it('suppresses buffered live frames once a terminal event mid-replay closes the stream', async () => {
+    // Regression (Cursor Bugbot follow-up): `#emit` no-ops after the stream is
+    // closed, so a terminal event in the replayed history that terminates the
+    // stream mid-reconcile does not let later buffered live frames slip through
+    // after the consumer has been told the workflow ended. The drain loop and the
+    // history loop are symmetric — neither emits past termination.
+    const server = new FakeWebSocketServer();
+    const received: WorkflowEvent[] = [];
+
+    const fetchStarted = Promise.withResolvers<void>();
+    const releaseFetch = Promise.withResolvers<void>();
+    const history: EventHistoryFetcher = async () => {
+      fetchStarted.resolve();
+      await releaseFetch.promise;
+      // History ends with a terminal event, which closes the stream as it replays.
+      return [event('workflow:started'), event('workflow:completed', { result: 'ok' })];
+    };
+
+    const subscription = new WorkflowEventSubscription(
+      'ws://test/watch',
+      {},
+      'wf-terminal-midreplay',
+      history,
+      (e) => received.push(e),
+      { webSocketFactory: server.factory },
+    );
+
+    await fetchStarted.promise;
+    await waitFor(() => server.sockets.length === 1 && server.latest().opened);
+    // A non-overlapping live frame buffered during the fetch. Because the history
+    // terminates the stream as it replays, this frame must NOT be delivered after
+    // the terminal — the stream has ended.
+    server.latest().deliver(event('signal:received', { name: 'after-terminal' }));
+
+    releaseFetch.resolve();
+
+    await waitFor(() => subscription.closeReason !== null);
+    expect(subscription.closeReason).toBe('workflow-terminal');
+    // The last delivered event is the terminal; no frame slips through after it.
+    expect(received.at(-1)?.type).toBe('workflow:completed');
+    expect(received.some((e) => e.data?.['name'] === 'after-terminal')).toBe(false);
+  });
+
   it('does not buffer events for a callback-only subscriber (no unbounded growth)', async () => {
     // Regression: HttpHandle.addEventListener uses only the push callback and
     // never iterates. Emitted events must not pile up in the iterator buffer for
