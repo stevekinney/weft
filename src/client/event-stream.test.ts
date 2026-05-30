@@ -559,6 +559,58 @@ describe('WorkflowEventSubscription', () => {
     await sleepForTesting(20);
     expect(server.sockets.length).toBe(settledCount);
   });
+
+  it('does not skip the surviving suffix when event-log compaction re-bases the history array', async () => {
+    // Regression (Copilot follow-up): `getEvents` returns only the records that
+    // survive compaction. After delivering N events, a reconnect where the first
+    // records were compacted returns an array shorter than the watermark.
+    // Slicing from the count-based watermark would slice past the end and skip
+    // the surviving suffix. The fix replays the whole returned suffix when the
+    // array is re-based (shorter than the watermark), leaning on the overlap
+    // dedup so nothing is silently lost.
+    const server = new FakeWebSocketServer();
+    const received: WorkflowEvent[] = [];
+
+    let historyCalls = 0;
+    const history: EventHistoryFetcher = async () => {
+      historyCalls += 1;
+      if (historyCalls === 1) {
+        // First connect: three persisted events; watermark advances to 3.
+        return [event('workflow:started'), event('activity:started'), event('activity:completed')];
+      }
+      // After a drop, compaction reclaimed the first three records; getEvents
+      // now returns only the surviving suffix — shorter than the watermark (3).
+      // The new records (signal + terminal) must NOT be skipped.
+      return [event('signal:received', { name: 'late' }), event('workflow:completed')];
+    };
+
+    const subscription = new WorkflowEventSubscription(
+      'ws://test/watch',
+      {},
+      'wf-compaction',
+      history,
+      (e) => received.push(e),
+      { webSocketFactory: server.factory, reconnectBackoffMs: 1 },
+    );
+
+    await waitFor(() => received.length === 3);
+    expect(received.map((e) => e.type)).toEqual([
+      'workflow:started',
+      'activity:started',
+      'activity:completed',
+    ]);
+
+    // Drop the socket; the reconnect's catch-up returns the re-based suffix.
+    server.latest().drop();
+    await waitFor(() => server.sockets.length === 2);
+
+    // The surviving suffix (signal + terminal) is delivered, not skipped.
+    await waitFor(() => received.some((e) => e.type === 'signal:received'));
+    await waitFor(() => subscription.closeReason !== null);
+    expect(received.map((e) => e.type)).toContain('signal:received');
+    expect(received.map((e) => e.type)).toContain('workflow:completed');
+    expect(subscription.closeReason).toBe('workflow-terminal');
+  });
 });
 
 describe('openClientEventSubscription', () => {

@@ -2,8 +2,31 @@ import { describe, expect, it } from 'bun:test';
 import type { Engine } from '../core/engine.ts';
 import { createWorkflowHandleEventIterator } from '../core/engine/handle-iteration.ts';
 import { SignalReceivedEvent, WorkflowCompletedEvent } from '../core/events.ts';
-import type { WorkflowState } from '../core/types.ts';
+import type { WorkflowEvent, WorkflowState } from '../core/types.ts';
 import { createLocalWorkflowEventTail } from './local-event-tail.ts';
+
+function event(type: string, data: Record<string, unknown> = {}): WorkflowEvent {
+  return { type, timestamp: 1, data };
+}
+
+async function drain(tail: {
+  [Symbol.asyncIterator](): AsyncIterator<WorkflowEvent>;
+}): Promise<string[]> {
+  const seen: string[] = [];
+  const consume = (async () => {
+    for await (const e of tail) seen.push(e.type);
+  })();
+  await Promise.race([
+    consume,
+    new Promise<never>((_resolve, reject) =>
+      setTimeout(
+        () => reject(new Error(`tail did not terminate; seen=${JSON.stringify(seen)}`)),
+        1000,
+      ),
+    ),
+  ]);
+  return seen;
+}
 
 /**
  * A faithful stand-in for the engine's {@link WorkflowHandle} event stream: an
@@ -33,11 +56,21 @@ class FakeWorkflowHandle extends EventTarget {
   }
 }
 
-function fakeEngine(handle: FakeWorkflowHandle): Engine {
-  // The local tail only calls `engine.getHandle(id)`; everything else is unused.
-  // A test-only structural stand-in is sufficient and keeps the test focused on
-  // the eager-attach behavior rather than spinning a full engine.
-  return { getHandle: () => handle } as unknown as Engine;
+function fakeEngine(
+  handle: FakeWorkflowHandle,
+  options: { history?: WorkflowEvent[]; getEventsError?: Error } = {},
+): Engine {
+  // The local tail calls `engine.getHandle(id)` and `engine.getEvents(id)`;
+  // everything else is unused. A test-only structural stand-in keeps the test
+  // focused on the tail's catch-up/eager-attach behavior rather than spinning a
+  // full engine.
+  return {
+    getHandle: () => handle,
+    getEvents: async () => {
+      if (options.getEventsError) throw options.getEventsError;
+      return options.history ?? [];
+    },
+  } as unknown as Engine;
 }
 
 describe('createLocalWorkflowEventTail', () => {
@@ -134,5 +167,90 @@ describe('createLocalWorkflowEventTail', () => {
     const seen: string[] = [];
     for await (const event of tail) seen.push(event.type);
     expect(seen).toEqual([]);
+  });
+
+  it('replays persisted history on connect (events emitted before the tail opened)', async () => {
+    // Regression (Copilot follow-up): the local tail must replay persisted
+    // history like the HTTP tail, so a tail opened after events were already
+    // persisted still delivers them. The unified tail contract promises both
+    // transports deliver the same records.
+    const handle = new FakeWorkflowHandle();
+    const tail = createLocalWorkflowEventTail(
+      fakeEngine(handle, {
+        history: [event('workflow:started'), event('activity:started'), event('signal:received')],
+      }),
+      'wf-history',
+    );
+
+    await tail.whenConnected();
+    // A live terminal frame after catch-up ends the tail.
+    handle.dispatchEvent(new WorkflowCompletedEvent('wf-history', 'ok', 1));
+
+    const seen = await drain(tail);
+    expect(seen).toEqual([
+      'workflow:started',
+      'activity:started',
+      'signal:received',
+      'workflow:completed',
+    ]);
+  });
+
+  it('dedups the overlap between replayed history and buffered live frames', async () => {
+    // History already contains the live frame that landed during the fetch, so
+    // it must be delivered exactly once. The history record's `data` matches how
+    // `SignalReceivedEvent` serializes (own properties minus `type`, `undefined`
+    // dropped by JSON), so `eventsEqual` recognizes the overlap.
+    const handle = new FakeWorkflowHandle();
+    const tail = createLocalWorkflowEventTail(
+      fakeEngine(handle, {
+        history: [
+          event('workflow:started'),
+          // Matches how `serializeEngineEvent` renders a live SignalReceivedEvent
+          // (own enumerable props minus `type`; `payload: undefined` is dropped
+          // by JSON; the DOM Event base contributes `isTrusted`).
+          event('signal:received', { workflowId: 'wf-overlap', signalName: 'a', isTrusted: false }),
+        ],
+      }),
+      'wf-overlap',
+    );
+
+    // Dispatch the overlapping live frame BEFORE catch-up finishes (it is
+    // buffered) plus a genuinely new one.
+    handle.dispatchEvent(new SignalReceivedEvent('wf-overlap', 'a', undefined));
+    handle.dispatchEvent(new WorkflowCompletedEvent('wf-overlap', 'ok', 1));
+
+    const seen = await drain(tail);
+    // The overlapping signal appears once (deduped), the new completion once.
+    expect(seen.filter((t) => t === 'signal:received')).toHaveLength(1);
+    expect(seen).toContain('workflow:started');
+    expect(seen).toContain('workflow:completed');
+  });
+
+  it('survives a failed history fetch and still delivers live frames', async () => {
+    const handle = new FakeWorkflowHandle();
+    const tail = createLocalWorkflowEventTail(
+      fakeEngine(handle, { getEventsError: new Error('history unavailable') }),
+      'wf-history-fail',
+    );
+
+    await tail.whenConnected();
+    handle.dispatchEvent(new SignalReceivedEvent('wf-history-fail', 'ping', undefined));
+    handle.dispatchEvent(new WorkflowCompletedEvent('wf-history-fail', 'ok', 1));
+
+    const seen = await drain(tail);
+    expect(seen).toEqual(['signal:received', 'workflow:completed']);
+  });
+
+  it('terminates from history alone when the persisted log ends with a terminal event', async () => {
+    const handle = new FakeWorkflowHandle();
+    const tail = createLocalWorkflowEventTail(
+      fakeEngine(handle, {
+        history: [event('workflow:started'), event('workflow:completed', { result: 'done' })],
+      }),
+      'wf-history-terminal',
+    );
+
+    const seen = await drain(tail);
+    expect(seen).toEqual(['workflow:started', 'workflow:completed']);
   });
 });
