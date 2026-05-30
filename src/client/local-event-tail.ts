@@ -15,7 +15,7 @@
 import type { Engine } from '../core/engine.ts';
 import { WORKFLOW_TERMINAL_EVENT_TYPES } from '../core/events/workflow-events.ts';
 import type { WorkflowEvent } from '../core/types.ts';
-import type { WorkflowEventTail } from './interface.ts';
+import type { WorkflowEventTail } from './event-tail.ts';
 
 /**
  * Serialize a dispatched engine `Event` into a {@link WorkflowEvent}. Mirrors

@@ -466,14 +466,12 @@ export type {
 
 export { HttpClient, HttpClientError } from './client/index';
 export type { HttpClientOptions } from './client/index';
+export type { ClientHandle, UpdateResult, WeftClient } from './client/interface';
+export { LocalClient } from './client/local';
 export type {
-  ClientHandle,
   KnownWorkflowName,
   UnknownNameWhenRegistryEmpty,
-  UpdateResult,
-  WeftClient,
-} from './client/interface';
-export { LocalClient } from './client/local';
+} from './client/workflow-name-typing';
 
 export {
   ConnectionConfigurationError,

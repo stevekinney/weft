@@ -10,7 +10,8 @@ import type {
   UpdateDefinition,
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
-import type { ClientHandle, ClientScheduleHandle, WorkflowEventTail } from './interface.ts';
+import type { WorkflowEventTail } from './event-tail.ts';
+import type { ClientHandle, ClientScheduleHandle } from './interface.ts';
 
 export interface WorkflowHandleDelegationClient {
   cancel(id: string): Promise<void>;

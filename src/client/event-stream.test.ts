@@ -3,7 +3,12 @@ import type { WorkflowEvent } from '../core/types.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import { workflowWatchWebSocketUrl } from './event-stream-transport.ts';
 import { FakeWebSocketServer } from './event-stream.test-support.ts';
-import { WorkflowEventSubscription, type EventHistoryFetcher } from './event-stream.ts';
+import {
+  openClientEventSubscription,
+  WorkflowEventSubscription,
+  type EventHistoryFetcher,
+  type WorkflowEventStreamHost,
+} from './event-stream.ts';
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -461,6 +466,44 @@ describe('WorkflowEventSubscription', () => {
     server.latest().deliver(event('workflow:started'));
     await waitFor(() => received.length === 1);
     expect(received[0]?.type).toBe('workflow:started');
+    subscription.close();
+  });
+});
+
+describe('openClientEventSubscription', () => {
+  it('wires the host baseUrl, headers, getEvents catch-up, and stream options', async () => {
+    const server = new FakeWebSocketServer();
+    const received: WorkflowEvent[] = [];
+    const getEventsCalls: string[] = [];
+    const host: WorkflowEventStreamHost = {
+      baseUrl: 'http://localhost:3000',
+      headers: { Authorization: 'Bearer token' },
+      getEvents: async (workflowId) => {
+        getEventsCalls.push(workflowId);
+        return [event('workflow:started')];
+      },
+    };
+
+    const subscription = openClientEventSubscription(
+      host,
+      { webSocketFactory: server.factory },
+      'wf-host',
+      (e) => received.push(e),
+    );
+
+    // The host's getEvents fed the connect catch-up for the requested workflow.
+    await waitFor(() => received.length === 1);
+    expect(getEventsCalls).toEqual(['wf-host']);
+    expect(received[0]?.type).toBe('workflow:started');
+
+    // The socket targets the watch channel derived from the host's baseUrl.
+    expect(server.sockets.length).toBe(1);
+    expect(server.latest().url).toBe('ws://localhost:3000/v1/workflows/wf-host/watch');
+
+    // Live frames after catch-up are delivered exactly once.
+    server.latest().deliver(event('workflow:completed', { result: 'ok' }));
+    await waitFor(() => received.length === 2);
+    expect(received.map((e) => e.type)).toEqual(['workflow:started', 'workflow:completed']);
     subscription.close();
   });
 });

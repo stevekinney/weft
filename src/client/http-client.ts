@@ -44,10 +44,11 @@ import type {
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
 import {
-  createWorkflowEventSubscription,
+  openClientEventSubscription,
   type WorkflowEventStreamOptions,
   type WorkflowEventSubscription,
 } from './event-stream.ts';
+import type { WorkflowEventTail } from './event-tail.ts';
 import {
   addTagsRequest,
   cancelAllWorkflowRequests,
@@ -75,19 +76,11 @@ import { HttpHandle } from './http-handle.ts';
 import { httpClientCatalogTransport } from './http-operations.ts';
 import { request, resolveHttpClientConnection, type HttpClientOptions } from './http-request.ts';
 import { HttpScheduleHandle } from './http-schedule-handle.ts';
-import type {
-  ClientHandle,
-  ClientScheduleHandle,
-  KnownWorkflowName,
-  TailOptions,
-  UnknownNameWhenRegistryEmpty,
-  UpdateResult,
-  WeftClient,
-  WorkflowEventTail,
-} from './interface.ts';
+import type { ClientHandle, ClientScheduleHandle, UpdateResult, WeftClient } from './interface.ts';
 import { buildScheduleListSearchParams } from './schedule-list-search-params.ts';
 import { buildWorkflowListSearchParams } from './search-params.ts';
 import { buildStartBody, scheduleSpecToWireFields } from './start-body.ts';
+import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow-name-typing.ts';
 
 /**
  * Remote Weft client backed by HTTP requests.
@@ -416,16 +409,7 @@ export class HttpClient implements WeftClient {
     id: string,
     onEvent: (event: WorkflowEvent) => void,
   ): WorkflowEventSubscription {
-    return createWorkflowEventSubscription(
-      {
-        baseUrl: this.baseUrl,
-        headers: this.headers,
-        getEvents: (w) => this.getEvents(w),
-        streamOptions: this.#streamOptions,
-      },
-      id,
-      onEvent,
-    );
+    return openClientEventSubscription(this, this.#streamOptions, id, onEvent);
   }
 
   tail(id: string): WorkflowEventTail {

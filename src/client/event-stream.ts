@@ -73,6 +73,17 @@ export type EventStreamContext = {
 };
 
 /**
+ * The streaming-relevant view of an HTTP client. Capturing only these fields
+ * lets {@link openClientEventSubscription} assemble an {@link EventStreamContext}
+ * without `HttpClient` constructing the literal inline.
+ */
+export type WorkflowEventStreamHost = {
+  readonly baseUrl: string;
+  readonly headers: Record<string, string>;
+  getEvents(workflowId: string): Promise<WorkflowEvent[]>;
+};
+
+/**
  * Open a live {@link WorkflowEventSubscription} for a workflow over the `/watch`
  * WebSocket channel, wiring the watch URL and the `getEvents` catch-up fetch
  * from the given client context. Shared by `HttpHandle` (push-based
@@ -90,6 +101,29 @@ export function createWorkflowEventSubscription(
     (id) => context.getEvents(id),
     onEvent,
     context.streamOptions,
+  );
+}
+
+/**
+ * Open a {@link WorkflowEventSubscription} from an HTTP client's streaming
+ * fields plus its resolved {@link WorkflowEventStreamOptions}. Keeps the
+ * context assembly out of `HttpClient` so its public surface stays thin.
+ */
+export function openClientEventSubscription(
+  host: WorkflowEventStreamHost,
+  streamOptions: WorkflowEventStreamOptions,
+  workflowId: string,
+  onEvent: (event: WorkflowEvent) => void,
+): WorkflowEventSubscription {
+  return createWorkflowEventSubscription(
+    {
+      baseUrl: host.baseUrl,
+      headers: host.headers,
+      getEvents: (id) => host.getEvents(id),
+      streamOptions,
+    },
+    workflowId,
+    onEvent,
   );
 }
 

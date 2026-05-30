@@ -58,19 +58,12 @@ import type {
   WorkflowTimelineEntry,
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
+import type { WorkflowEventTail } from './event-tail.ts';
 import { ScheduleHandleDelegation, WorkflowHandleDelegation } from './handle-delegation.ts';
 import { inProcessCatalogTransport } from './in-process-operations.ts';
-import type {
-  ClientHandle,
-  ClientScheduleHandle,
-  KnownWorkflowName,
-  TailOptions,
-  UnknownNameWhenRegistryEmpty,
-  UpdateResult,
-  WeftClient,
-  WorkflowEventTail,
-} from './interface.ts';
+import type { ClientHandle, ClientScheduleHandle, UpdateResult, WeftClient } from './interface.ts';
 import { createLocalWorkflowEventTail } from './local-event-tail.ts';
+import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow-name-typing.ts';
 
 // ---------------------------------------------------------------------------
 // LocalHandle — wraps Engine's WorkflowHandle

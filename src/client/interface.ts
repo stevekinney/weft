@@ -48,77 +48,8 @@ import type {
   WorkflowSummary,
   WorkflowTimelineEntry,
 } from '../core/types.ts';
-
-// ---------------------------------------------------------------------------
-// Registry-driven typing for client call sites
-// ---------------------------------------------------------------------------
-
-/**
- * Workflow names known to the augmented {@link WorkflowRegistry}. Empty
- * (`never`) until a project augments the registry — typically by running
- * `weft codegen` and including the generated `.d.ts` in its compilation. The
- * client's typed `start`/`schedule` overloads key off this set, so without
- * codegen they degrade to the permissive string-name overloads.
- *
- * `weft codegen` only ever emits explicit string-literal entries, so in
- * practice this resolves to a finite union of registered names. If a project
- * hand-augments `WorkflowRegistry` with an index signature
- * (`[name: string]: ...`), `KnownWorkflowName` widens to `string` and the
- * typed overload accepts any name with that entry's input type — the same
- * behavior the engine exhibits, and a deliberate consequence of opting into a
- * permissive augmentation.
- */
-export type KnownWorkflowName = Extract<keyof WorkflowRegistry, string>;
-
-/**
- * Resolves to `TName` only when the {@link WorkflowRegistry} carries no known
- * names (codegen has not run, or no workflow types were emitted). This gates
- * the permissive string-name `start`/`schedule` overload so that, once the
- * registry is populated, callers must pass a registered name (or fall through
- * to the typed overload). Mirrors the engine's
- * `UnknownWorkflowNameWhenDefaultRegistryIsEmpty` gate, scoped to the global
- * registry the client consumes.
- */
-export type UnknownNameWhenRegistryEmpty<TName extends string> = [KnownWorkflowName] extends [never]
-  ? TName
-  : never;
-
-// ---------------------------------------------------------------------------
-// Streaming surface — push-based live event tail
-// ---------------------------------------------------------------------------
-
-/**
- * A live workflow-event tail. Async-iterate it to consume events as they are
- * produced; the iteration terminates cleanly when the workflow reaches a
- * terminal state, the server closes the stream, or {@link WorkflowEventTail.close}
- * is called.
- *
- * @example
- * ```ts
- * import { workflow, Engine, MemoryStorage, LocalClient } from 'weft';
- *
- * await using engine = new Engine({ storage: new MemoryStorage() });
- * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));
- * const client = new LocalClient(engine);
- * const handle = await client.start('ping', null);
- * for await (const event of client.tail(handle.id)) {
- *   console.log(event.type);
- * }
- * ```
- */
-export interface WorkflowEventTail extends AsyncIterable<WorkflowEvent> {
-  /** Stop the tail and release its resources. Idempotent. */
-  close(): void;
-
-  /**
-   * Resolves once the tail is live and ready to deliver events (or when it has
-   * terminated). Await this before triggering work whose events you intend to
-   * observe, so nothing is missed in the window before the underlying transport
-   * connects. In library mode it resolves immediately — the in-process engine
-   * stream is live from construction.
-   */
-  whenConnected(): Promise<void>;
-}
+import type { WorkflowEventTail } from './event-tail.ts';
+import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow-name-typing.ts';
 
 // ---------------------------------------------------------------------------
 // Client handle — lightweight reference to a running workflow
