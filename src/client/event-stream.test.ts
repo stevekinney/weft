@@ -677,6 +677,64 @@ describe('WorkflowEventSubscription', () => {
     expect(received.map((e) => e.type)).toContain('workflow:completed');
     expect(subscription.closeReason).toBe('workflow-terminal');
   });
+
+  it('does not skip new events after compaction shrinks then the history grows again', async () => {
+    // Regression (Cursor Bugbot follow-up, High): a compaction-rebased replay must
+    // NOT inflate the cursor with duplicate deliveries. Earlier the cursor tracked
+    // the delivered count, so replaying a shorter re-based array pushed it ABOVE
+    // the history length; a later, longer history then sliced past its end and
+    // permanently dropped genuinely new events. The cursor now tracks the
+    // reconciled array length, so it can never overshoot the surviving history.
+    const server = new FakeWebSocketServer();
+    const received: WorkflowEvent[] = [];
+
+    let historyCalls = 0;
+    const history: EventHistoryFetcher = async () => {
+      historyCalls += 1;
+      if (historyCalls === 1) {
+        // Initial catch-up: 3 persisted events. Old code set the cursor to 3.
+        return [event('e', { n: 1 }), event('e', { n: 2 }), event('e', { n: 3 })];
+      }
+      if (historyCalls === 2) {
+        // Compaction reclaimed the first event: only 2 survive (shorter than the
+        // cursor). The old delivered-count cursor would inflate to 5 here.
+        return [event('e', { n: 2 }), event('e', { n: 3 })];
+      }
+      // History grew again with two genuinely new events. The old inflated cursor
+      // (5) would `slice(5) = []` and lose n:4 and n:5; the array-length cursor
+      // (2) correctly slices `[n:4, n:5]` plus the terminal.
+      return [
+        event('e', { n: 2 }),
+        event('e', { n: 3 }),
+        event('e', { n: 4 }),
+        event('e', { n: 5 }),
+        event('workflow:completed'),
+      ];
+    };
+
+    const subscription = new WorkflowEventSubscription(
+      'ws://test/watch',
+      {},
+      'wf-compaction-grow',
+      history,
+      (e) => received.push(e),
+      { webSocketFactory: server.factory, reconnectBackoffMs: 1 },
+    );
+
+    await waitFor(() => received.length === 3);
+    // Second catch-up (compaction-rebased): re-delivers the 2 survivors.
+    server.latest().drop();
+    await waitFor(() => historyCalls >= 2);
+    // Third catch-up: must deliver the new events n:4 and n:5, not skip them.
+    await waitFor(() => server.sockets.length >= 2);
+    server.latest().drop();
+    await waitFor(() => subscription.closeReason !== null);
+
+    const ns = received.filter((e) => e.type === 'e').map((e) => e.data?.['n']);
+    expect(ns).toContain(4);
+    expect(ns).toContain(5);
+    expect(subscription.closeReason).toBe('workflow-terminal');
+  });
 });
 
 describe('openClientEventSubscription', () => {

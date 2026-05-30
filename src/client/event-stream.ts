@@ -93,24 +93,21 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
 
   #socket: StreamSocket | null = null;
   #closed = false;
-  // Count of events already delivered. The watch channel emits events in the
-  // same order `getEvents` persists them, so a monotonic delivered-count tracks
-  // "how many events has this subscription handed to the consumer".
-  #deliveredCount = 0;
-  // The history cursor: how far into the *persisted* sequence the subscription
-  // is confirmed contiguous. The next catch-up replays `history.slice` from here
-  // so it does not re-emit what was already covered. Normally this tracks
-  // `#deliveredCount` (every delivered event is a confirmed prefix of history),
-  // but it freezes whenever a catch-up fetch fails: a failed catch-up may have
-  // skipped a persisted event in the gap it was meant to replay, so the live
-  // frames delivered afterward are NOT proven contiguous. Slicing from
-  // `#deliveredCount` instead would permanently skip those gap events on the
-  // next successful catch-up. The next successful fetch replays from this frozen
-  // watermark (recovering the gap, at the cost of re-delivering the post-failure
-  // live frames once — at-least-once, never lose) and then re-syncs it.
+  // The history cursor: the length of the `getEvents` array the last *successful*
+  // catch-up reconciled. The next catch-up replays `history.slice(watermark)` so
+  // it does not re-emit what that array already covered. This is deliberately the
+  // reconciled *array length*, NOT the count of events delivered to the consumer:
+  //   - A failed catch-up leaves it untouched, so the next successful fetch
+  //     replays from before the gap and recovers any event the failure missed.
+  //   - Live frames delivered between catch-ups do not advance it, so a frame
+  //     re-appearing in the next history is re-delivered (at-least-once) rather
+  //     than skipped.
+  //   - It never exceeds the surviving history length, so event-log compaction
+  //     re-basing the array shorter cannot inflate it and make a later
+  //     `slice` skip newly persisted events.
+  // The watch channel delivers events in `getEvents` order, so an array length is
+  // a sound contiguous cursor. Delivery is at-least-once: never silently skip.
   #historyWatermark = 0;
-  // Set when a fetch fails so `#emit` stops advancing `#historyWatermark`.
-  #catchUpFailed = false;
   #reconnectAttempts = 0;
   #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   // While catch-up is fetching/emitting history, live frames are buffered here
@@ -299,13 +296,10 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     } catch {
       // A failed catch-up must not kill the stream; fall through so any live
       // frames buffered during the fetch still drain, and the next reconnect
-      // retries the catch-up. Freeze the history watermark: the failed fetch may
-      // have skipped a persisted event in the gap it was meant to replay, so the
-      // live frames we are about to drain are not proven contiguous and must not
-      // advance the cursor — otherwise the next successful catch-up would slice
-      // past, and permanently lose, those gap events.
+      // retries. The watermark is left untouched (we return early before
+      // advancing it), so the next successful fetch replays from before any gap
+      // the failure missed and recovers it.
       fetchSucceeded = false;
-      this.#catchUpFailed = true;
       history = [];
     }
     if (this.#closed) return false;
@@ -316,30 +310,16 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     // buffer — neither the watermark nor `#pendingLive` is touched, so the re-run
     // (scheduled by #catchUp's finally, which keeps the buffered frames) delivers
     // the new socket's frames even if the next history fetch has not persisted
-    // them yet. Emitting here would inflate the cursor and skip gap events.
+    // them yet. Emitting here would advance the watermark against a dead socket's
+    // snapshot and skip gap events.
     if (generation !== this.#connectGeneration) return false;
+    if (!fetchSucceeded) return false;
 
-    // A successful fetch re-establishes contiguity from the frozen watermark, so
-    // clear the failure flag before emitting: the history we are about to replay
-    // is contiguous by construction, and `#emit` should resume advancing the
-    // watermark with it. (Done after the guards above so a stale/closed pass
-    // leaves the flag set for the genuine re-run.)
-    if (fetchSucceeded) this.#catchUpFailed = false;
-
-    // Emit history beyond the confirmed watermark. History and live frames share
-    // one ordered sequence; the watermark is how far that sequence is proven
-    // contiguous, so it — not the raw delivered count — is the slice cursor.
-    //
-    // `getEvents` returns only the records that survive event-log compaction, so
-    // on a long-running workflow the array can be *re-based*: a prefix the
-    // watermark counted has been reclaimed and the returned array is shorter than
-    // the watermark. The count-based cursor cannot translate the watermark into
-    // the re-based array (WorkflowEvent carries no stable sequence), so slicing
-    // from it would skip the surviving suffix. When that happens, replay the
-    // whole returned suffix and lean on the consuming overlap dedup below to drop
-    // any frame already delivered — at-least-once, never silently skip. (A true
-    // fix would key on a server-exposed event sequence; that is a wider API
-    // change tracked separately.)
+    // Replay history past the cursor. `getEvents` returns only the records that
+    // survive event-log compaction, so on a long-running workflow the array can
+    // be *re-based* shorter than the cursor; in that case replay the whole
+    // surviving suffix and lean on the consuming overlap dedup (and at-least-once
+    // re-delivery) rather than slicing past the array end and skipping events.
     const compactionRebased = history.length < this.#historyWatermark;
     const newHistory = compactionRebased ? history : history.slice(this.#historyWatermark);
     for (const event of newHistory) {
@@ -356,7 +336,13 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
       if (this.#closed) return false;
       this.#emit(live);
     }
-    return fetchSucceeded;
+
+    // Advance the cursor to the reconciled array length — never to the delivered
+    // count, which can exceed it after compaction-rebased duplicate replays or
+    // between-catch-up live frames. This guarantees the cursor never overshoots
+    // the surviving history, so the next slice cannot skip newly persisted events.
+    this.#historyWatermark = history.length;
+    return true;
   }
 
   #deliverLive(event: WorkflowEvent): void {
@@ -370,11 +356,10 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   }
 
   #emit(event: WorkflowEvent): void {
-    this.#deliveredCount += 1;
-    // Advance the history cursor in lockstep while the stream is healthy. While
-    // a catch-up has failed the watermark stays frozen so the next successful
-    // catch-up replays from before the gap rather than skipping it.
-    if (!this.#catchUpFailed) this.#historyWatermark = this.#deliveredCount;
+    // The history cursor is advanced once per successful reconcile (to the
+    // reconciled array length), not here per-event — emitting must not inflate it
+    // with duplicate replays or between-catch-up live frames (see
+    // `#historyWatermark`).
     try {
       this.#onEvent(event);
     } catch {
