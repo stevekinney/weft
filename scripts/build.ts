@@ -1,26 +1,58 @@
 import { $ } from 'bun';
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+
 import sveltePlugin from 'bun-plugin-svelte';
 
 await $`rm -rf dist`;
 
 const typescriptTranspiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' });
 
-function rewriteRelativeJavaScriptSpecifiers(source: string): string {
+/**
+ * Map an extensionless relative specifier to the `.js` path the unbundled
+ * runtime build emits. A specifier pointing at a directory (e.g. `./diagnostics`
+ * whose entry is `diagnostics/index.ts`) must become `./diagnostics/index.js`,
+ * not `./diagnostics.js` — otherwise the consumer hits "Cannot find module".
+ * The source file's path anchors the resolution so we can tell a directory
+ * import apart from a sibling-module import on disk.
+ */
+function relativeSpecifierToJavaScript(sourcePath: string, specifier: string): string {
+  const withoutTypeScriptExtension = specifier.endsWith('.ts') ? specifier.slice(0, -3) : specifier;
+  const absoluteTarget = resolve(dirname(sourcePath), withoutTypeScriptExtension);
+  // A bare directory import resolves to its `index.ts`; emit `/index.js`.
+  if (!existsSync(`${absoluteTarget}.ts`) && existsSync(`${absoluteTarget}/index.ts`)) {
+    return `${withoutTypeScriptExtension}/index.js`;
+  }
+  return `${withoutTypeScriptExtension}.js`;
+}
+
+function rewriteRelativeJavaScriptSpecifiers(sourcePath: string, source: string): string {
   return source
     .replace(/from (["'])(\.\.?\/[^"']+)\1/g, (match, quote: string, specifier: string) => {
       if (/\.(js|json|html|css)$/.test(specifier)) return match;
-      const withoutTypeScriptExtension = specifier.endsWith('.ts')
-        ? specifier.slice(0, -3)
-        : specifier;
-      return `from ${quote}${withoutTypeScriptExtension}.js${quote}`;
+      return `from ${quote}${relativeSpecifierToJavaScript(sourcePath, specifier)}${quote}`;
     })
     .replace(/import\((["'])(\.\.?\/[^"']+)\1\)/g, (match, quote: string, specifier: string) => {
       if (/\.(js|json|html|css)$/.test(specifier)) return match;
-      const withoutTypeScriptExtension = specifier.endsWith('.ts')
-        ? specifier.slice(0, -3)
-        : specifier;
-      return `import(${quote}${withoutTypeScriptExtension}.js${quote})`;
+      return `import(${quote}${relativeSpecifierToJavaScript(sourcePath, specifier)}${quote})`;
     });
+}
+
+// Remove block and line comments so a token inside JSDoc/comments (which tsc
+// copies into `.d.ts`) is not mistaken for a real import. Build output never
+// contains a `//` or `/* */` sequence inside a string literal, so this is
+// safe for emitted code even though it would be unsound on arbitrary source.
+function stripComments(source: string): string {
+  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
+}
+
+/** Reduce a module specifier to its package root (`@scope/name` or `name`). */
+function packageRootOf(specifier: string): string {
+  if (specifier.startsWith('@')) {
+    const [scope, name] = specifier.split('/');
+    return name ? `${scope}/${name}` : specifier;
+  }
+  return specifier.split('/')[0];
 }
 
 async function writeUnbundledRuntimeModules(): Promise<void> {
@@ -42,7 +74,7 @@ async function writeUnbundledRuntimeModules(): Promise<void> {
 
     const outputPath = sourcePath.replace(/^src\//, 'dist/').replace(/\.ts$/, '.js');
     const transformed = typescriptTranspiler.transformSync(await Bun.file(sourcePath).text());
-    await Bun.write(outputPath, rewriteRelativeJavaScriptSpecifiers(transformed));
+    await Bun.write(outputPath, rewriteRelativeJavaScriptSpecifiers(sourcePath, transformed));
   }
 }
 
@@ -196,21 +228,6 @@ async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
   const specifierPattern =
     /(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)(["'])([^"']+)\1/g;
 
-  // Remove block and line comments so a token inside JSDoc/comments (which tsc
-  // copies into `.d.ts`) is not mistaken for a real import. Build output never
-  // contains a `//` or `/* */` sequence inside a string literal, so this is
-  // safe for emitted code even though it would be unsound on arbitrary source.
-  const stripComments = (source: string): string =>
-    source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
-
-  const packageRootOf = (specifier: string): string => {
-    if (specifier.startsWith('@')) {
-      const [scope, name] = specifier.split('/');
-      return name ? `${scope}/${name}` : specifier;
-    }
-    return specifier.split('/')[0];
-  };
-
   const offenders: { file: string; specifier: string }[] = [];
   const distGlob = new Bun.Glob('dist/**/*.{js,d.ts}');
 
@@ -236,5 +253,53 @@ async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
 }
 
 await assertNoTestOnlyDependenciesInDist();
+
+// Guard: every relative specifier the unbundled runtime build emits must point
+// at a file that actually exists in dist/. A bare directory import in source
+// (e.g. `export * from './diagnostics'`) used to be rewritten to
+// `./diagnostics.js` even though the directory's entry is `diagnostics/index.js`
+// — a "Cannot find module" the package consumer only hit at runtime. The
+// rewriter now resolves directory imports to `/index.js`; this assertion keeps
+// the whole class of dangling relative import out of shipped output.
+async function assertRelativeImportsResolveInDist(): Promise<void> {
+  // Match every form that pulls in a module: `from '…'`, `require('…')`,
+  // dynamic `import('…')`, and bare side-effect `import '…'`.
+  const relativeSpecifierPattern =
+    /(?:\bfrom\s*|\brequire\s*\(\s*|\bimport\s*\(\s*|\bimport\s+)(["'])(\.\.?\/[^"']+)\1/g;
+
+  const offenders: { file: string; specifier: string }[] = [];
+  const distGlob = new Bun.Glob('dist/**/*.js');
+
+  for await (const distPath of distGlob.scan('.')) {
+    if (distPath.endsWith('.js.map')) continue;
+    const contents = stripComments(await Bun.file(distPath).text());
+    for (const [, , specifier] of contents.matchAll(relativeSpecifierPattern)) {
+      // Only check JavaScript module specifiers (asset/data files vary).
+      if (!specifier.endsWith('.js')) continue;
+      // Svelte components (`*.svelte`) are compiled into the dashboard's
+      // bundled `index.html` output, never emitted as sibling runtime modules,
+      // so the unbundled dashboard `entrypoint.js` references a `.svelte.js`
+      // that legitimately has no standalone file. The dashboard ships bundled.
+      if (specifier.endsWith('.svelte.js')) continue;
+      const resolved = resolve(dirname(distPath), specifier);
+      if (!existsSync(resolved)) {
+        offenders.push({ file: distPath, specifier });
+      }
+    }
+  }
+
+  if (offenders.length > 0) {
+    console.error('Build produced dist/ artifacts with unresolvable relative imports:');
+    for (const { file, specifier } of offenders) {
+      console.error(`  ${file} imports "${specifier}" which does not exist`);
+    }
+    console.error(
+      'Write directory re-exports in src/ explicitly as `./dir/index.ts` so the build emits `./dir/index.js`.',
+    );
+    process.exit(1);
+  }
+}
+
+await assertRelativeImportsResolveInDist();
 
 console.log('Build complete!');

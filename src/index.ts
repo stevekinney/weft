@@ -480,4 +480,4 @@ export {
 } from './connection';
 export type { ConnectionOptions, ResolvedConnection } from './connection';
 
-export * from './diagnostics';
+export * from './diagnostics/index.ts';
