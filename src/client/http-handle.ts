@@ -19,11 +19,16 @@ export class HttpHandle extends WorkflowHandleDelegation<HttpClient> {
 
   #ensureSubscribed(): WorkflowEventSubscription | null {
     if (this.#closed) return null;
-    // Re-open when there is no subscription yet, or the cached one has
-    // terminated (reconnect exhausted, or auto-closed on a terminal event). A
-    // dead subscription opens no socket, so without this a caller that attaches
-    // listeners after termination would silently receive nothing.
-    if (this.#subscription === null || this.#subscription.closeReason !== null) {
+    // Open once and cache for the handle's lifetime. We deliberately do NOT
+    // re-open after the subscription terminates (workflow reached a terminal
+    // event, or reconnects were exhausted): the catch-up replays the full
+    // persisted history on connect, so a fresh subscription would re-dispatch
+    // every already-delivered event to listeners still registered from before —
+    // duplicate delivery. A terminal workflow emits nothing further, and an
+    // exhausted reconnect means the server is unreachable; in both cases the
+    // right recovery is a new handle (or `getEvents()` for history), not a
+    // silent re-subscribe that double-fires existing listeners.
+    if (this.#subscription === null) {
       this.#subscription = this.client.openEventSubscription(this.id, (event) => {
         this.#events.dispatchEvent(new CustomEvent(event.type, { detail: event.data }));
       });

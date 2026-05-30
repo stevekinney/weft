@@ -1378,6 +1378,61 @@ describe('HttpClient request surface', () => {
     expect(wsServer.latest().closed).toBe(true);
   });
 
+  it('does not re-open a duplicating subscription after the workflow terminates', async () => {
+    // Regression: re-opening the cached subscription after termination would
+    // replay the full persisted history on connect and re-dispatch every event
+    // to listeners still registered from before — duplicate delivery. The handle
+    // opens its subscription once and never re-opens, so attaching a listener
+    // after the terminal event must not create a second socket.
+    let eventsCalls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = requestInputToUrl(input);
+      if (url.includes('/events')) {
+        eventsCalls += 1;
+        // History carries the terminal event, so any re-subscribe would replay it.
+        return jsonResponse({
+          events: [{ type: 'workflow:completed', timestamp: 1, data: { result: 'done' } }],
+        });
+      }
+      return jsonResponse({ id: 'wf-no-reopen' });
+    }) as unknown as typeof fetch;
+    const wsServer = new FakeWebSocketServer();
+
+    const httpClient = new HttpClient({
+      baseUrl: 'http://example.test',
+      webSocketFactory: wsServer.factory,
+    });
+    const handle = await httpClient.start('echo', 'hello');
+
+    const completedCounts = { first: 0, second: 0 };
+    handle.addEventListener('workflow:completed', () => {
+      completedCounts.first += 1;
+    });
+
+    // Wait for the catch-up to deliver the terminal event and auto-close.
+    const deadline = Date.now() + 1000;
+    while (completedCounts.first === 0) {
+      if (Date.now() > deadline) throw new Error('terminal event never delivered');
+      await sleepForTesting(2);
+    }
+    expect(completedCounts.first).toBe(1);
+    const socketsAfterTerminal = wsServer.sockets.length;
+    const eventsCallsAfterTerminal = eventsCalls;
+
+    // Attach a new listener after termination. The handle must NOT open a new
+    // subscription (no new socket, no second catch-up), so the pre-existing
+    // listener does not fire again.
+    handle.addEventListener('workflow:completed', () => {
+      completedCounts.second += 1;
+    });
+    await sleepForTesting(10);
+
+    expect(wsServer.sockets.length).toBe(socketsAfterTerminal);
+    expect(eventsCalls).toBe(eventsCallsAfterTerminal);
+    expect(completedCounts.first).toBe(1); // not re-fired
+    expect(completedCounts.second).toBe(0);
+  });
+
   it('opens at most one subscription regardless of listener count', async () => {
     globalThis.fetch = (async (input: RequestInfo | URL) => {
       if (requestInputToUrl(input).includes('/events')) return jsonResponse({ events: [] });

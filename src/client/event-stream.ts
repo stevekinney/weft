@@ -216,7 +216,17 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     let socket: StreamSocket;
     try {
       socket = this.#factory(this.#url, this.#headers);
-    } catch {
+    } catch (error) {
+      // The first connect runs synchronously in the constructor, before any
+      // socket has opened. A failure here (e.g. no global WebSocket, so the
+      // default factory throws) is an environment/configuration problem, not a
+      // transient drop — surface it to the caller instead of spinning reconnects
+      // to exhaustion. Once a socket has successfully opened at least once
+      // (`#connectGeneration > 0`), later factory failures are treated as
+      // transient and retried.
+      if (this.#connectGeneration === 0 && this.#reconnectAttempts === 0) {
+        throw error;
+      }
       this.#scheduleReconnect();
       return;
     }

@@ -63,6 +63,14 @@ const isBunRuntime = typeof globalThis.Bun !== 'undefined';
  * alone. Tests that replace the factory bypass this entirely.
  */
 export const defaultWebSocketFactory: WebSocketFactory = (url, headers) => {
+  if (typeof WebSocket === 'undefined') {
+    // No global `WebSocket` (e.g. older Node without the experimental flag).
+    // Fail with an actionable message instead of a cryptic `ReferenceError` or
+    // a silent reconnect spin to exhaustion.
+    throw new Error(
+      'No global WebSocket is available for live event streaming. Provide HttpClientOptions.webSocketFactory (e.g. backed by the `ws` package) or run on a runtime with a built-in WebSocket (Bun, modern browsers, Node 22+).',
+    );
+  }
   if (!isBunRuntime) {
     // Browser / service-worker: header-less constructor. Cross-origin auth must
     // ride a cookie or query param the server accepts, not a WebSocket header.

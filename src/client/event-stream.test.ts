@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import type { WorkflowEvent } from '../core/types.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
-import { workflowWatchWebSocketUrl } from './event-stream-transport.ts';
+import { defaultWebSocketFactory, workflowWatchWebSocketUrl } from './event-stream-transport.ts';
 import { FakeWebSocketServer } from './event-stream.test-support.ts';
 import {
   openClientEventSubscription,
@@ -580,5 +580,41 @@ describe('WorkflowEventSubscription bufferForIteration', () => {
     server.latest().deliver(event('workflow:completed', { result: 'ok' }));
     await consume;
     expect(collected).toEqual(['workflow:completed']);
+  });
+});
+
+describe('defaultWebSocketFactory', () => {
+  it('throws an actionable error when no global WebSocket is available', () => {
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'WebSocket');
+    // Simulate a runtime without a built-in WebSocket (e.g. older Node).
+    Object.defineProperty(globalThis, 'WebSocket', { configurable: true, value: undefined });
+    try {
+      expect(() => defaultWebSocketFactory('ws://test/watch', {})).toThrow(
+        /No global WebSocket is available.*webSocketFactory/s,
+      );
+    } finally {
+      if (descriptor === undefined) {
+        delete (globalThis as { WebSocket?: unknown }).WebSocket;
+      } else {
+        Object.defineProperty(globalThis, 'WebSocket', descriptor);
+      }
+    }
+  });
+});
+
+describe('WorkflowEventSubscription first-connect failure', () => {
+  it('propagates a factory error on the initial connect instead of spinning reconnects', () => {
+    // The first connect runs synchronously in the constructor. A failure there
+    // (e.g. no WebSocket global) is an environment problem, not a transient
+    // drop, so it must surface to the caller rather than retry to exhaustion.
+    expect(
+      () =>
+        new WorkflowEventSubscription('ws://test/watch', {}, 'wf-fatal', noHistory, () => {}, {
+          webSocketFactory: () => {
+            throw new Error('no websocket');
+          },
+          reconnectBackoffMs: 1,
+        }),
+    ).toThrow('no websocket');
   });
 });
