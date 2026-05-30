@@ -36,7 +36,6 @@ import {
   defaultWebSocketFactory,
   eventsEqual,
   parseWatchFrame,
-  workflowWatchWebSocketUrl,
   type StreamSocket,
   type WebSocketFactory,
 } from './event-stream-transport.ts';
@@ -73,43 +72,6 @@ const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_RECONNECT_BACKOFF_MS = 50;
 
 /**
- * The streaming-relevant view of an HTTP client: the fields a workflow event
- * subscription needs to open its `/watch` socket and run `getEvents` catch-up.
- * `HttpClient` satisfies this structurally, so {@link openClientEventSubscription}
- * takes the client directly instead of an assembled context literal.
- */
-export type WorkflowEventStreamHost = {
-  readonly baseUrl: string;
-  readonly headers: Record<string, string>;
-  getEvents(workflowId: string): Promise<WorkflowEvent[]>;
-};
-
-/**
- * Open a live {@link WorkflowEventSubscription} for a workflow over the `/watch`
- * WebSocket channel, wiring the watch URL and the `getEvents` catch-up fetch
- * from the given client. Shared by `HttpHandle` (push-based `addEventListener`)
- * and `HttpClient.tail`. Pass `bufferForIteration` for iteration-intended
- * consumers (`tail()`) so the connect catch-up is buffered for the async
- * iterator rather than dropped.
- */
-export function openClientEventSubscription(
-  host: WorkflowEventStreamHost,
-  streamOptions: WorkflowEventStreamOptions,
-  workflowId: string,
-  onEvent: (event: WorkflowEvent) => void,
-  bufferForIteration = false,
-): WorkflowEventSubscription {
-  return new WorkflowEventSubscription(
-    workflowWatchWebSocketUrl(host.baseUrl, workflowId),
-    host.headers,
-    workflowId,
-    (id) => host.getEvents(id),
-    onEvent,
-    bufferForIteration ? { ...streamOptions, bufferForIteration } : streamOptions,
-  );
-}
-
-/**
  * A live workflow-event subscription over the `/watch` WebSocket channel.
  * Delivers events to a push callback and to a single async iterator, catching
  * up from persisted history on every (re)connect and transparently reconnecting
@@ -133,9 +95,24 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   #socket: StreamSocket | null = null;
   #closed = false;
   // Count of events already delivered. The watch channel emits events in the
-  // same order `getEvents` persists them, so a monotonic delivered-count is a
-  // sufficient cursor for "how far into the history has this subscription got".
+  // same order `getEvents` persists them, so a monotonic delivered-count tracks
+  // "how many events has this subscription handed to the consumer".
   #deliveredCount = 0;
+  // The history cursor: how far into the *persisted* sequence the subscription
+  // is confirmed contiguous. The next catch-up replays `history.slice` from here
+  // so it does not re-emit what was already covered. Normally this tracks
+  // `#deliveredCount` (every delivered event is a confirmed prefix of history),
+  // but it freezes whenever a catch-up fetch fails: a failed catch-up may have
+  // skipped a persisted event in the gap it was meant to replay, so the live
+  // frames delivered afterward are NOT proven contiguous. Slicing from
+  // `#deliveredCount` instead would permanently skip those gap events on the
+  // next successful catch-up. The next successful fetch replays from this frozen
+  // watermark (recovering the gap, at the cost of re-delivering the post-failure
+  // live frames once — at-least-once, never lose) and then re-syncs it.
+  #historyWatermark = 0;
+  // Set when a catch-up's history fetch fails so `#emit` stops advancing
+  // `#historyWatermark`; cleared once a fetch succeeds and reconciles.
+  #catchUpFailed = false;
   #reconnectAttempts = 0;
   #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   // While catch-up is fetching/emitting history, live frames are buffered here
@@ -234,7 +211,14 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
 
     socket.addEventListener('open', () => {
       if (this.#closed || this.#socket !== socket) return;
-      this.#reconnectAttempts = 0;
+      // The reconnect counter is intentionally NOT reset here. A socket `open`
+      // only proves the upgrade was accepted, not that the connection is
+      // healthy: a server or proxy that accepts then immediately closes would,
+      // if we reset on `open`, reconnect forever at the first backoff interval
+      // and defeat `maxReconnectAttempts`. The counter is reset only after a
+      // catch-up succeeds (see `#catchUp`), which proves the socket stayed open
+      // long enough to fetch and reconcile history.
+      //
       // Tag this connection so a catch-up still in flight from a dropped socket
       // knows it is stale and must hand off to a fresh catch-up for this socket.
       this.#connectGeneration += 1;
@@ -267,8 +251,9 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     // and we must re-run for the new socket instead of declaring the stream
     // caught up against an already-dead connection's snapshot.
     const generation = this.#connectGeneration;
+    let succeeded = false;
     try {
-      await this.#reconcileHistory(generation);
+      succeeded = await this.#reconcileHistory(generation);
     } finally {
       this.#catchUpInFlight = false;
       if (!this.#closed && generation !== this.#connectGeneration) {
@@ -277,45 +262,73 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
         // stale snapshot and the new connection are not lost.
         void this.#catchUp();
       } else {
-        // The stream is now live: history drained, live frames flowing.
+        if (succeeded && this.#socket !== null) {
+          // The connection is proven healthy: the socket is still open AND it
+          // stayed open long enough to fetch history and reconcile. Only now is
+          // it safe to reset the reconnect counter. Resetting merely on socket
+          // `open`, or even on a catch-up that completed after the socket had
+          // already dropped (`#socket === null`), would let a server/proxy that
+          // accepts the upgrade then immediately closes reconnect forever,
+          // defeating `maxReconnectAttempts`.
+          this.#reconnectAttempts = 0;
+        }
+        // The stream is now live: history drained (or its fetch failed and the
+        // next reconnect will retry), live frames flowing.
         this.#markConnected();
       }
     }
   }
 
   /**
-   * Fetch persisted history, emit the events past `#deliveredCount`, then drain
-   * the live frames buffered during the fetch (dropping the ones the replayed
-   * history already covered). Bails out early if the stream closes mid-way, or
-   * if a reconnect made this catch-up's generation stale during the fetch.
+   * Fetch persisted history, emit the events past the history watermark, then
+   * drain the live frames buffered during the fetch (dropping the ones the
+   * replayed history already covered). Returns `true` only when the fetch
+   * succeeded and this pass committed against the current connection; returns
+   * `false` if the fetch failed, the stream closed mid-way, or a reconnect made
+   * this catch-up's generation stale during the fetch.
    */
-  async #reconcileHistory(generation: number): Promise<void> {
+  async #reconcileHistory(generation: number): Promise<boolean> {
     let history: WorkflowEvent[] = [];
+    let fetchSucceeded = true;
     try {
       history = await this.#fetchHistory(this.#workflowId);
     } catch {
       // A failed catch-up must not kill the stream; fall through so any live
       // frames buffered during the fetch still drain, and the next reconnect
-      // retries the catch-up.
+      // retries the catch-up. Freeze the history watermark: the failed fetch may
+      // have skipped a persisted event in the gap it was meant to replay, so the
+      // live frames we are about to drain are not proven contiguous and must not
+      // advance the cursor — otherwise the next successful catch-up would slice
+      // past, and permanently lose, those gap events.
+      fetchSucceeded = false;
+      this.#catchUpFailed = true;
       history = [];
     }
-    if (this.#closed) return;
+    if (this.#closed) return false;
 
     // A reconnect happened while we awaited history. This snapshot was taken
     // against the dropped socket, and `#pendingLive` now holds frames from the
     // new socket. Abandon this pass without emitting history or draining the
-    // buffer — neither `#deliveredCount` nor `#pendingLive` is touched, so the
-    // fresh re-run (scheduled by #catchUp's finally) reconciles everything from
-    // a correct cursor. Emitting here would inflate `#deliveredCount` with the
-    // new socket's live frames and make the re-run skip gap events.
-    if (generation !== this.#connectGeneration) return;
+    // buffer — neither the watermark nor `#pendingLive` is touched, so the fresh
+    // re-run (scheduled by #catchUp's finally) reconciles everything from a
+    // correct cursor. Emitting here would inflate the cursor with the new
+    // socket's live frames and make the re-run skip gap events.
+    if (generation !== this.#connectGeneration) return false;
 
-    // Emit history beyond what was already delivered. History and live frames
-    // share one ordered sequence, so `#deliveredCount` is the cursor.
-    const newHistory = history.slice(this.#deliveredCount);
+    // A successful fetch re-establishes contiguity from the frozen watermark, so
+    // clear the failure flag before emitting: the history we are about to replay
+    // is contiguous by construction, and `#emit` should resume advancing the
+    // watermark with it. (Done after the guards above so a stale/closed pass
+    // leaves the flag set for the genuine re-run.)
+    if (fetchSucceeded) this.#catchUpFailed = false;
+
+    // Emit history beyond the confirmed watermark. History and live frames share
+    // one ordered sequence; the watermark is how far that sequence is proven
+    // contiguous, so it — not the raw delivered count — is the slice cursor.
+    const newHistory = history.slice(this.#historyWatermark);
     for (const event of newHistory) {
       this.#emit(event);
-      if (this.#closed) return;
+      if (this.#closed) return false;
     }
 
     // Drain live frames that arrived during the fetch, dropping any that the
@@ -328,7 +341,7 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     this.#pendingLive = [];
     const historyConsumed: boolean[] = Array.from(newHistory, () => false);
     for (const live of buffered) {
-      if (this.#closed) return;
+      if (this.#closed) return false;
       const overlapIndex = newHistory.findIndex(
         (historic, index) => !historyConsumed[index] && eventsEqual(historic, live),
       );
@@ -338,6 +351,7 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
       }
       this.#emit(live);
     }
+    return fetchSucceeded;
   }
 
   #deliverLive(event: WorkflowEvent): void {
@@ -352,6 +366,10 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
 
   #emit(event: WorkflowEvent): void {
     this.#deliveredCount += 1;
+    // Advance the history cursor in lockstep while the stream is healthy. While
+    // a catch-up has failed the watermark stays frozen so the next successful
+    // catch-up replays from before the gap rather than skipping it.
+    if (!this.#catchUpFailed) this.#historyWatermark = this.#deliveredCount;
     try {
       this.#onEvent(event);
     } catch {

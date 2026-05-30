@@ -72,13 +72,23 @@ export class FakeWebSocketServer {
   readonly sockets: FakeWebSocket[] = [];
   /** Auto-fire `open` on construction. Set false to control timing in tests. */
   autoOpen = true;
+  /**
+   * Simulate a server/proxy that accepts the upgrade then immediately drops the
+   * connection: each socket fires `open` and then `close` on the same microtask
+   * turn. Used to prove the reconnect cap is honored for open-then-close churn
+   * (resetting the reconnect counter on `open` alone would loop forever).
+   */
+  autoCloseOnOpen = false;
 
   readonly factory: WebSocketFactory = (url) => {
     const socket = new FakeWebSocket(url);
     this.sockets.push(socket);
     if (this.autoOpen) {
       // Open on the next microtask so the subscription has wired its listeners.
-      queueMicrotask(() => socket.fireOpen());
+      queueMicrotask(() => {
+        socket.fireOpen();
+        if (this.autoCloseOnOpen) socket.drop();
+      });
     }
     return socket;
   };

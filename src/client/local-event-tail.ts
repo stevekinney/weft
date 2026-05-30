@@ -46,28 +46,85 @@ export function createLocalWorkflowEventTail(
   const handle = engine.getHandle(workflowId);
   const iterator = handle[Symbol.asyncIterator]();
 
+  // The engine handle's iterator is an async generator: its body — including
+  // the `addEventListener` calls that attach the listeners — does not run until
+  // the first `next()`. If we waited for `for await` to drive that, any event
+  // emitted between `client.tail(id)` and the start of iteration would be missed
+  // (the listeners would not yet exist), so the local tail would not match the
+  // HTTP tail's buffering contract. To close that gap we pump the iterator
+  // eagerly from construction and buffer the events ourselves: the first
+  // `next()` runs the generator body synchronously up to its first `await`,
+  // attaching the listeners before this function returns.
+  const buffer: WorkflowEvent[] = [];
+  let pumpDone = false;
+  let pumpError: unknown = null;
   let closed = false;
+  let waker: (() => void) | null = null;
+
+  function wake(): void {
+    const resolve = waker;
+    if (resolve !== null) {
+      waker = null;
+      resolve();
+    }
+  }
+
   function close(): void {
     if (closed) return;
     closed = true;
     // The engine handle's async iterator removes its listeners in its own
     // `finally`; calling `return()` drives that teardown.
     void iterator.return?.(undefined);
+    wake();
   }
+
+  // Eagerly drain the engine iterator into `buffer`. Started synchronously so
+  // listeners attach on this microtask, before the caller awaits
+  // `whenConnected()` or begins iterating.
+  const pump = (async (): Promise<void> => {
+    try {
+      for (let next = await iterator.next(); next.done !== true; next = await iterator.next()) {
+        if (closed) return;
+        const event = serializeEngineEvent(next.value);
+        buffer.push(event);
+        wake();
+        if (WORKFLOW_TERMINAL_EVENT_TYPES.has(event.type)) return;
+      }
+    } catch (error) {
+      pumpError = error;
+    } finally {
+      pumpDone = true;
+      // Drive the engine iterator's own `finally` so its listeners are removed
+      // once the pump stops draining (terminal event reached, stream exhausted,
+      // or an error). Idempotent with the consumer's `close()` in its `finally`;
+      // does not clear `buffer`, so any frames already buffered (e.g. a terminal
+      // event) are still delivered to a consumer that starts iterating later.
+      void iterator.return?.(undefined);
+      wake();
+    }
+  })();
+  // The pump owns iterator teardown; swallow its settled promise so an
+  // unconsumed tail never surfaces an unhandled rejection.
+  void pump.catch(() => {});
 
   return {
     close,
-    // The in-process engine stream is live from construction — the handle's
-    // event iterator attaches its listeners synchronously and synthesizes the
+    // The in-process engine stream is live from construction — the eager pump
+    // above has already attached the handle's listeners and will synthesize the
     // terminal event if the workflow already finished — so there is nothing to
     // wait for.
     whenConnected: () => Promise.resolve(),
     async *[Symbol.asyncIterator](): AsyncIterator<WorkflowEvent> {
       try {
-        for (let next = await iterator.next(); next.done !== true; next = await iterator.next()) {
-          const event = serializeEngineEvent(next.value);
-          yield event;
-          if (WORKFLOW_TERMINAL_EVENT_TYPES.has(event.type)) return;
+        while (true) {
+          while (buffer.length > 0) {
+            yield buffer.shift()!;
+          }
+          if (pumpError !== null) throw pumpError;
+          if (pumpDone || closed) return;
+          await new Promise<void>((resolve) => {
+            waker = resolve;
+          });
         }
       } finally {
         close();

@@ -464,6 +464,7 @@ export type {
   RemoteWorkerWorkflowDefinition,
 } from './worker/workflow-activity-binding';
 
+export type { WorkflowEventTail } from './client/event-tail';
 export { HttpClient, HttpClientError } from './client/index';
 export type { HttpClientOptions } from './client/index';
 export type { ClientHandle, UpdateResult, WeftClient } from './client/interface';

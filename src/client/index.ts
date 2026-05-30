@@ -8,6 +8,7 @@
  * @module client/index
  */
 
+export type { WorkflowEventTail } from './event-tail.ts';
 export { HttpClient } from './http-client.ts';
 export { HttpClientError } from './http-request.ts';
 export type { HttpClientOptions } from './http-request.ts';

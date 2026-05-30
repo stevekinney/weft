@@ -3,12 +3,11 @@ import type { WorkflowEvent } from '../core/types.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import { defaultWebSocketFactory, workflowWatchWebSocketUrl } from './event-stream-transport.ts';
 import { FakeWebSocketServer } from './event-stream.test-support.ts';
+import { WorkflowEventSubscription, type EventHistoryFetcher } from './event-stream.ts';
 import {
   openClientEventSubscription,
-  WorkflowEventSubscription,
-  type EventHistoryFetcher,
   type WorkflowEventStreamHost,
-} from './event-stream.ts';
+} from './open-event-subscription.ts';
 
 async function waitFor(predicate: () => boolean, timeoutMs = 1000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -467,6 +466,98 @@ describe('WorkflowEventSubscription', () => {
     await waitFor(() => received.length === 1);
     expect(received[0]?.type).toBe('workflow:started');
     subscription.close();
+  });
+
+  it('does not lose persisted events after a failed catch-up, then live frames, then a successful reconnect', async () => {
+    // Regression (Finding 3): when the initial catch-up FETCH fails, live frames
+    // delivered afterward must NOT advance the history cursor. The failed fetch
+    // may have skipped a persisted event in the gap it was meant to replay, so a
+    // later successful catch-up has to replay from before those live frames or
+    // the gap event is permanently lost. The fix freezes the history watermark
+    // while a catch-up has failed; the next successful catch-up replays from the
+    // frozen watermark, recovering the gap (re-delivering the post-failure live
+    // frame once is acceptable at-least-once behavior — never lose).
+    const server = new FakeWebSocketServer();
+    const received: WorkflowEvent[] = [];
+
+    let historyCalls = 0;
+    const history: EventHistoryFetcher = async () => {
+      historyCalls += 1;
+      // First catch-up fails: the persisted "gap" event A is never replayed.
+      if (historyCalls === 1) throw new Error('history fetch failed');
+      // The reconnect's successful catch-up sees the full persisted sequence:
+      // the gap event A (missed by the failed fetch), the live frame B already
+      // delivered, and the terminal C.
+      return [
+        event('workflow:started', { name: 'A' }),
+        event('signal:received', { name: 'B' }),
+        event('workflow:completed', { name: 'C' }),
+      ];
+    };
+
+    const subscription = new WorkflowEventSubscription(
+      'ws://test/watch',
+      {},
+      'wf-failed-catchup',
+      history,
+      (e) => received.push(e),
+      { webSocketFactory: server.factory, reconnectBackoffMs: 1 },
+    );
+
+    // First socket open, failed catch-up has settled.
+    await waitFor(() => server.sockets.length === 1 && server.latest().opened);
+    await waitFor(() => historyCalls === 1);
+    await sleepForTesting(5);
+
+    // A live frame B lands after the failed catch-up. It is delivered, but must
+    // not advance the (frozen) history watermark.
+    server.latest().deliver(event('signal:received', { name: 'B' }));
+    await waitFor(() => received.length === 1);
+    expect(received[0]?.data).toEqual({ name: 'B' });
+
+    // Drop the socket; the reconnect's catch-up succeeds and replays from the
+    // frozen watermark (0), so the gap event A is recovered — not skipped.
+    server.latest().drop();
+    await waitFor(() => server.sockets.length === 2);
+    await waitFor(() => historyCalls >= 2);
+
+    // A is recovered, C terminates. Every persisted type is present (no loss).
+    await waitFor(() => received.some((e) => e.data?.['name'] === 'A'));
+    await waitFor(() => subscription.closeReason !== null);
+    const names = received.map((e) => e.data?.['name']);
+    expect(names).toContain('A');
+    expect(names).toContain('B');
+    expect(names).toContain('C');
+    expect(subscription.closeReason).toBe('workflow-terminal');
+  });
+
+  it('honors maxReconnectAttempts for a socket that opens then immediately closes (no infinite reconnect)', async () => {
+    // Regression (Finding 4): resetting `#reconnectAttempts` on socket `open`
+    // let a server/proxy that accepts the upgrade then immediately closes
+    // reconnect forever at the first backoff interval. The counter must reset
+    // only after a connection is proven healthy (a catch-up succeeded while the
+    // socket is still open), so open-then-close churn terminates after the cap.
+    const server = new FakeWebSocketServer();
+    server.autoCloseOnOpen = true; // every socket opens, then immediately drops
+    const subscription = new WorkflowEventSubscription(
+      'ws://test/watch',
+      {},
+      'wf-open-close-churn',
+      noHistory,
+      () => {},
+      { webSocketFactory: server.factory, maxReconnectAttempts: 3, reconnectBackoffMs: 1 },
+    );
+
+    // The subscription terminates instead of looping forever; the socket count
+    // is bounded by the cap (initial connect + at most maxReconnectAttempts).
+    await waitFor(() => subscription.closeReason !== null);
+    expect(subscription.closeReason).toBe('reconnect-exhausted');
+    expect(server.sockets.length).toBeLessThanOrEqual(4);
+
+    // Give any rogue reconnect timer a chance to fire; the count must stay put.
+    const settledCount = server.sockets.length;
+    await sleepForTesting(20);
+    expect(server.sockets.length).toBe(settledCount);
   });
 });
 

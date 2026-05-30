@@ -43,11 +43,7 @@ import type {
   WorkflowTimelineEntry,
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
-import {
-  openClientEventSubscription,
-  type WorkflowEventStreamOptions,
-  type WorkflowEventSubscription,
-} from './event-stream.ts';
+import { type WorkflowEventStreamOptions, type WorkflowEventSubscription } from './event-stream.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
 import {
   addTagsRequest,
@@ -77,6 +73,7 @@ import { httpClientCatalogTransport } from './http-operations.ts';
 import { request, resolveHttpClientConnection, type HttpClientOptions } from './http-request.ts';
 import { HttpScheduleHandle } from './http-schedule-handle.ts';
 import type { ClientHandle, ClientScheduleHandle, UpdateResult, WeftClient } from './interface.ts';
+import { openClientEventSubscription } from './open-event-subscription.ts';
 import { buildScheduleListSearchParams } from './schedule-list-search-params.ts';
 import { buildWorkflowListSearchParams } from './search-params.ts';
 import { buildStartBody, scheduleSpecToWireFields } from './start-body.ts';
