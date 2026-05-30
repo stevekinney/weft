@@ -393,6 +393,72 @@ describe('WorkflowEventSubscription', () => {
     expect(subscription.closeReason).toBe('workflow-terminal');
   });
 
+  it('keeps a new socket live frame buffered across a stale-catch-up re-run even when the re-run history has not persisted it yet', async () => {
+    // Regression (Cursor Bugbot follow-up): when a stale catch-up returns on a
+    // generation mismatch, the re-run must NOT clear `#pendingLive` — it holds
+    // frames the CURRENT socket (S2) delivered while the stale fetch was running.
+    // Recovery cannot depend on those frames being in the re-run's history fetch
+    // (the server may not have persisted them yet), or the "never lose" contract
+    // breaks. Here the re-run's history deliberately OMITS the S2 live frame, so
+    // it is delivered only if it survived in the buffer.
+    const server = new FakeWebSocketServer();
+    const received: WorkflowEvent[] = [];
+
+    let historyCalls = 0;
+    const firstFetchStarted = Promise.withResolvers<void>();
+    const releaseFirstFetch = Promise.withResolvers<void>();
+    const history: EventHistoryFetcher = async () => {
+      historyCalls += 1;
+      if (historyCalls === 1) {
+        firstFetchStarted.resolve();
+        await releaseFirstFetch.promise;
+        return [event('workflow:started')];
+      }
+      // The re-run's history has NOT yet persisted the S2 live signal — it only
+      // sees the original started event. The S2 signal must still be delivered
+      // from the preserved buffer, not lost.
+      return [event('workflow:started')];
+    };
+
+    const subscription = new WorkflowEventSubscription(
+      'ws://test/watch',
+      {},
+      'wf-buffer-survives',
+      history,
+      (e) => received.push(e),
+      { webSocketFactory: server.factory, reconnectBackoffMs: 1 },
+    );
+
+    // S1 open, first fetch in flight.
+    await firstFetchStarted.promise;
+    expect(server.sockets.length).toBe(1);
+
+    // Drop S1; S2 reconnects (its catch-up is blocked by the in-flight guard).
+    server.latest().drop();
+    await waitFor(() => server.sockets.length === 2 && server.latest().opened);
+
+    // S2 delivers a live signal while the stale fetch is still pending — buffered
+    // in #pendingLive (catch-up is in flight).
+    server.latest().deliver(event('signal:received', { name: 'unpersisted' }));
+
+    // Release the stale fetch; the stale pass abandons (generation mismatch) and
+    // the re-run must keep the buffered S2 frame and deliver it.
+    releaseFirstFetch.resolve();
+
+    await waitFor(() =>
+      received.some((e) => e.type === 'signal:received' && e.data?.['name'] === 'unpersisted'),
+    );
+    expect(received.map((e) => e.type)).toContain('workflow:started');
+    expect(
+      received.filter((e) => e.type === 'signal:received' && e.data?.['name'] === 'unpersisted'),
+    ).toHaveLength(1);
+
+    // A later live terminal ends the stream cleanly.
+    server.latest().deliver(event('workflow:completed', { result: 'ok' }));
+    await waitFor(() => subscription.closeReason !== null);
+    expect(subscription.closeReason).toBe('workflow-terminal');
+  });
+
   it('terminates after reconnect attempts are exhausted', async () => {
     const server = new FakeWebSocketServer();
     server.autoOpen = false; // never connect, so every socket immediately drops

@@ -4,26 +4,22 @@
  * The server broadcasts a workflow's lifecycle events over a per-workflow
  * WebSocket channel at `/v1/workflows/:id/watch` (see the server's
  * `wireEventBroadcasting`). Each frame is a JSON {@link WorkflowEvent}
- * (`{ type, timestamp, data }`) — the same shape `getEvents()` returns and the
- * dashboard already consumes. This module opens that channel and exposes the
- * events through two surfaces:
+ * (`{ type, timestamp, data }`) — the same shape `getEvents()` returns. This
+ * module opens that channel and exposes the events through two surfaces: a push
+ * callback (`onEvent`) used by {@link HttpHandle.addEventListener} so listeners
+ * fire the moment an event lands instead of on a 2-second poll, and an
+ * {@link AsyncIterable} used by `client.tail(id)` / `handle.tail()`.
  *
- *   - a push callback (`onEvent`) used by {@link HttpHandle.addEventListener}
- *     so listeners fire the moment an event lands instead of on a 2-second
- *     poll cadence, and
- *   - an {@link AsyncIterable} used by `client.tail(id)` / `handle.tail()`.
- *
- * **Catch-up + reconnect.** The watch channel is live-only — it does not replay
- * events from before the socket connected, and a dropped socket can miss events
- * while disconnected. To close both gaps the subscription fetches the persisted
- * event history (`getEvents`) on every (re)connect, emits the events past a
- * confirmed-contiguous history watermark, then drops any live frame buffered
- * during the fetch that the replayed history already covered (the overlap
- * window). Delivery is at-least-once: a failed fetch or a compaction-re-based
- * history array may re-deliver a frame once but never silently skips one (see
- * `#historyWatermark`). Reconnect attempts back off and are capped; the cap is
- * honored even for open-then-close sockets, since the counter resets only after
- * a catch-up proves the connection healthy (see `#catchUp`).
+ * **Catch-up + reconnect.** The watch channel is live-only and a dropped socket
+ * can miss events while disconnected. To close both gaps the subscription
+ * fetches the persisted event history (`getEvents`) on every (re)connect, emits
+ * the events past a confirmed-contiguous history watermark, then drops any live
+ * frame buffered during the fetch that the replayed history already covered (the
+ * overlap window). Delivery is at-least-once: a failed fetch or a
+ * compaction-re-based history array may re-deliver a frame once but never
+ * silently skips one (see `#historyWatermark`). Reconnect attempts back off and
+ * are capped; the cap is honored even for open-then-close sockets, since the
+ * counter resets only after a catch-up proves the connection healthy (`#catchUp`).
  *
  * **Clean close.** `close()` closes the socket and resolves the iterable.
  * Terminal workflow events (`completed`, `failed`, `cancelled`, `timed-out`)
@@ -37,7 +33,7 @@ import { WORKFLOW_TERMINAL_EVENT_TYPES } from '../core/events/workflow-events.ts
 import type { WorkflowEvent } from '../core/types.ts';
 import {
   defaultWebSocketFactory,
-  eventsEqual,
+  dropOverlappingLiveFrames,
   parseWatchFrame,
   type StreamSocket,
   type WebSocketFactory,
@@ -247,7 +243,13 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   async #catchUp(): Promise<void> {
     if (this.#catchUpInFlight || this.#closed) return;
     this.#catchUpInFlight = true;
-    this.#pendingLive = [];
+    // Do NOT reset `#pendingLive` here. `#deliverLive` only buffers while a
+    // catch-up is in flight and a successful reconcile drains it to empty, so it
+    // already holds exactly the current overlap window. Clearing it would discard
+    // frames the *current* socket delivered while a now-stale catch-up's fetch
+    // was running — those must survive into the re-run below (the next history
+    // fetch may not have persisted them yet), or the "never lose" contract breaks.
+    //
     // Pin the connection this catch-up is reconciling against. If the socket
     // drops and reconnects while we await history, this generation goes stale
     // and we must re-run for the new socket instead of declaring the stream
@@ -311,10 +313,10 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     // A reconnect happened while we awaited history. This snapshot was taken
     // against the dropped socket, and `#pendingLive` now holds frames from the
     // new socket. Abandon this pass without emitting history or draining the
-    // buffer — neither the watermark nor `#pendingLive` is touched, so the fresh
-    // re-run (scheduled by #catchUp's finally) reconciles everything from a
-    // correct cursor. Emitting here would inflate the cursor with the new
-    // socket's live frames and make the re-run skip gap events.
+    // buffer — neither the watermark nor `#pendingLive` is touched, so the re-run
+    // (scheduled by #catchUp's finally, which keeps the buffered frames) delivers
+    // the new socket's frames even if the next history fetch has not persisted
+    // them yet. Emitting here would inflate the cursor and skip gap events.
     if (generation !== this.#connectGeneration) return false;
 
     // A successful fetch re-establishes contiguity from the frozen watermark, so
@@ -345,33 +347,16 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
       if (this.#closed) return false;
     }
 
-    this.#drainPendingLive(newHistory);
-    return fetchSucceeded;
-  }
-
-  /**
-   * Drain the live frames buffered during the fetch, dropping any that the
-   * replayed `history` already covered (the overlap window). The dedup is
-   * *consuming*: each history entry can cancel at most one live frame, so two
-   * structurally identical events (e.g. two rapid signals with the same name and
-   * payload) where only one is a true overlap duplicate keep the genuinely new
-   * one instead of both being dropped.
-   */
-  #drainPendingLive(history: readonly WorkflowEvent[]): void {
+    // Drain the live frames buffered during the fetch, dropping the overlap with
+    // the history just replayed; the rest are genuinely new and are emitted in
+    // order.
     const buffered = this.#pendingLive;
     this.#pendingLive = [];
-    const historyConsumed: boolean[] = Array.from(history, () => false);
-    for (const live of buffered) {
-      if (this.#closed) return;
-      const overlapIndex = history.findIndex(
-        (historic, index) => !historyConsumed[index] && eventsEqual(historic, live),
-      );
-      if (overlapIndex !== -1) {
-        historyConsumed[overlapIndex] = true;
-        continue;
-      }
+    for (const live of dropOverlappingLiveFrames(newHistory, buffered)) {
+      if (this.#closed) return false;
       this.#emit(live);
     }
+    return fetchSucceeded;
   }
 
   #deliverLive(event: WorkflowEvent): void {

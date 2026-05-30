@@ -99,6 +99,33 @@ export function eventsEqual(a: WorkflowEvent, b: WorkflowEvent): boolean {
   return a.type === b.type && JSON.stringify(a.data) === JSON.stringify(b.data);
 }
 
+/**
+ * Drop the `buffered` live frames that the replayed `history` already covered
+ * (the overlap window), returning the genuinely new frames in order. The dedup
+ * is *consuming*: each history entry can cancel at most one live frame, so two
+ * structurally identical events (e.g. two rapid signals with the same name and
+ * payload) where only one is a true overlap duplicate keep the genuinely new one
+ * instead of both being dropped. Shared by both client transports' catch-up.
+ */
+export function dropOverlappingLiveFrames(
+  history: readonly WorkflowEvent[],
+  buffered: readonly WorkflowEvent[],
+): WorkflowEvent[] {
+  const historyConsumed: boolean[] = Array.from(history, () => false);
+  const fresh: WorkflowEvent[] = [];
+  for (const live of buffered) {
+    const overlapIndex = history.findIndex(
+      (historic, index) => !historyConsumed[index] && eventsEqual(historic, live),
+    );
+    if (overlapIndex !== -1) {
+      historyConsumed[overlapIndex] = true;
+      continue;
+    }
+    fresh.push(live);
+  }
+  return fresh;
+}
+
 /** Parse a watch-channel frame into a {@link WorkflowEvent}, or null if malformed. */
 export function parseWatchFrame(raw: unknown): WorkflowEvent | null {
   if (typeof raw !== 'string') return null;
