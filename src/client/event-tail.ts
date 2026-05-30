@@ -38,8 +38,11 @@ export interface WorkflowEventTail extends AsyncIterable<WorkflowEvent> {
    * Resolves once the tail is live and ready to deliver events (or when it has
    * terminated). Await this before triggering work whose events you intend to
    * observe, so nothing is missed in the window before the underlying transport
-   * connects. In library mode it resolves immediately — the in-process engine
-   * stream is live from construction.
+   * connects. Both modes resolve only after the connect catch-up has replayed
+   * the workflow's persisted history (server mode after the `/watch` socket's
+   * `getEvents` catch-up; library mode after the in-process `engine.getEvents`
+   * replay), so awaiting it may perform async work and a `for await` started
+   * afterward still sees the replayed history ahead of any live frame.
    */
   whenConnected(): Promise<void>;
 }

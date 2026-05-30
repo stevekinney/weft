@@ -26,16 +26,23 @@ import type { WorkflowEventTail } from './event-tail.ts';
 
 /**
  * Serialize a dispatched engine `Event` into a {@link WorkflowEvent}. Mirrors
- * the server's watch-channel serialization: every own-property except `type`
- * is copied into `data`, with `Error` values flattened to their message so the
- * record survives a JSON round-trip on the server transport.
+ * the server's watch-channel serialization exactly: every own-property except
+ * `type` is copied into `data`, with `Error` values flattened to their message,
+ * then the bag is passed through a JSON round-trip — the same one the server's
+ * `serializeEvent` + WebSocket transport applies. That round-trip drops
+ * `undefined`-valued properties (e.g. a signal delivered with no payload yields
+ * no `payload` key, just like the HTTP tail), so library mode and server mode
+ * produce identical {@link WorkflowEvent} records.
  */
 function serializeEngineEvent(event: Event): WorkflowEvent {
-  const data: Record<string, unknown> = {};
+  const raw: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(event)) {
     if (key === 'type') continue;
-    data[key] = value instanceof Error ? value.message : value;
+    raw[key] = value instanceof Error ? value.message : value;
   }
+  // JSON round-trip to match the server transport: drops `undefined` values and
+  // normalizes the bag to the same shape the HTTP tail receives off the wire.
+  const data = JSON.parse(JSON.stringify(raw)) as Record<string, unknown>;
   return { type: event.type, timestamp: Date.now(), data };
 }
 

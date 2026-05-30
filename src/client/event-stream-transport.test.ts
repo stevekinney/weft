@@ -1,6 +1,11 @@
-import { describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it } from 'bun:test';
 import type { WorkflowEvent } from '../core/types.ts';
-import { dropOverlappingLiveFrames, eventsEqual } from './event-stream-transport.ts';
+import { setPortableRuntimeTestOverridesForTesting } from '../runtime/portable.ts';
+import {
+  defaultWebSocketFactory,
+  dropOverlappingLiveFrames,
+  eventsEqual,
+} from './event-stream-transport.ts';
 
 function event(type: string, data: Record<string, unknown> = {}): WorkflowEvent {
   return { type, timestamp: 1, data };
@@ -48,5 +53,82 @@ describe('dropOverlappingLiveFrames', () => {
   it('returns an empty array when every buffered frame overlaps history', () => {
     const history = [event('a'), event('b')];
     expect(dropOverlappingLiveFrames(history, [event('a'), event('b')])).toEqual([]);
+  });
+});
+
+describe('defaultWebSocketFactory runtime behavior', () => {
+  const nodeOverrides = {
+    bun: undefined,
+    window: undefined,
+    document: undefined,
+    process: { versions: { node: '22.0.0' } } as unknown as typeof globalThis.process,
+  };
+
+  afterEach(() => {
+    setPortableRuntimeTestOverridesForTesting(undefined);
+  });
+
+  it('throws an actionable error on Node when auth headers are configured (headers cannot ride the socket)', () => {
+    // Regression (Copilot follow-up): Node 22+ has a global WebSocket but its
+    // constructor cannot send custom headers. Silently dropping a configured
+    // Authorization header would produce an unauthenticated socket; the factory
+    // must fail loudly pointing at webSocketFactory instead.
+    setPortableRuntimeTestOverridesForTesting(nodeOverrides);
+    expect(() => defaultWebSocketFactory('ws://test/watch', { Authorization: 'Bearer t' })).toThrow(
+      /cannot send the configured auth headers.*webSocketFactory/s,
+    );
+  });
+
+  it('does not throw on Node when no auth headers are configured', () => {
+    // No credentials to drop — a header-less socket is fine.
+    setPortableRuntimeTestOverridesForTesting(nodeOverrides);
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'WebSocket');
+    // Stub a constructible WebSocket so the header-less path can build one.
+    Object.defineProperty(globalThis, 'WebSocket', {
+      configurable: true,
+      value: class {
+        constructor(public url: string) {}
+        addEventListener(): void {}
+        close(): void {}
+      },
+    });
+    try {
+      expect(() => defaultWebSocketFactory('ws://test/watch', {})).not.toThrow();
+    } finally {
+      if (descriptor === undefined) {
+        delete (globalThis as { WebSocket?: unknown }).WebSocket;
+      } else {
+        Object.defineProperty(globalThis, 'WebSocket', descriptor);
+      }
+    }
+  });
+
+  it('does not throw on a browser even with headers (cookie/query auth is expected)', () => {
+    setPortableRuntimeTestOverridesForTesting({
+      bun: undefined,
+      process: undefined,
+      window: {} as unknown as typeof globalThis.window,
+      document: {} as unknown as typeof globalThis.document,
+    });
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'WebSocket');
+    Object.defineProperty(globalThis, 'WebSocket', {
+      configurable: true,
+      value: class {
+        constructor(public url: string) {}
+        addEventListener(): void {}
+        close(): void {}
+      },
+    });
+    try {
+      expect(() =>
+        defaultWebSocketFactory('ws://test/watch', { Authorization: 'Bearer t' }),
+      ).not.toThrow();
+    } finally {
+      if (descriptor === undefined) {
+        delete (globalThis as { WebSocket?: unknown }).WebSocket;
+      } else {
+        Object.defineProperty(globalThis, 'WebSocket', descriptor);
+      }
+    }
   });
 });

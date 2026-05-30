@@ -9,6 +9,7 @@
  */
 
 import type { WorkflowEvent } from '../core/types.ts';
+import { detectRuntime } from '../runtime/portable.ts';
 
 /** Minimal socket surface the subscription drives. Matches `WebSocket`. */
 export type StreamSocket = {
@@ -51,16 +52,23 @@ export function workflowWatchWebSocketUrl(baseUrl: string, workflowId: string): 
   return `${wsOrigin}${trimmed}${path}`;
 }
 
-/** True when running under Bun, whose `WebSocket` accepts custom upgrade headers. */
-const isBunRuntime = typeof globalThis.Bun !== 'undefined';
-
 /**
  * The default factory. Under Bun the second `WebSocket` argument is an options
  * bag that accepts custom upgrade headers, so auth headers ride the handshake.
- * In the browser the second argument is `protocols` (a string or string array)
- * and passing an options object would break the connection — and the browser
- * WebSocket cannot send custom headers at all — so we construct with the URL
- * alone. Tests that replace the factory bypass this entirely.
+ * Elsewhere the second argument is `protocols` (a string or string array) and
+ * the platform `WebSocket` cannot send custom headers at all, so we construct
+ * with the URL alone:
+ *
+ *   - In a browser / service worker that is expected — cross-origin auth rides a
+ *     cookie or query param the server accepts, not a WebSocket header.
+ *   - In Node/edge the global `WebSocket` (Node 22+, undici) also cannot send
+ *     headers, so silently dropping a configured `Authorization`/`token` would
+ *     produce an unauthenticated socket that fails or reconnects forever against
+ *     an auth-enabled server. That is surfaced as an explicit configuration
+ *     error pointing at `HttpClientOptions.webSocketFactory` (e.g. backed by the
+ *     `ws` package, which supports headers) rather than failing silently.
+ *
+ * Tests that replace the factory bypass this entirely.
  */
 export const defaultWebSocketFactory: WebSocketFactory = (url, headers) => {
   if (typeof WebSocket === 'undefined') {
@@ -71,9 +79,19 @@ export const defaultWebSocketFactory: WebSocketFactory = (url, headers) => {
       'No global WebSocket is available for live event streaming. Provide HttpClientOptions.webSocketFactory (e.g. backed by the `ws` package) or run on a runtime with a built-in WebSocket (Bun, modern browsers, Node 22+).',
     );
   }
-  if (!isBunRuntime) {
-    // Browser / service-worker: header-less constructor. Cross-origin auth must
-    // ride a cookie or query param the server accepts, not a WebSocket header.
+  const runtime = detectRuntime();
+  if (runtime !== 'bun') {
+    if (runtime !== 'browser' && Object.keys(headers).length > 0) {
+      // Node / edge with auth headers configured: the platform WebSocket
+      // constructor cannot carry them, so connecting here would silently drop
+      // credentials. Fail loudly with the fix instead of producing an
+      // unauthenticated socket that reconnects to exhaustion.
+      throw new Error(
+        'Live event streaming on this runtime cannot send the configured auth headers over WebSocket: the platform WebSocket constructor has no header support. Provide HttpClientOptions.webSocketFactory (e.g. backed by the `ws` package, which supports headers) or authenticate the watch socket with a cookie or query parameter the server accepts.',
+      );
+    }
+    // Browser / service worker (or a non-Bun runtime with no auth headers):
+    // header-less constructor. Cross-origin auth rides a cookie or query param.
     return new WebSocket(url);
   }
   // Bun's two-arg overload is not in the DOM lib types, so narrow to it at

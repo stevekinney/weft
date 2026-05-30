@@ -129,6 +129,27 @@ describe('createLocalWorkflowEventTail', () => {
     expect(events[1]?.data).toMatchObject({ result: { ok: true } });
   });
 
+  it('drops undefined-valued properties to match the server JSON round-trip', async () => {
+    // Regression (Copilot follow-up): a signal delivered with no payload must not
+    // leave a `payload: undefined` key in the local tail's `data` — the HTTP tail
+    // has no such key (JSON.stringify drops it on the wire), and the unified
+    // contract promises identical records.
+    const handle = new FakeWorkflowHandle();
+    const tail = createLocalWorkflowEventTail(fakeEngine(handle), 'wf-undef');
+
+    await tail.whenConnected();
+    handle.dispatchEvent(new SignalReceivedEvent('wf-undef', 'continue', undefined));
+    handle.dispatchEvent(new WorkflowCompletedEvent('wf-undef', 'ok', 1));
+
+    const events = [];
+    for await (const e of tail) events.push(e);
+
+    expect(events[0]?.type).toBe('signal:received');
+    // No `payload` key at all (not `payload: undefined`), matching the wire shape.
+    expect(events[0]?.data).not.toHaveProperty('payload');
+    expect(events[0]?.data).toMatchObject({ signalName: 'continue' });
+  });
+
   it('terminates immediately when the workflow has already finished (synthesized terminal)', async () => {
     const handle = new FakeWorkflowHandle();
     // The persisted state is terminal before iteration, so the iterator
