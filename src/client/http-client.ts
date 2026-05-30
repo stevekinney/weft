@@ -404,18 +404,25 @@ export class HttpClient implements WeftClient {
    * channel. Shared by {@link HttpHandle} (push-based `addEventListener`) and
    * {@link tail}. The subscription catches up from `getEvents` on every
    * (re)connect, so it covers events emitted before it connected.
+   *
+   * `bufferForIteration` defaults off for the callback-only `addEventListener`
+   * path; {@link tail} sets it so the connect catch-up is buffered for the
+   * async iterator instead of dropped.
    */
   openEventSubscription(
     id: string,
     onEvent: (event: WorkflowEvent) => void,
+    bufferForIteration = false,
   ): WorkflowEventSubscription {
-    return openClientEventSubscription(this, this.#streamOptions, id, onEvent);
+    return openClientEventSubscription(this, this.#streamOptions, id, onEvent, bufferForIteration);
   }
 
   tail(id: string): WorkflowEventTail {
     // The subscription always catches up from persisted history on connect, so
     // resumption from an arbitrary point is automatic — no cursor is needed.
-    return this.openEventSubscription(id, () => {});
+    // Buffer for iteration so the catch-up history (emitted before the consumer
+    // starts `for await`) is delivered, not dropped.
+    return this.openEventSubscription(id, () => {}, true);
   }
 
   async getTimeline(id: string): Promise<WorkflowTimelineEntry[]> {

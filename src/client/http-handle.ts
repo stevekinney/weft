@@ -19,7 +19,11 @@ export class HttpHandle extends WorkflowHandleDelegation<HttpClient> {
 
   #ensureSubscribed(): WorkflowEventSubscription | null {
     if (this.#closed) return null;
-    if (this.#subscription === null) {
+    // Re-open when there is no subscription yet, or the cached one has
+    // terminated (reconnect exhausted, or auto-closed on a terminal event). A
+    // dead subscription opens no socket, so without this a caller that attaches
+    // listeners after termination would silently receive nothing.
+    if (this.#subscription === null || this.#subscription.closeReason !== null) {
       this.#subscription = this.client.openEventSubscription(this.id, (event) => {
         this.#events.dispatchEvent(new CustomEvent(event.type, { detail: event.data }));
       });

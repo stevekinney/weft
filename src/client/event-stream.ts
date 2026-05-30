@@ -58,6 +58,15 @@ export type WorkflowEventStreamOptions = {
    * production omits it and the global `WebSocket` is used.
    */
   readonly webSocketFactory?: WebSocketFactory;
+  /**
+   * Buffer events for async iteration from construction rather than lazily on
+   * first iterator pull. `tail()` sets this so the documented
+   * `await tail.whenConnected(); for await (…)` pattern still sees the connect
+   * catch-up history (which is emitted before the `for await` loop begins).
+   * Callback-only subscribers (`HttpHandle.addEventListener`) leave it off so
+   * the iterator buffer never accumulates a never-drained queue. Default false.
+   */
+  readonly bufferForIteration?: boolean;
 };
 
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
@@ -107,20 +116,23 @@ export function createWorkflowEventSubscription(
 /**
  * Open a {@link WorkflowEventSubscription} from an HTTP client's streaming
  * fields plus its resolved {@link WorkflowEventStreamOptions}. Keeps the
- * context assembly out of `HttpClient` so its public surface stays thin.
+ * context assembly out of `HttpClient` so its public surface stays thin. Pass
+ * `bufferForIteration` for iteration-intended consumers (`tail()`) so the
+ * connect catch-up is buffered for the async iterator rather than dropped.
  */
 export function openClientEventSubscription(
   host: WorkflowEventStreamHost,
   streamOptions: WorkflowEventStreamOptions,
   workflowId: string,
   onEvent: (event: WorkflowEvent) => void,
+  bufferForIteration = false,
 ): WorkflowEventSubscription {
   return createWorkflowEventSubscription(
     {
       baseUrl: host.baseUrl,
       headers: host.headers,
       getEvents: (id) => host.getEvents(id),
-      streamOptions,
+      streamOptions: bufferForIteration ? { ...streamOptions, bufferForIteration } : streamOptions,
     },
     workflowId,
     onEvent,
@@ -171,8 +183,10 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   // events between the stale snapshot and the new socket permanently missed.
   #connectGeneration = 0;
   // Async-iterator plumbing: buffered events plus a parked waker. The buffer is
-  // only filled while an iterator is actively consuming (`#iterating`), so a
-  // callback-only subscriber never accumulates a never-drained queue.
+  // filled while `#iterating` is set — either because an iterator is actively
+  // consuming or because the subscription was opened for iteration
+  // (`bufferForIteration`, used by `tail()`). A callback-only subscriber leaves
+  // it off so it never accumulates a never-drained queue.
   readonly #buffer: WorkflowEvent[] = [];
   #waker: (() => void) | null = null;
   #iterating = false;
@@ -199,6 +213,10 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     this.#factory = options?.webSocketFactory ?? defaultWebSocketFactory;
     this.#maxReconnectAttempts = options?.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
     this.#reconnectBackoffMs = options?.reconnectBackoffMs ?? DEFAULT_RECONNECT_BACKOFF_MS;
+    // Iteration-intended consumers (`tail()`) buffer from construction so the
+    // connect catch-up — emitted before the `for await` loop starts — is not
+    // dropped. Callback-only subscribers keep the lazy default.
+    this.#iterating = options?.bufferForIteration ?? false;
     this.#connect();
   }
 

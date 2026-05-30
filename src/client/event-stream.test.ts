@@ -507,3 +507,78 @@ describe('openClientEventSubscription', () => {
     subscription.close();
   });
 });
+
+describe('WorkflowEventSubscription bufferForIteration', () => {
+  it('delivers connect catch-up to a for-await consumer that starts iterating after whenConnected (tail() pattern)', async () => {
+    // Regression: `tail()` opens the subscription with a no-op callback, and the
+    // documented pattern is `await tail.whenConnected(); for await (…)`. Because
+    // `whenConnected()` resolves only after the connect catch-up has been
+    // emitted, an iterator obtained afterwards must still receive that history.
+    // Without `bufferForIteration` the catch-up was dropped (the buffer only
+    // filled once `#iterating` flipped, which happened too late).
+    const server = new FakeWebSocketServer();
+    const history: EventHistoryFetcher = async () => [
+      event('workflow:started'),
+      event('activity:started'),
+    ];
+    const subscription = new WorkflowEventSubscription(
+      'ws://test/watch',
+      {},
+      'wf-buffer',
+      history,
+      () => {},
+      { webSocketFactory: server.factory, bufferForIteration: true },
+    );
+
+    // Mirror the tail() usage: wait for the stream to be live (catch-up done)
+    // BEFORE starting iteration.
+    await subscription.whenConnected();
+
+    const collected: string[] = [];
+    const consume = (async () => {
+      for await (const e of subscription) collected.push(e.type);
+    })();
+
+    // The catch-up history emitted before iteration began is still delivered.
+    await waitFor(() => collected.length === 2);
+    expect(collected).toEqual(['workflow:started', 'activity:started']);
+
+    // A subsequent live terminal frame ends the iteration cleanly.
+    server.latest().deliver(event('workflow:completed', { result: 'ok' }));
+    await consume;
+    expect(collected).toEqual(['workflow:started', 'activity:started', 'workflow:completed']);
+    expect(subscription.closeReason).toBe('workflow-terminal');
+  });
+
+  it('leaves the iterator buffer empty for callback-only subscribers (no leak when bufferForIteration is off)', async () => {
+    // The default (callback-only, e.g. HttpHandle.addEventListener) must not
+    // accumulate a never-drained iterator buffer. We verify that an iterator
+    // obtained late still sees only post-iteration frames, confirming the buffer
+    // was not silently filling for the callback path.
+    const server = new FakeWebSocketServer();
+    const callbackEvents: string[] = [];
+    const history: EventHistoryFetcher = async () => [event('workflow:started')];
+    const subscription = new WorkflowEventSubscription(
+      'ws://test/watch',
+      {},
+      'wf-callback',
+      history,
+      (e) => callbackEvents.push(e.type),
+      { webSocketFactory: server.factory },
+    );
+
+    await subscription.whenConnected();
+    expect(callbackEvents).toEqual(['workflow:started']);
+
+    // Start iterating only now; the pre-iteration catch-up was delivered to the
+    // callback but was not buffered for the iterator (no leak).
+    const collected: string[] = [];
+    const consume = (async () => {
+      for await (const e of subscription) collected.push(e.type);
+    })();
+
+    server.latest().deliver(event('workflow:completed', { result: 'ok' }));
+    await consume;
+    expect(collected).toEqual(['workflow:completed']);
+  });
+});
