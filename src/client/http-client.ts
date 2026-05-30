@@ -103,15 +103,10 @@ function scheduleSpecToWireFields(spec: string | ScheduleSpec): Record<string, u
  * const handle = await client.start('greet', { name: 'Alice' });
  * const result = await handle.result();
  * void result;
- * ```
  *
- * @example
- * ```ts
- * import { HttpClient } from 'weft';
- *
- * // Reads WEFT_ADDR and WEFT_TOKEN from the environment.
- * const client = new HttpClient();
- * void client;
+ * // With no options, the server and token resolve from WEFT_ADDR/WEFT_TOKEN.
+ * const resolved = new HttpClient();
+ * void resolved;
  * ```
  */
 export class HttpClient implements WeftClient {

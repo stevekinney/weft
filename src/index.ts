@@ -11,18 +11,16 @@
  * @module weft
  */
 
-export { VERSION } from './version.ts';
-// Error base + discriminant
-export { WeftError, isWeftError, isWeftErrorCode } from './core/weft-error.ts';
-export type { WeftErrorCode } from './core/weft-error.ts';
-// Wire fault code + failure-category mapping
-export {
-  FAULT_CODE_TO_FAILURE_CATEGORY,
-  failureCategoryForFaultCode,
-  isFaultCode,
-} from './core/fault-code.ts';
-export type { FaultCode } from './core/fault-code.ts';
-// Core
+export { AlertManager } from './alerting/index';
+export type {
+  AlertAction,
+  AlertMetric,
+  AlertRule,
+  AlertState,
+  AlertStatus,
+  AlertingOptions,
+  WebhookTarget,
+} from './alerting/types';
 export {
   ActivityReconciliationCapabilityError,
   ActivityReconciliationConflictError,
@@ -42,6 +40,37 @@ export {
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './core/engine';
 export type { EngineCreateOptions, EngineStateNamespace, RecoverAllOptions } from './core/engine';
+export {
+  ActivityAsyncPendingEvent,
+  ActivityCompletedEvent,
+  ActivityFailedEvent,
+  ActivityStartedEvent,
+  AlertFiredEvent,
+  AlertResolvedEvent,
+  AttributesChangedEvent,
+  CheckpointSizeWarningEvent,
+  ConstraintViolatedEvent,
+  DevelopmentWarningEvent,
+  SignalDeliveredEvent,
+  SignalReceivedEvent,
+  StorageSizeReportedEvent,
+  UpdateCompletedEvent,
+  UpdateReceivedEvent,
+  WorkflowCancelledEvent,
+  WorkflowCompletedEvent,
+  WorkflowFailedEvent,
+  WorkflowRecoverySkippedEvent,
+  WorkflowResumedEvent,
+  WorkflowStartedEvent,
+  WorkflowTimedOutEvent,
+} from './core/events';
+export type { TypedEventTarget, WeftEventMap, WorkflowRecoverySkippedReason } from './core/events';
+export {
+  FAULT_CODE_TO_FAILURE_CATEGORY,
+  failureCategoryForFaultCode,
+  isFaultCode,
+} from './core/fault-code.ts';
+export type { FaultCode } from './core/fault-code.ts';
 export {
   DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD,
   DEFAULT_MAX_NESTING_DEPTH,
@@ -176,43 +205,9 @@ export type {
   WorkflowTimelineStatus,
   WorkflowTypeRetentionPolicy,
 } from './core/types';
-// Alerting
-export { AlertManager } from './alerting/index';
-export type {
-  AlertAction,
-  AlertMetric,
-  AlertRule,
-  AlertState,
-  AlertStatus,
-  AlertingOptions,
-  WebhookTarget,
-} from './alerting/types';
-// Events
-export {
-  ActivityAsyncPendingEvent,
-  ActivityCompletedEvent,
-  ActivityFailedEvent,
-  ActivityStartedEvent,
-  AlertFiredEvent,
-  AlertResolvedEvent,
-  AttributesChangedEvent,
-  CheckpointSizeWarningEvent,
-  ConstraintViolatedEvent,
-  DevelopmentWarningEvent,
-  SignalDeliveredEvent,
-  SignalReceivedEvent,
-  StorageSizeReportedEvent,
-  UpdateCompletedEvent,
-  UpdateReceivedEvent,
-  WorkflowCancelledEvent,
-  WorkflowCompletedEvent,
-  WorkflowFailedEvent,
-  WorkflowRecoverySkippedEvent,
-  WorkflowResumedEvent,
-  WorkflowStartedEvent,
-  WorkflowTimedOutEvent,
-} from './core/events';
-export type { TypedEventTarget, WeftEventMap, WorkflowRecoverySkippedReason } from './core/events';
+export { WeftError, isWeftError, isWeftErrorCode } from './core/weft-error.ts';
+export type { WeftErrorCode } from './core/weft-error.ts';
+export { VERSION } from './version.ts';
 // Runtime — portable helpers for cross-runtime code
 export { detectRuntime, hashBytes, hashString, sleep } from './runtime/portable';
 export type { RuntimeKind } from './runtime/portable';
@@ -223,6 +218,8 @@ export { CompressedStorage } from './storage/compressed-storage';
 // Storage — interface, KEYS, and zero-native-dep backends only.
 // Heavy or runtime-bound backends are subpath-only:
 //   weft/storage/sqlite | weft/storage/lmdb | weft/storage/turso
+export { decode, encode, validateCloneable } from './core/codec';
+export { PayloadSizeExceededError } from './core/payload-size';
 export { storageDeleteRange } from './storage/delete-range';
 export type { DeleteRangeOptions } from './storage/delete-range';
 export {
@@ -249,10 +246,6 @@ export type {
   TypedBatchOperation,
   TypedStorage,
 } from './storage/typed-storage';
-// Codec
-export { decode, encode, validateCloneable } from './core/codec';
-// Payload-size cap
-export { PayloadSizeExceededError } from './core/payload-size';
 
 export {
   advanceCheckpoint,
@@ -261,7 +254,6 @@ export {
   deserializeCheckpoint,
   serializeCheckpoint,
 } from './core/checkpoint';
-// Scheduler
 export { Scheduler, calculateBackoff, parseDuration } from './core/scheduler';
 export type { TimerEntry } from './core/types/checkpoint';
 
