@@ -6,6 +6,11 @@
  * @module client/interface
  */
 
+import type {
+  CatalogOperationName,
+  CatalogOperationTypes,
+  WeftClient as CatalogOperations,
+} from '../cli/generated/operation-client.generated.ts';
 import type { StoredStreamChunk } from '../core/context.ts';
 import type { TypedEventTarget, WeftEventMap } from '../core/events.ts';
 import type {
@@ -435,4 +440,36 @@ export interface WeftClient {
 
   /** Retrieve the result of a previously submitted coordinated update. */
   getUpdateResult(updateId: string): Promise<UpdateResult>;
+
+  /**
+   * Typed low-level accessor for the full operation catalog.
+   *
+   * Every catalog operation is reachable as `client.operations['weft.<op>']`,
+   * including server operations the ergonomic surface does not curate (workers,
+   * task queues, task diagnostics, system metrics/registry, checkpoints). New
+   * catalog operations appear here automatically when the snapshot regenerates,
+   * so the client never drifts behind the server.
+   *
+   * @example
+   * ```ts
+   * import { workflow, Engine, MemoryStorage, LocalClient } from 'weft';
+   *
+   * await using engine = new Engine({ storage: new MemoryStorage() });
+   * engine.register(workflow({ name: 'noop' }).execute(async function* () {}));
+   * const client = new LocalClient(engine);
+   * const metrics = await client.operations['weft.system.metrics']({});
+   * void metrics;
+   * ```
+   */
+  readonly operations: CatalogOperations;
+
+  /**
+   * Invoke a single catalog operation by name, with its input and output typed
+   * from the generated catalog. Equivalent to `client.operations[name](input)`
+   * but ergonomic when the operation name is known dynamically.
+   */
+  call<Name extends CatalogOperationName>(
+    name: Name,
+    input: CatalogOperationTypes[Name]['input'],
+  ): Promise<CatalogOperationTypes[Name]['output']>;
 }

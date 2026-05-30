@@ -3,6 +3,7 @@
 
 import {
   createCatalogWeftClient,
+  httpJsonRpcTransport,
   type CatalogWeftClient,
   type WeftClientConnection,
 } from '../operation-client-runtime.ts';
@@ -706,5 +707,8 @@ export type CatalogOperationTypes = {
 export type WeftClient = CatalogWeftClient<CatalogOperationTypes>;
 
 export function createWeftClient(connection: WeftClientConnection = {}): WeftClient {
-  return createCatalogWeftClient<CatalogOperationTypes>(CATALOG_OPERATION_NAMES, connection);
+  return createCatalogWeftClient<CatalogOperationTypes>(
+    CATALOG_OPERATION_NAMES,
+    httpJsonRpcTransport(connection),
+  );
 }
