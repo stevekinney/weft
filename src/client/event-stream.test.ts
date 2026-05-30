@@ -534,6 +534,41 @@ describe('WorkflowEventSubscription', () => {
     subscription.close();
   });
 
+  it('delivers a live frame buffered DURING a failed history fetch (not stranded)', async () => {
+    // Regression: a frame that arrives while the history fetch is in flight is
+    // buffered in #pendingLive. If the fetch then FAILS, that buffered frame must
+    // still be drained — the reconcile drains #pendingLive even on failure, so a
+    // healthy socket that never reconnects does not strand it.
+    const server = new FakeWebSocketServer();
+    const received: WorkflowEvent[] = [];
+    const fetchStarted = Promise.withResolvers<void>();
+    const releaseFetch = Promise.withResolvers<void>();
+    const failingHistory: EventHistoryFetcher = async () => {
+      fetchStarted.resolve();
+      await releaseFetch.promise;
+      throw new Error('history fetch failed');
+    };
+    const subscription = new WorkflowEventSubscription(
+      'ws://test/watch',
+      {},
+      'wf-buffered-fail',
+      failingHistory,
+      (e) => received.push(e),
+      { webSocketFactory: server.factory },
+    );
+
+    // Socket open, fetch in flight: deliver a frame that lands in #pendingLive.
+    await fetchStarted.promise;
+    await waitFor(() => server.sockets.length === 1 && server.latest().opened);
+    server.latest().deliver(event('signal:received', { name: 'buffered' }));
+
+    // Now fail the fetch; the buffered frame must still be delivered.
+    releaseFetch.resolve();
+    await waitFor(() => received.some((e) => e.data?.['name'] === 'buffered'));
+    expect(received.map((e) => e.type)).toContain('signal:received');
+    subscription.close();
+  });
+
   it('does not lose persisted events after a failed catch-up, then live frames, then a successful reconnect', async () => {
     // Regression (Finding 3): when the initial catch-up FETCH fails, live frames
     // delivered afterward must NOT advance the history cursor. The failed fetch

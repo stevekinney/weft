@@ -3,6 +3,7 @@ import type { Engine } from '../core/engine.ts';
 import { createWorkflowHandleEventIterator } from '../core/engine/handle-iteration.ts';
 import { SignalReceivedEvent, WorkflowCompletedEvent } from '../core/events.ts';
 import type { WorkflowEvent, WorkflowState } from '../core/types.ts';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import { createLocalWorkflowEventTail } from './local-event-tail.ts';
 
 function event(type: string, data: Record<string, unknown> = {}): WorkflowEvent {
@@ -58,15 +59,23 @@ class FakeWorkflowHandle extends EventTarget {
 
 function fakeEngine(
   handle: FakeWorkflowHandle,
-  options: { history?: WorkflowEvent[]; getEventsError?: Error } = {},
+  options: {
+    history?: WorkflowEvent[];
+    getEventsError?: Error;
+    onFetchStart?: () => void;
+    gate?: Promise<void>;
+  } = {},
 ): Engine {
   // The local tail calls `engine.getHandle(id)` and `engine.getEvents(id)`;
   // everything else is unused. A test-only structural stand-in keeps the test
   // focused on the tail's catch-up/eager-attach behavior rather than spinning a
-  // full engine.
+  // full engine. `onFetchStart`/`gate` let a test deterministically buffer live
+  // frames while the history fetch is in flight.
   return {
     getHandle: () => handle,
     getEvents: async () => {
+      options.onFetchStart?.();
+      if (options.gate) await options.gate;
       if (options.getEventsError) throw options.getEventsError;
       return options.history ?? [];
     },
@@ -217,33 +226,72 @@ describe('createLocalWorkflowEventTail', () => {
   });
 
   it('dedups the overlap between replayed history and buffered live frames', async () => {
-    // History already contains the live frame that landed during the fetch, so
-    // it must be delivered exactly once. The history record's `data` matches how
-    // `SignalReceivedEvent` serializes (own properties minus `type`, `undefined`
-    // dropped by JSON), so `eventsEqual` recognizes the overlap.
+    // History already contains the live frame that lands during the fetch, so it
+    // must be delivered exactly once. The fetch is gated so the frame is provably
+    // buffered in #pendingLive before catch-up drains. The history record's `data`
+    // matches how `serializeEngineEvent` renders a live SignalReceivedEvent (own
+    // props minus `type`; `payload: undefined` dropped by JSON; the DOM Event base
+    // contributes `isTrusted`), so the overlap is recognized.
     const handle = new FakeWorkflowHandle();
+    const fetchStarted = Promise.withResolvers<void>();
+    const releaseFetch = Promise.withResolvers<void>();
     const tail = createLocalWorkflowEventTail(
       fakeEngine(handle, {
         history: [
           event('workflow:started'),
-          // Matches how `serializeEngineEvent` renders a live SignalReceivedEvent
-          // (own enumerable props minus `type`; `payload: undefined` is dropped
-          // by JSON; the DOM Event base contributes `isTrusted`).
           event('signal:received', { workflowId: 'wf-overlap', signalName: 'a', isTrusted: false }),
         ],
+        onFetchStart: () => fetchStarted.resolve(),
+        gate: releaseFetch.promise,
       }),
       'wf-overlap',
     );
 
-    // Dispatch the overlapping live frame BEFORE catch-up finishes (it is
-    // buffered) plus a genuinely new one.
+    // Wait until the catch-up fetch is in flight, then dispatch the overlapping
+    // live frame (buffered in #pendingLive) plus a genuinely new completion.
+    await fetchStarted.promise;
     handle.dispatchEvent(new SignalReceivedEvent('wf-overlap', 'a', undefined));
     handle.dispatchEvent(new WorkflowCompletedEvent('wf-overlap', 'ok', 1));
+    // Let the pump cycle the dispatched events into #pendingLive before the
+    // catch-up drains (the engine iterator delivers them across microtasks).
+    await sleepForTesting(5);
+    releaseFetch.resolve();
 
     const seen = await drain(tail);
     // The overlapping signal appears once (deduped), the new completion once.
     expect(seen.filter((t) => t === 'signal:received')).toHaveLength(1);
     expect(seen).toContain('workflow:started');
+    expect(seen).toContain('workflow:completed');
+  });
+
+  it('does not drop a legitimate repeated signal delivered after catch-up', async () => {
+    // Regression (Copilot follow-up): the post-catch-up path must NOT keep
+    // deduping against history. A signal identical to one already in the
+    // replayed history, but delivered as a fresh live event after whenConnected,
+    // is a genuinely new occurrence and must be delivered — not dropped as a
+    // false overlap (the HTTP tail only dedups the in-flight fetch window).
+    const handle = new FakeWorkflowHandle();
+    const tail = createLocalWorkflowEventTail(
+      fakeEngine(handle, {
+        history: [
+          event('signal:received', {
+            workflowId: 'wf-repeat',
+            signalName: 'tick',
+            isTrusted: false,
+          }),
+        ],
+      }),
+      'wf-repeat',
+    );
+
+    await tail.whenConnected();
+    // A fresh, identical signal AFTER catch-up — must be delivered, not deduped.
+    handle.dispatchEvent(new SignalReceivedEvent('wf-repeat', 'tick', undefined));
+    handle.dispatchEvent(new WorkflowCompletedEvent('wf-repeat', 'ok', 1));
+
+    const seen = await drain(tail);
+    // Two signal:received: one replayed from history, one fresh live repeat.
+    expect(seen.filter((t) => t === 'signal:received')).toHaveLength(2);
     expect(seen).toContain('workflow:completed');
   });
 

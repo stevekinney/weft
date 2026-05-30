@@ -21,7 +21,7 @@
 import type { Engine } from '../core/engine.ts';
 import { WORKFLOW_TERMINAL_EVENT_TYPES } from '../core/events/workflow-events.ts';
 import type { WorkflowEvent } from '../core/types.ts';
-import { eventsEqual } from './event-stream-transport.ts';
+import { dropOverlappingLiveFrames } from './event-stream-transport.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
 
 /**
@@ -62,18 +62,15 @@ export function createLocalWorkflowEventTail(
   const iterator = handle[Symbol.asyncIterator]();
 
   // `output` holds events ready for the consumer. Live engine events are routed
-  // through `deliverLive`, which buffers them until the history catch-up has run
-  // and then deduplicates each against the replayed history (the overlap window)
-  // before delivering — so a single sequential router owns the buffer/dedup and
-  // there is no flag race between the history fetch and the live pump.
+  // through `deliverLive`, which buffers them only while the history catch-up is
+  // in flight; once catch-up has run, the buffered frames are reconciled against
+  // history (the overlap window) exactly once and every subsequent live frame is
+  // emitted directly. Mirrors the HTTP tail, which likewise dedups only frames
+  // buffered during the fetch — never all future live frames, so a legitimate
+  // repeated signal/activity after catch-up is not dropped as a false overlap.
   const output: WorkflowEvent[] = [];
   const pendingLive: WorkflowEvent[] = [];
   let catchUpDone = false;
-  // History entries still eligible to cancel a live frame. Each can dedup at
-  // most one live frame, so two structurally identical events where only one
-  // overlaps history keep the genuinely new one.
-  let overlapHistory: WorkflowEvent[] = [];
-  let overlapConsumed: boolean[] = [];
   let terminated = false;
   let pumpDone = false;
   let pumpError: unknown = null;
@@ -95,21 +92,13 @@ export function createLocalWorkflowEventTail(
     if (WORKFLOW_TERMINAL_EVENT_TYPES.has(event.type)) terminated = true;
   }
 
-  // Deliver a live engine event: buffer while catch-up is in flight, otherwise
-  // dedup against any still-unconsumed replayed history entry (dropping the
-  // overlap) before emitting. Routing live frames pumped after catch-up through
-  // the same dedup closes the race where an event queued in the engine iterator
-  // is only pumped after the history fetch resolved.
+  // Deliver a live engine event: buffer while the catch-up is in flight (the
+  // `connected` IIFE reconciles the buffer against history once it resolves);
+  // after catch-up, emit directly with no further dedup so legitimate repeated
+  // events are never dropped.
   function deliverLive(event: WorkflowEvent): void {
     if (!catchUpDone) {
       pendingLive.push(event);
-      return;
-    }
-    const overlapIndex = overlapHistory.findIndex(
-      (historic, index) => !overlapConsumed[index] && eventsEqual(historic, event),
-    );
-    if (overlapIndex !== -1) {
-      overlapConsumed[overlapIndex] = true;
       return;
     }
     emit(event);
@@ -167,20 +156,20 @@ export function createLocalWorkflowEventTail(
     }
     if (closed) return;
 
-    overlapHistory = history;
-    overlapConsumed = Array.from(history, () => false);
     for (const event of history) {
       emit(event);
       if (terminated) break;
     }
 
-    // Flip to live delivery, then drain the frames buffered during the fetch
-    // through the same dedup path so the buffered overlap is dropped.
+    // Drain the frames buffered during the fetch, dropping the overlap with the
+    // history just replayed (the consuming dedup keeps a genuinely-new repeat),
+    // then flip to direct live delivery for all subsequent frames.
     const buffered = pendingLive.splice(0, pendingLive.length);
+    const fresh = terminated ? [] : dropOverlappingLiveFrames(history, buffered);
     catchUpDone = true;
-    for (const live of buffered) {
+    for (const live of fresh) {
       if (terminated) break;
-      deliverLive(live);
+      emit(live);
     }
     wake();
   })();

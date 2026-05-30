@@ -15,6 +15,11 @@ import type { WorkflowEvent } from '../core/types.ts';
  * terminal state, the server closes the stream, or {@link WorkflowEventTail.close}
  * is called.
  *
+ * The tail is **single-consumer**: both transports drain one shared buffer, so a
+ * second concurrent `for await` over the same tail would steal events from the
+ * first and can leave a consumer hanging. Open a fresh tail per consumer
+ * (`client.tail(id)` / `handle.tail()`) instead of iterating one tail twice.
+ *
  * @example
  * ```ts
  * import { workflow, Engine, MemoryStorage, LocalClient, type WorkflowEventTail } from 'weft';

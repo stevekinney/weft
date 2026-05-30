@@ -313,13 +313,13 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     // them yet. Emitting here would advance the watermark against a dead socket's
     // snapshot and skip gap events.
     if (generation !== this.#connectGeneration) return false;
-    if (!fetchSucceeded) return false;
 
     // Replay history past the cursor. `getEvents` returns only the records that
     // survive event-log compaction, so on a long-running workflow the array can
     // be *re-based* shorter than the cursor; in that case replay the whole
     // surviving suffix and lean on the consuming overlap dedup (and at-least-once
-    // re-delivery) rather than slicing past the array end and skipping events.
+    // re-delivery) rather than slicing past the array end and skipping events. On
+    // a failed fetch `history` is empty, so nothing is replayed here.
     const compactionRebased = history.length < this.#historyWatermark;
     const newHistory = compactionRebased ? history : history.slice(this.#historyWatermark);
     for (const event of newHistory) {
@@ -329,7 +329,8 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
 
     // Drain the live frames buffered during the fetch, dropping the overlap with
     // the history just replayed; the rest are genuinely new and are emitted in
-    // order.
+    // order. This runs even on a failed fetch so frames buffered during it are
+    // not stranded (with empty history they all pass through as new).
     const buffered = this.#pendingLive;
     this.#pendingLive = [];
     for (const live of dropOverlappingLiveFrames(newHistory, buffered)) {
@@ -337,12 +338,14 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
       this.#emit(live);
     }
 
-    // Advance the cursor to the reconciled array length — never to the delivered
-    // count, which can exceed it after compaction-rebased duplicate replays or
-    // between-catch-up live frames. This guarantees the cursor never overshoots
-    // the surviving history, so the next slice cannot skip newly persisted events.
-    this.#historyWatermark = history.length;
-    return true;
+    // Only a successful fetch advances the cursor. A failed fetch leaves it
+    // untouched so the next successful fetch replays from before any gap the
+    // failure missed and recovers it. The cursor is the reconciled array length —
+    // never the delivered count, which can exceed it after compaction-rebased
+    // duplicate replays or between-catch-up live frames — so it never overshoots
+    // the surviving history and the next slice cannot skip newly persisted events.
+    if (fetchSucceeded) this.#historyWatermark = history.length;
+    return fetchSucceeded;
   }
 
   #deliverLive(event: WorkflowEvent): void {
