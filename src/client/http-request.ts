@@ -1,3 +1,4 @@
+import { resolveConnection } from '../connection.ts';
 import { failureCategoryForFaultCode, isFaultCode, type FaultCode } from '../core/fault-code.ts';
 import type { FailureCategory } from '../core/types/identity.ts';
 import { WeftError } from '../core/weft-error.ts';
@@ -32,6 +33,34 @@ export interface HttpClientOptions {
   token?: string;
   /** Optional headers to include on every request (e.g. auth tokens). */
   headers?: Record<string, string>;
+}
+
+/**
+ * Resolve {@link HttpClientOptions} into the concrete `baseUrl` and request
+ * headers an {@link HttpClient} uses. With no `baseUrl`/`token`, the server
+ * address and bearer token come from {@link resolveConnection} (explicit
+ * options, then `WEFT_ADDR`/`WEFT_TOKEN`, then the `~/.weft/config` profile,
+ * then `http://localhost:7233`). The CLI-only run lockfile is never consulted.
+ * A caller-supplied `headers.Authorization` always takes precedence over a
+ * resolved token; pass an empty `token` to suppress a resolved token entirely.
+ */
+export function resolveHttpClientConnection(options: HttpClientOptions): {
+  baseUrl: string;
+  headers: Record<string, string>;
+} {
+  const connection = resolveConnection({
+    includeRunLockfile: false,
+    ...(options.baseUrl !== undefined ? { server: options.baseUrl } : {}),
+    ...(options.token !== undefined ? { token: options.token } : {}),
+  });
+  const baseUrl = connection.server.toString().replace(/\/+$/, '');
+
+  const headers = new Headers(options.headers);
+  if (connection.token !== undefined && connection.token !== '' && !headers.has('Authorization')) {
+    headers.set('Authorization', `Bearer ${connection.token}`);
+  }
+
+  return { baseUrl, headers: Object.fromEntries(headers.entries()) };
 }
 
 /**

@@ -12,6 +12,7 @@ import type {
   RetentionOverview,
   ReviewListEntry,
   ReviewListFilter,
+  SignalDeliveryOptions,
   SubmitReviewOptions,
 } from '../core/types.ts';
 import { HttpClientError, request } from './http-request.ts';
@@ -218,4 +219,43 @@ export async function getUpdateResultRequest(
   if (response.result !== undefined) out.result = response.result;
   if (response.error !== undefined) out.error = response.error;
   return out;
+}
+
+/** Send a named signal (with optional payload + delivery options) to a workflow. */
+export async function signalWorkflowRequest(
+  context: HttpClientRequestContext,
+  id: string,
+  name: string,
+  payload?: unknown,
+  options?: SignalDeliveryOptions,
+): Promise<void> {
+  await request<unknown>(
+    context.baseUrl,
+    `/workflows/${encodeURIComponent(id)}/signal/${encodeURIComponent(name)}`,
+    context.headers,
+    {
+      method: 'POST',
+      body: JSON.stringify({ payload, ...options }),
+    },
+  );
+}
+
+/**
+ * Query a named read-only accessor on a workflow. A no-input query is a GET;
+ * an input payload is sent as a POST body.
+ */
+export async function queryWorkflowRequest(
+  context: HttpClientRequestContext,
+  id: string,
+  name: string,
+  input?: unknown,
+): Promise<unknown> {
+  const path = `/workflows/${encodeURIComponent(id)}/query/${encodeURIComponent(name)}`;
+  const response = await request<{ result: unknown }>(
+    context.baseUrl,
+    path,
+    context.headers,
+    input !== undefined ? { method: 'POST', body: JSON.stringify({ input }) } : undefined,
+  );
+  return response?.result;
 }

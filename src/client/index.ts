@@ -11,4 +11,11 @@
 export { HttpClient } from './http-client.ts';
 export { HttpClientError } from './http-request.ts';
 export type { HttpClientOptions } from './http-request.ts';
-export type { ClientHandle, ClientScheduleHandle, UpdateResult, WeftClient } from './interface.ts';
+export type {
+  ClientHandle,
+  ClientScheduleHandle,
+  KnownWorkflowName,
+  UnknownNameWhenRegistryEmpty,
+  UpdateResult,
+  WeftClient,
+} from './interface.ts';

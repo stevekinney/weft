@@ -1,4 +1,8 @@
 import { z } from 'zod';
+import type {
+  KnownWorkflowName as KnownWorkflowNameFromClientEntry,
+  UnknownNameWhenRegistryEmpty as UnknownNameWhenRegistryEmptyFromClientEntry,
+} from '../client/index.ts';
 import {
   activity,
   Context,
@@ -10,6 +14,8 @@ import {
   type AnyWorkflowDefinition,
   type ClientHandle,
   type InferActivityEntry,
+  type KnownWorkflowName,
+  type UnknownNameWhenRegistryEmpty,
   type WeftClient,
   type WorkflowContext,
   type WorkflowDefinition,
@@ -211,6 +217,37 @@ async function verifyModuleAugmentedClientSchedule(): Promise<void> {
   await typedClient.schedule('moduleAugmentedWelcome', { name: 'Grace' }, '0 9 * * 1');
 }
 void verifyModuleAugmentedClientSchedule;
+
+// Regression guard for the review finding: the helper types that appear in the
+// public `WeftClient.start`/`schedule` overload signatures must be importable
+// by consumers from the same public specifiers that expose `WeftClient`. They
+// are re-exported from both `weft` (this file's `../index.ts`) and
+// `weft/client` (`../client/index.ts`); if either re-export is dropped, the
+// imports above stop resolving and this file fails to typecheck. The aliases
+// must also resolve to the same type from both entrypoints — a single source
+// of truth, not two divergent declarations.
+type KnownWorkflowNameEntrypointsAgree = Equals<
+  KnownWorkflowName,
+  KnownWorkflowNameFromClientEntry
+>;
+type UnknownNameEntrypointsAgree = Equals<
+  UnknownNameWhenRegistryEmpty<'unknown-name'>,
+  UnknownNameWhenRegistryEmptyFromClientEntry<'unknown-name'>
+>;
+const knownWorkflowNameEntrypointsAgree: KnownWorkflowNameEntrypointsAgree = true;
+const unknownNameEntrypointsAgree: UnknownNameEntrypointsAgree = true;
+void knownWorkflowNameEntrypointsAgree;
+void unknownNameEntrypointsAgree;
+
+// Because `WorkflowRegistry` is module-augmented above, `KnownWorkflowName`
+// resolves to a non-empty union (the augmented name is assignable) and the
+// permissive `UnknownNameWhenRegistryEmpty<TName>` gate collapses to `never`,
+// matching the engine's `UnknownWorkflowNameWhenDefaultRegistryIsEmpty` gate.
+const augmentedNameIsKnown: 'moduleAugmentedWelcome' extends KnownWorkflowName ? true : never =
+  true;
+const registryEmptyGateIsClosed: Equals<UnknownNameWhenRegistryEmpty<'anything'>, never> = true;
+void augmentedNameIsKnown;
+void registryEmptyGateIsClosed;
 
 // Activity name brand-rejection at the `engine.register` boundary was
 // intentionally removed when the global `ActivityTypes` augmentation went

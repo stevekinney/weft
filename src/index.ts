@@ -466,7 +466,13 @@ export type {
 
 export { HttpClient, HttpClientError } from './client/index';
 export type { HttpClientOptions } from './client/index';
-export type { ClientHandle, UpdateResult, WeftClient } from './client/interface';
+export type {
+  ClientHandle,
+  KnownWorkflowName,
+  UnknownNameWhenRegistryEmpty,
+  UpdateResult,
+  WeftClient,
+} from './client/interface';
 export { LocalClient } from './client/local';
 
 export {
@@ -476,33 +482,4 @@ export {
 } from './connection';
 export type { ConnectionOptions, ResolvedConnection } from './connection';
 
-export { collectDiagnostics } from './diagnostics/doctor';
-export {
-  formatBytes,
-  formatDiagnosticReport,
-  formatDuration,
-  formatVersionCheckReport,
-} from './diagnostics/format';
-export { MemoryProfiler, analyzeStability, linearRegression } from './diagnostics/memory-profiler';
-export type {
-  MemoryProfile,
-  MemorySample,
-  StabilityOptions,
-  StabilityResult,
-} from './diagnostics/memory-profiler';
-export { generateRecommendations } from './diagnostics/recommendations';
-export type {
-  DatabaseHealth,
-  DiagnosticReport,
-  HealthStatus,
-  LargestCheckpoint,
-  LongestRunningWorkflow,
-  QueueStatistics,
-  Recommendation,
-  RecommendationSeverity,
-  VersionCheckReport,
-  WorkflowStatistics,
-  WorkflowStatusCounts,
-  WorkflowTypeReport,
-} from './diagnostics/types';
-export { runVersionCheck } from './diagnostics/version-check';
+export * from './diagnostics';

@@ -1,4 +1,3 @@
-import { resolveConnection } from '../connection.ts';
 import type { StoredStreamChunk } from '../core/context.ts';
 import type {
   AttributeFilterKey,
@@ -46,14 +45,16 @@ import {
   getUpdateResultRequest,
   listReviewRequests,
   purgeWorkflowRequests,
+  queryWorkflowRequest,
   signalAllWorkflowRequests,
+  signalWorkflowRequest,
   submitCoordinatedUpdateRequest,
   submitReviewRequest,
   tagAllWorkflowRequests,
   untagAllWorkflowRequests,
 } from './http-client-requests.ts';
 import { HttpHandle } from './http-handle.ts';
-import { request, type HttpClientOptions } from './http-request.ts';
+import { request, resolveHttpClientConnection, type HttpClientOptions } from './http-request.ts';
 import { HttpScheduleHandle } from './http-schedule-handle.ts';
 import type {
   ClientHandle,
@@ -65,22 +66,7 @@ import type {
 } from './interface.ts';
 import { buildScheduleListSearchParams } from './schedule-list-search-params.ts';
 import { buildWorkflowListSearchParams } from './search-params.ts';
-import { buildStartBody } from './start-body.ts';
-
-/**
- * Translate a schedule recurrence specification into the wire body fields the
- * REST/JSON-RPC schedule operations accept. A bare string is sent as
- * `cronExpression`; an interval spec is sent as `every`.
- */
-function scheduleSpecToWireFields(spec: string | ScheduleSpec): Record<string, unknown> {
-  if (typeof spec === 'string') {
-    return { cronExpression: spec };
-  }
-  if (spec.every !== undefined) {
-    return { every: spec.every };
-  }
-  return { cronExpression: spec.cron };
-}
+import { buildStartBody, scheduleSpecToWireFields } from './start-body.ts';
 
 /**
  * Remote Weft client backed by HTTP requests.
@@ -131,22 +117,9 @@ export class HttpClient implements WeftClient {
   readonly headers: Record<string, string>;
 
   constructor(options: HttpClientOptions = {}) {
-    const connection = resolveConnection({
-      includeRunLockfile: false,
-      ...(options.baseUrl !== undefined ? { server: options.baseUrl } : {}),
-      ...(options.token !== undefined ? { token: options.token } : {}),
-    });
-    this.baseUrl = connection.server.toString().replace(/\/+$/, '');
-
-    const headers = new Headers(options.headers);
-    if (
-      connection.token !== undefined &&
-      connection.token !== '' &&
-      !headers.has('Authorization')
-    ) {
-      headers.set('Authorization', `Bearer ${connection.token}`);
-    }
-    this.headers = Object.fromEntries(headers.entries());
+    const connection = resolveHttpClientConnection(options);
+    this.baseUrl = connection.baseUrl;
+    this.headers = connection.headers;
   }
 
   async start<TName extends KnownWorkflowName>(
@@ -291,16 +264,7 @@ export class HttpClient implements WeftClient {
     payload?: unknown,
     options?: SignalDeliveryOptions,
   ): Promise<void> {
-    const name = messageName(nameOrDefinition);
-    await request<unknown>(
-      this.baseUrl,
-      `/workflows/${encodeURIComponent(id)}/signal/${encodeURIComponent(name)}`,
-      this.headers,
-      {
-        method: 'POST',
-        body: JSON.stringify({ payload, ...options }),
-      },
-    );
+    await signalWorkflowRequest(this, id, messageName(nameOrDefinition), payload, options);
   }
 
   async query<TOutput>(id: string, name: QueryDefinition<void, TOutput>): Promise<TOutput>;
@@ -311,25 +275,7 @@ export class HttpClient implements WeftClient {
   ): Promise<TOutput>;
   async query(id: string, name: string, input?: unknown): Promise<unknown>;
   async query(id: string, nameOrDefinition: MessageName, input?: unknown): Promise<unknown> {
-    const name = messageName(nameOrDefinition);
-    if (input !== undefined) {
-      const response = await request<{ result: unknown }>(
-        this.baseUrl,
-        `/workflows/${encodeURIComponent(id)}/query/${encodeURIComponent(name)}`,
-        this.headers,
-        {
-          method: 'POST',
-          body: JSON.stringify({ input }),
-        },
-      );
-      return response?.result;
-    }
-    const response = await request<{ result: unknown }>(
-      this.baseUrl,
-      `/workflows/${encodeURIComponent(id)}/query/${encodeURIComponent(name)}`,
-      this.headers,
-    );
-    return response?.result;
+    return queryWorkflowRequest(this, id, messageName(nameOrDefinition), input);
   }
 
   async update(
