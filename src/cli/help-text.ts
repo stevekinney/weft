@@ -280,8 +280,9 @@ Options:
 
 Connection resolution:
   Live HTTP fetches use --server and --token when provided, then WEFT_ADDR and
-  WEFT_TOKEN, then the ~/.weft/config profile, then http://localhost:7233.
-  Vendored snapshots supplied with --from do not read connection settings.
+  WEFT_TOKEN, then the ~/.weft/config profile, then the run lockfile written by
+  a local 'weft serve', then http://localhost:7233. Vendored snapshots supplied
+  with --from do not read connection settings.
 
 Exit codes:
   0   Success or no changes needed (file is up to date)

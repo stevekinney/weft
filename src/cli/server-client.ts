@@ -16,7 +16,7 @@
  * @module cli/server-client
  */
 
-import type { CliConnectionOptions } from './connection.ts';
+import type { ConnectionOptions } from '../connection.ts';
 import {
   CATALOG_OPERATION_NAMES,
   type CatalogOperationName,
@@ -39,7 +39,7 @@ export type CatalogCallResult<Output> =
  * than a runtime surprise.
  */
 export async function callCatalogOperation<Name extends CatalogOperationName>(
-  connection: CliConnectionOptions,
+  connection: ConnectionOptions,
   operationName: Name,
   input: CatalogOperationTypes[Name]['input'],
 ): Promise<CatalogCallResult<CatalogOperationTypes[Name]['output']>> {

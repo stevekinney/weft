@@ -14,7 +14,7 @@
  * @module cli/tail
  */
 
-import { resolveCliConnection, type CliConnectionOptions } from './connection.ts';
+import { resolveConnection, type ConnectionOptions } from '../connection.ts';
 import { color, messageOf } from './output.ts';
 import type { CommandOutput, TailCommand } from './types.ts';
 
@@ -201,14 +201,14 @@ export async function executeTail(command: TailCommand): Promise<CommandOutput> 
     };
   }
 
-  const connection: CliConnectionOptions = {
+  const connection: ConnectionOptions = {
     ...(command.server === undefined ? {} : { server: command.server }),
     ...(command.token === undefined ? {} : { token: command.token }),
     ...(command.profile === undefined ? {} : { profile: command.profile }),
   };
-  let resolved: Awaited<ReturnType<typeof resolveCliConnection>>;
+  let resolved: ReturnType<typeof resolveConnection>;
   try {
-    resolved = await resolveCliConnection(connection);
+    resolved = resolveConnection(connection);
   } catch (error) {
     return {
       stdout: '',

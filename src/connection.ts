@@ -141,16 +141,59 @@ type WeftRunLockfile = {
 export function resolveConnection(options: ConnectionOptions = {}): ResolvedConnection {
   const context = resolveConnectionContext(options);
   const server = resolveServerString(context);
-  // A profile or lockfile token is only safe to apply when an explicit option
-  // or `WEFT_ADDR` did not steer the request to a different server.
-  const serverIsOverridden = options.server !== undefined || Bun.env['WEFT_ADDR'] !== undefined;
-  const fallbackProfile = serverIsOverridden ? undefined : context.profile;
+  const fallbackProfile = profileForToken(context, server);
   const token = resolveToken(options.token ?? Bun.env['WEFT_TOKEN'], fallbackProfile);
 
   return {
     server: new URL(server),
     ...(token === undefined ? {} : { token }),
   };
+}
+
+/**
+ * Decide whether the selected profile's token may back the resolved
+ * connection. A profile token is bound to the profile's own server, so it is
+ * only applied when the request is actually heading there.
+ *
+ * When no explicit `server` option or `WEFT_ADDR` overrides the address, the
+ * profile is its own destination, so its token applies. When an override is
+ * present, the token applies only if the override points at the same
+ * destination as the profile's `server`; an override to a different host (or a
+ * profile with no `server` to compare against) drops the token so credentials
+ * never leak to a server the profile did not name.
+ */
+function profileForToken(
+  context: ConnectionContext,
+  resolvedServer: string,
+): WeftProfile | undefined {
+  if (context.profile === undefined) return undefined;
+  const serverIsOverridden =
+    context.options.server !== undefined || Bun.env['WEFT_ADDR'] !== undefined;
+  if (!serverIsOverridden) return context.profile;
+  const profileServer = context.profile.server;
+  if (profileServer === undefined) return undefined;
+  return sameDestination(resolvedServer, profileServer) ? context.profile : undefined;
+}
+
+/**
+ * Compare two server strings by destination (origin plus normalized path),
+ * ignoring trailing slashes, query strings, and fragments. Malformed URLs fall
+ * back to an exact string comparison so a parse failure never silently treats
+ * two distinct destinations as equal.
+ */
+function sameDestination(a: string, b: string): boolean {
+  let left: URL;
+  let right: URL;
+  try {
+    left = new URL(a);
+    right = new URL(b);
+  } catch {
+    return a === b;
+  }
+  return (
+    left.origin === right.origin &&
+    left.pathname.replace(/\/+$/, '') === right.pathname.replace(/\/+$/, '')
+  );
 }
 
 type ConnectionContext = {

@@ -15,7 +15,7 @@
  * @module cli/server-commands
  */
 
-import { resolveCliConnection } from './connection.ts';
+import { resolveConnection } from '../connection.ts';
 import { CATALOG_OPERATION_NAMES } from './generated/operation-client.generated.ts';
 import { messageOf, prettyJson } from './output.ts';
 import type { CommandOutput, ServerCommand } from './types.ts';
@@ -26,7 +26,7 @@ const HEALTH_POLL_INTERVAL_MS = 250;
 export async function executeServer(command: ServerCommand): Promise<CommandOutput> {
   let resolved: { server: URL; token: string | undefined };
   try {
-    resolved = await resolveServerConnection(command);
+    resolved = resolveServerConnection(command);
   } catch (error) {
     return {
       stdout: '',
@@ -39,10 +39,11 @@ export async function executeServer(command: ServerCommand): Promise<CommandOutp
   return executeServerInfo(command, server, token);
 }
 
-async function resolveServerConnection(
-  command: ServerCommand,
-): Promise<{ server: URL; token: string | undefined }> {
-  const connection = await resolveCliConnection({
+function resolveServerConnection(command: ServerCommand): {
+  server: URL;
+  token: string | undefined;
+} {
+  const connection = resolveConnection({
     ...(command.server === undefined ? {} : { server: command.server }),
     ...(command.token === undefined ? {} : { token: command.token }),
     ...(command.profile === undefined ? {} : { profile: command.profile }),

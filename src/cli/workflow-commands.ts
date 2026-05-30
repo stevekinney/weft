@@ -11,7 +11,7 @@
  * @module cli/workflow-commands
  */
 
-import type { CliConnectionOptions } from './connection.ts';
+import type { ConnectionOptions } from '../connection.ts';
 import {
   confirmDestructive,
   formatTimestamp,
@@ -33,7 +33,7 @@ type WorkflowSummaryRow = {
 
 /** Execute any `weft workflow <action>` command against a server. */
 export async function executeWorkflow(command: WorkflowCommand): Promise<CommandOutput> {
-  const connection: CliConnectionOptions = {
+  const connection: ConnectionOptions = {
     ...(command.server === undefined ? {} : { server: command.server }),
     ...(command.token === undefined ? {} : { token: command.token }),
     ...(command.profile === undefined ? {} : { profile: command.profile }),
@@ -83,7 +83,7 @@ function extractItems(output: unknown): unknown[] {
 
 async function executeWorkflowList(
   command: Extract<WorkflowCommand, { action: 'ls' }>,
-  connection: CliConnectionOptions,
+  connection: ConnectionOptions,
 ): Promise<CommandOutput> {
   const result = await callCatalogOperation(connection, 'weft.workflows.list', {
     ...(command.type === undefined ? {} : { type: command.type }),
@@ -128,7 +128,7 @@ async function executeWorkflowList(
 
 async function executeWorkflowGet(
   command: GetOrEventsCommand,
-  connection: CliConnectionOptions,
+  connection: ConnectionOptions,
 ): Promise<CommandOutput> {
   const result = await callCatalogOperation(connection, 'weft.workflows.get', {
     workflowId: command.workflowId,
@@ -139,7 +139,7 @@ async function executeWorkflowGet(
 
 async function executeWorkflowEvents(
   command: GetOrEventsCommand,
-  connection: CliConnectionOptions,
+  connection: ConnectionOptions,
 ): Promise<CommandOutput> {
   const result = await callCatalogOperation(connection, 'weft.workflows.events.list', {
     workflowId: command.workflowId,
@@ -188,7 +188,7 @@ function parseJson(source: string): { ok: true; value: unknown } | { ok: false; 
 
 async function executeWorkflowStart(
   command: Extract<WorkflowCommand, { action: 'start' }>,
-  connection: CliConnectionOptions,
+  connection: ConnectionOptions,
 ): Promise<CommandOutput> {
   const parsed = await readInlineInput(command.input, command.inputFile);
   if (!parsed.ok) {
@@ -212,7 +212,7 @@ async function executeWorkflowStart(
 
 async function executeWorkflowCancel(
   command: Extract<WorkflowCommand, { action: 'cancel' }>,
-  connection: CliConnectionOptions,
+  connection: ConnectionOptions,
 ): Promise<CommandOutput> {
   if (command.dryRun) {
     const stdout = command.json
@@ -250,7 +250,7 @@ async function executeWorkflowCancel(
 
 async function executeWorkflowSignal(
   command: Extract<WorkflowCommand, { action: 'signal' }>,
-  connection: CliConnectionOptions,
+  connection: ConnectionOptions,
 ): Promise<CommandOutput> {
   const parsed = await readInlineInput(command.input, command.inputFile);
   if (!parsed.ok) {

@@ -130,6 +130,14 @@ describe('codegen help text', () => {
     expect(CODEGEN_HELP_TEXT).toContain('Cannot be');
     expect(CODEGEN_HELP_TEXT).toContain('combined with --from');
   });
+
+  it('documents the run lockfile fallback that resolveConnection consults for the CLI', () => {
+    // `executeCodegen` calls `resolveConnection` without disabling the lockfile,
+    // so the documented resolution order must include it between the profile
+    // and the localhost default.
+    expect(CODEGEN_HELP_TEXT).toContain('run lockfile');
+    expect(CODEGEN_HELP_TEXT).toContain('http://localhost:7233');
+  });
 });
 
 describe('composeRegistryUrl', () => {
@@ -512,6 +520,46 @@ describe('executeCodegen HTTP fetch path', () => {
     } finally {
       if (priorHome === undefined) delete Bun.env['WEFT_HOME'];
       else Bun.env['WEFT_HOME'] = priorHome;
+      if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
+      else Bun.env['WEFT_ADDR'] = priorAddress;
+    }
+  });
+
+  it('reports a malformed --server as a CommandOutput, not a thrown TypeError', async () => {
+    const dir = makeTempDir();
+    const out = join(dir, 'weft.d.ts');
+    const priorAddress = Bun.env['WEFT_ADDR'];
+    delete Bun.env['WEFT_ADDR'];
+    try {
+      // `resolveConnection` constructs `new URL(server)`, which throws a
+      // `TypeError` for a malformed value. `executeCodegen` must translate that
+      // into a clean diagnostic rather than rejecting.
+      const result = await executeCodegen({
+        server: 'not a url',
+        out,
+        timeoutMs: 30_000,
+      });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('codegen: invalid server URL');
+      expect(result.stderr).toContain('not a url');
+      expect(existsSync(out)).toBe(false);
+    } finally {
+      if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
+      else Bun.env['WEFT_ADDR'] = priorAddress;
+    }
+  });
+
+  it('reports a malformed WEFT_ADDR as a CommandOutput diagnostic', async () => {
+    const dir = makeTempDir();
+    const out = join(dir, 'weft.d.ts');
+    const priorAddress = Bun.env['WEFT_ADDR'];
+    Bun.env['WEFT_ADDR'] = ':::not-a-url:::';
+    try {
+      const result = await executeCodegen({ out, timeoutMs: 30_000 });
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('codegen: invalid server URL');
+      expect(existsSync(out)).toBe(false);
+    } finally {
       if (priorAddress === undefined) delete Bun.env['WEFT_ADDR'];
       else Bun.env['WEFT_ADDR'] = priorAddress;
     }

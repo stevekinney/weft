@@ -146,6 +146,83 @@ describe('resolveConnection', () => {
     }
   });
 
+  it('keeps the profile token when an explicit server names the same destination', () => {
+    const snapshot = snapshotEnv('WEFT_ADDR', 'WEFT_TOKEN', 'WEFT_HOME');
+    const home = makeHome();
+    Bun.env['WEFT_HOME'] = home;
+    delete Bun.env['WEFT_ADDR'];
+    delete Bun.env['WEFT_TOKEN'];
+    writeConfig(
+      home,
+      [
+        'default_profile = "main"',
+        '',
+        '[profiles.main]',
+        'server = "http://profile.test:9000"',
+        'token = "profile-token"',
+      ].join('\n'),
+    );
+    try {
+      // A trailing slash is the same destination as the profile's server, so
+      // the profile token must still apply.
+      const connection = resolveConnection({ server: 'http://profile.test:9000/' });
+      expect(connection.server.toString()).toBe('http://profile.test:9000/');
+      expect(connection.token).toBe('profile-token');
+    } finally {
+      restoreEnv(snapshot);
+    }
+  });
+
+  it('drops the profile token when an explicit server names a different destination', () => {
+    const snapshot = snapshotEnv('WEFT_ADDR', 'WEFT_TOKEN', 'WEFT_HOME');
+    const home = makeHome();
+    Bun.env['WEFT_HOME'] = home;
+    delete Bun.env['WEFT_ADDR'];
+    delete Bun.env['WEFT_TOKEN'];
+    writeConfig(
+      home,
+      [
+        'default_profile = "main"',
+        '',
+        '[profiles.main]',
+        'server = "http://profile.test:9000"',
+        'token = "profile-token"',
+      ].join('\n'),
+    );
+    try {
+      const connection = resolveConnection({ server: 'http://elsewhere.test:9000' });
+      expect(connection.server.toString()).toBe('http://elsewhere.test:9000/');
+      expect(connection.token).toBeUndefined();
+    } finally {
+      restoreEnv(snapshot);
+    }
+  });
+
+  it('keeps the profile token when WEFT_ADDR names the same destination', () => {
+    const snapshot = snapshotEnv('WEFT_ADDR', 'WEFT_TOKEN', 'WEFT_HOME');
+    const home = makeHome();
+    Bun.env['WEFT_HOME'] = home;
+    Bun.env['WEFT_ADDR'] = 'http://profile.test:9000';
+    delete Bun.env['WEFT_TOKEN'];
+    writeConfig(
+      home,
+      [
+        'default_profile = "main"',
+        '',
+        '[profiles.main]',
+        'server = "http://profile.test:9000"',
+        'token = "profile-token"',
+      ].join('\n'),
+    );
+    try {
+      const connection = resolveConnection();
+      expect(connection.server.toString()).toBe('http://profile.test:9000/');
+      expect(connection.token).toBe('profile-token');
+    } finally {
+      restoreEnv(snapshot);
+    }
+  });
+
   it('falls back to the run lockfile for CLI callers', () => {
     const snapshot = snapshotEnv('WEFT_ADDR', 'WEFT_HOME');
     const home = makeHome();

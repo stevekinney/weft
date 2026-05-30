@@ -175,6 +175,17 @@ function resolveCodegenConnection(options: CodegenOptions): Result<CodegenConnec
     if (error instanceof ConnectionConfigurationError) {
       return { ok: false, error: `codegen: ${error.message}` };
     }
+    // `resolveConnection` constructs `new URL(server)`, which throws a
+    // `TypeError` for a malformed `--server`/`WEFT_ADDR`. That is a user-caused
+    // failure, so surface it as a `CommandOutput` diagnostic rather than letting
+    // it escape `executeCodegen` as an uncaught throw.
+    if (error instanceof TypeError) {
+      const resolvedServer = options.server ?? Bun.env['WEFT_ADDR'] ?? '';
+      return {
+        ok: false,
+        error: `codegen: invalid server URL '${resolvedServer}': ${error.message}`,
+      };
+    }
     throw error;
   }
 }
