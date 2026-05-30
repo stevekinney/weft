@@ -175,9 +175,10 @@ function resolveCodegenConnection(options: CodegenOptions): Result<CodegenConnec
     // `resolveConnection` raises a `ConnectionConfigurationError` for both a
     // malformed `~/.weft/config` and a malformed resolved server URL (from any
     // source: `--server`, `WEFT_ADDR`, the profile `server`, or the run
-    // lockfile), with the offending value already in the message. Surface it as
-    // a `CommandOutput` diagnostic rather than letting it escape `executeCodegen`
-    // as an uncaught throw.
+    // lockfile). Its message already carries the relevant context — the invalid
+    // URL string for a bad server value, or the config path for a parse failure.
+    // Surface it as a `CommandOutput` diagnostic rather than letting it escape
+    // `executeCodegen` as an uncaught throw.
     if (error instanceof ConnectionConfigurationError) {
       return { ok: false, error: `codegen: ${error.message}` };
     }

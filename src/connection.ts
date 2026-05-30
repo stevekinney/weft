@@ -82,9 +82,13 @@ export type ResolvedConnection = {
 export const DEFAULT_WEFT_ADDRESS = 'http://localhost:7233';
 
 /**
- * Raised when a present `~/.weft/config` file cannot be parsed. A missing file
- * is not an error; a malformed one is surfaced so callers do not silently
- * connect to the wrong server.
+ * Raised when connection resolution fails. Two cases surface as this error:
+ * a present `~/.weft/config` file that cannot be parsed (a missing file is not
+ * an error), and a resolved server value that is not a valid URL — regardless
+ * of where it came from (`--server`/explicit option, `WEFT_ADDR`, the profile
+ * `server` field, or the run lockfile). Both are surfaced rather than silently
+ * connecting to the wrong server; the message carries the offending value (the
+ * invalid URL string, or the config path for a parse failure).
  *
  * @example
  * ```ts
