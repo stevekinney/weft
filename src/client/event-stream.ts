@@ -72,19 +72,11 @@ export type WorkflowEventStreamOptions = {
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_RECONNECT_BACKOFF_MS = 50;
 
-/** The minimal client context a workflow event subscription needs. */
-export type EventStreamContext = {
-  readonly baseUrl: string;
-  readonly headers: Record<string, string>;
-  /** Fetches a workflow's persisted event history for connect/reconnect catch-up. */
-  getEvents(workflowId: string): Promise<WorkflowEvent[]>;
-  readonly streamOptions: WorkflowEventStreamOptions;
-};
-
 /**
- * The streaming-relevant view of an HTTP client. Capturing only these fields
- * lets {@link openClientEventSubscription} assemble an {@link EventStreamContext}
- * without `HttpClient` constructing the literal inline.
+ * The streaming-relevant view of an HTTP client: the fields a workflow event
+ * subscription needs to open its `/watch` socket and run `getEvents` catch-up.
+ * `HttpClient` satisfies this structurally, so {@link openClientEventSubscription}
+ * takes the client directly instead of an assembled context literal.
  */
 export type WorkflowEventStreamHost = {
   readonly baseUrl: string;
@@ -95,30 +87,10 @@ export type WorkflowEventStreamHost = {
 /**
  * Open a live {@link WorkflowEventSubscription} for a workflow over the `/watch`
  * WebSocket channel, wiring the watch URL and the `getEvents` catch-up fetch
- * from the given client context. Shared by `HttpHandle` (push-based
- * `addEventListener`) and `HttpClient.tail`.
- */
-export function createWorkflowEventSubscription(
-  context: EventStreamContext,
-  workflowId: string,
-  onEvent: (event: WorkflowEvent) => void,
-): WorkflowEventSubscription {
-  return new WorkflowEventSubscription(
-    workflowWatchWebSocketUrl(context.baseUrl, workflowId),
-    context.headers,
-    workflowId,
-    (id) => context.getEvents(id),
-    onEvent,
-    context.streamOptions,
-  );
-}
-
-/**
- * Open a {@link WorkflowEventSubscription} from an HTTP client's streaming
- * fields plus its resolved {@link WorkflowEventStreamOptions}. Keeps the
- * context assembly out of `HttpClient` so its public surface stays thin. Pass
- * `bufferForIteration` for iteration-intended consumers (`tail()`) so the
- * connect catch-up is buffered for the async iterator rather than dropped.
+ * from the given client. Shared by `HttpHandle` (push-based `addEventListener`)
+ * and `HttpClient.tail`. Pass `bufferForIteration` for iteration-intended
+ * consumers (`tail()`) so the connect catch-up is buffered for the async
+ * iterator rather than dropped.
  */
 export function openClientEventSubscription(
   host: WorkflowEventStreamHost,
@@ -127,15 +99,13 @@ export function openClientEventSubscription(
   onEvent: (event: WorkflowEvent) => void,
   bufferForIteration = false,
 ): WorkflowEventSubscription {
-  return createWorkflowEventSubscription(
-    {
-      baseUrl: host.baseUrl,
-      headers: host.headers,
-      getEvents: (id) => host.getEvents(id),
-      streamOptions: bufferForIteration ? { ...streamOptions, bufferForIteration } : streamOptions,
-    },
+  return new WorkflowEventSubscription(
+    workflowWatchWebSocketUrl(host.baseUrl, workflowId),
+    host.headers,
     workflowId,
+    (id) => host.getEvents(id),
     onEvent,
+    bufferForIteration ? { ...streamOptions, bufferForIteration } : streamOptions,
   );
 }
 
