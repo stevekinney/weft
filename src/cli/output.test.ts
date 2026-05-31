@@ -12,24 +12,32 @@ import {
 
 describe('supportsColor', () => {
   it('FORCE_COLOR=0 does not enable color (per FORCE_COLOR spec)', () => {
-    const priorValue = Bun.env['FORCE_COLOR'];
+    const priorForceColor = Bun.env['FORCE_COLOR'];
+    const priorNoColor = Bun.env['NO_COLOR'];
     Bun.env['FORCE_COLOR'] = '0';
+    delete Bun.env['NO_COLOR'];
     try {
       expect(supportsColor({ isTTY: false })).toBe(false);
     } finally {
-      if (priorValue === undefined) delete Bun.env['FORCE_COLOR'];
-      else Bun.env['FORCE_COLOR'] = priorValue;
+      if (priorForceColor === undefined) delete Bun.env['FORCE_COLOR'];
+      else Bun.env['FORCE_COLOR'] = priorForceColor;
+      if (priorNoColor === undefined) delete Bun.env['NO_COLOR'];
+      else Bun.env['NO_COLOR'] = priorNoColor;
     }
   });
 
   it('FORCE_COLOR=1 enables color', () => {
-    const priorValue = Bun.env['FORCE_COLOR'];
+    const priorForceColor = Bun.env['FORCE_COLOR'];
+    const priorNoColor = Bun.env['NO_COLOR'];
     Bun.env['FORCE_COLOR'] = '1';
+    delete Bun.env['NO_COLOR'];
     try {
       expect(supportsColor({ isTTY: false })).toBe(true);
     } finally {
-      if (priorValue === undefined) delete Bun.env['FORCE_COLOR'];
-      else Bun.env['FORCE_COLOR'] = priorValue;
+      if (priorForceColor === undefined) delete Bun.env['FORCE_COLOR'];
+      else Bun.env['FORCE_COLOR'] = priorForceColor;
+      if (priorNoColor === undefined) delete Bun.env['NO_COLOR'];
+      else Bun.env['NO_COLOR'] = priorNoColor;
     }
   });
 });

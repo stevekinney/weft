@@ -30,7 +30,7 @@ Run these in order. Fix failures before proceeding to the next phase.
 bun run build
 ```
 
-Catches: compilation errors, missing modules, broken imports, declaration generation failures. The build outputs to `dist/` and includes both server (Bun target) and browser (browser target) entrypoints.
+Catches: compilation errors, missing modules, broken imports, declaration generation failures. The build outputs to `dist/` and includes both server (Bun target) and browser (browser target) entrypoints. It also runs the post-build distribution guard that rejects dangling relative `.js` specifiers in `dist/`, including extensionless directory re-export mistakes.
 
 ### Phase 2: Typecheck
 
@@ -88,6 +88,7 @@ Every addition or removal in `src/index.ts` is a public API change. Verify:
 - No internal types or implementation details leaked into the public surface
 - Removed exports are truly unused by consumers
 - Also check the secondary entrypoints: `./service-worker`, `./storage/indexeddb`, `./storage/text-value-store`, `./storage/compressed`, `./server`, `./server/handler`, `./mcp`
+- Directory re-exports target explicit `index.ts` paths when they are part of the public root surface; do not rely on the build rewriter to guess a package-consumer contract.
 
 ### Documentation Gates
 

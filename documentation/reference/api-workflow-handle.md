@@ -118,7 +118,7 @@ await handle.cancel();
 
 ## EventTarget Interface
 
-`WorkflowHandle` extends `EventTarget`, so you can listen for lifecycle events using the standard `addEventListener` / `removeEventListener` API. Events are forwarded from the engine to the handle.
+`WorkflowHandle` extends `EventTarget`, so you can listen for lifecycle events using the standard `addEventListener` / `removeEventListener` API. In-process handles receive events directly from the engine. Client handles preserve the same listener contract; `HttpClient` bridges workflow events over the per-workflow `/v1/workflows/:id/watch` WebSocket channel instead of polling `getEvents()`.
 
 ```ts partial
 handle.addEventListener('workflow:completed', (event) => {
@@ -141,6 +141,24 @@ Event types forwarded to the handle:
 | `workflow:completed` | Workflow finishes successfully     |
 | `workflow:failed`    | Workflow throws an unhandled error |
 | `workflow:cancelled` | Workflow is cancelled              |
+| `workflow:timed-out` | Workflow reaches a timeout policy  |
+
+## Client Event Tails
+
+`ClientHandle` values returned by `LocalClient` and `HttpClient` also expose `tail()`, and clients expose `client.tail(id)`. Both return a `WorkflowEventTail`:
+
+```ts partial
+const tail = handle.tail();
+await tail.whenConnected();
+
+for await (const event of tail) {
+  console.log(event.type);
+}
+```
+
+The tail is a single-consumer `AsyncIterable<WorkflowEvent>` with `close()` and `whenConnected()`. `whenConnected()` resolves after the transport is live and the initial history catch-up has run, so the common `await tail.whenConnected(); for await (...)` pattern still sees already-persisted events. Iteration ends on `workflow:completed`, `workflow:failed`, `workflow:cancelled`, `workflow:timed-out`, server close, or `tail.close()`.
+
+In server mode, `HttpClient` uses the `/v1/workflows/:id/watch` WebSocket channel and performs `getEvents()` catch-up on connect and reconnect. If the runtime has no global `WebSocket`, or cannot send configured authentication headers through its WebSocket constructor, pass `HttpClientOptions.webSocketFactory`.
 
 ---
 
@@ -152,7 +170,7 @@ Event types forwarded to the handle:
 async *[Symbol.asyncIterator](): AsyncIterableIterator<Event>;
 ```
 
-Yields workflow lifecycle events as they occur. The iterator completes when the workflow reaches a terminal state (`workflow:completed`, `workflow:failed`, or `workflow:cancelled`).
+Yields workflow lifecycle events as they occur. The iterator completes when the workflow reaches a terminal state (`workflow:completed`, `workflow:failed`, `workflow:cancelled`, or `workflow:timed-out`).
 
 Listened event types: `workflow:completed`, `workflow:failed`, `workflow:cancelled`, `workflow:timed-out`, `activity:started`, `activity:completed`, `signal:received`, `update:received`, `update:completed`.
 

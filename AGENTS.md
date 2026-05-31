@@ -52,7 +52,7 @@ bun test                  # Run all tests
 bun test src/utils        # Run tests in specific directory
 bun test logger          # Run tests matching pattern
 bun test --watch         # Watch mode
-bun test --coverage      # Generate coverage report
+bun run test:coverage    # Generate coverage report (sets WEFT_COVERAGE_MODE=1, applies project timeout)
 ```
 
 ### Code Quality
@@ -173,6 +173,8 @@ If an `as` cast is genuinely necessary (e.g., deserializing from storage where t
 - Payload-size policy changes must reject oversized workflow inputs, signal payloads, and activity results before durable writes. Keep `payloadSize.maxBytes` separate from storage compression and Worker `maxProtocolMessageBytes`.
 - Worker execution changes must preserve explicit trust posture: `workflowExecutionMode: 'worker'` is the hardened untrusted path with turn timeouts and bounded protocol messages; `workflowExecutionMode: 'inline'` rejects `workerExecution`.
 - Task polling and shutdown changes must cover already-aborted request signals, disconnects during parked long-polls, task retention for dead pollers, and `server.stop()` disposal of queued timers/waiters.
+- Client event-streaming changes must preserve the `client.tail(id)` / `handle.tail()` contract across `LocalClient` and `HttpClient`: `whenConnected()` resolves after catch-up, tails are single-consumer, `HttpClient` uses `/v1/workflows/:id/watch`, reconnect catch-up must not duplicate or skip buffered frames, callback-only listeners must not accumulate an unbounded iterator buffer, and runtimes without usable WebSocket header support must get an actionable `webSocketFactory` diagnostic.
+- Public root exports and build rewriter changes must run `bun run build`; the post-build guard fails if `dist/` contains a dangling relative `.js` specifier, including directory re-export mistakes such as emitting `./diagnostics.js` when only `./diagnostics/index.js` exists.
 
 ### Testing Approach
 

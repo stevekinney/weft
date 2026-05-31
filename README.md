@@ -163,6 +163,23 @@ const handle = await engine.start('approval', { orderId: 'order-123' });
 await engine.signal(handle.id, approvalSignal, { approved: true });
 ```
 
+### Live Workflow Events
+
+Workflow handles expose lifecycle events through `addEventListener`, and client handles can open a live tail for progress UIs or operators. `LocalClient` reads from the in-process engine stream; `HttpClient` uses the per-workflow `/v1/workflows/:id/watch` WebSocket channel with history catch-up on connect and reconnect, so `addEventListener`, `client.tail(id)`, and `handle.tail()` are push-based rather than a polling loop.
+
+```typescript
+const handle = await client.start('checkout', order);
+const tail = handle.tail();
+
+await tail.whenConnected();
+
+for await (const event of tail) {
+  console.log(event.type);
+}
+```
+
+The tail is single-consumer and stops on terminal workflow events or `tail.close()`. In runtimes without a built-in WebSocket, or where authenticated WebSockets need headers the platform constructor cannot send, provide `HttpClientOptions.webSocketFactory`.
+
 ### Search Attributes
 
 Attach indexed metadata to a workflow at runtime, then list and filter on it.
