@@ -209,9 +209,10 @@ describe('weft tail', () => {
 
   it('suppresses streamed stdout under --quiet', async () => {
     const writeSpy = mock(() => true);
-    const fetchImpl = async () => sseResponse(['event: done\ndata: \n\n']);
+    const fetchImpl = async () =>
+      sseResponse(['id: 1\nevent: token\ndata: hidden\n\n', 'event: done\ndata: \n\n']);
     const previousFetch = globalThis.fetch;
-    const previousWrite = process.stdout.write.bind(process.stdout);
+    const previousWrite = process.stdout.write;
     globalThis.fetch = fetchImpl as unknown as typeof fetch;
     process.stdout.write = writeSpy as unknown as typeof process.stdout.write;
 
