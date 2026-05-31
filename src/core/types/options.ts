@@ -142,11 +142,12 @@ export interface EngineOptions {
   /** Enable BroadcastChannel for cross-worker event coordination. Default: false. */
   broadcastEvents?: boolean;
   /**
-   * Select where workflow generator turns execute. Omit to preserve legacy
-   * behavior: `workerExecution` selects Worker execution and no Worker
-   * configuration selects inline execution. Use `'worker'` for untrusted
-   * deployments and `'inline'` only when workflow code is trusted to run in the
-   * engine isolate.
+   * Select where workflow generator turns execute. Omitting this defaults to
+   * `'inline'`, which steps the generator in the engine isolate and is
+   * appropriate only when workflow code is trusted. Use `'worker'` for
+   * untrusted deployments: it requires `workerExecution` and applies hardened
+   * Worker turn-timeout and protocol-message-size limits. Explicit `'inline'`
+   * rejects `workerExecution`.
    */
   workflowExecutionMode?: 'inline' | 'worker';
   /**
@@ -173,8 +174,8 @@ export interface EngineOptions {
     smol?: boolean;
     /**
      * Host-enforced wall-clock timeout for each Worker `run` or `resume` turn.
-     * Defaults to `1_000` in explicit Worker mode. Omit in legacy Worker mode
-     * to keep the legacy no-timeout behavior.
+     * Defaults to `1_000` in Worker mode. Provide a positive safe integer to
+     * override the default.
      */
     workflowTurnTimeoutMs?: number;
     /**

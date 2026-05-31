@@ -48,7 +48,7 @@ interface EngineOptions {
 | `checkpointSizeWarningThreshold` | `number`                   | `65_536` (64 KB)      | Checkpoint size in bytes at which a `CheckpointSizeWarningEvent` is emitted.                                               |
 | `maxNestingDepth`                | `number`                   | `10`                  | Maximum child workflow nesting depth.                                                                                      |
 | `broadcastEvents`                | `boolean`                  | `false`               | Enable `BroadcastChannel` for cross-worker event coordination. Lazily creates the channel on first use.                    |
-| `workflowExecutionMode`          | `'inline' \| 'worker'`     | legacy selection      | Explicitly choose inline or Worker workflow execution. Omit to preserve legacy behavior.                                   |
+| `workflowExecutionMode`          | `'inline' \| 'worker'`     | `'inline'`            | Choose inline or Worker workflow execution. Omitting defaults to inline; Worker mode requires `workerExecution`.           |
 | `workerExecution`                | `WorkerExecutionOptions`   | `undefined`           | Configuration for offloading workflow execution to Web Workers                                                             |
 | `activityExecution`              | `ActivityExecutionOptions` | `undefined`           | Configuration for activity execution behavior                                                                              |
 | `alerts`                         | `AlertOptions[]`           | `undefined`           | Metric alert thresholds that fire `AlertFiredEvent` / `AlertResolvedEvent`                                                 |
@@ -111,7 +111,7 @@ const untrustedEngine = new Engine({
 void untrustedEngine;
 ```
 
-When `workflowExecutionMode` is omitted, Weft preserves the legacy selection rule: providing `workerExecution` selects Worker execution; omitting it selects inline execution. Explicit `workflowExecutionMode: 'inline'` rejects `workerExecution` so configuration cannot silently fall back to a different trust posture. Explicit `workflowExecutionMode: 'worker'` rejects construction unless `workerExecution.workerUrl` is available.
+When `workflowExecutionMode` is omitted, Weft defaults to inline execution. Worker execution is the hardened untrusted posture and must be requested explicitly with `workflowExecutionMode: 'worker'`, which requires `workerExecution` and applies the hardened turn-timeout and protocol-message defaults. Providing `workerExecution` without `workflowExecutionMode: 'worker'` is rejected at construction so a trust posture is never selected implicitly. `workflowExecutionMode: 'inline'` rejects `workerExecution` for the same reason.
 
 Worker mode executes workflow generator turns outside the engine isolate. It protects engine liveness and engine heap access by driving the workflow through bounded `postMessage` turns, but it is not an operating-system sandbox. Workflow code still runs inside the Worker global realm and may access APIs exposed by that runtime, including Worker globals, imports, network APIs, filesystem APIs in Bun, and environment APIs when the runtime exposes them.
 
@@ -132,8 +132,8 @@ interface WorkerExecutionOptions {
 | `workerUrl`               | `string \| URL` | required                            | Worker entrypoint URL created by `createWorkerEntryUrl` or an equivalent bundle.                    |
 | `poolSize`                | `number`        | `4`                                 | Maximum concurrent workflow Workers.                                                                |
 | `smol`                    | `boolean`       | `false`                             | Pass Bun's smaller-memory Worker option when the runtime supports it.                               |
-| `workflowTurnTimeoutMs`   | `number`        | `1_000` in explicit Worker mode     | Host-enforced wall-clock budget for each Worker `run` or `resume` turn. Positive safe integer only. |
-| `maxProtocolMessageBytes` | `number`        | `1_048_576` in explicit Worker mode | Maximum encoded size of Weft-owned Worker protocol messages. Minimum accepted value is `4_096`.     |
+| `workflowTurnTimeoutMs`   | `number`        | `1_000` in Worker mode              | Host-enforced wall-clock budget for each Worker `run` or `resume` turn. Positive safe integer only. |
+| `maxProtocolMessageBytes` | `number`        | `1_048_576` in Worker mode          | Maximum encoded size of Weft-owned Worker protocol messages. Minimum accepted value is `4_096`.     |
 
 The Worker protocol byte limit is separate from `payloadSize.maxBytes`. Payload limits guard workflow inputs, signals, and activity results at API boundaries. `maxProtocolMessageBytes` guards Weft-owned Worker envelopes, checkpoints, and operation-result messages crossing `postMessage`.
 

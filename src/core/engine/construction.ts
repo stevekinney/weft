@@ -256,8 +256,7 @@ export function normalizeWorkerExecutionConfiguration(
     return { mode: 'inline', workerExecution: null };
   }
 
-  const hardened = workflowExecutionMode === 'worker';
-  return normalizeWorkerModeConfiguration(workerExecution, hardened);
+  return normalizeWorkerModeConfiguration(workerExecution);
 }
 
 function normalizeWorkflowExecutionMode(
@@ -281,25 +280,37 @@ function resolveWorkerExecutionForMode(
     }
     return null;
   }
-  if (workflowExecutionMode === 'worker' && options?.workerExecution === undefined) {
-    throw new Error('options.workerExecution is required when workflowExecutionMode is "worker"');
+  if (workflowExecutionMode === 'worker') {
+    if (options?.workerExecution === undefined) {
+      throw new Error('options.workerExecution is required when workflowExecutionMode is "worker"');
+    }
+    return options.workerExecution;
   }
-  return options?.workerExecution ?? null;
+  // Omitted mode defaults to inline. Worker execution is the hardened untrusted
+  // posture and must be requested explicitly; providing workerExecution alone is
+  // an error rather than a silent, weaker Worker selection.
+  if (options?.workerExecution !== undefined) {
+    throw new Error(
+      'options.workflowExecutionMode must be "worker" when options.workerExecution is provided',
+    );
+  }
+  return null;
 }
 
 function normalizeWorkerModeConfiguration(
   workerExecution: NonNullable<EngineConstructorOptions['workerExecution']>,
-  hardened: boolean,
 ): NormalizedWorkerExecutionConfiguration {
+  // Worker mode is reachable only via explicit `workflowExecutionMode: 'worker'`,
+  // so it always applies the hardened turn-timeout and protocol-message defaults.
   const workflowTurnTimeoutMs = normalizePositiveSafeIntegerOption(
     workerExecution.workflowTurnTimeoutMs,
     'options.workerExecution.workflowTurnTimeoutMs',
-    hardened ? DEFAULT_WORKER_TURN_TIMEOUT_MS : undefined,
+    DEFAULT_WORKER_TURN_TIMEOUT_MS,
   );
   const maxProtocolMessageBytes = normalizePositiveSafeIntegerOption(
     workerExecution.maxProtocolMessageBytes,
     'options.workerExecution.maxProtocolMessageBytes',
-    hardened ? DEFAULT_WORKER_PROTOCOL_MESSAGE_BYTES : undefined,
+    DEFAULT_WORKER_PROTOCOL_MESSAGE_BYTES,
   );
   if (
     maxProtocolMessageBytes !== undefined &&
@@ -315,9 +326,8 @@ function normalizeWorkerModeConfiguration(
     workerExecution,
     workflowTurnTimeoutMs,
     maxProtocolMessageBytes,
-    requireProtocolVersion:
-      hardened || workflowTurnTimeoutMs !== undefined || maxProtocolMessageBytes !== undefined,
-    discardOnCancel: hardened || workflowTurnTimeoutMs !== undefined,
+    requireProtocolVersion: true,
+    discardOnCancel: true,
   };
 }
 

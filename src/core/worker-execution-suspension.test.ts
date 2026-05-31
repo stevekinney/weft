@@ -69,9 +69,13 @@ describe('worker execution signal suspension', () => {
   });
 
   function createWorkerEngine(storage = new MemoryStorage()): Engine {
+    // These suspension/recovery tests are not about turn-timeout enforcement, so
+    // use a generous per-turn budget that no individual run/resume turn here
+    // approaches. (Turn-timeout behavior is covered by createHardenedWorkerEngine.)
     const workerEngine = new Engine({
       storage,
-      workerExecution: { workerUrl, poolSize: 1 },
+      workflowExecutionMode: 'worker',
+      workerExecution: { workerUrl, poolSize: 1, workflowTurnTimeoutMs: 30_000 },
     });
     registerWorkerExecutionTestWorkflows(workerEngine);
     engine = workerEngine;
@@ -337,7 +341,8 @@ describe('worker execution isolation boundary', () => {
 
     const workerEngine = new Engine({
       storage: new MemoryStorage(),
-      workerExecution: { workerUrl, poolSize: 1 },
+      workflowExecutionMode: 'worker',
+      workerExecution: { workerUrl, poolSize: 1, workflowTurnTimeoutMs: 30_000 },
     });
     workerEngine.register(engineSimpleWorkflow);
     workerEngine.register(engineWaitWorkflow);

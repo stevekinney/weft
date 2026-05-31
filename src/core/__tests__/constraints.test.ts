@@ -425,6 +425,7 @@ describe('constraint primitive', () => {
 
   it('throws when registering a workflow with constraints on a worker-mode engine', () => {
     const engine = new Engine({
+      workflowExecutionMode: 'worker',
       workerExecution: {
         workerUrl: new URL('https://example.invalid/worker.js'),
         poolSize: 1,

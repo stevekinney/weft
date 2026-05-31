@@ -11,14 +11,14 @@
  * are user-supplied code. This interface is the single seam across which the engine
  * drives that code, and the only place where "where does the workflow generator
  * step?" is decided. `InlineExecutionStrategy` steps the generator in the engine's
- * own isolate (no isolation — appropriate only for trusted workflows). Omitted
- * execution-mode options preserve legacy selection: no `workerExecution` means
- * inline execution, while `workerExecution` means Worker execution.
+ * own isolate (no isolation — appropriate only for trusted workflows) and is the
+ * default when `workflowExecutionMode` is omitted.
  * `WorkerExecutionStrategy` steps the generator inside a Web Worker and communicates
  * with the engine through bounded `postMessage` turns, so untrusted workflow code
- * never executes in the engine isolate. Explicit `workflowExecutionMode: 'worker'`
- * is the hardened untrusted posture, and in that mode the engine's `inlineStrategy`
- * is `null` — every code path that would step a workflow generator is guarded on
+ * never executes in the engine isolate. `workflowExecutionMode: 'worker'` is the
+ * hardened untrusted posture, must be requested explicitly (and requires
+ * `workerExecution`), and in that mode the engine's `inlineStrategy` is `null` —
+ * every code path that would step a workflow generator is guarded on
  * `inlineStrategy` and therefore unreachable.
  *
  * **Security contract the boundary upholds for untrusted code (worker strategy):**

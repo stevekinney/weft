@@ -6369,15 +6369,16 @@ describe('Engine speculative execution', () => {
 // ---------------------------------------------------------------------------
 
 describe('Engine decode and scoped-state guards', () => {
-  it('still constructs when only workerExecution is configured', () => {
-    const engine = new Engine({
-      workerExecution: {
-        workerUrl: new URL('https://example.invalid/worker.js'),
-        poolSize: 1,
-      },
-    });
-    expect(engine).toBeInstanceOf(Engine);
-    engine[Symbol.dispose]();
+  it('rejects workerExecution without explicit worker mode', () => {
+    expect(
+      () =>
+        new Engine({
+          workerExecution: {
+            workerUrl: new URL('https://example.invalid/worker.js'),
+            poolSize: 1,
+          },
+        }),
+    ).toThrow('options.workflowExecutionMode must be "worker"');
   });
 
   it('decodeWorkflowState falls back to workflow id when execution owner is malformed', async () => {
