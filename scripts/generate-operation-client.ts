@@ -69,9 +69,9 @@ export async function createOperationClientSource(snapshot: CatalogSnapshot): Pr
     schemaToNode(operation.outputSchema),
   ]);
 
-  const aliasNameByKey = selectAliases(roots);
+  const { aliasNameByKey, nodeByKey } = selectAliases(roots);
   const entries = operations.map((operation) => operationToTypeEntry(operation, aliasNameByKey));
-  const aliasDeclarations = renderAliasDeclarations(aliasNameByKey);
+  const aliasDeclarations = renderAliasDeclarations(aliasNameByKey, nodeByKey);
 
   const aliasBlock = aliasDeclarations.length ? `\n${aliasDeclarations.join('\n')}\n` : '';
 
@@ -177,6 +177,11 @@ function schemaToNode(schema: Record<string, unknown>): TypeNode {
         ? schema['required'].filter((entry): entry is string => typeof entry === 'string')
         : [],
     );
+    // Snapshot schemas arrive with keys already canonicalized (alphabetical), so
+    // this sort is a no-op on the real catalog and preserves the prior generator's
+    // field order byte-for-byte. It stays as a defensive invariant: the dedup key
+    // and emitted text must be field-order-stable even if an upstream source is
+    // ever not pre-canonicalized.
     const fields = Object.entries(properties)
       .map(([name, propertySchema]) => ({
         name,
@@ -202,34 +207,32 @@ function renderNode(
   aliasNameByKey: ReadonlyMap<string, string>,
   suppressKey?: string,
 ): string {
+  // Render a child, substituting its alias name unless it is the suppressed self.
+  const renderChild = (child: TypeNode): string => {
+    const key = canonicalKey(child);
+    if (key !== suppressKey) {
+      const alias = aliasNameByKey.get(key);
+      if (alias !== undefined) return alias;
+    }
+    return renderNode(child, aliasNameByKey, suppressKey);
+  };
+
   switch (node.kind) {
     case 'primitive':
       return node.text;
     case 'record':
       return 'Record<string, unknown>';
     case 'array':
-      return `ReadonlyArray<${renderChild(node.element, aliasNameByKey)}>`;
+      return `ReadonlyArray<${renderChild(node.element)}>`;
     case 'union':
-      return node.members.map((member) => renderChild(member, aliasNameByKey)).join(' | ');
+      return node.members.map((member) => renderChild(member)).join(' | ');
     case 'object': {
       const fields = node.fields.map((field) => {
         const optional = field.optional ? '?' : '';
-        return `readonly ${JSON.stringify(field.name)}${optional}: ${renderChild(
-          field.value,
-          aliasNameByKey,
-        )};`;
+        return `readonly ${JSON.stringify(field.name)}${optional}: ${renderChild(field.value)};`;
       });
       return `{ ${fields.join(' ')} }`;
     }
-  }
-
-  function renderChild(child: TypeNode, aliases: ReadonlyMap<string, string>): string {
-    const key = canonicalKey(child);
-    if (key !== suppressKey) {
-      const alias = aliases.get(key);
-      if (alias !== undefined) return alias;
-    }
-    return renderNode(child, aliases, suppressKey);
   }
 }
 
@@ -250,40 +253,44 @@ function canonicalKey(node: TypeNode): string {
   return JSON.stringify(node);
 }
 
+type AliasSelection = {
+  readonly aliasNameByKey: ReadonlyMap<string, string>;
+  readonly nodeByKey: ReadonlyMap<string, TypeNode>;
+};
+
 /**
- * Select which structural shapes to hoist into aliases and assign each a stable
- * name. Performs a final prune-to-fixed-point so that every surviving alias is
- * referenced at least twice across the emitted alias bodies and operation entries.
+ * Select which structural shapes to hoist into aliases. Prunes to a fixed point
+ * so that every surviving alias is referenced at least twice across the emitted
+ * alias bodies and operation entries. Returns both the name map and the original
+ * nodes so declarations render without round-tripping through the string key.
  */
-function selectAliases(roots: ReadonlyArray<TypeNode>): Map<string, string> {
+function selectAliases(roots: ReadonlyArray<TypeNode>): AliasSelection {
   const counts = new Map<string, { count: number; node: TypeNode }>();
   for (const root of roots) collectCounts(root, counts);
 
-  const candidates = new Map<string, TypeNode>();
+  let candidates = new Map<string, TypeNode>();
   for (const [key, { count, node }] of counts) {
     if (isHoistWorthy(node, count)) candidates.set(key, node);
   }
 
-  let aliasNameByKey = assignAliasNames(candidates);
-
-  // Prune aliases whose final non-declaration reference count falls below the
-  // minimum. Dropping a parent can lower a child's references, so iterate.
+  // Prune aliases referenced fewer than twice once substitution is applied.
+  // Dropping a parent can lower a child's reference count, so iterate to a fixed
+  // point. References are counted structurally over the node graph (not by text
+  // matching), so the count is exact. The loop strictly shrinks `candidates`
+  // each iteration until it stabilizes, so it terminates in at most
+  // `candidates.size` rounds.
   for (;;) {
-    const references = countAliasReferences(aliasNameByKey, roots);
+    const aliasKeys = new Set(candidates.keys());
+    const references = countAliasReferences(aliasKeys, roots);
     const survivors = new Map<string, TypeNode>();
     for (const [key, node] of candidates) {
-      const name = aliasNameByKey.get(key);
-      if (name !== undefined && (references.get(name) ?? 0) >= MINIMUM_OCCURRENCES) {
-        survivors.set(key, node);
-      }
+      if ((references.get(key) ?? 0) >= MINIMUM_OCCURRENCES) survivors.set(key, node);
     }
     if (survivors.size === candidates.size) break;
-    candidates.clear();
-    for (const [key, node] of survivors) candidates.set(key, node);
-    aliasNameByKey = assignAliasNames(candidates);
+    candidates = survivors;
   }
 
-  return aliasNameByKey;
+  return { aliasNameByKey: assignAliasNames(candidates), nodeByKey: candidates };
 }
 
 /** Increment the occurrence count for `node` and recurse into its children. */
@@ -322,9 +329,10 @@ export function assignAliasNames(
   const aliasNameByKey = new Map<string, string>();
   const keyByName = new Map<string, string>();
   // Deterministic assignment order so names never depend on Map insertion order.
-  const sortedKeys = [...candidates.keys()].toSorted(compareStrings);
-  for (const key of sortedKeys) {
-    const node = candidates.get(key)!;
+  const sortedEntries = [...candidates.entries()].toSorted(([left], [right]) =>
+    compareStrings(left, right),
+  );
+  for (const [key, node] of sortedEntries) {
     const name = aliasNameFor(node, hashFn);
     const existing = keyByName.get(name);
     if (existing !== undefined && existing !== key) {
@@ -350,69 +358,83 @@ export function aliasNameFor(node: TypeNode, hashFn: (value: string) => string =
   return `Shared${hint}_${hashFn(canonicalKey(node))}`;
 }
 
-/** Count non-declaration references to each alias name across all rendered output. */
+/**
+ * Count, per alias key, how many substitution sites would reference it once
+ * `aliasKeys` are hoisted. Counts are structural — derived by walking the node
+ * graph, never by matching rendered text. A reference is a position where a
+ * hoisted key appears: a root that is itself an alias, or a child (array
+ * element, object field, union member) whose key is hoisted. An alias node's
+ * own body does not count as a self-reference (the body inlines its top level).
+ */
 function countAliasReferences(
-  aliasNameByKey: ReadonlyMap<string, string>,
+  aliasKeys: ReadonlySet<string>,
   roots: ReadonlyArray<TypeNode>,
 ): Map<string, number> {
   const references = new Map<string, number>();
-  for (const name of aliasNameByKey.values()) references.set(name, 0);
+  for (const key of aliasKeys) references.set(key, 0);
 
-  const tally = (text: string) => {
-    for (const [, name] of aliasNameByKey) {
-      const matches = text.match(new RegExp(`\\b${name}\\b`, 'g'));
-      if (matches) references.set(name, (references.get(name) ?? 0) + matches.length);
-    }
+  const bump = (key: string) => references.set(key, (references.get(key) ?? 0) + 1);
+
+  /** Count alias references among the children of `node` (not `node` itself). */
+  const countChildren = (node: TypeNode) => {
+    if (node.kind === 'array') visitChild(node.element);
+    else if (node.kind === 'union') for (const member of node.members) visitChild(member);
+    else if (node.kind === 'object') for (const field of node.fields) visitChild(field.value);
   };
 
-  // References from operation entries (roots may themselves be aliases).
-  for (const root of roots) tally(renderRoot(root, aliasNameByKey));
-  // References between alias bodies (each rendered with self suppressed).
-  for (const body of aliasBodies(aliasNameByKey, roots).values()) tally(body);
+  const visitChild = (child: TypeNode) => {
+    const key = canonicalKey(child);
+    if (aliasKeys.has(key)) {
+      // The child collapses to an alias reference; do not descend past it.
+      bump(key);
+      return;
+    }
+    countChildren(child);
+  };
+
+  // Operation entries: a root that is itself an alias is one reference.
+  for (const root of roots) {
+    const key = canonicalKey(root);
+    if (aliasKeys.has(key)) bump(key);
+    else countChildren(root);
+  }
+
+  // Alias bodies: each hoisted shape's body contributes references to the
+  // nested aliases it substitutes (its own top level is inlined, not a self-ref).
+  const seen = new Set<string>();
+  const collectBodies = (node: TypeNode) => {
+    const key = canonicalKey(node);
+    if (aliasKeys.has(key)) {
+      if (seen.has(key)) return;
+      seen.add(key);
+      countChildren(node);
+    }
+    if (node.kind === 'array') collectBodies(node.element);
+    else if (node.kind === 'union') for (const member of node.members) collectBodies(member);
+    else if (node.kind === 'object') for (const field of node.fields) collectBodies(field.value);
+  };
+  for (const root of roots) collectBodies(root);
 
   return references;
 }
 
-/** Render each alias body once (self-suppressed), keyed by alias name. */
-function aliasBodies(
+/**
+ * Render the `type Shared… = …;` declarations, sorted by alias name. Each body
+ * is rendered from its original {@link TypeNode} with its own key suppressed, so
+ * nested aliases substitute but the alias never references itself.
+ */
+function renderAliasDeclarations(
   aliasNameByKey: ReadonlyMap<string, string>,
-  roots: ReadonlyArray<TypeNode>,
-): Map<string, string> {
-  const nodeByKey = new Map<string, TypeNode>();
-  const collect = (node: TypeNode) => {
-    const key = canonicalKey(node);
-    if (aliasNameByKey.has(key) && !nodeByKey.has(key)) nodeByKey.set(key, node);
-    if (node.kind === 'array') collect(node.element);
-    else if (node.kind === 'union') for (const member of node.members) collect(member);
-    else if (node.kind === 'object') for (const field of node.fields) collect(field.value);
-  };
-  for (const root of roots) collect(root);
-
-  const bodies = new Map<string, string>();
-  for (const [key, node] of nodeByKey) {
-    const name = aliasNameByKey.get(key)!;
-    bodies.set(name, renderNode(node, aliasNameByKey, key));
-  }
-  return bodies;
-}
-
-/** Render the `type Shared… = …;` declarations, sorted by alias name. */
-function renderAliasDeclarations(aliasNameByKey: ReadonlyMap<string, string>): string[] {
-  // The canonical key is `JSON.stringify(node)`, so each alias node is recovered
-  // by parsing its key. Each body is rendered with self suppressed so nested
-  // aliases substitute but the alias never references itself.
+  nodeByKey: ReadonlyMap<string, TypeNode>,
+): string[] {
   const entries = [...aliasNameByKey.entries()].toSorted(([, left], [, right]) =>
     compareStrings(left, right),
   );
   return entries.map(([key, name]) => {
-    const body = renderNode(parseKey(key), aliasNameByKey, key);
-    return `type ${name} = ${body};`;
+    const node = nodeByKey.get(key);
+    if (node === undefined) throw new Error(`missing node for alias ${name} (${key})`);
+    return `type ${name} = ${renderNode(node, aliasNameByKey, key)};`;
   });
-}
-
-/** Parse a canonical key back into its {@link TypeNode}. */
-function parseKey(key: string): TypeNode {
-  return JSON.parse(key) as TypeNode;
 }
 
 function toPascalCase(value: string): string {
@@ -442,5 +464,5 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-export { canonicalKey, renderNode, schemaToNode };
-export type { TypeNode };
+export { canonicalKey, isHoistWorthy, renderNode, schemaToNode, selectAliases };
+export type { AliasSelection, ObjectField, TypeNode };

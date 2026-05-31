@@ -1,13 +1,16 @@
 import { describe, expect, it } from 'bun:test';
 
+import type { CatalogOperationTypes } from '../src/cli/generated/operation-client.generated.ts';
 import { createCatalogSnapshot } from '../src/cli/operation-catalog-snapshot.ts';
 import {
   aliasNameFor,
   assignAliasNames,
   canonicalKey,
   createOperationClientSource,
+  isHoistWorthy,
   renderNode,
   schemaToNode,
+  selectAliases,
   type TypeNode,
 } from './generate-operation-client.ts';
 
@@ -18,9 +21,11 @@ function renderInline(schema: Record<string, unknown>): string {
   return renderNode(schemaToNode(schema), NO_ALIASES);
 }
 
-describe('schemaToNode + renderNode — byte-identical baseline', () => {
-  // These assertions pin the exact TypeScript text the pre-refactor generator
-  // produced for each supported schema feature. Any drift fails here.
+describe('schemaToNode + renderNode — emitted text contract', () => {
+  // These assertions pin the exact TypeScript text the generator emits for each
+  // supported schema feature. Snapshot schemas arrive key-sorted, so on the real
+  // catalog this matches the pre-refactor `Object.entries` order byte-for-byte;
+  // the explicit field sort here is the intentional, enforced invariant.
   it('renders primitives', () => {
     expect(renderInline({ type: 'string' })).toBe('string');
     expect(renderInline({ type: 'number' })).toBe('number');
@@ -79,6 +84,46 @@ describe('createOperationClientSource — generated output', () => {
     expect(first).toBe(second);
   });
 
+  it('canonical keys are independent of property insertion order', () => {
+    // Exercises the field-sort defense: two objects with the same fields in
+    // different declaration order must dedupe to one alias, never two.
+    const forward = schemaToNode({
+      type: 'object',
+      properties: { a: { type: 'string' }, b: { type: 'number' } },
+    });
+    const reverse = schemaToNode({
+      type: 'object',
+      properties: { b: { type: 'number' }, a: { type: 'string' } },
+    });
+    expect(canonicalKey(forward)).toBe(canonicalKey(reverse));
+  });
+
+  it('assigns alias names independent of candidate insertion order', () => {
+    const left = schemaToNode({
+      type: 'object',
+      properties: { gt: { type: 'number' }, lt: { type: 'number' }, eq: { type: 'number' } },
+    });
+    const right = schemaToNode({
+      type: 'object',
+      properties: { x: { type: 'string' }, y: { type: 'string' }, z: { type: 'string' } },
+    });
+    const forward = assignAliasNames(
+      new Map([
+        [canonicalKey(left), left],
+        [canonicalKey(right), right],
+      ]),
+    );
+    const reverse = assignAliasNames(
+      new Map([
+        [canonicalKey(right), right],
+        [canonicalKey(left), left],
+      ]),
+    );
+    const byKey = (first: [string, string], second: [string, string]) =>
+      first[0] < second[0] ? -1 : 1;
+    expect([...forward.entries()].toSorted(byKey)).toEqual([...reverse.entries()].toSorted(byKey));
+  });
+
   it('hoists the date-range shape into exactly one alias', async () => {
     const source = await createOperationClientSource(createCatalogSnapshot());
     const rangeDeclarations = [
@@ -122,11 +167,92 @@ describe('createOperationClientSource — generated output', () => {
 });
 
 describe('alias selection thresholds', () => {
+  const object = (...names: string[]): TypeNode => ({
+    kind: 'object',
+    fields: names.map((name) => ({
+      name,
+      optional: false,
+      value: { kind: 'primitive', text: 'string' },
+    })),
+  });
+
   it('does not alias the 1-field key object in real output', async () => {
     const source = await createOperationClientSource(createCatalogSnapshot());
     // The attribute element { gt, gte, key, lt, lte, value } is aliased, but a
     // bare { readonly "key": string } object must never become its own alias.
     expect(source).not.toMatch(/type Shared\w+ = \{ readonly "key": string; \};/);
+  });
+
+  it('hoists a >=3-field object that repeats twice', () => {
+    expect(isHoistWorthy(object('a', 'b', 'c'), 2)).toBe(true);
+  });
+
+  it('never hoists a 1-field object no matter how often it repeats', () => {
+    expect(isHoistWorthy(object('key'), 2)).toBe(false);
+    expect(isHoistWorthy(object('key'), 9)).toBe(false);
+  });
+
+  it('hoists a 2-field object only when it repeats at least three times', () => {
+    expect(isHoistWorthy(object('a', 'b'), 2)).toBe(false);
+    expect(isHoistWorthy(object('a', 'b'), 3)).toBe(true);
+  });
+
+  it('never hoists non-object nodes', () => {
+    expect(isHoistWorthy({ kind: 'primitive', text: 'string' }, 9)).toBe(false);
+    expect(
+      isHoistWorthy({ kind: 'array', element: { kind: 'primitive', text: 'string' } }, 9),
+    ).toBe(false);
+  });
+});
+
+describe('selectAliases — prune to fixed point', () => {
+  it('prunes a child whose references collapse into a single alias body', () => {
+    // `inner` occurs once inside `outer`; `outer` occurs twice across the roots.
+    // By occurrence count both qualify (inner=2 via the two outers, outer=2).
+    // But once `outer` is hoisted, `inner` is referenced only from `outer`'s one
+    // body — a single reference — so the prune pass drops `inner`, keeping `outer`.
+    const inner: TypeNode = {
+      kind: 'object',
+      fields: [
+        { name: 'p', optional: false, value: { kind: 'primitive', text: 'string' } },
+        { name: 'q', optional: false, value: { kind: 'primitive', text: 'string' } },
+        { name: 'r', optional: false, value: { kind: 'primitive', text: 'string' } },
+      ],
+    };
+    const outer: TypeNode = {
+      kind: 'object',
+      fields: [
+        { name: 'a', optional: false, value: inner },
+        { name: 'b', optional: false, value: { kind: 'primitive', text: 'string' } },
+        { name: 'c', optional: false, value: { kind: 'primitive', text: 'string' } },
+      ],
+    };
+    const { aliasNameByKey, nodeByKey } = selectAliases([outer, outer]);
+    expect(aliasNameByKey.size).toBe(1);
+    expect([...nodeByKey.values()]).toEqual([outer]);
+  });
+
+  it('keeps a child alias referenced by a surviving parent and an entry', () => {
+    const inner: TypeNode = {
+      kind: 'object',
+      fields: [
+        { name: 'p', optional: false, value: { kind: 'primitive', text: 'string' } },
+        { name: 'q', optional: false, value: { kind: 'primitive', text: 'string' } },
+        { name: 'r', optional: false, value: { kind: 'primitive', text: 'string' } },
+      ],
+    };
+    const outer: TypeNode = {
+      kind: 'object',
+      fields: [
+        { name: 'a', optional: false, value: inner },
+        { name: 'b', optional: false, value: { kind: 'primitive', text: 'string' } },
+        { name: 'c', optional: false, value: { kind: 'primitive', text: 'string' } },
+      ],
+    };
+    // `outer` appears twice (two roots) -> survives -> references `inner` once;
+    // `inner` also appears directly as a root -> 2 references total -> survives.
+    const { aliasNameByKey } = selectAliases([outer, outer, inner]);
+    expect(aliasNameByKey.size).toBe(2);
   });
 });
 
@@ -195,5 +321,38 @@ describe('assignAliasNames — collision guard', () => {
     // A constant hash forces both distinct keys to the same name through the
     // real production assignment path.
     expect(() => assignAliasNames(candidates, () => 'deadbeef')).toThrow(/alias name collision/);
+  });
+});
+
+describe('type equivalence — aliases are transparent at call sites', () => {
+  // These assignments fail `bun run typecheck` (and `bun test`'s tsc pass) if
+  // hoisting an inline shape into a named alias ever changes the structural type
+  // a consumer sees. The central PR contract is checked at compile time here.
+  it('accepts a bulk-filter input literal through the hoisted alias', () => {
+    const input: CatalogOperationTypes['weft.workflows.bulk.cancel']['input'] = {
+      idPrefix: 'order-',
+      limit: 10,
+      createdAt: { gt: 1, lte: 2 },
+      executionDeadline: { gte: 3 },
+      attributes: [{ key: 'region', value: 'us-east' }],
+      tags: ['urgent'],
+      confirmationToken: 'token',
+      dryRun: true,
+    };
+    expect(input.limit).toBe(10);
+  });
+
+  it('keeps bulk.cancel and bulk.delete inputs mutually assignable', () => {
+    const cancel: CatalogOperationTypes['weft.workflows.bulk.cancel']['input'] = { limit: 1 };
+    const remove: CatalogOperationTypes['weft.workflows.bulk.delete']['input'] = cancel;
+    const back: CatalogOperationTypes['weft.workflows.bulk.cancel']['input'] = remove;
+    expect(back.limit).toBe(1);
+  });
+
+  it('exposes the nested date-range alias as the same structural shape', () => {
+    const range: NonNullable<
+      CatalogOperationTypes['weft.workflows.bulk.signal']['input']['createdAt']
+    > = { gt: 1, gte: 2, lt: 3, lte: 4 };
+    expect(range.lte).toBe(4);
   });
 });
