@@ -1,4 +1,5 @@
 import { createLiveOperationRegistry } from '../server/rest-bindings.ts';
+import { findNearestCandidate } from './command-suggestions.ts';
 import snapshotData from './generated/operation-catalog.snapshot.json';
 import { sendJsonRpcRequest } from './json-rpc-client.ts';
 import type { CatalogOperationSnapshot, CatalogSnapshot } from './operation-catalog-snapshot.ts';
@@ -231,43 +232,13 @@ function formatAccess(operation: CatalogOperationSnapshot): string {
 }
 
 function formatUnknownOperation(name: string): string {
-  const suggestion = findNearest(
+  const suggestion = findNearestCandidate(
     name,
     snapshot.operations.map((operation) => operation.name),
+    6,
   );
   const suffix = suggestion === undefined ? '' : `. Did you mean ${suggestion}?`;
   return `api: unknown operation ${name}${suffix}. Run weft api --list`;
-}
-
-function findNearest(value: string, candidates: readonly string[]): string | undefined {
-  let nearest: string | undefined;
-  let nearestDistance = Number.POSITIVE_INFINITY;
-  for (const candidate of candidates) {
-    const distance = editDistance(value, candidate);
-    if (distance < nearestDistance) {
-      nearest = candidate;
-      nearestDistance = distance;
-    }
-  }
-  return nearestDistance <= 6 ? nearest : undefined;
-}
-
-function editDistance(left: string, right: string): number {
-  const previous = Array.from({ length: right.length + 1 }, (_value, index) => index);
-  const current = Array.from({ length: right.length + 1 }, () => 0);
-  for (let leftIndex = 1; leftIndex <= left.length; leftIndex++) {
-    current[0] = leftIndex;
-    for (let rightIndex = 1; rightIndex <= right.length; rightIndex++) {
-      const substitutionCost = left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1;
-      current[rightIndex] = Math.min(
-        previous[rightIndex]! + 1,
-        current[rightIndex - 1]! + 1,
-        previous[rightIndex - 1]! + substitutionCost,
-      );
-    }
-    previous.splice(0, previous.length, ...current);
-  }
-  return previous[right.length]!;
 }
 
 function usageError(message: string): CommandOutput {

@@ -2,28 +2,36 @@ export function formatUnknownCommandError(
   command: string,
   knownSubcommands: readonly string[],
 ): string {
-  const suggestion = findNearestSubcommand(command, knownSubcommands);
+  const suggestion = findNearestCandidate(command, knownSubcommands, 2);
   return suggestion === undefined
     ? `Unknown command '${command}'`
     : `Unknown command '${command}'. Did you mean '${suggestion}'?`;
 }
 
-function findNearestSubcommand(
-  command: string,
-  knownSubcommands: readonly string[],
+/**
+ * Returns the candidate with the smallest edit distance to `value`, or
+ * `undefined` when the nearest candidate's distance is strictly greater than
+ * `maxDistance`. A candidate at exactly `maxDistance` is accepted. Callers
+ * supply `maxDistance` so different suggestion surfaces can tune how forgiving
+ * their typo matching is. Internal to `src/cli/`; not part of the public API.
+ */
+export function findNearestCandidate(
+  value: string,
+  candidates: readonly string[],
+  maxDistance: number,
 ): string | undefined {
   let nearest: string | undefined;
   let nearestDistance = Number.POSITIVE_INFINITY;
 
-  for (const candidate of knownSubcommands) {
-    const distance = editDistance(command, candidate);
+  for (const candidate of candidates) {
+    const distance = editDistance(value, candidate);
     if (distance < nearestDistance) {
       nearest = candidate;
       nearestDistance = distance;
     }
   }
 
-  return nearestDistance <= 2 ? nearest : undefined;
+  return nearestDistance <= maxDistance ? nearest : undefined;
 }
 
 function editDistance(left: string, right: string): number {
