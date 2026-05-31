@@ -401,11 +401,17 @@ function countAliasReferences(
 
   // Alias bodies: each hoisted shape's body contributes references to the
   // nested aliases it substitutes (its own top level is inlined, not a self-ref).
+  // The two steps below do DIFFERENT work and must both run for an alias node:
+  // `countChildren` records this body's direct alias references (stopping at
+  // alias boundaries), while the tail recursion keeps descending to discover and
+  // count the bodies of aliases nested deeper. Returning early after
+  // `countChildren` would miss grandchild aliases and is a bug, not an
+  // optimization. `seen` makes the per-body counting idempotent across roots that
+  // share a subtree.
   const seen = new Set<string>();
   const collectBodies = (node: TypeNode) => {
     const key = canonicalKey(node);
-    if (aliasKeys.has(key)) {
-      if (seen.has(key)) return;
+    if (aliasKeys.has(key) && !seen.has(key)) {
       seen.add(key);
       countChildren(node);
     }

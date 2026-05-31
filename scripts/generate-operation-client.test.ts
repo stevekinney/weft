@@ -147,6 +147,22 @@ describe('createOperationClientSource — generated output', () => {
     expect(cancel?.[1]).toBe(remove?.[1]);
   });
 
+  it('leaves bulk.signal input inline but substitutes its nested aliases', async () => {
+    const source = await createOperationClientSource(createCatalogSnapshot());
+    // bulk.signal carries extra `name`/`payload` fields, so its whole input is a
+    // distinct shape from cancel/delete and is intentionally NOT routed through
+    // the shared filter alias. Its nested date-range/attribute shapes still
+    // collapse to aliases.
+    const signal = source.match(
+      /'weft\.workflows\.bulk\.signal': \{\s*readonly input: (\{[^}]*?readonly name: string;[\s\S]*?\});/,
+    );
+    expect(signal?.[1]).toBeDefined();
+    expect(signal?.[1]).toContain('readonly payload?: unknown;');
+    // Nested aliases substituted inside the inline signal input.
+    expect(signal?.[1]).toMatch(/readonly createdAt\?: Shared\w+;/);
+    expect(signal?.[1]).toMatch(/readonly attributes\?: ReadonlyArray<Shared\w+>;/);
+  });
+
   it('never emits a self-referential alias', async () => {
     const source = await createOperationClientSource(createCatalogSnapshot());
     for (const [, name] of source.matchAll(/type (Shared\w+) = /g)) {
@@ -253,6 +269,45 @@ describe('selectAliases — prune to fixed point', () => {
     // `inner` also appears directly as a root -> 2 references total -> survives.
     const { aliasNameByKey } = selectAliases([outer, outer, inner]);
     expect(aliasNameByKey.size).toBe(2);
+  });
+
+  it('recovers a deeply nested alias after its parent is pruned', () => {
+    // C nests in B nests in A. B is referenced only once (in A's body) so B is
+    // pruned; once B inlines into A, C surfaces twice inside A and survives.
+    // This exercises the body-discovery walk: it must descend through a pruned
+    // parent to keep a grandchild that is genuinely shared.
+    const prim = (text: string): TypeNode => ({ kind: 'primitive', text });
+    const c: TypeNode = {
+      kind: 'object',
+      fields: [
+        { name: 'p', optional: false, value: prim('number') },
+        { name: 'q', optional: false, value: prim('number') },
+        { name: 'r', optional: false, value: prim('number') },
+      ],
+    };
+    const b: TypeNode = {
+      kind: 'object',
+      fields: [
+        { name: 'm', optional: false, value: c },
+        { name: 'n', optional: false, value: c },
+        { name: 'o', optional: false, value: prim('string') },
+      ],
+    };
+    const a: TypeNode = {
+      kind: 'object',
+      fields: [
+        { name: 'a', optional: false, value: b },
+        { name: 'b', optional: false, value: prim('string') },
+        { name: 'c', optional: false, value: prim('string') },
+      ],
+    };
+    const { aliasNameByKey, nodeByKey } = selectAliases([a, a]);
+    // Survivors: A (two roots) and C (twice inside A after B inlines). Not B.
+    expect(aliasNameByKey.size).toBe(2);
+    const survivors = new Set(nodeByKey.values());
+    expect(survivors.has(a)).toBe(true);
+    expect(survivors.has(c)).toBe(true);
+    expect(survivors.has(b)).toBe(false);
   });
 });
 
