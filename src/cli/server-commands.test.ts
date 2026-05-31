@@ -72,6 +72,18 @@ describe('weft server health', () => {
       engine[Symbol.dispose]();
     }
   });
+
+  it('surfaces connection configuration errors and quiet health failures', async () => {
+    const badConnection = await executeServer(healthCommand({ server: 'not-a-url' }));
+    expect(badConnection.exitCode).toBe(2);
+    expect(badConnection.stderr).toContain('connection error');
+
+    const quietFailure = await executeServer(
+      healthCommand({ server: 'http://127.0.0.1:1/', quiet: true }),
+    );
+    expect(quietFailure.exitCode).toBe(2);
+    expect(quietFailure.stderr).toBe('');
+  });
 });
 
 describe('weft server info', () => {
@@ -89,5 +101,17 @@ describe('weft server info', () => {
       await server.stop();
       engine[Symbol.dispose]();
     }
+  });
+
+  it('reports JSON info and preserves unhealthy exit codes', async () => {
+    const result = await executeServer(
+      healthCommand({ action: 'info', server: 'http://127.0.0.1:1/', json: true }),
+    );
+    expect(result.exitCode).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      healthy: false,
+      serverOperationCount: null,
+      additionalOperations: [],
+    });
   });
 });

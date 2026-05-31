@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock } from 'bun:test';
 
 import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
@@ -108,6 +108,29 @@ describe('streamWorkflowEvents', () => {
     expect(lines[0]).toContain('connection failed');
   });
 
+  it('returns exit 2 on a mid-stream reader failure', async () => {
+    const errors: string[] = [];
+    const body = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: token\ndata: first\n\n'));
+        controller.error(new Error('stream reset'));
+      },
+    });
+
+    const exitCode = await streamWorkflowEvents({
+      url: new URL('http://localhost/v1/workflows/wf/sse'),
+      signal: new AbortController().signal,
+      write: () => undefined,
+      reportError: (line) => errors.push(line),
+      json: true,
+      fetchImpl: async () =>
+        new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } }),
+    });
+
+    expect(exitCode).toBe(2);
+    expect(errors[0]).toContain('stream error');
+  });
+
   it('returns exit 1 on a 404', async () => {
     const exitCode = await streamWorkflowEvents({
       url: new URL('http://localhost/v1/workflows/missing/sse'),
@@ -168,6 +191,44 @@ describe('weft tail', () => {
     } finally {
       await server.stop();
       engine[Symbol.dispose]();
+    }
+  });
+
+  it('surfaces connection configuration errors before opening SSE', async () => {
+    const result = await executeTail({
+      command: 'tail',
+      server: 'not-a-url',
+      workflowId: 'wf-tail-live',
+      help: false,
+      json: false,
+      quiet: false,
+    });
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('connection error');
+  });
+
+  it('suppresses streamed stdout under --quiet', async () => {
+    const writeSpy = mock(() => true);
+    const fetchImpl = async () => sseResponse(['event: done\ndata: \n\n']);
+    const previousFetch = globalThis.fetch;
+    const previousWrite = process.stdout.write.bind(process.stdout);
+    globalThis.fetch = fetchImpl as unknown as typeof fetch;
+    process.stdout.write = writeSpy as unknown as typeof process.stdout.write;
+
+    try {
+      const result = await executeTail({
+        command: 'tail',
+        server: 'http://localhost:7233',
+        workflowId: 'wf-tail-live',
+        help: false,
+        json: true,
+        quiet: true,
+      });
+      expect(result.exitCode).toBe(0);
+      expect(writeSpy).not.toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = previousFetch;
+      process.stdout.write = previousWrite;
     }
   });
 });

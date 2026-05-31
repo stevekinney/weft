@@ -65,6 +65,13 @@ describe('api argument parser', () => {
       parseCliArguments(['api', 'weft.workflows.list', '--input', '{}', '--input-file', 'in.json']),
     ).toThrow(/--input and --input-file/);
   });
+
+  it('rejects conflicting list and describe selectors and ignores flag-only argv', () => {
+    expect(() => parseCliArguments(['api', '--list', '--describe', 'weft.workflows.list'])).toThrow(
+      /--list cannot be combined/,
+    );
+    expect(findCliSubcommandName(['--describe', 'weft.workflows.list'])).toBeUndefined();
+  });
 });
 
 describe('api command', () => {
@@ -105,6 +112,17 @@ describe('api command', () => {
     expect(readableDescription.stdout).toContain('Name: weft.workflows.cancel');
     expect(readableDescription.stdout).toContain('Safety: destructive');
     expect(() => JSON.parse(readableDescription.stdout)).toThrow();
+
+    const humanList = await executeApi({
+      command: 'api',
+      list: true,
+      yes: false,
+      help: false,
+      json: false,
+    });
+    expect(humanList.exitCode).toBe(0);
+    expect(humanList.stdout).toContain('name');
+    expect(humanList.stdout).toContain('json-rpc-http');
   });
 
   it('shows the longer-form description for an operation that declares one', async () => {
@@ -201,6 +219,30 @@ describe('api command', () => {
     expect(result.stderr).toContain('--list');
   });
 
+  it('reports local usage errors before attempting a request', async () => {
+    const missingSelector = await executeApi({
+      command: 'api',
+      list: false,
+      yes: false,
+      help: false,
+      json: false,
+    });
+    expect(missingSelector.exitCode).toBe(3);
+    expect(missingSelector.stderr).toContain('expected --list');
+
+    const streamingOperation = await executeApi({
+      command: 'api',
+      operationName: 'weft.workflows.events',
+      input: '{}',
+      list: false,
+      yes: false,
+      help: false,
+      json: false,
+    });
+    expect(streamingOperation.exitCode).toBe(3);
+    expect(streamingOperation.stderr).toContain('supports unary operations only');
+  });
+
   it('rejects unary operations that are unavailable over JSON-RPC HTTP', async () => {
     const result = await executeApi({
       command: 'api',
@@ -251,6 +293,72 @@ describe('api command', () => {
       await server.stop();
       engine[Symbol.dispose]();
     }
+  });
+
+  it('reads input from files, rejects missing files, and surfaces operation failures', async () => {
+    const directory = await mkdtemp(join(tmpdir(), 'weft-api-input-'));
+    const inputPath = join(directory, 'input.json');
+    await Bun.write(inputPath, JSON.stringify({ workflowId: 'missing-workflow' }));
+
+    const engine = new Engine();
+    const server = serve({ engine, port: 0 });
+    try {
+      const failedOperation = await executeApi({
+        command: 'api',
+        operationName: 'weft.workflows.get',
+        server: server.url.toString(),
+        inputFile: inputPath,
+        list: false,
+        yes: false,
+        help: false,
+        json: true,
+      });
+
+      expect(failedOperation.exitCode).toBe(1);
+      expect(JSON.parse(failedOperation.stdout)).toMatchObject({ ok: false });
+
+      const missingFile = await executeApi({
+        command: 'api',
+        operationName: 'weft.workflows.get',
+        inputFile: join(directory, 'missing.json'),
+        list: false,
+        yes: false,
+        help: false,
+        json: false,
+      });
+      expect(missingFile.exitCode).toBe(3);
+      expect(missingFile.stderr).toContain('input file not found');
+    } finally {
+      await server.stop();
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('rejects non-object JSON input and connection failures', async () => {
+    const arrayInput = await executeApi({
+      command: 'api',
+      operationName: 'weft.workflows.get',
+      input: '[]',
+      list: false,
+      yes: false,
+      help: false,
+      json: false,
+    });
+    expect(arrayInput.exitCode).toBe(3);
+    expect(arrayInput.stderr).toContain('expected object, received array');
+
+    const connectionFailure = await executeApi({
+      command: 'api',
+      operationName: 'weft.workflows.list',
+      server: 'http://127.0.0.1:1/',
+      input: '{}',
+      list: false,
+      yes: false,
+      help: false,
+      json: false,
+    });
+    expect(connectionFailure.exitCode).toBe(2);
+    expect(connectionFailure.stderr).toContain('connection failed');
   });
 });
 
