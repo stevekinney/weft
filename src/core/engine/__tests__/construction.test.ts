@@ -267,6 +267,15 @@ describe('normalizeWorkerExecutionConfiguration', () => {
     ).toThrow('at least 4096');
   });
 
+  it('accepts the minimum valid protocol message byte limit', () => {
+    expect(
+      normalizeWorkerExecutionConfiguration({
+        workflowExecutionMode: 'worker',
+        workerExecution: { workerUrl, maxProtocolMessageBytes: 4_096 },
+      }),
+    ).toMatchObject({ mode: 'worker', maxProtocolMessageBytes: 4_096 });
+  });
+
   it('routes explicit worker mode through the Worker execution strategy bundle', () => {
     const bundle = createExecutionStrategyBundle({
       options: {

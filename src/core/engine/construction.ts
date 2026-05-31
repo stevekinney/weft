@@ -319,10 +319,7 @@ function normalizeWorkerModeConfiguration(
       'options.workerExecution.maxProtocolMessageBytes',
       undefined,
     ) ?? DEFAULT_WORKER_PROTOCOL_MESSAGE_BYTES;
-  if (
-    maxProtocolMessageBytes !== undefined &&
-    maxProtocolMessageBytes < MIN_WORKER_PROTOCOL_MESSAGE_BYTES
-  ) {
+  if (maxProtocolMessageBytes < MIN_WORKER_PROTOCOL_MESSAGE_BYTES) {
     throw new Error(
       `options.workerExecution.maxProtocolMessageBytes must be at least ${MIN_WORKER_PROTOCOL_MESSAGE_BYTES}`,
     );
