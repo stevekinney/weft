@@ -62,6 +62,50 @@ export const CATALOG_OPERATION_NAMES = [
 
 export type CatalogOperationName = (typeof CATALOG_OPERATION_NAMES)[number];
 
+type SharedAttributesConfirmationTo_f933f774 = {
+  readonly attributes?: ReadonlyArray<SharedGtGteKey_896a0c41>;
+  readonly confirmationToken?: string;
+  readonly createdAt?: SharedGtGteLt_d9a61361;
+  readonly dryRun?: boolean;
+  readonly executionDeadline?: SharedGtGteLt_d9a61361;
+  readonly failureCategory?: unknown;
+  readonly idPrefix?: string;
+  readonly limit?: number;
+  readonly offset?: number;
+  readonly requestId?: string;
+  readonly status?: unknown;
+  readonly tags?: ReadonlyArray<string>;
+  readonly type?: string;
+  readonly updatedAt?: SharedGtGteLt_d9a61361;
+};
+type SharedAttributesCreatedAtExecu_c9ba5dc6 = {
+  readonly attributes?: ReadonlyArray<SharedGtGteKey_896a0c41>;
+  readonly createdAt?: SharedGtGteLt_d9a61361;
+  readonly executionDeadline?: SharedGtGteLt_d9a61361;
+  readonly failureCategory?: unknown;
+  readonly idPrefix?: string;
+  readonly limit?: number;
+  readonly offset?: number;
+  readonly status?: unknown;
+  readonly tags?: ReadonlyArray<string>;
+  readonly type?: string;
+  readonly updatedAt?: SharedGtGteLt_d9a61361;
+};
+type SharedGtGteKey_896a0c41 = {
+  readonly gt?: unknown;
+  readonly gte?: unknown;
+  readonly key: string;
+  readonly lt?: unknown;
+  readonly lte?: unknown;
+  readonly value?: unknown;
+};
+type SharedGtGteLt_d9a61361 = {
+  readonly gt?: number;
+  readonly gte?: number;
+  readonly lt?: number;
+  readonly lte?: number;
+};
+
 export type CatalogOperationTypes = {
   'weft.recover.all': {
     readonly input: {};
@@ -291,18 +335,8 @@ export type CatalogOperationTypes = {
         readonly lte?: unknown;
         readonly value?: unknown;
       }>;
-      readonly createdAt?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
-      readonly executionDeadline?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
+      readonly createdAt?: SharedGtGteLt_d9a61361;
+      readonly executionDeadline?: SharedGtGteLt_d9a61361;
       readonly failureCategory?: unknown;
       readonly groupBy: unknown;
       readonly idPrefix?: string;
@@ -310,12 +344,7 @@ export type CatalogOperationTypes = {
       readonly status?: unknown;
       readonly tags?: ReadonlyArray<string>;
       readonly type?: string;
-      readonly updatedAt?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
+      readonly updatedAt?: SharedGtGteLt_d9a61361;
     };
     readonly output: {
       readonly groups: ReadonlyArray<{ readonly count: number; readonly key: unknown }>;
@@ -335,113 +364,22 @@ export type CatalogOperationTypes = {
     readonly faults: never;
   };
   'weft.workflows.bulk.cancel': {
-    readonly input: {
-      readonly attributes?: ReadonlyArray<{
-        readonly gt?: unknown;
-        readonly gte?: unknown;
-        readonly key: string;
-        readonly lt?: unknown;
-        readonly lte?: unknown;
-        readonly value?: unknown;
-      }>;
-      readonly confirmationToken?: string;
-      readonly createdAt?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
-      readonly dryRun?: boolean;
-      readonly executionDeadline?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
-      readonly failureCategory?: unknown;
-      readonly idPrefix?: string;
-      readonly limit?: number;
-      readonly offset?: number;
-      readonly requestId?: string;
-      readonly status?: unknown;
-      readonly tags?: ReadonlyArray<string>;
-      readonly type?: string;
-      readonly updatedAt?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
-    };
+    readonly input: SharedAttributesConfirmationTo_f933f774;
     readonly output: unknown;
     readonly faults: never;
   };
   'weft.workflows.bulk.delete': {
-    readonly input: {
-      readonly attributes?: ReadonlyArray<{
-        readonly gt?: unknown;
-        readonly gte?: unknown;
-        readonly key: string;
-        readonly lt?: unknown;
-        readonly lte?: unknown;
-        readonly value?: unknown;
-      }>;
-      readonly confirmationToken?: string;
-      readonly createdAt?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
-      readonly dryRun?: boolean;
-      readonly executionDeadline?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
-      readonly failureCategory?: unknown;
-      readonly idPrefix?: string;
-      readonly limit?: number;
-      readonly offset?: number;
-      readonly requestId?: string;
-      readonly status?: unknown;
-      readonly tags?: ReadonlyArray<string>;
-      readonly type?: string;
-      readonly updatedAt?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
-    };
+    readonly input: SharedAttributesConfirmationTo_f933f774;
     readonly output: unknown;
     readonly faults: 'Unprocessable';
   };
   'weft.workflows.bulk.signal': {
     readonly input: {
-      readonly attributes?: ReadonlyArray<{
-        readonly gt?: unknown;
-        readonly gte?: unknown;
-        readonly key: string;
-        readonly lt?: unknown;
-        readonly lte?: unknown;
-        readonly value?: unknown;
-      }>;
+      readonly attributes?: ReadonlyArray<SharedGtGteKey_896a0c41>;
       readonly confirmationToken?: string;
-      readonly createdAt?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
+      readonly createdAt?: SharedGtGteLt_d9a61361;
       readonly dryRun?: boolean;
-      readonly executionDeadline?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
+      readonly executionDeadline?: SharedGtGteLt_d9a61361;
       readonly failureCategory?: unknown;
       readonly idPrefix?: string;
       readonly limit?: number;
@@ -452,12 +390,7 @@ export type CatalogOperationTypes = {
       readonly status?: unknown;
       readonly tags?: ReadonlyArray<string>;
       readonly type?: string;
-      readonly updatedAt?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
+      readonly updatedAt?: SharedGtGteLt_d9a61361;
     };
     readonly output: unknown;
     readonly faults: never;
@@ -466,41 +399,7 @@ export type CatalogOperationTypes = {
     readonly input: {
       readonly confirmationToken?: string;
       readonly dryRun?: boolean;
-      readonly filter?: {
-        readonly attributes?: ReadonlyArray<{
-          readonly gt?: unknown;
-          readonly gte?: unknown;
-          readonly key: string;
-          readonly lt?: unknown;
-          readonly lte?: unknown;
-          readonly value?: unknown;
-        }>;
-        readonly createdAt?: {
-          readonly gt?: number;
-          readonly gte?: number;
-          readonly lt?: number;
-          readonly lte?: number;
-        };
-        readonly executionDeadline?: {
-          readonly gt?: number;
-          readonly gte?: number;
-          readonly lt?: number;
-          readonly lte?: number;
-        };
-        readonly failureCategory?: unknown;
-        readonly idPrefix?: string;
-        readonly limit?: number;
-        readonly offset?: number;
-        readonly status?: unknown;
-        readonly tags?: ReadonlyArray<string>;
-        readonly type?: string;
-        readonly updatedAt?: {
-          readonly gt?: number;
-          readonly gte?: number;
-          readonly lt?: number;
-          readonly lte?: number;
-        };
-      };
+      readonly filter?: SharedAttributesCreatedAtExecu_c9ba5dc6;
       readonly operation: string;
       readonly requestId?: string;
       readonly tags: ReadonlyArray<string>;
@@ -540,26 +439,9 @@ export type CatalogOperationTypes = {
   };
   'weft.workflows.list': {
     readonly input: {
-      readonly attributes?: ReadonlyArray<{
-        readonly gt?: unknown;
-        readonly gte?: unknown;
-        readonly key: string;
-        readonly lt?: unknown;
-        readonly lte?: unknown;
-        readonly value?: unknown;
-      }>;
-      readonly createdAt?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
-      readonly executionDeadline?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
+      readonly attributes?: ReadonlyArray<SharedGtGteKey_896a0c41>;
+      readonly createdAt?: SharedGtGteLt_d9a61361;
+      readonly executionDeadline?: SharedGtGteLt_d9a61361;
       readonly failureCategory?: unknown;
       readonly idPrefix?: string;
       readonly include?: unknown;
@@ -568,52 +450,13 @@ export type CatalogOperationTypes = {
       readonly status?: unknown;
       readonly tags?: ReadonlyArray<string>;
       readonly type?: string;
-      readonly updatedAt?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
+      readonly updatedAt?: SharedGtGteLt_d9a61361;
     };
     readonly output: unknown;
     readonly faults: 'Unprocessable';
   };
   'weft.workflows.purge': {
-    readonly input: {
-      readonly attributes?: ReadonlyArray<{
-        readonly gt?: unknown;
-        readonly gte?: unknown;
-        readonly key: string;
-        readonly lt?: unknown;
-        readonly lte?: unknown;
-        readonly value?: unknown;
-      }>;
-      readonly createdAt?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
-      readonly executionDeadline?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
-      readonly failureCategory?: unknown;
-      readonly idPrefix?: string;
-      readonly limit?: number;
-      readonly offset?: number;
-      readonly status?: unknown;
-      readonly tags?: ReadonlyArray<string>;
-      readonly type?: string;
-      readonly updatedAt?: {
-        readonly gt?: number;
-        readonly gte?: number;
-        readonly lt?: number;
-        readonly lte?: number;
-      };
-    };
+    readonly input: SharedAttributesCreatedAtExecu_c9ba5dc6;
     readonly output: unknown;
     readonly faults: never;
   };
