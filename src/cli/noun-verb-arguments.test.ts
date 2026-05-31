@@ -192,3 +192,18 @@ describe('completions argument parsing', () => {
     );
   });
 });
+
+describe('unknown top-level command suggestions', () => {
+  it('suggests a nearby subcommand for a near-miss top-level command', () => {
+    // 'serv' is distance 1 from the known subcommand 'serve', within the threshold of 2.
+    expect(() => parseCliArguments(['serv'])).toThrow(
+      /Unknown command 'serv'\. Did you mean 'serve'\?/,
+    );
+  });
+
+  it('omits a suggestion for a top-level command beyond the threshold', () => {
+    // 'xyzzy' is more than two edits from every known subcommand.
+    expect(() => parseCliArguments(['xyzzy'])).toThrow(/Unknown command 'xyzzy'/);
+    expect(() => parseCliArguments(['xyzzy'])).not.toThrow(/Did you mean/);
+  });
+});

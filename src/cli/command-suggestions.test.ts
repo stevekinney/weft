@@ -13,6 +13,14 @@ describe('findNearestCandidate', () => {
     expect(nearest).toBe('aaaaab');
   });
 
+  it('returns the first candidate when two candidates are equidistant', () => {
+    // 'abcd' -> 'xbcd' (distance 1) and 'abcd' -> 'abcx' (distance 1) are tied.
+    // The inner comparison is strict `<`, so the first candidate in iteration
+    // order wins. This pins the tie-break against an accidental switch to `<=`.
+    const nearest = findNearestCandidate('abcd', ['xbcd', 'abcx'], 6);
+    expect(nearest).toBe('xbcd');
+  });
+
   it('accepts a candidate at exactly maxDistance (distance 6, maxDistance 6)', () => {
     // 'aaaaaa' -> 'bbbbbb' substitutes all six positions: distance 6.
     const nearest = findNearestCandidate('aaaaaa', ['bbbbbb'], 6);
@@ -51,7 +59,8 @@ describe('formatUnknownCommandError', () => {
   });
 
   it('omits a suggestion when the nearest subcommand exceeds the threshold', () => {
-    // 'xyzzy' is more than two edits from any candidate.
+    // 'xyzzy' is distance 6 from 'studio' and distance 6 from 'server',
+    // both far past the threshold of 2.
     const message = formatUnknownCommandError('xyzzy', ['studio', 'server']);
     expect(message).toBe("Unknown command 'xyzzy'");
   });
