@@ -102,7 +102,7 @@ controller.abort();
 
 Using `AbortSignal` for cleanup is the modern best practice. One `abort()` call removes every listener you attached with that signal—no need to track individual references.
 
-_Pattern 2: Async iteration._ `WorkflowHandle` implements `Symbol.asyncIterator`, so you can `for await...of` over events from a specific workflow.
+_Pattern 2: Async iteration._ In-process `WorkflowHandle` implements `Symbol.asyncIterator`, so you can `for await...of` over events from a specific workflow.
 
 ```typescript partial
 const handle = await engine.start('order', orderData);
@@ -118,9 +118,24 @@ for await (const event of handle) {
 }
 ```
 
-This is useful for streaming progress to a client or building real-time UIs. The iterator yields events as they happen and terminates when the workflow reaches a terminal state (completed, failed, or cancelled).
+This is useful for streaming progress to code that already has an in-process engine handle. The iterator yields events as they happen and terminates when the workflow reaches a terminal state (completed, failed, cancelled, or timed out).
 
-_Pattern 3: Observable._ `WorkflowHandle` also implements `Symbol.observable`, making it compatible with RxJS and other reactive libraries.
+_Pattern 3: Client tails._ `LocalClient` and `HttpClient` expose `client.tail(id)` and `handle.tail()` for code that uses the client abstraction. The returned `WorkflowEventTail` is an `AsyncIterable` with `whenConnected()` and `close()`.
+
+```typescript partial
+const handle = await client.start('order', orderData);
+const tail = handle.tail();
+
+await tail.whenConnected();
+
+for await (const event of tail) {
+  console.log(event.type);
+}
+```
+
+`HttpClient` tails ride the `/v1/workflows/:id/watch` WebSocket channel and catch up from `getEvents()` on connect and reconnect. `LocalClient` tails bridge the engine event stream and perform the same history catch-up. A tail is single-consumer: open a fresh `client.tail(id)` or `handle.tail()` for each independent reader.
+
+_Pattern 4: Observable._ `WorkflowHandle` also implements `Symbol.observable`, making it compatible with RxJS and other reactive libraries.
 
 ```typescript partial
 const handle = await engine.start('order', orderData);
@@ -142,4 +157,4 @@ const subscription = observable.subscribe({
 subscription.unsubscribe();
 ```
 
-Pick the pattern that fits your use case. `addEventListener` for global engine-level observability, async iteration for following a single workflow, and Observable when you are already in a reactive pipeline.
+Pick the pattern that fits your use case. `addEventListener` for persistent observation, client tails for client-mode progress streams, in-process async iteration when you already hold an engine handle, and Observable when you are already in a reactive pipeline.

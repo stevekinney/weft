@@ -106,6 +106,8 @@ weft codegen --server http://localhost:7233 --out ./src/weft.generated.d.ts --js
 
 The generated file augments the public `weft` module with `WorkflowRegistry` entries — typed workflow names that make `engine.start('name', ...)` infer the right input shape. Activity names are no longer typed via a global module augmentation; they live on the workflow builder's `.activities({...})` step instead. Output is byte-stable: running the command again with the same snapshot reports that the file is up to date and does not rewrite it.
 
+When `--server` is used, connection resolution follows the same order as the server-inspection commands: explicit `--server`, `WEFT_ADDR`, selected profile, then the run lockfile written by `weft serve`. If the resolved server URL is malformed, the diagnostic reports the actual offending value regardless of which source supplied it. For example, a bad profile URL now fails as `codegen: invalid server URL '<value>'` rather than reconstructing the message from flags and environment alone.
+
 **Options:**
 
 | Flag        | Short | Default | Description                                                                                      |
@@ -271,7 +273,7 @@ On a TTY, lists render as a table and single objects as indented JSON; `--json` 
 | `--quiet`      | `-q`  | `false` | Print ids only / suppress success text                |
 | `--help`       | `-h`  |         | Show help message                                     |
 
-Exit codes follow the operate/inspect convention: `0` success, `1` operation failed or destructive op not confirmed, `2` connection error, `3` usage or input error, `4` operation unavailable on this server (version skew).
+Exit codes follow the operate/inspect convention: `0` success, `1` operation failed or destructive op not confirmed, `2` connection error, `3` usage or input error, `4` operation unavailable on this server (version skew). Connection-configuration errors name the resolved URL source instead of falling back to an empty value when it came from a profile or run lockfile.
 
 ### tail
 

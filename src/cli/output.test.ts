@@ -12,24 +12,47 @@ import {
 
 describe('supportsColor', () => {
   it('FORCE_COLOR=0 does not enable color (per FORCE_COLOR spec)', () => {
-    const priorValue = Bun.env['FORCE_COLOR'];
+    const priorForceColor = Bun.env['FORCE_COLOR'];
+    const priorNoColor = Bun.env['NO_COLOR'];
     Bun.env['FORCE_COLOR'] = '0';
+    delete Bun.env['NO_COLOR'];
     try {
       expect(supportsColor({ isTTY: false })).toBe(false);
     } finally {
-      if (priorValue === undefined) delete Bun.env['FORCE_COLOR'];
-      else Bun.env['FORCE_COLOR'] = priorValue;
+      if (priorForceColor === undefined) delete Bun.env['FORCE_COLOR'];
+      else Bun.env['FORCE_COLOR'] = priorForceColor;
+      if (priorNoColor === undefined) delete Bun.env['NO_COLOR'];
+      else Bun.env['NO_COLOR'] = priorNoColor;
     }
   });
 
   it('FORCE_COLOR=1 enables color', () => {
-    const priorValue = Bun.env['FORCE_COLOR'];
+    const priorForceColor = Bun.env['FORCE_COLOR'];
+    const priorNoColor = Bun.env['NO_COLOR'];
     Bun.env['FORCE_COLOR'] = '1';
+    delete Bun.env['NO_COLOR'];
     try {
       expect(supportsColor({ isTTY: false })).toBe(true);
     } finally {
-      if (priorValue === undefined) delete Bun.env['FORCE_COLOR'];
-      else Bun.env['FORCE_COLOR'] = priorValue;
+      if (priorForceColor === undefined) delete Bun.env['FORCE_COLOR'];
+      else Bun.env['FORCE_COLOR'] = priorForceColor;
+      if (priorNoColor === undefined) delete Bun.env['NO_COLOR'];
+      else Bun.env['NO_COLOR'] = priorNoColor;
+    }
+  });
+
+  it('NO_COLOR disables color unless FORCE_COLOR is forcing it', () => {
+    const priorForceColor = Bun.env['FORCE_COLOR'];
+    const priorNoColor = Bun.env['NO_COLOR'];
+    Bun.env['FORCE_COLOR'] = '';
+    Bun.env['NO_COLOR'] = '1';
+    try {
+      expect(supportsColor({ isTTY: true })).toBe(false);
+    } finally {
+      if (priorForceColor === undefined) delete Bun.env['FORCE_COLOR'];
+      else Bun.env['FORCE_COLOR'] = priorForceColor;
+      if (priorNoColor === undefined) delete Bun.env['NO_COLOR'];
+      else Bun.env['NO_COLOR'] = priorNoColor;
     }
   });
 });
@@ -125,5 +148,33 @@ describe('confirmDestructive', () => {
       readLine: async () => '',
     });
     expect(decision).toBe('denied');
+  });
+
+  it('defaultReadLine trims trailing newlines across chunk boundaries', async () => {
+    const priorStream = Bun.stdin.stream;
+    Bun.stdin.stream = (() =>
+      new ReadableStream<Uint8Array<ArrayBuffer>>({
+        start(controller) {
+          const firstChunk = new Uint8Array(new ArrayBuffer(2));
+          firstChunk.set([121, 101]);
+          controller.enqueue(firstChunk);
+
+          const secondChunk = new Uint8Array(new ArrayBuffer(6));
+          secondChunk.set([115, 10, 114, 101, 115, 116]);
+          controller.enqueue(secondChunk);
+          controller.close();
+        },
+      })) as unknown as typeof Bun.stdin.stream;
+
+    try {
+      const decision = await confirmDestructive({
+        prompt: 'go?',
+        assumeYes: false,
+        isTty: true,
+      });
+      expect(decision).toBe('confirmed');
+    } finally {
+      Bun.stdin.stream = priorStream;
+    }
   });
 });

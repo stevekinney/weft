@@ -15,6 +15,7 @@ description: >-
 - Introducing a promise that can outlive its owner or wait on an event from another process.
 - Fixing tests that rely on real sleeps, timing slack, or unbounded polling.
 - Changing server task polling, request `AbortSignal` handling, or `TaskQueue` disposal.
+- Changing client workflow-event streaming, including `HttpClient` `/v1/workflows/:id/watch` subscriptions, `client.tail(id)`, `handle.tail()`, `whenConnected()`, reconnect catch-up, or WebSocket factory behavior.
 
 ## Do not use
 
@@ -32,6 +33,15 @@ description: >-
 6. Check `signal.aborted` before registering listeners or claiming work; an already-aborted signal will not fire another abort event.
 7. On server shutdown, clear timers, resolve parked waiters, and avoid invoking callbacks that would re-enter disposed engine or storage state.
 
+### Client event-streaming work
+
+- Treat connect, history catch-up, live-frame buffering, reconnect, terminal close, and manual `close()` as separate state transitions.
+- Pin a connect generation around history catch-up; a stale catch-up must not emit history, drain frames from a newer socket, or inflate the delivered cursor.
+- Deduplicate only the true catch-up/live overlap. If two live frames are structurally identical, consume at most one matching history entry so the second live frame is still delivered.
+- Buffer from construction for `tail()` so `await tail.whenConnected(); for await (...)` still sees catch-up history. Do not buffer indefinitely for callback-only `addEventListener` subscriptions.
+- Keep `HttpHandle` subscription lifetime explicit: do not silently re-open a terminal or exhausted subscription if doing so would replay already-delivered events to existing listeners.
+- Fail first-connect factory errors loudly. Missing global WebSocket support or header-capability mismatches should point at `HttpClientOptions.webSocketFactory`.
+
 ### RemoteWorker reconnect work
 
 - Model close, deferred requeue, same-`workerId` re-register, peer takeover, heartbeat visibility extension, and stale `taskResult` arrival as separate transitions.
@@ -42,6 +52,7 @@ description: >-
 
 - Add race regression tests for before-ack disposal, socket close, cancellation, and shutdown paths touched by the change.
 - For reconnect behavior, cover grace-window cancellation, visibility-timeout takeover, stale completion rejection, server-restart redelivery, and buffered `taskResult` resend after a socket failure.
+- For client event streaming, cover connect catch-up, reconnect during catch-up, duplicate-looking live frames, callback-only no-leak behavior, `whenConnected()` after close, and missing or inadequate WebSocket factories.
 - For long-poll task queues, cover disconnect during wait, already-aborted signals, pending-task retention for dead callers, idempotent disposal, and timer cleanup.
 - Prove no test depends on unbounded waits or real-time sleeps.
 - Run the focused lifecycle or worker tests plus `bun run verify:no-test-sleeps` when relevant.

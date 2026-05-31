@@ -116,6 +116,15 @@ describe('weft workflow start/get/events', () => {
       expect(json.exitCode).toBe(0);
       const lines = json.stdout.split('\n').filter((line) => line.length > 0);
       for (const line of lines) expect(() => JSON.parse(line)).not.toThrow();
+
+      const quiet = await executeWorkflow({
+        ...base,
+        action: 'ls',
+        server: served.url,
+        quiet: true,
+      } satisfies WorkflowCommand);
+      expect(quiet.exitCode).toBe(0);
+      expect(quiet.stdout).toBe('wf-ls-1');
     } finally {
       await served.stop();
     }
@@ -230,6 +239,34 @@ describe('weft workflow signal', () => {
       await served.stop();
     }
   });
+
+  it('surfaces local input errors for start and signal before calling the server', async () => {
+    const served = createServedEngine();
+    try {
+      const start = await executeWorkflow({
+        ...base,
+        action: 'start',
+        server: served.url,
+        workflowType: 'echo',
+        input: '{',
+      } satisfies WorkflowCommand);
+      expect(start.exitCode).toBe(3);
+      expect(start.stderr).toContain('invalid JSON input');
+
+      const signal = await executeWorkflow({
+        ...base,
+        action: 'signal',
+        server: served.url,
+        workflowId: 'wf-signal-1',
+        signalName: 'wake',
+        inputFile: '/definitely/missing.json',
+      } satisfies WorkflowCommand);
+      expect(signal.exitCode).toBe(3);
+      expect(signal.stderr).toContain('input file not found');
+    } finally {
+      await served.stop();
+    }
+  });
 });
 
 describe('connection failures', () => {
@@ -238,6 +275,17 @@ describe('connection failures', () => {
       ...base,
       action: 'get',
       server: 'http://127.0.0.1:1/',
+      workflowId: 'wf-1',
+    } satisfies WorkflowCommand);
+    expect(result.exitCode).toBe(2);
+    expect(result.stderr).toContain('connection failed');
+  });
+
+  it('reports configuration errors before attempting a request', async () => {
+    const result = await executeWorkflow({
+      ...base,
+      action: 'get',
+      server: 'not-a-url',
       workflowId: 'wf-1',
     } satisfies WorkflowCommand);
     expect(result.exitCode).toBe(2);
