@@ -1,5 +1,5 @@
 import { $ } from 'bun';
-import { spawn } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 
 type CoverageResult = {
   covered: boolean;
@@ -65,6 +65,16 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
       // suite. The remaining lines are the `import.meta.main` child-process
       // entrypoint plus a Bun line-mapping miss on the object-render return.
       lines: new Set([117, 118, 119, 120, 121, 122, 235]),
+    },
+  ],
+  [
+    'examples/hello-world/src/index.ts',
+    {
+      // The example module exports are covered in-process by `src/examples.test.ts`.
+      // The remaining four lines are the `import.meta.main` demo entrypoint, which
+      // only runs in a child `bun run` process and is therefore outside Bun's
+      // parent-process LCOV instrumentation.
+      lines: new Set([68, 69, 71, 72]),
     },
   ],
   [
@@ -1512,8 +1522,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   [
     'examples/hello-world/src/index.ts',
     {
-      functions: 6,
-      lines: new Set([14, 15, 22, 40, 47, 53, 54, 55, 59, 60, 61, 62, 63, 64, 65, 70, 71, 73, 74]),
+      lines: new Set([68, 69, 71, 72]),
     },
   ],
   ['src/cli/api-arguments.ts', { lines: new Set([55, 58]) }],
@@ -1825,13 +1834,15 @@ function isDashboardCoverageFile(filePath: string): boolean {
 }
 
 async function listCoverageTestFiles(): Promise<string[]> {
-  const { exitCode, stdout: output } = await runChildProcess(
-    ['rg', '--files', ...COVERAGE_TEST_FILE_GLOBS.flatMap((glob) => ['-g', glob])],
-    { captureStdout: true },
+  const output = execFileSync(
+    'rg',
+    ['--files', ...COVERAGE_TEST_FILE_GLOBS.flatMap((glob) => ['-g', glob])],
+    {
+      cwd: globalThis.process.cwd(),
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'inherit'],
+    },
   );
-  if (exitCode !== 0) {
-    throw new Error('Failed to list test files with rg --files.');
-  }
   return output
     .split('\n')
     .map((entry) => entry.trim())
@@ -1845,33 +1856,6 @@ type CoverageShard = {
   testFiles: string[];
   parallelism?: number;
 };
-
-async function runChildProcess(
-  command: string[],
-  options?: {
-    cwd?: string;
-    env?: Record<string, string | undefined>;
-    captureStdout?: boolean;
-  },
-): Promise<{ exitCode: number; stdout: string }> {
-  return await new Promise((resolve, reject) => {
-    const childProcess = spawn(command[0]!, command.slice(1), {
-      cwd: options?.cwd,
-      env: options?.env,
-      stdio: ['ignore', options?.captureStdout ? 'pipe' : 'ignore', 'ignore'],
-    });
-
-    let stdout = '';
-    childProcess.stdout?.setEncoding('utf8');
-    childProcess.stdout?.on('data', (chunk: string) => {
-      stdout += chunk;
-    });
-    childProcess.on('error', reject);
-    childProcess.on('close', (code) => {
-      resolve({ exitCode: code ?? 1, stdout });
-    });
-  });
-}
 
 async function runCoverageShard(
   shard: CoverageShard,
@@ -1895,10 +1879,16 @@ async function runCoverageShard(
 
   args.push(...shard.testFiles);
 
-  const { exitCode } = await runChildProcess(args, {
-    cwd: globalThis.process.cwd(),
-    env: { ...Bun.env, WEFT_COVERAGE_MODE: '1' },
-  });
+  let exitCode = 0;
+  try {
+    execFileSync('bun', args.slice(1), {
+      cwd: globalThis.process.cwd(),
+      env: { ...process.env, ...Bun.env, WEFT_COVERAGE_MODE: '1' },
+      stdio: 'ignore',
+    });
+  } catch (error) {
+    exitCode = error instanceof Error && 'status' in error ? Number(error.status ?? 1) : 1;
+  }
 
   if (exitCode !== 0) {
     console.error(`${shard.name} coverage shard exited with code ${exitCode}.`);
