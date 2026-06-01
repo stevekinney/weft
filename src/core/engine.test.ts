@@ -390,7 +390,7 @@ describe('Engine', () => {
     builderEngine[Symbol.dispose]();
   });
 
-  it('register(name, fn) shorthand registers a workflow', async () => {
+  it('register(workflow) registers a workflow', async () => {
     const engine = new Engine();
     const handler = async function* (_ctx: WorkflowContext, input: unknown) {
       return `hello ${input as string}`;
@@ -1970,7 +1970,7 @@ describe('Engine', () => {
     engine[Symbol.dispose]();
   });
 
-  it('register(name, registration) accepts a WorkflowRegistration object', async () => {
+  it('register(workflow) accepts a workflow definition object', async () => {
     const engine = new Engine();
     const handler = async function* (_ctx: WorkflowContext, input: unknown) {
       return `versioned: ${input as string}`;
@@ -1988,7 +1988,7 @@ describe('Engine', () => {
     engine[Symbol.dispose]();
   });
 
-  it('register(name, registration) preserves workflow definition metadata for introspection', () => {
+  it('register(workflow) preserves workflow definition metadata for introspection', () => {
     const engine = new Engine();
     const tags = ['orders', 'examples'];
     const inputSchema = makeDefinitionSchema<{ orderId: string }>();
@@ -2027,7 +2027,7 @@ describe('Engine', () => {
     engine[Symbol.dispose]();
   });
 
-  it('register(name, registration) rejects malformed schema metadata', () => {
+  it('register(workflow) rejects malformed schema metadata', () => {
     const engine = new Engine();
     const handler = async function* () {
       return { completed: true };
@@ -2065,7 +2065,7 @@ describe('Engine', () => {
     engine[Symbol.dispose]();
   });
 
-  it('register(name, registration) defaults version to 1', async () => {
+  it('register(workflow) defaults version to 1', async () => {
     const engine = new Engine();
     const handler = async function* () {
       return 'ok';
@@ -2703,13 +2703,6 @@ describe('Engine', () => {
     await engine.cancel(handle.id);
     engine[Symbol.dispose]();
   });
-
-  // Pattern D — deleted with Phase 6C: this test relied on registering a bare
-  // (non-generator) function via the deprecated `engine.register(name, fn)`
-  // overload, then asserted that the engine's catch handler surfaced the
-  // synchronous throw. The builder API forbids non-generator handlers at the
-  // type level (`.execute(fn)` requires a generator), so this code path is
-  // unreachable through the supported public API. No behavior to port.
 
   it('getHandle for a completed and resolved workflow loads result from storage', async () => {
     const engine = new Engine();

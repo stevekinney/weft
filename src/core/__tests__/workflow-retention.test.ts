@@ -512,19 +512,6 @@ describe('workflow retention', () => {
     engine[Symbol.dispose]();
   });
 
-  it.skip('re-registering a workflow without retention clears the sweep interval when no other retention is configured', async () => {
-    // SKIPPED: this test exercises legacy "re-register replaces" semantics on
-    // the deprecated `engine.register(name, handler)` overload. Phase 3 of the
-    // workflow-builder refactor changed engine.register(workflow) to be
-    // idempotent on the same WorkflowDefinition reference and to throw on
-    // same-name-different-reference. Replacing a registered workflow's
-    // retention behaviour is no longer reachable from the public API; a
-    // future `.replace()` or `.upgrade()` method on the builder may be added
-    // if real users need it.
-    const storage = new CountingWorkflowStateScanStorage();
-    void storage;
-  });
-
   it('engine.purge(filter) stops scanning workflow state entries once the limit is reached', async () => {
     const storage = new CountingWorkflowStateScanStorage();
     const engine = new Engine({ storage });

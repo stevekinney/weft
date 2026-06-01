@@ -1,14 +1,9 @@
 /**
- * The `WorkflowDefinition` type — the runtime shape produced by `workflow()`
- * and `workflow({ name }).execute(fn)`. Carries the workflow name, the
- * generator handler, and the colocated metadata the engine reads at
- * registration time (version, schemas, retention, search attributes,
- * migration, domain constraints, tags, description).
- *
- * The legacy `WorkflowRegistration` and `WorkflowDefinitionOptions` types
- * that previously sat alongside this interface were removed when the
- * `engine.register(name, registration)` and bare-function `workflow(handler)`
- * overloads were deleted in favour of the chained builder API.
+ * The `WorkflowDefinition` type — the runtime shape produced by
+ * `workflow({ name }).execute(fn)`. Carries the workflow name, the generator
+ * handler, and the colocated metadata the engine reads at registration time
+ * (version, schemas, retention, search attributes, migration, domain
+ * constraints, tags, description).
  */
 
 import type { ConstraintDefinition } from '../constraint.ts';

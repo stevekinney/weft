@@ -49,15 +49,11 @@ export type ActivityOperationCallbacks = {
  *
  * Resolution rules:
  *
- * - When the workflow was registered via the builder, it owns a per-workflow
- *   `ActivityRegistry`. The per-workflow registry is the *only* source of
- *   truth: a miss is a miss, never a silent fallthrough to the legacy global
- *   pool. This prevents a typo or omitted `.activities()` entry from
- *   accidentally dispatching an unrelated global activity that happens to
- *   share the name.
- * - When the workflow is legacy (registered via the deprecated `engine.register(
- *   name, handler)` overload, no per-workflow registry exists), the global
- *   `ActivityRegistry` is the source of truth.
+ * - When a workflow declares activities inline through `.activities()`, it owns
+ *   a per-workflow `ActivityRegistry`, which is consulted first.
+ * - The global `ActivityRegistry` is the fallback, so a builder workflow can
+ *   share an activity that lives in the global pool. A workflow with no
+ *   per-workflow registry resolves entirely against the global registry.
  *
  * Both `getActivityFunctionWithMetadata` and `resolveActivityFunction` route
  * through this single resolver so metadata (compensation, verification) and
@@ -80,7 +76,6 @@ function resolveActivityViaRegistries(
     if (perWorkflow !== undefined) {
       // Per-workflow registry wins; fall back to global to support the
       // mixed-registration pattern (builder workflow + shared global activity).
-      // Phase 6C removes the global registry entirely.
       const perWorkflowFn = perWorkflow.resolve(activityName);
       if (perWorkflowFn) {
         return { fn: perWorkflowFn, workflowType };

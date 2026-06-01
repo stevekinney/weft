@@ -430,57 +430,6 @@ engine.register(welcome);
 
 Each `ctx.step()` is a checkpoint boundary. The engine compiles step-style workflows to generator form at registration time. When you need durable timers, signals, or parallel execution, switch to the generator API.
 
-## Migrating from the Legacy `workflow({ name, handler })` Form
-
-The pre-builder forms of `workflow()` and `engine.register(...)` are deprecated and will be removed in an upcoming release. New code should use the chained builder.
-
-Before:
-
-```typescript partial
-import { Engine, activity, workflow } from 'weft';
-
-const formatGreeting = activity({
-  name: 'formatGreeting',
-  execute: async (input: { name: string }) => `Hello, ${input.name}!`,
-});
-
-const welcome = workflow({
-  name: 'welcome',
-  handler: async function* (ctx, input: { name: string }) {
-    return yield* ctx.run(formatGreeting, input);
-  },
-});
-
-const engine = new Engine();
-engine.register('welcome', welcome.handler);
-// or: engine.register(formatGreeting);
-```
-
-After:
-
-```typescript partial
-import { Engine, workflow } from 'weft';
-
-const welcome = workflow({ name: 'welcome' })
-  .activities({
-    formatGreeting: async (input: { name: string }) => `Hello, ${input.name}!`,
-  })
-  .execute(async function* (ctx, input: { name: string }) {
-    return yield* ctx.run('formatGreeting', input);
-  });
-
-const engine = new Engine();
-engine.register(welcome);
-```
-
-Here's what's different:
-
-- **Activities are workflow-scoped.** Pass them inline to `.activities({ ... })` and reference them by their map key inside `ctx.run('key', input)`. The engine builds one activity registry per workflow type, so there's no global pool to manage anymore.
-- **`engine.register(name, handler)` is gone.** Pass the workflow definition itself: `engine.register(welcome)` or `engine.registerWorkflows({ welcome })`. The return value is the engine with that workflow's name and types baked in, so `engine.start('welcome', input)` autocompletes immediately.
-- **Standalone `engine.register(activityDefinition)` is gone.** Activities live on the workflow they belong to. If multiple workflows truly share an activity, declare it on each one — this keeps scope local and lets the engine route remote work cleanly per workflow.
-- **Workflow and activity names follow a grammar now.** Use `[A-Za-z_][A-Za-z0-9_-]*` — no dots, no leading digits. Dotted names like `payments.charge` need renaming to `payments-charge` or `paymentsCharge`. The wire format encodes activity names as `${workflowType}.${activityName}` for remote workers, and that qualifier has to split cleanly.
-- **Re-registering the same name with a different `WorkflowDefinition` throws.** The old API silently replaced the registration; the builder rejects it loudly. If you genuinely need to swap behavior for the same name at runtime, that's a separate request — open an issue. TypeScript catches same-name re-registration at compile time too; use `engine.register(welcome as never)` as a documented escape hatch when you know the same definition reference is being registered idempotently.
-
 ## Weft vs. Temporal
 
 | Concept                | Temporal                                      | Weft                                                                       |
