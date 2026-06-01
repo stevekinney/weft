@@ -61,7 +61,7 @@ weft codegen --server http://localhost:7233 --out ./src/weft.generated.d.ts
 
 `verify:documentation` is the minimum gate for public Markdown, generated reference links, and documentation anchors. Run `verify:markdown-doctests` when Markdown examples change, `verify:jsdoc:doctests` when JSDoc examples change, and `verify:jsdoc:full` before shipping changes that alter exported declarations.
 
-Use `bun run scripts/check-coverage.ts` for the deterministic adjusted-coverage gate. It deletes stale `coverage/` output, runs Bun coverage once, applies the repository's explicit LCOV allowances, and fails when adjusted line or function coverage is below 100 percent.
+Use `bun run scripts/check-coverage.ts` for the deterministic adjusted-coverage gate. It deletes stale `coverage/` output, runs Bun coverage once, applies the repository's explicit LCOV allowances, and fails when adjusted line or function coverage is below 100 percent. This is a coverage gate only: it can still evaluate LCOV after `bun test` exits non-zero, so it does not replace a passing `bun test` or `bun run validate`.
 
 Use `weft conformance` when a change touches the `RemoteWorker` protocol or worker SDK compatibility. Use `weft codegen` when validating cross-process type-generation docs or client fixtures; the command reads `/v1/registry` from a live server or `--from` a vendored registry JSON file and writes a deterministic `.d.ts`.
 
