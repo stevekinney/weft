@@ -6,6 +6,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { classifyErrorAsFailureCategory } from '../../core/failure-categories.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types/workflow-function.ts';
 import type { ChaosScenario, FailureCategory } from '../chaos.ts';
@@ -154,7 +155,8 @@ describe('withChaos', () => {
     expect(caught).toBeInstanceOf(ChaosTimeoutError);
     expect(caught).not.toBeInstanceOf(ChaosTransientError);
     expect(caught).not.toBeInstanceOf(ChaosNonRetryableError);
-    expect((caught as ChaosTimeoutError).name).toBe('TimeoutError');
+    expect((caught as ChaosTimeoutError).name).toBe('ChaosTimeoutError');
+    expect(classifyErrorAsFailureCategory(caught)).toBe('timeout');
     // The timeout fault must actually wait for the abort signal to fire —
     // a synchronous throw would return in ~0ms. TIMEOUT_FAULT_MS is 25ms;
     // assert a lower bound well below that to avoid timer-coalescing flakes

@@ -16,6 +16,10 @@ const timeoutErrorNames = new Set([
   'WorkflowTimeoutError',
   'TimeoutError',
 ]);
+
+export const timeoutFailureCategoryMarker: unique symbol = Symbol.for(
+  'weft.failure-category.timeout',
+);
 const cancellationErrorNames = new Set([
   'AbortError',
   'CancelledError',
@@ -76,6 +80,7 @@ export function classifyErrorAsFailureCategory(
   }
 
   if (timeoutErrorNames.has(error.name)) return 'timeout';
+  if (Object.prototype.hasOwnProperty.call(error, timeoutFailureCategoryMarker)) return 'timeout';
   if (cancellationErrorNames.has(error.name)) return 'cancellation';
   if (resourceErrorNames.has(error.name)) return 'resource';
 

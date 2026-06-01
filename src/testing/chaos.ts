@@ -8,6 +8,7 @@
  * @module testing/chaos
  */
 
+import { timeoutFailureCategoryMarker } from '../core/failure-categories.ts';
 import { sleep } from '../runtime/portable.ts';
 
 // ---------------------------------------------------------------------------
@@ -154,16 +155,17 @@ export class ChaosNonRetryableError extends Error {
  *
  * const err = new ChaosTimeoutError(25);
  * console.log(err.timeoutMilliseconds); // 25
- * console.log(err.name);               // 'TimeoutError'
+ * console.log(err.name);               // 'ChaosTimeoutError'
  * ```
  */
 export class ChaosTimeoutError extends Error {
   /** Milliseconds the chaos wrapper waited before raising the timeout. */
   readonly timeoutMilliseconds: number;
+  readonly [timeoutFailureCategoryMarker] = true;
 
   constructor(timeoutMilliseconds: number) {
     super(`[chaos] timeout fault fired after ${timeoutMilliseconds}ms`);
-    this.name = 'TimeoutError';
+    this.name = 'ChaosTimeoutError';
     this.timeoutMilliseconds = timeoutMilliseconds;
   }
 }
