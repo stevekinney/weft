@@ -1,6 +1,13 @@
-import { afterEach, describe, expect, it } from 'bun:test';
+import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { installDashboardDom } from './svelte-test-harness.test-support.ts';
+import {
+  compileSvelteHarnessModule,
+  createGeneratedArtifactTracker,
+  installDashboardDom,
+} from './svelte-test-harness.test-support.ts';
 
 const SENTINEL = Symbol('pre-existing-global');
 
@@ -35,7 +42,7 @@ function rememberProbe(key: string): void {
 
 describe('installDashboardDom', () => {
   it('installs base globals and runs the requestAnimationFrame shim', async () => {
-    teardown = installDashboardDom();
+    teardown = await installDashboardDom();
 
     expect(typeof globalThis.requestAnimationFrame).toBe('function');
     expect(typeof globalThis.document).toBe('object');
@@ -52,7 +59,7 @@ describe('installDashboardDom', () => {
   });
 
   it('cancelAnimationFrame prevents a pending callback from firing', async () => {
-    teardown = installDashboardDom();
+    teardown = await installDashboardDom();
 
     let fired = false;
     const handle = globalThis.requestAnimationFrame(() => {
@@ -64,26 +71,26 @@ describe('installDashboardDom', () => {
     expect(fired).toBe(false);
   });
 
-  it('merges extraGlobals over the base set', () => {
-    teardown = installDashboardDom((window) => ({
+  it('merges extraGlobals over the base set', async () => {
+    teardown = await installDashboardDom((window) => ({
       HTMLButtonElement: window.HTMLButtonElement,
     }));
 
     expect(typeof (globalThis as Record<string, unknown>)['HTMLButtonElement']).toBe('function');
   });
 
-  it('teardown deletes globals that did not previously exist', () => {
+  it('teardown deletes globals that did not previously exist', async () => {
     rememberProbe(ABSENT_PROBE);
     expect(ABSENT_PROBE in globalThis).toBe(false);
 
-    const cleanup = installDashboardDom((window) => ({ [ABSENT_PROBE]: window.document }));
+    const cleanup = await installDashboardDom((window) => ({ [ABSENT_PROBE]: window.document }));
     expect(ABSENT_PROBE in globalThis).toBe(true);
 
     cleanup();
     expect(ABSENT_PROBE in globalThis).toBe(false);
   });
 
-  it('teardown restores a global that already existed', () => {
+  it('teardown restores a global that already existed', async () => {
     rememberProbe(PRESENT_PROBE);
     Object.defineProperty(globalThis, PRESENT_PROBE, {
       configurable: true,
@@ -91,12 +98,37 @@ describe('installDashboardDom', () => {
       value: SENTINEL,
     });
 
-    const cleanup = installDashboardDom((window) => ({ [PRESENT_PROBE]: window.document }));
+    const cleanup = await installDashboardDom((window) => ({ [PRESENT_PROBE]: window.document }));
     expect((globalThis as Record<string, unknown>)[PRESENT_PROBE]).toBe(
       (globalThis as { document: unknown }).document,
     );
 
     cleanup();
     expect((globalThis as Record<string, unknown>)[PRESENT_PROBE]).toBe(SENTINEL);
+  });
+
+  it('throws when the Svelte build reports success without an output file', async () => {
+    const tracker = createGeneratedArtifactTracker();
+    const componentDirectory = await mkdtemp(join(tmpdir(), 'weft-dashboard-harness-'));
+    const buildSpy = spyOn(Bun, 'build').mockResolvedValue({
+      success: true,
+      outputs: [],
+      logs: [],
+    } as never);
+
+    try {
+      await expect(
+        compileSvelteHarnessModule({
+          componentDirectory,
+          harnessBaseName: 'missing-output',
+          harnessExtension: '.ts',
+          source: 'export const value = 1;',
+          tracker,
+        }),
+      ).rejects.toThrow('Svelte component build did not produce an output file');
+    } finally {
+      buildSpy.mockRestore();
+      tracker.cleanup();
+    }
   });
 });

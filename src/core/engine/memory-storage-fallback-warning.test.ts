@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { CompressedStorage } from '../../storage/compressed-storage.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import {
+  readEnvironmentVariableFromSources,
   resetMemoryStorageFallbackWarningForTesting,
   resolveEngineStorage,
 } from './construction.ts';
@@ -125,5 +126,20 @@ describe('MemoryStorage fallback warning', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  it('reads from the first available environment source and falls back to undefined', () => {
+    expect(
+      readEnvironmentVariableFromSources('WEFT_DEV_WARNINGS', {
+        bunEnv: { WEFT_DEV_WARNINGS: '1' },
+        processEnv: { WEFT_DEV_WARNINGS: '0' },
+      }),
+    ).toBe('1');
+    expect(
+      readEnvironmentVariableFromSources('NODE_ENV', {
+        processEnv: { NODE_ENV: 'development' },
+      }),
+    ).toBe('development');
+    expect(readEnvironmentVariableFromSources('MISSING', {})).toBeUndefined();
   });
 });

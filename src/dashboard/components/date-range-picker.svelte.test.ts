@@ -83,7 +83,7 @@ async function mountDateRangePicker(): Promise<{
   cleanup: () => Promise<void>;
 }> {
   // The base global set already covers HTMLInputElement/SVGElement.
-  const cleanupDom = installDashboardDom();
+  const cleanupDom = await installDashboardDom();
   try {
     const harnessModule = await loadDateRangeHarnessModule();
     flushSvelte = harnessModule.flushSync;

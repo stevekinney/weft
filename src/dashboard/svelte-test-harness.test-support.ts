@@ -6,7 +6,6 @@ import { pathToFileURL } from 'node:url';
 
 import type { BunPlugin } from 'bun';
 import type { DOMWindow } from 'jsdom';
-import { JSDOM } from 'jsdom';
 
 /**
  * Tracks temporary files and directories generated while compiling a Svelte
@@ -23,6 +22,21 @@ export type GeneratedArtifactTracker = {
   /** Remove every tracked file (force) and directory (force + recursive), clearing the lists. */
   cleanup(): void;
 };
+
+let jsdomModulePromise:
+  | Promise<{
+      JSDOM: typeof import('jsdom').JSDOM;
+    }>
+  | undefined;
+
+async function loadJsdomModule(): Promise<{
+  JSDOM: typeof import('jsdom').JSDOM;
+}> {
+  jsdomModulePromise ??= import('jsdom') as Promise<{
+    JSDOM: typeof import('jsdom').JSDOM;
+  }>;
+  return await jsdomModulePromise;
+}
 
 /**
  * Create a {@link GeneratedArtifactTracker}. Each dashboard Svelte suite makes
@@ -123,9 +137,10 @@ export async function compileSvelteHarnessModule(options: {
  * `extraGlobals` lets a suite add element constructors it needs (e.g.
  * `HTMLButtonElement`, `MouseEvent`) without re-listing the common set.
  */
-export function installDashboardDom(
+export async function installDashboardDom(
   extraGlobals?: (window: DOMWindow) => Record<string, unknown>,
-): () => void {
+): Promise<() => void> {
+  const { JSDOM } = await loadJsdomModule();
   const dom = new JSDOM('<!doctype html><html><body></body></html>', {
     url: 'http://localhost/',
   });

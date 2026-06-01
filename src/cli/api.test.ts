@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import { resolveConnection } from '../connection.ts';
 import { Engine } from '../core/engine.ts';
 import { serve } from '../server/index.ts';
-import { executeApi } from './api.ts';
+import { executeApi, normalizeValidatedInput } from './api.ts';
 import { createWeftClient } from './generated/operation-client.generated.ts';
 import { jsonRpcEndpoint } from './json-rpc-client.ts';
 import { parseCliArguments } from './parse-arguments.ts';
@@ -359,6 +359,64 @@ describe('api command', () => {
     });
     expect(connectionFailure.exitCode).toBe(2);
     expect(connectionFailure.stderr).toContain('connection failed');
+  });
+
+  it('defaults omitted input to an empty object, rejects malformed JSON, and renders human operation faults', async () => {
+    const engine = new Engine();
+    const server = serve({ engine, port: 0 });
+    try {
+      const omittedInput = await executeApi({
+        command: 'api',
+        operationName: 'weft.workflows.list',
+        server: server.url.toString(),
+        list: false,
+        yes: false,
+        help: false,
+        json: true,
+      });
+      expect(omittedInput.exitCode).toBe(0);
+      expect(JSON.parse(omittedInput.stdout)).toMatchObject({ items: [] });
+
+      const malformedInput = await executeApi({
+        command: 'api',
+        operationName: 'weft.workflows.list',
+        input: '{"limit":',
+        list: false,
+        yes: false,
+        help: false,
+        json: false,
+      });
+      expect(malformedInput.exitCode).toBe(3);
+      expect(malformedInput.stderr).toContain('invalid JSON input');
+
+      const humanReadableFailure = await executeApi({
+        command: 'api',
+        operationName: 'weft.workflows.get',
+        server: server.url.toString(),
+        input: '{"workflowId":"missing-workflow"}',
+        list: false,
+        yes: false,
+        help: false,
+        json: false,
+      });
+      expect(humanReadableFailure.exitCode).toBe(1);
+      expect(humanReadableFailure.stdout).toBe('');
+      expect(humanReadableFailure.stderr).toContain('api:');
+    } finally {
+      await server.stop();
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('rejects validated inputs that are not JSON objects', () => {
+    expect(normalizeValidatedInput('weft.workflows.list', null)).toMatchObject({
+      ok: false,
+      output: { exitCode: 3 },
+    });
+    expect(normalizeValidatedInput('weft.workflows.list', ['item'])).toMatchObject({
+      ok: false,
+      output: { exitCode: 3 },
+    });
   });
 });
 

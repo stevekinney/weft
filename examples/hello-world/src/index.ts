@@ -56,9 +56,7 @@ export async function runHelloWorldExample(subject = 'world'): Promise<{ greetin
   return await handle.result();
 }
 
-export async function runCustomerProfileExample(
-  customerId = '42',
-): Promise<CustomerProfileOutput> {
+export async function runCustomerProfileExample(customerId = '42'): Promise<CustomerProfileOutput> {
   await using engine = new Engine({ storage: new MemoryStorage() }).register(
     customerProfileWorkflow,
   );

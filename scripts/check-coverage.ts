@@ -1,4 +1,5 @@
 import { $ } from 'bun';
+import { spawn } from 'node:child_process';
 
 type CoverageResult = {
   covered: boolean;
@@ -7,10 +8,20 @@ type CoverageResult = {
   uncoveredFiles: string[];
 };
 
+type FileCoverageResult = {
+  covered: boolean;
+  lines: { total: number; hit: number; missed: number };
+  functions: { total: number; hit: number; missed: number };
+};
+
 type CoverageAllowance = {
   functions?: number;
   lines?: Set<number>;
 };
+
+const COVERAGE_TEST_TIMEOUT_MS = 30_000;
+const DASHBOARD_TEST_FILE_PREFIX = 'src/dashboard/';
+const COVERAGE_TEST_FILE_GLOBS = ['*test.ts', '*spec.ts'] as const;
 
 function isGeneratedCoverageArtifact(filePath: string): boolean {
   if (
@@ -45,6 +56,15 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
       // exercised by the automation entrypoint rather than Bun's in-process coverage run.
       functions: 4,
       lines: createLineSet(153, 265),
+    },
+  ],
+  [
+    'scripts/generate-operation-client.ts',
+    {
+      // The type-generation logic is exercised in-process by the generator test
+      // suite. The remaining lines are the `import.meta.main` child-process
+      // entrypoint plus a Bun line-mapping miss on the object-render return.
+      lines: new Set([117, 118, 119, 120, 121, 122, 235]),
     },
   ],
   [
@@ -1678,16 +1698,42 @@ const COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
   ...CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH,
 ]);
 
-/**
- * Parse an lcov report and return per-metric totals plus the list of files with gaps.
- */
-export function parseLcov(content: string): CoverageResult {
+function summarizeCoverageFiles(files: ReadonlyMap<string, FileCoverageResult>): CoverageResult {
   const lines = { total: 0, hit: 0, missed: 0 };
   const functions = { total: 0, hit: 0, missed: 0 };
   const uncoveredFiles: string[] = [];
 
+  for (const [filePath, fileCoverage] of files) {
+    lines.total += fileCoverage.lines.total;
+    lines.hit += fileCoverage.lines.hit;
+    lines.missed += fileCoverage.lines.missed;
+    functions.total += fileCoverage.functions.total;
+    functions.hit += fileCoverage.functions.hit;
+    functions.missed += fileCoverage.functions.missed;
+    if (!fileCoverage.covered) {
+      uncoveredFiles.push(filePath);
+    }
+  }
+
+  uncoveredFiles.sort();
+
+  return {
+    covered: lines.missed === 0 && functions.missed === 0,
+    lines,
+    functions,
+    uncoveredFiles,
+  };
+}
+
+/**
+ * Parse an lcov report into adjusted per-file coverage metrics.
+ */
+export function parseLcovFiles(content: string): Map<string, FileCoverageResult> {
+  const files = new Map<string, FileCoverageResult>();
+
   let currentFile = '';
-  let fileHasGap = false;
+  let fileLineTotal = 0;
+  let fileLineHit = 0;
   let fileFunctionTotal = 0;
   let fileFunctionHit = 0;
 
@@ -1705,21 +1751,29 @@ export function parseLcov(content: string): CoverageResult {
     const adjustedFunctionTotal = Math.max(0, fileFunctionTotal - ignoredFunctions);
     const adjustedFunctionHit = Math.min(fileFunctionHit, adjustedFunctionTotal);
     const functionMisses = adjustedFunctionTotal - adjustedFunctionHit;
+    const lineMisses = fileLineTotal - fileLineHit;
 
-    functions.total += adjustedFunctionTotal;
-    functions.hit += adjustedFunctionHit;
-    functions.missed += functionMisses;
-
-    if (fileHasGap || functionMisses > 0) {
-      uncoveredFiles.push(currentFile);
-    }
+    files.set(currentFile, {
+      covered: lineMisses === 0 && functionMisses === 0,
+      lines: {
+        total: fileLineTotal,
+        hit: fileLineHit,
+        missed: lineMisses,
+      },
+      functions: {
+        total: adjustedFunctionTotal,
+        hit: adjustedFunctionHit,
+        missed: functionMisses,
+      },
+    });
   }
 
   for (const line of content.split('\n')) {
     if (line.startsWith('SF:')) {
       finalizeCurrentFile();
       currentFile = line.slice(3);
-      fileHasGap = false;
+      fileLineTotal = 0;
+      fileLineHit = 0;
       fileFunctionTotal = 0;
       fileFunctionHit = 0;
       continue;
@@ -1741,28 +1795,130 @@ export function parseLcov(content: string): CoverageResult {
         continue;
       }
 
-      lines.total += 1;
+      fileLineTotal += 1;
       if (hitCount > 0) {
-        lines.hit += 1;
+        fileLineHit += 1;
       } else {
-        lines.missed += 1;
-        fileHasGap = true;
       }
     } else if (line === 'end_of_record') {
       finalizeCurrentFile();
       currentFile = '';
-      fileHasGap = false;
+      fileLineTotal = 0;
+      fileLineHit = 0;
       fileFunctionTotal = 0;
       fileFunctionHit = 0;
     }
   }
 
-  return {
-    covered: lines.missed === 0 && functions.missed === 0,
-    lines,
-    functions,
-    uncoveredFiles,
-  };
+  return files;
+}
+
+/**
+ * Parse an lcov report and return per-metric totals plus the list of files with gaps.
+ */
+export function parseLcov(content: string): CoverageResult {
+  return summarizeCoverageFiles(parseLcovFiles(content));
+}
+
+function isDashboardCoverageFile(filePath: string): boolean {
+  return filePath.startsWith(DASHBOARD_TEST_FILE_PREFIX);
+}
+
+async function listCoverageTestFiles(): Promise<string[]> {
+  const { exitCode, stdout: output } = await runChildProcess(
+    ['rg', '--files', ...COVERAGE_TEST_FILE_GLOBS.flatMap((glob) => ['-g', glob])],
+    { captureStdout: true },
+  );
+  if (exitCode !== 0) {
+    throw new Error('Failed to list test files with rg --files.');
+  }
+  return output
+    .split('\n')
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0)
+    .toSorted();
+}
+
+type CoverageShard = {
+  name: string;
+  coverageDirectory: string;
+  testFiles: string[];
+  parallelism?: number;
+};
+
+async function runChildProcess(
+  command: string[],
+  options?: {
+    cwd?: string;
+    env?: Record<string, string | undefined>;
+    captureStdout?: boolean;
+  },
+): Promise<{ exitCode: number; stdout: string }> {
+  return await new Promise((resolve, reject) => {
+    const childProcess = spawn(command[0]!, command.slice(1), {
+      cwd: options?.cwd,
+      env: options?.env,
+      stdio: ['ignore', options?.captureStdout ? 'pipe' : 'ignore', 'ignore'],
+    });
+
+    let stdout = '';
+    childProcess.stdout?.setEncoding('utf8');
+    childProcess.stdout?.on('data', (chunk: string) => {
+      stdout += chunk;
+    });
+    childProcess.on('error', reject);
+    childProcess.on('close', (code) => {
+      resolve({ exitCode: code ?? 1, stdout });
+    });
+  });
+}
+
+async function runCoverageShard(
+  shard: CoverageShard,
+): Promise<{ exitCode: number; lcovPath: string }> {
+  await $`rm -rf ${shard.coverageDirectory}`.quiet().nothrow();
+
+  const args = [
+    'bun',
+    'test',
+    '--timeout',
+    `${COVERAGE_TEST_TIMEOUT_MS}`,
+    '--coverage',
+    '--coverage-reporter=lcov',
+    '--coverage-dir',
+    shard.coverageDirectory,
+  ];
+
+  if (shard.parallelism !== undefined) {
+    args.push(`--parallel=${shard.parallelism}`);
+  }
+
+  args.push(...shard.testFiles);
+
+  const { exitCode } = await runChildProcess(args, {
+    cwd: globalThis.process.cwd(),
+    env: { ...Bun.env, WEFT_COVERAGE_MODE: '1' },
+  });
+
+  if (exitCode !== 0) {
+    console.error(`${shard.name} coverage shard exited with code ${exitCode}.`);
+  }
+
+  return { exitCode, lcovPath: `${shard.coverageDirectory}/lcov.info` };
+}
+
+function mergeCoverageFiles(
+  primaryFiles: ReadonlyMap<string, FileCoverageResult>,
+  overrideFiles: ReadonlyMap<string, FileCoverageResult>,
+  shouldOverride: (filePath: string) => boolean,
+): Map<string, FileCoverageResult> {
+  const merged = new Map(primaryFiles);
+  for (const [filePath, fileCoverage] of overrideFiles) {
+    if (shouldOverride(filePath) || !merged.has(filePath)) {
+      merged.set(filePath, fileCoverage);
+    }
+  }
+  return merged;
 }
 
 /**
@@ -1770,28 +1926,46 @@ export function parseLcov(content: string): CoverageResult {
  * every line and function is covered.
  */
 export async function checkCoverage(): Promise<boolean> {
-  const lcovPath = 'coverage/lcov.info';
-
   // Remove the entire coverage directory so we never read a previous run's report.
   await $`rm -rf coverage`.quiet().nothrow();
+  const allTestFiles = await listCoverageTestFiles();
+  const dashboardTestFiles = allTestFiles.filter((filePath) =>
+    filePath.startsWith(DASHBOARD_TEST_FILE_PREFIX),
+  );
+  const nonDashboardTestFiles = allTestFiles.filter(
+    (filePath) => !filePath.startsWith(DASHBOARD_TEST_FILE_PREFIX),
+  );
 
-  // .nothrow() prevents throwing when tests fail — we still want the coverage report.
-  const result =
-    await $`WEFT_COVERAGE_MODE=1 bun test --timeout 15000 --coverage --coverage-reporter=lcov --coverage-dir=coverage`
-      .quiet()
-      .nothrow();
+  const primaryShard = await runCoverageShard({
+    name: 'non-dashboard',
+    coverageDirectory: 'coverage/non-dashboard',
+    testFiles: nonDashboardTestFiles,
+  });
+  const dashboardShard = await runCoverageShard({
+    name: 'dashboard',
+    coverageDirectory: 'coverage/dashboard',
+    testFiles: dashboardTestFiles,
+    parallelism: 1,
+  });
 
-  if (result.exitCode !== 0) {
-    console.error(`bun test exited with code ${result.exitCode} — some tests may be failing.`);
+  if (primaryShard.exitCode !== 0 || dashboardShard.exitCode !== 0) {
+    console.error('Coverage shard execution failed.');
   }
 
-  if (!(await Bun.file(lcovPath).exists())) {
-    console.error('No coverage report generated.');
+  if (!(await Bun.file(primaryShard.lcovPath).exists())) {
+    console.error(`No coverage report generated for ${primaryShard.lcovPath}.`);
+    return false;
+  }
+  if (!(await Bun.file(dashboardShard.lcovPath).exists())) {
+    console.error(`No coverage report generated for ${dashboardShard.lcovPath}.`);
     return false;
   }
 
-  const lcov = await Bun.file(lcovPath).text();
-  const coverage = parseLcov(lcov);
+  const primaryCoverageFiles = parseLcovFiles(await Bun.file(primaryShard.lcovPath).text());
+  const dashboardCoverageFiles = parseLcovFiles(await Bun.file(dashboardShard.lcovPath).text());
+  const coverage = summarizeCoverageFiles(
+    mergeCoverageFiles(primaryCoverageFiles, dashboardCoverageFiles, isDashboardCoverageFile),
+  );
 
   if (coverage.lines.total === 0) {
     console.error('Coverage report is empty — no source files were instrumented.');

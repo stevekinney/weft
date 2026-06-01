@@ -322,7 +322,7 @@ async function mountWorkflowList(apiClient: WorkflowListApiClient): Promise<{
   unmount: () => Promise<void>;
   cleanup: () => Promise<void>;
 }> {
-  const cleanupDom = installDashboardDom((window) => ({
+  const cleanupDom = await installDashboardDom((window) => ({
     HTMLButtonElement: window.HTMLButtonElement,
     HTMLMediaElement: window.HTMLMediaElement,
     HTMLSelectElement: window.HTMLSelectElement,

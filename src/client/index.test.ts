@@ -206,7 +206,7 @@ async function exerciseWorkflowHandleAndSchedule(httpClient: HttpClient): Promis
 async function exerciseWorkflowClientRequests(httpClient: HttpClient): Promise<void> {
   expect(await httpClient.get('wf/1')).toMatchObject({ id: 'wf-1', status: 'running' });
   expect(
-    await httpClient.listSchedules({ status: 'active', workflowType: 'echo', limit: 5 }),
+    await httpClient.listSchedules({ status: 'active', workflowType: 'echo', limit: 5, offset: 0 }),
   ).toMatchObject({
     items: [{ id: 'schedule-1' }],
     total: 1,
@@ -395,6 +395,7 @@ function assertScheduleCalls(fetchCalls: FetchCall[]): void {
   expect(scheduleListUrl.searchParams.get('status')).toBe('active');
   expect(scheduleListUrl.searchParams.get('workflowType')).toBe('echo');
   expect(scheduleListUrl.searchParams.get('limit')).toBe('5');
+  expect(scheduleListUrl.searchParams.get('offset')).toBe('0');
 }
 
 function assertFilterAndFollowupCalls(fetchCalls: FetchCall[]): void {

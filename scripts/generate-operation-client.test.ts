@@ -1,4 +1,7 @@
 import { describe, expect, it } from 'bun:test';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import type { CatalogOperationTypes } from '../src/cli/generated/operation-client.generated.ts';
 import { createCatalogSnapshot } from '../src/cli/operation-catalog-snapshot.ts';
@@ -8,6 +11,7 @@ import {
   canonicalKey,
   createOperationClientSource,
   isHoistWorthy,
+  OPERATION_CLIENT_PATH,
   renderNode,
   schemaToNode,
   selectAliases,
@@ -43,6 +47,10 @@ describe('schemaToNode + renderNode — emitted text contract', () => {
 
   it('renders type-array unions preserving member order', () => {
     expect(renderInline({ type: ['string', 'number', 'null'] })).toBe('string | number | null');
+  });
+
+  it('falls back to unknown for unsupported type-array members', () => {
+    expect(renderInline({ type: ['string', 123] })).toBe('string | unknown');
   });
 
   it('renders objects with sorted fields and required handling', () => {
@@ -179,6 +187,29 @@ describe('createOperationClientSource — generated output', () => {
       // declaration + at least two non-declaration references
       expect(occurrences.length).toBeGreaterThanOrEqual(3);
     }
+  });
+
+  it('regenerates the checked-in client from the CLI entrypoint', async () => {
+    const expectedSource = await createOperationClientSource(createCatalogSnapshot());
+    const directory = await mkdtemp(join(tmpdir(), 'weft-operation-client-'));
+    const snapshotPath = join(directory, 'operation-client.generated.ts.before');
+    await Bun.write(snapshotPath, await Bun.file(OPERATION_CLIENT_PATH).text());
+
+    const result = Bun.spawn({
+      cmd: ['bun', 'scripts/generate-operation-client.ts'],
+      cwd: process.cwd(),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const exitCode = await result.exited;
+    const stdout = await new Response(result.stdout).text();
+    const stderr = await new Response(result.stderr).text();
+
+    expect(exitCode).toBe(0);
+    expect(stderr).toBe('');
+    expect(stdout).toContain(`wrote ${OPERATION_CLIENT_PATH}`);
+    expect(await Bun.file(OPERATION_CLIENT_PATH).text()).toBe(expectedSource);
+    expect(await Bun.file(snapshotPath).text()).toBe(expectedSource);
   });
 });
 

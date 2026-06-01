@@ -150,9 +150,9 @@ describe('normalizeWorkerExecutionConfiguration', () => {
   });
 
   it('rejects worker configuration without explicit worker mode', () => {
-    expect(() =>
-      normalizeWorkerExecutionConfiguration({ workerExecution: { workerUrl } }),
-    ).toThrow('options.workflowExecutionMode must be "worker" when options.workerExecution is provided');
+    expect(() => normalizeWorkerExecutionConfiguration({ workerExecution: { workerUrl } })).toThrow(
+      'options.workflowExecutionMode must be "worker" when options.workerExecution is provided',
+    );
   });
 
   it('applies hardened defaults for explicit worker mode', () => {
@@ -193,7 +193,11 @@ describe('normalizeWorkerExecutionConfiguration', () => {
     expect(
       normalizeWorkerExecutionConfiguration({
         workflowExecutionMode: 'worker',
-        workerExecution: { workerUrl, workflowTurnTimeoutMs: 5_000, maxProtocolMessageBytes: 8_192 },
+        workerExecution: {
+          workerUrl,
+          workflowTurnTimeoutMs: 5_000,
+          maxProtocolMessageBytes: 8_192,
+        },
       }),
     ).toMatchObject({
       mode: 'worker',

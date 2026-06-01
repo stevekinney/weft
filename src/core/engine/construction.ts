@@ -95,11 +95,24 @@ let didWarnOnMemoryStorageFallback = false;
  * that global is absent. Returns `undefined` when no environment object exists.
  */
 function readEnvironmentVariable(name: string): string | undefined {
-  if (typeof Bun !== 'undefined') {
-    return Bun.env[name];
+  return readEnvironmentVariableFromSources(name, {
+    bunEnv: typeof Bun !== 'undefined' ? Bun.env : undefined,
+    processEnv: typeof process !== 'undefined' ? process.env : undefined,
+  });
+}
+
+export function readEnvironmentVariableFromSources(
+  name: string,
+  sources: {
+    bunEnv?: Record<string, string | undefined> | undefined;
+    processEnv?: Record<string, string | undefined> | undefined;
+  },
+): string | undefined {
+  if (sources.bunEnv !== undefined) {
+    return sources.bunEnv[name];
   }
-  if (typeof process !== 'undefined') {
-    return process.env[name];
+  if (sources.processEnv !== undefined) {
+    return sources.processEnv[name];
   }
   return undefined;
 }

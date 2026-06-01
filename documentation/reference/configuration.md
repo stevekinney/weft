@@ -127,13 +127,13 @@ interface WorkerExecutionOptions {
 }
 ```
 
-| Field                     | Type            | Default                             | Description                                                                                         |
-| ------------------------- | --------------- | ----------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `workerUrl`               | `string \| URL` | required                            | Worker entrypoint URL created by `createWorkerEntryUrl` or an equivalent bundle.                    |
-| `poolSize`                | `number`        | `4`                                 | Maximum concurrent workflow Workers.                                                                |
-| `smol`                    | `boolean`       | `false`                             | Pass Bun's smaller-memory Worker option when the runtime supports it.                               |
-| `workflowTurnTimeoutMs`   | `number`        | `1_000` in Worker mode              | Host-enforced wall-clock budget for each Worker `run` or `resume` turn. Positive safe integer only. |
-| `maxProtocolMessageBytes` | `number`        | `1_048_576` in Worker mode          | Maximum encoded size of Weft-owned Worker protocol messages. Minimum accepted value is `4_096`.     |
+| Field                     | Type            | Default                    | Description                                                                                         |
+| ------------------------- | --------------- | -------------------------- | --------------------------------------------------------------------------------------------------- |
+| `workerUrl`               | `string \| URL` | required                   | Worker entrypoint URL created by `createWorkerEntryUrl` or an equivalent bundle.                    |
+| `poolSize`                | `number`        | `4`                        | Maximum concurrent workflow Workers.                                                                |
+| `smol`                    | `boolean`       | `false`                    | Pass Bun's smaller-memory Worker option when the runtime supports it.                               |
+| `workflowTurnTimeoutMs`   | `number`        | `1_000` in Worker mode     | Host-enforced wall-clock budget for each Worker `run` or `resume` turn. Positive safe integer only. |
+| `maxProtocolMessageBytes` | `number`        | `1_048_576` in Worker mode | Maximum encoded size of Weft-owned Worker protocol messages. Minimum accepted value is `4_096`.     |
 
 The Worker protocol byte limit is separate from `payloadSize.maxBytes`. Payload limits guard workflow inputs, signals, and activity results at API boundaries. `maxProtocolMessageBytes` guards Weft-owned Worker envelopes, checkpoints, and operation-result messages crossing `postMessage`.
 

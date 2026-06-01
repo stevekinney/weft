@@ -180,10 +180,17 @@ function validateInput(
       ),
     };
   }
-  if (parsed.data === null || typeof parsed.data !== 'object' || Array.isArray(parsed.data)) {
+  return normalizeValidatedInput(operationName, parsed.data);
+}
+
+export function normalizeValidatedInput(
+  operationName: string,
+  parsedData: unknown,
+): { ok: true; value: Record<string, unknown> } | { ok: false; output: CommandOutput } {
+  if (parsedData === null || typeof parsedData !== 'object' || Array.isArray(parsedData)) {
     return { ok: false, output: usageError(`api: ${operationName} input must be a JSON object`) };
   }
-  return { ok: true, value: parsed.data as Record<string, unknown> };
+  return { ok: true, value: parsedData as Record<string, unknown> };
 }
 
 async function callOperation(
