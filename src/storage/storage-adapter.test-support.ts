@@ -273,12 +273,12 @@ export type BasicStorageContractOptions = {
 };
 
 /**
- * Register the basic key/value and scan/batch contract that every storage
- * adapter must satisfy identically: get/put/overwrite/delete, prefix scans with
- * limit/reverse/range bounds, and batch application. Each case constructs a
- * fresh adapter via `create()` and disposes it through `using`, so adapters
- * that hold native handles (SQLite) and adapters that do not (in-memory) share
- * one source of truth. Adapter-specific construction, disposal semantics,
+ * Register the basic key/value and scan contract that every storage adapter
+ * must satisfy identically: get/put/overwrite/delete and prefix scans with
+ * limit/reverse/range bounds. Each case constructs a fresh adapter via
+ * `create()` and disposes it through `using`, so adapters that hold native
+ * handles (SQLite) and adapters that do not (in-memory) share one source of
+ * truth. Batch behavior and adapter-specific construction, disposal semantics,
  * capability rows, and edge cases stay in the per-adapter suite.
  */
 export function runBasicStorageContract(name: string, options: BasicStorageContractOptions): void {
