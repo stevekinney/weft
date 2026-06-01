@@ -54,11 +54,14 @@ bun run verify:documentation
 bun run verify:markdown-doctests
 bun run verify:jsdoc:doctests
 bun run verify:jsdoc:full
+bun run scripts/check-coverage.ts
 weft conformance -- <worker-command>
 weft codegen --server http://localhost:7233 --out ./src/weft.generated.d.ts
 ```
 
 `verify:documentation` is the minimum gate for public Markdown, generated reference links, and documentation anchors. Run `verify:markdown-doctests` when Markdown examples change, `verify:jsdoc:doctests` when JSDoc examples change, and `verify:jsdoc:full` before shipping changes that alter exported declarations.
+
+Use `bun run scripts/check-coverage.ts` for the deterministic adjusted-coverage gate. It deletes stale `coverage/` output, runs Bun coverage once, applies the repository's explicit LCOV allowances, and fails when adjusted line or function coverage is below 100 percent.
 
 Use `weft conformance` when a change touches the `RemoteWorker` protocol or worker SDK compatibility. Use `weft codegen` when validating cross-process type-generation docs or client fixtures; the command reads `/v1/registry` from a live server or `--from` a vendored registry JSON file and writes a deterministic `.d.ts`.
 
@@ -147,6 +150,8 @@ If an `as` cast is genuinely necessary (e.g., deserializing from storage where t
 - Task polling and shutdown changes must cover already-aborted request signals, disconnects during parked long-polls, task retention for dead pollers, and `server.stop()` disposal of queued timers/waiters.
 - Client event-streaming changes must preserve the `client.tail(id)` / `handle.tail()` contract across `LocalClient` and `HttpClient`: `whenConnected()` resolves after catch-up, tails are single-consumer, `HttpClient` uses `/v1/workflows/:id/watch`, reconnect catch-up must not duplicate or skip buffered frames, callback-only listeners must not accumulate an unbounded iterator buffer, and runtimes without usable WebSocket header support must get an actionable `webSocketFactory` diagnostic.
 - Public root exports and build rewriter changes must run `bun run build`; the post-build guard fails if `dist/` contains a dangling relative `.js` specifier, including directory re-export mistakes such as emitting `./diagnostics.js` when only `./diagnostics/index.js` exists.
+- Generated operation-client changes must update `scripts/generate-operation-client.ts`, regenerate `src/cli/generated/operation-client.generated.ts`, and prove determinism with `bun run scripts/generate-operation-client.ts && bun run scripts/check-catalog-drift.ts`. When reducing generated duplication, keep aliases structurally transparent, preserve call-site inference with type-level tests, and run `jscpd` against the generated file.
+- CLI command-suggestion refactors must preserve user-visible wording and thresholds: top-level subcommands use distance `2`, `weft api` operation suggestions use distance `6`, and tie breaks keep the first candidate. Pin those invariants in `src/cli/command-suggestions.test.ts` and parser integration tests.
 
 ### Testing Approach
 

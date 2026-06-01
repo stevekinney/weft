@@ -18,6 +18,7 @@ description: >-
 - Changing history policy, payload-size admission, archive export, Worker replay signatures, checkpoint failure metadata, or event-log verification.
 - Adding compatibility with another package while Weft still owns the runtime contract.
 - Generating or validating cross-process declarations from registry snapshots, or wrapping byte-oriented storage for string-oriented consumers.
+- Refactoring registry-driven generated clients, especially when JSON Schema shapes become shared aliases instead of inline object types.
 - Normalizing failure-category values, changing workflow visibility index keys, or changing framed compressed-storage payloads.
 
 ## Do not use
@@ -33,15 +34,17 @@ description: >-
 3. Add old-vs-new fixtures before changing implementation behavior when existing stored records may exist.
 4. Normalize replayed values through the same path as fresh values, especially JSON-safe outputs and lossy codec values.
 5. For registry codegen, pin deterministic output and make unsupported JSON Schema keywords degrade to `unknown` rather than emitting an unsound type.
-6. For failure-category changes, preserve read/query compatibility for legacy stored values while keeping new public filter input limited to the current taxonomy.
-7. For compression changes, keep the two-byte framing contract pinned so gzip, brotli, and uncompressed values remain distinguishable without storage-side metadata.
-8. Keep external compatibility structural and dev/test-only; do not import sibling package runtime types into Weft runtime source.
-9. For bounded storage deletion, prove the operation cannot become an unbounded wipe through malformed options, negative limits, reverse iteration, or scoped-storage prefix smuggling.
-10. For event-log compaction, prove the watermark and checkpoint commit are atomic, verification seeds from the watermark, the surviving tail still matches the head, and `history.maxEvents` continues to count lifetime sequence.
-11. For `payloadSize.maxBytes`, prove oversize workflow inputs, signal payloads, and activity results fail before durable writes while already-persisted data remains replayable under the current policy.
+6. When hoisting repeated registry shapes into aliases, derive the deduplication key and emitted TypeScript from the same normalized representation so two shapes alias only when they render identically. Keep alias names deterministic and collision-checked.
+7. For failure-category changes, preserve read/query compatibility for legacy stored values while keeping new public filter input limited to the current taxonomy.
+8. For compression changes, keep the two-byte framing contract pinned so gzip, brotli, and uncompressed values remain distinguishable without storage-side metadata.
+9. Keep external compatibility structural and dev/test-only; do not import sibling package runtime types into Weft runtime source.
+10. For bounded storage deletion, prove the operation cannot become an unbounded wipe through malformed options, negative limits, reverse iteration, or scoped-storage prefix smuggling.
+11. For event-log compaction, prove the watermark and checkpoint commit are atomic, verification seeds from the watermark, the surviving tail still matches the head, and `history.maxEvents` continues to count lifetime sequence.
+12. For `payloadSize.maxBytes`, prove oversize workflow inputs, signal payloads, and activity results fail before durable writes while already-persisted data remains replayable under the current policy.
 
 ## Verification
 
 - Add regression tests that prove old committed records still deduplicate and replay without re-executing effects.
 - Test fresh execution and replay produce the same normalized content shape.
+- For registry codegen aliasing, run generator determinism, catalog drift, and type-level assignability tests against representative generated operation inputs.
 - Run the relevant focused test, then `bun run typecheck` and `bun run validate` before shipping.

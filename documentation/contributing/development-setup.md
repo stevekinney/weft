@@ -62,6 +62,14 @@ bun test --parallel       # Parallel execution across files
 > [!NOTE]
 > The project's `bun run test` script wraps `bun test --timeout 15000`. Use `bun run test:coverage` (which sets `WEFT_COVERAGE_MODE=1`) for coverage with the project's configured timeout and environment.
 
+For the repository coverage gate, use the deterministic verifier:
+
+```bash
+bun run scripts/check-coverage.ts
+```
+
+The verifier removes stale `coverage/` output, runs Bun coverage once with LCOV output, applies the repository's narrow coverage allowances, and exits non-zero when adjusted line or function coverage is below 100 percent. Use it when changing coverage-sensitive code, generated clients, CLI paths, dashboard test harnesses, or the allowance table itself.
+
 ### Testing conventions
 
 Test files live next to the source they test, using the `.test.ts` suffix. A separate `tsconfig.test.json` provides relaxed TypeScript settings for test code. Oxlint rules are also relaxed for test files (`*.test.ts`, `*.spec.ts`, `test/**`, `__tests__/**`)—you can freely use `any`, non-null assertions, unused variables, and other patterns that would normally be flagged in production code.

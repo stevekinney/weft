@@ -18,6 +18,7 @@ description: >-
 - Cleaning up API surface exports, lifecycle overloads, compression framing, visibility filters, or route helpers after review feedback.
 - Removing oxlint suppressions or splitting oversized modules while claiming public behavior, type inference, and dispatch ordering are unchanged.
 - Removing dead public options or stale deleted-module references after the owning feature has already been removed.
+- Deduplicating CLI suggestion helpers or generated operation-client type output while claiming user-visible CLI wording, thresholds, or TypeScript inference are unchanged.
 
 ## Do not use
 
@@ -39,9 +40,12 @@ description: >-
 10. Compare documentation examples against the public API after the refactor.
 11. Keep compatibility by preserving behavior, not by adding shims or old import paths unless explicitly required.
 12. When removing a never-functional public option, delete the field, resolver default, guard tests, and public documentation together; record the breaking removal in `CHANGELOG.md` instead of adding a compatibility shim.
+13. For CLI suggestion helper refactors, pin each caller's distance threshold and message text. Top-level subcommands use max distance `2`; `weft api` operation suggestions use max distance `6`; equal-distance candidates keep the first match.
+14. For generated operation-client deduplication, change the generator instead of hand-editing `src/cli/generated/operation-client.generated.ts`. Keep repeated aliases structural and internal, prove deterministic regeneration, and add type-level assignability tests for representative bulk-operation inputs.
 
 ## Verification
 
 - Add or update runtime tests for ordering, event sequence, and return shape invariants.
 - Add type-level coverage when the refactor changes public TypeScript ergonomics.
 - Run focused tests, `bun run typecheck`, and documentation verification when examples changed.
+- For generated client cleanup, also run `bun run scripts/generate-operation-client.ts && bun run scripts/check-catalog-drift.ts` and `jscpd` against `src/cli/generated/operation-client.generated.ts`.
