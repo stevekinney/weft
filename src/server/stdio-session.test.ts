@@ -17,12 +17,68 @@ import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
 import { makeOperation as makeOp } from './json-rpc-operation.test-support.ts';
-import { createOperationRegistry } from './operation-catalog.ts';
-import { runStdioSession, type StdioAdmission } from './stdio-session.ts';
+import { createOperationRegistry, type OperationRegistry } from './operation-catalog.ts';
+import { runStdioSession, type StdioAdmission, type StdioSessionResult } from './stdio-session.ts';
 import { collectingWritable, readableFromLines } from './stdio-stream.test-support.ts';
 import { createInMemoryEventBackend, createWorkflowEventFeed } from './workflow-event-feed.ts';
 
 const fakeEngine = {} as unknown;
+
+type CollectingWritable = ReturnType<typeof collectingWritable>;
+
+/** Registry exposing the `weft.test.echo` operation reused across dispatch tests. */
+function echoRegistry(): OperationRegistry {
+  return createOperationRegistry([
+    makeOp({
+      name: 'weft.test.echo',
+      inputSchema: z.object({ v: z.string() }),
+      outputSchema: z.object({ v: z.string() }),
+      invoke: async ({ input: i }) => ({ v: i.v }),
+    }),
+  ]);
+}
+
+/** Registry exposing the `weft.test.ping` operation reused across auth tests. */
+function pingRegistry(): OperationRegistry {
+  return createOperationRegistry([
+    makeOp({
+      name: 'weft.test.ping',
+      inputSchema: z.object({}),
+      outputSchema: z.object({ ok: z.boolean() }),
+      invoke: async () => ({ ok: true }),
+    }),
+  ]);
+}
+
+/**
+ * Run a stdio session against the shared fake engine and a fresh in-memory
+ * event feed, filling in the constant `engine`/`feed`/`output.stream` wiring
+ * the dispatch and framing tests all repeat. Each test supplies its own input
+ * stream, admission, registry, and optional `maxFrameBytes`.
+ */
+function runStdioTestSession({
+  input,
+  output,
+  admission = { kind: 'allow-unauthenticated-local-admin' },
+  registry,
+  maxFrameBytes,
+}: {
+  input: ReadableStream<Uint8Array>;
+  output: CollectingWritable;
+  admission?: StdioAdmission;
+  registry: OperationRegistry;
+  maxFrameBytes?: number;
+}): Promise<StdioSessionResult> {
+  return runStdioSession({
+    input,
+    output: output.stream,
+    admission,
+    registry,
+    engine: fakeEngine,
+    feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+    ...(maxFrameBytes === undefined ? {} : { maxFrameBytes }),
+  });
+}
 
 describe('runStdioSession — admission', () => {
   it('rejects when neither token nor admin flag supplied', async () => {
@@ -351,21 +407,11 @@ describe('runStdioSession — admission', () => {
       },
     });
     const output = collectingWritable();
-    const registry = createOperationRegistry([
-      makeOp({
-        name: 'weft.test.ping',
-        inputSchema: z.object({}),
-        outputSchema: z.object({ ok: z.boolean() }),
-        invoke: async () => ({ ok: true }),
-      }),
-    ]);
-    const result = await runStdioSession({
+    const result = await runStdioTestSession({
       input,
-      output: output.stream,
+      output,
       admission: { kind: 'startup-token', token },
-      registry,
-      engine: fakeEngine,
-      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+      registry: pingRegistry(),
     });
 
     expect(result.exitCode).toBe(0);
@@ -384,22 +430,7 @@ describe('runStdioSession — dispatch', () => {
         '\n',
     ]);
     const output = collectingWritable();
-    const registry = createOperationRegistry([
-      makeOp({
-        name: 'weft.test.echo',
-        inputSchema: z.object({ v: z.string() }),
-        outputSchema: z.object({ v: z.string() }),
-        invoke: async ({ input: i }) => ({ v: i.v }),
-      }),
-    ]);
-    const result = await runStdioSession({
-      input,
-      output: output.stream,
-      admission: { kind: 'allow-unauthenticated-local-admin' },
-      registry,
-      engine: fakeEngine,
-      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
-    });
+    const result = await runStdioTestSession({ input, output, registry: echoRegistry() });
     expect(result.exitCode).toBe(0);
     const lines = output.lines();
     expect(lines).toHaveLength(2);
@@ -411,13 +442,10 @@ describe('runStdioSession — dispatch', () => {
     const huge = 'x'.repeat(2000);
     const input = readableFromLines([JSON.stringify({ huge }) + '\n']);
     const output = collectingWritable();
-    const result = await runStdioSession({
+    const result = await runStdioTestSession({
       input,
-      output: output.stream,
-      admission: { kind: 'allow-unauthenticated-local-admin' },
+      output,
       registry: createOperationRegistry([]),
-      engine: fakeEngine,
-      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
       maxFrameBytes: 500,
     });
     expect(result.exitCode).toBe(0);
@@ -428,13 +456,10 @@ describe('runStdioSession — dispatch', () => {
   it('exits cleanly when stdin closes', async () => {
     const input = readableFromLines([]);
     const output = collectingWritable();
-    const result = await runStdioSession({
+    const result = await runStdioTestSession({
       input,
-      output: output.stream,
-      admission: { kind: 'allow-unauthenticated-local-admin' },
+      output,
       registry: createOperationRegistry([]),
-      engine: fakeEngine,
-      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
     });
     expect(result.exitCode).toBe(0);
   });
@@ -447,22 +472,7 @@ describe('runStdioSession — dispatch', () => {
       '\n';
     const input = readableFromLines([combined]);
     const output = collectingWritable();
-    const registry = createOperationRegistry([
-      makeOp({
-        name: 'weft.test.echo',
-        inputSchema: z.object({ v: z.string() }),
-        outputSchema: z.object({ v: z.string() }),
-        invoke: async ({ input: i }) => ({ v: i.v }),
-      }),
-    ]);
-    const result = await runStdioSession({
-      input,
-      output: output.stream,
-      admission: { kind: 'allow-unauthenticated-local-admin' },
-      registry,
-      engine: fakeEngine,
-      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
-    });
+    const result = await runStdioTestSession({ input, output, registry: echoRegistry() });
     expect(result.exitCode).toBe(0);
     const lines = output.lines();
     expect(lines).toHaveLength(2);
@@ -499,21 +509,10 @@ describe('runStdioSession — dispatch', () => {
       },
     });
     const output = collectingWritable();
-    const registry = createOperationRegistry([
-      makeOp({
-        name: 'weft.test.echo',
-        inputSchema: z.object({ v: z.string() }),
-        outputSchema: z.object({ v: z.string() }),
-        invoke: async ({ input: i }) => ({ v: i.v }),
-      }),
-    ]);
-    const result = await runStdioSession({
+    const result = await runStdioTestSession({
       input,
-      output: output.stream,
-      admission: { kind: 'allow-unauthenticated-local-admin' },
-      registry,
-      engine: fakeEngine,
-      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+      output,
+      registry: echoRegistry(),
       maxFrameBytes: 500,
     });
     expect(result.exitCode).toBe(0);
@@ -557,21 +556,10 @@ describe('runStdioSession — dispatch', () => {
       },
     });
     const output = collectingWritable();
-    const registry = createOperationRegistry([
-      makeOp({
-        name: 'weft.test.echo',
-        inputSchema: z.object({ v: z.string() }),
-        outputSchema: z.object({ v: z.string() }),
-        invoke: async ({ input: i }) => ({ v: i.v }),
-      }),
-    ]);
-    const result = await runStdioSession({
+    const result = await runStdioTestSession({
       input,
-      output: output.stream,
-      admission: { kind: 'allow-unauthenticated-local-admin' },
-      registry,
-      engine: fakeEngine,
-      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+      output,
+      registry: echoRegistry(),
       maxFrameBytes: 500,
     });
     expect(result.exitCode).toBe(0);
@@ -693,21 +681,11 @@ describe('runStdioSession — dispatch', () => {
       '\n';
     const input = readableFromLines([combined]);
     const output = collectingWritable();
-    const registry = createOperationRegistry([
-      makeOp({
-        name: 'weft.test.ping',
-        inputSchema: z.object({}),
-        outputSchema: z.object({ ok: z.boolean() }),
-        invoke: async () => ({ ok: true }),
-      }),
-    ]);
-    const result = await runStdioSession({
+    const result = await runStdioTestSession({
       input,
-      output: output.stream,
+      output,
       admission: { kind: 'startup-token', token },
-      registry,
-      engine: fakeEngine,
-      feed: createWorkflowEventFeed(createInMemoryEventBackend()),
+      registry: pingRegistry(),
     });
     expect(result.exitCode).toBe(0);
     const lines = output.lines();

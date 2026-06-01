@@ -12,6 +12,10 @@ import { workflow } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { serve, type WeftServer } from './index.ts';
 import { openWebSocket, waitForMessage } from './json-rpc-websocket-client.test-support.ts';
+import {
+  waitForStatus as waitForStatusWithTimeout,
+  type WaitableWorkflowStatus,
+} from './workflow-status.test-support.ts';
 
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
   ctx: WorkflowContext,
@@ -43,19 +47,50 @@ function createHoldEngine(): Engine {
   return engine;
 }
 
-async function waitForStatus(
+/**
+ * Wait for a workflow status over the WebSocket integration path. These tests
+ * run against a real `serve()` socket, so they allow a longer 2s window than
+ * the in-process default of the shared helper.
+ */
+function waitForStatus(
   engine: Engine,
   workflowId: string,
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
+  status: WaitableWorkflowStatus,
   timeoutMilliseconds = 2_000,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    const state = await engine.get(workflowId);
-    if (state?.status === status) return;
-    await sleepForTesting(10);
-  }
-  throw new Error(`workflow ${workflowId} did not reach ${status} in time`);
+  return waitForStatusWithTimeout(engine, workflowId, status, timeoutMilliseconds);
+}
+
+/** WebSocket URL for the `/jsonrpc` endpoint of a running server. */
+function jsonRpcWebSocketUrl(runningServer: WeftServer): string {
+  return `${runningServer.url.replace('http://', 'ws://')}/jsonrpc`;
+}
+
+/**
+ * Open an authenticated socket against a subscribe-capable server, send a
+ * `weft.workflows.subscribe` request for `workflowId`'s events, and resolve
+ * with the opened socket plus the returned `subscriptionId`. Several tests
+ * begin with this exact handshake before diverging into their own assertions.
+ */
+async function openSubscribedEventsSocket(
+  runningServer: WeftServer,
+  workflowId: string,
+): Promise<{ ws: WebSocket; subscriptionId: string }> {
+  const ws = await openWebSocket(jsonRpcWebSocketUrl(runningServer), SUBSCRIBE_TEST_API_KEY);
+  const subscribeResponsePromise = waitForMessage(
+    ws,
+    (parsed: any) => parsed?.id === 1 && parsed?.result?.subscriptionId,
+  );
+  ws.send(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'weft.workflows.subscribe',
+      params: { workflowId, selector: 'events' },
+    }),
+  );
+  const subscribeResponse = (await subscribeResponsePromise) as any;
+  return { ws, subscriptionId: subscribeResponse.result.subscriptionId as string };
 }
 
 describe('serve() — WebSocket /jsonrpc', () => {
@@ -107,25 +142,8 @@ describe('serve() — WebSocket /jsonrpc', () => {
     await waitForStatus(engine, handle.id, 'running');
 
     server = serve({ engine, ...subscribeServeOptions });
-    const wsUrl = `${server.url.replace('http://', 'ws://')}/jsonrpc`;
-    const ws = await openWebSocket(wsUrl, SUBSCRIBE_TEST_API_KEY);
-
-    const subscribeResponsePromise = waitForMessage(
-      ws,
-      (parsed: any) => parsed?.id === 1 && parsed?.result?.subscriptionId,
-    );
-    ws.send(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'weft.workflows.subscribe',
-        params: { workflowId: handle.id, selector: 'events' },
-      }),
-    );
-
-    const subscribeResponse = (await subscribeResponsePromise) as any;
-    expect(subscribeResponse.result.subscriptionId).toBeTruthy();
-    const subscriptionId = subscribeResponse.result.subscriptionId as string;
+    const { ws, subscriptionId } = await openSubscribedEventsSocket(server, handle.id);
+    expect(subscriptionId).toBeTruthy();
 
     const deliverPromise = waitForMessage(
       ws,
@@ -157,23 +175,7 @@ describe('serve() — WebSocket /jsonrpc', () => {
     await waitForStatus(engine, handle.id, 'running');
 
     server = serve({ engine, ...subscribeServeOptions });
-    const wsUrl = `${server.url.replace('http://', 'ws://')}/jsonrpc`;
-    const ws = await openWebSocket(wsUrl, SUBSCRIBE_TEST_API_KEY);
-
-    const subscribeResponsePromise = waitForMessage(
-      ws,
-      (parsed: any) => parsed?.id === 1 && parsed?.result?.subscriptionId,
-    );
-    ws.send(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'weft.workflows.subscribe',
-        params: { workflowId: handle.id, selector: 'events' },
-      }),
-    );
-    const subscribeResponse = (await subscribeResponsePromise) as any;
-    const subscriptionId = subscribeResponse.result.subscriptionId as string;
+    const { ws, subscriptionId } = await openSubscribedEventsSocket(server, handle.id);
 
     const unsubscribeResponsePromise = waitForMessage(ws, (parsed: any) => parsed?.id === 2);
     ws.send(
@@ -317,22 +319,7 @@ describe('serve() — WebSocket /jsonrpc', () => {
     await waitForStatus(engine, handle.id, 'running');
 
     server = serve({ engine, ...subscribeServeOptions });
-    const wsUrl = `${server.url.replace('http://', 'ws://')}/jsonrpc`;
-    const ws = await openWebSocket(wsUrl, SUBSCRIBE_TEST_API_KEY);
-
-    const subscribeResponsePromise = waitForMessage(
-      ws,
-      (parsed: any) => parsed?.id === 1 && parsed?.result?.subscriptionId,
-    );
-    ws.send(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'weft.workflows.subscribe',
-        params: { workflowId: handle.id, selector: 'events' },
-      }),
-    );
-    await subscribeResponsePromise;
+    const { ws } = await openSubscribedEventsSocket(server, handle.id);
 
     let leakedRejection: unknown = null;
     const rejectionHandler = (reason: unknown) => {
@@ -504,22 +491,9 @@ describe('serve() — WebSocket /jsonrpc', () => {
     await waitForStatus(engine, handle.id, 'running');
 
     server = serve({ engine, ...subscribeServeOptions });
-    const wsUrl = `${server.url.replace('http://', 'ws://')}/jsonrpc`;
-    const ws = await openWebSocket(wsUrl, SUBSCRIBE_TEST_API_KEY);
-
-    const subscribeResponsePromise = waitForMessage(
-      ws,
-      (parsed: any) => parsed?.id === 1 && parsed?.result?.subscriptionId,
-    );
-    ws.send(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        id: 1,
-        method: 'weft.workflows.subscribe',
-        params: { workflowId: handle.id, selector: 'events' },
-      }),
-    );
-    await subscribeResponsePromise;
+    // Open and subscribe, but intentionally leave the client socket open: this
+    // test exercises `server.stop()` draining an active subscription.
+    await openSubscribedEventsSocket(server, handle.id);
 
     let leakedRejection: unknown = null;
     const rejectionHandler = (reason: unknown) => {

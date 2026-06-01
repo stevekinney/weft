@@ -14,6 +14,34 @@ function createEngine(): Engine {
   return new Engine({ storage: new MemoryStorage() });
 }
 
+/**
+ * Assert that a discovery request to `requestUrl` is rejected with a 503 whose
+ * error names `publicOrigin`/`trustedHosts` when `NODE_ENV` and the untrusted-
+ * origin override are both unset. Saves and restores both environment variables
+ * around the request so the surrounding suite is unaffected.
+ */
+async function expectUntrustedOriginRejected(engine: Engine, requestUrl: string): Promise<void> {
+  const originalNodeEnv = Bun.env['NODE_ENV'];
+  const originalOverride = Bun.env['WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN'];
+  delete Bun.env['NODE_ENV'];
+  delete Bun.env['WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN'];
+  try {
+    const response = await handleRequest(new Request(requestUrl), engine);
+    expect(response.status).toBe(503);
+    const body = (await response.json()) as { error?: string };
+    expect(body.error).toContain('publicOrigin');
+    expect(body.error).toContain('trustedHosts');
+  } finally {
+    if (originalNodeEnv !== undefined) Bun.env['NODE_ENV'] = originalNodeEnv;
+    else delete Bun.env['NODE_ENV'];
+    if (originalOverride !== undefined) {
+      Bun.env['WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN'] = originalOverride;
+    } else {
+      delete Bun.env['WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN'];
+    }
+  }
+}
+
 describe('API catalog linkset', () => {
   let engine: Engine | undefined;
 
@@ -158,28 +186,7 @@ describe('API catalog linkset', () => {
 
   it('returns 503 for /.well-known/mcp.json by default without publicOrigin or trustedHosts', async () => {
     engine = createEngine();
-    const originalNodeEnv = Bun.env['NODE_ENV'];
-    const originalOverride = Bun.env['WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN'];
-    delete Bun.env['NODE_ENV'];
-    delete Bun.env['WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN'];
-    try {
-      const response = await handleRequest(
-        new Request('https://attacker.example/.well-known/mcp.json'),
-        engine,
-      );
-      expect(response.status).toBe(503);
-      const body = (await response.json()) as { error?: string };
-      expect(body.error).toContain('publicOrigin');
-      expect(body.error).toContain('trustedHosts');
-    } finally {
-      if (originalNodeEnv !== undefined) Bun.env['NODE_ENV'] = originalNodeEnv;
-      else delete Bun.env['NODE_ENV'];
-      if (originalOverride !== undefined) {
-        Bun.env['WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN'] = originalOverride;
-      } else {
-        delete Bun.env['WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN'];
-      }
-    }
+    await expectUntrustedOriginRejected(engine, 'https://attacker.example/.well-known/mcp.json');
   });
 
   it('serves /.well-known/mcp.json when the explicit untrusted-origin override is set', async () => {
@@ -337,28 +344,7 @@ describe('API catalog linkset', () => {
     // Closes Codex round-4 finding: a `production`-only check was too
     // narrow because deployments use staging/prod/preview/unset.
     engine = createEngine();
-    const originalNodeEnv = Bun.env['NODE_ENV'];
-    const originalOverride = Bun.env['WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN'];
-    delete Bun.env['NODE_ENV'];
-    delete Bun.env['WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN'];
-    try {
-      const response = await handleRequest(
-        new Request('https://attacker.example/.well-known/api-catalog'),
-        engine,
-      );
-      expect(response.status).toBe(503);
-      const body = (await response.json()) as { error?: string };
-      expect(body.error).toContain('publicOrigin');
-      expect(body.error).toContain('trustedHosts');
-    } finally {
-      if (originalNodeEnv !== undefined) Bun.env['NODE_ENV'] = originalNodeEnv;
-      else delete Bun.env['NODE_ENV'];
-      if (originalOverride !== undefined) {
-        Bun.env['WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN'] = originalOverride;
-      } else {
-        delete Bun.env['WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN'];
-      }
-    }
+    await expectUntrustedOriginRejected(engine, 'https://attacker.example/.well-known/api-catalog');
   });
 
   it('returns 503 when NODE_ENV=staging without publicOrigin/trustedHosts (not just NODE_ENV=production)', async () => {

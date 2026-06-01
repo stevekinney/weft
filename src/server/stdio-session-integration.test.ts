@@ -1,4 +1,3 @@
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 /**
  * End-to-end integration tests for `runStdioSession` wired to a real
  * `Engine` instance and the production `createEngineEventFeedBackend`.
@@ -26,6 +25,10 @@ import { createLiveOperationRegistry } from './rest-bindings.ts';
 import { runStdioSession } from './stdio-session.ts';
 import { collectingWritable, readableFromLines } from './stdio-stream.test-support.ts';
 import { createWorkflowEventFeed, type WorkflowEventFeed } from './workflow-event-feed.ts';
+import {
+  waitForStatus as waitForStatusWithTimeout,
+  type WaitableWorkflowStatus,
+} from './workflow-status.test-support.ts';
 
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
   ctx: WorkflowContext,
@@ -117,20 +120,18 @@ function waitForLine(
   });
 }
 
-/** Poll until the engine workflow reaches the target status or timeout elapses. */
-async function waitForStatus(
+/**
+ * Poll until the engine workflow reaches the target status or timeout elapses.
+ * These engine-backed integration tests allow a longer 2s window than the
+ * in-process default of the shared helper.
+ */
+function waitForStatus(
   engine: Engine,
   workflowId: string,
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
+  status: WaitableWorkflowStatus,
   timeoutMs = 2_000,
 ): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const state = await engine.get(workflowId);
-    if (state?.status === status) return;
-    await sleepForTesting(10);
-  }
-  throw new Error(`workflow ${workflowId} did not reach ${status} within ${timeoutMs}ms`);
+  return waitForStatusWithTimeout(engine, workflowId, status, timeoutMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -165,6 +166,48 @@ describe('runStdioSession — engine-backed integration', () => {
   afterEach(() => {
     feed.dispose();
   });
+
+  /**
+   * Send a `weft.workflows.subscribe` request, start a stdio session, and wait
+   * for stdio to reject it with `UnsupportedTransport`. Returns the live
+   * input/output handles plus the session promise so each test can continue
+   * with its own teardown and post-rejection assertions.
+   */
+  async function startRejectedSubscription(workflowId: string): Promise<{
+    input: ReturnType<typeof controllableInput>;
+    output: ReturnType<typeof collectingWritable>;
+    sessionPromise: ReturnType<typeof runStdioSession>;
+  }> {
+    const input = controllableInput();
+    const output = collectingWritable();
+
+    input.send(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId, selector: 'events' },
+        id: 1,
+      }) + '\n',
+    );
+
+    const sessionPromise = runStdioSession({
+      input: input.stream,
+      output: output.stream,
+      admission: { kind: 'allow-unauthenticated-local-admin' },
+      registry,
+      engine,
+      feed,
+    });
+
+    const subscribeResponse = (await waitForLine(
+      output.lines.bind(output),
+      (parsed: any) => parsed?.id === 1 && parsed?.error?.data?.weftCode === 'UnsupportedTransport',
+      3_000,
+    )) as any;
+    expect(subscribeResponse.error.code).toBe(-32030);
+
+    return { input, output, sessionPromise };
+  }
 
   it('test 1: dispatches a non-subscription operation against the real engine', async () => {
     // Start a workflow, then ask the real engine for its state via stdio.
@@ -231,36 +274,9 @@ describe('runStdioSession — engine-backed integration', () => {
     const handle = await engine.start('hold', {}, {});
     await waitForStatus(engine, handle.id, 'running');
 
-    const input = controllableInput();
-    const output = collectingWritable();
-
-    // Subscribe.
-    input.send(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'weft.workflows.subscribe',
-        params: { workflowId: handle.id, selector: 'events' },
-        id: 1,
-      }) + '\n',
-    );
-
-    const sessionPromise = runStdioSession({
-      input: input.stream,
-      output: output.stream,
-      admission: { kind: 'allow-unauthenticated-local-admin' },
-      registry,
-      engine,
-      feed,
-    });
+    const { input, output, sessionPromise } = await startRejectedSubscription(handle.id);
 
     try {
-      const subscribeResponse = (await waitForLine(
-        output.lines.bind(output),
-        (parsed: any) =>
-          parsed?.id === 1 && parsed?.error?.data?.weftCode === 'UnsupportedTransport',
-        3_000,
-      )) as any;
-      expect(subscribeResponse.error.code).toBe(-32030);
       const lineCountAfterRejectedSubscribe = output.lines().length;
 
       // Signal the engine and complete the workflow. A rejected subscribe
@@ -330,36 +346,9 @@ describe('runStdioSession — engine-backed integration', () => {
     };
     process.on('unhandledRejection', rejectionHandler);
 
-    const input = controllableInput();
-    const output = collectingWritable();
-
-    input.send(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'weft.workflows.subscribe',
-        params: { workflowId: handle.id, selector: 'events' },
-        id: 1,
-      }) + '\n',
-    );
-
-    const sessionPromise = runStdioSession({
-      input: input.stream,
-      output: output.stream,
-      admission: { kind: 'allow-unauthenticated-local-admin' },
-      registry,
-      engine,
-      feed,
-    });
+    const { input, output, sessionPromise } = await startRejectedSubscription(handle.id);
 
     try {
-      const subscribeResponse = (await waitForLine(
-        output.lines.bind(output),
-        (parsed: any) =>
-          parsed?.id === 1 && parsed?.error?.data?.weftCode === 'UnsupportedTransport',
-        3_000,
-      )) as any;
-      expect(subscribeResponse.error.code).toBe(-32030);
-
       input.close();
       const result = await sessionPromise;
       expect(result.exitCode).toBe(0);
