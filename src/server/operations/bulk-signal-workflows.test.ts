@@ -46,7 +46,7 @@ function bulkAdminHandlerOptions(customRegistry = registry) {
 
 describe('weft.workflows.bulk.signal', () => {
   it('returns signal counts and signals matching workflows', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const firstHandle = await engine.start('waiting', 'first', {
       id: 'bulk-signal-selected-a',
@@ -129,7 +129,7 @@ describe('weft.workflows.bulk.signal', () => {
   });
 
   it('returns 400 when the request body is not a JSON object', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const response = await handleRequest(request(['not-an-object']), engine, {
       ...bulkAdminHandlerOptions(),
@@ -141,7 +141,7 @@ describe('weft.workflows.bulk.signal', () => {
   });
 
   it('returns 400 for missing required fields and unscoped filters', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     let response = await handleRequest(request({ filter: {}, name: 'continue' }), engine, {
       ...bulkAdminHandlerOptions(),
@@ -187,7 +187,7 @@ describe('weft.workflows.bulk.signal', () => {
   });
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
     const failingOperation = {
       ...bulkSignalWorkflowsOperation,
       invoke: async () => {

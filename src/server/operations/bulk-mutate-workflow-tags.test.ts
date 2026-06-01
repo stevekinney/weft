@@ -44,7 +44,7 @@ function bulkAdminHandlerOptions(customRegistry = registry) {
 
 describe('weft.workflows.bulk.tags', () => {
   it('adds and removes tags on matching workflows', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const firstHandle = await engine.start('echo', 'first', {
       id: 'bulk-tags-selected-a',
@@ -166,7 +166,7 @@ describe('weft.workflows.bulk.tags', () => {
   });
 
   it('returns 400 when the request body is not a JSON object', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const response = await handleRequest(request(['not-an-object']), engine, {
       ...bulkAdminHandlerOptions(),
@@ -178,7 +178,7 @@ describe('weft.workflows.bulk.tags', () => {
   });
 
   it('returns 400 for invalid tag mutation input', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     let response = await handleRequest(
       request({
@@ -217,7 +217,7 @@ describe('weft.workflows.bulk.tags', () => {
   });
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
     const failingOperation = {
       ...bulkMutateWorkflowTagsOperation,
       invoke: async () => {

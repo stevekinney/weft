@@ -47,7 +47,7 @@ function bulkAdminHandlerOptions(customRegistry = registry) {
 
 describe('weft.workflows.bulk.cancel', () => {
   it('returns cancellation counts and cancels matching workflows', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     await engine.start('waiting', undefined, {
       id: 'bulk-cancel-selected-a',
@@ -139,7 +139,7 @@ describe('weft.workflows.bulk.cancel', () => {
   });
 
   it('returns 400 when the bulk filter is unscoped', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const response = await handleRequest(request('/v1/workflows/bulk/cancel', {}), engine, {
       ...bulkAdminHandlerOptions(),
@@ -154,7 +154,7 @@ describe('weft.workflows.bulk.cancel', () => {
   });
 
   it('returns 400 for invalid filter bodies before dispatching', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const response = await handleRequest(
       request('/v1/workflows/bulk/cancel', {
@@ -174,7 +174,7 @@ describe('weft.workflows.bulk.cancel', () => {
   });
 
   it('caps request ids before they can become audit storage keys', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const response = await handleRequest(
       request('/v1/workflows/bulk/cancel', {
@@ -193,7 +193,7 @@ describe('weft.workflows.bulk.cancel', () => {
   });
 
   it('requires workflows:admin for authenticated bulk operators', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const response = await handleRequest(
       request('/v1/workflows/bulk/cancel', {
@@ -219,7 +219,7 @@ describe('weft.workflows.bulk.cancel', () => {
   });
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
     const failingOperation = {
       ...bulkCancelWorkflowsOperation,
       invoke: async () => {

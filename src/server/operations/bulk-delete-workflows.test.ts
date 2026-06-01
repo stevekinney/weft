@@ -50,7 +50,7 @@ function bulkAdminHandlerOptions(customRegistry = registry) {
 
 describe('weft.workflows.bulk.delete', () => {
   it('deletes matching terminal workflows', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const firstHandle = await engine.start('echo', 'first', {
       id: 'bulk-delete-selected-a',
@@ -113,7 +113,7 @@ describe('weft.workflows.bulk.delete', () => {
   });
 
   it('requires a confirmation token before deleting matching terminal workflows', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const handle = await engine.start('echo', 'first', {
       id: 'bulk-delete-token-required',
@@ -134,7 +134,7 @@ describe('weft.workflows.bulk.delete', () => {
   });
 
   it('returns 422 when the filter matches non-terminal workflows', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const completedHandle = await engine.start('echo', 'done', {
       id: 'bulk-delete-completed',
@@ -164,7 +164,7 @@ describe('weft.workflows.bulk.delete', () => {
   });
 
   it('returns 400 when the bulk filter is unscoped', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const response = await handleRequest(request({ filter: {} }), engine, {
       ...bulkAdminHandlerOptions(),
@@ -179,7 +179,7 @@ describe('weft.workflows.bulk.delete', () => {
   });
 
   it('returns 400 with the "Field \\"filter.tags\\"" label when filter tags contain an empty string', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const response = await handleRequest(request({ filter: { tags: [''] } }), engine, {
       ...bulkAdminHandlerOptions(),
@@ -193,7 +193,7 @@ describe('weft.workflows.bulk.delete', () => {
   });
 
   it('returns 400 when a filter time-range bound is not a finite number', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
 
     const response = await handleRequest(
       request({ filter: { tags: ['selected'], createdAt: { gt: 'not-a-number' } } }),
@@ -209,7 +209,7 @@ describe('weft.workflows.bulk.delete', () => {
   });
 
   it('masks EngineFailure faults to a 500 with a generic error body', async () => {
-    const engine = createEngine();
+    using engine = createEngine();
     const failingOperation = {
       ...bulkDeleteWorkflowsOperation,
       invoke: async () => {
