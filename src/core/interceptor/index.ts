@@ -12,7 +12,7 @@ export * from './workflow-composition.ts';
  *
  * @example
  * ```ts
- * import { interceptor } from 'weft';
+ * import { interceptor } from '@lostgradient/weft';
  *
  * const tracer = interceptor({
  *   name: 'tracer',

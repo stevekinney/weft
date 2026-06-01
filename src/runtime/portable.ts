@@ -78,7 +78,7 @@ const RUNTIME_DETECTORS: readonly RuntimeDetector[] = [
  *
  * @example
  * ```ts
- * import { detectRuntime } from 'weft';
+ * import { detectRuntime } from '@lostgradient/weft';
  *
  * const runtime = detectRuntime();
  * // Returns 'bun' | 'node' | 'browser' | 'edge'
@@ -104,7 +104,7 @@ export function detectRuntime(): RuntimeKind {
  *
  * @example
  * ```ts
- * import { sleep } from 'weft';
+ * import { sleep } from '@lostgradient/weft';
  *
  * async function poll() {
  *   for (let i = 0; i < 3; i++) {
@@ -160,7 +160,7 @@ const textEncoder = new TextEncoder();
  *
  * @example
  * ```ts
- * import { hashBytes } from 'weft';
+ * import { hashBytes } from '@lostgradient/weft';
  *
  * const data = new TextEncoder().encode('hello');
  * const hash = hashBytes(data);
@@ -179,7 +179,7 @@ export function hashBytes(data: Uint8Array): string {
  *
  * @example
  * ```ts
- * import { hashString } from 'weft';
+ * import { hashString } from '@lostgradient/weft';
  *
  * const h1 = hashString('workflow-key');
  * const h2 = hashString('workflow-key');

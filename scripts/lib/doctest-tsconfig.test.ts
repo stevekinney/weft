@@ -12,8 +12,8 @@ import {
 
 describe('doctest tsconfig generation', () => {
   const publicEntryPoints = {
-    weft: 'src/index.ts',
-    'weft/storage/memory': 'src/storage/memory.ts',
+    '@lostgradient/weft': 'src/index.ts',
+    '@lostgradient/weft/storage/memory': 'src/storage/memory.ts',
   };
   const repositoryRoot = '/workspace/weft';
   const doctestsDirectory = '/workspace/weft/tmp/doctests';
@@ -26,8 +26,8 @@ describe('doctest tsconfig generation', () => {
       noUnusedParameters: false,
       baseUrl: '.',
       paths: {
-        weft: ['../../src/index'],
-        'weft/storage/memory': ['../../src/storage/memory'],
+        '@lostgradient/weft': ['../../src/index'],
+        '@lostgradient/weft/storage/memory': ['../../src/storage/memory'],
       },
     },
     include: ['./**/*.ts'],
@@ -57,8 +57,8 @@ describe('doctest tsconfig generation', () => {
       compilerOptions: {
         ...expectedTsconfig.compilerOptions,
         paths: {
-          weft: ['../../../src/index'],
-          'weft/storage/memory': ['../../../src/storage/memory'],
+          '@lostgradient/weft': ['../../../src/index'],
+          '@lostgradient/weft/storage/memory': ['../../../src/storage/memory'],
         },
       },
     });
@@ -70,7 +70,7 @@ describe('doctest tsconfig generation', () => {
         repositoryRoot,
         doctestsDirectory,
         publicEntryPoints: {
-          weft: 'src\\index.ts',
+          '@lostgradient/weft': 'src\\index.ts',
         },
       }),
     ).toEqual({
@@ -78,7 +78,7 @@ describe('doctest tsconfig generation', () => {
       compilerOptions: {
         ...expectedTsconfig.compilerOptions,
         paths: {
-          weft: ['../../src/index'],
+          '@lostgradient/weft': ['../../src/index'],
         },
       },
     });
@@ -102,64 +102,64 @@ describe('doctest tsconfig generation', () => {
         repositoryRoot,
         doctestsDirectory,
         publicEntryPoints: {
-          weft: '../outside.ts',
+          '@lostgradient/weft': '../outside.ts',
         },
       }),
-    ).toThrow('Invalid doctest source path for weft');
+    ).toThrow('Invalid doctest source path for @lostgradient/weft');
     expect(() =>
       createDoctestTsconfig({
         repositoryRoot,
         doctestsDirectory,
         publicEntryPoints: {
-          weft: '/tmp/outside.ts',
+          '@lostgradient/weft': '/tmp/outside.ts',
         },
       }),
-    ).toThrow('Invalid doctest source path for weft');
+    ).toThrow('Invalid doctest source path for @lostgradient/weft');
     expect(() =>
       createDoctestTsconfig({
         repositoryRoot,
         doctestsDirectory,
         publicEntryPoints: {
-          weft: 'src/../index.ts',
+          '@lostgradient/weft': 'src/../index.ts',
         },
       }),
-    ).toThrow('Invalid doctest source path for weft');
+    ).toThrow('Invalid doctest source path for @lostgradient/weft');
     expect(() =>
       createDoctestTsconfig({
         repositoryRoot,
         doctestsDirectory,
         publicEntryPoints: {
-          weft: '..\\outside.ts',
+          '@lostgradient/weft': '..\\outside.ts',
         },
       }),
-    ).toThrow('Invalid doctest source path for weft');
+    ).toThrow('Invalid doctest source path for @lostgradient/weft');
     expect(() =>
       createDoctestTsconfig({
         repositoryRoot,
         doctestsDirectory,
         publicEntryPoints: {
-          weft: 'src\\..\\index.ts',
+          '@lostgradient/weft': 'src\\..\\index.ts',
         },
       }),
-    ).toThrow('Invalid doctest source path for weft');
+    ).toThrow('Invalid doctest source path for @lostgradient/weft');
     expect(() =>
       createDoctestTsconfig({
         repositoryRoot,
         doctestsDirectory,
         publicEntryPoints: {
-          weft: 'C:\\tmp\\outside.ts',
+          '@lostgradient/weft': 'C:\\tmp\\outside.ts',
         },
       }),
-    ).toThrow('Invalid doctest source path for weft');
+    ).toThrow('Invalid doctest source path for @lostgradient/weft');
     expect(() =>
       createDoctestTsconfig({
         repositoryRoot,
         doctestsDirectory,
         publicEntryPoints: {
-          weft: 'C:/tmp/outside.ts',
+          '@lostgradient/weft': 'C:/tmp/outside.ts',
         },
       }),
-    ).toThrow('Invalid doctest source path for weft');
+    ).toThrow('Invalid doctest source path for @lostgradient/weft');
   });
 
   it('rejects doctest source paths that are not TypeScript source files', () => {
@@ -168,10 +168,10 @@ describe('doctest tsconfig generation', () => {
         repositoryRoot,
         doctestsDirectory,
         publicEntryPoints: {
-          weft: 'src/index.js',
+          '@lostgradient/weft': 'src/index.js',
         },
       }),
-    ).toThrow('Invalid doctest source path for weft');
+    ).toThrow('Invalid doctest source path for @lostgradient/weft');
   });
 
   it('writes tsconfig.json into the provided doctest directory', () => {
@@ -194,8 +194,8 @@ describe('doctest tsconfig generation', () => {
             compilerOptions: {
               ...expectedTsconfig.compilerOptions,
               paths: {
-                weft: ['../../../src/index'],
-                'weft/storage/memory': ['../../../src/storage/memory'],
+                '@lostgradient/weft': ['../../../src/index'],
+                '@lostgradient/weft/storage/memory': ['../../../src/storage/memory'],
               },
             },
           },

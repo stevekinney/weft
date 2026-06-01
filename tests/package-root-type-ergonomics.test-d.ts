@@ -7,7 +7,7 @@ import {
   type BulkOperationDryRunResult,
   type BulkSignalResult,
   type WorkflowHandle,
-} from 'weft';
+} from '@lostgradient/weft';
 
 interface PackageRootWelcomeInput {
   name: string;
@@ -21,7 +21,7 @@ interface PackageRootFormatGreetingInput {
   name: string;
 }
 
-declare module 'weft' {
+declare module '@lostgradient/weft' {
   interface WorkflowRegistry {
     // Module-augmented workflow name, distinct from any `engine.register(...)`
     // call site below so the builder's `WorkflowAlreadyRegistered` brand does

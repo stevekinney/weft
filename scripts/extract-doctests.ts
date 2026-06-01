@@ -2,13 +2,13 @@
  * Extracts every @example block from manifest entries and writes one .ts file
  * per block to tmp/doctests/<batchSlug>/<importPath-slug>__<exportName>__<kind>__<index>.ts.
  * Generates tmp/doctests/tsconfig.json with `paths` resolved from the manifest's
- * publicEntryPoints table so 'weft' and subpaths resolve to source files.
+ * publicEntryPoints table so '@lostgradient/weft' and subpaths resolve to source files.
  *
  * The extractor is NOT a coverage tool — it only produces compileable artifacts.
  * Coverage enforcement is audit-jsdoc-manifest.ts's job.
  *
  * Hard requirement on examples: each block must contain at least one
- *   import ... from 'weft'   |   import type ... from 'weft'   |   mixed
+ *   import ... from '@lostgradient/weft'   |   import type ... from '@lostgradient/weft'   |   mixed
  * statement as one of its first non-blank lines. Blocks missing this are
  * reported and the run aborts with a non-zero exit (no silent injection).
  *
@@ -25,7 +25,8 @@ import { buildManifest, type PublicFace } from './lib/jsdoc-manifest.ts';
 const REPO_ROOT = resolve(import.meta.dir, '..');
 const DOCTESTS_DIR = resolve(REPO_ROOT, 'tmp/doctests');
 const ISOLATED_DOCTESTS_DIR = resolve(REPO_ROOT, 'tmp/doctests-isolated');
-const PUBLIC_MODULE_AUGMENTATION_PATTERN = /\bdeclare\s+module\s+['"]weft(?:\/[^'"]*)?['"]/;
+const PUBLIC_MODULE_AUGMENTATION_PATTERN =
+  /\bdeclare\s+module\s+['"]@lostgradient\/weft(?:\/[^'"]*)?['"]/;
 
 // ---------------------------------------------------------------------------
 // Slugification helpers — keep filenames safe across filesystems.
@@ -153,11 +154,11 @@ function needsIsolatedDoctest(block: string): boolean {
 // one of the symbol's publicFaces import paths. Accepts value, type-only, or
 // mixed import forms, including aliases.
 //
-// For a symbol reachable only from one path (e.g. `weft/storage/lmdb#LMDBStorage`),
-// the example MUST import from that path — importing from `'weft'` would be
+// For a symbol reachable only from one path (e.g. `@lostgradient/weft/storage/lmdb#LMDBStorage`),
+// the example MUST import from that path — importing from `'@lostgradient/weft'` would be
 // misleading because `LMDBStorage` isn't re-exported there. For symbols
-// reachable from multiple paths (e.g. `MemoryStorage` is at both `'weft'` and
-// `'weft/storage/memory'`), importing from any one valid face is acceptable.
+// reachable from multiple paths (e.g. `MemoryStorage` is at both `'@lostgradient/weft'` and
+// `'@lostgradient/weft/storage/memory'`), importing from any one valid face is acceptable.
 // ---------------------------------------------------------------------------
 
 function hasFaceImport(block: string, publicFaces: PublicFace[]): boolean {
@@ -246,7 +247,7 @@ function main(): void {
       entry.classification === 'unclassified' ? 'unclassified' : entry.classification;
 
     // The example must import from at least one of the entry's publicFaces.
-    // For multi-face symbols (re-exported from both `'weft'` and a subpath),
+    // For multi-face symbols (re-exported from both `'@lostgradient/weft'` and a subpath),
     // any one valid face import is acceptable for all faces.
     examples.forEach((block, index) => {
       if (!hasFaceImport(block, entry.publicFaces)) {
@@ -309,7 +310,7 @@ function main(): void {
     console.error("extract-doctests: examples missing required `from '<publicFace>'` import:");
     for (const line of missingImports) console.error(line);
     console.error(
-      "  → Fix: each @example block must import its symbol from the same path the consumer would. For an entry whose publicFaces[0].importPath is 'weft/storage/lmdb', the example must include `import { ... } from 'weft/storage/lmdb';` (related auxiliary imports from 'weft' are fine in addition).",
+      "  → Fix: each @example block must import its symbol from the same path the consumer would. For an entry whose publicFaces[0].importPath is '@lostgradient/weft/storage/lmdb', the example must include `import { ... } from '@lostgradient/weft/storage/lmdb';` (related auxiliary imports from '@lostgradient/weft' are fine in addition).",
     );
     process.exit(1);
   }

@@ -5,7 +5,7 @@
  *
  * @example
  * ```ts
- * import { Engine, DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD } from 'weft';
+ * import { Engine, DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD } from '@lostgradient/weft';
  *
  * const engine = new Engine({
  *   checkpointSizeWarningThreshold: DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD * 2,
@@ -22,7 +22,7 @@ export const DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD = 65_536; // 64KB
  *
  * @example
  * ```ts
- * import { Engine, DEFAULT_MAX_NESTING_DEPTH } from 'weft';
+ * import { Engine, DEFAULT_MAX_NESTING_DEPTH } from '@lostgradient/weft';
  *
  * const engine = new Engine({ maxNestingDepth: DEFAULT_MAX_NESTING_DEPTH + 5 });
  * void engine;
@@ -40,7 +40,7 @@ export const DEFAULT_POLL_INTERVAL_MS = 1000;
  *
  * @example
  * ```ts
- * import { Engine, DEFAULT_VISIBILITY_TIMEOUT_MS, activity } from 'weft';
+ * import { Engine, DEFAULT_VISIBILITY_TIMEOUT_MS, activity } from '@lostgradient/weft';
  *
  * const longTask = activity({
  *   name: 'longTask',

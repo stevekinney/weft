@@ -12,7 +12,7 @@ import {
  *
  * @example
  * ```ts
- * import { createCheckpoint, serializeCheckpoint } from 'weft';
+ * import { createCheckpoint, serializeCheckpoint } from '@lostgradient/weft';
  *
  * const checkpoint = createCheckpoint('wf-123', '1.0.0');
  * const bytes = serializeCheckpoint(checkpoint);
@@ -32,7 +32,7 @@ export function serializeCheckpoint(checkpoint: Checkpoint, serializer?: Seriali
  *
  * @example
  * ```ts
- * import { createCheckpoint, serializeCheckpoint, deserializeCheckpoint } from 'weft';
+ * import { createCheckpoint, serializeCheckpoint, deserializeCheckpoint } from '@lostgradient/weft';
  *
  * const checkpoint = createCheckpoint('wf-456', '1.0.0');
  * const bytes = serializeCheckpoint(checkpoint);

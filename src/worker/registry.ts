@@ -50,7 +50,7 @@ type DrainRecord = {
  *
  * @example
  * ```ts
- * import { WorkerRegistry } from 'weft';
+ * import { WorkerRegistry } from '@lostgradient/weft';
  * const registry = new WorkerRegistry({ policy: 'least-loaded' });
  * registry.register({ id: 'worker-1', queue: 'default', activities: ['sendEmail'], concurrency: 10 });
  * const best = registry.findWorker('sendEmail', { queue: 'default' });

@@ -15,7 +15,7 @@ const DEFAULT_PATH_PREFIX = '/weft/';
  *
  * @example
  * ```ts
- * import { DEFAULT_PERIODIC_SYNC_TAG } from 'weft/service-worker';
+ * import { DEFAULT_PERIODIC_SYNC_TAG } from '@lostgradient/weft/service-worker';
  * const tag: 'weft-timers' = DEFAULT_PERIODIC_SYNC_TAG;
  * void tag;
  * ```
@@ -29,8 +29,8 @@ export const DEFAULT_PERIODIC_SYNC_TAG = 'weft-timers';
  *
  * @example
  * ```ts
- * import { createFetchHandler, type MinimalFetchEvent } from 'weft/service-worker';
- * import { Engine, MemoryStorage } from 'weft';
+ * import { createFetchHandler, type MinimalFetchEvent } from '@lostgradient/weft/service-worker';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
  * const engine = new Engine({ storage: new MemoryStorage() });
  * const handler = createFetchHandler({ engine });
  * declare const event: MinimalFetchEvent;
@@ -48,7 +48,7 @@ export interface MinimalFetchEvent {
  *
  * @example
  * ```ts
- * import type { MinimalExtendableEvent } from 'weft/service-worker';
+ * import type { MinimalExtendableEvent } from '@lostgradient/weft/service-worker';
  * declare const event: MinimalExtendableEvent;
  * event.waitUntil(Promise.resolve());
  * ```
@@ -62,7 +62,7 @@ export interface MinimalExtendableEvent {
  *
  * @example
  * ```ts
- * import type { MinimalPeriodicSyncEvent } from 'weft/service-worker';
+ * import type { MinimalPeriodicSyncEvent } from '@lostgradient/weft/service-worker';
  * declare const event: MinimalPeriodicSyncEvent;
  * if (event.tag === 'weft-timers') event.waitUntil(Promise.resolve());
  * ```
@@ -77,7 +77,7 @@ export interface MinimalPeriodicSyncEvent extends MinimalExtendableEvent {
  *
  * @example
  * ```ts
- * import { normalizePathPrefix } from 'weft/service-worker';
+ * import { normalizePathPrefix } from '@lostgradient/weft/service-worker';
  * normalizePathPrefix('/weft'); // '/weft/'
  * normalizePathPrefix(undefined); // '/weft/'
  * ```
@@ -96,7 +96,7 @@ export function normalizePathPrefix(pathPrefix: string | undefined): string {
  *
  * @example
  * ```ts
- * import { buildDelegatedRequest, normalizePathPrefix } from 'weft/service-worker';
+ * import { buildDelegatedRequest, normalizePathPrefix } from '@lostgradient/weft/service-worker';
  * declare const event: { request: Request; respondWith(r: Response | Promise<Response>): void };
  * const delegated = buildDelegatedRequest(event, normalizePathPrefix('/weft/'));
  * void delegated;

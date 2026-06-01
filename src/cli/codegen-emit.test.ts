@@ -562,7 +562,7 @@ describe('emitRegistryDeclaration', () => {
 
   it('emits a valid empty file when the snapshot has no entries', () => {
     const output = emitRegistryDeclaration(buildSnapshot());
-    expect(output).toContain("declare module 'weft' {");
+    expect(output).toContain("declare module '@lostgradient/weft' {");
     expect(output).toContain('interface WorkflowRegistry {}');
     // Activity names are typed per-workflow via the builder's
     // `.activities({...})` step, not via a global module augmentation.

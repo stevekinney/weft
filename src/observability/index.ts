@@ -90,7 +90,7 @@ function createObservabilityState(options?: ObservabilityOptions): Observability
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage, createObservabilityInterceptors } from 'weft';
+ * import { Engine, MemoryStorage, createObservabilityInterceptors } from '@lostgradient/weft';
  *
  * const { interceptor, metrics } = createObservabilityInterceptors({
  *   tracerName: 'my-app',

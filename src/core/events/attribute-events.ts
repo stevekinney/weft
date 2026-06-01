@@ -5,7 +5,7 @@
  *
  * @example
  * ```ts
- * import { Engine, AttributesChangedEvent } from 'weft';
+ * import { Engine, AttributesChangedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('attributes:changed', (e: Event) => {

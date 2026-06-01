@@ -84,7 +84,7 @@ export class AsyncActivityDeferral extends Error {
  *
  * @example
  * ```ts
- * import { AsyncActivityTokenNotFoundError } from 'weft';
+ * import { AsyncActivityTokenNotFoundError } from '@lostgradient/weft';
  *
  * function isStaleCallbackToken(error: unknown): boolean {
  *   return error instanceof AsyncActivityTokenNotFoundError;

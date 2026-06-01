@@ -222,7 +222,7 @@ void verifyModuleAugmentedClientSchedule;
 // public `WeftClient.start`/`schedule` overload signatures must be importable
 // by consumers from the same public specifiers that expose `WeftClient`. They
 // are re-exported from both `weft` (this file's `../index.ts`) and
-// `weft/client` (`../client/index.ts`); if either re-export is dropped, the
+// `@lostgradient/weft/client` (`../client/index.ts`); if either re-export is dropped, the
 // imports above stop resolving and this file fails to typecheck. The aliases
 // must also resolve to the same type from both entrypoints — a single source
 // of truth, not two divergent declarations.

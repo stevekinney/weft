@@ -5,7 +5,7 @@ Weft's public definitions are object-shaped runtime values with enough metadata 
 ## Activity definitions
 
 ```ts
-import { activity } from 'weft';
+import { activity } from '@lostgradient/weft';
 
 const sendEmail = activity({
   name: 'sendEmail',
@@ -41,8 +41,8 @@ See [the activities guide](../guides/activities.md) for usage patterns and motiv
 ## Workflows
 
 ```ts
-import { workflow } from 'weft';
-import type { WorkflowContext } from 'weft';
+import { workflow } from '@lostgradient/weft';
+import type { WorkflowContext } from '@lostgradient/weft';
 
 const checkout = workflow({ name: 'checkout', version: '1.0.0' }).execute(async function* (
   _ctx: WorkflowContext,
@@ -61,8 +61,13 @@ See [the workflows guide](../guides/workflows.md) for usage patterns and motivat
 ## Messages
 
 ```ts
-import { query, signal, update } from 'weft';
-import type { QueryDefinition, SignalDefinition, UpdateDefinition, WorkflowContext } from 'weft';
+import { query, signal, update } from '@lostgradient/weft';
+import type {
+  QueryDefinition,
+  SignalDefinition,
+  UpdateDefinition,
+  WorkflowContext,
+} from '@lostgradient/weft';
 
 const approval = signal<{ approved: boolean }>('approval');
 const approve = update<{ reviewer: string }, { accepted: boolean }>('approve');
@@ -106,7 +111,7 @@ The runtime value for each handle is only `{ name }`; the generic parameters exi
 ## Search Attributes
 
 ```ts
-import { searchAttribute } from 'weft';
+import { searchAttribute } from '@lostgradient/weft';
 
 const customerId = searchAttribute('customerId', 'string');
 const labels = searchAttribute('labels', { type: 'array', items: { type: 'string' } });
@@ -122,8 +127,8 @@ See [the search attributes guide](../guides/search-attributes.md) for usage patt
 ## Interceptors, Constraints, And Schedules
 
 ```ts
-import { constraint, interceptor, schedule, workflow } from 'weft';
-import type { WorkflowContext, WorkflowInterceptor } from 'weft';
+import { constraint, interceptor, schedule, workflow } from '@lostgradient/weft';
+import type { WorkflowContext, WorkflowInterceptor } from '@lostgradient/weft';
 
 const tracing: WorkflowInterceptor & { name: string } = interceptor({
   name: 'tracing',

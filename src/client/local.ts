@@ -128,7 +128,7 @@ class LocalScheduleHandle extends ScheduleHandleDelegation<LocalClient> {
  *
  * @example
  * ```ts
- * import { workflow, Engine, MemoryStorage, LocalClient, type WorkflowContext } from 'weft';
+ * import { workflow, Engine, MemoryStorage, LocalClient, type WorkflowContext } from '@lostgradient/weft';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * engine.register(
@@ -156,7 +156,7 @@ export class LocalClient implements WeftClient {
    *
    * @example
    * ```ts
-   * import { Engine, LocalClient } from 'weft';
+   * import { Engine, LocalClient } from '@lostgradient/weft';
    *
    * const engine = new Engine();
    * const client = new LocalClient(engine);

@@ -63,7 +63,7 @@ The main workflow lives in `src/workflows/order.ts`.
 - Child workflows: approved high-value orders start `orderProcessingShipment` as a child workflow and pipe its tracking number back to the parent.
 - Schedules: `orderProcessingSchedule` wires `orderProcessingSweepStaleOrders` as the recurring stale-order sweep.
 
-The tests use `TestEngine` from `weft/testing`; the runnable server uses `SQLiteStorage` from `weft/storage/sqlite` and `serve()` from `weft/server`. The imports are intentionally package-shaped so the files are copyable into an application.
+The tests use `TestEngine` from `@lostgradient/weft/testing`; the runnable server uses `SQLiteStorage` from `@lostgradient/weft/storage/sqlite` and `serve()` from `@lostgradient/weft/server`. The imports are intentionally package-shaped so the files are copyable into an application.
 
 ## Why Each Message Type Exists
 

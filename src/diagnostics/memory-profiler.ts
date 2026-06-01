@@ -47,7 +47,7 @@ export interface StabilityResult {
  *
  * @example
  * ```ts
- * import { analyzeStability, type StabilityOptions } from 'weft';
+ * import { analyzeStability, type StabilityOptions } from '@lostgradient/weft';
  *
  * const options: StabilityOptions = {
  *   maxGrowthRatePerSecond: 5 * 1024, // 5 KB/s threshold
@@ -80,7 +80,7 @@ export interface StabilityOptions {
  *
  * @example
  * ```ts
- * import { linearRegression } from 'weft';
+ * import { linearRegression } from '@lostgradient/weft';
  *
  * const points: [number, number][] = [
  *   [0, 100], [1, 105], [2, 110], [3, 115],
@@ -135,7 +135,7 @@ export function linearRegression(points: [number, number][]): {
  *
  * @example
  * ```ts
- * import { MemoryProfiler, analyzeStability } from 'weft';
+ * import { MemoryProfiler, analyzeStability } from '@lostgradient/weft';
  *
  * const profiler = new MemoryProfiler();
  * profiler.start(100);
@@ -191,7 +191,7 @@ export function analyzeStability(
  *
  * @example
  * ```ts
- * import { MemoryProfiler } from 'weft';
+ * import { MemoryProfiler } from '@lostgradient/weft';
  *
  * const profiler = new MemoryProfiler();
  * profiler.start(200); // sample every 200ms

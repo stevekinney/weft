@@ -12,8 +12,8 @@
     "skipLibCheck": true,
     "types": ["bun"],
     "paths": {
-      "weft": ["../../../../index.ts"],
-      "weft/client": ["../../../../client/index.ts"]
+      "@lostgradient/weft": ["../../../../index.ts"],
+      "@lostgradient/weft/client": ["../../../../client/index.ts"]
     }
   },
   "include": ["consumer.ts", "weft.generated.d.ts"]

@@ -30,7 +30,7 @@ const TICK_INTERVAL_MS = 10_000;
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage, AlertManager } from 'weft';
+ * import { Engine, MemoryStorage, AlertManager } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });

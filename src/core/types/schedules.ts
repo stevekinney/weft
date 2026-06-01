@@ -20,7 +20,7 @@ export type ScheduleStatus = 'active' | 'paused' | 'cancelled';
  *
  * @example
  * ```ts
- * import { workflow, Engine, type ScheduleOverlapPolicy } from 'weft';
+ * import { workflow, Engine, type ScheduleOverlapPolicy } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(workflow({ name: 'hourly' }).execute(async function* () { return 'done'; }));
@@ -41,7 +41,7 @@ export type ScheduleOverlapPolicy = 'skip' | 'queue' | 'cancel-running' | 'allow
  *
  * @example
  * ```ts
- * import type { ScheduleSpec } from 'weft';
+ * import type { ScheduleSpec } from '@lostgradient/weft';
  *
  * const cronSpec: ScheduleSpec = { cron: '0 9 * * *' };
  * const intervalSpec: ScheduleSpec = { every: '1h' };
@@ -58,7 +58,7 @@ export type ScheduleSpec = { cron: string; every?: never } | { every: Duration; 
  *
  * @example
  * ```ts
- * import { workflow, Engine, type ScheduleOptions } from 'weft';
+ * import { workflow, Engine, type ScheduleOptions } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(workflow({ name: 'report' }).execute(async function* () { return 'ok'; }));
@@ -79,7 +79,7 @@ export interface ScheduleOptions {
  *
  * @example
  * ```ts
- * import { schedule, type ScheduleDefinition } from 'weft';
+ * import { schedule, type ScheduleDefinition } from '@lostgradient/weft';
  *
  * const dailyReport: ScheduleDefinition<{ day: string }> = schedule({
  *   workflow: 'report',
@@ -109,7 +109,7 @@ export type ScheduleDefinition<TInput = unknown> = ScheduleSpec & {
  *
  * @example
  * ```ts
- * import { schedule } from 'weft';
+ * import { schedule } from '@lostgradient/weft';
  *
  * const definition = schedule({ workflow: 'report', cron: '0 9 * * *', input: null });
  * ```

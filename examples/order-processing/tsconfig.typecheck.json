@@ -13,10 +13,10 @@
     "noPropertyAccessFromIndexSignature": true,
     "noUncheckedIndexedAccess": true,
     "paths": {
-      "weft": ["../../dist/index.d.ts"],
-      "weft/server": ["../../dist/server/index.d.ts"],
-      "weft/storage/sqlite": ["../../dist/storage/sqlite.d.ts"],
-      "weft/testing": ["../../dist/testing/index.d.ts"]
+      "@lostgradient/weft": ["../../dist/index.d.ts"],
+      "@lostgradient/weft/server": ["../../dist/server/index.d.ts"],
+      "@lostgradient/weft/storage/sqlite": ["../../dist/storage/sqlite.d.ts"],
+      "@lostgradient/weft/testing": ["../../dist/testing/index.d.ts"]
     },
     "pretty": true,
     "skipLibCheck": true,

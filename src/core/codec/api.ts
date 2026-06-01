@@ -10,7 +10,7 @@ import { extensionCodec, replaceUndefined } from './extension-codec.ts';
  *
  * @example
  * ```ts
- * import { encode, decode } from 'weft';
+ * import { encode, decode } from '@lostgradient/weft';
  *
  * const data = { name: 'Alice', createdAt: new Date(), tags: new Set(['admin']) };
  * const bytes = encode(data);
@@ -31,7 +31,7 @@ export function encode(value: unknown): Uint8Array {
  *
  * @example
  * ```ts
- * import { encode, decode } from 'weft';
+ * import { encode, decode } from '@lostgradient/weft';
  *
  * const original = { id: 42, labels: new Map([['env', 'prod']]) };
  * const bytes = encode(original);

@@ -93,7 +93,7 @@ This is the mechanism for trace context, short-lived authorization claims, and o
 Here's a logging interceptor that times every activity:
 
 ```typescript
-import type { WorkflowInterceptor } from 'weft';
+import type { WorkflowInterceptor } from '@lostgradient/weft';
 
 const loggingInterceptor: WorkflowInterceptor = {
   *activity(interception, next) {
@@ -131,7 +131,7 @@ function validationInterceptor(schemas: Record<string, ZodSchema>): WorkflowInte
 An auth propagation interceptor should pass a short-lived claim or opaque credential reference, not the underlying secret:
 
 ```typescript
-import type { WorkflowInterceptor } from 'weft';
+import type { WorkflowInterceptor } from '@lostgradient/weft';
 
 function authInterceptor(getCredentialReference: () => string): WorkflowInterceptor {
   return {
@@ -166,7 +166,7 @@ const authActivityInterceptor: ActivityInterceptor = {
 `composeWorkflowInterceptors()` and `composeActivityInterceptors()` combine multiple interceptors into a single chain. The chain is built once per engine, not per operation—zero overhead when no interceptors are registered.
 
 ```typescript partial
-import { composeWorkflowInterceptors, composeActivityInterceptors } from 'weft';
+import { composeWorkflowInterceptors, composeActivityInterceptors } from '@lostgradient/weft';
 
 const composed = composeWorkflowInterceptors([
   authInterceptor(getCredentialReference),

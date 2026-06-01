@@ -3,7 +3,7 @@ import { z } from 'zod';
 
 import type { JSONValue } from '../core/json.ts';
 // Pin the public surface: `JSONValue` must remain exported from both the
-// package root barrel and the `weft/storage` subpath barrel. If either export
+// package root barrel and the `@lostgradient/weft/storage` subpath barrel. If either export
 // is dropped or renamed, these imports stop resolving and the file fails
 // `bun run typecheck`. (This does not detect a *reintroduced* lowercase
 // `JsonValue` — TypeScript treats it as a distinct name; the absence of that

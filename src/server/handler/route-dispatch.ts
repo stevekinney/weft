@@ -51,7 +51,7 @@ type AuthenticatedRequestContext = AuthContext;
  *
  * @example
  * ```ts
- * import { type HandlerOptions } from 'weft/server/handler';
+ * import { type HandlerOptions } from '@lostgradient/weft/server/handler';
  *
  * const options: HandlerOptions = {
  *   authContext: { method: 'public' },
@@ -338,7 +338,7 @@ function readFaultProperties(
  *
  * @example Catch an unknown error and surface as a fault when it qualifies
  * ```ts
- * import { isOperationFaultLike } from 'weft/server/handler';
+ * import { isOperationFaultLike } from '@lostgradient/weft/server/handler';
  *
  * try {
  *   // operation handler runs here
@@ -386,7 +386,7 @@ export function isOperationFaultLike(value: unknown): value is OperationFault {
  *
  * @example
  * ```ts
- * import { authContextToPrincipal } from 'weft/server/handler';
+ * import { authContextToPrincipal } from '@lostgradient/weft/server/handler';
  *
  * const principal = authContextToPrincipal({ method: 'api-key' });
  * console.log(principal.method); // 'api-key'

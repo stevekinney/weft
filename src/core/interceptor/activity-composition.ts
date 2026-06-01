@@ -9,7 +9,7 @@ import type { ActivityInterceptor, ComposedActivityInterceptor } from './interce
  *
  * @example
  * ```ts
- * import { composeActivityInterceptors, type ActivityInterceptor } from 'weft';
+ * import { composeActivityInterceptors, type ActivityInterceptor } from '@lostgradient/weft';
  *
  * const retryLogger: ActivityInterceptor = {
  *   async execute(ctx, next) {

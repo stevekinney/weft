@@ -2,7 +2,7 @@
 
 Weft provides a command-line interface for running the server and diagnosing database state.
 
-This reference documents the source/binary `weft` CLI entrypoint (`src/cli-main.ts`). The published [`weft` package](https://www.npmjs.com/package/weft) at 0.1.0 installs only the [`weft-mcp`](api-server.md#mcp-server) binary; [`bun add weft`](https://bun.sh/docs/cli/add) does not put a `weft` command on your `PATH` yet. Use these commands from a source checkout or from a standalone binary built from this repository until the package publishes a `weft` bin.
+This reference documents the `weft` CLI entrypoint (`src/cli-main.ts`). The published [`@lostgradient/weft`](https://www.npmjs.com/package/@lostgradient/weft) package installs both the `weft` binary and the [`weft-mcp`](api-server.md#mcp-server) binary.
 
 > [!NOTE]
 > [`serve`](#serve-default) and [`doctor`](#doctor) are the candidate-stable source/binary CLI commands for the pre-1.0 launch plan. [`conformance`](#conformance), [`codegen`](#codegen), and other specialized commands are useful, but their flags and output contracts remain experimental until the Tier-0 contract and 1.0 stability policy land.
@@ -128,7 +128,7 @@ When `--server` is used, connection resolution follows the same order as the ser
 **Generated declaration shape:**
 
 ```typescript partial
-declare module 'weft' {
+declare module '@lostgradient/weft' {
   interface WorkflowRegistry {
     checkout: {
       input: CheckoutInput;
@@ -163,7 +163,7 @@ The `--workflows` path is a TypeScript module resolved by Bun at runtime. Point 
 The workflows module must default-export a `Record<string, WorkflowRegistration>`:
 
 ```typescript partial
-import type { WorkflowRegistration } from 'weft';
+import type { WorkflowRegistration } from '@lostgradient/weft';
 
 export default {
   order: {
@@ -366,7 +366,7 @@ import {
   runVersionCheck,
   formatDiagnosticReport,
   formatVersionCheckReport,
-} from 'weft';
+} from '@lostgradient/weft';
 ```
 
 See the TypeScript types for `DiagnosticReport` and `VersionCheckReport` for the full data model.

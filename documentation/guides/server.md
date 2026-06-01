@@ -10,8 +10,8 @@ You've built your workflows and tested them locally. Now you need to expose them
 The `serve()` function takes an engine and optional network configuration, and returns a `WeftServer` handle.
 
 ```typescript partial
-import { Engine, workflow } from 'weft';
-import { serve } from 'weft/server';
+import { Engine, workflow } from '@lostgradient/weft';
+import { serve } from '@lostgradient/weft/server';
 
 const engine = new Engine({ storage });
 engine.register(workflow({ name: 'order' }).execute(orderWorkflow));
@@ -50,8 +50,8 @@ When [`auth`](../reference/configuration.md#serveoptions) is omitted, [`serve()`
 Use [`auth`](../reference/configuration.md#serveoptions) to lock down the [REST](../reference/api-server.md#rest-api-routes), [JSON-RPC](../getting-started/transports.md#json-rpc-over-http-post-apijsonrpc), [WebSocket](../getting-started/transports.md#json-rpc-over-websocket-ws-apijsonrpc), worker, and [MCP](../getting-started/transports.md#mcp-over-streamable-http-and-stdio) surfaces. Public discovery and health routes remain public, while operation routes enforce the scope policy declared by the operation catalog.
 
 ```typescript partial
-import { Engine } from 'weft';
-import { serve } from 'weft/server';
+import { Engine } from '@lostgradient/weft';
+import { serve } from '@lostgradient/weft/server';
 
 const engine = new Engine({ storage });
 
@@ -82,7 +82,7 @@ Public-path bypasses (health, metrics, discovery) are not audited—no credentia
 
 ### Credential redaction
 
-`redactCredential` and `redactHeaders` (exported from `weft/server`) mask `Authorization`, `X-API-Key`, `Cookie`, and `Proxy-Authorization` values before they reach a log line. Reach for them whenever you log request headers in custom middleware: a masked value keeps a short, non-reversible fingerprint for correlation without exposing the secret.
+`redactCredential` and `redactHeaders` (exported from `@lostgradient/weft/server`) mask `Authorization`, `X-API-Key`, `Cookie`, and `Proxy-Authorization` values before they reach a log line. Reach for them whenever you log request headers in custom middleware: a masked value keeps a short, non-reversible fingerprint for correlation without exposing the secret.
 
 ## Rate limiting
 
@@ -101,10 +101,10 @@ const server = serve({
 
 ## Rotating API keys
 
-Static `apiKeys` are fixed for the lifetime of a `serve()` call, so rotating them means a config change and a restart. `createRotatingApiKeyStore` (from `weft/server`) closes that gap: it is a mutable, in-process key registry the authenticator consults on every request through the `resolveApiKeyPrincipal` hook. Add the replacement key, let it run alongside the outgoing one, then revoke the old key—all without downtime. During the overlap window both keys authenticate.
+Static `apiKeys` are fixed for the lifetime of a `serve()` call, so rotating them means a config change and a restart. `createRotatingApiKeyStore` (from `@lostgradient/weft/server`) closes that gap: it is a mutable, in-process key registry the authenticator consults on every request through the `resolveApiKeyPrincipal` hook. Add the replacement key, let it run alongside the outgoing one, then revoke the old key—all without downtime. During the overlap window both keys authenticate.
 
 ```typescript partial
-import { createRotatingApiKeyStore, serve } from 'weft/server';
+import { createRotatingApiKeyStore, serve } from '@lostgradient/weft/server';
 
 const keys = createRotatingApiKeyStore();
 keys.add('key-v1', { subject: 'service-account', scopes: ['workflows:read'] });
@@ -129,8 +129,8 @@ The dashboard and the [Service Worker browser runtime](#service-worker) are brow
 Configure `cors` only when a browser client calls the API from a **different origin** (a dashboard hosted separately, a web app embedding Weft's API, or a Service Worker registered under another origin):
 
 ```typescript partial
-import { Engine } from 'weft';
-import { serve } from 'weft/server';
+import { Engine } from '@lostgradient/weft';
+import { serve } from '@lostgradient/weft/server';
 
 const engine = new Engine({ storage });
 
@@ -346,7 +346,7 @@ not claim a pending task for a caller that can no longer complete it.
 Under the hood, `serve()` delegates to `handleRequest()`—a pure function that maps a `Request` to a `Response` with no Bun-specific dependencies. This is intentional. If you need to embed Weft's API inside an existing server or use a different HTTP framework, import `handleRequest` directly:
 
 ```typescript partial
-import { handleRequest } from 'weft/server/handler';
+import { handleRequest } from '@lostgradient/weft/server/handler';
 
 // Inside your existing server
 const response = await handleRequest(request, engine);
@@ -362,17 +362,17 @@ All response-producing endpoints support content negotiation. If the `Accept` he
 
 The same `handleRequest()` function that powers the Bun server also powers the Service Worker runtime. In the browser, a Service Worker intercepts `fetch` events and routes them through the engine—your client code calls `fetch("/weft/v1/workflows", ...)` and the Service Worker responds, no network required.
 
-The `weft/service-worker` module provides bootstrap functions for lifecycle, fetch, and periodic-sync wiring. Timer wakeup uses the engine scheduler from the Service Worker event.
+The `@lostgradient/weft/service-worker` module provides bootstrap functions for lifecycle, fetch, and periodic-sync wiring. Timer wakeup uses the engine scheduler from the Service Worker event.
 
 ```typescript partial
 /// <reference lib="webworker" />
-import { Engine } from 'weft';
-import { IndexedDBStorage } from 'weft/storage/indexeddb';
+import { Engine } from '@lostgradient/weft';
+import { IndexedDBStorage } from '@lostgradient/weft/storage/indexeddb';
 import {
   createFetchHandler,
   createLifecycleHandlers,
   createPeriodicSyncHandler,
-} from 'weft/service-worker';
+} from '@lostgradient/weft/service-worker';
 
 const storage = new IndexedDBStorage('weft');
 // `recover: false` defers recovery until after registration — register your

@@ -6,7 +6,7 @@ import type { SearchAttributeSchema } from './search-attributes.ts';
  *
  * @example
  * ```ts
- * import { Engine, type RegisteredWorkflowDefinition } from 'weft';
+ * import { Engine, type RegisteredWorkflowDefinition } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * const definition: RegisteredWorkflowDefinition | undefined = engine.getWorkflowDefinition('greet');

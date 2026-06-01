@@ -44,7 +44,7 @@ function brotliDecompressSync(data: Uint8Array): Uint8Array {
  *
  * @example
  * ```ts
- * import { createCompressor, type CompressionAlgorithm } from 'weft';
+ * import { createCompressor, type CompressionAlgorithm } from '@lostgradient/weft';
  *
  * const algorithm: CompressionAlgorithm = 'brotli';
  * const compressor = createCompressor(algorithm);
@@ -63,7 +63,7 @@ export type CompressionAlgorithm = 'gzip' | 'brotli' | 'none';
  *
  * @example
  * ```ts
- * import { Engine, type CompressionOptions } from 'weft';
+ * import { Engine, type CompressionOptions } from '@lostgradient/weft';
  *
  * const compression: CompressionOptions = {
  *   algorithm: 'brotli',
@@ -88,7 +88,7 @@ export type CompressionOptions = {
  *
  * @example
  * ```ts
- * import { createCompressor, type Compressor } from 'weft';
+ * import { createCompressor, type Compressor } from '@lostgradient/weft';
  *
  * const compressor: Compressor = createCompressor('gzip');
  * const payload = new TextEncoder().encode('hello'.repeat(200));
@@ -139,7 +139,7 @@ const HEADER_SIZE = 2;
  *
  * @example
  * ```ts
- * import { createBunCompressor } from 'weft';
+ * import { createBunCompressor } from '@lostgradient/weft';
  *
  * const compressor = createBunCompressor('gzip');
  * const data = new TextEncoder().encode('hello world'.repeat(100));
@@ -157,7 +157,7 @@ export function createBunCompressor(algorithm: CompressionAlgorithm): Compressor
  *
  * @example
  * ```ts
- * import { createCompressor } from 'weft';
+ * import { createCompressor } from '@lostgradient/weft';
  *
  * const gzip = createCompressor('gzip');
  * const brotli = createCompressor('brotli');

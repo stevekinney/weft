@@ -1,4 +1,4 @@
-import { query, signal, update } from 'weft';
+import { query, signal, update } from '@lostgradient/weft';
 
 import type { AddItemInput, AddItemResult, CancelOrderInput, OrderStatus } from './model';
 

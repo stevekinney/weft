@@ -17,7 +17,7 @@
  *
  * @example
  * ```ts
- * import { TestEngine, type MockCall } from 'weft/testing';
+ * import { TestEngine, type MockCall } from '@lostgradient/weft/testing';
  *
  * const engine = new TestEngine();
  * async function sendEmail(input: unknown): Promise<string> { return ''; }
@@ -49,7 +49,7 @@ export type MockActivityFunction<TInput, TResult> = [TInput] extends [void]
  *
  * @example
  * ```ts
- * import { TestEngine, type MockHandle } from 'weft/testing';
+ * import { TestEngine, type MockHandle } from '@lostgradient/weft/testing';
  *
  * const engine = new TestEngine();
  * async function sendEmail(input: unknown): Promise<string> { return 'real'; }
@@ -90,7 +90,7 @@ export interface MockHandle<TInput, TResult> {
  *
  * @example
  * ```ts
- * import { ActivityMockRegistry, type MockedActivity } from 'weft/testing';
+ * import { ActivityMockRegistry, type MockedActivity } from '@lostgradient/weft/testing';
  *
  * const registry = new ActivityMockRegistry();
  * async function fetchUser(id: unknown): Promise<string> { return String(id); }
@@ -226,7 +226,7 @@ class MockHandleImplementation<TInput, TResult> implements MockHandle<TInput, TR
  *
  * @example
  * ```ts
- * import { ActivityMockRegistry } from 'weft/testing';
+ * import { ActivityMockRegistry } from '@lostgradient/weft/testing';
  *
  * async function sendEmail(input: unknown): Promise<string> { return 'sent'; }
  *

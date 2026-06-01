@@ -21,7 +21,7 @@ import { scopedStorage } from './scoped-storage.ts';
  *
  * @example
  * ```ts
- * import { WebExtensionStorage, type WebExtensionStorageArea } from 'weft/storage/web-extension';
+ * import { WebExtensionStorage, type WebExtensionStorageArea } from '@lostgradient/weft/storage/web-extension';
  *
  * const area: WebExtensionStorageArea = 'local';
  * const storage = new WebExtensionStorage({ area });
@@ -35,7 +35,7 @@ export type WebExtensionStorageArea = 'local' | 'sync' | 'session' | 'managed';
  *
  * @example
  * ```ts
- * import { WebExtensionStorage, type WebExtensionStorageOptions } from 'weft/storage/web-extension';
+ * import { WebExtensionStorage, type WebExtensionStorageOptions } from '@lostgradient/weft/storage/web-extension';
  *
  * const options: WebExtensionStorageOptions = { area: 'sync' };
  * const storage = new WebExtensionStorage(options);
@@ -236,8 +236,8 @@ async function invokeWebExtensionMethod<T>(
  *
  * @example
  * ```ts
- * import { Engine } from 'weft';
- * import { WebExtensionStorage } from 'weft/storage/web-extension';
+ * import { Engine } from '@lostgradient/weft';
+ * import { WebExtensionStorage } from '@lostgradient/weft/storage/web-extension';
  *
  * await using storage = new WebExtensionStorage({ area: 'local' });
  * await using engine = new Engine({ storage });

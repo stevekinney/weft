@@ -21,7 +21,7 @@ let cachedValibotConverter: ((schema: unknown, options?: unknown) => unknown) | 
  *
  * @example
  * ```ts
- * import type { DefinitionSchemaDirection } from 'weft';
+ * import type { DefinitionSchemaDirection } from '@lostgradient/weft';
  *
  * const direction: DefinitionSchemaDirection = 'input';
  * void direction;
@@ -45,7 +45,7 @@ export type DefinitionSchemaDirection = 'input' | 'output';
  *
  * @example
  * ```ts
- * import { definitionSchemaToJsonSchema } from 'weft';
+ * import { definitionSchemaToJsonSchema } from '@lostgradient/weft';
  * import { z } from 'zod';
  *
  * const schema = z.object({ email: z.string() });

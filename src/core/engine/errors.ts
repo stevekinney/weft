@@ -8,7 +8,7 @@ import { WeftError } from '../weft-error.ts';
  *
  * @example
  * ```ts
- * import { workflow, Engine, WorkflowAlreadyExistsError } from 'weft';
+ * import { workflow, Engine, WorkflowAlreadyExistsError } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));
@@ -39,7 +39,7 @@ export class WorkflowAlreadyExistsError extends WeftError<'WorkflowAlreadyExists
  *
  * @example
  * ```ts
- * import { BulkDeleteRequiresTerminalWorkflowsError } from 'weft';
+ * import { BulkDeleteRequiresTerminalWorkflowsError } from '@lostgradient/weft';
  *
  * function shouldShowTerminalOnlyMessage(error: unknown): boolean {
  *   return error instanceof BulkDeleteRequiresTerminalWorkflowsError;
@@ -59,7 +59,7 @@ export class BulkDeleteRequiresTerminalWorkflowsError extends WeftError<'BulkDel
  *
  * @example
  * ```ts
- * import { BulkOperationConfirmationError } from 'weft';
+ * import { BulkOperationConfirmationError } from '@lostgradient/weft';
  *
  * function needsFreshBulkPreview(error: unknown): boolean {
  *   return error instanceof BulkOperationConfirmationError;
@@ -99,7 +99,7 @@ function summarizeMissingWorkflowTypes(missingTypes: readonly string[]): string 
  *
  * @example
  * ```ts
- * import { Engine, WorkflowTypeNotRegisteredForRecoveryError } from 'weft';
+ * import { Engine, WorkflowTypeNotRegisteredForRecoveryError } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * try {
@@ -152,7 +152,7 @@ export class WorkflowTypeNotRegisteredForRecoveryError extends WeftError<'Workfl
  *
  * @example
  * ```ts
- * import { activity, Engine, EngineCreateNameMismatchError } from 'weft';
+ * import { activity, Engine, EngineCreateNameMismatchError } from '@lostgradient/weft';
  *
  * const farewell = activity({ name: 'farewell', execute: async () => 'bye' });
  * try {
@@ -187,7 +187,7 @@ export class EngineCreateNameMismatchError extends WeftError<'EngineCreateNameMi
  *
  * @example
  * ```ts
- * import { Engine, WorkflowNotFoundError } from 'weft';
+ * import { Engine, WorkflowNotFoundError } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * try {
@@ -216,7 +216,7 @@ export class WorkflowNotFoundError extends WeftError<'WorkflowNotFoundError'> {
  *
  * @example
  * ```ts
- * import { Engine, WorkflowNotRegisteredError } from 'weft';
+ * import { Engine, WorkflowNotRegisteredError } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * try {
@@ -251,7 +251,7 @@ export class WorkflowNotRegisteredError extends WeftError<'WorkflowNotRegistered
  *
  * @example
  * ```ts
- * import { workflow, ActivityResolutionError } from 'weft';
+ * import { workflow, ActivityResolutionError } from '@lostgradient/weft';
  *
  * function isMissingActivity(error: unknown): boolean {
  *   return error instanceof ActivityResolutionError;

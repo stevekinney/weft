@@ -56,7 +56,7 @@ export function normalizeStorageTimestamp(timestamp: number, fieldName: string):
  *
  * @example
  * ```ts
- * import { parseDuration } from 'weft';
+ * import { parseDuration } from '@lostgradient/weft';
  *
  * console.log(parseDuration(5000));       // 5000
  * console.log(parseDuration('250ms'));    // 250
@@ -108,7 +108,7 @@ export function parseDuration(duration: Duration): number {
  *
  * @example
  * ```ts
- * import { calculateBackoff, type RetryPolicy } from 'weft';
+ * import { calculateBackoff, type RetryPolicy } from '@lostgradient/weft';
  *
  * const policy: RetryPolicy = {
  *   maxAttempts: 5,

@@ -19,7 +19,7 @@ export type AlertAction = 'log' | 'webhook';
  *
  * @example
  * ```ts
- * import { type AlertMetric, type AlertRule } from 'weft';
+ * import { type AlertMetric, type AlertRule } from '@lostgradient/weft';
  *
  * const metric: AlertMetric = 'workflow.failure_rate';
  * const rule: AlertRule = {
@@ -43,7 +43,7 @@ export type AlertMetric = 'workflow.failure_rate' | 'activity.p99_duration' | 's
  *
  * @example
  * ```ts
- * import { AlertManager, type AlertRule } from 'weft';
+ * import { AlertManager, type AlertRule } from '@lostgradient/weft';
  *
  * const rule: AlertRule = {
  *   metric: 'workflow.failure_rate',
@@ -74,7 +74,7 @@ export type AlertRule = {
  *
  * @example
  * ```ts
- * import { AlertManager, type WebhookTarget, type AlertingOptions } from 'weft';
+ * import { AlertManager, type WebhookTarget, type AlertingOptions } from '@lostgradient/weft';
  *
  * const target: WebhookTarget = {
  *   url: 'https://hooks.example.com/alerts',
@@ -105,7 +105,7 @@ export type WebhookTarget = {
  *
  * @example
  * ```ts
- * import { AlertManager, type AlertingOptions } from 'weft';
+ * import { AlertManager, type AlertingOptions } from '@lostgradient/weft';
  *
  * const options: AlertingOptions = {
  *   rules: [
@@ -133,7 +133,7 @@ export type AlertingOptions = {
  *
  * @example
  * ```ts
- * import { AlertManager, type AlertStatus } from 'weft';
+ * import { AlertManager, type AlertStatus } from '@lostgradient/weft';
  *
  * const engine = new EventTarget();
  * using manager = new AlertManager(engine, {

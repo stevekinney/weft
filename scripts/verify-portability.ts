@@ -24,14 +24,17 @@ type PortableEntry = {
 
 const PORTABLE_ENTRIES: PortableEntry[] = [
   { name: 'weft (root)', entrypoint: './src/index.ts' },
-  { name: 'weft/client', entrypoint: './src/client/index.ts' },
-  { name: 'weft/service-worker', entrypoint: './src/service-worker/index.ts' },
-  { name: 'weft/storage/http', entrypoint: './src/storage/http.ts' },
-  { name: 'weft/storage/indexeddb', entrypoint: './src/storage/indexeddb.ts' },
-  { name: 'weft/storage/resolve', entrypoint: './src/storage/resolve.ts' },
-  { name: 'weft/storage/web-extension', entrypoint: './src/storage/web-extension.ts' },
-  { name: 'weft/worker-protocol', entrypoint: './src/worker/protocol.ts' },
-  { name: 'weft/server/handler', entrypoint: './src/server/handler.ts' },
+  { name: '@lostgradient/weft/client', entrypoint: './src/client/index.ts' },
+  { name: '@lostgradient/weft/service-worker', entrypoint: './src/service-worker/index.ts' },
+  { name: '@lostgradient/weft/storage/http', entrypoint: './src/storage/http.ts' },
+  { name: '@lostgradient/weft/storage/indexeddb', entrypoint: './src/storage/indexeddb.ts' },
+  { name: '@lostgradient/weft/storage/resolve', entrypoint: './src/storage/resolve.ts' },
+  {
+    name: '@lostgradient/weft/storage/web-extension',
+    entrypoint: './src/storage/web-extension.ts',
+  },
+  { name: '@lostgradient/weft/worker-protocol', entrypoint: './src/worker/protocol.ts' },
+  { name: '@lostgradient/weft/server/handler', entrypoint: './src/server/handler.ts' },
 ];
 
 /**

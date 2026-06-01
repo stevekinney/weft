@@ -7,7 +7,7 @@ import type { ConstraintViolation } from '../constraint.ts';
  *
  * @example
  * ```ts
- * import { Engine, CheckpointSizeWarningEvent } from 'weft';
+ * import { Engine, CheckpointSizeWarningEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine({ checkpointSizeWarningThreshold: 32_000 });
  * engine.addEventListener('checkpoint:size-warning', (e: Event) => {
@@ -38,7 +38,7 @@ export class CheckpointSizeWarningEvent extends Event {
  *
  * @example
  * ```ts
- * import { Engine, DevelopmentWarningEvent } from 'weft';
+ * import { Engine, DevelopmentWarningEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine({ development: true });
  * engine.addEventListener('development:warning', (e: Event) => {
@@ -82,7 +82,7 @@ export class CleanupWarningEvent extends Event {
  *
  * @example
  * ```ts
- * import { Engine, StorageSizeReportedEvent } from 'weft';
+ * import { Engine, StorageSizeReportedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('storage:size-reported', (e: Event) => {
@@ -108,7 +108,7 @@ export class StorageSizeReportedEvent extends Event {
  *
  * @example
  * ```ts
- * import { Engine, AlertFiredEvent } from 'weft';
+ * import { Engine, AlertFiredEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('alert:fired', (e: Event) => {
@@ -140,7 +140,7 @@ export class AlertFiredEvent extends Event {
  *
  * @example
  * ```ts
- * import { Engine, AlertResolvedEvent } from 'weft';
+ * import { Engine, AlertResolvedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('alert:resolved', (e: Event) => {
@@ -172,7 +172,7 @@ export class AlertResolvedEvent extends Event {
  *
  * @example
  * ```ts
- * import { Engine, ConstraintViolatedEvent } from 'weft';
+ * import { Engine, ConstraintViolatedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('constraint:violated', (e: Event) => {

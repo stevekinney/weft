@@ -114,8 +114,8 @@ export interface ScheduleHandleEngine {
  *
  * @example
  * ```ts
- * import { workflow, Engine, WorkflowHandle, activity } from 'weft';
- * import type { WorkflowContext, Context } from 'weft';
+ * import { workflow, Engine, WorkflowHandle, activity } from '@lostgradient/weft';
+ * import type { WorkflowContext, Context } from '@lostgradient/weft';
  *
  * const greet = activity({ name: 'greet', execute: async (i: unknown) => `hi ${i}` });
  * const engine = new Engine();
@@ -134,7 +134,7 @@ export interface ScheduleHandleEngine {
  *
  * @example Iterate workflow lifecycle events
  * ```ts
- * import { Engine, workflow, type WorkflowHandle } from 'weft';
+ * import { Engine, workflow, type WorkflowHandle } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));
@@ -378,7 +378,7 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
  *
  * @example
  * ```ts
- * import { workflow, Engine, ScheduleHandle } from 'weft';
+ * import { workflow, Engine, ScheduleHandle } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(workflow({ name: 'daily-report' }).execute(async function* () { return 'ok'; }));

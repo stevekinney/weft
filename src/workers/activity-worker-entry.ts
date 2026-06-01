@@ -25,7 +25,7 @@ import { executeActivity } from './activity-runner.ts';
  *
  * @example
  * ```ts
- * import { type ActivityHandlerLookup } from 'weft';
+ * import { type ActivityHandlerLookup } from '@lostgradient/weft';
  *
  * const activities = new Map<string, (input: unknown) => unknown>([
  *   ['double', (n: unknown) => (n as number) * 2],
@@ -51,7 +51,7 @@ export type ActivityHandlerLookup = (name: string) => ((input: unknown) => unkno
  *
  * @example
  * ```ts
- * import { initializeActivityWorkerMessageLoop } from 'weft';
+ * import { initializeActivityWorkerMessageLoop } from '@lostgradient/weft';
  *
  * const activities = new Map<string, (input: unknown) => unknown>();
  * activities.set('greet', (input: unknown) => {
@@ -177,7 +177,7 @@ function validateHandlerSerializable(
  *
  * @example
  * ```ts
- * import { createActivityWorkerEntryUrl, revokeActivityWorkerEntryUrl } from 'weft';
+ * import { createActivityWorkerEntryUrl, revokeActivityWorkerEntryUrl } from '@lostgradient/weft';
  *
  * const registrations = new Map<string, (input: unknown) => unknown>();
  * registrations.set('double', (n: unknown) => (n as number) * 2);
@@ -217,7 +217,7 @@ initializeActivityWorkerMessageLoop((name) => activities.get(name));
  *
  * @example
  * ```ts
- * import { createActivityWorkerEntryUrl, revokeActivityWorkerEntryUrl } from 'weft';
+ * import { createActivityWorkerEntryUrl, revokeActivityWorkerEntryUrl } from '@lostgradient/weft';
  *
  * const registrations = new Map<string, (input: unknown) => unknown>();
  * registrations.set('greet', (input: unknown) => 'hello');

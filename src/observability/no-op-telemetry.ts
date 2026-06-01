@@ -37,7 +37,7 @@ type SpanStatus = {
  *
  * @example
  * ```ts
- * import { getOpenTelemetryApi, type OpenTelemetrySpan } from 'weft/observability';
+ * import { getOpenTelemetryApi, type OpenTelemetrySpan } from '@lostgradient/weft/observability';
  *
  * const api = getOpenTelemetryApi();
  * const tracer = api.trace.getTracer('example');
@@ -66,7 +66,7 @@ type SpanOptions = {
  *
  * @example
  * ```ts
- * import { getOpenTelemetryApi, type OpenTelemetryTracer } from 'weft/observability';
+ * import { getOpenTelemetryApi, type OpenTelemetryTracer } from '@lostgradient/weft/observability';
  *
  * const api = getOpenTelemetryApi();
  * const tracer: OpenTelemetryTracer = api.trace.getTracer('my-service', '1.0.0');
@@ -100,7 +100,7 @@ type OpenTelemetryUpDownCounter = {
  *
  * @example
  * ```ts
- * import { getOpenTelemetryApi, type OpenTelemetryMeter } from 'weft/observability';
+ * import { getOpenTelemetryApi, type OpenTelemetryMeter } from '@lostgradient/weft/observability';
  *
  * const api = getOpenTelemetryApi();
  * const meter: OpenTelemetryMeter = api.metrics.getMeter('my-service');
@@ -119,7 +119,7 @@ export type OpenTelemetryMeter = {
  *
  * @example
  * ```ts
- * import { getOpenTelemetryApi, type OpenTelemetryApi } from 'weft/observability';
+ * import { getOpenTelemetryApi, type OpenTelemetryApi } from '@lostgradient/weft/observability';
  *
  * const api: OpenTelemetryApi = getOpenTelemetryApi();
  * const tracer = api.trace.getTracer('my-app');
@@ -292,7 +292,7 @@ export function resolveInstalledOpenTelemetryApi(
  *
  * @example
  * ```ts
- * import { getOpenTelemetryApi } from 'weft/observability';
+ * import { getOpenTelemetryApi } from '@lostgradient/weft/observability';
  *
  * // Works whether the OpenTelemetry API package is installed or not
  * const api = getOpenTelemetryApi();

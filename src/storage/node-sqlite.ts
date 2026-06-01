@@ -6,7 +6,7 @@
  * storage layer to run on Node.js 22+.
  *
  * `better-sqlite3` is a peer dependency — it must be installed separately by
- * consumers who import `weft/storage/sqlite/node`.
+ * consumers who import `@lostgradient/weft/storage/sqlite/node`.
  *
  * @module storage/node-sqlite
  */
@@ -107,7 +107,7 @@ function loadBetterSqlite3(): BetterSqliteConstructor {
 
 /**
  * Runtime-neutral alias for the Node SQLite adapter. Consumers that import
- * from `weft/storage/sqlite` get this class under Node.
+ * from `@lostgradient/weft/storage/sqlite` get this class under Node.
  */
 export { NodeSQLiteStorage as SQLiteStorage };
 
@@ -118,20 +118,20 @@ export { NodeSQLiteStorage as SQLiteStorage };
  * Implements the same WAL-mode schema as {@link BunSQLiteStorage}
  * but resolves the `better-sqlite3` peer dependency lazily at construction time,
  * so the module compiles without it installed.  Import from
- * `weft/storage/sqlite/node` to use this adapter.
+ * `@lostgradient/weft/storage/sqlite/node` to use this adapter.
  *
  * Unlike BunSQLiteStorage, this adapter currently implements only the required
  * Storage methods (`get`, `put`, `delete`, `scan`, `batch`, and
  * `conditionalBatch`). The optional `has`, `keys`, `count`, `deletePrefix`, and
  * `scoped` helpers fall back to the generic implementations in
- * `weft/storage/interface`; `deleteRange` falls back to `storageDeleteRange`
- * (exported from `weft` / `weft/storage`). There is no SQL passthrough
+ * `@lostgradient/weft/storage/interface`; `deleteRange` falls back to `storageDeleteRange`
+ * (exported from `@lostgradient/weft` / `@lostgradient/weft/storage`). There is no SQL passthrough
  * `query()` method.
  *
  * @example
  * ```ts
- * import { NodeSQLiteStorage } from 'weft/storage/sqlite/node';
- * import { workflow, Engine } from 'weft';
+ * import { NodeSQLiteStorage } from '@lostgradient/weft/storage/sqlite/node';
+ * import { workflow, Engine } from '@lostgradient/weft';
  *
  * // Requires: bun add better-sqlite3
  * await using storage = new NodeSQLiteStorage('./weft.db');

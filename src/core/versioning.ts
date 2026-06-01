@@ -41,7 +41,7 @@ export type VersionCompatibility = 'compatible' | 'needs-migration' | 'incompati
  *
  * @example
  * ```ts
- * import { checkVersionCompatibility } from 'weft';
+ * import { checkVersionCompatibility } from '@lostgradient/weft';
  *
  * console.log(checkVersionCompatibility('1.0.0', '1.0.0', false)); // 'compatible'
  * console.log(checkVersionCompatibility('1.0.0', '2.0.0', true));  // 'needs-migration'
@@ -72,7 +72,7 @@ export function checkVersionCompatibility(
  *
  * @example
  * ```ts
- * import { migrateCheckpoint } from 'weft';
+ * import { migrateCheckpoint } from '@lostgradient/weft';
  *
  * const oldData = { step: 0, locals: { counter: 1 }, version: '1.0.0' };
  * const migrated = migrateCheckpoint(oldData, '1.0.0', '2.0.0', (data) => {
@@ -133,7 +133,7 @@ export type ShapeDescriptor = Record<string, string>;
  *
  * @example
  * ```ts
- * import { diffCheckpointShapes } from 'weft';
+ * import { diffCheckpointShapes } from '@lostgradient/weft';
  *
  * const diffs = diffCheckpointShapes(
  *   { userId: 'string', count: 'number' },
@@ -178,7 +178,7 @@ export function diffCheckpointShapes(
  *
  * @example
  * ```ts
- * import { inferShape } from 'weft';
+ * import { inferShape } from '@lostgradient/weft';
  *
  * const shape = inferShape({ userId: 'abc', count: 42, active: true });
  * console.log(shape['userId']); // 'string'
@@ -273,7 +273,7 @@ export type ShapeDiffOptions = {
  *
  * @example
  * ```ts
- * import { VersionMismatchError } from 'weft';
+ * import { VersionMismatchError } from '@lostgradient/weft';
  *
  * try {
  *   throw new VersionMismatchError(

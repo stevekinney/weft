@@ -6,7 +6,7 @@
  *
  * @example Route review notifications to a webhook
  * ```ts
- * import { ReviewRequestedEvent } from 'weft';
+ * import { ReviewRequestedEvent } from '@lostgradient/weft';
  *
  * const target = new EventTarget();
  *
@@ -41,7 +41,7 @@ export class ReviewRequestedEvent extends Event {
  *
  * @example Record review decisions in an audit log
  * ```ts
- * import { ReviewCompletedEvent } from 'weft';
+ * import { ReviewCompletedEvent } from '@lostgradient/weft';
  *
  * const target = new EventTarget();
  *
@@ -82,7 +82,7 @@ export class ReviewCompletedEvent extends Event {
  *
  * @example
  * ```ts
- * import type { TypedEventTarget, WeftReviewEventMap } from 'weft';
+ * import type { TypedEventTarget, WeftReviewEventMap } from '@lostgradient/weft';
  *
  * declare const target: TypedEventTarget<WeftReviewEventMap>;
  * target.addEventListener('human-review:requested', (event) => {

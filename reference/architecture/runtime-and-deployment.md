@@ -358,7 +358,7 @@ chmod +x weft
 ./weft --port 7233
 
 # Mode 2: Library (import into your project)
-bun add weft
+bun add @lostgradient/weft
 
 # Mode 3: User compiles their own binary with workflows baked in
 bun build --compile src/my-app.ts --outfile my-app
@@ -410,9 +410,9 @@ For Weft, a Service Worker is the **browser equivalent of the Bun server process
 // weft-sw.ts — installed as a Service Worker
 /// <reference lib="webworker" />
 
-import { Engine } from 'weft/core';
-import { IndexedDBStorage } from 'weft/storage/indexeddb';
-import { handleHTTP } from 'weft/server/handler'; // Pure request→response, no Bun.serve dependency
+import { Engine } from '@lostgradient/weft';
+import { IndexedDBStorage } from '@lostgradient/weft/storage/indexeddb';
+import { handleRequest } from '@lostgradient/weft/server/handler'; // Pure request→response, no Bun.serve dependency
 
 const engine = new Engine({
   storage: new IndexedDBStorage('weft'),
@@ -422,7 +422,7 @@ const engine = new Engine({
 self.addEventListener('fetch', (event: FetchEvent) => {
   const url = new URL(event.request.url);
   if (url.pathname.startsWith('/weft/')) {
-    event.respondWith(handleHTTP(engine, event.request));
+    event.respondWith(handleRequest(event.request, engine));
   }
 });
 
@@ -680,13 +680,13 @@ A remote worker is a standalone process that connects to a Weft server, declares
 
 ```typescript
 // my-worker.ts — runs as a separate process, connects to a Weft server
-import { Worker } from 'weft/worker';
+import { RemoteWorker } from '@lostgradient/weft';
 
 import { charge } from './activities/charge.ts';
 import { ship } from './activities/ship.ts';
 import { sendEmail } from './activities/email.ts';
 
-const worker = new Worker({
+const worker = new RemoteWorker({
   serverUrl: 'ws://weft-server:7233/api/v1/tasks/default/stream',
   queue: 'default',
   identity: `worker-${crypto.randomUUID()}`, // unique per process

@@ -23,7 +23,7 @@ export type { WorkflowDefinition } from './workflow-definition.ts';
  *
  * @example
  * ```ts
- * import { workflow, activity, Engine, type WorkflowContext, type WorkflowFunction } from 'weft';
+ * import { workflow, activity, Engine, type WorkflowContext, type WorkflowFunction } from '@lostgradient/weft';
  *
  * const greet = activity({ name: 'greet', execute: async (input: string) => `hello ${input}` });
  *
@@ -54,7 +54,7 @@ export type WorkflowFunction<TInput = unknown, TOutput = unknown> = (
  *
  * @example
  * ```ts
- * import { workflow, Engine, compileStepWorkflow, type StepWorkflowContext } from 'weft';
+ * import { workflow, Engine, compileStepWorkflow, type StepWorkflowContext } from '@lostgradient/weft';
  *
  * async function myStepWorkflow(ctx: StepWorkflowContext, input: unknown) {
  *   const result = await ctx.step('fetchData', async () => {
@@ -82,7 +82,7 @@ export interface StepWorkflowContext {
  *
  * @example
  * ```ts
- * import { workflow, Engine, compileStepWorkflow, type StepWorkflowFunction } from 'weft';
+ * import { workflow, Engine, compileStepWorkflow, type StepWorkflowFunction } from '@lostgradient/weft';
  *
  * const process: StepWorkflowFunction = async (ctx, input) => {
  *   return ctx.step('transform', () => (input as string).toUpperCase());
@@ -106,7 +106,7 @@ export type StepWorkflowFunction<TInput = unknown, TOutput = unknown> = (
  *
  * @example
  * ```ts
- * import { workflow, Engine, type WorkflowOperation, type WorkflowContext } from 'weft';
+ * import { workflow, Engine, type WorkflowOperation, type WorkflowContext } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(
@@ -144,7 +144,7 @@ export type WorkflowOperation<TResult> = Generator<unknown, TResult, unknown>;
  *
  * @example
  * ```ts
- * import { workflow, Engine, type ChildWorkflowTarget, type WorkflowContext } from 'weft';
+ * import { workflow, Engine, type ChildWorkflowTarget, type WorkflowContext } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(
@@ -184,7 +184,7 @@ export type ChildWorkflowOptions = {
  *
  * @example
  * ```ts
- * import { workflow, Engine, type WorkflowPipeStage, type WorkflowContext } from 'weft';
+ * import { workflow, Engine, type WorkflowPipeStage, type WorkflowContext } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(workflow({ name: 'step1' }).execute(async function* (_ctx: WorkflowContext, i: unknown) { return String(i); }));
@@ -215,7 +215,7 @@ export interface WorkflowPipeStage<TInput = unknown, TOutput = unknown> {
  *
  * @example
  * ```ts
- * import { workflow, Engine, type WorkflowPipeStageDefinition, type WorkflowContext } from 'weft';
+ * import { workflow, Engine, type WorkflowPipeStageDefinition, type WorkflowContext } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(
@@ -252,7 +252,7 @@ export type WorkflowPipeStageDefinition<TInput = unknown, TOutput = unknown> =
  *
  * @example
  * ```ts
- * import { workflow, Engine, type WorkflowMapOptions, type WorkflowContext } from 'weft';
+ * import { workflow, Engine, type WorkflowMapOptions, type WorkflowContext } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(
@@ -281,7 +281,7 @@ export interface WorkflowMapOptions {
  *
  * @example
  * ```ts
- * import { Engine, workflow, type WorkflowReduceInput, type WorkflowContext } from 'weft';
+ * import { Engine, workflow, type WorkflowReduceInput, type WorkflowContext } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(
@@ -316,7 +316,7 @@ export interface WorkflowReduceInput<TAccumulator, TItem> {
  *
  * @example
  * ```ts
- * import { Engine, workflow, type WorkflowReduceOptions, type WorkflowContext } from 'weft';
+ * import { Engine, workflow, type WorkflowReduceOptions, type WorkflowContext } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(
@@ -347,7 +347,7 @@ export interface WorkflowReduceOptions extends Record<string, unknown> {
  *
  * @example
  * ```ts
- * import { workflow, signal } from 'weft';
+ * import { workflow, signal } from '@lostgradient/weft';
  *
  * const welcome = workflow({ name: 'welcome' })
  *   .activities({

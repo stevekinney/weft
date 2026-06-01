@@ -53,8 +53,8 @@ The browser surfaces graduate on a specific, mechanical criterion: the IndexedDB
 The smallest useful Weft program has four moving pieces: a storage backend, a named activity, a named workflow, and a handle that waits for the result.
 
 ```typescript
-import { Engine, workflow } from 'weft';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { Engine, workflow } from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 type WelcomeInput = {
   name: string;
@@ -90,7 +90,7 @@ If you'd rather wire things up by hand — useful for tests, isolating engines o
 > The chained builder also accepts `.signals({...})`, `.updates({...})`, `.queries({...})`, and `.searchAttributes({...})`. Each can be called at most once before `.execute(fn)`; the type system flips a phantom flag so a duplicate call fails to typecheck, and the runtime mirrors the same invariant. These maps don't introduce new runtime gating — they're type hints that thread into `ctx.run()`, `ctx.waitForSignal()`, `ctx.waitForUpdate()`, and friends so your editor autocompletes and your code typechecks. The underlying dispatch paths are unchanged.
 
 > [!NOTE]
-> `MemoryStorage` (also exported from `weft`) is fine for tests and ephemeral scripts, but it lives in process memory—a crash takes the checkpoints with it. Use a persistent backend like `SQLiteStorage` whenever durability actually matters.
+> `MemoryStorage` (also exported from `@lostgradient/weft`) is fine for tests and ephemeral scripts, but it lives in process memory—a crash takes the checkpoints with it. Use a persistent backend like `SQLiteStorage` whenever durability actually matters.
 
 ## How It Works
 
@@ -212,8 +212,8 @@ Workflow visibility extends the same list surface with operator filters for `idP
 Weft can pause a workflow at any checkpoint and surface a decision payload to a human reviewer. The workflow resumes with the reviewer's decision—no polling, no special infrastructure.
 
 ```typescript
-import { Engine, workflow } from 'weft';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { Engine, workflow } from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 type PaymentRequest = {
   orderId: string;
@@ -255,14 +255,14 @@ If the process crashes between the approval decision arriving and `chargeCard` e
 A small `Storage` interface over string keys and `Uint8Array` values: five required methods (`get`, `put`, `delete`, `scan`, `batch`) plus optional capabilities (`conditionalBatch`, `has`, `deletePrefix`) that adapters can implement when their backend supports them. Built-in adapters:
 
 - **`MemoryStorage`** for development and tests
-- **`SQLiteStorage`** (subpath `weft/storage/sqlite`) for SQLite persistence; Bun resolves to `BunSQLiteStorage`, Node resolves to `NodeSQLiteStorage`
-- **`BunSQLiteStorage`** (subpath `weft/storage/sqlite/bun`) for an explicit Bun SQLite override
-- **`NodeSQLiteStorage`** (subpath `weft/storage/sqlite/node`) for an explicit Node.js SQLite override via `better-sqlite3`
-- **`LMDBStorage`** (subpath `weft/storage/lmdb`) for embedded high-throughput workloads
-- **`TursoStorage`** (subpath `weft/storage/turso`) for distributed libSQL deployments
-- **`IndexedDBStorage`** (subpath `weft/storage/indexeddb`) for browser environments
-- **`WebExtensionStorage`** (subpath `weft/storage/web-extension`) for extension contexts using `browser.storage` or `chrome.storage`
-- **`HTTPStorage`** (subpath `weft/storage/http`) for remote storage over Weft's HTTP storage routes
+- **`SQLiteStorage`** (subpath `@lostgradient/weft/storage/sqlite`) for SQLite persistence; Bun resolves to `BunSQLiteStorage`, Node resolves to `NodeSQLiteStorage`
+- **`BunSQLiteStorage`** (subpath `@lostgradient/weft/storage/sqlite/bun`) for an explicit Bun SQLite override
+- **`NodeSQLiteStorage`** (subpath `@lostgradient/weft/storage/sqlite/node`) for an explicit Node.js SQLite override via `better-sqlite3`
+- **`LMDBStorage`** (subpath `@lostgradient/weft/storage/lmdb`) for embedded high-throughput workloads
+- **`TursoStorage`** (subpath `@lostgradient/weft/storage/turso`) for distributed libSQL deployments
+- **`IndexedDBStorage`** (subpath `@lostgradient/weft/storage/indexeddb`) for browser environments
+- **`WebExtensionStorage`** (subpath `@lostgradient/weft/storage/web-extension`) for extension contexts using `browser.storage` or `chrome.storage`
+- **`HTTPStorage`** (subpath `@lostgradient/weft/storage/http`) for remote storage over Weft's HTTP storage routes
 - **`CompressedStorage`** wrapper for transparent `gzip` or `brotli` compression
 
 Bring your own backend by implementing the interface—five methods is enough.
@@ -274,9 +274,9 @@ For long-running workflows, `history.retentionWindow` can compact old event-log 
 `serve()` wraps `Bun.serve()` to expose your engine over HTTP and WebSocket with a versioned REST API.
 
 ```typescript
-import { Engine } from 'weft';
-import { serve } from 'weft/server';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { Engine } from '@lostgradient/weft';
+import { serve } from '@lostgradient/weft/server';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 const engine = new Engine({ storage: new SQLiteStorage('./weft.db') });
 engine.register(checkoutWorkflow);
@@ -292,7 +292,7 @@ Endpoints under `/api/v1/` cover the full lifecycle: start workflows, list, sign
 Workers can connect to the server over WebSocket, pull tasks, execute activities, and report results back. The same activity code runs inline in development and remote in production—no API changes.
 
 ```typescript
-import { RemoteWorker } from 'weft';
+import { RemoteWorker } from '@lostgradient/weft';
 
 const worker = new RemoteWorker({
   serverUrl: 'wss://weft.internal:7233',
@@ -311,7 +311,7 @@ The core engine runs inside a Web Worker, with a Service Worker acting as the du
 Built-in event system (`EventTarget`-based, so it composes with everything), W3C `traceparent` propagation, and OpenTelemetry-compatible metrics. Composable interceptors layer cross-cutting concerns—tracing, validation, encryption—without any of them knowing about each other.
 
 ```typescript
-import { createObservabilityInterceptors, createOpenTelemetryMetrics } from 'weft';
+import { createObservabilityInterceptors, createOpenTelemetryMetrics } from '@lostgradient/weft';
 
 const metrics = createOpenTelemetryMetrics({
   /* your meter provider */
@@ -329,7 +329,7 @@ const engine = new Engine({
 `TestEngine` swaps the production engine in tests and gives you a virtual clock. `engine.advanceTime('1 hour')` jumps timers forward without waiting; `engine.mock(activity, fake)` swaps in fake activity implementations with type-checked signatures, call recording, and per-call overrides.
 
 ```typescript
-import { TestEngine } from 'weft/testing';
+import { TestEngine } from '@lostgradient/weft/testing';
 import { expect, test } from 'bun:test';
 
 test('onboarding completes after a day', async () => {
@@ -359,7 +359,7 @@ For chaos testing, `withChaos()` wraps activities with configurable transient fa
 Every error Weft throws extends `WeftError`, so a single `instanceof` check catches them all, and each carries a stable string `code` equal to its class name:
 
 ```typescript
-import { isWeftError, isWeftErrorCode } from 'weft';
+import { isWeftError, isWeftErrorCode } from '@lostgradient/weft';
 
 try {
   await engine.start('checkout', { orderId: 'order-1' }, { id: 'order-1' });
@@ -380,10 +380,10 @@ try {
 }
 ```
 
-`isWeftError` is an `instanceof` check — the right tool in the common case where the error came from the same module instance. If an error can reach you across a realm or a duplicate module load (multiple copies of `weft` in one process), `instanceof` is unreliable; skip `isWeftError` and branch on `error.code` directly, since the string `code` survives those boundaries:
+`isWeftError` is an `instanceof` check — the right tool in the common case where the error came from the same module instance. If an error can reach you across a realm or a duplicate module load (multiple copies of `@lostgradient/weft` in one process), `instanceof` is unreliable; skip `isWeftError` and branch on `error.code` directly, since the string `code` survives those boundaries:
 
 ```typescript
-import { isWeftErrorCode } from 'weft';
+import { isWeftErrorCode } from '@lostgradient/weft';
 
 function isAlreadyRunning(error: unknown): boolean {
   const code = (error as { code?: unknown }).code;
@@ -396,18 +396,18 @@ The exported `WeftErrorCode` union lists every code that belongs to a public, ex
 ## Installation
 
 ```bash
-bun add weft
+bun add @lostgradient/weft
 ```
 
 Storage backends and adapters are exported under subpaths so they only load when imported:
 
 ```typescript
-import { SQLiteStorage } from 'weft/storage/sqlite';
-import { LMDBStorage } from 'weft/storage/lmdb';
-import { TursoStorage } from 'weft/storage/turso';
-import { IndexedDBStorage } from 'weft/storage/indexeddb';
-import { WebExtensionStorage } from 'weft/storage/web-extension';
-import { HTTPStorage } from 'weft/storage/http';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
+import { LMDBStorage } from '@lostgradient/weft/storage/lmdb';
+import { TursoStorage } from '@lostgradient/weft/storage/turso';
+import { IndexedDBStorage } from '@lostgradient/weft/storage/indexeddb';
+import { WebExtensionStorage } from '@lostgradient/weft/storage/web-extension';
+import { HTTPStorage } from '@lostgradient/weft/storage/http';
 ```
 
 The `bun` runtime version `1.3.13` or later is required.
@@ -441,7 +441,7 @@ Each `ctx.step()` is a checkpoint boundary. The engine compiles step-style workf
 | Signal                 | `setHandler` + `condition`                    | `yield* ctx.waitForSignal(name)`                                           |
 | Versioning             | `patched()` / `deprecatePatch()`              | Deploy new code (migration optional)                                       |
 | Long-running workflows | `continueAsNew()`                             | None needed (checkpoint size is bounded by live state, not history length) |
-| Dev environment        | Docker Compose + Temporal server              | `bun add weft`                                                             |
+| Dev environment        | Docker Compose + Temporal server              | `bun add @lostgradient/weft`                                               |
 | Bundling               | Webpack for workflow sandbox                  | None                                                                       |
 
 > Weft is for teams whose primary backend language is TypeScript. If you need workflows in multiple languages, [Temporal](https://temporal.io) is the right answer. For the design rationale, see [ADR 0001 — Workflows Are TypeScript-Only by Design](documentation/contributing/architecture-decisions/0001-workflows-typescript-only.md).

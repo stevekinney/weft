@@ -7,7 +7,7 @@
  *
  * @example
  * ```ts
- * import type { StandardTypedV1Properties } from 'weft/json-schema';
+ * import type { StandardTypedV1Properties } from '@lostgradient/weft/json-schema';
  *
  * const properties: StandardTypedV1Properties = { version: 1, vendor: 'example' };
  * void properties;
@@ -24,7 +24,7 @@ export interface StandardTypedV1Properties<Input = unknown, Output = Input> {
  *
  * @example
  * ```ts
- * import type { StandardTypedV1Types } from 'weft/json-schema';
+ * import type { StandardTypedV1Types } from '@lostgradient/weft/json-schema';
  *
  * const types: StandardTypedV1Types<string, number> = {
  *   input: '',
@@ -43,7 +43,7 @@ export interface StandardTypedV1Types<Input = unknown, Output = Input> {
  *
  * @example
  * ```ts
- * import type { StandardSchemaV1Properties } from 'weft/json-schema';
+ * import type { StandardSchemaV1Properties } from '@lostgradient/weft/json-schema';
  *
  * const properties: StandardSchemaV1Properties<unknown, string> = {
  *   version: 1,
@@ -69,7 +69,7 @@ export interface StandardSchemaV1Properties<
  *
  * @example
  * ```ts
- * import type { StandardSchemaV1Result } from 'weft/json-schema';
+ * import type { StandardSchemaV1Result } from '@lostgradient/weft/json-schema';
  *
  * const result: StandardSchemaV1Result<string> = { value: 'ok' };
  * void result;
@@ -84,7 +84,7 @@ export type StandardSchemaV1Result<Output> =
  *
  * @example
  * ```ts
- * import type { StandardSchemaV1SuccessResult } from 'weft/json-schema';
+ * import type { StandardSchemaV1SuccessResult } from '@lostgradient/weft/json-schema';
  *
  * const result: StandardSchemaV1SuccessResult<string> = { value: 'ok' };
  * void result;
@@ -100,7 +100,7 @@ export interface StandardSchemaV1SuccessResult<Output> {
  *
  * @example
  * ```ts
- * import type { StandardSchemaV1FailureResult } from 'weft/json-schema';
+ * import type { StandardSchemaV1FailureResult } from '@lostgradient/weft/json-schema';
  *
  * const result: StandardSchemaV1FailureResult = {
  *   issues: [{ message: 'Expected a string.' }],
@@ -117,7 +117,7 @@ export interface StandardSchemaV1FailureResult {
  *
  * @example
  * ```ts
- * import type { StandardSchemaV1Issue } from 'weft/json-schema';
+ * import type { StandardSchemaV1Issue } from '@lostgradient/weft/json-schema';
  *
  * const issue: StandardSchemaV1Issue = { message: 'Expected a string.' };
  * void issue;
@@ -133,7 +133,7 @@ export interface StandardSchemaV1Issue {
  *
  * @example
  * ```ts
- * import type { StandardSchemaV1PathSegment } from 'weft/json-schema';
+ * import type { StandardSchemaV1PathSegment } from '@lostgradient/weft/json-schema';
  *
  * const segment: StandardSchemaV1PathSegment = { key: 'email' };
  * void segment;
@@ -148,7 +148,7 @@ export interface StandardSchemaV1PathSegment {
  *
  * @example
  * ```ts
- * import type { StandardSchemaV1Options } from 'weft/json-schema';
+ * import type { StandardSchemaV1Options } from '@lostgradient/weft/json-schema';
  *
  * const options: StandardSchemaV1Options = { libraryOptions: { abortEarly: true } };
  * void options;
@@ -163,7 +163,7 @@ export interface StandardSchemaV1Options {
  *
  * @example
  * ```ts
- * import type { StandardJSONSchemaV1Properties } from 'weft/json-schema';
+ * import type { StandardJSONSchemaV1Properties } from '@lostgradient/weft/json-schema';
  *
  * const properties: StandardJSONSchemaV1Properties = {
  *   version: 1,
@@ -188,7 +188,7 @@ export interface StandardJSONSchemaV1Properties<
  *
  * @example
  * ```ts
- * import type { StandardJSONSchemaV1Converter } from 'weft/json-schema';
+ * import type { StandardJSONSchemaV1Converter } from '@lostgradient/weft/json-schema';
  *
  * const converter: StandardJSONSchemaV1Converter = {
  *   input: () => ({ type: 'object' }),
@@ -207,7 +207,7 @@ export interface StandardJSONSchemaV1Converter {
  *
  * @example
  * ```ts
- * import type { StandardJSONSchemaV1Target } from 'weft/json-schema';
+ * import type { StandardJSONSchemaV1Target } from '@lostgradient/weft/json-schema';
  *
  * const target: StandardJSONSchemaV1Target = 'draft-2020-12';
  * void target;
@@ -224,7 +224,7 @@ export type StandardJSONSchemaV1Target =
  *
  * @example
  * ```ts
- * import type { StandardJSONSchemaV1Options } from 'weft/json-schema';
+ * import type { StandardJSONSchemaV1Options } from '@lostgradient/weft/json-schema';
  *
  * const options: StandardJSONSchemaV1Options = { target: 'draft-2020-12' };
  * void options;
@@ -246,7 +246,7 @@ export interface StandardJSONSchemaV1Options {
  *
  * @example
  * ```ts
- * import type { StandardTypedV1 } from 'weft/json-schema';
+ * import type { StandardTypedV1 } from '@lostgradient/weft/json-schema';
  *
  * const typedMetadata = {
  *   '~standard': { version: 1, vendor: 'example' },
@@ -264,7 +264,7 @@ export interface StandardTypedV1<Input = unknown, Output = Input> {
  *
  * @example
  * ```ts
- * import type { StandardSchemaV1 } from 'weft/json-schema';
+ * import type { StandardSchemaV1 } from '@lostgradient/weft/json-schema';
  *
  * const stringSchema = {
  *   '~standard': {
@@ -290,7 +290,7 @@ export interface StandardSchemaV1<Input = unknown, Output = Input> {
  *
  * @example
  * ```ts
- * import type { StandardJSONSchemaV1 } from 'weft/json-schema';
+ * import type { StandardJSONSchemaV1 } from '@lostgradient/weft/json-schema';
  *
  * const jsonSchemaMetadata = {
  *   '~standard': {
@@ -321,7 +321,7 @@ export interface StandardJSONSchemaV1<Input = unknown, Output = Input> {
  *
  * @example
  * ```ts
- * import type { DefinitionSchema } from 'weft/json-schema';
+ * import type { DefinitionSchema } from '@lostgradient/weft/json-schema';
  *
  * function acceptsDefinitionSchema(schema: DefinitionSchema): DefinitionSchema {
  *   return schema;
@@ -345,7 +345,7 @@ export type DefinitionSchema<Input = unknown, Output = Input> =
  *
  * @example
  * ```ts
- * import type { InferSchemaInput } from 'weft/json-schema';
+ * import type { InferSchemaInput } from '@lostgradient/weft/json-schema';
  * import { z } from 'zod';
  *
  * const schema = z.string().transform((s) => s.length);
@@ -367,7 +367,7 @@ export type InferSchemaInput<TSchema> =
  *
  * @example
  * ```ts
- * import type { InferSchemaOutput } from 'weft/json-schema';
+ * import type { InferSchemaOutput } from '@lostgradient/weft/json-schema';
  * import { z } from 'zod';
  *
  * const schema = z.string().transform((s) => s.length);

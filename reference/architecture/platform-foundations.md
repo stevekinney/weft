@@ -827,7 +827,7 @@ async function runServer(port: number) {
   const storage = stack.use(new BunSQLiteStorage('./weft.db'));
   const engine = stack.use(new Engine({ storage }));
   const server = stack.adopt(
-    Bun.serve({ port, fetch: (req) => handleHTTP(engine, req) }),
+    Bun.serve({ port, fetch: (request) => handleRequest(request, engine) }),
     (s) => s.stop(), // custom disposal logic
   );
 

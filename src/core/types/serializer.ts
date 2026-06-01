@@ -13,7 +13,7 @@
  *
  * @example
  * ```ts
- * import { Engine, type Serializer } from 'weft';
+ * import { Engine, type Serializer } from '@lostgradient/weft';
  *
  * const jsonSerializer: Serializer = {
  *   serialize(value) {

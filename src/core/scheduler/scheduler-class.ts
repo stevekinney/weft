@@ -33,8 +33,8 @@ type TimerProcessingResult = 'processed' | 'retry';
  *
  * @example
  * ```ts
- * import { Scheduler } from 'weft';
- * import { MemoryStorage } from 'weft/storage/memory';
+ * import { Scheduler } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
  *
  * const storage = new MemoryStorage();
  * const scheduler = new Scheduler({

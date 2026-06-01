@@ -13,13 +13,13 @@ You'll need Bun 1.3.13 or later. Verify with `bun --version`.
 Most projects should start here. Add Weft as a dependency and use the engine directly in your code.
 
 ```bash
-bun add weft
+bun add @lostgradient/weft
 ```
 
 That's it. No Docker, no separate server process, no gRPC. You import `Engine` and `MemoryStorage` (or `BunSQLiteStorage`) and start writing workflows.
 
 ```typescript
-import { Engine, MemoryStorage } from 'weft';
+import { Engine, MemoryStorage } from '@lostgradient/weft';
 
 const engine = new Engine({ storage: new MemoryStorage() });
 ```
@@ -27,8 +27,8 @@ const engine = new Engine({ storage: new MemoryStorage() });
 For production, swap in SQLite-backed storage so your checkpoints survive process restarts:
 
 ```typescript
-import { Engine } from 'weft';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { Engine } from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 const engine = new Engine({
   storage: new SQLiteStorage('./weft.db'),

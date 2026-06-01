@@ -49,7 +49,7 @@ class WorkerPool implements Disposable, AsyncDisposable {
 **Example:**
 
 ```ts partial
-import { WorkerPool } from 'weft';
+import { WorkerPool } from '@lostgradient/weft';
 
 await using pool = new WorkerPool({
   concurrency: 4,
@@ -154,7 +154,7 @@ The worker sends heartbeats every 10 seconds after registration is acknowledged 
 **Example:**
 
 ```ts
-import { RemoteWorker } from 'weft';
+import { RemoteWorker } from '@lostgradient/weft';
 
 const worker = new RemoteWorker({
   serverUrl: 'ws://localhost:7233/api/v1/tasks/default/stream',
@@ -236,7 +236,7 @@ class LongPollWorker implements Disposable {
 **Example:**
 
 ```ts
-import { LongPollWorker } from 'weft';
+import { LongPollWorker } from '@lostgradient/weft';
 
 const worker = new LongPollWorker({
   serverUrl: 'http://localhost:7233',

@@ -14,7 +14,7 @@ import { WeftError } from './weft-error.ts';
  *
  * @example
  * ```ts
- * import { Engine, PersistedDataIncompatibleError } from 'weft';
+ * import { Engine, PersistedDataIncompatibleError } from '@lostgradient/weft';
  *
  * try {
  *   await Engine.create({});

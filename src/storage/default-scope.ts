@@ -10,7 +10,7 @@
  *
  * @example
  * ```ts
- * import { DEFAULT_SCOPE } from 'weft/storage/interface';
+ * import { DEFAULT_SCOPE } from '@lostgradient/weft/storage/interface';
  * console.log(DEFAULT_SCOPE); // 'default'
  * ```
  */

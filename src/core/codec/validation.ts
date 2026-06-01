@@ -16,7 +16,7 @@ export interface CloneValidationResult {
  *
  * @example
  * ```ts
- * import { validateCloneable } from 'weft';
+ * import { validateCloneable } from '@lostgradient/weft';
  *
  * const safe = validateCloneable({ name: 'Alice', scores: [1, 2, 3] });
  * console.log(safe.valid);   // true

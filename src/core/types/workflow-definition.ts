@@ -21,7 +21,7 @@ import type { WorkflowFunction } from './workflow-function.ts';
  *
  * @example
  * ```ts
- * import { workflow, type WorkflowDefinition, type WorkflowContext } from 'weft';
+ * import { workflow, type WorkflowDefinition, type WorkflowContext } from '@lostgradient/weft';
  *
  * const greet: WorkflowDefinition<string, string> = workflow({ name: 'greet' })
  *   .execute(async function* (_ctx: WorkflowContext, input: string) {

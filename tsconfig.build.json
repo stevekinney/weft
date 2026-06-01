@@ -8,15 +8,20 @@
     "incremental": false,
     "rootDir": "./src",
     "outDir": "./dist",
-    "sourceMap": true,
-    "inlineSources": true
+    "sourceMap": false,
+    "inlineSources": false
   },
   "include": ["src"],
   "exclude": [
     "node_modules",
+    "src/benchmarks/**",
+    "src/cli/__fixtures__/**",
     "**/*.test.ts",
     "**/*.spec.ts",
+    "**/*.test-d.ts",
     "**/*.test-support.ts",
-    "**/*-fixture.ts"
+    "**/*-fixture.ts",
+    "**/__fixtures__/**",
+    "**/__tests__/**"
   ]
 }

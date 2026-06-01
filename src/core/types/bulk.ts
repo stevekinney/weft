@@ -10,7 +10,7 @@ export const MAX_BULK_CONFIRMATION_TOKEN_LENGTH = 256;
  *
  * @example
  * ```ts
- * import type { BulkOperationAction } from 'weft';
+ * import type { BulkOperationAction } from '@lostgradient/weft';
  *
  * const action: BulkOperationAction = 'cancel';
  * void action;
@@ -30,7 +30,7 @@ export type BulkOperationAction =
  *
  * @example
  * ```ts
- * import type { BulkOperationPrincipal } from 'weft';
+ * import type { BulkOperationPrincipal } from '@lostgradient/weft';
  *
  * const principal: BulkOperationPrincipal = {
  *   method: 'api-key',
@@ -49,7 +49,7 @@ export type BulkOperationPrincipal = {
  *
  * @example
  * ```ts
- * import type { BulkOperationFilterSummary } from 'weft';
+ * import type { BulkOperationFilterSummary } from '@lostgradient/weft';
  *
  * const filter: BulkOperationFilterSummary = {
  *   status: ['running', 'pending'],
@@ -80,7 +80,7 @@ export type BulkOperationFilterSummary = {
  *
  * @example
  * ```ts
- * import type { BulkOperationScopeSummary } from 'weft';
+ * import type { BulkOperationScopeSummary } from '@lostgradient/weft';
  *
  * const scope: BulkOperationScopeSummary = {
  *   matched: 2,
@@ -107,7 +107,7 @@ export type BulkOperationScopeSummary = {
  *
  * @example
  * ```ts
- * import type { BulkOperationDryRunResult } from 'weft';
+ * import type { BulkOperationDryRunResult } from '@lostgradient/weft';
  *
  * const preview: BulkOperationDryRunResult = {
  *   dryRun: true,
@@ -145,7 +145,7 @@ export type BulkOperationDryRunResult = {
  *
  * @example
  * ```ts
- * import type { BulkOperationDryRunOptions } from 'weft';
+ * import type { BulkOperationDryRunOptions } from '@lostgradient/weft';
  *
  * const options: BulkOperationDryRunOptions = {
  *   dryRun: true,
@@ -165,7 +165,7 @@ export type BulkOperationDryRunOptions = {
  *
  * @example
  * ```ts
- * import type { BulkOperationCommitOptions } from 'weft';
+ * import type { BulkOperationCommitOptions } from '@lostgradient/weft';
  *
  * const options: BulkOperationCommitOptions = {
  *   confirmationToken: 'bulk:token-from-preview',
@@ -186,7 +186,7 @@ export type BulkOperationCommitOptions = {
  *
  * @example
  * ```ts
- * import type { BulkOperationOptions } from 'weft';
+ * import type { BulkOperationOptions } from '@lostgradient/weft';
  *
  * const options: BulkOperationOptions = { dryRun: true };
  * void options;
@@ -200,7 +200,7 @@ export type BulkOperationOptions = BulkOperationDryRunOptions | BulkOperationCom
  *
  * @example
  * ```ts
- * import type { BulkSignalAllDryRunOptions } from 'weft';
+ * import type { BulkSignalAllDryRunOptions } from '@lostgradient/weft';
  *
  * const options: BulkSignalAllDryRunOptions = { dryRun: true };
  * void options;
@@ -214,7 +214,7 @@ export type BulkSignalAllDryRunOptions = BulkOperationDryRunOptions;
  *
  * @example
  * ```ts
- * import type { BulkSignalAllCommitOptions } from 'weft';
+ * import type { BulkSignalAllCommitOptions } from '@lostgradient/weft';
  *
  * const options: BulkSignalAllCommitOptions = {
  *   confirmationToken: 'bulk:token-from-preview',
@@ -229,7 +229,7 @@ export type BulkSignalAllCommitOptions = BulkOperationCommitOptions;
  *
  * @example
  * ```ts
- * import type { BulkSignalAllOptions } from 'weft';
+ * import type { BulkSignalAllOptions } from '@lostgradient/weft';
  *
  * const options: BulkSignalAllOptions = { dryRun: true };
  * void options;
@@ -242,7 +242,7 @@ export type BulkSignalAllOptions = BulkSignalAllDryRunOptions | BulkSignalAllCom
  *
  * @example
  * ```ts
- * import type { BulkOperationAuditEvent } from 'weft';
+ * import type { BulkOperationAuditEvent } from '@lostgradient/weft';
  *
  * const event: BulkOperationAuditEvent = {
  *   type: 'bulk-operation:audit',

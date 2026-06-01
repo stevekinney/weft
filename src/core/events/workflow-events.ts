@@ -7,7 +7,7 @@ import type { TerminationReason } from '../types/history-policy.ts';
  *
  * @example
  * ```ts
- * import { workflow, Engine, WorkflowStartedEvent } from 'weft';
+ * import { workflow, Engine, WorkflowStartedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('workflow:started', (e: Event) => {
@@ -39,7 +39,7 @@ export class WorkflowStartedEvent extends Event {
  *
  * @example
  * ```ts
- * import { workflow, Engine, WorkflowCompletedEvent } from 'weft';
+ * import { workflow, Engine, WorkflowCompletedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('workflow:completed', (e: Event) => {
@@ -71,7 +71,7 @@ export class WorkflowCompletedEvent extends Event {
  *
  * @example
  * ```ts
- * import { workflow, Engine, WorkflowFailedEvent } from 'weft';
+ * import { workflow, Engine, WorkflowFailedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('workflow:failed', (e: Event) => {
@@ -101,7 +101,7 @@ export class WorkflowFailedEvent extends Event {
  *
  * @example
  * ```ts
- * import { Engine, workflow, WorkflowCancelledEvent } from 'weft';
+ * import { Engine, workflow, WorkflowCancelledEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('workflow:cancelled', (e: Event) => {
@@ -110,7 +110,7 @@ export class WorkflowFailedEvent extends Event {
  * });
  * engine.register(
  *   workflow({ name: 'slow' }).execute(async function* (
- *     _ctx: import('weft').WorkflowContext,
+ *     _ctx: import('@lostgradient/weft').WorkflowContext,
  *     _input: unknown,
  *   ) {
  *     await new Promise(() => {}); // never resolves
@@ -140,7 +140,7 @@ export class WorkflowCancelledEvent extends Event {
  *
  * @example
  * ```ts
- * import { Engine, WorkflowTimedOutEvent } from 'weft';
+ * import { Engine, WorkflowTimedOutEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('workflow:timed-out', (e: Event) => {
@@ -192,7 +192,7 @@ export const WORKFLOW_TERMINAL_EVENT_TYPES: ReadonlySet<string> = new Set<string
  *
  * @example
  * ```ts
- * import { Engine, WorkflowResumedEvent } from 'weft';
+ * import { Engine, WorkflowResumedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('workflow:resumed', (e: Event) => {
@@ -218,7 +218,7 @@ export class WorkflowResumedEvent extends Event {
  *
  * @example
  * ```ts
- * import type { WorkflowRecoverySkippedReason } from 'weft';
+ * import type { WorkflowRecoverySkippedReason } from '@lostgradient/weft';
  *
  * const reason: WorkflowRecoverySkippedReason = 'type-not-registered';
  * void reason;
@@ -234,7 +234,7 @@ export type WorkflowRecoverySkippedReason = 'type-not-registered';
  *
  * @example
  * ```ts
- * import { Engine, WorkflowRecoverySkippedEvent } from 'weft';
+ * import { Engine, WorkflowRecoverySkippedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener(WorkflowRecoverySkippedEvent.type, (event) => {

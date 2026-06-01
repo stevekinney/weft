@@ -22,7 +22,7 @@ import type { WorkflowEvent } from '../core/types.ts';
  *
  * @example
  * ```ts
- * import { workflow, Engine, MemoryStorage, LocalClient, type WorkflowEventTail } from 'weft';
+ * import { workflow, Engine, MemoryStorage, LocalClient, type WorkflowEventTail } from '@lostgradient/weft';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));

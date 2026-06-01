@@ -12,7 +12,7 @@ Here's the mental model comparison for someone writing their first workflow.
 | Signal                 | `setHandler` + `condition`        | `yield* ctx.waitForSignal(name)`        |
 | Versioning             | `patched()` / `deprecatePatch()`  | Deploy new code (migration optional)    |
 | Long-running workflows | `continueAsNew()`                 | Nothing (checkpoints are fixed-size)    |
-| Dev environment        | Docker Compose + Temporal server  | `bun add weft`                          |
+| Dev environment        | Docker Compose + Temporal server  | `bun add @lostgradient/weft`            |
 | Bundling               | Webpack for workflow sandbox      | None                                    |
 
 Now let's walk through each of the ten design failures in detail.
@@ -70,7 +70,7 @@ engine.register(
 );
 ```
 
-Weft's source/binary CLI also provides `weft version:check`, which analyzes registered workflows against the existing database and reports compatibility _before_ deployment—telling you exactly how many running workflows need migration and whether your migration function covers them. In the published 0.1.0 package, `bun add weft` installs only the `weft-mcp` binary, so if you expect `weft version:check` after a normal package install, that is why it is missing. Run it from a source checkout or a standalone `weft` binary instead.
+Weft's CLI also provides `weft version:check`, which analyzes registered workflows against the existing database and reports compatibility _before_ deployment—telling you exactly how many running workflows need migration and whether your migration function covers them. Installing `@lostgradient/weft` provides both `weft` and `weft-mcp`.
 
 ## Steep learning curve
 
@@ -98,7 +98,7 @@ Under the hood, `ctx.step()` compiles to the generator form. Developers who need
 
 **The Temporal problem.** Running Temporal self-hosted requires Cassandra or PostgreSQL, Elasticsearch for visibility, the Temporal server itself (multiple Go services), and a frontend service. Even for local development, you need Docker Compose or the Temporal CLI dev server. Temporal Cloud describes "several compute clusters, one or more databases, Elasticsearch, ingress, observability stack, and other dependency components" per cloud cell, with eight engineering on-call rotations.
 
-**The Weft answer.** `bun add weft` for the library, or build a single binary from this repository when you want the source/binary CLI. SQLite is the default database, embedded in the runtime. No external dependencies for development or small production deployments.
+**The Weft answer.** `bun add @lostgradient/weft` for the library, or build a single binary from this repository when you want the source/binary CLI. SQLite is the default database, embedded in the runtime. No external dependencies for development or small production deployments.
 
 ```bash
 # Temporal
@@ -109,7 +109,7 @@ temporal server start-dev     # ... or the dev shortcut that still needs Docker
 ./weft --port 7233            # SQLite auto-created. Dashboard at localhost:7233/
 ```
 
-Weft's source/binary CLI also includes `weft doctor`, a diagnostic command that reports database health, workflow statistics, queue depths, performance metrics, and actionable recommendations—all without any external monitoring infrastructure. Like `version:check`, it is not installed by the published 0.1.0 package's `bin` map.
+Weft's CLI also includes `weft doctor`, a diagnostic command that reports database health, workflow statistics, queue depths, performance metrics, and actionable recommendations—all without any external monitoring infrastructure.
 
 ## Performance out of the box
 
@@ -168,7 +168,7 @@ There is no `continueAsNew`, no history limit, no manual state serialization. A 
 Activities can declare their own operational characteristics with a colocated configuration pattern.
 
 ```typescript partial
-import { activity } from 'weft';
+import { activity } from '@lostgradient/weft';
 
 export const charge = activity({
   name: 'charge',

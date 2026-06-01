@@ -15,7 +15,7 @@ import {
  *
  * @example
  * ```ts
- * import { signal, type SignalDefinition } from 'weft';
+ * import { signal, type SignalDefinition } from '@lostgradient/weft';
  *
  * declare const handle: {
  *   signal(definition: SignalDefinition<{ approved: boolean }>, input: { approved: boolean }): Promise<void>;
@@ -37,7 +37,7 @@ export interface SignalDefinition<TInput = void> {
  *
  * @example
  * ```ts
- * import { update, type UpdateDefinition } from 'weft';
+ * import { update, type UpdateDefinition } from '@lostgradient/weft';
  *
  * declare const handle: {
  *   update(
@@ -66,7 +66,7 @@ export interface UpdateDefinition<TInput = void, TOutput = unknown> {
  *
  * @example
  * ```ts
- * import { query, type QueryDefinition } from 'weft';
+ * import { query, type QueryDefinition } from '@lostgradient/weft';
  *
  * declare const handle: {
  *   query(
@@ -104,7 +104,7 @@ export type MessageName = string | { readonly name: string };
  *
  * @example
  * ```ts
- * import type { SignalOptions } from 'weft';
+ * import type { SignalOptions } from '@lostgradient/weft';
  * import { z } from 'zod';
  *
  * const options: SignalOptions<{ approved: boolean }> = {
@@ -122,7 +122,7 @@ export interface SignalOptions<TInput = void> {
  *
  * @example
  * ```ts
- * import type { SignalDeliveryOptions } from 'weft';
+ * import type { SignalDeliveryOptions } from '@lostgradient/weft';
  *
  * const options: SignalDeliveryOptions = { signalId: 'approval-123' };
  * void options;
@@ -140,7 +140,7 @@ export interface SignalDeliveryOptions {
  *
  * @example
  * ```ts
- * import { signal } from 'weft';
+ * import { signal } from '@lostgradient/weft';
  * import { z } from 'zod';
  *
  * const approval = signal<{ approved: boolean }>('approval');
@@ -179,7 +179,7 @@ export function signal(name: string, options?: SignalOptions<unknown>): SignalDe
  *
  * @example
  * ```ts
- * import type { UpdateOptions } from 'weft';
+ * import type { UpdateOptions } from '@lostgradient/weft';
  * import { z } from 'zod';
  *
  * const options: UpdateOptions<{ id: string }, { ok: true }> = {
@@ -201,7 +201,7 @@ export interface UpdateOptions<TInput = void, TOutput = unknown> {
  *
  * @example
  * ```ts
- * import { update } from 'weft';
+ * import { update } from '@lostgradient/weft';
  * import { z } from 'zod';
  *
  * const approve = update<{ id: string }, { accepted: boolean }>('approve');
@@ -254,7 +254,7 @@ export function update(name: string, options?: UpdateOptions<unknown>): UpdateDe
  *
  * @example
  * ```ts
- * import type { QueryOptions } from 'weft';
+ * import type { QueryOptions } from '@lostgradient/weft';
  * import { z } from 'zod';
  *
  * const options: QueryOptions<{ id: string }, { state: string }> = {
@@ -276,7 +276,7 @@ export interface QueryOptions<TInput = void, TOutput = unknown> {
  *
  * @example
  * ```ts
- * import { query } from 'weft';
+ * import { query } from '@lostgradient/weft';
  * import { z } from 'zod';
  *
  * const status = query<void, { state: string }>('status');

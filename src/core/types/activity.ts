@@ -14,7 +14,7 @@ import type { Duration, RetryPolicy } from './retry-retention.ts';
  *
  * @example
  * ```ts
- * import type { ActivityFunction } from 'weft';
+ * import type { ActivityFunction } from '@lostgradient/weft';
  *
  * const fetchUserFn: ActivityFunction<string, { id: string; name: string }> =
  *   async (input, ctx) => {
@@ -42,7 +42,7 @@ export type ActivityFunction<TInput = unknown, TOutput = unknown> = (
  *
  * @example
  * ```ts
- * import { activity, type ActivityContext } from 'weft';
+ * import { activity, type ActivityContext } from '@lostgradient/weft';
  *
  * const processChunks = activity({
  *   name: 'processChunks',
@@ -82,7 +82,7 @@ export interface ActivityContext {
    *
    * @example
    * ```ts
-   * import { activity, type ActivityContext } from 'weft';
+   * import { activity, type ActivityContext } from '@lostgradient/weft';
    *
    * const awaitWebhook = activity({
    *   name: 'awaitWebhook',
@@ -109,7 +109,7 @@ export interface ActivityContext {
  *
  * @example
  * ```ts
- * import { workflow, activity, Engine, type ActivityCallOptions, type WorkflowContext } from 'weft';
+ * import { workflow, activity, Engine, type ActivityCallOptions, type WorkflowContext } from '@lostgradient/weft';
  *
  * const slowTask = activity({ name: 'slowTask', execute: async (i: unknown) => i });
  * const engine = new Engine();
@@ -140,7 +140,7 @@ export interface ActivityCallOptions {
  *
  * @example
  * ```ts
- * import type { ActivityVerificationPhase } from 'weft';
+ * import type { ActivityVerificationPhase } from '@lostgradient/weft';
  *
  * const phase: ActivityVerificationPhase = 'pre-dispatch-reconciliation';
  * console.log(phase);
@@ -153,7 +153,7 @@ export type ActivityVerificationPhase = 'post-execution-validation' | 'pre-dispa
  *
  * @example
  * ```ts
- * import type { ActivityVerificationContext } from 'weft';
+ * import type { ActivityVerificationContext } from '@lostgradient/weft';
  *
  * function shouldQueryExternalSystem(context: ActivityVerificationContext): boolean {
  *   return context.phase === 'pre-dispatch-reconciliation';
@@ -177,7 +177,7 @@ export interface ActivityVerificationContext<TInput = unknown> {
  *
  * @example
  * ```ts
- * import type { ActivityVerificationResult } from 'weft';
+ * import type { ActivityVerificationResult } from '@lostgradient/weft';
  *
  * const result: ActivityVerificationResult<string> = {
  *   status: 'completed-with-result',
@@ -220,7 +220,7 @@ export type ActivityVerifier<TInput = unknown, TOutput = unknown> =
  *
  * @example
  * ```ts
- * import { activity, type ActivityDefinition } from 'weft';
+ * import { activity, type ActivityDefinition } from '@lostgradient/weft';
  *
  * const sendEmail: ActivityDefinition<{ to: string; body: string }, void> = activity({
  *   name: 'sendEmail',
@@ -301,7 +301,7 @@ export interface ActivityDefinition<
  *
  * @example
  * ```ts
- * import { activity, type ActivityCallable } from 'weft';
+ * import { activity, type ActivityCallable } from '@lostgradient/weft';
  *
  * const normalizeEmail: ActivityCallable<string, string> = activity(async function normalizeEmail(
  *   input: string,
@@ -332,7 +332,7 @@ export type ActivityCallable<TInput, TOutput, TName extends string = string> = A
  *
  * @example
  * ```ts
- * import { activity } from 'weft';
+ * import { activity } from '@lostgradient/weft';
  *
  * const fetchUser = activity({
  *   name: 'fetchUser',

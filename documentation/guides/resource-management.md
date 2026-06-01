@@ -5,8 +5,8 @@ Declare `await using engine = new Engine(...)` and shutdown is automatic on scop
 ## The pattern
 
 ```typescript partial
-import { Engine, workflow } from 'weft';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { Engine, workflow } from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 declare const orderWorkflow: never; // your registered workflow
 
@@ -45,7 +45,7 @@ _WorkflowHandle_ implements `AsyncDisposable`. Handles are lightweight, so dispo
 
 _BunSQLiteStorage_ implements `Disposable`. Disposal closes the underlying SQLite database connection.
 
-`IndexedDBStorage` is the browser-environment equivalent—also `Disposable`—and uses the `await using` pattern. Import it from `'weft/storage/indexeddb'`.
+`IndexedDBStorage` is the browser-environment equivalent—also `Disposable`—and uses the `await using` pattern. Import it from `'@lostgradient/weft/storage/indexeddb'`.
 
 ```typescript partial
 {
@@ -70,7 +70,7 @@ async function runServer(port: number) {
   const storage = stack.use(new BunSQLiteStorage('./weft.db'));
   const engine = stack.use(new Engine({ storage }));
   const server = stack.adopt(
-    Bun.serve({ port, fetch: (request) => handleHTTP(engine, request) }),
+    Bun.serve({ port, fetch: (request) => handleRequest(request, engine) }),
     (s) => s.stop(),
   );
 

@@ -22,7 +22,7 @@ import { resolvePrefixRangeEnd, type Storage } from './interface.ts';
  *
  * @example
  * ```ts
- * import type { DeleteRangeOptions } from 'weft';
+ * import type { DeleteRangeOptions } from '@lostgradient/weft';
  *
  * // Delete events strictly below a sequence watermark.
  * const options: DeleteRangeOptions = { lt: 'ev:wf:0000000003' };
@@ -136,7 +136,7 @@ export function normalizeDeleteRangeOptions(
  *
  * @example
  * ```ts
- * import { MemoryStorage, storageDeleteRange } from 'weft';
+ * import { MemoryStorage, storageDeleteRange } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await storage.put('ev:wf:0000000001', new Uint8Array([1]));

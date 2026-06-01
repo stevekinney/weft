@@ -22,7 +22,7 @@
  *
  * @example
  * ```ts
- * import type { ArchiveAdapter } from 'weft';
+ * import type { ArchiveAdapter } from '@lostgradient/weft';
  *
  * const adapter: ArchiveAdapter = {
  *   async store(workflowId, key, bytes) {

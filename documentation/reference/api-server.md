@@ -11,8 +11,8 @@ function serve(options: ServeOptions): WeftServer;
 Start the Weft HTTP + WebSocket server. Returns a `WeftServer` handle for introspection and shutdown.
 
 ```ts partial
-import { Engine, workflow } from 'weft';
-import { serve } from 'weft/server';
+import { Engine, workflow } from '@lostgradient/weft';
+import { serve } from '@lostgradient/weft/server';
 
 const engine = new Engine();
 engine.register(
@@ -112,7 +112,7 @@ A pure HTTP request handler that maps a `Request` to a `Response`. Has no Bun-sp
 `HandlerOptions` accepts an operation registry, REST bindings, and a Prometheus exporter. Omit it to use defaults.
 
 ```ts partial
-import { handleRequest } from 'weft/server/handler';
+import { handleRequest } from '@lostgradient/weft/server/handler';
 
 // Use inside a custom Bun.serve, Deno.serve, or any framework
 const response = await handleRequest(request, engine);
@@ -398,7 +398,7 @@ Activities are never exposed as standalone MCP tools. Workflow tool failures are
 
 MCP resource discovery includes workflow state, event log, checkpoint history, and workflow-search templates. Subscribing to a workflow resource sends `notifications/resources/updated` over the GET event stream when that workflow changes.
 
-The `weft/mcp` subpath exports the server helpers for embedding, and the `weft-mcp` binary runs a local MCP stdio session against memory or SQLite storage. Local stdio admission is explicit: use `--startup-token <token>` for a first-frame authentication gate, or `--allow-unauthenticated-local-admin` only for trusted local process boundaries.
+The `@lostgradient/weft/mcp` subpath exports the server helpers for embedding, and the `weft-mcp` binary runs a local MCP stdio session against memory or SQLite storage. Local stdio admission is explicit: use `--startup-token <token>` for a first-frame authentication gate, or `--allow-unauthenticated-local-admin` only for trusted local process boundaries.
 
 ### Storage Operations
 
@@ -603,14 +603,14 @@ body shape.
 
 ## Service Worker
 
-The `weft/service-worker` module provides bootstrap functions for running the Weft engine inside a Service Worker. These functions wire `handleRequest()` into the Service Worker event model.
+The `@lostgradient/weft/service-worker` module provides bootstrap functions for running the Weft engine inside a Service Worker. These functions wire `handleRequest()` into the Service Worker event model.
 
 ```ts partial
 import {
   createFetchHandler,
   createLifecycleHandlers,
   createPeriodicSyncHandler,
-} from 'weft/service-worker';
+} from '@lostgradient/weft/service-worker';
 ```
 
 ---

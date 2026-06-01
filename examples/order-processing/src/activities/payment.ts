@@ -1,4 +1,4 @@
-import { activity } from 'weft';
+import { activity } from '@lostgradient/weft';
 
 import type { ChargePaymentInput, PaymentCharge, RefundPaymentInput } from '../model';
 

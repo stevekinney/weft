@@ -11,7 +11,7 @@ import type { ActivityDefinition, SearchAttributeSchema, SearchAttributeValue } 
  *
  * @example
  * ```ts
- * import { activity, type SagaStep, type WorkflowContext } from 'weft';
+ * import { activity, type SagaStep, type WorkflowContext } from '@lostgradient/weft';
  *
  * const chargeCard = activity({
  *   name: 'chargeCard',
@@ -56,7 +56,7 @@ export interface ErasedSagaStep {
  *
  * @example
  * ```ts
- * import { workflow, activity, Engine, type OffloadReference, type WorkflowContext } from 'weft';
+ * import { workflow, activity, Engine, type OffloadReference, type WorkflowContext } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(
@@ -85,7 +85,7 @@ export interface OffloadReference {
  *
  * @example
  * ```ts
- * import { workflow, Engine, type StreamReference, type WorkflowContext } from 'weft';
+ * import { workflow, Engine, type StreamReference, type WorkflowContext } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(
@@ -121,7 +121,7 @@ export interface StoredStreamChunk<T = unknown> {
  *
  * @example
  * ```ts
- * import { workflow, Engine, type StreamSink, type WorkflowContext } from 'weft';
+ * import { workflow, Engine, type StreamSink, type WorkflowContext } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(
@@ -145,7 +145,7 @@ export interface StreamSink {
  *
  * @example
  * ```ts
- * import { Context, type ContextOptions } from 'weft';
+ * import { Context, type ContextOptions } from '@lostgradient/weft';
  *
  * const controller = new AbortController();
  * const options: ContextOptions = {

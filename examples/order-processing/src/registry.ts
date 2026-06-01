@@ -1,4 +1,4 @@
-import { Engine, schedule } from 'weft';
+import { Engine, schedule } from '@lostgradient/weft';
 
 import { staleOrderSweepInput } from './sample-data';
 import { orderWorkflow } from './workflows/order';

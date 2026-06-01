@@ -80,7 +80,7 @@ function createWorkerWebSocket(
  *
  * @example
  * ```ts
- * import { RemoteWorker } from 'weft';
+ * import { RemoteWorker } from '@lostgradient/weft';
  *
  * using worker = new RemoteWorker({
  *   serverUrl: 'ws://localhost:3000',

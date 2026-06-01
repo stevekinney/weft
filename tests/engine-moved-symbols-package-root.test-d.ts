@@ -1,12 +1,12 @@
 // Semantic-export oracle for symbols a future Engine split might relocate.
 //
-// This guards the *public package entrypoint* (`weft`), not a deep sibling
+// This guards the *public package entry point* (`@lostgradient/weft`), not a deep sibling
 // path: if the Engine class or its companion types move to new modules, the
 // re-export chain (src/index.ts -> src/core/engine.ts -> src/core/engine/index.ts)
-// must keep these reachable from `weft` with unchanged types. These are
+// must keep these reachable from `@lostgradient/weft` with unchanged types. These are
 // type-only assertions — no runtime behavior.
 
-import { Engine, type AtomicState, type EngineStateNamespace } from 'weft';
+import { Engine, type AtomicState, type EngineStateNamespace } from '@lostgradient/weft';
 
 // `EngineStateNamespace` is public and `Engine.state` returns it. The getter's
 // type must remain assignable to the named interface, and the interface must

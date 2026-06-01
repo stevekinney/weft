@@ -7,8 +7,8 @@ import type { ContextInternals } from './internals.ts';
  *
  * @example
  * ```ts
- * import { workflow, Engine, update } from 'weft';
- * import type { UpdateHandlerOptions } from 'weft';
+ * import { workflow, Engine, update } from '@lostgradient/weft';
+ * import type { UpdateHandlerOptions } from '@lostgradient/weft';
  *
  * const setAge = update<{ age: number }, void>('setAge');
  * const engine = new Engine();

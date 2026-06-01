@@ -40,7 +40,7 @@ chmod +x weft
 **Library.** Import Weft into your own project and use the engine programmatically.
 
 ```bash
-bun add weft
+bun add @lostgradient/weft
 ```
 
 **User-compiled binary.** Bake your workflow code _into_ the Weft binary for a fully self-contained application.

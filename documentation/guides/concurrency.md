@@ -12,7 +12,7 @@ A plain in-memory lock does not survive a crash, and a database row lock does no
 A `DurableSemaphore` stores one `LockRecord` in a single CAS state slot:
 
 ```typescript
-import type { LockRecord } from 'weft';
+import type { LockRecord } from '@lostgradient/weft';
 
 const record: LockRecord = {
   holders: [{ holderId: 'workflow-a', leaseExpiresAt: 1717000030000 }],
@@ -43,8 +43,8 @@ The lock lives in whatever CAS slot you point it at, and the contenders must add
 Here is a workflow that serializes a critical section. It polls `tryAcquire`, sleeping between attempts so the wait is durable — a queued workflow costs nothing while it waits, even for days.
 
 ```typescript
-import { DurableMutex, initialLockRecord, workflow } from 'weft';
-import type { LockRecord, WorkflowContext } from 'weft';
+import { DurableMutex, initialLockRecord, workflow } from '@lostgradient/weft';
+import type { LockRecord, WorkflowContext } from '@lostgradient/weft';
 
 // Capture wall-clock time through an activity so the value is recorded in the
 // effect log and replays identically. In tests, point this at your virtual clock.
@@ -81,8 +81,8 @@ void transfer;
 A `DurableSemaphore` with `permits: N` admits at most `N` concurrent holders. The acquire loop is identical — only the constructor changes.
 
 ```typescript
-import { DurableSemaphore, initialLockRecord, workflow } from 'weft';
-import type { LockRecord, WorkflowContext } from 'weft';
+import { DurableSemaphore, initialLockRecord, workflow } from '@lostgradient/weft';
+import type { LockRecord, WorkflowContext } from '@lostgradient/weft';
 
 const readClock = async () => Date.now();
 
@@ -133,9 +133,9 @@ Leases prevent permanent deadlock from a crashed _holder_: the next contender re
 The same primitive works against an admin [`AtomicState`](state.md#admin-access) handle, whose methods return promises instead of workflow operations. This is useful for operational tooling — for example, an operator force-releasing a stuck lock:
 
 ```typescript
-import { AtomicState, DurableMutex, initialLockRecord } from 'weft';
-import type { LockRecord } from 'weft';
-import { MemoryStorage } from 'weft/storage/memory';
+import { AtomicState, DurableMutex, initialLockRecord } from '@lostgradient/weft';
+import type { LockRecord } from '@lostgradient/weft';
+import { MemoryStorage } from '@lostgradient/weft/storage/memory';
 
 const storage = new MemoryStorage();
 const slot = new AtomicState<LockRecord>(storage, 'state:workflow-scope:default:account-42:lock', {

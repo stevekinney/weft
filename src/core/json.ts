@@ -4,7 +4,7 @@
  *
  * @example
  * ```ts
- * import type { JSONPrimitive } from 'weft';
+ * import type { JSONPrimitive } from '@lostgradient/weft';
  *
  * const value: JSONPrimitive = 'ready';
  * ```
@@ -17,7 +17,7 @@ export type JSONPrimitive = string | number | boolean | null;
  *
  * @example
  * ```ts
- * import type { JSONValue } from 'weft';
+ * import type { JSONValue } from '@lostgradient/weft';
  *
  * const value: JSONValue = { count: 1, tags: ['ready'] };
  * ```
@@ -31,7 +31,7 @@ export type JSONValue = JSONPrimitive | ReadonlyArray<JSONValue> | { [key: strin
  *
  * @example
  * ```ts
- * import { isJSONValue } from 'weft';
+ * import { isJSONValue } from '@lostgradient/weft';
  *
  * isJSONValue({ count: 1, tags: ['ready'] }); // true
  * isJSONValue(new Date());                    // false
@@ -62,7 +62,7 @@ export function isJSONValue(value: unknown): value is JSONValue {
  *
  * @example
  * ```ts
- * import { normalizeJSONValue } from 'weft';
+ * import { normalizeJSONValue } from '@lostgradient/weft';
  *
  * normalizeJSONValue({ count: 1 });        // { count: 1 }
  * normalizeJSONValue(new Error('boom'));    // { name: 'Error', message: 'boom' }

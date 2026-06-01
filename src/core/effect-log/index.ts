@@ -43,7 +43,7 @@ import { isJSONValue, normalizeJSONValue, type JSONValue } from '../json.ts';
  *
  * @example Inspect the record returned by EffectLog.lookup
  * ```ts
- * import type { EffectRecord } from 'weft';
+ * import type { EffectRecord } from '@lostgradient/weft';
  *
  * function describeRecord(record: EffectRecord): string {
  *   switch (record.status) {
@@ -68,7 +68,7 @@ export type EffectRecord =
  *
  * @example
  * ```ts
- * import type { EffectLogLike } from 'weft';
+ * import type { EffectLogLike } from '@lostgradient/weft';
  *
  * async function dedupe(log: EffectLogLike, hash: string): Promise<boolean> {
  *   const existing = await log.lookup(hash);
@@ -96,7 +96,7 @@ export type EffectLogLike = Pick<
  *
  * @example Catch a replay conflict and route to human review
  * ```ts
- * import { EffectReplayConflictError } from 'weft';
+ * import { EffectReplayConflictError } from '@lostgradient/weft';
  *
  * try {
  *   // ... effect execution
@@ -142,7 +142,7 @@ export class EffectReplayConflictError extends WeftError<'EffectReplayConflictEr
  *
  * @example Hash only the fields that determine a payment's observable effect
  * ```ts
- * import { computeSemanticHash } from 'weft';
+ * import { computeSemanticHash } from '@lostgradient/weft';
  *
  * const hash = computeSemanticHash({ recipient: 'alice', amount: 100 });
  * // Key order is irrelevant — same hash regardless of property insertion order.
@@ -226,8 +226,8 @@ function isEffectRecord(value: unknown): value is EffectRecord {
  *
  * @example Create and use an EffectLog for durable deduplication
  * ```ts
- * import { EffectLog, computeSemanticHash } from 'weft';
- * import { MemoryStorage } from 'weft/storage/memory';
+ * import { EffectLog, computeSemanticHash } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
  *
  * const storage = new MemoryStorage();
  * const log = new EffectLog(storage, 'workflow-abc', 'operation-1');

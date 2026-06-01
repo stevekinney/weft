@@ -7,8 +7,8 @@ Every checkpoint, workflow state, signal, and timer in Weft is ultimately a key-
 SQLite is the default for Bun and Node. IndexedDB is the browser default. For local Bun or Node work, `resolveDefaultStorage()` picks the matching SQLite backend and gives you a persistent database without extra setup.
 
 ```ts
-import { Engine } from 'weft';
-import { resolveDefaultStorage } from 'weft/storage/auto';
+import { Engine } from '@lostgradient/weft';
+import { resolveDefaultStorage } from '@lostgradient/weft/storage/auto';
 
 await using storage = await resolveDefaultStorage();
 await using engine = new Engine({ storage });
@@ -18,7 +18,7 @@ void engine;
 This works under Bun and Node. The path lives under `${tmpdir()}/weft-default/<cwd-hash>.db` (or `WEFT_DEFAULT_STORAGE_PATH` if set).
 
 > [!WARNING]
-> `weft/storage/auto` requires Bun or Node. For browsers, import `IndexedDBStorage` from `weft/storage/indexeddb` directly, or use `setupServiceWorker()` from `weft/service-worker`.
+> `@lostgradient/weft/storage/auto` requires Bun or Node. For browsers, import `IndexedDBStorage` from `@lostgradient/weft/storage/indexeddb` directly, or use `setupServiceWorker()` from `@lostgradient/weft/service-worker`.
 
 `resolveDefaultStorage()` is for development, demos, and Hello World. Production deployments usually pick an explicit adapter so the storage path and backend are part of deployment configuration.
 
@@ -46,8 +46,8 @@ Use the narrowest adapter that matches where the engine runs:
 Use a direct adapter import when you know the deployment target:
 
 ```ts
-import { Engine } from 'weft';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { Engine } from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 using storage = new SQLiteStorage('./weft.db');
 using engine = new Engine({ storage });
@@ -57,8 +57,8 @@ void engine;
 Use `resolveStorage(configuration)` when backend choice comes from configuration. It accepts a discriminated `StorageConfiguration` union and lazy-loads the matching adapter, so optional dependencies are only required when you select that backend.
 
 ```ts
-import { Engine } from 'weft';
-import { resolveStorage } from 'weft/storage';
+import { Engine } from '@lostgradient/weft';
+import { resolveStorage } from '@lostgradient/weft/storage';
 
 await using storage = await resolveStorage({ type: 'sqlite', path: './weft.db' });
 await using engine = new Engine({ storage });
@@ -187,7 +187,7 @@ Backend transaction guarantees live with each adapter below. `SQLiteStorage`, `I
 For tests and ephemeral workflows. A `Map<string, Uint8Array>` with the same interface, running entirely in memory. Fast, deterministic, no cleanup needed.
 
 ```ts
-import { MemoryStorage, Engine } from 'weft';
+import { MemoryStorage, Engine } from '@lostgradient/weft';
 
 const storage = new MemoryStorage();
 const engine = new Engine({ storage });
@@ -203,23 +203,23 @@ const engine = new Engine(); // uses MemoryStorage
 
 ### `SQLiteStorage`
 
-The default for production persistence on Bun and Node. Import `SQLiteStorage` from `weft/storage/sqlite`; export conditions resolve it to `BunSQLiteStorage` under Bun and `NodeSQLiteStorage` under Node.js.
+The default for production persistence on Bun and Node. Import `SQLiteStorage` from `@lostgradient/weft/storage/sqlite`; export conditions resolve it to `BunSQLiteStorage` under Bun and `NodeSQLiteStorage` under Node.js.
 
 ```ts partial
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 using storage = new SQLiteStorage('./weft.db');
 const engine = new Engine({ storage });
 ```
 
-Use `weft/storage/sqlite/bun` or `weft/storage/sqlite/node` only when you need to force one implementation.
+Use `@lostgradient/weft/storage/sqlite/bun` or `@lostgradient/weft/storage/sqlite/node` only when you need to force one implementation.
 
 Under the hood, it creates a single `kv` table (`key TEXT PRIMARY KEY, value BLOB NOT NULL`) using `WITHOUT ROWID` for optimal key-value performance. WAL mode is enabled, `synchronous = NORMAL`, and the cache size is bumped—sensible defaults for a write-heavy workload.
 
 `BunSQLiteStorage` exposes an optional `query()` method for ad-hoc SQL queries, invaluable for debugging and dashboards. `NodeSQLiteStorage` intentionally sticks to the portable `Storage` interface and does not expose SQL passthrough. Import the Bun override directly when you need SQL passthrough:
 
 ```ts partial
-import { BunSQLiteStorage } from 'weft/storage/sqlite/bun';
+import { BunSQLiteStorage } from '@lostgradient/weft/storage/sqlite/bun';
 
 using storage = new BunSQLiteStorage('./weft.db');
 const rows = await storage.query<{ key: string }>('SELECT key FROM kv WHERE key LIKE ?', ['wf:%']);
@@ -232,7 +232,7 @@ Batch operations run inside a SQLite transaction, so they're atomic—a batch th
 Memory-mapped key-value backend for high-throughput workloads. Optional dependency: `lmdb`.
 
 ```ts
-import { LMDBStorage } from 'weft/storage/lmdb';
+import { LMDBStorage } from '@lostgradient/weft/storage/lmdb';
 
 await using storage = new LMDBStorage('./weft-data');
 ```
@@ -246,7 +246,7 @@ LMDB excels at zero-copy reads, which is unbeatable for hot-path operations like
 libSQL/Turso backend for edge or serverless deployments. Optional dependency: `@libsql/client`.
 
 ```ts partial
-import { TursoStorage } from 'weft/storage/turso';
+import { TursoStorage } from '@lostgradient/weft/storage/turso';
 
 await using storage = new TursoStorage({
   url: 'libsql://your-db.turso.io',
@@ -263,7 +263,7 @@ Like SQLite, the underlying schema is a single `kv` table using `WITHOUT ROWID`.
 Browser-native storage—the equivalent of SQLite for the browser. Persists workflow state to IndexedDB, suitable for Service Worker deployments where the engine runs entirely in the browser.
 
 ```ts partial
-import { IndexedDBStorage } from 'weft/storage/indexeddb';
+import { IndexedDBStorage } from '@lostgradient/weft/storage/indexeddb';
 
 using storage = new IndexedDBStorage('weft');
 const engine = new Engine({ storage });
@@ -277,14 +277,14 @@ The `batch()` method is atomic. All operations run inside a single IndexedDB tra
 
 The `using` pattern works for cleanup: `[Symbol.dispose]()` closes the underlying IndexedDB database connection.
 
-Browser consumers should use browser-safe subpath imports (`weft/storage/indexeddb`, `weft/storage/web-extension`) and avoid server-only adapters.
+Browser consumers should use browser-safe subpath imports (`@lostgradient/weft/storage/indexeddb`, `@lostgradient/weft/storage/web-extension`) and avoid server-only adapters.
 
 ### `WebExtensionStorage`
 
 Persists bytes through `browser.storage` or `chrome.storage` in extension contexts. Values are JSON envelopes with base64-encoded `Uint8Array` payloads.
 
 ```ts
-import { WebExtensionStorage } from 'weft/storage/web-extension';
+import { WebExtensionStorage } from '@lostgradient/weft/storage/web-extension';
 
 using storage = new WebExtensionStorage({ area: 'local' });
 ```
@@ -302,7 +302,7 @@ The required permission in your extension manifest:
 Remote storage over HTTP—talks to Weft's storage REST routes for distributed deployments.
 
 ```ts
-import { HTTPStorage } from 'weft/storage/http';
+import { HTTPStorage } from '@lostgradient/weft/storage/http';
 
 const token = 'example-token';
 using storage = new HTTPStorage({
@@ -320,8 +320,8 @@ The constructor accepts a `baseUrl` (string or URL) and optional `headers` for a
 A wrapper that compresses values before delegating to another adapter. Useful when you're storing large payloads and want to trade CPU for storage size.
 
 ```ts
-import { CompressedStorage } from 'weft/storage/compressed';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { CompressedStorage } from '@lostgradient/weft/storage/compressed';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 using inner = new SQLiteStorage('./weft.db');
 const storage = new CompressedStorage(inner);
@@ -333,6 +333,6 @@ Wraps any `Storage` implementation. Disposing the `CompressedStorage` disposes t
 
 **Missing optional dependencies (`better-sqlite3`, `lmdb`, `@libsql/client`).** `NodeSQLiteStorage`, `LMDBStorage`, and `TursoStorage` import their dependencies lazily. If the package isn't installed, you'll see an error when you first call `resolveStorage` or instantiate the adapter. Install the adapter you selected with `bun add better-sqlite3`, `bun add lmdb`, or `bun add @libsql/client`.
 
-**`weft/storage/auto` in a browser bundler.** The module statically imports Node built-ins, so bundlers like Vite or webpack will fail or warn when targeting the browser. Switch to `weft/storage/indexeddb` directly, or use `setupServiceWorker()` from `weft/service-worker`. If you need a single configuration that works across runtimes including browsers, use `resolveStorage({ type: 'auto' })` instead—it lazy-loads adapters and includes browser fallbacks.
+**`@lostgradient/weft/storage/auto` in a browser bundler.** The module statically imports Node built-ins, so bundlers like Vite or webpack will fail or warn when targeting the browser. Switch to `@lostgradient/weft/storage/indexeddb` directly, or use `setupServiceWorker()` from `@lostgradient/weft/service-worker`. If you need a single configuration that works across runtimes including browsers, use `resolveStorage({ type: 'auto' })` instead—it lazy-loads adapters and includes browser fallbacks.
 
 **HTTP storage connectivity issues.** `HTTPStorage` returns the underlying `fetch` errors. For 4xx responses, the response body usually contains an error message; for network errors, the `fetch` exception propagates. If scans hit the 64MB response limit, the client throws explicitly—narrow the prefix or paginate with `limit` and `gt`.

@@ -1,6 +1,6 @@
 # Types Reference
 
-Complete type reference for Weft, organized by category. All types are exported from the `weft` package entry point.
+Complete type reference for Weft, organized by category. All types are exported from the `@lostgradient/weft` package entry point.
 
 ---
 
@@ -210,7 +210,7 @@ Schema metadata accepted by workflow and activity definitions. [Standard Schema]
 
 Core workflow and activity registration validates the Standard Schema metadata shape and stores these fields for introspection. Runtime input or output validation happens only in adapters that explicitly consume the metadata.
 
-Weft exports the small Standard Schema helper surfaces from `weft/json-schema` so diagnostics and generated declaration files stay self-contained without crowding the workflow-authoring entrypoint: `StandardTypedV1Properties`, `StandardTypedV1Types`, `StandardSchemaV1Properties`, `StandardSchemaV1Result`, `StandardSchemaV1SuccessResult`, `StandardSchemaV1FailureResult`, `StandardSchemaV1Issue`, `StandardSchemaV1PathSegment`, `StandardSchemaV1Options`, `StandardJSONSchemaV1Properties`, `StandardJSONSchemaV1Converter`, `StandardJSONSchemaV1Target`, and `StandardJSONSchemaV1Options`.
+Weft exports the small Standard Schema helper surfaces from `@lostgradient/weft/json-schema` so diagnostics and generated declaration files stay self-contained without crowding the workflow-authoring entrypoint: `StandardTypedV1Properties`, `StandardTypedV1Types`, `StandardSchemaV1Properties`, `StandardSchemaV1Result`, `StandardSchemaV1SuccessResult`, `StandardSchemaV1FailureResult`, `StandardSchemaV1Issue`, `StandardSchemaV1PathSegment`, `StandardSchemaV1Options`, `StandardJSONSchemaV1Properties`, `StandardJSONSchemaV1Converter`, `StandardJSONSchemaV1Target`, and `StandardJSONSchemaV1Options`.
 
 ### `WorkflowAtomicState<T>`
 
@@ -278,7 +278,7 @@ interface WorkflowRegistry {}
 ```
 
 ```ts
-import 'weft';
+import '@lostgradient/weft';
 
 interface TypedWelcomeInput {
   name: string;
@@ -288,7 +288,7 @@ interface TypedWelcomeOutput {
   greeting: string;
 }
 
-declare module 'weft' {
+declare module '@lostgradient/weft' {
   interface WorkflowRegistry {
     typedWelcome: { input: TypedWelcomeInput; output: TypedWelcomeOutput };
   }
@@ -298,7 +298,7 @@ declare module 'weft' {
 To type an activity name, build the workflow with the chained builder and add the activity in `.activities({...})`:
 
 ```ts
-import { workflow } from 'weft';
+import { workflow } from '@lostgradient/weft';
 
 const welcome = workflow({ name: 'typedWelcome' })
   .activities({
@@ -399,7 +399,7 @@ interface WorkerReplayOperationSignature {
 ### `WorkerReplayOperationFailure`
 
 ```ts
-import type { FailureCategory } from 'weft';
+import type { FailureCategory } from '@lostgradient/weft';
 
 interface WorkerReplayOperationFailure {
   status: 'failed';

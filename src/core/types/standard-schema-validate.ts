@@ -15,7 +15,7 @@ import type {
  *
  * @example
  * ```ts
- * import type { ValidationIssue } from 'weft/json-schema';
+ * import type { ValidationIssue } from '@lostgradient/weft/json-schema';
  *
  * const issue: ValidationIssue = { message: 'Expected a string.', path: '/email' };
  * void issue;
@@ -33,7 +33,7 @@ export interface ValidationIssue {
  *
  * @example
  * ```ts
- * import type { StandardSchemaValidationContext } from 'weft/json-schema';
+ * import type { StandardSchemaValidationContext } from '@lostgradient/weft/json-schema';
  *
  * const context: StandardSchemaValidationContext = {
  *   fieldName: 'input',
@@ -61,7 +61,7 @@ export interface StandardSchemaValidationContext {
  *
  * @example
  * ```ts
- * import { StandardSchemaValidationError } from 'weft/json-schema';
+ * import { StandardSchemaValidationError } from '@lostgradient/weft/json-schema';
  *
  * const error = new StandardSchemaValidationError({
  *   fieldName: 'input',
@@ -110,7 +110,7 @@ export class StandardSchemaValidationError extends WeftError<'StandardSchemaVali
  *
  * @example
  * ```ts
- * import { validateStandardSchema } from 'weft/json-schema';
+ * import { validateStandardSchema } from '@lostgradient/weft/json-schema';
  * import { z } from 'zod';
  *
  * const schema = z.object({ email: z.string().email() });
@@ -153,7 +153,7 @@ export async function validateStandardSchema<Output>(
  *
  * @example
  * ```ts
- * import { formatStandardSchemaIssues } from 'weft/json-schema';
+ * import { formatStandardSchemaIssues } from '@lostgradient/weft/json-schema';
  *
  * const formatted = formatStandardSchemaIssues([
  *   { message: 'Expected a string.', path: '/email' },

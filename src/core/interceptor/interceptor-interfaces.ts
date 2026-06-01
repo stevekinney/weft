@@ -20,7 +20,7 @@ import type {
  *
  * @example
  * ```ts
- * import { workflow, Engine, type WorkflowInterceptor } from 'weft';
+ * import { workflow, Engine, type WorkflowInterceptor } from '@lostgradient/weft';
  *
  * const tracer: WorkflowInterceptor = {
  *   *activity(ctx, next) {
@@ -102,7 +102,7 @@ export const WORKFLOW_INTERCEPTOR_HOOKS = Object.freeze([
  *
  * @example
  * ```ts
- * import { Engine, type ActivityInterceptor } from 'weft';
+ * import { Engine, type ActivityInterceptor } from '@lostgradient/weft';
  *
  * const logger: ActivityInterceptor = {
  *   async execute(ctx, next) {
@@ -128,7 +128,7 @@ export interface ActivityInterceptor {
  *
  * @example
  * ```ts
- * import { Engine, type Interceptor } from 'weft';
+ * import { Engine, type Interceptor } from '@lostgradient/weft';
  *
  * const tracer: Interceptor = {
  *   *activity(interception, next) {
@@ -157,8 +157,8 @@ export interface Interceptor extends WorkflowInterceptor, ActivityInterceptor {}
  *
  * @example
  * ```ts
- * import { composeWorkflowInterceptors, type ComposedWorkflowInterceptor } from 'weft';
- * import type { WorkflowInterceptor } from 'weft';
+ * import { composeWorkflowInterceptors, type ComposedWorkflowInterceptor } from '@lostgradient/weft';
+ * import type { WorkflowInterceptor } from '@lostgradient/weft';
  *
  * const tracer: WorkflowInterceptor = {
  *   *activity(ctx, next) {
@@ -215,8 +215,8 @@ export interface ComposedWorkflowInterceptor {
  *
  * @example
  * ```ts
- * import { composeActivityInterceptors, type ComposedActivityInterceptor } from 'weft';
- * import type { ActivityInterceptor } from 'weft';
+ * import { composeActivityInterceptors, type ComposedActivityInterceptor } from '@lostgradient/weft';
+ * import type { ActivityInterceptor } from '@lostgradient/weft';
  *
  * const logger: ActivityInterceptor = {
  *   async execute(ctx, next) {

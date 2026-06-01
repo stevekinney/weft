@@ -11,8 +11,8 @@ For the Tier-0 contract that defines future activity reconciliation, signal idem
 If `recoverAll()` finds a running workflow whose type isn't registered on the engine, it throws `WorkflowTypeNotRegisteredForRecoveryError` before resuming anything. No partial recovery, no quiet skip, no zombie workflows hanging around in storage with no process to drive them.
 
 ```typescript partial
-import { Engine, WorkflowTypeNotRegisteredForRecoveryError } from 'weft';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { Engine, WorkflowTypeNotRegisteredForRecoveryError } from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 try {
   const engine = await Engine.create({
@@ -84,7 +84,7 @@ Sometimes drift is intentional: a rolling deploy where old pods are still servin
 For these cases, pass `acknowledgeUnknownWorkflowTypes: true`:
 
 ```typescript partial
-import { Engine, WorkflowRecoverySkippedEvent } from 'weft';
+import { Engine, WorkflowRecoverySkippedEvent } from '@lostgradient/weft';
 
 const engine = await Engine.create({
   storage,
@@ -156,8 +156,14 @@ Hello-world is too short to actually exercise recovery — it completes in under
 `recovery-demo.ts`:
 
 ```typescript
-import { Engine, WorkflowAlreadyExistsError, signal, workflow, type WorkflowContext } from 'weft';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import {
+  Engine,
+  WorkflowAlreadyExistsError,
+  signal,
+  workflow,
+  type WorkflowContext,
+} from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 const release = signal<{ message: string }>('release');
 

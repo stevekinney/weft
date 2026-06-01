@@ -40,7 +40,7 @@ The design constraints, in priority order:
 
 4. **Runs in the browser.** The core engine (minus the server shell) runs in Web Workers and can use a Service Worker as its persistence and scheduling backbone. Same workflow code, different execution environment.
 
-5. **Library/server parity.** Every capability exposed by the server's HTTP and WebSocket API is also available through the library's in-process `Engine` API — and vice versa. A developer who starts with `bun add weft` and later moves to the standalone server (or the reverse) should not lose features or change workflow code. The server is a deployment wrapper around the engine, not a superset of it. Track 8 extends that parity model with shared REST/OpenAPI and JSON-RPC/OpenRPC contracts generated from one runtime operation catalog, but those transports remain adapters over the same `Engine`, `EventTarget`, `BroadcastChannel`, and Worker messaging primitives rather than a separate system.
+5. **Library/server parity.** Every capability exposed by the server's HTTP and WebSocket API is also available through the library's in-process `Engine` API — and vice versa. A developer who starts with `bun add @lostgradient/weft` and later moves to the standalone server (or the reverse) should not lose features or change workflow code. The server is a deployment wrapper around the engine, not a superset of it. Track 8 extends that parity model with shared REST/OpenAPI and JSON-RPC/OpenRPC contracts generated from one runtime operation catalog, but those transports remain adapters over the same `Engine`, `EventTarget`, `BroadcastChannel`, and Worker messaging primitives rather than a separate system.
 
 ---
 
@@ -58,7 +58,7 @@ Here is what a developer must learn to write their first workflow:
 | Signal                 | `setHandler` + `condition`        | `yield* ctx.waitForSignal(name)`     |
 | Versioning             | `patched()` / `deprecatePatch()`  | Deploy new code (migration optional) |
 | Long-running workflows | `continueAsNew()`                 | Nothing (checkpoints are fixed-size) |
-| Dev environment        | Docker Compose + Temporal server  | `bun add weft`                       |
+| Dev environment        | Docker Compose + Temporal server  | `bun add @lostgradient/weft`         |
 | Bundling               | Webpack for workflow sandbox      | None                                 |
 
 ### 1. The Determinism Constraint Is a Developer Experience Nightmare
@@ -193,7 +193,7 @@ This teaches the mental model while the developer writes code.
 
 **The Temporal problem.** Running Temporal self-hosted requires Cassandra or PostgreSQL, Elasticsearch for visibility, the Temporal server itself (multiple Go services), and a frontend service. Even for local development, you need Docker Compose or the Temporal CLI dev server. Temporal Cloud describes "several compute clusters, one or more databases, Elasticsearch, ingress, observability stack, and other dependency components" per cloud cell, with eight engineering on-call rotations.
 
-**The Weft answer.** `bun add weft` or download a single binary. SQLite is the default database, embedded in the runtime. No external dependencies for development or small production deployments. (See: [Single Binary Distribution](./runtime-and-deployment.md#8-single-binary-distribution).)
+**The Weft answer.** `bun add @lostgradient/weft` or download a single binary. SQLite is the default database, embedded in the runtime. No external dependencies for development or small production deployments. (See: [Single Binary Distribution](./runtime-and-deployment.md#8-single-binary-distribution).)
 
 ```bash
 # Temporal
@@ -286,7 +286,7 @@ async function* batchWorkflow(ctx: Context, items: string[]) {
 **Going further: built-in profiling mode.** `MemoryProfiler` provides interval-based memory sampling with stability analysis. Start a profiling session, run a workload, then retrieve summary statistics including RSS growth slope and stability verdict:
 
 ```typescript
-import { MemoryProfiler, analyzeStability } from 'weft';
+import { MemoryProfiler, analyzeStability } from '@lostgradient/weft';
 
 const profiler = new MemoryProfiler();
 profiler.start(1000); // sample every second
@@ -349,10 +349,10 @@ const result = await handle.result();
 
 This is compile-time only. At runtime, the engine uses strings and unknown exactly as before. The type parameter is erased.
 
-**Going further: `weft/testing` module with `TestEngine`.** A real engine backed by `MemoryStorage` with deterministic time control and crash simulation:
+**Going further: `@lostgradient/weft/testing` module with `TestEngine`.** A real engine backed by `MemoryStorage` with deterministic time control and crash simulation:
 
 ```typescript
-import { TestEngine } from 'weft/testing';
+import { TestEngine } from '@lostgradient/weft/testing';
 
 const engine = new TestEngine();
 engine.mock(charge, async (order) => ({ id: 'pay-123', amount: order.total }));
@@ -454,7 +454,7 @@ For debugging a workflow that has been running for 30 days, being able to see "w
 **Going further: `activity()` helper with colocated configuration.** Instead of configuring retry policies at scattered call sites, activities declare their own operational characteristics:
 
 ```typescript
-import { activity } from 'weft';
+import { activity } from '@lostgradient/weft';
 
 export const charge = activity({
   name: 'charge',

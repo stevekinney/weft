@@ -1,6 +1,6 @@
-import { createMetricsCollectorExporter, Engine } from 'weft';
-import type { ServeOptions } from 'weft/server';
-import type { HandlerOptions } from 'weft/server/handler';
+import { createMetricsCollectorExporter, Engine } from '@lostgradient/weft';
+import type { ServeOptions } from '@lostgradient/weft/server';
+import type { HandlerOptions } from '@lostgradient/weft/server/handler';
 
 const packageRootEngine = new Engine();
 const packageRootPrometheusExporter = createMetricsCollectorExporter(undefined);

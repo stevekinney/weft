@@ -25,7 +25,7 @@ export type PayloadKind = 'workflow input' | 'signal payload' | 'activity result
  *
  * @example
  * ```ts
- * import { workflow, Engine, PayloadSizeExceededError } from 'weft';
+ * import { workflow, Engine, PayloadSizeExceededError } from '@lostgradient/weft';
  *
  * const engine = new Engine({ payloadSize: { maxBytes: 64 } });
  * engine.register(workflow({ name: 'echo' }).execute(async function* (_ctx, input) { return input; }));

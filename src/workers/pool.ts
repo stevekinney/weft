@@ -8,7 +8,7 @@
  *
  * @example
  * ```ts
- * import { WorkerPool, type WorkerPoolOptions } from 'weft';
+ * import { WorkerPool, type WorkerPoolOptions } from '@lostgradient/weft';
  *
  * const options: WorkerPoolOptions = {
  *   concurrency: 4,
@@ -42,7 +42,7 @@ type PendingWorkerRequest = {
  *
  * @example
  * ```ts
- * import { WorkerPool } from 'weft';
+ * import { WorkerPool } from '@lostgradient/weft';
  *
  * await using pool = new WorkerPool({
  *   concurrency: 2,

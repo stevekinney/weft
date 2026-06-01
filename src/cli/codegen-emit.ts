@@ -3,7 +3,7 @@
  *
  * Consumes a {@link RegistrySnapshot} (the same shape served by
  * `GET /v1/registry`) and produces a single `.d.ts` string that
- * augments the public `'weft'` module with typed `WorkflowRegistry`
+ * augments the public `'@lostgradient/weft'` module with typed `WorkflowRegistry`
  * entries. The output is byte-stable across runs with the same input:
  * keys are sorted with explicit codepoint comparators, property names
  * are uniformly double-quoted via `JSON.stringify`, and there are no
@@ -45,6 +45,8 @@ import {
 } from './codegen-emit-keywords.ts';
 
 export { CodegenEmitError } from './codegen-emit-keywords.ts';
+
+const WEFT_PACKAGE_NAME = '@lostgradient/weft';
 
 // Deterministic, locale-independent compare via `<`/`>` (UTF-16
 // code-unit order). Registry keys are workflow/activity identifiers
@@ -474,7 +476,7 @@ export function emitRegistryDeclaration(snapshot: RegistrySnapshot): string {
     '// (start/schedule input and handle.result() output) per workflow.',
     '/* eslint-disable */',
     '',
-    "declare module 'weft' {",
+    `declare module '${WEFT_PACKAGE_NAME}' {`,
     workflowBlock,
     '}',
     '',

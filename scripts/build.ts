@@ -66,6 +66,8 @@ async function writeUnbundledRuntimeModules(): Promise<void> {
       sourcePath.endsWith('.bench.ts') ||
       sourcePath.endsWith('-fixture.ts') ||
       sourcePath.startsWith('src/benchmarks/') ||
+      (sourcePath.startsWith('src/dashboard/') && sourcePath !== 'src/dashboard/route-table.ts') ||
+      sourcePath.startsWith('src/workers/test-') ||
       sourcePath.includes('/__tests__/') ||
       sourcePath.includes('/__fixtures__/')
     ) {
@@ -102,11 +104,10 @@ await Bun.build({
     './src/testing/index.ts',
     './src/worker/protocol.ts',
     './src/cli-main.ts',
-    './src/mcp/index.ts',
     './src/mcp/cli.ts',
     './src/observability/index.ts',
     './src/json-schema.ts',
-    // Bun-only server subpath (weft/server)
+    // Bun-only server subpath (@lostgradient/weft/server)
     './src/server/index.ts',
   ],
   outdir: './dist',
@@ -114,10 +115,43 @@ await Bun.build({
   format: 'esm',
   root: './src',
   naming: '[dir]/[name].js',
-  sourcemap: 'external',
   minify: true,
   external: ['lmdb', '@libsql/client', '@opentelemetry/api', 'bun:sqlite', 'better-sqlite3'],
 });
+
+// Keep the MCP public barrel as local binding re-exports. Bun 1.3.13 can
+// produce invalid minified output for this barrel when imported from packed
+// consumers, so emit the public subpath as plain ESM.
+await Bun.write(
+  './dist/mcp/index.js',
+  `import {
+  anonymousPrincipal,
+  principalFromApiKey,
+  principalFromJwtClaims,
+  principalFromMutualTls,
+  principalFromStdioLocal,
+} from '../server/principal.js';
+import { handleMcpHttpRequest } from './http.js';
+import { DEFAULT_MCP_MAX_BODY_BYTES, MCP_PROTOCOL_VERSION } from './protocol.js';
+import { McpSession, McpSessionManager, createMcpSessionManager } from './session.js';
+import { runMcpStdioSession } from './stdio.js';
+
+export {
+  anonymousPrincipal,
+  createMcpSessionManager,
+  DEFAULT_MCP_MAX_BODY_BYTES,
+  handleMcpHttpRequest,
+  MCP_PROTOCOL_VERSION,
+  McpSession,
+  McpSessionManager,
+  principalFromApiKey,
+  principalFromJwtClaims,
+  principalFromMutualTls,
+  principalFromStdioLocal,
+  runMcpStdioSession,
+};
+`,
+);
 
 // Keep the storage barrel as local binding re-exports. Bun 1.3.13 can
 // incorrectly strip imported bindings that are only used by a bundled barrel
@@ -155,7 +189,6 @@ export {
 };
 `,
 );
-await $`rm -f dist/storage/index.js.map`;
 
 // Preserve runtime constructor names for package export-condition smoke tests.
 await Bun.build({
@@ -165,7 +198,6 @@ await Bun.build({
   format: 'esm',
   root: './src',
   naming: '[dir]/[name].js',
-  sourcemap: 'external',
   minify: false,
   external: ['bun:sqlite', 'better-sqlite3'],
 });
@@ -185,7 +217,6 @@ await Bun.build({
   target: 'browser',
   format: 'esm',
   naming: '[dir]/[name].js',
-  sourcemap: 'external',
   minify: true,
 });
 
@@ -195,11 +226,44 @@ await Bun.build({
   outdir: './dist/dashboard',
   target: 'browser',
   minify: true,
-  sourcemap: 'external',
   plugins: [sveltePlugin],
 });
 
 await $`bunx tsc --declaration --emitDeclarationOnly --project tsconfig.build.json`;
+
+async function removePackagedArtifactLeaks(): Promise<void> {
+  const removeGlobPatterns = [
+    'dist/**/*.map',
+    'dist/**/*.test-d.d.ts',
+    'dist/benchmarks/**',
+    'dist/**/__fixtures__/**',
+    'dist/**/__tests__/**',
+    'dist/workers/test-*',
+    'dist/cli/__fixtures__/**',
+  ];
+
+  for (const pattern of removeGlobPatterns) {
+    const glob = new Bun.Glob(pattern);
+    for await (const artifactPath of glob.scan('.')) {
+      await $`rm -rf ${artifactPath}`;
+    }
+  }
+
+  const dashboardGlob = new Bun.Glob('dist/dashboard/**/*.{js,d.ts}');
+  for await (const artifactPath of dashboardGlob.scan('.')) {
+    const allowedDashboardArtifact =
+      artifactPath === 'dist/dashboard/index.js' ||
+      artifactPath === 'dist/dashboard/route-table.js' ||
+      artifactPath === 'dist/dashboard/route-table.d.ts' ||
+      /^dist\/dashboard\/chunk-[^/]+\.(?:js|d\.ts)$/.test(artifactPath);
+
+    if (!allowedDashboardArtifact) {
+      await $`rm -f ${artifactPath}`;
+    }
+  }
+}
+
+await removePackagedArtifactLeaks();
 
 // Guard: nothing test-only may ship in the published package. Test-support
 // helpers under src/ that import dev-only modules used to leak into dist/
@@ -218,9 +282,16 @@ await $`bunx tsc --declaration --emitDeclarationOnly --project tsconfig.build.js
 // valibot) are deliberately present in dist/, so a blanket "no devDependency in
 // dist" rule would false-positive on them. These three are the test-only
 // modules with no legitimate path into shipped output; add to the list if a new
-// test-only runtime dependency is introduced.
+// test-only or build-only runtime dependency is introduced.
 async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
-  const forbiddenPackageRoots = ['bun:test', 'fake-indexeddb', 'jsdom', 'playwright'];
+  const forbiddenPackageRoots = [
+    'bun:test',
+    'bun-plugin-svelte',
+    'fake-indexeddb',
+    'jsdom',
+    'playwright',
+    'svelte',
+  ];
 
   // Capture the specifier from every form that pulls in a module: `from '…'`,
   // `require('…')`, dynamic `import('…')`, and bare side-effect `import '…'`
@@ -276,11 +347,6 @@ async function assertRelativeImportsResolveInDist(): Promise<void> {
     for (const [, , specifier] of contents.matchAll(relativeSpecifierPattern)) {
       // Only check JavaScript module specifiers (asset/data files vary).
       if (!specifier.endsWith('.js')) continue;
-      // Svelte components (`*.svelte`) are compiled into the dashboard's
-      // bundled `index.html` output, never emitted as sibling runtime modules,
-      // so the unbundled dashboard `entrypoint.js` references a `.svelte.js`
-      // that legitimately has no standalone file. The dashboard ships bundled.
-      if (specifier.endsWith('.svelte.js')) continue;
       const resolved = resolve(dirname(distPath), specifier);
       if (!existsSync(resolved)) {
         offenders.push({ file: distPath, specifier });

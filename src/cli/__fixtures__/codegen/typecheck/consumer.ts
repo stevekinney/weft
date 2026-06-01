@@ -1,6 +1,6 @@
 // This file exists to prove the generated `.d.ts` lands on the real
-// `'weft'` module identity. The tsconfig `paths` mapping resolves
-// `'weft'` to the in-repo source, so the module augmentation in
+// `'@lostgradient/weft'` module identity. The tsconfig `paths` mapping resolves
+// `'@lostgradient/weft'` to the in-repo source, so the module augmentation in
 // `weft.generated.d.ts` extends the real `WorkflowRegistry`
 // interface, not a hand-authored stub.
 //
@@ -14,8 +14,8 @@
 // `@ts-expect-error` below reports TS2769, and breaking the output narrowing
 // reports TS2339 — the check is non-vacuous).
 
-import type { Engine } from 'weft';
-import type { WeftClient } from 'weft/client';
+import type { Engine } from '@lostgradient/weft';
+import type { WeftClient } from '@lostgradient/weft/client';
 
 declare const engine: Engine;
 

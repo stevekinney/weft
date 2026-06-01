@@ -5,7 +5,7 @@
  *
  * @example
  * ```ts
- * import { Engine, SignalReceivedEvent } from 'weft';
+ * import { Engine, SignalReceivedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('signal:received', (e: Event) => {
@@ -35,7 +35,7 @@ export class SignalReceivedEvent extends Event {
  *
  * @example
  * ```ts
- * import { Engine, SignalDeliveredEvent } from 'weft';
+ * import { Engine, SignalDeliveredEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('signal:delivered', (e: Event) => {

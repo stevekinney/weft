@@ -27,7 +27,7 @@
  *
  * @example
  * ```ts
- * import type { ConstraintViolation } from 'weft';
+ * import type { ConstraintViolation } from '@lostgradient/weft';
  *
  * const policy: ConstraintViolation = 'compensate';
  * void policy;
@@ -58,7 +58,7 @@ export interface ConstraintCheckState {
  *
  * @example
  * ```ts
- * import { constraint, Engine, workflow, type ConstraintDefinition } from 'weft';
+ * import { constraint, Engine, workflow, type ConstraintDefinition } from '@lostgradient/weft';
  *
  * let balance = 0;
  * const positiveBalance: ConstraintDefinition = constraint({
@@ -138,7 +138,7 @@ export interface ConstraintDefinition {
  *
  * @example
  * ```ts
- * import { constraint, Engine } from 'weft';
+ * import { constraint, Engine } from '@lostgradient/weft';
  *
  * let balance = 0;
  *

@@ -9,7 +9,7 @@
  *
  * @example
  * ```ts
- * import type { MetricType } from 'weft/observability';
+ * import type { MetricType } from '@lostgradient/weft/observability';
  *
  * const metricType: MetricType = 'histogram';
  * console.log(metricType);
@@ -22,7 +22,7 @@ export type MetricType = 'counter' | 'gauge' | 'histogram';
  *
  * @example
  * ```ts
- * import { METRICS, type MetricDefinition } from 'weft/observability';
+ * import { METRICS, type MetricDefinition } from '@lostgradient/weft/observability';
  *
  * const workflowDuration: MetricDefinition = METRICS.workflowDuration;
  * console.log(workflowDuration.name, workflowDuration.unit);
@@ -40,7 +40,7 @@ export interface MetricDefinition {
  *
  * @example
  * ```ts
- * import type { CounterMetric } from 'weft/observability';
+ * import type { CounterMetric } from '@lostgradient/weft/observability';
  *
  * const startedWorkflows: CounterMetric = { type: 'counter', value: 12 };
  * console.log(startedWorkflows.value);
@@ -53,7 +53,7 @@ export type CounterMetric = { type: 'counter'; value: number };
  *
  * @example
  * ```ts
- * import type { HistogramMetric } from 'weft/observability';
+ * import type { HistogramMetric } from '@lostgradient/weft/observability';
  *
  * const duration: HistogramMetric = {
  *   type: 'histogram',
@@ -82,7 +82,7 @@ export type HistogramMetric = {
  *
  * @example
  * ```ts
- * import type { GaugeMetric } from 'weft/observability';
+ * import type { GaugeMetric } from '@lostgradient/weft/observability';
  *
  * const activeWorkflows: GaugeMetric = { type: 'gauge', value: 2 };
  * console.log(activeWorkflows.value);
@@ -95,7 +95,7 @@ export type GaugeMetric = { type: 'gauge'; value: number };
  *
  * @example
  * ```ts
- * import { MetricsCollector, type MetricsSnapshot } from 'weft/observability';
+ * import { MetricsCollector, type MetricsSnapshot } from '@lostgradient/weft/observability';
  *
  * const collector = new MetricsCollector();
  * collector.increment('weft.workflow.started');

@@ -10,7 +10,7 @@ This guide walks through the upgrade path for in-flight breaking changes. Pre-1.
 The `Storage` interface now requires `capabilities(): StorageCapabilities`, a self-reported profile of the backend's consistency and feature guarantees. Every built-in adapter already implements it; this only affects custom adapters and inline `Storage` test doubles.
 
 ```typescript partial
-import type { Storage, StorageCapabilities } from 'weft';
+import type { Storage, StorageCapabilities } from '@lostgradient/weft';
 
 class MyStorage implements Storage {
   capabilities(): StorageCapabilities {
@@ -82,13 +82,13 @@ Most callers will:
 
 Two new entry points landed alongside the storage adapter expansion:
 
-- `resolveDefaultStorage()` from `weft/storage/auto`—the developer-convenience helper that picks a SQLite backend based on Bun vs. Node.
-- `resolveStorage(configuration)` from `weft/storage` or `weft/storage/resolve`—the configuration-driven resolver covering every backend, including browser and remote.
+- `resolveDefaultStorage()` from `@lostgradient/weft/storage/auto`—the developer-convenience helper that picks a SQLite backend based on Bun vs. Node.
+- `resolveStorage(configuration)` from `@lostgradient/weft/storage` or `@lostgradient/weft/storage/resolve`—the configuration-driven resolver covering every backend, including browser and remote.
 
 If you've been constructing storage adapters by hand, neither helper is required. They're additive. But if you're shipping a quick example, `resolveDefaultStorage()` collapses three lines of imports into one. See [the storage guide](./storage.md) for when to use which.
 
 ## Service Worker Setup Helper
 
-`setupServiceWorker()` from `weft/service-worker` wires up an engine with `IndexedDBStorage`, fetch handler, lifecycle handlers, and Periodic Background Sync in one call. The lower-level handlers (`createFetchHandler`, `createLifecycleHandlers`, `createPeriodicSyncHandler`, `ServiceWorkerScheduler`) remain available as the manual-setup escape hatch.
+`setupServiceWorker()` from `@lostgradient/weft/service-worker` wires up an engine with `IndexedDBStorage`, fetch handler, lifecycle handlers, and Periodic Background Sync in one call. The lower-level handlers (`createFetchHandler`, `createLifecycleHandlers`, `createPeriodicSyncHandler`, `ServiceWorkerScheduler`) remain available as the manual-setup escape hatch.
 
 If you're already using the lower-level handlers, no change is required. If you want to simplify, see [the service worker guide](./service-worker.md).

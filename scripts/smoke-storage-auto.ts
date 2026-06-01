@@ -1,5 +1,5 @@
 /**
- * Built-output smoke test for `weft/storage/auto`.
+ * Built-output smoke test for `@lostgradient/weft/storage/auto`.
  *
  * Runs `resolveDefaultStorage()` and constructs an `Engine` against the
  * resolved storage from the dist bundle. Catches regressions where source

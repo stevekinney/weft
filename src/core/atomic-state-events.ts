@@ -4,7 +4,7 @@
  *
  * @example
  * ```ts
- * import type { SleepFunction } from 'weft';
+ * import type { SleepFunction } from '@lostgradient/weft';
  *
  * const sleep: SleepFunction = async (milliseconds) => {
  *   await Bun.sleep(milliseconds);
@@ -19,7 +19,7 @@ export type SleepFunction = (milliseconds: number) => Promise<void>;
  *
  * @example
  * ```ts
- * import type { AtomicStateOptions } from 'weft';
+ * import type { AtomicStateOptions } from '@lostgradient/weft';
  *
  * const options: AtomicStateOptions<number> = {
  *   initial: 0,
@@ -49,7 +49,7 @@ export interface AtomicStateOptions<T = unknown> {
  *
  * @example
  * ```ts
- * import type { AtomicStateScope } from 'weft';
+ * import type { AtomicStateScope } from '@lostgradient/weft';
  *
  * const scope: AtomicStateScope = {
  *   type: 'workflow',
@@ -66,7 +66,7 @@ export type AtomicStateScope =
  *
  * @example
  * ```ts
- * import type { AtomicStateSnapshot } from 'weft';
+ * import type { AtomicStateSnapshot } from '@lostgradient/weft';
  *
  * const snapshot: AtomicStateSnapshot<number> = { value: 1, version: 2 };
  * console.log(snapshot.version);
@@ -82,7 +82,7 @@ export interface AtomicStateSnapshot<T = unknown> {
  *
  * @example
  * ```ts
- * import type { AtomicStateCommitResult } from 'weft';
+ * import type { AtomicStateCommitResult } from '@lostgradient/weft';
  *
  * const result: AtomicStateCommitResult<string> = {
  *   applied: true,
@@ -101,7 +101,7 @@ export interface AtomicStateCommitResult<T = unknown> extends AtomicStateSnapsho
  *
  * @example
  * ```ts
- * import { AtomicStateChangeEvent, type AtomicStateEvent } from 'weft';
+ * import { AtomicStateChangeEvent, type AtomicStateEvent } from '@lostgradient/weft';
  *
  * const event: AtomicStateEvent<number> = new AtomicStateChangeEvent(1, undefined, 1);
  * console.log(event.type);
@@ -117,7 +117,7 @@ export type AtomicStateEvent<T = unknown> =
  *
  * @example
  * ```ts
- * import type { AtomicStateObserver } from 'weft';
+ * import type { AtomicStateObserver } from '@lostgradient/weft';
  *
  * const observer: AtomicStateObserver<number> = {
  *   next(event) {
@@ -139,7 +139,7 @@ export type AtomicStateObserver<T = unknown> =
  *
  * @example
  * ```ts
- * import type { AtomicStateSubscription } from 'weft';
+ * import type { AtomicStateSubscription } from '@lostgradient/weft';
  *
  * const subscription: AtomicStateSubscription = {
  *   unsubscribe() {},
@@ -168,8 +168,8 @@ const fallbackObservableSymbol = Symbol.for('observable') as typeof Symbol.obser
  *
  * @example
  * ```ts
- * import { AtomicState, OBSERVABLE_SYMBOL } from 'weft';
- * import { MemoryStorage } from 'weft/storage/memory';
+ * import { AtomicState, OBSERVABLE_SYMBOL } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
  *
  * const state = new AtomicState<number>(new MemoryStorage(), 'state:workflow-scope:default:count');
  * const observable = state[OBSERVABLE_SYMBOL]();
@@ -191,7 +191,7 @@ if (symbolConstructor.observable === undefined) {
  *
  * @example
  * ```ts
- * import { AtomicStateChangeEvent } from 'weft';
+ * import { AtomicStateChangeEvent } from '@lostgradient/weft';
  *
  * const event = new AtomicStateChangeEvent('next', 'previous', 4);
  * console.log(event.value, event.previousValue, event.version);
@@ -215,7 +215,7 @@ export class AtomicStateChangeEvent<T> extends Event {
  *
  * @example
  * ```ts
- * import { AtomicStateConflictEvent } from 'weft';
+ * import { AtomicStateConflictEvent } from '@lostgradient/weft';
  *
  * const event = new AtomicStateConflictEvent('state:workflow-scope:default:count', 2);
  * console.log(event.stateKey, event.attempt);
@@ -237,7 +237,7 @@ export class AtomicStateConflictEvent extends Event {
  *
  * @example
  * ```ts
- * import { AtomicStateExhaustedEvent } from 'weft';
+ * import { AtomicStateExhaustedEvent } from '@lostgradient/weft';
  *
  * const event = new AtomicStateExhaustedEvent('state:workflow-scope:default:count', 10);
  * console.log(event.stateKey, event.attempts);

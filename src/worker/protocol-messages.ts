@@ -4,7 +4,7 @@
  * These types mirror the JSON Schema documents in `./protocol-schemas.ts`
  * field-for-field. The runtime parser guards in `./protocol.ts` enforce the
  * shapes described here at the trust boundary. They are re-exported from
- * `weft/worker-protocol` (via `./protocol.ts`) so the public surface remains
+ * `@lostgradient/weft/worker-protocol` (via `./protocol.ts`) so the public surface remains
  * a single import path.
  *
  * @module worker/protocol-messages
@@ -17,7 +17,7 @@ import type { RemoteWorkerProtocolVersion } from './protocol-version.ts';
  *
  * @example
  * ```ts
- * import type { RemoteWorkerJsonValue } from 'weft/worker-protocol';
+ * import type { RemoteWorkerJsonValue } from '@lostgradient/weft/worker-protocol';
  *
  * const payload: RemoteWorkerJsonValue = { amount: 42, memo: null };
  * ```
@@ -35,7 +35,7 @@ export type RemoteWorkerJsonValue =
  *
  * @example
  * ```ts
- * import type { RemoteWorkerCapabilities } from 'weft/worker-protocol';
+ * import type { RemoteWorkerCapabilities } from '@lostgradient/weft/worker-protocol';
  *
  * const capabilities: RemoteWorkerCapabilities = { region: 'us-west', gpu: false };
  * ```
@@ -50,7 +50,7 @@ export type RemoteWorkerCapabilities = Readonly<Record<string, RemoteWorkerJsonV
  *
  * @example
  * ```ts
- * import type { RegisterMessage } from 'weft/worker-protocol';
+ * import type { RegisterMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: RegisterMessage = {
  *   type: 'register',
@@ -80,7 +80,7 @@ export type RegisterMessage = {
  *
  * @example
  * ```ts
- * import type { HeartbeatMessage } from 'weft/worker-protocol';
+ * import type { HeartbeatMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: HeartbeatMessage = { type: 'heartbeat', workerId: 'worker-1' };
  * ```
@@ -95,7 +95,7 @@ export type HeartbeatMessage = {
  *
  * @example
  * ```ts
- * import type { CompletedTaskResultMessage } from 'weft/worker-protocol';
+ * import type { CompletedTaskResultMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: CompletedTaskResultMessage = {
  *   type: 'taskResult',
@@ -117,7 +117,7 @@ export type CompletedTaskResultMessage = {
  *
  * @example
  * ```ts
- * import type { FailedTaskResultMessage } from 'weft/worker-protocol';
+ * import type { FailedTaskResultMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: FailedTaskResultMessage = {
  *   type: 'taskResult',
@@ -139,7 +139,7 @@ export type FailedTaskResultMessage = {
  *
  * @example
  * ```ts
- * import type { CancelledTaskResultMessage } from 'weft/worker-protocol';
+ * import type { CancelledTaskResultMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: CancelledTaskResultMessage = {
  *   type: 'taskResult',
@@ -163,7 +163,7 @@ export type CancelledTaskResultMessage = {
  *
  * @example
  * ```ts
- * import type { RegisterAckMessage } from 'weft/worker-protocol';
+ * import type { RegisterAckMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: RegisterAckMessage = {
  *   type: 'registerAck',
@@ -189,7 +189,7 @@ export type RegisterAckMessage = {
  *
  * @example
  * ```ts
- * import type { RegisterErrorMessage } from 'weft/worker-protocol';
+ * import type { RegisterErrorMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: RegisterErrorMessage = {
  *   type: 'registerError',
@@ -213,7 +213,7 @@ export type RegisterErrorMessage = {
  *
  * @example
  * ```ts
- * import type { ProtocolErrorMessage } from 'weft/worker-protocol';
+ * import type { ProtocolErrorMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: ProtocolErrorMessage = {
  *   type: 'protocolError',
@@ -237,7 +237,7 @@ export type ProtocolErrorMessage = {
  *
  * @example
  * ```ts
- * import type { TaskMessage } from 'weft/worker-protocol';
+ * import type { TaskMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: TaskMessage = {
  *   type: 'task',
@@ -261,7 +261,7 @@ export type TaskMessage = {
  *
  * @example
  * ```ts
- * import type { CancelMessage } from 'weft/worker-protocol';
+ * import type { CancelMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: CancelMessage = { type: 'cancel', operationId: 'op-1' };
  * ```
@@ -276,7 +276,7 @@ export type CancelMessage = {
  *
  * @example
  * ```ts
- * import type { ShutdownMessage } from 'weft/worker-protocol';
+ * import type { ShutdownMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: ShutdownMessage = { type: 'shutdown' };
  * ```

@@ -12,7 +12,12 @@ If you are not familiar with generators, Weft provides a simpler entry point. Wr
 > The generator workflow API is the primary engine surface. [`ctx.step()`](../reference/api-context.md#step-based-workflows) and [`compileStepWorkflow(...)`](../reference/api-context.md#step-based-workflows) are experimental sugar before 1.0; use them when they improve readability, but expect the generator API to define the stable semantics first.
 
 ```typescript partial
-import { Engine, workflow, compileStepWorkflow, type StepWorkflowContext } from 'weft';
+import {
+  Engine,
+  workflow,
+  compileStepWorkflow,
+  type StepWorkflowContext,
+} from '@lostgradient/weft';
 
 const engine = new Engine();
 
@@ -36,7 +41,7 @@ The step-based API is a subset of the full API. It supports sequential steps onl
 A workflow is an `async function*` that receives a context and an input. The generator syntax is the key: every `yield*` expression is a **checkpoint boundary** where Weft snapshots your entire local scope.
 
 ```typescript partial
-import { Engine, workflow } from 'weft';
+import { Engine, workflow } from '@lostgradient/weft';
 
 const engine = new Engine();
 

@@ -1,4 +1,4 @@
-import { workflow } from 'weft';
+import { workflow } from '@lostgradient/weft';
 
 import { shipOrder } from '../activities/shipping';
 import type { ShipmentInput } from '../model';

@@ -34,7 +34,7 @@ interface QueuedOperation {
  *
  * @example
  * ```ts
- * import { StepContext } from 'weft';
+ * import { StepContext } from '@lostgradient/weft';
  *
  * const controller = new AbortController();
  * const ctx = new StepContext('wf-demo', controller.signal);
@@ -111,7 +111,7 @@ export class StepContext implements StepWorkflowContext {
  *
  * @example
  * ```ts
- * import { workflow, Engine, compileStepWorkflow, type StepWorkflowContext } from 'weft';
+ * import { workflow, Engine, compileStepWorkflow, type StepWorkflowContext } from '@lostgradient/weft';
  *
  * async function process(ctx: StepWorkflowContext, input: unknown) {
  *   const upper = await ctx.step('uppercase', () =>
@@ -227,7 +227,7 @@ export function isGeneratorFunction(fn: Function): boolean {
  *
  * @example
  * ```ts
- * import { isAsyncGeneratorFunction } from 'weft';
+ * import { isAsyncGeneratorFunction } from '@lostgradient/weft';
  *
  * async function* myWorkflow() { yield 1; }
  * function* syncGen() { yield 1; }

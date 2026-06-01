@@ -7,8 +7,8 @@
  *
  * @example
  * ```ts
- * import { Engine, type ActivityInterception } from 'weft';
- * import type { WorkflowInterceptor } from 'weft';
+ * import { Engine, type ActivityInterception } from '@lostgradient/weft';
+ * import type { WorkflowInterceptor } from '@lostgradient/weft';
  *
  * const loggingInterceptor: WorkflowInterceptor = {
  *   *activity(ctx: ActivityInterception, next) {
@@ -35,8 +35,8 @@ export interface ActivityInterception {
  *
  * @example
  * ```ts
- * import { Engine, type SleepInterception } from 'weft';
- * import type { WorkflowInterceptor } from 'weft';
+ * import { Engine, type SleepInterception } from '@lostgradient/weft';
+ * import type { WorkflowInterceptor } from '@lostgradient/weft';
  *
  * const tracer: WorkflowInterceptor = {
  *   *sleep(ctx: SleepInterception, next) {
@@ -59,7 +59,7 @@ export interface SleepInterception {
  *
  * @example
  * ```ts
- * import { type SignalInterception, type WorkflowInterceptor } from 'weft';
+ * import { type SignalInterception, type WorkflowInterceptor } from '@lostgradient/weft';
  *
  * const tracer: WorkflowInterceptor = {
  *   *waitForSignal(ctx: SignalInterception, next) {
@@ -84,7 +84,7 @@ export interface SignalInterception {
  *
  * @example
  * ```ts
- * import { type WorkflowStartInterception, type WorkflowInterceptor } from 'weft';
+ * import { type WorkflowStartInterception, type WorkflowInterceptor } from '@lostgradient/weft';
  *
  * const tracer: WorkflowInterceptor = {
  *   workflowStart(ctx: WorkflowStartInterception, next) {
@@ -109,7 +109,7 @@ export interface WorkflowStartInterception {
  *
  * @example
  * ```ts
- * import { type ActivityExecutionInterception, type ActivityInterceptor } from 'weft';
+ * import { type ActivityExecutionInterception, type ActivityInterceptor } from '@lostgradient/weft';
  *
  * const logger: ActivityInterceptor = {
  *   async execute(ctx: ActivityExecutionInterception, next) {
@@ -140,7 +140,7 @@ export interface ActivityExecutionInterception {
  *
  * @example
  * ```ts
- * import { type ChildWorkflowInterception, type WorkflowInterceptor } from 'weft';
+ * import { type ChildWorkflowInterception, type WorkflowInterceptor } from '@lostgradient/weft';
  *
  * const tracer: WorkflowInterceptor = {
  *   async childWorkflow(ctx: ChildWorkflowInterception, next) {
@@ -168,7 +168,7 @@ export interface ChildWorkflowInterception {
  *
  * @example
  * ```ts
- * import { type QueryInterception, type WorkflowInterceptor } from 'weft';
+ * import { type QueryInterception, type WorkflowInterceptor } from '@lostgradient/weft';
  *
  * const tracer: WorkflowInterceptor = {
  *   *query(ctx: QueryInterception, next) {
@@ -191,7 +191,7 @@ export interface QueryInterception {
  *
  * @example
  * ```ts
- * import { type SignalReceivedInterception, type WorkflowInterceptor } from 'weft';
+ * import { type SignalReceivedInterception, type WorkflowInterceptor } from '@lostgradient/weft';
  *
  * const tracer: WorkflowInterceptor = {
  *   signalReceived(ctx: SignalReceivedInterception, next) {

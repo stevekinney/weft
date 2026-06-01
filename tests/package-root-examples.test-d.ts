@@ -1,4 +1,4 @@
-import { activity, workflow } from 'weft';
+import { activity, workflow } from '@lostgradient/weft';
 
 const formatGreetingActivity = activity({
   name: 'formatGreeting',

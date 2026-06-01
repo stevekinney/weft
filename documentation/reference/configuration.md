@@ -57,8 +57,8 @@ interface EngineOptions {
 **Example:**
 
 ```ts
-import { Engine } from 'weft';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { Engine } from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 const engine = new Engine({
   storage: new SQLiteStorage('data/weft.db'),
@@ -86,7 +86,7 @@ const engine = new Engine({
 Inline execution remains the default for trusted single-tenant deployments:
 
 ```ts
-import { Engine } from 'weft';
+import { Engine } from '@lostgradient/weft';
 
 const trustedEngine = new Engine({
   workflowExecutionMode: 'inline',
@@ -98,7 +98,7 @@ void trustedEngine;
 Use Worker execution for untrusted multi-tenant workflow code. Explicit Worker mode requires `workerExecution` and applies hardened defaults for the Worker protocol:
 
 ```ts
-import { Engine } from 'weft';
+import { Engine } from '@lostgradient/weft';
 
 const untrustedEngine = new Engine({
   workflowExecutionMode: 'worker',
@@ -180,8 +180,8 @@ When `auth` is omitted, [`serve()`](./api-server.md#serve) defaults to `unauthen
 **Example:**
 
 ```ts partial
-import { Engine } from 'weft';
-import { serve } from 'weft/server';
+import { Engine } from '@lostgradient/weft';
+import { serve } from '@lostgradient/weft/server';
 
 const engine = new Engine();
 const server = serve({ engine, port: 8080 });

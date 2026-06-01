@@ -1,8 +1,8 @@
 /**
  * Stable, machine-readable discriminant for every Weft error class that is
- * part of the public API (re-exported from `weft`). Each value equals the
+ * part of the public API (re-exported from `@lostgradient/weft`). Each value equals the
  * throwing class's name and is safe to `switch` on exhaustively. Errors not
- * exported from `weft` carry internal codes that are intentionally absent
+ * exported from `@lostgradient/weft` carry internal codes that are intentionally absent
  * from this union and may change between releases.
  *
  * Prefer comparing `error.code` (or {@link isWeftErrorCode}) over `instanceof`
@@ -11,7 +11,7 @@
  *
  * @example
  * ```ts
- * import { isWeftError, isWeftErrorCode, type WeftErrorCode } from 'weft';
+ * import { isWeftError, isWeftErrorCode, type WeftErrorCode } from '@lostgradient/weft';
  *
  * function statusFor(error: unknown): number {
  *   if (isWeftError(error) && isWeftErrorCode(error.code)) {
@@ -62,7 +62,7 @@ export type WeftErrorCode =
  *
  * @example
  * ```ts
- * import { WeftError } from 'weft';
+ * import { WeftError } from '@lostgradient/weft';
  *
  * function describe(error: unknown): string {
  *   return error instanceof WeftError ? `${error.code}: ${error.message}` : 'unknown';
@@ -122,7 +122,7 @@ const PUBLIC_WEFT_ERROR_CODES = new Set<string>(Object.keys(publicWeftErrorCodeM
  *
  * @example
  * ```ts
- * import { isWeftError } from 'weft';
+ * import { isWeftError } from '@lostgradient/weft';
  *
  * function logFrom(error: unknown): string {
  *   return isWeftError(error) ? `[${error.code}] ${error.message}` : 'non-weft error';
@@ -140,7 +140,7 @@ export function isWeftError(value: unknown): value is WeftError {
  *
  * @example
  * ```ts
- * import { isWeftError, isWeftErrorCode } from 'weft';
+ * import { isWeftError, isWeftErrorCode } from '@lostgradient/weft';
  *
  * function isMissingWorkflow(error: unknown): boolean {
  *   return isWeftError(error) && isWeftErrorCode(error.code)

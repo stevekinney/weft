@@ -26,7 +26,7 @@ import { mkdir, rm } from 'node:fs/promises';
  *
  * @example
  * ```ts
- * import { resolveConnection, type ConnectionOptions } from 'weft';
+ * import { resolveConnection, type ConnectionOptions } from '@lostgradient/weft';
  *
  * const options: ConnectionOptions = {
  *   server: 'https://weft.example.com',
@@ -54,7 +54,7 @@ export type ConnectionOptions = {
  *
  * @example
  * ```ts
- * import { resolveConnection, type ResolvedConnection } from 'weft';
+ * import { resolveConnection, type ResolvedConnection } from '@lostgradient/weft';
  *
  * const connection: ResolvedConnection = resolveConnection({
  *   server: 'https://weft.example.com',
@@ -74,7 +74,7 @@ export type ResolvedConnection = {
  *
  * @example
  * ```ts
- * import { DEFAULT_WEFT_ADDRESS } from 'weft';
+ * import { DEFAULT_WEFT_ADDRESS } from '@lostgradient/weft';
  *
  * console.log(DEFAULT_WEFT_ADDRESS); // "http://localhost:7233"
  * ```
@@ -92,7 +92,7 @@ export const DEFAULT_WEFT_ADDRESS = 'http://localhost:7233';
  *
  * @example
  * ```ts
- * import { ConnectionConfigurationError, resolveConnection } from 'weft';
+ * import { ConnectionConfigurationError, resolveConnection } from '@lostgradient/weft';
  *
  * try {
  *   resolveConnection();
@@ -136,7 +136,7 @@ type WeftRunLockfile = {
  *
  * @example
  * ```ts
- * import { resolveConnection } from 'weft';
+ * import { resolveConnection } from '@lostgradient/weft';
  *
  * const connection = resolveConnection({ server: 'https://weft.example.com' });
  * console.log(connection.server.toString()); // "https://weft.example.com/"

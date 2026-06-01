@@ -34,7 +34,7 @@ You can pass a number (interpreted as milliseconds) or a string with a unit. The
 Fractional values work too: `"1.5 hours"` is 90 minutes. If you need the raw conversion in your own code, the `parseDuration()` utility is exported.
 
 ```typescript
-import { parseDuration } from 'weft';
+import { parseDuration } from '@lostgradient/weft';
 
 parseDuration('1 hour'); // 3_600_000
 parseDuration('30s'); // 30_000

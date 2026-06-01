@@ -81,7 +81,7 @@ class CircularBuffer {
  *
  * @example
  * ```ts
- * import { MetricsCollector } from 'weft/observability';
+ * import { MetricsCollector } from '@lostgradient/weft/observability';
  *
  * const collector = new MetricsCollector();
  * collector.increment('weft.workflow.started');
@@ -166,7 +166,7 @@ export class MetricsCollector {
  *
  * @example
  * ```ts
- * import { createOpenTelemetryMetrics, type OpenTelemetryMetrics } from 'weft/observability';
+ * import { createOpenTelemetryMetrics, type OpenTelemetryMetrics } from '@lostgradient/weft/observability';
  *
  * const openTelemetryMetrics: OpenTelemetryMetrics = createOpenTelemetryMetrics('my-service');
  * openTelemetryMetrics.workflowDuration.record(120);
@@ -197,7 +197,7 @@ export type OpenTelemetryMetrics = {
  *
  * @example
  * ```ts
- * import { createOpenTelemetryMetrics } from 'weft/observability';
+ * import { createOpenTelemetryMetrics } from '@lostgradient/weft/observability';
  *
  * // Uses the auto-detected OpenTelemetry API or no-op fallback
  * const instruments = createOpenTelemetryMetrics('my-service');
@@ -345,7 +345,7 @@ function formatDpmoGaugeLines(snapshot: MetricsSnapshot): string[] {
  *
  * @example
  * ```ts
- * import { MetricsCollector, serializeMetricsSnapshotForPrometheus } from 'weft/observability';
+ * import { MetricsCollector, serializeMetricsSnapshotForPrometheus } from '@lostgradient/weft/observability';
  *
  * const collector = new MetricsCollector();
  * collector.increment('weft.workflow.started');
@@ -370,7 +370,7 @@ export function serializeMetricsSnapshotForPrometheus(snapshot: MetricsSnapshot)
  *
  * @example
  * ```ts
- * import { createMetricsCollectorExporter } from 'weft/observability';
+ * import { createMetricsCollectorExporter } from '@lostgradient/weft/observability';
  *
  * const exporter = createMetricsCollectorExporter(undefined);
  * // Pass to serve() to expose /v1/metrics

@@ -108,8 +108,8 @@ function createCursorRequestAwaiter<TCursor extends IDBCursor | IDBCursorWithVal
  *
  * @example
  * ```ts
- * import { IndexedDBStorage } from 'weft/storage/indexeddb';
- * import { workflow, Engine, type WorkflowContext } from 'weft';
+ * import { IndexedDBStorage } from '@lostgradient/weft/storage/indexeddb';
+ * import { workflow, Engine, type WorkflowContext } from '@lostgradient/weft';
  *
  * // Opens (or re-opens) the default 'weft' IndexedDB database
  * await using storage = new IndexedDBStorage();

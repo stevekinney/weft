@@ -1,5 +1,5 @@
-import { Engine, WorkflowAlreadyExistsError, type WorkflowHandle } from 'weft';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { Engine, WorkflowAlreadyExistsError, type WorkflowHandle } from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 import { addItemUpdate, cancelOrderSignal, orderStatusQuery } from './messages';
 import { calculateOrderTotal, type AddItemInput, type OrderProcessingInput } from './model';

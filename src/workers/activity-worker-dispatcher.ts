@@ -30,7 +30,7 @@ const DEFAULT_WORKER_TIMEOUT_MILLISECONDS = 30_000;
  *
  * @example
  * ```ts
- * import { ActivityWorkerDispatcher, WorkerPool, type ActivityWorkerDispatcherOptions } from 'weft';
+ * import { ActivityWorkerDispatcher, WorkerPool, type ActivityWorkerDispatcherOptions } from '@lostgradient/weft';
  *
  * const options: ActivityWorkerDispatcherOptions = {
  *   timeoutMilliseconds: 60_000,
@@ -59,7 +59,7 @@ export type ActivityWorkerDispatcherOptions = {
  *
  * @example
  * ```ts
- * import { ActivityWorkerDispatcher, WorkerPool } from 'weft';
+ * import { ActivityWorkerDispatcher, WorkerPool } from '@lostgradient/weft';
  *
  * const pool = new WorkerPool({
  *   concurrency: 4,

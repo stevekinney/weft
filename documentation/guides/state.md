@@ -52,7 +52,7 @@ Session state is cheapest because it is checkpoint-local. The other scopes are C
 Outside a workflow, use `engine.state` for the durable scopes:
 
 ```typescript
-import { Engine } from 'weft';
+import { Engine } from '@lostgradient/weft';
 
 const engine = new Engine();
 

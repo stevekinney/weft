@@ -66,8 +66,8 @@ function serializeEvent(event: Event): string | null {
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage } from 'weft';
- * import { wireEventBroadcasting, type EventBroadcastingHandle } from 'weft/server';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { wireEventBroadcasting, type EventBroadcastingHandle } from '@lostgradient/weft/server';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * const bunServer = Bun.serve({ fetch: () => new Response('ok') });
@@ -169,8 +169,8 @@ export function registerWorkflowEventLifecycle(
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage } from 'weft';
- * import { wireEventBroadcasting } from 'weft/server';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { wireEventBroadcasting } from '@lostgradient/weft/server';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * const bunServer = Bun.serve({ fetch: () => new Response('ok') });

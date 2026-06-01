@@ -14,6 +14,7 @@ import { delimiter, join } from 'node:path';
 
 const repositoryPath = join(import.meta.dir, '..');
 const distPath = join(repositoryPath, 'dist');
+const packageName = '@lostgradient/weft';
 
 // ---------------------------------------------------------------------------
 // Helper: build a tiny entry file importing from a dist path and return text
@@ -106,7 +107,7 @@ function runSQLiteImportSmokeTest(
   runtimeName: string,
 ): void {
   const script = [
-    "import { SQLiteStorage } from 'weft/storage/sqlite';",
+    "import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';",
     `if (SQLiteStorage.name !== ${JSON.stringify(expectedConstructorName)}) {`,
     `  throw new Error(\`Expected ${runtimeName} to resolve SQLiteStorage to ${expectedConstructorName}, got \${SQLiteStorage.name}\`);`,
     '}',
@@ -114,7 +115,7 @@ function runSQLiteImportSmokeTest(
   runSmokeScript(
     command,
     runtimeName,
-    `weft/storage/sqlite resolves to ${expectedConstructorName}`,
+    `@lostgradient/weft/storage/sqlite resolves to ${expectedConstructorName}`,
     script,
   );
 }
@@ -149,9 +150,11 @@ const heavyTokens = ['LMDBStorage', 'TursoStorage', 'BunSQLiteStorage'];
 const foundHeavy = heavyTokens.filter((token) => memoryBundle.includes(token));
 
 if (foundHeavy.length > 0) {
-  fail(`weft/storage/memory bundle contains heavy backend code: ${foundHeavy.join(', ')}`);
+  fail(
+    `@lostgradient/weft/storage/memory bundle contains heavy backend code: ${foundHeavy.join(', ')}`,
+  );
 } else {
-  pass('weft/storage/memory is free of heavy backend code');
+  pass('@lostgradient/weft/storage/memory is free of heavy backend code');
 }
 
 // ---------------------------------------------------------------------------
@@ -166,9 +169,11 @@ const storageBarrelBundle = await buildEntry('storage/index.js', 'MemoryStorage'
 const foundInBarrel = heavyTokens.filter((token) => storageBarrelBundle.includes(token));
 
 if (foundInBarrel.length > 0) {
-  fail(`weft/storage barrel bundle contains heavy backend code: ${foundInBarrel.join(', ')}`);
+  fail(
+    `@lostgradient/weft/storage barrel bundle contains heavy backend code: ${foundInBarrel.join(', ')}`,
+  );
 } else {
-  pass('weft/storage barrel is free of heavy backend code');
+  pass('@lostgradient/weft/storage barrel is free of heavy backend code');
 }
 
 // ---------------------------------------------------------------------------
@@ -181,11 +186,13 @@ const lmdbBundle = await buildEntry('storage/lmdb.js', 'LMDBStorage', [
 ]);
 
 if (!lmdbBundle.includes('lmdb')) {
-  fail('weft/storage/lmdb bundle has no reference to lmdb (should be external import)');
+  fail(
+    '@lostgradient/weft/storage/lmdb bundle has no reference to lmdb (should be external import)',
+  );
 } else if (lmdbBundle.includes('@libsql/client')) {
-  fail('weft/storage/lmdb bundle unexpectedly contains @libsql/client');
+  fail('@lostgradient/weft/storage/lmdb bundle unexpectedly contains @libsql/client');
 } else {
-  pass('weft/storage/lmdb externalizes lmdb correctly');
+  pass('@lostgradient/weft/storage/lmdb externalizes lmdb correctly');
 }
 
 // ---------------------------------------------------------------------------
@@ -198,9 +205,11 @@ const tursoBundle = await buildEntry('storage/turso.js', 'TursoStorage', [
 ]);
 
 if (!tursoBundle.includes('@libsql/client')) {
-  fail('weft/storage/turso bundle has no reference to @libsql/client (should be external import)');
+  fail(
+    '@lostgradient/weft/storage/turso bundle has no reference to @libsql/client (should be external import)',
+  );
 } else {
-  pass('weft/storage/turso externalizes @libsql/client correctly');
+  pass('@lostgradient/weft/storage/turso externalizes @libsql/client correctly');
 }
 
 // Test 5: root entrypoint must not export testing primitives
@@ -213,10 +222,11 @@ if (!tursoBundle.includes('@libsql/client')) {
 
   try {
     const fixtureSource = await Bun.file(fixtureFile).text();
-    const patchedSource = fixtureSource.replace("'weft'", JSON.stringify(rootEntrypoint));
+    const packageSpecifier = `'${packageName}'`;
+    const patchedSource = fixtureSource.replace(packageSpecifier, JSON.stringify(rootEntrypoint));
     if (patchedSource === fixtureSource) {
       throw new Error(
-        `Test 5: fixture replacement produced no change. ${fixtureFile} no longer contains the literal "'weft'" — update the fixture or the replacement target.`,
+        `Test 5: fixture replacement produced no change. ${fixtureFile} no longer contains the literal ${packageSpecifier} — update the fixture or the replacement target.`,
       );
     }
     await Bun.write(entryFile, patchedSource);
@@ -312,7 +322,7 @@ if (foundTestingBundleTokens.length > 0) {
 
     if (!result.success) {
       const messages = result.logs.map((log) => log.message).join('\n');
-      fail(`weft/testing failed to export testing primitives:\n${messages}`);
+      fail(`@lostgradient/weft/testing failed to export testing primitives:\n${messages}`);
     } else {
       const outputs = await Promise.all(result.outputs.map((output) => output.text()));
       const bundleText = outputs.join('\n');
@@ -324,9 +334,11 @@ if (foundTestingBundleTokens.length > 0) {
       ];
       const missing = requiredIdentifiers.filter((token) => !bundleText.includes(token));
       if (missing.length > 0) {
-        fail(`weft/testing bundle is missing expected exports: ${missing.join(', ')}`);
+        fail(
+          `@lostgradient/weft/testing bundle is missing expected exports: ${missing.join(', ')}`,
+        );
       } else {
-        pass('weft/testing exports testing primitives');
+        pass('@lostgradient/weft/testing exports testing primitives');
       }
     }
   } finally {
@@ -335,7 +347,7 @@ if (foundTestingBundleTokens.length > 0) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 8: weft/storage and weft/testing barrels load cleanly and expose
+// Test 8: @lostgradient/weft/storage and @lostgradient/weft/testing barrels load cleanly and expose
 // their value exports.
 //
 // The Bun 1.3.13 minifier emits broken JavaScript for pure re-export barrels,
@@ -350,7 +362,7 @@ if (foundTestingBundleTokens.length > 0) {
   const cases: Array<{ entrypoint: string; label: string; expectedExports: string[] }> = [
     {
       entrypoint: join(distPath, 'storage/index.js'),
-      label: 'weft/storage',
+      label: '@lostgradient/weft/storage',
       expectedExports: [
         'KEYS',
         'MemoryStorage',
@@ -366,7 +378,7 @@ if (foundTestingBundleTokens.length > 0) {
     },
     {
       entrypoint: join(distPath, 'testing/index.js'),
-      label: 'weft/testing',
+      label: '@lostgradient/weft/testing',
       expectedExports: [
         'ActivityMockRegistry',
         'ChaosNonRetryableError',
@@ -381,10 +393,10 @@ if (foundTestingBundleTokens.length > 0) {
 
   for (const { entrypoint, label, expectedExports } of cases) {
     try {
-      if (label === 'weft/storage') {
+      if (label === '@lostgradient/weft/storage') {
         const barrelText = readFileSync(entrypoint, 'utf8');
         if (/export\s*\{[^}]+\}\s*from\s*['"]\.\//.test(barrelText)) {
-          fail('weft/storage barrel must keep the local-binding export workaround');
+          fail('@lostgradient/weft/storage barrel must keep the local-binding export workaround');
         }
       }
 
@@ -406,17 +418,17 @@ if (foundTestingBundleTokens.length > 0) {
 // Test 9: storage package entrypoints load in their intended runtimes
 // ---------------------------------------------------------------------------
 const storageBarrelScript = [
-  "import * as storage from 'weft/storage';",
+  "import * as storage from '@lostgradient/weft/storage';",
   "for (const name of ['KEYS', 'MemoryStorage', 'resolveStorage', 'ScopedStorage', 'scopedStorage', 'withCodec', 'jsonCodec', 'msgpackCodec']) {",
   '  if (!(name in storage)) throw new Error(`Missing storage barrel export: ${name}`);',
   '}',
 ].join('\n');
 
 const storageAdapterSubpathsScript = [
-  "import { HTTPStorage } from 'weft/storage/http';",
-  "import { resolveStorage } from 'weft/storage/resolve';",
-  "import { resolveDefaultStorage } from 'weft/storage/auto';",
-  "import { WebExtensionStorage } from 'weft/storage/web-extension';",
+  "import { HTTPStorage } from '@lostgradient/weft/storage/http';",
+  "import { resolveStorage } from '@lostgradient/weft/storage/resolve';",
+  "import { resolveDefaultStorage } from '@lostgradient/weft/storage/auto';",
+  "import { WebExtensionStorage } from '@lostgradient/weft/storage/web-extension';",
   "if (typeof HTTPStorage !== 'function') throw new Error('HTTPStorage subpath failed');",
   "if (typeof WebExtensionStorage !== 'function') throw new Error('WebExtensionStorage subpath failed');",
   "if (typeof resolveDefaultStorage !== 'function') throw new Error('resolveDefaultStorage subpath failed');",
@@ -424,13 +436,13 @@ const storageAdapterSubpathsScript = [
 ].join('\n');
 
 const bunSqliteOverrideScript = [
-  "import { BunSQLiteStorage, SQLiteStorage } from 'weft/storage/sqlite/bun';",
+  "import { BunSQLiteStorage, SQLiteStorage } from '@lostgradient/weft/storage/sqlite/bun';",
   "if (BunSQLiteStorage.name !== 'BunSQLiteStorage') throw new Error('BunSQLiteStorage export failed');",
   "if (SQLiteStorage.name !== 'BunSQLiteStorage') throw new Error('SQLiteStorage Bun override failed');",
 ].join('\n');
 
 const nodeSqliteOverrideScript = [
-  "import { NodeSQLiteStorage, SQLiteStorage } from 'weft/storage/sqlite/node';",
+  "import { NodeSQLiteStorage, SQLiteStorage } from '@lostgradient/weft/storage/sqlite/node';",
   "if (NodeSQLiteStorage.name !== 'NodeSQLiteStorage') throw new Error('NodeSQLiteStorage export failed');",
   "if (SQLiteStorage.name !== 'NodeSQLiteStorage') throw new Error('SQLiteStorage Node override failed');",
 ].join('\n');
@@ -438,7 +450,7 @@ const nodeSqliteOverrideScript = [
 runSmokeScript(
   [process.execPath, '--eval'],
   'Bun',
-  'weft/storage full barrel imports',
+  '@lostgradient/weft/storage full barrel imports',
   storageBarrelScript,
 );
 runSmokeScript(
@@ -450,19 +462,21 @@ runSmokeScript(
 runSmokeScript(
   [process.execPath, '--eval'],
   'Bun',
-  'weft/storage/sqlite/bun explicit override imports',
+  '@lostgradient/weft/storage/sqlite/bun explicit override imports',
   bunSqliteOverrideScript,
 );
 runSQLiteImportSmokeTest([process.execPath, '--eval'], 'BunSQLiteStorage', 'Bun');
 
 const nodeExecutable = resolveRealNodeExecutable();
 if (nodeExecutable === null) {
-  fail('weft/storage/sqlite Node.js import smoke test requires a real node executable on PATH');
+  fail(
+    '@lostgradient/weft/storage/sqlite Node.js import smoke test requires a real node executable on PATH',
+  );
 } else {
   runSmokeScript(
     [nodeExecutable, '--input-type=module', '--eval'],
     'Node.js',
-    'weft/storage full barrel imports',
+    '@lostgradient/weft/storage full barrel imports',
     storageBarrelScript,
   );
   runSmokeScript(
@@ -474,7 +488,7 @@ if (nodeExecutable === null) {
   runSmokeScript(
     [nodeExecutable, '--input-type=module', '--eval'],
     'Node.js',
-    'weft/storage/sqlite/node explicit override imports',
+    '@lostgradient/weft/storage/sqlite/node explicit override imports',
     nodeSqliteOverrideScript,
   );
   runSQLiteImportSmokeTest(
@@ -485,9 +499,9 @@ if (nodeExecutable === null) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 10: weft/service-worker bundle must not pull in Bun/Node SQLite adapters
+// Test 10: @lostgradient/weft/service-worker bundle must not pull in Bun/Node SQLite adapters
 //
-// `resolveDefaultStorage` is exported only from `weft/storage/auto`, which the
+// `resolveDefaultStorage` is exported only from `@lostgradient/weft/storage/auto`, which the
 // service-worker entrypoint must never import (directly or transitively).
 // Verify the emitted bundle is free of any Bun/Node-only storage code so
 // browser consumers don't ship dead SQLite chunks.
@@ -506,10 +520,10 @@ const foundInServiceWorker = serviceWorkerForbiddenTokens.filter((token) =>
 
 if (foundInServiceWorker.length > 0) {
   fail(
-    `weft/service-worker bundle contains forbidden SQLite adapter code: ${foundInServiceWorker.join(', ')}`,
+    `@lostgradient/weft/service-worker bundle contains forbidden SQLite adapter code: ${foundInServiceWorker.join(', ')}`,
   );
 } else {
-  pass('weft/service-worker bundle is free of SQLite adapter code');
+  pass('@lostgradient/weft/service-worker bundle is free of SQLite adapter code');
 }
 
 if (failed) {

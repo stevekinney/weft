@@ -30,7 +30,7 @@ import type { Serializer } from './serializer.ts';
  *
  * @example Start a delayed workflow with tags and search attributes
  * ```ts
- * import { workflow, Engine, type StartOptions } from 'weft';
+ * import { workflow, Engine, type StartOptions } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(
@@ -65,7 +65,7 @@ export interface StartOptions {
  *
  * @example
  * ```ts
- * import { workflow, Engine, type ForkOptions } from 'weft';
+ * import { workflow, Engine, type ForkOptions } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(workflow({ name: 'process' }).execute(async function* () { return 'done'; }));
@@ -95,7 +95,7 @@ export interface ForkOptions {
  *
  * @example
  * ```ts
- * import { Engine, type EngineOptions } from 'weft';
+ * import { Engine, type EngineOptions } from '@lostgradient/weft';
  *
  * const options: EngineOptions = {
  *   development: true,
@@ -225,7 +225,7 @@ export interface EngineOptions {
  *
  * @example
  * ```ts
- * import { Engine, type ListFilter } from 'weft';
+ * import { Engine, type ListFilter } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * const filter: ListFilter = {
@@ -259,7 +259,7 @@ export interface TimeRange {
  *
  * @example
  * ```ts
- * import { Engine, type ListFilter } from 'weft';
+ * import { Engine, type ListFilter } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * const filter: ListFilter = {
@@ -278,7 +278,7 @@ export interface ListFilter {
    *
    * @example
    * ```ts
-   * import type { ListFilter } from 'weft';
+   * import type { ListFilter } from '@lostgradient/weft';
    * const filter: ListFilter = { type: 'order-fulfillment' };
    * ```
    */
@@ -319,7 +319,7 @@ export interface ListFilter {
  *
  * @example Include failure categories projected from search attributes
  * ```ts
- * import { Engine, type ListOptions } from 'weft';
+ * import { Engine, type ListOptions } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * const options: ListOptions = { includeFailureCategory: true };

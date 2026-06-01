@@ -21,7 +21,7 @@ import { scopedStorage } from './scoped-storage.ts';
  *
  * @example
  * ```ts
- * import { HTTPStorage, type HTTPStorageOptions } from 'weft/storage/http';
+ * import { HTTPStorage, type HTTPStorageOptions } from '@lostgradient/weft/storage/http';
  *
  * const token = 'example-token';
  * const options: HTTPStorageOptions = {
@@ -173,7 +173,7 @@ async function* readNdjsonLines(response: Response): AsyncIterable<string> {
  *
  * @example
  * ```ts
- * import { HTTPStorage } from 'weft/storage/http';
+ * import { HTTPStorage } from '@lostgradient/weft/storage/http';
  *
  * const token = 'example-token';
  * await using storage = new HTTPStorage({

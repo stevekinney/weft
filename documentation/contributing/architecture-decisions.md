@@ -114,7 +114,7 @@ See [Interceptors guide](../guides/interceptors.md).
 
 ## Observability
 
-OpenTelemetry integration is opt-in, implemented as a pre-built interceptor. Import `createObservabilityInterceptors` from `weft` and you get auto-created spans for all context operations, W3C Trace Context propagation through the `headers` mechanism, and standard OpenTelemetry metrics. If you don't import it, no OpenTelemetry code is loaded. The `@opentelemetry/api` package is a no-op unless an SDK is configured, so there's zero overhead when tracing is disabled.
+OpenTelemetry integration is opt-in, implemented as a pre-built interceptor. Import `createObservabilityInterceptors` from `@lostgradient/weft` and you get auto-created spans for all context operations, W3C Trace Context propagation through the `headers` mechanism, and standard OpenTelemetry metrics. If you don't import it, no OpenTelemetry code is loaded. The `@opentelemetry/api` package is a no-op unless an SDK is configured, so there's zero overhead when tracing is disabled.
 
 See [Observability guide](../guides/observability.md).
 

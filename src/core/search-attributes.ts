@@ -64,7 +64,7 @@ function sortableHexToFloat(hex: string): number {
  *
  * @example
  * ```ts
- * import { encodeAttributeValue } from 'weft';
+ * import { encodeAttributeValue } from '@lostgradient/weft';
  *
  * console.log(encodeAttributeValue('acme'));        // 's:acme'
  * console.log(encodeAttributeValue(42));            // 'n:...' (sortable hex)
@@ -115,7 +115,7 @@ export function validateEncodedValueSize(encoded: string, attributeName: string)
  *
  * @example
  * ```ts
- * import { encodeAttributeValue, decodeAttributeValue } from 'weft';
+ * import { encodeAttributeValue, decodeAttributeValue } from '@lostgradient/weft';
  *
  * const encoded = encodeAttributeValue('acme');
  * const decoded = decodeAttributeValue(encoded, 'string');
@@ -250,7 +250,7 @@ const EMPTY_VALUE = new Uint8Array(0);
  *
  * @example
  * ```ts
- * import { buildIndexOperations } from 'weft';
+ * import { buildIndexOperations } from '@lostgradient/weft';
  *
  * const ops = buildIndexOperations(
  *   'wf-123',

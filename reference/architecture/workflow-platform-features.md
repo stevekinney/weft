@@ -624,14 +624,14 @@ Observability is implemented as a pre-built interceptor pair. It uses standard O
 #### Design Principles
 
 1. **Uses `@opentelemetry/api` directly.** No custom tracing layer. The API package is a lightweight no-op unless an SDK is configured — zero overhead if you don't enable tracing.
-2. **Opt-in, not built-in.** Import from `weft/observability`. If you don't import it, no OpenTelemetry code is loaded.
+2. **Opt-in, not built-in.** Import from `@lostgradient/weft/observability`. If you don't import it, no OpenTelemetry code is loaded.
 3. **Auto-created spans** for all context operations.
 4. **W3C Trace Context propagation** via the interceptor `headers` Map.
 
 #### API
 
 ```typescript
-import { createObservabilityInterceptors } from 'weft/observability';
+import { createObservabilityInterceptors } from '@lostgradient/weft/observability';
 
 interface ObservabilityOptions {
   tracerName?: string; // Defaults to "weft"

@@ -27,7 +27,7 @@ function randomHex(byteCount: number): string {
  *
  * @example
  * ```ts
- * import { formatTraceParent, type TraceContext } from 'weft/observability';
+ * import { formatTraceParent, type TraceContext } from '@lostgradient/weft/observability';
  *
  * const context: TraceContext = {
  *   version: '00',
@@ -63,7 +63,7 @@ const ALL_ZEROS_SPAN_ID = '0000000000000000';
  *
  * @example
  * ```ts
- * import { parseTraceParent } from 'weft';
+ * import { parseTraceParent } from '@lostgradient/weft';
  *
  * const ctx = parseTraceParent(
  *   '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01',
@@ -95,7 +95,7 @@ export function parseTraceParent(value: string): TraceContext | null {
  *
  * @example
  * ```ts
- * import { formatTraceParent, generateTraceId, generateSpanId } from 'weft';
+ * import { formatTraceParent, generateTraceId, generateSpanId } from '@lostgradient/weft';
  *
  * const header = formatTraceParent({
  *   version: '00',
@@ -120,7 +120,7 @@ export function formatTraceParent(context: TraceContext): string {
  *
  * @example
  * ```ts
- * import { extractTraceParent } from 'weft/observability';
+ * import { extractTraceParent } from '@lostgradient/weft/observability';
  *
  * const headers = new Map([
  *   ['traceparent', '00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01'],
@@ -139,7 +139,7 @@ export function extractTraceParent(headers: Map<string, string>): TraceContext |
  *
  * @example
  * ```ts
- * import { generateSpanId, generateTraceId, injectTraceParent } from 'weft/observability';
+ * import { generateSpanId, generateTraceId, injectTraceParent } from '@lostgradient/weft/observability';
  *
  * const headers = new Map<string, string>();
  * injectTraceParent(headers, {
@@ -164,7 +164,7 @@ export function injectTraceParent(headers: Map<string, string>, context: TraceCo
  *
  * @example
  * ```ts
- * import { generateTraceId } from 'weft';
+ * import { generateTraceId } from '@lostgradient/weft';
  *
  * const traceId = generateTraceId();
  * console.log(traceId.length);  // 32
@@ -180,7 +180,7 @@ export function generateTraceId(): string {
  *
  * @example
  * ```ts
- * import { generateSpanId } from 'weft';
+ * import { generateSpanId } from '@lostgradient/weft';
  *
  * const spanId = generateSpanId();
  * console.log(spanId.length);  // 16

@@ -10,8 +10,8 @@ Durable workflows are inherently hard to test. They span time—sleeps, retries,
 `TestEngine` is a subclass of `Engine` backed by in-memory storage and a virtual clock. Everything behaves like the real engine, but you control time and can mock activities.
 
 ```typescript partial
-import { workflow } from 'weft';
-import { TestEngine } from 'weft/testing';
+import { workflow } from '@lostgradient/weft';
+import { TestEngine } from '@lostgradient/weft/testing';
 
 const engine = new TestEngine();
 
@@ -144,8 +144,8 @@ Here's a complete test combining everything:
 
 ```typescript partial
 import { describe, expect, it } from 'bun:test';
-import { workflow } from 'weft';
-import { TestEngine } from 'weft/testing';
+import { workflow } from '@lostgradient/weft';
+import { TestEngine } from '@lostgradient/weft/testing';
 
 describe('order workflow', () => {
   it('processes an order end to end', async () => {

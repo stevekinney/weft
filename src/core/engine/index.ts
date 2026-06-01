@@ -301,7 +301,7 @@ export const ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING = Symbol('engineSignalWaiter
  *
  * @example Run a workflow with an activity
  * ```ts
- * import { workflow, activity, Engine, type Context, type WorkflowContext } from 'weft';
+ * import { workflow, activity, Engine, type Context, type WorkflowContext } from '@lostgradient/weft';
  * const fetchUser = activity({
  *   name: 'fetchUser',
  *   execute: async (input: unknown) => ({ name: 'Alice' }),
@@ -319,8 +319,8 @@ export const ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING = Symbol('engineSignalWaiter
  *
  * @example With a SQLite backend
  * ```ts
- * import { Engine } from 'weft';
- * import { BunSQLiteStorage } from 'weft/storage/sqlite/bun';
+ * import { Engine } from '@lostgradient/weft';
+ * import { BunSQLiteStorage } from '@lostgradient/weft/storage/sqlite/bun';
  * await using storage = new BunSQLiteStorage('./weft.db');
  * await using engine = new Engine({ storage });
  * await engine.recoverAll();
@@ -341,7 +341,7 @@ export class Engine<
    *
    * @example
    * ```ts
-   * import { activity, Engine, workflow } from 'weft';
+   * import { activity, Engine, workflow } from '@lostgradient/weft';
    *
    * const greet = activity({ name: 'greet', execute: async (name: string) => `Hi ${name}` });
    * const welcome = workflow({ name: 'welcome' }).execute(async function* (ctx, input: string) {
@@ -643,7 +643,7 @@ export class Engine<
    *
    * @example
    * ```ts
-   * import { Engine, workflow, type WorkflowContext } from 'weft';
+   * import { Engine, workflow, type WorkflowContext } from '@lostgradient/weft';
    *
    * const engine = new Engine();
    * engine.register(
@@ -713,7 +713,7 @@ export class Engine<
    *
    * @example
    * ```ts
-   * import { Engine, workflow } from 'weft';
+   * import { Engine, workflow } from '@lostgradient/weft';
    *
    * const welcome = workflow({ name: 'welcome' })
    *   .execute(async function* (_ctx, name: string) {
@@ -1306,8 +1306,8 @@ export class Engine<
    *
    * @example
    * ```ts
-   * import { Engine } from 'weft';
-   * declare const externalEntry: import('weft').TimerEntry;
+   * import { Engine } from '@lostgradient/weft';
+   * declare const externalEntry: import('@lostgradient/weft').TimerEntry;
    * const engine = new Engine();
    * await engine.fireTimer(externalEntry);
    * ```

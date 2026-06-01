@@ -234,7 +234,7 @@ function composeSignalReceivedHook(
  *
  * @example
  * ```ts
- * import { composeWorkflowInterceptors, type WorkflowInterceptor } from 'weft';
+ * import { composeWorkflowInterceptors, type WorkflowInterceptor } from '@lostgradient/weft';
  *
  * const tracing: WorkflowInterceptor = {
  *   *activity(ctx, next) {

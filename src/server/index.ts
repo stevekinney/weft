@@ -75,7 +75,7 @@ export {
  *
  * @example
  * ```ts
- * import { DASHBOARD_PAGE_ROUTES } from 'weft/server';
+ * import { DASHBOARD_PAGE_ROUTES } from '@lostgradient/weft/server';
  *
  * // The dashboard owns the origin root via these specific page routes.
  * console.log(DASHBOARD_PAGE_ROUTES[0]); // '/'
@@ -89,7 +89,7 @@ export const DASHBOARD_PAGE_ROUTES: readonly string[] = DASHBOARD_MOUNT_PATTERNS
  *
  * @example
  * ```ts
- * import type { UnauthenticatedAccessPolicy } from 'weft/server';
+ * import type { UnauthenticatedAccessPolicy } from '@lostgradient/weft/server';
  *
  * const unauthenticatedAccess: UnauthenticatedAccessPolicy = 'reject';
  * void unauthenticatedAccess;
@@ -106,8 +106,8 @@ export type UnauthenticatedAccessPolicy = 'warn' | 'allow' | 'reject';
  *
  * @example
  * ```ts
- * import { serve, type ServeOptions } from 'weft/server';
- * import { Engine, MemoryStorage } from 'weft';
+ * import { serve, type ServeOptions } from '@lostgradient/weft/server';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });
@@ -237,7 +237,7 @@ export interface ServeOptions {
  *
  * @example
  * ```ts
- * import { type TaskDispatch } from 'weft/server';
+ * import { type TaskDispatch } from '@lostgradient/weft/server';
  *
  * const task: TaskDispatch = {
  *   operationId: crypto.randomUUID(),
@@ -286,15 +286,15 @@ export interface TaskDispatch {
  * block exits.
  *
  * **Type availability note:** `registry` is typed as `WorkerRegistry`, which
- * is exported from `'weft'` but not from `'weft/server'`. `taskQueue` is typed
+ * is exported from `'@lostgradient/weft'` but not from `'@lostgradient/weft/server'`. `taskQueue` is typed
  * as `TaskQueue`, which is an internal type not re-exported from any public
  * entry point. Prefer using `WeftServer` methods (`dispatchTask`,
  * `shutdownWorker`, etc.) rather than reaching into `taskQueue` directly.
  *
  * @example
  * ```ts
- * import { serve, type WeftServer } from 'weft/server';
- * import { Engine, MemoryStorage } from 'weft';
+ * import { serve, type WeftServer } from '@lostgradient/weft/server';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });
@@ -340,13 +340,13 @@ export interface WeftServer extends AsyncDisposable {
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage, workflow } from 'weft';
- * import { serve } from 'weft/server';
+ * import { Engine, MemoryStorage, workflow } from '@lostgradient/weft';
+ * import { serve } from '@lostgradient/weft/server';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * engine.register(
  *   workflow({ name: 'greet' }).execute(async function* (
- *     _ctx: import('weft').WorkflowContext,
+ *     _ctx: import('@lostgradient/weft').WorkflowContext,
  *     input: { name: string },
  *   ) {
  *     return `Hello, ${input.name}!`;

@@ -36,7 +36,7 @@ import { THRESHOLDS } from './types.ts';
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage, collectDiagnostics } from 'weft';
+ * import { Engine, MemoryStorage, collectDiagnostics } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * const report = await collectDiagnostics(storage, ':memory:');

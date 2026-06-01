@@ -19,7 +19,7 @@ export type ReviewDecision = 'approved' | 'rejected' | 'needs-changes';
  *
  * @example
  * ```ts
- * import { Engine, type SubmitReviewOptions } from 'weft';
+ * import { Engine, type SubmitReviewOptions } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * const options: SubmitReviewOptions = {
@@ -50,7 +50,7 @@ export interface SubmitReviewOptions {
  *
  * @example
  * ```ts
- * import type { ReviewStatus } from 'weft';
+ * import type { ReviewStatus } from '@lostgradient/weft';
  *
  * const status: ReviewStatus = 'pending';
  * void status;
@@ -66,7 +66,7 @@ export type ReviewStatus = 'pending' | 'completed';
  *
  * @example
  * ```ts
- * import type { ReviewListFilter } from 'weft';
+ * import type { ReviewListFilter } from '@lostgradient/weft';
  *
  * const filter: ReviewListFilter = {
  *   status: 'completed',
@@ -89,7 +89,7 @@ export interface ReviewListFilter {
  *
  * @example
  * ```ts
- * import type { PendingReviewEntry } from 'weft';
+ * import type { PendingReviewEntry } from '@lostgradient/weft';
  *
  * const entry: PendingReviewEntry = {
  *   status: 'pending',
@@ -116,7 +116,7 @@ export interface PendingReviewEntry extends ReviewRequest {
  *
  * @example
  * ```ts
- * import type { CompletedReviewEntry } from 'weft';
+ * import type { CompletedReviewEntry } from '@lostgradient/weft';
  *
  * const entry: CompletedReviewEntry = {
  *   status: 'completed',
@@ -154,7 +154,7 @@ export interface CompletedReviewEntry extends CompletedReviewDecision {
  *
  * @example
  * ```ts
- * import type { ReviewListEntry } from 'weft';
+ * import type { ReviewListEntry } from '@lostgradient/weft';
  *
  * function summarize(entry: ReviewListEntry): string {
  *   return entry.status === 'completed'

@@ -6,20 +6,20 @@ Weft's performance advantage isn't the result of micro-optimizations. It's archi
 
 Here's the head-to-head comparison.
 
-| Dimension               | Temporal                           | Weft (SQLite)             | Weft (LMDB)               |
-| ----------------------- | ---------------------------------- | ------------------------- | ------------------------- |
-| **Recovery**            | O(n) replay                        | O(1) checkpoint           | O(1) checkpoint           |
-| **Storage read**        | ~1ms (network)                     | ~10us (in-process)        | ~1us (memory-mapped)      |
-| **Storage write**       | ~2ms (network)                     | ~20us (WAL)               | ~10us (batched)           |
-| **Task claim**          | gRPC round-trip                    | 1 SQL statement           | 1 range read + put        |
-| **Cold start**          | Seconds (Go + DB pool)             | <50ms (Bun + SQLite)      | <50ms (Bun + mmap)        |
-| **Memory per workflow** | ~50KB (history cache)              | ~2KB (checkpoint)         | ~2KB (checkpoint)         |
-| **Single binary**       | No                                 | Yes                       | No (native addon)         |
-| **Browser**             | No                                 | Yes (IndexedDB)           | No                        |
-| **History growth**      | O(n) with activity count           | O(1) fixed-size           | O(1) fixed-size           |
-| **Dev environment**     | Docker Compose (~minutes)          | `bun add weft` (~seconds) | `bun add weft` (~seconds) |
-| **Bundle step**         | Webpack per workflow change        | None                      | None                      |
-| **Max workflow length** | ~50K events (then `continueAsNew`) | Unlimited                 | Unlimited                 |
+| Dimension               | Temporal                           | Weft (SQLite)                           | Weft (LMDB)                             |
+| ----------------------- | ---------------------------------- | --------------------------------------- | --------------------------------------- |
+| **Recovery**            | O(n) replay                        | O(1) checkpoint                         | O(1) checkpoint                         |
+| **Storage read**        | ~1ms (network)                     | ~10us (in-process)                      | ~1us (memory-mapped)                    |
+| **Storage write**       | ~2ms (network)                     | ~20us (WAL)                             | ~10us (batched)                         |
+| **Task claim**          | gRPC round-trip                    | 1 SQL statement                         | 1 range read + put                      |
+| **Cold start**          | Seconds (Go + DB pool)             | <50ms (Bun + SQLite)                    | <50ms (Bun + mmap)                      |
+| **Memory per workflow** | ~50KB (history cache)              | ~2KB (checkpoint)                       | ~2KB (checkpoint)                       |
+| **Single binary**       | No                                 | Yes                                     | No (native addon)                       |
+| **Browser**             | No                                 | Yes (IndexedDB)                         | No                                      |
+| **History growth**      | O(n) with activity count           | O(1) fixed-size                         | O(1) fixed-size                         |
+| **Dev environment**     | Docker Compose (~minutes)          | `bun add @lostgradient/weft` (~seconds) | `bun add @lostgradient/weft` (~seconds) |
+| **Bundle step**         | Webpack per workflow change        | None                                    | None                                    |
+| **Max workflow length** | ~50K events (then `continueAsNew`) | Unlimited                               | Unlimited                               |
 
 The numbers that matter most: 100x faster storage reads (in-process versus network), O(1) versus O(n) recovery, and 25x less memory per workflow.
 

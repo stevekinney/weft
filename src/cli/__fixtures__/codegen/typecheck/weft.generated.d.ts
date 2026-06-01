@@ -3,7 +3,7 @@
 // (start/schedule input and handle.result() output) per workflow.
 /* eslint-disable */
 
-declare module 'weft' {
+declare module '@lostgradient/weft' {
   interface WorkflowRegistry {
     "welcome": { input: { "name": string; }; output: { "greeting": string; } };
   }

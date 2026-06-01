@@ -25,7 +25,7 @@
  *
  * @example
  * ```ts
- * import { Engine, type PayloadSizePolicy } from 'weft';
+ * import { Engine, type PayloadSizePolicy } from '@lostgradient/weft';
  *
  * const payloadSize: PayloadSizePolicy = { maxBytes: 1_048_576 };
  * const engine = new Engine({ payloadSize });

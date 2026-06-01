@@ -13,7 +13,7 @@
  * so a string consumer never sees corrupted data masquerading as
  * valid text.
  *
- * @module weft/storage/text-value-store
+ * @module @lostgradient/weft/storage/text-value-store
  */
 import { storageDeletePrefix, storageHas, storageKeys, type Storage } from './interface';
 
@@ -27,8 +27,8 @@ import { storageDeletePrefix, storageHas, storageKeys, type Storage } from './in
  *
  * @example
  * ```ts
- * import { MemoryStorage } from 'weft';
- * import { textValueStore, type TextValueStore } from 'weft/storage/text-value-store';
+ * import { MemoryStorage } from '@lostgradient/weft';
+ * import { textValueStore, type TextValueStore } from '@lostgradient/weft/storage/text-value-store';
  *
  * await using base = new MemoryStorage();
  * const store: TextValueStore = textValueStore(base);
@@ -77,8 +77,8 @@ const textDecoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
  *
  * @example
  * ```ts
- * import { MemoryStorage } from 'weft';
- * import { textValueStore } from 'weft/storage/text-value-store';
+ * import { MemoryStorage } from '@lostgradient/weft';
+ * import { textValueStore } from '@lostgradient/weft/storage/text-value-store';
  *
  * await using base = new MemoryStorage();
  * const store = textValueStore(base);

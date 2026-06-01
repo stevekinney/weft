@@ -19,7 +19,7 @@ type ECDSAAlgorithm = 'ES256' | 'ES384' | 'ES512';
  *
  * @example
  * ```ts
- * import { type JWTAlgorithm, type JWTConfig } from 'weft';
+ * import { type JWTAlgorithm, type JWTConfig } from '@lostgradient/weft';
  *
  * const algorithm: JWTAlgorithm = 'RS256';
  * const config: JWTConfig = {
@@ -45,7 +45,7 @@ export type JWTAlgorithm = HMACAlgorithm | RSAAlgorithm | ECDSAAlgorithm;
  *
  * @example
  * ```ts
- * import { type JWTConfig } from 'weft';
+ * import { type JWTConfig } from '@lostgradient/weft';
  *
  * const jwtConfig: JWTConfig = {
  *   secret: process.env['JWT_SECRET'] ?? '',
@@ -81,7 +81,7 @@ export type JWTConfig = {
  *
  * @example
  * ```ts
- * import { type MTLSConfig } from 'weft';
+ * import { type MTLSConfig } from '@lostgradient/weft';
  * import { readFileSync } from 'node:fs';
  *
  * const mtlsConfig: MTLSConfig = {
@@ -114,7 +114,7 @@ export type MTLSConfig = {
  *
  * @example
  * ```ts
- * import { type AuthConfig } from 'weft';
+ * import { type AuthConfig } from '@lostgradient/weft';
  *
  * const auth: AuthConfig = {
  *   apiKeys: [process.env['API_KEY'] ?? ''],
@@ -184,7 +184,7 @@ export type AuthConfig = {
  *
  * @example
  * ```ts
- * import { createAuthenticator, type AuthMethod } from 'weft';
+ * import { createAuthenticator, type AuthMethod } from '@lostgradient/weft';
  *
  * const authenticate = await createAuthenticator({ apiKeys: ['key-1'] });
  * const req = new Request('http://localhost/v1/workflows', {
@@ -229,7 +229,7 @@ export type AuthContext = {
  *
  * @example
  * ```ts
- * import { createAuthenticator, type AuthResult } from 'weft';
+ * import { createAuthenticator, type AuthResult } from '@lostgradient/weft';
  *
  * const authenticate = await createAuthenticator({ apiKeys: ['s3cr3t'] });
  * const req = new Request('http://localhost/v1/workflows');
@@ -255,7 +255,7 @@ export type AuthResult =
  *
  * @example
  * ```ts
- * import { createAuthenticator, type JWTPayload } from 'weft';
+ * import { createAuthenticator, type JWTPayload } from '@lostgradient/weft';
  *
  * const authenticate = await createAuthenticator({
  *   jwt: { secret: 'test-secret' },
@@ -285,7 +285,7 @@ export type JWTPayload = Record<string, unknown>;
  *
  * @example
  * ```ts
- * import { createAuthenticator, type Authenticator } from 'weft';
+ * import { createAuthenticator, type Authenticator } from '@lostgradient/weft';
  *
  * const authenticate: Authenticator = await createAuthenticator({
  *   apiKeys: ['my-key'],

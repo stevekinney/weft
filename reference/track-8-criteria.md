@@ -31,7 +31,7 @@ When wave PRs cite a criterion, they cite the `id` here, not a line number in `a
 
 ### 8b. JSON-RPC transport surface
 
-- **`8b-1`**: JSON-RPC 2.0 is supported over three runtime transports. `POST /jsonrpc`, WebSocket upgrade on `/jsonrpc`, and newline-delimited JSON over a dedicated stdio runtime entrypoint. This stdio runtime surface is distinct from the existing MCP stdio JSON-RPC transport in `weft/mcp/stdio`; they may share framing or codec helpers if useful, but they are different protocol surfaces with different method namespaces and semantics.
+- **`8b-1`**: JSON-RPC 2.0 is supported over three runtime transports. `POST /jsonrpc`, WebSocket upgrade on `/jsonrpc`, and newline-delimited JSON over a dedicated stdio runtime entrypoint. This stdio runtime surface is distinct from the existing MCP stdio transport exported from `@lostgradient/weft/mcp`; they may share framing or codec helpers if useful, but they are different protocol surfaces with different method namespaces and semantics.
 - **`8b-2`**: Runtime JSON-RPC methods use stable namespaced names. Examples: `weft.workflows.start`, `weft.workflows.get`, `weft.workflows.signal`. These names belong to the runtime API surface and are not MCP method names.
 - **`8b-3`**: JSON-RPC uses named params only. The OpenRPC contract documents `paramStructure: "by-name"` so generated clients and manual callers converge on one request shape.
 - **`8b-4`**: Batch requests are supported. The shared dispatcher validates and executes JSON-RPC batches without inventing transport-specific behavior.

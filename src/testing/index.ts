@@ -1,11 +1,11 @@
 /**
  * Public testing primitives for weft consumers.
  *
- * Imported via `weft/testing` to keep production bundles free of
+ * Imported via `@lostgradient/weft/testing` to keep production bundles free of
  * test-only code. Re-exports {@link TestEngine}, {@link TimeControl},
  * {@link ActivityMockRegistry}, and the chaos helpers.
  *
- * @module weft/testing
+ * @module @lostgradient/weft/testing
  */
 
 // Bun 1.3.13 minifier workaround: pure re-export barrels
@@ -28,7 +28,7 @@ import { TimeControl } from './time-control';
  *
  * @example
  * ```ts
- * import { ActivityMockRegistry } from 'weft/testing';
+ * import { ActivityMockRegistry } from '@lostgradient/weft/testing';
  * const registry = new ActivityMockRegistry();
  * void registry;
  * ```
@@ -40,7 +40,7 @@ const exportedActivityMockRegistry = ActivityMockRegistry;
  *
  * @example
  * ```ts
- * import { ChaosNonRetryableError } from 'weft/testing';
+ * import { ChaosNonRetryableError } from '@lostgradient/weft/testing';
  * const error = new ChaosNonRetryableError('chaos');
  * void error;
  * ```
@@ -52,7 +52,7 @@ const exportedChaosNonRetryableError = ChaosNonRetryableError;
  *
  * @example
  * ```ts
- * import { ChaosTimeoutError } from 'weft/testing';
+ * import { ChaosTimeoutError } from '@lostgradient/weft/testing';
  * const error = new ChaosTimeoutError(1000);
  * void error;
  * ```
@@ -64,7 +64,7 @@ const exportedChaosTimeoutError = ChaosTimeoutError;
  *
  * @example
  * ```ts
- * import { ChaosTransientError } from 'weft/testing';
+ * import { ChaosTransientError } from '@lostgradient/weft/testing';
  * const error = new ChaosTransientError('transient');
  * void error;
  * ```
@@ -76,7 +76,7 @@ const exportedChaosTransientError = ChaosTransientError;
  *
  * @example
  * ```ts
- * import { TestEngine } from 'weft/testing';
+ * import { TestEngine } from '@lostgradient/weft/testing';
  * await using engine = new TestEngine();
  * void engine;
  * ```
@@ -88,7 +88,7 @@ const exportedTestEngine = TestEngine;
  *
  * @example
  * ```ts
- * import { TimeControl } from 'weft/testing';
+ * import { TimeControl } from '@lostgradient/weft/testing';
  * const control = new TimeControl();
  * void control;
  * ```
@@ -100,7 +100,7 @@ const exportedTimeControl = TimeControl;
  *
  * @example
  * ```ts
- * import { withChaos } from 'weft/testing';
+ * import { withChaos } from '@lostgradient/weft/testing';
  * const wrapped = withChaos(async () => 'ok', { faultRate: 0.1 });
  * void wrapped;
  * ```
@@ -112,7 +112,7 @@ const exportedWithChaos = withChaos;
  *
  * @example
  * ```ts
- * import { spawnServerSubprocess } from 'weft/testing';
+ * import { spawnServerSubprocess } from '@lostgradient/weft/testing';
  * void spawnServerSubprocess;
  * ```
  */
@@ -123,7 +123,7 @@ const exportedSpawnServerSubprocess = spawnServerSubprocess;
  *
  * @example
  * ```ts
- * import { killAndReboot } from 'weft/testing';
+ * import { killAndReboot } from '@lostgradient/weft/testing';
  * void killAndReboot;
  * ```
  */
@@ -134,7 +134,7 @@ const exportedKillAndReboot = killAndReboot;
  *
  * @example
  * ```ts
- * import { withSubprocessServer } from 'weft/testing';
+ * import { withSubprocessServer } from '@lostgradient/weft/testing';
  * void withSubprocessServer;
  * ```
  */

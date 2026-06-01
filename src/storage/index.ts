@@ -9,16 +9,16 @@
  * per-backend subpaths:
  *
  * ```ts
- * import { CompressedStorage } from 'weft/storage/compressed'; // requires node:zlib / Bun
- * import { SQLiteStorage }     from 'weft/storage/sqlite';     // Bun or Node SQLite
- * import { LMDBStorage }       from 'weft/storage/lmdb';       // peer: lmdb
- * import { TursoStorage }      from 'weft/storage/turso';      // peer: @libsql/client
- * import { IndexedDBStorage }  from 'weft/storage/indexeddb';  // browser-only
- * import { WebExtensionStorage } from 'weft/storage/web-extension'; // extension-only
- * import { HTTPStorage }       from 'weft/storage/http';       // remote storage
+ * import { CompressedStorage } from '@lostgradient/weft/storage/compressed'; // requires node:zlib / Bun
+ * import { SQLiteStorage }     from '@lostgradient/weft/storage/sqlite';     // Bun or Node SQLite
+ * import { LMDBStorage }       from '@lostgradient/weft/storage/lmdb';       // peer: lmdb
+ * import { TursoStorage }      from '@lostgradient/weft/storage/turso';      // peer: @libsql/client
+ * import { IndexedDBStorage }  from '@lostgradient/weft/storage/indexeddb';  // browser-only
+ * import { WebExtensionStorage } from '@lostgradient/weft/storage/web-extension'; // extension-only
+ * import { HTTPStorage }       from '@lostgradient/weft/storage/http';       // remote storage
  * ```
  *
- * @module weft/storage
+ * @module @lostgradient/weft/storage
  */
 import { storageDeleteRange } from './delete-range';
 import {
@@ -46,7 +46,7 @@ import { jsonCodec, msgpackCodec, withCodec } from './typed-storage';
  *
  * @example
  * ```ts
- * import { jsonCodec } from 'weft/storage';
+ * import { jsonCodec } from '@lostgradient/weft/storage';
  * const codec = jsonCodec();
  * void codec;
  * ```
@@ -58,7 +58,7 @@ const exportedJsonCodec = jsonCodec;
  *
  * @example
  * ```ts
- * import { workflow, KEYS } from 'weft/storage';
+ * import { workflow, KEYS } from '@lostgradient/weft/storage';
  * const key = KEYS.workflow('wf-1');
  * void key;
  * ```
@@ -70,7 +70,7 @@ const exportedKeys = KEYS;
  *
  * @example
  * ```ts
- * import { MemoryStorage } from 'weft/storage';
+ * import { MemoryStorage } from '@lostgradient/weft/storage';
  * await using storage = new MemoryStorage();
  * void storage;
  * ```
@@ -82,7 +82,7 @@ const exportedMemoryStorage = MemoryStorage;
  *
  * @example
  * ```ts
- * import { msgpackCodec } from 'weft/storage';
+ * import { msgpackCodec } from '@lostgradient/weft/storage';
  * const codec = msgpackCodec();
  * void codec;
  * ```
@@ -94,7 +94,7 @@ const exportedMsgpackCodec = msgpackCodec;
  *
  * @example
  * ```ts
- * import { resolveStorage } from 'weft/storage';
+ * import { resolveStorage } from '@lostgradient/weft/storage';
  * const storage = await resolveStorage({ type: 'memory' });
  * void storage;
  * ```
@@ -106,7 +106,7 @@ const exportedResolveStorage = resolveStorage;
  *
  * @example
  * ```ts
- * import { MemoryStorage, ScopedStorage } from 'weft/storage';
+ * import { MemoryStorage, ScopedStorage } from '@lostgradient/weft/storage';
  * await using base = new MemoryStorage();
  * const scoped = new ScopedStorage(base, 'scope:');
  * void scoped;
@@ -119,7 +119,7 @@ const exportedScopedStorage = ScopedStorage;
  *
  * @example
  * ```ts
- * import { MemoryStorage, scopedStorage } from 'weft/storage';
+ * import { MemoryStorage, scopedStorage } from '@lostgradient/weft/storage';
  * await using base = new MemoryStorage();
  * const scoped = scopedStorage(base, 'scope:');
  * void scoped;
@@ -132,7 +132,7 @@ const exportedScopedStorageFactory = scopedStorage;
  *
  * @example
  * ```ts
- * import { MemoryStorage, storageConditionalBatch } from 'weft/storage';
+ * import { MemoryStorage, storageConditionalBatch } from '@lostgradient/weft/storage';
  * await using storage = new MemoryStorage();
  * await storageConditionalBatch(storage, [], []);
  * ```
@@ -144,7 +144,7 @@ const exportedStorageConditionalBatch = storageConditionalBatch;
  *
  * @example
  * ```ts
- * import { MemoryStorage, storageDeleteRange } from 'weft/storage';
+ * import { MemoryStorage, storageDeleteRange } from '@lostgradient/weft/storage';
  * await using storage = new MemoryStorage();
  * await storage.put('ev:wf:0000000001', new Uint8Array([1]));
  * const deleted = await storageDeleteRange(storage, 'ev:wf:', { lte: 'ev:wf:0000000001' });
@@ -158,7 +158,7 @@ const exportedStorageDeleteRange = storageDeleteRange;
  *
  * @example
  * ```ts
- * import { MemoryStorage, requireStorageCapability } from 'weft/storage';
+ * import { MemoryStorage, requireStorageCapability } from '@lostgradient/weft/storage';
  * await using storage = new MemoryStorage();
  * requireStorageCapability(storage, 'conditionalBatch', 'compare-and-swap');
  * ```
@@ -170,7 +170,7 @@ const exportedRequireStorageCapability = requireStorageCapability;
  *
  * @example
  * ```ts
- * import { storageValuesEqual } from 'weft/storage';
+ * import { storageValuesEqual } from '@lostgradient/weft/storage';
  * const equal = storageValuesEqual(new Uint8Array([1]), new Uint8Array([1]));
  * void equal;
  * ```
@@ -182,7 +182,7 @@ const exportedStorageValuesEqual = storageValuesEqual;
  *
  * @example
  * ```ts
- * import { MemoryStorage, textValueStore } from 'weft/storage';
+ * import { MemoryStorage, textValueStore } from '@lostgradient/weft/storage';
  * await using base = new MemoryStorage();
  * const store = textValueStore(base);
  * void store;
@@ -195,7 +195,7 @@ const exportedTextValueStore = textValueStore;
  *
  * @example
  * ```ts
- * import { jsonCodec, MemoryStorage, withCodec } from 'weft/storage';
+ * import { jsonCodec, MemoryStorage, withCodec } from '@lostgradient/weft/storage';
  * await using base = new MemoryStorage();
  * const typed = withCodec(base, jsonCodec());
  * void typed;

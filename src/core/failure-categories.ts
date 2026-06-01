@@ -14,7 +14,6 @@ const timeoutErrorNames = new Set([
   'ReviewTimeoutError',
   'UpdateTimeoutError',
   'WorkflowTimeoutError',
-  'ChaosTimeoutError',
   'TimeoutError',
 ]);
 const cancellationErrorNames = new Set([

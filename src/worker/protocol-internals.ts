@@ -2,7 +2,7 @@
  * Internal helpers used by `./protocol.ts` to enforce the RemoteWorker
  * protocol contract at the trust boundary.
  *
- * Nothing in this module is part of the public `weft/worker-protocol` surface
+ * Nothing in this module is part of the public `@lostgradient/weft/worker-protocol` surface
  * (other than `isRemoteWorkerJsonValue`, which `protocol.ts` re-exports).
  * Splitting these helpers out of `protocol.ts` keeps the canonical parser
  * module focused on the schema-to-guard mapping a reviewer audits.
@@ -22,7 +22,7 @@ import type {
  *
  * @example
  * ```ts
- * import type { RemoteWorkerProtocolFailure } from 'weft/worker-protocol';
+ * import type { RemoteWorkerProtocolFailure } from '@lostgradient/weft/worker-protocol';
  *
  * const failure: RemoteWorkerProtocolFailure = {
  *   code: 'invalid_message',
@@ -41,7 +41,7 @@ export type RemoteWorkerProtocolFailure = {
  *
  * @example
  * ```ts
- * import type { RemoteWorkerProtocolParseResult, RegisterMessage } from 'weft/worker-protocol';
+ * import type { RemoteWorkerProtocolParseResult, RegisterMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const result: RemoteWorkerProtocolParseResult<RegisterMessage> = {
  *   ok: false,
@@ -62,7 +62,7 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
  *
  * @example
  * ```ts
- * import { isRemoteWorkerJsonValue } from 'weft/worker-protocol';
+ * import { isRemoteWorkerJsonValue } from '@lostgradient/weft/worker-protocol';
  *
  * const canSend = isRemoteWorkerJsonValue({ nested: ['ok'] });
  * ```

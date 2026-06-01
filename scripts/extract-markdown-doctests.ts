@@ -31,7 +31,7 @@
  *    in-memory manifest's `publicEntryPoints` via `scripts/lib/jsdoc-manifest.ts`).
  *    The public-face JSDoc gate (`scripts/check-declaration-jsdoc.ts --all`) already proves
  *    source-vs-dist parity for the consumer-visible surface, so a snippet that
- *    imports `weft/storage/sqlite/node` resolves to `src/storage/node-sqlite.ts`
+ *    imports `@lostgradient/weft/storage/sqlite/node` resolves to `src/storage/node-sqlite.ts`
  *    and the result is verifiably equivalent to typechecking against built
  *    `dist/`. We avoid requiring a build (30+ seconds) for the doctest gate.
  *

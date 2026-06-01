@@ -24,8 +24,8 @@ import { scopedStorage } from './scoped-storage';
  *
  * @example
  * ```ts
- * import { LMDBStorage } from 'weft/storage/lmdb';
- * import { workflow, Engine } from 'weft';
+ * import { LMDBStorage } from '@lostgradient/weft/storage/lmdb';
+ * import { workflow, Engine } from '@lostgradient/weft';
  *
  * await using storage = new LMDBStorage('./weft-data');
  * await using engine = new Engine({ storage });

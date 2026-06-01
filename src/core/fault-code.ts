@@ -27,7 +27,7 @@ import type { FailureCategory } from './types/identity.ts';
  *
  * @example
  * ```ts
- * import { HttpClientError, type FaultCode } from 'weft';
+ * import { HttpClientError, type FaultCode } from '@lostgradient/weft';
  *
  * function describe(error: HttpClientError): string {
  *   const code: FaultCode | undefined = error.faultCode;
@@ -62,7 +62,7 @@ export type FaultCode =
  *
  * @example
  * ```ts
- * import { FAULT_CODE_TO_FAILURE_CATEGORY } from 'weft';
+ * import { FAULT_CODE_TO_FAILURE_CATEGORY } from '@lostgradient/weft';
  *
  * FAULT_CODE_TO_FAILURE_CATEGORY.Timeout; // 'timeout'
  * ```
@@ -94,7 +94,7 @@ const faultCodes = new Set<unknown>(Object.keys(FAULT_CODE_TO_FAILURE_CATEGORY))
  *
  * @example
  * ```ts
- * import { isFaultCode } from 'weft';
+ * import { isFaultCode } from '@lostgradient/weft';
  *
  * isFaultCode('NotFound'); // true
  * isFaultCode('teapot'); // false
@@ -109,7 +109,7 @@ export function isFaultCode(value: unknown): value is FaultCode {
  *
  * @example
  * ```ts
- * import { failureCategoryForFaultCode } from 'weft';
+ * import { failureCategoryForFaultCode } from '@lostgradient/weft';
  *
  * failureCategoryForFaultCode('Timeout'); // 'timeout'
  * failureCategoryForFaultCode('EngineFailure'); // 'system'

@@ -5,7 +5,7 @@
  *
  * @example
  * ```ts
- * import { Engine, ActivityStartedEvent } from 'weft';
+ * import { Engine, ActivityStartedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('activity:started', (e: Event) => {
@@ -37,7 +37,7 @@ export class ActivityStartedEvent extends Event {
  *
  * @example
  * ```ts
- * import { Engine, ActivityCompletedEvent } from 'weft';
+ * import { Engine, ActivityCompletedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('activity:completed', (e: Event) => {
@@ -74,7 +74,7 @@ export class ActivityCompletedEvent extends Event {
  *
  * @example
  * ```ts
- * import { Engine, ActivityAsyncPendingEvent } from 'weft';
+ * import { Engine, ActivityAsyncPendingEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('activity:async-pending', (e: Event) => {
@@ -115,7 +115,7 @@ export class ActivityAsyncPendingEvent extends Event {
  *
  * @example
  * ```ts
- * import { Engine, ActivityFailedEvent } from 'weft';
+ * import { Engine, ActivityFailedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.addEventListener('activity:failed', (e: Event) => {

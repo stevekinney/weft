@@ -9,7 +9,7 @@ Session state is the narrowest scope in the [`ctx.state`](./state.md) ladder. It
 `ctx.state.session<T>(key, options?)` returns a `WorkflowSessionState<T>` handle. The core methods are `get`, `set`, `update`, `delete`, and `run`.
 
 ```ts partial
-import { workflow, type WorkflowContext } from 'weft';
+import { workflow, type WorkflowContext } from '@lostgradient/weft';
 
 engine.register(
   workflow({ name: 'counter' }).execute(async function* (ctx: WorkflowContext) {

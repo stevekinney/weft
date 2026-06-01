@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { TestEngine } from 'weft/testing';
+import { TestEngine } from '@lostgradient/weft/testing';
 
 import type { CheckoutInput } from '../src/index';
 import {

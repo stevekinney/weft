@@ -9,7 +9,7 @@ The workflow-side interceptor exposes seven optional hooks — `activity`, `slee
 All hooks are optional. Implement only the ones you need. The `activity`, `sleep`, `waitForSignal`, and `query` hooks are generators — call `yield* next(interception)` to delegate to the rest of the chain. The `childWorkflow` hook is async and returns a `Promise`. The `workflowStart` and `signalReceived` hooks are plain functions.
 
 ```ts partial
-import type { WorkflowInterceptor, ActivityInterception } from 'weft';
+import type { WorkflowInterceptor, ActivityInterception } from '@lostgradient/weft';
 
 const loggingInterceptor: WorkflowInterceptor = {
   *activity(interception, next) {
@@ -39,7 +39,7 @@ interface ActivityInterceptor {
 Activity interceptors run around activity execution specifically. Unlike workflow interceptors, the `execute` hook is async (not a generator), making it suitable for wrapping activity calls with retry logic, timeouts, or observability.
 
 ```ts partial
-import type { ActivityInterceptor } from 'weft';
+import type { ActivityInterceptor } from '@lostgradient/weft';
 
 const timingInterceptor: ActivityInterceptor = {
   async execute(interception, next) {
@@ -60,7 +60,7 @@ engine.addInterceptor(timingInterceptor);
 ## `Interceptor`
 
 ```ts partial
-import type { WorkflowInterceptor, ActivityInterceptor } from 'weft';
+import type { WorkflowInterceptor, ActivityInterceptor } from '@lostgradient/weft';
 
 interface Interceptor extends WorkflowInterceptor, ActivityInterceptor {}
 ```
@@ -185,7 +185,7 @@ Compose an array of workflow interceptors into a single `ComposedWorkflowInterce
 The first interceptor in the array is the outermost wrapper; the last is closest to the final execute function.
 
 ```ts partial
-import { composeWorkflowInterceptors } from 'weft';
+import { composeWorkflowInterceptors } from '@lostgradient/weft';
 
 const composed = composeWorkflowInterceptors([loggingInterceptor, tracingInterceptor]);
 ```
@@ -244,8 +244,8 @@ interface ComposedActivityInterceptor {
 Register interceptors on an engine instance before starting workflows:
 
 ```ts
-import { Engine } from 'weft';
-import type { ActivityInterceptor, WorkflowInterceptor } from 'weft';
+import { Engine } from '@lostgradient/weft';
+import type { ActivityInterceptor, WorkflowInterceptor } from '@lostgradient/weft';
 
 const engine = new Engine();
 

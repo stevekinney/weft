@@ -5,7 +5,7 @@
  * documented schema field. Wire-shape types live in `./protocol-messages.ts`,
  * JSON Schema documents in `./protocol-schemas.ts`, and internal helpers in
  * `./protocol-internals.ts`. All are re-exported so the public surface
- * `weft/worker-protocol` stays a single import path.
+ * `@lostgradient/weft/worker-protocol` stays a single import path.
  *
  * @module worker/protocol
  */
@@ -86,7 +86,7 @@ export type {
  *
  * @example
  * ```ts
- * import type { TaskResultMessage } from 'weft/worker-protocol';
+ * import type { TaskResultMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: TaskResultMessage = {
  *   type: 'taskResult', operationId: 'op-1', status: 'completed', value: { ok: true },
@@ -103,7 +103,7 @@ export type TaskResultMessage =
  *
  * @example
  * ```ts
- * import type { WorkerToServerMessage } from 'weft/worker-protocol';
+ * import type { WorkerToServerMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: WorkerToServerMessage = { type: 'heartbeat', workerId: 'worker-1' };
  * ```
@@ -115,7 +115,7 @@ export type WorkerToServerMessage = RegisterMessage | HeartbeatMessage | TaskRes
  *
  * @example
  * ```ts
- * import type { ServerToWorkerMessage } from 'weft/worker-protocol';
+ * import type { ServerToWorkerMessage } from '@lostgradient/weft/worker-protocol';
  *
  * const message: ServerToWorkerMessage = { type: 'shutdown' };
  * ```
@@ -421,7 +421,7 @@ function parseProtocolErrorMessage(
  * Parse and validate a worker-to-server protocol message.
  * @example
  * ```ts
- * import { parseWorkerToServerMessage } from 'weft/worker-protocol';
+ * import { parseWorkerToServerMessage } from '@lostgradient/weft/worker-protocol';
  * const result = parseWorkerToServerMessage({ type: 'heartbeat', workerId: 'worker-1' });
  * ```
  */
@@ -456,7 +456,7 @@ export function parseWorkerToServerMessage(
  * Parse and validate a server-to-worker protocol message.
  * @example
  * ```ts
- * import { parseServerToWorkerMessage } from 'weft/worker-protocol';
+ * import { parseServerToWorkerMessage } from '@lostgradient/weft/worker-protocol';
  * const result = parseServerToWorkerMessage({ type: 'shutdown' });
  * ```
  */

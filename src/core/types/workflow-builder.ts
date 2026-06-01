@@ -45,7 +45,7 @@ import type { WorkflowDefinition, WorkflowOperation } from './workflow-function.
  *
  * @example
  * ```ts
- * import { workflow, type WorkflowGenerator } from 'weft';
+ * import { workflow, type WorkflowGenerator } from '@lostgradient/weft';
  * const fn: WorkflowGenerator<{ id: string }, string, {}, {}, {}, {}, {}> =
  *   async function* (_ctx, input) { return input.id; };
  * const job = workflow({ name: 'job' }).execute(fn);
@@ -98,7 +98,7 @@ export type WorkflowContextOf<
  *
  * @example
  * ```ts
- * import type { BuilderState } from 'weft';
+ * import type { BuilderState } from '@lostgradient/weft';
  *
  * // A fresh builder starts with every flag `false`.
  * const initial: BuilderState = {
@@ -125,7 +125,7 @@ export interface BuilderState {
  *
  * @example
  * ```ts
- * import { workflow, type InitialBuilderState, type WorkflowBuilder } from 'weft';
+ * import { workflow, type InitialBuilderState, type WorkflowBuilder } from '@lostgradient/weft';
  *
  * const fresh: WorkflowBuilder<'demo', {}, {}, {}, {}, {}, InitialBuilderState> =
  *   workflow({ name: 'demo' });
@@ -147,7 +147,7 @@ export interface InitialBuilderState {
  *
  * @example
  * ```ts
- * import type { InitialBuilderState, MarkBuilderState } from 'weft';
+ * import type { InitialBuilderState, MarkBuilderState } from '@lostgradient/weft';
  *
  * type AfterActivities = MarkBuilderState<InitialBuilderState, 'activities'>;
  * // AfterActivities['activities'] is true; the rest stay false.
@@ -179,7 +179,7 @@ declare const workflowAlreadyRegisteredBrand: unique symbol;
  *
  * @example
  * ```ts
- * import { Engine, workflow, type WorkflowAlreadyRegistered } from 'weft';
+ * import { Engine, workflow, type WorkflowAlreadyRegistered } from '@lostgradient/weft';
  * const greet = workflow({ name: 'greet' }).execute(async function* () { return 'hi'; });
  * const engine = new Engine().register(greet);
  * engine.register(greet as never); // runtime idempotent escape hatch
@@ -208,7 +208,7 @@ export interface WorkflowAlreadyRegistered<TName extends string> {
  *
  * @example
  * ```ts
- * import { workflow, signal, type InitialBuilderState, type WorkflowBuilder } from 'weft';
+ * import { workflow, signal, type InitialBuilderState, type WorkflowBuilder } from '@lostgradient/weft';
  *
  * const builder: WorkflowBuilder<'welcome', {}, {}, {}, {}, {}, InitialBuilderState> =
  *   workflow({ name: 'welcome' });
@@ -243,7 +243,7 @@ export interface WorkflowBuilder<
    *
    * @example
    * ```ts
-   * import { workflow } from 'weft';
+   * import { workflow } from '@lostgradient/weft';
    * const welcome = workflow({ name: 'welcome' })
    *   .activities({ format: async ({ name }: { name: string }) => `Hello, ${name}!` })
    *   .execute(async function* (ctx, input: { name: string }) {
@@ -275,7 +275,7 @@ export interface WorkflowBuilder<
    *
    * @example
    * ```ts
-   * import { signal, workflow } from 'weft';
+   * import { signal, workflow } from '@lostgradient/weft';
    * const approval = workflow({ name: 'approval' })
    *   .signals({ approve: signal<{ approverId: string }>('approve') })
    *   .execute(async function* (ctx) {
@@ -306,7 +306,7 @@ export interface WorkflowBuilder<
    *
    * @example
    * ```ts
-   * import { update, workflow } from 'weft';
+   * import { update, workflow } from '@lostgradient/weft';
    * const order = workflow({ name: 'order' })
    *   .updates({ check: update<{ id: string }, { ok: boolean }>('check') })
    *   .execute(async function* () { return { ok: true }; });
@@ -335,7 +335,7 @@ export interface WorkflowBuilder<
    *
    * @example
    * ```ts
-   * import { query, workflow } from 'weft';
+   * import { query, workflow } from '@lostgradient/weft';
    * const job = workflow({ name: 'job' })
    *   .queries({ getProgress: query<void, number>('getProgress') })
    *   .execute(async function* () { return { done: true }; });
@@ -366,7 +366,7 @@ export interface WorkflowBuilder<
    *
    * @example
    * ```ts
-   * import { workflow } from 'weft';
+   * import { workflow } from '@lostgradient/weft';
    * const order = workflow({ name: 'order' })
    *   .searchAttributes({ customerId: { type: 'string' } })
    *   .execute(async function* (ctx, input: { customerId: string }) {
@@ -400,7 +400,7 @@ export interface WorkflowBuilder<
    *
    * @example
    * ```ts
-   * import { workflow } from 'weft';
+   * import { workflow } from '@lostgradient/weft';
    * const welcome = workflow({ name: 'welcome' })
    *   .activities({ format: async ({ name }: { name: string }) => `Hi ${name}` })
    *   .execute(async function* (ctx, input: { name: string }) {
@@ -445,7 +445,7 @@ export interface WorkflowBuilder<
  *
  * @example
  * ```ts
- * import { workflow, type BuiltWorkflowDefinition } from 'weft';
+ * import { workflow, type BuiltWorkflowDefinition } from '@lostgradient/weft';
  *
  * // `.execute(fn)` returns a `BuiltWorkflowDefinition`. Its `activities`,
  * // `signals`, `updates`, `queries`, and `searchAttributes` containers are

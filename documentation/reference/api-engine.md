@@ -39,8 +39,8 @@ Creates a new engine instance. All options are optional — sensible defaults ar
 | `interceptors`                   | `readonly Interceptor[]`   | `undefined`           | Unified interceptors registered at construction                                |
 
 ```ts
-import { Engine } from 'weft';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { Engine } from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 const engine = new Engine({
   storage: new SQLiteStorage('./data/weft.db'),
@@ -63,7 +63,7 @@ Register a workflow or activity definition built with the chained builder API. W
 The schema fields are introspection metadata. Core workflow registration validates their Standard Schema metadata shape, but workflow execution does not validate input or output from these fields unless an adapter explicitly opts into that validation.
 
 ```ts partial
-import { workflow } from 'weft';
+import { workflow } from '@lostgradient/weft';
 
 engine.register(
   workflow({ name: 'send-email' }).execute(async function* (context, input) {

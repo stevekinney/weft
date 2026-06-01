@@ -32,7 +32,7 @@ export interface ExpiredDeadline {
  *
  * @example
  * ```ts
- * import { createDeadlineOperations } from 'weft';
+ * import { createDeadlineOperations } from '@lostgradient/weft';
  *
  * const ops = createDeadlineOperations('wf-123', Date.now(), '30m');
  * // Returns a BatchOperation array to put the deadline key in storage.
@@ -73,8 +73,8 @@ export function cleanupDeadlineOperations(
  *
  * @example
  * ```ts
- * import { checkExpiredDeadlines, createDeadlineOperations } from 'weft';
- * import { MemoryStorage } from 'weft/storage/memory';
+ * import { checkExpiredDeadlines, createDeadlineOperations } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
  *
  * const storage = new MemoryStorage();
  * const ops = createDeadlineOperations('wf-abc', Date.now() - 60_000, '30s');
@@ -109,7 +109,7 @@ export async function checkExpiredDeadlines(
  *
  * @example
  * ```ts
- * import { timeRemaining } from 'weft';
+ * import { timeRemaining } from '@lostgradient/weft';
  *
  * const now = Date.now();
  * const deadline = now + 5000;
@@ -136,7 +136,7 @@ export function timeRemaining(deadline: number | undefined, now: number): number
  *
  * @example
  * ```ts
- * import { workflow, Engine, WorkflowTimeoutError } from 'weft';
+ * import { workflow, Engine, WorkflowTimeoutError } from '@lostgradient/weft';
  *
  * const engine = new Engine();
  * engine.register(

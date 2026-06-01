@@ -65,8 +65,8 @@ import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow
  *
  * @example
  * ```ts
- * import { workflow, Engine, MemoryStorage, LocalClient, type WorkflowCompletedEvent } from 'weft';
- * import type { ClientHandle } from 'weft/client';
+ * import { workflow, Engine, MemoryStorage, LocalClient, type WorkflowCompletedEvent } from '@lostgradient/weft';
+ * import type { ClientHandle } from '@lostgradient/weft/client';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));
@@ -169,8 +169,8 @@ export interface ClientHandle<TResult = unknown>
  *
  * @example
  * ```ts
- * import { workflow, Engine, MemoryStorage, LocalClient } from 'weft';
- * import type { ClientScheduleHandle } from 'weft/client';
+ * import { workflow, Engine, MemoryStorage, LocalClient } from '@lostgradient/weft';
+ * import type { ClientScheduleHandle } from '@lostgradient/weft/client';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * engine.register(workflow({ name: 'report' }).execute(async function* () { return 'sent'; }));
@@ -221,7 +221,7 @@ export type UpdateResult = {
  *
  * @example
  * ```ts
- * import { workflow, Engine, MemoryStorage, LocalClient, type WeftClient } from 'weft';
+ * import { workflow, Engine, MemoryStorage, LocalClient, type WeftClient } from '@lostgradient/weft';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * engine.register(workflow({ name: 'my-workflow' }).execute(async function* () { return 42; }));
@@ -447,7 +447,7 @@ export interface WeftClient {
    *
    * @example
    * ```ts
-   * import { workflow, Engine, MemoryStorage, LocalClient } from 'weft';
+   * import { workflow, Engine, MemoryStorage, LocalClient } from '@lostgradient/weft';
    *
    * await using engine = new Engine({ storage: new MemoryStorage() });
    * engine.register(workflow({ name: 'noop' }).execute(async function* () {}));

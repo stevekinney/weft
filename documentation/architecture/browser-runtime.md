@@ -14,7 +14,7 @@ For Weft, a Service Worker is the browser equivalent of the Bun server process.
 ┌──────────────────────────────────────────────────────┐
 │ Browser Tab (your app)                               │
 │                                                      │
-│  import { HttpClient } from 'weft/client';           │
+│  import { HttpClient } from '@lostgradient/weft/client';           │
 │  const client = new HttpClient({ baseUrl: '/' });    │
 │  await client.start('order', { orderId: 'abc' });    │
 │                                                      │
@@ -44,8 +44,8 @@ The Weft HTTP handler is a pure `Request` to `Response` function. On the server,
 // weft-sw.ts — installed as a Service Worker
 /// <reference lib="webworker" />
 
-import { workflow } from 'weft';
-import { setupServiceWorker } from 'weft/service-worker';
+import { workflow } from '@lostgradient/weft';
+import { setupServiceWorker } from '@lostgradient/weft/service-worker';
 
 const { engine } = await setupServiceWorker({
   pathPrefix: '/weft/',
@@ -76,9 +76,9 @@ import {
   createLifecycleHandlers,
   createPeriodicSyncHandler,
   ServiceWorkerScheduler,
-} from 'weft/service-worker';
-import { Engine } from 'weft';
-import { IndexedDBStorage } from 'weft/storage/indexeddb';
+} from '@lostgradient/weft/service-worker';
+import { Engine } from '@lostgradient/weft';
+import { IndexedDBStorage } from '@lostgradient/weft/storage/indexeddb';
 
 const storage = new IndexedDBStorage('weft');
 // `recover: false` — this snippet boots the service worker but does not show

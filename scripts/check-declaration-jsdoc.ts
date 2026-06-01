@@ -12,7 +12,7 @@
  *                      to check).
  *
  * The script normalizes each importPath to its package.json `exports` key
- * (strip package-name prefix: 'weft' -> '.', 'weft/storage/memory' ->
+ * (strip package-name prefix: '@lostgradient/weft' -> '.', '@lostgradient/weft/storage/memory' ->
  * './storage/memory'), reads exports[<key>].types to locate the .d.ts file,
  * uses ts.createProgram + ts.TypeChecker to follow alias chains to the
  * underlying declaration, selects the namespace partition matching kind, and

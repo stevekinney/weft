@@ -14,7 +14,7 @@ const DEFAULT_INTERVAL_MS = 10_000;
  *
  * @example
  * ```ts
- * import { HeartbeatManager } from 'weft';
+ * import { HeartbeatManager } from '@lostgradient/weft';
  *
  * let heartbeatFn = (details?: unknown) => {
  *   console.log('heartbeat', details);

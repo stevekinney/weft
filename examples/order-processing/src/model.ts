@@ -1,4 +1,4 @@
-import type { SearchAttributeValue } from 'weft';
+import type { SearchAttributeValue } from '@lostgradient/weft';
 
 export const highValueReviewThreshold = 1_000;
 

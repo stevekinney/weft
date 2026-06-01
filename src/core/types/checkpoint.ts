@@ -16,7 +16,7 @@ export const WORKER_REPLAY_SIGNATURE_FORMAT = 'weft-worker-operation-signature-v
  *
  * @example
  * ```ts
- * import type { WorkerReplayOperationSignature } from 'weft';
+ * import type { WorkerReplayOperationSignature } from '@lostgradient/weft';
  *
  * const signature: WorkerReplayOperationSignature = {
  *   format: 'weft-worker-operation-signature-v1',
@@ -48,7 +48,7 @@ export interface WorkerReplayOperationSignature {
  *
  * @example
  * ```ts
- * import type { WorkerReplayOperationFailure } from 'weft';
+ * import type { WorkerReplayOperationFailure } from '@lostgradient/weft';
  *
  * const failure: WorkerReplayOperationFailure = {
  *   status: 'failed',
@@ -83,7 +83,7 @@ export interface WorkerReplayOperationFailure {
  *
  * @example
  * ```ts
- * import { workflow, Engine, type Checkpoint } from 'weft';
+ * import { workflow, Engine, type Checkpoint } from '@lostgradient/weft';
  *
  * const engine = new Engine({ checkpointHistory: 5 });
  * engine.register(workflow({ name: 'counter' }).execute(async function* () { return 42; }));
@@ -216,7 +216,7 @@ export type OperationOutcome =
  *
  * @example
  * ```ts
- * import { Engine, type TimerEntry } from 'weft';
+ * import { Engine, type TimerEntry } from '@lostgradient/weft';
  * declare const engine: Engine;
  * declare const entry: TimerEntry;
  * await engine.fireTimer(entry);

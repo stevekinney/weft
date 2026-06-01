@@ -61,7 +61,7 @@ export type ActivityReconciliationReference = {
  *
  * @example
  * ```ts
- * import { ActivityReconciliationCapabilityError } from 'weft';
+ * import { ActivityReconciliationCapabilityError } from '@lostgradient/weft';
  *
  * function needsConditionalBatchStorage(error: unknown): boolean {
  *   return error instanceof ActivityReconciliationCapabilityError;
@@ -84,7 +84,7 @@ export class ActivityReconciliationCapabilityError extends WeftError<'ActivityRe
  *
  * @example
  * ```ts
- * import { ActivityReconciliationConflictError } from 'weft';
+ * import { ActivityReconciliationConflictError } from '@lostgradient/weft';
  *
  * function shouldRetryWorkflowTurn(error: unknown): boolean {
  *   return error instanceof ActivityReconciliationConflictError;
@@ -105,7 +105,7 @@ export class ActivityReconciliationConflictError extends WeftError<'ActivityReco
  *
  * @example
  * ```ts
- * import { ActivityReconciliationIndeterminateError } from 'weft';
+ * import { ActivityReconciliationIndeterminateError } from '@lostgradient/weft';
  *
  * function needsOperatorReconciliation(error: unknown): boolean {
  *   return error instanceof ActivityReconciliationIndeterminateError;

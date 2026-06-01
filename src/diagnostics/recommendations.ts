@@ -134,7 +134,7 @@ const RECOMMENDATION_RULES: readonly Rule[] = [
  *
  * @example
  * ```ts
- * import { MemoryStorage, collectDiagnostics, generateRecommendations } from 'weft';
+ * import { MemoryStorage, collectDiagnostics, generateRecommendations } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * const report = await collectDiagnostics(storage, ':memory:');

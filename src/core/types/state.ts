@@ -168,7 +168,7 @@ export interface WorkflowSessionState<T> {
  *
  * @example
  * ```ts
- * import type { WorkflowAtomicStateOptions } from 'weft';
+ * import type { WorkflowAtomicStateOptions } from '@lostgradient/weft';
  *
  * const options: WorkflowAtomicStateOptions<number> = {
  *   initial: 0,
@@ -185,7 +185,7 @@ export type WorkflowAtomicStateOptions<T> = Pick<AtomicStateOptions<T>, 'initial
  *
  * @example
  * ```ts
- * import type { WorkflowAtomicState } from 'weft';
+ * import type { WorkflowAtomicState } from '@lostgradient/weft';
  *
  * declare const counter: WorkflowAtomicState<number>;
  * const operation = counter.increment();
@@ -215,7 +215,7 @@ export interface WorkflowAtomicState<T> {
  *
  * @example
  * ```ts
- * import type { WorkflowStateNamespace } from 'weft';
+ * import type { WorkflowStateNamespace } from '@lostgradient/weft';
  *
  * declare const state: WorkflowStateNamespace;
  * const session = state.session<number>('attempts', { initial: 0 });

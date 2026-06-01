@@ -40,7 +40,7 @@ export type {
  *
  * @example
  * ```ts
- * import { formatStandardSchemaIssues } from 'weft/json-schema';
+ * import { formatStandardSchemaIssues } from '@lostgradient/weft/json-schema';
  *
  * const message = formatStandardSchemaIssues([
  *   { message: 'Expected a string.', path: '/email' },
@@ -55,7 +55,7 @@ const exportedFormatStandardSchemaIssues = formatStandardSchemaIssues;
  *
  * @example
  * ```ts
- * import { StandardSchemaValidationError } from 'weft/json-schema';
+ * import { StandardSchemaValidationError } from '@lostgradient/weft/json-schema';
  *
  * const error = new StandardSchemaValidationError({
  *   fieldName: 'input',
@@ -72,7 +72,7 @@ const exportedStandardSchemaValidationError = StandardSchemaValidationError;
  *
  * @example
  * ```ts
- * import { validateStandardSchema } from 'weft/json-schema';
+ * import { validateStandardSchema } from '@lostgradient/weft/json-schema';
  * import { z } from 'zod';
  *
  * const schema = z.object({ email: z.string().email() });

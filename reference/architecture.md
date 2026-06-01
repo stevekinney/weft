@@ -38,7 +38,7 @@ The design constraints, in priority order:
 
 4. **Runs in the browser.** The core engine (minus the server shell) runs in Web Workers and can use a Service Worker as its persistence and scheduling backbone. Same workflow code, different execution environment.
 
-5. **Library/server parity.** Every capability exposed by the server's HTTP and WebSocket API is also available through the library's in-process `Engine` API — and vice versa. A developer who starts with `bun add weft` and later moves to the standalone server (or the reverse) should not lose features or change workflow code. The server is a deployment wrapper around the engine, not a superset of it.
+5. **Library/server parity.** Every capability exposed by the server's HTTP and WebSocket API is also available through the library's in-process `Engine` API — and vice versa. A developer who starts with `bun add @lostgradient/weft` and later moves to the standalone server (or the reverse) should not lose features or change workflow code. The server is a deployment wrapper around the engine, not a superset of it.
 
 ---
 
@@ -56,7 +56,7 @@ Here is what a developer must learn to write their first workflow:
 | Signal                 | `setHandler` + `condition`        | `yield* ctx.waitForSignal(name)`     |
 | Versioning             | `patched()` / `deprecatePatch()`  | Deploy new code (migration optional) |
 | Long-running workflows | `continueAsNew()`                 | Nothing (checkpoints are fixed-size) |
-| Dev environment        | Docker Compose + Temporal server  | `bun add weft`                       |
+| Dev environment        | Docker Compose + Temporal server  | `bun add @lostgradient/weft`         |
 | Bundling               | Webpack for workflow sandbox      | None                                 |
 
 ### 1. The Determinism Constraint Is a Developer Experience Nightmare
@@ -191,7 +191,7 @@ This teaches the mental model while the developer writes code.
 
 **The Temporal problem.** Running Temporal self-hosted requires Cassandra or PostgreSQL, Elasticsearch for visibility, the Temporal server itself (multiple Go services), and a frontend service. Even for local development, you need Docker Compose or the Temporal CLI dev server. Temporal Cloud describes "several compute clusters, one or more databases, Elasticsearch, ingress, observability stack, and other dependency components" per cloud cell, with eight engineering on-call rotations.
 
-**The Weft answer.** `bun add weft` or download a single binary. SQLite is the default database, embedded in the runtime. No external dependencies for development or small production deployments. (See: [Single Binary Distribution](#8-single-binary-distribution).)
+**The Weft answer.** `bun add @lostgradient/weft` or download a single binary. SQLite is the default database, embedded in the runtime. No external dependencies for development or small production deployments. (See: [Single Binary Distribution](#8-single-binary-distribution).)
 
 ```bash
 # Temporal
@@ -284,7 +284,7 @@ async function* batchWorkflow(ctx: Context, items: string[]) {
 **Going further: built-in profiling mode.** `MemoryProfiler` provides interval-based memory sampling with stability analysis. Start a profiling session, run a workload, then retrieve summary statistics including RSS growth slope and stability verdict:
 
 ```typescript
-import { MemoryProfiler, analyzeStability } from 'weft';
+import { MemoryProfiler, analyzeStability } from '@lostgradient/weft';
 
 const profiler = new MemoryProfiler();
 profiler.start(1000); // sample every second
@@ -347,10 +347,10 @@ const result = await handle.result();
 
 This is compile-time only. At runtime, the engine uses strings and unknown exactly as before. The type parameter is erased.
 
-**Going further: `weft/testing` module with `TestEngine`.** A real engine backed by `MemoryStorage` with deterministic time control and crash simulation:
+**Going further: `@lostgradient/weft/testing` module with `TestEngine`.** A real engine backed by `MemoryStorage` with deterministic time control and crash simulation:
 
 ```typescript
-import { TestEngine } from 'weft/testing';
+import { TestEngine } from '@lostgradient/weft/testing';
 
 const engine = new TestEngine();
 engine.mock(charge, async (order) => ({ id: 'pay-123', amount: order.total }));
@@ -452,7 +452,7 @@ For debugging a workflow that has been running for 30 days, being able to see "w
 **Going further: `activity()` helper with colocated configuration.** Instead of configuring retry policies at scattered call sites, activities declare their own operational characteristics:
 
 ```typescript
-import { activity } from 'weft';
+import { activity } from '@lostgradient/weft';
 
 export const charge = activity({
   name: 'charge',
@@ -1507,7 +1507,7 @@ async function runServer(port: number) {
   const storage = stack.use(new BunSQLiteStorage('./weft.db'));
   const engine = stack.use(new Engine({ storage }));
   const server = stack.adopt(
-    Bun.serve({ port, fetch: (req) => handleHTTP(engine, req) }),
+    Bun.serve({ port, fetch: (request) => handleRequest(request, engine) }),
     (s) => s.stop(), // custom disposal logic
   );
 
@@ -2094,7 +2094,7 @@ chmod +x weft
 ./weft --port 7233
 
 # Mode 2: Library (import into your project)
-bun add weft
+bun add @lostgradient/weft
 
 # Mode 3: User compiles their own binary with workflows baked in
 bun build --compile src/my-app.ts --outfile my-app
@@ -2146,9 +2146,9 @@ For Weft, a Service Worker is the **browser equivalent of the Bun server process
 // weft-sw.ts — installed as a Service Worker
 /// <reference lib="webworker" />
 
-import { Engine } from 'weft/core';
-import { IndexedDBStorage } from 'weft/storage/indexeddb';
-import { handleHTTP } from 'weft/server/handler'; // Pure request→response, no Bun.serve dependency
+import { Engine } from '@lostgradient/weft';
+import { IndexedDBStorage } from '@lostgradient/weft/storage/indexeddb';
+import { handleRequest } from '@lostgradient/weft/server/handler'; // Pure request→response, no Bun.serve dependency
 
 const engine = new Engine({
   storage: new IndexedDBStorage('weft'),
@@ -2158,7 +2158,7 @@ const engine = new Engine({
 self.addEventListener('fetch', (event: FetchEvent) => {
   const url = new URL(event.request.url);
   if (url.pathname.startsWith('/weft/')) {
-    event.respondWith(handleHTTP(engine, event.request));
+    event.respondWith(handleRequest(event.request, engine));
   }
 });
 
@@ -2392,13 +2392,13 @@ A remote worker is a standalone process that connects to a Weft server, declares
 
 ```typescript
 // my-worker.ts — runs as a separate process, connects to a Weft server
-import { Worker } from 'weft/worker';
+import { RemoteWorker } from '@lostgradient/weft';
 
 import { charge } from './activities/charge.ts';
 import { ship } from './activities/ship.ts';
 import { sendEmail } from './activities/email.ts';
 
-const worker = new Worker({
+const worker = new RemoteWorker({
   serverUrl: 'ws://weft-server:7233/api/v1/tasks/default/stream',
   queue: 'default',
   identity: `worker-${crypto.randomUUID()}`, // unique per process
@@ -3407,14 +3407,14 @@ Observability is implemented as a pre-built interceptor pair. It uses standard O
 #### Design Principles
 
 1. **Uses `@opentelemetry/api` directly.** No custom tracing layer. The API package is a lightweight no-op unless an SDK is configured — zero overhead if you don't enable tracing.
-2. **Opt-in, not built-in.** Import from `weft/observability`. If you don't import it, no OpenTelemetry code is loaded.
+2. **Opt-in, not built-in.** Import from `@lostgradient/weft/observability`. If you don't import it, no OpenTelemetry code is loaded.
 3. **Auto-created spans** for all context operations.
 4. **W3C Trace Context propagation** via the interceptor `headers` Map.
 
 #### API
 
 ```typescript
-import { createObservabilityInterceptors } from 'weft/observability';
+import { createObservabilityInterceptors } from '@lostgradient/weft/observability';
 
 interface ObservabilityOptions {
   tracerName?: string; // Defaults to "weft"
@@ -3518,21 +3518,21 @@ engine.addInterceptor(encryptionInterceptor); // 4. Encrypt before sending to wo
 
 ### Weft vs Temporal
 
-| Dimension                | Temporal                           | Weft (SQLite)             | Weft (LMDB)               |
-| ------------------------ | ---------------------------------- | ------------------------- | ------------------------- |
-| **Recovery**             | O(n) replay                        | O(1) checkpoint           | O(1) checkpoint           |
-| **Storage read**         | ~1ms (network)                     | ~10μs (in-process)        | ~1μs (memory-mapped)      |
-| **Storage write**        | ~2ms (network)                     | ~20μs (WAL)               | ~10μs (batched)           |
-| **Task claim**           | gRPC round-trip                    | 1 SQL statement           | 1 range read + put        |
-| **Cold start**           | seconds (Go + DB pool)             | <50ms (Bun + SQLite)      | <50ms (Bun + mmap)        |
-| **Memory / workflow**    | ~50KB (history cache)              | ~2KB (checkpoint)         | ~2KB (checkpoint)         |
-| **Single binary?**       | No                                 | Yes                       | No (native addon)         |
-| **Browser?**             | No                                 | No                        | No                        |
-| **Browser (IndexedDB)?** | —                                  | Yes (same engine)         | —                         |
-| **History growth**       | O(n) with activity count           | O(1) fixed-size           | O(1) fixed-size           |
-| **Dev environment**      | Docker Compose (~minutes)          | `bun add weft` (~seconds) | `bun add weft` (~seconds) |
-| **Bundle step**          | Webpack per workflow change        | None                      | None                      |
-| **Max workflow length**  | ~50K events (then `continueAsNew`) | Unlimited                 | Unlimited                 |
+| Dimension                | Temporal                           | Weft (SQLite)                           | Weft (LMDB)                             |
+| ------------------------ | ---------------------------------- | --------------------------------------- | --------------------------------------- |
+| **Recovery**             | O(n) replay                        | O(1) checkpoint                         | O(1) checkpoint                         |
+| **Storage read**         | ~1ms (network)                     | ~10μs (in-process)                      | ~1μs (memory-mapped)                    |
+| **Storage write**        | ~2ms (network)                     | ~20μs (WAL)                             | ~10μs (batched)                         |
+| **Task claim**           | gRPC round-trip                    | 1 SQL statement                         | 1 range read + put                      |
+| **Cold start**           | seconds (Go + DB pool)             | <50ms (Bun + SQLite)                    | <50ms (Bun + mmap)                      |
+| **Memory / workflow**    | ~50KB (history cache)              | ~2KB (checkpoint)                       | ~2KB (checkpoint)                       |
+| **Single binary?**       | No                                 | Yes                                     | No (native addon)                       |
+| **Browser?**             | No                                 | No                                      | No                                      |
+| **Browser (IndexedDB)?** | —                                  | Yes (same engine)                       | —                                       |
+| **History growth**       | O(n) with activity count           | O(1) fixed-size                         | O(1) fixed-size                         |
+| **Dev environment**      | Docker Compose (~minutes)          | `bun add @lostgradient/weft` (~seconds) | `bun add @lostgradient/weft` (~seconds) |
+| **Bundle step**          | Webpack per workflow change        | None                                    | None                                    |
+| **Max workflow length**  | ~50K events (then `continueAsNew`) | Unlimited                               | Unlimited                               |
 
 ### Platform Primitive Performance Wins
 
@@ -3628,7 +3628,7 @@ weft/
 
 ```typescript
 // Library mode — embed in your app
-import { Engine, BunSQLiteStorage } from 'weft';
+import { Engine, BunSQLiteStorage } from '@lostgradient/weft';
 
 const engine = new Engine({
   storage: new BunSQLiteStorage('./weft.db'),
@@ -3883,7 +3883,7 @@ Three files. Webpack bundling. `proxyActivities` ceremony. Separate worker proce
 ### Browser / Service Worker
 
 - [x] **Core engine runs in browser Web Workers.** Same workflow code, IndexedDB storage.
-- [x] **Service Worker intercepts `/weft/` fetch events.** Same `handleHTTP()` function as server.
+- [x] **Service Worker intercepts `/weft/` fetch events.** Same `handleRequest()` function as server.
 - [x] **IndexedDB storage passes all storage interface tests.** Same test suite as SQLite.
 - [x] **Client library works with both remote server and local Service Worker.** Same `fetch()` calls, different routing.
 - [x] **Service Worker handles Periodic Background Sync for timers.** (Where browser supports it.)
@@ -4004,8 +4004,8 @@ Three files. Webpack bundling. `proxyActivities` ceremony. Separate worker proce
 
 ### DX
 
-- [x] **Zero config to start.** `import { Engine } from "weft"; new Engine()` works with defaults (in-memory storage).
-- [x] **`bun add weft` is the only install step.** No codegen, no proto files, no Docker.
+- [x] **Zero config to start.** `import { Engine } from "@lostgradient/weft"; new Engine()` works with defaults (in-memory storage).
+- [x] **`bun add @lostgradient/weft` is the only install step.** No codegen, no proto files, no Docker.
 - [x] **TypeScript types infer everything.** Event listeners, workflow context, activity return types — all inferred.
 - [x] **`using` / `await using` works for all resources.** No manual cleanup ever required.
 - [x] **Testing: `MemoryStorage` + `TestEngine.advanceTime()`.** No real timers in tests. `TestEngine` provides deterministic time control via `TimeControl`.
@@ -4027,7 +4027,7 @@ Three files. Webpack bundling. `proxyActivities` ceremony. Separate worker proce
 - [x] **`ctx.offload()` stores large data separately.** Leaves only a lightweight reference in the checkpoint. `ctx.load()` retrieves on demand.
 - [x] **Built-in profiling mode.** `MemoryProfiler` class provides interval-based memory profiling with stability analysis. Exported from index.
 - [x] **Typed workflow registry.** `Engine<WorkflowRegistry>` provides compile-time type safety on `engine.start()`, `handle.result()`, `handle.signal()`.
-- [x] **`weft/testing` module with `TestEngine`.** Real engine with `MemoryStorage`, deterministic time control, crash simulation via `engine.recover()`.
+- [x] **`@lostgradient/weft/testing` module with `TestEngine`.** Real engine with `MemoryStorage`, deterministic time control, crash simulation via `engine.recover()`.
 - [x] **`ctx.archive()` moves old state out of checkpoint.** Preserved at `archive:{workflowId}:{key}` for auditing, queryable via dashboard and API.
 - [x] **`ctx.expose()` for live workflow inspection.** Accessor functions evaluated at each checkpoint, rendered on dashboard without pre-registered query handlers.
 - [x] **Checkpoint history (last N).** Configurable number of retained checkpoints per workflow for time-travel debugging.
@@ -4251,7 +4251,7 @@ Track 8 extends the runtime surface without creating a second execution system. 
 
 #### 8b. JSON-RPC transport surface
 
-- [x] **JSON-RPC 2.0 is supported over three runtime transports.** `POST /jsonrpc`, WebSocket upgrade on `/jsonrpc`, and newline-delimited JSON over a dedicated stdio runtime entrypoint. This stdio runtime surface is distinct from the existing MCP stdio JSON-RPC transport in `weft/mcp/stdio`; they may share framing or codec helpers if useful, but they are different protocol surfaces with different method namespaces and semantics.
+- [x] **JSON-RPC 2.0 is supported over three runtime transports.** `POST /jsonrpc`, WebSocket upgrade on `/jsonrpc`, and newline-delimited JSON over a dedicated stdio runtime entrypoint. This stdio runtime surface is distinct from the existing MCP stdio transport exported from `@lostgradient/weft/mcp`; they may share framing or codec helpers if useful, but they are different protocol surfaces with different method namespaces and semantics.
 - [x] **Runtime JSON-RPC methods use stable namespaced names.** Examples: `weft.workflows.start`, `weft.workflows.get`, `weft.workflows.signal`. These names belong to the runtime API surface and are not MCP method names.
 - [x] **JSON-RPC uses named params only.** The OpenRPC contract documents `paramStructure: "by-name"` so generated clients and manual callers converge on one request shape.
 - [x] **Batch requests are supported.** The shared dispatcher validates and executes JSON-RPC batches without inventing transport-specific behavior.

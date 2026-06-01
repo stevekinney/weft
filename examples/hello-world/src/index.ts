@@ -1,10 +1,10 @@
 /**
  * The smallest end-to-end Weft example: define an activity, compose it into a
  * workflow, then run it on an in-memory engine. This is a real consumer starting
- * point — it imports everything from the published `weft` package, exactly as
+ * point — it imports everything from the published `@lostgradient/weft` package, exactly as
  * your own project would. Run it with `bun run start` from this directory.
  */
-import { Engine, MemoryStorage, activity, workflow } from 'weft';
+import { Engine, MemoryStorage, activity, workflow } from '@lostgradient/weft';
 
 // --- hello-world -----------------------------------------------------------
 

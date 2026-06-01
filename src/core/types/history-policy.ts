@@ -16,7 +16,7 @@
  *
  * @example
  * ```ts
- * import { Engine, type HistoryPolicy } from 'weft';
+ * import { Engine, type HistoryPolicy } from '@lostgradient/weft';
  *
  * const history: HistoryPolicy = { maxEvents: 100_000 };
  * const engine = new Engine({ history });
@@ -72,7 +72,7 @@ export interface NormalizedHistoryPolicy {
  *
  * @example
  * ```ts
- * import { HISTORY_CIRCUIT_BREAKER_REASON, type TerminationReason } from 'weft';
+ * import { HISTORY_CIRCUIT_BREAKER_REASON, type TerminationReason } from '@lostgradient/weft';
  *
  * const reason: TerminationReason = HISTORY_CIRCUIT_BREAKER_REASON;
  * void reason;
@@ -87,7 +87,7 @@ export type TerminationReason = typeof HISTORY_CIRCUIT_BREAKER_REASON;
  *
  * @example
  * ```ts
- * import { Engine, HISTORY_CIRCUIT_BREAKER_REASON } from 'weft';
+ * import { Engine, HISTORY_CIRCUIT_BREAKER_REASON } from '@lostgradient/weft';
  *
  * const engine = new Engine({ history: { maxEvents: 100_000 } });
  * const state = await engine.get('some-workflow-id');

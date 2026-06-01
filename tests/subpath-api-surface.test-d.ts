@@ -3,7 +3,7 @@ import type {
   StandardSchemaV1,
   StandardSchemaV1Issue,
   ValidationIssue,
-} from 'weft/json-schema';
+} from '@lostgradient/weft/json-schema';
 import type {
   MetricDefinition,
   MetricsSnapshot,
@@ -12,12 +12,12 @@ import type {
   OpenTelemetrySpan,
   OpenTelemetryTracer,
   TraceContext,
-} from 'weft/observability';
+} from '@lostgradient/weft/observability';
 
 // @ts-expect-error OpenTelemetry infrastructure types are subpath-only.
-type RootOpenTelemetryApi = import('weft').OpenTelemetryApi;
+type RootOpenTelemetryApi = import('@lostgradient/weft').OpenTelemetryApi;
 // @ts-expect-error Standard Schema helper types are subpath-only.
-type RootStandardSchemaV1 = import('weft').StandardSchemaV1;
+type RootStandardSchemaV1 = import('@lostgradient/weft').StandardSchemaV1;
 
 const traceContext: TraceContext = {
   version: '00',

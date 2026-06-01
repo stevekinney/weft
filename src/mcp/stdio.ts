@@ -9,7 +9,7 @@ import { McpSession, McpSessionManager, type McpSessionManagerOptions } from './
  *
  * @example
  * ```ts
- * import { type McpStdioAdmission } from 'weft/mcp';
+ * import { type McpStdioAdmission } from '@lostgradient/weft/mcp';
  *
  * const admission: McpStdioAdmission = {
  *   kind: 'startup-token',
@@ -28,8 +28,8 @@ export type McpStdioAdmission =
  *
  * @example
  * ```ts
- * import { type McpStdioSessionOptions } from 'weft/mcp';
- * import { Engine, MemoryStorage } from 'weft';
+ * import { type McpStdioSessionOptions } from '@lostgradient/weft/mcp';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });
@@ -58,7 +58,7 @@ export type McpStdioSessionOptions = {
  *
  * @example
  * ```ts
- * import { type McpStdioSessionResult } from 'weft/mcp';
+ * import { type McpStdioSessionResult } from '@lostgradient/weft/mcp';
  *
  * const result: McpStdioSessionResult = { exitCode: 0 };
  * process.exitCode = result.exitCode;
@@ -76,8 +76,8 @@ const DEFAULT_MAX_FRAME_BYTES = 1_048_576;
  *
  * @example
  * ```ts
- * import { runMcpStdioSession } from 'weft/mcp';
- * import { Engine, MemoryStorage } from 'weft';
+ * import { runMcpStdioSession } from '@lostgradient/weft/mcp';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });

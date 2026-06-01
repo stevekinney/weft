@@ -78,7 +78,7 @@ export type RunAllResult<TBranches extends Record<string, WorkflowRunAllBranch>>
  *
  * @example
  * ```ts
- * import { workflow, Engine, activity, type WorkflowContext } from 'weft';
+ * import { workflow, Engine, activity, type WorkflowContext } from '@lostgradient/weft';
  *
  * interface GreetingInput {
  *   name: string;
@@ -325,7 +325,7 @@ export interface WorkflowContext<
    *
    * @example
    * ```ts
-   * import { workflow, type WorkflowContext } from 'weft';
+   * import { workflow, type WorkflowContext } from '@lostgradient/weft';
    *
    * const myWorkflow = workflow({ name: 'my-workflow' }).execute(async function* (ctx: WorkflowContext) {
    *   ctx.onCancel(async () => {

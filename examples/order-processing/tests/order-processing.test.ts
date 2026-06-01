@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { TestEngine } from 'weft/testing';
+import { TestEngine } from '@lostgradient/weft/testing';
 
 import { addItemUpdate, cancelOrderSignal, orderStatusQuery } from '../src/messages';
 import { calculateOrderTotal, type AddItemInput } from '../src/model';

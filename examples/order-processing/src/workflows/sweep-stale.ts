@@ -1,4 +1,4 @@
-import { workflow } from 'weft';
+import { workflow } from '@lostgradient/weft';
 
 import { cancelStaleOrder } from '../activities/shipping';
 import type { SweepStaleOrdersInput } from '../model';

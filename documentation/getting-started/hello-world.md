@@ -9,7 +9,7 @@ Start with a fresh directory and install Weft:
 ```bash
 mkdir weft-hello && cd weft-hello
 bun init -y
-bun add weft
+bun add @lostgradient/weft
 ```
 
 ## The Simplest Workflow
@@ -17,8 +17,13 @@ bun add weft
 Create a file called `index.ts` and paste this:
 
 ```typescript
-import { Engine, WorkflowAlreadyExistsError, workflow, type WorkflowHandle } from 'weft';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import {
+  Engine,
+  WorkflowAlreadyExistsError,
+  workflow,
+  type WorkflowHandle,
+} from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 interface HelloWorldWelcomeInput {
   name: string;
@@ -70,8 +75,13 @@ That's a durable workflow with persistent storage and an explicit recovery path.
 If generators are unfamiliar, you can write the same workflow with plain `async`/`await` and compile it with `compileStepWorkflow(...)` before passing it to `.execute(...)`:
 
 ```typescript partial
-import { Engine, workflow, compileStepWorkflow, type StepWorkflowContext } from 'weft';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import {
+  Engine,
+  workflow,
+  compileStepWorkflow,
+  type StepWorkflowContext,
+} from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 const engine = new Engine({ storage: new SQLiteStorage('./weft.db') });
 
@@ -199,8 +209,8 @@ Both activities run concurrently and the workflow resumes when all of them compl
 `MemoryStorage` is great for development, but everything vanishes when the process stops. For real durability, use `SQLiteStorage`:
 
 ```typescript
-import { Engine } from 'weft';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { Engine } from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 const engine = await Engine.create({
   storage: new SQLiteStorage('./weft.db'),
@@ -215,8 +225,8 @@ Now your checkpoints live in a SQLite database on disk. Crash the process, resta
 For quick experiments where you don't want to think about which adapter to pick, `resolveDefaultStorage()` detects Bun or Node and picks the matching SQLite backend (it's not for browsers — use `IndexedDBStorage` directly there). The path goes under the OS temp directory; production deployments should pass `storage` explicitly.
 
 ```typescript
-import { Engine } from 'weft';
-import { resolveDefaultStorage } from 'weft/storage/auto';
+import { Engine } from '@lostgradient/weft';
+import { resolveDefaultStorage } from '@lostgradient/weft/storage/auto';
 
 await using storage = await resolveDefaultStorage();
 await using engine = await Engine.create({ storage, recover: true });

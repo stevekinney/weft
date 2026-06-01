@@ -65,8 +65,8 @@ The minimal worker entry:
 ```typescript partial
 /// <reference lib="webworker" />
 
-import { activity, workflow } from 'weft';
-import { setupServiceWorker } from 'weft/service-worker';
+import { activity, workflow } from '@lostgradient/weft';
+import { setupServiceWorker } from '@lostgradient/weft/service-worker';
 
 const formatGreeting = activity({
   name: 'formatGreeting',
@@ -105,7 +105,7 @@ If `setupServiceWorker` is called outside a Service Worker scope (for example, a
 Register the Service Worker from page code, wait until it's ready, register Periodic Background Sync when available, then use the HTTP client against the local path prefix.
 
 ```typescript partial
-import { HttpClient } from 'weft/client';
+import { HttpClient } from '@lostgradient/weft/client';
 
 const registration = await navigator.serviceWorker.register('/sw.js', {
   scope: '/',
@@ -213,7 +213,7 @@ Register activities inside the Service Worker. Activities must be browser-safe: 
 If the same workflow also runs on the server, keep activity names stable across environments and swap implementations per runtime.
 
 ```typescript partial
-import { activity } from 'weft';
+import { activity } from '@lostgradient/weft';
 
 const uploadDraft = activity({
   name: 'uploadDraft',
@@ -263,13 +263,13 @@ When you need synchronous workflow registration before any `await`, an existing 
 ```typescript partial
 /// <reference lib="webworker" />
 
-import { Engine, activity, workflow } from 'weft';
-import { IndexedDBStorage } from 'weft/storage/indexeddb';
+import { Engine, activity, workflow } from '@lostgradient/weft';
+import { IndexedDBStorage } from '@lostgradient/weft/storage/indexeddb';
 import {
   createFetchHandler,
   createLifecycleHandlers,
   createPeriodicSyncHandler,
-} from 'weft/service-worker';
+} from '@lostgradient/weft/service-worker';
 
 const serviceWorker = self as unknown as ServiceWorkerGlobalScope;
 

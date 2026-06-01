@@ -30,7 +30,7 @@ import { principalFromApiKey, type AuthenticatedPrincipal } from '../principal.t
  *
  * @example
  * ```ts
- * import { type ApiKeyRegistration } from 'weft/server';
+ * import { type ApiKeyRegistration } from '@lostgradient/weft/server';
  *
  * const registration: ApiKeyRegistration = {
  *   subject: 'service-account-7',
@@ -60,7 +60,7 @@ export type ApiKeyRegistration = {
  *
  * @example
  * ```ts
- * import { createRotatingApiKeyStore, type RotatingApiKeyStore } from 'weft/server';
+ * import { createRotatingApiKeyStore, type RotatingApiKeyStore } from '@lostgradient/weft/server';
  *
  * const store: RotatingApiKeyStore = createRotatingApiKeyStore();
  * store.add('key-old', { subject: 'svc', scopes: ['workflows:read'] });
@@ -104,9 +104,9 @@ function isExpired(stored: StoredKey, currentTime: number): boolean {
  *
  * @example
  * ```ts
- * import { createRotatingApiKeyStore } from 'weft/server';
- * import { serve } from 'weft/server';
- * import { Engine, MemoryStorage } from 'weft';
+ * import { createRotatingApiKeyStore } from '@lostgradient/weft/server';
+ * import { serve } from '@lostgradient/weft/server';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * const store = createRotatingApiKeyStore();
  * store.add('initial-key', { subject: 'svc', scopes: ['workflows:read'] });

@@ -20,5 +20,5 @@ types, context construction, Bun server startup, resource disposal order,
 in-flight restore, and visibility/reconciliation intervals.
 
 No public `WeftServer` methods changed. `wireEventBroadcasting` and
-`EventBroadcastingHandle` remain available from `weft/server` through
+`EventBroadcastingHandle` remain available from `@lostgradient/weft/server` through
 re-exports from `src/server/index.ts`.

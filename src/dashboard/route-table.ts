@@ -69,7 +69,7 @@ export const ROUTE_TABLE: RouteDefinition[] = [
  *
  * @example
  * ```ts
- * import { DASHBOARD_PAGE_ROUTES } from 'weft/server';
+ * import { DASHBOARD_PAGE_ROUTES } from '@lostgradient/weft/server';
  * console.log(DASHBOARD_PAGE_ROUTES.includes('/workflows/*')); // true
  * ```
  */

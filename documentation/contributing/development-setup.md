@@ -113,6 +113,17 @@ bun run verify:markdown-doctests # Check TypeScript code blocks in documentation
 bun run verify:release-version  # Confirm version consistency before a release
 ```
 
+### Release package checks
+
+The npm package is published as `@lostgradient/weft` through trusted publishing. The GitHub Actions release workflow uses npm OIDC provenance and must not use `NODE_AUTH_TOKEN` or `NPM_TOKEN`; configure the npm trusted publisher for `.github/workflows/release.yaml` before the first publish.
+
+Run the package gates against the built artifact before cutting a tag:
+
+```bash
+bun run prepack
+npm publish --dry-run
+```
+
 For dashboard development, run:
 
 ```bash

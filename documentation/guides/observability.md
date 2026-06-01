@@ -10,7 +10,7 @@ Your workflows are running in production. Something is slow, but you can't tell 
 Import the factory, pass the engine as the `eventTarget`, and register the interceptor.
 
 ```typescript partial
-import { createObservabilityInterceptors } from 'weft/observability';
+import { createObservabilityInterceptors } from '@lostgradient/weft/observability';
 
 const { interceptor, dispose } = createObservabilityInterceptors({
   eventTarget: engine,
@@ -91,7 +91,7 @@ import {
   generateSpanId,
   formatTraceParent,
   parseTraceParent,
-} from 'weft/observability';
+} from '@lostgradient/weft/observability';
 ```
 
 `generateTraceId()` produces a 32-hex-character (16-byte) random trace ID. `generateSpanId()` produces a 16-hex-character (8-byte) random span ID. Both use `crypto.randomBytes()` under the hood.
@@ -103,7 +103,7 @@ The `traceparent` header uses the standard `{version}-{traceId}-{spanId}-{flags}
 The `METRICS` object defines the metric catalogue:
 
 ```typescript
-import { METRICS } from 'weft/observability';
+import { METRICS } from '@lostgradient/weft/observability';
 
 // METRICS.workflowDuration
 //   name: 'weft.workflow.duration', type: 'histogram', unit: 'ms'

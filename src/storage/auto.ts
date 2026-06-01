@@ -1,7 +1,7 @@
 /**
  * Runtime-detected default storage backend for **Bun and Node** processes.
  *
- * Imported via `weft/storage/auto`. Resolves a persistent storage
+ * Imported via `@lostgradient/weft/storage/auto`. Resolves a persistent storage
  * adapter appropriate for the current runtime:
  *
  *   1. Bun → `BunSQLiteStorage`
@@ -18,13 +18,13 @@
  * `node:os`, `node:path`, and `node:crypto`, so bundling it into a
  * browser target will fail. Browser/Service Worker contexts should use
  * `IndexedDBStorage` directly (or `setupServiceWorker()` from
- * `weft/service-worker`, which constructs IndexedDB internally).
+ * `@lostgradient/weft/service-worker`, which constructs IndexedDB internally).
  *
  * `resolveDefaultStorage()` is for developer convenience. Production
  * deployments should pick an explicit adapter and pass it to
  * `new Engine({ storage })`.
  *
- * @module weft/storage/auto
+ * @module @lostgradient/weft/storage/auto
  */
 
 import { createHash } from 'node:crypto';
@@ -89,8 +89,8 @@ const NODE_SQLITE_STORAGE_MODULE = storageModuleSpecifier('./node-sqlite.ts', '.
  *
  * @example
  * ```ts
- * import { Engine } from 'weft';
- * import { resolveDefaultStorage } from 'weft/storage/auto';
+ * import { Engine } from '@lostgradient/weft';
+ * import { resolveDefaultStorage } from '@lostgradient/weft/storage/auto';
  *
  * await using storage = await resolveDefaultStorage();
  * await using engine = new Engine({ storage });
@@ -117,6 +117,6 @@ export async function resolveDefaultStorage(): Promise<WeftStorage> {
     'resolveDefaultStorage: requires Bun or Node. ' +
       `Detected: typeof Bun=${describeGlobal('Bun')}, typeof process=${describeGlobal('process')}. ` +
       'In browser/Service Worker contexts, use `IndexedDBStorage` directly ' +
-      'or `setupServiceWorker()` from `weft/service-worker`.',
+      'or `setupServiceWorker()` from `@lostgradient/weft/service-worker`.',
   );
 }

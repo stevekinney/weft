@@ -35,7 +35,7 @@ async function* orderWorkflow(ctx: Context, order: Order) {
 The standalone `timeRemaining()` utility does the same calculation outside of a context:
 
 ```typescript partial
-import { timeRemaining } from 'weft';
+import { timeRemaining } from '@lostgradient/weft';
 
 const remaining = timeRemaining(deadline, Date.now());
 ```

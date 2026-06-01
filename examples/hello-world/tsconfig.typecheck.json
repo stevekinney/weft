@@ -13,7 +13,7 @@
     "noPropertyAccessFromIndexSignature": true,
     "noUncheckedIndexedAccess": true,
     "paths": {
-      "weft": ["../../dist/index.d.ts"]
+      "@lostgradient/weft": ["../../dist/index.d.ts"]
     },
     "pretty": true,
     "skipLibCheck": true,

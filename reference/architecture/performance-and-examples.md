@@ -6,21 +6,21 @@ This companion document was split out of [../architecture.md](../architecture.md
 
 ### Weft vs Temporal
 
-| Dimension                | Temporal                           | Weft (SQLite)             | Weft (LMDB)               |
-| ------------------------ | ---------------------------------- | ------------------------- | ------------------------- |
-| **Recovery**             | O(n) replay                        | O(1) checkpoint           | O(1) checkpoint           |
-| **Storage read**         | ~1ms (network)                     | ~10μs (in-process)        | ~1μs (memory-mapped)      |
-| **Storage write**        | ~2ms (network)                     | ~20μs (WAL)               | ~10μs (batched)           |
-| **Task claim**           | gRPC round-trip                    | 1 SQL statement           | 1 range read + put        |
-| **Cold start**           | seconds (Go + DB pool)             | <50ms (Bun + SQLite)      | <50ms (Bun + mmap)        |
-| **Memory / workflow**    | ~50KB (history cache)              | ~2KB (checkpoint)         | ~2KB (checkpoint)         |
-| **Single binary?**       | No                                 | Yes                       | No (native addon)         |
-| **Browser?**             | No                                 | No                        | No                        |
-| **Browser (IndexedDB)?** | —                                  | Yes (same engine)         | —                         |
-| **History growth**       | O(n) with activity count           | O(1) fixed-size           | O(1) fixed-size           |
-| **Dev environment**      | Docker Compose (~minutes)          | `bun add weft` (~seconds) | `bun add weft` (~seconds) |
-| **Bundle step**          | Webpack per workflow change        | None                      | None                      |
-| **Max workflow length**  | ~50K events (then `continueAsNew`) | Unlimited                 | Unlimited                 |
+| Dimension                | Temporal                           | Weft (SQLite)                           | Weft (LMDB)                             |
+| ------------------------ | ---------------------------------- | --------------------------------------- | --------------------------------------- |
+| **Recovery**             | O(n) replay                        | O(1) checkpoint                         | O(1) checkpoint                         |
+| **Storage read**         | ~1ms (network)                     | ~10μs (in-process)                      | ~1μs (memory-mapped)                    |
+| **Storage write**        | ~2ms (network)                     | ~20μs (WAL)                             | ~10μs (batched)                         |
+| **Task claim**           | gRPC round-trip                    | 1 SQL statement                         | 1 range read + put                      |
+| **Cold start**           | seconds (Go + DB pool)             | <50ms (Bun + SQLite)                    | <50ms (Bun + mmap)                      |
+| **Memory / workflow**    | ~50KB (history cache)              | ~2KB (checkpoint)                       | ~2KB (checkpoint)                       |
+| **Single binary?**       | No                                 | Yes                                     | No (native addon)                       |
+| **Browser?**             | No                                 | No                                      | No                                      |
+| **Browser (IndexedDB)?** | —                                  | Yes (same engine)                       | —                                       |
+| **History growth**       | O(n) with activity count           | O(1) fixed-size                         | O(1) fixed-size                         |
+| **Dev environment**      | Docker Compose (~minutes)          | `bun add @lostgradient/weft` (~seconds) | `bun add @lostgradient/weft` (~seconds) |
+| **Bundle step**          | Webpack per workflow change        | None                                    | None                                    |
+| **Max workflow length**  | ~50K events (then `continueAsNew`) | Unlimited                               | Unlimited                               |
 
 ### Platform Primitive Performance Wins
 
@@ -116,7 +116,7 @@ weft/
 
 ```typescript
 // Library mode — embed in your app
-import { Engine, BunSQLiteStorage } from 'weft';
+import { Engine, BunSQLiteStorage } from '@lostgradient/weft';
 
 const engine = new Engine({
   storage: new BunSQLiteStorage('./weft.db'),

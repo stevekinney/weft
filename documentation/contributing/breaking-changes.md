@@ -1,6 +1,6 @@
 # Breaking-Change and Deprecation Policy
 
-This document defines how Weft manages API stability, communicates breaking changes, and handles the deprecation lifecycle. It applies to the exported public API (the `weft` package and its sub-path exports) and to the wire contracts (REST, JSON-RPC, WebSocket, storage key layout, persisted-state shape).
+This document defines how Weft manages API stability, communicates breaking changes, and handles the deprecation lifecycle. It applies to the exported public API (the `@lostgradient/weft` package and its sub-path exports) and to the wire contracts (REST, JSON-RPC, WebSocket, storage key layout, persisted-state shape).
 
 ## Stability Tiers
 

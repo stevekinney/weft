@@ -2,13 +2,13 @@
  * In-repo fixture copy of the `hello-world` example workflow and activity.
  *
  * The consumer-facing version lives in `examples/hello-world/` and imports from
- * the published `weft` package. This module deliberately keeps its own copy that
+ * the published `@lostgradient/weft` package. This module deliberately keeps its own copy that
  * imports the engine relatively (`./index.ts`) so in-repo tests
  * (`src/examples.test.ts`) and the CLI smoke harness (`scripts/cli-smoke-main.ts`)
- * load it without the example workspace's `weft` resolution — which is only
+ * load it without the example workspace's `@lostgradient/weft` resolution — which is only
  * present after that workspace is `bun install`ed and is therefore unavailable in
  * the root `tsc`/`bun test` jobs. Re-exporting from the example instead drags
- * `from 'weft'` into the root program and breaks CI. The small duplication is the
+ * `from '@lostgradient/weft'` into the root program and breaks CI. The small duplication is the
  * intentional cost of the in-repo-fixture vs. consumer-example split.
  *
  * The `.test-support.ts` suffix keeps it out of the build (`dist/`).

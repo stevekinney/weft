@@ -17,7 +17,7 @@ type PendingRequest = {
  *
  * @example
  * ```ts
- * import { type McpSessionPhase } from 'weft/mcp';
+ * import { type McpSessionPhase } from '@lostgradient/weft/mcp';
  *
  * const phase: McpSessionPhase = 'ready';
  * void phase;
@@ -30,8 +30,8 @@ export type McpSessionPhase = 'new' | 'initializing' | 'ready';
  *
  * @example
  * ```ts
- * import { createMcpSessionManager, type McpSessionManagerOptions } from 'weft/mcp';
- * import { Engine, MemoryStorage } from 'weft';
+ * import { createMcpSessionManager, type McpSessionManagerOptions } from '@lostgradient/weft/mcp';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });
@@ -76,8 +76,8 @@ const RESOURCE_EVENT_NAMES = [
  *
  * @example
  * ```ts
- * import { McpSessionManager, type McpSession } from 'weft/mcp';
- * import { Engine, MemoryStorage } from 'weft';
+ * import { McpSessionManager, type McpSession } from '@lostgradient/weft/mcp';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });
@@ -193,8 +193,8 @@ function asJsonRpcId(value: unknown): JsonRpcId | undefined {
  *
  * @example
  * ```ts
- * import { McpSessionManager } from 'weft/mcp';
- * import { Engine, MemoryStorage } from 'weft';
+ * import { McpSessionManager } from '@lostgradient/weft/mcp';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });
@@ -321,8 +321,8 @@ export class McpSessionManager implements AsyncDisposable {
  *
  * @example
  * ```ts
- * import { createMcpSessionManager } from 'weft/mcp';
- * import { Engine, MemoryStorage } from 'weft';
+ * import { createMcpSessionManager } from '@lostgradient/weft/mcp';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * await using storage = new MemoryStorage();
  * await using engine = new Engine({ storage });

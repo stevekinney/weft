@@ -38,8 +38,8 @@ export type {
  *
  * @example
  * ```ts
- * import { createFetchHandler, type ServiceWorkerOptions } from 'weft/service-worker';
- * import { Engine, MemoryStorage } from 'weft';
+ * import { createFetchHandler, type ServiceWorkerOptions } from '@lostgradient/weft/service-worker';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
  *
  * const storage = new MemoryStorage();
  * const engine = new Engine({ storage });
@@ -78,8 +78,8 @@ export interface ServiceWorkerOptions {
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage } from 'weft';
- * import { createFetchHandler } from 'weft/service-worker';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ * import { createFetchHandler } from '@lostgradient/weft/service-worker';
  *
  * const engine = new Engine({ storage: new MemoryStorage() });
  * const handler = createFetchHandler({ engine, pathPrefix: '/weft/' });
@@ -116,13 +116,13 @@ export function createFetchHandler(
  * resolves.
  *
  * Note: `ServiceWorkerScheduler` is the parameter type but is not currently
- * re-exported from `weft/service-worker` — construct the scheduler in the
+ * re-exported from `@lostgradient/weft/service-worker` — construct the scheduler in the
  * module that imports it directly (e.g. the dashboard runtime) and pass
  * the instance to this factory.
  *
  * @example
  * ```ts
- * import { createPeriodicSyncHandler } from 'weft/service-worker';
+ * import { createPeriodicSyncHandler } from '@lostgradient/weft/service-worker';
  *
  * // In your Service Worker (with a scheduler from the runtime that imports it):
  * declare const scheduler: { tick(): Promise<void> };
@@ -164,7 +164,7 @@ export function createPeriodicSyncHandler(
  *
  * @example
  * ```ts
- * import { createLifecycleHandlers } from 'weft/service-worker';
+ * import { createLifecycleHandlers } from '@lostgradient/weft/service-worker';
  *
  * const { install, activate } = createLifecycleHandlers();
  *

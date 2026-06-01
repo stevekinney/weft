@@ -62,10 +62,13 @@ jobs:
       - name: Verify tag matches package.json version
         run: bun run scripts/verify-release-version.ts
 
-      - name: Build package
-        run: bun run build
+      - name: Run package prepack gates
+        run: bun run prepack
+
+      - name: Verify npm publish dry run
+        run: npm publish --dry-run --ignore-scripts
 
       - name: Publish to npm
         env:
           NPM_CONFIG_PROVENANCE: 'true'
-        run: npm publish
+        run: npm publish --ignore-scripts

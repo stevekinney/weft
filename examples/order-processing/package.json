@@ -13,7 +13,7 @@
     "verify": "bun run typecheck && bun run lint && bun run test"
   },
   "dependencies": {
-    "weft": "file:../.."
+    "@lostgradient/weft": "file:../.."
   },
   "devDependencies": {
     "@types/bun": "1.3.13",

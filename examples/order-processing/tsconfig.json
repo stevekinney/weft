@@ -18,10 +18,10 @@
     "strict": true,
     "target": "ES2022",
     "paths": {
-      "weft": ["../../src/index.ts"],
-      "weft/server": ["../../src/server/index.ts"],
-      "weft/storage/sqlite": ["../../src/storage/bun-sql.ts"],
-      "weft/testing": ["../../src/testing/index.ts"]
+      "@lostgradient/weft": ["../../src/index.ts"],
+      "@lostgradient/weft/server": ["../../src/server/index.ts"],
+      "@lostgradient/weft/storage/sqlite": ["../../src/storage/bun-sql.ts"],
+      "@lostgradient/weft/testing": ["../../src/testing/index.ts"]
     },
     "types": ["bun"],
     "verbatimModuleSyntax": true

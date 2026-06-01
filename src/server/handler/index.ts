@@ -112,7 +112,7 @@ async function dispatchDirectRoute(
  *
  * @example
  * ```ts
- * import { workflow, Engine, MemoryStorage, handleRequest } from 'weft';
+ * import { workflow, Engine, MemoryStorage, handleRequest } from '@lostgradient/weft';
  *
  * await using engine = new Engine({ storage: new MemoryStorage() });
  * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));

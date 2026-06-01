@@ -1,5 +1,5 @@
 {
-  "name": "weft",
+  "name": "@lostgradient/weft",
   "version": "0.2.0",
   "description": "A Bun-native durable execution engine with pluggable key-value storage.",
   "keywords": [
@@ -177,8 +177,8 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "bin": {
-    "weft": "./dist/cli-main.js",
-    "weft-mcp": "./dist/mcp/cli.js"
+    "weft": "dist/cli-main.js",
+    "weft-mcp": "dist/mcp/cli.js"
   },
   "files": [
     "dist",
@@ -188,6 +188,7 @@
   "scripts": {
     "build": "bun run scripts/build.ts",
     "build:binary": "bun run scripts/build-binary-main.ts",
+    "check:package-contents": "bun run scripts/check-package-contents.ts",
     "clean": "rm -rf dist coverage tsconfig.tsbuildinfo",
     "dev": "bun --watch run src/index.ts",
     "dev:dashboard": "bun --hot src/dashboard/development-server.ts",
@@ -196,7 +197,7 @@
     "lint": "oxlint --type-aware --tsconfig ./tsconfig.json --report-unused-disable-directives-severity=error && bun run scripts/check-lint-disables.ts && bun run scripts/check-import-cycles.ts && bun run scripts/check-internal-imports.ts && bun run scripts/check-engine-internals-field-access.ts && bun run scripts/check-definition-vocabulary.ts && bun run scripts/check-catalog-completeness.ts && bun run scripts/check-catalog-drift.ts && bun run scripts/check-type-ergonomics.ts",
     "lint:fix": "oxlint --fix --type-aware --tsconfig ./tsconfig.json",
     "markdown-doctests:inventory": "bun run scripts/extract-markdown-doctests.ts inventory",
-    "prepack": "bun run build && bun run verify:exports && bun run verify:portability",
+    "prepack": "bun run build && bun run verify:exports && bun run verify:portability && bun run verify:markdown-doctests && bun run verify:jsdoc && bun run verify:jsdoc:doctests && bun run verify:jsdoc:declarations && bun run check:package-contents && bun run validate:package-consumers",
     "pr:title": "bun run scripts/pr-title.ts",
     "prepare": "husky",
     "prepublishOnly": "bun run validate",
@@ -208,6 +209,7 @@
     "typecheck:package-root": "bun run build && tsc --noEmit -p tsconfig.package-test-d.json",
     "typecheck:tests": "tsc --noEmit -p tsconfig.test-d.json && bun run typecheck:package-root",
     "validate": "bun run lint && bun run typecheck && bun run typecheck:tests && bun run verify:documentation && bun run verify:no-test-sleeps && bun run verify:public-api-jsdoc && bun run test",
+    "validate:package-consumers": "bun run scripts/validate-package-consumers.ts",
     "verify:documentation": "bun run scripts/verify-documentation.ts",
     "verify:exports": "bun run scripts/verify-tree-shaking.ts",
     "verify:jsdoc": "bun run scripts/audit-jsdoc-manifest.ts",

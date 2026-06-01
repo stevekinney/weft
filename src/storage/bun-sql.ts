@@ -27,7 +27,7 @@ import {
 
 /**
  * Runtime-neutral alias for the Bun SQLite adapter. Consumers that import
- * from `weft/storage/sqlite` get this class under Bun.
+ * from `@lostgradient/weft/storage/sqlite` get this class under Bun.
  */
 export { BunSQLiteStorage as SQLiteStorage };
 
@@ -45,8 +45,8 @@ export { BunSQLiteStorage as SQLiteStorage };
  *
  * @example
  * ```ts
- * import { BunSQLiteStorage } from 'weft/storage/sqlite/bun';
- * import { workflow, Engine, type WorkflowContext } from 'weft';
+ * import { BunSQLiteStorage } from '@lostgradient/weft/storage/sqlite/bun';
+ * import { workflow, Engine, type WorkflowContext } from '@lostgradient/weft';
  *
  * // Durable on-disk storage
  * await using storage = new BunSQLiteStorage('./weft.db');

@@ -1,6 +1,6 @@
-import { Engine } from 'weft';
-import { serve } from 'weft/server';
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { Engine } from '@lostgradient/weft';
+import { serve } from '@lostgradient/weft/server';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 import { createOrderProcessingEngine, orderProcessingSchedule } from './registry';
 

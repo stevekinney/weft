@@ -172,7 +172,7 @@ async function storageDeleteRange(
 Validate `DeleteRangeOptions`, call the adapter's native `deleteRange()` when it exists, or derive the operation with a bounded `scan()` plus `batch()` fallback. This is the public dispatcher to use from engine and adapter code; it keeps unbounded or malformed deletes from reaching native SQL, IndexedDB, or LMDB implementations.
 
 ```ts
-import { MemoryStorage, storageDeleteRange } from 'weft';
+import { MemoryStorage, storageDeleteRange } from '@lostgradient/weft';
 
 await using storage = new MemoryStorage();
 await storage.put('ev:wf-1:0000000001', new Uint8Array([1]));
@@ -215,7 +215,7 @@ const KEYS: {
 Key layout constants for hierarchical key encoding. All timestamps are zero-padded to 16 digits for correct lexicographic ordering. The `KEYS` object is the canonical source for key construction -- never hand-build keys.
 
 ```ts
-import { KEYS } from 'weft';
+import { KEYS } from '@lostgradient/weft';
 
 const key = KEYS.workflow('my-workflow-id');
 // => "wf:my-workflow-id"
@@ -235,7 +235,7 @@ const executionStateKey = KEYS.stateExecution('wf-123', 'counter');
 class SQLiteStorage implements Storage
 ```
 
-SQLite-backed storage. The `weft/storage/sqlite` subpath resolves to `BunSQLiteStorage` under Bun and `NodeSQLiteStorage` under Node.js. Use `weft/storage/sqlite/bun` or `weft/storage/sqlite/node` when you need an explicit runtime override.
+SQLite-backed storage. The `@lostgradient/weft/storage/sqlite` subpath resolves to `BunSQLiteStorage` under Bun and `NodeSQLiteStorage` under Node.js. Use `@lostgradient/weft/storage/sqlite/bun` or `@lostgradient/weft/storage/sqlite/node` when you need an explicit runtime override.
 
 ### Constructor
 
@@ -254,7 +254,7 @@ The constructor automatically creates the `kv` table if it does not exist and co
 - `cache_size = -64000` (64 MB)
 
 ```ts
-import { SQLiteStorage } from 'weft/storage/sqlite';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 const storage = new SQLiteStorage('./data/weft.db');
 ```
@@ -269,10 +269,10 @@ All methods from the `Storage` interface, plus:
 async query<T>(sql: string, parameters?: SQLQueryBindings[]): Promise<T[]>
 ```
 
-Execute raw SQL against the underlying database. Returns all matching rows. This method is available on `BunSQLiteStorage` from `weft/storage/sqlite/bun`. The runtime-neutral `weft/storage/sqlite` type intentionally sticks to the common SQLite surface because it may resolve to `NodeSQLiteStorage`.
+Execute raw SQL against the underlying database. Returns all matching rows. This method is available on `BunSQLiteStorage` from `@lostgradient/weft/storage/sqlite/bun`. The runtime-neutral `@lostgradient/weft/storage/sqlite` type intentionally sticks to the common SQLite surface because it may resolve to `NodeSQLiteStorage`.
 
 ```ts partial
-import { BunSQLiteStorage } from 'weft/storage/sqlite/bun';
+import { BunSQLiteStorage } from '@lostgradient/weft/storage/sqlite/bun';
 
 const storage = new BunSQLiteStorage('./data/weft.db');
 const rows = await storage.query<{ key: string }>('SELECT key FROM kv WHERE key LIKE ?', ['wf:%']);
@@ -359,10 +359,10 @@ class IndexedDBStorage implements Storage
 IndexedDB-backed storage for browser environments. Uses a single `kv` object store with string keys and `Uint8Array` values. Suitable for Service Worker deployments where the engine runs entirely in the browser.
 
 ```ts
-import { IndexedDBStorage } from 'weft/storage/indexeddb';
+import { IndexedDBStorage } from '@lostgradient/weft/storage/indexeddb';
 ```
 
-Browser consumers should use browser-safe subpath imports such as `weft/storage/indexeddb` or `weft/storage/web-extension` and avoid server-only storage adapters.
+Browser consumers should use browser-safe subpath imports such as `@lostgradient/weft/storage/indexeddb` or `@lostgradient/weft/storage/web-extension` and avoid server-only storage adapters.
 
 ### Constructor
 
@@ -413,7 +413,7 @@ class LMDBStorage implements Storage
 Memory-mapped key-value storage backed by [LMDB](https://www.symas.com/lmdb). Optional dependency: `lmdb`. Suitable for high-throughput workloads where SQLite is no longer fast enough on the read path.
 
 ```ts
-import { LMDBStorage } from 'weft/storage/lmdb';
+import { LMDBStorage } from '@lostgradient/weft/storage/lmdb';
 ```
 
 ### Constructor
@@ -429,7 +429,7 @@ new LMDBStorage(path: string)
 If the `lmdb` package is not installed, the module import fails with the upstream package's missing-module error.
 
 ```ts partial
-import { LMDBStorage } from 'weft/storage/lmdb';
+import { LMDBStorage } from '@lostgradient/weft/storage/lmdb';
 
 await using storage = new LMDBStorage('./weft-data');
 ```
@@ -453,7 +453,7 @@ class TursoStorage implements Storage
 libSQL/Turso storage for edge or serverless deployments. Optional dependency: `@libsql/client`.
 
 ```ts
-import { TursoStorage } from 'weft/storage/turso';
+import { TursoStorage } from '@lostgradient/weft/storage/turso';
 ```
 
 ### Constructor
@@ -477,7 +477,7 @@ type TursoStorageOptions = {
 If the `@libsql/client` package is not installed, the module import fails with the upstream package's missing-module error.
 
 ```ts partial
-import { TursoStorage } from 'weft/storage/turso';
+import { TursoStorage } from '@lostgradient/weft/storage/turso';
 
 await using storage = new TursoStorage({
   url: 'libsql://your-db.turso.io',
@@ -500,7 +500,7 @@ class WebExtensionStorage implements Storage
 WebExtension-context storage backed by `chrome.storage` or `browser.storage`. Values are stored as JSON envelopes with base64-encoded `Uint8Array` payloads.
 
 ```ts
-import { WebExtensionStorage } from 'weft/storage/web-extension';
+import { WebExtensionStorage } from '@lostgradient/weft/storage/web-extension';
 ```
 
 ### Constructor
@@ -522,7 +522,7 @@ type WebExtensionStorageOptions = {
 The constructor resolves either `globalThis.browser` or `globalThis.chrome` and accesses the matching `storage` namespace. If neither is present, the constructor throws immediately with: `WebExtensionStorage requires globalThis.browser.storage or globalThis.chrome.storage.`
 
 ```ts
-import { WebExtensionStorage } from 'weft/storage/web-extension';
+import { WebExtensionStorage } from '@lostgradient/weft/storage/web-extension';
 
 using storage = new WebExtensionStorage({ area: 'local' });
 ```
@@ -548,7 +548,7 @@ class HTTPStorage implements Storage
 Remote storage over HTTP. Talks to Weft's storage REST routes (see [the server API reference](./api-server.md#storage-operations)). Suitable for distributed deployments where a single Weft server owns the storage and other clients connect over the network.
 
 ```ts
-import { HTTPStorage } from 'weft/storage/http';
+import { HTTPStorage } from '@lostgradient/weft/storage/http';
 ```
 
 ### Constructor
@@ -570,7 +570,7 @@ type HTTPStorageOptions = {
 | `headers` | `Record<string, string>` | `{}`    | Headers sent with every request. Use this for `authorization` and any other request headers. |
 
 ```ts partial
-import { HTTPStorage } from 'weft/storage/http';
+import { HTTPStorage } from '@lostgradient/weft/storage/http';
 
 using storage = new HTTPStorage({
   baseUrl: 'https://weft.example.com',
@@ -593,7 +593,7 @@ class CompressedStorage implements Storage
 A wrapper that compresses values before delegating to another `Storage`. Useful for large payloads where storage size matters more than CPU.
 
 ```ts
-import { CompressedStorage } from 'weft/storage/compressed';
+import { CompressedStorage } from '@lostgradient/weft/storage/compressed';
 ```
 
 ### Constructor
@@ -621,12 +621,12 @@ function resolveStorage<Configuration extends StorageConfiguration>(
 Resolves a storage backend from runtime configuration. Lazy-loads adapter modules so optional dependencies (like `lmdb` or `@libsql/client`) are only required when their configuration type is selected.
 
 ```ts
-import { resolveStorage } from 'weft/storage';
+import { resolveStorage } from '@lostgradient/weft/storage';
 
 const storage = await resolveStorage({ type: 'sqlite', path: './weft.db' });
 ```
 
-Available from both `weft/storage` and `weft/storage/resolve`.
+Available from both `@lostgradient/weft/storage` and `@lostgradient/weft/storage/resolve`.
 
 ### `StorageConfiguration`
 
@@ -660,7 +660,7 @@ type StorageConfiguration =
 Return-type narrowing helper. Use when a configuration value is already narrowed and downstream code needs the adapter-specific instance type:
 
 ```ts partial
-import type { HTTPStorageConfiguration, ResolvedStorage } from 'weft/storage/resolve';
+import type { HTTPStorageConfiguration, ResolvedStorage } from '@lostgradient/weft/storage/resolve';
 
 type RemoteStorage = ResolvedStorage<HTTPStorageConfiguration>;
 // RemoteStorage is HTTPStorage
@@ -689,7 +689,7 @@ The mapping:
 4. Else if `globalThis.indexedDB` is defined, returns `IndexedDBStorage` (default `databaseName: 'weft'`).
 5. Else returns `MemoryStorage`.
 
-For a Bun-or-Node-only helper that throws in browsers (instead of falling through), use `resolveDefaultStorage()` from `weft/storage/auto`.
+For a Bun-or-Node-only helper that throws in browsers (instead of falling through), use `resolveDefaultStorage()` from `@lostgradient/weft/storage/auto`.
 
 ---
 
@@ -702,7 +702,7 @@ function resolveDefaultStorage(): Promise<Storage>;
 Picks a SQLite-backed storage adapter for the current runtime. Bun returns `BunSQLiteStorage`; Node returns `NodeSQLiteStorage`; everything else throws.
 
 ```ts
-import { resolveDefaultStorage } from 'weft/storage/auto';
+import { resolveDefaultStorage } from '@lostgradient/weft/storage/auto';
 
 await using storage = await resolveDefaultStorage();
 ```
@@ -715,6 +715,6 @@ The path is resolved as:
 The parent directory is created (recursive) before the path is returned.
 
 > [!WARNING]
-> `weft/storage/auto` statically imports `node:fs`, `node:os`, `node:path`, and `node:crypto`. Bundling it for a browser target will fail. Browser and Service Worker contexts should use `IndexedDBStorage` directly, or `setupServiceWorker()` from `weft/service-worker`.
+> `@lostgradient/weft/storage/auto` statically imports `node:fs`, `node:os`, `node:path`, and `node:crypto`. Bundling it for a browser target will fail. Browser and Service Worker contexts should use `IndexedDBStorage` directly, or `setupServiceWorker()` from `@lostgradient/weft/service-worker`.
 
 This helper is for development convenience. Production deployments should pick an explicit adapter and pass it to `new Engine({ storage })`.

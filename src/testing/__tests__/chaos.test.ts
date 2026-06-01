@@ -154,7 +154,7 @@ describe('withChaos', () => {
     expect(caught).toBeInstanceOf(ChaosTimeoutError);
     expect(caught).not.toBeInstanceOf(ChaosTransientError);
     expect(caught).not.toBeInstanceOf(ChaosNonRetryableError);
-    expect((caught as ChaosTimeoutError).name).toBe('ChaosTimeoutError');
+    expect((caught as ChaosTimeoutError).name).toBe('TimeoutError');
     // The timeout fault must actually wait for the abort signal to fire —
     // a synchronous throw would return in ~0ms. TIMEOUT_FAULT_MS is 25ms;
     // assert a lower bound well below that to avoid timer-coalescing flakes

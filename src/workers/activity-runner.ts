@@ -12,7 +12,7 @@
  *
  * @example
  * ```ts
- * import { executeActivity, type ActivityExecutionRequest } from 'weft';
+ * import { executeActivity, type ActivityExecutionRequest } from '@lostgradient/weft';
  *
  * const request: ActivityExecutionRequest = {
  *   operationId: crypto.randomUUID(),
@@ -43,7 +43,7 @@ export interface ActivityExecutionRequest {
  *
  * @example
  * ```ts
- * import { executeActivity, type ActivityExecutionResult } from 'weft';
+ * import { executeActivity, type ActivityExecutionResult } from '@lostgradient/weft';
  *
  * const result: ActivityExecutionResult = await executeActivity(
  *   { operationId: 'op-1', activityName: 'add', input: [1, 2], attempt: 1 },
@@ -79,7 +79,7 @@ export interface ActivityExecutionResult {
  *
  * @example
  * ```ts
- * import { executeActivity } from 'weft';
+ * import { executeActivity } from '@lostgradient/weft';
  *
  * const result = await executeActivity(
  *   {

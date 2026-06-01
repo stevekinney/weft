@@ -71,7 +71,7 @@ When a workflow pauses for human review, review events track the request and the
 All event types are collected into `WeftEventMap`, a TypeScript interface that maps event type strings to their concrete event classes. Review-specific events are also available through `WeftReviewEventMap`. You can use either map with the `TypedEventTarget` interface for full type safety.
 
 ```typescript partial
-import type { WeftEventMap, TypedEventTarget } from 'weft';
+import type { WeftEventMap, TypedEventTarget } from '@lostgradient/weft';
 
 const typedEngine = engine as unknown as TypedEventTarget<WeftEventMap>;
 

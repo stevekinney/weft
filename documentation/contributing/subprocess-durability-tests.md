@@ -2,16 +2,16 @@
 
 Use the subprocess harness when a test needs to prove behavior across a real server process boundary. In-process recovery tests are still useful for engine algorithms, but they do not prove that an operator-style server process can be killed and restarted against the same durable storage.
 
-Import the harness from `weft/testing`:
+Import the harness from `@lostgradient/weft/testing`:
 
 ```ts
-import { killAndReboot, spawnServerSubprocess } from 'weft/testing';
+import { killAndReboot, spawnServerSubprocess } from '@lostgradient/weft/testing';
 ```
 
 The harness starts a Bun subprocess, waits for a readiness line, captures stdout and stderr, and reboots against the same database path after a signal:
 
 ```ts
-import { killAndReboot, spawnServerSubprocess } from 'weft/testing';
+import { killAndReboot, spawnServerSubprocess } from '@lostgradient/weft/testing';
 
 const server = await spawnServerSubprocess({
   entrypoint: './tmp/test-entrypoint.ts',

@@ -41,7 +41,7 @@ export type NameKind = 'workflow' | 'activity';
  *
  * @example
  * ```ts
- * import { validateWorkflowOrActivityName } from 'weft';
+ * import { validateWorkflowOrActivityName } from '@lostgradient/weft';
  *
  * validateWorkflowOrActivityName('formatGreeting', 'activity'); // ok
  * try {

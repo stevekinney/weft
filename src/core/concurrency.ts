@@ -20,7 +20,7 @@
  * next contender, which is what prevents a crashed holder from deadlocking the
  * lock forever.
  *
- * @module weft/core/concurrency
+ * @module core/concurrency
  */
 
 import {
@@ -51,8 +51,8 @@ export type { AcquireAttempt, LockHolder, LockRecord } from './concurrency-lock-
  *
  * @example
  * ```ts
- * import { AtomicState, type CasSlot, type LockRecord } from 'weft';
- * import { MemoryStorage } from 'weft/storage/memory';
+ * import { AtomicState, type CasSlot, type LockRecord } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
  *
  * // AtomicState satisfies CasSlot structurally (its methods return promises).
  * const slot: CasSlot<LockRecord, Promise<LockRecord>, Promise<LockRecord | undefined>> =
@@ -92,7 +92,7 @@ function assertValidLease(leaseMs: number): void {
  *
  * @example
  * ```ts
- * import { DurableSemaphore, type DurableSemaphoreOptions } from 'weft';
+ * import { DurableSemaphore, type DurableSemaphoreOptions } from '@lostgradient/weft';
  *
  * const options: DurableSemaphoreOptions = { permits: 3, leaseMs: 60_000 };
  * const semaphore = new DurableSemaphore(options);
@@ -135,12 +135,12 @@ const DEFAULT_LEASE_MS = 30_000;
  *
  * @example
  * ```ts
- * import { DurableSemaphore } from 'weft';
- * import { AtomicState } from 'weft';
- * import { MemoryStorage } from 'weft/storage/memory';
+ * import { DurableSemaphore } from '@lostgradient/weft';
+ * import { AtomicState } from '@lostgradient/weft';
+ * import { MemoryStorage } from '@lostgradient/weft/storage/memory';
  *
  * const storage = new MemoryStorage();
- * const slot = new AtomicState<import('weft').LockRecord>(
+ * const slot = new AtomicState<import('@lostgradient/weft').LockRecord>(
  *   storage,
  *   'state:workflow-scope:default:rate-limit:lock',
  *   { initial: { holders: [], waiters: [] } },
@@ -250,8 +250,8 @@ export class DurableSemaphore {
  *
  * @example
  * ```ts
- * import { DurableMutex } from 'weft';
- * import { workflow, type WorkflowContext, type LockRecord } from 'weft';
+ * import { DurableMutex } from '@lostgradient/weft';
+ * import { workflow, type WorkflowContext, type LockRecord } from '@lostgradient/weft';
  *
  * const transfer = workflow({ name: 'transfer' }).execute(async function* (ctx: WorkflowContext) {
  *   const slot = ctx.state.workflow<LockRecord>('account-42:lock', {
@@ -292,7 +292,7 @@ export class DurableMutex extends DurableSemaphore {
  *
  * @example
  * ```ts
- * import type { AcquireAttempt, AcquireWithSlot } from 'weft';
+ * import type { AcquireAttempt, AcquireWithSlot } from '@lostgradient/weft';
  *
  * type PromiseResult = AcquireWithSlot<Promise<unknown>>; // Promise<AcquireAttempt>
  * const result: PromiseResult = Promise.resolve<AcquireAttempt>({ acquired: true, position: -1 });
@@ -311,7 +311,7 @@ export type AcquireWithSlot<R> =
  *
  * @example
  * ```ts
- * import type { RenewWithSlot } from 'weft';
+ * import type { RenewWithSlot } from '@lostgradient/weft';
  *
  * type PromiseResult = RenewWithSlot<Promise<unknown>>; // Promise<boolean>
  * const result: PromiseResult = Promise.resolve(true);

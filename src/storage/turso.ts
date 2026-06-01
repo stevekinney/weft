@@ -32,7 +32,7 @@ const LIBSQL_CREATE_KEY_VALUE_TABLE_STATEMENT = `${SQLITE_CREATE_KEY_VALUE_TABLE
  *
  * @example
  * ```ts
- * import { TursoStorage, type TursoStorageOptions } from 'weft/storage/turso';
+ * import { TursoStorage, type TursoStorageOptions } from '@lostgradient/weft/storage/turso';
  *
  * const options: TursoStorageOptions = {
  *   url: 'file:local.db',
@@ -57,8 +57,8 @@ export type TursoStorageOptions = {
  *
  * @example
  * ```ts
- * import { TursoStorage } from 'weft/storage/turso';
- * import { Engine } from 'weft';
+ * import { TursoStorage } from '@lostgradient/weft/storage/turso';
+ * import { Engine } from '@lostgradient/weft';
  *
  * await using storage = new TursoStorage({
  *   url: 'libsql://my-db.turso.io',
