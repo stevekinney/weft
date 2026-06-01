@@ -1,18 +1,21 @@
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 /**
  * `weft.workflows.bulk.signal` operation + REST binding — behavior tests.
  */
 
 import { describe, expect, it } from 'bun:test';
 
-import { Engine } from '../../core/engine.ts';
+import type { Engine } from '../../core/engine.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
+import { createJsonRequest } from '../http-request.test-support.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
-import { principalFromApiKey } from '../principal.ts';
+import { waitForStatus } from '../workflow-status.test-support.ts';
+import {
+  createBulkTestEngine,
+  bulkAdminHandlerOptions as makeBulkAdminHandlerOptions,
+} from './bulk-operation.test-support.ts';
 import {
   bulkSignalWorkflowsOperation,
   bulkSignalWorkflowsRestBinding,
@@ -27,56 +30,18 @@ const waitingWorkflow = workflow({ name: 'waiting' }).execute(async function* (
 });
 
 function createEngine(): Engine {
-  const engine = new Engine({ storage: new MemoryStorage() });
-  engine.register(waitingWorkflow);
-  return engine;
-}
-
-async function waitForStatus(
-  engine: Engine,
-  workflowId: string,
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
-  timeoutMilliseconds = 500,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMilliseconds;
-  while (Date.now() < deadline) {
-    const state = await engine.get(workflowId);
-    if (state?.status === status) {
-      return;
-    }
-    await sleepForTesting(5);
-  }
-
-  throw new Error(`Workflow ${workflowId} did not reach ${status} within ${timeoutMilliseconds}ms`);
+  return createBulkTestEngine(waitingWorkflow);
 }
 
 function request(body?: unknown): Request {
-  return new Request('http://localhost/v1/workflows/bulk/signal', {
-    method: 'POST',
-    ...(body === undefined
-      ? {}
-      : {
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify(body),
-        }),
-  });
+  return createJsonRequest({ method: 'POST', path: '/v1/workflows/bulk/signal', body });
 }
 
 const registry = createOperationRegistry([bulkSignalWorkflowsOperation]);
 const bindings = [bulkSignalWorkflowsRestBinding];
 
 function bulkAdminHandlerOptions(customRegistry = registry) {
-  return {
-    operationRegistry: customRegistry,
-    restBindings: bindings,
-    authContext: {
-      method: 'api-key' as const,
-      principal: principalFromApiKey({
-        subject: 'bulk-admin-operator',
-        scopes: ['workflows:admin'],
-      }),
-    },
-  };
+  return makeBulkAdminHandlerOptions({ registry: customRegistry, bindings });
 }
 
 describe('weft.workflows.bulk.signal', () => {
