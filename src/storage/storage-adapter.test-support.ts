@@ -19,10 +19,16 @@ import { storageConditionalBatch } from './interface.ts';
 import { MemoryStorage } from './memory.ts';
 
 const textEncoder = new TextEncoder();
+const textDecoder = new TextDecoder();
 
 /** Encode a string as bytes for storage values. */
-function bytes(value: string): Uint8Array {
+export function bytes(value: string): Uint8Array {
   return textEncoder.encode(value);
+}
+
+/** Decode storage bytes back into a string. */
+export function decodeText(value: Uint8Array): string {
+  return textDecoder.decode(value);
 }
 
 /** Drain an async iterable into an array, preserving order. */
@@ -258,5 +264,108 @@ export function runStorageCapabilityConformance(
         },
       );
     }
+  });
+}
+
+/** Construct a fresh, empty adapter for each basic-contract case. */
+export type BasicStorageContractOptions = {
+  readonly create: () => Storage | Promise<Storage>;
+};
+
+/**
+ * Register the basic key/value and scan/batch contract that every storage
+ * adapter must satisfy identically: get/put/overwrite/delete, prefix scans with
+ * limit/reverse/range bounds, and batch application. Each case constructs a
+ * fresh adapter via `create()` and disposes it through `using`, so adapters
+ * that hold native handles (SQLite) and adapters that do not (in-memory) share
+ * one source of truth. Adapter-specific construction, disposal semantics,
+ * capability rows, and edge cases stay in the per-adapter suite.
+ */
+export function runBasicStorageContract(name: string, options: BasicStorageContractOptions): void {
+  const { create } = options;
+
+  describe(`${name} basic storage contract`, () => {
+    it('get on empty storage returns null', async () => {
+      using storage = await create();
+      const result = await storage.get('nonexistent');
+      expect(result).toBeNull();
+    });
+
+    it('put then get returns same bytes', async () => {
+      using storage = await create();
+      const value = bytes('hello');
+      await storage.put('key', value);
+      const result = await storage.get('key');
+      expect(result).toEqual(value);
+    });
+
+    it('put with same key overwrites previous value', async () => {
+      using storage = await create();
+      await storage.put('key', bytes('first'));
+      await storage.put('key', bytes('second'));
+      const result = await storage.get('key');
+      expect(decodeText(result!)).toBe('second');
+    });
+
+    it('delete removes key, subsequent get returns null', async () => {
+      using storage = await create();
+      await storage.put('key', bytes('value'));
+      await storage.delete('key');
+      const result = await storage.get('key');
+      expect(result).toBeNull();
+    });
+
+    it('scan with prefix returns only matching keys, sorted lexicographically', async () => {
+      using storage = await create();
+      await storage.put('wf:b', bytes('b'));
+      await storage.put('wf:a', bytes('a'));
+      await storage.put('wf:c', bytes('c'));
+      await storage.put('other:x', bytes('x'));
+
+      const entries = await collect(storage.scan('wf:'));
+      expect(entries.map(([key]) => key)).toEqual(['wf:a', 'wf:b', 'wf:c']);
+    });
+
+    it('scan with limit returns at most N entries', async () => {
+      using storage = await create();
+      await storage.put('p:a', bytes('a'));
+      await storage.put('p:b', bytes('b'));
+      await storage.put('p:c', bytes('c'));
+
+      const entries = await collect(storage.scan('p:', { limit: 2 }));
+      expect(entries).toHaveLength(2);
+      expect(entries.map(([key]) => key)).toEqual(['p:a', 'p:b']);
+    });
+
+    it('scan with reverse returns in reverse order', async () => {
+      using storage = await create();
+      await storage.put('p:a', bytes('a'));
+      await storage.put('p:b', bytes('b'));
+      await storage.put('p:c', bytes('c'));
+
+      const entries = await collect(storage.scan('p:', { reverse: true }));
+      expect(entries.map(([key]) => key)).toEqual(['p:c', 'p:b', 'p:a']);
+    });
+
+    it('scan with gt/lt bounds', async () => {
+      using storage = await create();
+      await storage.put('p:a', bytes('a'));
+      await storage.put('p:b', bytes('b'));
+      await storage.put('p:c', bytes('c'));
+      await storage.put('p:d', bytes('d'));
+
+      const entries = await collect(storage.scan('p:', { gt: 'p:a', lt: 'p:d' }));
+      expect(entries.map(([key]) => key)).toEqual(['p:b', 'p:c']);
+    });
+
+    it('scan with empty prefix returns all keys', async () => {
+      using storage = await create();
+      await storage.put('alpha', bytes('a'));
+      await storage.put('beta', bytes('b'));
+      await storage.put('gamma', bytes('c'));
+
+      const entries = await collect(storage.scan(''));
+      expect(entries.map(([key]) => key)).toEqual(['alpha', 'beta', 'gamma']);
+    });
   });
 }

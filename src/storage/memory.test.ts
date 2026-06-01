@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from './memory';
-import { runStorageCapabilityConformance } from './storage-adapter.test-support.ts';
+import {
+  collect,
+  decodeText as decode,
+  bytes as encode,
+  runBasicStorageContract,
+  runStorageCapabilityConformance,
+} from './storage-adapter.test-support.ts';
 
 runStorageCapabilityConformance('MemoryStorage', {
   create: () => new MemoryStorage(),
@@ -14,103 +20,13 @@ runStorageCapabilityConformance('MemoryStorage', {
   },
 });
 
-/** Helper to encode a string as Uint8Array. */
-function encode(value: string): Uint8Array {
-  return new TextEncoder().encode(value);
-}
-
-/** Helper to decode a Uint8Array to string. */
-function decode(value: Uint8Array): string {
-  return new TextDecoder().decode(value);
-}
-
-/** Collect all entries from an async iterable into an array. */
-async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
-  const results: T[] = [];
-  for await (const item of iterable) {
-    results.push(item);
-  }
-  return results;
-}
+runBasicStorageContract('MemoryStorage', { create: () => new MemoryStorage() });
 
 describe('MemoryStorage', () => {
-  it('get on empty storage returns null', async () => {
-    const storage = new MemoryStorage();
-    const result = await storage.get('nonexistent');
-    expect(result).toBeNull();
-  });
-
-  it('put then get returns same bytes', async () => {
-    const storage = new MemoryStorage();
-    const value = encode('hello');
-    await storage.put('key', value);
-    const result = await storage.get('key');
-    expect(result).toEqual(value);
-  });
-
-  it('put with same key overwrites previous value', async () => {
-    const storage = new MemoryStorage();
-    await storage.put('key', encode('first'));
-    await storage.put('key', encode('second'));
-    const result = await storage.get('key');
-    expect(decode(result!)).toBe('second');
-  });
-
-  it('delete removes key, subsequent get returns null', async () => {
-    const storage = new MemoryStorage();
-    await storage.put('key', encode('value'));
-    await storage.delete('key');
-    const result = await storage.get('key');
-    expect(result).toBeNull();
-  });
-
   it('delete on nonexistent key is a no-op', async () => {
     const storage = new MemoryStorage();
     await storage.delete('nonexistent');
     expect(storage.size).toBe(0);
-  });
-
-  it('scan with prefix returns only matching keys, sorted lexicographically', async () => {
-    const storage = new MemoryStorage();
-    await storage.put('wf:b', encode('b'));
-    await storage.put('wf:a', encode('a'));
-    await storage.put('wf:c', encode('c'));
-    await storage.put('other:x', encode('x'));
-
-    const entries = await collect(storage.scan('wf:'));
-    expect(entries.map(([key]) => key)).toEqual(['wf:a', 'wf:b', 'wf:c']);
-  });
-
-  it('scan with limit returns at most N entries', async () => {
-    const storage = new MemoryStorage();
-    await storage.put('p:a', encode('a'));
-    await storage.put('p:b', encode('b'));
-    await storage.put('p:c', encode('c'));
-
-    const entries = await collect(storage.scan('p:', { limit: 2 }));
-    expect(entries).toHaveLength(2);
-    expect(entries.map(([key]) => key)).toEqual(['p:a', 'p:b']);
-  });
-
-  it('scan with reverse returns in reverse order', async () => {
-    const storage = new MemoryStorage();
-    await storage.put('p:a', encode('a'));
-    await storage.put('p:b', encode('b'));
-    await storage.put('p:c', encode('c'));
-
-    const entries = await collect(storage.scan('p:', { reverse: true }));
-    expect(entries.map(([key]) => key)).toEqual(['p:c', 'p:b', 'p:a']);
-  });
-
-  it('scan with gt/lt bounds', async () => {
-    const storage = new MemoryStorage();
-    await storage.put('p:a', encode('a'));
-    await storage.put('p:b', encode('b'));
-    await storage.put('p:c', encode('c'));
-    await storage.put('p:d', encode('d'));
-
-    const entries = await collect(storage.scan('p:', { gt: 'p:a', lt: 'p:d' }));
-    expect(entries.map(([key]) => key)).toEqual(['p:b', 'p:c']);
   });
 
   it('scan with gte/lte bounds', async () => {
@@ -122,16 +38,6 @@ describe('MemoryStorage', () => {
 
     const entries = await collect(storage.scan('p:', { gte: 'p:b', lte: 'p:c' }));
     expect(entries.map(([key]) => key)).toEqual(['p:b', 'p:c']);
-  });
-
-  it('scan with empty prefix returns all keys', async () => {
-    const storage = new MemoryStorage();
-    await storage.put('alpha', encode('a'));
-    await storage.put('beta', encode('b'));
-    await storage.put('gamma', encode('c'));
-
-    const entries = await collect(storage.scan(''));
-    expect(entries.map(([key]) => key)).toEqual(['alpha', 'beta', 'gamma']);
   });
 
   it('scan with no matches yields zero entries', async () => {
