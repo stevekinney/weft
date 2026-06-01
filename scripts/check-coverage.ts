@@ -1807,7 +1807,6 @@ export function parseLcovFiles(content: string): Map<string, FileCoverageResult>
       fileLineTotal += 1;
       if (hitCount > 0) {
         fileLineHit += 1;
-      } else {
       }
     } else if (line === 'end_of_record') {
       finalizeCurrentFile();

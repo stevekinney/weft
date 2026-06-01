@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -192,24 +192,28 @@ describe('createOperationClientSource — generated output', () => {
   it('regenerates the checked-in client from the CLI entrypoint', async () => {
     const expectedSource = await createOperationClientSource(createCatalogSnapshot());
     const directory = await mkdtemp(join(tmpdir(), 'weft-operation-client-'));
-    const snapshotPath = join(directory, 'operation-client.generated.ts.before');
-    await Bun.write(snapshotPath, await Bun.file(OPERATION_CLIENT_PATH).text());
+    try {
+      const snapshotPath = join(directory, 'operation-client.generated.ts.before');
+      await Bun.write(snapshotPath, await Bun.file(OPERATION_CLIENT_PATH).text());
 
-    const result = Bun.spawn({
-      cmd: ['bun', 'scripts/generate-operation-client.ts'],
-      cwd: process.cwd(),
-      stdout: 'pipe',
-      stderr: 'pipe',
-    });
-    const exitCode = await result.exited;
-    const stdout = await new Response(result.stdout).text();
-    const stderr = await new Response(result.stderr).text();
+      const result = Bun.spawn({
+        cmd: ['bun', 'scripts/generate-operation-client.ts'],
+        cwd: process.cwd(),
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const exitCode = await result.exited;
+      const stdout = await new Response(result.stdout).text();
+      const stderr = await new Response(result.stderr).text();
 
-    expect(exitCode).toBe(0);
-    expect(stderr).toBe('');
-    expect(stdout).toContain(`wrote ${OPERATION_CLIENT_PATH}`);
-    expect(await Bun.file(OPERATION_CLIENT_PATH).text()).toBe(expectedSource);
-    expect(await Bun.file(snapshotPath).text()).toBe(expectedSource);
+      expect(exitCode).toBe(0);
+      expect(stderr).toBe('');
+      expect(stdout).toContain(`wrote ${OPERATION_CLIENT_PATH}`);
+      expect(await Bun.file(OPERATION_CLIENT_PATH).text()).toBe(expectedSource);
+      expect(await Bun.file(snapshotPath).text()).toBe(expectedSource);
+    } finally {
+      await rm(directory, { force: true, recursive: true });
+    }
   });
 });
 
