@@ -185,6 +185,13 @@ export class LocalClient implements WeftClient {
     );
   }
 
+  // Duplicate intentionally retained: the call/start overload stacks mirror
+  // `HttpClient`, but TypeScript requires each class implementing `WeftClient`
+  // to declare these overloads locally to emit them into its `.d.ts` and
+  // preserve call-site inference (the bodies differ — this returns a
+  // `LocalHandle` over `#engine`, `HttpClient` issues an HTTP request and
+  // returns an `HttpHandle`); rejected: a shared base class, which would drop
+  // the per-class overload declarations from the emitted declarations.
   call<Name extends CatalogOperationName>(
     name: Name,
     input: CatalogOperationTypes[Name]['input'],

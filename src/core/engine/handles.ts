@@ -171,6 +171,13 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
     return this.#engine.cancel(this.id);
   }
 
+  // Duplicate intentionally retained: the signal/update/query overload stacks
+  // mirror `WorkflowHandleDelegation`, but TypeScript requires each class to
+  // declare its full overload signatures locally to emit them into its `.d.ts`
+  // and preserve call-site inference (this class delegates to a private
+  // `#engine`, that one to a `client` field, so the bodies cannot share);
+  // rejected: hoisting the signatures into a shared interface or mixin, which
+  // drops the per-class overload declarations from the emitted declarations.
   async signal(name: SignalDefinition): Promise<void>;
   async signal<TInput>(
     name: SignalDefinition<TInput>,

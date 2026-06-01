@@ -138,6 +138,12 @@ export class HttpClient implements WeftClient {
       options.webSocketFactory === undefined ? {} : { webSocketFactory: options.webSocketFactory };
   }
 
+  // Duplicate intentionally retained: the call/start overload stacks mirror
+  // `LocalClient`, but TypeScript requires each `WeftClient` implementer to
+  // declare these overloads locally to emit them into its `.d.ts` and keep
+  // call-site inference (bodies differ: HTTP request + `HttpHandle` here vs a
+  // `LocalHandle` over `#engine`); rejected: a shared base class, which drops
+  // the per-class overload declarations from the emitted declarations.
   call<Name extends CatalogOperationName>(
     name: Name,
     input: CatalogOperationTypes[Name]['input'],

@@ -52,6 +52,13 @@ export abstract class WorkflowHandleDelegation<
     return this.client.cancel(this.id);
   }
 
+  // Duplicate intentionally retained: the signal/update/query overload stacks
+  // mirror the engine's `WorkflowHandle`, but TypeScript requires each class to
+  // declare its full overload signatures locally to emit them into its `.d.ts`
+  // and preserve call-site inference (this class delegates to a `client` field,
+  // that one to a private `#engine`, so the bodies cannot share); rejected:
+  // hoisting the signatures into a shared interface or mixin, which drops the
+  // per-class overload declarations from the emitted declarations.
   async signal(name: SignalDefinition): Promise<void>;
   async signal<TInput>(
     name: SignalDefinition<TInput>,
