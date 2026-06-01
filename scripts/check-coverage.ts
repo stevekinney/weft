@@ -1939,6 +1939,7 @@ export async function checkCoverage(): Promise<boolean> {
 
   if (primaryShard.exitCode !== 0 || dashboardShard.exitCode !== 0) {
     console.error('Coverage shard execution failed.');
+    return false;
   }
 
   if (!(await Bun.file(primaryShard.lcovPath).exists())) {

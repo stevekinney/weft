@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, mock, spyOn } from 'bun:test';
+import { randomUUID } from 'node:crypto';
 
 import { parseLcov } from './check-coverage.ts';
 
@@ -110,5 +111,40 @@ describe('parseLcov', () => {
     expect(coverage.uncoveredFiles).toEqual([
       '../../../../../../private/var/folders/x_/tmp/weft-schedule-output-example.ts',
     ]);
+  });
+
+  it('returns false immediately when a coverage shard exits non-zero', async () => {
+    mock.module('bun', () => ({
+      $: () => ({
+        quiet: () => ({
+          nothrow: async () => undefined,
+        }),
+      }),
+    }));
+    mock.module('node:child_process', () => ({
+      execFileSync(command: string) {
+        if (command === 'rg') {
+          return 'src/example.test.ts\nsrc/dashboard/example.test.ts\n';
+        }
+        if (command === 'bun') {
+          const error = new Error('coverage shard failed') as Error & { status: number };
+          error.status = 1;
+          throw error;
+        }
+        throw new Error(`Unexpected command: ${command}`);
+      },
+    }));
+
+    const errorSpy = mock((_message?: unknown, ..._args: unknown[]) => {});
+
+    try {
+      using consoleErrorSpy = spyOn(console, 'error').mockImplementation(errorSpy);
+      const { checkCoverage } = await import(`./check-coverage.ts?failure=${randomUUID()}`);
+
+      await expect(checkCoverage()).resolves.toBe(false);
+      expect(consoleErrorSpy).toHaveBeenCalledWith('Coverage shard execution failed.');
+    } finally {
+      mock.restore();
+    }
   });
 });
