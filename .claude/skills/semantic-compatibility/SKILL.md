@@ -14,10 +14,12 @@ description: >-
 - Renaming fields in persisted or replayed shapes, such as `input` to `arguments`.
 - Changing semantic hash inputs, canonicalization, serialization, or codec behavior.
 - Updating `JSONValue`, tool-call, tool-result, checkpoint, storage, or effect-log data.
-- Adding storage primitives that can delete persisted ranges, especially `deleteRange` bounds, prefix intersection, or watermark truncation semantics.
+- Adding storage primitives that can delete persisted ranges, especially `deleteRange` bounds, prefix intersection, event-log compaction watermarks, or watermark truncation semantics.
+- Changing history policy, payload-size admission, archive export, Worker replay signatures, checkpoint failure metadata, or event-log verification.
 - Adding compatibility with another package while Weft still owns the runtime contract.
 - Generating or validating cross-process declarations from registry snapshots, or wrapping byte-oriented storage for string-oriented consumers.
 - Refactoring registry-driven generated clients, especially when JSON Schema shapes become shared aliases instead of inline object types.
+- Changing storage capability reports, reserved key prefixes, string KV import helpers, or application-facing wrappers that share a storage backend with the engine.
 - Normalizing failure-category values, changing workflow visibility index keys, or changing framed compressed-storage payloads.
 
 ## Do not use
@@ -38,10 +40,15 @@ description: >-
 8. For compression changes, keep the two-byte framing contract pinned so gzip, brotli, and uncompressed values remain distinguishable without storage-side metadata.
 9. Keep external compatibility structural and dev/test-only; do not import sibling package runtime types into Weft runtime source.
 10. For bounded storage deletion, prove the operation cannot become an unbounded wipe through malformed options, negative limits, reverse iteration, or scoped-storage prefix smuggling.
+11. For event-log compaction, prove the watermark and checkpoint commit are atomic, verification seeds from the watermark, the surviving tail still matches the head, and `history.maxEvents` continues to count lifetime sequence.
+12. For `payloadSize.maxBytes`, prove oversize workflow inputs, signal payloads, and activity results fail before durable writes while already-persisted data remains replayable under the current policy.
+13. For application storage wrappers, keep `disposeUnderlyingStorage: false` available and covered when the wrapper shares an engine-owned backend, and forward `conditionalBatch()` through text and typed codecs without changing compare bytes unexpectedly.
+14. For string KV imports, prove source and target paths cannot be identical, source table names are validated, reserved Weft prefixes are rejected, and existing target keys are never overwritten.
 
 ## Verification
 
 - Add regression tests that prove old committed records still deduplicate and replay without re-executing effects.
 - Test fresh execution and replay produce the same normalized content shape.
 - For registry codegen aliasing, run generator determinism, catalog drift, and type-level assignability tests against representative generated operation inputs.
+- For storage wrapper or importer changes, run the focused text-value, typed-storage, conditional-batch, and importer tests plus documentation verification when public guidance changes.
 - Run the relevant focused test, then `bun run typecheck` and `bun run validate` before shipping.

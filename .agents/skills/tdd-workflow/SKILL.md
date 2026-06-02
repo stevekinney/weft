@@ -47,12 +47,20 @@ With passing tests as a safety net, improve the code. Extract helpers, rename fo
 
 ```typescript
 import { describe, it, expect } from 'bun:test';
-import { TestEngine } from 'weft';
+import { workflow } from '@lostgradient/weft';
+import { TestEngine } from '@lostgradient/weft/testing';
+
+const myWorkflow = workflow({ name: 'my-workflow' }).execute(async function* (
+  _ctx,
+  input: { input: string },
+) {
+  return { output: input.input };
+});
 
 describe('my workflow', () => {
   it('completes with the expected result', async () => {
-    const engine = new TestEngine();
-    engine.register('my-workflow', myWorkflow);
+    await using engine = new TestEngine();
+    engine.register(myWorkflow);
 
     const handle = await engine.start('my-workflow', { input: 'value' });
     const result = await handle.result();
@@ -74,8 +82,8 @@ Use `testEngine.advanceTime(duration)` to move virtual time forward. Duration st
 
 ```typescript
 it('retries after a delay', async () => {
-  const engine = new TestEngine();
-  engine.register('retry-workflow', retryWorkflow);
+  await using engine = new TestEngine();
+  engine.register(retryWorkflow);
 
   const handle = await engine.start('retry-workflow', {});
 
@@ -95,8 +103,8 @@ Use `testEngine.mock(activity, implementation)` to substitute activity implement
 
 ```typescript
 it('calls the payment activity with the right amount', async () => {
-  const engine = new TestEngine();
-  engine.register('checkout', checkoutWorkflow);
+  await using engine = new TestEngine();
+  engine.register(checkoutWorkflow);
 
   const paymentMock = engine.mock(chargePayment, async (amount: number) => {
     return { transactionId: 'test-txn-123' };
@@ -126,14 +134,14 @@ Use `testEngine.recover()` to simulate a process restart. The recovered engine s
 
 ```typescript
 it('resumes from checkpoint after restart', async () => {
-  const engine = new TestEngine();
-  engine.register('durable-workflow', durableWorkflow);
+  await using engine = new TestEngine();
+  engine.register(durableWorkflow);
 
   const handle = await engine.start('durable-workflow', {});
   // Let it checkpoint some progress...
 
   const recovered = engine.recover();
-  recovered.register('durable-workflow', durableWorkflow);
+  recovered.register(durableWorkflow);
   // The recovered engine picks up where the original left off
 });
 ```
@@ -154,6 +162,6 @@ it('resumes from checkpoint after restart', async () => {
 | Workflow execution and lifecycle                      | `TestEngine`                                                  |
 | Time-dependent behavior (delays, retries, timeouts)   | `TestEngine` + `advanceTime()`                                |
 | External service calls (APIs, databases)              | `TestEngine` + `mock()`                                       |
-| Crash recovery and checkpoint replay                  | `TestEngine` + `recover()`                                    |
+| Crash recovery and checkpoint resume                  | `TestEngine` + `recover()`                                    |
 | Server HTTP route behavior                            | Direct calls to `handleRequest(request, engine)`              |
 | Storage backend behavior                              | Direct instantiation of `MemoryStorage` or `BunSQLiteStorage` |

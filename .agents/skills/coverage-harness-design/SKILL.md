@@ -43,9 +43,10 @@ description: >-
 11. Remove stale allowances for deleted files immediately; absence from LCOV is not evidence that an allowance is still useful.
 12. For test-only helper moves, keep helpers in `.test-support.ts` or another build-excluded shape, then run `bun run build` so the dist guard proves `bun:test`, `fake-indexeddb`, and `jsdom` did not leak into published files.
 13. When the coverage runner launches subprocesses or shards, test the non-zero exit path and assert `checkCoverage()` returns `false` immediately enough that failing tests cannot be hidden by a complete-looking LCOV file.
+14. Keep the current shard shape intact unless a test proves a better split: non-dashboard tests run in parallel, dashboard tests run with `--parallel=1`, and merged LCOV should preserve dashboard metrics for overlapping paths.
 
 ## Verification
 
-- Run `WEFT_COVERAGE_MODE=1 bun test --timeout 15000 --coverage --coverage-reporter=lcov --coverage-dir=coverage`.
-- Parse the generated LCOV with `scripts/check-coverage.ts` or the repository's coverage verification command.
+- Run `bun run scripts/check-coverage.ts`; it clears stale coverage, runs the non-dashboard and dashboard shards, merges LCOV, applies explicit allowances, and enforces adjusted 100 percent line and function coverage.
+- For changes to the coverage runner itself, also run the focused `scripts/check-coverage.test.ts` tests that cover shard failure, LCOV merge behavior, and allowance handling.
 - Run broader validation only when the coverage fix also changes production code, public APIs, or documentation.

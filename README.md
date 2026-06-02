@@ -2,6 +2,14 @@
 
 A Bun-native durable execution engine. Current launch version: `0.2.0`.
 
+Install the library from npm as `@lostgradient/weft`:
+
+```bash
+bun add @lostgradient/weft
+```
+
+The CLI binaries remain unscoped: package installs place `weft` and `weft-mcp` on `PATH`.
+
 > _Weft_—the cross-threads in weaving that bind the warp together.
 
 ## The Problem

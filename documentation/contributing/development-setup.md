@@ -68,7 +68,7 @@ For the repository coverage gate, use the deterministic verifier:
 bun run scripts/check-coverage.ts
 ```
 
-The verifier removes stale `coverage/` output, runs Bun coverage once with LCOV output, applies the repository's narrow coverage allowances, and exits non-zero when adjusted line or function coverage is below 100 percent. It is a coverage gate only: it can still evaluate LCOV after `bun test` exits non-zero, so keep `bun test` or `bun run validate` as the passing-suite gate. Use it when changing coverage-sensitive code, generated clients, CLI paths, dashboard test harnesses, or the allowance table itself.
+The verifier removes stale `coverage/` output, runs the non-dashboard coverage shard in parallel, runs dashboard coverage serially, merges the LCOV files, applies the repository's narrow coverage allowances, and exits non-zero when adjusted line or function coverage is below 100 percent. It is a coverage gate only: it can still evaluate LCOV after a shard exits non-zero, so keep `bun test` or `bun run validate` as the passing-suite gate. Use it when changing coverage-sensitive code, generated clients, CLI paths, dashboard test harnesses, or the allowance table itself.
 
 ### Testing conventions
 
@@ -121,8 +121,10 @@ Run the package gates against the built artifact before cutting a tag:
 
 ```bash
 bun run prepack
-npm publish --dry-run
+npm publish --dry-run --ignore-scripts
 ```
+
+`prepack` already runs the build, export and portability checks, Markdown and JSDoc doctests, package-content validation, and packed-consumer checks. The publish dry run uses `--ignore-scripts` to match the release workflow, where `prepack` has already run explicitly before publish.
 
 For dashboard development, run:
 

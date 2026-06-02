@@ -19,6 +19,7 @@ description: >-
 - Removing oxlint suppressions or splitting oversized modules while claiming public behavior, type inference, and dispatch ordering are unchanged.
 - Removing dead public options or stale deleted-module references after the owning feature has already been removed.
 - Deduplicating CLI suggestion helpers or generated operation-client type output while claiming user-visible CLI wording, thresholds, or TypeScript inference are unchanged.
+- Deduplicating client or handle overload implementations where `.d.ts` emission and call-site inference still require each public class to declare its overloads locally.
 
 ## Do not use
 
@@ -42,6 +43,7 @@ description: >-
 12. When removing a never-functional public option, delete the field, resolver default, guard tests, and public documentation together; record the breaking removal in `CHANGELOG.md` instead of adding a compatibility shim.
 13. For CLI suggestion helper refactors, pin each caller's distance threshold and message text. Top-level subcommands use max distance `2`; `weft api` operation suggestions use max distance `6`; equal-distance candidates keep the first match.
 14. For generated operation-client deduplication, change the generator instead of hand-editing `src/cli/generated/operation-client.generated.ts`. Keep repeated aliases structural and internal, prove deterministic regeneration, and add type-level assignability tests for representative bulk-operation inputs.
+15. For `LocalClient`, `HttpClient`, `WorkflowHandle`, and `WorkflowHandleDelegation`, do not replace duplicated overload declarations with a shared base unless type-level tests prove emitted declarations and inference remain identical.
 
 ## Verification
 

@@ -102,6 +102,17 @@ bun run verify:jsdoc:doctests
 
 Use `bun run verify:jsdoc:full` when exported declarations or public JSDoc changed.
 
+### Package Gates
+
+Run these when package exports, build exclusions, publish workflow, public subpaths, optional dependency isolation, JSDoc examples, or consumer install behavior changed:
+
+```bash
+bun run prepack
+npm publish --dry-run --ignore-scripts
+```
+
+`prepack` is the repository package contract: build, export and portability checks, Markdown and JSDoc doctests, package-content validation, and packed-consumer checks. The publish dry run uses `--ignore-scripts` because the release workflow runs `prepack` explicitly before publishing with ignored package lifecycle scripts.
+
 ### Phase 6: Diff Review
 
 ```bash

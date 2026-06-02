@@ -16,6 +16,7 @@ description: >-
 - Fixing tests that rely on real sleeps, timing slack, or unbounded polling.
 - Changing server task polling, request `AbortSignal` handling, or `TaskQueue` disposal.
 - Changing client workflow-event streaming, including `HttpClient` `/v1/workflows/:id/watch` subscriptions, `client.tail(id)`, `handle.tail()`, `whenConnected()`, reconnect catch-up, or WebSocket factory behavior.
+- Changing pending workflow updates during inline advance or resume, especially where durable update responses can drain before handlers are registered.
 
 ## Do not use
 
@@ -32,6 +33,7 @@ description: >-
 5. Cap polling and retry loops, then surface the final state when the cap is reached.
 6. Check `signal.aborted` before registering listeners or claiming work; an already-aborted signal will not fire another abort event.
 7. On server shutdown, clear timers, resolve parked waiters, and avoid invoking callbacks that would re-enter disposed engine or storage state.
+8. For pending updates, wait for registered update handlers before draining durable requests. A resumed or inline-advanced workflow must not reject a valid persisted update merely because the handler registry has not caught up yet.
 
 ### Client event-streaming work
 
@@ -54,5 +56,6 @@ description: >-
 - For reconnect behavior, cover grace-window cancellation, visibility-timeout takeover, stale completion rejection, server-restart redelivery, and buffered `taskResult` resend after a socket failure.
 - For client event streaming, cover connect catch-up, reconnect during catch-up, duplicate-looking live frames, callback-only no-leak behavior, `whenConnected()` after close, and missing or inadequate WebSocket factories.
 - For long-poll task queues, cover disconnect during wait, already-aborted signals, pending-task retention for dead callers, idempotent disposal, and timer cleanup.
+- For pending-update drains, cover resume and inline advancement paths where the update is durable before the handler is visible.
 - Prove no test depends on unbounded waits or real-time sleeps.
 - Run the focused lifecycle or worker tests plus `bun run verify:no-test-sleeps` when relevant.
