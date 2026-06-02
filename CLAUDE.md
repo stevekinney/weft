@@ -61,7 +61,7 @@ weft codegen --server http://localhost:7233 --out ./src/weft.generated.d.ts
 
 `verify:documentation` is the minimum gate for public Markdown, generated reference links, and documentation anchors. Run `verify:markdown-doctests` when Markdown examples change, `verify:jsdoc:doctests` when JSDoc examples change, and `verify:jsdoc:full` before shipping changes that alter exported declarations.
 
-Use `bun run scripts/check-coverage.ts` for the deterministic adjusted-coverage gate. It deletes stale `coverage/` output, runs non-dashboard coverage in parallel, runs dashboard coverage serially, merges LCOV, applies the repository's explicit allowances, and fails when adjusted line or function coverage is below 100 percent. This is a coverage gate only: it can still evaluate LCOV after a shard exits non-zero, so it does not replace a passing `bun test` or `bun run validate`.
+Use `bun run scripts/check-coverage.ts` for the deterministic adjusted-coverage gate. It deletes stale `coverage/` output, runs one Bun coverage pass, parses `coverage/lcov.info`, applies the repository's explicit allowances, and fails when the coverage process exits non-zero or adjusted line or function coverage is below 100 percent. This is a coverage gate only, so it does not replace a passing `bun test` or `bun run validate`.
 
 Use `bun run prepack` before release or package-surface changes. It runs the build, export and portability checks, Markdown and JSDoc doctests, package-content validation, and packed-consumer checks. The GitHub release workflow publishes `@lostgradient/weft` with `npm publish --ignore-scripts`, so local publish dry runs should use `npm publish --dry-run --ignore-scripts` after `prepack`.
 

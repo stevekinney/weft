@@ -36,7 +36,7 @@ Use the narrowest adapter that matches where the engine runs:
 | `IndexedDBStorage`     | Browser           | `local`                           | Experimental                   | None             | Browser native; no SQL passthrough.       |
 | `WebExtensionStorage`  | Browser extension | `ephemeral`, `local`, or `remote` | Experimental                   | None             | `chrome.storage` / `browser.storage`.     |
 | `HTTPStorage`          | All               | `remote`                          | Experimental                   | None             | Connects to a remote Weft storage API.    |
-| `CompressedStorage`    | All               | Delegates to wrapped storage      | Experimental                   | None             | Wraps another adapter; compresses values. |
+| `CompressedStorage`    | All               | Same as wrapped storage           | Experimental                   | None             | Wraps another adapter; compresses values. |
 
 > [!NOTE]
 > Candidate-stable is provisional while the [Tier-0 Behavioral Contract](../architecture/tier-0-behavioral-contract.md) is still shaping failure semantics. The storage adapters above keep their current capability contracts, but Tier-0 work may still add guarded failure modes when a deployment asks for behavior a backend cannot provide. The experimental browser adapters (`IndexedDBStorage`, `WebExtensionStorage`) graduate on a separate, mechanical criterion: their real-browser smoke tests must be green in a required CI gate. See the [browser-surface promotion gate](../roadmap-to-1.0.md#browser-surface-promotion-gate).

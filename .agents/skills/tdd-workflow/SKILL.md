@@ -65,7 +65,7 @@ describe('my workflow', () => {
     const handle = await engine.start('my-workflow', { input: 'value' });
     const result = await handle.result();
 
-    expect(result).toEqual({ output: 'expected' });
+    expect(result).toEqual({ output: 'value' });
   });
 });
 ```
@@ -140,8 +140,9 @@ it('resumes from checkpoint after restart', async () => {
   const handle = await engine.start('durable-workflow', {});
   // Let it checkpoint some progress...
 
-  const recovered = engine.recover();
+  await using recovered = engine.recover();
   recovered.register(durableWorkflow);
+  await recovered.recoverAll();
   // The recovered engine picks up where the original left off
 });
 ```

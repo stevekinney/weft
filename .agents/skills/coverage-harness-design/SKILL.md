@@ -18,7 +18,7 @@ description: >-
 - Covering event-log compaction watermark verification, Worker replay signatures, Worker protocol guards, payload-size admission, or post-build distribution guards.
 - Covering CLI output/error paths that moved coverage because of current-branch instrumentation gaps, such as `api`, `server`, `workflow`, `tail`, `completions`, and output helper regressions.
 - Covering `.test-support.ts` harness modules whose consumers execute the behavior but Bun reports nested callback or unnamed-function misses.
-- Editing coverage orchestration itself, especially when a failing shard or child coverage process could be accidentally masked.
+- Editing coverage orchestration itself, especially when a failing child coverage process could be accidentally masked.
 - Deciding whether a coverage allowance is justified.
 - Building a structural test double to reach a branch hidden by normal constructors or registries.
 
@@ -42,11 +42,11 @@ description: >-
 10. For support-module instrumentation gaps, first add direct helper tests or fix the fake harness semantics. Only then add function-only allowances that name the Bun instrumentation limitation and leave line/branch coverage strict.
 11. Remove stale allowances for deleted files immediately; absence from LCOV is not evidence that an allowance is still useful.
 12. For test-only helper moves, keep helpers in `.test-support.ts` or another build-excluded shape, then run `bun run build` so the dist guard proves `bun:test`, `fake-indexeddb`, and `jsdom` did not leak into published files.
-13. When the coverage runner launches subprocesses or shards, test the non-zero exit path and assert `checkCoverage()` returns `false` immediately enough that failing tests cannot be hidden by a complete-looking LCOV file.
-14. Keep the current shard shape intact unless a test proves a better split: non-dashboard tests run in parallel, dashboard tests run with `--parallel=1`, and merged LCOV should preserve dashboard metrics for overlapping paths.
+13. When the coverage runner launches a child process, test the non-zero exit path and assert `checkCoverage()` returns `false` immediately enough that failing tests cannot be hidden by a complete-looking LCOV file.
+14. Keep the current single-pass coverage shape intact unless a test proves a better split: one Bun coverage run writes `coverage/lcov.info`, and the checker should fail fast when that run exits non-zero.
 
 ## Verification
 
-- Run `bun run scripts/check-coverage.ts`; it clears stale coverage, runs the non-dashboard and dashboard shards, merges LCOV, applies explicit allowances, and enforces adjusted 100 percent line and function coverage.
-- For changes to the coverage runner itself, also run the focused `scripts/check-coverage.test.ts` tests that cover shard failure, LCOV merge behavior, and allowance handling.
+- Run `bun run scripts/check-coverage.ts`; it clears stale coverage, runs one Bun coverage pass, parses `coverage/lcov.info`, applies explicit allowances, and enforces adjusted 100 percent line and function coverage.
+- For changes to the coverage runner itself, also run the focused `scripts/check-coverage.test.ts` tests that cover coverage-process failure, LCOV parsing, and allowance handling.
 - Run broader validation only when the coverage fix also changes production code, public APIs, or documentation.
