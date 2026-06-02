@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { workflow } from '../types.ts';
+import { UpdateTimeoutError } from '../updates.ts';
 import { disposeEngine } from './disposal.ts';
 import { EngineDisposedError } from './errors.ts';
 import { Engine } from './index.ts';
@@ -125,7 +126,7 @@ describe('disposeEngine', () => {
     await expect(handle.result()).rejects.toBeInstanceOf(EngineDisposedError);
   });
 
-  it('does not reject a result that resolved before dispose', async () => {
+  it('keeps a resolved handle result cached across dispose', async () => {
     const engine = new Engine();
     engine.register(
       workflow({ name: 'quick' }).execute(async function* () {
@@ -138,9 +139,31 @@ describe('disposeEngine', () => {
 
     engine[Symbol.dispose]();
 
-    // A completed result stays fulfilled across dispose — dispose only rejects
-    // still-pending waiters.
+    // `handle.result()` memoizes its promise (`#resultPromise ??= ...`), so this
+    // second call on the SAME handle returns the cached resolved value and never
+    // re-enters the disposed guard. A handle that already produced a result
+    // keeps it across dispose.
     await expect(handle.result()).resolves.toBe('finished');
+  });
+
+  it('rejects a fresh handle result() after dispose even for a completed workflow', async () => {
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'quick-fresh' }).execute(async function* () {
+        return 'finished';
+      }),
+    );
+    const started = await engine.start('quick-fresh', null);
+    await started.result();
+
+    engine[Symbol.dispose]();
+
+    // A FRESH handle (no cached #resultPromise) routes through the disposed
+    // guard. A disposed engine rejects new result() calls — the normal
+    // Symbol.dispose contract (a disposed resource throws on use), rather than
+    // reaching back into storage for a completed result.
+    const freshHandle = engine.getHandle('quick-fresh');
+    await expect(freshHandle.result()).rejects.toBeInstanceOf(EngineDisposedError);
   });
 
   it('leaves external update callers bounded by their own timeout, not EngineDisposedError', async () => {
@@ -167,6 +190,8 @@ describe('disposeEngine', () => {
     const settled = await updatePromise;
     expect(settled.outcome).toBe('rejected');
     if (settled.outcome === 'rejected') {
+      // Bounded by the update's own response timeout, NOT settled by dispose.
+      expect(settled.error).toBeInstanceOf(UpdateTimeoutError);
       expect(settled.error).not.toBeInstanceOf(EngineDisposedError);
     }
   });
