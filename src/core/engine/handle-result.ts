@@ -40,6 +40,9 @@ export function getWorkflowResultPromise(
   // waiters.
   if (internals.disposed) {
     const rejected = Promise.reject(new EngineDisposedError());
+    // Attach a no-op catch so a caller that wires up its own handler in a later
+    // microtask (or drops the promise) does not trip an unhandled-rejection
+    // warning, matching the guard on waiter promises in createWorkflowResultWaiter.
     void rejected.catch(() => {});
     return rejected;
   }
