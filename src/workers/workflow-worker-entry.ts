@@ -138,35 +138,3 @@ function attachWorkerProtocol(
     ...(inboundMessage.turnId === undefined ? {} : { turnId: inboundMessage.turnId }),
   } as WorkerOutboundMessage;
 }
-
-/**
- * Create a Blob URL that can be used to spawn a Web Worker with the given
- * workflow registrations.
- *
- * @param registrations - Map of workflow type names to handler functions.
- *   The handlers must be serializable (no closures over local state).
- * @returns A Blob URL suitable for `new Worker(url)`.
- */
-export function createWorkerEntryUrl(
-  registrations: Map<string, (ctx: WorkerWorkflowContext, input: unknown) => AsyncGenerator>,
-): string {
-  // Build a self-contained script that imports the entry point and wires
-  // up registrations. This relies on the bundler/runtime supporting
-  // dynamic imports from blob URLs.
-  const registrationEntries = [...registrations.entries()]
-    .map(
-      ([name, handler]) => `  registrations.set(${JSON.stringify(name)}, ${handler.toString()});`,
-    )
-    .join('\n');
-
-  const script = `
-const registrations = new Map();
-${registrationEntries}
-
-import { initializeWorkerMessageLoop } from '${import.meta.url}';
-initializeWorkerMessageLoop((type) => registrations.get(type));
-`;
-
-  const blob = new Blob([script], { type: 'application/javascript' });
-  return URL.createObjectURL(blob);
-}

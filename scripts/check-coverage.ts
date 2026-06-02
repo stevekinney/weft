@@ -578,13 +578,6 @@ const COVERAGE_ALLOWANCE_OVERRIDES = new Map<string, CoverageAllowance>([
     },
   ],
   [
-    'src/core/atomic-state.ts',
-    {
-      functions: 1,
-      lines: new Set([412, 413, 414, 415, 416, 417, 418, 419]),
-    },
-  ],
-  [
     'src/core/context/session-state.ts',
     {
       functions: 6,
@@ -1226,10 +1219,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
   ['src/client/http-client-requests.ts', { lines: new Set([133]) }],
   ['src/client/local.ts', { functions: 1, lines: new Set([129]) }],
   [
-    'src/core/atomic-state.ts',
-    { functions: 1, lines: new Set([413, 414, 415, 416, 417, 418, 419, 420]) },
-  ],
-  [
     'src/core/checkpoint/serialization.ts',
     {
       lines: new Set([115, 116, 117]),
@@ -1631,10 +1620,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   [
     'src/core/engine/activity-reconciliation.ts',
     {
-      functions: 1,
-      lines: new Set([
-        304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 332, 333, 334, 335, 387, 388, 389,
-      ]),
+      lines: new Set([319, 320, 321, 322, 374, 375, 376]),
     },
   ],
   [

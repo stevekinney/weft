@@ -301,19 +301,6 @@ export function buildActivityVerificationContext(
   };
 }
 
-export async function deleteActivityReconciliationRecordsForWorkflow(
-  storage: Storage,
-  workflowId: string,
-): Promise<string[]> {
-  const prefix = KEYS.activityReconciliationPrefix(workflowId);
-  const keys: string[] = [];
-  for await (const [key] of storage.scan(prefix)) keys.push(key);
-  if (keys.length > 0) {
-    await storage.batch(keys.map((key) => ({ type: 'delete', key })));
-  }
-  return keys;
-}
-
 function parseActivityReconciliationRecord(value: unknown): ActivityReconciliationRecord {
   if (typeof value !== 'object' || value === null) {
     throw new ActivityReconciliationIndeterminateError(

@@ -1,5 +1,5 @@
 import { sleep as portableSleep } from '../runtime/portable.ts';
-import type { BatchOperation, Storage } from '../storage/interface.ts';
+import type { Storage } from '../storage/interface.ts';
 import { KEYS, requireStorageCapability, storageConditionalBatch } from '../storage/interface.ts';
 import {
   AtomicStateChangeEvent,
@@ -408,15 +408,4 @@ export class AtomicState<T> extends EventTarget {
   async #read(): Promise<AtomicStateSnapshot<T>> {
     return readAtomicStateSnapshot(this.#storage, this.#dataKey, this.#options);
   }
-}
-
-export function buildAtomicStateCommitOperations<T>(
-  dataKey: string,
-  value: T,
-  version: number,
-): BatchOperation[] {
-  return [
-    { type: 'put', key: dataKey, value: encode(value) },
-    { type: 'put', key: atomicStateVersionKey(dataKey), value: encode(version) },
-  ];
 }

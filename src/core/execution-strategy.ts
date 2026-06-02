@@ -57,8 +57,8 @@
  * registration map; it simply never *invokes* it. This is execution isolation, not
  * a claim that the engine never possesses the workflow's code. How a given worker
  * obtains its copy of the workflow code is a property of how the caller built the
- * worker bundle (for example the opt-in `createWorkerEntryUrl` helper serializes
- * handlers via `Function.prototype.toString`), not of this interface.
+ * worker bundle (for example a bundle that serializes handlers via
+ * `Function.prototype.toString`), not of this interface.
  *
  * **Transport-agnostic.** The methods return `void` and all engine/strategy
  * coupling flows through serializable messages plus {@link ExecutionStrategy.onMessage}.

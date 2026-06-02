@@ -308,9 +308,9 @@ describe('worker execution signal suspension', () => {
 //
 // The sentinels live only in this engine-side closure and are asserted in the
 // engine isolate. We deliberately do not rely on a sentinel surviving the
-// `createWorkerEntryUrl` `Function.prototype.toString` worker boundary (a
-// closure sentinel would not survive it; a module-level sentinel could be
-// duplicated per isolate), which is exactly the leak this test must not depend on.
+// `Function.prototype.toString` worker-bundle boundary (a closure sentinel would
+// not survive it; a module-level sentinel could be duplicated per isolate), which
+// is exactly the leak this test must not depend on.
 describe('worker execution isolation boundary', () => {
   let engine: Engine | undefined;
 

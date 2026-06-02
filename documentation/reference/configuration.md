@@ -129,7 +129,7 @@ interface WorkerExecutionOptions {
 
 | Field                     | Type            | Default                    | Description                                                                                         |
 | ------------------------- | --------------- | -------------------------- | --------------------------------------------------------------------------------------------------- |
-| `workerUrl`               | `string \| URL` | required                   | Worker entrypoint URL created by `createWorkerEntryUrl` or an equivalent bundle.                    |
+| `workerUrl`               | `string \| URL` | required                   | Worker entrypoint URL, for example `new URL('./workflow-worker.ts', import.meta.url)`.              |
 | `poolSize`                | `number`        | `4`                        | Maximum concurrent workflow Workers.                                                                |
 | `smol`                    | `boolean`       | `false`                    | Pass Bun's smaller-memory Worker option when the runtime supports it.                               |
 | `workflowTurnTimeoutMs`   | `number`        | `1_000` in Worker mode     | Host-enforced wall-clock budget for each Worker `run` or `resume` turn. Positive safe integer only. |

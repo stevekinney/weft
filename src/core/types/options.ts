@@ -166,7 +166,7 @@ export interface EngineOptions {
    * the Worker runtime.
    */
   workerExecution?: {
-    /** URL of the worker script (created via `createWorkerEntryUrl`). */
+    /** URL of the worker script, for example `new URL('./workflow-worker.ts', import.meta.url)`. */
     workerUrl: string | URL;
     /** Maximum number of concurrent workers. Default: 4. */
     poolSize?: number;
