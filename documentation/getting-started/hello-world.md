@@ -125,7 +125,7 @@ There's no replay happening here. Weft doesn't re-execute your workflow from the
 > [!NOTE]
 > **Checkpoint:** a serialized snapshot of the workflow's current position and local variables. Each durable operation creates a checkpoint boundary, so recovery resumes from the latest saved boundary instead of starting over.
 
-`Engine.create()` does the registration dance for you in one call: construct the engine, then register every workflow in the `workflows` map (including each workflow's `.activities({ ... })` block). Pass `recover: true` when booting against durable storage to call `engine.recoverAll()` after registration so any workflows still running from a previous process pick up where they left off. The map key (`helloWorldWelcome`) is canonical — Weft validates at runtime that the key matches its definition's `name` field, so you can't accidentally register `farewell` under the key `welcome`.
+`Engine.create()` does the registration dance for you in one call: construct the engine, register every workflow in the `workflows` map (including each workflow's `.activities({ ... })` block), and then **recover by default** — `engine.recoverAll()` runs after registration so any workflows still running from a previous process pick up where they left off. Pass `recover: false` to skip recovery (handy for tests or pre-migration inspection). The map key (`helloWorldWelcome`) is canonical — Weft validates at runtime that the key matches its definition's `name` field, so you can't accidentally register `farewell` under the key `welcome`.
 
 `engine.start()` kicks off a new execution and returns a handle. `handle.result()` waits for the workflow to finish and gives you the output. Without `options.id`, each call gets a fresh UUID; with a stable id, the second run of this script throws `WorkflowAlreadyExistsError` instead of double-starting — which is what the `try`/`catch` block handles by resuming the existing workflow.
 
@@ -217,7 +217,7 @@ const engine = await Engine.create({
 });
 ```
 
-Now your checkpoints live in a SQLite database on disk. Crash the process, restart it, and `Engine.create({ recover: true })` will resume any workflows that were running — `recoverAll()` runs after every activity and workflow you passed in is registered. Persistent storage keeps the bytes; recovery tells the new engine process to own the work again.
+Now your checkpoints live in a SQLite database on disk. Crash the process, restart it, and `Engine.create()` will resume any workflows that were running — `recoverAll()` runs by default after every activity and workflow you passed in is registered. Persistent storage keeps the bytes; recovery tells the new engine process to own the work again.
 
 > [!IMPORTANT]
 > If your storage contains running workflows whose types aren't in the `workflows` map you passed to `Engine.create`, recovery will throw `WorkflowTypeNotRegisteredForRecoveryError` listing the unknown types. This is intentional: the alternative is silently abandoning workflows mid-flight. The [Recovery and deploys guide](../guides/recovery-and-deploys.md) covers how to handle this during rolling deploys and how to drain workflows whose types you want to retire.
@@ -229,7 +229,7 @@ import { Engine } from '@lostgradient/weft';
 import { resolveDefaultStorage } from '@lostgradient/weft/storage/auto';
 
 await using storage = await resolveDefaultStorage();
-await using engine = await Engine.create({ storage, recover: true });
+await using engine = await Engine.create({ storage });
 ```
 
 ## Next Steps

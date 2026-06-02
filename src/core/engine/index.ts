@@ -336,8 +336,8 @@ export class Engine<
 {
   /**
    * Construct and register an engine in one step. Activities are registered
-   * before workflows. Pass `recover: true` to run recovery after all
-   * definitions are installed.
+   * before workflows. Recovery runs by default after all definitions are
+   * installed; pass `recover: false` to opt out.
    *
    * @example
    * ```ts
@@ -406,15 +406,12 @@ export class Engine<
         engine.register(definition);
       }
 
-      if (options.recover === true) {
-        await engine.recoverAll({
-          ...(options.acknowledgeUnknownWorkflowTypes !== undefined
+      if (options.recover !== false) {
+        await engine.recoverAll(
+          options.acknowledgeUnknownWorkflowTypes !== undefined
             ? { acknowledgeUnknownWorkflowTypes: options.acknowledgeUnknownWorkflowTypes }
-            : {}),
-          ...(options.requireConcurrentResumeSafety !== undefined
-            ? { requireConcurrentResumeSafety: options.requireConcurrentResumeSafety }
-            : {}),
-        });
+            : {},
+        );
       }
     } catch (error) {
       // Constructor side effects (broadcast channel, scheduler, dispatchers,

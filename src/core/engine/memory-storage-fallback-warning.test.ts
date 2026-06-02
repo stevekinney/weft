@@ -128,6 +128,40 @@ describe('MemoryStorage fallback warning', () => {
     }
   });
 
+  it('fires independently of the recover setting at the Engine.create boundary', async () => {
+    // Regression pin: the warning is gated on dev/env flags during storage
+    // resolution, not on recovery. Flipping the recover default to `true` must
+    // not change when (or how often) it fires. With an empty MemoryStorage
+    // fallback there is nothing to recover, so default-recover and recover:false
+    // must produce identical single-warning behavior under a dev flag.
+    const { Engine } = await import('../engine.ts');
+    Bun.env['WEFT_DEV_WARNINGS'] = '1';
+
+    const warnDefault = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      // No `recover` field: recovery runs by default, storage falls back to
+      // MemoryStorage, and the fallback warning fires exactly once.
+      const defaultRecover = await Engine.create({});
+      expect(warnDefault).toHaveBeenCalledTimes(1);
+      expect(warnDefault.mock.calls[0]?.[0]).toMatch(FALLBACK_PATTERN);
+      defaultRecover[Symbol.dispose]();
+    } finally {
+      warnDefault.mockRestore();
+    }
+
+    resetMemoryStorageFallbackWarningForTesting();
+
+    const warnOptOut = spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const optedOut = await Engine.create({ recover: false });
+      expect(warnOptOut).toHaveBeenCalledTimes(1);
+      expect(warnOptOut.mock.calls[0]?.[0]).toMatch(FALLBACK_PATTERN);
+      optedOut[Symbol.dispose]();
+    } finally {
+      warnOptOut.mockRestore();
+    }
+  });
+
   it('reads from the first available environment source and falls back to undefined', () => {
     expect(
       readEnvironmentVariableFromSources('WEFT_DEV_WARNINGS', {

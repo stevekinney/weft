@@ -22,14 +22,17 @@
  */
 import { storageDeleteRange } from './delete-range';
 import {
+  assertDurableStorageForRecovery,
   KEYS,
   requireStorageCapability,
   storageConditionalBatch,
   storageValuesEqual,
+  WEFT_RESERVED_KEY_PREFIXES,
 } from './interface';
 import { MemoryStorage } from './memory';
 import { resolveStorage } from './resolve';
 import { ScopedStorage, scopedStorage } from './scoped-storage';
+import { copyTextKeyValueRowsToStorage } from './text-value-import';
 import { textValueStore } from './text-value-store';
 import { jsonCodec, msgpackCodec, withCodec } from './typed-storage';
 
@@ -54,11 +57,43 @@ import { jsonCodec, msgpackCodec, withCodec } from './typed-storage';
 const exportedJsonCodec = jsonCodec;
 
 /**
+ * Re-exported {@link assertDurableStorageForRecovery}. See the original declaration for full docs.
+ *
+ * @example
+ * ```ts
+ * import { assertDurableStorageForRecovery } from '@lostgradient/weft/storage';
+ * import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
+ *
+ * await using storage = new SQLiteStorage('./weft.db');
+ * assertDurableStorageForRecovery(storage);
+ * ```
+ */
+const exportedAssertDurableStorageForRecovery = assertDurableStorageForRecovery;
+
+/**
+ * Re-exported {@link copyTextKeyValueRowsToStorage}. See the original declaration for full docs.
+ *
+ * @example
+ * ```ts
+ * import { MemoryStorage, copyTextKeyValueRowsToStorage } from '@lostgradient/weft/storage';
+ *
+ * await using storage = new MemoryStorage();
+ * const result = await copyTextKeyValueRowsToStorage({
+ *   storage,
+ *   rows: [{ key: 'session:1', value: 'active' }],
+ *   targetPrefix: 'app:my-service',
+ * });
+ * void result;
+ * ```
+ */
+const exportedCopyTextKeyValueRowsToStorage = copyTextKeyValueRowsToStorage;
+
+/**
  * Re-exported {@link KEYS}. See the original declaration for full docs.
  *
  * @example
  * ```ts
- * import { workflow, KEYS } from '@lostgradient/weft/storage';
+ * import { KEYS } from '@lostgradient/weft/storage';
  * const key = KEYS.workflow('wf-1');
  * void key;
  * ```
@@ -191,6 +226,20 @@ const exportedStorageValuesEqual = storageValuesEqual;
 const exportedTextValueStore = textValueStore;
 
 /**
+ * Re-exported {@link WEFT_RESERVED_KEY_PREFIXES}. See the original declaration for full docs.
+ *
+ * @example
+ * ```ts
+ * import { WEFT_RESERVED_KEY_PREFIXES } from '@lostgradient/weft/storage';
+ *
+ * const key = 'wf:order-123';
+ * const isWeftKey = WEFT_RESERVED_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));
+ * void isWeftKey;
+ * ```
+ */
+const exportedWeftReservedKeyPrefixes = WEFT_RESERVED_KEY_PREFIXES;
+
+/**
  * Re-exported {@link withCodec}. See the original declaration for full docs.
  *
  * @example
@@ -214,15 +263,29 @@ export type {
   StorageCapabilities,
 } from './interface';
 export type { StorageConfiguration } from './resolve';
-export type { TextValueStore } from './text-value-store';
 export type {
+  CopyTextKeyValueRowsToStorageOptions,
+  CopyTextKeyValueRowsToStorageResult,
+  TextKeyValueRow,
+} from './text-value-import';
+export type {
+  TextValueStore,
+  TextValueStoreBatchOperation,
+  TextValueStoreCondition,
+  TextValueStoreOptions,
+} from './text-value-store';
+export type {
+  CodecStorageOptions,
   MessagePackValue,
   StorageCodec,
   StorageValueParser,
   TypedBatchOperation,
+  TypedConditionalBatchCondition,
   TypedStorage,
 } from './typed-storage';
 export {
+  exportedAssertDurableStorageForRecovery as assertDurableStorageForRecovery,
+  exportedCopyTextKeyValueRowsToStorage as copyTextKeyValueRowsToStorage,
   exportedJsonCodec as jsonCodec,
   exportedKeys as KEYS,
   exportedMemoryStorage as MemoryStorage,
@@ -235,5 +298,6 @@ export {
   exportedStorageDeleteRange as storageDeleteRange,
   exportedStorageValuesEqual as storageValuesEqual,
   exportedTextValueStore as textValueStore,
+  exportedWeftReservedKeyPrefixes as WEFT_RESERVED_KEY_PREFIXES,
   exportedWithCodec as withCodec,
 };

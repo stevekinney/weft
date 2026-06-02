@@ -15,7 +15,10 @@ const IS_COVERAGE_INSTRUMENTATION_ENABLED = isCoverageInstrumentationEnabled();
  * locally before changes that touch the hot path (engine loop, storage
  * batching, retention sweep) to keep the regression coverage honest.
  */
-const runLoadGrowthBenchmark = process.env['CI'] ? it.skip : it;
+const runLoadGrowthBenchmark =
+  process.env['CI'] || IS_CONSTRAINED_CODEX_RUNNER || IS_COVERAGE_INSTRUMENTATION_ENABLED
+    ? it.skip
+    : it;
 const TARGET_WORKFLOWS_PER_SECOND = IS_CONSTRAINED_CODEX_RUNNER ? 500 : 10_000;
 /**
  * `TARGET_WORKFLOWS_PER_SECOND` is the *pacing* rate the runner drives load at,

@@ -106,7 +106,7 @@ describe('createLocalWorkflowEventTail', () => {
     // ends the tail cleanly.
     const seen: string[] = [];
     const consume = (async () => {
-      for await (const event of tail) seen.push(event.type);
+      for await (const frame of tail) seen.push(frame.type);
     })();
     await Promise.race([
       consume,
@@ -130,7 +130,7 @@ describe('createLocalWorkflowEventTail', () => {
     handle.dispatchEvent(new WorkflowCompletedEvent('wf-serialize', { ok: true }, 5));
 
     const events = [];
-    for await (const event of tail) events.push(event);
+    for await (const frame of tail) events.push(frame);
 
     expect(events[0]?.type).toBe('signal:received');
     expect(events[0]?.data).toMatchObject({ signalName: 'approve', payload: { userId: 42 } });
@@ -172,7 +172,7 @@ describe('createLocalWorkflowEventTail', () => {
     await tail.whenConnected();
     const seen: string[] = [];
     const consume = (async () => {
-      for await (const event of tail) seen.push(event.type);
+      for await (const frame of tail) seen.push(frame.type);
     })();
     await Promise.race([
       consume,
@@ -195,7 +195,7 @@ describe('createLocalWorkflowEventTail', () => {
     tail.close();
 
     const seen: string[] = [];
-    for await (const event of tail) seen.push(event.type);
+    for await (const frame of tail) seen.push(frame.type);
     expect(seen).toEqual([]);
   });
 

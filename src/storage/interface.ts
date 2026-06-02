@@ -8,9 +8,10 @@ import {
   storageKeysCore,
 } from './derived-operations.ts';
 
-export { requireStorageCapability } from './capabilities.ts';
+export { assertDurableStorageForRecovery, requireStorageCapability } from './capabilities.ts';
 export type { GatedStorageCapabilityKey, StorageCapabilities } from './capabilities.ts';
 export { DEFAULT_SCOPE } from './default-scope.ts';
+export { WEFT_RESERVED_KEY_PREFIXES } from './key-prefixes.ts';
 
 /**
  * A single KV operation in a batch.

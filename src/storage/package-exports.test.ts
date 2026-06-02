@@ -45,6 +45,15 @@ describe('storage package exports', () => {
     });
   });
 
+  it('exposes the text key-value import helper as a subpath', () => {
+    expect(packageJson.exports['./storage/text-value-import']).toEqual({
+      types: './dist/storage/text-value-import.d.ts',
+      bun: './dist/storage/text-value-import.js',
+      import: './dist/storage/text-value-import.js',
+      default: './dist/storage/text-value-import.js',
+    });
+  });
+
   it('exposes compressed storage as a runtime-specific subpath', () => {
     expect(packageJson.exports['./storage/compressed']).toEqual({
       types: './dist/storage/compressed-storage.d.ts',

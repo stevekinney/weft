@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
-import { createDiskBackedTestFixture } from '../testing/storage-backends.test-support.ts';
+import {
+  createDiskBackedTestFixture,
+  sqliteDatabaseSidecarSuffixes,
+} from '../testing/storage-backends.test-support.ts';
 import { runStorageCapabilityConformance } from './storage-adapter.test-support.ts';
 import { TursoStorage } from './turso';
 
@@ -14,6 +17,7 @@ runStorageCapabilityConformance('TursoStorage', {
     return new TursoStorage({ url: `file:${fixture.path}` });
   },
   expected: {
+    persistence: 'local',
     readAfterWrite: 'session',
     scanConsistency: 'snapshot',
     atomicBatch: true,
@@ -24,6 +28,29 @@ runStorageCapabilityConformance('TursoStorage', {
   // contention is covered sequentially in conditional-batch.test.ts.
   supportsConcurrentWrites: false,
 });
+
+function createFileBackedTursoStorage(prefix: string): {
+  readonly storage: TursoStorage;
+  readonly url: string;
+  readonly cleanup: () => void;
+} {
+  const fixture = createDiskBackedTestFixture({
+    prefix,
+    suffix: '.db',
+    sidecarSuffixes: sqliteDatabaseSidecarSuffixes,
+  });
+  const url = `file:${fixture.path}`;
+  const storage = new TursoStorage({ url });
+
+  return {
+    storage,
+    url,
+    cleanup: () => {
+      storage[Symbol.dispose]();
+      fixture.cleanup();
+    },
+  };
+}
 
 /** Helper to encode a string as Uint8Array. */
 function encode(value: string): Uint8Array {
@@ -45,6 +72,33 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 describe('TursoStorage', () => {
+  it('allows only one competing file-backed conditionalBatch caller to win', async () => {
+    const first = createFileBackedTursoStorage('turso-cas-contention');
+    const second = new TursoStorage({ url: first.url });
+
+    try {
+      await first.storage.put('cas:counter', encode('start'));
+      const condition = [{ key: 'cas:counter', expectedValue: encode('start') }];
+
+      const [firstCommitted, secondCommitted] = await Promise.all([
+        first.storage.conditionalBatch(condition, [
+          { type: 'put', key: 'cas:counter', value: encode('first') },
+        ]),
+        second.conditionalBatch(condition, [
+          { type: 'put', key: 'cas:counter', value: encode('second') },
+        ]),
+      ]);
+
+      expect([firstCommitted, secondCommitted].filter(Boolean)).toHaveLength(1);
+      expect(decode((await first.storage.get('cas:counter'))!)).toBe(
+        firstCommitted ? 'first' : 'second',
+      );
+    } finally {
+      second[Symbol.dispose]();
+      first.cleanup();
+    }
+  });
+
   it('get on empty storage returns null', async () => {
     const storage = new TursoStorage({ url: 'file::memory:' });
     const result = await storage.get('nonexistent');

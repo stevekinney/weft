@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'bun:test';
 
+import {
+  createDiskBackedTestFixture,
+  sqliteDatabaseSidecarSuffixes,
+} from '../testing/storage-backends.test-support.ts';
+import { BunSQLiteStorage } from './bun-sql.ts';
 import { normalizeDeleteRangeOptions, storageDeleteRange } from './delete-range.ts';
+import { HTTPStorage } from './http.ts';
 import type { Storage } from './interface.ts';
 import {
+  assertDurableStorageForRecovery,
   decodeStorageKeyComponent,
   encodeStorageKeyComponent,
   KEYS,
@@ -15,8 +22,10 @@ import {
   storageKeys,
   storageValuesEqual,
   tryDecodeStorageKeyComponent,
+  WEFT_RESERVED_KEY_PREFIXES,
 } from './interface.ts';
 import { MemoryStorage } from './memory.ts';
+import { TursoStorage } from './turso.ts';
 
 function createCoreStorageAdapter(): Storage {
   const storage = new MemoryStorage();
@@ -27,6 +36,7 @@ function createCoreStorageAdapter(): Storage {
     capabilities: () => ({
       readAfterWrite: 'linearizable',
       scanConsistency: 'snapshot',
+      persistence: 'ephemeral',
       atomicBatch: true,
       conditionalBatch: false,
       boundedRangeDelete: false,
@@ -124,6 +134,166 @@ describe('scan utilities', () => {
   });
 });
 
+describe('WEFT_RESERVED_KEY_PREFIXES', () => {
+  it('covers the storage prefixes Weft currently writes through KEYS', () => {
+    const representativeKeys = [
+      KEYS.workflow('workflow-id'),
+      KEYS.checkpoint('workflow-id'),
+      KEYS.checkpointHistory('workflow-id', 1),
+      KEYS.timeline('workflow-id', 1),
+      KEYS.schedule('schedule-id'),
+      KEYS.scheduleTick(1, 'schedule-id'),
+      KEYS.scheduleRun('workflow-id'),
+      KEYS.operation('default', 1, 'operation-id'),
+      KEYS.operationInflight('operation-id'),
+      KEYS.operationQueued('operation-id'),
+      KEYS.operationResolved('operation-id'),
+      KEYS.bulkOperationAudit(1, 'request-id', 'token'),
+      KEYS.operationResolvedByTime(1, 'operation-id'),
+      KEYS.asyncActivity('workflow-id', 'token'),
+      KEYS.activityReconciliation('workflow-id', 'activity', 'digest'),
+      KEYS.event('workflow-id', 1),
+      KEYS.eventHead('workflow-id'),
+      KEYS.eventWatermark('workflow-id'),
+      KEYS.signal('workflow-id', 'signal-name', 'signal-id'),
+      KEYS.signalSequence('workflow-id'),
+      KEYS.signalAcceptedResponse('workflow-id', 'signal-name', 'signal-id'),
+      KEYS.deadline(1, 'workflow-id'),
+      KEYS.terminalCleanup(1, 'timer-id'),
+      KEYS.delayedStart(1, 'workflow-id'),
+      KEYS.terminalWorkflow(1, 'workflow-id'),
+      KEYS.attribute('workflow-id'),
+      KEYS.attributeIndex('attribute', 'value', 'workflow-id'),
+      KEYS.tagIndex('tag', 'workflow-id'),
+      KEYS.update('workflow-id', 'update-id'),
+      KEYS.updateResponse('update-id'),
+      KEYS.updateIdempotency('workflow-id', 'idempotency-key'),
+      KEYS.budget('namespace', 'period', 'date'),
+      KEYS.review('workflow-id', 'review-id'),
+      KEYS.workflowHeaders('workflow-id'),
+      KEYS.terminalCleanupNeeded('workflow-id'),
+      KEYS.offload('workflow-id', 'key'),
+      KEYS.archive('workflow-id', 'key'),
+      KEYS.stateExecution('workflow-id', 'key'),
+      KEYS.stateWorkflow('workflow-type', 'key'),
+      KEYS.streamChunk('workflow-id', 'key', 1),
+      KEYS.streamMetadata('workflow-id', 'key'),
+      KEYS.budgetCharged('operation-id'),
+      KEYS.toolEffect('workflow-id', 'agent-id', 'digest'),
+      KEYS.workflowVisibilityStatus('running', 'workflow-id'),
+      KEYS.workflowVisibilityType('workflow-type', 'workflow-id'),
+      KEYS.workflowVisibilityCreated(1, 'workflow-id'),
+      KEYS.workflowVisibilityUpdated(1, 'workflow-id'),
+      KEYS.workflowVisibilityDeadline(1, 'workflow-id'),
+      KEYS.workflowVisibilityManifest('workflow-id'),
+      KEYS.workflowVisibilityMetaVersion(),
+      KEYS.workflowVisibilityMetaBuiltAt(),
+      KEYS.workflowVisibilityMetaCursor(),
+    ];
+
+    for (const key of representativeKeys) {
+      expect(
+        WEFT_RESERVED_KEY_PREFIXES.some((reservedPrefix) => key.startsWith(reservedPrefix)),
+        key,
+      ).toBe(true);
+    }
+  });
+
+  it('leaves the recommended application namespace outside the Weft reserved keyspace', () => {
+    expect(
+      WEFT_RESERVED_KEY_PREFIXES.some((reservedPrefix) =>
+        'app:my-service:session:1'.startsWith(reservedPrefix),
+      ),
+    ).toBe(false);
+  });
+});
+
+describe('assertDurableStorageForRecovery', () => {
+  it('accepts the conservative durable recovery capability row', () => {
+    const storage = createCoreStorageAdapter();
+    storage.capabilities = () => ({
+      readAfterWrite: 'linearizable',
+      scanConsistency: 'snapshot',
+      persistence: 'local',
+      atomicBatch: true,
+      conditionalBatch: true,
+      boundedRangeDelete: false,
+    });
+
+    expect(() => assertDurableStorageForRecovery(storage)).not.toThrow();
+  });
+
+  it('rejects ephemeral, remote, eventual, best-effort, non-atomic, and non-CAS backends', () => {
+    const storage = createCoreStorageAdapter();
+    storage.capabilities = () => ({
+      readAfterWrite: 'eventual',
+      scanConsistency: 'best-effort',
+      persistence: 'remote',
+      atomicBatch: false,
+      conditionalBatch: false,
+      boundedRangeDelete: false,
+    });
+
+    expect(() => assertDurableStorageForRecovery(storage)).toThrow(
+      /persistence must be "local".*readAfterWrite must be "linearizable".*scanConsistency must be "snapshot".*atomicBatch must be true.*conditionalBatch must be true/s,
+    );
+  });
+
+  it('rejects MemoryStorage because it is ephemeral', () => {
+    expect(() => assertDurableStorageForRecovery(new MemoryStorage())).toThrow(
+      /persistence must be "local"/,
+    );
+  });
+
+  it('accepts file-backed BunSQLiteStorage', () => {
+    const fixture = createDiskBackedTestFixture({
+      prefix: 'durable-assertion-bun-sqlite',
+      suffix: '.db',
+      sidecarSuffixes: sqliteDatabaseSidecarSuffixes,
+    });
+    const storage = new BunSQLiteStorage(fixture.path);
+
+    try {
+      expect(() => assertDurableStorageForRecovery(storage)).not.toThrow();
+    } finally {
+      storage[Symbol.dispose]();
+      fixture.cleanup();
+    }
+  });
+
+  it('rejects in-memory BunSQLiteStorage because it is ephemeral', () => {
+    using storage = new BunSQLiteStorage(':memory:');
+
+    expect(() => assertDurableStorageForRecovery(storage)).toThrow(/persistence must be "local"/);
+  });
+
+  it('rejects file-backed TursoStorage because read-after-write is session-scoped', () => {
+    const fixture = createDiskBackedTestFixture({
+      prefix: 'durable-assertion-turso',
+      suffix: '.db',
+      sidecarSuffixes: sqliteDatabaseSidecarSuffixes,
+    });
+    const storage = new TursoStorage({ url: `file:${fixture.path}` });
+
+    try {
+      expect(() => assertDurableStorageForRecovery(storage)).toThrow(
+        /readAfterWrite must be "linearizable"/,
+      );
+    } finally {
+      storage[Symbol.dispose]();
+      fixture.cleanup();
+    }
+  });
+
+  it('rejects HTTPStorage because remote eventual storage is not durable recovery storage', () => {
+    const storage = new HTTPStorage({ baseUrl: 'https://weft.example.invalid' });
+
+    expect(() => assertDurableStorageForRecovery(storage)).toThrow(
+      /persistence must be "local".*readAfterWrite must be "linearizable".*scanConsistency must be "snapshot".*conditionalBatch must be true/s,
+    );
+  });
+});
+
 describe('storage helper fallbacks', () => {
   it('uses core storage operations when optional helpers are absent', async () => {
     const storage = createCoreStorageAdapter();
@@ -148,6 +318,7 @@ describe('storage helper fallbacks', () => {
       capabilities: () => ({
         readAfterWrite: 'linearizable',
         scanConsistency: 'snapshot',
+        persistence: 'local',
         atomicBatch: true,
         conditionalBatch: true,
         boundedRangeDelete: true,
@@ -341,6 +512,7 @@ describe('storageDeleteRange', () => {
       capabilities: () => ({
         readAfterWrite: 'linearizable',
         scanConsistency: 'snapshot',
+        persistence: 'local',
         atomicBatch: true,
         conditionalBatch: true,
         boundedRangeDelete: true,
@@ -393,6 +565,7 @@ describe('storageConditionalBatch', () => {
       capabilities: () => ({
         readAfterWrite: 'linearizable',
         scanConsistency: 'snapshot',
+        persistence: 'local',
         atomicBatch: true,
         conditionalBatch: true,
         boundedRangeDelete: false,
@@ -410,6 +583,7 @@ describe('storageConditionalBatch', () => {
       capabilities: () => ({
         readAfterWrite: 'linearizable',
         scanConsistency: 'snapshot',
+        persistence: 'local',
         atomicBatch: true,
         conditionalBatch: true,
         boundedRangeDelete: false,

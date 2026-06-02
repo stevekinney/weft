@@ -145,6 +145,7 @@ export class IndexedDBStorage implements Storage {
     // CAN appear mid-iteration — the honest scan level is best-effort, not
     // snapshot.
     return {
+      persistence: 'local',
       readAfterWrite: 'linearizable',
       scanConsistency: 'best-effort',
       atomicBatch: true,

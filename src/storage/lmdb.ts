@@ -59,6 +59,7 @@ export class LMDBStorage implements Storage {
     // call. lmdb-js exposes no native single-operation range-delete API, so this
     // is the scan-and-delete fallback — boundedRangeDelete is false.
     return {
+      persistence: 'local',
       readAfterWrite: 'linearizable',
       scanConsistency: 'snapshot',
       atomicBatch: true,

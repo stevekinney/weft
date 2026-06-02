@@ -199,6 +199,7 @@ describe('failureCategory search attribute indexing', () => {
     } catch {
       // expected
     }
+    await flush();
 
     const result = await engine.list({
       attributes: [{ key: 'failureCategory', value: 'application' as FailureCategory }],

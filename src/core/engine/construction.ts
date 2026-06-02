@@ -47,7 +47,6 @@ export type EngineCreateRuntimeOptions = EngineConstructorOptions & {
   workflows?: Record<string, AnyWorkflowDefinition> | undefined;
   recover?: boolean | undefined;
   acknowledgeUnknownWorkflowTypes?: boolean | undefined;
-  requireConcurrentResumeSafety?: boolean | undefined;
   allowLegacyData?: boolean | undefined;
 };
 

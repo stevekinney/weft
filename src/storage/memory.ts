@@ -48,6 +48,7 @@ export class MemoryStorage implements Storage {
     // applies synchronously (atomic). deletePrefix and deleteRange are
     // range-bounded deletes.
     return {
+      persistence: 'ephemeral',
       readAfterWrite: 'linearizable',
       scanConsistency: 'snapshot',
       atomicBatch: true,

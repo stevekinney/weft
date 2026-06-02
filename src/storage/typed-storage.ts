@@ -7,11 +7,13 @@ import type { JSONValue } from '../core/json.ts';
 
 import { storageDeleteRange, type DeleteRangeOptions } from './delete-range.ts';
 import {
+  storageConditionalBatch,
   storageCount,
   storageDeletePrefix,
   storageHas,
   storageKeys,
   type BatchOperation,
+  type ConditionalBatchCondition,
   type ScanOptions,
   type Storage,
 } from './interface.ts';
@@ -112,15 +114,59 @@ export type TypedBatchOperation<Value> =
   | { type: 'delete'; key: string };
 
 /**
+ * Typed compare-and-swap precondition used by
+ * {@link ConditionalTypedStorage.conditionalBatch}.
+ *
+ * @example
+ * ```ts
+ * import { type TypedConditionalBatchCondition } from '@lostgradient/weft/storage';
+ *
+ * type SessionMetadata = { lastUsedAt: string };
+ * const condition: TypedConditionalBatchCondition<SessionMetadata> = {
+ *   key: 'session:1',
+ *   expectedValue: { lastUsedAt: '2026-06-01T00:00:00.000Z' },
+ * };
+ * console.log(condition.key); // 'session:1'
+ * ```
+ */
+export type TypedConditionalBatchCondition<Value> = {
+  /** Key whose current decoded value must match `expectedValue`. */
+  key: string;
+  /** Required current value, or `null` to require the key to be absent. */
+  expectedValue: Value | null;
+};
+
+/**
+ * Options for {@link withCodec}.
+ *
+ * @example
+ * ```ts
+ * import { type CodecStorageOptions } from '@lostgradient/weft/storage';
+ *
+ * const options: CodecStorageOptions = {
+ *   disposeUnderlyingStorage: false,
+ * };
+ * console.log(options.disposeUnderlyingStorage); // false
+ * ```
+ */
+export type CodecStorageOptions = {
+  /**
+   * Whether disposing the typed wrapper also disposes the wrapped storage.
+   * Defaults to `true` to preserve the owning-wrapper behavior. Set `false`
+   * when several typed views share the same storage instance.
+   */
+  disposeUnderlyingStorage?: boolean;
+};
+
+/**
  * Disposable typed key-value store interface over a raw {@link Storage}.
  *
  * Mirrors the `Storage` interface but operates on `Value` instead of
  * `Uint8Array` — encoding and decoding is handled transparently by the
  * underlying codec.  Obtain a `TypedStorage` via {@link withCodec},
  * {@link jsonCodec}, or {@link msgpackCodec} rather than implementing it
- * directly.
- * Note: `TypedStorage` does not surface `Storage.conditionalBatch`,
- * `Storage.query`, or `Storage.scoped` — drop down to the underlying raw
+ * directly. Note: `TypedStorage` intentionally does not surface
+ * `Storage.query` or `Storage.scoped` — drop down to the underlying raw
  * storage to use those operations.
  *
  * @example
@@ -155,13 +201,27 @@ export interface TypedStorage<Value> extends Disposable {
   count(prefix: string): Promise<number>;
 }
 
-class CodecStorage<Value> implements TypedStorage<Value> {
+/**
+ * Typed storage returned by {@link withCodec}. It extends the base
+ * {@link TypedStorage} shape with compare-and-swap support without requiring
+ * every external `TypedStorage` implementation to define the method.
+ */
+export interface ConditionalTypedStorage<Value> extends TypedStorage<Value> {
+  conditionalBatch(
+    conditions: TypedConditionalBatchCondition<Value>[],
+    operations: TypedBatchOperation<Value>[],
+  ): Promise<boolean>;
+}
+
+class CodecStorage<Value> implements ConditionalTypedStorage<Value> {
   #storage: Storage;
   #codec: StorageCodec<Value>;
+  #disposeUnderlyingStorage: boolean;
 
-  constructor(storage: Storage, codec: StorageCodec<Value>) {
+  constructor(storage: Storage, codec: StorageCodec<Value>, options: CodecStorageOptions = {}) {
     this.#storage = storage;
     this.#codec = codec;
+    this.#disposeUnderlyingStorage = options.disposeUnderlyingStorage ?? true;
   }
 
   async get(key: string): Promise<Value | null> {
@@ -184,6 +244,10 @@ class CodecStorage<Value> implements TypedStorage<Value> {
   }
 
   async batch(operations: TypedBatchOperation<Value>[]): Promise<void> {
+    await this.#storage.batch(this.#encodeOperations(operations));
+  }
+
+  #encodeOperations(operations: TypedBatchOperation<Value>[]): BatchOperation[] {
     const encodedOperations: BatchOperation[] = operations.map((operation) => {
       if (operation.type === 'put') {
         return {
@@ -196,7 +260,28 @@ class CodecStorage<Value> implements TypedStorage<Value> {
       return operation;
     });
 
-    await this.#storage.batch(encodedOperations);
+    return encodedOperations;
+  }
+
+  #encodeConditions(
+    conditions: TypedConditionalBatchCondition<Value>[],
+  ): ConditionalBatchCondition[] {
+    return conditions.map((condition) => ({
+      key: condition.key,
+      expectedValue:
+        condition.expectedValue === null ? null : this.#codec.encode(condition.expectedValue),
+    }));
+  }
+
+  async conditionalBatch(
+    conditions: TypedConditionalBatchCondition<Value>[],
+    operations: TypedBatchOperation<Value>[],
+  ): Promise<boolean> {
+    return storageConditionalBatch(
+      this.#storage,
+      this.#encodeConditions(conditions),
+      this.#encodeOperations(operations),
+    );
   }
 
   async has(key: string): Promise<boolean> {
@@ -221,6 +306,9 @@ class CodecStorage<Value> implements TypedStorage<Value> {
   }
 
   [Symbol.dispose](): void {
+    if (!this.#disposeUnderlyingStorage) {
+      return;
+    }
     this.#storage[Symbol.dispose]();
   }
 }
@@ -231,14 +319,12 @@ class CodecStorage<Value> implements TypedStorage<Value> {
  *
  * Use the built-in {@link jsonCodec} or {@link msgpackCodec} factories as the
  * `codec` argument, or supply a custom implementation.  The returned store
- * disposes the underlying storage when its own `[Symbol.dispose]` is called.
- * Because the codec store calls `[Symbol.dispose]` on the inner storage, do not
- * share the same `Storage` between two `withCodec` wrappers — disposing the
- * second wrapper will call dispose on already-disposed storage.
+ * disposes the underlying storage when its own `[Symbol.dispose]` is called
+ * unless `disposeUnderlyingStorage: false` is provided.
  *
  * @example
  * ```ts
- * import { Engine, MemoryStorage, withCodec, jsonCodec } from '@lostgradient/weft';
+ * import { MemoryStorage, withCodec, jsonCodec } from '@lostgradient/weft';
  *
  * type Config = { retries: number; timeout: number };
  *
@@ -253,8 +339,9 @@ class CodecStorage<Value> implements TypedStorage<Value> {
 export function withCodec<Value>(
   storage: Storage,
   codec: StorageCodec<Value>,
-): TypedStorage<Value> {
-  return new CodecStorage(storage, codec);
+  options: CodecStorageOptions = {},
+): ConditionalTypedStorage<Value> {
+  return new CodecStorage(storage, codec, options);
 }
 
 function encodeJsonValue(value: JSONValue): Uint8Array {

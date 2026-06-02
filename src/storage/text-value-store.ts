@@ -15,7 +15,82 @@
  *
  * @module @lostgradient/weft/storage/text-value-store
  */
-import { storageDeletePrefix, storageHas, storageKeys, type Storage } from './interface';
+import {
+  storageConditionalBatch,
+  storageDeletePrefix,
+  storageHas,
+  storageKeys,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  type Storage,
+} from './interface';
+
+/**
+ * Options for {@link textValueStore}.
+ *
+ * @example
+ * ```ts
+ * import { type TextValueStoreOptions } from '@lostgradient/weft/storage';
+ *
+ * const options: TextValueStoreOptions = {
+ *   disposeUnderlyingStorage: false,
+ * };
+ * console.log(options.disposeUnderlyingStorage); // false
+ * ```
+ */
+export type TextValueStoreOptions = {
+  /**
+   * Whether `close()` disposes the wrapped storage. Defaults to `true` so the
+   * existing owning-wrapper behavior is preserved. Set `false` when the same
+   * storage instance is shared by the Weft engine and application state.
+   */
+  disposeUnderlyingStorage?: boolean;
+};
+
+/**
+ * Text compare-and-swap precondition used by
+ * {@link ConditionalTextValueStore.conditionalBatch}.
+ *
+ * @example
+ * ```ts
+ * import { type TextValueStoreCondition } from '@lostgradient/weft/storage';
+ *
+ * const condition: TextValueStoreCondition = {
+ *   key: 'api-key:1:last-used-at',
+ *   expectedValue: '2026-06-01T00:00:00.000Z',
+ * };
+ * console.log(condition.key); // 'api-key:1:last-used-at'
+ * ```
+ */
+export type TextValueStoreCondition = {
+  /** Key whose current text value must match `expectedValue`. */
+  key: string;
+  /** Required current value, or `null` to require the key to be absent. */
+  expectedValue: string | null;
+};
+
+/**
+ * Text mutation applied by {@link ConditionalTextValueStore.conditionalBatch}.
+ *
+ * `set` and `put` are synonyms so callers can use the naming convention of
+ * their string store while Weft still delegates to raw storage `put`.
+ *
+ * @example
+ * ```ts
+ * import { type TextValueStoreBatchOperation } from '@lostgradient/weft/storage';
+ *
+ * const operation: TextValueStoreBatchOperation = {
+ *   type: 'set',
+ *   key: 'session:1',
+ *   value: 'active',
+ * };
+ * console.log(operation.type); // 'set'
+ * ```
+ */
+export type TextValueStoreBatchOperation =
+  | { type: 'set'; key: string; value: string }
+  | { type: 'put'; key: string; value: string }
+  | { type: 'delete'; key: string };
 
 /**
  * String-valued key/value store layered on top of a Weft {@link Storage}.
@@ -54,8 +129,35 @@ export type TextValueStore = {
   has(key: string): Promise<boolean>;
   /** Delete every key under `prefix`. Returns the number deleted. */
   deletePrefix(prefix: string): Promise<number>;
-  /** Dispose the underlying storage. */
+  /** Close the wrapper, disposing the underlying storage unless configured otherwise. */
   close(): Promise<void>;
+};
+
+/**
+ * Text store returned by {@link textValueStore}. It keeps the base
+ * {@link TextValueStore} shape source-compatible for external implementations
+ * while exposing compare-and-swap on Weft's wrapper.
+ *
+ * @example
+ * ```ts
+ * import { MemoryStorage } from '@lostgradient/weft/storage';
+ * import { type ConditionalTextValueStore, textValueStore } from '@lostgradient/weft/storage/text-value-store';
+ *
+ * await using storage = new MemoryStorage();
+ * const store: ConditionalTextValueStore = textValueStore(storage);
+ * const committed = await store.conditionalBatch(
+ *   [{ key: 'session:1', expectedValue: null }],
+ *   [{ type: 'set', key: 'session:1', value: 'open' }],
+ * );
+ * console.log(committed); // true
+ * ```
+ */
+export type ConditionalTextValueStore = TextValueStore & {
+  /** Apply a compare-and-swap batch over UTF-8 text values. */
+  conditionalBatch(
+    conditions: TextValueStoreCondition[],
+    operations: TextValueStoreBatchOperation[],
+  ): Promise<boolean>;
 };
 
 const textEncoder = new TextEncoder();
@@ -87,7 +189,30 @@ const textDecoder = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
  * console.log(await store.list(''));         // ['greeting']
  * ```
  */
-export function textValueStore(storage: Storage): TextValueStore {
+export function textValueStore(
+  storage: Storage,
+  options: TextValueStoreOptions = {},
+): ConditionalTextValueStore {
+  const disposeUnderlyingStorage = options.disposeUnderlyingStorage ?? true;
+
+  const encodeCondition = (condition: TextValueStoreCondition): ConditionalBatchCondition => ({
+    key: condition.key,
+    expectedValue:
+      condition.expectedValue === null ? null : textEncoder.encode(condition.expectedValue),
+  });
+
+  const encodeOperation = (operation: TextValueStoreBatchOperation): BatchOperation => {
+    if (operation.type === 'delete') {
+      return operation;
+    }
+
+    return {
+      type: 'put',
+      key: operation.key,
+      value: textEncoder.encode(operation.value),
+    };
+  };
+
   return {
     async get(key: string): Promise<string | null> {
       const bytes = await storage.get(key);
@@ -115,7 +240,20 @@ export function textValueStore(storage: Storage): TextValueStore {
     async deletePrefix(prefix: string): Promise<number> {
       return storageDeletePrefix(storage, prefix);
     },
+    async conditionalBatch(
+      conditions: TextValueStoreCondition[],
+      operations: TextValueStoreBatchOperation[],
+    ): Promise<boolean> {
+      return storageConditionalBatch(
+        storage,
+        conditions.map(encodeCondition),
+        operations.map(encodeOperation),
+      );
+    },
     async close(): Promise<void> {
+      if (!disposeUnderlyingStorage) {
+        return;
+      }
       // Weft `Storage extends Disposable`, so `Symbol.dispose` is synchronous by
       // contract. The `async` wrapper exists only so the wrapped surface returns
       // `Promise<void>` like the `KeyValueStore` shape expects. If a Weft backend

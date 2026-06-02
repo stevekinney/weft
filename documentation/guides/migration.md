@@ -15,6 +15,7 @@ import type { Storage, StorageCapabilities } from '@lostgradient/weft';
 class MyStorage implements Storage {
   capabilities(): StorageCapabilities {
     return {
+      persistence: 'local', // 'ephemeral' | 'local' | 'remote'
       readAfterWrite: 'linearizable', // 'linearizable' | 'session' | 'eventual'
       scanConsistency: 'snapshot', // 'snapshot' | 'best-effort'
       atomicBatch: true, // batch() is all-or-nothing
@@ -58,7 +59,7 @@ const engine = await Engine.create({
 });
 ```
 
-`Engine.create()` registers activities first, then workflows. Pass `recover: true` when this boot path should also run `recoverAll()` after registration. Map keys must match each definition's `name` field — `Engine.create({ workflows: { greet: farewellDefinition } })` throws `EngineCreateNameMismatchError` rather than silently registering `farewell` under the wrong key.
+`Engine.create()` registers activities first, then workflows, and then runs `recoverAll()` by default. Pass `recover: false` to skip recovery (for tests or pre-migration inspection). Map keys must match each definition's `name` field — `Engine.create({ workflows: { greet: farewellDefinition } })` throws `EngineCreateNameMismatchError` rather than silently registering `farewell` under the wrong key.
 
 The constructor and `register()` remain available for tests and dynamic plugin loading.
 

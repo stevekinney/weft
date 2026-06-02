@@ -300,8 +300,6 @@ describe('EventLog.verify()', () => {
     await log.append({ type: 'legit', payload: 3 });
 
     // Tamper: overwrite entry at sequence 1 with different content.
-    const { encode } = await import('../codec.ts');
-
     const tamperedEntry = {
       type: 'tampered',
       workflowId: 'wf-test',

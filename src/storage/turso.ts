@@ -27,6 +27,109 @@ import {
 
 const LIBSQL_CREATE_KEY_VALUE_TABLE_STATEMENT = `${SQLITE_CREATE_KEY_VALUE_TABLE};`;
 
+type TursoStoragePersistence = NonNullable<StorageCapabilities['persistence']>;
+type TursoTransaction = Awaited<ReturnType<Client['transaction']>>;
+
+function isSqliteBusyError(error: unknown): boolean {
+  return (
+    typeof error === 'object' && error !== null && 'code' in error && error.code === 'SQLITE_BUSY'
+  );
+}
+
+async function beginWriteTransaction(client: Client): Promise<TursoTransaction | null> {
+  return client.transaction('write').catch((error: unknown) => {
+    if (isSqliteBusyError(error)) {
+      return null;
+    }
+    throw error;
+  });
+}
+
+async function rollbackBestEffort(transaction: TursoTransaction): Promise<void> {
+  try {
+    await transaction.rollback();
+  } catch {
+    // Best-effort rollback; preserve the original failure.
+  }
+}
+
+async function waitForWriteRetry(attempt: number): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, Math.min(attempt * 5, 50));
+  });
+}
+
+async function executeWriteBatchWithBusyRetry(
+  client: Client,
+  statements: Array<{ sql: string; args: InValue[] }>,
+): Promise<void> {
+  const maximumAttempts = 10;
+
+  for (let attempt = 1; attempt <= maximumAttempts; attempt++) {
+    try {
+      await client.batch(statements, 'write');
+      return;
+    } catch (error) {
+      if (!isSqliteBusyError(error) || attempt === maximumAttempts) {
+        throw error;
+      }
+      await waitForWriteRetry(attempt);
+    }
+  }
+}
+
+async function conditionsMatch(
+  transaction: TursoTransaction,
+  conditions: ConditionalBatchCondition[],
+): Promise<boolean> {
+  for (const condition of conditions) {
+    const result = await transaction.execute({
+      sql: SQLITE_SELECT_VALUE_BY_KEY,
+      args: [condition.key],
+    });
+
+    const raw = result.rows[0]?.['value'] as unknown;
+    const currentValue =
+      raw === null || raw === undefined ? null : new Uint8Array(raw as ArrayBuffer);
+    if (!storageValuesEqual(currentValue, condition.expectedValue)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+async function applyBatchOperations(
+  transaction: TursoTransaction,
+  operations: BatchOperation[],
+): Promise<void> {
+  for (const operation of operations) {
+    if (operation.type === 'put') {
+      await transaction.execute({
+        sql: SQLITE_UPSERT_VALUE_BY_KEY,
+        args: [operation.key, operation.value],
+      });
+    } else {
+      await transaction.execute({
+        sql: SQLITE_DELETE_VALUE_BY_KEY,
+        args: [operation.key],
+      });
+    }
+  }
+}
+
+function resolveTursoStoragePersistence(url: string): TursoStoragePersistence {
+  if (url === 'file::memory:' || url === ':memory:') {
+    return 'ephemeral';
+  }
+
+  if (url.startsWith('file:')) {
+    return 'local';
+  }
+
+  return 'remote';
+}
+
 /**
  * Configuration for connecting to a Turso/libSQL database.
  *
@@ -69,9 +172,11 @@ export type TursoStorageOptions = {
  */
 export class TursoStorage implements Storage {
   #client: Client;
+  #persistence: TursoStoragePersistence;
   #initialized = false;
 
   constructor(options: TursoStorageOptions) {
+    this.#persistence = resolveTursoStoragePersistence(options.url);
     this.#client = createClient(
       options.authToken ? { url: options.url, authToken: options.authToken } : { url: options.url },
     );
@@ -84,6 +189,7 @@ export class TursoStorage implements Storage {
     // run inside a libSQL transaction (snapshot); batch() and the range
     // deletePrefix and deleteRange are single transactional statements.
     return {
+      persistence: this.#persistence,
       readAfterWrite: 'session',
       scanConsistency: 'snapshot',
       atomicBatch: true,
@@ -233,7 +339,7 @@ export class TursoStorage implements Storage {
       };
     });
 
-    await this.#client.batch(statements, 'write');
+    await executeWriteBatchWithBusyRetry(this.#client, statements);
   }
 
   async conditionalBatch(
@@ -242,46 +348,26 @@ export class TursoStorage implements Storage {
   ): Promise<boolean> {
     await this.#ensureTable();
 
-    const transaction = await this.#client.transaction('write');
+    const transaction = await beginWriteTransaction(this.#client);
+    if (transaction === null) {
+      return false;
+    }
+
     try {
       await transaction.executeMultiple(LIBSQL_CREATE_KEY_VALUE_TABLE_STATEMENT);
 
-      for (const condition of conditions) {
-        const result = await transaction.execute({
-          sql: SQLITE_SELECT_VALUE_BY_KEY,
-          args: [condition.key],
-        });
-
-        const raw = result.rows[0]?.['value'] as unknown;
-        const currentValue =
-          raw === null || raw === undefined ? null : new Uint8Array(raw as ArrayBuffer);
-        if (!storageValuesEqual(currentValue, condition.expectedValue)) {
-          await transaction.rollback();
-          return false;
-        }
+      if (!(await conditionsMatch(transaction, conditions))) {
+        await transaction.rollback();
+        return false;
       }
 
-      for (const operation of operations) {
-        if (operation.type === 'put') {
-          await transaction.execute({
-            sql: SQLITE_UPSERT_VALUE_BY_KEY,
-            args: [operation.key, operation.value],
-          });
-        } else {
-          await transaction.execute({
-            sql: SQLITE_DELETE_VALUE_BY_KEY,
-            args: [operation.key],
-          });
-        }
-      }
-
+      await applyBatchOperations(transaction, operations);
       await transaction.commit();
       return true;
     } catch (error) {
-      try {
-        await transaction.rollback();
-      } catch {
-        // Best-effort rollback; preserve the original failure.
+      await rollbackBestEffort(transaction);
+      if (isSqliteBusyError(error)) {
+        return false;
       }
       throw error;
     }

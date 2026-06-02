@@ -123,6 +123,7 @@ function installStorageNamespace(
     storage: {
       local: area,
       sync: area,
+      session: area,
       managed: area,
       onChanged: {
         addListener() {
@@ -152,6 +153,7 @@ describe('WebExtensionStorage', () => {
       const storage = new WebExtensionStorage();
       assertCapabilitiesShape(storage);
       expect(storage.capabilities()).toEqual({
+        persistence: 'local',
         readAfterWrite: 'session',
         scanConsistency: 'best-effort',
         atomicBatch: true,
@@ -173,6 +175,23 @@ describe('WebExtensionStorage', () => {
       const storage = new WebExtensionStorage();
       expect(storage.capabilities().conditionalBatch).toBe(false);
       expect((storage as { conditionalBatch?: unknown }).conditionalBatch).toBeUndefined();
+    } finally {
+      restore();
+    }
+  });
+
+  it('reports persistence based on the configured extension storage area', () => {
+    const area = new FakeStorageArea();
+    const restore = installStorageNamespace('browser', area);
+    try {
+      expect(new WebExtensionStorage({ area: 'local' }).capabilities().persistence).toBe('local');
+      expect(new WebExtensionStorage({ area: 'session' }).capabilities().persistence).toBe(
+        'ephemeral',
+      );
+      expect(new WebExtensionStorage({ area: 'sync' }).capabilities().persistence).toBe('remote');
+      expect(new WebExtensionStorage({ area: 'managed' }).capabilities().persistence).toBe(
+        'remote',
+      );
     } finally {
       restore();
     }

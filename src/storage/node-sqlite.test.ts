@@ -179,16 +179,18 @@ describe('NodeSQLiteStorage', () => {
 
   it('throws a clear runtime error when better-sqlite3 fails while opening the database', async () => {
     mock.module('node:module', () => ({
+      // A `new`-able constructor that throws on construction, simulating
+      // better-sqlite3's native-binding load failure under Bun. A constructor
+      // function (not a class) avoids the no-extraneous-class lint on a
+      // constructor-only body while staying newable for the loader path.
       createRequire: () => (): new (path: string) => unknown =>
-        class NativeLoadFailureDatabase {
-          constructor() {
-            const error = new Error("'better-sqlite3' is not yet supported in Bun.") as Error & {
-              code: string;
-            };
-            error.code = 'ERR_DLOPEN_FAILED';
-            throw error;
-          }
-        },
+        function NativeLoadFailureDatabase(this: unknown, _path: string): void {
+          const error = new Error("'better-sqlite3' is not yet supported in Bun.") as Error & {
+            code: string;
+          };
+          error.code = 'ERR_DLOPEN_FAILED';
+          throw error;
+        } as unknown as new (path: string) => unknown,
     }));
 
     try {

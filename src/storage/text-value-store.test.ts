@@ -3,7 +3,11 @@ import { describe, expect, it } from 'bun:test';
 import { storageBackends, teardown } from '../testing/storage-backends.test-support.ts';
 import type { Storage } from './interface.ts';
 import { MemoryStorage } from './memory.ts';
-import { textValueStore } from './text-value-store.ts';
+import {
+  type ConditionalTextValueStore,
+  type TextValueStore,
+  textValueStore,
+} from './text-value-store.ts';
 
 function createCoreStorageAdapter(): Storage {
   const storage = new MemoryStorage();
@@ -151,6 +155,65 @@ describe('textValueStore (MemoryStorage)', () => {
 
     // MemoryStorage's dispose clears state; a fresh get should now be empty.
     expect(await base.get('k')).toBeNull();
+  });
+
+  it('can close without disposing shared underlying storage', async () => {
+    const base = new MemoryStorage();
+    const store = textValueStore(base, { disposeUnderlyingStorage: false });
+
+    await store.set('k', 'v');
+    await store.close();
+
+    expect(await store.get('k')).toBe('v');
+    expect(new TextDecoder().decode((await base.get('k'))!)).toBe('v');
+  });
+
+  it('conditionalBatch encodes text conditions and set operations', async () => {
+    await using base = new MemoryStorage();
+    const store: ConditionalTextValueStore = textValueStore(base);
+
+    await store.set('session:1', 'open');
+
+    const committed = await store.conditionalBatch(
+      [{ key: 'session:1', expectedValue: 'open' }],
+      [
+        { type: 'set', key: 'session:1', value: 'closed' },
+        { type: 'delete', key: 'session:old' },
+      ],
+    );
+
+    expect(committed).toBe(true);
+    expect(await store.get('session:1')).toBe('closed');
+
+    const stale = await store.conditionalBatch(
+      [{ key: 'session:1', expectedValue: 'open' }],
+      [{ type: 'set', key: 'session:1', value: 'stale-write' }],
+    );
+
+    expect(stale).toBe(false);
+    expect(await store.get('session:1')).toBe('closed');
+  });
+
+  it('keeps the base TextValueStore type source-compatible without conditionalBatch', () => {
+    const store: TextValueStore = {
+      async get() {
+        return null;
+      },
+      async set() {},
+      async delete() {},
+      async list() {
+        return [];
+      },
+      async has() {
+        return false;
+      },
+      async deletePrefix() {
+        return 0;
+      },
+      async close() {},
+    };
+
+    expect(typeof store.set).toBe('function');
   });
 });
 

@@ -180,7 +180,7 @@ describe('Engine', () => {
     engine[Symbol.dispose]();
   });
 
-  it('Engine.create registers activities before workflows and recovers when requested', async () => {
+  it('Engine.create registers activities before workflows and runs recovery by default', async () => {
     const storage = new MemoryStorage();
     const firstEngine = new Engine({ storage });
     const formatFactoryGreeting = activity({
@@ -206,7 +206,6 @@ describe('Engine', () => {
       storage,
       activities: { formatFactoryGreeting },
       workflows: { factoryWelcome },
-      recover: true,
       // Storage was populated by `new Engine({ storage })` above (before the
       // schema-version sentinel was written), so opt into the migration path.
       allowLegacyData: true,
@@ -226,20 +225,11 @@ describe('Engine', () => {
     recoveredEngine[Symbol.dispose]();
   });
 
-  it('Engine.create forwards requireConcurrentResumeSafety into recovery', async () => {
+  it('Engine.create recovers against storage without conditionalBatch support', async () => {
+    // Default recovery (no `recover` field) should work even against storage
+    // that reports conditionalBatch: false — the cap is not required for recovery.
     const storage = new EngineCreateNoConditionalBatchStorage();
-
-    await expect(
-      Engine.create({
-        storage,
-        recover: true,
-        requireConcurrentResumeSafety: true,
-      }),
-    ).rejects.toThrow(
-      'Feature "concurrent resume checkpoint commits" requires storage capability "conditionalBatch"',
-    );
-
-    const engine = await Engine.create({ storage, recover: true });
+    const engine = await Engine.create({ storage });
     engine[Symbol.dispose]();
   });
 

@@ -267,6 +267,7 @@ class RacingStorage implements Storage {
 class NoConditionalBatchStorage implements Storage {
   capabilities() {
     return {
+      persistence: 'ephemeral' as const,
       readAfterWrite: 'linearizable' as const,
       scanConsistency: 'snapshot' as const,
       atomicBatch: true,

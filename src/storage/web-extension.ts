@@ -16,30 +16,24 @@ import {
 } from './interface.ts';
 import { scopedStorage } from './scoped-storage.ts';
 
-/**
- * Named WebExtension storage area used by {@link WebExtensionStorage}.
- *
+/** Named WebExtension storage area used by {@link WebExtensionStorage}.
  * @example
  * ```ts
  * import { WebExtensionStorage, type WebExtensionStorageArea } from '@lostgradient/weft/storage/web-extension';
- *
  * const area: WebExtensionStorageArea = 'local';
  * const storage = new WebExtensionStorage({ area });
- * void storage;
  * ```
  */
 export type WebExtensionStorageArea = 'local' | 'sync' | 'session' | 'managed';
 
-/**
- * Constructor options for {@link WebExtensionStorage}.
- *
+type WebExtensionStoragePersistence = NonNullable<StorageCapabilities['persistence']>;
+
+/** Constructor options for {@link WebExtensionStorage}.
  * @example
  * ```ts
  * import { WebExtensionStorage, type WebExtensionStorageOptions } from '@lostgradient/weft/storage/web-extension';
- *
  * const options: WebExtensionStorageOptions = { area: 'sync' };
  * const storage = new WebExtensionStorage(options);
- * void storage;
  * ```
  */
 export type WebExtensionStorageOptions = {
@@ -179,6 +173,20 @@ function resolveStorageArea(
   return driver;
 }
 
+function webExtensionAreaPersistence(
+  area: WebExtensionStorageArea,
+): WebExtensionStoragePersistence {
+  if (area === 'session') {
+    return 'ephemeral';
+  }
+
+  if (area === 'sync' || area === 'managed') {
+    return 'remote';
+  }
+
+  return 'local';
+}
+
 function lastRuntimeError(namespace: WebExtensionNamespace): Error | null {
   const message = namespace.runtime?.lastError?.message;
   return message === undefined ? null : new Error(message);
@@ -249,10 +257,12 @@ export class WebExtensionStorage implements Storage {
   readonly #namespace: WebExtensionNamespace;
   readonly #driver: WebExtensionStorageAreaDriver;
   readonly #area: WebExtensionStorageArea;
+  readonly #persistence: WebExtensionStoragePersistence;
   readonly #changeListener: WebExtensionStorageChangeListener;
 
   constructor(options: WebExtensionStorageOptions = {}) {
     this.#area = options.area ?? 'local';
+    this.#persistence = webExtensionAreaPersistence(this.#area);
     this.#namespace = resolveNamespace();
     this.#driver = resolveStorageArea(this.#namespace, this.#area);
     this.#changeListener = () => {};
@@ -260,16 +270,11 @@ export class WebExtensionStorage implements Storage {
   }
 
   capabilities(): StorageCapabilities {
-    // browser.storage / chrome.storage async KV, no transactions. batch()
-    // rewrites the full keyspace under an in-process mutation lock with a single
-    // storage `set()` call: the set applies atomically or its promise rejects,
-    // so the batch is all-or-nothing (atomicBatch: true). There is no native
-    // compare-and-swap (conditionalBatch: false). Same-instance reads observe
-    // this instance's own writes (session); a separate extension context may
-    // lag, and there is no scan-time transaction isolation (best-effort).
-    // deletePrefix and deleteRange use the derived scan-and-delete fallback, so
-    // boundedRangeDelete is false.
+    // browser.storage/chrome.storage has no transactions. batch() rewrites the
+    // keyspace under an in-process lock with one storage set, but there is no
+    // native CAS and scans are best-effort across extension contexts.
     return {
+      persistence: this.#persistence,
       readAfterWrite: 'session',
       scanConsistency: 'best-effort',
       atomicBatch: true,
@@ -478,9 +483,7 @@ export class WebExtensionStorage implements Storage {
   }
 
   async deleteRange(prefix: string, options: DeleteRangeOptions): Promise<number> {
-    // Normalize before the writable check so an invalid request (e.g. missing
-    // bounds) throws the same way regardless of area writability; then reject a
-    // write attempt on a read-only area up front, matching deletePrefix.
+    // Normalize before the writable check so invalid bounds fail consistently.
     const normalized = normalizeDeleteRangeOptions(options);
     this.#assertWritable();
     return storageDeleteRangeCore(this, prefix, normalized);

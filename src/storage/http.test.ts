@@ -12,6 +12,7 @@ describe('HTTPStorage capabilities()', () => {
     const storage = new HTTPStorage({ baseUrl: 'https://example.test/api/' });
     assertCapabilitiesShape(storage);
     expect(storage.capabilities()).toEqual({
+      persistence: 'remote',
       readAfterWrite: 'eventual',
       scanConsistency: 'best-effort',
       atomicBatch: true,

@@ -132,10 +132,14 @@ describe('NodeSQLiteStorage with mocked better-sqlite3', () => {
     const { NodeSQLiteStorage } = await import(`./node-sqlite.ts?mocked=${Date.now()}`);
 
     const storage = new NodeSQLiteStorage(':memory:', FakeDatabase);
+    const fileBackedStorage = new NodeSQLiteStorage('./weft.db', FakeDatabase);
+    expect(fileBackedStorage.capabilities().persistence).toBe('local');
+    fileBackedStorage[Symbol.dispose]();
 
     // Honest capability row: linearizable WAL SQLite, but no own deletePrefix
     // (derived fallback) so boundedRangeDelete is false.
     expect(storage.capabilities()).toEqual({
+      persistence: 'ephemeral',
       readAfterWrite: 'linearizable',
       scanConsistency: 'snapshot',
       atomicBatch: true,
