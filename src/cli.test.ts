@@ -1153,6 +1153,8 @@ describe('CLI direct execution', () => {
 
   it('starts the server and responds to health check', async () => {
     const port = 17233 + Math.floor(Math.random() * 1000);
+    const apiMessage = `Weft API running at http://0.0.0.0:${port}/api/v1`;
+    const healthMessage = `Health check: http://0.0.0.0:${port}/v1/health`;
     const process = Bun.spawn(
       ['bun', './src/cli-main.ts', '--port', String(port), '--database', ':memory:'],
       {
@@ -1162,6 +1164,21 @@ describe('CLI direct execution', () => {
     );
 
     let stdout = '';
+    const stdoutReader = process.stdout.getReader();
+    const stdoutDrain = (async () => {
+      const decoder = new TextDecoder();
+      try {
+        while (true) {
+          const chunk = await stdoutReader.read();
+          if (chunk.done) break;
+          stdout += decoder.decode(chunk.value, { stream: true });
+        }
+      } finally {
+        stdout += decoder.decode();
+        stdoutReader.releaseLock();
+      }
+    })();
+
     try {
       await waitForCondition(
         async () => {
@@ -1174,14 +1191,19 @@ describe('CLI direct execution', () => {
         },
         { timeoutMs: 3_000, intervalMs: 25, label: 'CLI health endpoint' },
       );
+
+      await waitForCondition(
+        async () => stdout.includes(apiMessage) && stdout.includes(healthMessage),
+        { timeoutMs: 3_000, intervalMs: 25, label: 'CLI startup output' },
+      );
     } finally {
       process.kill('SIGTERM');
       await process.exited;
-      stdout = await new Response(process.stdout).text();
+      await stdoutDrain;
     }
 
-    expect(stdout).toContain(`Weft API running at http://0.0.0.0:${port}/api/v1`);
-    expect(stdout).toContain(`Health check: http://0.0.0.0:${port}/v1/health`);
+    expect(stdout).toContain(apiMessage);
+    expect(stdout).toContain(healthMessage);
   });
 
   it('accepts --storage flag via the CLI binary', async () => {
