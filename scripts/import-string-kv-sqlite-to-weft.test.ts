@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite';
 import { describe, expect, it } from 'bun:test';
-import { symlinkSync } from 'node:fs';
+import { linkSync, symlinkSync } from 'node:fs';
 
 import { BunSQLiteStorage } from '../src/storage/bun-sql.ts';
 import {
@@ -41,6 +41,15 @@ function runImportScript(arguments_: string[]) {
 
 function decode(value: Uint8Array | null): string | null {
   return value === null ? null : new TextDecoder().decode(value);
+}
+
+function createSameFileLink(sourcePath: string, targetPath: string): void {
+  try {
+    symlinkSync(sourcePath, targetPath);
+  } catch (error) {
+    if (process.platform !== 'win32') throw error;
+    linkSync(sourcePath, targetPath);
+  }
 }
 
 describe('import-string-kv-sqlite-to-weft', () => {
@@ -101,7 +110,7 @@ describe('import-string-kv-sqlite-to-weft', () => {
 
     try {
       symlink.cleanup();
-      symlinkSync(source.path, symlink.path);
+      createSameFileLink(source.path, symlink.path);
       const result = runImportScript([
         '--source',
         source.path,

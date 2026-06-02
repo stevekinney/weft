@@ -1,6 +1,12 @@
 import { $ } from 'bun';
 import { execFileSync } from 'node:child_process';
 
+type ExecFileFailure = Error & {
+  stderr?: Buffer | string;
+  stdout?: Buffer | string;
+  status?: number;
+};
+
 type CoverageResult = {
   covered: boolean;
   lines: { total: number; hit: number; missed: number };
@@ -22,6 +28,19 @@ type CoverageAllowance = {
 const COVERAGE_TEST_TIMEOUT_MS = 30_000;
 const DASHBOARD_TEST_FILE_PREFIX = 'src/dashboard/';
 const COVERAGE_TEST_FILE_GLOBS = ['*test.ts', '*spec.ts'] as const;
+
+function isExecFileFailure(error: unknown): error is ExecFileFailure {
+  return error instanceof Error;
+}
+
+function writeCapturedOutput(output: Buffer | string | undefined): void {
+  if (output === undefined) return;
+  if (typeof output === 'string') {
+    process.stderr.write(output);
+    return;
+  }
+  process.stderr.write(output);
+}
 
 function isGeneratedCoverageArtifact(filePath: string): boolean {
   if (
@@ -1914,10 +1933,16 @@ async function runCoverageShard(
     execFileSync('bun', args.slice(1), {
       cwd: globalThis.process.cwd(),
       env: { ...process.env, ...Bun.env, WEFT_COVERAGE_MODE: '1' },
-      stdio: 'inherit',
+      stdio: 'pipe',
     });
   } catch (error) {
-    exitCode = error instanceof Error && 'status' in error ? Number(error.status ?? 1) : 1;
+    if (isExecFileFailure(error)) {
+      writeCapturedOutput(error.stdout);
+      writeCapturedOutput(error.stderr);
+      exitCode = Number(error.status ?? 1);
+    } else {
+      exitCode = 1;
+    }
   }
 
   if (exitCode !== 0) {

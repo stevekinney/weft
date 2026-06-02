@@ -960,9 +960,8 @@ for (const backend of storageBackends) {
         const handle = await engine1.start('durable', undefined);
         suppressResult(handle);
         await flush();
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 20);
-        });
+        const registrationProbe = await engine1.update(handle.id, 'process', 'registration-probe');
+        expect(registrationProbe).toBe('processed: registration-probe');
 
         // Seed a pending coordinated update in storage
         const pendingUpdate = {
@@ -977,9 +976,6 @@ for (const backend of storageBackends) {
         // Dispose engine1 to simulate crash
         engine1[Symbol.dispose]();
         await flush();
-        await new Promise<void>((resolve) => {
-          setTimeout(resolve, 20);
-        });
 
         // Create engine2 with the same storage, simulating restart
         engine = new Engine({ storage: result.storage });

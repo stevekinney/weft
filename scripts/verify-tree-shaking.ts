@@ -230,7 +230,11 @@ if (!tursoBundle.includes('@libsql/client')) {
   try {
     const scopedPackageDirectory = join(tempDir, 'node_modules', '@lostgradient');
     mkdirSync(scopedPackageDirectory, { recursive: true });
-    symlinkSync(repositoryPath, join(scopedPackageDirectory, 'weft'), 'dir');
+    symlinkSync(
+      repositoryPath,
+      join(scopedPackageDirectory, 'weft'),
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
 
     const fixtureSource = await Bun.file(fixtureFile).text();
     if (!fixtureSource.includes(`'${packageName}'`)) {
