@@ -70,7 +70,7 @@ export type EngineCreateOptions<
     | {
         /** Opt out of recovering stored running workflows after registration. */
         recover: false;
-        /** Only valid when recovery runs (the default, or `recover: true`). */
+        /** Only valid when recovery is enabled (the default). Invalid with `recover: false`. */
         acknowledgeUnknownWorkflowTypes?: never;
       }
   );

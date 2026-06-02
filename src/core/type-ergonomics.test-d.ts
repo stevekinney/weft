@@ -331,9 +331,11 @@ async function verifyEngineCreateInference(): Promise<void> {
   void neither.start('moduleAugmentedWelcome', { name: 'Steve' });
   // @ts-expect-error no definition maps means only module-augmented workflows are available.
   void neither.start('localGreet', 'Steve');
-  // Recovery is the default: omitting `recover` recovers, and the
-  // acknowledgement escape hatch is valid without spelling out `recover: true`.
+  // Recovery is the default: omitting `recover` (or passing `recover: undefined`)
+  // is equivalent to `recover: true`, and the acknowledgement escape hatch is
+  // valid in all of those forms.
   await Engine.create({});
+  await Engine.create({ recover: undefined, acknowledgeUnknownWorkflowTypes: true });
   await Engine.create({ acknowledgeUnknownWorkflowTypes: true });
   await Engine.create({ recover: true, acknowledgeUnknownWorkflowTypes: true });
   await Engine.create({ recover: false });

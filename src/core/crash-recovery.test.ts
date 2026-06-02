@@ -987,9 +987,11 @@ describe('crash recovery', () => {
     );
 
     // The escape hatch suppresses the throw and skips the unknown workflow.
+    // Note: allowLegacyData is omitted here — the first (failed) Engine.create
+    // call already wrote the schema-version sentinel, so the second does not
+    // need the legacy-data opt-in.
     const acknowledged = await Engine.create({
       storage,
-      allowLegacyData: true,
       acknowledgeUnknownWorkflowTypes: true,
     });
     expect(await acknowledged.get('unknown-default-id')).not.toBeNull();

@@ -336,8 +336,8 @@ export class Engine<
 {
   /**
    * Construct and register an engine in one step. Activities are registered
-   * before workflows. Pass `recover: true` to run recovery after all
-   * definitions are installed.
+   * before workflows. Recovery runs by default after all definitions are
+   * installed; pass `recover: false` to opt out.
    *
    * @example
    * ```ts
