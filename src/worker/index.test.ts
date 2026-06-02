@@ -70,6 +70,11 @@ async function waitForTaskResult(messages: any[], label: string): Promise<any> {
  * each activity under the qualified name `${type}.${activityName}`, so tests
  * that assert on advertised names or dispatch by name use that qualified form
  * (e.g. `orders.processOrder`).
+ *
+ * `type` defaults to `'orders'`: a test-convenience token with no domain
+ * meaning. Every assertion on an advertised/dispatched name in this file is
+ * written against that default prefix; pass an explicit `type` only when a test
+ * needs a distinct workflow namespace.
  */
 function workflowsOf(
   activities: Record<string, (input: any, context?: any) => Promise<unknown>>,

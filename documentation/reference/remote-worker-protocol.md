@@ -131,20 +131,20 @@ Sent immediately after the WebSocket opens.
 }
 ```
 
-| Field             | Type                         | Required | Description                                                                                     |
-| ----------------- | ---------------------------- | -------- | ----------------------------------------------------------------------------------------------- |
-| `type`            | `"register"`                 | Yes      | Message discriminator.                                                                          |
-| `protocolVersion` | `1`                          | Yes      | Required v1 protocol version. Missing or unsupported versions receive `registerError`.          |
-| `workerId`        | string                       | Yes      | Stable identifier for this worker. Must be non-empty.                                           |
-| `activities`      | string[]                     | Yes      | Names of activities this worker can execute. Entries must be non-empty strings.                 |
-| `concurrency`     | number                       | No       | Maximum concurrent tasks. Server clamps finite numbers to `[1, 1000]`. Defaults to `10`.        |
-| `queue`           | string                       | No       | Informational queue name. The server uses the queue derived from the worker-stream URL instead. |
-| `deploymentName`  | string                       | No       | Operator-defined deployment group. Drain operations can target all workers with this name.      |
-| `buildId`         | string                       | No       | Build or release identifier shown in fleet summaries.                                           |
-| `runtimeVersion`  | string                       | No       | Runtime or SDK version reported by the worker.                                                  |
-| `gitSha`          | string                       | No       | Source revision reported by the worker.                                                         |
-| `startedAt`       | number                       | No       | Worker process start time in epoch milliseconds. Defaults to registration time when omitted.    |
-| `capabilities`    | `Record<string, JSON value>` | No       | JSON object of capability metadata such as region, hardware class, or feature flags.            |
+| Field             | Type                         | Required | Description                                                                                                                                                                           |
+| ----------------- | ---------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `type`            | `"register"`                 | Yes      | Message discriminator.                                                                                                                                                                |
+| `protocolVersion` | `1`                          | Yes      | Required v1 protocol version. Missing or unsupported versions receive `registerError`.                                                                                                |
+| `workerId`        | string                       | Yes      | Stable identifier for this worker. Must be non-empty.                                                                                                                                 |
+| `activities`      | string[]                     | Yes      | Names of activities this worker can execute, each in `${workflowType}.${activityName}` form when produced by the TypeScript SDK's `workflows` map. Entries must be non-empty strings. |
+| `concurrency`     | number                       | No       | Maximum concurrent tasks. Server clamps finite numbers to `[1, 1000]`. Defaults to `10`.                                                                                              |
+| `queue`           | string                       | No       | Informational queue name. The server uses the queue derived from the worker-stream URL instead.                                                                                       |
+| `deploymentName`  | string                       | No       | Operator-defined deployment group. Drain operations can target all workers with this name.                                                                                            |
+| `buildId`         | string                       | No       | Build or release identifier shown in fleet summaries.                                                                                                                                 |
+| `runtimeVersion`  | string                       | No       | Runtime or SDK version reported by the worker.                                                                                                                                        |
+| `gitSha`          | string                       | No       | Source revision reported by the worker.                                                                                                                                               |
+| `startedAt`       | number                       | No       | Worker process start time in epoch milliseconds. Defaults to registration time when omitted.                                                                                          |
+| `capabilities`    | `Record<string, JSON value>` | No       | JSON object of capability metadata such as region, hardware class, or feature flags.                                                                                                  |
 
 The server processes `register` only on worker-stream paths (`/api/v1/tasks/:queue/stream`). On other WebSocket endpoints, worker protocol messages are ignored or handled by that endpoint's own protocol.
 

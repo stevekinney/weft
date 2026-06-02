@@ -41,11 +41,21 @@ export function normalizeWorkerJsonValue(value: unknown): RemoteWorkerJsonValue 
  * Centralises the precondition checks so name-grammar violations and
  * key/name mismatches fail fast at construction time, before any WebSocket
  * connection is opened. `workflows` is required.
+ *
+ * The removed `activities` alias is rejected actively rather than ignored: an
+ * untyped or JavaScript caller that still passes it (especially alongside an
+ * empty `workflows: {}`) would otherwise build a worker that silently drops part
+ * of its configuration, so we fail loudly instead.
  */
 export function resolveActivityTable(
   options: ActivityTableSource,
 ): Record<string, RemoteWorkerActivityFunction> {
-  if (options.workflows === undefined) {
+  if (Object.prototype.hasOwnProperty.call(options, 'activities')) {
+    throw new Error(
+      'RemoteWorker no longer accepts `activities`; declare your activities under `workflows` instead.',
+    );
+  }
+  if (options.workflows === undefined || options.workflows === null) {
     throw new Error(
       'RemoteWorker requires `workflows` — a map of workflow type → { name, activities }.',
     );

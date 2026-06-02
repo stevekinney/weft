@@ -112,7 +112,7 @@ describe('RemoteWorker workflows option', () => {
 
   it('no longer accepts an `activities` option (alias removed)', () => {
     // The flat `activities` alias was removed in favour of the required
-    // `workflows` map. A consumer that passes it should not typecheck.
+    // `workflows` map. A consumer that passes it should not typecheck...
     expect(
       () =>
         new RemoteWorker({
@@ -121,7 +121,17 @@ describe('RemoteWorker workflows option', () => {
           // @ts-expect-error `activities` is no longer a RemoteWorker option.
           activities: { 'welcome.formatGreeting': async () => 'hi' },
         }),
-    ).not.toThrow();
+    ).toThrow(/no longer accepts `activities`/);
+  });
+
+  it('rejects a stale `activities` even when it is the only activity source', () => {
+    // An untyped/JS caller that swapped nothing and kept `activities` (no
+    // `workflows`) must fail loudly rather than build a zero-activity worker.
+    const staleOptions = {
+      serverUrl: 'ws://localhost:0',
+      activities: { 'welcome.formatGreeting': async () => 'hi' },
+    } as unknown as ConstructorParameters<typeof RemoteWorker>[0];
+    expect(() => new RemoteWorker(staleOptions)).toThrow(/no longer accepts `activities`/);
   });
 
   it('rejects when `workflows` is omitted', () => {
@@ -131,6 +141,11 @@ describe('RemoteWorker workflows option', () => {
       serverUrl: 'ws://localhost:0',
     } as unknown as ConstructorParameters<typeof RemoteWorker>[0];
     expect(() => new RemoteWorker(optionsWithoutWorkflows)).toThrow(/requires `workflows`/);
+  });
+
+  it('accepts an empty `workflows` map (worker advertises no activities)', () => {
+    using worker = new RemoteWorker({ serverUrl: 'ws://localhost:0', workflows: {} });
+    expect(worker).toBeDefined();
   });
 
   it('propagates name-grammar rejection from the worker SDK entry', () => {
