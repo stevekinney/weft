@@ -20,7 +20,6 @@ type CoverageAllowance = {
 };
 
 const COVERAGE_TEST_TIMEOUT_MS = 30_000;
-const DASHBOARD_TEST_FILE_PREFIX = 'src/dashboard/';
 const COVERAGE_TEST_FILE_GLOBS = ['*test.ts', '*spec.ts'] as const;
 
 function isGeneratedCoverageArtifact(filePath: string): boolean {
@@ -33,9 +32,7 @@ function isGeneratedCoverageArtifact(filePath: string): boolean {
     return true;
   }
 
-  return /src\/dashboard\/(?:components|fragments|views)\/\.[^/]+\.compiled(?:\/[^/]+\.(?:js|mjs)|\.mjs)$/.test(
-    filePath,
-  );
+  return false;
 }
 
 function createLineSet(startLine: number, endLine: number): Set<number> {
@@ -423,22 +420,6 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
       lines: new Set([
         47, 54, 121, 129, 145, 153, 158, 168, 196, 210, 215, 220, 228, 234, 239, 258, 265, 273,
       ]),
-    },
-  ],
-  [
-    'src/dashboard/api-client.ts',
-    {
-      // Line coverage is complete. Bun still reports one unnamed function miss
-      // in this class-heavy module, so allow the aggregate instrumentation drift.
-      functions: 1,
-    },
-  ],
-  [
-    'src/dashboard/fragments/workflow-execution-timeline.ts',
-    {
-      // Line coverage is complete. Bun still reports one unnamed aggregate
-      // function miss in this request-guard helper module.
-      functions: 1,
     },
   ],
   [
@@ -1021,8 +1002,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = new Map<string, CoverageAllowa
   ['src/core/types/definition-schema-to-json.ts', { lines: new Set([135, 136, 137, 140, 141]) }],
   ['src/core/worker-checkpoint-resume-state.ts', { functions: 1 }],
   ['src/core/worker-execution-strategy.ts', { functions: 2 }],
-  ['src/dashboard/utilities/workflow-detail-timeline.ts', { lines: new Set([185, 186]) }],
-  ['src/dashboard/utilities/workflow-list-data.ts', { lines: new Set([63]) }],
   [
     'src/mcp/access.ts',
     { functions: 1, lines: new Set([36, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 117]) },
@@ -1298,19 +1277,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
     },
   ],
   ['src/core/tenant-quotas/quota-manager-operations.ts', { lines: new Set([31, 33, 34, 35, 36]) }],
-  [
-    // Shared dashboard Svelte test harness. Line 110 is the defensive guard
-    // that throws when a successful Bun.build reports zero outputs — an
-    // invariant Bun never violates, so the branch cannot be exercised. The
-    // allowance is scoped to that single line; every function is covered by
-    // svelte-test-harness.test-support.test.ts and the two component suites.
-    'src/dashboard/svelte-test-harness.test-support.ts',
-    { lines: new Set([110]) },
-  ],
-  [
-    'src/dashboard/utilities/workflow-detail-timeline.ts',
-    { lines: new Set([180, 185, 186, 209, 210]) },
-  ],
   ['src/mcp/access.ts', { lines: new Set([28, 29, 30, 31, 32]) }],
   [
     'src/mcp/dispatcher.ts',
@@ -1525,6 +1491,16 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
       lines: new Set([68, 69, 71, 72]),
     },
   ],
+  [
+    'examples/order-processing/src/server.ts',
+    {
+      // The executable example server is covered through smoke tests around
+      // `serve()`, but its `import.meta.main` entrypoint parks forever by design
+      // and only contributes coverage from a child process.
+      functions: 1,
+      lines: createLineSet(12, 32),
+    },
+  ],
   ['src/cli/api-arguments.ts', { lines: new Set([55, 58]) }],
   [
     'src/cli/api.ts',
@@ -1681,7 +1657,6 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
     'src/server/operations/worker-drain.ts',
     { functions: 2, lines: new Set([260, 267, 268, 269, 273, 274, 275, 276, 277]) },
   ],
-  ['src/server/route-model.ts', { lines: new Set([58, 61]) }],
   ['src/server/runtime/cors.ts', { lines: new Set([304]) }],
   ['src/server/runtime/request-gate.ts', { lines: new Set([118, 119]) }],
   ['src/server/runtime/websocket-upgrade.ts', { lines: new Set([123, 124]) }],
@@ -1828,10 +1803,6 @@ export function parseLcov(content: string): CoverageResult {
   return summarizeCoverageFiles(parseLcovFiles(content));
 }
 
-function isDashboardCoverageFile(filePath: string): boolean {
-  return filePath.startsWith(DASHBOARD_TEST_FILE_PREFIX);
-}
-
 async function listCoverageTestFiles(): Promise<string[]> {
   const output = execFileSync(
     'rg',
@@ -1896,20 +1867,6 @@ async function runCoverageShard(
   return { exitCode, lcovPath: `${shard.coverageDirectory}/lcov.info` };
 }
 
-function mergeCoverageFiles(
-  primaryFiles: ReadonlyMap<string, FileCoverageResult>,
-  overrideFiles: ReadonlyMap<string, FileCoverageResult>,
-  shouldOverride: (filePath: string) => boolean,
-): Map<string, FileCoverageResult> {
-  const merged = new Map(primaryFiles);
-  for (const [filePath, fileCoverage] of overrideFiles) {
-    if (shouldOverride(filePath) || !merged.has(filePath)) {
-      merged.set(filePath, fileCoverage);
-    }
-  }
-  return merged;
-}
-
 /**
  * Run the test suite with coverage, parse the lcov report, and return whether
  * every line and function is covered.
@@ -1918,44 +1875,24 @@ export async function checkCoverage(): Promise<boolean> {
   // Remove the entire coverage directory so we never read a previous run's report.
   await $`rm -rf coverage`.quiet().nothrow();
   const allTestFiles = await listCoverageTestFiles();
-  const dashboardTestFiles = allTestFiles.filter((filePath) =>
-    filePath.startsWith(DASHBOARD_TEST_FILE_PREFIX),
-  );
-  const nonDashboardTestFiles = allTestFiles.filter(
-    (filePath) => !filePath.startsWith(DASHBOARD_TEST_FILE_PREFIX),
-  );
 
-  const primaryShard = await runCoverageShard({
-    name: 'non-dashboard',
-    coverageDirectory: 'coverage/non-dashboard',
-    testFiles: nonDashboardTestFiles,
-  });
-  const dashboardShard = await runCoverageShard({
-    name: 'dashboard',
-    coverageDirectory: 'coverage/dashboard',
-    testFiles: dashboardTestFiles,
-    parallelism: 1,
+  const shard = await runCoverageShard({
+    name: 'coverage',
+    coverageDirectory: 'coverage',
+    testFiles: allTestFiles,
   });
 
-  if (primaryShard.exitCode !== 0 || dashboardShard.exitCode !== 0) {
-    console.error('Coverage shard execution failed.');
+  if (shard.exitCode !== 0) {
+    console.error('Coverage execution failed.');
     return false;
   }
 
-  if (!(await Bun.file(primaryShard.lcovPath).exists())) {
-    console.error(`No coverage report generated for ${primaryShard.lcovPath}.`);
-    return false;
-  }
-  if (!(await Bun.file(dashboardShard.lcovPath).exists())) {
-    console.error(`No coverage report generated for ${dashboardShard.lcovPath}.`);
+  if (!(await Bun.file(shard.lcovPath).exists())) {
+    console.error(`No coverage report generated for ${shard.lcovPath}.`);
     return false;
   }
 
-  const primaryCoverageFiles = parseLcovFiles(await Bun.file(primaryShard.lcovPath).text());
-  const dashboardCoverageFiles = parseLcovFiles(await Bun.file(dashboardShard.lcovPath).text());
-  const coverage = summarizeCoverageFiles(
-    mergeCoverageFiles(primaryCoverageFiles, dashboardCoverageFiles, isDashboardCoverageFile),
-  );
+  const coverage = parseLcov(await Bun.file(shard.lcovPath).text());
 
   if (coverage.lines.total === 0) {
     console.error('Coverage report is empty — no source files were instrumented.');

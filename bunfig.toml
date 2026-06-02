@@ -4,9 +4,6 @@
 [run]
 bun = true
 
-[serve.static]
-plugins = ["bun-plugin-svelte"]
-
 [test]
 coveragePathIgnorePatterns = ["scripts/check-coverage.ts"]
 # Nested git worktrees live inside the repo tree (Scrumlord task worktrees under

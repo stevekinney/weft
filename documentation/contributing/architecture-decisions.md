@@ -46,7 +46,7 @@ The storage interface is KV-oriented (not SQL-oriented) so all backends share th
 
 ## Single Binary Distribution
 
-`bun build --compile` produces standalone executables that include the Bun runtime, the engine, the HTTP server, and the embedded web dashboard. Cross-compilation targets cover macOS (ARM64, x64), Linux (ARM64, x64), and Windows (x64). End users download one file and run it—no Docker, no dependency installation.
+`bun build --compile` produces standalone executables that include the Bun runtime, the engine, and the HTTP server. Cross-compilation targets cover macOS (ARM64, x64), Linux (ARM64, x64), and Windows (x64). End users download one file and run it—no Docker, no dependency installation.
 
 See [Single Binary architecture](../architecture/single-binary.md).
 

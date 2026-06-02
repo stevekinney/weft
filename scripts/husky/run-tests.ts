@@ -95,23 +95,6 @@ export const LOAD_SENSITIVE_TEST_PATHS = [
   'src/core/bulk-operations.test.ts',
 ] as const;
 
-/**
- * Dashboard compiler/JSDOM suites that must run serially.
- *
- * These tests import Svelte's compiler through jsdom/css-tree. Running them in
- * the same high-parallel Bun process as the whole repository can trigger
- * css-tree's lazy dictionary patching before its patch table is initialized.
- * They remain part of pre-commit, but run in a separate `--parallel=1` step.
- */
-export const SERIAL_TEST_PATHS = [
-  'src/dashboard/dashboard-serving.test.ts',
-  'src/dashboard/svelte-test-harness.test-support.test.ts',
-  'src/dashboard/fragments/workflow-execution-timeline.svelte.test.ts',
-  'src/dashboard/fragments/schedule-list.test.ts',
-  'src/dashboard/components/date-range-picker.svelte.test.ts',
-  'src/dashboard/views/workflow-list.svelte.test.ts',
-] as const;
-
 function normalizedTestPath(file: string): string {
   return file.replace(/^\.\//, '').replace(/\/+/g, '/');
 }
@@ -119,7 +102,7 @@ function normalizedTestPath(file: string): string {
 /**
  * Discover the test files the pre-commit full-suite step runs: every
  * `{src,tests}/**\/*.test.ts` except `/benchmarks/` files and the
- * {@link LOAD_SENSITIVE_TEST_PATHS} and {@link SERIAL_TEST_PATHS} entries.
+ * {@link LOAD_SENSITIVE_TEST_PATHS} entries.
  * Shared by the hook and its verification so the two cannot drift.
  */
 export async function discoverTestFiles(): Promise<string[]> {
@@ -134,20 +117,9 @@ export async function discoverTestFiles(): Promise<string[]> {
       LOAD_SENSITIVE_TEST_PATHS.includes(normalized as (typeof LOAD_SENSITIVE_TEST_PATHS)[number])
     )
       continue;
-    if (SERIAL_TEST_PATHS.includes(normalized as (typeof SERIAL_TEST_PATHS)[number])) continue;
     testFiles.push(file);
   }
   return testFiles;
-}
-
-/** Return only the serial dashboard suites that exist in the checkout. */
-export async function discoverSerialTestFiles(): Promise<string[]> {
-  const glob = new Bun.Glob('{src,tests}/**/*.test.ts');
-  const discovered = new Set<string>();
-  for await (const file of glob.scan('.')) {
-    discovered.add(normalizedTestPath(file));
-  }
-  return SERIAL_TEST_PATHS.filter((file) => discovered.has(file));
 }
 
 /** Per-test timeout (ms) for the full and isolation runs. Matches the hook's historical value. */

@@ -64,27 +64,14 @@ if (parsedArguments.command === 'serve') {
     console.log('No --workflows module provided; starting in inspect-only mode.');
   }
 
-  let dashboard: unknown = null;
-  if (parsedArguments.ui) {
-    try {
-      const dashboardModule = await import('./dashboard/index.html' as string);
-      dashboard = dashboardModule.default;
-    } catch {
-      // Dashboard not built — serve without it.
-    }
-  }
-
   const server = serve({
     engine,
     port: Number(parsedArguments.port),
-    dashboard,
   });
   await writeRunLockfile(server.url);
 
-  console.log(`Weft running on ${server.url}`);
-  if (dashboard !== null) {
-    console.log(`Dashboard: ${server.url}`);
-  }
+  console.log(`Weft API running at ${new URL('/api/v1', server.url).href}`);
+  console.log(`Health check: ${new URL('/v1/health', server.url).href}`);
   console.log(`Storage: ${parsedArguments.storage}`);
   console.log(`Database: ${parsedArguments.database}`);
 

@@ -149,7 +149,7 @@ interface ServeOptions {
   port?: number;
   hostname?: string;
   development?: boolean;
-  dashboard?: unknown;
+  dashboard?: DashboardRouteTarget;
   auth?: AuthConfig;
   unauthenticatedAccess?: 'warn' | 'allow' | 'reject';
   visibilityPollIntervalMs?: number;
@@ -165,7 +165,7 @@ interface ServeOptions {
 | `port`                     | `number`                        | `7233`           | TCP port to listen on                                      |
 | `hostname`                 | `string`                        | `'0.0.0.0'`      | Hostname/IP to bind to                                     |
 | `development`              | `boolean`                       | `false`          | Enable development mode with verbose error responses       |
-| `dashboard`                | `unknown`                       | `undefined`      | Dashboard HTML/module import served at `/` when supplied   |
+| `dashboard`                | `DashboardRouteTarget`          | `undefined`      | External dashboard shell served at supported page routes   |
 | `auth`                     | `AuthConfig`                    | `undefined`      | Authentication configuration (JWT, mTLS, or custom)        |
 | `unauthenticatedAccess`    | `'warn' \| 'allow' \| 'reject'` | `'warn'`         | Startup policy when `auth` is omitted                      |
 | `visibilityPollIntervalMs` | `number`                        | `5000`           | Polling interval for task visibility timeout checks        |

@@ -19,7 +19,10 @@ interface Violation {
 const violations: Violation[] = [];
 
 async function scanFile(relPath: string): Promise<void> {
-  const source = await file(join(repoRoot, relPath)).text();
+  const sourceFile = file(join(repoRoot, relPath));
+  if (!(await sourceFile.exists())) return;
+
+  const source = await sourceFile.text();
   const lines = source.split('\n');
 
   for (const [index, line] of lines.entries()) {

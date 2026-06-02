@@ -1,13 +1,13 @@
 /**
  * Cross-Origin Resource Sharing (CORS) for the Weft server.
  *
- * The server hosts a browser dashboard (`/ui`) and a documented browser
- * runtime (Service Worker + IndexedDB). When those run on a different origin
- * than the API, the browser enforces CORS — and with no policy configured it
- * blocks every cross-origin call. This module supplies an opt-in, **safe by
- * default** policy: when `serve()` is called without a `cors` option, the
- * server emits no `Access-Control-*` headers at all (same-origin only). It
- * never defaults to `Access-Control-Allow-Origin: *`.
+ * The server supports browser clients such as external dashboards and the
+ * documented browser runtime (Service Worker + IndexedDB). When those run on a
+ * different origin than the API, the browser enforces CORS — and with no policy
+ * configured it blocks every cross-origin call. This module supplies an
+ * opt-in, **safe by default** policy: when `serve()` is called without a `cors`
+ * option, the server emits no `Access-Control-*` headers at all (same-origin
+ * only). It never defaults to `Access-Control-Allow-Origin: *`.
  *
  * Three pieces wire into the request pipeline:
  *   - {@link buildPreflightResponse} answers `OPTIONS` preflight requests

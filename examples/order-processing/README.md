@@ -21,13 +21,15 @@ bun install
 bun run verify
 ```
 
-Start the local server and dashboard:
+Start the local headless server:
 
 ```bash
 bun run server
 ```
 
-The dashboard is available at `http://localhost:7321/`.
+The REST API is available under `http://localhost:7321/api/v1/`; use `/v1/health`
+as the root-stable health probe, and add an external dashboard or HTTP client when you want a
+browser-facing operator surface.
 
 The server stores state in `./order-processing.sqlite` by default. Set `WEFT_DATABASE_PATH` when
 you want both terminals to use a different SQLite file.

@@ -164,12 +164,8 @@ function findForbiddenPaths(files: PackFile[]): string[] {
       reason: 'test worker entrypoints are not public runtime files',
     },
     {
-      pattern: /^dist\/dashboard\/entrypoint\./,
-      reason: 'dashboard development entrypoint imports Svelte',
-    },
-    {
-      pattern: /^dist\/dashboard\/(?:components|fragments|utilities|views)\//,
-      reason: 'dashboard source modules are not public package content',
+      pattern: /^dist\/dashboard(?:\/|$)/,
+      reason: 'the bundled dashboard is no longer public package content',
     },
     {
       pattern: /(^|\/)(?:src|scripts|tests|examples|documentation|reference|\.github)\//,

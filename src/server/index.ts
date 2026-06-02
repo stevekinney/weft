@@ -1,11 +1,11 @@
 /**
- * Bun.serve() wrapper with WebSocket support, dashboard UI, and clean shutdown.
+ * Bun.serve() wrapper with WebSocket support, optional external UI mounting,
+ * and clean shutdown.
  *
  * @module server
  */
 
 import type { RetryPolicy } from '../core/types.ts';
-import { DASHBOARD_MOUNT_PATTERNS } from '../dashboard/route-table.ts';
 import type { PrometheusExporter } from '../observability/metrics.ts';
 import type { RoutingPolicy } from '../worker/registry.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
@@ -62,12 +62,9 @@ export {
 } from './authentication.ts';
 
 /**
- * Static route patterns at which the dashboard shell is served, derived
- * directly from the SPA's route table (`DASHBOARD_MOUNT_PATTERNS` in
- * `src/dashboard/route-table.ts`). Deriving from the single source of truth —
- * rather than re-listing the routes here — means a new top-level dashboard
- * page automatically gets a server mount, so a hard reload of it resolves to
- * the shell instead of 404ing.
+ * Static route patterns at which an externally supplied dashboard shell is
+ * served. Weft no longer bundles a dashboard, but `serve({ dashboard })`
+ * keeps a same-origin mounting point for packages that provide one.
  *
  * They are intentionally specific (no blanket `/*`) so they cannot shadow the
  * API served under the `/api` prefix or the root-stable discovery endpoints —
@@ -77,12 +74,52 @@ export {
  * ```ts
  * import { DASHBOARD_PAGE_ROUTES } from '@lostgradient/weft/server';
  *
- * // The dashboard owns the origin root via these specific page routes.
+ * // A mounted dashboard shell owns these specific page routes.
  * console.log(DASHBOARD_PAGE_ROUTES[0]); // '/'
  * console.log(DASHBOARD_PAGE_ROUTES.includes('/workflows')); // true
  * ```
  */
-export const DASHBOARD_PAGE_ROUTES: readonly string[] = DASHBOARD_MOUNT_PATTERNS;
+export const DASHBOARD_PAGE_ROUTES = [
+  '/',
+  '/workflows',
+  '/workflows/*',
+  '/reviews',
+  '/workers',
+] as const satisfies readonly string[];
+
+/**
+ * Route pattern owned by an externally supplied dashboard shell.
+ *
+ * Weft mounts a caller-provided `serve({ dashboard })` target only at these
+ * page routes, leaving API and discovery routes to the server fetch handler.
+ *
+ * @example
+ * ```ts
+ * import type { DashboardPageRoute } from '@lostgradient/weft/server';
+ *
+ * const workflowRoute: DashboardPageRoute = '/workflows/*';
+ * void workflowRoute;
+ * ```
+ */
+export type DashboardPageRoute = (typeof DASHBOARD_PAGE_ROUTES)[number];
+
+/**
+ * Bun route target accepted by `serve({ dashboard })`.
+ *
+ * Pass a static `Response` or a Bun route handler supplied by an external
+ * dashboard package. Weft serves that target only at {@link DASHBOARD_PAGE_ROUTES}.
+ *
+ * @example
+ * ```ts
+ * import type { DashboardRouteTarget } from '@lostgradient/weft/server';
+ *
+ * const dashboard: DashboardRouteTarget = new Response('<!doctype html><div id="app"></div>', {
+ *   headers: { 'Content-Type': 'text/html; charset=utf-8' },
+ * });
+ * void dashboard;
+ * ```
+ */
+export type DashboardRouteTarget = Bun.Serve.Routes<undefined, string>[string];
 
 /**
  * Startup policy for `serve()` when no `auth` configuration is supplied.
@@ -127,8 +164,8 @@ export interface ServeOptions {
   hostname?: string;
   /** Enable Bun's development mode (HMR, source maps, detailed errors). */
   development?: boolean;
-  /** Dashboard HTML import served at the root path `/` (e.g., `import dashboard from './index.html'`). */
-  dashboard?: unknown;
+  /** Optional external dashboard shell served at {@link DASHBOARD_PAGE_ROUTES}. */
+  dashboard?: DashboardRouteTarget;
   /** Authentication configuration. When provided, all non-public endpoints require valid credentials. */
   auth?: AuthConfig;
   /**
@@ -146,10 +183,10 @@ export interface ServeOptions {
    */
   rateLimit?: RateLimitConfig;
   /**
-   * Cross-Origin Resource Sharing policy for browser clients (the dashboard
-   * and the Service Worker / IndexedDB browser runtime) that call the server
-   * from a different origin. **Omitting `cors` is the safe default: the server
-   * emits no `Access-Control-*` headers and only same-origin browser requests
+   * Cross-Origin Resource Sharing policy for browser clients (external
+   * dashboards and the Service Worker / IndexedDB browser runtime) that call
+   * the server from a different origin. **Omitting `cors` is the safe default:
+   * the server emits no `Access-Control-*` headers and only same-origin browser requests
    * succeed — it never defaults to `Access-Control-Allow-Origin: *`.** When set,
    * `serve()` answers CORS preflight (`OPTIONS`) requests and decorates
    * responses for allowed origins, and rejects cross-origin WebSocket upgrades
@@ -327,7 +364,7 @@ export interface WeftServer extends AsyncDisposable {
 // ---------------------------------------------------------------------------
 
 /**
- * Start the Weft HTTP + WebSocket server with embedded dashboard.
+ * Start the Weft HTTP + WebSocket server.
  *
  * `serve()` validates the supplied `auth` configuration synchronously and
  * throws `Error` before binding the port if any auth setting is invalid.
@@ -364,22 +401,17 @@ export function serve(options: ServeOptions): WeftServer {
   const context = buildServerContext(serverOptions, serverMetricsCollector);
   const boundCleanup = (operationId: string): void => cleanupWorkflowIndex(context, operationId);
 
-  const routes: Record<string, unknown> = {};
-  if (options.dashboard != null) {
-    // Mount the dashboard at its known top-level page routes — never a blanket
+  const routes: Bun.Serve.Routes<WebSocketData, string> = {};
+  if (options.dashboard !== undefined) {
+    // Mount a supplied dashboard shell at known top-level page routes — never a blanket
     // `/*`. Bun matches the static `routes` map before the `fetch` fallback
     // (where the entire API is dispatched), and `fetch` never runs for a path a
     // route already matched. A global `/*` would therefore swallow `/api/...`
     // and return the dashboard shell instead of the API response. These
     // specific page routes can't collide with `/api/...` or the root-stable
     // carve-outs, so `fetch` still owns everything else.
-    //
-    // `DASHBOARD_PAGE_ROUTES` is derived from the SPA's route table
-    // (`DASHBOARD_MOUNT_PATTERNS` in `src/dashboard/route-table.ts`), so a new
-    // top-level page automatically gets a server mount — there is no list to
-    // hand-maintain here.
     for (const path of DASHBOARD_PAGE_ROUTES) {
-      routes[path] = options.dashboard;
+      routes[path] = options.dashboard as Bun.Serve.Routes<WebSocketData, string>[string];
     }
   }
 

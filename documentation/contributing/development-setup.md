@@ -68,7 +68,7 @@ For the repository coverage gate, use the deterministic verifier:
 bun run scripts/check-coverage.ts
 ```
 
-The verifier removes stale `coverage/` output, runs Bun coverage once with LCOV output, applies the repository's narrow coverage allowances, and exits non-zero when adjusted line or function coverage is below 100 percent. It is a coverage gate only: it can still evaluate LCOV after `bun test` exits non-zero, so keep `bun test` or `bun run validate` as the passing-suite gate. Use it when changing coverage-sensitive code, generated clients, CLI paths, dashboard test harnesses, or the allowance table itself.
+The verifier removes stale `coverage/` output, runs Bun coverage once with LCOV output, applies the repository's narrow coverage allowances, and exits non-zero when adjusted line or function coverage is below 100 percent. It is a coverage gate only: it can still evaluate LCOV after `bun test` exits non-zero, so keep `bun test` or `bun run validate` as the passing-suite gate. Use it when changing coverage-sensitive code, generated clients, CLI paths, or the allowance table itself.
 
 ### Testing conventions
 
@@ -122,12 +122,6 @@ Run the package gates against the built artifact before cutting a tag:
 ```bash
 bun run prepack
 npm publish --dry-run
-```
-
-For dashboard development, run:
-
-```bash
-bun run dev:dashboard  # Start the Svelte dashboard dev server
 ```
 
 ## Git hooks

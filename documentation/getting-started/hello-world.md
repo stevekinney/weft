@@ -236,4 +236,4 @@ await using engine = await Engine.create({ storage, recover: true });
 
 You've got the fundamentals: workflows, activities, checkpoints, sleeps, signals, parallel execution, and persistent storage. From here, the [Workflows guide](../guides/workflows.md) goes deeper on generator behavior, and the [Activities guide](../guides/activities.md) covers side effects and retries.
 
-When you want to see those primitives working together in one production-shaped flow, open the [order processing reference example](../../examples/order-processing/README.md). It adds updates, queries, search attributes, human review, child workflows, schedules, and a runnable dashboard setup.
+When you want to see those primitives working together in one production-shaped flow, open the [order processing reference example](../../examples/order-processing/README.md). It adds updates, queries, search attributes, human review, child workflows, schedules, and a runnable headless server.

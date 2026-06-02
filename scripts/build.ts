@@ -2,8 +2,6 @@ import { $ } from 'bun';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
-import sveltePlugin from 'bun-plugin-svelte';
-
 await $`rm -rf dist`;
 
 const typescriptTranspiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' });
@@ -66,7 +64,6 @@ async function writeUnbundledRuntimeModules(): Promise<void> {
       sourcePath.endsWith('.bench.ts') ||
       sourcePath.endsWith('-fixture.ts') ||
       sourcePath.startsWith('src/benchmarks/') ||
-      (sourcePath.startsWith('src/dashboard/') && sourcePath !== 'src/dashboard/route-table.ts') ||
       sourcePath.startsWith('src/workers/test-') ||
       sourcePath.includes('/__tests__/') ||
       sourcePath.includes('/__fixtures__/')
@@ -220,15 +217,6 @@ await Bun.build({
   minify: true,
 });
 
-// Dashboard (Svelte SPA for /ui)
-await Bun.build({
-  entrypoints: ['./src/dashboard/index.html'],
-  outdir: './dist/dashboard',
-  target: 'browser',
-  minify: true,
-  plugins: [sveltePlugin],
-});
-
 await $`bunx tsc --declaration --emitDeclarationOnly --project tsconfig.build.json`;
 
 async function removePackagedArtifactLeaks(): Promise<void> {
@@ -248,19 +236,6 @@ async function removePackagedArtifactLeaks(): Promise<void> {
       await $`rm -rf ${artifactPath}`;
     }
   }
-
-  const dashboardGlob = new Bun.Glob('dist/dashboard/**/*.{js,d.ts}');
-  for await (const artifactPath of dashboardGlob.scan('.')) {
-    const allowedDashboardArtifact =
-      artifactPath === 'dist/dashboard/index.js' ||
-      artifactPath === 'dist/dashboard/route-table.js' ||
-      artifactPath === 'dist/dashboard/route-table.d.ts' ||
-      /^dist\/dashboard\/chunk-[^/]+\.(?:js|d\.ts)$/.test(artifactPath);
-
-    if (!allowedDashboardArtifact) {
-      await $`rm -f ${artifactPath}`;
-    }
-  }
 }
 
 await removePackagedArtifactLeaks();
@@ -278,11 +253,11 @@ await removePackagedArtifactLeaks();
 // first, because `tsc` emits JSDoc into `.d.ts` files — a shipped doc example
 // like `import { JSDOM } from 'jsdom'` is a mention, not a real dependency, and
 // must not fail the build. The forbidden set is curated rather than derived
-// from every devDependency: several devDependencies (better-sqlite3, svelte,
-// valibot) are deliberately present in dist/, so a blanket "no devDependency in
-// dist" rule would false-positive on them. These three are the test-only
-// modules with no legitimate path into shipped output; add to the list if a new
-// test-only or build-only runtime dependency is introduced.
+// from every devDependency: several devDependencies (better-sqlite3, valibot)
+// are deliberately present in dist/, so a blanket "no devDependency in dist"
+// rule would false-positive on them. These packages are test-only or
+// build-only modules with no legitimate path into shipped output; add to the
+// list if a new test-only or build-only runtime dependency is introduced.
 async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
   const forbiddenPackageRoots = [
     'bun:test',
