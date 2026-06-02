@@ -50,7 +50,7 @@ export function normalizeWorkerJsonValue(value: unknown): RemoteWorkerJsonValue 
 export function resolveActivityTable(
   options: ActivityTableSource,
 ): Record<string, RemoteWorkerActivityFunction> {
-  if ('activities' in options) {
+  if (Object.prototype.hasOwnProperty.call(options, 'activities')) {
     throw new Error(
       'RemoteWorker no longer accepts `activities`; declare your activities under `workflows` instead.',
     );

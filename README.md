@@ -304,7 +304,7 @@ const worker = new RemoteWorker({
   },
 });
 
-await worker.start();
+await worker.connect();
 ```
 
 ### Browser Support
