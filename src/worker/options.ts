@@ -8,24 +8,16 @@ import {
   type RegisterMessage,
   type RemoteWorkerCapabilities,
 } from './protocol.ts';
-import type {
-  RemoteWorkerActivityFunction,
-  RemoteWorkerWorkflowDefinition,
-} from './workflow-activity-binding.ts';
+import type { RemoteWorkerWorkflowDefinition } from './workflow-activity-binding.ts';
 
 /**
  * Options accepted by `new RemoteWorker(...)`.
  *
- * Workers may advertise their activities in two equivalent ways:
- *
- *   1. **Preferred — `workflows`**: a map of `workflowType → { name, activities }`.
- *      The SDK builds the qualified `${workflowType}.${activityName}` table that
- *      protocol v2 expects and validates that each outer key matches the inner
- *      `workflow.name`. This is the API the engine-side builder produces.
- *   2. **Legacy — `activities`**: a flat map whose keys are already qualified
- *      names. Useful for tests and ad-hoc workers that don't use the builder.
- *
- * Exactly one of `workflows` / `activities` must be provided.
+ * A worker advertises its activities through `workflows`: a map of
+ * `workflowType → { name, activities }`. The SDK builds the qualified
+ * `${workflowType}.${activityName}` table that the protocol expects and
+ * validates that each outer key matches the inner `workflow.name`. This is the
+ * API the engine-side builder produces, and it is required.
  */
 export interface RemoteWorkerOptions {
   serverUrl: string;
@@ -33,13 +25,9 @@ export interface RemoteWorkerOptions {
   /**
    * Map of workflow type → workflow definition. The SDK produces qualified
    * activity names from this map and validates name grammar + key/name match.
+   * This is the single, required activity-advertisement input.
    */
-  workflows?: Record<string, RemoteWorkerWorkflowDefinition>;
-  /**
-   * Flat map of qualified activity name → executor. When supplied without
-   * `workflows`, the worker advertises these names verbatim.
-   */
-  activities?: Record<string, RemoteWorkerActivityFunction>;
+  workflows: Record<string, RemoteWorkerWorkflowDefinition>;
   concurrency?: number; // default: 10
   queue?: string; // default: 'default'
   disconnectTimeoutMs?: number; // default: 30_000

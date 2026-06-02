@@ -9,10 +9,17 @@ import {
   type RemoteWorkerWorkflowDefinition,
 } from './workflow-activity-binding.ts';
 
-/** The subset of worker options that determines the advertised activity table. */
+/**
+ * The subset of worker options that determines the advertised activity table.
+ *
+ * `workflows` is required on the public {@link RemoteWorkerOptions}. It stays
+ * optional here so {@link resolveActivityTable} can defend against untyped or
+ * JavaScript callers that omit it and throw a clear construction error rather
+ * than reading `undefined`. This optionality must not leak into the public
+ * constructor type.
+ */
 export type ActivityTableSource = {
   workflows?: Record<string, RemoteWorkerWorkflowDefinition>;
-  activities?: Record<string, RemoteWorkerActivityFunction>;
 };
 
 /**
@@ -33,27 +40,25 @@ export function normalizeWorkerJsonValue(value: unknown): RemoteWorkerJsonValue 
  *
  * Centralises the precondition checks so name-grammar violations and
  * key/name mismatches fail fast at construction time, before any WebSocket
- * connection is opened. Exactly one of `workflows` / `activities` must be set.
+ * connection is opened. `workflows` is required.
+ *
+ * The removed `activities` alias is rejected actively rather than ignored: an
+ * untyped or JavaScript caller that still passes it (especially alongside an
+ * empty `workflows: {}`) would otherwise build a worker that silently drops part
+ * of its configuration, so we fail loudly instead.
  */
 export function resolveActivityTable(
   options: ActivityTableSource,
 ): Record<string, RemoteWorkerActivityFunction> {
-  const hasWorkflows = options.workflows !== undefined;
-  const hasActivities = options.activities !== undefined;
-  if (hasWorkflows && hasActivities) {
+  if (Object.prototype.hasOwnProperty.call(options, 'activities')) {
     throw new Error(
-      'RemoteWorker accepts either `workflows` or `activities`, not both — `workflows` is the canonical entry; remove `activities` when migrating.',
+      'RemoteWorker no longer accepts `activities`; declare your activities under `workflows` instead.',
     );
   }
-  if (!hasWorkflows && !hasActivities) {
+  if (options.workflows === undefined || options.workflows === null) {
     throw new Error(
-      'RemoteWorker requires either `workflows` (preferred) or `activities` (legacy) — both were omitted.',
+      'RemoteWorker requires `workflows` — a map of workflow type → { name, activities }.',
     );
   }
-  if (options.workflows !== undefined) {
-    return buildQualifiedActivityTable(options.workflows);
-  }
-  // Legacy entry: callers pre-qualified the activity names themselves. We
-  // still trust the keys verbatim — Phase 5 sweeps these call sites.
-  return { ...options.activities };
+  return buildQualifiedActivityTable(options.workflows);
 }

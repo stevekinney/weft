@@ -63,9 +63,15 @@ async function readResolvedRecord(engine: Engine, operationId: string): Promise<
 function installRemoteWorkerDispatcher(engine: Engine, server: WeftServer): void {
   const dispatcher = {
     async execute(request: ActivityExecutionRequest): Promise<ActivityExecutionResult> {
+      // This bridge maps the engine-local bare activity name to the remote
+      // worker's advertised qualified name. The worker below registers its
+      // activities under the `greeting` workflow type, so the worker advertises
+      // (and matches against) `greeting.${activity}`. The engine never qualifies
+      // names itself — qualification is the dispatch caller's responsibility.
+      const advertisedActivityName = `greeting.${request.activityName}`;
       const dispatched = await server.dispatchTask({
         operationId: request.operationId,
-        activityName: request.activityName,
+        activityName: advertisedActivityName,
         input: request.input,
         workflowId: 'parity-remote-workflow-id',
       });
@@ -194,13 +200,18 @@ describe('durable state, remote worker, and testing-harness parity', () => {
     remoteWorker = new RemoteWorker({
       serverUrl: `${server.url.replace(/^http/, 'ws')}/v1/tasks/default/stream`,
       workerId: 'parity-remote-worker',
-      activities: {
-        formatGreeting: async (input: unknown) => {
-          executedInputs.push(input);
-          return `Hello, ${(input as { name: string }).name}`;
-        },
-        failGreeting: async () => {
-          throw new Error('remote greeting failed');
+      workflows: {
+        greeting: {
+          name: 'greeting',
+          activities: {
+            formatGreeting: async (input: unknown) => {
+              executedInputs.push(input);
+              return `Hello, ${(input as { name: string }).name}`;
+            },
+            failGreeting: async () => {
+              throw new Error('remote greeting failed');
+            },
+          },
         },
       },
       concurrency: 1,
@@ -240,11 +251,11 @@ describe('durable state, remote worker, and testing-harness parity', () => {
     const resolvedOperations = await Array.fromAsync(engine.storage.scan('op:resolved:'));
     const completedOperation = resolvedOperations
       .map(([, value]) => decode(value) as ResolvedRecord)
-      .find((record) => record.activityName === 'formatGreeting');
+      .find((record) => record.activityName === 'greeting.formatGreeting');
     expect(completedOperation).toMatchObject({
       status: 'completed',
       value: 'Hello, Ada',
-      activityName: 'formatGreeting',
+      activityName: 'greeting.formatGreeting',
       workflowId: 'parity-remote-workflow-id',
       workerId: 'parity-remote-worker',
     });
@@ -264,11 +275,11 @@ describe('durable state, remote worker, and testing-harness parity', () => {
     const finalResolvedOperations = await Array.fromAsync(engine.storage.scan('op:resolved:'));
     const failedOperation = finalResolvedOperations
       .map(([, value]) => decode(value) as ResolvedRecord)
-      .find((record) => record.activityName === 'failGreeting');
+      .find((record) => record.activityName === 'greeting.failGreeting');
     expect(failedOperation).toMatchObject({
       status: 'failed',
       error: expect.stringContaining('remote greeting failed'),
-      activityName: 'failGreeting',
+      activityName: 'greeting.failGreeting',
       workflowId: 'parity-remote-workflow-id',
       workerId: 'parity-remote-worker',
     });

@@ -9,17 +9,24 @@ Your workflow engine runs on one machine, but your activities need to run on GPU
 
 A `RemoteWorker` connects to the server, registers its available activities and concurrency capacity, then waits for task assignments.
 
+A worker advertises its activities through a `workflows` map: each entry pairs a workflow type with that workflow's activity implementations. The SDK builds the qualified `${workflowType}.${activityName}` names the protocol expects (so the `media` workflow's `transcribe` activity is advertised as `media.transcribe`) and validates that each map key matches the inner `workflow.name`.
+
 ```typescript
 import { RemoteWorker } from '@lostgradient/weft';
 
 const worker = new RemoteWorker({
   serverUrl: 'wss://weft-server:7233/api/v1/tasks/default/stream',
-  activities: {
-    transcribe: async (input) => {
-      /* ... */
-    },
-    generateThumbnail: async (input) => {
-      /* ... */
+  workflows: {
+    media: {
+      name: 'media',
+      activities: {
+        transcribe: async (input) => {
+          /* ... */
+        },
+        generateThumbnail: async (input) => {
+          /* ... */
+        },
+      },
     },
   },
   concurrency: 5,
@@ -40,7 +47,10 @@ import type { ActivityInterceptor } from '@lostgradient/weft';
 interface RemoteWorkerOptions {
   serverUrl: string;
   workerId?: string; // default: crypto.randomUUID()
-  activities: Record<string, (input: unknown) => Promise<unknown>>;
+  workflows: Record<
+    string,
+    { name: string; activities: Record<string, (input: unknown) => Promise<unknown>> }
+  >;
   concurrency?: number; // default: 10
   queue?: string; // default: 'default'
   disconnectTimeoutMs?: number; // default: 30_000
@@ -58,7 +68,7 @@ When the engine needs to execute an activity, the server finds a worker that has
 {
   "type": "task",
   "operationId": "abc-123",
-  "activityName": "transcribe",
+  "activityName": "media.transcribe",
   "input": { "audioUrl": "..." }
 }
 ```
@@ -104,9 +114,14 @@ const loggingInterceptor: ActivityInterceptor = {
 
 const worker = new RemoteWorker({
   serverUrl: 'wss://weft-server:7233/api/v1/tasks/default/stream',
-  activities: {
-    transcribe: async (input) => {
-      /* ... */
+  workflows: {
+    media: {
+      name: 'media',
+      activities: {
+        transcribe: async (input) => {
+          /* ... */
+        },
+      },
     },
   },
   interceptors: [loggingInterceptor],
@@ -137,8 +152,13 @@ const { interceptor } = createObservabilityInterceptors();
 
 const worker = new RemoteWorker({
   serverUrl: 'wss://weft-server:7233/api/v1/tasks/default/stream',
-  activities: {
-    /* ... */
+  workflows: {
+    media: {
+      name: 'media',
+      activities: {
+        /* ... */
+      },
+    },
   },
   interceptors: [interceptor],
 });

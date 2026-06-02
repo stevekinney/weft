@@ -35,6 +35,66 @@ function median(values: number[]): number {
   return sorted[Math.floor(sorted.length / 2)]!;
 }
 
+const BATCH_WRITE_TOTAL = 25_000;
+const BATCH_WRITE_BATCH_SIZE = 500;
+
+/**
+ * Run the shared batch-write workload used by both benchmark call sites and
+ * return its measured throughput. This owns the workload so the two benchmarks
+ * cannot drift: a 100-write warmup (excluded from timing) primes WAL mode and
+ * prepared statements; every sample's batches are pre-generated before any
+ * timing starts; `performance.now()` brackets only the `storage.batch` calls;
+ * and each batch object is consumed exactly once. Both call sites measure the
+ * same total writes, batch size, sample count, and `wf:{sample}:{n}:ckpt` key
+ * pattern.
+ */
+async function runBatchWriteBenchmark(
+  storage: BunSQLiteStorage,
+  value: Uint8Array,
+): Promise<{ medianWritesPerSecond: number; writesPerSecondSamples: number[] }> {
+  // Warm up: small batch to trigger WAL mode and prime prepared statements.
+  await storage.batch(
+    Array.from({ length: 100 }, (_, index) => ({
+      type: 'put' as const,
+      key: `warmup:${index}`,
+      value,
+    })),
+  );
+
+  const totalWrites = BATCH_WRITE_TOTAL;
+  const batchSize = BATCH_WRITE_BATCH_SIZE;
+  const batches = totalWrites / batchSize;
+
+  // Pre-generate each sample's batch operations so timing reflects storage
+  // throughput rather than key generation or object allocation.
+  const sampleBatches: BatchOperation[][][] = Array.from(
+    { length: BATCH_WRITE_SAMPLE_SIZE },
+    (_sample, sampleIndex) =>
+      Array.from({ length: batches }, (_batch, batchIndex) =>
+        Array.from({ length: batchSize }, (_item, itemIndex) => ({
+          type: 'put' as const,
+          key: `wf:${sampleIndex}:${String(batchIndex * batchSize + itemIndex).padStart(10, '0')}:ckpt`,
+          value,
+        })),
+      ),
+  );
+
+  const writesPerSecondSamples: number[] = [];
+  for (const batchesForSample of sampleBatches) {
+    const start = performance.now();
+    for (const batch of batchesForSample) {
+      await storage.batch(batch);
+    }
+    const elapsed = performance.now() - start;
+    writesPerSecondSamples.push((totalWrites / elapsed) * 1000);
+  }
+
+  return {
+    medianWritesPerSecond: Math.round(median(writesPerSecondSamples)),
+    writesPerSecondSamples,
+  };
+}
+
 describe('BunSQLiteStorage benchmark', () => {
   const fixtureCleanups: Array<() => void> = [];
 
@@ -59,52 +119,17 @@ describe('BunSQLiteStorage benchmark', () => {
     const storage = createStorage();
     const value = generateCheckpointValue();
 
-    // Warm up: small batch to trigger WAL mode and prime prepared statements.
-    await storage.batch(
-      Array.from({ length: 100 }, (_, index) => ({
-        type: 'put' as const,
-        key: `warmup:${index}`,
-        value,
-      })),
+    const { medianWritesPerSecond, writesPerSecondSamples } = await runBatchWriteBenchmark(
+      storage,
+      value,
     );
-
-    const totalWrites = 25_000;
-    const batchSize = 500;
-    const batches = totalWrites / batchSize;
-
-    // Pre-generate each sample's batch operations so timing reflects storage
-    // throughput rather than key generation or object allocation.
-    const sampleBatches: BatchOperation[][][] = Array.from(
-      { length: BATCH_WRITE_SAMPLE_SIZE },
-      (_sample, sampleIndex) =>
-        Array.from({ length: batches }, (_batch, batchIndex) =>
-          Array.from({ length: batchSize }, (_item, itemIndex) => ({
-            type: 'put' as const,
-            key: `wf:${sampleIndex}:${String(batchIndex * batchSize + itemIndex).padStart(10, '0')}:ckpt`,
-            value,
-          })),
-        ),
-    );
-
-    const writesPerSecondSamples: number[] = [];
-
-    for (const batchesForSample of sampleBatches) {
-      const start = performance.now();
-      for (const batch of batchesForSample) {
-        await storage.batch(batch);
-      }
-      const elapsed = performance.now() - start;
-      writesPerSecondSamples.push((totalWrites / elapsed) * 1000);
-    }
-
-    const medianWritesPerSecond = Math.round(median(writesPerSecondSamples));
 
     console.log(
       [
         `\n  SQLite batch write benchmark:`,
-        `    Total writes:    ${totalWrites.toLocaleString()}`,
+        `    Total writes:    ${BATCH_WRITE_TOTAL.toLocaleString()}`,
         `    Value size:      ${value.byteLength} bytes`,
-        `    Batch size:      ${batchSize.toLocaleString()}`,
+        `    Batch size:      ${BATCH_WRITE_BATCH_SIZE.toLocaleString()}`,
         `    Samples:         ${writesPerSecondSamples.map((sample) => Math.round(sample).toLocaleString()).join(', ')}`,
         `    Median writes/sec:${medianWritesPerSecond.toLocaleString()}`,
         `    Target:          ${TARGET_WRITES_PER_SECOND.toLocaleString()}`,
@@ -120,7 +145,7 @@ describe('BunSQLiteStorage benchmark', () => {
     expect(first).toEqual(value);
 
     const last = await storage.get(
-      `wf:${lastSamplePrefix}:${String(totalWrites - 1).padStart(10, '0')}:ckpt`,
+      `wf:${lastSamplePrefix}:${String(BATCH_WRITE_TOTAL - 1).padStart(10, '0')}:ckpt`,
     );
     expect(last).toEqual(value);
 
@@ -133,40 +158,7 @@ describe('BunSQLiteStorage benchmark', () => {
       const storage = createStorage();
       const value = generateCheckpointValue();
 
-      await storage.batch(
-        Array.from({ length: 100 }, (_, index) => ({
-          type: 'put' as const,
-          key: `warmup:${index}`,
-          value,
-        })),
-      );
-
-      const totalWrites = 25_000;
-      const batchSize = 500;
-      const batches = totalWrites / batchSize;
-      const sampleBatches: BatchOperation[][][] = Array.from(
-        { length: BATCH_WRITE_SAMPLE_SIZE },
-        (_sample, sampleIndex) =>
-          Array.from({ length: batches }, (_batch, batchIndex) =>
-            Array.from({ length: batchSize }, (_item, itemIndex) => ({
-              type: 'put' as const,
-              key: `wf:${sampleIndex}:${String(batchIndex * batchSize + itemIndex).padStart(10, '0')}:ckpt`,
-              value,
-            })),
-          ),
-      );
-      const writesPerSecondSamples: number[] = [];
-
-      for (const batchesForSample of sampleBatches) {
-        const start = performance.now();
-        for (const batch of batchesForSample) {
-          await storage.batch(batch);
-        }
-        const elapsed = performance.now() - start;
-        writesPerSecondSamples.push((totalWrites / elapsed) * 1000);
-      }
-
-      const medianWritesPerSecond = Math.round(median(writesPerSecondSamples));
+      const { medianWritesPerSecond } = await runBatchWriteBenchmark(storage, value);
       expect(medianWritesPerSecond).toBeGreaterThanOrEqual(TARGET_WRITES_PER_SECOND);
 
       storage[Symbol.dispose]();

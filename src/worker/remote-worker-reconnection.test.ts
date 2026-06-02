@@ -354,10 +354,15 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
       serverUrl: setup.workerUrl,
       workerId: 'sdk-worker-a',
       maxBufferedResults: 0,
-      activities: {
-        echo: async (input: unknown) => {
-          activityRan = true;
-          return input;
+      workflows: {
+        orders: {
+          name: 'orders',
+          activities: {
+            echo: async (input: unknown) => {
+              activityRan = true;
+              return input;
+            },
+          },
         },
       },
     });
@@ -368,7 +373,9 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
     const operationId = 'backpressure-redelivery-op';
     void setup.server.dispatchTask({
       operationId,
-      activityName: 'echo',
+      // The SDK worker advertises the qualified `orders.echo` name; the raw
+      // worker-B below registers the same name so the redelivery routes to it.
+      activityName: 'orders.echo',
       input: { value: 'v' },
       visibilityTimeout: 5_000,
     });
@@ -383,7 +390,9 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
     expect(activityRan).toBe(false);
 
     // worker-B registers and receives the redelivery after A's lease expires.
-    const workerB = await connectAndRegisterWorker(setup, 'worker-b');
+    const workerB = await connectAndRegisterWorker(setup, 'worker-b', {
+      activities: ['orders.echo'],
+    });
     const dispatchToB = await workerB.nextServerMessage(isTask, { timeoutMs: 5_000 });
     if (!isTask(dispatchToB)) throw new Error('expected task on B');
     expect(dispatchToB.operationId).toBe(operationId);

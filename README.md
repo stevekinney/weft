@@ -304,10 +304,15 @@ import { RemoteWorker } from '@lostgradient/weft';
 
 const worker = new RemoteWorker({
   serverUrl: 'wss://weft.internal:7233',
-  activities: { chargeCard, reserveInventory, sendConfirmation },
+  workflows: {
+    orderFulfillment: {
+      name: 'orderFulfillment',
+      activities: { chargeCard, reserveInventory, sendConfirmation },
+    },
+  },
 });
 
-await worker.start();
+await worker.connect();
 ```
 
 ### Browser Support

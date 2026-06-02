@@ -84,10 +84,15 @@ function createWorkerWebSocket(
  *
  * using worker = new RemoteWorker({
  *   serverUrl: 'ws://localhost:3000',
- *   activities: {
- *     sendEmail: async (input: unknown) => {
- *       console.log('sending', input);
- *       return 'sent';
+ *   workflows: {
+ *     notifications: {
+ *       name: 'notifications',
+ *       activities: {
+ *         sendEmail: async (input: unknown) => {
+ *           console.log('sending', input);
+ *           return 'sent';
+ *         },
+ *       },
  *     },
  *   },
  *   concurrency: 5,
@@ -101,8 +106,7 @@ export class RemoteWorker implements Disposable {
   /**
    * Resolved at construction time so name-grammar / key-vs-name violations
    * fail fast at the SDK entry instead of mid-dispatch. Keys are qualified
-   * activity names (`${workflowType}.${activityName}`) when `workflows` was
-   * supplied, or verbatim when only `activities` was supplied.
+   * activity names (`${workflowType}.${activityName}`) built from `workflows`.
    */
   #activityTable: Record<string, RemoteWorkerActivityFunction>;
   #ws: WebSocket | null;

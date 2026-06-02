@@ -63,6 +63,31 @@ const engine = await Engine.create({
 
 The constructor and `register()` remain available for tests and dynamic plugin loading.
 
+## `RemoteWorker` Requires `workflows`
+
+`RemoteWorker` no longer accepts the flat `activities` option. Declare your activities under a required `workflows` map instead — each entry pairs a workflow type with that workflow's activity implementations:
+
+```typescript partial
+// Before
+const worker = new RemoteWorker({
+  serverUrl: 'wss://weft.internal:7233',
+  activities: { sendEmail, chargeCard },
+});
+
+// After
+const worker = new RemoteWorker({
+  serverUrl: 'wss://weft.internal:7233',
+  workflows: {
+    notifications: {
+      name: 'notifications',
+      activities: { sendEmail, chargeCard },
+    },
+  },
+});
+```
+
+The SDK advertises each activity under its qualified name `${workflowType}.${activityName}` (so `sendEmail` above becomes `notifications.sendEmail`), and validates that each map key matches the inner `workflow.name`. Any code that dispatches to the worker — including `server.dispatchTask({ activityName })` and the task frames the engine sends — must use that qualified name. Passing the removed `activities` option now throws at construction rather than being silently ignored. `LongPollWorker` is unaffected: it keeps its own `activities` option.
+
 ## AI Agent Surface Removal
 
 Weft no longer ships an AI agent surface. Agent loops, declarations, coordination primitives, provider contracts, tool-call types, and agent events moved out of the core package. Weft now focuses on durable execution primitives: workflows, activities, checkpoints, signals, updates, shared state, and human review.
