@@ -53,8 +53,14 @@ export type EngineCreateOptions<
   allowLegacyData?: boolean;
 } & (
     | {
-        /** Recover stored running workflows after registration. */
-        recover: true;
+        /**
+         * Recover stored running workflows after registration. Defaults to
+         * `true`: a fresh engine booting against durable storage resumes any
+         * workflows left in flight by a previous process. Pass `recover: false`
+         * to opt out (tests, `ScopedStorage` isolation, pre-migration
+         * inspection).
+         */
+        recover?: true | undefined;
         /**
          * Forwarded to `Engine.recoverAll`. Only use this during rolling
          * deploys or explicit storage migrations.
@@ -62,9 +68,9 @@ export type EngineCreateOptions<
         acknowledgeUnknownWorkflowTypes?: boolean;
       }
     | {
-        /** Whether to recover stored running workflows after registration. Defaults to `false`. */
-        recover?: false | undefined;
-        /** Only valid when `recover: true` is also set. */
+        /** Opt out of recovering stored running workflows after registration. */
+        recover: false;
+        /** Only valid when recovery runs (the default, or `recover: true`). */
         acknowledgeUnknownWorkflowTypes?: never;
       }
   );

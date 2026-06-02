@@ -1,6 +1,6 @@
 # Recovery and Deploys
 
-Weft promises that workflows survive process death. The mechanism is `engine.recoverAll()` — at boot, the engine scans storage for workflows that were running when the previous process exited and resumes them. Call it directly on a manually-built engine, or pass `recover: true` to `Engine.create()` so recovery runs after definition registration.
+Weft promises that workflows survive process death. The mechanism is `engine.recoverAll()` — at boot, the engine scans storage for workflows that were running when the previous process exited and resumes them. `Engine.create()` runs recovery **by default** after registering definitions, so a fresh engine booting against durable storage picks up where the previous process left off. Pass `recover: false` to opt out (tests, `ScopedStorage` isolation, or inspecting a store before migrating it), or call `engine.recoverAll()` directly on a manually-built engine. Durability — persisting each step before it commits — is always on regardless of the `recover` setting; `recover` only controls whether this engine resumes that persisted work on boot.
 
 This guide is about what happens when recovery and your deploy lifecycle disagree — when storage holds workflows whose code is no longer in the new build, when you're rolling pods one at a time, or when you genuinely want to abandon old workflows and need to do it on purpose.
 
@@ -18,7 +18,6 @@ try {
   const engine = await Engine.create({
     storage: new SQLiteStorage('./weft.db'),
     workflows: { greet },
-    recover: true,
   });
 } catch (error) {
   if (error instanceof WorkflowTypeNotRegisteredForRecoveryError) {
@@ -53,7 +52,7 @@ The `Error.message` lists missing _type names_ (capped at ten with `+N more` pas
 
 Earlier versions of Weft silently skipped unregistered workflow types during recovery. The result: a deploy that accidentally dropped a workflow definition would boot cleanly, look healthy, and silently abandon every in-flight execution of that workflow type. The bug surfaced only when someone noticed a customer's order had been stuck in `running` for a week.
 
-The default has flipped because abandoned workflows are almost always a bug, not an intent. If you _do_ intend it — see the next section — you have to say so explicitly.
+Weft throws here rather than skipping because abandoned workflows are almost always a bug, not an intent. And because recovery now runs by default, this loud failure is exactly what surfaces the dropped-definition mistake on the very next boot. If you _do_ intend to skip unregistered types — see the next section — you have to say so explicitly.
 
 ## One engine per durable store
 

@@ -406,7 +406,7 @@ export class Engine<
         engine.register(definition);
       }
 
-      if (options.recover === true) {
+      if (options.recover !== false) {
         await engine.recoverAll(
           options.acknowledgeUnknownWorkflowTypes !== undefined
             ? { acknowledgeUnknownWorkflowTypes: options.acknowledgeUnknownWorkflowTypes }

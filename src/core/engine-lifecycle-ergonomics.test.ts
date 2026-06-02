@@ -70,7 +70,7 @@ describe('Engine lifecycle ergonomics', () => {
     expect(shouldEmitEngineLeakWarningForTesting()).toBe(true);
   });
 
-  it('requires explicit recovery for both new Engine and Engine.create', async () => {
+  it('recovers by default and opts out with recover: false', async () => {
     const storage = new MemoryStorage();
     const resumable = workflow({ name: 'resumable' }).execute(async function* (
       ctx: WorkflowContext,
@@ -86,18 +86,20 @@ describe('Engine lifecycle ergonomics', () => {
     await flush();
     original[Symbol.dispose]();
 
-    // Storage was populated by the legacy `new Engine({ storage })` path
-    // above, so opt into the migration path that stamps the schema-version
-    // sentinel for pre-sentinel data.
-    const createdWithoutRecovery = await Engine.create({ storage, allowLegacyData: true });
-    const unrecoveredState = await createdWithoutRecovery.get('recoverable-workflow');
-    expect(unrecoveredState?.status).toBe('running');
-    createdWithoutRecovery[Symbol.dispose]();
+    // `recover: false` opts out of the default recovery sweep, leaving the
+    // workflow dormant for inspection. The store was populated by the legacy
+    // `new Engine({ storage })` path above, so opt into the migration path
+    // that stamps the schema-version sentinel for pre-sentinel data.
+    const inspecting = await Engine.create({ storage, recover: false, allowLegacyData: true });
+    const dormantState = await inspecting.get('recoverable-workflow');
+    expect(dormantState?.status).toBe('running');
+    inspecting[Symbol.dispose]();
 
+    // Recovery is the default: a fresh engine that registers the workflow type
+    // resumes the in-flight workflow on construction without an explicit flag.
     const recovered = await Engine.create({
       storage,
       workflows: { resumable },
-      recover: true,
     });
     await recovered.signal('recoverable-workflow', 'release', 'ok');
     await expect(recovered.getHandle('recoverable-workflow').result()).resolves.toBe('done:ok');

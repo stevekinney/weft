@@ -140,6 +140,10 @@ The signal task must test duplicate `signalId` delivery for REST, JSON-RPC, and 
 
 ## Concurrent Resume And Checkpoint Ownership
 
+This track is the future **`MultiEngine`** capability: safe recovery when more than one engine process may drive the same durable store. It is **not yet implemented**. Until it lands, the supported model is a single engine process per durable store (see [Recovery and Deploys](../guides/recovery-and-deploys.md)), and the requirements below describe what the follow-up work must make true — not current behavior.
+
+There is intentionally **no public option** that claims safe concurrent recovery today. An earlier `requireConcurrentResumeSafety` flag only asserted `conditionalBatch` at the recovery boundary and was removed: it guarded the checkpoint _commit_ against corruption (a guarantee the CAS primitives already provide where it matters) but did nothing about the duplicate _execution_ — two owners both resuming a workflow and both running its next step — which is the actual hazard `MultiEngine` must solve with a fenced ownership claim acquired before execution.
+
 ### Current Behavior
 
 `commitCheckpoint()` appends checkpoint, event-log, timeline, and index operations, then commits them with `storage.batch()`. It does not compare the current checkpoint head before writing. Storage adapters report whether `conditionalBatch` is available, and `requireStorageCapability()` can fail fast for features that need it, but checkpoint commit does not currently require CAS.

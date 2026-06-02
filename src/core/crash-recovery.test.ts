@@ -888,4 +888,111 @@ describe('crash recovery', () => {
     const result = await handles[0]!.result();
     expect(result).toBe('sqlite-recovered');
   });
+
+  it('Engine.create recovers by default against durable storage and resumes a parked workflow', async () => {
+    const { BunSQLiteStorage } = await import('../storage/bun-sql.ts');
+
+    using storage = new BunSQLiteStorage(':memory:');
+
+    // The post-signal activity is the *observable resumed effect*: it only
+    // fires if the second engine actually drove the workflow past the park
+    // point, not if it merely read stored state.
+    let postSignalActivityCalls = 0;
+    function makeWorkflow() {
+      return workflow({ name: 'default-recover-parked' }).execute(async function* (ctx) {
+        const c = ctx;
+        const release = yield* c.waitForSignal<string>('release');
+        return yield* c.run(async () => {
+          postSignalActivityCalls += 1;
+          return `resumed:${release}`;
+        });
+      });
+    }
+
+    // First engine via Engine.create (stamps the schema-version sentinel so the
+    // recovering engine opens the store without a legacy-data opt-in). recover:
+    // false because the store is empty and there is nothing to resume yet.
+    const engine1 = await Engine.create({
+      storage,
+      workflows: { 'default-recover-parked': makeWorkflow() },
+      recover: false,
+    });
+    await engine1.start('default-recover-parked', null, { id: 'wf-default-recover' });
+    await flush();
+    expect(postSignalActivityCalls).toBe(0);
+    engine1[Symbol.dispose]();
+
+    // Second engine via Engine.create with NO `recover` field — recovery is the
+    // default, so the parked workflow must resume on construction.
+    const recovered = await Engine.create({
+      storage,
+      workflows: { 'default-recover-parked': makeWorkflow() },
+    });
+    await recovered.signal('wf-default-recover', 'release', 'go');
+    const result = await recovered.getHandle('wf-default-recover').result();
+    expect(result).toBe('resumed:go');
+    // The resumed effect actually executed exactly once.
+    expect(postSignalActivityCalls).toBe(1);
+    recovered[Symbol.dispose]();
+  });
+
+  it('Engine.create({ recover: false }) leaves a parked workflow dormant without executing its next step', async () => {
+    const { BunSQLiteStorage } = await import('../storage/bun-sql.ts');
+
+    using storage = new BunSQLiteStorage(':memory:');
+
+    let postSignalActivityCalls = 0;
+    function makeWorkflow() {
+      return workflow({ name: 'opt-out-parked' }).execute(async function* (ctx) {
+        const c = ctx;
+        const release = yield* c.waitForSignal<string>('release');
+        return yield* c.run(async () => {
+          postSignalActivityCalls += 1;
+          return `resumed:${release}`;
+        });
+      });
+    }
+
+    const engine1 = await Engine.create({
+      storage,
+      workflows: { 'opt-out-parked': makeWorkflow() },
+      recover: false,
+    });
+    await engine1.start('opt-out-parked', null, { id: 'wf-opt-out' });
+    await flush();
+    engine1[Symbol.dispose]();
+
+    // recover: false opts out — the workflow stays running in storage and no
+    // resumed effect fires, even though the engine registered the type.
+    const inspecting = await Engine.create({
+      storage,
+      workflows: { 'opt-out-parked': makeWorkflow() },
+      recover: false,
+    });
+    await flush();
+    const dormantState = await inspecting.get('wf-opt-out');
+    expect(dormantState?.status).toBe('running');
+    expect(postSignalActivityCalls).toBe(0);
+    inspecting[Symbol.dispose]();
+  });
+
+  it('Engine.create recovering by default throws on an unregistered stored type, suppressible with acknowledgeUnknownWorkflowTypes', async () => {
+    const storage = new MemoryStorage();
+    await seedStoredWorkflowState(storage, 'unknown-default-id', 'unknown-default-type', 'running');
+
+    // No `recover` field: recovery runs by default and the unregistered stored
+    // type makes the boot fail loudly rather than silently abandoning it.
+    await expect(Engine.create({ storage, allowLegacyData: true })).rejects.toBeInstanceOf(
+      WorkflowTypeNotRegisteredForRecoveryError,
+    );
+
+    // The escape hatch suppresses the throw and skips the unknown workflow.
+    const acknowledged = await Engine.create({
+      storage,
+      allowLegacyData: true,
+      acknowledgeUnknownWorkflowTypes: true,
+    });
+    expect(await acknowledged.get('unknown-default-id')).not.toBeNull();
+    acknowledged[Symbol.dispose]();
+  });
 });
