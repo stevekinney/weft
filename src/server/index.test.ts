@@ -2046,8 +2046,13 @@ describe('worker WebSocket protocol', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}/v1/tasks/default/stream`,
       workerId: 'remote-1',
-      activities: {
-        greet: async (input: unknown) => `Hello, ${String(input)}!`,
+      workflows: {
+        greeting: {
+          name: 'greeting',
+          activities: {
+            greet: async (input: unknown) => `Hello, ${String(input)}!`,
+          },
+        },
       },
       concurrency: 3,
     });
@@ -2058,13 +2063,13 @@ describe('worker WebSocket protocol', () => {
     // Server should have registered the worker
     expect(server.registry.size).toBe(1);
     expect(server.registry.getAll()[0]?.id).toBe('remote-1');
-    expect(server.registry.getAll()[0]?.activities).toEqual(['greet']);
+    expect(server.registry.getAll()[0]?.activities).toEqual(['greeting.greet']);
     expect(server.registry.getAll()[0]?.concurrency).toBe(3);
 
     // Dispatch a task and verify the worker processes it
     const dispatched = await server.dispatchTask({
       operationId: 'e2e-op-1',
-      activityName: 'greet',
+      activityName: 'greeting.greet',
       input: 'World',
     });
     expect(dispatched).toBe(true);
@@ -2421,8 +2426,13 @@ describe('queue-aware worker stream', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}/v1/tasks/billing/stream`,
       workerId: 'billing-remote',
-      activities: {
-        charge: async (input: unknown) => ({ charged: input }),
+      workflows: {
+        billing: {
+          name: 'billing',
+          activities: {
+            charge: async (input: unknown) => ({ charged: input }),
+          },
+        },
       },
       concurrency: 3,
       queue: 'billing',
@@ -2440,7 +2450,7 @@ describe('queue-aware worker stream', () => {
     // Dispatch to the billing queue
     const dispatched = await server.dispatchTask({
       operationId: 'billing-e2e',
-      activityName: 'charge',
+      activityName: 'billing.charge',
       input: 42,
       queue: 'billing',
     });
@@ -6579,8 +6589,13 @@ describe('header propagation in task dispatch', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}/v1/tasks/default/stream`,
       workerId: 'header-e2e-worker',
-      activities: {
-        echo: async (input: unknown) => input,
+      workflows: {
+        notifications: {
+          name: 'notifications',
+          activities: {
+            echo: async (input: unknown) => input,
+          },
+        },
       },
       interceptors: [interceptor],
       concurrency: 3,
@@ -6593,7 +6608,7 @@ describe('header propagation in task dispatch', () => {
 
     const dispatched = await server.dispatchTask({
       operationId: 'header-e2e-op-1',
-      activityName: 'echo',
+      activityName: 'notifications.echo',
       input: 'payload',
       headers: { 'x-trace-id': 'trace-e2e-789', 'x-custom': 'value-42' },
     });
@@ -6632,8 +6647,13 @@ describe('header propagation in task dispatch', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}/v1/tasks/default/stream`,
       workerId: 'header-e2e-no-headers',
-      activities: {
-        echo: async (input: unknown) => input,
+      workflows: {
+        notifications: {
+          name: 'notifications',
+          activities: {
+            echo: async (input: unknown) => input,
+          },
+        },
       },
       interceptors: [interceptor],
       concurrency: 3,
@@ -6644,7 +6664,7 @@ describe('header propagation in task dispatch', () => {
 
     await server.dispatchTask({
       operationId: 'header-e2e-no-op',
-      activityName: 'echo',
+      activityName: 'notifications.echo',
       input: 'payload',
     });
 

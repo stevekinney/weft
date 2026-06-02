@@ -40,7 +40,7 @@ import { RemoteWorker } from '@lostgradient/weft';
 
 using worker = new RemoteWorker({
   serverUrl: 'ws://localhost:7233/api/v1/tasks/default/stream',
-  activities: { sendEmail },
+  workflows: { notifications: { name: 'notifications', activities: { sendEmail } } },
   concurrency: 5,
   queue: 'default',
 });

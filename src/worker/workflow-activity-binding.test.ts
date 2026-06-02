@@ -110,21 +110,27 @@ describe('RemoteWorker workflows option', () => {
     worker[Symbol.dispose]();
   });
 
-  it('rejects when both `workflows` and `activities` are supplied', () => {
+  it('no longer accepts an `activities` option (alias removed)', () => {
+    // The flat `activities` alias was removed in favour of the required
+    // `workflows` map. A consumer that passes it should not typecheck.
     expect(
       () =>
         new RemoteWorker({
           serverUrl: 'ws://localhost:0',
           workflows: { welcome: { name: 'welcome', activities: {} } },
+          // @ts-expect-error `activities` is no longer a RemoteWorker option.
           activities: { 'welcome.formatGreeting': async () => 'hi' },
         }),
-    ).toThrow(/either `workflows` or `activities`/);
+    ).not.toThrow();
   });
 
-  it('rejects when neither `workflows` nor `activities` is supplied', () => {
-    expect(() => new RemoteWorker({ serverUrl: 'ws://localhost:0' })).toThrow(
-      /requires either `workflows`/,
-    );
+  it('rejects when `workflows` is omitted', () => {
+    // Cast through `unknown` so the runtime guard is exercised without an
+    // excess-property typecheck firing first; `workflows` is required.
+    const optionsWithoutWorkflows = {
+      serverUrl: 'ws://localhost:0',
+    } as unknown as ConstructorParameters<typeof RemoteWorker>[0];
+    expect(() => new RemoteWorker(optionsWithoutWorkflows)).toThrow(/requires `workflows`/);
   });
 
   it('propagates name-grammar rejection from the worker SDK entry', () => {

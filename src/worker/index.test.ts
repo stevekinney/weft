@@ -64,6 +64,20 @@ async function waitForTaskResult(messages: any[], label: string): Promise<any> {
   return taskResult;
 }
 
+/**
+ * Wrap a flat `activityName → executor` map in the `workflows` shape the
+ * RemoteWorker constructor now requires. The worker advertises and dispatches
+ * each activity under the qualified name `${type}.${activityName}`, so tests
+ * that assert on advertised names or dispatch by name use that qualified form
+ * (e.g. `orders.processOrder`).
+ */
+function workflowsOf(
+  activities: Record<string, (input: any, context?: any) => Promise<unknown>>,
+  type = 'orders',
+): Record<string, { name: string; activities: typeof activities }> {
+  return { [type]: { name: type, activities } };
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -83,9 +97,9 @@ describe('RemoteWorker', () => {
   it('constructor stores options with defaults', () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     // Verify it was created without throwing
@@ -98,9 +112,9 @@ describe('RemoteWorker', () => {
   it('connected is false before connect', () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     expect(worker.connected).toBe(false);
@@ -111,9 +125,9 @@ describe('RemoteWorker', () => {
   it('inFlight starts at 0', () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     expect(worker.inFlight).toBe(0);
@@ -124,9 +138,9 @@ describe('RemoteWorker', () => {
   it('[Symbol.dispose] is callable', () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     expect(() => worker[Symbol.dispose]()).not.toThrow();
@@ -135,9 +149,9 @@ describe('RemoteWorker', () => {
   it('[Symbol.dispose] is idempotent', () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     worker[Symbol.dispose]();
@@ -156,9 +170,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'test-worker-1',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
       concurrency: 5,
       queue: 'test-queue',
     });
@@ -177,7 +191,7 @@ describe('RemoteWorker', () => {
     expect(registerMessage).toBeDefined();
     expect(registerMessage.protocolVersion).toBe(2);
     expect(registerMessage.workerId).toBe('test-worker-1');
-    expect(registerMessage.activities).toEqual(['processOrder']);
+    expect(registerMessage.activities).toEqual(['orders.processOrder']);
     expect(registerMessage.concurrency).toBe(5);
     expect(registerMessage.queue).toBe('test-queue');
 
@@ -196,9 +210,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'identity-worker',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
       deploymentName: 'payments',
       buildId: 'build-2026-05-12',
       runtimeVersion: 'bun-1.2.13',
@@ -256,9 +270,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'rejected-worker',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     await expect(worker.connect()).rejects.toThrow('Unsupported protocol');
@@ -279,9 +293,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'close-before-ack-worker',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     await expect(worker.connect()).rejects.toThrow(
@@ -303,9 +317,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'dispose-before-ack-worker',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     const connectPromise = worker.connect();
@@ -357,9 +371,9 @@ describe('RemoteWorker', () => {
       const worker = new RemoteWorker({
         serverUrl: `ws://localhost:${server.port}`,
         workerId: 'ack-gated-heartbeat-worker',
-        activities: {
+        workflows: workflowsOf({
           processOrder: async (input) => input,
-        },
+        }),
       });
 
       const connectPromise = worker.connect();
@@ -376,7 +390,7 @@ describe('RemoteWorker', () => {
           protocolVersion: 2,
           workerId: 'ack-gated-heartbeat-worker',
           queue: 'default',
-          activities: ['processOrder'],
+          activities: ['orders.processOrder'],
           concurrency: 10,
         }),
       );
@@ -396,9 +410,9 @@ describe('RemoteWorker', () => {
   it('connect() rejects when connection fails', async () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:1',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     await expect(worker.connect()).rejects.toThrow();
@@ -410,9 +424,9 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     await worker.connect();
@@ -425,9 +439,9 @@ describe('RemoteWorker', () => {
   it('disconnect() is safe to call when not connected', async () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     // Should not throw
@@ -449,7 +463,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-1',
-              activityName: 'processOrder',
+              activityName: 'orders.processOrder',
               input: { orderId: 123 },
             }),
           );
@@ -460,9 +474,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'test-worker-2',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input: any) => ({ processed: true, orderId: input.orderId }),
-      },
+      }),
     });
 
     await worker.connect();
@@ -499,9 +513,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'test-worker-3',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     await worker.connect();
@@ -527,7 +541,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-3',
-              activityName: 'failingActivity',
+              activityName: 'orders.failingActivity',
               input: null,
             }),
           );
@@ -538,11 +552,11 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'test-worker-4',
-      activities: {
+      workflows: workflowsOf({
         failingActivity: async () => {
           throw new Error('activity crashed');
         },
-      },
+      }),
     });
 
     await worker.connect();
@@ -568,7 +582,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-4',
-              activityName: 'stringThrow',
+              activityName: 'orders.stringThrow',
               input: null,
             }),
           );
@@ -579,11 +593,11 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'test-worker-5',
-      activities: {
+      workflows: workflowsOf({
         stringThrow: async () => {
           throw 'string error';
         },
-      },
+      }),
     });
 
     await worker.connect();
@@ -610,7 +624,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-5',
-              activityName: 'slowActivity',
+              activityName: 'orders.slowActivity',
               input: null,
             }),
           );
@@ -620,12 +634,12 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: {
+      workflows: workflowsOf({
         slowActivity: async () => {
           await activityPromise;
           return 'done';
         },
-      },
+      }),
     });
 
     await worker.connect();
@@ -654,9 +668,9 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     await worker.connect();
@@ -688,9 +702,9 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     await worker.connect();
@@ -708,9 +722,9 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     await worker.connect();
@@ -752,7 +766,7 @@ describe('RemoteWorker', () => {
       const worker = new RemoteWorker({
         serverUrl: `ws://localhost:${server.port}`,
         workerId: 'heartbeat-test',
-        activities: {},
+        workflows: {},
       });
 
       await worker.connect();
@@ -781,9 +795,9 @@ describe('RemoteWorker', () => {
   it('shuttingDown is false initially', () => {
     const worker = new RemoteWorker({
       serverUrl: 'ws://localhost:8080',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     expect(worker.shuttingDown).toBe(false);
@@ -808,9 +822,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'shutdown-test',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     await worker.connect();
@@ -845,7 +859,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-shutdown-1',
-              activityName: 'slowActivity',
+              activityName: 'orders.slowActivity',
               input: null,
             }),
           );
@@ -861,12 +875,12 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'graceful-shutdown-test',
-      activities: {
+      workflows: workflowsOf({
         slowActivity: async () => {
           await activityPromise;
           return 'done';
         },
-      },
+      }),
     });
 
     await worker.connect();
@@ -925,7 +939,7 @@ describe('RemoteWorker', () => {
               JSON.stringify({
                 type: 'task',
                 operationId: 'op-post-shutdown',
-                activityName: 'processOrder',
+                activityName: 'orders.processOrder',
                 input: null,
               }),
             );
@@ -937,9 +951,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'ignore-post-shutdown-test',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     await worker.connect();
@@ -971,7 +985,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-timeout-1',
-              activityName: 'hangingActivity',
+              activityName: 'orders.hangingActivity',
               input: null,
             }),
           );
@@ -984,11 +998,11 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'disconnect-timeout-test',
-      activities: {
+      workflows: workflowsOf({
         hangingActivity: async () => {
           await neverResolves;
         },
-      },
+      }),
       disconnectTimeoutMs,
     });
 
@@ -1028,7 +1042,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-shutdown-timeout-1',
-              activityName: 'hangingActivity',
+              activityName: 'orders.hangingActivity',
               input: null,
             }),
           );
@@ -1046,11 +1060,11 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'graceful-shutdown-timeout-test',
-      activities: {
+      workflows: workflowsOf({
         hangingActivity: async () => {
           await neverResolves;
         },
-      },
+      }),
       disconnectTimeoutMs,
     });
 
@@ -1090,7 +1104,7 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: {},
+      workflows: {},
     });
 
     await worker.connect();
@@ -1108,9 +1122,9 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     await worker.connect();
@@ -1147,7 +1161,7 @@ describe('RemoteWorker', () => {
               JSON.stringify({
                 type: 'task',
                 operationId: 'op-post-reconnect',
-                activityName: 'processOrder',
+                activityName: 'orders.processOrder',
                 input: { orderId: 42 },
               }),
             );
@@ -1159,9 +1173,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'reconnect-after-shutdown-test',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     // First connection — server triggers shutdown
@@ -1194,9 +1208,9 @@ describe('RemoteWorker', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     await worker.connect();
@@ -1231,7 +1245,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-intercept-1',
-              activityName: 'greet',
+              activityName: 'orders.greet',
               input: 'world',
             }),
           );
@@ -1251,16 +1265,16 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'interceptor-test',
-      activities: {
+      workflows: workflowsOf({
         greet: async (input: unknown) => `hello ${String(input)}`,
-      },
+      }),
       interceptors: [interceptor],
     });
 
     await worker.connect();
     const taskResult = await waitForTaskResult(messages, 'intercepted task result');
 
-    expect(interceptorCalls).toEqual(['before:greet', 'after:greet']);
+    expect(interceptorCalls).toEqual(['before:orders.greet', 'after:orders.greet']);
 
     expect(taskResult.status).toBe('completed');
     expect(taskResult.value).toBe('hello world');
@@ -1281,7 +1295,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-modify-input',
-              activityName: 'echo',
+              activityName: 'orders.echo',
               input: 'original',
             }),
           );
@@ -1298,9 +1312,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'modify-input-test',
-      activities: {
+      workflows: workflowsOf({
         echo: async (input: unknown) => input,
-      },
+      }),
       interceptors: [interceptor],
     });
 
@@ -1327,7 +1341,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-headers',
-              activityName: 'echo',
+              activityName: 'orders.echo',
               input: 'data',
               headers: { 'x-trace-id': 'trace-abc', 'x-auth': 'token-xyz' },
             }),
@@ -1346,9 +1360,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'headers-test',
-      activities: {
+      workflows: workflowsOf({
         echo: async (input: unknown) => input,
-      },
+      }),
       interceptors: [interceptor],
     });
 
@@ -1378,7 +1392,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-no-interceptor',
-              activityName: 'double',
+              activityName: 'orders.double',
               input: 21,
             }),
           );
@@ -1390,9 +1404,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'no-interceptor-test',
-      activities: {
+      workflows: workflowsOf({
         double: async (input: unknown) => (input as number) * 2,
-      },
+      }),
     });
 
     await worker.connect();
@@ -1419,7 +1433,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-context-check',
-              activityName: 'echo',
+              activityName: 'orders.echo',
               input: 'test',
             }),
           );
@@ -1438,9 +1452,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'context-check-test',
-      activities: {
+      workflows: workflowsOf({
         echo: async (input: unknown) => input,
-      },
+      }),
       interceptors: [interceptor],
     });
 
@@ -1476,7 +1490,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-cancel-1',
-              activityName: 'cancellableActivity',
+              activityName: 'orders.cancellableActivity',
               input: null,
             }),
           );
@@ -1492,7 +1506,7 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'cancel-test-worker',
-      activities: {
+      workflows: workflowsOf({
         cancellableActivity: async (_input: unknown, context) => {
           taskStarted = true;
           // Wait indefinitely — the cancel should abort this via the signal
@@ -1502,7 +1516,7 @@ describe('RemoteWorker', () => {
             });
           });
         },
-      },
+      }),
     });
 
     await worker.connect();
@@ -1541,9 +1555,9 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'cancel-noop-test',
-      activities: {
+      workflows: workflowsOf({
         processOrder: async (input) => input,
-      },
+      }),
     });
 
     await worker.connect();
@@ -1572,7 +1586,7 @@ describe('RemoteWorker', () => {
             JSON.stringify({
               type: 'task',
               operationId: 'op-signal-check',
-              activityName: 'signalInspector',
+              activityName: 'orders.signalInspector',
               input: null,
             }),
           );
@@ -1583,12 +1597,12 @@ describe('RemoteWorker', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       workerId: 'signal-check-worker',
-      activities: {
+      workflows: workflowsOf({
         signalInspector: async (_input: unknown, context) => {
           receivedSignal = context?.signal;
           return 'done';
         },
-      },
+      }),
     });
 
     await worker.connect();
@@ -1764,7 +1778,7 @@ describe('RemoteWorker — connect() re-entrancy', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: { processOrder: async (input) => input },
+      workflows: workflowsOf({ processOrder: async (input) => input }),
     });
 
     const first = worker.connect();
@@ -1831,7 +1845,7 @@ describe('RemoteWorker — connect() re-entrancy', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: { processOrder: async (input) => input },
+      workflows: workflowsOf({ processOrder: async (input) => input }),
     });
 
     const first = worker.connect();
@@ -1860,7 +1874,7 @@ describe('RemoteWorker — connect() re-entrancy', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: { processOrder: async (input) => input },
+      workflows: workflowsOf({ processOrder: async (input) => input }),
     });
 
     await worker.connect();
@@ -1896,7 +1910,7 @@ describe('RemoteWorker — connect() re-entrancy', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: { processOrder: async (input) => input },
+      workflows: workflowsOf({ processOrder: async (input) => input }),
     });
 
     const first = worker.connect();
@@ -1980,7 +1994,7 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-buffer',
-            activityName: 'slow',
+            activityName: 'orders.slow',
             input: null,
           }),
         );
@@ -1990,9 +2004,9 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: {
+      workflows: workflowsOf({
         slow: async () => activityPromise,
-      },
+      }),
     });
 
     await worker.connect();
@@ -2043,7 +2057,7 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-immediate',
-            activityName: 'echo',
+            activityName: 'orders.echo',
             input: 'hi',
           }),
         );
@@ -2053,7 +2067,7 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: { echo: async (input) => input },
+      workflows: workflowsOf({ echo: async (input) => input }),
     });
 
     await worker.connect();
@@ -2087,7 +2101,7 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-fail',
-            activityName: 'boom',
+            activityName: 'orders.boom',
             input: null,
           }),
         );
@@ -2097,12 +2111,12 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: {
+      workflows: workflowsOf({
         boom: async () => {
           await blockPromise;
           throw new Error('activity blew up');
         },
-      },
+      }),
     });
 
     await worker.connect();
@@ -2149,7 +2163,7 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-after-dispose',
-            activityName: 'slow',
+            activityName: 'orders.slow',
             input: null,
           }),
         );
@@ -2159,7 +2173,7 @@ describe('RemoteWorker — taskResult resend on reconnect', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: { slow: async () => activityPromise },
+      workflows: workflowsOf({ slow: async () => activityPromise }),
     });
 
     await worker.connect();
@@ -2235,7 +2249,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-throw',
-            activityName: 'slow',
+            activityName: 'orders.slow',
             input: null,
           }),
         );
@@ -2245,7 +2259,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: { slow: async () => activityPromise },
+      workflows: workflowsOf({ slow: async () => activityPromise }),
     });
 
     await worker.connect();
@@ -2291,7 +2305,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-flush-throw',
-            activityName: 'slow',
+            activityName: 'orders.slow',
             input: null,
           }),
         );
@@ -2302,7 +2316,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
     // Registration 0: deliver task, then drop so the result buffers.
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: { slow: async () => activityPromise },
+      workflows: workflowsOf({ slow: async () => activityPromise }),
     });
     await worker.connect();
     await waitForCondition(() => worker.inFlight === 1, {
@@ -2381,7 +2395,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
                 JSON.stringify({
                   type: 'task',
                   operationId: 'op-preack',
-                  activityName: 'slow',
+                  activityName: 'orders.slow',
                   input: null,
                 }),
               );
@@ -2410,7 +2424,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: { slow: async () => activityPromise },
+      workflows: workflowsOf({ slow: async () => activityPromise }),
     });
     await worker.connect();
     await waitForCondition(() => worker.inFlight === 1, {
@@ -2467,7 +2481,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-declined',
-            activityName: 'declined',
+            activityName: 'orders.declined',
             input: null,
           }),
         );
@@ -2478,12 +2492,12 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
       maxBufferedResults: 0,
-      activities: {
+      workflows: workflowsOf({
         declined: async () => {
           declinedRan = true;
           return 'should-not-run';
         },
-      },
+      }),
     });
 
     await worker.connect();
@@ -2513,7 +2527,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
           JSON.stringify({
             type: 'task',
             operationId: 'op-failsock',
-            activityName: 'slow',
+            activityName: 'orders.slow',
             input: null,
           }),
         );
@@ -2523,7 +2537,7 @@ describe('RemoteWorker — send-failure recovery and backpressure', () => {
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}`,
-      activities: { slow: async () => activityPromise },
+      workflows: workflowsOf({ slow: async () => activityPromise }),
     });
     await worker.connect();
     await waitForCondition(() => worker.inFlight === 1, {
