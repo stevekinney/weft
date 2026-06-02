@@ -95,17 +95,26 @@ describe('disposeEngine', () => {
     const engine = new Engine();
     const internals = getInternals(engine);
 
-    const waiters = ['wf-1', 'wf-2', 'wf-3'].map((workflowId) => {
+    // Capture each waiter's settlement with a handler attached up front, before
+    // dispose rejects them. disposeEngine rejects all three synchronously;
+    // awaiting them sequentially would leave the later rejected promises
+    // momentarily unhandled and could trip an unhandled-rejection warning.
+    const outcomes = ['wf-1', 'wf-2', 'wf-3'].map((workflowId) => {
       const { promise, resolve, reject } = Promise.withResolvers<unknown>();
       internals.resultResolvers.set(workflowId, { promise, resolve, reject });
-      return promise;
+      return promise.then(
+        () => ({ rejected: false as const, error: undefined as unknown }),
+        (error: unknown) => ({ rejected: true as const, error }),
+      );
     });
 
     disposeEngine(internals);
 
     expect(internals.resultResolvers.size).toBe(0);
-    for (const promise of waiters) {
-      await expect(promise).rejects.toBeInstanceOf(EngineDisposedError);
+    const settled = await Promise.all(outcomes);
+    for (const outcome of settled) {
+      expect(outcome.rejected).toBe(true);
+      expect(outcome.error).toBeInstanceOf(EngineDisposedError);
     }
   });
 
