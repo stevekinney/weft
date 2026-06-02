@@ -6,7 +6,8 @@ import {
 } from './customer-profile.test-support.ts';
 import { formatGreetingActivity, helloWorldWorkflow } from './hello-world.test-support.ts';
 
-async function loadPublishedHelloWorldModule(): Promise<{
+/** Shape of the bundled hello-world example module's public exports. */
+type PublishedHelloWorldModule = {
   customerProfileWorkflow: {
     handler: (
       context: unknown,
@@ -30,32 +31,14 @@ async function loadPublishedHelloWorldModule(): Promise<{
     loyaltyTier: string;
   }>;
   runHelloWorldExample: (subject?: string) => Promise<{ greeting: string }>;
-}> {
-  return (await import(new URL('../examples/hello-world/src/index.ts', import.meta.url).href)) as {
-    customerProfileWorkflow: {
-      handler: (
-        context: unknown,
-        input: { customerId: string },
-      ) => AsyncGenerator<{ customerId: string; loyaltyTier: string }>;
-    };
-    formatGreetingActivity: {
-      execute: (input: string) => Promise<{ greeting: string }>;
-    };
-    helloWorldWorkflow: {
-      handler: (context: unknown, input: string) => AsyncGenerator<{ greeting: string }>;
-    };
-    loadCustomerProfileActivity: {
-      execute: (input: { customerId: string }) => Promise<{
-        customerId: string;
-        loyaltyTier: string;
-      }>;
-    };
-    runCustomerProfileExample: (customerId?: string) => Promise<{
-      customerId: string;
-      loyaltyTier: string;
-    }>;
-    runHelloWorldExample: (subject?: string) => Promise<{ greeting: string }>;
-  };
+};
+
+async function loadPublishedHelloWorldModule(): Promise<PublishedHelloWorldModule> {
+  // The bundled example's export shape is known by construction, so the dynamic
+  // import is asserted to `PublishedHelloWorldModule` rather than narrowed.
+  return (await import(
+    new URL('../examples/hello-world/src/index.ts', import.meta.url).href
+  )) as PublishedHelloWorldModule;
 }
 
 describe('bundled examples', () => {
