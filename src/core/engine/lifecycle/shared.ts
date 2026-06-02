@@ -35,12 +35,6 @@ export type RecoverAllOptions = {
    * rolling deploys or explicit storage migrations.
    */
   acknowledgeUnknownWorkflowTypes?: boolean;
-  /**
-   * Require storage compare-and-swap support before recovery takes ownership of
-   * persisted workflows. Use this when more than one engine process may recover
-   * the same storage concurrently.
-   */
-  requireConcurrentResumeSafety?: boolean;
 };
 
 export type LifecycleCallbacks = {

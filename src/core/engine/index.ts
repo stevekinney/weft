@@ -407,14 +407,11 @@ export class Engine<
       }
 
       if (options.recover === true) {
-        await engine.recoverAll({
-          ...(options.acknowledgeUnknownWorkflowTypes !== undefined
+        await engine.recoverAll(
+          options.acknowledgeUnknownWorkflowTypes !== undefined
             ? { acknowledgeUnknownWorkflowTypes: options.acknowledgeUnknownWorkflowTypes }
-            : {}),
-          ...(options.requireConcurrentResumeSafety !== undefined
-            ? { requireConcurrentResumeSafety: options.requireConcurrentResumeSafety }
-            : {}),
-        });
+            : {},
+        );
       }
     } catch (error) {
       // Constructor side effects (broadcast channel, scheduler, dispatchers,

@@ -226,18 +226,8 @@ describe('Engine', () => {
     recoveredEngine[Symbol.dispose]();
   });
 
-  it('Engine.create forwards requireConcurrentResumeSafety into recovery', async () => {
+  it('Engine.create recovers against storage without conditionalBatch support', async () => {
     const storage = new EngineCreateNoConditionalBatchStorage();
-
-    await expect(
-      Engine.create({
-        storage,
-        recover: true,
-        requireConcurrentResumeSafety: true,
-      }),
-    ).rejects.toThrow(
-      'Feature "concurrent resume checkpoint commits" requires storage capability "conditionalBatch"',
-    );
 
     const engine = await Engine.create({ storage, recover: true });
     engine[Symbol.dispose]();

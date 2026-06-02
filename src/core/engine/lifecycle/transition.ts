@@ -1,4 +1,4 @@
-import { KEYS, requireStorageCapability } from '../../../storage/interface.ts';
+import { KEYS } from '../../../storage/interface.ts';
 import { deserializeCheckpoint, serializeCheckpoint } from '../../checkpoint.ts';
 import { Context, setContextWorkflowInterceptor } from '../../context.ts';
 import { EMPTY_EVENT_HEAD } from '../../event-log.ts';
@@ -121,14 +121,6 @@ export async function recoverAll(
   callbacks: LifecycleCallbacks,
   options?: RecoverAllOptions,
 ): Promise<WorkflowHandle[]> {
-  if (options?.requireConcurrentResumeSafety === true) {
-    requireStorageCapability(
-      internals.storage,
-      'conditionalBatch',
-      'concurrent resume checkpoint commits',
-    );
-  }
-
   const preflight = await preflightRecoverAll(internals, callbacks);
   const handles: WorkflowHandle[] = [];
 

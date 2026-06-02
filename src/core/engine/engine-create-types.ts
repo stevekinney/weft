@@ -60,19 +60,12 @@ export type EngineCreateOptions<
          * deploys or explicit storage migrations.
          */
         acknowledgeUnknownWorkflowTypes?: boolean;
-        /**
-         * Forwarded to `Engine.recoverAll`. Set when multiple engine processes
-         * may recover the same durable storage concurrently.
-         */
-        requireConcurrentResumeSafety?: boolean;
       }
     | {
         /** Whether to recover stored running workflows after registration. Defaults to `false`. */
         recover?: false | undefined;
         /** Only valid when `recover: true` is also set. */
         acknowledgeUnknownWorkflowTypes?: never;
-        /** Only valid when `recover: true` is also set. */
-        requireConcurrentResumeSafety?: never;
       }
   );
 

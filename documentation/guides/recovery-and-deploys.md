@@ -55,27 +55,18 @@ Earlier versions of Weft silently skipped unregistered workflow types during rec
 
 The default has flipped because abandoned workflows are almost always a bug, not an intent. If you _do_ intend it — see the next section — you have to say so explicitly.
 
-## Concurrent recovery: `requireConcurrentResumeSafety`
+## One engine per durable store
 
-If exactly one engine process owns recovery for a storage backend, the default recovery path is enough.
-If multiple processes may call `recoverAll()` against the same durable storage at the same time, opt into
-the concurrent-owner gate:
+The supported deployment model is **a single engine process per durable storage backend** — one
+owner driving recovery and execution for that store. Recovery runs on boot (the default) and sweeps
+the store for in-flight workflows; with one owner, that sweep is safe.
 
-```typescript partial
-const engine = await Engine.create({
-  storage,
-  workflows: { greet },
-  recover: true,
-  requireConcurrentResumeSafety: true,
-});
-```
-
-That flag fails fast unless the storage adapter reports `conditionalBatch: true`. Adapters with that
-capability commit checkpoints with a compare-and-swap guard on the previous canonical checkpoint bytes,
-so a stale owner cannot overwrite a newer checkpoint. Adapters without it are single-owner-only for
-recovery: they may still run normal checkpoint commits, but they do not claim safe concurrent ownership.
-This guard protects checkpoint commits; it does not make every recovery or dispatch side effect
-single-owner before the next checkpoint persists.
+Do **not** point two engines at the same durable store. Multi-process recovery is not coordinated: two
+engines booting against one store can both resume the same workflow and both execute its next step,
+producing duplicate side effects (the next activity firing twice). Safe multi-process recovery — a
+fenced ownership claim acquired before a resumed workflow executes — is a future `MultiEngine`
+capability that is **not yet implemented**. Until it lands, treat single-engine-per-store as a hard
+operational constraint.
 
 ## Acknowledging drift: `acknowledgeUnknownWorkflowTypes`
 
