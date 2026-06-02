@@ -25,6 +25,8 @@ import {
   buildSqlitePrefixRangeParameters,
 } from './sqlite-key-value-queries';
 
+type BunSQLiteStoragePersistence = NonNullable<StorageCapabilities['persistence']>;
+
 /**
  * Runtime-neutral alias for the Bun SQLite adapter. Consumers that import
  * from `@lostgradient/weft/storage/sqlite` get this class under Bun.
@@ -64,6 +66,7 @@ export { BunSQLiteStorage as SQLiteStorage };
  */
 export class BunSQLiteStorage implements Storage {
   #database: Database;
+  #persistence: BunSQLiteStoragePersistence;
   // Prepared statements are cached on the instance so the hot paths (get,
   // put, batch) never pay `prepare()` cost after construction. This matters:
   // the start/complete benchmarks make 2-3 storage calls per workflow, and
@@ -101,6 +104,7 @@ export class BunSQLiteStorage implements Storage {
   }
 
   constructor(path: string = ':memory:') {
+    this.#persistence = path === ':memory:' ? 'ephemeral' : 'local';
     this.#database = new Database(path);
 
     this.#database.exec('PRAGMA journal_mode = WAL');
@@ -146,6 +150,7 @@ export class BunSQLiteStorage implements Storage {
     // committed data (linearizable); statements observe a snapshot; batch() runs
     // in one transaction (atomic); deletePrefix and deleteRange are single range DELETEs.
     return {
+      persistence: this.#persistence,
       readAfterWrite: 'linearizable',
       scanConsistency: 'snapshot',
       atomicBatch: true,

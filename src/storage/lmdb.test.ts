@@ -8,6 +8,7 @@ runStorageCapabilityConformance('LMDBStorage', {
   create: () =>
     new LMDBStorage(createDiskBackedTestFixture({ prefix: 'lmdb-caps', recursive: true }).path),
   expected: {
+    persistence: 'local',
     readAfterWrite: 'linearizable',
     scanConsistency: 'snapshot',
     atomicBatch: true,

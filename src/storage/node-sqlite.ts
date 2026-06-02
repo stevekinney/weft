@@ -55,6 +55,8 @@ type BetterSqliteConstructor = new (path: string) => BetterSqliteDatabase;
 /** Lazily resolved `better-sqlite3` constructor. */
 let DatabaseConstructor: BetterSqliteConstructor | undefined;
 
+type NodeSQLiteStoragePersistence = NonNullable<StorageCapabilities['persistence']>;
+
 function createMissingBetterSqlite3Error(cause: unknown): Error {
   return new Error(
     'NodeSQLiteStorage requires the optional peer dependency "better-sqlite3". ' +
@@ -144,6 +146,7 @@ export { NodeSQLiteStorage as SQLiteStorage };
  */
 export class NodeSQLiteStorage implements Storage {
   #database: BetterSqliteDatabase;
+  #persistence: NodeSQLiteStoragePersistence;
   #getStatement: BetterSqliteStatement;
   #putStatement: BetterSqliteStatement;
   #deleteStatement: BetterSqliteStatement;
@@ -165,6 +168,7 @@ export class NodeSQLiteStorage implements Storage {
     // and relies on the derived scan-and-delete fallback, so boundedRangeDelete
     // is false.
     return {
+      persistence: this.#persistence,
       readAfterWrite: 'linearizable',
       scanConsistency: 'snapshot',
       atomicBatch: true,
@@ -174,6 +178,7 @@ export class NodeSQLiteStorage implements Storage {
   }
 
   constructor(path: string = ':memory:', databaseConstructor?: BetterSqliteConstructor) {
+    this.#persistence = path === ':memory:' ? 'ephemeral' : 'local';
     const Database = databaseConstructor ?? loadBetterSqlite3();
 
     try {

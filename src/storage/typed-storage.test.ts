@@ -17,7 +17,14 @@ import {
   createCoreStorageAdapter,
   createFullStorageAdapter,
 } from './storage-adapter.test-support.ts';
-import { type MessagePackValue, jsonCodec, msgpackCodec, withCodec } from './typed-storage.ts';
+import {
+  type ConditionalTypedStorage,
+  type MessagePackValue,
+  type TypedStorage,
+  jsonCodec,
+  msgpackCodec,
+  withCodec,
+} from './typed-storage.ts';
 
 describe('withCodec', () => {
   it('withCodec(storage, jsonCodec) round-trips structured values without TextEncoder boilerplate', async () => {
@@ -127,6 +134,98 @@ describe('withCodec', () => {
     expect(await storage.has('item')).toBe(false);
 
     expect(() => storage[Symbol.dispose]()).not.toThrow();
+  });
+
+  it('withCodec(storage, codec, { disposeUnderlyingStorage: false }) leaves shared storage open', async () => {
+    const underlyingStorage = new MemoryStorage();
+    const storage = withCodec(
+      underlyingStorage,
+      jsonCodec(
+        z.object({
+          value: z.string(),
+        }).parse,
+      ),
+      { disposeUnderlyingStorage: false },
+    );
+
+    await storage.put('item', { value: 'present' });
+    storage[Symbol.dispose]();
+
+    expect(await storage.get('item')).toEqual({ value: 'present' });
+    expect(await underlyingStorage.get('item')).not.toBeNull();
+  });
+
+  it('withCodec(storage, codec) forwards conditionalBatch through the codec wrapper', async () => {
+    const storage: ConditionalTypedStorage<{ count: number }> = withCodec(
+      new MemoryStorage(),
+      jsonCodec(
+        z.object({
+          count: z.number(),
+        }).parse,
+      ),
+    );
+
+    await storage.put('counter', { count: 1 });
+
+    const committed = await storage.conditionalBatch(
+      [{ key: 'counter', expectedValue: { count: 1 } }],
+      [{ type: 'put', key: 'counter', value: { count: 2 } }],
+    );
+
+    expect(committed).toBe(true);
+    expect(await storage.get('counter')).toEqual({ count: 2 });
+
+    const stale = await storage.conditionalBatch(
+      [{ key: 'counter', expectedValue: { count: 1 } }],
+      [{ type: 'put', key: 'counter', value: { count: 3 } }],
+    );
+
+    expect(stale).toBe(false);
+    expect(await storage.get('counter')).toEqual({ count: 2 });
+  });
+
+  it('keeps the base TypedStorage interface source-compatible without conditionalBatch', () => {
+    const storage: TypedStorage<string> = {
+      async get() {
+        return null;
+      },
+      async put() {},
+      async delete() {},
+      async *scan() {},
+      async batch() {},
+      async has() {
+        return false;
+      },
+      async deletePrefix() {
+        return 0;
+      },
+      async *keys() {},
+      async count() {
+        return 0;
+      },
+      [Symbol.dispose]() {},
+    };
+
+    expect(typeof storage.batch).toBe('function');
+  });
+
+  it('withCodec(storage, codec) treats null conditionalBatch expectations as key absence', async () => {
+    const storage = withCodec(
+      new MemoryStorage(),
+      jsonCodec(
+        z.object({
+          value: z.string(),
+        }).parse,
+      ),
+    );
+
+    const committed = await storage.conditionalBatch(
+      [{ key: 'created', expectedValue: null }],
+      [{ type: 'put', key: 'created', value: { value: 'yes' } }],
+    );
+
+    expect(committed).toBe(true);
+    expect(await storage.get('created')).toEqual({ value: 'yes' });
   });
 
   it('jsonCodec without a parser rejects unsupported values before serialization', () => {

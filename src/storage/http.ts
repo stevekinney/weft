@@ -205,6 +205,7 @@ export class HTTPStorage implements Storage {
     // deletePrefix and deleteRange use the derived scan-and-delete fallback, so
     // boundedRangeDelete is false.
     return {
+      persistence: 'remote',
       readAfterWrite: 'eventual',
       scanConsistency: 'best-effort',
       atomicBatch: true,

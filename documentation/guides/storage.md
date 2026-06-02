@@ -108,6 +108,7 @@ Every adapter implements `capabilities(): StorageCapabilities` — an honest, se
 
 ```ts partial
 type StorageCapabilities = {
+  persistence: 'ephemeral' | 'local' | 'remote';
   readAfterWrite: 'linearizable' | 'session' | 'eventual';
   scanConsistency: 'snapshot' | 'best-effort';
   atomicBatch: boolean;
@@ -116,22 +117,24 @@ type StorageCapabilities = {
 };
 ```
 
-The engine depends on four guarantees. **`atomicBatch`** keeps a checkpoint commit all-or-nothing. **`readAfterWrite`** lets a resume observe the checkpoint it just wrote. **`scanConsistency`** keeps visibility and index scans from seeing torn writes. **`conditionalBatch`** backs compare-and-swap state, including storage-backed workflow state and operations that must commit only if the current value still matches the caller's expectation.
+The engine depends on four consistency guarantees. **`atomicBatch`** keeps a checkpoint commit all-or-nothing. **`readAfterWrite`** lets a resume observe the checkpoint it just wrote. **`scanConsistency`** keeps visibility and index scans from seeing torn writes. **`conditionalBatch`** backs compare-and-swap state, including storage-backed workflow state and operations that must commit only if the current value still matches the caller's expectation.
+
+`persistence` describes where data survives: `ephemeral` storage is process- or session-local, `local` storage is durable in the local runtime or browser origin, and `remote` storage is owned by another service or synchronized storage area.
 
 The Tier-0 failure-semantics contract relies on this capability split for activity reconciliation, signal idempotency, and checkpoint ownership. See [Tier-0 Behavioral Contract](../architecture/tier-0-behavioral-contract.md) for the implementation gates.
 
 The honest profile per built-in adapter:
 
-| Adapter               | readAfterWrite | scanConsistency | atomicBatch | conditionalBatch | boundedRangeDelete |
-| --------------------- | -------------- | --------------- | ----------- | ---------------- | ------------------ |
-| `MemoryStorage`       | `linearizable` | `snapshot`      | yes         | yes              | yes                |
-| `BunSQLiteStorage`    | `linearizable` | `snapshot`      | yes         | yes              | yes                |
-| `NodeSQLiteStorage`   | `linearizable` | `snapshot`      | yes         | yes              | no                 |
-| `LMDBStorage`         | `linearizable` | `snapshot`      | yes         | yes              | no                 |
-| `IndexedDBStorage`    | `linearizable` | `best-effort`   | yes         | yes              | yes                |
-| `TursoStorage`        | `session`      | `snapshot`      | yes         | yes              | yes                |
-| `HTTPStorage`         | `eventual`     | `best-effort`   | yes         | no (opt-in)      | no                 |
-| `WebExtensionStorage` | `session`      | `best-effort`   | yes         | no               | no                 |
+| Adapter               | persistence                       | readAfterWrite | scanConsistency | atomicBatch | conditionalBatch | boundedRangeDelete |
+| --------------------- | --------------------------------- | -------------- | --------------- | ----------- | ---------------- | ------------------ |
+| `MemoryStorage`       | `ephemeral`                       | `linearizable` | `snapshot`      | yes         | yes              | yes                |
+| `BunSQLiteStorage`    | `ephemeral` or `local`            | `linearizable` | `snapshot`      | yes         | yes              | yes                |
+| `NodeSQLiteStorage`   | `ephemeral` or `local`            | `linearizable` | `snapshot`      | yes         | yes              | no                 |
+| `LMDBStorage`         | `local`                           | `linearizable` | `snapshot`      | yes         | yes              | no                 |
+| `IndexedDBStorage`    | `local`                           | `linearizable` | `best-effort`   | yes         | yes              | yes                |
+| `TursoStorage`        | `ephemeral`, `local`, or `remote` | `session`      | `snapshot`      | yes         | yes              | yes                |
+| `HTTPStorage`         | `remote`                          | `eventual`     | `best-effort`   | yes         | no (opt-in)      | no                 |
+| `WebExtensionStorage` | `ephemeral`, `local`, or `remote` | `session`      | `best-effort`   | yes         | no               | no                 |
 
 Three kinds of capability, treated differently:
 
@@ -141,6 +144,16 @@ Three kinds of capability, treated differently:
 
 > [!WARNING] Eventual read-after-write
 > `HTTPStorage` reports `readAfterWrite: eventual`: the client offers no read-your-writes guarantee, so a resume immediately after a checkpoint write may read stale state. There is no runtime gate for this. Operators choosing an eventual backend accept that visibility trade-off; the built-in `linearizable` single-process adapters do not have it.
+
+For applications that should fail boot when durable recovery is misconfigured, call [`assertDurableStorageForRecovery()`](../reference/api-storage.md#assertdurablestorageforrecovery). It accepts only `persistence: 'local'`, `readAfterWrite: 'linearizable'`, `scanConsistency: 'snapshot'`, `atomicBatch: true`, and `conditionalBatch: true`.
+
+```ts
+import { assertDurableStorageForRecovery } from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
+
+await using storage = new SQLiteStorage('./weft.db');
+assertDurableStorageForRecovery(storage);
+```
 
 **The opaque-value invariant:** adapters and decorators must treat stored values as opaque bytes and must not inspect or depend on value contents — values may later be encrypted or compressed. The engine ranges only over keys, never value bytes. This is why `CompressedStorage`, which transforms value bytes, downgrades `conditionalBatch` to `false`: a caller-supplied `expectedValue` can never byte-match the compressed stored value.
 
@@ -171,6 +184,35 @@ upr:{updateId}                                -- update response
 This listing covers the primary keys. The full canonical list—including `wf:{id}:timeline:`, `schedule:`, `op:inflight:`, `tag:`, `upk:` (idempotency), `budget:`, `archive:`, `state:execution:`, `state:workflow:`, `blob:`, and others—is in `KEYS` in `src/storage/interface.ts`.
 
 All timestamps are zero-padded to 16 digits for correct lexicographic ordering. So `scan("op:default:")` returns all operations on the "default" queue in scheduled order—the core hot path is a single range scan, regardless of backend.
+
+[`WEFT_RESERVED_KEY_PREFIXES`](../reference/api-storage.md#weft_reserved_key_prefixes) is the stable list of Weft-owned prefixes. Application data in a shared store should use its own namespace:
+
+```ts
+import { MemoryStorage, scopedStorage, textValueStore } from '@lostgradient/weft/storage';
+
+await using storage = new MemoryStorage();
+const applicationStorage = textValueStore(scopedStorage(storage, 'app:my-service'), {
+  disposeUnderlyingStorage: false,
+});
+await applicationStorage.set('session:1', '...');
+```
+
+When using `textValueStore()` or `withCodec()` over a storage instance also owned by the engine, pass `{ disposeUnderlyingStorage: false }` so closing the wrapper does not close the engine's storage.
+
+Both wrappers expose `conditionalBatch()` for compare-and-swap application state. Text wrappers compare and write UTF-8 strings; typed wrappers compare and write values through their codec before delegating to raw storage CAS.
+
+### Importing an existing string KV database
+
+For an existing SQLite database with a string-valued `kv(key TEXT PRIMARY KEY, value TEXT NOT NULL)` table, import rows into a Weft database under an application prefix:
+
+```bash
+bun scripts/import-string-kv-sqlite-to-weft.ts \
+  --source ./application.db \
+  --target ./weft.db \
+  --target-prefix app:my-service
+```
+
+The script copies rows into the target Weft keyspace and leaves the source database untouched. It rejects identical source and target paths, validates the source table name, writes values as UTF-8 bytes, and refuses to overwrite existing target keys.
 
 ### Event-log compaction
 

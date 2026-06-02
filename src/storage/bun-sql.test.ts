@@ -11,6 +11,7 @@ import {
 runStorageCapabilityConformance('BunSQLiteStorage', {
   create: () => new BunSQLiteStorage(':memory:'),
   expected: {
+    persistence: 'ephemeral',
     readAfterWrite: 'linearizable',
     scanConsistency: 'snapshot',
     atomicBatch: true,

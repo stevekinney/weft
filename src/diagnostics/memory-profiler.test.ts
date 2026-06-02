@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
+
+import { isConstrainedCodexRunner } from '../benchmarks/benchmark-environment.ts';
+import { isCoverageInstrumentationEnabled } from '../benchmarks/coverage-mode.ts';
 import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
@@ -15,6 +18,9 @@ import {
   analyzeStability,
   linearRegression,
 } from './memory-profiler.ts';
+
+const runRssStabilityTest =
+  isConstrainedCodexRunner() || isCoverageInstrumentationEnabled() ? it.skip : it;
 
 // ---------------------------------------------------------------------------
 // Unit tests: linearRegression
@@ -230,59 +236,63 @@ describe('MemoryProfiler', () => {
 // ---------------------------------------------------------------------------
 
 describe('engine memory stability under load', () => {
-  it('RSS stays bounded after running many workflows to completion', async () => {
-    const engine = new Engine({
-      storage: new MemoryStorage(),
-    });
+  runRssStabilityTest(
+    'RSS stays bounded after running many workflows to completion',
+    async () => {
+      const engine = new Engine({
+        storage: new MemoryStorage(),
+      });
 
-    // A trivial workflow that completes in one step
-    const trivial = workflow({ name: 'trivial' }).execute(async function* (
-      _context: WorkflowContext,
-      input: unknown,
-    ) {
-      return `done:${String(input)}`;
-    });
-    engine.register(trivial);
+      // A trivial workflow that completes in one step
+      const trivial = workflow({ name: 'trivial' }).execute(async function* (
+        _context: WorkflowContext,
+        input: unknown,
+      ) {
+        return `done:${String(input)}`;
+      });
+      engine.register(trivial);
 
-    const profiler = new MemoryProfiler();
-    profiler.start(100); // sample every 100ms
+      const profiler = new MemoryProfiler();
+      profiler.start(100); // sample every 100ms
 
-    // Run workflows in batches. We can't do 10K/sec for an hour in a unit
-    // test, but we can run enough to detect linear growth in engine maps.
-    const totalWorkflows = 2000;
-    const batchSize = 100;
-    const batches = totalWorkflows / batchSize;
+      // Run workflows in batches. We can't do 10K/sec for an hour in a unit
+      // test, but we can run enough to detect linear growth in engine maps.
+      const totalWorkflows = 2000;
+      const batchSize = 100;
+      const batches = totalWorkflows / batchSize;
 
-    for (let batch = 0; batch < batches; batch++) {
-      const handles = await Promise.all(
-        Array.from({ length: batchSize }, (_, i) =>
-          engine.start('trivial', `batch-${batch}-item-${i}`),
-        ),
-      );
-      // Wait for all to complete
-      await Promise.all(handles.map((handle) => handle.result()));
-    }
+      for (let batch = 0; batch < batches; batch++) {
+        const handles = await Promise.all(
+          Array.from({ length: batchSize }, (_, i) =>
+            engine.start('trivial', `batch-${batch}-item-${i}`),
+          ),
+        );
+        // Wait for all to complete
+        await Promise.all(handles.map((handle) => handle.result()));
+      }
 
-    // Let GC run
-    Bun.gc(true);
-    await sleepForTesting(100);
+      // Let GC run
+      Bun.gc(true);
+      await sleepForTesting(100);
 
-    profiler.stop();
+      profiler.stop();
 
-    const profile = profiler.profile();
-    const stability = analyzeStability(profile.samples, {
-      warmupSamples: 3,
-      // Allow up to 50KB/sec growth (accounts for test runner overhead,
-      // storage growth from MemoryStorage, and GC jitter)
-      maxGrowthRatePerSecond: 50 * 1024,
-    });
+      const profile = profiler.profile();
+      const stability = analyzeStability(profile.samples, {
+        warmupSamples: 3,
+        // Allow up to 50KB/sec growth (accounts for test runner overhead,
+        // storage growth from MemoryStorage, and GC jitter)
+        maxGrowthRatePerSecond: 50 * 1024,
+      });
 
-    // The engine's internal maps should be cleaned up after workflow completion.
-    // RSS may fluctuate due to GC, but should not show unbounded linear growth.
-    expect(stability.stable).toBe(true);
+      // The engine's internal maps should be cleaned up after workflow completion.
+      // RSS may fluctuate due to GC, but should not show unbounded linear growth.
+      expect(stability.stable).toBe(true);
 
-    engine[Symbol.dispose]();
-  }, 30_000); // 30s timeout for this test
+      engine[Symbol.dispose]();
+    },
+    30_000,
+  ); // 30s timeout for this test
 
   it('engine internal maps are cleaned up after workflow completion', async () => {
     const storage = new MemoryStorage();

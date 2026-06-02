@@ -12,6 +12,7 @@ import { collect, runStorageCapabilityConformance } from './storage-adapter.test
 runStorageCapabilityConformance('IndexedDBStorage', {
   create: () => new IndexedDBStorage(`weft-caps-${String(Math.random()).slice(2)}`),
   expected: {
+    persistence: 'local',
     readAfterWrite: 'linearizable',
     scanConsistency: 'best-effort',
     atomicBatch: true,

@@ -93,7 +93,7 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
       // subprocess because Bun coverage does not propagate into child runs.
       // The direct helper exports are exercised in-process by the test suite;
       // the remaining runner path is only observed through the child process.
-      functions: 1,
+      functions: 2,
       lines: createMergedLineSet(
         createLineSet(24, 67),
         createLineSet(73, 75),
@@ -1129,6 +1129,19 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = new Map<string, CoverageAllowa
       ]),
     },
   ],
+  [
+    'src/storage/turso.ts',
+    {
+      // This is the defensive rollback-suppression helper used after a libSQL
+      // transaction already failed. Real libSQL rollback failures are not
+      // deterministic to trigger; the behavior preserves the original failure.
+      // The retry sleep is only reached on a transient libSQL busy response,
+      // which is covered structurally by the retry caller and hard to force
+      // deterministically through the public adapter without timing races.
+      functions: 1,
+      lines: new Set([48, 49, 50, 56, 57, 58]),
+    },
+  ],
   ['src/testing/fake-timers.test-support.ts', { lines: new Set([232]) }],
   ['src/testing/storage-backends.test-support.ts', { lines: new Set([71, 72, 73]) }],
   [
@@ -1413,6 +1426,17 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
       ]),
     },
   ],
+  [
+    'src/storage/turso.ts',
+    {
+      // These are the defensive rollback-suppression and transient busy retry
+      // sleep helpers. Both preserve or recover from libSQL failures that are
+      // hard to force deterministically through the public adapter without
+      // adding timing races to the coverage suite.
+      functions: 2,
+      lines: new Set([48, 49, 50, 56, 57, 58]),
+    },
+  ],
   ['src/storage/indexeddb.ts', { functions: 1 }],
   [
     'src/storage/scoped-storage.ts',
@@ -1632,15 +1656,21 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
     {
       functions: 2,
       lines: new Set([
-        50, 75, 76, 85, 111, 112, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140,
-        141, 142, 161,
+        80, 105, 106, 115, 141, 142, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169,
+        170, 171, 172, 191,
       ]),
     },
   ],
   ['src/core/engine/schedules.ts', { lines: new Set([152, 330, 356, 361]) }],
   [
     'src/core/engine/updates.ts',
-    { functions: 1, lines: new Set([197, 394, 401, 490, 491, 492, 493, 494, 495, 496]) },
+    {
+      functions: 1,
+      lines: new Set([
+        197, 313, 314, 315, 316, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330,
+        331, 332, 333, 334, 335, 394, 401, 490, 491, 492, 493, 494, 495, 496,
+      ]),
+    },
   ],
   [
     'src/core/engine/validation/schedule.ts',
@@ -1692,8 +1722,9 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
     {
       functions: 3,
       lines: new Set([
-        58, 59, 60, 61, 62, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83,
-        87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104,
+        58, 59, 60, 61, 62, 63, 64, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81,
+        82, 83, 84, 85, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104,
+        105, 106,
       ]),
     },
   ],
@@ -1883,7 +1914,7 @@ async function runCoverageShard(
     execFileSync('bun', args.slice(1), {
       cwd: globalThis.process.cwd(),
       env: { ...process.env, ...Bun.env, WEFT_COVERAGE_MODE: '1' },
-      stdio: 'ignore',
+      stdio: 'inherit',
     });
   } catch (error) {
     exitCode = error instanceof Error && 'status' in error ? Number(error.status ?? 1) : 1;

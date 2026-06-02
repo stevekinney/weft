@@ -12,6 +12,38 @@ type PendingUpdateCallbacks = {
   broadcast: (message: { type: 'update:completed'; workflowId: string; updateId: string }) => void;
 };
 
+async function waitForNextMacrotask(): Promise<void> {
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+}
+
+async function waitForRegisteredUpdateHandlers(
+  internals: EngineInternals,
+  workflowId: string,
+): Promise<boolean> {
+  const inlineStrategy = internals.inlineStrategy;
+  if (inlineStrategy === null) return false;
+
+  let context = inlineStrategy.getContext(workflowId);
+  if (context && context.updateHandlers.size > 0) return true;
+
+  const pendingAdvance = inlineStrategy.waitForWorkflowAdvance(workflowId);
+  if (pendingAdvance) {
+    await pendingAdvance;
+    context = inlineStrategy.getContext(workflowId);
+    if (context && context.updateHandlers.size > 0) return true;
+  }
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    await waitForNextMacrotask();
+    context = inlineStrategy.getContext(workflowId);
+    if (context && context.updateHandlers.size > 0) return true;
+  }
+
+  return false;
+}
+
 export async function invokeUpdateHandler(
   internals: EngineInternals,
   name: string,
@@ -30,13 +62,11 @@ export async function processPendingUpdatesAfterInlineAdvance(
   workflowId: string,
   callbacks: PendingUpdateCallbacks,
 ): Promise<void> {
-  const inlineContext = internals.inlineStrategy?.getContext(workflowId);
-  if (!inlineContext || inlineContext.updateHandlers.size === 0) {
-    const pendingAdvance = internals.inlineStrategy?.waitForWorkflowAdvance(workflowId);
-    if (pendingAdvance) {
-      await pendingAdvance;
-    }
-  }
+  const pendingUpdates = await internals.updateCoordinator.getPendingUpdates(workflowId);
+  if (pendingUpdates.length === 0) return;
+
+  const hasHandlers = await waitForRegisteredUpdateHandlers(internals, workflowId);
+  if (!hasHandlers) return;
 
   await processPendingUpdatesForHandlers(internals, workflowId, callbacks);
 }

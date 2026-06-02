@@ -103,6 +103,7 @@ type BatchOperation =
 
 ```ts partial
 type StorageCapabilities = {
+  persistence: 'ephemeral' | 'local' | 'remote';
   readAfterWrite: 'linearizable' | 'session' | 'eventual';
   scanConsistency: 'snapshot' | 'best-effort';
   atomicBatch: boolean;
@@ -111,7 +112,23 @@ type StorageCapabilities = {
 };
 ```
 
-The self-reported guarantee profile returned by [`capabilities()`](#capabilities). `conditionalBatch` is the only runtime-gated capability; `atomicBatch`/`readAfterWrite`/`scanConsistency` are trusted correctness contracts the engine does not verify, and `boundedRangeDelete` is an operational hint. The per-adapter matrix and the opaque-value invariant live in the [Consistency & capabilities](../guides/storage.md#consistency-capabilities) guide. Gate a feature with `requireStorageCapability(storage, 'conditionalBatch', featureName)`, whose capability parameter is typed [`GatedStorageCapabilityKey`](#gatedstoragecapabilitykey); it throws a clear diagnostic at first use when the capability is `false`.
+The self-reported guarantee profile returned by [`capabilities()`](#capabilities). `persistence` says whether data is `ephemeral`, `local`, or `remote`. `conditionalBatch` is the only runtime-gated capability; `atomicBatch`/`readAfterWrite`/`scanConsistency` are trusted correctness contracts the engine does not verify, and `boundedRangeDelete` is an operational hint. The per-adapter matrix and the opaque-value invariant live in the [Consistency & capabilities](../guides/storage.md#consistency-capabilities) guide. Gate a feature with `requireStorageCapability(storage, 'conditionalBatch', featureName)`, whose capability parameter is typed [`GatedStorageCapabilityKey`](#gatedstoragecapabilitykey); it throws a clear diagnostic at first use when the capability is `false`.
+
+### `assertDurableStorageForRecovery()`
+
+```ts partial
+function assertDurableStorageForRecovery(storage: Storage): void;
+```
+
+Boot-time assertion for applications that require durable recovery. It accepts only the conservative recovery row: `persistence: 'local'`, `readAfterWrite: 'linearizable'`, `scanConsistency: 'snapshot'`, `atomicBatch: true`, and `conditionalBatch: true`. It throws an `Error` listing every missing guarantee.
+
+```ts
+import { assertDurableStorageForRecovery } from '@lostgradient/weft';
+import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
+
+await using storage = new SQLiteStorage('./weft.db');
+assertDurableStorageForRecovery(storage);
+```
 
 ### `GatedStorageCapabilityKey`
 
@@ -225,6 +242,43 @@ const signalKey = KEYS.signal('wf-123', 'approval', 'sig-456');
 
 const executionStateKey = KEYS.stateExecution('wf-123', 'counter');
 // => "state:execution:wf-123:counter"
+```
+
+## `WEFT_RESERVED_KEY_PREFIXES`
+
+```ts partial
+const WEFT_RESERVED_KEY_PREFIXES: readonly string[];
+```
+
+Weft-owned key prefixes reserved for runtime data. Application state should use a separate namespace such as `app:my-service:` or a scoped wrapper:
+
+```ts
+import { MemoryStorage, scopedStorage } from '@lostgradient/weft/storage';
+
+await using storage = new MemoryStorage();
+const applicationStorage = scopedStorage(storage, 'app:my-service');
+void applicationStorage;
+```
+
+## `copyTextKeyValueRowsToStorage()`
+
+```ts partial
+async function copyTextKeyValueRowsToStorage(options: {
+  storage: Storage;
+  rows: Iterable<{ key: string; value: string }> | AsyncIterable<{ key: string; value: string }>;
+  targetPrefix?: string;
+}): Promise<{ copied: number }>;
+```
+
+Copy string-valued rows into byte-oriented Weft storage, encoding values as UTF-8 and optionally prefixing keys. The helper refuses duplicate source keys, refuses to overwrite existing target keys, and commits through `conditionalBatch()` so a racing target write aborts the import.
+
+The companion operator script imports an existing SQLite string KV table:
+
+```bash
+bun scripts/import-string-kv-sqlite-to-weft.ts \
+  --source ./application.db \
+  --target ./weft.db \
+  --target-prefix app:my-service
 ```
 
 ---

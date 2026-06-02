@@ -74,6 +74,12 @@
       "import": "./dist/storage/text-value-store.js",
       "default": "./dist/storage/text-value-store.js"
     },
+    "./storage/text-value-import": {
+      "types": "./dist/storage/text-value-import.d.ts",
+      "bun": "./dist/storage/text-value-import.js",
+      "import": "./dist/storage/text-value-import.js",
+      "default": "./dist/storage/text-value-import.js"
+    },
     "./storage/sqlite": {
       "types": "./dist/storage/sqlite.d.ts",
       "bun": "./dist/storage/bun-sql.js",

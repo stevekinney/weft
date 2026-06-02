@@ -12,6 +12,7 @@ import {
 runStorageCapabilityConformance('MemoryStorage', {
   create: () => new MemoryStorage(),
   expected: {
+    persistence: 'ephemeral',
     readAfterWrite: 'linearizable',
     scanConsistency: 'snapshot',
     atomicBatch: true,

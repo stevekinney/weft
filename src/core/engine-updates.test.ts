@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { waitForever } from '../testing/fake-timers.test-support.ts';
+import { waitForCondition, waitForever } from '../testing/fake-timers.test-support.ts';
 
 import type { ScanOptions, Storage } from '../storage/interface.ts';
 import { KEYS } from '../storage/interface.ts';
@@ -960,6 +960,9 @@ for (const backend of storageBackends) {
         const handle = await engine1.start('durable', undefined);
         suppressResult(handle);
         await flush();
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 20);
+        });
 
         // Seed a pending coordinated update in storage
         const pendingUpdate = {
@@ -974,6 +977,9 @@ for (const backend of storageBackends) {
         // Dispose engine1 to simulate crash
         engine1[Symbol.dispose]();
         await flush();
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 20);
+        });
 
         // Create engine2 with the same storage, simulating restart
         engine = new Engine({ storage: result.storage });
@@ -992,16 +998,18 @@ for (const backend of storageBackends) {
         const resumedHandle = await engine.resume(handle.id);
         suppressResult(resumedHandle);
 
-        // Wait for queueMicrotask + async processing
-        await flush();
-        await flush();
+        const responseKey = 'upr:pending-drain';
+        await waitForCondition(async () => (await result.storage.get(responseKey)) !== null, {
+          timeoutMs: 500,
+          label: 'pending update response after resume',
+        });
 
         // The pending update request should have been consumed from storage
         const remaining = await result.storage.get(KEYS.update(handle.id, 'pending-drain'));
         expect(remaining).toBeNull();
 
         // The response should have been written
-        const response = await result.storage.get('upr:pending-drain');
+        const response = await result.storage.get(responseKey);
         expect(response).not.toBeNull();
         const decoded = decode(response!) as { result: unknown };
         expect(decoded.result).toBe('processed: queued-data');

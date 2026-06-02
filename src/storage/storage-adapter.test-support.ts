@@ -47,6 +47,7 @@ export async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
  */
 export function fullStorageCapabilities(): StorageCapabilities {
   return {
+    persistence: 'ephemeral',
     readAfterWrite: 'linearizable',
     scanConsistency: 'snapshot',
     atomicBatch: true,
@@ -62,6 +63,7 @@ export function fullStorageCapabilities(): StorageCapabilities {
  */
 export function coreStorageCapabilities(): StorageCapabilities {
   return {
+    persistence: 'ephemeral',
     readAfterWrite: 'linearizable',
     scanConsistency: 'snapshot',
     atomicBatch: true,
@@ -77,6 +79,7 @@ export function coreStorageCapabilities(): StorageCapabilities {
  */
 export function assertCapabilitiesShape(storage: Storage): void {
   const capabilities = storage.capabilities();
+  expect(['ephemeral', 'local', 'remote']).toContain(capabilities.persistence ?? '');
   expect(['linearizable', 'session', 'eventual']).toContain(capabilities.readAfterWrite);
   expect(['snapshot', 'best-effort']).toContain(capabilities.scanConsistency);
   expect(typeof capabilities.atomicBatch).toBe('boolean');
@@ -106,7 +109,7 @@ export function createCoreStorageAdapter(): Storage {
 
 /** Handle returned by {@link createFullStorageAdapter}. */
 export type FullStorageAdapter = {
-  /** Storage exposing the full optional surface (has/deletePrefix/keys/count). */
+  /** Storage exposing every optional method available on `MemoryStorage`. */
   readonly storage: Storage;
   /** The underlying `MemoryStorage`, for asserting raw on-disk keys. */
   readonly inner: MemoryStorage;
@@ -116,7 +119,8 @@ export type FullStorageAdapter = {
 
 /**
  * A full `Storage` adapter backed by a real `MemoryStorage` that forwards every
- * optional method and flips a disposal flag observable via `wasDisposed()`.
+ * optional method available on that backend and flips a disposal flag observable
+ * via `wasDisposed()`.
  */
 export function createFullStorageAdapter(): FullStorageAdapter {
   const storage = new MemoryStorage();
@@ -130,10 +134,13 @@ export function createFullStorageAdapter(): FullStorageAdapter {
       delete: storage.delete.bind(storage),
       scan: storage.scan.bind(storage),
       batch: storage.batch.bind(storage),
+      conditionalBatch: storage.conditionalBatch.bind(storage),
       has: storage.has?.bind(storage),
       deletePrefix: storage.deletePrefix?.bind(storage),
+      deleteRange: storage.deleteRange?.bind(storage),
       keys: storage.keys?.bind(storage),
       count: storage.count?.bind(storage),
+      scoped: storage.scoped?.bind(storage),
       [Symbol.dispose]: () => {
         disposed = true;
         storage[Symbol.dispose]();

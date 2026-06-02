@@ -8,7 +8,15 @@
  * Run after `bun run build`: bun run verify:exports
  */
 
-import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
@@ -218,18 +226,19 @@ if (!tursoBundle.includes('@libsql/client')) {
   const tempDir = mkdtempSync(join(tmpdir(), 'weft-root-testing-export-'));
   const entryFile = join(tempDir, 'entry.ts');
   const fixtureFile = join(import.meta.dir, 'fixtures/root-import-testing.ts');
-  const rootEntrypoint = join(distPath, 'index.js');
 
   try {
+    const scopedPackageDirectory = join(tempDir, 'node_modules', '@lostgradient');
+    mkdirSync(scopedPackageDirectory, { recursive: true });
+    symlinkSync(repositoryPath, join(scopedPackageDirectory, 'weft'), 'dir');
+
     const fixtureSource = await Bun.file(fixtureFile).text();
-    const packageSpecifier = `'${packageName}'`;
-    const patchedSource = fixtureSource.replace(packageSpecifier, JSON.stringify(rootEntrypoint));
-    if (patchedSource === fixtureSource) {
+    if (!fixtureSource.includes(`'${packageName}'`)) {
       throw new Error(
-        `Test 5: fixture replacement produced no change. ${fixtureFile} no longer contains the literal ${packageSpecifier} — update the fixture or the replacement target.`,
+        `Test 5: fixture no longer imports ${packageName} — update the fixture or the package-resolution smoke test.`,
       );
     }
-    await Bun.write(entryFile, patchedSource);
+    await Bun.write(entryFile, fixtureSource);
 
     try {
       const result = await Bun.build({

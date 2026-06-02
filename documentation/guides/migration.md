@@ -15,6 +15,7 @@ import type { Storage, StorageCapabilities } from '@lostgradient/weft';
 class MyStorage implements Storage {
   capabilities(): StorageCapabilities {
     return {
+      persistence: 'local', // 'ephemeral' | 'local' | 'remote'
       readAfterWrite: 'linearizable', // 'linearizable' | 'session' | 'eventual'
       scanConsistency: 'snapshot', // 'snapshot' | 'best-effort'
       atomicBatch: true, // batch() is all-or-nothing

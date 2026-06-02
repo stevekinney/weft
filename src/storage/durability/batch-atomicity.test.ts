@@ -23,6 +23,7 @@ import {
 /** Expected capability row per durable adapter exercised by this suite. */
 const expectedCapabilitiesBySpec: Record<string, StorageCapabilities> = {
   BunSQLiteStorage: {
+    persistence: 'local',
     readAfterWrite: 'linearizable',
     scanConsistency: 'snapshot',
     atomicBatch: true,
@@ -30,6 +31,7 @@ const expectedCapabilitiesBySpec: Record<string, StorageCapabilities> = {
     boundedRangeDelete: true,
   },
   NodeSQLiteStorage: {
+    persistence: 'local',
     readAfterWrite: 'linearizable',
     scanConsistency: 'snapshot',
     atomicBatch: true,
@@ -37,6 +39,7 @@ const expectedCapabilitiesBySpec: Record<string, StorageCapabilities> = {
     boundedRangeDelete: false,
   },
   TursoStorage: {
+    persistence: 'local',
     readAfterWrite: 'session',
     scanConsistency: 'snapshot',
     atomicBatch: true,

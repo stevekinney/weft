@@ -158,33 +158,55 @@ export {
 // export list, so this mirrors the workaround in src/storage/index.ts.
 await Bun.write(
   './dist/storage/index.js',
-  `import { KEYS, storageConditionalBatch, storageValuesEqual } from './interface.js';
+  `import {
+  assertDurableStorageForRecovery,
+  KEYS,
+  requireStorageCapability,
+  storageConditionalBatch,
+  storageValuesEqual,
+  WEFT_RESERVED_KEY_PREFIXES,
+} from './interface.js';
+import { storageDeleteRange } from './delete-range.js';
 import { MemoryStorage } from './memory.js';
 import { resolveStorage } from './resolve.js';
 import { ScopedStorage, scopedStorage } from './scoped-storage.js';
+import { copyTextKeyValueRowsToStorage } from './text-value-import.js';
+import { textValueStore } from './text-value-store.js';
 import { jsonCodec, msgpackCodec, withCodec } from './typed-storage.js';
 
+const exportedAssertDurableStorageForRecovery = assertDurableStorageForRecovery;
+const exportedCopyTextKeyValueRowsToStorage = copyTextKeyValueRowsToStorage;
 const exportedJsonCodec = jsonCodec;
 const exportedKeys = KEYS;
 const exportedMemoryStorage = MemoryStorage;
 const exportedMsgpackCodec = msgpackCodec;
+const exportedRequireStorageCapability = requireStorageCapability;
 const exportedResolveStorage = resolveStorage;
 const exportedScopedStorage = ScopedStorage;
 const exportedScopedStorageFactory = scopedStorage;
 const exportedStorageConditionalBatch = storageConditionalBatch;
+const exportedStorageDeleteRange = storageDeleteRange;
 const exportedStorageValuesEqual = storageValuesEqual;
+const exportedTextValueStore = textValueStore;
+const exportedWeftReservedKeyPrefixes = WEFT_RESERVED_KEY_PREFIXES;
 const exportedWithCodec = withCodec;
 
 export {
+  exportedAssertDurableStorageForRecovery as assertDurableStorageForRecovery,
+  exportedCopyTextKeyValueRowsToStorage as copyTextKeyValueRowsToStorage,
   exportedJsonCodec as jsonCodec,
   exportedKeys as KEYS,
   exportedMemoryStorage as MemoryStorage,
   exportedMsgpackCodec as msgpackCodec,
+  exportedRequireStorageCapability as requireStorageCapability,
   exportedResolveStorage as resolveStorage,
   exportedScopedStorage as ScopedStorage,
   exportedScopedStorageFactory as scopedStorage,
   exportedStorageConditionalBatch as storageConditionalBatch,
+  exportedStorageDeleteRange as storageDeleteRange,
   exportedStorageValuesEqual as storageValuesEqual,
+  exportedTextValueStore as textValueStore,
+  exportedWeftReservedKeyPrefixes as WEFT_RESERVED_KEY_PREFIXES,
   exportedWithCodec as withCodec,
 };
 `,

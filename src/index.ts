@@ -227,6 +227,8 @@ export { storageDeleteRange } from './storage/delete-range';
 export type { DeleteRangeOptions } from './storage/delete-range';
 export {
   KEYS,
+  WEFT_RESERVED_KEY_PREFIXES,
+  assertDurableStorageForRecovery,
   requireStorageCapability,
   storageConditionalBatch,
   storageValuesEqual,
@@ -241,12 +243,20 @@ export type {
 } from './storage/interface';
 export { MemoryStorage } from './storage/memory';
 export { ScopedStorage, scopedStorage } from './storage/scoped-storage';
+export { copyTextKeyValueRowsToStorage } from './storage/text-value-import';
+export type {
+  CopyTextKeyValueRowsToStorageOptions,
+  CopyTextKeyValueRowsToStorageResult,
+  TextKeyValueRow,
+} from './storage/text-value-import';
 export { jsonCodec, msgpackCodec, withCodec } from './storage/typed-storage';
 export type {
+  CodecStorageOptions,
   MessagePackValue,
   StorageCodec,
   StorageValueParser,
   TypedBatchOperation,
+  TypedConditionalBatchCondition,
   TypedStorage,
 } from './storage/typed-storage';
 // Codec

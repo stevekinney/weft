@@ -65,6 +65,17 @@ import type { Storage } from './interface.ts';
  */
 export type StorageCapabilities = {
   /**
+   * Persistence scope for data written through this storage instance.
+   * - `ephemeral`: data is process- or session-local and is lost when the
+   *   runtime exits or the storage area is cleared (`MemoryStorage`, in-memory
+   *   SQLite/libSQL, browser-extension session storage).
+   * - `local`: data is durably persisted by a local runtime or origin-backed
+   *   store suitable for same-process recovery checks.
+   * - `remote`: data is owned by a remote service or synchronized storage area
+   *   whose durability and freshness depend on that service.
+   */
+  persistence?: 'ephemeral' | 'local' | 'remote';
+  /**
    * Visibility of a completed write to a later read, scoped to one `Storage`
    * instance.
    * - `linearizable`: a completed `put`/`batch` is observable by **any**
@@ -168,5 +179,47 @@ export function requireStorageCapability(
     throw new Error(
       `Feature "${featureName}" requires storage capability "${capability}", but this storage backend does not provide it.`,
     );
+  }
+}
+
+/**
+ * Fail fast when a storage backend is not conservative enough for boot-time
+ * durable recovery. This is intentionally stricter than the engine's per-feature
+ * gates: it rejects ephemeral, remote, eventual, best-effort, non-atomic, and
+ * non-CAS storage before an application starts in durable mode.
+ *
+ * @throws {Error} When the backend's capability row is not suitable for recovery.
+ *
+ * @example
+ * ```ts
+ * import { assertDurableStorageForRecovery } from '@lostgradient/weft';
+ * import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
+ *
+ * await using storage = new SQLiteStorage('./weft.db');
+ * assertDurableStorageForRecovery(storage);
+ * ```
+ */
+export function assertDurableStorageForRecovery(storage: Storage): void {
+  const capabilities = storage.capabilities();
+  const failures: string[] = [];
+
+  if (capabilities.persistence !== 'local') {
+    failures.push(`persistence must be "local" (got "${capabilities.persistence}")`);
+  }
+  if (capabilities.readAfterWrite !== 'linearizable') {
+    failures.push(`readAfterWrite must be "linearizable" (got "${capabilities.readAfterWrite}")`);
+  }
+  if (capabilities.scanConsistency !== 'snapshot') {
+    failures.push(`scanConsistency must be "snapshot" (got "${capabilities.scanConsistency}")`);
+  }
+  if (!capabilities.atomicBatch) {
+    failures.push('atomicBatch must be true');
+  }
+  if (!capabilities.conditionalBatch) {
+    failures.push('conditionalBatch must be true');
+  }
+
+  if (failures.length > 0) {
+    throw new Error(`Storage is not durable enough for recovery: ${failures.join('; ')}.`);
   }
 }

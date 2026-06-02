@@ -170,6 +170,7 @@ let baseUrl: string;
       const result = (await page.evaluate((databaseName) => {
         type IDBStorageCtor = new (name: string) => {
           capabilities(): {
+            persistence: string;
             readAfterWrite: string;
             scanConsistency: string;
             atomicBatch: boolean;
@@ -185,6 +186,7 @@ let baseUrl: string;
         return caps;
       }, uniqueDatabase())) as StorageCapabilities;
 
+      expect(result.persistence).toBe('local');
       expect(result.readAfterWrite).toBe('linearizable');
       expect(result.scanConsistency).toBe('best-effort');
       expect(result.atomicBatch).toBe(true);
