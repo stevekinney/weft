@@ -282,7 +282,7 @@ describe('MCP Streamable HTTP transport', () => {
       method: 'tools/call',
       params: {
         name: 'query_workflow',
-        arguments: { workflowId: 'mcp-control-workflow', name: 'label' },
+        arguments: { workflowId: 'mcp-control-workflow', queryName: 'label' },
       },
     });
     expect(parseToolText(queried.result)).toEqual({ result: 'initial-label' });
@@ -295,7 +295,7 @@ describe('MCP Streamable HTTP transport', () => {
         name: 'update_workflow',
         arguments: {
           workflowId: 'mcp-control-workflow',
-          name: 'setLabel',
+          updateName: 'setLabel',
           payload: 'updated-label',
         },
       },
@@ -308,7 +308,7 @@ describe('MCP Streamable HTTP transport', () => {
       method: 'tools/call',
       params: {
         name: 'signal_workflow',
-        arguments: { workflowId: 'mcp-control-workflow', name: 'release', payload: 'done' },
+        arguments: { workflowId: 'mcp-control-workflow', signalName: 'release', payload: 'done' },
       },
     });
     expect(parseToolText(signalled.result)).toEqual({ ok: true });

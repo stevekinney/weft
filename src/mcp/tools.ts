@@ -214,10 +214,10 @@ function builtInTools(): ToolImplementation[] {
         inputSchema: objectSchema(
           {
             workflowId: { type: 'string' },
-            name: { type: 'string' },
+            signalName: { type: 'string' },
             payload: {},
           },
-          ['workflowId', 'name'],
+          ['workflowId', 'signalName'],
         ),
       },
       call: async (argumentsValue, context) => {
@@ -227,7 +227,7 @@ function builtInTools(): ToolImplementation[] {
         await requireVisibleWorkflow(context, workflowId);
         await context.engine.signal(
           workflowId,
-          requireString(args['name'], 'name'),
+          requireString(args['signalName'], 'signalName'),
           args['payload'],
         );
         return { ok: true };
@@ -240,10 +240,10 @@ function builtInTools(): ToolImplementation[] {
         inputSchema: objectSchema(
           {
             workflowId: { type: 'string' },
-            name: { type: 'string' },
+            updateName: { type: 'string' },
             payload: {},
           },
-          ['workflowId', 'name'],
+          ['workflowId', 'updateName'],
         ),
       },
       call: async (argumentsValue, context) => {
@@ -253,7 +253,7 @@ function builtInTools(): ToolImplementation[] {
         await requireVisibleWorkflow(context, workflowId);
         const result = await context.engine.update(
           workflowId,
-          requireString(args['name'], 'name'),
+          requireString(args['updateName'], 'updateName'),
           args['payload'],
         );
         return { result };
@@ -266,10 +266,10 @@ function builtInTools(): ToolImplementation[] {
         inputSchema: objectSchema(
           {
             workflowId: { type: 'string' },
-            name: { type: 'string' },
+            queryName: { type: 'string' },
             input: {},
           },
-          ['workflowId', 'name'],
+          ['workflowId', 'queryName'],
         ),
       },
       call: async (argumentsValue, context) => {
@@ -279,7 +279,7 @@ function builtInTools(): ToolImplementation[] {
         await requireVisibleWorkflow(context, workflowId);
         const result = await context.engine.query(
           workflowId,
-          requireString(args['name'], 'name'),
+          requireString(args['queryName'], 'queryName'),
           args['input'],
         );
         return { result };
