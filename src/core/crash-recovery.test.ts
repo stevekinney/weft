@@ -964,14 +964,23 @@ describe('crash recovery', () => {
 
     // recover: false opts out — the workflow stays running in storage and no
     // resumed effect fires, even though the engine registered the type.
+    const resumedEvents: WorkflowResumedEvent[] = [];
     const inspecting = await Engine.create({
       storage,
       workflows: { 'opt-out-parked': makeWorkflow() },
       recover: false,
     });
+    inspecting.addEventListener(WorkflowResumedEvent.type, (event) => {
+      resumedEvents.push(event as WorkflowResumedEvent);
+    });
     await flush();
     const dormantState = await inspecting.get('wf-opt-out');
     expect(dormantState?.status).toBe('running');
+    // No WorkflowResumedEvent proves the engine did not call recoverAll() at
+    // all — even a resume that re-parks at the signal would emit this event.
+    // postSignalActivityCalls === 0 alone would not distinguish "no recovery"
+    // from "recovered but still parked."
+    expect(resumedEvents).toHaveLength(0);
     expect(postSignalActivityCalls).toBe(0);
     inspecting[Symbol.dispose]();
   });
