@@ -39,7 +39,9 @@ export function getWorkflowResultPromise(
   // a promise that never settles. Mirrors disposeEngine rejecting in-flight
   // waiters.
   if (internals.disposed) {
-    return Promise.reject(new EngineDisposedError());
+    const rejected = Promise.reject(new EngineDisposedError());
+    void rejected.catch(() => {});
+    return rejected;
   }
 
   const waiter = createWorkflowResultWaiter(internals, workflowId);
