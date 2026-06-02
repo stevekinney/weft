@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
 import { workflow } from '../types.ts';
-import { disposeEngine, EngineDisposedError } from './disposal.ts';
+import { disposeEngine } from './disposal.ts';
+import { EngineDisposedError } from './errors.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
 
@@ -87,6 +88,87 @@ describe('disposeEngine', () => {
     // is already settled here. Without the fix the waiter map is cleared but the
     // promise is never settled, so this await would hang and the test times out.
     await expect(resultPromise).rejects.toBeInstanceOf(EngineDisposedError);
+  });
+
+  it('rejects every pending result waiter when several workflows are in flight', async () => {
+    const engine = new Engine();
+    const internals = getInternals(engine);
+
+    const waiters = ['wf-1', 'wf-2', 'wf-3'].map((workflowId) => {
+      const { promise, resolve, reject } = Promise.withResolvers<unknown>();
+      internals.resultResolvers.set(workflowId, { promise, resolve, reject });
+      return promise;
+    });
+
+    disposeEngine(internals);
+
+    expect(internals.resultResolvers.size).toBe(0);
+    for (const promise of waiters) {
+      await expect(promise).rejects.toBeInstanceOf(EngineDisposedError);
+    }
+  });
+
+  it('rejects handle.result() called after the engine is already disposed', async () => {
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'sleeper-after' }).execute(async function* (ctx) {
+        yield* ctx.sleep('1h');
+        return 'done';
+      }),
+    );
+    const handle = await engine.start('sleeper-after', null);
+
+    engine[Symbol.dispose]();
+
+    // The waiter map is empty post-dispose, so without the `disposed` guard this
+    // would register a fresh waiter the torn-down engine never settles.
+    await expect(handle.result()).rejects.toBeInstanceOf(EngineDisposedError);
+  });
+
+  it('does not reject a result that resolved before dispose', async () => {
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'quick' }).execute(async function* () {
+        return 'finished';
+      }),
+    );
+    const handle = await engine.start('quick', null);
+    // Settle the result first; the waiter is resolved and removed from the map.
+    await expect(handle.result()).resolves.toBe('finished');
+
+    engine[Symbol.dispose]();
+
+    // A completed result stays fulfilled across dispose — dispose only rejects
+    // still-pending waiters.
+    await expect(handle.result()).resolves.toBe('finished');
+  });
+
+  it('leaves external update callers bounded by their own timeout, not EngineDisposedError', async () => {
+    // Pins the deliberate asymmetry: update/review waiters are NOT settled by
+    // dispose (they are internal generator wait-frames). External update callers
+    // must surface their own response timeout rather than hang or observe
+    // EngineDisposedError.
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'never-handles-update' }).execute(async function* (ctx) {
+        yield* ctx.sleep('1h');
+        return 'done';
+      }),
+    );
+    const handle = await engine.start('never-handles-update', null);
+
+    const updatePromise = handle.update('noop', null, { timeout: 50 }).then(
+      () => ({ outcome: 'resolved' as const }),
+      (error: unknown) => ({ outcome: 'rejected' as const, error }),
+    );
+
+    engine[Symbol.dispose]();
+
+    const settled = await updatePromise;
+    expect(settled.outcome).toBe('rejected');
+    if (settled.outcome === 'rejected') {
+      expect(settled.error).not.toBeInstanceOf(EngineDisposedError);
+    }
   });
 
   it('is idempotent — a second dispose does not throw', () => {

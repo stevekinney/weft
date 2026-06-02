@@ -227,7 +227,7 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
   [
     'src/core/engine/handle-result.ts',
     {
-      lines: new Set([50, 51, 76, 77, 78, 79, 91]),
+      lines: new Set([58, 79, 80, 93, 95, 96]),
     },
   ],
   [
@@ -1256,7 +1256,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
     'src/core/engine/engine-runtime-helpers.ts',
     { functions: 2, lines: new Set([29, 30, 31, 52, 53, 54, 55, 56, 60]) },
   ],
-  ['src/core/engine/handle-result.ts', { lines: new Set([48, 69, 70, 83, 85, 86, 106]) }],
+  ['src/core/engine/handle-result.ts', { lines: new Set([58, 79, 80, 93, 95, 96]) }],
   [
     'src/core/engine/inline-launch-queue.ts',
     { functions: 1, lines: new Set([29, 31, 32, 33, 42, 43, 75, 165]) },

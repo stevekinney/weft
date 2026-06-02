@@ -1,4 +1,5 @@
 import type { WorkflowResultWaiter } from './engine-internal-types.ts';
+import { EngineDisposedError } from './errors.ts';
 import { WorkflowHandle } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
 import { loadWorkflowResult, loadWorkflowState } from './storage-io.ts';
@@ -30,6 +31,15 @@ export function getWorkflowResultPromise(
   const existingWaiter = internals.resultResolvers.get(workflowId);
   if (existingWaiter) {
     return existingWaiter.promise;
+  }
+
+  // A result() call after disposal would otherwise register a fresh waiter in a
+  // map the torn-down engine can never settle (the bootstrap returns without
+  // resolving for a still-running workflow). Reject up front instead of leaking
+  // a promise that never settles. Mirrors disposeEngine rejecting in-flight
+  // waiters.
+  if (internals.disposed) {
+    return Promise.reject(new EngineDisposedError());
   }
 
   const waiter = createWorkflowResultWaiter(internals, workflowId);

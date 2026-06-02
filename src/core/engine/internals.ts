@@ -60,6 +60,12 @@ export interface EngineInternals {
   registrations: Map<string, RegistrationEntry>;
   workflowTypesByHandler: WeakMap<Function, string>;
   abortController: AbortController;
+  /**
+   * Set to `true` by {@link disposeEngine}. Guards post-dispose entry points
+   * (such as `handle.result()`) so they reject with {@link EngineDisposedError}
+   * instead of registering a waiter the torn-down engine can never settle.
+   */
+  disposed: boolean;
   scheduler: Scheduler;
   options: ResolvedOptions;
   strategy: ExecutionStrategy;

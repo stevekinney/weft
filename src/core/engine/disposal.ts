@@ -3,8 +3,6 @@ import { EngineDisposedError } from './errors.ts';
 import { disposeQueuedInlineWorkflowStarts } from './inline-launch-queue.ts';
 import type { EngineInternals } from './internals.ts';
 
-export { EngineDisposedError } from './errors.ts';
-
 /**
  * Synchronous teardown for an {@link Engine}. Moved verbatim from
  * `Engine[Symbol.dispose]` — the operation order is correctness-sensitive
@@ -13,6 +11,7 @@ export { EngineDisposedError } from './errors.ts';
  * both delegate here.
  */
 export function disposeEngine(internals: EngineInternals): void {
+  internals.disposed = true;
   internals.alertManager?.[Symbol.dispose]();
   internals.alertManager = null;
   internals.abortController.abort();
