@@ -202,26 +202,8 @@ describe('operation dispatch audit — HTTP-handler integration', () => {
     // pre-failure stages and stops. A regression where an HTTP adapter
     // shortcuts past parse failure (e.g. invokes the operation with raw
     // input) would surface as the trace containing markers AFTER `parsed`.
-    const { handleRequest } = await import('../handler.ts');
-    const { Engine } = await import('../../core/engine.ts');
-    const { MemoryStorage } = await import('../../storage/memory.ts');
-
-    const operation = createTraceOperation();
-    const registry = createOperationRegistry([operation]);
-    const traceBinding = {
-      method: 'POST' as const,
-      path: '/v1/test/trace',
-      pathParamNames: [] as readonly string[],
-      operationName: 'weft.audit.trace',
-      inputSources: { value: { kind: 'body-field' as const, bodyField: 'value' } },
-      extractInput: async (request: Request) => {
-        const body = (await request.json()) as Record<string, unknown>;
-        return { value: body['value'] };
-      },
-      success: { kind: 'json' as const, status: 200 },
-    };
-    const markers: PipelineTraceMarker[] = [];
-    const engine = new Engine({ storage: new MemoryStorage() });
+    const { handleRequest, engine, registry, traceBinding, markers } =
+      await createHttpTraceFixture();
 
     try {
       // value field missing → Zod safeParse rejects → InvalidParams.
@@ -256,26 +238,8 @@ describe('operation dispatch audit — HTTP-handler integration', () => {
     // through the standard pipeline rather than shortcutting around it.
     // The earlier transport sweep above tests executeOperation directly;
     // this test verifies the HTTP handler path lands at executeOperation.
-    const { handleRequest } = await import('../handler.ts');
-    const { Engine } = await import('../../core/engine.ts');
-    const { MemoryStorage } = await import('../../storage/memory.ts');
-
-    const operation = createTraceOperation();
-    const registry = createOperationRegistry([operation]);
-    const traceBinding = {
-      method: 'POST' as const,
-      path: '/v1/test/trace',
-      pathParamNames: [] as readonly string[],
-      operationName: 'weft.audit.trace',
-      inputSources: { value: { kind: 'body-field' as const, bodyField: 'value' } },
-      extractInput: async (request: Request) => {
-        const body = (await request.json()) as Record<string, unknown>;
-        return { value: body['value'] };
-      },
-      success: { kind: 'json' as const, status: 200 },
-    };
-    const markers: PipelineTraceMarker[] = [];
-    const engine = new Engine({ storage: new MemoryStorage() });
+    const { handleRequest, engine, registry, traceBinding, markers } =
+      await createHttpTraceFixture();
 
     try {
       const response = await handleRequest(
@@ -299,6 +263,37 @@ describe('operation dispatch audit — HTTP-handler integration', () => {
     }
   });
 });
+
+/**
+ * Build the invariant HTTP-handler trace harness shared by the two
+ * HTTP-integration tests: the dynamic imports, the trace operation + registry,
+ * the REST `traceBinding`, a fresh marker array, and an engine over
+ * `MemoryStorage`. Each test keeps its own request body, expected status, and
+ * expected marker sequence at the call site; the caller disposes the engine.
+ */
+async function createHttpTraceFixture() {
+  const { handleRequest } = await import('../handler.ts');
+  const { Engine } = await import('../../core/engine.ts');
+  const { MemoryStorage } = await import('../../storage/memory.ts');
+
+  const registry = createOperationRegistry([createTraceOperation()]);
+  const traceBinding = {
+    method: 'POST' as const,
+    path: '/v1/test/trace',
+    pathParamNames: [] as readonly string[],
+    operationName: 'weft.audit.trace',
+    inputSources: { value: { kind: 'body-field' as const, bodyField: 'value' } },
+    extractInput: async (request: Request) => {
+      const body = (await request.json()) as Record<string, unknown>;
+      return { value: body['value'] };
+    },
+    success: { kind: 'json' as const, status: 200 },
+  };
+  const markers: PipelineTraceMarker[] = [];
+  const engine = new Engine({ storage: new MemoryStorage() });
+
+  return { handleRequest, engine, registry, traceBinding, markers };
+}
 
 function createTraceOperation() {
   return defineOperation({
