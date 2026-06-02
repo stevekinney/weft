@@ -22,8 +22,9 @@
 /**
  * External URL prefix under which the functional HTTP/WebSocket API is served
  * (REST workflows/schedules/tasks, `/mcp`, `/jsonrpc`, and the workflow/task
- * WebSocket upgrades). The dashboard SPA owns the origin root, so the API is
- * namespaced beneath this prefix on the wire.
+ * WebSocket upgrades). Optional dashboard shells can be mounted at specific
+ * root-level page routes, so the API is namespaced beneath this prefix on the
+ * wire.
  *
  * This is purely an *external* (wire) concern. Internal routing — the
  * `DIRECT_HTTP_ROUTES` table, every `RestBinding`, the WebSocket-upgrade

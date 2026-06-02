@@ -22,14 +22,13 @@ The binary bundles everything the engine needs to run:
 
 - The Bun runtime (includes SQLite, HTTP server, WebSocket, and more)
 - Weft engine, server, and worker code
-- The web dashboard (pre-built Svelte SPA, embedded as assets)
 - Default configuration
 
 What does _not_ ship inside (and shouldn't): LMDB native bindings (opt-in via `bun add lmdb` when you need them) and your workflow/activity code (loaded at runtime or compiled into your own binary).
 
 ## Three distribution modes
 
-**Standalone server.** Download and run. SQLite is auto-created. The dashboard is available immediately.
+**Standalone server.** Download and run. SQLite is auto-created and the API is available immediately.
 
 ```bash
 curl -L https://github.com/stevekinney/weft/releases/download/v1/weft-darwin-arm64 -o weft
@@ -50,4 +49,4 @@ bun build --compile src/my-app.ts --outfile my-app
 # my-app includes Weft engine + your workflow code in one binary
 ```
 
-The third mode is the interesting one for production. Your entire application—server, engine, workflows, activities, dashboard—compiles into a single file that you `scp` to a server and run. No container orchestration, no dependency management, no "works on my machine."
+The third mode is the interesting one for production. Your entire application—server, engine, workflows, and activities—compiles into a single file that you `scp` to a server and run. No container orchestration, no dependency management, no "works on my machine."

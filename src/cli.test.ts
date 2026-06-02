@@ -193,15 +193,8 @@ describe('CLI argument parsing', () => {
       expect(result.storage).toBe('sqlite');
     });
 
-    it('enables ui by default', () => {
-      const result = parseCliArguments([]) as ServeCommand;
-      expect(result.ui).toBe(true);
-    });
-
-    it('parses --no-ui to disable the dashboard', () => {
-      const result = parseCliArguments(['--no-ui']) as ServeCommand;
-      expect(result.command).toBe('serve');
-      expect(result.ui).toBe(false);
+    it('rejects --no-ui now that the bundled dashboard is removed', () => {
+      expect(() => parseCliArguments(['--no-ui'])).toThrow('Unknown option');
     });
 
     it('parses all flags combined', () => {
@@ -212,14 +205,12 @@ describe('CLI argument parsing', () => {
         '/tmp/all.db',
         '-s',
         'memory',
-        '--no-ui',
         '-h',
       ]) as ServeCommand;
       expect(result.command).toBe('serve');
       expect(result.port).toBe('4000');
       expect(result.database).toBe('/tmp/all.db');
       expect(result.storage).toBe('memory');
-      expect(result.ui).toBe(false);
       expect(result.help).toBe(true);
     });
 
@@ -833,8 +824,8 @@ describe('help text', () => {
     expect(HELP_TEXT).toContain('--storage');
   });
 
-  it('HELP_TEXT documents --no-ui flag', () => {
-    expect(HELP_TEXT).toContain('--no-ui');
+  it('HELP_TEXT does not document removed dashboard flags', () => {
+    expect(HELP_TEXT).not.toContain('--no-ui');
   });
 
   it('HELP_TEXT lists all storage backends', () => {
@@ -1162,6 +1153,8 @@ describe('CLI direct execution', () => {
 
   it('starts the server and responds to health check', async () => {
     const port = 17233 + Math.floor(Math.random() * 1000);
+    const apiMessage = `Weft API running at http://0.0.0.0:${port}/api/v1`;
+    const healthMessage = `Health check: http://0.0.0.0:${port}/v1/health`;
     const process = Bun.spawn(
       ['bun', './src/cli-main.ts', '--port', String(port), '--database', ':memory:'],
       {
@@ -1169,6 +1162,22 @@ describe('CLI direct execution', () => {
         stderr: 'pipe',
       },
     );
+
+    let stdout = '';
+    const stdoutReader = process.stdout.getReader();
+    const stdoutDrain = (async () => {
+      const decoder = new TextDecoder();
+      try {
+        while (true) {
+          const chunk = await stdoutReader.read();
+          if (chunk.done) break;
+          stdout += decoder.decode(chunk.value, { stream: true });
+        }
+      } finally {
+        stdout += decoder.decode();
+        stdoutReader.releaseLock();
+      }
+    })();
 
     try {
       await waitForCondition(
@@ -1182,10 +1191,19 @@ describe('CLI direct execution', () => {
         },
         { timeoutMs: 3_000, intervalMs: 25, label: 'CLI health endpoint' },
       );
+
+      await waitForCondition(
+        async () => stdout.includes(apiMessage) && stdout.includes(healthMessage),
+        { timeoutMs: 3_000, intervalMs: 25, label: 'CLI startup output' },
+      );
     } finally {
       process.kill('SIGTERM');
       await process.exited;
+      await stdoutDrain;
     }
+
+    expect(stdout).toContain(apiMessage);
+    expect(stdout).toContain(healthMessage);
   });
 
   it('accepts --storage flag via the CLI binary', async () => {
@@ -1198,14 +1216,14 @@ describe('CLI direct execution', () => {
     expect(exitCode).toBe(0);
   });
 
-  it('accepts --no-ui flag via the CLI binary', async () => {
+  it('rejects --no-ui flag via the CLI binary', async () => {
     const process = Bun.spawn(['bun', './src/cli-main.ts', '--help', '--no-ui'], {
       stdout: 'pipe',
       stderr: 'pipe',
     });
 
     const exitCode = await process.exited;
-    expect(exitCode).toBe(0);
+    expect(exitCode).toBe(1);
   });
 
   it('validates the bundled examples through the CLI entrypoint and exits 0', async () => {

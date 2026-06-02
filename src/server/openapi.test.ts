@@ -5,7 +5,7 @@ import { emitBindings, generateOpenApiDocument } from './openapi.ts';
 import { createOperationRegistry } from './operation-catalog.ts';
 import { defineOperation } from './operation-registry.ts';
 import type { UnknownRestBinding } from './rest-bindings.ts';
-import { DIRECT_HTTP_ROUTES, toOpenApiPath, toRegex } from './route-model.ts';
+import { DIRECT_HTTP_ROUTES, externalApiPath, toOpenApiPath, toRegex } from './route-model.ts';
 
 describe('OpenAPI document generation', () => {
   const document = generateOpenApiDocument();
@@ -486,6 +486,25 @@ describe('emitBindings — body-accepting methods', () => {
 });
 
 describe('route-model helpers', () => {
+  describe('externalApiPath', () => {
+    it('adds the external API prefix to canonical root-relative paths', () => {
+      expect(externalApiPath('/v1/workflows')).toBe('/api/v1/workflows');
+      expect(externalApiPath('/mcp')).toBe('/api/mcp');
+    });
+
+    it('rejects paths without a leading slash', () => {
+      expect(() => externalApiPath('v1/workflows')).toThrow(
+        'externalApiPath requires a leading slash',
+      );
+    });
+
+    it('rejects paths that are already externally prefixed', () => {
+      expect(() => externalApiPath('/api/v1/workflows')).toThrow(
+        'externalApiPath received an already-prefixed path',
+      );
+    });
+  });
+
   describe('toOpenApiPath', () => {
     it('converts :param to {param}', () => {
       expect(toOpenApiPath('/v1/workflows/:id/signal/:name')).toBe(

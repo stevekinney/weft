@@ -262,7 +262,7 @@ export function buildBunServeConfig(
   port: number,
   hostname: string,
   development: boolean,
-  routes: Record<string, unknown>,
+  routes: Bun.Serve.Routes<WebSocketData, string>,
   tlsOptions: ReturnType<typeof buildTLSOptions>,
   fetchHandler: (request: Request) => Promise<Response | undefined>,
   websocketCallbacks: ReturnType<typeof createServerWebSocketHandlers>,

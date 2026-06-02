@@ -6,7 +6,6 @@ import { join } from 'node:path';
 import {
   buildTestCommand,
   createRealDependencies,
-  discoverSerialTestFiles,
   discoverTestFiles,
   extractJunitFailureExcerpts,
   formatFailingTests,
@@ -15,7 +14,6 @@ import {
   parseJunitFailures,
   renderTestOutcome,
   runTestSuite,
-  SERIAL_TEST_PATHS,
   STALE_DIRECTORY_AGE_MS,
   sweepStalePrecommitDirectories,
   tailBound,
@@ -282,18 +280,6 @@ describe('discoverTestFiles', () => {
     for (const excluded of LOAD_SENSITIVE_TEST_PATHS) {
       expect(files).not.toContain(excluded);
     }
-  });
-
-  it('excludes serial dashboard files from the parallel set', async () => {
-    const files = await discoverTestFiles();
-    for (const excluded of SERIAL_TEST_PATHS) {
-      expect(files).not.toContain(excluded);
-    }
-  });
-
-  it('discovers serial dashboard files separately', async () => {
-    const files = await discoverSerialTestFiles();
-    expect(files).toEqual([...SERIAL_TEST_PATHS]);
   });
 
   it('returns only .test.ts files', async () => {

@@ -3,7 +3,7 @@
 You've built your workflows and tested them locally. Now you need to expose them over the network—accept HTTP requests to start workflows, send signals, query status, and stream results over WebSockets. Weft's server module wraps `Bun.serve()` with a complete REST API and WebSocket support.
 
 > [!NOTE]
-> [`serve()`](../reference/api-server.md#serve) and the `/v1` REST surface are candidate-stable, provisional surfaces. [MCP discovery](../reference/api-server.md#mcp-server), the bundled dashboard, and the exact [OpenTelemetry](./observability.md) metric names remain experimental until the Tier-0 failure-semantics work finishes and the launch contract is frozen.
+> [`serve()`](../reference/api-server.md#serve) and the `/v1` REST surface are candidate-stable, provisional surfaces. [MCP discovery](../reference/api-server.md#mcp-server), externally supplied dashboard mounting, and the exact [OpenTelemetry](./observability.md) metric names remain experimental until the Tier-0 failure-semantics work finishes and the launch contract is frozen.
 
 ## Starting the server
 
@@ -29,7 +29,7 @@ interface ServeOptions {
   port?: number;
   hostname?: string;
   development?: boolean; // enable Bun's development mode (HMR, source maps)
-  dashboard?: unknown; // dashboard HTML/module import served at /
+  dashboard?: DashboardRouteTarget; // external dashboard shell served at supported page routes
   auth?: AuthConfig; // API key or JWT authentication configuration
   cors?: CorsOptions; // cross-origin policy for browser clients; omit for same-origin only
   unauthenticatedAccess?: 'warn' | 'allow' | 'reject'; // startup policy when auth is omitted
@@ -124,7 +124,7 @@ Each key may also carry an absolute `expiresAt` timestamp, after which it is rej
 
 ## Cross-Origin Resource Sharing (CORS)
 
-The dashboard and the [Service Worker browser runtime](#service-worker) are browser clients. When they run on the **same origin** as the API—the default when the CLI serves the dashboard from `/`, or when a reverse proxy puts the UI and API behind one hostname—no CORS configuration is needed, and Weft ships nothing by default: `serve()` emits no `Access-Control-*` headers and only same-origin browser requests succeed. **The default is deliberately restrictive; Weft never sends `Access-Control-Allow-Origin: *`.**
+External dashboards and the [Service Worker browser runtime](#service-worker) are browser clients. When they run on the **same origin** as the API—for example, when an embedded server mounts a dashboard shell with `serve({ dashboard })`, or when a reverse proxy puts the UI and API behind one hostname—no CORS configuration is needed, and Weft ships nothing by default: `serve()` emits no `Access-Control-*` headers and only same-origin browser requests succeed. **The default is deliberately restrictive; Weft never sends `Access-Control-Allow-Origin: *`.**
 
 Configure `cors` only when a browser client calls the API from a **different origin** (a dashboard hosted separately, a web app embedding Weft's API, or a Service Worker registered under another origin):
 
@@ -163,9 +163,9 @@ Two combinations fail fast—`serve()` throws before binding the port:
 
 A wildcard origin is allowed only for a public, non-credentialed API that does not accept an `Authorization` header. For everything else, list the exact origins your browser clients are served from.
 
-## Dashboard
+## External Dashboard Mounting
 
-The built-in dashboard is served at `/` when you pass a dashboard HTML/module import to `serve({ dashboard })`. The CLI loads the bundled dashboard by default and prints the dashboard URL after startup; pass `--no-ui` to run only the API and worker endpoints. For production, do not expose a CLI-started dashboard directly on a public interface unless access is controlled in front of Weft. Put an authenticated reverse proxy or custom wrapper in front of `/` before exposing it beyond a trusted operator network. During dashboard development, `bun run dev:dashboard` starts the server with the dashboard artifact from `src/dashboard/index.html`, which is the same kind of value you can pass through `ServeOptions.dashboard` in an embedded server.
+Weft no longer bundles a dashboard, and the CLI starts a headless API server. Embedded servers can still pass an externally supplied dashboard shell to `serve({ dashboard })`; Weft mounts that shell at `/`, `/workflows`, `/workflows/*`, `/reviews`, and `/workers`, while `/api/...` and discovery routes continue to be handled by the API. `serve({ auth })` protects API calls made by that shell; it does not authenticate the shell route itself because Bun serves `routes` entries before Weft's fetch handler runs. For production, put an external dashboard behind a trusted reverse proxy or operator-only network when the shell itself must be access-controlled.
 
 ## The WeftServer handle
 

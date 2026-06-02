@@ -13,7 +13,6 @@ export type CliCommand =
       port: string;
       database: string;
       storage: StorageBackend;
-      ui: boolean;
       help: boolean;
       workflows?: string;
     }

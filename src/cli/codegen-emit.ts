@@ -22,8 +22,8 @@
  * module augmentation — that interface was removed when the chained
  * workflow builder made activity names a per-workflow concern (typed at
  * the builder's `.activities({...})` step). The snapshot still carries
- * activity schemas because the same registry feeds the dashboard and
- * MCP tooling, but the emitter intentionally drops them from the
+ * activity schemas because the same registry feeds discovery and MCP tooling,
+ * but the emitter intentionally drops them from the
  * generated `.d.ts`.
  *
  * The JSON Schema subset supported here covers what

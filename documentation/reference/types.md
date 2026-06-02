@@ -923,7 +923,7 @@ interface ServeOptions {
   port?: number;
   hostname?: string;
   development?: boolean;
-  dashboard?: unknown;
+  dashboard?: DashboardRouteTarget;
   auth?: AuthConfig;
   unauthenticatedAccess?: 'warn' | 'allow' | 'reject';
 }

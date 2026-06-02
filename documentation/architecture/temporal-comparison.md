@@ -106,7 +106,7 @@ docker compose up -d          # PostgreSQL, Elasticsearch, 4 Temporal services
 temporal server start-dev     # ... or the dev shortcut that still needs Docker
 
 # Weft
-./weft --port 7233            # SQLite auto-created. Dashboard at localhost:7233/
+./weft --port 7233            # SQLite auto-created. REST API at localhost:7233/api/v1/
 ```
 
 Weft's CLI also includes `weft doctor`, a diagnostic command that reports database health, workflow statistics, queue depths, performance metrics, and actionable recommendations—all without any external monitoring infrastructure.

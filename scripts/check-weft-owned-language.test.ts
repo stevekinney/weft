@@ -70,7 +70,10 @@ describe('Weft-owned language', () => {
     const matches: string[] = [];
 
     for (const relativePath of await trackedFiles()) {
-      const rawContent = await Bun.file(new URL(relativePath, `file://${repositoryRoot}/`)).text();
+      const trackedFile = Bun.file(new URL(relativePath, `file://${repositoryRoot}/`));
+      if (!(await trackedFile.exists())) continue;
+
+      const rawContent = await trackedFile.text();
       const lowered = contentForCheck(relativePath, rawContent).toLowerCase();
       const lines = lowered.split('\n');
 

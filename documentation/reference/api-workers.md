@@ -525,11 +525,3 @@ type ListTaskQueuesResponse = {
 ```
 
 Queues are sorted by `queue` ascending.
-
-### Dashboard view
-
-The bundled dashboard ships a "Workers" page at `/workers` that
-renders workers, deployment aggregates, task queues, and drain controls
-side-by-side and polls every five seconds.
-Polling pauses while the tab is hidden and resumes when it becomes
-visible again.

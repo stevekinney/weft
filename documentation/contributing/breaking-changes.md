@@ -13,7 +13,7 @@ Not every Weft surface carries the same stability promise. The tier is stated pe
 
 **Stable surfaces (as of 0.1.x):** `Engine`, `TestEngine`, `SQLiteStorage` (Bun and Node), `LMDBStorage`, `RemoteWorker`, `serve()` and the `/v1/` REST surface, public error classes and `WeftErrorCode`, `WorkflowContext` method signatures, and `ActivityDefinition` fields.
 
-**Experimental surfaces:** Browser runtime, MCP server, `IndexedDBStorage`, `WebExtensionStorage`, `HTTPStorage`, `CompressedStorage`, Turso storage (pending conformance proof), CLI commands beyond `serve` and `doctor`, OTel metric names, the dashboard, and `ctx.step()` sugar.
+**Experimental surfaces:** Browser runtime, MCP server, `IndexedDBStorage`, `WebExtensionStorage`, `HTTPStorage`, `CompressedStorage`, Turso storage (pending conformance proof), CLI commands beyond `serve` and `doctor`, OTel metric names, externally supplied dashboard mounting, and `ctx.step()` sugar.
 
 ## Versioning
 

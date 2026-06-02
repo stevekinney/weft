@@ -39,13 +39,13 @@ The database file is created automatically. No migrations to run.
 
 ## Standalone Binary
 
-For larger deployments, build a standalone binary with the Weft engine, server, web dashboard, and your workflow code in one artifact. This is useful when you want REST API endpoints, WebSocket worker connections, and application logic with no runtime dependencies on the target machine.
+For larger deployments, build a standalone binary with the Weft engine, server, and your workflow code in one artifact. This is useful when you want REST API endpoints, WebSocket worker connections, and application logic with no runtime dependencies on the target machine.
 
 ```bash
 bun run build:binary
 ```
 
-The build script (`scripts/build-binary-main.ts`) bundles the Bun runtime, the Weft engine, your workflows, and the server dashboard. For cross-compilation targets, see the script's Bun `--target` options.
+The build script (`scripts/build-binary-main.ts`) bundles the Bun runtime, the Weft engine, and your workflows. For cross-compilation targets, see the script's Bun `--target` options.
 
 ## Supported Platforms
 
@@ -67,7 +67,7 @@ bun build --compile --target=bun-windows-x64  src/cli-main.ts --outfile dist/wef
 
 ## What Ships Inside the Binary
 
-The compiled binary includes the Bun runtime (with SQLite, HTTP server, and WebSocket built in), the Weft engine and server code, the web dashboard, and default configuration. It does not include native bindings for optional peers — `lmdb`, `@libsql/client`, and `@opentelemetry/api` — install those separately if you use Turso, LMDB, or OpenTelemetry.
+The compiled binary includes the Bun runtime (with SQLite, HTTP server, and WebSocket built in), the Weft engine and server code, and default configuration. It does not include native bindings for optional peers — `lmdb`, `@libsql/client`, and `@opentelemetry/api` — install those separately if you use Turso, LMDB, or OpenTelemetry.
 
 ## Next Steps
 

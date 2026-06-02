@@ -10,8 +10,7 @@ import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 import { createOrderProcessingEngine, orderProcessingSchedule } from '../src/registry';
 
 describe('order-processing server smoke check', () => {
-  it('serves health and dashboard routes against SQLite storage', async () => {
-    const dashboardModule = await import('../../../src/dashboard/index.html' as string);
+  it('serves health and a caller-supplied shell against SQLite storage', async () => {
     const temporaryDirectory = await mkdtemp(join(tmpdir(), 'weft-order-processing-smoke-'));
 
     try {
@@ -20,7 +19,9 @@ describe('order-processing server smoke check', () => {
       await engine.schedule(orderProcessingSchedule);
 
       await using server = serve({
-        dashboard: dashboardModule.default,
+        dashboard: new Response('<html><body>order shell</body></html>', {
+          headers: { 'Content-Type': 'text/html' },
+        }),
         engine,
         hostname: '127.0.0.1',
         port: 0,
@@ -35,12 +36,10 @@ describe('order-processing server smoke check', () => {
       const apiHealthResponse = await fetch(new URL('/api/v1/health', server.url));
       expect(apiHealthResponse.ok).toBe(true);
 
-      // The dashboard shell is served from the origin root.
-      const dashboardResponse = await fetch(new URL('/', server.url));
-      expect(dashboardResponse.ok).toBe(true);
-      // Bundled-asset reachability is exercised by the repo-root dashboard asset
-      // smoke test; the bundler emits cwd-relative asset URLs, so asserting them
-      // here (run from the example's own cwd) is environment-fragile.
+      // A caller-supplied shell can still mount on the origin root.
+      const shellResponse = await fetch(new URL('/', server.url));
+      expect(shellResponse.ok).toBe(true);
+      expect(await shellResponse.text()).toContain('order shell');
     } finally {
       await rm(temporaryDirectory, { force: true, recursive: true });
     }

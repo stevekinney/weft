@@ -2,7 +2,6 @@
 import { $ } from 'bun';
 
 import {
-  discoverSerialTestFiles,
   discoverTestFiles,
   extractJunitFailureExcerpts,
   renderTestOutcome,
@@ -147,15 +146,6 @@ function reportTestOutcome(outcome: Awaited<ReturnType<typeof runTestSuite>>): b
   const outcome = await runTestSuite(testFiles);
   if (!reportTestOutcome(outcome)) {
     ok = false;
-  }
-
-  const serialTestFiles = await discoverSerialTestFiles();
-  if (serialTestFiles.length > 0) {
-    info(`Running serial dashboard tests… (${serialTestFiles.length} files)`);
-    const serialOutcome = await runTestSuite(serialTestFiles, undefined, { parallel: false });
-    if (!reportTestOutcome(serialOutcome)) {
-      ok = false;
-    }
   }
 }
 

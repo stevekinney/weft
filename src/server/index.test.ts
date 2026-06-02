@@ -340,7 +340,7 @@ describe('serve', () => {
   const makeDashboard = (): Response =>
     new Response(dashboardBody, { headers: { 'Content-Type': 'text/html' } });
 
-  it('serves the dashboard at the origin root', async () => {
+  it('serves a supplied dashboard shell at the origin root', async () => {
     engine = createEngine();
     server = serve({ engine, port: 0, dashboard: makeDashboard() });
 
@@ -349,13 +349,12 @@ describe('serve', () => {
     expect(await rootResponse.text()).toContain('dashboard');
   });
 
-  it('serves the dashboard shell at every known top-level page route', async () => {
+  it('serves a supplied dashboard shell at every supported page route', async () => {
     engine = createEngine();
     server = serve({ engine, port: 0, dashboard: makeDashboard() });
 
-    // Enumerating DASHBOARD_PAGE_ROUTES is the enforcement mechanism that keeps
-    // the server route list in sync with the SPA ROUTE_TABLE: a hard reload of
-    // any dashboard page must resolve to the shell.
+    // Enumerating DASHBOARD_PAGE_ROUTES pins the server-owned mount list used by
+    // external dashboard packages.
     for (const route of DASHBOARD_PAGE_ROUTES) {
       // `/workflows/*` is a deep-link pattern; exercise it with a concrete id.
       const path = route.endsWith('/*') ? `${route.slice(0, -2)}/abc123` : route;
@@ -363,6 +362,37 @@ describe('serve', () => {
       expect(response.status).toBe(200);
       expect(await response.text()).toContain('dashboard');
     }
+  });
+
+  it('is headless by default on every dashboard page route', async () => {
+    engine = createEngine();
+    server = serve({ engine, port: 0 });
+
+    for (const route of DASHBOARD_PAGE_ROUTES) {
+      const path = route.endsWith('/*') ? `${route.slice(0, -2)}/abc123` : route;
+      const response = await fetch(`${server.url}${path}`);
+      expect(response.status).toBe(404);
+    }
+
+    const canonicalHealthResponse = await fetch(`${server.url}/v1/health`);
+    expect(canonicalHealthResponse.status).toBe(200);
+
+    const prefixedHealthResponse = await fetch(`${server.url}/api/v1/health`);
+    expect(prefixedHealthResponse.status).toBe(200);
+  });
+
+  it('treats a null dashboard option from JavaScript callers as headless', async () => {
+    engine = createEngine();
+    const javascriptOptions = { engine, port: 0, dashboard: null } as unknown as Parameters<
+      typeof serve
+    >[0];
+    server = serve(javascriptOptions);
+
+    const rootResponse = await fetch(`${server.url}/`);
+    expect(rootResponse.status).toBe(404);
+
+    const healthResponse = await fetch(`${server.url}/v1/health`);
+    expect(healthResponse.status).toBe(200);
   });
 
   it('does not serve the dashboard for unknown root paths (no blanket catch-all)', async () => {
