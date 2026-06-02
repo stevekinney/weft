@@ -1,6 +1,9 @@
 import { disposeEngineCleanupInterval } from './engine-runtime-helpers.ts';
+import { EngineDisposedError } from './errors.ts';
 import { disposeQueuedInlineWorkflowStarts } from './inline-launch-queue.ts';
 import type { EngineInternals } from './internals.ts';
+
+export { EngineDisposedError } from './errors.ts';
 
 /**
  * Synchronous teardown for an {@link Engine}. Moved verbatim from
@@ -31,6 +34,16 @@ export function disposeEngine(internals: EngineInternals): void {
   }
   internals.nextRetentionSweepAt = null;
   internals.handleCache.clear();
+  // Reject pending result waiters before clearing so external `handle.result()`
+  // callers observe a deterministic rejection instead of a promise that never
+  // settles. Mirrors the signalWaiters settle-before-clear precedent above.
+  // (update/review waiters are internal generator wait-frames awaited only by
+  // the now-disposed engine; abandoning them is correct, and resolving them
+  // would step a workflow generator against torn-down machinery. External
+  // update/review callers are bounded by their own response timeouts.)
+  for (const waiter of internals.resultResolvers.values()) {
+    waiter.reject(new EngineDisposedError());
+  }
   internals.resultResolvers.clear();
   internals.updateWaiters.clear();
   internals.updateWaitersByWorkflow.clear();

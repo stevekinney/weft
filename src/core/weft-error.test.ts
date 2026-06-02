@@ -11,6 +11,7 @@ import {
   BulkOperationConfirmationError,
   EffectReplayConflictError,
   EngineCreateNameMismatchError,
+  EngineDisposedError,
   HttpClientError,
   PayloadSizeExceededError,
   PersistedDataIncompatibleError,
@@ -49,6 +50,7 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
     }),
   EngineCreateNameMismatchError: () =>
     new EngineCreateNameMismatchError('workflow', 'expected', 'actual'),
+  EngineDisposedError: () => new EngineDisposedError(),
   WorkflowNotFoundError: () => new WorkflowNotFoundError('wf-404'),
   WorkflowNotRegisteredError: () => new WorkflowNotRegisteredError('checkout'),
   ActivityResolutionError: () => new ActivityResolutionError('checkout', 'charge'),

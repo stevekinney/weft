@@ -251,6 +251,7 @@ export {
   BulkDeleteRequiresTerminalWorkflowsError,
   BulkOperationConfirmationError,
   EngineCreateNameMismatchError,
+  EngineDisposedError,
   PersistedDataIncompatibleError,
   WorkflowAlreadyExistsError,
   WorkflowNotFoundError,

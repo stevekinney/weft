@@ -33,6 +33,7 @@ export {
   BulkOperationConfirmationError,
   Engine,
   EngineCreateNameMismatchError,
+  EngineDisposedError,
   PersistedDataIncompatibleError,
   ScheduleHandle,
   WorkflowAlreadyExistsError,

@@ -181,6 +181,27 @@ export class EngineCreateNameMismatchError extends WeftError<'EngineCreateNameMi
 }
 
 /**
+ * Thrown to settle a pending `handle.result()` promise when the engine is
+ * disposed while the workflow is still in flight. Disposing the engine tears
+ * down the machinery that would eventually resolve the result, so awaiting
+ * callers receive this rejection instead of a promise that never settles.
+ *
+ * @example
+ * ```ts
+ * import { EngineDisposedError } from '@lostgradient/weft';
+ *
+ * function isShutdownDuringResult(error: unknown): boolean {
+ *   return error instanceof EngineDisposedError;
+ * }
+ * ```
+ */
+export class EngineDisposedError extends WeftError<'EngineDisposedError'> {
+  constructor() {
+    super('EngineDisposedError', 'Engine was disposed before the workflow completed');
+  }
+}
+
+/**
  * Thrown by engine APIs that need a workflow to be present in storage but
  * cannot find one with the given ID. Inspect `workflowId` to identify the
  * missing record.
