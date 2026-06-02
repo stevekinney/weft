@@ -20,6 +20,12 @@ void lockedDownServeOptions;
 const dashboardTarget: DashboardRouteTarget = new Response('<html></html>');
 void dashboardTarget;
 
+const dashboardHandlerTarget: DashboardRouteTarget = (_request, server) => {
+  void server;
+  return new Response('<html></html>');
+};
+void dashboardHandlerTarget;
+
 const dashboardServeOptions: ServeOptions = {
   engine,
   dashboard: new Response('<html></html>'),
@@ -28,7 +34,7 @@ void dashboardServeOptions;
 
 const functionDashboardServeOptions: ServeOptions = {
   engine,
-  dashboard: () => new Response('<html></html>'),
+  dashboard: dashboardHandlerTarget,
 };
 void functionDashboardServeOptions;
 

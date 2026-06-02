@@ -119,7 +119,7 @@ export type DashboardPageRoute = (typeof DASHBOARD_PAGE_ROUTES)[number];
  * void dashboard;
  * ```
  */
-export type DashboardRouteTarget = Bun.Serve.Routes<undefined, string>[string];
+export type DashboardRouteTarget = Bun.Serve.Routes<unknown, string>[string];
 
 /**
  * Startup policy for `serve()` when no `auth` configuration is supplied.
@@ -402,7 +402,7 @@ export function serve(options: ServeOptions): WeftServer {
   const boundCleanup = (operationId: string): void => cleanupWorkflowIndex(context, operationId);
 
   const routes: Bun.Serve.Routes<WebSocketData, string> = {};
-  if (options.dashboard !== undefined) {
+  if (options.dashboard != null) {
     // Mount a supplied dashboard shell at known top-level page routes — never a blanket
     // `/*`. Bun matches the static `routes` map before the `fetch` fallback
     // (where the entire API is dispatched), and `fetch` never runs for a path a
@@ -411,7 +411,7 @@ export function serve(options: ServeOptions): WeftServer {
     // specific page routes can't collide with `/api/...` or the root-stable
     // carve-outs, so `fetch` still owns everything else.
     for (const path of DASHBOARD_PAGE_ROUTES) {
-      routes[path] = options.dashboard as Bun.Serve.Routes<WebSocketData, string>[string];
+      routes[path] = options.dashboard;
     }
   }
 

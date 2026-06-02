@@ -381,6 +381,20 @@ describe('serve', () => {
     expect(prefixedHealthResponse.status).toBe(200);
   });
 
+  it('treats a null dashboard option from JavaScript callers as headless', async () => {
+    engine = createEngine();
+    const javascriptOptions = { engine, port: 0, dashboard: null } as unknown as Parameters<
+      typeof serve
+    >[0];
+    server = serve(javascriptOptions);
+
+    const rootResponse = await fetch(`${server.url}/`);
+    expect(rootResponse.status).toBe(404);
+
+    const healthResponse = await fetch(`${server.url}/v1/health`);
+    expect(healthResponse.status).toBe(200);
+  });
+
   it('does not serve the dashboard for unknown root paths (no blanket catch-all)', async () => {
     engine = createEngine();
     server = serve({ engine, port: 0, dashboard: makeDashboard() });

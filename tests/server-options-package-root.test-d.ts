@@ -14,11 +14,23 @@ void packageRootServeOptions;
 const packageRootDashboardTarget: DashboardRouteTarget = new Response('<html></html>');
 void packageRootDashboardTarget;
 
+const packageRootDashboardHandlerTarget: DashboardRouteTarget = (_request, server) => {
+  void server;
+  return new Response('<html></html>');
+};
+void packageRootDashboardHandlerTarget;
+
 const packageRootDashboardServeOptions: ServeOptions = {
   engine: packageRootEngine,
   dashboard: new Response('<html></html>'),
 };
 void packageRootDashboardServeOptions;
+
+const packageRootDashboardHandlerServeOptions: ServeOptions = {
+  engine: packageRootEngine,
+  dashboard: packageRootDashboardHandlerTarget,
+};
+void packageRootDashboardHandlerServeOptions;
 
 const invalidPackageRootDashboardServeOptions: ServeOptions = {
   engine: packageRootEngine,
