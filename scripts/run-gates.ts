@@ -154,7 +154,7 @@ export async function runPipeline(
       );
       for (const line of summaryLines(pipelineName, results)) console.log(line);
       console.error(chalk.red(`\n${capitalCase(pipelineName)} failed at gate "${gate.name}".`));
-      return 1;
+      return code;
     }
   }
 

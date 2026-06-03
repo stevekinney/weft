@@ -97,12 +97,12 @@ describe('runPipeline', () => {
     }
   });
 
-  it('fails fast: stops at the first failing gate and returns 1', async () => {
+  it('fails fast: stops at the first failing gate and returns its exit code', async () => {
     const console = captureConsole();
     const { runGate, ran } = stubRunner({ typecheck: 2 });
     try {
       const code = await runPipeline('validate', runGate);
-      expect(code).toBe(1);
+      expect(code).toBe(2);
       // 'lint' and 'typecheck' ran; nothing after 'typecheck' did.
       expect(ran).toEqual(['lint', 'typecheck']);
       expect(console.log.join('\n')).toContain('typecheck failed (exit 2');
