@@ -1,5 +1,18 @@
 import { createMetricsCollectorExporter, Engine } from '@lostgradient/weft';
-import type { DashboardRouteTarget, ServeOptions } from '@lostgradient/weft/server';
+import {
+  WorkerRegistry,
+  type AuthConfig,
+  type DashboardRouteTarget,
+  type DiscoveryInfo,
+  type PrometheusExporter,
+  type RetryPolicy,
+  type RoutingPolicy,
+  type SchedulingPolicy,
+  type ServeOptions,
+  type TaskDispatch,
+  type TaskQueue,
+  type WeftServer,
+} from '@lostgradient/weft/server';
 import type { HandlerOptions } from '@lostgradient/weft/server/handler';
 
 const packageRootEngine = new Engine();
@@ -54,3 +67,47 @@ void packageRootHandlerOptions;
 // @ts-expect-error `metricsCollector` is no longer a public package handler option.
 const legacyPackageRootHandlerOptions: HandlerOptions = { metricsCollector: undefined };
 void legacyPackageRootHandlerOptions;
+
+// Every option/handle TYPE named in ServeOptions / WeftServer / TaskDispatch is
+// importable from the published '@lostgradient/weft/server' subpath. The `Engine`
+// instance passed to `serve()` is the exception: it comes from the root
+// '@lostgradient/weft' (imported on line 1), its canonical home, by design.
+const packageRootRoutingPolicy: RoutingPolicy = 'least-loaded';
+const packageRootSchedulingPolicy: SchedulingPolicy = 'fifo';
+const packageRootDiscoveryInfo: DiscoveryInfo = { description: 'Example API' };
+const packageRootReexportedExporter: PrometheusExporter = packageRootPrometheusExporter;
+const packageRootAuth: AuthConfig = { apiKeys: ['secret'] };
+
+const fullyTypedPackageRootServeOptions: ServeOptions = {
+  engine: packageRootEngine,
+  auth: packageRootAuth,
+  routingPolicy: packageRootRoutingPolicy,
+  schedulingPolicy: packageRootSchedulingPolicy,
+  discoveryInfo: packageRootDiscoveryInfo,
+  prometheusExporter: packageRootReexportedExporter,
+};
+void fullyTypedPackageRootServeOptions;
+
+const packageRootTaskDispatch: TaskDispatch = {
+  operationId: 'op-1',
+  activityName: 'sendEmail',
+  input: {},
+  retryPolicy: {
+    maxAttempts: 3,
+    initialBackoff: '1s',
+    backoffMultiplier: 2,
+    maxBackoff: '30s',
+  } satisfies RetryPolicy,
+};
+void packageRootTaskDispatch;
+
+declare const packageRootServer: WeftServer;
+const packageRootRegistry: WorkerRegistry = packageRootServer.registry;
+const packageRootTaskQueue: TaskQueue = packageRootServer.taskQueue;
+void packageRootRegistry;
+void packageRootTaskQueue;
+
+// WorkerRegistry is re-exported as a VALUE from the published subpath, so it is
+// constructable — not merely nameable as a type.
+const packageRootConstructedRegistry = new WorkerRegistry();
+void packageRootConstructedRegistry;

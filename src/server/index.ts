@@ -55,11 +55,27 @@ export {
   type ApiKeyRegistration,
   type AuthAuditEvent,
   type AuthAuditSink,
+  type AuthConfig,
   type RateLimitConfig,
   type RateLimitDecision,
   type RateLimiter,
   type RotatingApiKeyStore,
 } from './authentication.ts';
+
+// Re-export every option/handle *type* named in ServeOptions / WeftServer /
+// TaskDispatch so a consumer of `@lostgradient/weft/server` can name them all
+// from this entry point. (AuthConfig/RateLimitConfig ship from the auth block
+// above; CorsOptions from its own export above.) The `Engine` instance you pass
+// to `serve()` comes from the root `@lostgradient/weft` — its canonical home —
+// not from here. WorkerRegistry stays a value to match the root export; TaskQueue
+// is type-only — exposed for naming `server.taskQueue`, not for construction.
+export type { RetryPolicy } from '../core/types.ts';
+export type { PrometheusExporter } from '../observability/metrics.ts';
+export { WorkerRegistry } from '../worker/registry.ts';
+export type { RoutingPolicy } from '../worker/registry.ts';
+export type { DiscoveryInfo } from './discovery-info.ts';
+export type { SchedulingPolicy } from './task-queue-types.ts';
+export type { TaskQueue } from './task-queue.ts';
 
 /**
  * Static route patterns at which an externally supplied dashboard shell is
@@ -322,11 +338,11 @@ export interface TaskDispatch {
  * in TypeScript 5.2+ to have the server stop automatically when the enclosing
  * block exits.
  *
- * **Type availability note:** `registry` is typed as `WorkerRegistry`, which
- * is exported from `'@lostgradient/weft'` but not from `'@lostgradient/weft/server'`. `taskQueue` is typed
- * as `TaskQueue`, which is an internal type not re-exported from any public
- * entry point. Prefer using `WeftServer` methods (`dispatchTask`,
- * `shutdownWorker`, etc.) rather than reaching into `taskQueue` directly.
+ * Both `registry` ({@link WorkerRegistry}) and `taskQueue` ({@link TaskQueue})
+ * are re-exported from `'@lostgradient/weft/server'`, so you can name these
+ * types without a second import. Still prefer `WeftServer` methods
+ * (`dispatchTask`, `shutdownWorker`, etc.) over reaching into `taskQueue`
+ * directly — it is exposed for inspection, not as a stable mutation surface.
  *
  * @example
  * ```ts
@@ -371,9 +387,9 @@ export interface WeftServer extends AsyncDisposable {
  * In-flight task records from previous server runs are restored from storage
  * on startup so no tasks are silently lost across restarts.
  *
- * The returned `WeftServer.taskQueue` field is intentionally opaque — prefer
- * `WeftServer` methods (`dispatchTask`, `shutdownWorker`, etc.) over reaching
- * into it directly.
+ * The returned `WeftServer.taskQueue` is exposed for inspection, not as a stable
+ * mutation surface — prefer `WeftServer` methods (`dispatchTask`,
+ * `shutdownWorker`, etc.) over reaching into it directly.
  *
  * @example
  * ```ts

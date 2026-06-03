@@ -55,6 +55,24 @@ interface Waiter {
  * enqueued and a matching waiter exists, the task is dispatched immediately.
  * When a poll request arrives and no task is available, the request blocks
  * until a task arrives or the timeout expires.
+ *
+ * `serve()` owns the live instance and exposes it as
+ * {@link WeftServer.taskQueue} for inspection. Prefer the `WeftServer` methods
+ * (`dispatchTask`, `shutdownWorker`, etc.) over mutating the queue directly —
+ * the type is re-exported so callers can name `server.taskQueue`, not as a
+ * stable mutation surface.
+ *
+ * @example
+ * ```ts
+ * import { serve, type TaskQueue } from '@lostgradient/weft/server';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ *
+ * await using engine = new Engine({ storage: new MemoryStorage() });
+ * await using server = serve({ engine });
+ *
+ * const taskQueue: TaskQueue = server.taskQueue;
+ * void taskQueue;
+ * ```
  */
 export class TaskQueue implements Disposable {
   #pending = new Map<string, PendingTask[]>();

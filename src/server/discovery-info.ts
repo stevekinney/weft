@@ -4,7 +4,29 @@
  * @module server/discovery-info
  */
 
-/** Operator-supplied metadata applied uniformly to all three discovery documents. */
+/**
+ * Operator-supplied metadata applied uniformly to all three discovery documents
+ * (`/openapi.json`, `/openrpc.json`, `/asyncapi.json`). Set it once on
+ * `serve({ discoveryInfo })` and the description, contact, license, and
+ * external-docs fields appear in every discovery surface from a single source,
+ * so the three documents never drift.
+ *
+ * @example
+ * ```ts
+ * import { serve, type DiscoveryInfo } from '@lostgradient/weft/server';
+ * import { Engine, MemoryStorage } from '@lostgradient/weft';
+ *
+ * const discoveryInfo: DiscoveryInfo = {
+ *   description: 'Order processing API',
+ *   contact: { name: 'Platform', email: 'platform@example.com' },
+ *   license: { name: 'MIT' },
+ * };
+ *
+ * await using engine = new Engine({ storage: new MemoryStorage() });
+ * await using server = serve({ engine, discoveryInfo });
+ * void server;
+ * ```
+ */
 export type DiscoveryInfo = {
   /** Long-form description rendered in each document's `info.description`. */
   description?: string;
