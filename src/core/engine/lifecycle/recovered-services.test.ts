@@ -117,10 +117,15 @@ describe('reprovideRecoveredServices', () => {
     const { internals, services } = makeInternals({
       resolver: () => ({ status: 'unavailable', reason: 'no config' }),
     });
-    const failRun = mock(async () => {});
+    const failed: Array<[string, Error]> = [];
+    const failRun = async (id: string, error: Error): Promise<void> => {
+      failed.push([id, error]);
+    };
     const stop = await reprovideRecoveredServices(internals, makeState(), failRun, noopCommitError);
     expect(stop).toBe(true);
-    expect(failRun).toHaveBeenCalledWith('run-1', 'no config');
+    expect(failed).toHaveLength(1);
+    expect(failed[0]![0]).toBe('run-1');
+    expect(failed[0]![1].message).toContain('no config');
     expect(services.has('run-1')).toBe(false);
   });
 
@@ -130,10 +135,13 @@ describe('reprovideRecoveredServices', () => {
         throw new Error('rebuild rejected');
       },
     });
-    const failRun = mock(async () => {});
+    const failed: Array<[string, Error]> = [];
+    const failRun = async (id: string, error: Error): Promise<void> => {
+      failed.push([id, error]);
+    };
     const stop = await reprovideRecoveredServices(internals, makeState(), failRun, noopCommitError);
     expect(stop).toBe(true);
-    expect(failRun).toHaveBeenCalledWith('run-1', 'rebuild rejected');
+    expect(failed[0]![1].message).toContain('rebuild rejected');
   });
 
   it('stringifies a non-Error resolver throw', async () => {
@@ -142,9 +150,12 @@ describe('reprovideRecoveredServices', () => {
         throw 'plain string fault';
       },
     });
-    const failRun = mock(async () => {});
+    const failed: Array<[string, Error]> = [];
+    const failRun = async (id: string, error: Error): Promise<void> => {
+      failed.push([id, error]);
+    };
     await reprovideRecoveredServices(internals, makeState(), failRun, noopCommitError);
-    expect(failRun).toHaveBeenCalledWith('run-1', 'plain string fault');
+    expect(failed[0]![1].message).toContain('plain string fault');
   });
 
   it('still stops (true) and records a fail-warn when the terminal commit itself throws', async () => {

@@ -199,11 +199,7 @@ export async function startDelayedWorkflow(
   const servicesUnavailable = await reprovideRecoveredServices(
     internals,
     runningState,
-    (workflowId, reason) =>
-      callbacks.failWorkflow(
-        workflowId,
-        new Error(`Recovered workflow "${workflowId}" services unavailable: ${reason}`),
-      ),
+    (workflowId, error) => callbacks.failWorkflow(workflowId, error),
     callbacks.handleCleanupError,
   );
   if (servicesUnavailable) {

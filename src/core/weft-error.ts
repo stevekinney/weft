@@ -140,8 +140,8 @@ export function isWeftError(value: unknown): value is WeftError {
 /**
  * Cross-boundary discriminant check: `true` when `value` is one of the public
  * {@link WeftErrorCode} string values. This narrows a `code` *string*; to test
- * a caught `unknown` (the common `catch` case), reach for {@link isWeftErrorLike}
- * or {@link isWeftErrorByCode}, which check the whole error object structurally.
+ * a caught `unknown` (the common `catch` case), reach for {@link isWeftErrorLike},
+ * which checks the whole error object structurally.
  *
  * @example
  * ```ts

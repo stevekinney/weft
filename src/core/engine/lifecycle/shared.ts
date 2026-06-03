@@ -64,8 +64,9 @@ export type LifecycleCallbacks = {
    * non-serialized `services` could not be re-provided (the engine's
    * `resolveWorkflowServices` reported `unavailable`). Fails just this run with
    * a `system` failure category; the engine and other recovered runs continue.
+   * `error` is the canonical {@link unavailableServicesError}.
    */
-  failWorkflowForUnavailableServices: (workflowId: string, reason: string) => Promise<void>;
+  failWorkflowForUnavailableServices: (workflowId: string, error: Error) => Promise<void>;
 };
 
 /**

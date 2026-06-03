@@ -25,14 +25,17 @@ import type { EngineInternals } from '../internals.ts';
  *
  * @param failRun - Terminally fails just this run with `reason`. Supplied by the
  *   caller because the two entry points reach the termination machinery through
- *   different callback bundles.
+ *   different callback bundles. It receives the canonical terminal error built
+ *   by {@link unavailableServicesError}, so both recovery paths fail the run
+ *   with an identical message and (via `failWorkflow`'s default) the `system`
+ *   failure category.
  * @param onCommitError - Records a fail-warn when `failRun` itself throws, so the
  *   swallowed terminal-commit fault is still observable.
  */
 export async function reprovideRecoveredServices(
   internals: EngineInternals,
   state: WorkflowState,
-  failRun: (workflowId: string, reason: string) => Promise<void>,
+  failRun: (workflowId: string, error: Error) => Promise<void>,
   onCommitError: (source: string, error: unknown, workflowId: string) => void,
 ): Promise<boolean> {
   const resolver = internals.options.resolveWorkflowServices;
@@ -64,7 +67,7 @@ export async function reprovideRecoveredServices(
   }
 
   try {
-    await failRun(state.id, reason);
+    await failRun(state.id, unavailableServicesError(state.id, reason));
   } catch (error) {
     // The terminal-fail commit itself faulted (e.g. a storage write error). The
     // run stays in its persisted pre-execution state for a later boot to retry;
@@ -72,4 +75,13 @@ export async function reprovideRecoveredServices(
     onCommitError('reprovideRecoveredServices', error, state.id);
   }
   return true;
+}
+
+/**
+ * The canonical terminal error for a recovered run whose services could not be
+ * re-provided. Shared by both recovery paths so they fail with an identical
+ * message (the failure category is `system`, the default for `failWorkflow`).
+ */
+export function unavailableServicesError(workflowId: string, reason: string): Error {
+  return new Error(`Recovered workflow "${workflowId}" services unavailable: ${reason}`);
 }

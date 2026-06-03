@@ -251,4 +251,50 @@ describe('engine time operation helpers', () => {
 
     expect(beginWorkflowExecution).not.toHaveBeenCalled();
   });
+
+  it('fails a recovered delayed-start run whose services the resolver reports unavailable', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-delayed-no-services';
+    const state = createWorkflowState(workflowId);
+    const checkpoint = createCheckpoint(workflowId);
+    const registration = { handler: async function* () {}, version: '1' };
+    const beginWorkflowExecution = mock(() => {});
+    const failed: Array<[string, Error]> = [];
+    const failWorkflow = async (id: string, error: Error): Promise<void> => {
+      failed.push([id, error]);
+    };
+
+    await storage.put(KEYS.workflow(workflowId), encode(state));
+    await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
+
+    await startDelayedWorkflow(
+      {
+        checkpoints: new Map<string, Checkpoint>(),
+        // Inline engine with an empty services map (fresh-process recovery) and a
+        // resolver that reports the run unavailable.
+        inlineStrategy: {},
+        workflowServices: new Map<string, unknown>(),
+        options: {
+          getNow: () => 2_000,
+          resolveWorkflowServices: () => ({ status: 'unavailable', reason: 'no config' }),
+        },
+        registrations: new Map([[state.type, registration]]),
+        storage,
+        workflowVersionTuples: new Map(),
+      } as never,
+      createDelayedStartEntry(workflowId, { executionTimeoutMs: 500 }),
+      createCallbacks({
+        beginWorkflowExecution,
+        failWorkflow,
+        loadWorkflowState: async () => state,
+        runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
+      }),
+    );
+
+    // The run is failed with the canonical unavailable-services error, and the
+    // generator is never started.
+    expect(failed).toHaveLength(1);
+    expect(failed[0]![1].message).toContain('services unavailable');
+    expect(beginWorkflowExecution).not.toHaveBeenCalled();
+  });
 });
