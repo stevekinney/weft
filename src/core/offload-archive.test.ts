@@ -7,6 +7,7 @@ import { TestEngine } from '../testing/test-engine';
 import { decode, encode } from './codec';
 import type { OffloadReference } from './context';
 import { Engine } from './engine';
+import { cleanupWorkflowStorage } from './engine/termination/cleanup';
 import type { WorkflowContext } from './types';
 import { workflow } from './types';
 
@@ -229,5 +230,68 @@ describe('offload, load, and archive', () => {
     const handle = await engine.start('test', {});
     const result = await handle.result();
     expect(result).toBe('caught: computation failed');
+  });
+});
+
+describe('Engine.getOffload', () => {
+  it('reads an offloaded value back after the workflow completes', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+
+    const payload = { report: 'quarterly', values: [100, 200, 300] };
+
+    const producer = workflow({ name: 'producer' }).execute(async function* (ctx: WorkflowContext) {
+      const c = ctx;
+      const reference = yield* c.offload('report', async () => payload);
+      return reference;
+    });
+    engine.register(producer);
+
+    const handle = await engine.start('producer', {});
+    await handle.result();
+
+    // The contract from cleanup.ts:148-152 — offloaded artifacts survive normal
+    // completion and are readable via getOffload() after handle.result().
+    expect(await engine.getOffload(handle.id, 'report')).toEqual(payload);
+  });
+
+  it('returns null for an unknown key', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+
+    const producer = workflow({ name: 'producer' }).execute(async function* (ctx: WorkflowContext) {
+      const c = ctx;
+      yield* c.offload('report', async () => ({ ok: true }));
+      return 'done';
+    });
+    engine.register(producer);
+
+    const handle = await engine.start('producer', {});
+    await handle.result();
+
+    expect(await engine.getOffload(handle.id, 'no-such-key')).toBeNull();
+    expect(await engine.getOffload('no-such-workflow', 'report')).toBeNull();
+  });
+
+  it('returns null after a terminated workflow sweeps its offloaded artifacts', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+
+    const producer = workflow({ name: 'producer' }).execute(async function* (ctx: WorkflowContext) {
+      const c = ctx;
+      const reference = yield* c.offload('report', async () => ({ value: 1 }));
+      return reference;
+    });
+    engine.register(producer);
+
+    const handle = await engine.start('producer', {});
+    await handle.result();
+    expect(await engine.getOffload(handle.id, 'report')).toEqual({ value: 1 });
+
+    // Terminate sweeps output artifacts (cleanup.ts:153-157, includeOutputArtifacts: true).
+    // Drive the sweep directly, matching the convention in termination.test.ts:417,435.
+    await cleanupWorkflowStorage({ storage } as never, handle.id, true);
+
+    expect(await engine.getOffload(handle.id, 'report')).toBeNull();
   });
 });

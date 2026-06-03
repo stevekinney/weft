@@ -168,6 +168,7 @@ import {
   removeTags as removeWorkflowTags,
   setAttributes as setWorkflowAttributes,
 } from './listing.ts';
+import { getOffloadFromInternals } from './operations-data.ts';
 import { getStreamChunksFromInternals } from './operations-stream.ts';
 import {
   handleTimerFired as handleTimerFiredFromInternals,
@@ -1109,6 +1110,32 @@ export class Engine<
     options?: { after?: number },
   ): Promise<StoredStreamChunk[]> {
     return getStreamChunksFromInternals(getInternals(this), workflowId, key, options);
+  }
+  /**
+   * Read a value a workflow offloaded with `ctx.offload(key, ...)` back out of
+   * storage by `workflowId` + `key`. Returns the decoded value, or `null` when
+   * no value is stored under that key.
+   *
+   * This is the external, post-completion reader for offloaded artifacts — the
+   * missing sibling of {@link getStreamChunks} and {@link getEvents}. Offloaded
+   * values survive normal completion (`completeWorkflow`/`failWorkflow` preserve
+   * them) so a consumer can read a finished workflow's offloaded output after
+   * `handle.result()` resolves. They are swept only when a workflow is
+   * terminated, cancelled, or times out, in which case this returns `null`.
+   *
+   * @example
+   * ```ts
+   * import { Engine } from '@lostgradient/weft';
+   *
+   * async function readReport(engine: Engine, workflowId: string): Promise<unknown> {
+   *   // `null` when the workflow offloaded nothing under this key, or after a
+   *   // terminated workflow swept its output artifacts.
+   *   return engine.getOffload(workflowId, 'report');
+   * }
+   * ```
+   */
+  async getOffload(workflowId: string, key: string): Promise<unknown> {
+    return getOffloadFromInternals(getInternals(this), workflowId, key);
   }
   async fork(sourceWorkflowId: string, options?: ForkOptions): Promise<WorkflowHandle> {
     return forkFromLifecycle(
