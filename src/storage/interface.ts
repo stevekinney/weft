@@ -387,7 +387,7 @@ const formatSortableTimestamp = (timestamp: number): string => String(timestamp)
  * zero-padded to 16 digits for lexicographic ordering.
  *
  * This registry grows as storage features are added, which is why this file
- * carries a `max-lines: 600` override (vs. the repo default of 500) in
+ * carries a `max-lines: 600` override (above the repo default ceiling) in
  * `.oxlintrc.json` — 600 matches `conventions.md`'s documented split threshold.
  * When `KEYS` next approaches that line, extract it into its own module rather
  * than raising the ceiling again.

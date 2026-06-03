@@ -52,35 +52,7 @@ export function buildStartBatchOperations(
       options?.searchAttributes,
       callbacks,
     ),
-    ...(workflowStartHeaders && workflowStartHeaders.size > 0
-      ? [
-          {
-            type: 'put' as const,
-            key: KEYS.workflowHeaders(workflowId),
-            value: encodeWorkflowStartHeaders(workflowStartHeaders),
-          },
-          {
-            type: 'put' as const,
-            key: KEYS.terminalCleanupNeeded(workflowId),
-            value: EMPTY_STORAGE_VALUE,
-          },
-        ]
-      : []),
-    // Persist a presence-only "expects services" marker atomically with the rest
-    // of the start state. The services value itself is never written; this bit is
-    // the only durable trace, and it lets a fresh-process recovery tell a run that
-    // lost its services on crash apart from a run that never had any (which must
-    // recover without ever consulting the resolver). A separate write after the
-    // batch would reopen the crash window this marker exists to close.
-    ...(options?.services !== undefined
-      ? [
-          {
-            type: 'put' as const,
-            key: KEYS.workflowHasServices(workflowId),
-            value: EMPTY_STORAGE_VALUE,
-          },
-        ]
-      : []),
+    ...buildPerRunScratchOperations(workflowId, options, workflowStartHeaders),
     ...(additionalOperations ?? []),
   ];
 
@@ -102,6 +74,55 @@ export function buildStartBatchOperations(
     operations.push(...buildTimerBatchOperations(delayedStartTimer));
   }
 
+  return operations;
+}
+
+/**
+ * Durable per-run scratch written at start: start headers, the presence-only
+ * "expects services" marker, and the `terminalCleanupNeeded` flag.
+ *
+ * The services marker's value is never written — only this presence bit, so a
+ * fresh-process recovery can tell a run that lost its services on crash apart
+ * from one that never had any (which must recover without consulting the
+ * resolver). Writing it in this batch (not a separate write after) keeps it
+ * atomic with the rest of start, closing the crash window it exists to close.
+ *
+ * `terminalCleanupNeeded` is written whenever the run leaves ANY durable scratch
+ * the synchronous in-memory completion path does not sweep — headers and the
+ * services marker both qualify. It is the durable trigger for the deferred
+ * `cleanupWorkflowStorage` pass; without it a services-only run (no headers,
+ * signals, or forks) would leak its marker forever.
+ */
+function buildPerRunScratchOperations(
+  workflowId: string,
+  options: StartOptions | undefined,
+  workflowStartHeaders: Map<string, string> | undefined,
+): BatchOperation[] {
+  const hasHeaders = workflowStartHeaders !== undefined && workflowStartHeaders.size > 0;
+  const hasServices = options?.services !== undefined;
+
+  const operations: BatchOperation[] = [];
+  if (hasHeaders) {
+    operations.push({
+      type: 'put',
+      key: KEYS.workflowHeaders(workflowId),
+      value: encodeWorkflowStartHeaders(workflowStartHeaders),
+    });
+  }
+  if (hasServices) {
+    operations.push({
+      type: 'put',
+      key: KEYS.workflowHasServices(workflowId),
+      value: EMPTY_STORAGE_VALUE,
+    });
+  }
+  if (hasHeaders || hasServices) {
+    operations.push({
+      type: 'put',
+      key: KEYS.terminalCleanupNeeded(workflowId),
+      value: EMPTY_STORAGE_VALUE,
+    });
+  }
   return operations;
 }
 

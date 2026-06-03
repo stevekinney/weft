@@ -344,7 +344,11 @@ describe('ctx.services — terminal cleanup', () => {
     expect(internals.workflowServices.has('cleanup-run')).toBe(false);
   });
 
-  it('drops the durable "expects services" marker when terminal cleanup sweeps the run', async () => {
+  it('drops the durable "expects services" marker through the real completion path', async () => {
+    // Regression: a services-only run (no start headers, no signals, no forks)
+    // must still schedule the deferred durable cleanup that sweeps its marker.
+    // Before the fix, only header/signal/fork runs scheduled that cleanup, so the
+    // `wf-has-services:` marker leaked once per completed services-only run.
     const storage = new MemoryStorage();
     const engine = new Engine({ storage });
 
@@ -361,13 +365,55 @@ describe('ctx.services — terminal cleanup', () => {
     expect(await storage.get(KEYS.workflowHasServices('marker-run'))).not.toBeNull();
 
     await handle.result();
+    await flush();
 
-    // Durable scratch is swept by the deferred terminal-cleanup pass (run here
-    // directly, exactly as the persisted timer invokes it). The marker dies with
-    // the run's other per-run bookkeeping, so a fresh engine over this store never
-    // tries to re-provide services for an already-completed run.
-    await cleanupWorkflowStorage(getInternals(engine), 'marker-run', false);
+    // Completion scheduled the deferred durable cleanup (because the run carries
+    // services). Advance the scheduler past the terminal-cleanup delay to fire it
+    // — no manual cleanup call. The marker is swept along with the rest of the
+    // run's durable scratch, so a fresh engine over this store never re-provisions
+    // services for a completed run.
+    await engine.scheduler.tick(Date.now() + 120_000);
     expect(await storage.get(KEYS.workflowHasServices('marker-run'))).toBeNull();
+    await engine[Symbol.asyncDispose]();
+  });
+
+  it('sweeps the durable "expects services" marker via cleanupWorkflowStorage', async () => {
+    // Direct unit check on the sweep helper itself, complementing the end-to-end
+    // completion-path test above.
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const wf = workflow({ name: 'sweep-wf' }).execute(async function* (ctx: WorkflowContext) {
+      return (ctx.services as { v: number }).v;
+    });
+    engine.register(wf);
+
+    await engine.start('sweep-wf', null, { id: 'sweep-run', services: { v: 1 } });
+    expect(await storage.get(KEYS.workflowHasServices('sweep-run'))).not.toBeNull();
+
+    await cleanupWorkflowStorage(getInternals(engine), 'sweep-run', false);
+    expect(await storage.get(KEYS.workflowHasServices('sweep-run'))).toBeNull();
+    await engine[Symbol.asyncDispose]();
+  });
+
+  it('deletes the durable "expects services" marker on purge', async () => {
+    // Regression: purge (and retention reclaim, which reuses the same machinery)
+    // must delete the marker. A surviving marker on a purged-then-reused id would
+    // make recovery re-provision services for a run that never had them.
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const wf = workflow({ name: 'purge-wf' }).execute(async function* (ctx: WorkflowContext) {
+      return (ctx.services as { v: number }).v;
+    });
+    engine.register(wf);
+
+    const handle = await engine.start('purge-wf', null, { id: 'purge-run', services: { v: 1 } });
+    await handle.result();
+    await flush();
+    expect(await storage.get(KEYS.workflowHasServices('purge-run'))).not.toBeNull();
+
+    const purged = await engine.purge();
+    expect(purged.deleted).toBeGreaterThanOrEqual(1);
+    expect(await storage.get(KEYS.workflowHasServices('purge-run'))).toBeNull();
     await engine[Symbol.asyncDispose]();
   });
 });

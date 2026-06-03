@@ -284,16 +284,15 @@ export interface EngineOptions {
    * sees `undefined`.
    *
    * Contract a fresh integrator must know:
-   * - Fires for every recovered *running* inline workflow whose services are not
-   *   already live in this process — NOT only those that originally passed
-   *   `services`. For an unrecognized id, return `{ status: 'available',
-   *   services: undefined }` to leave it unchanged; `unavailable` would
-   *   terminally fail an innocent run.
+   * - Fires only for recovered inline runs that were launched WITH `services`
+   *   (those carrying the durable "expects services" marker). A run started
+   *   without `services` never reaches the resolver, regardless of what it would
+   *   return — so a fail-closed resolver does not fail innocent no-services runs.
    * - `{ status: 'unavailable' }` permanently fails the run (terminal `failed`,
    *   `system` category) with `reason` as the message — not a "retry later"
    *   signal. A resolver *throw* is treated identically (error message → reason).
-   * - May be called more than once per run (crash-recovery then a manual
-   *   `engine.resume(id)`), so it must be idempotent.
+   * - May be called again on a later boot if a prior recovery left the run still
+   *   recoverable (e.g. the terminal-fail commit faulted), so keep it idempotent.
    * - Inline only; worker-mode runs never invoke it.
    *
    * Engine-scoped: each engine instance carries its own resolver, so two engines

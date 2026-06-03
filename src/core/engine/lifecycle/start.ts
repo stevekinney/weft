@@ -102,6 +102,7 @@ function rollbackTransientStartState(internals: EngineInternals, workflowId: str
   internals.workflowHeaders.delete(workflowId);
   internals.workflowVersionTuples.delete(workflowId);
   internals.workflowServices.delete(workflowId);
+  internals.workflowsNeedingTerminalCleanup.delete(workflowId);
 }
 
 /**
@@ -224,8 +225,14 @@ export async function startWorkflow(
     // written atomically in the start batch (see buildStartBatchOperations) so a
     // fresh-process recovery knows to re-provide them. Cleared on terminal cleanup
     // (and on rollback below).
+    //
+    // Joining `workflowsNeedingTerminalCleanup` mirrors `setWorkflowStartHeaders`:
+    // it is what makes `completeWorkflow` schedule the deferred durable cleanup
+    // that sweeps the marker. The start batch wrote the matching
+    // `terminalCleanupNeeded` key so recovery re-derives this membership.
     if (options?.services !== undefined) {
       internals.workflowServices.set(workflowId, options.services);
+      internals.workflowsNeedingTerminalCleanup.add(workflowId);
     }
 
     const handle = createWorkflowHandle(internals, workflowId, callbacks);
