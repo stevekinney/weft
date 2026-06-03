@@ -115,8 +115,9 @@ function summaryLines(pipelineName: string, results: readonly GateResult[]): str
 
 /**
  * Run a named pipeline, failing fast. Returns the exit code: `0` when every gate
- * passed, `1` otherwise. `runGate` defaults to real process spawning; tests pass
- * a stub to drive ordering and fail-fast without spawning.
+ * passed, otherwise the failing gate's non-zero exit code. `runGate` defaults to
+ * real process spawning; tests pass a stub to drive ordering and fail-fast without
+ * spawning.
  */
 export async function runPipeline(
   pipelineName: string,
