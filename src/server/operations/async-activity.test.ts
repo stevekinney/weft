@@ -142,6 +142,22 @@ describe('weft.activities.complete', () => {
     expect(response.status).toBe(400);
   });
 
+  it('rejects malformed JSON bodies with 400', async () => {
+    await using engine = createEngine();
+
+    const response = await handleRequest(
+      new Request('http://localhost/v1/activities/complete', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{"token":',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+  });
+
   it('masks an unexpected engine failure to a 500 generic body', async () => {
     await using engine = createEngine();
     const original = engine.completeAsyncActivity.bind(engine);

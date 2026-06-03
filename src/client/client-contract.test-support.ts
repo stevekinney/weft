@@ -123,7 +123,7 @@ export async function waitForQueryReadyForTesting(
  * The deadline doubles as a regression guard: a value well under the old
  * 2-second poll interval proves events are delivered push-based, not polled.
  */
-function waitForHandleEvent(
+export function waitForHandleEventForTesting(
   handle: { addEventListener: (type: string, listener: (event: Event) => void) => void },
   type: string,
   timeoutMs: number,
@@ -156,7 +156,7 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       // old HttpHandle used, so this fails loudly if streaming regresses to
       // polling. Attach the listener, wait for the stream to be live (so no
       // event is missed in the connect window), then signal.
-      const completed = waitForHandleEvent(handle, 'workflow:completed', 1000);
+      const completed = waitForHandleEventForTesting(handle, 'workflow:completed', 1000);
       await handle.whenConnected();
       await handle.signal('continue', 'done');
       const event = await completed;
