@@ -119,8 +119,10 @@ const PUBLIC_WEFT_ERROR_CODES = new Set<string>(Object.keys(publicWeftErrorCodeM
 /**
  * Same-realm narrowing: `true` when `value` is a Weft library error instance.
  * Use this for the common case of catching any Weft error. For comparisons
- * that may cross a realm or duplicate-module boundary, narrow on
- * {@link isWeftErrorCode} against `error.code` instead.
+ * that may cross a realm or duplicate-module boundary (where `instanceof` is
+ * unreliable), use {@link isWeftErrorLike} instead — it narrows the error
+ * object structurally. {@link isWeftErrorCode} narrows a bare `code` *string*,
+ * not a caught `unknown`.
  *
  * @example
  * ```ts
@@ -166,6 +168,8 @@ export function isWeftErrorCode(value: unknown): value is WeftErrorCode {
  * `instanceof`. It is the structural counterpart to {@link isWeftError}: prefer
  * `isWeftError` for same-realm catches where you want the live class instance,
  * and `isWeftErrorLike` whenever the error may have crossed a module boundary.
+ * To match a *specific* code, narrow with this guard then compare `error.code`
+ * — TypeScript narrows it to the matched literal in the branch.
  *
  * @example
  * ```ts
@@ -188,30 +192,4 @@ export function isWeftErrorLike(value: unknown): value is { code: WeftErrorCode;
     'message' in value &&
     typeof value.message === 'string'
   );
-}
-
-/**
- * Cross-boundary structural narrowing against a *specific* code: `true` when
- * `value` is a public Weft error whose `code` equals `code`. Layered on
- * {@link isWeftErrorLike}, so it shares the same module-boundary-safe semantics
- * and never uses `instanceof`. The `TCode` type parameter narrows the result to
- * the matched code, so the branch body sees the precise error shape.
- *
- * This collapses the common hand-rolled `typeof e === 'object' && e !== null &&
- * 'code' in e && e.code === '...'` structural check into one call.
- *
- * @example
- * ```ts
- * import { isWeftErrorByCode } from '@lostgradient/weft';
- *
- * function isEngineDisposed(error: unknown): boolean {
- *   return isWeftErrorByCode(error, 'EngineDisposedError');
- * }
- * ```
- */
-export function isWeftErrorByCode<TCode extends WeftErrorCode>(
-  value: unknown,
-  code: TCode,
-): value is { code: TCode; message: string } {
-  return isWeftErrorLike(value) && value.code === code;
 }

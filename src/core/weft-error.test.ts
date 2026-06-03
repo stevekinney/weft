@@ -34,7 +34,6 @@ import { StandardSchemaValidationError } from '../json-schema.ts';
 import {
   WeftError,
   isWeftError,
-  isWeftErrorByCode,
   isWeftErrorCode,
   isWeftErrorLike,
   type WeftErrorCode,
@@ -123,16 +122,14 @@ describe('WeftError', () => {
         expect(isWeftError(error)).toBe(true);
         expect(isWeftErrorCode(error.code)).toBe(true);
         expect(isWeftErrorLike(error)).toBe(true);
-        expect(isWeftErrorByCode(error, code)).toBe(true);
       });
 
       it('is recognized structurally even when it crossed a module boundary', () => {
-        // A foreign-module copy fails `instanceof`, but the structural guards
+        // A foreign-module copy fails `instanceof`, but the structural guard
         // must still accept it — this is the whole point of `isWeftErrorLike`.
         const foreign = foreignWeftError(code);
         expect(isWeftError(foreign)).toBe(false);
         expect(isWeftErrorLike(foreign)).toBe(true);
-        expect(isWeftErrorByCode(foreign, code)).toBe(true);
       });
 
       it('retains a non-empty message', () => {
@@ -225,37 +222,19 @@ describe('isWeftErrorLike', () => {
       throw new Error('expected isWeftErrorLike to accept the foreign error');
     }
   });
-});
 
-describe('isWeftErrorByCode', () => {
-  it('matches the requested code on a same-realm instance', () => {
-    expect(isWeftErrorByCode(new EngineDisposedError(), 'EngineDisposedError')).toBe(true);
-  });
-
-  it('matches the requested code on a foreign-module error object', () => {
-    expect(isWeftErrorByCode(foreignWeftError('EngineDisposedError'), 'EngineDisposedError')).toBe(
-      true,
-    );
-  });
-
-  it('rejects a Weft error of a different code', () => {
-    expect(isWeftErrorByCode(new WorkflowNotFoundError('wf-404'), 'EngineDisposedError')).toBe(
-      false,
-    );
-  });
-
-  it('rejects a non-Weft value', () => {
-    expect(isWeftErrorByCode(new Error('plain'), 'EngineDisposedError')).toBe(false);
-    expect(isWeftErrorByCode(null, 'EngineDisposedError')).toBe(false);
-  });
-
-  it('narrows code to the matched literal in the branch body', () => {
-    const error: unknown = foreignWeftError('WorkflowNotFoundError');
-    if (isWeftErrorByCode(error, 'WorkflowNotFoundError')) {
-      const code: 'WorkflowNotFoundError' = error.code;
-      expect(code).toBe('WorkflowNotFoundError');
+  it('supports matching a specific code by comparing the narrowed code', () => {
+    // The inline replacement for a dedicated by-code guard: narrow structurally,
+    // then compare. TypeScript narrows `error.code` to the matched literal.
+    const match: unknown = foreignWeftError('EngineDisposedError');
+    if (isWeftErrorLike(match) && match.code === 'EngineDisposedError') {
+      const code: 'EngineDisposedError' = match.code;
+      expect(code).toBe('EngineDisposedError');
     } else {
-      throw new Error('expected isWeftErrorByCode to match');
+      throw new Error('expected the foreign EngineDisposedError to match');
     }
+    // A Weft error of a different code does not match the specific comparison.
+    const other: unknown = new WorkflowNotFoundError('wf-404');
+    expect(isWeftErrorLike(other) && other.code === 'EngineDisposedError').toBe(false);
   });
 });

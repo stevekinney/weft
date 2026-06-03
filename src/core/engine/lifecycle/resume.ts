@@ -13,6 +13,7 @@ import { loadWorkflowState } from '../storage-io.ts';
 import { getComposedWorkflowInterceptor } from '../strategy-helpers.ts';
 import { decodeWorkflowState } from '../validation.ts';
 import { prepareResumeState } from './persist.ts';
+import { reprovideRecoveredServices } from './recovered-services.ts';
 import {
   enforceHistoryPolicyBeforeReplay,
   loadTerminalCleanupTrackedState,
@@ -34,60 +35,22 @@ type SerializedResumeArgs = {
 };
 
 /**
- * Re-provide a recovered inline workflow's non-serialized `services` via the
- * engine's `resolveWorkflowServices`. On `available`, the rebuilt value is
- * stored in `internals.workflowServices` so the relaunched `Context` reads it as
- * `ctx.services`. With no resolver configured, the run resumes with no services
- * (`ctx.services` is `undefined`) — the same as a fresh start without services.
- */
-async function resolveServicesForRecovery(
-  internals: EngineInternals,
-  state: WorkflowState,
-): Promise<{ status: 'available' } | { status: 'unavailable'; reason: string }> {
-  const resolver = internals.options.resolveWorkflowServices;
-  if (!resolver) {
-    return { status: 'available' };
-  }
-  const resolution = await resolver({
-    workflowId: state.id,
-    workflowType: state.type,
-    input: state.input,
-  });
-  if (resolution.status === 'available') {
-    internals.workflowServices.set(state.id, resolution.services);
-    return { status: 'available' };
-  }
-  return { status: 'unavailable', reason: resolution.reason };
-}
-
-/**
- * Re-provide a recovered inline workflow's `services` before the generator is
- * driven forward. Returns `true` when the run was failed (services unavailable)
- * and the caller should stop resuming it; `false` to continue the resume. Worker
- * mode skips this entirely — services are inline-only and rejected at start.
- *
- * A failure here (e.g. a storage write fault during the terminal commit) is
- * recorded fail-warn rather than thrown, so it cannot escape into `recoverAll`'s
- * loop and abort recovery of sibling runs.
+ * Re-provide a recovered inline workflow's non-serialized `services` before the
+ * generator is driven forward. Returns `true` when the resume must STOP (the run
+ * was failed for unavailable services, or the terminal commit faulted), `false`
+ * to continue. See {@link reprovideRecoveredServices} for the full contract.
  */
 async function prepareRecoveredServicesOrFail(
   internals: EngineInternals,
   state: WorkflowState,
   callbacks: LifecycleCallbacks,
 ): Promise<boolean> {
-  if (internals.inlineStrategy === null) {
-    return false;
-  }
-  const resolved = await resolveServicesForRecovery(internals, state);
-  if (resolved.status !== 'unavailable') {
-    return false;
-  }
-  try {
-    await callbacks.failWorkflowForUnavailableServices(state.id, resolved.reason);
-  } catch (error) {
-    callbacks.handleCleanupError('failWorkflowForUnavailableServices', error, state.id);
-  }
-  return true;
+  return reprovideRecoveredServices(
+    internals,
+    state,
+    callbacks.failWorkflowForUnavailableServices,
+    callbacks.handleCleanupError,
+  );
 }
 
 function assertResumeNotTerminating(internals: EngineInternals, workflowId: string): void {

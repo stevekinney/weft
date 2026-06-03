@@ -202,6 +202,8 @@ export function createTimeOperationCallbacks<TWorkflows extends object, TActivit
       ),
     handleScheduleTimer: (entry) => handleScheduleTimerForEngine(engine, entry),
     timeout: (workflowId) => engine.timeout(workflowId),
+    handleCleanupError: (source, error, workflowId) =>
+      createTerminationCallbacks(engine).handleCleanupError(source, error, workflowId),
   };
 }
 

@@ -56,6 +56,7 @@ function createCallbacks(
   TimeOperationCallbacks,
   | 'beginWorkflowExecution'
   | 'failWorkflow'
+  | 'handleCleanupError'
   | 'loadWorkflowStartHeaders'
   | 'loadWorkflowState'
   | 'runSerializedWorkflowStateWrite'
@@ -65,6 +66,7 @@ function createCallbacks(
   return {
     beginWorkflowExecution: mock(() => {}),
     failWorkflow: mock(async () => {}),
+    handleCleanupError: mock(() => {}),
     loadWorkflowStartHeaders: mock(async () => undefined),
     loadWorkflowState: mock(async () => null),
     runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),

@@ -272,15 +272,29 @@ export interface EngineOptions {
   /**
    * Re-provide the non-serialized per-run `services` value (see
    * {@link StartOptions.services}) for a workflow recovered in a fresh process.
-   * `engine.recoverAll()` and `engine.resume(id)` call this once per recovered
-   * inline workflow, **before** the generator is driven forward, so the resumed
+   * `engine.recoverAll()` and `engine.resume(id)` call this **before** the
+   * generator is driven forward (and the delayed-start timer handler calls it
+   * for a `startAfter`/`startAt` run that crashed before firing), so the resumed
    * body can read `ctx.services` exactly as it did before the crash.
    *
    * Return `{ status: 'available', services }` to supply the rebuilt
    * capabilities, or `{ status: 'unavailable', reason }` to fail just that one
-   * recovered run (it is forced to a terminal failed state with the reason) —
-   * the engine and every other recovered run are unaffected. Without a resolver,
-   * a recovered inline workflow that reads `ctx.services` sees `undefined`.
+   * recovered run — the engine and every other recovered run are unaffected.
+   * Without a resolver, a recovered inline workflow that reads `ctx.services`
+   * sees `undefined`.
+   *
+   * Contract a fresh integrator must know:
+   * - Fires for every recovered *running* inline workflow whose services are not
+   *   already live in this process — NOT only those that originally passed
+   *   `services`. For an unrecognized id, return `{ status: 'available',
+   *   services: undefined }` to leave it unchanged; `unavailable` would
+   *   terminally fail an innocent run.
+   * - `{ status: 'unavailable' }` permanently fails the run (terminal `failed`,
+   *   `system` category) with `reason` as the message — not a "retry later"
+   *   signal. A resolver *throw* is treated identically (error message → reason).
+   * - May be called more than once per run (crash-recovery then a manual
+   *   `engine.resume(id)`), so it must be idempotent.
+   * - Inline only; worker-mode runs never invoke it.
    *
    * Engine-scoped: each engine instance carries its own resolver, so two engines
    * in one process never collide on per-run dependency reconstruction.

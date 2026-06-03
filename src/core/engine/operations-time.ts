@@ -7,6 +7,7 @@ import { buildTimerBatchOperations, normalizeStorageTimestamp } from '../schedul
 import type { Checkpoint, Duration, StartOptions, TimerEntry, WorkflowState } from '../types.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import type { EngineInternals } from './internals.ts';
+import { reprovideRecoveredServices } from './lifecycle/recovered-services.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
 
 type RegistrationEntry =
@@ -41,6 +42,7 @@ export type TimeOperationCallbacks = {
   runDeferredTerminalCleanup: (workflowId: string, timerId: string) => Promise<void>;
   handleScheduleTimer: (entry: TimerEntry) => Promise<void>;
   timeout: (workflowId: string) => Promise<void>;
+  handleCleanupError: (source: string, error: unknown, workflowId: string) => void;
 };
 
 export function createDelayedStartTimerEntry(
@@ -114,6 +116,7 @@ export async function startDelayedWorkflow(
     TimeOperationCallbacks,
     | 'beginWorkflowExecution'
     | 'failWorkflow'
+    | 'handleCleanupError'
     | 'loadWorkflowStartHeaders'
     | 'loadWorkflowState'
     | 'runSerializedWorkflowStateWrite'
@@ -185,6 +188,25 @@ export async function startDelayedWorkflow(
     },
   );
   if (!runningState) {
+    return;
+  }
+
+  // A delayed-start workflow that crashed `pending` before its timer fired
+  // loses its in-memory services on recovery (the timer fires in a fresh
+  // process). Re-provide them before execution begins, exactly as the
+  // running-workflow resume path does — and fail the run if unavailable rather
+  // than silently executing with `ctx.services === undefined`.
+  const servicesUnavailable = await reprovideRecoveredServices(
+    internals,
+    runningState,
+    (workflowId, reason) =>
+      callbacks.failWorkflow(
+        workflowId,
+        new Error(`Recovered workflow "${workflowId}" services unavailable: ${reason}`),
+      ),
+    callbacks.handleCleanupError,
+  );
+  if (servicesUnavailable) {
     return;
   }
 
@@ -266,6 +288,7 @@ export async function handleTimerFired(
   callbacks: Pick<
     TimeOperationCallbacks,
     | 'failWorkflow'
+    | 'handleCleanupError'
     | 'loadWorkflowStartHeaders'
     | 'loadWorkflowState'
     | 'runDeferredTerminalCleanup'

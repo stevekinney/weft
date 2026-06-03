@@ -121,8 +121,18 @@ export interface WorkflowContext<
    * re-provided on recovery). Inline execution mode only — passing `services`
    * under `workflowExecutionMode: 'worker'` throws at `engine.start()`, since a
    * non-serializable value cannot cross to a Worker.
+   *
+   * Typed `unknown`: narrow or cast at the call site
+   * (`const { db } = ctx.services as MyServices`). A threaded generic is a
+   * deliberate follow-on, not part of this surface yet. Optional so existing
+   * structural `WorkflowContext` implementors are not source-broken.
+   *
+   * Child workflows started from within a workflow do **not** inherit the
+   * parent's `services` — each run has its own. A child that needs services must
+   * be configured for them the same way (and re-provided on recovery by the
+   * engine's `resolveWorkflowServices`).
    */
-  readonly services: unknown;
+  readonly services?: unknown;
   // ---------------------------------------------------------------------
   // Workflow-scoped typed-key overloads. These fire first when the workflow
   // was built with the chained builder (`.activities({...})`, `.signals({...})`

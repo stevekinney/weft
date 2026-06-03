@@ -74,7 +74,7 @@
       }
     },
     {
-      "files": ["src/index.ts", "src/storage/index.ts"],
+      "files": ["src/index.ts"],
       "rules": {
         "max-lines": "off"
       }
