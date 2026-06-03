@@ -275,7 +275,7 @@ async function consumePendingAsyncActivity(
     throw new AsyncActivityTokenNotFoundError(token);
   }
   // Claim the in-memory token SYNCHRONOUSLY, before any await. Two concurrent
-  // completions for the same token (trivially rac- able now the token is
+  // completions for the same token (trivially race-able now that the token is
   // resolvable over a public HTTP endpoint) would otherwise both pass the
   // `get` above and both drive the workflow generator past the parked step.
   // The synchronous delete makes the second caller's `get` miss and throw

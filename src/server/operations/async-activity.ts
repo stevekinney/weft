@@ -34,7 +34,6 @@ import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
  * untrusted networks MUST validate completion payloads as hostile external
  * input — exactly as they would a signal. Lock the mutating surface down with
  * `serve({ auth })` if completions should not be anonymous.
- * See `.audit/pr4-design-decision.md`.
  *
  * The token travels in the request body, never the URL path: tokens embed the
  * workflow id and `:` separators, which have no business in a route.
