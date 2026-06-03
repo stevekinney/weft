@@ -39,6 +39,15 @@ import 'fake-indexeddb/auto';
 export const NO_AUTHENTICATION_WARNING_FRAGMENT = 'server started with NO authentication';
 
 /**
+ * Whether a `console.warn` call carries the no-auth posture warning. Exported so
+ * the drift-guard test (`tests/auth-warning-filter.test.ts`) exercises the exact
+ * predicate the wrapper installs, rather than a copy that could silently drift.
+ */
+export function isSuppressedAuthWarning(args: readonly unknown[]): boolean {
+  return typeof args[0] === 'string' && args[0].includes(NO_AUTHENTICATION_WARNING_FRAGMENT);
+}
+
+/**
  * Wrap `console.warn` so the known-benign no-auth posture warning is dropped
  * while every other warning passes through untouched. To assert on this warning
  * in a test, use `spyOn(console, 'warn')` (or save and restore `console.warn`
@@ -48,7 +57,7 @@ export const NO_AUTHENTICATION_WARNING_FRAGMENT = 'server started with NO authen
  */
 const originalConsoleWarn = console.warn.bind(console);
 console.warn = (...args: Parameters<typeof console.warn>): void => {
-  if (typeof args[0] === 'string' && args[0].includes(NO_AUTHENTICATION_WARNING_FRAGMENT)) {
+  if (isSuppressedAuthWarning(args)) {
     return;
   }
   originalConsoleWarn(...args);
