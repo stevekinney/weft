@@ -23,7 +23,18 @@ import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
  * not a secret capability — it is intentionally derivable so a crashed-and-
  * recovered workflow re-mints the same token. Exposure therefore matches the
  * existing signal/cancel/update endpoints and is gated by the same auth layer
- * (`evaluateAccess`), not by token entropy. See `.audit/pr4-design-decision.md`.
+ * (`evaluateAccess`), not by token entropy.
+ *
+ * Because the token is guessable, a caller who can infer a workflow id can forge
+ * the *result* or *error* of a parked activity step. This is a sharper trust
+ * issue than `signal`: a signal is an external message a workflow author already
+ * treats as untrusted input, whereas an activity result is the private
+ * continuation of the author's own `ctx.run(...)` and may be trusted blindly.
+ * Workflow authors who use `completeAsync()` and expose this endpoint to
+ * untrusted networks MUST validate completion payloads as hostile external
+ * input — exactly as they would a signal. Lock the mutating surface down with
+ * `serve({ auth })` if completions should not be anonymous.
+ * See `.audit/pr4-design-decision.md`.
  *
  * The token travels in the request body, never the URL path: tokens embed the
  * workflow id and `:` separators, which have no business in a route.

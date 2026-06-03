@@ -75,6 +75,13 @@ export interface ActivityContext {
    * The token is deterministic and survives engine restart: it is re-minted
    * identically when the activity replays after recovery.
    *
+   * Security: the token is a deterministic identifier, NOT a secret. When the
+   * completion endpoint is reachable by untrusted callers, anyone who can infer
+   * a workflow id can forge this activity's result or error. Treat the completed
+   * value as hostile external input (validate it as you would a signal payload),
+   * and gate the mutating surface with `serve({ auth })` if completions must not
+   * be anonymous.
+   *
    * `completeAsync()` never returns normally — it throws an internal sentinel
    * that the engine recognizes to park the activity. Call it as the last
    * statement of (or `return` it from) the activity, and do not catch the

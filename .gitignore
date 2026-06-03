@@ -112,11 +112,10 @@ weft.db-wal
 *.sqlite-shm
 *.sqlite-wal
 .codex-worktrees/
-tmp/
 
 # Svelte test-harness artifacts (leaked when a harness test is killed mid-run before afterEach cleanup)
 src/dashboard/**/.*.compiled/
 src/dashboard/**/.*-harness.*
 src/dashboard/**/.schedule-list.*.mjs
 src/dashboard/**/.workflow-execution-timeline.*
-tmp/
+.audit/

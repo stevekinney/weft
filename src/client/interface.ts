@@ -214,18 +214,18 @@ export type UpdateResult = {
  * Out-of-band ("async") activity completion surface, shared by every client.
  *
  * An activity that called `ActivityContext.completeAsync()` parks its workflow
- * until an external system resolves it by the durable task token announced
- * through the engine's `activity:async-pending` event. These methods perform
- * that resolution: in library mode they call the engine directly; in server
- * mode they POST to `/v1/activities/{complete,fail}`. The same surface works
- * against {@link WeftClient.activity} regardless of transport.
+ * until an external system resolves it by the durable task token announced on
+ * the engine's `activity:async-pending` event. Library mode calls the engine
+ * directly; server mode POSTs to `/v1/activities/{complete,fail}`. After a
+ * restart, wait for recovery to settle first — a completion racing `recoverAll()`
+ * consumes the single-use token before re-adoption and strands the workflow. The
+ * token is a deterministic identifier, not a secret (see `completeAsync`).
  *
  * @example
  * ```ts
  * import { Engine, LocalClient, type WeftClientActivity } from '@lostgradient/weft';
  *
- * const client = new LocalClient(new Engine());
- * const activity: WeftClientActivity = client.activity;
+ * const activity: WeftClientActivity = new LocalClient(new Engine()).activity;
  * // `token` comes from the engine's `activity:async-pending` event:
  * // await activity.complete(token, { approved: true });
  * void activity;
