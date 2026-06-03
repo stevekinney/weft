@@ -5,16 +5,16 @@
  * exported from `@lostgradient/weft` carry internal codes that are intentionally absent
  * from this union and may change between releases.
  *
- * Prefer comparing `error.code` (or {@link isWeftErrorCode}) over `instanceof`
+ * Prefer comparing `error.code` (or {@link isWeftErrorLike}) over `instanceof`
  * when an error may have crossed a realm or duplicate-module boundary, where
  * `instanceof` is unreliable.
  *
  * @example
  * ```ts
- * import { isWeftError, isWeftErrorCode, type WeftErrorCode } from '@lostgradient/weft';
+ * import { isWeftErrorLike, type WeftErrorCode } from '@lostgradient/weft';
  *
  * function statusFor(error: unknown): number {
- *   if (isWeftError(error) && isWeftErrorCode(error.code)) {
+ *   if (isWeftErrorLike(error)) {
  *     const code: WeftErrorCode = error.code;
  *     return code === 'WorkflowNotFoundError' ? 404 : 400;
  *   }
@@ -136,21 +136,82 @@ export function isWeftError(value: unknown): value is WeftError {
 }
 
 /**
- * Cross-boundary structural check: `true` when `value` is one of the public
- * {@link WeftErrorCode} values. Pair with {@link isWeftError} to safely switch
- * over public codes: `if (isWeftError(e) && isWeftErrorCode(e.code)) { ... }`.
+ * Cross-boundary discriminant check: `true` when `value` is one of the public
+ * {@link WeftErrorCode} string values. This narrows a `code` *string*; to test
+ * a caught `unknown` (the common `catch` case), reach for {@link isWeftErrorLike}
+ * or {@link isWeftErrorByCode}, which check the whole error object structurally.
  *
  * @example
  * ```ts
- * import { isWeftError, isWeftErrorCode } from '@lostgradient/weft';
+ * import { isWeftErrorCode } from '@lostgradient/weft';
  *
- * function isMissingWorkflow(error: unknown): boolean {
- *   return isWeftError(error) && isWeftErrorCode(error.code)
- *     ? error.code === 'WorkflowNotFoundError'
- *     : false;
+ * function isPublicCode(code: string): boolean {
+ *   return isWeftErrorCode(code);
  * }
  * ```
  */
 export function isWeftErrorCode(value: unknown): value is WeftErrorCode {
   return typeof value === 'string' && PUBLIC_WEFT_ERROR_CODES.has(value);
+}
+
+/**
+ * Cross-boundary structural narrowing: `true` when `value` looks like a public
+ * Weft error — an object carrying a public {@link WeftErrorCode} `code` and a
+ * string `message`. Unlike {@link isWeftError}, this does *not* use `instanceof`,
+ * so it stays reliable when the error crossed a realm or duplicate-module
+ * boundary — the common case when Weft is a transitive dependency in a monorepo,
+ * where two copies of the `WeftError` class make `instanceof` fail.
+ *
+ * Use this in a `catch` to branch on a caught `unknown` without first proving
+ * `instanceof`. It is the structural counterpart to {@link isWeftError}: prefer
+ * `isWeftError` for same-realm catches where you want the live class instance,
+ * and `isWeftErrorLike` whenever the error may have crossed a module boundary.
+ *
+ * @example
+ * ```ts
+ * import { isWeftErrorLike } from '@lostgradient/weft';
+ *
+ * function statusFor(error: unknown): number {
+ *   if (isWeftErrorLike(error)) {
+ *     return error.code === 'WorkflowNotFoundError' ? 404 : 400;
+ *   }
+ *   return 500;
+ * }
+ * ```
+ */
+export function isWeftErrorLike(value: unknown): value is { code: WeftErrorCode; message: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'code' in value &&
+    isWeftErrorCode(value.code) &&
+    'message' in value &&
+    typeof value.message === 'string'
+  );
+}
+
+/**
+ * Cross-boundary structural narrowing against a *specific* code: `true` when
+ * `value` is a public Weft error whose `code` equals `code`. Layered on
+ * {@link isWeftErrorLike}, so it shares the same module-boundary-safe semantics
+ * and never uses `instanceof`. The `TCode` type parameter narrows the result to
+ * the matched code, so the branch body sees the precise error shape.
+ *
+ * This collapses the common hand-rolled `typeof e === 'object' && e !== null &&
+ * 'code' in e && e.code === '...'` structural check into one call.
+ *
+ * @example
+ * ```ts
+ * import { isWeftErrorByCode } from '@lostgradient/weft';
+ *
+ * function isEngineDisposed(error: unknown): boolean {
+ *   return isWeftErrorByCode(error, 'EngineDisposedError');
+ * }
+ * ```
+ */
+export function isWeftErrorByCode<TCode extends WeftErrorCode>(
+  value: unknown,
+  code: TCode,
+): value is { code: TCode; message: string } {
+  return isWeftErrorLike(value) && value.code === code;
 }

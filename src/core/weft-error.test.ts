@@ -31,7 +31,26 @@ import {
 // StandardSchemaValidationError is public via the `@lostgradient/weft/json-schema` subpath,
 // not the root entry — so it belongs in WeftErrorCode and is imported here.
 import { StandardSchemaValidationError } from '../json-schema.ts';
-import { WeftError, isWeftError, isWeftErrorCode, type WeftErrorCode } from './weft-error.ts';
+import {
+  WeftError,
+  isWeftError,
+  isWeftErrorByCode,
+  isWeftErrorCode,
+  isWeftErrorLike,
+  type WeftErrorCode,
+} from './weft-error.ts';
+
+/**
+ * A WeftError produced by a *second copy* of the module — exactly what a
+ * duplicate-module boundary creates (Weft as a transitive dependency resolved
+ * to two physical copies in a monorepo). It is structurally a public Weft error
+ * but is NOT an instance of this realm's {@link WeftError} class, so `instanceof`
+ * (and therefore {@link isWeftError}) returns `false` for it. This is the trap
+ * the structural guards exist to defeat.
+ */
+function foreignWeftError(code: WeftErrorCode, message = 'from another module copy'): unknown {
+  return { code, message, name: code };
+}
 
 /**
  * Exhaustive table over every public {@link WeftErrorCode}. Because the cases
@@ -99,10 +118,21 @@ describe('WeftError', () => {
         expect(error.name).toBe(code);
       });
 
-      it('is recognized by both guards', () => {
+      it('is recognized by every guard', () => {
         const error = construct();
         expect(isWeftError(error)).toBe(true);
         expect(isWeftErrorCode(error.code)).toBe(true);
+        expect(isWeftErrorLike(error)).toBe(true);
+        expect(isWeftErrorByCode(error, code)).toBe(true);
+      });
+
+      it('is recognized structurally even when it crossed a module boundary', () => {
+        // A foreign-module copy fails `instanceof`, but the structural guards
+        // must still accept it — this is the whole point of `isWeftErrorLike`.
+        const foreign = foreignWeftError(code);
+        expect(isWeftError(foreign)).toBe(false);
+        expect(isWeftErrorLike(foreign)).toBe(true);
+        expect(isWeftErrorByCode(foreign, code)).toBe(true);
       });
 
       it('retains a non-empty message', () => {
@@ -151,5 +181,81 @@ describe('isWeftErrorCode', () => {
     expect(isWeftErrorCode('NotAWeftCode')).toBe(false);
     expect(isWeftErrorCode(42)).toBe(false);
     expect(isWeftErrorCode(null)).toBe(false);
+  });
+});
+
+describe('isWeftErrorLike', () => {
+  it('accepts a same-realm WeftError instance', () => {
+    expect(isWeftErrorLike(new WorkflowNotFoundError('wf-404'))).toBe(true);
+  });
+
+  it('accepts a foreign-module error object that fails instanceof', () => {
+    const foreign = foreignWeftError('EngineDisposedError');
+    expect(isWeftError(foreign)).toBe(false);
+    expect(isWeftErrorLike(foreign)).toBe(true);
+  });
+
+  it('rejects non-objects', () => {
+    expect(isWeftErrorLike(null)).toBe(false);
+    expect(isWeftErrorLike(undefined)).toBe(false);
+    expect(isWeftErrorLike('EngineDisposedError')).toBe(false);
+    expect(isWeftErrorLike(42)).toBe(false);
+  });
+
+  it('rejects an object with no code property', () => {
+    expect(isWeftErrorLike({ message: 'no code here' })).toBe(false);
+  });
+
+  it('rejects an object whose code is not a public Weft code', () => {
+    expect(isWeftErrorLike({ code: 'McpProtocolError', message: 'internal' })).toBe(false);
+    expect(isWeftErrorLike({ code: 42, message: 'not a string code' })).toBe(false);
+  });
+
+  it('rejects a public code without a string message', () => {
+    expect(isWeftErrorLike({ code: 'EngineDisposedError' })).toBe(false);
+    expect(isWeftErrorLike({ code: 'EngineDisposedError', message: 123 })).toBe(false);
+  });
+
+  it('narrows code to WeftErrorCode in the branch body', () => {
+    const error: unknown = foreignWeftError('WorkflowNotFoundError');
+    if (isWeftErrorLike(error)) {
+      const code: WeftErrorCode = error.code;
+      expect(code).toBe('WorkflowNotFoundError');
+    } else {
+      throw new Error('expected isWeftErrorLike to accept the foreign error');
+    }
+  });
+});
+
+describe('isWeftErrorByCode', () => {
+  it('matches the requested code on a same-realm instance', () => {
+    expect(isWeftErrorByCode(new EngineDisposedError(), 'EngineDisposedError')).toBe(true);
+  });
+
+  it('matches the requested code on a foreign-module error object', () => {
+    expect(isWeftErrorByCode(foreignWeftError('EngineDisposedError'), 'EngineDisposedError')).toBe(
+      true,
+    );
+  });
+
+  it('rejects a Weft error of a different code', () => {
+    expect(isWeftErrorByCode(new WorkflowNotFoundError('wf-404'), 'EngineDisposedError')).toBe(
+      false,
+    );
+  });
+
+  it('rejects a non-Weft value', () => {
+    expect(isWeftErrorByCode(new Error('plain'), 'EngineDisposedError')).toBe(false);
+    expect(isWeftErrorByCode(null, 'EngineDisposedError')).toBe(false);
+  });
+
+  it('narrows code to the matched literal in the branch body', () => {
+    const error: unknown = foreignWeftError('WorkflowNotFoundError');
+    if (isWeftErrorByCode(error, 'WorkflowNotFoundError')) {
+      const code: 'WorkflowNotFoundError' = error.code;
+      expect(code).toBe('WorkflowNotFoundError');
+    } else {
+      throw new Error('expected isWeftErrorByCode to match');
+    }
   });
 });
