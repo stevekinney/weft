@@ -27,6 +27,7 @@ describe('yieldToPortableEventLoop', () => {
   });
 
   it('falls back to setTimeout when MessageChannel is unavailable', async () => {
+    const hadMessageChannel = 'MessageChannel' in globalThis;
     const original = globalThis.MessageChannel;
     // Simulate a runtime without MessageChannel (the else branch).
     // @ts-expect-error deliberately removing a global for the fallback path
@@ -34,7 +35,12 @@ describe('yieldToPortableEventLoop', () => {
     try {
       await expect(yieldToPortableEventLoop()).resolves.toBeUndefined();
     } finally {
-      globalThis.MessageChannel = original;
+      if (hadMessageChannel) {
+        globalThis.MessageChannel = original;
+      } else {
+        // @ts-expect-error restoring absence — do not leave an undefined property
+        delete globalThis.MessageChannel;
+      }
     }
   });
 });

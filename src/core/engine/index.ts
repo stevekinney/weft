@@ -1115,15 +1115,17 @@ export class Engine<
   }
   /**
    * Read a value a workflow offloaded with `ctx.offload(key, ...)` back out of
-   * storage by `workflowId` + `key`. Returns the decoded value, or `null` when
-   * no value is stored under that key.
+   * storage by `workflowId` + `key`.
    *
    * This is the external, post-completion reader for offloaded artifacts — the
    * missing sibling of {@link getStreamChunks} and {@link getEvents}. Offloaded
    * values survive normal completion (`completeWorkflow`/`failWorkflow` preserve
    * them) so a consumer can read a finished workflow's offloaded output after
    * `handle.result()` resolves. They are swept only when a workflow is
-   * terminated, cancelled, or times out, in which case this returns `null`.
+   * terminated, cancelled, or times out.
+   *
+   * @returns The decoded offload value, or `null` when no value is stored under
+   *   that key (key was never written, workflow ID unknown, or artifact swept).
    *
    * @example
    * ```ts

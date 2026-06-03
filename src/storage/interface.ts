@@ -388,9 +388,9 @@ const formatSortableTimestamp = (timestamp: number): string => String(timestamp)
  *
  * This registry grows as storage features are added, which is why this file
  * carries a `max-lines: 600` override (above the repo default ceiling) in
- * `.oxlintrc.json` — 600 matches `conventions.md`'s documented split threshold.
- * When `KEYS` next approaches that line, extract it into its own module rather
- * than raising the ceiling again.
+ * `.oxlintrc.json` — 600 matches the documented split threshold in
+ * `.claude/rules/conventions.md`. When `KEYS` next approaches that line, extract
+ * it into its own module rather than raising the ceiling again.
  *
  * @example
  * ```ts
