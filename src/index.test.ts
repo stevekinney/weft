@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'bun:test';
 
+import packageJson from '../package.json';
 import { workflow } from './core/types/workflow-function.ts';
 import type { WorkflowOperation, WorkflowReplay, WorkflowTimelineEntry } from './index';
 import { Engine, MemoryStorage, VERSION, WorkflowAlreadyExistsError } from './index';
 
 describe('weft', () => {
-  it('exports a version string', () => {
-    expect(VERSION).toBe('0.2.0');
+  it('exports a version string that matches package.json', () => {
+    // VERSION is hand-maintained in src/version.ts; pin it to package.json so the
+    // two cannot drift. scripts/verify-release-version.ts enforces the same
+    // invariant at release time against the git tag.
+    expect(VERSION).toBe(packageJson.version);
   });
 
   it('exports Engine class', () => {
