@@ -27,6 +27,7 @@ export interface ContextInternals {
   executionStateOwnerId: string;
   resolveWorkflowType: ((target: string | Function) => string) | undefined;
   registerCancelHandler: ((handler: () => Promise<void> | void) => () => void) | undefined;
+  services: unknown;
 }
 
 const INTERNALS = new WeakMap<Context, ContextInternals>();
@@ -60,6 +61,7 @@ export function initializeInternals(
     executionStateOwnerId: options.executionStateOwnerId ?? options.workflowId,
     resolveWorkflowType: options.resolveWorkflowType,
     registerCancelHandler: options.registerCancelHandler,
+    services: options.services,
   };
   INTERNALS.set(context, internals);
 }

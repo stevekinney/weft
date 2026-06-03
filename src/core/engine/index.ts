@@ -446,6 +446,7 @@ export class Engine<
       resolveWorkflowType: this.#resolveWorkflowTypeTarget.bind(this),
       registerCancelHandler: (workflowId, handler) =>
         registerCancelHandler(getInternals(this), workflowId, handler),
+      getWorkflowServices: (workflowId) => getInternals(this).workflowServices.get(workflowId),
     });
     getInternals(this).storage = storage;
     getInternals(this).abortController = new AbortController();
@@ -506,6 +507,7 @@ export class Engine<
       );
     }
     getInternals(this).heartbeatDetails = new Map();
+    getInternals(this).workflowServices = new Map();
     getInternals(this).pendingAsyncActivities = new Map();
     getInternals(this).pendingStarts = new Set();
     getInternals(this).pendingScheduleCreations = new Set();

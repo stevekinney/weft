@@ -101,6 +101,24 @@ function rollbackTransientStartState(internals: EngineInternals, workflowId: str
   internals.checkpoints.delete(workflowId);
   internals.workflowHeaders.delete(workflowId);
   internals.workflowVersionTuples.delete(workflowId);
+  internals.workflowServices.delete(workflowId);
+}
+
+/**
+ * `services` is a non-serializable per-run value read inline as `ctx.services`.
+ * It cannot cross to a Worker, so reject it early under worker execution mode
+ * rather than stranding a persisted run that can never read its services.
+ */
+function assertServicesSupportedForMode(
+  internals: EngineInternals,
+  options: StartOptions | undefined,
+): void {
+  if (options?.services !== undefined && internals.inlineStrategy === null) {
+    throw new Error(
+      'options.services is only supported in inline execution mode; it cannot be ' +
+        'serialized to a Worker. Remove services or use workflowExecutionMode: "inline".',
+    );
+  }
 }
 
 export async function startWorkflow(
@@ -115,6 +133,8 @@ export async function startWorkflow(
   if (!registration) {
     throw new WorkflowNotRegisteredError(type);
   }
+
+  assertServicesSupportedForMode(internals, options);
 
   const preparation = prepareStartWorkflow(internals, options, callbacks);
   const { workflowId, callerProvidedId, parentHeaders, executionStateOwnerId, delayedStartTimer } =
@@ -197,6 +217,13 @@ export async function startWorkflow(
     );
 
     await persistStartBatch(internals, startOperations);
+
+    // Hold the non-serialized per-run services in engine memory so the inline
+    // Context can read them. Never written to the start batch — they bypass
+    // every durable record. Cleared on terminal cleanup (and on rollback below).
+    if (options?.services !== undefined) {
+      internals.workflowServices.set(workflowId, options.services);
+    }
 
     const handle = createWorkflowHandle(internals, workflowId, callbacks);
     if (!delayedStartTimer) {

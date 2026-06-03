@@ -255,6 +255,7 @@ export function resolveEngineOptions(
   return {
     storage,
     getNow,
+    resolveWorkflowServices: options?.resolveWorkflowServices ?? null,
     ...resolveBooleanDefaults(options),
     ...resolveNumericDefaults(options),
     ...resolveRetentionFields(options),
@@ -369,6 +370,7 @@ export function createExecutionStrategyBundle(parameters: {
   getComposedWorkflowInterceptor?: () => ComposedWorkflowInterceptor | null;
   resolveWorkflowType: (target: string | Function) => string;
   registerCancelHandler?: (workflowId: string, handler: () => Promise<void> | void) => () => void;
+  getWorkflowServices?: (workflowId: string) => unknown;
 }): ExecutionStrategyBundle {
   const {
     options,
@@ -380,6 +382,7 @@ export function createExecutionStrategyBundle(parameters: {
     getComposedWorkflowInterceptor,
     resolveWorkflowType,
     registerCancelHandler,
+    getWorkflowServices,
   } = parameters;
   const workerExecutionConfiguration = normalizeWorkerExecutionConfiguration(options);
   if (workerExecutionConfiguration.mode === 'worker') {
@@ -408,6 +411,7 @@ export function createExecutionStrategyBundle(parameters: {
     development,
     resolveWorkflowType,
     ...(registerCancelHandler !== undefined && { registerCancelHandler }),
+    ...(getWorkflowServices !== undefined && { getWorkflowServices }),
   });
   return { strategy: inlineStrategy, inlineStrategy };
 }

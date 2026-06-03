@@ -33,6 +33,63 @@ type SerializedResumeArgs = {
   callbacks: LifecycleCallbacks;
 };
 
+/**
+ * Re-provide a recovered inline workflow's non-serialized `services` via the
+ * engine's `resolveWorkflowServices`. On `available`, the rebuilt value is
+ * stored in `internals.workflowServices` so the relaunched `Context` reads it as
+ * `ctx.services`. With no resolver configured, the run resumes with no services
+ * (`ctx.services` is `undefined`) — the same as a fresh start without services.
+ */
+async function resolveServicesForRecovery(
+  internals: EngineInternals,
+  state: WorkflowState,
+): Promise<{ status: 'available' } | { status: 'unavailable'; reason: string }> {
+  const resolver = internals.options.resolveWorkflowServices;
+  if (!resolver) {
+    return { status: 'available' };
+  }
+  const resolution = await resolver({
+    workflowId: state.id,
+    workflowType: state.type,
+    input: state.input,
+  });
+  if (resolution.status === 'available') {
+    internals.workflowServices.set(state.id, resolution.services);
+    return { status: 'available' };
+  }
+  return { status: 'unavailable', reason: resolution.reason };
+}
+
+/**
+ * Re-provide a recovered inline workflow's `services` before the generator is
+ * driven forward. Returns `true` when the run was failed (services unavailable)
+ * and the caller should stop resuming it; `false` to continue the resume. Worker
+ * mode skips this entirely — services are inline-only and rejected at start.
+ *
+ * A failure here (e.g. a storage write fault during the terminal commit) is
+ * recorded fail-warn rather than thrown, so it cannot escape into `recoverAll`'s
+ * loop and abort recovery of sibling runs.
+ */
+async function prepareRecoveredServicesOrFail(
+  internals: EngineInternals,
+  state: WorkflowState,
+  callbacks: LifecycleCallbacks,
+): Promise<boolean> {
+  if (internals.inlineStrategy === null) {
+    return false;
+  }
+  const resolved = await resolveServicesForRecovery(internals, state);
+  if (resolved.status !== 'unavailable') {
+    return false;
+  }
+  try {
+    await callbacks.failWorkflowForUnavailableServices(state.id, resolved.reason);
+  } catch (error) {
+    callbacks.handleCleanupError('failWorkflowForUnavailableServices', error, state.id);
+  }
+  return true;
+}
+
 function assertResumeNotTerminating(internals: EngineInternals, workflowId: string): void {
   if (internals.terminalizingWorkflows.has(workflowId)) {
     throw new Error(`Cannot resume workflow "${workflowId}": termination is in progress`);
@@ -104,6 +161,9 @@ function relaunchInlineWorkflowAfterResume(
     ...(latestState.executionDeadline !== undefined && {
       deadline: latestState.executionDeadline,
     }),
+    // Non-serialized services re-provided by resolveServicesForRecovery (or set
+    // at start when resuming in the same process); undefined when none.
+    services: internals.workflowServices.get(workflowId),
   });
   setContextWorkflowInterceptor(context, getComposedWorkflowInterceptor(internals));
 
@@ -232,6 +292,15 @@ export async function resumeWorkflowFromStorage(
 
   const workflowStartHeaders = await loadWorkflowStartHeaders(internals, workflowId, callbacks);
   await loadTerminalCleanupTrackedState(internals, workflowId, callbacks);
+
+  // Re-provide the non-serialized `services` value before the generator is
+  // driven forward. Inline mode only — worker mode cannot receive a
+  // non-serializable value (and `engine.start` rejected `services` there). When
+  // the resolver reports the run unavailable, fail just this run and skip the
+  // resume so the engine and other recovered runs are unaffected.
+  if (await prepareRecoveredServicesOrFail(internals, state, callbacks)) {
+    return callbacks.getHandle(workflowId);
+  }
 
   const handle = callbacks.getHandle(workflowId);
   await callbacks.runSerializedWorkflowStateWrite(workflowId, () =>

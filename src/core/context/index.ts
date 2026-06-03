@@ -96,6 +96,9 @@ export class Context implements WorkflowContext {
     if (internals.deadline === undefined) return Infinity;
     return Math.max(0, internals.deadline - internals.getNow());
   }
+  get services(): unknown {
+    return getInternals(this).services;
+  }
   get stepIndex(): number {
     return getInternals(this).stepIndex;
   }

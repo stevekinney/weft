@@ -174,6 +174,8 @@ export type {
   WorkflowId,
   WorkflowRegistry,
   WorkflowReplay,
+  WorkflowServicesResolution,
+  WorkflowServicesResolverInfo,
   WorkflowSessionState,
   WorkflowState,
   WorkflowStateNamespace,

@@ -59,6 +59,13 @@ export type LifecycleCallbacks = {
    * history is terminated without being replayed.
    */
   enforceHistoryCircuitBreaker: (workflowId: string) => Promise<void>;
+  /**
+   * Force a recovered workflow to a terminal `failed` state because its
+   * non-serialized `services` could not be re-provided (the engine's
+   * `resolveWorkflowServices` reported `unavailable`). Fails just this run with
+   * a `system` failure category; the engine and other recovered runs continue.
+   */
+  failWorkflowForUnavailableServices: (workflowId: string, reason: string) => Promise<void>;
 };
 
 /**

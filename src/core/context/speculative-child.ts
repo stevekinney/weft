@@ -30,6 +30,9 @@ function assignOptionalContextOptions(options: ContextOptions, internals: Contex
   if (internals.resolveWorkflowType !== undefined) {
     options.resolveWorkflowType = internals.resolveWorkflowType;
   }
+  if (internals.services !== undefined) {
+    options.services = internals.services;
+  }
 }
 
 function createSpeculativeChildOptions(

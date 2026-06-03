@@ -189,4 +189,10 @@ export interface ContextOptions {
    * it is not persisted or restored after engine restart.
    */
   registerCancelHandler?: (handler: () => Promise<void> | void) => () => void;
+  /**
+   * Host-supplied, per-run capabilities exposed as `ctx.services`. Never
+   * checkpointed; held only for this run and re-provided on recovery via the
+   * engine's `resolveWorkflowServices` resolver.
+   */
+  services?: unknown;
 }

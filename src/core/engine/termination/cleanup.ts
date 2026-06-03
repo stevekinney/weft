@@ -137,6 +137,7 @@ export function cleanupWaiters(
 
   internals.workflowNestingDepths.delete(workflowId);
   internals.workflowHeaders.delete(workflowId);
+  internals.workflowServices.delete(workflowId);
   internals.workflowTypeByWorkflowId.delete(workflowId);
 }
 
