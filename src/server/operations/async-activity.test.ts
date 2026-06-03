@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'bun:test';
 
-import { Engine } from '../../core/engine.ts';
-import { ActivityAsyncPendingEvent } from '../../core/events.ts';
+import { AsyncActivityTokenNotFoundError, Engine } from '../../core/engine.ts';
 import type { ActivityContext, WorkflowContext } from '../../core/types.ts';
 import { activity, workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { nextAsyncPendingToken } from '../../testing/async-activity.test-support.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import {
@@ -30,17 +30,6 @@ function createEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage() });
   engine.register(deferringWorkflow);
   return engine;
-}
-
-/** Resolve with the task token the next time `engine` parks an async activity. */
-function nextAsyncPendingToken(engine: Engine): Promise<string> {
-  return new Promise<string>((resolve) => {
-    engine.addEventListener(
-      'activity:async-pending',
-      (event) => resolve((event as ActivityAsyncPendingEvent).token),
-      { once: true },
-    );
-  });
 }
 
 const registry = createOperationRegistry([
@@ -364,5 +353,35 @@ describe('async activity payload-size enforcement', () => {
 
     expect(response.status).toBe(400);
     expect(await engine.get(handle.id)).toMatchObject({ status: 'running' });
+  });
+});
+
+describe('async activity single-use token under concurrency', () => {
+  it('two concurrent completions for one token: exactly one wins, the other rejects', async () => {
+    await using engine = createEngine();
+    const tokenPromise = nextAsyncPendingToken(engine);
+    const handle = await engine.start('deferring', 'concurrent');
+    const token = await tokenPromise;
+
+    // Fire both without awaiting between them so they race the single-use token.
+    // The synchronous in-memory claim in consumePendingAsyncActivity must let
+    // exactly one through; the loser sees the token already gone (NotFound). A
+    // regression that double-drives the workflow generator would fulfill both.
+    const [first, second] = await Promise.allSettled([
+      engine.completeAsyncActivity(token, { winner: 'a' }),
+      engine.completeAsyncActivity(token, { winner: 'b' }),
+    ]);
+
+    const fulfilled = [first, second].filter((r) => r.status === 'fulfilled');
+    const rejected = [first, second].filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(
+      AsyncActivityTokenNotFoundError,
+    );
+
+    // The workflow completed once, with whichever result won the race.
+    const result = (await handle.result()) as { resolved: { winner: string } };
+    expect(['a', 'b']).toContain(result.resolved.winner);
   });
 });

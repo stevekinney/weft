@@ -112,7 +112,7 @@ export type CatalogOperationTypes = {
   'weft.activities.complete': {
     readonly input: { readonly result?: unknown; readonly token: string };
     readonly output: { readonly ok: boolean };
-    readonly faults: 'NotFound';
+    readonly faults: 'InvalidParams' | 'NotFound';
   };
   'weft.activities.fail': {
     readonly input: {
@@ -120,7 +120,7 @@ export type CatalogOperationTypes = {
       readonly token: string;
     };
     readonly output: { readonly ok: boolean };
-    readonly faults: 'NotFound';
+    readonly faults: 'InvalidParams' | 'NotFound';
   };
   'weft.recover.all': {
     readonly input: {};

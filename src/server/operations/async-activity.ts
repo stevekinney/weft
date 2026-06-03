@@ -4,7 +4,6 @@ import { AsyncActivityTokenNotFoundError, type Engine } from '../../core/engine.
 import { PayloadSizeExceededError } from '../../core/payload-size.ts';
 import type { AccessPolicy } from '../authorization.ts';
 import { raiseFault } from '../operation-catalog.ts';
-import type { FaultCode } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
@@ -28,6 +27,10 @@ import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
  *
  * The token travels in the request body, never the URL path: tokens embed the
  * workflow id and `:` separators, which have no business in a route.
+ *
+ * Not MCP-exposed (`mcpExposable: false`): an MCP client holds no durable
+ * reference to a workflow's async task tokens, so a token-keyed completion tool
+ * would be unreachable and confusing in that surface.
  *
  * @module server/operations/async-activity
  */
@@ -87,7 +90,7 @@ function errorFromFailInput(input: FailAsyncActivityInput): Error {
  * propagates unchanged for the pipeline to mask as `EngineFailure`.
  */
 function raiseAsyncActivityFault(
-  operation: { readonly name: string; readonly producibleFaults?: readonly FaultCode[] },
+  operation: Parameters<typeof raiseFault>[0],
   token: string,
   error: unknown,
 ): never {
@@ -116,18 +119,22 @@ export const completeAsyncActivityOperation = defineOperation<
     'workflow as though the activity had returned that result inline. Requires the ' +
     'durable task token announced through the `activity:async-pending` event. Faults ' +
     'with NotFound when the token is unknown or already completed/failed (tokens are ' +
-    'single-use).',
+    'single-use), and InvalidParams when the result exceeds the payload size limit.',
   destructive: true,
   tags: ['Activities'],
   inputSchema: completeAsyncActivityInput,
   outputSchema: okOutput,
   access: asyncActivityAccess,
-  producibleFaults: ['NotFound'],
+  producibleFaults: ['NotFound', 'InvalidParams'],
   transports: httpAndJsonRpcTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<AsyncActivityOutput> => {
+    // `engine` is erased to the catalog engine type so adapters can share the
+    // registry; in a live server it is always the concrete Engine. Cast matches
+    // every other operation in this directory.
+    const liveEngine = engine as Engine;
     try {
-      await (engine as Engine).completeAsyncActivity(input.token, input.result);
+      await liveEngine.completeAsyncActivity(input.token, input.result);
     } catch (error) {
       raiseAsyncActivityFault(completeAsyncActivityOperation, input.token, error);
     }
@@ -147,18 +154,21 @@ export const failAsyncActivityOperation = defineOperation<
     'parked workflow at the deferred step — identical to an inline activity that threw, ' +
     'so the workflow’s own try/catch and retry policy apply unchanged. Requires the ' +
     'durable task token from the `activity:async-pending` event. Faults with NotFound ' +
-    'when the token is unknown or already completed/failed (tokens are single-use).',
+    'when the token is unknown or already completed/failed (tokens are single-use), and ' +
+    'InvalidParams when the failure message exceeds the payload size limit.',
   destructive: true,
   tags: ['Activities'],
   inputSchema: failAsyncActivityInput,
   outputSchema: okOutput,
   access: asyncActivityAccess,
-  producibleFaults: ['NotFound'],
+  producibleFaults: ['NotFound', 'InvalidParams'],
   transports: httpAndJsonRpcTransports,
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<AsyncActivityOutput> => {
+    // See completeAsyncActivityOperation: erased catalog engine, concrete at runtime.
+    const liveEngine = engine as Engine;
     try {
-      await (engine as Engine).failAsyncActivity(input.token, errorFromFailInput(input));
+      await liveEngine.failAsyncActivity(input.token, errorFromFailInput(input));
     } catch (error) {
       raiseAsyncActivityFault(failAsyncActivityOperation, input.token, error);
     }
@@ -191,9 +201,12 @@ export const completeAsyncActivityRestBinding: UnknownRestBinding = {
     result: { kind: 'body-field', bodyField: 'result' },
   },
   extractInput: async (request) => {
+    // Pass raw body fields through; the operation's Zod schema is the single
+    // validator and rejects a missing/non-string token as InvalidParams. (No
+    // empty-string coercion — that would invent a value for a required field.)
     const body = await readJsonObjectBody(request);
     return {
-      token: typeof body['token'] === 'string' ? body['token'] : '',
+      token: body['token'],
       ...('result' in body ? { result: body['result'] } : {}),
     };
   },
@@ -212,9 +225,10 @@ export const failAsyncActivityRestBinding: UnknownRestBinding = {
     error: { kind: 'body-field', bodyField: 'error' },
   },
   extractInput: async (request) => {
+    // Raw pass-through; the Zod schema validates both token and the error shape.
     const body = await readJsonObjectBody(request);
     return {
-      token: typeof body['token'] === 'string' ? body['token'] : '',
+      token: body['token'],
       error: body['error'],
     };
   },

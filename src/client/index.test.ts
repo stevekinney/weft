@@ -1,11 +1,14 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'bun:test';
 import { Engine } from '../core/engine.ts';
-import { ActivityAsyncPendingEvent } from '../core/events.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { query, workflow } from '../core/types.ts';
 import { handleRequest } from '../server/handler.ts';
 import { serve, type WeftServer } from '../server/index.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import {
+  CONTRACT_PAYLOAD_CAP_BYTES,
+  nextAsyncPendingToken,
+} from '../testing/async-activity.test-support.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import {
   clientContractAsyncActivityWorkflow,
@@ -448,10 +451,6 @@ let engine: Engine;
 let server: WeftServer;
 let client: WeftClient;
 
-// A generous cap so every existing tiny-payload contract test is unaffected,
-// while the payload-size contract test has a known limit to exceed.
-const CONTRACT_PAYLOAD_CAP_BYTES = 1_048_576;
-
 beforeAll(() => {
   engine = new Engine({
     storage: new MemoryStorage(),
@@ -504,15 +503,12 @@ describe('HttpClient', () => {
       waitingTwice: 'client-contract-waiting-twice',
       asyncActivity: 'client-contract-async-activity',
     },
-    captureNextAsyncToken: () =>
-      new Promise<string>((resolve) => {
-        engine.addEventListener(
-          'activity:async-pending',
-          (event) => resolve((event as ActivityAsyncPendingEvent).token),
-          { once: true },
-        );
-      }),
+    captureNextAsyncToken: () => nextAsyncPendingToken(engine),
     asyncResultCapBytes: CONTRACT_PAYLOAD_CAP_BYTES,
+    expectTokenNotFound: (error) => {
+      expect(error).toBeInstanceOf(HttpClientError);
+      expect((error as HttpClientError).status).toBe(404);
+    },
   });
 
   it('implements WeftClient', () => {

@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { Engine } from '../core/engine.ts';
-import {
-  ActivityAsyncPendingEvent,
-  WorkflowCompletedEvent,
-  WorkflowFailedEvent,
-} from '../core/events.ts';
+import { AsyncActivityTokenNotFoundError, Engine } from '../core/engine.ts';
+import { WorkflowCompletedEvent, WorkflowFailedEvent } from '../core/events.ts';
 import type { ScheduleSummary, WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import {
+  CONTRACT_PAYLOAD_CAP_BYTES,
+  nextAsyncPendingToken,
+} from '../testing/async-activity.test-support.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import {
   clientContractAsyncActivityWorkflow,
@@ -39,10 +39,6 @@ const failingWorkflow = workflow({ name: 'failing' }).execute(async function* (
   throw new Error('intentional failure');
 });
 
-// A generous cap so every existing tiny-payload contract test is unaffected,
-// while the payload-size contract test has a known limit to exceed.
-const CONTRACT_PAYLOAD_CAP_BYTES = 1_048_576;
-
 function createTestEngine(): Engine {
   const engine = new Engine({
     storage: new MemoryStorage(),
@@ -56,17 +52,6 @@ function createTestEngine(): Engine {
   engine.register(clientContractAsyncActivityWorkflow);
   engine.register(failingWorkflow);
   return engine;
-}
-
-/** Resolve with the task token the next time `engine` parks an async activity. */
-function nextAsyncPendingToken(engine: Engine): Promise<string> {
-  return new Promise<string>((resolve) => {
-    engine.addEventListener(
-      'activity:async-pending',
-      (event) => resolve((event as ActivityAsyncPendingEvent).token),
-      { once: true },
-    );
-  });
 }
 
 async function waitForWorkflowStatus(
@@ -115,6 +100,9 @@ describe('LocalClient', () => {
     waitForRunning: (workflowId) => waitForWorkflowStatus(engine, workflowId, 'running'),
     captureNextAsyncToken: () => nextAsyncPendingToken(engine),
     asyncResultCapBytes: CONTRACT_PAYLOAD_CAP_BYTES,
+    expectTokenNotFound: (error) => {
+      expect(error).toBeInstanceOf(AsyncActivityTokenNotFoundError);
+    },
   });
 
   it('implements WeftClient', () => {

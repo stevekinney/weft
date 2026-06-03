@@ -14,21 +14,10 @@ import { describe, expect, it } from 'bun:test';
 import { LocalClient } from '../client/local.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { nextAsyncPendingToken } from '../testing/async-activity.test-support.ts';
 import { AsyncActivityTokenNotFoundError, Engine } from './engine.ts';
-import { ActivityAsyncPendingEvent } from './events.ts';
 import type { ActivityContext, WorkflowContext } from './types.ts';
 import { activity, workflow } from './types.ts';
-
-/** Resolve with the task token the next time the engine parks an async activity. */
-function nextAsyncPendingToken(engine: Engine): Promise<string> {
-  return new Promise<string>((resolve) => {
-    engine.addEventListener(
-      'activity:async-pending',
-      (event) => resolve((event as ActivityAsyncPendingEvent).token),
-      { once: true },
-    );
-  });
-}
 
 const awaitCallback = activity({
   name: 'awaitCallback',

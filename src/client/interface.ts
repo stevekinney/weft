@@ -232,8 +232,8 @@ export type UpdateResult = {
  * ```
  */
 export interface WeftClientActivity {
-  /** Complete a deferred activity by token, resuming its workflow with `result`. */
-  complete(token: string, result: unknown): Promise<void>;
+  /** Complete a deferred activity by token, resuming its workflow with `result` (optional; omitted/`undefined` resumes with `undefined`). */
+  complete(token: string, result?: unknown): Promise<void>;
   /** Fail a deferred activity by token; the error is thrown into its workflow. */
   completeExceptionally(token: string, error: unknown): Promise<void>;
 }

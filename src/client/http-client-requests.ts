@@ -22,7 +22,7 @@ import type {
   WorkflowTimelineEntry,
 } from '../core/types.ts';
 import { HttpClientError, request } from './http-request.ts';
-import type { UpdateResult, WeftClientActivity } from './interface.ts';
+import type { UpdateResult } from './interface.ts';
 import { buildReviewListSearchParams } from './search-params.ts';
 import { scheduleSpecToWireFields } from './start-body.ts';
 
@@ -328,8 +328,10 @@ export async function signalWorkflowRequest(
 export async function completeAsyncActivityRequest(
   context: HttpClientRequestContext,
   token: string,
-  result: unknown,
+  result?: unknown,
 ): Promise<void> {
+  // `JSON.stringify` drops a `result` of `undefined`, so the wire body omits it
+  // and the server resumes the workflow with `undefined` — matching LocalClient.
   await request<unknown>(context.baseUrl, '/activities/complete', context.headers, {
     method: 'POST',
     body: JSON.stringify({ token, result }),
@@ -355,17 +357,6 @@ export async function failAsyncActivityRequest(
     method: 'POST',
     body: JSON.stringify({ token, error: reduced }),
   });
-}
-
-/**
- * Build the `HttpClient.activity` surface bound to a request context. Keeps the
- * constructor terse and co-locates the activity wiring with its request helpers.
- */
-export function createHttpClientActivity(context: HttpClientRequestContext): WeftClientActivity {
-  return {
-    complete: (token, result) => completeAsyncActivityRequest(context, token, result),
-    completeExceptionally: (token, error) => failAsyncActivityRequest(context, token, error),
-  };
 }
 
 /** Fetch a workflow's full persisted state, or `null` if it does not exist. */
@@ -400,6 +391,19 @@ export function cancelWorkflowRequest(
   return request<void>(context.baseUrl, `/workflows/${encodeURIComponent(id)}`, context.headers, {
     method: 'DELETE',
   });
+}
+
+/** Force-timeout a workflow (`POST /v1/workflows/:id/timeout`). */
+export function timeoutWorkflowRequest(
+  context: HttpClientRequestContext,
+  id: string,
+): Promise<void> {
+  return request<void>(
+    context.baseUrl,
+    `/workflows/${encodeURIComponent(id)}/timeout`,
+    context.headers,
+    { method: 'POST' },
+  );
 }
 
 /** Pause a recurring schedule (`POST /v1/schedules/:id/pause`). */

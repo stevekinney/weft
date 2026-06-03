@@ -6,7 +6,7 @@
       "name": "weft.activities.complete",
       "kind": "unary",
       "summary": "Complete a deferred activity by task token",
-      "description": "Resolve an out-of-band (\"async\") activity with a result, resuming its parked workflow as though the activity had returned that result inline. Requires the durable task token announced through the `activity:async-pending` event. Faults with NotFound when the token is unknown or already completed/failed (tokens are single-use).",
+      "description": "Resolve an out-of-band (\"async\") activity with a result, resuming its parked workflow as though the activity had returned that result inline. Requires the durable task token announced through the `activity:async-pending` event. Faults with NotFound when the token is unknown or already completed/failed (tokens are single-use), and InvalidParams when the result exceeds the payload size limit.",
       "tags": ["Activities"],
       "destructive": true,
       "access": {
@@ -18,7 +18,7 @@
         "jsonRpcStdio": true,
         "jsonRpcWebSocket": true
       },
-      "producibleFaults": ["NotFound"],
+      "producibleFaults": ["InvalidParams", "NotFound"],
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -47,7 +47,7 @@
       "name": "weft.activities.fail",
       "kind": "unary",
       "summary": "Fail a deferred activity by task token",
-      "description": "Fail an out-of-band (\"async\") activity, throwing the supplied error into its parked workflow at the deferred step — identical to an inline activity that threw, so the workflow’s own try/catch and retry policy apply unchanged. Requires the durable task token from the `activity:async-pending` event. Faults with NotFound when the token is unknown or already completed/failed (tokens are single-use).",
+      "description": "Fail an out-of-band (\"async\") activity, throwing the supplied error into its parked workflow at the deferred step — identical to an inline activity that threw, so the workflow’s own try/catch and retry policy apply unchanged. Requires the durable task token from the `activity:async-pending` event. Faults with NotFound when the token is unknown or already completed/failed (tokens are single-use), and InvalidParams when the failure message exceeds the payload size limit.",
       "tags": ["Activities"],
       "destructive": true,
       "access": {
@@ -59,7 +59,7 @@
         "jsonRpcStdio": true,
         "jsonRpcWebSocket": true
       },
-      "producibleFaults": ["NotFound"],
+      "producibleFaults": ["InvalidParams", "NotFound"],
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

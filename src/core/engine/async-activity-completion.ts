@@ -274,11 +274,21 @@ async function consumePendingAsyncActivity(
   if (!pending) {
     throw new AsyncActivityTokenNotFoundError(token);
   }
-  // Delete the durable record first so that if storage rejects the in-memory
-  // token is not silently lost. If storage.delete fails, the token remains in
-  // memory and the caller can retry.
-  await internals.storage.delete(KEYS.asyncActivity(pending.workflowId, token));
+  // Claim the in-memory token SYNCHRONOUSLY, before any await. Two concurrent
+  // completions for the same token (trivially rac- able now the token is
+  // resolvable over a public HTTP endpoint) would otherwise both pass the
+  // `get` above and both drive the workflow generator past the parked step.
+  // The synchronous delete makes the second caller's `get` miss and throw
+  // `AsyncActivityTokenNotFoundError`.
   internals.pendingAsyncActivities.delete(token);
+  try {
+    await internals.storage.delete(KEYS.asyncActivity(pending.workflowId, token));
+  } catch (error) {
+    // Restore the in-memory token on storage failure so the caller can retry —
+    // preserving the original "don't lose the token if storage rejects" invariant.
+    internals.pendingAsyncActivities.set(token, pending);
+    throw error;
+  }
   return pending;
 }
 
@@ -384,12 +394,14 @@ export async function failAsyncActivity(
   finalizeTimeline: (workflowId: string, status: 'completed' | 'failed', output: unknown) => void,
 ): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
-  // The failure message is caller-supplied over the public completion endpoint
-  // and gets persisted (timeline + fed outcome). Cap it for the same reason the
-  // complete path caps its result — checked BEFORE consuming the single-use token
-  // so an oversized message is rejectable and retryable rather than stranding it.
+  const errorName = error instanceof Error ? error.name : undefined;
+  // Both the failure message AND name are caller-supplied over the public
+  // completion endpoint and get persisted (timeline + fed outcome). Cap the full
+  // persisted shape — not just the message — for the same reason the complete
+  // path caps its result. Checked BEFORE consuming the single-use token so an
+  // oversized failure is rejectable and retryable rather than stranding it.
   assertPayloadWithinLimit(
-    message,
+    { message, name: errorName },
     internals.options.payloadSizePolicy.maxBytes,
     'activity result',
   );

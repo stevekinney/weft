@@ -50,8 +50,9 @@ import {
   cancelAllWorkflowRequests,
   cancelScheduleRequest,
   cancelWorkflowRequest,
-  createHttpClientActivity,
+  completeAsyncActivityRequest,
   deleteAllWorkflowRequests,
+  failAsyncActivityRequest,
   forkWorkflowRequest,
   getAttributesRequest,
   getRetentionOverviewRequest,
@@ -73,6 +74,7 @@ import {
   submitCoordinatedUpdateRequest,
   submitReviewRequest,
   tagAllWorkflowRequests,
+  timeoutWorkflowRequest,
   untagAllWorkflowRequests,
   updateScheduleRequest,
 } from './http-client-requests.ts';
@@ -153,7 +155,10 @@ export class HttpClient implements WeftClient {
       CATALOG_OPERATION_NAMES,
       httpClientCatalogTransport(this.baseUrl, this.headers),
     );
-    this.activity = createHttpClientActivity(this);
+    this.activity = {
+      complete: (token, result) => completeAsyncActivityRequest(this, token, result),
+      completeExceptionally: (token, error) => failAsyncActivityRequest(this, token, error),
+    };
     this.#streamOptions =
       options.webSocketFactory === undefined ? {} : { webSocketFactory: options.webSocketFactory };
   }
@@ -366,12 +371,7 @@ export class HttpClient implements WeftClient {
   }
 
   async timeout(id: string): Promise<void> {
-    return request<void>(
-      this.baseUrl,
-      `/workflows/${encodeURIComponent(id)}/timeout`,
-      this.headers,
-      { method: 'POST' },
-    );
+    return timeoutWorkflowRequest(this, id);
   }
 
   async getAttributes(id: string): Promise<Record<string, SearchAttributeValue> | null> {
