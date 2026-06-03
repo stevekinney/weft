@@ -110,7 +110,7 @@ bun run verify:documentation    # Check documentation links, anchors, and versio
 bun run verify:portability      # Check that code avoids Bun-only APIs in portable modules
 bun run verify:jsdoc            # Validate JSDoc coverage on public API
 bun run verify:markdown-doctests # Check TypeScript code blocks in documentation
-bun run verify:release-version  # Confirm version consistency before a release
+bun run scripts/verify-release-version.ts --tag=v0.2.0  # Confirm package.json, VERSION, and tag consistency before a release
 ```
 
 ### Release package checks
@@ -124,7 +124,7 @@ bun run prepack
 npm publish --dry-run --ignore-scripts
 ```
 
-`prepack` already runs the build, export and portability checks, Markdown and JSDoc doctests, package-content validation, and packed-consumer checks. The publish dry run uses `--ignore-scripts` to match the release workflow, where `prepack` has already run explicitly before publish.
+`prepack` already runs the build, export and portability checks, Markdown and JSDoc doctests, package-content validation, and packed-consumer checks. The publish dry run uses `--ignore-scripts` to match the release workflow, where `prepack` has already run explicitly before publish. The release workflow also runs `bun run validate` before publishing, and `verify-release-version` fails unless the pushed tag, `package.json.version`, and the exported `VERSION` constant all agree.
 
 ## Git hooks
 

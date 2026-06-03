@@ -91,6 +91,36 @@ const processLargeFile = async (path: string, context?: ActivityContext) => {
 };
 ```
 
+### Out-of-band completion
+
+Some activities start work that finishes later somewhere else: a webhook callback, a human-operated job, or a third-party batch process. Call `context.completeAsync()` to park the workflow at that activity step and complete or fail it later by durable task token.
+
+```typescript partial
+const awaitWebhook = activity({
+  name: 'awaitWebhook',
+  execute: async (input: { callbackUrl: string }, context?: ActivityContext) => {
+    const callbackUrl = new URL(input.callbackUrl);
+    if (callbackUrl.origin !== 'https://callbacks.example.com') {
+      throw new Error('Unsupported callback origin');
+    }
+    await fetch(callbackUrl, { method: 'POST' });
+    return context!.completeAsync();
+  },
+});
+```
+
+The engine emits an `activity:async-pending` event with the token. Resolve it in-process with `engine.completeAsyncActivity(token, result)` / `engine.failAsyncActivity(token, error)`, through the transport-neutral client surface `client.activity.complete(token, result)` / `client.activity.completeExceptionally(token, error)`, or over REST:
+
+```bash
+curl -X POST http://localhost:7233/api/v1/activities/complete \
+  -H 'content-type: application/json' \
+  -d '{"token":"async-act:v1:workflow-123:4:1","result":{"ok":true}}'
+```
+
+Tokens are single-use. A replayed or unknown token returns `NotFound`; oversized completion and failure payloads return `InvalidParams` before the parked token is consumed, so the workflow remains waiting.
+
+The token is a deterministic identifier, not a secret. Treat completion payloads as hostile external input, validate them the same way you validate signal payloads, and enable `serve({ auth })` before exposing completion endpoints outside a trusted boundary.
+
 ## Per-call options
 
 You can override retry, timeout, queue, and idempotency settings on a per-invocation basis using `ActivityCallOptions`.

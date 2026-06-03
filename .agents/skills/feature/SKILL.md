@@ -21,7 +21,7 @@ Follow this workflow:
 
 - Read the relevant source files to understand the affected modules.
 - Check `src/index.ts` to see if the public API surface will change. Any new exports are a public API decision — be deliberate.
-- Identify which subsystems are involved: core engine (`src/core/`), storage (`src/storage/`), server (`src/server/`), server runtime (`src/server/runtime/`), client (`src/client/`), dashboard (`src/dashboard/`), testing (`src/testing/`), observability (`src/observability/`), remote workers (`src/worker/`), in-process workers (`src/workers/`), browser runtime (`src/service-worker/`), or alerting (`src/alerting/`).
+- Identify which subsystems are involved: core engine (`src/core/`), storage (`src/storage/`), server (`src/server/`), server runtime (`src/server/runtime/`), client (`src/client/`), externally supplied dashboard mounting (`serve({ dashboard })`), testing (`src/testing/`), observability (`src/observability/`), remote workers (`src/worker/`), in-process workers (`src/workers/`), browser runtime (`src/service-worker/`), or alerting (`src/alerting/`).
 - Check if this feature needs to work across storage backends (MemoryStorage, BunSQLiteStorage, IndexedDB).
 - Check if this feature needs browser compatibility (no Bun-specific APIs in browser-targeted code).
 
@@ -30,7 +30,7 @@ Follow this workflow:
 - Outline the approach before writing code.
 - Identify existing utilities and patterns to reuse — do not reinvent.
 - If the change touches the public API, list exactly which exports are added or modified.
-- If the change adds a server operation, list the REST path, JSON-RPC name, access scope, transport exposure, dashboard client impact, and documentation page to update.
+- If the change adds a server operation, list the REST path, JSON-RPC name, access scope, transport exposure, operator UI or external-dashboard impact, and documentation page to update.
 - Consider whether new types belong near their module or in `src/core/types.ts`.
 
 ## 3. Implement

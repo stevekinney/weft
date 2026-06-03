@@ -5,7 +5,7 @@ Weft provides a command-line interface for running the server and diagnosing dat
 This reference documents the `weft` CLI entrypoint (`src/cli-main.ts`). The published [`@lostgradient/weft`](https://www.npmjs.com/package/@lostgradient/weft) package installs both the `weft` binary and the [`weft-mcp`](api-server.md#mcp-server) binary.
 
 > [!NOTE]
-> [`serve`](#serve-default) and [`doctor`](#doctor) are the candidate-stable source/binary CLI commands for the pre-1.0 launch plan. [`conformance`](#conformance), [`codegen`](#codegen), and other specialized commands are useful, but their flags and output contracts remain experimental until the Tier-0 contract and 1.0 stability policy land.
+> [`serve`](#serve-default), [`doctor`](#doctor), and the leading-token version forms [`version`](#version), `--version`, and `-v` are the candidate-stable source/binary CLI commands for the pre-1.0 launch plan. [`conformance`](#conformance), [`codegen`](#codegen), and other specialized commands are useful, but their flags and output contracts remain experimental until the Tier-0 contract and 1.0 stability policy land.
 
 ## Usage
 

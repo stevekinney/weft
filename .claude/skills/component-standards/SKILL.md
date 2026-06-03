@@ -1,11 +1,7 @@
 ---
 name: component-standards
-description: Apply frontend domain conventions for Weft dashboard components, Svelte runes, reactivity patterns, and accessibility requirements.
+description: Preserve Weft external-dashboard mount contracts and avoid reintroducing the removed bundled dashboard.
 allowed-tools:
-  - mcp__svelte__list-sections
-  - mcp__svelte__get-documentation
-  - mcp__svelte__svelte-autofixer
-  - mcp__svelte__playground-link
   - Bash
   - Read
   - Edit
@@ -18,70 +14,48 @@ allowed-tools:
 
 ## When to use
 
-- Creating or modifying components under `src/dashboard/components/**`
-- Creating or modifying domain fragments under `src/dashboard/fragments/**`
-- Updating Svelte reactivity or state management in `src/dashboard/**/*.svelte.ts`
-- Building or modifying views in `src/dashboard/views/**`
-- Writing or fixing dashboard tests
+- Changing `serve({ dashboard })`, `DASHBOARD_PAGE_ROUTES`, route targets, or external dashboard mounting behavior.
+- Reviewing a change that proposes restoring `src/dashboard/**`, Svelte build tooling, jsdom dashboard tests, or bundled-dashboard package content.
+- Documenting how an externally supplied operator UI should call the Weft API.
 
 ## Do not use
 
-- Pure server/engine workflows (`src/core/**`, `src/server/**`)
+- Pure core engine workflows (`src/core/**`) and unrelated server behavior outside the external-dashboard mount contract
 - Storage adapters (`src/storage/**`)
 - Service worker code (`src/service-worker/**`)
+- Building an in-repository dashboard; Weft no longer ships one.
 
 ## Constraints
 
-- Follow `{baseDir}/rules/component-library.md`
-- Follow `{baseDir}/rules/svelte-patterns.md`
-- No Tailwind; use tokens from `styles/tokens.css`
-- Variants via `data-*` attributes, not conditional utility classes
-- No SvelteKit patterns — this is a plain Svelte 5 SPA
+- Keep Weft headless by default. `weft serve` starts the API and health endpoints; no bundled UI assets should be loaded or emitted.
+- Preserve the external shell contract: `serve({ dashboard })` may mount caller-supplied content on `DASHBOARD_PAGE_ROUTES`, while `/api/...`, discovery, health, REST, JSON-RPC, WebSocket, worker, and MCP routes remain server-owned.
+- Do not add Svelte, jsdom, dashboard-specific build steps, or package payload entries unless a new task explicitly reintroduces a maintained dashboard product.
+- Authentication protects API calls made by a mounted shell; it does not authenticate the shell route itself because Bun route entries are served before Weft's fetch handler.
 
 ## Operation modes
 
-### 1) Component API and variants
+### External Shell Contract
 
-- Define props/types in `<script lang="ts" module>`
-- Merge external classes with `cn()` from `utilities/class-names.ts`
-- Use snippets for projected content (`children`, `header`, `footer`)
-- Shared components must use the canonical implementation; do not fork per-view
+- Pin the supported page route list in tests when it changes.
+- Keep API paths rooted under `/api/...` so external shells cannot shadow server operations.
+- Document production access control as reverse-proxy or operator-network responsibility when the shell itself must be private.
 
-### 2) Reactivity and state
+### Operator API Alignment
 
-- Prefer `$state`, `$derived`, `$bindable`, and minimal `$effect`
-- WebSocket state lives in `.svelte.ts` files using runes at module level
-- Re-run `mcp__svelte__svelte-autofixer` until clean
-
-### 3) Data fetching and routing
-
-- Use `ApiClient` from `getContext('api-client')` for HTTP requests
-- Use `WebSocketClient` for real-time updates
-- Navigation via `navigate()` from `router.svelte.ts`
-- No SvelteKit load functions, form actions, or `$app/*` imports
-- Workflow list filters must reuse the shared filter builder so list requests, aggregate counts, saved filter suggestions, and bulk-action previews send the same filter shape.
-- Date-range filters use millisecond bounds from `datetime-local` controls and should keep loading/error state announced through accessible status regions.
-
-### 4) Accessibility
-
-- Cover keyboard interaction and ARIA expectations
-- Form controls require `id` and `label`
-- Use `aria-live` regions for dynamic status updates
-- Touch targets minimum 44px
+- When server operations support operator UIs, update public REST/JSON-RPC documentation and typed clients instead of adding dashboard-only helpers.
+- Workflow visibility docs and tests must keep list filters, aggregate counts, and bulk-action preview filters aligned.
+- For async activity completion, document that operator UIs must treat completion payloads as untrusted and call the authenticated API routes when exposed outside a trusted boundary.
 
 ## Workflow
 
-1. Inspect similar components/fragments/views for the existing pattern.
-2. Apply the smallest change that fits component and Svelte rules.
-3. Run autofixer and type checking for touched files.
-4. Visually verify in the browser via `mcp__claude-in-chrome__*` tools.
+1. Inspect `src/server/index.ts`, `src/server/route-model.ts`, and the server guide before changing mount behavior.
+2. Apply the smallest change that preserves headless default behavior and route ownership.
+3. Update documentation and route tests together.
+4. Review the package-content guard if any UI asset path is added.
 
 ## Verification
 
-- `mcp__svelte__svelte-autofixer` returns clean for changed `.svelte` files.
+- `bun run build` passes and emits no `dist/dashboard` payload.
 - `bun run typecheck` passes.
 - `bun run lint` passes.
-
-## Additional references
-
-- [Component Library Reference](references/component-library-reference.md)
+- `bun run verify:documentation` passes when docs changed.

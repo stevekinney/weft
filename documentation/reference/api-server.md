@@ -353,6 +353,19 @@ Each response item includes a `status` discriminator. Pending entries expose the
 
 When server authentication is enabled, `GET /api/v1/reviews` requires the `reviews:read` scope.
 
+### Async Activities
+
+| Method | Path                          | Description                                |
+| ------ | ----------------------------- | ------------------------------------------ |
+| `POST` | `/api/v1/activities/complete` | Complete a deferred activity by task token |
+| `POST` | `/api/v1/activities/fail`     | Fail a deferred activity by task token     |
+
+Activities that call `ActivityContext.completeAsync()` park their workflow until an external process resolves the durable task token announced by the `activity:async-pending` event. `complete` accepts `{ "token": string, "result"?: unknown }`; `fail` accepts `{ "token": string, "error": { "message": string, "name"?: string } }`. Both return `{ "ok": true }` on success.
+
+The matching operation names are `weft.activities.complete` and `weft.activities.fail`, and both are exposed over REST and JSON-RPC. Their operation access policy is `public`, so no operation-specific scope is required by `evaluateAccess`. Lock the server surface down with `serve({ auth })` and your surrounding deployment controls whenever completions come from outside a trusted boundary.
+
+The token travels in the JSON body, never the URL path. Tokens are deterministic identifiers, not secrets, and they are single-use: an unknown or already-consumed token returns `404` / `NotFound`; malformed JSON or oversized completion payloads return `400` / `InvalidParams` before consuming the token. Unexpected engine failures keep the normal REST/JSON-RPC fault split: REST masks internal failures, while JSON-RPC receives the operation fault object.
+
 ### Discovery
 
 The operation catalog is the unified, transport-neutral registry of every operation Weft exposes. The discovery routes serve machine-readable schemas derived from the same registry that powers REST, JSON-RPC, and WebSocket dispatch.

@@ -11,9 +11,9 @@ Not every Weft surface carries the same stability promise. The tier is stated pe
 | **stable**       | No breaking changes without a deprecation cycle (see below). Removal requires at least one release with a deprecation warning.                               |
 | **experimental** | May change or be removed in any release, including patch releases. Experimental surfaces exist to collect real-world feedback before the contract is frozen. |
 
-**Stable surfaces (as of 0.1.x):** `Engine`, `TestEngine`, `SQLiteStorage` (Bun and Node), `LMDBStorage`, `RemoteWorker`, `serve()` and the `/v1/` REST surface, public error classes and `WeftErrorCode`, `WorkflowContext` method signatures, and `ActivityDefinition` fields.
+**Candidate-stable, provisional surfaces (as of 0.2.x):** `Engine`, `TestEngine`, `SQLiteStorage` (Bun and Node), `LMDBStorage`, `RemoteWorker`, `serve()` and the `/v1/` REST surface, source/binary CLI commands `serve`, `doctor`, `version`, `--version`, and `-v`, public error classes and `WeftErrorCode`, `WorkflowContext` method signatures, and `ActivityDefinition` fields. These are the surfaces expected to graduate into the stable tier if Tier-0 work does not force a public-shape change; the full stable deprecation guarantee applies after graduation.
 
-**Experimental surfaces:** Browser runtime, MCP server, `IndexedDBStorage`, `WebExtensionStorage`, `HTTPStorage`, `CompressedStorage`, Turso storage (pending conformance proof), CLI commands beyond `serve` and `doctor`, OTel metric names, externally supplied dashboard mounting, and `ctx.step()` sugar.
+**Experimental surfaces:** Browser runtime, MCP server, `IndexedDBStorage`, `WebExtensionStorage`, `HTTPStorage`, `CompressedStorage`, Turso storage (pending conformance proof), CLI commands beyond `serve`, `doctor`, `version`, `--version`, and `-v`, OTel metric names, externally supplied dashboard mounting, and `ctx.step()` sugar.
 
 ## Versioning
 

@@ -18,6 +18,7 @@ description: >-
 - Cleaning up API surface exports, lifecycle overloads, compression framing, visibility filters, or route helpers after review feedback.
 - Removing oxlint suppressions or splitting oversized modules while claiming public behavior, type inference, and dispatch ordering are unchanged.
 - Removing dead public options or stale deleted-module references after the owning feature has already been removed.
+- Removing dead, never-exported helpers while keeping public examples on primitive patterns such as `new URL('./workflow-worker.ts', import.meta.url)`.
 - Deduplicating CLI suggestion helpers or generated operation-client type output while claiming user-visible CLI wording, thresholds, or TypeScript inference are unchanged.
 - Deduplicating client or handle overload implementations where `.d.ts` emission and call-site inference still require each public class to declare its overloads locally.
 
@@ -44,6 +45,8 @@ description: >-
 13. For CLI suggestion helper refactors, pin each caller's distance threshold and message text. Top-level subcommands use max distance `2`; `weft api` operation suggestions use max distance `6`; equal-distance candidates keep the first match.
 14. For generated operation-client deduplication, change the generator instead of hand-editing `src/cli/generated/operation-client.generated.ts`. Keep repeated aliases structural and internal, prove deterministic regeneration, and add type-level assignability tests for representative bulk-operation inputs.
 15. For `LocalClient`, `HttpClient`, `WorkflowHandle`, and `WorkflowHandleDelegation`, do not replace duplicated overload declarations with a shared base unless type-level tests prove emitted declarations and inference remain identical.
+16. For `@lostgradient/weft/server` export cleanup, keep `/server` self-sufficient for server option and handle types while leaving `Engine` on the root package. Add internal and built-package `.test-d.ts` assertions instead of relying on JSDoc claims.
+17. For RemoteWorker cleanup, preserve the required `workflows` map and qualified activity-name behavior; do not add a compatibility alias for removed `activities`.
 
 ## Verification
 

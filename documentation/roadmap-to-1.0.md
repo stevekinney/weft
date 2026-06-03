@@ -21,9 +21,10 @@ The 1.0 compatibility promise applies to surfaces that graduate into the stable 
 - [Bun SQLite and SQLite via Node compatibility APIs](reference/api-storage.md#sqlitestorage), plus [LMDB](reference/api-storage.md#lmdbstorage) storage adapters.
 - `RemoteWorker`.
 - `serve()` and the `/v1` REST surface.
+- Source and binary CLI commands `serve`, `doctor`, `version`, `--version`, and `-v`.
 - Exported public error codes.
 
-Experimental surfaces can continue changing before they graduate. That includes the browser runtime, MCP, IndexedDB, WebExtension, HTTP and compressed storage, [Turso](reference/api-storage.md#tursostorage) until conformance proof is complete, CLI commands beyond `serve` and `doctor`, OpenTelemetry metric names, externally supplied dashboard mounting, and `ctx.step()` sugar.
+Experimental surfaces can continue changing before they graduate. That includes the browser runtime, MCP, IndexedDB, WebExtension, HTTP and compressed storage, [Turso](reference/api-storage.md#tursostorage) until conformance proof is complete, CLI commands beyond `serve`, `doctor`, `version`, `--version`, and `-v`, OpenTelemetry metric names, externally supplied dashboard mounting, and `ctx.step()` sugar.
 
 ## Required Before 1.0
 

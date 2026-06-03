@@ -39,8 +39,10 @@ The server routes through operation handlers plus transport-specific discovery e
 - [ ] Discovery documents that emit absolute URLs use `publicOrigin` or trusted host validation, not arbitrary Host-header text
 - [ ] REST `EngineFailure` responses use the canonical masked body; raw engine messages stay out of HTTP responses
 - [ ] Schedule routes use operation-catalog access policies consistently across REST and JSON-RPC; do not add tenant-claim gates back into core schedule access
+- [ ] Async activity completion routes keep tokens in the body, not the path; treat tokens as deterministic identifiers rather than secrets; require payload validation and `serve({ auth })` guidance when exposed outside a trusted boundary
 
 Routes that accept bodies include workflow start, signal, update, query, attributes, review decisions, bulk actions, JSON-RPC, HTTP storage, and MCP `POST /mcp`.
+Async activity completion (`POST /api/v1/activities/complete` and `/fail`) also accepts bodies and must return 400 for malformed JSON.
 
 ### 2. MCP Authentication
 
