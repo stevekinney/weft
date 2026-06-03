@@ -18,6 +18,7 @@
 // Remove this workaround once Bun ships the fix and CI proves a clean
 // build with direct re-exports.
 import { ChaosNonRetryableError, ChaosTimeoutError, ChaosTransientError, withChaos } from './chaos';
+import { flushPortableMicrotasks, yieldToPortableEventLoop } from './event-loop';
 import { ActivityMockRegistry } from './mocks';
 import { killAndReboot, spawnServerSubprocess, withSubprocessServer } from './subprocess-engine';
 import { TestEngine } from './test-engine';
@@ -140,6 +141,37 @@ const exportedKillAndReboot = killAndReboot;
  */
 const exportedWithSubprocessServer = withSubprocessServer;
 
+/**
+ * Re-exported {@link yieldToPortableEventLoop}. See the original declaration for full docs.
+ *
+ * Yields one event-loop turn without test-runner-only timer APIs. Use it in an
+ * `afterEach` to drain a prior test's deferred inline workflow launch: under a
+ * shared-process runner (Bun, Jest, Vitest), an engine disposed mid-workflow can
+ * otherwise leave a queued inline start that starves the next test.
+ *
+ * @example
+ * ```ts
+ * import { yieldToPortableEventLoop } from '@lostgradient/weft/testing';
+ * afterEach(yieldToPortableEventLoop);
+ * ```
+ */
+const exportedYieldToPortableEventLoop = yieldToPortableEventLoop;
+
+/**
+ * Re-exported {@link flushPortableMicrotasks}. See the original declaration for full docs.
+ *
+ * Lets queued microtasks settle without advancing time or yielding a full
+ * event-loop turn — the cheaper drain when you only need promise continuations
+ * to run.
+ *
+ * @example
+ * ```ts
+ * import { flushPortableMicrotasks } from '@lostgradient/weft/testing';
+ * await flushPortableMicrotasks();
+ * ```
+ */
+const exportedFlushPortableMicrotasks = flushPortableMicrotasks;
+
 export type { ChaosScenario, FaultClass } from './chaos';
 export type { MockCall, MockedActivity, MockHandle } from './mocks';
 export type {
@@ -154,10 +186,12 @@ export {
   exportedChaosNonRetryableError as ChaosNonRetryableError,
   exportedChaosTimeoutError as ChaosTimeoutError,
   exportedChaosTransientError as ChaosTransientError,
+  exportedFlushPortableMicrotasks as flushPortableMicrotasks,
   exportedKillAndReboot as killAndReboot,
   exportedSpawnServerSubprocess as spawnServerSubprocess,
   exportedTestEngine as TestEngine,
   exportedTimeControl as TimeControl,
   exportedWithChaos as withChaos,
   exportedWithSubprocessServer as withSubprocessServer,
+  exportedYieldToPortableEventLoop as yieldToPortableEventLoop,
 };

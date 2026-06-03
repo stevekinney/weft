@@ -98,7 +98,10 @@ export type TextValueStoreBatchOperation =
  * Matches the structural shape downstream consumers commonly require
  * from a string `KeyValueStore` backend: `get`/`set`/`delete` over
  * UTF-8 text, a `list(prefix)` that materializes keys into an array,
- * and optional `has`, `deletePrefix`, and `close` helpers.
+ * and `has`, `deletePrefix`, and `close` helpers. All members are
+ * required — a conforming `TextValueStore` always provides them, so
+ * consumers can call `has`/`deletePrefix` without an optional-chaining
+ * fallback.
  *
  * @example
  * ```ts
