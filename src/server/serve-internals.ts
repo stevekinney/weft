@@ -49,9 +49,10 @@ const DEFAULT_WORKER_RECONNECT_GRACE_PERIOD_MS = 100;
 const MAX_WORKER_RECONNECT_GRACE_PERIOD_MS = 5_000;
 const AUTHENTICATION_REQUIRED_ENVIRONMENT_VARIABLE = 'WEFT_SERVER_AUTHENTICATION_REQUIRED';
 /**
+ * @internal
+ *
  * Warning emitted when a server starts with no authentication and no explicit
- * `unauthenticatedAccess` policy. Exported so the test preload's noise filter can
- * pin its match substring against the real text (see
+ * `unauthenticatedAccess` policy. Exported for test-only drift guards (see
  * `tests/auth-warning-filter.test.ts`); production code reads it locally.
  */
 export const NO_AUTHENTICATION_WARNING =
