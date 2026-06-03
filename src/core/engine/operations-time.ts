@@ -1,5 +1,5 @@
 import type { BatchOperation } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS, storageHas } from '../../storage/interface.ts';
 import { deserializeCheckpoint } from '../checkpoint.ts';
 import { encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
@@ -204,6 +204,16 @@ export async function startDelayedWorkflow(
   );
   if (servicesUnavailable) {
     return;
+  }
+
+  // Re-derive terminal-cleanup tracking from the durable marker, exactly as the
+  // running-workflow resume path does (loadTerminalCleanupTrackedState). On a
+  // fresh process the in-memory workflowsNeedingTerminalCleanup set is empty, so
+  // without this a recovered services-only run (no start headers, which would
+  // otherwise re-add it) would complete without scheduling the deferred durable
+  // sweep — leaking its wf-has-services marker and other per-run scratch.
+  if (await storageHas(internals.storage, KEYS.terminalCleanupNeeded(entry.workflowId))) {
+    internals.workflowsNeedingTerminalCleanup.add(entry.workflowId);
   }
 
   internals.checkpoints.set(entry.workflowId, checkpoint);

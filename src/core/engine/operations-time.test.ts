@@ -350,4 +350,88 @@ describe('engine time operation helpers', () => {
     expect(failed).toHaveLength(0);
     expect(beginWorkflowExecution).toHaveBeenCalledTimes(1);
   });
+
+  it('re-derives terminal-cleanup tracking from the durable marker on fresh-process recovery', async () => {
+    // Regression: on a fresh process the in-memory workflowsNeedingTerminalCleanup
+    // set is empty. A recovered delayed-start run whose durable terminalCleanupNeeded
+    // key is present (e.g. a services-only run, which has no headers to re-add it)
+    // must re-join the set, or completeWorkflow skips the deferred durable sweep and
+    // leaks the run's per-run scratch (the wf-has-services marker). Mirrors the
+    // running-workflow resume path's loadTerminalCleanupTrackedState.
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-delayed-rederive';
+    const state = createWorkflowState(workflowId, { executionStateOwnerId: workflowId });
+    const checkpoint = createCheckpoint(workflowId);
+    const registration = { handler: async function* () {}, version: '1' };
+    const beginWorkflowExecution = mock(() => {});
+    const workflowsNeedingTerminalCleanup = new Set<string>();
+
+    await storage.put(KEYS.workflow(workflowId), encode(state));
+    await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
+    // The durable marker is present (written at start for a services-bearing run),
+    // but the fresh-process in-memory set starts empty.
+    await storage.put(KEYS.terminalCleanupNeeded(workflowId), new Uint8Array(0));
+
+    await startDelayedWorkflow(
+      {
+        checkpoints: new Map<string, Checkpoint>(),
+        inlineStrategy: {},
+        workflowServices: new Map<string, unknown>(),
+        workflowsNeedingTerminalCleanup,
+        options: { getNow: () => 2_000 },
+        registrations: new Map([[state.type, registration]]),
+        storage,
+        workflowVersionTuples: new Map(),
+      } as never,
+      createDelayedStartEntry(workflowId, { executionTimeoutMs: 500 }),
+      createCallbacks({
+        beginWorkflowExecution,
+        loadWorkflowState: async () => state,
+        runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
+      }),
+    );
+
+    // The run rejoined the cleanup set, so its later completion will schedule the
+    // deferred durable sweep. Without the fix the set stays empty.
+    expect(workflowsNeedingTerminalCleanup.has(workflowId)).toBe(true);
+    expect(beginWorkflowExecution).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves terminal-cleanup tracking empty when no durable marker exists', async () => {
+    // The complement: a delayed-start run with no durable terminalCleanupNeeded key
+    // (no headers, no services) must NOT join the cleanup set — scheduling a sweep
+    // for a run with nothing to sweep would be wasted work.
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-delayed-no-marker';
+    const state = createWorkflowState(workflowId, { executionStateOwnerId: workflowId });
+    const checkpoint = createCheckpoint(workflowId);
+    const registration = { handler: async function* () {}, version: '1' };
+    const beginWorkflowExecution = mock(() => {});
+    const workflowsNeedingTerminalCleanup = new Set<string>();
+
+    await storage.put(KEYS.workflow(workflowId), encode(state));
+    await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
+
+    await startDelayedWorkflow(
+      {
+        checkpoints: new Map<string, Checkpoint>(),
+        inlineStrategy: {},
+        workflowServices: new Map<string, unknown>(),
+        workflowsNeedingTerminalCleanup,
+        options: { getNow: () => 2_000 },
+        registrations: new Map([[state.type, registration]]),
+        storage,
+        workflowVersionTuples: new Map(),
+      } as never,
+      createDelayedStartEntry(workflowId, { executionTimeoutMs: 500 }),
+      createCallbacks({
+        beginWorkflowExecution,
+        loadWorkflowState: async () => state,
+        runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
+      }),
+    );
+
+    expect(workflowsNeedingTerminalCleanup.has(workflowId)).toBe(false);
+    expect(beginWorkflowExecution).toHaveBeenCalledTimes(1);
+  });
 });
