@@ -17,6 +17,7 @@ import {
   executeTail,
   executeTimeline,
   executeValidate,
+  executeVersion,
   executeVersionCheck,
   executeWorkflow,
   findCliSubcommandName,
@@ -45,7 +46,11 @@ const parsedArguments = (() => {
   }
 })();
 
-if (parsedArguments.command === 'serve') {
+if (parsedArguments.command === 'version') {
+  const result = executeVersion();
+  console.log(result.stdout);
+  process.exit(result.exitCode);
+} else if (parsedArguments.command === 'serve') {
   if (parsedArguments.help) {
     console.log(HELP_TEXT);
     process.exit(0);

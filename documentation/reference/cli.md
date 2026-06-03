@@ -139,6 +139,22 @@ declare module '@lostgradient/weft' {
 
 Unsupported JSON Schema features intentionally degrade to `unknown` rather than emitting an unsound type. `$ref`, `patternProperties`, `not`, `dependentRequired`, and other unsupported keywords should be simplified before publishing the registry snapshot if you need narrower generated types.
 
+### version
+
+Print the installed Weft version and exit. Equivalent forms:
+
+```bash
+weft version
+weft --version
+weft -v
+```
+
+The output is the bare version string (for example, `0.2.0`) so scripts can capture it without parsing decoration. The exit code is `0`.
+
+Version is recognized only as the _leading_ token, which keeps each subcommand in control of its own option line. `weft serve --version` does not print the version—`serve` rejects `--version` as an unknown option—so a real command never silently short-circuits to version output. This is the same command surfaced as `version` in `--help` and shell completions.
+
+Not to be confused with [`version:check`](#versioncheck), which compares registered workflow versions against a database.
+
 ### version:check
 
 Analyze registered workflow versions against an existing database to check deployment compatibility.

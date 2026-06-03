@@ -16,6 +16,7 @@ export type CliCommand =
       help: boolean;
       workflows?: string;
     }
+  | { command: 'version' }
   | { command: 'doctor'; database: string; help: boolean; json: boolean }
   | {
       command: 'version:check';

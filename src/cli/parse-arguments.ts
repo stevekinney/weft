@@ -47,6 +47,20 @@ const SUBCOMMAND_PARSERS: Record<string, (args: string[]) => CliCommand> = {
 
 const KNOWN_SUBCOMMAND_LIST = [...KNOWN_SUBCOMMANDS];
 
+/**
+ * Version is requested as a *leading* top-level token only: `weft --version`,
+ * `weft -v`, or `weft version`. Requiring it to lead keeps a real subcommand in
+ * control of its own option line — `weft serve --version` falls through to the
+ * serve parser, which rejects `--version` as an unknown option rather than
+ * silently printing the version. The request short-circuits before any
+ * subcommand parsing, so anything after the leading token is ignored (no strict
+ * option validation runs).
+ */
+function isLeadingVersionRequest(args: string[]): boolean {
+  const leading = args[0];
+  return leading === '--version' || leading === '-v' || leading === 'version';
+}
+
 type ParsedSubcommand = {
   subcommand?: string;
   subcommandIndex: number;
@@ -80,6 +94,10 @@ function removeSubcommand(args: string[], subcommandIndex: number): string[] {
 
 /** Parses raw CLI arguments into a command object for the runner. */
 export function parseCliArguments(args: string[]): CliCommand {
+  if (isLeadingVersionRequest(args)) {
+    return { command: 'version' };
+  }
+
   const { subcommand, subcommandIndex } = findSubcommand(args);
   const remainingArgs = removeSubcommand(args, subcommandIndex);
   const parser = SUBCOMMAND_PARSERS[subcommand ?? ''];

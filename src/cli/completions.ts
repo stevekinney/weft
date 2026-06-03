@@ -34,6 +34,7 @@ const TOP_LEVEL_COMMANDS = [
   'workflow',
   'tail',
   'completions',
+  'version',
 ] as const;
 
 /** Subcommands keyed by noun, for nested completion. */

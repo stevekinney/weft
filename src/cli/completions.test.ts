@@ -16,6 +16,7 @@ describe('generateCompletionScript', () => {
     expect(script).toContain('workflow');
     expect(script).toContain('server');
     expect(script).toContain('tail');
+    expect(script).toContain('version');
   });
 
   it('emits a bash completion script', () => {

@@ -1552,7 +1552,6 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
       lines: new Set([94, 95, 184, 185, 234, 279, 280, 410, 441, 442, 443, 445, 446, 447, 448]),
     },
   ],
-  ['src/cli/completions.ts', { lines: new Set([124, 127, 144, 145]) }],
   ['src/cli/noun-verb-arguments.ts', { lines: new Set([172]) }],
   ['src/cli/operation-catalog-snapshot.ts', { functions: 1, lines: new Set([56, 89, 90, 91, 92]) }],
   [

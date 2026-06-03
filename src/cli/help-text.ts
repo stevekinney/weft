@@ -17,6 +17,10 @@ Commands:
   workflow        List, inspect, start, signal, and cancel workflows on a server
   tail            Stream a workflow's events as Server-Sent Events
   completions     Generate or install shell completion scripts
+  version         Print the installed Weft version
+
+Version (leading token only; a subcommand owns its own option line):
+  weft version | weft --version | weft -v   Print the installed Weft version
 
 Serve Options:
   -p, --port <port>           Server port (default: 7233)

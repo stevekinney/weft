@@ -34,4 +34,5 @@ export type { CliCommand, CommandOutput, StorageBackend } from './types.ts';
 export { collectDiffLines, splitGlobPattern } from './utilities.ts';
 export { executeValidate } from './validate.ts';
 export { executeVersionCheck } from './version-check.ts';
+export { executeVersion } from './version.ts';
 export { executeWorkflow } from './workflow-commands.ts';

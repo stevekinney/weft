@@ -21,6 +21,7 @@ import {
   executeSchedule,
   executeTimeline,
   executeValidate,
+  executeVersion,
   executeVersionCheck,
   parseCliArguments,
   splitGlobPattern,
@@ -30,6 +31,7 @@ import { encode } from './core/codec.ts';
 import type { WorkflowContext } from './core/types.ts';
 import { workflow } from './core/types/workflow-function.ts';
 import { KEYS } from './storage/interface.ts';
+import { VERSION } from './version.ts';
 
 const publicEntryPointUrl = new URL('./index.ts', import.meta.url).href;
 
@@ -119,13 +121,13 @@ describe('CLI argument parsing', () => {
     });
 
     it('parses --help flag', () => {
-      const result = parseCliArguments(['--help']);
+      const result = parseCliArguments(['--help']) as ServeCommand;
       expect(result.command).toBe('serve');
       expect(result.help).toBe(true);
     });
 
     it('defaults help to false', () => {
-      const result = parseCliArguments([]);
+      const result = parseCliArguments([]) as ServeCommand;
       expect(result.command).toBe('serve');
       expect(result.help).toBe(false);
     });
@@ -143,7 +145,7 @@ describe('CLI argument parsing', () => {
     });
 
     it('parses -h short flag for help', () => {
-      const result = parseCliArguments(['-h']);
+      const result = parseCliArguments(['-h']) as ServeCommand;
       expect(result.command).toBe('serve');
       expect(result.help).toBe(true);
     });
@@ -231,6 +233,51 @@ describe('CLI argument parsing', () => {
     });
   });
 
+  describe('version request', () => {
+    it('parses --version as a leading flag', () => {
+      const result = parseCliArguments(['--version']);
+      expect(result.command).toBe('version');
+    });
+
+    it('parses -v as a leading short flag', () => {
+      const result = parseCliArguments(['-v']);
+      expect(result.command).toBe('version');
+    });
+
+    it('parses the bare version subcommand', () => {
+      const result = parseCliArguments(['version']);
+      expect(result.command).toBe('version');
+    });
+
+    it('ignores tokens after the leading version request', () => {
+      const result = parseCliArguments(['version', '--port', '9000']);
+      expect(result.command).toBe('version');
+    });
+
+    it('does not honor --version after a real subcommand', () => {
+      // A subcommand owns its own option line: serve rejects --version as an
+      // unknown option rather than silently short-circuiting to the version.
+      expect(() => parseCliArguments(['serve', '--version'])).toThrow('Unknown option');
+    });
+
+    it('does not honor -v after a real subcommand', () => {
+      // The short flag has the same leading-only semantics as --version.
+      expect(() => parseCliArguments(['serve', '-v'])).toThrow('Unknown option');
+    });
+
+    it('lets a leading version request win over a trailing --help', () => {
+      // The leading token short-circuits before any per-command --help handling.
+      const result = parseCliArguments(['--version', '--help']);
+      expect(result.command).toBe('version');
+    });
+
+    it('executeVersion prints the exported VERSION constant and exits 0', () => {
+      const result = executeVersion();
+      expect(result.stdout).toBe(VERSION);
+      expect(result.exitCode).toBe(0);
+    });
+  });
+
   describe('doctor subcommand', () => {
     it('returns command doctor when doctor is the first positional', () => {
       const result = parseCliArguments(['doctor']);
@@ -256,19 +303,19 @@ describe('CLI argument parsing', () => {
     });
 
     it('parses --help flag', () => {
-      const result = parseCliArguments(['doctor', '--help']);
+      const result = parseCliArguments(['doctor', '--help']) as DoctorCommand;
       expect(result.command).toBe('doctor');
       expect(result.help).toBe(true);
     });
 
     it('parses -h short flag for help', () => {
-      const result = parseCliArguments(['doctor', '-h']);
+      const result = parseCliArguments(['doctor', '-h']) as DoctorCommand;
       expect(result.command).toBe('doctor');
       expect(result.help).toBe(true);
     });
 
     it('defaults help to false', () => {
-      const result = parseCliArguments(['doctor']);
+      const result = parseCliArguments(['doctor']) as DoctorCommand;
       expect(result.command).toBe('doctor');
       expect(result.help).toBe(false);
     });
@@ -358,19 +405,19 @@ describe('CLI argument parsing', () => {
     });
 
     it('parses --help flag', () => {
-      const result = parseCliArguments(['version:check', '--help']);
+      const result = parseCliArguments(['version:check', '--help']) as VersionCheckCommand;
       expect(result.command).toBe('version:check');
       expect(result.help).toBe(true);
     });
 
     it('parses -h short flag for help', () => {
-      const result = parseCliArguments(['version:check', '-h']);
+      const result = parseCliArguments(['version:check', '-h']) as VersionCheckCommand;
       expect(result.command).toBe('version:check');
       expect(result.help).toBe(true);
     });
 
     it('defaults help to false', () => {
-      const result = parseCliArguments(['version:check']);
+      const result = parseCliArguments(['version:check']) as VersionCheckCommand;
       expect(result.command).toBe('version:check');
       expect(result.help).toBe(false);
     });
@@ -744,6 +791,13 @@ describe('help text', () => {
 
   it('HELP_TEXT contains serve subcommand', () => {
     expect(HELP_TEXT).toContain('serve');
+  });
+
+  it('HELP_TEXT documents the version command and its leading-token forms', () => {
+    expect(HELP_TEXT).toContain('version ');
+    expect(HELP_TEXT).toContain('weft --version');
+    expect(HELP_TEXT).toContain('weft -v');
+    expect(HELP_TEXT).toContain('leading token only');
   });
 
   it('VALIDATE_HELP_TEXT contains exit codes section', () => {
@@ -1251,6 +1305,45 @@ describe('CLI direct execution', () => {
     expect(stdout).toContain('examples/hello-world/src/index.ts');
     expect(stdout).toContain('examples/order-processing/src/workflows/order.ts');
     expect(stdout).toContain('No issues found.');
+  });
+
+  it('runs --version through the binary and prints the version, exit 0', async () => {
+    const process = Bun.spawn(['bun', './src/cli-main.ts', '--version'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    const exitCode = await process.exited;
+    const stdout = await new Response(process.stdout).text();
+
+    expect(exitCode).toBe(0);
+    expect(stdout.trim()).toBe(VERSION);
+  });
+
+  it('runs -v through the binary and prints the version, exit 0', async () => {
+    const process = Bun.spawn(['bun', './src/cli-main.ts', '-v'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    const exitCode = await process.exited;
+    const stdout = await new Response(process.stdout).text();
+
+    expect(exitCode).toBe(0);
+    expect(stdout.trim()).toBe(VERSION);
+  });
+
+  it('runs the bare version subcommand through the binary and prints the version, exit 0', async () => {
+    const process = Bun.spawn(['bun', './src/cli-main.ts', 'version'], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+
+    const exitCode = await process.exited;
+    const stdout = await new Response(process.stdout).text();
+
+    expect(exitCode).toBe(0);
+    expect(stdout.trim()).toBe(VERSION);
   });
 });
 
