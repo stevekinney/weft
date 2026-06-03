@@ -1603,8 +1603,9 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
       // The shared client-contract helpers now have direct unit coverage for the
       // query/update/signal workflows, async-activity handoff, and both success
       // and timeout event-wait paths. Bun still reports unnamed function
-      // misses in this callback-heavy test-support module despite full line
-      // coverage and the direct behavioral assertions above.
+      // misses in this callback-heavy test-support module despite those direct
+      // behavioral assertions, and line 92 remains intentionally uncovered
+      // because the `completeAsync()` activity body never returns in-process.
       functions: 3,
       lines: new Set([92]),
     },
