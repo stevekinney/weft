@@ -2,6 +2,8 @@ import { $ } from 'bun';
 import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
+import chalk from 'chalk';
+
 await $`rm -rf dist`;
 
 const typescriptTranspiler = new Bun.Transpiler({ loader: 'ts', target: 'bun' });
@@ -365,4 +367,30 @@ async function assertRelativeImportsResolveInDist(): Promise<void> {
 
 await assertRelativeImportsResolveInDist();
 
-console.log('Build complete!');
+// Summarize what shipped so a build prints something actionable instead of a
+// bare "complete" — file counts by kind and total dist size make a regression
+// (e.g. a suddenly-empty or bloated dist/) visible at a glance.
+async function summarizeDist(): Promise<{ js: number; types: number; bytes: number }> {
+  let js = 0;
+  let types = 0;
+  let bytes = 0;
+  for await (const distPath of new Bun.Glob('dist/**/*.{js,d.ts}').scan('.')) {
+    if (distPath.endsWith('.d.ts')) types += 1;
+    else js += 1;
+    const stats = await Bun.file(distPath).stat();
+    bytes += stats.size;
+  }
+  return { js, types, bytes };
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${bytes} B`;
+}
+
+const { js, types, bytes } = await summarizeDist();
+console.log(
+  chalk.green('✓ Build complete') +
+    chalk.dim(` — ${js} modules, ${types} type files, ${formatBytes(bytes)} in dist/`),
+);

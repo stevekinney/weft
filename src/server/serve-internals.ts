@@ -48,7 +48,13 @@ const RECONCILIATION_MULTIPLIER = 12;
 const DEFAULT_WORKER_RECONNECT_GRACE_PERIOD_MS = 100;
 const MAX_WORKER_RECONNECT_GRACE_PERIOD_MS = 5_000;
 const AUTHENTICATION_REQUIRED_ENVIRONMENT_VARIABLE = 'WEFT_SERVER_AUTHENTICATION_REQUIRED';
-const NO_AUTHENTICATION_WARNING =
+/**
+ * Warning emitted when a server starts with no authentication and no explicit
+ * `unauthenticatedAccess` policy. Exported so the test preload's noise filter can
+ * pin its match substring against the real text (see
+ * `tests/auth-warning-filter.test.ts`); production code reads it locally.
+ */
+export const NO_AUTHENTICATION_WARNING =
   '[weft] WARNING: server started with NO authentication; all non-public operations are publicly accessible. Configure serve({ auth }) to lock down, or set unauthenticatedAccess: "reject" in production to fail closed.';
 const NO_AUTHENTICATION_REJECT_ERROR =
   '[weft] Refusing to start server with no authentication. Configure serve({ auth }) or set unauthenticatedAccess: "allow" only for trusted local development.';

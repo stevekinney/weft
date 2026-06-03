@@ -84,6 +84,16 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
     },
   ],
   [
+    'scripts/run-gates.ts',
+    {
+      // The pipeline logic, gate spawning, and CLI `main()` are unit-tested in
+      // scripts/run-gates.test.ts via injected dependencies. The single
+      // remaining line is the bare `import.meta.main` guard body, which only
+      // runs when the file is executed as the entrypoint — not under the test.
+      lines: new Set([222]),
+    },
+  ],
+  [
     'examples/hello-world/src/index.ts',
     {
       // The example module exports are covered in-process by `src/examples.test.ts`.
