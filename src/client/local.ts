@@ -61,7 +61,13 @@ import { messageName } from '../core/types.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
 import { ScheduleHandleDelegation, WorkflowHandleDelegation } from './handle-delegation.ts';
 import { inProcessCatalogTransport } from './in-process-operations.ts';
-import type { ClientHandle, ClientScheduleHandle, UpdateResult, WeftClient } from './interface.ts';
+import type {
+  ClientHandle,
+  ClientScheduleHandle,
+  UpdateResult,
+  WeftClient,
+  WeftClientActivity,
+} from './interface.ts';
 import { createLocalWorkflowEventTail } from './local-event-tail.ts';
 import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow-name-typing.ts';
 
@@ -165,12 +171,7 @@ export class LocalClient implements WeftClient {
    * void client;
    * ```
    */
-  readonly activity: {
-    /** Complete a deferred activity by token, resuming its workflow with `result`. */
-    complete(token: string, result: unknown): Promise<void>;
-    /** Fail a deferred activity by token; the error is thrown into its workflow. */
-    completeExceptionally(token: string, error: unknown): Promise<void>;
-  };
+  readonly activity: WeftClientActivity;
 
   constructor(engine: Engine) {
     this.#engine = runtimeWorkflowEngine(engine);

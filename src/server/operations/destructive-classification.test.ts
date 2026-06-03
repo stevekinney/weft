@@ -35,6 +35,8 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.workflows.purge': true,
   'weft.workflows.signal': true,
   'weft.workflows.update': true,
+  'weft.activities.complete': true,
+  'weft.activities.fail': true,
   'weft.recover.all': true,
   'weft.schedules.cancel': true,
   'weft.reviews.decision.submit': true,

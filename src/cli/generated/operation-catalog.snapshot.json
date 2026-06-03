@@ -3,6 +3,100 @@
   "version": 1,
   "operations": [
     {
+      "name": "weft.activities.complete",
+      "kind": "unary",
+      "summary": "Complete a deferred activity by task token",
+      "description": "Resolve an out-of-band (\"async\") activity with a result, resuming its parked workflow as though the activity had returned that result inline. Requires the durable task token announced through the `activity:async-pending` event. Faults with NotFound when the token is unknown or already completed/failed (tokens are single-use).",
+      "tags": ["Activities"],
+      "destructive": true,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcStdio": true,
+        "jsonRpcWebSocket": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "result": {},
+          "token": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["token"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": ["ok"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.activities.fail",
+      "kind": "unary",
+      "summary": "Fail a deferred activity by task token",
+      "description": "Fail an out-of-band (\"async\") activity, throwing the supplied error into its parked workflow at the deferred step — identical to an inline activity that threw, so the workflow’s own try/catch and retry policy apply unchanged. Requires the durable task token from the `activity:async-pending` event. Faults with NotFound when the token is unknown or already completed/failed (tokens are single-use).",
+      "tags": ["Activities"],
+      "destructive": true,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcStdio": true,
+        "jsonRpcWebSocket": true
+      },
+      "producibleFaults": ["NotFound"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "error": {
+            "additionalProperties": false,
+            "properties": {
+              "message": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": ["message"],
+            "type": "object"
+          },
+          "token": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["token", "error"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "ok": {
+            "const": true,
+            "type": "boolean"
+          }
+        },
+        "required": ["ok"],
+        "type": "object"
+      }
+    },
+    {
       "name": "weft.recover.all",
       "kind": "unary",
       "summary": "Recover all interrupted workflows",

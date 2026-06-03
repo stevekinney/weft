@@ -9,6 +9,8 @@ import {
 } from '../operation-client-runtime.ts';
 
 export const CATALOG_OPERATION_NAMES = [
+  'weft.activities.complete',
+  'weft.activities.fail',
   'weft.recover.all',
   'weft.retention.get',
   'weft.reviews.decision.submit',
@@ -107,6 +109,19 @@ type SharedGtGteLt_d9a61361 = {
 };
 
 export type CatalogOperationTypes = {
+  'weft.activities.complete': {
+    readonly input: { readonly result?: unknown; readonly token: string };
+    readonly output: { readonly ok: boolean };
+    readonly faults: 'NotFound';
+  };
+  'weft.activities.fail': {
+    readonly input: {
+      readonly error: { readonly message: string; readonly name?: string };
+      readonly token: string;
+    };
+    readonly output: { readonly ok: boolean };
+    readonly faults: 'NotFound';
+  };
   'weft.recover.all': {
     readonly input: {};
     readonly output: { readonly recovered: ReadonlyArray<string> };

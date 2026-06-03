@@ -48,18 +48,25 @@ import type { WorkflowEventTail } from './event-tail.ts';
 import {
   addTagsRequest,
   cancelAllWorkflowRequests,
+  cancelScheduleRequest,
+  cancelWorkflowRequest,
+  createHttpClientActivity,
   deleteAllWorkflowRequests,
   forkWorkflowRequest,
   getAttributesRequest,
   getRetentionOverviewRequest,
+  getScheduleRequest,
   getStreamChunkRequests,
   getTimelineRequest,
   getUpdateResultRequest,
+  getWorkflowRequest,
   listReviewRequests,
+  pauseScheduleRequest,
   purgeWorkflowRequests,
   queryWorkflowRequest,
   removeTagsRequest,
   replayToRequest,
+  resumeScheduleRequest,
   setAttributesRequest,
   signalAllWorkflowRequests,
   signalWorkflowRequest,
@@ -67,12 +74,19 @@ import {
   submitReviewRequest,
   tagAllWorkflowRequests,
   untagAllWorkflowRequests,
+  updateScheduleRequest,
 } from './http-client-requests.ts';
 import { HttpHandle } from './http-handle.ts';
 import { httpClientCatalogTransport } from './http-operations.ts';
 import { request, resolveHttpClientConnection, type HttpClientOptions } from './http-request.ts';
 import { HttpScheduleHandle } from './http-schedule-handle.ts';
-import type { ClientHandle, ClientScheduleHandle, UpdateResult, WeftClient } from './interface.ts';
+import type {
+  ClientHandle,
+  ClientScheduleHandle,
+  UpdateResult,
+  WeftClient,
+  WeftClientActivity,
+} from './interface.ts';
 import { openClientEventSubscription } from './open-event-subscription.ts';
 import { buildScheduleListSearchParams } from './schedule-list-search-params.ts';
 import { buildWorkflowListSearchParams } from './search-params.ts';
@@ -124,6 +138,11 @@ export class HttpClient implements WeftClient {
   readonly headers: Record<string, string>;
   /** Typed low-level accessor for every catalog operation over JSON-RPC. */
   readonly operations: CatalogOperations;
+  /**
+   * Out-of-band ("async") activity completion over HTTP. POSTs to
+   * `/v1/activities/{complete,fail}`; mirrors {@link LocalClient}'s `activity`.
+   */
+  readonly activity: WeftClientActivity;
   readonly #streamOptions: WorkflowEventStreamOptions;
 
   constructor(options: HttpClientOptions = {}) {
@@ -134,6 +153,7 @@ export class HttpClient implements WeftClient {
       CATALOG_OPERATION_NAMES,
       httpClientCatalogTransport(this.baseUrl, this.headers),
     );
+    this.activity = createHttpClientActivity(this);
     this.#streamOptions =
       options.webSocketFactory === undefined ? {} : { webSocketFactory: options.webSocketFactory };
   }
@@ -207,19 +227,11 @@ export class HttpClient implements WeftClient {
   }
 
   async get(id: string): Promise<WorkflowState | null> {
-    return request<WorkflowState | null>(
-      this.baseUrl,
-      `/workflows/${encodeURIComponent(id)}`,
-      this.headers,
-    );
+    return getWorkflowRequest(this, id);
   }
 
   async getSchedule(id: string): Promise<ScheduleSummary | null> {
-    return request<ScheduleSummary | null>(
-      this.baseUrl,
-      `/schedules/${encodeURIComponent(id)}`,
-      this.headers,
-    );
+    return getScheduleRequest(this, id);
   }
 
   async list<
@@ -241,37 +253,23 @@ export class HttpClient implements WeftClient {
   }
 
   async cancel(id: string): Promise<void> {
-    return request<void>(this.baseUrl, `/workflows/${encodeURIComponent(id)}`, this.headers, {
-      method: 'DELETE',
-    });
+    return cancelWorkflowRequest(this, id);
   }
 
   async pauseSchedule(id: string): Promise<void> {
-    return request<void>(this.baseUrl, `/schedules/${encodeURIComponent(id)}/pause`, this.headers, {
-      method: 'POST',
-    });
+    return pauseScheduleRequest(this, id);
   }
 
   async resumeSchedule(id: string): Promise<void> {
-    return request<void>(
-      this.baseUrl,
-      `/schedules/${encodeURIComponent(id)}/resume`,
-      this.headers,
-      { method: 'POST' },
-    );
+    return resumeScheduleRequest(this, id);
   }
 
   async cancelSchedule(id: string): Promise<void> {
-    return request<void>(this.baseUrl, `/schedules/${encodeURIComponent(id)}`, this.headers, {
-      method: 'DELETE',
-    });
+    return cancelScheduleRequest(this, id);
   }
 
   async updateSchedule(id: string, newSpec: string | ScheduleSpec): Promise<void> {
-    return request<void>(this.baseUrl, `/schedules/${encodeURIComponent(id)}`, this.headers, {
-      method: 'PATCH',
-      body: JSON.stringify(scheduleSpecToWireFields(newSpec)),
-    });
+    return updateScheduleRequest(this, id, newSpec);
   }
 
   async signal(id: string, name: SignalDefinition): Promise<void>;

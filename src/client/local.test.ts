@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 import { Engine } from '../core/engine.ts';
-import { WorkflowCompletedEvent, WorkflowFailedEvent } from '../core/events.ts';
+import {
+  ActivityAsyncPendingEvent,
+  WorkflowCompletedEvent,
+  WorkflowFailedEvent,
+} from '../core/events.ts';
 import type { ScheduleSummary, WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import {
+  clientContractAsyncActivityWorkflow,
   clientContractEchoWorkflow,
   clientContractWaitingObjectWorkflow,
   clientContractWaitingTwiceWorkflow,
@@ -34,17 +39,34 @@ const failingWorkflow = workflow({ name: 'failing' }).execute(async function* (
   throw new Error('intentional failure');
 });
 
+// A generous cap so every existing tiny-payload contract test is unaffected,
+// while the payload-size contract test has a known limit to exceed.
+const CONTRACT_PAYLOAD_CAP_BYTES = 1_048_576;
+
 function createTestEngine(): Engine {
   const engine = new Engine({
     storage: new MemoryStorage(),
+    payloadSize: { maxBytes: CONTRACT_PAYLOAD_CAP_BYTES },
   });
   engine.register(echoWorkflow);
   engine.register(clientContractEchoWorkflow);
   engine.register(clientContractWaitingObjectWorkflow);
   engine.register(clientContractWaitingWorkflow);
   engine.register(clientContractWaitingTwiceWorkflow);
+  engine.register(clientContractAsyncActivityWorkflow);
   engine.register(failingWorkflow);
   return engine;
+}
+
+/** Resolve with the task token the next time `engine` parks an async activity. */
+function nextAsyncPendingToken(engine: Engine): Promise<string> {
+  return new Promise<string>((resolve) => {
+    engine.addEventListener(
+      'activity:async-pending',
+      (event) => resolve((event as ActivityAsyncPendingEvent).token),
+      { once: true },
+    );
+  });
 }
 
 async function waitForWorkflowStatus(
@@ -88,8 +110,11 @@ describe('LocalClient', () => {
       waiting: 'client-contract-waiting',
       waitingObject: 'client-contract-waiting-object',
       waitingTwice: 'client-contract-waiting-twice',
+      asyncActivity: 'client-contract-async-activity',
     },
     waitForRunning: (workflowId) => waitForWorkflowStatus(engine, workflowId, 'running'),
+    captureNextAsyncToken: () => nextAsyncPendingToken(engine),
+    asyncResultCapBytes: CONTRACT_PAYLOAD_CAP_BYTES,
   });
 
   it('implements WeftClient', () => {

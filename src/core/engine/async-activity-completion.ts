@@ -31,6 +31,7 @@
 import { KEYS, encodeStorageKeyComponent, type Storage } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
 import { ActivityAsyncPendingEvent } from '../events.ts';
+import { assertPayloadWithinLimit } from '../payload-size.ts';
 import type { OperationOutcome } from '../types.ts';
 import { WeftError } from '../weft-error.ts';
 import type { EngineInternals } from './internals.ts';
@@ -315,6 +316,14 @@ export async function completeAsyncActivity(
   feedOperationResult: (workflowId: string, outcome: OperationOutcome) => void,
   finalizeTimeline: (workflowId: string, status: 'completed' | 'failed', output: unknown) => void,
 ): Promise<void> {
+  // An async completion produces the same logical object as an inline activity
+  // return — an activity result — but reaches the workflow through
+  // `feedOperationResult`, which (unlike the inline reconciliation path) does not
+  // size-check. Enforce the cap here so the async path matches inline activities
+  // and `signal`. Checked BEFORE the token is consumed so an oversized payload is
+  // rejectable and retryable with a smaller value rather than stranding the
+  // single-use token.
+  assertPayloadWithinLimit(result, internals.options.payloadSizePolicy.maxBytes, 'activity result');
   await resolvePendingAsyncActivity(
     internals,
     token,
@@ -374,8 +383,17 @@ export async function failAsyncActivity(
   ) => void,
   finalizeTimeline: (workflowId: string, status: 'completed' | 'failed', output: unknown) => void,
 ): Promise<void> {
-  const pending = await consumePendingAsyncActivity(internals, token);
   const message = error instanceof Error ? error.message : String(error);
+  // The failure message is caller-supplied over the public completion endpoint
+  // and gets persisted (timeline + fed outcome). Cap it for the same reason the
+  // complete path caps its result — checked BEFORE consuming the single-use token
+  // so an oversized message is rejectable and retryable rather than stranding it.
+  assertPayloadWithinLimit(
+    message,
+    internals.options.payloadSizePolicy.maxBytes,
+    'activity result',
+  );
+  const pending = await consumePendingAsyncActivity(internals, token);
   finalizeTimeline(pending.workflowId, 'failed', message);
   feedOperationResult(
     pending.workflowId,

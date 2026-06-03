@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import type { WorkflowContext } from '../core/types.ts';
-import { signal } from '../core/types.ts';
+import type { ActivityContext, WorkflowContext } from '../core/types.ts';
+import { activity, signal } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import type { WeftClient } from './interface.ts';
@@ -10,6 +10,7 @@ type ClientContractWorkflowTypes = {
   waiting: string;
   waitingObject: string;
   waitingTwice: string;
+  asyncActivity: string;
 };
 
 type ClientContractTestOptions = {
@@ -18,6 +19,21 @@ type ClientContractTestOptions = {
   idPrefix: string;
   workflowTypes: ClientContractWorkflowTypes;
   waitForRunning?: (workflowId: string) => Promise<void>;
+  /**
+   * Resolve with the durable task token the next time the underlying engine
+   * parks an async activity. Each harness wires this to its engine's
+   * `activity:async-pending` event. When omitted, the async-activity contract
+   * tests are skipped (a transport that cannot observe the token cannot run
+   * them).
+   */
+  captureNextAsyncToken?: () => Promise<string>;
+  /**
+   * The engine's configured `payloadSize.maxBytes`, when the harness set one.
+   * Enables the payload-size contract test, which sends a completion result
+   * larger than this and asserts both transports reject it. Omit when the
+   * harness runs uncapped.
+   */
+  asyncResultCapBytes?: number;
 };
 
 export const clientContractEchoWorkflow = workflow({ name: 'client-contract-echo' }).execute(
@@ -62,6 +78,25 @@ export const clientContractWaitingObjectWorkflow = workflow({
   const payload = yield* ctx.waitForSignal(clientContractObjectSignal);
   return `${String(input)}:${payload.signalId}`;
 });
+
+/**
+ * Activity that hands off to out-of-band completion. `completeAsync()` throws to
+ * suspend, so the body never returns normally — the workflow parks until an
+ * external caller resolves it by token through `client.activity`.
+ */
+const clientContractAwaitCallback = activity({
+  name: 'clientContractAwaitCallback',
+  execute: (_input: void, context?: ActivityContext): unknown => context!.completeAsync(),
+});
+
+export const clientContractAsyncActivityWorkflow = workflow({
+  name: 'client-contract-async-activity',
+})
+  .activities({ clientContractAwaitCallback })
+  .execute(async function* (ctx: WorkflowContext, input: unknown) {
+    const resolved = yield* ctx.run(clientContractAwaitCallback);
+    return { input, resolved };
+  });
 
 export async function waitForQueryReadyForTesting(
   client: WeftClient,
@@ -358,5 +393,141 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
         expect.objectContaining({ nextFireAt: null, status: 'cancelled' }),
       );
     });
+  });
+
+  // The async-activity surface is the reason this contract exists for both
+  // transports: `client.activity.{complete,completeExceptionally}` must behave
+  // identically over the in-process engine and over HTTP. These run only when
+  // the harness can observe the durable task token (`captureNextAsyncToken`).
+  describe(`${label}: shared async-activity contract`, () => {
+    const maybe = (run: () => Promise<void>) => async () => {
+      const capture = options.captureNextAsyncToken;
+      if (capture === undefined) return;
+      await run();
+    };
+
+    it(
+      'completes a deferred activity by token and resumes the parked workflow',
+      maybe(async () => {
+        const client = getClient();
+        const capture = options.captureNextAsyncToken!;
+        const tokenPromise = capture();
+        const handle = await client.start(workflowTypes.asyncActivity, 'complete-case', {
+          id: `${idPrefix}-async-complete`,
+        });
+        const token = await tokenPromise;
+
+        // Parked, not finished: the workflow is suspended on the async activity.
+        await waitForRunning?.(handle.id);
+        await expect(client.get(handle.id)).resolves.toMatchObject({ status: 'running' });
+
+        await client.activity.complete(token, { decision: 'approved' });
+
+        await expect(handle.result()).resolves.toEqual({
+          input: 'complete-case',
+          resolved: { decision: 'approved' },
+        });
+      }),
+    );
+
+    it(
+      'fails a deferred activity by token, throwing into the parked workflow',
+      maybe(async () => {
+        const client = getClient();
+        const capture = options.captureNextAsyncToken!;
+        const tokenPromise = capture();
+        const handle = await client.start(workflowTypes.asyncActivity, 'fail-case', {
+          id: `${idPrefix}-async-fail`,
+        });
+        const token = await tokenPromise;
+
+        await waitForRunning?.(handle.id);
+
+        await client.activity.completeExceptionally(
+          token,
+          new Error('callback rejected by reviewer'),
+        );
+
+        // The error is thrown into the workflow at the parked step; with no
+        // try/catch it surfaces as a workflow failure. Assert on the *message*,
+        // not error identity — a live Error cannot cross the HTTP boundary, so
+        // both transports converge on the reduced message the engine keeps.
+        const settled = await handle
+          .result()
+          .then(() => ({ kind: 'resolved' as const }))
+          .catch((error: unknown) => ({ kind: 'rejected' as const, error }));
+        expect(settled.kind).toBe('rejected');
+        if (settled.kind === 'rejected') {
+          const message =
+            settled.error instanceof Error ? settled.error.message : String(settled.error);
+          expect(message).toContain('callback rejected by reviewer');
+        }
+      }),
+    );
+
+    it(
+      'rejects completion of an unknown or already-consumed token',
+      maybe(async () => {
+        const client = getClient();
+        const capture = options.captureNextAsyncToken!;
+        const tokenPromise = capture();
+        const handle = await client.start(workflowTypes.asyncActivity, 'single-use-case', {
+          id: `${idPrefix}-async-single-use`,
+        });
+        const token = await tokenPromise;
+        await waitForRunning?.(handle.id);
+
+        // First completion consumes the single-use token.
+        await client.activity.complete(token, { decision: 'first' });
+        await expect(handle.result()).resolves.toEqual({
+          input: 'single-use-case',
+          resolved: { decision: 'first' },
+        });
+
+        // A second completion (or any unknown token) must reject — NotFound over
+        // HTTP, AsyncActivityTokenNotFoundError in-process. Both transports
+        // reject; the exact error type is transport-specific, so assert the
+        // rejection itself, which is the portable contract.
+        const replayed = await client.activity
+          .complete(token, { decision: 'second' })
+          .then(() => ({ kind: 'resolved' as const }))
+          .catch((error: unknown) => ({ kind: 'rejected' as const, error }));
+        expect(replayed.kind).toBe('rejected');
+      }),
+    );
+
+    it(
+      'rejects an oversized completion result, leaving the workflow parked',
+      maybe(async () => {
+        const cap = options.asyncResultCapBytes;
+        if (cap === undefined) return;
+        const client = getClient();
+        const capture = options.captureNextAsyncToken!;
+        const tokenPromise = capture();
+        const handle = await client.start(workflowTypes.asyncActivity, 'oversize-case', {
+          id: `${idPrefix}-async-oversize`,
+        });
+        const token = await tokenPromise;
+        await waitForRunning?.(handle.id);
+
+        // A result comfortably larger than the cap must be rejected over BOTH
+        // transports — the async path mirrors inline-activity and signal payload
+        // enforcement. The workflow stays parked; the single-use token survives.
+        const oversized = { blob: 'x'.repeat(cap * 2 + 1024) };
+        const settled = await client.activity
+          .complete(token, oversized)
+          .then(() => ({ kind: 'resolved' as const }))
+          .catch((error: unknown) => ({ kind: 'rejected' as const, error }));
+        expect(settled.kind).toBe('rejected');
+        await expect(client.get(handle.id)).resolves.toMatchObject({ status: 'running' });
+
+        // The token survived: a within-limit retry still completes the workflow.
+        await client.activity.complete(token, { ok: true });
+        await expect(handle.result()).resolves.toEqual({
+          input: 'oversize-case',
+          resolved: { ok: true },
+        });
+      }),
+    );
   });
 }

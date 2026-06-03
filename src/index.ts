@@ -477,7 +477,12 @@ export type {
 export type { WorkflowEventTail } from './client/event-tail';
 export { HttpClient, HttpClientError } from './client/index';
 export type { HttpClientOptions } from './client/index';
-export type { ClientHandle, UpdateResult, WeftClient } from './client/interface';
+export type {
+  ClientHandle,
+  UpdateResult,
+  WeftClient,
+  WeftClientActivity,
+} from './client/interface';
 export { LocalClient } from './client/local';
 export type {
   KnownWorkflowName,

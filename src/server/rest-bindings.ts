@@ -21,6 +21,12 @@ import {
   aggregateWorkflowsRestBinding,
 } from './operations/aggregate-workflows.ts';
 import {
+  completeAsyncActivityOperation,
+  completeAsyncActivityRestBinding,
+  failAsyncActivityOperation,
+  failAsyncActivityRestBinding,
+} from './operations/async-activity.ts';
+import {
   bulkCancelWorkflowsOperation,
   bulkCancelWorkflowsRestBinding,
 } from './operations/bulk-cancel-workflows.ts';
@@ -238,6 +244,8 @@ export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   getWorkflowEventsRestBinding,
   setWorkflowAttributesRestBinding,
   signalWorkflowRestBinding,
+  completeAsyncActivityRestBinding,
+  failAsyncActivityRestBinding,
   queryWorkflowRestBinding,
   queryWorkflowWithInputRestBinding,
   resumeWorkflowRestBinding,
@@ -406,6 +414,8 @@ export function createLiveOperationRegistry(
     getWorkflowEventsOperation,
     setWorkflowAttributesOperation,
     signalWorkflowOperation,
+    completeAsyncActivityOperation,
+    failAsyncActivityOperation,
     queryWorkflowOperation,
     resumeWorkflowOperation,
     forkWorkflowOperation,
