@@ -66,6 +66,21 @@ export function buildStartBatchOperations(
           },
         ]
       : []),
+    // Persist a presence-only "expects services" marker atomically with the rest
+    // of the start state. The services value itself is never written; this bit is
+    // the only durable trace, and it lets a fresh-process recovery tell a run that
+    // lost its services on crash apart from a run that never had any (which must
+    // recover without ever consulting the resolver). A separate write after the
+    // batch would reopen the crash window this marker exists to close.
+    ...(options?.services !== undefined
+      ? [
+          {
+            type: 'put' as const,
+            key: KEYS.workflowHasServices(workflowId),
+            value: EMPTY_STORAGE_VALUE,
+          },
+        ]
+      : []),
     ...(additionalOperations ?? []),
   ];
 

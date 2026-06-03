@@ -172,6 +172,7 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.review('workflow-id', 'review-id'),
       KEYS.workflowHeaders('workflow-id'),
       KEYS.terminalCleanupNeeded('workflow-id'),
+      KEYS.workflowHasServices('workflow-id'),
       KEYS.offload('workflow-id', 'key'),
       KEYS.archive('workflow-id', 'key'),
       KEYS.stateExecution('workflow-id', 'key'),

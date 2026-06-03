@@ -198,6 +198,9 @@ export async function cleanupWorkflowStorage(
 
   await internals.storage.delete(KEYS.workflowHeaders(workflowId));
   await internals.storage.delete(KEYS.signalSequence(workflowId));
+  // The "expects services" marker is per-run bookkeeping, not an output artifact,
+  // so drop it on every terminal cleanup regardless of `includeOutputArtifacts`.
+  await internals.storage.delete(KEYS.workflowHasServices(workflowId));
 
   // Use the storage adapter's native prefix deletion when available
   // (e.g., BunSQLiteStorage's prepared DELETE...WHERE key >= ? AND key < ?).

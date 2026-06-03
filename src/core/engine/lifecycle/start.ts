@@ -219,8 +219,11 @@ export async function startWorkflow(
     await persistStartBatch(internals, startOperations);
 
     // Hold the non-serialized per-run services in engine memory so the inline
-    // Context can read them. Never written to the start batch — they bypass
-    // every durable record. Cleared on terminal cleanup (and on rollback below).
+    // Context can read them. The services value is never written to storage — it
+    // bypasses every durable record. A presence-only "expects services" marker IS
+    // written atomically in the start batch (see buildStartBatchOperations) so a
+    // fresh-process recovery knows to re-provide them. Cleared on terminal cleanup
+    // (and on rollback below).
     if (options?.services !== undefined) {
       internals.workflowServices.set(workflowId, options.services);
     }

@@ -47,6 +47,7 @@ export const WEFT_RESERVED_KEY_PREFIXES = [
   'wf-cleanup-needed:',
   'wf-deadline:',
   'wf-delayed:',
+  'wf-has-services:',
   'wf-headers:',
   'wf-idx-',
   'wf-terminal:',

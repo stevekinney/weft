@@ -13,11 +13,13 @@
 import { describe, expect, it } from 'bun:test';
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import type { WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
+import { cleanupWorkflowStorage } from './termination/cleanup.ts';
 
 /** Drain microtasks so fire-and-forget inline work completes. */
 async function flush(): Promise<void> {
@@ -228,6 +230,50 @@ describe('ctx.services — recovery re-provision', () => {
     await secondEngine[Symbol.asyncDispose]();
   });
 
+  it('resumes a no-services run on a fresh engine without consulting the resolver', async () => {
+    // A run that was started WITHOUT services must recover normally even when the
+    // engine has a fail-closed resolver. The resolver exists to rebuild services
+    // for runs that originally had them; consulting it for a no-services run would
+    // fail a perfectly healthy workflow. The durable "expects services" marker is
+    // what lets the recovery seam tell the two cases apart on a fresh process.
+    const storage = new MemoryStorage();
+    const wf = workflow({ name: 'plain' }).execute(async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('go');
+      return ctx.services === undefined ? 'no-services' : 'unexpected-services';
+    });
+    const firstEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { plain: wf },
+    });
+    // No `services` option — this run never expected any.
+    await firstEngine.start('plain', null, { id: 'plain-run' });
+    await flush();
+    await firstEngine[Symbol.asyncDispose]();
+
+    let resolverCalls = 0;
+    const secondEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { plain: wf },
+      // A fail-closed resolver: if this run ever consults it, the run fails.
+      resolveWorkflowServices: () => {
+        resolverCalls++;
+        return { status: 'unavailable', reason: 'should never be consulted' };
+      },
+    });
+
+    const handles = await secondEngine.recoverAll();
+    expect(handles).toHaveLength(1);
+    // The resolver must NOT have been consulted for a run that never had services.
+    expect(resolverCalls).toBe(0);
+
+    const resumed = handles[0]!;
+    await resumed.signal('go');
+    expect(await resumed.result()).toBe('no-services');
+    await secondEngine[Symbol.asyncDispose]();
+  });
+
   it('treats a resolver that THROWS as unavailable and still recovers a healthy sibling', async () => {
     const storage = new MemoryStorage();
     const wf = workflow({ name: 'sibling' }).execute(async function* (ctx: WorkflowContext) {
@@ -296,5 +342,32 @@ describe('ctx.services — terminal cleanup', () => {
     // Terminal cleanup must drop the per-run services, else a long-running engine
     // leaks one entry (and a credential-bearing closure) per completed run.
     expect(internals.workflowServices.has('cleanup-run')).toBe(false);
+  });
+
+  it('drops the durable "expects services" marker when terminal cleanup sweeps the run', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+
+    const wf = workflow({ name: 'marker-cleanup' }).execute(async function* (ctx: WorkflowContext) {
+      return (ctx.services as { v: number }).v;
+    });
+    engine.register(wf);
+
+    const handle = await engine.start('marker-cleanup', null, {
+      id: 'marker-run',
+      services: { v: 9 },
+    });
+    // The durable marker is written atomically with the start batch.
+    expect(await storage.get(KEYS.workflowHasServices('marker-run'))).not.toBeNull();
+
+    await handle.result();
+
+    // Durable scratch is swept by the deferred terminal-cleanup pass (run here
+    // directly, exactly as the persisted timer invokes it). The marker dies with
+    // the run's other per-run bookkeeping, so a fresh engine over this store never
+    // tries to re-provide services for an already-completed run.
+    await cleanupWorkflowStorage(getInternals(engine), 'marker-run', false);
+    expect(await storage.get(KEYS.workflowHasServices('marker-run'))).toBeNull();
+    await engine[Symbol.asyncDispose]();
   });
 });

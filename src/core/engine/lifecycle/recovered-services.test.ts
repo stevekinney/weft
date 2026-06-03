@@ -8,10 +8,14 @@
 
 import { describe, expect, it, mock } from 'bun:test';
 
+import { KEYS } from '../../../storage/interface.ts';
+import { MemoryStorage } from '../../../storage/memory.ts';
 import type { WorkflowState } from '../../types.ts';
 import { reprovideRecoveredServices } from './recovered-services.ts';
 
 type ServicesMap = Map<string, unknown>;
+
+const EMPTY_VALUE = new Uint8Array(0);
 
 function makeState(id = 'run-1', type = 'wf'): WorkflowState {
   return {
@@ -25,7 +29,13 @@ function makeState(id = 'run-1', type = 'wf'): WorkflowState {
   };
 }
 
-/** Minimal internals stub: an inline engine with a services map + resolver. */
+/**
+ * Minimal internals stub: an inline engine with a services map, resolver, and a
+ * real {@link MemoryStorage} so the helper's durable "expects services" marker
+ * read works. `expectsServices` controls whether the marker is pre-populated —
+ * defaults to `true` so resolver-firing branches reach the resolver. Set it to
+ * `false` to exercise the no-marker short-circuit.
+ */
 function makeInternals(options: {
   inline?: boolean;
   resolver?: (info: {
@@ -39,14 +49,21 @@ function makeInternals(options: {
         { status: 'available'; services: unknown } | { status: 'unavailable'; reason: string }
       >;
   services?: ServicesMap;
-}): { internals: never; services: ServicesMap } {
+  expectsServices?: boolean;
+  stateId?: string;
+}): { internals: never; services: ServicesMap; storage: MemoryStorage } {
   const services: ServicesMap = options.services ?? new Map();
+  const storage = new MemoryStorage();
+  if (options.expectsServices !== false) {
+    void storage.put(KEYS.workflowHasServices(options.stateId ?? 'run-1'), EMPTY_VALUE);
+  }
   const internals = {
     inlineStrategy: options.inline === false ? null : {},
     workflowServices: services,
+    storage,
     options: { resolveWorkflowServices: options.resolver },
   } as never;
-  return { internals, services };
+  return { internals, services, storage };
 }
 
 const noopCommitError = (): void => {};
@@ -96,6 +113,18 @@ describe('reprovideRecoveredServices', () => {
     );
     expect(stop).toBe(false);
     expect(resolver).not.toHaveBeenCalled();
+  });
+
+  it('skips the resolver when the run has no durable "expects services" marker', async () => {
+    // A fresh-process recovery of a run that never had services: no marker, so
+    // the resolver must not be consulted even if one is configured.
+    const resolver = mock(() => ({ status: 'available' as const, services: {} }));
+    const { internals } = makeInternals({ resolver, expectsServices: false });
+    const failRun = mock(async () => {});
+    const stop = await reprovideRecoveredServices(internals, makeState(), failRun, noopCommitError);
+    expect(stop).toBe(false);
+    expect(resolver).not.toHaveBeenCalled();
+    expect(failRun).not.toHaveBeenCalled();
   });
 
   it('skips the resolver when services are already live in the map (same process)', async () => {

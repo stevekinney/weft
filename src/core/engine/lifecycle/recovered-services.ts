@@ -1,3 +1,4 @@
+import { KEYS } from '../../../storage/interface.ts';
 import type { WorkflowState } from '../../types.ts';
 import type { EngineInternals } from '../internals.ts';
 
@@ -12,8 +13,13 @@ import type { EngineInternals } from '../internals.ts';
  * recovered run that originally had services would silently execute with
  * `ctx.services === undefined`.
  *
- * Returns `false` to proceed (services available, or none needed because no
- * resolver is configured). Returns `true` to STOP — the run was terminally
+ * The resolver is only consulted for runs launched WITH services, detected by
+ * the durable `KEYS.workflowHasServices` marker. A run that never had services
+ * has no marker and proceeds without touching the resolver — so a fail-closed
+ * resolver does not fail healthy no-services runs.
+ *
+ * Returns `false` to proceed (services available, none expected, or no resolver
+ * is configured). Returns `true` to STOP — the run was terminally
  * failed (services unavailable), or the terminal commit faulted and the run was
  * left for a later boot to retry. Either way the generator must not advance:
  * driving it without services would crash the body and that throw would escape
@@ -45,6 +51,13 @@ export async function reprovideRecoveredServices(
   // Same-process case: services are still live in the map (the run was launched
   // in this process and is being resumed/started here). Nothing to re-provide.
   if (internals.workflowServices.has(state.id)) {
+    return false;
+  }
+  // Fresh-process case: only runs that were launched WITH services left a durable
+  // "expects services" marker. A run that never had services has no marker, so
+  // the resolver must not be consulted — consulting it would fail a healthy
+  // no-services run whenever the engine has a fail-closed resolver configured.
+  if ((await internals.storage.get(KEYS.workflowHasServices(state.id))) === null) {
     return false;
   }
 

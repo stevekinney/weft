@@ -266,6 +266,10 @@ describe('engine time operation helpers', () => {
 
     await storage.put(KEYS.workflow(workflowId), encode(state));
     await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
+    // This run WAS launched with services, so its durable "expects services"
+    // marker is present — that is what makes the recovery seam consult the
+    // resolver on this fresh-process timer firing.
+    await storage.put(KEYS.workflowHasServices(workflowId), new Uint8Array(0));
 
     await startDelayedWorkflow(
       {
@@ -296,5 +300,54 @@ describe('engine time operation helpers', () => {
     expect(failed).toHaveLength(1);
     expect(failed[0]![1].message).toContain('services unavailable');
     expect(beginWorkflowExecution).not.toHaveBeenCalled();
+  });
+
+  it('starts a recovered delayed-start run with no services without consulting the resolver', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-delayed-plain';
+    const state = createWorkflowState(workflowId, { executionStateOwnerId: workflowId });
+    const checkpoint = createCheckpoint(workflowId);
+    const registration = { handler: async function* () {}, version: '1' };
+    const beginWorkflowExecution = mock(() => {});
+    let resolverCalls = 0;
+    const failed: Array<[string, Error]> = [];
+    const failWorkflow = async (id: string, error: Error): Promise<void> => {
+      failed.push([id, error]);
+    };
+
+    await storage.put(KEYS.workflow(workflowId), encode(state));
+    await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
+    // No `wf-has-services` marker: this run was started WITHOUT services. A
+    // fail-closed resolver must NOT be consulted, and the run must start normally.
+
+    await startDelayedWorkflow(
+      {
+        checkpoints: new Map<string, Checkpoint>(),
+        inlineStrategy: {},
+        workflowServices: new Map<string, unknown>(),
+        options: {
+          getNow: () => 2_000,
+          resolveWorkflowServices: () => {
+            resolverCalls += 1;
+            return { status: 'unavailable', reason: 'should never be consulted' };
+          },
+        },
+        registrations: new Map([[state.type, registration]]),
+        storage,
+        workflowVersionTuples: new Map(),
+      } as never,
+      createDelayedStartEntry(workflowId, { executionTimeoutMs: 500 }),
+      createCallbacks({
+        beginWorkflowExecution,
+        failWorkflow,
+        loadWorkflowState: async () => state,
+        runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
+      }),
+    );
+
+    // The resolver was never consulted and the generator was started normally.
+    expect(resolverCalls).toBe(0);
+    expect(failed).toHaveLength(0);
+    expect(beginWorkflowExecution).toHaveBeenCalledTimes(1);
   });
 });
