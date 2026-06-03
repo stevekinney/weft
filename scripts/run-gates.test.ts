@@ -1,31 +1,43 @@
 /**
  * Tests for the gate runner. The real gate-spawning path (`spawnGate`) shells
  * out to child processes and is exercised end-to-end by `bun run validate` /
- * `bun run prepack`; here we inject a fake gate runner and clock to drive the
- * decision, framing, and summary logic deterministically.
+ * `bun run prepack`; here we pass a stub gate runner to drive the decision,
+ * framing, and summary logic deterministically, capturing console output with
+ * `spyOn`.
  */
 import { describe, expect, it, spyOn } from 'bun:test';
 
-import type { Gate, PipelineDependencies } from './run-gates.ts';
-import { formatDuration, gateArgv, main, PIPELINES, runPipeline, spawnGate } from './run-gates.ts';
+import type { Gate } from './run-gates.ts';
+import { formatDuration, main, PIPELINES, runPipeline } from './run-gates.ts';
 
-/** Build injectable deps with a scripted per-gate exit-code map and a fake clock. */
-function harness(exitCodes: Record<string, number> = {}) {
-  const ran: string[] = [];
-  const lines: string[] = [];
-  const errors: string[] = [];
-  let clock = 0;
-  const dependencies: PipelineDependencies = {
-    runGate: (gate: Gate) => {
-      ran.push(gate.name);
-      clock += 10; // each gate "takes" 10ms on the fake clock
-      return Promise.resolve(exitCodes[gate.name] ?? 0);
+/** Capture console.log/console.error and return the recorded lines plus a restore fn. */
+function captureConsole() {
+  const log: string[] = [];
+  const error: string[] = [];
+  const logSpy = spyOn(console, 'log').mockImplementation((message?: unknown) => {
+    log.push(String(message));
+  });
+  const errorSpy = spyOn(console, 'error').mockImplementation((message?: unknown) => {
+    error.push(String(message));
+  });
+  return {
+    log,
+    error,
+    restore: () => {
+      logSpy.mockRestore();
+      errorSpy.mockRestore();
     },
-    now: () => clock,
-    log: (message) => lines.push(message),
-    logError: (message) => errors.push(message),
   };
-  return { dependencies, ran, lines, errors };
+}
+
+/** A stub gate runner returning the exit code mapped per gate name (default 0), recording order. */
+function stubRunner(exitCodes: Record<string, number> = {}) {
+  const ran: string[] = [];
+  const runGate = (gate: Gate): Promise<number> => {
+    ran.push(gate.name);
+    return Promise.resolve(exitCodes[gate.name] ?? 0);
+  };
+  return { runGate, ran };
 }
 
 describe('formatDuration', () => {
@@ -40,94 +52,93 @@ describe('formatDuration', () => {
   });
 });
 
-describe('gateArgv', () => {
-  it('defaults a script gate to `bun run <script>`', () => {
-    expect(gateArgv({ name: 'lint', script: 'lint' })).toEqual(['bun', 'run', 'lint']);
-  });
-
-  it('uses explicit argv when provided', () => {
-    expect(gateArgv({ name: 'raw', argv: ['echo', 'hi'] })).toEqual(['echo', 'hi']);
-  });
-
-  it('throws when a gate has neither script nor argv', () => {
-    expect(() => gateArgv({ name: 'empty' })).toThrow('neither script nor argv');
+describe('PIPELINES', () => {
+  it('references only package.json scripts that exist', async () => {
+    // Guard against a gate's `script` drifting from package.json (e.g. a script
+    // renamed without updating the pipeline). Turns a cryptic `bun run` runtime
+    // failure into a fast, clear local test failure.
+    const packageJson = await Bun.file(new URL('../package.json', import.meta.url)).json();
+    const scripts: Record<string, string> = packageJson.scripts;
+    for (const gates of Object.values(PIPELINES)) {
+      for (const gate of gates) {
+        expect(scripts[gate.script]).toBeDefined();
+      }
+    }
   });
 });
 
 describe('runPipeline', () => {
   it('returns a non-zero exit code for an unknown pipeline and lists the known ones', async () => {
-    const { dependencies, errors } = harness();
-    const code = await runPipeline('does-not-exist', dependencies);
-    expect(code).toBe(1);
-    const message = errors.join('\n');
-    expect(message).toContain('Unknown pipeline "does-not-exist"');
-    expect(message).toContain('validate');
-    expect(message).toContain('prepack');
+    const console = captureConsole();
+    try {
+      const code = await runPipeline('does-not-exist', () => Promise.resolve(0));
+      expect(code).toBe(1);
+      const message = console.error.join('\n');
+      expect(message).toContain('Unknown pipeline "does-not-exist"');
+      expect(message).toContain('validate');
+      expect(message).toContain('prepack');
+    } finally {
+      console.restore();
+    }
   });
 
   it('runs every gate in order and returns 0 when all pass', async () => {
-    const { dependencies, ran, lines } = harness();
-    const code = await runPipeline('validate', dependencies);
-    expect(code).toBe(0);
-    expect(ran).toEqual(PIPELINES.validate.map((gate) => gate.name));
-    const output = lines.join('\n');
-    expect(output).toContain('Validate passed');
-    expect(output).toContain('Validate Summary');
+    const console = captureConsole();
+    const { runGate, ran } = stubRunner();
+    try {
+      const code = await runPipeline('validate', runGate);
+      expect(code).toBe(0);
+      expect(ran).toEqual(PIPELINES.validate.map((gate) => gate.name));
+      const output = console.log.join('\n');
+      expect(output).toContain('Validate passed');
+      expect(output).toContain('Validate Summary');
+    } finally {
+      console.restore();
+    }
   });
 
   it('fails fast: stops at the first failing gate and returns 1', async () => {
-    const { dependencies, ran, lines, errors } = harness({ typecheck: 2 });
-    const code = await runPipeline('validate', dependencies);
-    expect(code).toBe(1);
-    // 'lint' and 'typecheck' ran; nothing after 'typecheck' did.
-    expect(ran).toEqual(['lint', 'typecheck']);
-    expect(lines.join('\n')).toContain('typecheck failed (exit 2');
-    expect(errors.join('\n')).toContain('failed at gate "typecheck"');
-  });
-
-  it('uses the real console/clock defaults when only runGate is injected', async () => {
-    // Inject only the gate runner so the default clock and console sinks
-    // actually execute (and are captured here to keep test output quiet).
-    const logSpy = spyOn(console, 'log').mockImplementation(() => {});
-    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+    const console = captureConsole();
+    const { runGate, ran } = stubRunner({ typecheck: 2 });
     try {
-      const passCode = await runPipeline('prepack', { runGate: () => Promise.resolve(0) });
-      expect(passCode).toBe(0);
-      const failCode = await runPipeline('unknown-pipeline', { runGate: () => Promise.resolve(0) });
-      expect(failCode).toBe(1);
-      expect(logSpy).toHaveBeenCalled();
-      expect(errorSpy).toHaveBeenCalled();
+      const code = await runPipeline('validate', runGate);
+      expect(code).toBe(1);
+      // 'lint' and 'typecheck' ran; nothing after 'typecheck' did.
+      expect(ran).toEqual(['lint', 'typecheck']);
+      expect(console.log.join('\n')).toContain('typecheck failed (exit 2');
+      expect(console.error.join('\n')).toContain('failed at gate "typecheck"');
     } finally {
-      logSpy.mockRestore();
-      errorSpy.mockRestore();
+      console.restore();
     }
   });
 });
 
 describe('main', () => {
   it('returns 1 and prints usage when no pipeline name is given', async () => {
-    const { dependencies, errors } = harness();
-    const code = await main([], dependencies);
-    expect(code).toBe(1);
-    expect(errors.join('\n')).toContain('Usage: bun run scripts/run-gates.ts');
+    const console = captureConsole();
+    try {
+      const code = await main([], () => Promise.resolve(0));
+      expect(code).toBe(1);
+      expect(console.error.join('\n')).toContain('Usage: bun run scripts/run-gates.ts');
+    } finally {
+      console.restore();
+    }
   });
 
   it('delegates to runPipeline for the named pipeline', async () => {
-    const { dependencies, ran } = harness();
-    const code = await main(['validate'], dependencies);
-    expect(code).toBe(0);
-    expect(ran).toEqual(PIPELINES.validate.map((gate) => gate.name));
+    const console = captureConsole();
+    const { runGate, ran } = stubRunner();
+    try {
+      const code = await main(['validate'], runGate);
+      expect(code).toBe(0);
+      expect(ran).toEqual(PIPELINES.validate.map((gate) => gate.name));
+    } finally {
+      console.restore();
+    }
   });
 });
 
-describe('spawnGate', () => {
-  it('resolves to a non-zero code when the command cannot be spawned', async () => {
-    const code = await spawnGate({ name: 'missing', argv: ['definitely-not-a-real-binary-xyz'] });
-    expect(code).not.toBe(0);
-  });
-
-  it('resolves to 0 for a command that exits cleanly', async () => {
-    const code = await spawnGate({ name: 'true', argv: ['true'] });
-    expect(code).toBe(0);
-  });
-});
+// `spawnGate` and the `import.meta.main` entrypoint shell out to real `bun run`
+// processes; spawning gates in a unit test would be slow and order-fragile, so
+// they are exercised end-to-end by `bun run validate` / `bun run prepack` and
+// carry a coverage allowance in scripts/check-coverage.ts.

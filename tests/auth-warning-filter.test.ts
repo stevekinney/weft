@@ -11,9 +11,9 @@
 import { describe, expect, it } from 'bun:test';
 
 import { NO_AUTHENTICATION_WARNING } from '../src/server/serve-internals.ts';
-
-// Keep in sync with `NO_AUTHENTICATION_WARNING_FRAGMENT` in tests/test-preload.ts.
-const FILTER_FRAGMENT = 'server started with NO authentication';
+// Import the fragment the preload actually filters on (not a copy), so the
+// drift guard below pins the real installed filter against the production text.
+import { NO_AUTHENTICATION_WARNING_FRAGMENT as FILTER_FRAGMENT } from './test-preload.ts';
 
 /**
  * Re-create the preload's filter around a controllable sink so we can assert its

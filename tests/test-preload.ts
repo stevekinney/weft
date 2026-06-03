@@ -36,14 +36,14 @@ import 'fake-indexeddb/auto';
  * constant by a drift-guard test (`tests/auth-warning-filter.test.ts`), so a
  * reworded warning fails loudly instead of silently slipping past the filter.
  */
-const NO_AUTHENTICATION_WARNING_FRAGMENT = 'server started with NO authentication';
+export const NO_AUTHENTICATION_WARNING_FRAGMENT = 'server started with NO authentication';
 
 /**
  * Wrap `console.warn` so the known-benign no-auth posture warning is dropped
- * while every other warning passes through untouched. Tests that assert on the
- * warning install their own `spyOn(console, 'warn')`, which replaces this
- * wrapper for their duration (and `mockRestore()` restores back to it), so their
- * assertions still observe the call — the filter only suppresses the incidental
+ * while every other warning passes through untouched. To assert on this warning
+ * in a test, use `spyOn(console, 'warn')` (or save and restore `console.warn`
+ * directly): either pattern replaces this wrapper for the test's duration, so
+ * the assertion observes the call. The filter only suppresses the incidental
  * warnings from servers started without auth as a side effect of other tests.
  */
 const originalConsoleWarn = console.warn.bind(console);

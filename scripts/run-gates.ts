@@ -13,10 +13,10 @@
  * Gates run as child processes inheriting stdio, so each gate's own output still
  * streams through unchanged; this runner only frames it.
  *
- * The orchestration ({@link runPipeline}) takes injectable dependencies (the
- * gate runner, a clock, and a line sink) so its success/fail/summary logic is
- * unit-testable without spawning real processes — the same pattern as
- * `scripts/husky/run-tests.ts`.
+ * `runPipeline` takes the gate runner as a defaulted parameter so its
+ * decision/framing/summary logic is unit-testable without spawning real
+ * processes; everything else (the clock, console output) runs for real in tests
+ * and is captured with `spyOn`.
  *
  * Usage:
  *   bun run scripts/run-gates.ts <pipeline>
@@ -27,14 +27,12 @@ import { spawn } from 'node:child_process';
 import chalk from 'chalk';
 import { capitalCase } from 'change-case';
 
-/** A single gate: a label plus the `bun run` script (or raw argv) to execute. */
+/** A single gate: a label plus the package.json `bun run` script to execute. */
 export type Gate = {
   /** Human-readable name shown in the header and summary. */
   readonly name: string;
-  /** `bun run <script>` is invoked unless {@link argv} is provided. */
-  readonly script?: string;
-  /** Explicit argv (first element is the executable) overriding {@link script}. */
-  readonly argv?: readonly string[];
+  /** The package.json script the gate runs as `bun run <script>`. */
+  readonly script: string;
 };
 
 /** Outcome of one gate, retained for the summary. */
@@ -44,17 +42,8 @@ type GateResult = {
   readonly durationMs: number;
 };
 
-/** Injectable dependencies so {@link runPipeline} is testable without spawning. */
-export type PipelineDependencies = {
-  /** Runs one gate and resolves to its exit code (`0` on success). */
-  readonly runGate: (gate: Gate) => Promise<number>;
-  /** Monotonic clock in milliseconds; defaults to `performance.now`. */
-  readonly now: () => number;
-  /** Where framing lines go; defaults to `console.log`. */
-  readonly log: (message: string) => void;
-  /** Where error lines go; defaults to `console.error`. */
-  readonly logError: (message: string) => void;
-};
+/** Runs one gate and resolves to its exit code (`0` on success). */
+type GateRunner = (gate: Gate) => Promise<number>;
 
 /**
  * Named pipelines. Each mirrors the previous `&&` chain in `package.json` so the
@@ -91,27 +80,25 @@ export function formatDuration(durationMs: number): string {
   return `${Math.round(durationMs)}ms`;
 }
 
-/** Resolve the argv a gate runs. Defaults to `bun run <script>`. */
-export function gateArgv(gate: Gate): readonly string[] {
-  if (gate.argv) return gate.argv;
-  if (gate.script) return ['bun', 'run', gate.script];
-  throw new Error(`Gate "${gate.name}" has neither script nor argv.`);
-}
-
 /**
- * Run one gate as a child process inheriting stdio. Resolves to its exit code;
- * a failure to spawn resolves to a non-zero code rather than rejecting so the
- * runner can report it like any other gate failure.
+ * Run one gate as `bun run <script>` in a child process inheriting stdio.
+ * Resolves to its exit code; a failure to spawn resolves to a non-zero code
+ * rather than rejecting so the runner can report it like any other gate failure.
  */
 export function spawnGate(gate: Gate): Promise<number> {
-  const [command, ...args] = gateArgv(gate);
   return new Promise((resolve) => {
-    const child = spawn(command, args, { stdio: 'inherit' });
+    const child = spawn('bun', ['run', gate.script], { stdio: 'inherit' });
+    let settled = false;
+    const settle = (code: number): void => {
+      if (settled) return;
+      settled = true;
+      resolve(code);
+    };
     child.on('error', (spawnError) => {
       console.error(chalk.red(`  failed to spawn: ${spawnError.message}`));
-      resolve(1);
+      settle(1);
     });
-    child.on('close', (code) => resolve(code ?? 1));
+    child.on('close', (code) => settle(code ?? 1));
   });
 }
 
@@ -126,74 +113,55 @@ function summaryLines(pipelineName: string, results: readonly GateResult[]): str
   return lines;
 }
 
-/** Default monotonic clock for {@link runPipeline}. */
-function defaultNow(): number {
-  return performance.now();
-}
-
-/** Default framing-line sink for {@link runPipeline}. */
-function defaultLog(message: string): void {
-  console.log(message);
-}
-
-/** Default error-line sink for {@link runPipeline}. */
-function defaultLogError(message: string): void {
-  console.error(message);
-}
-
 /**
  * Run a named pipeline, failing fast. Returns the exit code: `0` when every gate
- * passed, `1` otherwise. Dependencies default to real process spawning, the
- * system clock, and the console; tests inject substitutes.
+ * passed, `1` otherwise. `runGate` defaults to real process spawning; tests pass
+ * a stub to drive ordering and fail-fast without spawning.
  */
 export async function runPipeline(
   pipelineName: string,
-  dependencies: Partial<PipelineDependencies> = {},
+  runGate: GateRunner = spawnGate,
 ): Promise<number> {
-  const runGate = dependencies.runGate ?? spawnGate;
-  const now = dependencies.now ?? defaultNow;
-  const log = dependencies.log ?? defaultLog;
-  const logError = dependencies.logError ?? defaultLogError;
-
   const gates = PIPELINES[pipelineName];
   if (!gates) {
     const known = Object.keys(PIPELINES).join(', ');
-    logError(chalk.red(`Unknown pipeline "${pipelineName}". Known pipelines: ${known}.`));
+    console.error(chalk.red(`Unknown pipeline "${pipelineName}". Known pipelines: ${known}.`));
     return 1;
   }
 
   const results: GateResult[] = [];
-  const overallStart = now();
+  const overallStart = performance.now();
 
-  for (let index = 0; index < gates.length; index += 1) {
-    const gate = gates[index];
-    log(
+  for (const [index, gate] of gates.entries()) {
+    console.log(
       '\n' +
         chalk.bgBlue.black(` ${capitalCase(pipelineName)} `) +
         chalk.dim(` ${index + 1}/${gates.length} `) +
         chalk.bold(gate.name),
     );
 
-    const start = now();
+    const start = performance.now();
     const code = await runGate(gate);
-    const durationMs = now() - start;
+    const durationMs = performance.now() - start;
     const ok = code === 0;
     results.push({ name: gate.name, ok, durationMs });
 
     if (ok) {
-      log(chalk.green(`  ✓ ${gate.name}`) + chalk.dim(` (${formatDuration(durationMs)})`));
+      console.log(chalk.green(`  ✓ ${gate.name}`) + chalk.dim(` (${formatDuration(durationMs)})`));
     } else {
-      log(chalk.red(`  ✗ ${gate.name} failed (exit ${code}, ${formatDuration(durationMs)})`));
-      for (const line of summaryLines(pipelineName, results)) log(line);
-      logError(chalk.red(`\n${capitalCase(pipelineName)} failed at gate "${gate.name}".`));
+      console.log(
+        chalk.red(`  ✗ ${gate.name} failed (exit ${code}, ${formatDuration(durationMs)})`),
+      );
+      for (const line of summaryLines(pipelineName, results)) console.log(line);
+      console.error(chalk.red(`\n${capitalCase(pipelineName)} failed at gate "${gate.name}".`));
       return 1;
     }
   }
 
-  for (const line of summaryLines(pipelineName, results)) log(line);
-  log(
+  for (const line of summaryLines(pipelineName, results)) console.log(line);
+  console.log(
     chalk.green(`\n${capitalCase(pipelineName)} passed`) +
-      chalk.dim(` — ${gates.length} gates in ${formatDuration(now() - overallStart)}.`),
+      chalk.dim(` — ${gates.length} gates in ${formatDuration(performance.now() - overallStart)}.`),
   );
   return 0;
 }
@@ -206,16 +174,14 @@ export async function runPipeline(
  */
 export async function main(
   argv: readonly string[],
-  dependencies: Partial<PipelineDependencies> = {},
+  runGate: GateRunner = spawnGate,
 ): Promise<number> {
   const pipelineName = argv[0];
   if (!pipelineName) {
-    (dependencies.logError ?? defaultLogError)(
-      chalk.red('Usage: bun run scripts/run-gates.ts <pipeline>'),
-    );
+    console.error(chalk.red('Usage: bun run scripts/run-gates.ts <pipeline>'));
     return 1;
   }
-  return runPipeline(pipelineName, dependencies);
+  return runPipeline(pipelineName, runGate);
 }
 
 if (import.meta.main) {

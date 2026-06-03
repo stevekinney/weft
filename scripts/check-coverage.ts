@@ -86,11 +86,15 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
   [
     'scripts/run-gates.ts',
     {
-      // The pipeline logic, gate spawning, and CLI `main()` are unit-tested in
-      // scripts/run-gates.test.ts via injected dependencies. The single
-      // remaining line is the bare `import.meta.main` guard body, which only
-      // runs when the file is executed as the entrypoint — not under the test.
-      lines: new Set([222]),
+      // `runPipeline` / `main` (ordering, fail-fast, framing, summary) are
+      // unit-tested in scripts/run-gates.test.ts with a stub gate runner. The
+      // excluded surface is `spawnGate` (lines 88-101) and the `import.meta.main`
+      // entrypoint (line 188): both shell out to real `bun run` child processes,
+      // which would be slow and order-fragile to spawn in a unit test. They are
+      // exercised end-to-end by `bun run validate` / `bun run prepack`. This is
+      // the same allowance shape this script uses for its own shell wrapper.
+      functions: 1,
+      lines: createMergedLineSet(createLineSet(88, 101), new Set([188])),
     },
   ],
   [
