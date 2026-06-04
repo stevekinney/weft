@@ -36,6 +36,7 @@ import {
   cleanupTerminalWorkflowImmediately,
   cleanupTerminalWorkflowSynchronously,
   finalizeScheduledWorkflowTerminal,
+  FORCIBLY_TERMINABLE_STATUSES,
   type TerminationCallbacks,
 } from './cleanup.ts';
 
@@ -103,14 +104,12 @@ export async function terminateWorkflow(
       workflowId,
       { status, ...(reason !== undefined ? { terminationReason: reason } : {}) },
       {
-        // Cancel/timeout must be total over non-terminal states: 'suspended' is
-        // included so cancelling a suspended workflow terminates it (and rejects
-        // its still-pending result waiter) rather than no-op'ing and leaving
-        // result() to hang forever. The abort in strategy.cancelWorkflow above is
-        // a no-op for a suspended run (its controller was evicted at suspend),
-        // so cancel runs the registered cancel handlers without throwing into the
-        // already-gone generator — the intended "cancel a paused run" semantics.
-        allowedStatuses: ['running', 'pending', 'suspended'],
+        // Total over non-terminal states (see FORCIBLY_TERMINABLE_STATUSES):
+        // cancelling a suspended workflow terminates it and rejects its pending
+        // result waiter rather than no-op'ing. The abort in strategy.cancelWorkflow
+        // above is a no-op for a suspended run (controller evicted at suspend), so
+        // cancel runs the registered handlers without driving the gone generator.
+        allowedStatuses: FORCIBLY_TERMINABLE_STATUSES,
         buildAdditionalOperations: (_previousState, updatedAt) => {
           finalizePendingTimelineEntry(
             internals,
@@ -378,7 +377,10 @@ export async function failWorkflow(
     stateUpdate.errorStack = error.stack;
   }
   const failureResult = await updateWorkflowState(internals, workflowId, stateUpdate, {
-    allowedStatuses: ['running', 'pending'],
+    // See FORCIBLY_TERMINABLE_STATUSES — 'suspended' included so a cross-process
+    // resume whose services are unavailable can fail the run (the fail path runs
+    // before the suspended→running flip) instead of stranding it 'suspended'.
+    allowedStatuses: FORCIBLY_TERMINABLE_STATUSES,
     buildAdditionalOperations: (_previousState, updatedAt) => {
       finalizePendingTimelineEntry(internals, workflowId, 'failed', error.message, updatedAt);
       const pendingTimelineOperation = buildPendingTimelineOperation(internals, workflowId);

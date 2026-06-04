@@ -31,28 +31,34 @@ function suspendRequest(id: string): Request {
 describe('weft.workflows.suspend', () => {
   it('suspends a running workflow and returns 204', async () => {
     const engine = createEngine();
-    const handle = await engine.start('hold', null, { id: 'suspend-success' });
-    await waitForWorkflowStatus(engine, handle.id, 'running');
+    try {
+      const handle = await engine.start('hold', null, { id: 'suspend-success' });
+      await waitForWorkflowStatus(engine, handle.id, 'running');
 
-    const response = await handleRequest(suspendRequest(handle.id), engine, {
-      operationRegistry: registry,
-      restBindings: bindings,
-    });
+      const response = await handleRequest(suspendRequest(handle.id), engine, {
+        operationRegistry: registry,
+        restBindings: bindings,
+      });
 
-    expect(response.status).toBe(204);
-    await waitForWorkflowStatus(engine, handle.id, 'suspended');
-    await engine[Symbol.asyncDispose]();
+      expect(response.status).toBe(204);
+      await waitForWorkflowStatus(engine, handle.id, 'suspended');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
   });
 
   it('is a 204 no-op for a workflow that is not running', async () => {
     const engine = createEngine();
-    // Never-started id: suspend is a no-op, still returns 204.
-    const response = await handleRequest(suspendRequest('never-started'), engine, {
-      operationRegistry: registry,
-      restBindings: bindings,
-    });
-    expect(response.status).toBe(204);
-    await engine[Symbol.asyncDispose]();
+    try {
+      // Never-started id: suspend is a no-op, still returns 204.
+      const response = await handleRequest(suspendRequest('never-started'), engine, {
+        operationRegistry: registry,
+        restBindings: bindings,
+      });
+      expect(response.status).toBe(204);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
   });
 
   it('maps worker-mode WorkflowSuspendNotSupportedError to a 422 Unprocessable', async () => {

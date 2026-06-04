@@ -34,6 +34,20 @@ export const TERMINAL_WORKFLOW_STATUSES: ReadonlySet<WorkflowStatus> = new Set<W
 ]);
 
 /**
+ * Non-terminal statuses a workflow can be *forcibly* terminated from — cancel/
+ * timeout (`terminateWorkflow`) or system fail (`failWorkflow`). Both read this
+ * single constant so they cannot drift. `'suspended'` is included (a paused run
+ * must still be reachable by cancel/fail, else the CAS no-ops and the run is
+ * stranded); `completeWorkflow` deliberately excludes it (a suspended run's
+ * generator is evicted, so it can never reach normal completion).
+ */
+export const FORCIBLY_TERMINABLE_STATUSES = [
+  'running',
+  'pending',
+  'suspended',
+] as const satisfies readonly WorkflowStatus[];
+
+/**
  * Tracked-key waiter kinds share an identical shape: a per-workflow map of
  * `TrackedWaiterKeys` (string | Set<string>) referencing entries in a flat
  * waiter map. Sleep timers and review escalations have different shapes and

@@ -695,10 +695,12 @@ describe('HttpClient', () => {
       await client.suspend('http-suspend-live');
       expect(await statusOfWorkflow('http-suspend-live')).toBe('suspended');
 
-      // Clean up: resume and drive it to completion so it does not linger.
+      // Clean up: resume, signal, and AWAIT completion so the run does not
+      // linger past the test (avoids cross-test interference / flakiness).
       await client.resume('http-suspend-live');
       await client.signal('http-suspend-live', 'continue', 'go');
-      void handle;
+      await handle.result();
+      expect(await statusOfWorkflow('http-suspend-live')).toBe('completed');
     });
 
     it('suspending a completed workflow over HTTP is a no-op', async () => {
