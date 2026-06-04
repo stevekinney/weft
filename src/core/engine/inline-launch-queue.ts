@@ -68,7 +68,14 @@ export async function flushQueuedInlineWorkflowStarts(
   internals.queuedInlineWorkflowStarts = [];
 
   for (const start of pendingStarts) {
-    await startQueuedInlineWorkflowExecution(internals, start, callbacks);
+    // Isolate each start: a throw from one must not abandon the rest of the
+    // batch. The batch was already removed from the queue above, so an escaping
+    // throw would leave later starts' onStarted callbacks unfired forever —
+    // hanging their defer:false awaiters. swallowPromiseRejection contains the
+    // failure; the per-start finally still fires onStarted.
+    await callbacks.swallowPromiseRejection(
+      startQueuedInlineWorkflowExecution(internals, start, callbacks),
+    );
   }
 }
 

@@ -482,6 +482,42 @@ describe('onStarted fires on every flush terminal path', () => {
     engine[Symbol.dispose]();
   });
 
+  it('fires onStarted for every start in a batch even when an earlier one throws', async () => {
+    // Per-iteration fault isolation: if the first queued start throws during
+    // flush, the throw must not abandon the rest of the batch. The whole batch is
+    // removed from the queue before iterating, so an escaping throw would leave
+    // later starts' onStarted unfired forever — hanging their defer:false
+    // awaiters. Both starts' liveness callbacks must fire.
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'seeded' }).execute(async function* () {
+        return 'done';
+      }),
+    );
+    const internals = getInternals(engine);
+    // First start: persisted running state but a checkpoint stand-in that makes
+    // execution throw. Second start: no persisted state, takes the skip path.
+    const throwing = await engine.start('seeded', null, { id: 'batch-throws' });
+    void throwing;
+    const first = seedQueuedInlineStart(
+      internals,
+      'batch-throws',
+      null as unknown as QueuedInlineWorkflowExecutionStart['checkpoint'],
+    );
+    const second = seedQueuedInlineStart(
+      internals,
+      'batch-skipped',
+      {} as QueuedInlineWorkflowExecutionStart['checkpoint'],
+    );
+
+    await flushQueuedInlineWorkflowStarts(internals, noopInlineLaunchCallbacks);
+
+    // Both fired despite the first start throwing — the loop isolated the fault.
+    expect(first.fired()).toBe(true);
+    expect(second.fired()).toBe(true);
+    engine[Symbol.dispose]();
+  });
+
   it('settles a defer:false awaiter when the engine is disposed before flush', async () => {
     // The abort early-return in flushQueuedInlineWorkflowStarts (reached when a
     // post-dispose macrotask fires) must discard the queue AND fire onStarted, or

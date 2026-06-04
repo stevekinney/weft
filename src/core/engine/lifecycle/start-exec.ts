@@ -188,18 +188,26 @@ export async function beginExecutionAwaitingLiveness(
   }
 
   const liveness = params.options?.defer === false ? Promise.withResolvers<void>() : undefined;
-  beginWorkflowExecution(
-    internals,
-    workflowId,
-    params.type,
-    params.input,
-    params.checkpoint,
-    params.state.executionDeadline,
-    params.state.executionStateOwnerId ?? workflowId,
-    params.registration,
-    callbacks,
-    liveness ? () => liveness.resolve() : undefined,
-  );
+  try {
+    beginWorkflowExecution(
+      internals,
+      workflowId,
+      params.type,
+      params.input,
+      params.checkpoint,
+      params.state.executionDeadline,
+      params.state.executionStateOwnerId ?? workflowId,
+      params.registration,
+      callbacks,
+      liveness ? () => liveness.resolve() : undefined,
+    );
+  } catch (error) {
+    // If queueing/execution throws before onStarted can fire, reject the
+    // liveness promise so the defer:false awaiter surfaces the error instead of
+    // hanging on a run that never enqueued.
+    liveness?.reject(error instanceof Error ? error : new Error(String(error)));
+    throw error;
+  }
   if (liveness) {
     await liveness.promise;
   }
