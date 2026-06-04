@@ -115,6 +115,7 @@ export type {
   InferWorkflowEntries,
   InferWorkflowEntry,
   InitialBuilderState,
+  LaunchMetadata,
   ListFilter,
   ListOptions,
   MarkBuilderState,

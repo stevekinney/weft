@@ -6,6 +6,7 @@ import {
 } from '../events.ts';
 import { WorkflowTimeoutError } from '../timeouts.ts';
 import type {
+  LaunchMetadata,
   MessageName,
   QueryDefinition,
   ScheduleSpec,
@@ -169,6 +170,51 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
 
   async cancel(): Promise<void> {
     return this.#engine.cancel(this.id);
+  }
+
+  /**
+   * Reconstruct this workflow's launch context — its original `input` and the
+   * launch options recoverable from durable state — from the persisted
+   * {@link WorkflowState}. Resolves `null` if the workflow no longer exists
+   * (never started, or purged).
+   *
+   * Designed for the post-`recoverAll()` case: a recovered handle can recover
+   * the input a run was started with (and its `id`/`tags`) without the caller
+   * keeping a side table correlating recovered workflows back to their launch
+   * context. This is an async read (it loads state) so it behaves identically
+   * on handles from `start()`, `recoverAll()`, and `getHandle()` — none of which
+   * is special-cased — rather than a sync property that would be `undefined` on
+   * a handle created without a state load.
+   *
+   * @example
+   * ```ts
+   * import { Engine } from '@lostgradient/weft';
+   *
+   * const engine = new Engine();
+   * const handles = await engine.recoverAll();
+   * for (const handle of handles) {
+   *   const metadata = await handle.getLaunchMetadata();
+   *   if (metadata) {
+   *     // rebuild this run's dependencies from metadata.input
+   *     void metadata.input;
+   *   }
+   * }
+   * ```
+   */
+  async getLaunchMetadata(): Promise<LaunchMetadata | null> {
+    const state = await this.#engine.get(this.id);
+    if (state === null) {
+      return null;
+    }
+    return {
+      input: state.input,
+      launchOptions: {
+        id: state.id,
+        // Only present when the run was started with tags; omit the key entirely
+        // (exactOptionalPropertyTypes) rather than carrying an empty array.
+        ...(state.tags !== undefined && state.tags.length > 0 && { tags: state.tags }),
+      },
+    };
   }
 
   // Duplicate intentionally retained: the signal/update/query overload stacks
