@@ -7,6 +7,7 @@ import {
   type RegisteredActivityFunction,
 } from '../activity-registry.ts';
 import { AtomicState, type AtomicStateOptions } from '../atomic-state.ts';
+import { deserializeCheckpoint } from '../checkpoint.ts';
 import type { StoredStreamChunk } from '../context.ts';
 import { createHandleCacheFinalizer } from '../engine-helpers.ts';
 import type { Interceptor } from '../interceptor.ts';
@@ -1231,6 +1232,21 @@ export class Engine<
       return { ...state, status: 'pending' };
     }
     return state;
+  }
+  async getCurrentCheckpointStep(workflowId: string): Promise<number | null> {
+    // Prefer the in-memory checkpoint: for a run live in this engine it is the
+    // freshest cursor, ahead of the last durable commit. Fall back to the
+    // persisted checkpoint so a recovered or cross-process-inspected run still
+    // reports its durable step.
+    const inMemory = getInternals(this).checkpoints.get(workflowId);
+    if (inMemory !== undefined) {
+      return inMemory.step;
+    }
+    const bytes = await getInternals(this).storage.get(KEYS.checkpoint(workflowId));
+    if (bytes === null) {
+      return null;
+    }
+    return deserializeCheckpoint(bytes).step;
   }
   async getAttributes(workflowId: string): Promise<Record<string, SearchAttributeValue> | null> {
     return getWorkflowAttributes(getInternals(this), workflowId);

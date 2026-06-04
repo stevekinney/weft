@@ -18,6 +18,7 @@ import type {
   WorkflowState,
 } from '../types.ts';
 import { messageName } from '../types.ts';
+import type { WorkflowSnapshot } from '../types/workflow-snapshot.ts';
 import { createWorkflowHandleEventIterator } from './handle-iteration.ts';
 
 export function getWorkflowExecutionStartedAt(
@@ -94,6 +95,13 @@ export interface WorkflowHandleEngine extends EventTarget {
   addTags(workflowId: string, ...tags: string[]): Promise<void>;
   removeTags(workflowId: string, ...tags: string[]): Promise<void>;
   get(workflowId: string): Promise<WorkflowState | null>;
+  /**
+   * Current checkpoint step (the run's cursor) for a workflow, or `null` when no
+   * checkpoint exists. Reads the in-memory checkpoint when the run is live in
+   * this engine, otherwise the durably persisted checkpoint — so it is correct
+   * for both an in-flight run and one recovered or inspected in a fresh process.
+   */
+  getCurrentCheckpointStep(workflowId: string): Promise<number | null>;
 }
 
 export interface ScheduleHandleEngine {
@@ -217,6 +225,44 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
         ...(state.tags !== undefined && state.tags.length > 0 && { tags: state.tags }),
       },
     };
+  }
+
+  /**
+   * A point-in-time view of this workflow's progress: its status and current
+   * checkpoint step (cursor). Resolves `null` if the workflow no longer exists.
+   * The `status` matches `engine.get(id)` — notably it reports `'pending'` for a
+   * run whose inline start is still queued, even though its persisted status is
+   * `'running'`.
+   *
+   * Designed for observing a recovered run: after `engine.recoverAll()`, a
+   * caller can read where a resumed run currently is — and rebuild its own
+   * progress adapter to re-register the run on a live surface — without waiting
+   * for the run's final `result()`. It is an async read (loads state +
+   * checkpoint), so it behaves identically on handles from `start()`,
+   * `recoverAll()`, and `getHandle()`.
+   *
+   * @example
+   * ```ts
+   * import { Engine } from '@lostgradient/weft';
+   *
+   * const engine = new Engine();
+   * const handles = await engine.recoverAll();
+   * for (const handle of handles) {
+   *   const snapshot = await handle.snapshot();
+   *   if (snapshot) {
+   *     // re-register a progress adapter at snapshot.step
+   *     void snapshot.step;
+   *   }
+   * }
+   * ```
+   */
+  async snapshot(): Promise<WorkflowSnapshot | null> {
+    const state = await this.#engine.get(this.id);
+    if (state === null) {
+      return null;
+    }
+    const step = await this.#engine.getCurrentCheckpointStep(this.id);
+    return { status: state.status, step: step ?? 0 };
   }
 
   // Duplicate intentionally retained: the signal/update/query overload stacks
