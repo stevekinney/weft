@@ -169,6 +169,7 @@ export class HttpClient implements WeftClient {
   // call-site inference (bodies differ: HTTP request + `HttpHandle` here vs a
   // `LocalHandle` over `#engine`); rejected: a shared base class, which drops
   // the per-class overload declarations from the emitted declarations.
+  // jscpd:ignore-start
   call<Name extends CatalogOperationName>(
     name: Name,
     input: CatalogOperationTypes[Name]['input'],
@@ -195,6 +196,7 @@ export class HttpClient implements WeftClient {
 
     return new HttpHandle(response.id, this);
   }
+  // jscpd:ignore-end
 
   async schedule<TName extends KnownWorkflowName>(
     type: TName,

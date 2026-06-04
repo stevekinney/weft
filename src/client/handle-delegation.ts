@@ -59,6 +59,7 @@ export abstract class WorkflowHandleDelegation<
   // that one to a private `#engine`, so the bodies cannot share); rejected:
   // hoisting the signatures into a shared interface or mixin, which drops the
   // per-class overload declarations from the emitted declarations.
+  // jscpd:ignore-start
   async signal(name: SignalDefinition): Promise<void>;
   async signal<TInput>(
     name: SignalDefinition<TInput>,
@@ -105,6 +106,7 @@ export abstract class WorkflowHandleDelegation<
   async query(nameOrDefinition: MessageName, input?: unknown): Promise<unknown> {
     return this.client.query(this.id, messageName(nameOrDefinition), input);
   }
+  // jscpd:ignore-end
 
   async getAttributes(): Promise<Record<string, SearchAttributeValue> | null> {
     return this.client.getAttributes(this.id);

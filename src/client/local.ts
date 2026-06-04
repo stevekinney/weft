@@ -193,6 +193,7 @@ export class LocalClient implements WeftClient {
   // `LocalHandle` over `#engine`, `HttpClient` issues an HTTP request and
   // returns an `HttpHandle`); rejected: a shared base class, which would drop
   // the per-class overload declarations from the emitted declarations.
+  // jscpd:ignore-start
   call<Name extends CatalogOperationName>(
     name: Name,
     input: CatalogOperationTypes[Name]['input'],
@@ -214,6 +215,7 @@ export class LocalClient implements WeftClient {
     const handle = await this.#engine.start(type, input, options);
     return new LocalHandle(handle, this);
   }
+  // jscpd:ignore-end
 
   async schedule<TName extends KnownWorkflowName>(
     type: TName,
