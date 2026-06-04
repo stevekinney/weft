@@ -20,6 +20,7 @@ description: >-
 - Generating or validating cross-process declarations from registry snapshots, or wrapping byte-oriented storage for string-oriented consumers.
 - Refactoring registry-driven generated clients, especially when JSON Schema shapes become shared aliases instead of inline object types.
 - Changing storage capability reports, reserved key prefixes, string KV import helpers, or application-facing wrappers that share a storage backend with the engine.
+- Adding or deleting reserved workflow metadata markers such as `wf-has-services:`; marker writes, reads, cleanup, purge, and retention must stay aligned.
 - Normalizing failure-category values, changing workflow visibility index keys, or changing framed compressed-storage payloads.
 
 ## Do not use
@@ -44,6 +45,7 @@ description: >-
 12. For `payloadSize.maxBytes`, prove oversize workflow inputs, signal payloads, and activity results fail before durable writes while already-persisted data remains replayable under the current policy.
 13. For application storage wrappers, keep `disposeUnderlyingStorage: false` available and covered when the wrapper shares an engine-owned backend, and forward `conditionalBatch()` through text and typed codecs without changing compare bytes unexpectedly.
 14. For string KV imports, prove source and target paths cannot be identical, source table names are validated, reserved Weft prefixes are rejected, and existing target keys are never overwritten.
+15. For services markers, prove the marker is presence-only, is written atomically with start records, gates resolver calls on recovery, and is deleted by terminal cleanup, purge, and retention.
 
 ## Verification
 
@@ -51,4 +53,5 @@ description: >-
 - Test fresh execution and replay produce the same normalized content shape.
 - For registry codegen aliasing, run generator determinism, catalog drift, and type-level assignability tests against representative generated operation inputs.
 - For storage wrapper or importer changes, run the focused text-value, typed-storage, conditional-batch, and importer tests plus documentation verification when public guidance changes.
+- For services marker changes, run the recovered-services, workflow-services, delayed-start, purge, and retention tests that prove marker lifecycle across storage paths.
 - Run the relevant focused test, then `bun run typecheck` and `bun run validate` before shipping.

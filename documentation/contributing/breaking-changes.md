@@ -22,7 +22,7 @@ Weft uses [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 - **Pre-1.0 (`0.x.y`):** Breaking changes to stable surfaces are allowed but always announced in `CHANGELOG.md` with a migration path. The intent is to avoid unnecessary churn — pre-1.0 does not mean "anything goes."
 - **Post-1.0:** Breaking changes require a `MAJOR` version bump. `MINOR` adds backwards-compatible features. `PATCH` fixes bugs without changing the API contract.
 
-The project targets `0.2.0` as the next planned release. `1.0.0` requires all Tier-0 correctness work complete, stability-tier documentation in place, and the breaking-change policy frozen.
+The project is on the `0.2.x` release line. `1.0.0` requires all Tier-0 correctness work complete, stability-tier documentation in place, and the breaking-change policy frozen.
 
 ## What Counts as a Breaking Change
 

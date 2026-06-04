@@ -16,7 +16,8 @@ description: >-
 - Covering codegen declaration output, doctest extraction, skip-count parsing, or generated fixture typechecking.
 - Covering workflow visibility indexes, aggregate distinct-key caps, failure-category query aliases, backfill watermarks, or Bun SQLite smoke paths.
 - Covering event-log compaction watermark verification, Worker replay signatures, Worker protocol guards, payload-size admission, or post-build distribution guards.
-- Covering CLI output/error paths that moved coverage because of current-branch instrumentation gaps, such as `api`, `server`, `workflow`, `tail`, `version`, and output helper regressions.
+- Covering CLI output/error paths that moved coverage because of current-branch instrumentation gaps, such as `api`, `server`, `workflow`, `tail`, `version`, `completions`, and output helper regressions.
+- Covering callback creator bundles whose wrappers delegate to cleanup handlers, including time-operation and stream cleanup-error paths that coverage may miss until invoked directly.
 - Covering `.test-support.ts` harness modules whose consumers execute the behavior but Bun reports nested callback or unnamed-function misses.
 - Editing coverage orchestration itself, especially when a failing child coverage process could be accidentally masked.
 - Deciding whether a coverage allowance is justified.
@@ -46,6 +47,7 @@ description: >-
 14. Keep the current single-pass coverage shape intact unless a test proves a better split: one Bun coverage run writes `coverage/lcov.info`, and the checker should fail fast when that run exits non-zero.
 15. For line-keyed allowances after cleanup PRs, re-derive the LCOV lines from a fresh `coverage/lcov.info`; do not shift allowance numbers by inspection alone.
 16. For Bun anonymous-function instrumentation drift in callback-heavy test-support modules, prefer direct helper tests first and document any residual function-only allowance as instrumentation drift, not unreachable behavior.
+17. For callback bundle coverage, prefer a focused test that calls the created wrapper and asserts the delegated cleanup handler receives the same error over an allowance for a reachable delegator.
 
 ## Verification
 

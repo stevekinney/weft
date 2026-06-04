@@ -93,6 +93,8 @@ Use `bun run scripts/check-coverage.ts` for the deterministic adjusted-coverage 
 
 Use `bun run prepack` before release or package-surface changes. It runs the build, export and portability checks, Markdown and JSDoc doctests, package-content validation, and packed-consumer checks. The GitHub release workflow publishes `@lostgradient/weft` with `npm publish --ignore-scripts`, so local publish dry runs should use `npm publish --dry-run --ignore-scripts` after `prepack`. Release changes must also keep the tag, `package.json.version`, and exported `VERSION` constant aligned through `bun run scripts/verify-release-version.ts --tag=<tag>`.
 
+Release version changes must keep `package.json`, `src/version.ts`, and server discovery defaults aligned. Run `bun run verify:release-version` before release pull requests, and include OpenAPI, OpenRPC, AsyncAPI, and MCP discovery tests when the default version string changes.
+
 Use `weft conformance` when a change touches the `RemoteWorker` protocol or worker SDK compatibility. Use `weft codegen` when validating cross-process type-generation docs or client fixtures; the command reads `/v1/registry` from a live server or `--from` a vendored registry JSON file and writes a deterministic `.d.ts`.
 
 ## Architecture Overview
@@ -177,6 +179,7 @@ If an `as` cast is genuinely necessary (e.g., deserializing from storage where t
 - Storage adapters must report `capabilities()` honestly. Gate only `conditionalBatch` with `requireStorageCapability`; treat `boundedRangeDelete` as an operational hint and route bounded deletes through `storageDeleteRange()` so unbounded range deletion is impossible.
 - Storage integrations that claim durable recovery readiness must satisfy `assertDurableStorageForRecovery()`: `persistence: 'local'`, linearizable read-after-write, snapshot scans, atomic batches, and `conditionalBatch`. Keep `WEFT_RESERVED_KEY_PREFIXES`, `scopedStorage`, `textValueStore`, `withCodec`, and the string-KV importer aligned when changing storage keyspace or wrapper behavior.
 - `Engine.create()` recovers by default after workflow registration. Use `recover: false` only for tests, isolated `ScopedStorage` engines, or pre-migration inspection, and do not reintroduce `requireConcurrentResumeSafety`; current Weft supports one engine process per durable store until `MultiEngine` fenced ownership exists.
+- Per-run workflow `services` are inline-only host capabilities, not durable state. Starting with `services` must persist only the presence marker, reject Worker execution mode, re-provide services through `resolveWorkflowServices` on running and delayed-start recovery, fail only the affected run when unavailable, and sweep the marker on terminal cleanup, purge, and retention.
 - History policy changes must keep `history.maxEvents` as a lifetime circuit breaker and `history.retentionWindow` as storage reclamation only. Event-log compaction writes the watermark atomically with checkpoint commits; archival is best-effort after deletion and must not be described as a durability guarantee.
 - Payload-size policy changes must reject oversized workflow inputs, signal payloads, and activity results before durable writes. Keep `payloadSize.maxBytes` separate from storage compression and Worker `maxProtocolMessageBytes`.
 - Worker execution changes must preserve explicit trust posture: `workflowExecutionMode: 'worker'` is the hardened untrusted path with turn timeouts and bounded protocol messages; `workflowExecutionMode: 'inline'` rejects `workerExecution`.
@@ -195,6 +198,7 @@ If an `as` cast is genuinely necessary (e.g., deserializing from storage where t
 - Test files are typically colocated with sources using the `.test.ts` suffix.
 - Test-only support modules under `src/` must use `.test-support.ts` or another build-excluded test-only pattern. After renaming or adding support modules, run `bun run build` so the post-build guard catches forbidden `bun:test`, `fake-indexeddb`, or `jsdom` imports in `dist/`.
 - Shared browser-storage tests rely on the Bun `[test].preload` in `tests/test-preload.ts` for `fake-indexeddb`. Do not reintroduce per-file IndexedDB shim imports unless the file is a helper that can run outside the test preload.
+- Coverage fixes for callback creator bundles should exercise every wrapper path, including cleanup-error callbacks for stream and time operations, rather than adding allowances for reachable one-line delegators.
 - Oxlint rules are relaxed for test files (`*.test.ts`, `*.spec.ts`, `test/**`, `__tests__/**`). You can use `any`, non-null assertions, unused variables, and other patterns that would normally be flagged.
 - A separate `tsconfig.test.json` is available with relaxed TypeScript settings for tests.
 
