@@ -362,7 +362,7 @@ describe('engine time operation helpers', () => {
     writeDurableMarker: boolean;
   }): Promise<{
     workflowsNeedingTerminalCleanup: Set<string>;
-    beginWorkflowExecution: ReturnType<typeof mock<() => void>>;
+    beginWorkflowExecution: ReturnType<typeof mock>;
   }> {
     const storage = new MemoryStorage();
     const state = createWorkflowState(options.workflowId, {
