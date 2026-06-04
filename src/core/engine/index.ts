@@ -1325,11 +1325,13 @@ export class Engine<
     disposeEngine(getInternals(this));
   }
   /**
-   * Async teardown (`await using engine = ...`). Drains all pending inline
-   * launches so each queued workflow completes its first turn before disposal,
-   * leaving no deferred-launch macrotask to fire against torn-down state. Prefer
-   * this over the synchronous {@link Engine[Symbol.dispose]} in async contexts
-   * and tests. Synchronous teardown still runs even if the drain fails.
+   * Async teardown (`await using engine = ...`). Drains pending inline launches
+   * so each queued workflow completes its first turn before disposal, leaving no
+   * deferred-launch macrotask to fire against torn-down state. The drain is
+   * bounded (a pass cap and the abort signal); in the pathological case where it
+   * cannot converge, anything still queued is discarded by the synchronous
+   * teardown that always follows. Prefer this over the synchronous
+   * {@link Engine[Symbol.dispose]} in async contexts and tests.
    */
   async [Symbol.asyncDispose](): Promise<void> {
     // Drain pending inline launches BEFORE synchronous disposal aborts the

@@ -38,6 +38,12 @@ function seedQueuedInlineStart(
       settled = true;
     },
   };
+  // Drop any start already queued for this id (e.g. from a prior engine.start in
+  // the same test) so the seeded entry is the only one — avoids a double-start
+  // race with an already-scheduled flush.
+  internals.queuedInlineWorkflowStarts = internals.queuedInlineWorkflowStarts.filter(
+    (start) => start.workflowId !== workflowId,
+  );
   internals.queuedInlineWorkflowStarts.push(queued);
   internals.queuedInlineWorkflowStartIds.add(workflowId);
   internals.queuedOrLaunchingInlineWorkflowStartIds.add(workflowId);
@@ -345,8 +351,10 @@ describe('defer:false synchronous launch', () => {
     await engine.start('defer-true', null, { id: 'lazy' });
 
     expect(bodyEntered).toBe(false);
-    // Draining the queue lets the body run, proving the run is otherwise healthy.
-    await sleepForTesting(10);
+    // Yield one scheduler turn so the queued inline launch flushes, proving the
+    // run is otherwise healthy. (With real timers, sleepForTesting yields a
+    // single minimal turn regardless of the argument; 1 makes that intent clear.)
+    await sleepForTesting(1);
     expect(bodyEntered).toBe(true);
     engine[Symbol.dispose]();
   });

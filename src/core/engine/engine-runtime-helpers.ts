@@ -31,9 +31,13 @@ export function isActivityDefinition(value: unknown): value is AnyActivityDefini
 function inlineLaunchQueueCallbacksForEngine<TWorkflows extends object, TActivities extends object>(
   engine: Engine<TWorkflows, TActivities>,
 ): InlineLaunchQueueCallbacks {
+  // Build the lifecycle callbacks once and reuse them across every queued-start
+  // advance, rather than reconstructing the bundle per invocation on the
+  // inline-launch hot path.
+  const lifecycleCallbacks = createLifecycleCallbacks(engine);
   return {
     processPendingUpdatesAfterInlineAdvance: (workflowId) =>
-      createLifecycleCallbacks(engine).processPendingUpdatesAfterInlineAdvance(workflowId),
+      lifecycleCallbacks.processPendingUpdatesAfterInlineAdvance(workflowId),
     swallowPromiseRejection: (promise) => swallowPromiseRejection(promise),
   };
 }
