@@ -69,71 +69,71 @@ describe('PIPELINES', () => {
 
 describe('runPipeline', () => {
   it('returns a non-zero exit code for an unknown pipeline and lists the known ones', async () => {
-    const console = captureConsole();
+    const capturedConsole = captureConsole();
     try {
       const code = await runPipeline('does-not-exist', () => Promise.resolve(0));
       expect(code).toBe(1);
-      const message = console.error.join('\n');
+      const message = capturedConsole.error.join('\n');
       expect(message).toContain('Unknown pipeline "does-not-exist"');
       expect(message).toContain('validate');
       expect(message).toContain('prepack');
     } finally {
-      console.restore();
+      capturedConsole.restore();
     }
   });
 
   it('runs every gate in order and returns 0 when all pass', async () => {
-    const console = captureConsole();
+    const capturedConsole = captureConsole();
     const { runGate, ran } = stubRunner();
     try {
       const code = await runPipeline('validate', runGate);
       expect(code).toBe(0);
       expect(ran).toEqual(PIPELINES.validate.map((gate) => gate.name));
-      const output = console.log.join('\n');
+      const output = capturedConsole.log.join('\n');
       expect(output).toContain('Validate passed');
       expect(output).toContain('Validate Summary');
     } finally {
-      console.restore();
+      capturedConsole.restore();
     }
   });
 
   it('fails fast: stops at the first failing gate and returns its exit code', async () => {
-    const console = captureConsole();
+    const capturedConsole = captureConsole();
     const { runGate, ran } = stubRunner({ typecheck: 2 });
     try {
       const code = await runPipeline('validate', runGate);
       expect(code).toBe(2);
       // 'lint' and 'typecheck' ran; nothing after 'typecheck' did.
       expect(ran).toEqual(['lint', 'typecheck']);
-      expect(console.log.join('\n')).toContain('typecheck failed (exit 2');
-      expect(console.error.join('\n')).toContain('failed at gate "typecheck"');
+      expect(capturedConsole.log.join('\n')).toContain('typecheck failed (exit 2');
+      expect(capturedConsole.error.join('\n')).toContain('failed at gate "typecheck"');
     } finally {
-      console.restore();
+      capturedConsole.restore();
     }
   });
 });
 
 describe('main', () => {
   it('returns 1 and prints usage when no pipeline name is given', async () => {
-    const console = captureConsole();
+    const capturedConsole = captureConsole();
     try {
       const code = await main([], () => Promise.resolve(0));
       expect(code).toBe(1);
-      expect(console.error.join('\n')).toContain('Usage: bun run scripts/run-gates.ts');
+      expect(capturedConsole.error.join('\n')).toContain('Usage: bun run scripts/run-gates.ts');
     } finally {
-      console.restore();
+      capturedConsole.restore();
     }
   });
 
   it('delegates to runPipeline for the named pipeline', async () => {
-    const console = captureConsole();
+    const capturedConsole = captureConsole();
     const { runGate, ran } = stubRunner();
     try {
       const code = await main(['validate'], runGate);
       expect(code).toBe(0);
       expect(ran).toEqual(PIPELINES.validate.map((gate) => gate.name));
     } finally {
-      console.restore();
+      capturedConsole.restore();
     }
   });
 });

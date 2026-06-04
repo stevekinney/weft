@@ -52,8 +52,8 @@ const AUTHENTICATION_REQUIRED_ENVIRONMENT_VARIABLE = 'WEFT_SERVER_AUTHENTICATION
  * @internal
  *
  * Warning emitted when a server starts with no authentication and no explicit
- * `unauthenticatedAccess` policy. Exported for test-only drift guards (see
- * `tests/auth-warning-filter.test.ts`); production code reads it locally.
+ * `unauthenticatedAccess` policy. Exported only for internal tests (see
+ * `tests/auth-warning-filter.test.ts`) and not part of the public API surface.
  */
 export const NO_AUTHENTICATION_WARNING =
   '[weft] WARNING: server started with NO authentication; all non-public operations are publicly accessible. Configure serve({ auth }) to lock down, or set unauthenticatedAccess: "reject" in production to fail closed.';
