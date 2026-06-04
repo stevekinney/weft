@@ -248,7 +248,7 @@ schedule(
 ): Promise<ScheduleHandle>;
 ```
 
-Register a recurring schedule that starts a workflow on a cron expression or fixed interval, returning a `ScheduleHandle` for pausing, resuming, updating, or cancelling it. Call it either with a `ScheduleDefinition` object (`{ workflow, cron | every, input, overlapPolicy? }`) or positionally with a workflow type, input, and a cron string or `ScheduleSpec`. The `ScheduleOptions.overlap` policy governs what happens when a tick fires while the previous run is still in flight. The `ScheduleDefinition`, `ScheduleSpec`, and `ScheduleOptions` types carry JSDoc describing the spec formats (`{ cron }` vs `{ every }`) and the overlap values.
+Register a recurring schedule that starts a workflow on a cron expression or fixed interval, returning a `ScheduleHandle` for pausing, resuming, updating, or cancelling it. Call it either with a `ScheduleDefinition` object (`{ workflow, cron | every, input, overlapPolicy? }`) or positionally with a workflow type, input, and a cron string or `ScheduleSpec`. The `ScheduleOptions.overlap` policy governs what happens when a tick fires while the previous run is still in flight. A _suspended_ previous run counts as in flight: it still holds the schedule slot, so under a non-`allow` policy (`skip`/`queue`/`cancel-running`) the next tick does not start a second run until the suspended run is resumed to completion or cancelled. The `ScheduleDefinition`, `ScheduleSpec`, and `ScheduleOptions` types carry JSDoc describing the spec formats (`{ cron }` vs `{ every }`) and the overlap values.
 
 ### `scheduler` (getter)
 

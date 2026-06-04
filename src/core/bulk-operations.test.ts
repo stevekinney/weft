@@ -505,6 +505,35 @@ describe('bulk workflow operations', () => {
     }
   });
 
+  it('default cancelAll (no status filter) reaches a suspended workflow', async () => {
+    // ACTIVE_WORKFLOW_STATUSES includes 'suspended' so a default bulk cancel is
+    // consistent with single-workflow cancel, which is total over a suspended run.
+    const engine = new Engine({ storage: new MemoryStorage() });
+    engine.register(workflow({ name: 'wait-for-signal' }).execute(waitForSignalWorkflow));
+
+    try {
+      await engine.start('wait-for-signal', 'a', { id: 'bulk-suspend-a', tags: ['bulk-suspend'] });
+      await engine.start('wait-for-signal', 'b', { id: 'bulk-suspend-b', tags: ['bulk-suspend'] });
+      await Promise.all([
+        waitForWorkflowStatus(engine, 'bulk-suspend-a', 'running'),
+        waitForWorkflowStatus(engine, 'bulk-suspend-b', 'running'),
+      ]);
+
+      // Suspend one of them; the other stays running.
+      await engine.suspend('bulk-suspend-a');
+      await waitForWorkflowStatus(engine, 'bulk-suspend-a', 'suspended');
+
+      const result = await engine.cancelAll({ tags: ['bulk-suspend'] });
+      expect(result.cancelled).toBe(2);
+      const stateA = await engine.get('bulk-suspend-a');
+      const stateB = await engine.get('bulk-suspend-b');
+      expect(stateA?.status).toBe('cancelled');
+      expect(stateB?.status).toBe('cancelled');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
   it('acceptance criterion: engine.signalAll(filter, name, payload) signals all matching workflows', async () => {
     const engine = new Engine({ storage: new MemoryStorage() });
     const waitForSignalWorkflow3 = workflow({ name: 'wait-for-signal' }).execute(

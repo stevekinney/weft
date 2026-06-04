@@ -38,7 +38,12 @@ import { isTerminalWorkflowStatus } from './validation.ts';
 
 export { purgeInternal, TERMINAL_CLEANUP_DELAY_MS } from './bulk-operations-purge.ts';
 
-const ACTIVE_WORKFLOW_STATUSES: WorkflowStatus[] = ['pending', 'running'];
+// The non-terminal statuses a default bulk cancel/signal targets when the caller
+// gives no explicit status filter. 'suspended' is included so bulk cancel matches
+// single-workflow cancel (which is total over a suspended run) and so bulk signal
+// reaches a suspended run (it buffers the signal durably and replays it on
+// resume, exactly like a parked running run).
+const ACTIVE_WORKFLOW_STATUSES: WorkflowStatus[] = ['pending', 'running', 'suspended'];
 
 export async function purge(
   internals: EngineInternals,
