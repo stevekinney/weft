@@ -64,6 +64,40 @@ export async function flushQueuedInlineWorkflowStartsDirectly(
   await flushQueuedInlineWorkflowStarts(internals, callbacks);
 }
 
+/**
+ * Drain every pending inline launch before engine teardown. Called from
+ * `[Symbol.asyncDispose]` *before* `disposeEngine` aborts the signal, so the
+ * flush actually executes the queued starts (the abort check in
+ * {@link flushQueuedInlineWorkflowStarts} would otherwise discard them). This
+ * turns a deferred-launch macrotask into work that completes before
+ * `asyncDispose` returns, so a disposed engine leaves no dangling pending
+ * launch — the fix for the test-runner macrotask-starvation footgun.
+ *
+ * A queued start that was already aborted (signal set before this is reached)
+ * is left for the synchronous `disposeQueuedInlineWorkflowStarts` path, which
+ * discards it and settles its `defer: false` awaiter.
+ */
+export async function drainQueuedInlineWorkflowStarts(
+  internals: EngineInternals,
+  callbacks: InlineLaunchQueueCallbacks,
+): Promise<void> {
+  internals.queuedInlineWorkflowStartFlushScheduled = false;
+  // Drain repeatedly: a started workflow can synchronously enqueue a child
+  // inline start (e.g. ctx.startChild), so one pass may leave fresh entries.
+  // Bounded by the abort signal and an explicit pass cap so a pathological
+  // self-enqueueing run cannot spin forever during teardown.
+  let passes = 0;
+  const maxPasses = 1000;
+  while (
+    internals.queuedInlineWorkflowStarts.length > 0 &&
+    !internals.abortController.signal.aborted &&
+    passes < maxPasses
+  ) {
+    passes += 1;
+    await flushQueuedInlineWorkflowStarts(internals, callbacks);
+  }
+}
+
 async function startQueuedInlineWorkflowExecution(
   internals: EngineInternals,
   start: QueuedInlineWorkflowExecutionStart,
@@ -94,6 +128,11 @@ async function startQueuedInlineWorkflowExecution(
   } finally {
     internals.queuedInlineWorkflowStartIds.delete(start.workflowId);
     internals.queuedOrLaunchingInlineWorkflowStartIds.delete(start.workflowId);
+    // Settle the `defer: false` awaiter exactly once. The generator has been
+    // driven by this point on the success path; on the skip/throw paths the run
+    // will not become live, so resolving (rather than hanging the awaiter) is the
+    // correct terminal signal. `onStarted` is one-shot at the call site.
+    start.onStarted?.();
   }
 }
 
@@ -106,19 +145,37 @@ export function dropQueuedInlineWorkflowStart(
   }
 
   const initialLength = internals.queuedInlineWorkflowStarts.length;
-  internals.queuedInlineWorkflowStarts = internals.queuedInlineWorkflowStarts.filter(
-    (start) => start.workflowId !== workflowId,
-  );
+  const dropped: QueuedInlineWorkflowExecutionStart[] = [];
+  internals.queuedInlineWorkflowStarts = internals.queuedInlineWorkflowStarts.filter((start) => {
+    if (start.workflowId === workflowId) {
+      dropped.push(start);
+      return false;
+    }
+    return true;
+  });
   if (internals.queuedInlineWorkflowStarts.length !== initialLength) {
     internals.queuedInlineWorkflowStartIds.delete(workflowId);
     internals.queuedOrLaunchingInlineWorkflowStartIds.delete(workflowId);
+    // Settle the `defer: false` awaiter for a start dropped before it ran (e.g.
+    // the workflow was cancelled/terminated while still queued). The run never
+    // became live, but the awaiter must not hang. Mirrors the dispose path.
+    for (const start of dropped) {
+      start.onStarted?.();
+    }
   }
   return internals.queuedInlineWorkflowStarts.length !== initialLength;
 }
 
 export function disposeQueuedInlineWorkflowStarts(internals: EngineInternals): void {
   internals.queuedInlineWorkflowStartFlushScheduled = false;
+  // Settle any `defer: false` awaiters for starts discarded by a synchronous
+  // dispose. The run never became live, but its awaiter must not hang on a
+  // torn-down engine. (asyncDispose drains these instead of discarding them.)
+  const discarded = internals.queuedInlineWorkflowStarts;
   internals.queuedInlineWorkflowStarts = [];
+  for (const start of discarded) {
+    start.onStarted?.();
+  }
   internals.queuedInlineWorkflowStartIds.clear();
   internals.queuedOrLaunchingInlineWorkflowStartIds.clear();
 

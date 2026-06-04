@@ -27,7 +27,6 @@ export {
 } from './lifecycle/persist.ts';
 
 export {
-  beginWorkflowExecution,
   createInitialCheckpoint,
   createInitialWorkflowState,
   parseStartOptionDuration,
@@ -42,7 +41,11 @@ export {
   validateSearchAttributes,
 } from './lifecycle/start-batch.ts';
 
-export { runWorkflowStartInterceptor, startWorkflowExecution } from './lifecycle/start-exec.ts';
+export {
+  beginWorkflowExecution,
+  runWorkflowStartInterceptor,
+  startWorkflowExecution,
+} from './lifecycle/start-exec.ts';
 
 export {
   buildForkBatchOperations,

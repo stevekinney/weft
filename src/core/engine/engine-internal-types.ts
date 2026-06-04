@@ -78,4 +78,12 @@ export type QueuedInlineWorkflowExecutionStart = {
   nestingDepth: number;
   executionDeadline: number | undefined;
   executionStateOwnerId: string;
+  /**
+   * Liveness callback invoked once this queued start has actually begun
+   * executing (its generator has been driven). Set only for `defer: false`
+   * launches, which await it before `engine.start()` resolves. Fired exactly
+   * once; a discarded start (engine disposed without draining) settles it via
+   * the dispose path so the `defer: false` awaiter never hangs.
+   */
+  onStarted?: () => void;
 };

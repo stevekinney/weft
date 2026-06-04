@@ -137,6 +137,7 @@ import {
 import {
   createCleanupIntervalTick,
   createQueuedInlineWorkflowStartHandler,
+  drainQueuedInlineWorkflowStartsForEngine,
   isActivityDefinition,
 } from './engine-runtime-helpers.ts';
 import type { EngineStateNamespace } from './engine-state-namespace.ts';
@@ -1317,6 +1318,13 @@ export class Engine<
     disposeEngine(getInternals(this));
   }
   async [Symbol.asyncDispose](): Promise<void> {
+    // Drain pending inline launches BEFORE synchronous disposal aborts the
+    // signal (which would discard them). This makes a disposed engine leave no
+    // dangling deferred-launch macrotask — the clean async teardown that lets
+    // callers (and test runners) avoid manual macrotask draining.
+    if (!getInternals(this).disposed) {
+      await drainQueuedInlineWorkflowStartsForEngine(this);
+    }
     this[Symbol.dispose]();
   }
   get storage(): WeftStorage {

@@ -6,7 +6,10 @@ import {
   type EngineCleanupIntervalDisposalTracker,
 } from './engine-leak-warnings.ts';
 import type { Engine } from './index.ts';
-import { flushQueuedInlineWorkflowStarts } from './inline-launch-queue.ts';
+import {
+  drainQueuedInlineWorkflowStarts,
+  flushQueuedInlineWorkflowStarts,
+} from './inline-launch-queue.ts';
 import { getInternals, type EngineInternals } from './internals.ts';
 import { swallowPromiseRejection } from './strategy-helpers.ts';
 
@@ -40,6 +43,24 @@ export function createQueuedInlineWorkflowStartHandler<
       }),
     );
   };
+}
+
+/**
+ * Drain pending inline launches for `engine` before teardown. Built with the
+ * same inline-launch-queue callbacks as the scheduled flush handler so a drained
+ * start advances identically to a normally-flushed one. Called from
+ * `[Symbol.asyncDispose]` ahead of synchronous disposal (which aborts the signal
+ * and would otherwise discard the queue).
+ */
+export async function drainQueuedInlineWorkflowStartsForEngine<
+  TWorkflows extends object,
+  TActivities extends object,
+>(engine: Engine<TWorkflows, TActivities>): Promise<void> {
+  await drainQueuedInlineWorkflowStarts(getInternals(engine), {
+    processPendingUpdatesAfterInlineAdvance: (workflowId) =>
+      createLifecycleCallbacks(engine).processPendingUpdatesAfterInlineAdvance(workflowId),
+    swallowPromiseRejection: (promise) => swallowPromiseRejection(promise),
+  });
 }
 
 export function createCleanupIntervalTick<TWorkflows extends object, TActivities extends object>(

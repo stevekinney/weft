@@ -1,7 +1,6 @@
 import type { BatchOperation } from '../../../storage/interface.ts';
 import { KEYS } from '../../../storage/interface.ts';
 import { createCheckpoint } from '../../checkpoint.ts';
-import { WorkflowStartedEvent } from '../../events.ts';
 import { assertPayloadWithinLimit } from '../../payload-size.ts';
 import { normalizeStorageTimestamp } from '../../scheduler.ts';
 import {
@@ -25,10 +24,13 @@ import {
   normalizeStartWorkflowTags,
   setWorkflowStartHeaders,
   type LifecycleCallbacks,
-  type RegistrationEntry,
 } from './shared.ts';
 import { buildStartBatchOperations } from './start-batch.ts';
-import { runWorkflowStartInterceptor, startWorkflowExecution } from './start-exec.ts';
+import {
+  assertDeferSupported,
+  beginExecutionAwaitingLiveness,
+  runWorkflowStartInterceptor,
+} from './start-exec.ts';
 
 export async function start(
   internals: EngineInternals,
@@ -141,6 +143,8 @@ export async function startWorkflow(
   const { workflowId, callerProvidedId, parentHeaders, executionStateOwnerId, delayedStartTimer } =
     preparation;
 
+  assertDeferSupported(internals, options, Boolean(delayedStartTimer));
+
   // Atomic check-and-reserve: prevent two concurrent start() calls with the
   // same ID from both passing the storage check before either writes state.
   if (internals.pendingStarts.has(workflowId)) {
@@ -236,19 +240,20 @@ export async function startWorkflow(
     }
 
     const handle = createWorkflowHandle(internals, workflowId, callbacks);
-    if (!delayedStartTimer) {
-      beginWorkflowExecution(
-        internals,
-        workflowId,
+    await beginExecutionAwaitingLiveness(
+      internals,
+      {
         type,
         input,
         checkpoint,
-        state.executionDeadline,
-        state.executionStateOwnerId ?? workflowId,
+        state,
         registration,
-        callbacks,
-      );
-    }
+        options,
+        isDelayed: Boolean(delayedStartTimer),
+      },
+      workflowId,
+      callbacks,
+    );
     startSucceeded = true;
     return handle;
   } finally {
@@ -300,47 +305,6 @@ export function parseStartOptionDuration(
   _callbacks: LifecycleCallbacks,
 ): number {
   return parseStartWorkflowDuration(duration, fieldName);
-}
-
-export function beginWorkflowExecution(
-  internals: EngineInternals,
-  workflowId: string,
-  workflowType: string,
-  input: unknown,
-  checkpoint: Checkpoint,
-  executionDeadline: number | undefined,
-  executionStateOwnerId: string,
-  _registration: RegistrationEntry,
-  callbacks: LifecycleCallbacks,
-): void {
-  const nestingDepth = internals.pendingNestingDepth ?? 0;
-  internals.pendingNestingDepth = undefined;
-
-  if (internals.inlineStrategy !== null) {
-    callbacks.queueInlineWorkflowExecutionStart({
-      workflowId,
-      workflowType,
-      input,
-      checkpoint,
-      nestingDepth,
-      executionDeadline,
-      executionStateOwnerId,
-    });
-    return;
-  }
-
-  callbacks.dispatchEvent(new WorkflowStartedEvent(workflowId, workflowType, input));
-  startWorkflowExecution(
-    internals,
-    workflowId,
-    workflowType,
-    input,
-    checkpoint,
-    nestingDepth,
-    executionDeadline,
-    executionStateOwnerId,
-    callbacks,
-  );
 }
 
 function buildInitialIdentitySlice(
