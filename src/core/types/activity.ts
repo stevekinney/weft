@@ -259,7 +259,8 @@ export interface ActivityDefinition<
   /** Activity implementation called by the engine or worker. */
   execute: ActivityFunction<TInput, TOutput>;
   /**
-   * Optional post-execution verifier.
+   * Optional verifier, invoked in two phases (see
+   * `ActivityVerificationContext.phase`).
    *
    * During normal post-execution validation, return `true` to confirm the
    * activity result or `false` to reject it. During pre-dispatch crash recovery
