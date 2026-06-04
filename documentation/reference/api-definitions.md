@@ -23,7 +23,7 @@ Bare activity functions passed to `activity(fn)` must be named. Workflow calls u
 
 In addition to the fields shown above, `ActivityDefinition` accepts `idempotent?: boolean` (informs saga and validation guidance), `verify`, `visibilityTimeout`, `compensate`, `resourceScope`, and a function-form `idempotencyKey`. See the JSDoc on `ActivityDefinition` for the full surface.
 
-`verify` receives `(result, context)`. `context.phase` is either `post-execution-validation` or `pre-dispatch-reconciliation`. Boolean return values are compatibility aliases only for post-execution validation. Pre-dispatch reconciliation must return an explicit Tier-0 state:
+`verify` receives `(result, context)`. `context.phase` is either `post-execution-validation` or `pre-dispatch-reconciliation`. A boolean is the result shape for **post-execution validation** (`true` accepts the produced result, `false` rejects it). **Pre-dispatch reconciliation** must return one of the explicit Tier-0 states — a boolean there carries no reconciliation meaning and fails closed:
 
 ```ts
 type ActivityVerificationResult<TOutput> =
@@ -34,7 +34,7 @@ type ActivityVerificationResult<TOutput> =
   | { status: 'completed-with-result'; result: TOutput };
 ```
 
-`completed-result-unavailable`, `indeterminate`, verifier throws, corrupt reconciliation records, and legacy boolean pre-dispatch answers fail closed instead of redispatching a keyed activity.
+In pre-dispatch reconciliation, `completed-result-unavailable`, `indeterminate`, a verifier that throws, corrupt reconciliation records, and a boolean (which is not a Tier-0 reconciliation state) all fail closed instead of redispatching a keyed activity.
 
 See [the activities guide](../guides/activities.md) for usage patterns and motivation.
 
