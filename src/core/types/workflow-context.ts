@@ -111,6 +111,31 @@ export interface WorkflowContext<
   readonly executionTimeRemaining: number;
   readonly startedAt: number;
   readonly state: WorkflowStateNamespace;
+  /**
+   * Host-supplied, per-run capabilities passed at launch via
+   * `engine.start(type, input, { services })` (or `ctx.run`-free closures, live
+   * clients, tool registries). The value is **never checkpointed**: it is held
+   * only in engine memory for this run, and on a fresh-process recovery it is
+   * re-provided by the engine's `resolveWorkflowServices` resolver before the
+   * generator advances. `undefined` when no services were supplied (and not yet
+   * re-provided on recovery). Inline execution mode only — passing `services`
+   * under `workflowExecutionMode: 'worker'` throws at `engine.start()`, since a
+   * non-serializable value cannot cross to a Worker.
+   *
+   * Typed `unknown`: narrow or cast at the call site
+   * (`const { db } = ctx.services as MyServices`). A threaded generic is a
+   * deliberate follow-on, not part of this surface yet. Optional so existing
+   * structural `WorkflowContext` implementors are not source-broken.
+   *
+   * Separate child *workflows* started from within a workflow (`ctx.startChild()`)
+   * do **not** inherit the parent's `services` — each run is its own workflow with
+   * its own services, configured the same way (and re-provided on recovery by the
+   * engine's `resolveWorkflowServices`). This is distinct from a *speculative
+   * child context*, which is the same run advanced in-memory for speculative
+   * replay (same `workflowId`) and therefore does carry the run's `services`
+   * across.
+   */
+  readonly services?: unknown;
   // ---------------------------------------------------------------------
   // Workflow-scoped typed-key overloads. These fire first when the workflow
   // was built with the chained builder (`.activities({...})`, `.signals({...})`

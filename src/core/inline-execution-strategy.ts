@@ -44,6 +44,11 @@ export interface InlineExecutionDependencies {
   development?: boolean;
   getComposedWorkflowInterceptor?: () => ComposedWorkflowInterceptor | null;
   registerCancelHandler?: (workflowId: string, handler: () => Promise<void> | void) => () => void;
+  /**
+   * Look up the non-serialized per-run `services` value for a workflow, exposed
+   * to the body as `ctx.services`. Returns `undefined` when none was supplied.
+   */
+  getWorkflowServices?: (workflowId: string) => unknown;
 }
 
 type InlineWorkflowRegistration = NonNullable<
@@ -91,6 +96,7 @@ function createInlineContextOptions(
     ...(registerCancelHandler !== undefined && {
       registerCancelHandler: (handler) => registerCancelHandler(parameters.workflowId, handler),
     }),
+    services: dependencies.getWorkflowServices?.(parameters.workflowId),
   };
 }
 

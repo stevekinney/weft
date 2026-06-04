@@ -1073,6 +1073,20 @@ describe('Context', () => {
       expect(context.queryHandlers.get('parent')).toBe(parentQueryHandler);
       expect(context.queryHandlers.get('child')).toBe(childQueryHandler);
     });
+
+    it('propagates the non-serialized services value to a speculative child', () => {
+      const services = { generate: () => 'ok' };
+      const context = createContext({ services });
+      const child = context.createSpeculativeChild();
+      // A speculative re-execution of the body must still read ctx.services.
+      expect(child.services).toBe(services);
+    });
+
+    it('leaves child services undefined when the parent has none', () => {
+      const context = createContext();
+      const child = context.createSpeculativeChild();
+      expect(child.services).toBeUndefined();
+    });
   });
 
   describe('ctx.runAll fed-back result', () => {

@@ -1,5 +1,5 @@
 import type { BatchOperation } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS, storageHas } from '../../storage/interface.ts';
 import { deserializeCheckpoint } from '../checkpoint.ts';
 import { encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
@@ -7,6 +7,7 @@ import { buildTimerBatchOperations, normalizeStorageTimestamp } from '../schedul
 import type { Checkpoint, Duration, StartOptions, TimerEntry, WorkflowState } from '../types.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import type { EngineInternals } from './internals.ts';
+import { reprovideRecoveredServices } from './lifecycle/recovered-services.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
 
 type RegistrationEntry =
@@ -41,6 +42,7 @@ export type TimeOperationCallbacks = {
   runDeferredTerminalCleanup: (workflowId: string, timerId: string) => Promise<void>;
   handleScheduleTimer: (entry: TimerEntry) => Promise<void>;
   timeout: (workflowId: string) => Promise<void>;
+  handleCleanupError: (source: string, error: unknown, workflowId: string) => void;
 };
 
 export function createDelayedStartTimerEntry(
@@ -114,6 +116,7 @@ export async function startDelayedWorkflow(
     TimeOperationCallbacks,
     | 'beginWorkflowExecution'
     | 'failWorkflow'
+    | 'handleCleanupError'
     | 'loadWorkflowStartHeaders'
     | 'loadWorkflowState'
     | 'runSerializedWorkflowStateWrite'
@@ -186,6 +189,31 @@ export async function startDelayedWorkflow(
   );
   if (!runningState) {
     return;
+  }
+
+  // A delayed-start workflow that crashed `pending` before its timer fired
+  // loses its in-memory services on recovery (the timer fires in a fresh
+  // process). Re-provide them before execution begins, exactly as the
+  // running-workflow resume path does — and fail the run if unavailable rather
+  // than silently executing with `ctx.services === undefined`.
+  const servicesUnavailable = await reprovideRecoveredServices(
+    internals,
+    runningState,
+    (workflowId, error) => callbacks.failWorkflow(workflowId, error),
+    callbacks.handleCleanupError,
+  );
+  if (servicesUnavailable) {
+    return;
+  }
+
+  // Re-derive terminal-cleanup tracking from the durable marker, exactly as the
+  // running-workflow resume path does (loadTerminalCleanupTrackedState). On a
+  // fresh process the in-memory workflowsNeedingTerminalCleanup set is empty, so
+  // without this a recovered services-only run (no start headers, which would
+  // otherwise re-add it) would complete without scheduling the deferred durable
+  // sweep — leaking its wf-has-services marker and other per-run scratch.
+  if (await storageHas(internals.storage, KEYS.terminalCleanupNeeded(entry.workflowId))) {
+    internals.workflowsNeedingTerminalCleanup.add(entry.workflowId);
   }
 
   internals.checkpoints.set(entry.workflowId, checkpoint);
@@ -266,6 +294,7 @@ export async function handleTimerFired(
   callbacks: Pick<
     TimeOperationCallbacks,
     | 'failWorkflow'
+    | 'handleCleanupError'
     | 'loadWorkflowStartHeaders'
     | 'loadWorkflowState'
     | 'runDeferredTerminalCleanup'

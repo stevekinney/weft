@@ -101,6 +101,25 @@ function rollbackTransientStartState(internals: EngineInternals, workflowId: str
   internals.checkpoints.delete(workflowId);
   internals.workflowHeaders.delete(workflowId);
   internals.workflowVersionTuples.delete(workflowId);
+  internals.workflowServices.delete(workflowId);
+  internals.workflowsNeedingTerminalCleanup.delete(workflowId);
+}
+
+/**
+ * `services` is a non-serializable per-run value read inline as `ctx.services`.
+ * It cannot cross to a Worker, so reject it early under worker execution mode
+ * rather than stranding a persisted run that can never read its services.
+ */
+function assertServicesSupportedForMode(
+  internals: EngineInternals,
+  options: StartOptions | undefined,
+): void {
+  if (options?.services !== undefined && internals.inlineStrategy === null) {
+    throw new Error(
+      'options.services is only supported in inline execution mode; it cannot be ' +
+        'serialized to a Worker. Remove services or use workflowExecutionMode: "inline".',
+    );
+  }
 }
 
 export async function startWorkflow(
@@ -115,6 +134,8 @@ export async function startWorkflow(
   if (!registration) {
     throw new WorkflowNotRegisteredError(type);
   }
+
+  assertServicesSupportedForMode(internals, options);
 
   const preparation = prepareStartWorkflow(internals, options, callbacks);
   const { workflowId, callerProvidedId, parentHeaders, executionStateOwnerId, delayedStartTimer } =
@@ -197,6 +218,22 @@ export async function startWorkflow(
     );
 
     await persistStartBatch(internals, startOperations);
+
+    // Hold the non-serialized per-run services in engine memory so the inline
+    // Context can read them. The services value is never written to storage — it
+    // bypasses every durable record. A presence-only "expects services" marker IS
+    // written atomically in the start batch (see buildStartBatchOperations) so a
+    // fresh-process recovery knows to re-provide them. Cleared on terminal cleanup
+    // (and on rollback below).
+    //
+    // Joining `workflowsNeedingTerminalCleanup` mirrors `setWorkflowStartHeaders`:
+    // it is what makes `completeWorkflow` schedule the deferred durable cleanup
+    // that sweeps the marker. The start batch wrote the matching
+    // `terminalCleanupNeeded` key so recovery re-derives this membership.
+    if (options?.services !== undefined) {
+      internals.workflowServices.set(workflowId, options.services);
+      internals.workflowsNeedingTerminalCleanup.add(workflowId);
+    }
 
     const handle = createWorkflowHandle(internals, workflowId, callbacks);
     if (!delayedStartTimer) {

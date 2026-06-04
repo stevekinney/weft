@@ -57,6 +57,63 @@ export interface StartOptions {
   startAfter?: Duration;
   tags?: string[];
   searchAttributes?: Record<string, SearchAttributeValue>;
+  /**
+   * Host-supplied, per-run capabilities exposed to the workflow body as
+   * `ctx.services` (live clients, closures, tool registries). The value is
+   * **never checkpointed**; on a fresh-process recovery it is re-provided by the
+   * engine's {@link EngineOptions.resolveWorkflowServices} resolver before the
+   * generator advances.
+   *
+   * Inline execution mode only. Passing `services` under
+   * `workflowExecutionMode: 'worker'` throws at `engine.start()`, because a
+   * non-serializable value cannot cross to a Worker.
+   */
+  services?: unknown;
+}
+
+/**
+ * Result of {@link EngineOptions.resolveWorkflowServices}. An explicit union
+ * rather than a nullable return: `'unavailable'` is a deliberate, named outcome
+ * (the run's dependencies cannot be rebuilt in this process) that fails just
+ * that recovered run — it does not overload the resolved value with a lifecycle
+ * signal.
+ *
+ * @example
+ * ```ts
+ * import { type WorkflowServicesResolution } from '@lostgradient/weft';
+ *
+ * const ok: WorkflowServicesResolution = {
+ *   status: 'available',
+ *   services: { db: { query: () => [] } },
+ * };
+ * const no: WorkflowServicesResolution = { status: 'unavailable', reason: 'no config' };
+ * void ok;
+ * void no;
+ * ```
+ */
+export type WorkflowServicesResolution =
+  | { status: 'available'; services: unknown }
+  | { status: 'unavailable'; reason: string };
+
+/**
+ * Information passed to {@link EngineOptions.resolveWorkflowServices} for each
+ * recovered workflow. `input` is the original durable launch input, available
+ * at resume time — typically enough to rebuild the run's dependencies (tenant,
+ * model, tool registry) without a side table.
+ *
+ * @example
+ * ```ts
+ * import { type WorkflowServicesResolverInfo } from '@lostgradient/weft';
+ *
+ * function describe(info: WorkflowServicesResolverInfo): string {
+ *   return `${info.workflowType}/${info.workflowId}`;
+ * }
+ * ```
+ */
+export interface WorkflowServicesResolverInfo {
+  workflowId: string;
+  workflowType: string;
+  input: unknown;
 }
 
 /**
@@ -211,6 +268,39 @@ export interface EngineOptions {
    * after passing it has no effect.
    */
   interceptors?: readonly Interceptor[];
+
+  /**
+   * Re-provide the non-serialized per-run `services` value (see
+   * {@link StartOptions.services}) for a workflow recovered in a fresh process.
+   * `engine.recoverAll()` and `engine.resume(id)` call this **before** the
+   * generator is driven forward (and the delayed-start timer handler calls it
+   * for a `startAfter`/`startAt` run that crashed before firing), so the resumed
+   * body can read `ctx.services` exactly as it did before the crash.
+   *
+   * Return `{ status: 'available', services }` to supply the rebuilt
+   * capabilities, or `{ status: 'unavailable', reason }` to fail just that one
+   * recovered run — the engine and every other recovered run are unaffected.
+   * Without a resolver, a recovered inline workflow that reads `ctx.services`
+   * sees `undefined`.
+   *
+   * Contract a fresh integrator must know:
+   * - Fires only for recovered inline runs that were launched WITH `services`
+   *   (those carrying the durable "expects services" marker). A run started
+   *   without `services` never reaches the resolver, regardless of what it would
+   *   return — so a fail-closed resolver does not fail innocent no-services runs.
+   * - `{ status: 'unavailable' }` permanently fails the run (terminal `failed`,
+   *   `system` category) with `reason` as the message — not a "retry later"
+   *   signal. A resolver *throw* is treated identically (error message → reason).
+   * - May be called again on a later boot if a prior recovery left the run still
+   *   recoverable (e.g. the terminal-fail commit faulted), so keep it idempotent.
+   * - Inline only; worker-mode runs never invoke it.
+   *
+   * Engine-scoped: each engine instance carries its own resolver, so two engines
+   * in one process never collide on per-run dependency reconstruction.
+   */
+  resolveWorkflowServices?: (
+    info: WorkflowServicesResolverInfo,
+  ) => WorkflowServicesResolution | Promise<WorkflowServicesResolution>;
 }
 
 // ---------------------------------------------------------------------------

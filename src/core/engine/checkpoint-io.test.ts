@@ -140,6 +140,7 @@ function createCleanupInternals(storage: MemoryStorage, checkpoint: Checkpoint):
     updateWaiters: new Map(),
     updateWaitersByWorkflow: new Map(),
     workflowHeaders: new Map(),
+    workflowServices: new Map(),
     workflowNestingDepths: new Map(),
     workflowReviewIds: new Map(),
     workflowsNeedingTerminalCleanup: new Set(),

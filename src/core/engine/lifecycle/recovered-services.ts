@@ -1,0 +1,100 @@
+import { KEYS } from '../../../storage/interface.ts';
+import type { WorkflowState } from '../../types.ts';
+import type { EngineInternals } from '../internals.ts';
+
+/**
+ * Re-provide a recovered inline workflow's non-serialized `services` before its
+ * generator is driven forward, and decide whether execution should proceed.
+ *
+ * Both recovery entry points use this: `resumeWorkflowFromStorage` (for a run
+ * left `running`) and the delayed-start timer handler (for a `startAfter`/
+ * `startAt` run that crashed `pending` before its timer fired). On a fresh
+ * process the in-memory `workflowServices` map is empty, so without this a
+ * recovered run that originally had services would silently execute with
+ * `ctx.services === undefined`.
+ *
+ * The resolver is only consulted for runs launched WITH services, detected by
+ * the durable `KEYS.workflowHasServices` marker. A run that never had services
+ * has no marker and proceeds without touching the resolver — so a fail-closed
+ * resolver does not fail healthy no-services runs.
+ *
+ * Returns `false` to proceed (services available, none expected, or no resolver
+ * is configured). Returns `true` to STOP — the run was terminally
+ * failed (services unavailable), or the terminal commit faulted and the run was
+ * left for a later boot to retry. Either way the generator must not advance:
+ * driving it without services would crash the body and that throw would escape
+ * into the recovery loop, aborting sibling runs.
+ *
+ * Worker mode skips this (services are inline-only, rejected at `engine.start()`).
+ * A resolver throw is treated as `unavailable` with the error as the reason,
+ * for the same sibling-isolation reason.
+ *
+ * @param failRun - Terminally fails just this run with `reason`. Supplied by the
+ *   caller because the two entry points reach the termination machinery through
+ *   different callback bundles. It receives the canonical terminal error built
+ *   by {@link unavailableServicesError}, so both recovery paths fail the run
+ *   with an identical message and (via `failWorkflow`'s default) the `system`
+ *   failure category.
+ * @param onCommitError - Records a fail-warn when `failRun` itself throws, so the
+ *   swallowed terminal-commit fault is still observable.
+ */
+export async function reprovideRecoveredServices(
+  internals: EngineInternals,
+  state: WorkflowState,
+  failRun: (workflowId: string, error: Error) => Promise<void>,
+  onCommitError: (source: string, error: unknown, workflowId: string) => void,
+): Promise<boolean> {
+  const resolver = internals.options.resolveWorkflowServices;
+  if (internals.inlineStrategy === null || !resolver) {
+    return false;
+  }
+  // Same-process case: services are still live in the map (the run was launched
+  // in this process and is being resumed/started here). Nothing to re-provide.
+  if (internals.workflowServices.has(state.id)) {
+    return false;
+  }
+  // Fresh-process case: only runs that were launched WITH services left a durable
+  // "expects services" marker. A run that never had services has no marker, so
+  // the resolver must not be consulted — consulting it would fail a healthy
+  // no-services run whenever the engine has a fail-closed resolver configured.
+  if ((await internals.storage.get(KEYS.workflowHasServices(state.id))) === null) {
+    return false;
+  }
+
+  let reason: string;
+  try {
+    const resolution = await resolver({
+      workflowId: state.id,
+      workflowType: state.type,
+      input: state.input,
+    });
+    if (resolution.status === 'available') {
+      internals.workflowServices.set(state.id, resolution.services);
+      return false;
+    }
+    reason = resolution.reason;
+  } catch (error) {
+    // A resolver that throws (e.g. a network-client rebuild rejecting) must not
+    // abort recovery of sibling runs — treat it as unavailable.
+    reason = error instanceof Error ? error.message : String(error);
+  }
+
+  try {
+    await failRun(state.id, unavailableServicesError(state.id, reason));
+  } catch (error) {
+    // The terminal-fail commit itself faulted (e.g. a storage write error). The
+    // run stays in its persisted pre-execution state for a later boot to retry;
+    // still stop here so we never drive the generator without services.
+    onCommitError('reprovideRecoveredServices', error, state.id);
+  }
+  return true;
+}
+
+/**
+ * The canonical terminal error for a recovered run whose services could not be
+ * re-provided. Shared by both recovery paths so they fail with an identical
+ * message (the failure category is `system`, the default for `failWorkflow`).
+ */
+export function unavailableServicesError(workflowId: string, reason: string): Error {
+  return new Error(`Recovered workflow "${workflowId}" services unavailable: ${reason}`);
+}

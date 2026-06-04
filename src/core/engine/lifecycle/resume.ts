@@ -13,6 +13,7 @@ import { loadWorkflowState } from '../storage-io.ts';
 import { getComposedWorkflowInterceptor } from '../strategy-helpers.ts';
 import { decodeWorkflowState } from '../validation.ts';
 import { prepareResumeState } from './persist.ts';
+import { reprovideRecoveredServices } from './recovered-services.ts';
 import {
   enforceHistoryPolicyBeforeReplay,
   loadTerminalCleanupTrackedState,
@@ -32,6 +33,25 @@ type SerializedResumeArgs = {
   registration: RegistrationEntry;
   callbacks: LifecycleCallbacks;
 };
+
+/**
+ * Re-provide a recovered inline workflow's non-serialized `services` before the
+ * generator is driven forward. Returns `true` when the resume must STOP (the run
+ * was failed for unavailable services, or the terminal commit faulted), `false`
+ * to continue. See {@link reprovideRecoveredServices} for the full contract.
+ */
+async function prepareRecoveredServicesOrFail(
+  internals: EngineInternals,
+  state: WorkflowState,
+  callbacks: LifecycleCallbacks,
+): Promise<boolean> {
+  return reprovideRecoveredServices(
+    internals,
+    state,
+    callbacks.failWorkflowForUnavailableServices,
+    callbacks.handleCleanupError,
+  );
+}
 
 function assertResumeNotTerminating(internals: EngineInternals, workflowId: string): void {
   if (internals.terminalizingWorkflows.has(workflowId)) {
@@ -104,6 +124,9 @@ function relaunchInlineWorkflowAfterResume(
     ...(latestState.executionDeadline !== undefined && {
       deadline: latestState.executionDeadline,
     }),
+    // Non-serialized services re-provided by resolveServicesForRecovery (or set
+    // at start when resuming in the same process); undefined when none.
+    services: internals.workflowServices.get(workflowId),
   });
   setContextWorkflowInterceptor(context, getComposedWorkflowInterceptor(internals));
 
@@ -232,6 +255,15 @@ export async function resumeWorkflowFromStorage(
 
   const workflowStartHeaders = await loadWorkflowStartHeaders(internals, workflowId, callbacks);
   await loadTerminalCleanupTrackedState(internals, workflowId, callbacks);
+
+  // Re-provide the non-serialized `services` value before the generator is
+  // driven forward. Inline mode only — worker mode cannot receive a
+  // non-serializable value (and `engine.start` rejected `services` there). When
+  // the resolver reports the run unavailable, fail just this run and skip the
+  // resume so the engine and other recovered runs are unaffected.
+  if (await prepareRecoveredServicesOrFail(internals, state, callbacks)) {
+    return callbacks.getHandle(workflowId);
+  }
 
   const handle = callbacks.getHandle(workflowId);
   await callbacks.runSerializedWorkflowStateWrite(workflowId, () =>

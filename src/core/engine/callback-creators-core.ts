@@ -144,6 +144,14 @@ export function createLifecycleCallbacks<TWorkflows extends object, TActivities 
         createTerminationCallbacks(engine),
         HISTORY_CIRCUIT_BREAKER_REASON,
       ),
+    failWorkflowForUnavailableServices: (workflowId, error) =>
+      failWorkflow(
+        getInternals(engine),
+        workflowId,
+        error,
+        createTerminationCallbacks(engine),
+        'system',
+      ),
   };
 }
 

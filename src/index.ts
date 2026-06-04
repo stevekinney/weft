@@ -8,12 +8,17 @@
  *
  * For end-to-end usage examples see the {@link Engine} class.
  *
+ * This is the package's public re-export barrel: it contains only `export`
+ * statements, no logic, and grows one line per public symbol. Line count here
+ * is semantically meaningless, so it carries a `max-lines: off` override in
+ * `.oxlintrc.json` (unlike logic-bearing files, which keep the numeric ceiling).
+ *
  * @module weft
  */
 
 export { VERSION } from './version.ts';
 // Error base + discriminant
-export { WeftError, isWeftError, isWeftErrorCode } from './core/weft-error.ts';
+export { WeftError, isWeftError, isWeftErrorCode, isWeftErrorLike } from './core/weft-error.ts';
 export type { WeftErrorCode } from './core/weft-error.ts';
 // Wire fault code + failure-category mapping
 export {
@@ -168,6 +173,8 @@ export type {
   WorkflowId,
   WorkflowRegistry,
   WorkflowReplay,
+  WorkflowServicesResolution,
+  WorkflowServicesResolverInfo,
   WorkflowSessionState,
   WorkflowState,
   WorkflowStateNamespace,

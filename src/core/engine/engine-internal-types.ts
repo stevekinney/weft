@@ -43,6 +43,11 @@ export interface ResolvedOptions {
   archiveAdapter: ArchiveAdapter | null;
   payloadSizePolicy: NormalizedPayloadSizePolicy;
   getNow: () => number;
+  /**
+   * Re-provides the non-serialized per-run `services` value on recovery; `null`
+   * when the engine was created without `resolveWorkflowServices`.
+   */
+  resolveWorkflowServices: EngineOptions['resolveWorkflowServices'] | null;
 }
 
 export interface WorkflowResultWaiter {

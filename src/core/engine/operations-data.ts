@@ -76,6 +76,33 @@ export async function processLoadOperation(
   });
 }
 
+/**
+ * Read an offloaded value back out of storage by `workflowId` + `key`, decoding
+ * it with the same codec {@link processOffloadOperation} wrote it with.
+ *
+ * This is the post-completion sibling of the in-workflow `ctx.load()` read
+ * (see {@link processLoadOperation}): `ctx.load()` is restricted to the running
+ * workflow's own offloads and throws on a miss, whereas this external reader
+ * lets a consumer read a *terminal* workflow's offloaded output after
+ * `handle.result()` resolves — the artifact survives normal completion
+ * (`completeWorkflow`/`failWorkflow` preserve `offload:` keys) and is swept only
+ * when the workflow is terminated/cancelled.
+ *
+ * @returns The decoded offload value, or `null` when no value is stored under
+ *   that key (either the key was never written, or the artifact was swept).
+ */
+export async function getOffloadFromInternals(
+  internals: EngineInternals,
+  workflowId: string,
+  key: string,
+): Promise<unknown> {
+  const raw = await internals.storage.get(KEYS.offload(workflowId, key));
+  if (raw === null) {
+    return null;
+  }
+  return decode(raw);
+}
+
 export async function processArchiveOperation(
   internals: EngineInternals,
   workflowId: string,

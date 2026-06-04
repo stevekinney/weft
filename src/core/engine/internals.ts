@@ -131,6 +131,14 @@ export interface EngineInternals {
   workflowStateWriteChains: Map<string, Promise<void>>;
   heartbeatDetails: Map<string, unknown>;
   /**
+   * Per-run, non-serialized `services` value exposed to the workflow body as
+   * `ctx.services`. Set at `engine.start({ services })` and re-provided on
+   * recovery by `resolveWorkflowServices`. Never checkpointed — held only in
+   * engine memory, keyed by workflowId, and cleared on terminal cleanup (the
+   * same lifecycle as {@link heartbeatDetails}).
+   */
+  workflowServices: Map<string, unknown>;
+  /**
    * Activities that called `ctx.completeAsync()` and are awaiting out-of-band
    * completion via `engine.completeAsyncActivity` / `failAsyncActivity`, keyed
    * by their durable task token. Mirrored to storage (`KEYS.asyncActivity`) and

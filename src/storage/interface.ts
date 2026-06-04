@@ -386,6 +386,12 @@ const formatSortableTimestamp = (timestamp: number): string => String(timestamp)
  * Key layout constants for hierarchical key encoding. Timestamps are
  * zero-padded to 16 digits for lexicographic ordering.
  *
+ * This registry grows as storage features are added, which is why this file
+ * carries a `max-lines: 600` override (above the repo default ceiling) in
+ * `.oxlintrc.json` — 600 matches the documented split threshold in
+ * `.claude/rules/conventions.md`. When `KEYS` next approaches that line, extract
+ * it into its own module rather than raising the ceiling again.
+ *
  * @example
  * ```ts
  * import { KEYS } from '@lostgradient/weft/storage/interface';
@@ -464,6 +470,15 @@ export const KEYS = {
   workflowHeaders: (workflowId: string) => `wf-headers:${encodeStorageKeyComponent(workflowId)}`,
   terminalCleanupNeeded: (workflowId: string) =>
     `wf-cleanup-needed:${encodeStorageKeyComponent(workflowId)}`,
+  /**
+   * Presence-only marker written at start only when a run is launched with a
+   * non-serialized `services` value (see `start-batch.ts`). It lets a
+   * fresh-process recovery tell a run whose services were lost on crash apart
+   * from one that never had any — the services value itself is never persisted,
+   * so this bit is the only durable trace. Cleared on terminal cleanup.
+   */
+  workflowHasServices: (workflowId: string) =>
+    `wf-has-services:${encodeStorageKeyComponent(workflowId)}`,
   offload: (workflowId: string, key: string) =>
     `offload:${encodeStorageKeyComponent(workflowId)}:${key}`,
   archive: (workflowId: string, key: string) =>
