@@ -11,8 +11,8 @@ import type {
   WorkflowState,
 } from '../types.ts';
 import { WorkflowNotRegisteredError } from './errors.ts';
-import { ScheduleHandle } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
+import { ScheduleHandle } from './schedule-handle.ts';
 import { getNextScheduleOccurrence } from './schedule-occurrence.ts';
 import {
   clearScheduleCurrentWorkflow,

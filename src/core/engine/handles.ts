@@ -9,8 +9,6 @@ import type {
   LaunchMetadata,
   MessageName,
   QueryDefinition,
-  ScheduleSpec,
-  ScheduleSummary,
   SearchAttributeValue,
   SignalDefinition,
   SignalDeliveryOptions,
@@ -74,6 +72,8 @@ export const HANDLE_RESULT_PROMISE = Symbol('handleResultPromise');
 export interface WorkflowHandleEngine extends EventTarget {
   [HANDLE_RESULT_PROMISE](workflowId: string): Promise<unknown>;
   cancel(workflowId: string): Promise<void>;
+  suspend(workflowId: string): Promise<void>;
+  resume(workflowId: string): Promise<WorkflowHandle>;
   signal(
     workflowId: string,
     name: string,
@@ -102,14 +102,6 @@ export interface WorkflowHandleEngine extends EventTarget {
    * for both an in-flight run and one recovered or inspected in a fresh process.
    */
   getCurrentCheckpointStep(workflowId: string): Promise<number | null>;
-}
-
-export interface ScheduleHandleEngine {
-  pauseSchedule(scheduleId: string): Promise<void>;
-  resumeSchedule(scheduleId: string): Promise<void>;
-  cancelSchedule(scheduleId: string): Promise<void>;
-  updateSchedule(scheduleId: string, newSpec: string | ScheduleSpec): Promise<void>;
-  getSchedule(scheduleId: string): Promise<ScheduleSummary | null>;
 }
 
 /**
@@ -178,6 +170,30 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
 
   async cancel(): Promise<void> {
     return this.#engine.cancel(this.id);
+  }
+
+  /**
+   * Suspend this workflow without terminating it: it transitions to the
+   * non-terminal `'suspended'` status, keeps its durable checkpoint, and is
+   * later resumable via {@link WorkflowHandle.resume}. Unlike `cancel()`, this
+   * does not run cancel handlers and does not settle `result()` — the result
+   * promise stays pending until a later `resume()` completes the run. A
+   * suspended workflow is NOT auto-recovered by `engine.recoverAll()`; resume it
+   * explicitly. Suspending a workflow that is not running is a no-op.
+   */
+  async suspend(): Promise<void> {
+    return this.#engine.suspend(this.id);
+  }
+
+  /**
+   * Resume this workflow from its persisted checkpoint after it was suspended
+   * (or left `'running'` by a prior process). The run is re-driven on this
+   * engine; `result()` on this handle resolves when the resumed run completes.
+   * Throws if the workflow is in a status that cannot be resumed (terminal,
+   * pending, or not found).
+   */
+  async resume(): Promise<void> {
+    await this.#engine.resume(this.id);
   }
 
   /**
@@ -463,61 +479,5 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
 
   async [Symbol.asyncDispose](): Promise<void> {
     // No-op for now; handles are lightweight
-  }
-}
-
-/**
- * Handle to a recurring schedule created by {@link Engine.schedule}. Use
- * `handle.pause()`, `handle.resume()`, `handle.cancel()`, or
- * `handle.update(cronExpression)` to manage the schedule lifecycle.
- * `handle.describe()` returns the current {@link ScheduleSummary}.
- *
- * @example
- * ```ts
- * import { workflow, Engine, ScheduleHandle } from '@lostgradient/weft';
- *
- * const engine = new Engine();
- * engine.register(workflow({ name: 'daily-report' }).execute(async function* () { return 'ok'; }));
- *
- * const handle = await engine.schedule('daily-report', null, '0 9 * * *');
- * const typedHandle: ScheduleHandle = handle;
- * await handle.pause();
- * const summary = await handle.describe();
- * void typedHandle;
- * console.log(summary.status); // 'paused'
- * await handle.cancel();
- * ```
- */
-export class ScheduleHandle {
-  readonly id: string;
-  readonly #engine: ScheduleHandleEngine;
-
-  constructor(id: string, engine: ScheduleHandleEngine) {
-    this.id = id;
-    this.#engine = engine;
-  }
-
-  async pause(): Promise<void> {
-    await this.#engine.pauseSchedule(this.id);
-  }
-
-  async resume(): Promise<void> {
-    await this.#engine.resumeSchedule(this.id);
-  }
-
-  async cancel(): Promise<void> {
-    await this.#engine.cancelSchedule(this.id);
-  }
-
-  async update(newSpec: string | ScheduleSpec): Promise<void> {
-    await this.#engine.updateSchedule(this.id, newSpec);
-  }
-
-  async describe(): Promise<ScheduleSummary> {
-    const schedule = await this.#engine.getSchedule(this.id);
-    if (!schedule) {
-      throw new Error(`Schedule "${this.id}" not found`);
-    }
-    return schedule;
   }
 }

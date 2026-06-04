@@ -66,6 +66,13 @@ export type FailureCategory = 'application' | 'timeout' | 'cancellation' | 'reso
  * Read this off `(await handle.state()).status` to learn whether a workflow
  * is still running, finished cleanly, or failed. Pass it to `engine.list()`
  * filters to scope queries by status.
+ *
+ * `'suspended'` is a non-terminal, non-running pause: a workflow that was
+ * explicitly suspended via {@link WorkflowHandle.suspend} (or
+ * `engine.suspend(id)`) keeps its checkpoint and is resumable via
+ * {@link WorkflowHandle.resume} (or `engine.resume(id)`), but is NOT
+ * auto-recovered by `engine.recoverAll()` — suspension is client-driven
+ * preemption, not a fault condition.
  */
 export type WorkflowStatus =
   | 'pending'
@@ -73,4 +80,5 @@ export type WorkflowStatus =
   | 'completed'
   | 'failed'
   | 'cancelled'
-  | 'timed-out';
+  | 'timed-out'
+  | 'suspended';

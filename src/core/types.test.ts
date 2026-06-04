@@ -64,6 +64,8 @@ function statusLabel(status: WorkflowStatus): string {
       return 'cancelled';
     case 'timed-out':
       return 'timed-out';
+    case 'suspended':
+      return 'suspended';
     default: {
       const _exhaustive: never = status;
       throw new Error('Unhandled status: ' + String(_exhaustive));
@@ -72,7 +74,7 @@ function statusLabel(status: WorkflowStatus): string {
 }
 
 describe('WorkflowStatus type', () => {
-  it('covers all six states exhaustively', () => {
+  it('covers all seven states exhaustively', () => {
     const allStatuses: WorkflowStatus[] = [
       'pending',
       'running',
@@ -80,6 +82,7 @@ describe('WorkflowStatus type', () => {
       'failed',
       'cancelled',
       'timed-out',
+      'suspended',
     ];
 
     for (const status of allStatuses) {

@@ -259,6 +259,35 @@ export class WorkflowNotRegisteredError extends WeftError<'WorkflowNotRegistered
 }
 
 /**
+ * Thrown by {@link Engine.suspend} when invoked on an engine running in worker
+ * execution mode. Suspension parks the live run without aborting it, which the
+ * inline strategy supports directly; a worker run cannot be paused without
+ * sending it a cancellation, so the engine refuses rather than silently
+ * aborting. Suspend/resume in worker mode is a scoped follow-up.
+ *
+ * @example
+ * ```ts
+ * import { Engine, WorkflowSuspendNotSupportedError } from '@lostgradient/weft';
+ *
+ * async function trySuspend(engine: Engine, id: string) {
+ *   try {
+ *     await engine.suspend(id);
+ *   } catch (err) {
+ *     if (err instanceof WorkflowSuspendNotSupportedError) {
+ *       // worker-mode engine: cancel instead, or run inline
+ *     }
+ *   }
+ * }
+ * void trySuspend;
+ * ```
+ */
+export class WorkflowSuspendNotSupportedError extends WeftError<'WorkflowSuspendNotSupportedError'> {
+  constructor(message: string) {
+    super('WorkflowSuspendNotSupportedError', message);
+  }
+}
+
+/**
  * Thrown when the engine cannot resolve an activity name to a registered
  * function during dispatch. The per-workflow {@link ActivityRegistry} (built
  * from `workflow(...).activities({...})`) is consulted first; if the workflow

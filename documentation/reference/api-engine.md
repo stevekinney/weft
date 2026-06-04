@@ -321,6 +321,22 @@ async cancel(): Promise<void>
 
 Shorthand for `engine.cancel(handle.id)`.
 
+### `suspend()`
+
+```ts partial
+async suspend(): Promise<void>
+```
+
+Shorthand for `engine.suspend(handle.id)`. Pauses the workflow without terminating it — it moves to the non-terminal `'suspended'` status, keeps its checkpoint, and stops driving without aborting. Unlike `cancel()`, it does not run cancel handlers and does not settle `result()`. Resume it later with `resume()`. Inline execution mode only.
+
+### `resume()`
+
+```ts partial
+async resume(): Promise<void>
+```
+
+Shorthand for `engine.resume(handle.id)`. Re-drives the workflow from its persisted checkpoint — after a `suspend()`, or after a process restart left it `'running'`. `result()` on this handle resolves when the resumed run completes.
+
 ### `update()`
 
 ```ts partial

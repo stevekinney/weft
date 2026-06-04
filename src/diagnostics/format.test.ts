@@ -90,6 +90,7 @@ describe('formatDiagnosticReport', () => {
           failed: 5,
           cancelled: 3,
           timedOut: 2,
+          suspended: 0,
         },
         longestRunning: {
           id: 'wf-long',
@@ -178,6 +179,7 @@ describe('formatDiagnosticReport', () => {
           failed: 0,
           cancelled: 0,
           timedOut: 0,
+          suspended: 0,
         },
         longestRunning: null,
         largestCheckpoint: null,

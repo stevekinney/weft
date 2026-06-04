@@ -45,8 +45,9 @@ import type {
   TrackedWaiterKeys,
   WorkflowResultWaiter,
 } from './engine-internal-types.ts';
-import type { ScheduleHandleEngine, WorkflowHandle, WorkflowHandleEngine } from './handles.ts';
+import type { WorkflowHandle, WorkflowHandleEngine } from './handles.ts';
 import type { WorkflowFeedListener } from './index.ts';
+import type { ScheduleHandleEngine } from './schedule-handle.ts';
 
 type EngineRuntime = WorkflowHandleEngine & ScheduleHandleEngine;
 

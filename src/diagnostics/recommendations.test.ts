@@ -30,6 +30,7 @@ function makeHealthyWorkflows(overrides: Partial<WorkflowStatistics> = {}): Work
       failed: 1,
       cancelled: 1,
       timedOut: 1,
+      suspended: 0,
     },
     longestRunning: null,
     largestCheckpoint: null,

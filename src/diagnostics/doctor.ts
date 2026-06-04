@@ -192,6 +192,7 @@ async function aggregateWorkflowScan(storage: Storage, now: number): Promise<Wor
     failed: 0,
     cancelled: 0,
     timedOut: 0,
+    suspended: 0,
   };
   let total = 0;
   let longestRunning: LongestRunningWorkflow | null = null;

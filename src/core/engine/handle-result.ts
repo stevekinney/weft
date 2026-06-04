@@ -69,7 +69,11 @@ export async function bootstrapWorkflowResultResolver(
       return;
     }
 
-    if (state.status === 'running' || state.status === 'pending') {
+    // A suspended workflow has not produced a result and will be resumed later,
+    // so the waiter must stay pending — same as running/pending. (For a waiter
+    // created before suspend, the existing-waiter branch above already keeps it
+    // pending; this covers a fresh result() call made while suspended.)
+    if (state.status === 'running' || state.status === 'pending' || state.status === 'suspended') {
       return;
     }
 

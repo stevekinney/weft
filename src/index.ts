@@ -45,6 +45,7 @@ export {
   WorkflowHandle,
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
+  WorkflowSuspendNotSupportedError,
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './core/engine';
 export type { EngineCreateOptions, EngineStateNamespace, RecoverAllOptions } from './core/engine';
@@ -220,6 +221,7 @@ export {
   WorkflowRecoverySkippedEvent,
   WorkflowResumedEvent,
   WorkflowStartedEvent,
+  WorkflowSuspendedEvent,
   WorkflowTimedOutEvent,
 } from './core/events';
 export type { TypedEventTarget, WeftEventMap, WorkflowRecoverySkippedReason } from './core/events';

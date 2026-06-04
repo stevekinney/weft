@@ -1,5 +1,6 @@
 import { KEYS } from '../../../storage/interface.ts';
 import { deserializeCheckpoint, serializeCheckpoint } from '../../checkpoint.ts';
+import { encode } from '../../codec.ts';
 import { Context, setContextWorkflowInterceptor } from '../../context.ts';
 import { EventLog, type EventHeadRecord } from '../../event-log.ts';
 import { WorkflowResumedEvent } from '../../events.ts';
@@ -12,6 +13,7 @@ import type { EngineInternals } from '../internals.ts';
 import { loadWorkflowState } from '../storage-io.ts';
 import { getComposedWorkflowInterceptor } from '../strategy-helpers.ts';
 import { decodeWorkflowState } from '../validation.ts';
+import { buildWorkflowVisibilityIndexTransition } from '../workflow-indexes.ts';
 import { prepareResumeState } from './persist.ts';
 import { reprovideRecoveredServices } from './recovered-services.ts';
 import {
@@ -178,11 +180,20 @@ async function performSerializedResume(
     throw new Error(`Workflow "${workflowId}" not found in storage`);
   }
 
-  if (latestState.status !== 'running') {
+  if (latestState.status !== 'running' && latestState.status !== 'suspended') {
     throw new Error(
-      `Cannot resume workflow "${workflowId}": status is "${latestState.status}", expected "running"`,
+      `Cannot resume workflow "${workflowId}": status is "${latestState.status}", expected "running" or "suspended"`,
     );
   }
+
+  // A suspended workflow must be flipped back to 'running' durably as part of
+  // this serialized section, before the generator is relaunched. If we
+  // relaunched but left the persisted status 'suspended', a crash right after
+  // relaunch would orphan the run: recoverAll() deliberately skips 'suspended',
+  // so nothing would ever re-drive it. Recovered-running workflows already have
+  // status 'running', so the flip is gated to the suspended case to avoid an
+  // extra state write (and visibility-index churn) on every recoverAll() resume.
+  await reactivateSuspendedWorkflowState(internals, latestState);
 
   commitSerializedResumeState(internals, args);
 
@@ -191,6 +202,28 @@ async function performSerializedResume(
     return;
   }
   relaunchWorkerWorkflowAfterResume(internals, latestState, args);
+}
+
+/**
+ * Durably flip a suspended workflow back to 'running' before relaunch. No-op for
+ * a workflow already running (the recoverAll path), so the common recovery case
+ * does no extra storage write. Mutates `state.status` in place so the in-memory
+ * `latestState` the relaunch helpers read also reflects 'running'.
+ */
+async function reactivateSuspendedWorkflowState(
+  internals: EngineInternals,
+  state: WorkflowState,
+): Promise<void> {
+  if (state.status !== 'suspended') {
+    return;
+  }
+  const previousState: WorkflowState = { ...state };
+  state.status = 'running';
+  state.updatedAt = internals.options.getNow();
+  await internals.storage.batch([
+    { type: 'put', key: KEYS.workflow(state.id), value: encode(state) },
+    ...buildWorkflowVisibilityIndexTransition(state.id, previousState, state).batchOps,
+  ]);
 }
 
 export async function resumeWorkflowFromStorage(
@@ -206,9 +239,9 @@ export async function resumeWorkflowFromStorage(
   }
 
   const state = decodeWorkflowState(stateBytes);
-  if (state.status !== 'running') {
+  if (state.status !== 'running' && state.status !== 'suspended') {
     throw new Error(
-      `Cannot resume workflow "${workflowId}": status is "${state.status}", expected "running"`,
+      `Cannot resume workflow "${workflowId}": status is "${state.status}", expected "running" or "suspended"`,
     );
   }
 

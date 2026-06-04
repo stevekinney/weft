@@ -180,6 +180,7 @@ describe('workflow statistics', () => {
       failed: 0,
       cancelled: 0,
       timedOut: 0,
+      suspended: 0,
     });
     expect(report.workflows.longestRunning).toBeNull();
     expect(report.workflows.largestCheckpoint).toBeNull();

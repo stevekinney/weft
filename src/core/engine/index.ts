@@ -147,7 +147,7 @@ import {
   createWorkflowHandleWithResultPromise as createWorkflowHandleWithResultPromiseFromInternals,
   getWorkflowResultPromise as getWorkflowResultPromiseFromInternals,
 } from './handle-result.ts';
-import { HANDLE_RESULT_PROMISE, ScheduleHandle, WorkflowHandle } from './handles.ts';
+import { HANDLE_RESULT_PROMISE, WorkflowHandle } from './handles.ts';
 import { hasQueuedInlineWorkflowStart } from './inline-launch-queue.ts';
 import {
   handleStrategyMessage as handleStrategyMessageFromInternals,
@@ -196,6 +196,7 @@ import {
   listReviews as listReviewsFromInternals,
   submitReview as submitReviewFromInternals,
 } from './reviews.ts';
+import { ScheduleHandle } from './schedule-handle.ts';
 import {
   cancelSchedule as cancelScheduleFromInternals,
   listSchedules as listSchedulesFromInternals,
@@ -216,6 +217,7 @@ import {
   cancelWorkflow as cancelWorkflowFromTermination,
   cleanupWaiters as cleanupWaitersFromTermination,
   finalizePendingTimelineEntry,
+  suspendWorkflow as suspendWorkflowFromTermination,
   timeoutWorkflow as timeoutWorkflowFromTermination,
   type TerminationCallbacks,
 } from './termination.ts';
@@ -259,10 +261,12 @@ export {
   WorkflowAlreadyExistsError,
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
+  WorkflowSuspendNotSupportedError,
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './errors.ts';
-export { HANDLE_RESULT_PROMISE, ScheduleHandle, WorkflowHandle } from './handles.ts';
+export { HANDLE_RESULT_PROMISE, WorkflowHandle } from './handles.ts';
 export type { RecoverAllOptions } from './lifecycle.ts';
+export { ScheduleHandle } from './schedule-handle.ts';
 export type {
   WorkflowFeedListener,
   WorkflowFeedRecord,
@@ -1179,6 +1183,13 @@ export class Engine<
       this.#createLifecycleCallbacks(),
     );
   }
+  /**
+   * Re-drive a workflow from its persisted checkpoint and return a live handle.
+   * Accepts a workflow left `'running'` (e.g. recovered after a process restart)
+   * or one explicitly `'suspended'` via {@link Engine.suspend} — a suspended
+   * workflow is durably flipped back to `'running'` as part of resuming. Throws
+   * if the workflow is in any other status (terminal, pending) or not found.
+   */
   async resume(workflowId: string): Promise<WorkflowHandle> {
     return resumeFromLifecycle(getInternals(this), workflowId, this.#createLifecycleCallbacks());
   }
@@ -1242,6 +1253,26 @@ export class Engine<
   }
   async cancel(workflowId: string): Promise<void> {
     await cancelWorkflowFromTermination(
+      getInternals(this),
+      workflowId,
+      this.#createTerminationCallbacks(),
+    );
+  }
+  /**
+   * Suspend a running workflow without terminating it. The workflow transitions
+   * to the non-terminal `'suspended'` status, keeps its durable checkpoint, and
+   * is later resumable via {@link Engine.resume} (or `handle.resume()`). Unlike
+   * {@link Engine.cancel}, this does not run cancel handlers and does not settle
+   * the result promise — `handle.result()` stays pending until a later `resume()`
+   * drives the run to completion.
+   *
+   * Suspension is client-driven preemption, so a suspended workflow is NOT
+   * auto-recovered by {@link Engine.recoverAll}; resume it explicitly. Calling
+   * `suspend` on a workflow that is not running (already terminal, or never
+   * started) is a no-op.
+   */
+  async suspend(workflowId: string): Promise<void> {
+    await suspendWorkflowFromTermination(
       getInternals(this),
       workflowId,
       this.#createTerminationCallbacks(),

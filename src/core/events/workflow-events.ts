@@ -214,6 +214,34 @@ export class WorkflowResumedEvent extends Event {
 }
 
 /**
+ * Fired when a running workflow is explicitly suspended via
+ * `handle.suspend()` / `engine.suspend(id)`. Suspension is a non-terminal pause:
+ * the workflow keeps its checkpoint and is later resumable. This event is
+ * intentionally NOT in {@link WORKFLOW_TERMINAL_EVENT_TYPES} — a suspended
+ * workflow has not ended, and `handle.result()` stays pending.
+ *
+ * @example
+ * ```ts
+ * import { Engine, WorkflowSuspendedEvent } from '@lostgradient/weft';
+ *
+ * const engine = new Engine();
+ * engine.addEventListener('workflow:suspended', (e: Event) => {
+ *   const ev = e as WorkflowSuspendedEvent;
+ *   console.log('suspended', ev.workflowId);
+ * });
+ * ```
+ */
+export class WorkflowSuspendedEvent extends Event {
+  static readonly type = 'workflow:suspended' as const;
+  readonly workflowId: string;
+
+  constructor(workflowId: string) {
+    super(WorkflowSuspendedEvent.type);
+    this.workflowId = workflowId;
+  }
+}
+
+/**
  * Reason carried by {@link WorkflowRecoverySkippedEvent}.
  *
  * @example

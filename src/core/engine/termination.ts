@@ -1,7 +1,8 @@
 /**
  * Thin barrel over the split termination modules. Keeps existing import paths
  * (`./termination.ts`) working while the implementation lives in
- * `./termination/cleanup.ts` and `./termination/complete.ts`.
+ * `./termination/cleanup.ts`, `./termination/complete.ts`, and
+ * `./termination/suspend.ts`.
  */
 
 export {
@@ -28,3 +29,4 @@ export {
   terminateWorkflow,
   timeoutWorkflow,
 } from './termination/complete.ts';
+export { suspendWorkflow } from './termination/suspend.ts';
