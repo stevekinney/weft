@@ -3594,8 +3594,8 @@
     {
       "name": "weft.workflows.resume",
       "kind": "unary",
-      "summary": "Resume a suspended workflow",
-      "description": "Resume a workflow that is suspended (for example, paused awaiting a human review or an operator hold) by `workflowId`, returning the workflow `id`. Faults with NotFound when the workflow is not visible.",
+      "summary": "Resume a suspended or recovered workflow",
+      "description": "Re-drive a workflow from its persisted checkpoint by `workflowId`, returning the workflow `id`. Accepts a workflow that was explicitly suspended (`weft.workflows.suspend`) or one left running by a prior process; a suspended workflow is durably flipped back to running as part of resuming. Faults with NotFound when the workflow is not visible, or Conflict when it is in a status that cannot be resumed (terminal or pending).",
       "tags": ["Workflows"],
       "destructive": false,
       "access": {
@@ -3819,6 +3819,36 @@
         "required": ["sequence", "value"],
         "type": "object"
       }
+    },
+    {
+      "name": "weft.workflows.suspend",
+      "kind": "unary",
+      "summary": "Suspend a running workflow",
+      "description": "Request suspension of a running workflow by `id` without terminating it. The workflow transitions to the non-terminal `suspended` status, keeps its durable checkpoint, and is later resumable via `resume`. Unlike cancellation, suspension does not run cancel handlers and does not settle the result. Suspending a workflow that is not running is a no-op. Faults with Unprocessable when the engine runs in worker execution mode (which cannot pause a run without cancelling it).",
+      "tags": ["Workflows"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Unprocessable"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId"],
+        "type": "object"
+      },
+      "outputSchema": {}
     },
     {
       "name": "weft.workflows.tags.add",

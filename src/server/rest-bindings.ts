@@ -176,6 +176,10 @@ import {
   submitReviewDecisionRestBinding,
 } from './operations/submit-review-decision.ts';
 import {
+  suspendWorkflowOperation,
+  suspendWorkflowRestBinding,
+} from './operations/suspend-workflow.ts';
+import {
   timeoutWorkflowOperation,
   timeoutWorkflowRestBinding,
 } from './operations/timeout-workflow.ts';
@@ -249,6 +253,7 @@ export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   queryWorkflowRestBinding,
   queryWorkflowWithInputRestBinding,
   resumeWorkflowRestBinding,
+  suspendWorkflowRestBinding,
   forkWorkflowRestBinding,
   timeoutWorkflowRestBinding,
   updateWorkflowRestBinding,
@@ -418,6 +423,7 @@ export function createLiveOperationRegistry(
     failAsyncActivityOperation,
     queryWorkflowOperation,
     resumeWorkflowOperation,
+    suspendWorkflowOperation,
     forkWorkflowOperation,
     timeoutWorkflowOperation,
     updateWorkflowOperation,

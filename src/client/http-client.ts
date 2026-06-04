@@ -73,6 +73,7 @@ import {
   signalWorkflowRequest,
   submitCoordinatedUpdateRequest,
   submitReviewRequest,
+  suspendWorkflowRequest,
   tagAllWorkflowRequests,
   timeoutWorkflowRequest,
   untagAllWorkflowRequests,
@@ -261,6 +262,10 @@ export class HttpClient implements WeftClient {
 
   async cancel(id: string): Promise<void> {
     return cancelWorkflowRequest(this, id);
+  }
+
+  async suspend(id: string): Promise<void> {
+    return suspendWorkflowRequest(this, id);
   }
 
   async pauseSchedule(id: string): Promise<void> {

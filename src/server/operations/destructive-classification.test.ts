@@ -55,6 +55,7 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.workflows.start': false,
   'weft.workflows.fork': false,
   'weft.workflows.resume': false,
+  'weft.workflows.suspend': false,
   'weft.workflows.replay': false,
   'weft.workflows.get': false,
   'weft.workflows.result.get': false,

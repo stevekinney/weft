@@ -4,6 +4,7 @@ import { encode } from '../../codec.ts';
 import { Context, setContextWorkflowInterceptor } from '../../context.ts';
 import { EventLog, type EventHeadRecord } from '../../event-log.ts';
 import { WorkflowResumedEvent } from '../../events.ts';
+import { buildTimerBatchOperations } from '../../scheduler.ts';
 import type { Checkpoint, WorkflowState } from '../../types.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
 import { createCancelHandlerRegistration, resetCancelHandlers } from '../cancel-handlers.ts';
@@ -209,6 +210,13 @@ async function performSerializedResume(
  * a workflow already running (the recoverAll path), so the common recovery case
  * does no extra storage write. Mutates `state.status` in place so the in-memory
  * `latestState` the relaunch helpers read also reflects 'running'.
+ *
+ * Re-arms the execution-deadline timer in the same batch when one is persisted.
+ * The deadline is absolute wall-clock and suspend cancelled its durable timer,
+ * so it must be re-inserted here at the same absolute `fireAt`. A `fireAt` that
+ * is already in the past is selected by the scheduler's next expired-timer scan,
+ * so a workflow resumed past its deadline times out immediately — exactly the
+ * "suspension does not extend the deadline" contract.
  */
 async function reactivateSuspendedWorkflowState(
   internals: EngineInternals,
@@ -223,6 +231,14 @@ async function reactivateSuspendedWorkflowState(
   await internals.storage.batch([
     { type: 'put', key: KEYS.workflow(state.id), value: encode(state) },
     ...buildWorkflowVisibilityIndexTransition(state.id, previousState, state).batchOps,
+    ...(state.executionDeadline !== undefined
+      ? buildTimerBatchOperations({
+          id: `deadline:${state.id}`,
+          workflowId: state.id,
+          fireAt: state.executionDeadline,
+          kind: 'execution-deadline',
+        })
+      : []),
   ]);
 }
 

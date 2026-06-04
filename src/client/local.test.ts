@@ -18,7 +18,7 @@ import {
   runWeftClientContractTests,
 } from './client-contract.test-support.ts';
 import { ScheduleHandleDelegation, WorkflowHandleDelegation } from './handle-delegation.ts';
-import type { WeftClient } from './interface.ts';
+import type { ClientHandle, WeftClient } from './interface.ts';
 import { LocalClient } from './local.ts';
 
 // ---------------------------------------------------------------------------
@@ -39,6 +39,14 @@ const failingWorkflow = workflow({ name: 'failing' }).execute(async function* (
   throw new Error('intentional failure');
 });
 
+// A plain signal-waiter (no update handlers / exposed accessors) so it parks
+// cleanly on waitForSignal — the realistic suspend point exercised below.
+const suspendWaiterWorkflow = workflow({ name: 'suspend-waiter' }).execute(async function* (
+  ctx: WorkflowContext,
+) {
+  return yield* ctx.waitForSignal<string>('continue');
+});
+
 function createTestEngine(): Engine {
   const engine = new Engine({
     storage: new MemoryStorage(),
@@ -51,13 +59,14 @@ function createTestEngine(): Engine {
   engine.register(clientContractWaitingTwiceWorkflow);
   engine.register(clientContractAsyncActivityWorkflow);
   engine.register(failingWorkflow);
+  engine.register(suspendWaiterWorkflow);
   return engine;
 }
 
 async function waitForWorkflowStatus(
   engine: Engine,
   workflowId: string,
-  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out',
+  status: 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'suspended',
 ): Promise<void> {
   for (let attempt = 0; attempt < 5; attempt++) {
     const state = await engine.get(workflowId);
@@ -113,6 +122,7 @@ describe('LocalClient', () => {
     expect(client.list).toBeFunction();
     expect(client.listSchedules).toBeFunction();
     expect(client.cancel).toBeFunction();
+    expect(client.suspend).toBeFunction();
     expect(client.pauseSchedule).toBeFunction();
     expect(client.resumeSchedule).toBeFunction();
     expect(client.cancelSchedule).toBeFunction();
@@ -290,6 +300,37 @@ describe('LocalClient', () => {
       await handle.result();
       // Should not throw on a completed workflow
       await expect(handle.cancel()).resolves.toBeUndefined();
+    });
+  });
+
+  describe('suspend / resume', () => {
+    it('suspends a running workflow and resumes it to completion via the client', async () => {
+      const handle = await client.start('suspend-waiter', null, { id: 'client-suspend' });
+      await waitForWorkflowStatus(engine, handle.id, 'running');
+
+      await client.suspend('client-suspend');
+      await waitForWorkflowStatus(engine, handle.id, 'suspended');
+
+      const resumed = await client.resume('client-suspend');
+      expect(resumed.id).toBe('client-suspend');
+      await waitForWorkflowStatus(engine, handle.id, 'running');
+
+      // The forthcoming signal completes the resumed run.
+      await client.signal('client-suspend', 'continue', 'go');
+      expect(await handle.result()).toBe('go');
+    });
+
+    it('delegates handle.suspend() / handle.resume() to the client', async () => {
+      const handle = await client.start('suspend-waiter', null, { id: 'client-handle-suspend' });
+      await waitForWorkflowStatus(engine, handle.id, 'running');
+
+      await handle.suspend();
+      await waitForWorkflowStatus(engine, handle.id, 'suspended');
+
+      await handle.resume();
+      await waitForWorkflowStatus(engine, handle.id, 'running');
+      await client.signal('client-handle-suspend', 'continue', 'done');
+      expect(await handle.result()).toBe('done');
     });
   });
 
@@ -509,6 +550,8 @@ describe('LocalClient delegation surface', () => {
   it('centralizes workflow and schedule handle delegation through shared client-backed helpers', async () => {
     const workflowClient = {
       cancel: mock(async () => undefined),
+      suspend: mock(async () => undefined),
+      resume: mock(async () => ({ id: 'shared-workflow' }) as unknown as ClientHandle),
       signal: mock(async () => undefined),
       update: mock(async () => 'updated'),
       query: mock(async () => 'queried'),
@@ -539,6 +582,8 @@ describe('LocalClient delegation surface', () => {
 
     expect(await workflowHandle.result()).toBe('done');
     await workflowHandle.cancel();
+    await workflowHandle.suspend();
+    await workflowHandle.resume();
     await workflowHandle.signal('status', { ok: true });
     expect(await workflowHandle.update('rename', { value: 1 }, { timeout: 50 })).toBe('updated');
     expect(await workflowHandle.query('status')).toBe('queried');
@@ -548,6 +593,8 @@ describe('LocalClient delegation surface', () => {
     await workflowHandle.removeTags('nightly');
 
     expect(workflowClient.cancel).toHaveBeenCalledWith('shared-workflow');
+    expect(workflowClient.suspend).toHaveBeenCalledWith('shared-workflow');
+    expect(workflowClient.resume).toHaveBeenCalledWith('shared-workflow');
     expect(workflowClient.signal).toHaveBeenCalledWith('shared-workflow', 'status', {
       ok: true,
     });

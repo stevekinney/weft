@@ -103,7 +103,14 @@ export async function terminateWorkflow(
       workflowId,
       { status, ...(reason !== undefined ? { terminationReason: reason } : {}) },
       {
-        allowedStatuses: ['running', 'pending'],
+        // Cancel/timeout must be total over non-terminal states: 'suspended' is
+        // included so cancelling a suspended workflow terminates it (and rejects
+        // its still-pending result waiter) rather than no-op'ing and leaving
+        // result() to hang forever. The abort in strategy.cancelWorkflow above is
+        // a no-op for a suspended run (its controller was evicted at suspend),
+        // so cancel runs the registered cancel handlers without throwing into the
+        // already-gone generator — the intended "cancel a paused run" semantics.
+        allowedStatuses: ['running', 'pending', 'suspended'],
         buildAdditionalOperations: (_previousState, updatedAt) => {
           finalizePendingTimelineEntry(
             internals,

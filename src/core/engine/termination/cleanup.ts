@@ -97,6 +97,24 @@ function cleanupSleepResolvers(internals: EngineInternals, workflowId: string): 
   internals.sleepResolversByWorkflow.delete(workflowId);
 }
 
+/**
+ * Delete the in-memory sleep resolvers for a workflow WITHOUT calling them.
+ * Unlike {@link cleanupSleepResolvers} (which resolves each resolver — safe on a
+ * terminal path because the abort/terminal-state backstop stops the woken
+ * operation loop), suspend fires no abort and the status stays non-terminal, so
+ * resolving here could drive an evicted generator. Delete-only leaves the
+ * `processSleepOperation` loop dormant; the durable sleep timer in storage is
+ * untouched and re-arms when the workflow is resumed and the generator replays.
+ */
+function evictSleepResolversWithoutResolving(internals: EngineInternals, workflowId: string): void {
+  const sleepOps = internals.sleepResolversByWorkflow.get(workflowId);
+  if (!sleepOps) return;
+  for (const operationId of sleepOps) {
+    internals.sleepResolvers.delete(`${workflowId}:${operationId}`);
+  }
+  internals.sleepResolversByWorkflow.delete(workflowId);
+}
+
 function cleanupReviewEscalations(
   internals: EngineInternals,
   workflowId: string,
@@ -139,6 +157,33 @@ export function cleanupWaiters(
   internals.workflowHeaders.delete(workflowId);
   internals.workflowServices.delete(workflowId);
   internals.workflowTypeByWorkflowId.delete(workflowId);
+}
+
+/**
+ * Evict only the in-flight OPERATION waiters for a workflow that is being
+ * suspended (signal/update/review waiters, review escalations, and sleep
+ * resolvers), WITHOUT resolving them and WITHOUT touching the non-serialized
+ * `services`, headers, type, or nesting-depth bookkeeping.
+ *
+ * Suspend parks the inline run (evicting its context/generator), so a signal or
+ * update arriving afterwards must NOT wake the dormant operation loop and drive
+ * the gone generator — it should buffer durably and be replayed when the
+ * workflow resumes. Deleting (not resolving) each waiter leaves the loop dormant
+ * and severs that wake path; the durable signal/sleep state in storage is
+ * untouched, so resume replays it. This is the suspend-specific complement to
+ * {@link cleanupWaiters}, which is for terminal transitions and additionally
+ * drops `services` and resolves sleep resolvers — both wrong for a pause.
+ */
+export function evictSuspendedWorkflowWaiters(
+  internals: EngineInternals,
+  workflowId: string,
+  callbacks: Pick<TerminationCallbacks, 'swallowPromiseRejection'>,
+): void {
+  for (const kind of TRACKED_WAITER_KINDS) {
+    cleanupTrackedWaiter(internals, workflowId, kind);
+  }
+  evictSleepResolversWithoutResolving(internals, workflowId);
+  cleanupReviewEscalations(internals, workflowId, callbacks);
 }
 
 /**

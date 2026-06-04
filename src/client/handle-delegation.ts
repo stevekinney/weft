@@ -15,6 +15,8 @@ import type { ClientHandle, ClientScheduleHandle } from './interface.ts';
 
 export interface WorkflowHandleDelegationClient {
   cancel(id: string): Promise<void>;
+  suspend(id: string): Promise<void>;
+  resume(id: string): Promise<ClientHandle>;
   tail(id: string): WorkflowEventTail;
   signal(
     id: string,
@@ -50,6 +52,16 @@ export abstract class WorkflowHandleDelegation<
 
   async cancel(): Promise<void> {
     return this.client.cancel(this.id);
+  }
+
+  async suspend(): Promise<void> {
+    return this.client.suspend(this.id);
+  }
+
+  async resume(): Promise<void> {
+    // The client's resume() returns a fresh ClientHandle; discard it because the
+    // caller already holds this handle, whose result() resolves on completion.
+    await this.client.resume(this.id);
   }
 
   // Duplicate intentionally retained: the signal/update/query overload stacks

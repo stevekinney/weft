@@ -261,6 +261,10 @@ export class LocalClient implements WeftClient {
     return this.#engine.cancel(id);
   }
 
+  async suspend(id: string): Promise<void> {
+    return this.#engine.suspend(id);
+  }
+
   async pauseSchedule(id: string): Promise<void> {
     return this.#engine.pauseSchedule(id);
   }

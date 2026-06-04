@@ -25,6 +25,7 @@ export const INTERACTIVE_OPERATION_NAMES: ReadonlyArray<string> = [
   'weft.workflows.cancel',
   'weft.workflows.timeout',
   'weft.workflows.resume',
+  'weft.workflows.suspend',
   'weft.workflows.replay',
   // Schedule CRUD
   'weft.schedules.create',

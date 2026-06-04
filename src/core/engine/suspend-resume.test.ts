@@ -1,13 +1,23 @@
 import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { TestEngine } from '../../testing/test-engine.ts';
+import { WorkflowResumedEvent, WorkflowSuspendedEvent } from '../events.ts';
 import { normalizeListFilter } from '../list-filter-validation.ts';
 import type { WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
+import { WorkflowSuspendNotSupportedError } from './errors.ts';
 import { TERMINAL_STATUSES } from './guards.ts';
-import { Engine } from './index.ts';
+import {
+  ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING,
+  ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING,
+  ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING,
+  Engine,
+} from './index.ts';
 import { TERMINAL_WORKFLOW_STATUSES } from './termination.ts';
+
+const workerUrl = new URL('../../workers/test-browser-worker.ts', import.meta.url);
 
 /** Drain microtasks so a deferred inline start advances. */
 async function flush(): Promise<void> {
@@ -25,6 +35,15 @@ async function statusOf(engine: Engine, id: string): Promise<string | undefined>
 const waiter = workflow({ name: 'waits' }).execute(async function* (ctx: WorkflowContext) {
   yield* ctx.waitForSignal('go');
   return 'done';
+});
+
+// Parks on ctx.sleep instead of a signal, so a suspend lands while the run is
+// blocked on a durable sleep timer (the other realistic suspend point). Drives
+// the evictSleepResolversWithoutResolving path: suspend must drop the in-memory
+// sleep resolver WITHOUT resolving it and WITHOUT deleting the durable timer.
+const sleeper = workflow({ name: 'sleeps' }).execute(async function* (ctx: WorkflowContext) {
+  yield* ctx.sleep(5000);
+  return 'awake';
 });
 
 describe('suspend/resume', () => {
@@ -110,7 +129,11 @@ describe('suspend/resume', () => {
     expect(await statusOf(engine, 'sus-done')).toBe('completed');
   });
 
-  it('cancel on suspended is a no-op; resume then cancel terminates the run', async () => {
+  it('cancel terminates a suspended workflow and rejects its pending result', async () => {
+    // Cancel must be total over non-terminal states: cancelling a suspended
+    // workflow transitions it to 'cancelled' AND rejects the still-pending
+    // result waiter, so result() cannot hang forever on a suspended-then-
+    // abandoned run. (result() taken WHILE suspended — the bootstrap path.)
     await using engine = new Engine();
     engine.register(waiter);
 
@@ -119,16 +142,26 @@ describe('suspend/resume', () => {
     await handle.suspend();
     expect(await statusOf(engine, 'sus-cancel')).toBe('suspended');
 
-    // Direct cancel of a suspended workflow is a no-op (cancel CAS excludes
-    // 'suspended'); the status stays suspended.
-    await handle.cancel();
-    expect(await statusOf(engine, 'sus-cancel')).toBe('suspended');
-
-    // Resume puts it back to running, after which cancel terminates it.
-    await handle.resume();
-    await flush();
+    const resultPromise = handle.result();
     await handle.cancel();
     expect(await statusOf(engine, 'sus-cancel')).toBe('cancelled');
+    await expect(resultPromise).rejects.toThrow(/cancelled/i);
+  });
+
+  it('rejects a pre-suspend result waiter when a suspended workflow is cancelled', async () => {
+    // The other waiter ordering: result() called BEFORE suspend (the existing-
+    // resolver path), then the workflow is suspended and cancelled.
+    await using engine = new Engine();
+    engine.register(waiter);
+
+    const handle = await engine.start('waits', null, { id: 'sus-cancel-pre' });
+    await flush();
+    const resultPromise = handle.result();
+    await handle.suspend();
+    expect(await statusOf(engine, 'sus-cancel-pre')).toBe('suspended');
+    await handle.cancel();
+    expect(await statusOf(engine, 'sus-cancel-pre')).toBe('cancelled');
+    await expect(resultPromise).rejects.toThrow(/cancelled/i);
   });
 
   it('recoverAll skips suspended workflows (no auto-recovery, no throw)', async () => {
@@ -216,5 +249,202 @@ describe('suspend/resume', () => {
     expect([...TERMINAL_STATUSES].toSorted()).toEqual([...TERMINAL_WORKFLOW_STATUSES].toSorted());
     expect(TERMINAL_STATUSES.has('suspended')).toBe(false);
     expect(TERMINAL_WORKFLOW_STATUSES.has('suspended')).toBe(false);
+  });
+
+  it('is idempotent on an already-suspended workflow', async () => {
+    await using engine = new Engine();
+    engine.register(waiter);
+    const handle = await engine.start('waits', null, { id: 'sus-double' });
+    await flush();
+    await handle.suspend();
+    expect(await statusOf(engine, 'sus-double')).toBe('suspended');
+    // A second suspend on an already-suspended workflow is a no-op (the CAS is
+    // gated to 'running'), not an error.
+    await handle.suspend();
+    expect(await statusOf(engine, 'sus-double')).toBe('suspended');
+  });
+
+  it('evicts the inline park marker on suspend; a signal then buffers and replays on resume', async () => {
+    // The discriminating wake-path test. An inline workflow blocked on
+    // waitForSignal parks via `parkedInlineWorkflows` (not a persistent
+    // signalWaiters entry). Suspend must evict that marker so a signal arriving
+    // while suspended buffers durably instead of waking the parked run against
+    // its now-gone generator. On resume the buffered signal is consumed.
+    await using engine = new Engine();
+    engine.register(waiter);
+
+    const handle = await engine.start('waits', null, { id: 'sus-waiter' });
+    // Parked on waitForSignal('go') → exactly one parked inline workflow.
+    await waitForCondition(() => engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
+      label: 'inline workflow parked on waitForSignal',
+    });
+
+    await handle.suspend();
+    // Suspend evicted the park marker (and any signal waiter): no wake path left.
+    expect(engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]()).toBe(0);
+    expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
+
+    // Signal while suspended: it must buffer durably, NOT drive the parked run.
+    await engine.signal('sus-waiter', 'go');
+    await flush();
+    expect(await statusOf(engine, 'sus-waiter')).toBe('suspended');
+
+    // Resume re-drives; the buffered signal is consumed and the run completes.
+    await handle.resume();
+    await flush();
+    expect(await handle.result()).toBe('done');
+  });
+
+  it('evicts the sleep resolver without resolving it; the durable sleep timer survives and re-arms on resume', async () => {
+    // The sleep-case complement to the park-marker/signal test above, and the
+    // correctness proof for evictSleepResolversWithoutResolving. An inline run
+    // blocked on ctx.sleep registers an in-memory sleep RESOLVER and a durable
+    // sleep TIMER. Suspend must DELETE the resolver (not call it — resolving
+    // would drive the now-evicted generator) while leaving the durable timer
+    // untouched, so resume replays the sleep from storage and the run completes.
+    const engine = new TestEngine({ startTime: 0 });
+    engine.register(sleeper);
+    try {
+      const handle = await engine.start('sleeps', null, { id: 'sus-sleep' });
+      // Wait until the run has parked on the sleep: exactly one in-memory sleep
+      // resolver registered.
+      await waitForCondition(() => engine[ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING]() === 1, {
+        label: 'inline workflow parked on ctx.sleep',
+      });
+
+      // The durable sleep timer exists in storage before suspend.
+      const sleepTimerIndexKeys = async (): Promise<string[]> => {
+        const keys: string[] = [];
+        for await (const [key] of engine.storage.scan('timer-idx:sleep:')) keys.push(key);
+        return keys;
+      };
+      const timerKeysBeforeSuspend = await sleepTimerIndexKeys();
+      expect(timerKeysBeforeSuspend.length).toBe(1);
+
+      await handle.suspend();
+      expect(await statusOf(engine, 'sus-sleep')).toBe('suspended');
+      // The in-memory sleep resolver was EVICTED (deleted, not resolved)...
+      expect(engine[ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING]()).toBe(0);
+      // ...but the durable sleep timer SURVIVES so resume can replay it.
+      const timerKeysAfterSuspend = await sleepTimerIndexKeys();
+      expect(timerKeysAfterSuspend.length).toBe(1);
+
+      // Advancing time while suspended must NOT complete the run: it is parked,
+      // not sleeping, and resolving the evicted resolver was never wired up.
+      await engine.advanceTime('10 seconds');
+      await flush();
+      expect(await statusOf(engine, 'sus-sleep')).toBe('suspended');
+
+      // Resume re-drives the generator, which replays the sleep from the durable
+      // timer. Because virtual time is already past the fire time, the next scan
+      // completes the sleep and the workflow finishes — proving resume re-armed
+      // the sleep instead of hanging.
+      await handle.resume();
+      await flush();
+      await engine.advanceTime('1 second');
+      await flush();
+      expect(await handle.result()).toBe('awake');
+      expect(await statusOf(engine, 'sus-sleep')).toBe('completed');
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('preserves in-memory services across an in-process suspend → resume', async () => {
+    // suspend deliberately does NOT clear workflowServices (unlike terminal
+    // cleanup), so an in-process resume reuses the original non-serialized value.
+    const sentinel = { db: 'live-connection' };
+    let observed: unknown;
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'reads-services' }).execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('go');
+        observed = ctx.services;
+        return 'ok';
+      }),
+    );
+
+    const handle = await engine.start('reads-services', null, {
+      id: 'sus-services',
+      services: sentinel,
+    });
+    await flush();
+    await handle.suspend();
+    await handle.resume();
+    await flush();
+    await engine.signal('sus-services', 'go');
+    expect(await handle.result()).toBe('ok');
+    // The resumed run read the SAME services value provided at start.
+    expect(observed).toBe(sentinel);
+  });
+
+  it('dispatches WorkflowSuspendedEvent on suspend and WorkflowResumedEvent on resume', async () => {
+    await using engine = new Engine();
+    engine.register(waiter);
+
+    const suspendedIds: string[] = [];
+    const resumedIds: string[] = [];
+    engine.addEventListener('workflow:suspended', (event) => {
+      suspendedIds.push((event as WorkflowSuspendedEvent).workflowId);
+    });
+    engine.addEventListener('workflow:resumed', (event) => {
+      resumedIds.push((event as WorkflowResumedEvent).workflowId);
+    });
+
+    const handle = await engine.start('waits', null, { id: 'sus-events' });
+    await flush();
+    await handle.suspend();
+    expect(suspendedIds).toEqual(['sus-events']);
+
+    await handle.resume();
+    await flush();
+    expect(resumedIds).toContain('sus-events');
+  });
+
+  it('re-arms the absolute execution deadline on resume (times out if already past)', async () => {
+    // The deadline is absolute wall-clock: suspension does not extend it. A
+    // workflow resumed after its deadline has elapsed must time out, not run on.
+    const engine = new TestEngine();
+    engine.register(waiter);
+    try {
+      const handle = await engine.start('waits', null, {
+        id: 'sus-deadline',
+        executionTimeout: '5 seconds',
+      });
+      handle.result().catch(() => {});
+      await flush();
+      await handle.suspend();
+      expect(await statusOf(engine, 'sus-deadline')).toBe('suspended');
+
+      // Advance virtual time well past the absolute deadline while suspended,
+      // then resume. The re-armed timer is already due, so the next scheduler
+      // scan times the workflow out instead of letting it run on.
+      await engine.advanceTime('10 seconds');
+      await handle.resume();
+      await flush();
+      await engine.advanceTime('1 second');
+      await flush();
+      expect(await statusOf(engine, 'sus-deadline')).toBe('timed-out');
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('throws WorkflowSuspendNotSupportedError only for a running worker workflow', async () => {
+    await using engine = new Engine({
+      storage: new MemoryStorage(),
+      workflowExecutionMode: 'worker',
+      workerExecution: { workerUrl, poolSize: 1, workflowTurnTimeoutMs: 30_000 },
+    });
+    engine.register(waiter);
+
+    const handle = await engine.start('waits', null, { id: 'sus-worker' });
+    await flush();
+    // A running worker workflow cannot be parked without cancelling it.
+    await expect(handle.suspend()).rejects.toBeInstanceOf(WorkflowSuspendNotSupportedError);
+
+    // State-dependent, not mode-dependent: suspend on an UNKNOWN workflow is a
+    // no-op even in worker mode (it never reaches the unsupported-mode throw).
+    await expect(engine.suspend('does-not-exist')).resolves.toBeUndefined();
   });
 });

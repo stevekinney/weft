@@ -18,8 +18,7 @@ import type {
   ListFilter,
   ScheduleDefinition,
 } from '../types.ts';
-import { ScheduleHandle } from './handles.ts';
-import { assertCompatiblePersistedDataVersion, Engine } from './index.ts';
+import { assertCompatiblePersistedDataVersion, Engine, ScheduleHandle } from './index.ts';
 
 declare const engine: Engine;
 

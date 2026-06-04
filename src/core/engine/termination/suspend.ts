@@ -6,7 +6,7 @@ import { WorkflowSuspendNotSupportedError } from '../errors.ts';
 import { dropQueuedInlineWorkflowStart } from '../inline-launch-queue.ts';
 import type { EngineInternals } from '../internals.ts';
 import { buildWorkflowVisibilityIndexTransition } from '../workflow-indexes.ts';
-import type { TerminationCallbacks } from './cleanup.ts';
+import { evictSuspendedWorkflowWaiters, type TerminationCallbacks } from './cleanup.ts';
 
 /**
  * Suspend a running workflow without terminating it: a non-terminal cousin of
@@ -24,7 +24,7 @@ import type { TerminationCallbacks } from './cleanup.ts';
  *   the engine uses for signal-parking,
  * - does NOT run cancel handlers,
  * - does NOT settle the result promise (`handle.result()` stays pending until a
- *   later `resume()` drives the run to completion),
+ *   later `resume()` drives the run to completion, or a `cancel()` terminates it),
  * - does NOT clean up durable output artifacts or in-memory services (the
  *   `services` value is preserved so an in-process `resume()` can reuse it),
  * - does NOT schedule terminal cleanup.
@@ -34,42 +34,58 @@ import type { TerminationCallbacks } from './cleanup.ts';
  * workflow already left `running` (it completed, failed, or a concurrent cancel
  * won the race), the flip is skipped and suspend is a no-op — and because the
  * teardown is gated on the flip succeeding, a workflow that lost the race keeps
- * its execution state intact. Holding the lock across the flip and the park
- * closes the checkpoint-commit race: no in-flight checkpoint can commit a step
- * past the suspend point between the flip and the park.
+ * its execution state intact.
+ *
+ * The teardown evicts every piece of in-memory execution state that could let a
+ * post-suspend operation drive the parked run: the inline context/generator (via
+ * `parkWorkflow`), the in-memory checkpoint, the parked-inline marker, and the
+ * in-flight operation waiters (signal/update/sleep/review — deleted, NOT
+ * resolved, so a signal arriving after suspend buffers durably and is replayed
+ * on resume instead of waking a dormant operation loop against the gone
+ * generator). The durable checkpoint, durable buffered signals, durable sleep
+ * timers, and `workflowServices` are all left intact for resume.
+ *
+ * A signal that races the in-lock teardown is benign: `continueWorkflow` no-ops
+ * for an evicted generator, and `persistCheckpoint` no-ops when the context and
+ * in-memory checkpoint are gone — so no step can commit past the suspend point.
  *
  * `'suspended'` is neither `'running'` nor `'pending'`, and both local-ownership
  * predicates (`isInlineWorkflowLocallyOwned`, `hasLocalCheckpointOwnership`) are
  * gated on those two statuses. So once the status flips, the workflow stops
  * registering as locally owned — which is exactly what makes `recoverAll()` skip
  * it AND what lets `engine.resume()` re-drive it from storage instead of taking
- * its local-ownership early return. The in-memory checkpoint and parked-inline
- * entry are evicted here so resume reloads cleanly from the durable checkpoint;
- * the durable checkpoint in storage and the `workflowServices` entry are left
- * intact.
+ * its local-ownership early return.
  *
- * Worker execution mode is not yet supported: a worker run cannot be parked
- * without sending it a cancellation, so suspend throws
- * {@link WorkflowExecutionModeError} rather than silently aborting it.
+ * The execution deadline is absolute wall-clock time: suspension does NOT extend
+ * it. The pending `deadline:` timer is cancelled here and re-armed at the same
+ * absolute fire time on resume (or fires immediately if already past).
+ *
+ * Worker execution mode is not supported: a worker run cannot be parked without
+ * sending it a cancellation. To keep the contract state-dependent (suspend on a
+ * non-running workflow is always a no-op), the mode check runs only AFTER the
+ * status load confirms the workflow is `running`; a `running` worker workflow
+ * throws {@link WorkflowSuspendNotSupportedError}, while a completed or unknown
+ * one is a no-op regardless of execution mode.
  */
 export async function suspendWorkflow(
   internals: EngineInternals,
   workflowId: string,
   callbacks: TerminationCallbacks,
 ): Promise<void> {
-  if (internals.inlineStrategy === null) {
-    throw new WorkflowSuspendNotSupportedError(
-      'suspend is only supported in inline execution mode; a worker run cannot be paused ' +
-        'without cancelling it.',
-    );
-  }
-  const inlineStrategy = internals.inlineStrategy;
-
   const suspended = await callbacks.runSerializedWorkflowStateWrite(workflowId, async () => {
     const state = await callbacks.loadWorkflowState(workflowId);
     if (!state || state.status !== 'running') {
       // Lost the race to terminate/complete, or never running — idempotent.
       return false;
+    }
+
+    // State-dependent, not mode-dependent: only a *running* worker workflow is
+    // unsupported. A non-running one already returned a no-op above.
+    if (internals.inlineStrategy === null) {
+      throw new WorkflowSuspendNotSupportedError(
+        'suspend is only supported in inline execution mode; a worker run cannot be paused ' +
+          'without cancelling it.',
+      );
     }
 
     const updatedAt = internals.options.getNow();
@@ -84,18 +100,19 @@ export async function suspendWorkflow(
     ]);
 
     // Stop driving the live run WITHOUT aborting it: parkWorkflow evicts the
-    // run's context/turn from the inline strategy so a late activity completion
-    // cannot advance it past the suspend point, while leaving its
+    // run's context/generator/turn from the inline strategy so a late activity
+    // completion cannot advance it past the suspend point, while leaving its
     // AbortController unfired. Inside the same serialized section as the flip.
-    inlineStrategy.parkWorkflow(workflowId);
+    internals.inlineStrategy.parkWorkflow(workflowId);
     dropQueuedInlineWorkflowStart(internals, workflowId);
 
     // Evict in-memory execution state so a subsequent resume reloads from the
-    // durable checkpoint. Preserve the durable checkpoint (in storage) and the
-    // non-serialized `services` value (needed for an in-process resume). The
-    // result resolver is intentionally left in place: result() stays pending.
+    // durable checkpoint, and sever the wake paths for in-flight operations so a
+    // post-suspend signal/update buffers durably instead of driving the gone
+    // generator. Preserve the durable checkpoint (storage) and `services`.
     internals.checkpoints.delete(workflowId);
     internals.parkedInlineWorkflows.delete(workflowId);
+    evictSuspendedWorkflowWaiters(internals, workflowId, callbacks);
 
     return true;
   });
@@ -104,9 +121,9 @@ export async function suspendWorkflow(
     return;
   }
 
-  // The execution deadline clock does not run while suspended: cancel the
-  // pending deadline timer. Resume re-arms it from the persisted
-  // `executionDeadline` if one is present.
+  // The execution deadline is absolute wall-clock and does NOT pause while
+  // suspended: cancel the pending timer here; resume re-arms it at the same
+  // absolute fire time (or times out immediately if already past).
   void callbacks.swallowPromiseRejection(
     internals.scheduler.cancel(`deadline:${workflowId}`, workflowId),
   );

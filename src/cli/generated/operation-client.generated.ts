@@ -55,6 +55,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.workflows.signal',
   'weft.workflows.start',
   'weft.workflows.streams.chunks',
+  'weft.workflows.suspend',
   'weft.workflows.tags.add',
   'weft.workflows.tags.remove',
   'weft.workflows.timeline.get',
@@ -528,6 +529,11 @@ export type CatalogOperationTypes = {
     readonly input: { readonly after?: unknown; readonly key: string; readonly workflowId: string };
     readonly output: { readonly chunks: ReadonlyArray<unknown> };
     readonly faults: never;
+  };
+  'weft.workflows.suspend': {
+    readonly input: { readonly workflowId: string };
+    readonly output: unknown;
+    readonly faults: 'Unprocessable';
   };
   'weft.workflows.tags.add': {
     readonly input: { readonly tags?: unknown; readonly workflowId: string };

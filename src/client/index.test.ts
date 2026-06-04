@@ -671,6 +671,18 @@ describe('HttpClient', () => {
     });
   });
 
+  describe('suspend', () => {
+    it('suspends a workflow via the client over HTTP', async () => {
+      // Drives POST /v1/workflows/:id/suspend end-to-end: client →
+      // suspendWorkflowRequest → server REST binding → engine.suspend. A
+      // completed workflow is a documented no-op (the CAS is gated to
+      // 'running'), so this asserts the transport round-trips without error.
+      const handle = await client.start('echo', 'data', { id: 'http-suspend-test' });
+      await handle.result();
+      await client.suspend('http-suspend-test');
+    });
+  });
+
   describe('handle.cancel', () => {
     it('delegates to client.cancel', async () => {
       const handle = await client.start('echo', 'data', { id: 'http-handle-cancel' });

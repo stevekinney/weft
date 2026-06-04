@@ -13,6 +13,7 @@ export {
   cleanupTerminalWorkflowSynchronously,
   cleanupWaiters,
   cleanupWorkflowStorage,
+  evictSuspendedWorkflowWaiters,
   finalizeScheduledWorkflowTerminal,
   handleCleanupError,
   runDeferredTerminalCleanup,

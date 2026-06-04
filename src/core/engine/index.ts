@@ -292,6 +292,7 @@ export const ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING = Symbol(
   'engineParkedWorkflowCountForTesting',
 );
 export const ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING = Symbol('engineSignalWaiterCountForTesting');
+export const ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING = Symbol('engineSleepResolverCountForTesting');
 
 /**
  * Durable execution engine.
@@ -1051,6 +1052,9 @@ export class Engine<
   }
   [ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING](): number {
     return getInternals(this).signalWaiters.size;
+  }
+  [ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING](): number {
+    return getInternals(this).sleepResolvers.size;
   }
   async signal(workflowId: string, name: SignalDefinition): Promise<void>;
   async signal<TInput>(

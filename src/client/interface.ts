@@ -104,6 +104,22 @@ export interface ClientHandle<TResult = unknown>
   /** Cancel this workflow. */
   cancel(): Promise<void>;
 
+  /**
+   * Suspend this workflow without terminating it: it moves to the non-terminal
+   * `suspended` status, keeps its checkpoint, and is later resumable via
+   * {@link ClientHandle.resume}. Unlike {@link ClientHandle.cancel}, it does not
+   * run cancel handlers and does not settle `result()`. Inline execution mode
+   * only (worker-mode servers fault with `Unprocessable`).
+   */
+  suspend(): Promise<void>;
+
+  /**
+   * Resume this workflow from its persisted checkpoint after a
+   * {@link ClientHandle.suspend} (or after a process restart left it running).
+   * `result()` resolves when the resumed run completes.
+   */
+  resume(): Promise<void>;
+
   /** Send a named signal with an optional payload. */
   signal(name: SignalDefinition): Promise<void>;
   signal<TInput>(
@@ -315,6 +331,13 @@ export interface WeftClient {
 
   /** Cancel a running workflow. */
   cancel(id: string): Promise<void>;
+
+  /**
+   * Suspend a running workflow without terminating it. It moves to the
+   * non-terminal `suspended` status, keeps its checkpoint, and is later
+   * resumable via {@link WeftClient.resume}. Inline execution mode only.
+   */
+  suspend(id: string): Promise<void>;
 
   /** Pause a recurring schedule. */
   pauseSchedule(id: string): Promise<void>;
