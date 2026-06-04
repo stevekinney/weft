@@ -138,6 +138,11 @@ describe('engine callback creators', () => {
     await expect(
       timeCallbacks.failWorkflow('workflow-missing', new Error('failed')),
     ).resolves.toBeUndefined();
+    timeCallbacks.handleCleanupError(
+      'time-cleanup',
+      new Error('timer cleanup failed'),
+      'workflow-time',
+    );
 
     engine[Symbol.dispose]();
   });
