@@ -295,6 +295,53 @@ describe('suspend/resume', () => {
     expect(await handle.result()).toBe('done');
   });
 
+  it('a signal fired concurrently with suspend does not wake the run (in-memory teardown precedes the durable commit)', async () => {
+    // The RACE complement to the test above. Signal delivery (deliverBufferedSignals)
+    // is NOT gated behind the per-workflow serialized write lock and only skips
+    // TERMINAL workflows ('suspended' is non-terminal). If suspend committed the
+    // durable 'suspended' status BEFORE evicting the in-memory waiter/park-marker,
+    // a signal interleaving at that microtask boundary would find a live wake path
+    // and drive the not-yet-evicted generator to completion. suspend evicts all
+    // in-memory execution state BEFORE the durable commit, so firing the signal and
+    // the suspend concurrently must still land 'suspended' with result() unsettled —
+    // the signal buffers durably and only replays on a later resume.
+    await using engine = new Engine();
+    engine.register(waiter);
+
+    const handle = await engine.start('waits', null, { id: 'sus-race' });
+    await waitForCondition(() => engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
+      label: 'inline workflow parked on waitForSignal',
+    });
+
+    let settled = false;
+    void handle.result().then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+
+    // Fire suspend and the signal concurrently — interleave them at the microtask
+    // level rather than the sequential suspend-then-signal ordering above.
+    await Promise.all([handle.suspend(), engine.signal('sus-race', 'go')]);
+    await flush();
+
+    // The run did NOT advance: it is suspended, not completed, and result() is
+    // still pending. The concurrent signal buffered durably instead of waking it.
+    expect(await statusOf(engine, 'sus-race')).toBe('suspended');
+    expect(settled).toBe(false);
+    expect(engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]()).toBe(0);
+    expect(engine[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(0);
+
+    // Resume consumes the buffered signal and drives the run to completion.
+    await handle.resume();
+    await flush();
+    expect(await handle.result()).toBe('done');
+    expect(await statusOf(engine, 'sus-race')).toBe('completed');
+  });
+
   it('evicts the sleep resolver without resolving it; the durable sleep timer survives and re-arms on resume', async () => {
     // The sleep-case complement to the park-marker/signal test above, and the
     // correctness proof for evictSleepResolversWithoutResolving. An inline run

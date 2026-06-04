@@ -15,7 +15,14 @@ type WorkflowId = string;
 ### `WorkflowStatus`
 
 ```ts partial
-type WorkflowStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
+type WorkflowStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timed-out'
+  | 'suspended';
 ```
 
 ### `WorkflowState`
@@ -694,6 +701,7 @@ interface WeftEventMap {
   'workflow:cancelled': WorkflowCancelledEvent;
   'workflow:timed-out': WorkflowTimedOutEvent;
   'workflow:resumed': WorkflowResumedEvent;
+  'workflow:suspended': WorkflowSuspendedEvent;
   'activity:started': ActivityStartedEvent;
   'activity:completed': ActivityCompletedEvent;
   'activity:failed': ActivityFailedEvent;

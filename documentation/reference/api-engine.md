@@ -470,7 +470,14 @@ interface WorkflowSummary {
 ### `WorkflowStatus`
 
 ```ts partial
-type WorkflowStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
+type WorkflowStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timed-out'
+  | 'suspended';
 ```
 
 ### `WorkflowFunction`

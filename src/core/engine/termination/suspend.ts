@@ -1,7 +1,7 @@
+import type { BatchOperation } from '../../../storage/interface.ts';
 import { KEYS } from '../../../storage/interface.ts';
 import { encode } from '../../codec.ts';
 import { WorkflowSuspendedEvent } from '../../events.ts';
-import { buildTerminalWorkflowIndexOperations } from '../attributes-tags.ts';
 import { WorkflowSuspendNotSupportedError } from '../errors.ts';
 import { dropQueuedInlineWorkflowStart } from '../inline-launch-queue.ts';
 import type { EngineInternals } from '../internals.ts';
@@ -57,8 +57,14 @@ import { evictSuspendedWorkflowWaiters, type TerminationCallbacks } from './clea
  * its local-ownership early return.
  *
  * The execution deadline is absolute wall-clock time: suspension does NOT extend
- * it. The pending `deadline:` timer is cancelled here and re-armed at the same
- * absolute fire time on resume (or fires immediately if already past).
+ * it. The pending `deadline:` timer is deleted durably IN THE SAME COMMIT BATCH
+ * as the status flip, and re-armed at the same absolute fire time on resume (or
+ * fires immediately if already past). It is a durable delete rather than a
+ * `scheduler.cancel()` call because the scheduler is durable-scan-based and
+ * resume's re-arm is likewise durable-only (`buildTimerBatchOperations`); folding
+ * the delete into the commit makes it atomic with the flip and ordered before any
+ * concurrent resume, so an immediate resume cannot have its freshly re-armed
+ * deadline deleted by a late fire-and-forget cancel.
  *
  * Worker execution mode is not supported: a worker run cannot be parked without
  * sending it a cancellation. To keep the contract state-dependent (suspend on a
@@ -88,31 +94,43 @@ export async function suspendWorkflow(
       );
     }
 
+    // Tear down ALL in-memory execution state BEFORE the durable commit. The
+    // commit is suspend's only durable mutation; everything here is synchronous
+    // in-memory eviction (parkWorkflow/#cleanup is pure Map deletes — no
+    // generator drive, no durable-status read). Doing it first closes two races:
+    //
+    //   1. Signal/update delivery (`deliverBufferedSignals`) is NOT gated behind
+    //      this serialized lock and only skips TERMINAL workflows ('suspended' is
+    //      non-terminal). If a signal interleaved at the post-commit microtask
+    //      boundary, it would find a live waiter / parked marker and wake the
+    //      not-yet-evicted generator. Evicting before the commit means that by
+    //      the `await` boundary the waiter and park-marker are already gone, so a
+    //      concurrent signal buffers durably and replays on resume. Because the
+    //      eviction here is fully synchronous, no sub-step exposes a half-torn
+    //      state.
+    //   2. "Durable suspended + in-memory live" divergence is structurally
+    //      impossible: memory teardown precedes the only durable write. The sole
+    //      remaining failure mode — the commit throws after eviction — leaves the
+    //      durable status 'running' with no local ownership (checkpoint deleted),
+    //      which is exactly the crash case recoverAll() re-drives. Fail-safe, not
+    //      fail-divergent, so no defensive try/catch is needed.
+    internals.inlineStrategy.parkWorkflow(workflowId);
+    dropQueuedInlineWorkflowStart(internals, workflowId);
+    internals.checkpoints.delete(workflowId);
+    internals.parkedInlineWorkflows.delete(workflowId);
+    evictSuspendedWorkflowWaiters(internals, workflowId, callbacks);
+
     const updatedAt = internals.options.getNow();
     const updatedState = { ...state, status: 'suspended' as const, updatedAt };
 
     await callbacks.commitWorkflowStateOperations(state, [
-      // 'suspended' is non-terminal, so the terminal-index builder is a no-op
-      // here; included for symmetry with the other state-transition chokepoints.
-      ...buildTerminalWorkflowIndexOperations(state, updatedState),
       { type: 'put', key: KEYS.workflow(workflowId), value: encode(updatedState) },
       ...buildWorkflowVisibilityIndexTransition(workflowId, state, updatedState).batchOps,
+      // Delete the absolute execution-deadline timer in the same batch as the
+      // flip (atomic, lock-ordered before any resume re-arm). Symmetric to
+      // resume's durable re-arm via buildTimerBatchOperations.
+      ...buildDeadlineTimerDeleteOperations(workflowId, state.executionDeadline),
     ]);
-
-    // Stop driving the live run WITHOUT aborting it: parkWorkflow evicts the
-    // run's context/generator/turn from the inline strategy so a late activity
-    // completion cannot advance it past the suspend point, while leaving its
-    // AbortController unfired. Inside the same serialized section as the flip.
-    internals.inlineStrategy.parkWorkflow(workflowId);
-    dropQueuedInlineWorkflowStart(internals, workflowId);
-
-    // Evict in-memory execution state so a subsequent resume reloads from the
-    // durable checkpoint, and sever the wake paths for in-flight operations so a
-    // post-suspend signal/update buffers durably instead of driving the gone
-    // generator. Preserve the durable checkpoint (storage) and `services`.
-    internals.checkpoints.delete(workflowId);
-    internals.parkedInlineWorkflows.delete(workflowId);
-    evictSuspendedWorkflowWaiters(internals, workflowId, callbacks);
 
     return true;
   });
@@ -121,14 +139,28 @@ export async function suspendWorkflow(
     return;
   }
 
-  // The execution deadline is absolute wall-clock and does NOT pause while
-  // suspended: cancel the pending timer here; resume re-arms it at the same
-  // absolute fire time (or times out immediately if already past).
-  void callbacks.swallowPromiseRejection(
-    internals.scheduler.cancel(`deadline:${workflowId}`, workflowId),
-  );
-
   const event = new WorkflowSuspendedEvent(workflowId);
   callbacks.dispatchEvent(event);
   callbacks.forwardEventToHandle(workflowId, event);
+}
+
+/**
+ * Build the durable delete operations for a workflow's execution-deadline timer,
+ * mirroring the keys written by {@link buildTimerBatchOperations} for a
+ * `deadline:${workflowId}` / `execution-deadline` timer: the sortable deadline
+ * key plus its stable `timer-idx:` index. Returns an empty array when the
+ * workflow has no execution deadline.
+ */
+function buildDeadlineTimerDeleteOperations(
+  workflowId: string,
+  executionDeadline: number | undefined,
+): BatchOperation[] {
+  if (executionDeadline === undefined) {
+    return [];
+  }
+  const timerId = `deadline:${workflowId}`;
+  return [
+    { type: 'delete', key: KEYS.deadline(executionDeadline, timerId) },
+    { type: 'delete', key: `timer-idx:${timerId}` },
+  ];
 }

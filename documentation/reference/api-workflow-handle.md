@@ -129,7 +129,7 @@ async suspend(): Promise<void>;
 Suspend the workflow without terminating it. Unlike `cancel()`, suspension is a _pause_, not a cancellation:
 
 1. Sets the workflow status to the non-terminal `'suspended'`
-2. Parks the run **without** aborting its `AbortController` — no cancel handlers run, and code observing `ctx.signal.aborted` does not fire
+2. Parks the run _without_ aborting its `AbortController` — no cancel handlers run, and nothing observing `ctx.signal.aborted` sees it go true
 3. Preserves the durable checkpoint, so the run is resumable
 4. Leaves `result()` pending — it does not settle
 5. Dispatches a `WorkflowSuspendedEvent`

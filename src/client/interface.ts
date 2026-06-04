@@ -398,7 +398,11 @@ export interface WeftClient {
   /** Out-of-band ("async") activity completion by task token. See {@link WeftClientActivity}. */
   readonly activity: WeftClientActivity;
 
-  /** Resume a failed or timed-out workflow. */
+  /**
+   * Re-drive a workflow from its persisted checkpoint. Accepts a workflow that
+   * was explicitly suspended (`suspend(id)`) or one left `'running'` by a prior
+   * process; throws for a status that cannot be resumed (terminal or pending).
+   */
   resume(id: string): Promise<ClientHandle>;
 
   /** Recover all interrupted workflows. */

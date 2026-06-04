@@ -672,14 +672,43 @@ describe('HttpClient', () => {
   });
 
   describe('suspend', () => {
-    it('suspends a workflow via the client over HTTP', async () => {
-      // Drives POST /v1/workflows/:id/suspend end-to-end: client →
-      // suspendWorkflowRequest → server REST binding → engine.suspend. A
-      // completed workflow is a documented no-op (the CAS is gated to
-      // 'running'), so this asserts the transport round-trips without error.
-      const handle = await client.start('echo', 'data', { id: 'http-suspend-test' });
+    it('suspends a RUNNING workflow via POST /v1/workflows/:id/suspend', async () => {
+      // Drives POST /v1/workflows/:id/suspend end-to-end on a workflow that is
+      // genuinely running (parked on waitForSignal), so the test fails if the
+      // binding fired the wrong verb/path or hit a no-op. Asserts the actual
+      // 'running' → 'suspended' transition round-trips: client →
+      // suspendWorkflowRequest → server REST binding → engine.suspend.
+      const statusOfWorkflow = async (id: string): Promise<string | undefined> => {
+        const state = await client.get(id);
+        return state?.status;
+      };
+      const handle = await client.start('client-contract-waiting', 'data', {
+        id: 'http-suspend-live',
+      });
+      // Let the run reach 'running' (parked on waitForSignal('continue')).
+      for (let attempt = 0; attempt < 20; attempt++) {
+        if ((await statusOfWorkflow('http-suspend-live')) === 'running') break;
+        await sleepForTesting(5);
+      }
+      expect(await statusOfWorkflow('http-suspend-live')).toBe('running');
+
+      await client.suspend('http-suspend-live');
+      expect(await statusOfWorkflow('http-suspend-live')).toBe('suspended');
+
+      // Clean up: resume and drive it to completion so it does not linger.
+      await client.resume('http-suspend-live');
+      await client.signal('http-suspend-live', 'continue', 'go');
+      void handle;
+    });
+
+    it('suspending a completed workflow over HTTP is a no-op', async () => {
+      // The CAS is gated to 'running', so suspending a terminal workflow is a
+      // documented no-op that must round-trip without error or status change.
+      const handle = await client.start('echo', 'data', { id: 'http-suspend-noop' });
       await handle.result();
-      await client.suspend('http-suspend-test');
+      await client.suspend('http-suspend-noop');
+      const finalState = await client.get('http-suspend-noop');
+      expect(finalState?.status).toBe('completed');
     });
   });
 
