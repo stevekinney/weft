@@ -35,13 +35,20 @@ export function queueInlineWorkflowExecutionStart(
 }
 
 /**
- * Discard a set of queued inline starts, firing each one's `onStarted` liveness
- * callback so a `defer: false` awaiter settles instead of hanging on a run that
- * will never become live. Used by every path that drops queued starts without
- * executing them: abort-during-flush, synchronous dispose, and cancel-while-queued.
+ * Discard a set of queued inline starts consistently: settle each one's
+ * `onStarted` liveness callback (so a `defer: false` awaiter does not hang on a
+ * run that will never become live) AND remove its id from both queue-membership
+ * indexes (so they never claim a start that is no longer queued). Used by every
+ * path that drops queued starts without executing them: abort-during-flush,
+ * synchronous dispose, and cancel-while-queued.
  */
-function settleDiscardedInlineStarts(discarded: QueuedInlineWorkflowExecutionStart[]): void {
+function settleDiscardedInlineStarts(
+  internals: EngineInternals,
+  discarded: QueuedInlineWorkflowExecutionStart[],
+): void {
   for (const start of discarded) {
+    internals.queuedInlineWorkflowStartIds.delete(start.workflowId);
+    internals.queuedOrLaunchingInlineWorkflowStartIds.delete(start.workflowId);
     start.onStarted?.();
   }
 }
@@ -52,11 +59,11 @@ export async function flushQueuedInlineWorkflowStarts(
 ): Promise<void> {
   if (internals.abortController.signal.aborted) {
     // The engine is tearing down. Discard the queue, but settle each start's
-    // liveness callback first so a defer:false awaiter does not hang on a run
-    // that will never execute against the aborted engine.
+    // liveness callback and clear its membership indexes first so a defer:false
+    // awaiter does not hang and the id sets do not claim discarded starts.
     const discarded = internals.queuedInlineWorkflowStarts;
     internals.queuedInlineWorkflowStarts = [];
-    settleDiscardedInlineStarts(discarded);
+    settleDiscardedInlineStarts(internals, discarded);
     return;
   }
 
@@ -186,12 +193,11 @@ export function dropQueuedInlineWorkflowStart(
     return true;
   });
   if (internals.queuedInlineWorkflowStarts.length !== initialLength) {
-    internals.queuedInlineWorkflowStartIds.delete(workflowId);
-    internals.queuedOrLaunchingInlineWorkflowStartIds.delete(workflowId);
     // Settle the `defer: false` awaiter for a start dropped before it ran (e.g.
-    // the workflow was cancelled/terminated while still queued). The run never
-    // became live, but the awaiter must not hang. Mirrors the dispose path.
-    settleDiscardedInlineStarts(dropped);
+    // the workflow was cancelled/terminated while still queued) and clear its
+    // membership indexes. The run never became live, but the awaiter must not
+    // hang. Mirrors the dispose and abort paths.
+    settleDiscardedInlineStarts(internals, dropped);
   }
   return internals.queuedInlineWorkflowStarts.length !== initialLength;
 }
@@ -203,7 +209,10 @@ export function disposeQueuedInlineWorkflowStarts(internals: EngineInternals): v
   // torn-down engine. (asyncDispose drains these instead of discarding them.)
   const discarded = internals.queuedInlineWorkflowStarts;
   internals.queuedInlineWorkflowStarts = [];
-  settleDiscardedInlineStarts(discarded);
+  settleDiscardedInlineStarts(internals, discarded);
+  // Belt-and-suspenders full reset: the helper already cleared each discarded
+  // start's id, but a total clear guards against any index entry without a
+  // matching queued start.
   internals.queuedInlineWorkflowStartIds.clear();
   internals.queuedOrLaunchingInlineWorkflowStartIds.clear();
 

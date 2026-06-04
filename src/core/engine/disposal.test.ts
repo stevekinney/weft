@@ -537,6 +537,12 @@ describe('onStarted fires on every flush terminal path', () => {
 
     expect(seeded.fired()).toBe(true);
     expect(internals.queuedInlineWorkflowStarts.length).toBe(0);
+    // The membership indexes must not still claim the discarded start, or
+    // isInlineWorkflowLocallyOwned would report a torn-down run as live.
+    expect(internals.queuedInlineWorkflowStartIds.has('aborted-before-flush')).toBe(false);
+    expect(internals.queuedOrLaunchingInlineWorkflowStartIds.has('aborted-before-flush')).toBe(
+      false,
+    );
     engine[Symbol.dispose]();
   });
 });

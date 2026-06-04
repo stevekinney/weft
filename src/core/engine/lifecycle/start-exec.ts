@@ -188,26 +188,24 @@ export async function beginExecutionAwaitingLiveness(
   }
 
   const liveness = params.options?.defer === false ? Promise.withResolvers<void>() : undefined;
-  try {
-    beginWorkflowExecution(
-      internals,
-      workflowId,
-      params.type,
-      params.input,
-      params.checkpoint,
-      params.state.executionDeadline,
-      params.state.executionStateOwnerId ?? workflowId,
-      params.registration,
-      callbacks,
-      liveness ? () => liveness.resolve() : undefined,
-    );
-  } catch (error) {
-    // If queueing/execution throws before onStarted can fire, reject the
-    // liveness promise so the defer:false awaiter surfaces the error instead of
-    // hanging on a run that never enqueued.
-    liveness?.reject(error instanceof Error ? error : new Error(String(error)));
-    throw error;
-  }
+  // If beginWorkflowExecution throws before onStarted can fire, the error
+  // propagates straight out of this function — and since the throw is before the
+  // `await liveness.promise` below, the defer:false caller surfaces it via this
+  // function's own rejected promise. We deliberately do NOT reject `liveness`
+  // here: nothing awaits it on the throw path, so rejecting it would leave an
+  // orphaned rejected promise (an unhandled rejection).
+  beginWorkflowExecution(
+    internals,
+    workflowId,
+    params.type,
+    params.input,
+    params.checkpoint,
+    params.state.executionDeadline,
+    params.state.executionStateOwnerId ?? workflowId,
+    params.registration,
+    callbacks,
+    liveness ? () => liveness.resolve() : undefined,
+  );
   if (liveness) {
     await liveness.promise;
   }
