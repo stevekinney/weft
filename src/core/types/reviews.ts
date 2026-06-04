@@ -62,7 +62,8 @@ export type ReviewStatus = 'pending' | 'completed';
  * Filter accepted by `engine.listReviews(filter?)` and the `/v1/reviews`
  * transport surfaces.
  *
- * Omitting `status` preserves the legacy pending-only behavior.
+ * Omitting `status` lists pending reviews; pass `status: 'completed'` to list
+ * completed reviews instead.
  *
  * @example
  * ```ts

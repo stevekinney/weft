@@ -97,12 +97,14 @@ export interface EngineInternals {
   activityRegistry: ActivityRegistry;
   /**
    * Per-workflow activity registries built from
-   * `workflow({ name }).activities({ ... }).execute(...)`. Indexed by workflow
-   * type. Phase 3 wires lookups via `activityRegistriesByWorkflow.get(type)`
-   * first, falling back to {@link EngineInternals.activityRegistry} so the
-   * legacy global path keeps working until Phase 6 removes it. Each registry
-   * is constructed from a defensive deep clone+freeze of the workflow's
-   * `activities` map so post-registration mutation cannot reach the engine.
+   * `workflow({ name }).activities({ ... }).execute(...)`, indexed by workflow
+   * type. Activity lookup consults `activityRegistriesByWorkflow.get(type)`
+   * first and falls back to the engine-wide {@link EngineInternals.activityRegistry}.
+   * Both registry sources are first-class: a workflow that declares its own
+   * `activities(...)` map resolves from this per-workflow registry, while one
+   * registered without it resolves from the global registry. Each per-workflow
+   * registry is a defensive deep clone+freeze of the workflow's `activities` map
+   * so post-registration mutation cannot reach the engine.
    */
   activityRegistriesByWorkflow: Map<string, ActivityRegistry>;
   /**
