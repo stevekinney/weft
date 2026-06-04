@@ -210,8 +210,10 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
       input: state.input,
       launchOptions: {
         id: state.id,
-        // Only present when the run was started with tags; omit the key entirely
-        // (exactOptionalPropertyTypes) rather than carrying an empty array.
+        // Reflects the run's CURRENT tags from persisted state, not its
+        // launch-time tags: tags are mutable via addTags/removeTags. Omit the
+        // key entirely when there are none (exactOptionalPropertyTypes) rather
+        // than carrying an empty array.
         ...(state.tags !== undefined && state.tags.length > 0 && { tags: state.tags }),
       },
     };

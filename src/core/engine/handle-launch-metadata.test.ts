@@ -67,12 +67,15 @@ describe('WorkflowHandle.getLaunchMetadata', () => {
   it('recovers the original input on a handle returned from recoverAll', async () => {
     const storage = new MemoryStorage();
 
-    const original = new Engine({ storage });
-    original.register(waiter);
     const input = { tenant: 'acme', model: 'opus' };
-    await original.start('waits', input, { id: 'recoverable', tags: ['t1'] });
-    await flush();
-    original[Symbol.dispose]();
+    // Scope the first engine so it is disposed (releasing its timers) before the
+    // recovery engine opens the same storage, even if an assertion below throws.
+    {
+      using original = new Engine({ storage });
+      original.register(waiter);
+      await original.start('waits', input, { id: 'recoverable', tags: ['t1'] });
+      await flush();
+    }
 
     // Fresh process: recover and read launch context off the recovered handle
     // without any side table correlating the run back to its start call.

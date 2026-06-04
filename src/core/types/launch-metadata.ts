@@ -6,10 +6,12 @@
  * recovered workflow back to how it was started.
  *
  * `launchOptions` carries only the options recoverable *faithfully* from
- * persisted state: `id` (always) and `tags`. Deliberately excluded:
- * `executionTimeout` (state stores the absolute deadline, not the original
- * duration, so it cannot be reproduced exactly); `idempotencyKey` (no durable
- * trace); `searchAttributes` (live in their own durable index — read them via
+ * persisted state: `id` (always) and `tags`. Note `tags` is the run's *current*
+ * tag set (tags are mutable via `addTags`/`removeTags`), not necessarily the
+ * tags passed at launch. Deliberately excluded: `executionTimeout` (state
+ * stores the absolute deadline, not the original duration, so it cannot be
+ * reproduced exactly); `idempotencyKey` (no durable trace); `searchAttributes`
+ * (live in their own durable index — read them via
  * {@link WorkflowHandle.getAttributes}); and `services` (non-serializable,
  * re-provided on recovery by {@link EngineOptions.resolveWorkflowServices}).
  *
