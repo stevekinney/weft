@@ -34,6 +34,7 @@ Creates a new engine instance. All options are optional — sensible defaults ar
 | `broadcastEvents`                | `boolean`                  | `false`               | Enable `BroadcastChannel` for cross-worker event coordination                  |
 | `workflowExecutionMode`          | `'inline' \| 'worker'`     | `'inline'`            | Inline or Worker workflow execution; Worker mode requires `workerExecution`    |
 | `workerExecution`                | `WorkerExecutionOptions`   | `undefined`           | Configuration for offloading workflow execution to Web Workers                 |
+| `resolveWorkflowServices`        | `WorkflowServicesResolver` | `undefined`           | Rebuild per-run inline `ctx.services` during fresh-process recovery            |
 | `activityExecution`              | `ActivityExecutionOptions` | `undefined`           | Configuration for activity execution behavior                                  |
 | `alerts`                         | `AlertOptions[]`           | `undefined`           | Metric alert thresholds that fire `AlertFiredEvent` / `AlertResolvedEvent`     |
 | `interceptors`                   | `readonly Interceptor[]`   | `undefined`           | Unified interceptors registered at construction                                |
@@ -129,6 +130,8 @@ async start<TName extends keyof WorkflowRegistry & string>(
 
 Start a new workflow execution. Names declared in the augmentable `WorkflowRegistry` get typed input and typed `handle.result()` output. When a workflow registry is present, TypeScript rejects names outside that registry; use `workflow()` definitions with `Engine.create({ workflows })` or `engine.withWorkflow()` to add names explicitly. Throws if `type` is not registered or a workflow with the given `id` already exists.
 
+`options.services` is inline-only host data exposed as `ctx.services`. It is never checkpointed. When recovering a workflow that was launched with services in a fresh process, configure `EngineOptions.resolveWorkflowServices` to rebuild the value before the generator advances. Passing `services` in Worker execution mode throws at start because the value cannot cross to a Worker.
+
 | Parameter | Type           | Description                                 |
 | --------- | -------------- | ------------------------------------------- |
 | `type`    | `string`       | Name of the registered workflow             |
@@ -202,6 +205,20 @@ getHandle(workflowId: string): WorkflowHandle
 ```
 
 Retrieve a `WorkflowHandle` for an existing workflow by ID. Uses a `WeakRef` cache internally — if the handle has been garbage collected, a new one is created. If the workflow is still running, the result promise chains off the existing resolver. If the workflow has already completed or failed, the result is loaded from storage.
+
+### `getOffload()`
+
+```ts partial
+async getOffload(workflowId: string, key: string): Promise<unknown>
+```
+
+Read a value previously written by `ctx.offload(key, ...)` for a workflow. This is the external reader for offloaded artifacts after `handle.result()` resolves. The public TypeScript return is `unknown` because Weft does not know your artifact type; handle `null` as the runtime "not found or swept" value.
+
+```ts partial
+const report = await engine.getOffload(handle.id, 'report');
+```
+
+Offloaded values survive normal completion and application failure so consumers can inspect them after the workflow reaches a terminal result. They are swept when a workflow is terminated, cancelled, or timed out. The method returns the decoded value, or `null` when no value is stored under that key.
 
 ### `addInterceptor()`
 
@@ -348,13 +365,14 @@ interface EngineOptions {
   broadcastEvents?: boolean;
   workflowExecutionMode?: 'inline' | 'worker';
   workerExecution?: WorkerExecutionOptions;
+  resolveWorkflowServices?: WorkflowServicesResolver;
   activityExecution?: ActivityExecutionOptions;
   alerts?: AlertOptions[];
   interceptors?: readonly Interceptor[];
 }
 ```
 
-See [Configuration](./configuration.md) for defaults and Worker execution hardening options. `interceptors` is equivalent to registering each entry with `addInterceptor()` during construction. Explicit `workflowExecutionMode: 'worker'` is the untrusted workflow posture; inline execution remains available for trusted deployments.
+See [Configuration](./configuration.md) for defaults and Worker execution hardening options. `interceptors` is equivalent to registering each entry with `addInterceptor()` during construction. Explicit `workflowExecutionMode: 'worker'` is the untrusted workflow posture; inline execution remains available for trusted deployments. `resolveWorkflowServices` is consulted only for recovered inline workflows that were originally launched with `StartOptions.services`.
 
 ### `StartOptions`
 
@@ -363,7 +381,11 @@ interface StartOptions {
   id?: string;
   idempotencyKey?: string;
   executionTimeout?: Duration;
+  startAt?: number;
+  startAfter?: Duration;
+  tags?: string[];
   searchAttributes?: Record<string, SearchAttributeValue>;
+  services?: unknown;
 }
 ```
 
@@ -372,7 +394,11 @@ interface StartOptions {
 | `id`               | `string`                               | Explicit workflow ID. Auto-generated UUID if omitted.                                                                       |
 | `idempotencyKey`   | `string`                               | Deduplication key for at-most-once starts                                                                                   |
 | `executionTimeout` | `Duration`                             | Maximum wall-clock time before automatic cancellation. Accepts milliseconds or human-readable strings like `'30s'`, `'5m'`. |
-| `searchAttributes` | `Record<string, SearchAttributeValue>` | Initial search attributes for the workflow                                                                                  |
+| `startAt`          | `number`                               | Unix timestamp in milliseconds for a delayed start.                                                                         |
+| `startAfter`       | `Duration`                             | Delay before starting the workflow.                                                                                         |
+| `tags`             | `string[]`                             | Initial tags for workflow visibility.                                                                                       |
+| `searchAttributes` | `Record<string, SearchAttributeValue>` | Initial search attributes for the workflow.                                                                                 |
+| `services`         | `unknown`                              | Non-serialized per-run inline capabilities exposed as `ctx.services`; recovered by `EngineOptions.resolveWorkflowServices`. |
 
 ### `ListFilter`
 

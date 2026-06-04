@@ -1,6 +1,6 @@
 # Weft
 
-A Bun-native durable execution engine. Current launch version: `0.2.0`.
+A Bun-native durable execution engine. Current release: `0.2.1`.
 
 Install the library from npm as `@lostgradient/weft`:
 
@@ -43,7 +43,7 @@ Weft is a ground-up rethink: what would durable execution look like if you desig
 
 ## Stability Tiers
 
-Weft is launching as `0.2.0`, not `1.0`. The table below is the current adoption guidance, not a permanent compatibility guarantee. Surfaces marked **candidate-stable** are expected to carry the 1.0 support promise if the [Tier-0 Behavioral Contract](documentation/architecture/tier-0-behavioral-contract.md) does not force a public-shape change. Tier-0 work may still add error codes, duplicate-response shapes, or storage-capability failures before those surfaces graduate.
+Weft is still pre-1.0. The table below is the current adoption guidance, not a permanent compatibility guarantee. Surfaces marked **candidate-stable** are expected to carry the 1.0 support promise if the [Tier-0 Behavioral Contract](documentation/architecture/tier-0-behavioral-contract.md) does not force a public-shape change. Tier-0 work may still add error codes, duplicate-response shapes, or storage-capability failures before those surfaces graduate.
 
 | Tier                          | Surfaces                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | What to expect                                                                                                             |
 | ----------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
@@ -93,6 +93,14 @@ That's the core loop: `workflow({ name })` is a **chained builder** that co-loca
 `Engine.create()` does the registration dance for you: it constructs the engine and registers each workflow in the `workflows` map, pulling in all the activities each workflow declares. It then **recovers by default** — `engine.recoverAll()` runs after registration, so any workflows still running from a previous process pick up where they left off. That's the point of durable storage, so you don't have to ask for it. Pass `recover: false` to opt out (handy for tests, for `ScopedStorage`-isolated engines, or when you want to inspect a store before migrating it). Durability is separate: each step is persisted before it commits no matter what `recover` is set to — `recover` only decides whether _this_ engine resumes that persisted work on boot. Run a single engine per durable store; pointing two at the same store is not yet coordinated and can double-resume a workflow.
 
 If you'd rather wire things up by hand — useful for tests, isolating engines onto separate storage scopes via `ScopedStorage`, or adding new workflows after the engine starts up — `new Engine({ storage })`, `engine.register(workflow)` or `engine.registerWorkflows({ ... })`, and `await engine.recoverAll()` are the underlying primitives. Each `engine.register(workflow)` call returns the engine with that workflow's name and types baked in, so `engine.start('welcome', ...)` autocompletes immediately.
+
+When a workflow needs a live host capability that cannot be checkpointed, pass it as per-run `services`:
+
+```typescript
+const handle = await engine.start('welcome', { name: 'Steve' }, { services: { crmClient } });
+```
+
+Inside inline workflows, read that value from `ctx.services` and narrow it to your application type. Weft never writes the service object into checkpoints; it persists only a presence marker so `Engine.create({ resolveWorkflowServices })` can rebuild the service value during fresh-process recovery before the generator advances. Do not use `services` for durable data, and do not pass it in Worker execution mode — non-serializable values cannot cross to a Worker.
 
 > [!NOTE]
 > The chained builder also accepts `.signals({...})`, `.updates({...})`, `.queries({...})`, and `.searchAttributes({...})`. Each can be called at most once before `.execute(fn)`; the type system flips a phantom flag so a duplicate call fails to typecheck, and the runtime mirrors the same invariant. These maps don't introduce new runtime gating — they're type hints that thread into `ctx.run()`, `ctx.waitForSignal()`, `ctx.waitForUpdate()`, and friends so your editor autocompletes and your code typechecks. The underlying dispatch paths are unchanged.
@@ -372,39 +380,36 @@ For chaos testing, `withChaos()` wraps activities with configurable transient fa
 Every error Weft throws extends `WeftError`, so a single `instanceof` check catches them all, and each carries a stable string `code` equal to its class name:
 
 ```typescript
-import { isWeftError, isWeftErrorCode } from '@lostgradient/weft';
+import { isWeftError } from '@lostgradient/weft';
 
 try {
   await engine.start('checkout', { orderId: 'order-1' }, { id: 'order-1' });
 } catch (error) {
   if (!isWeftError(error)) throw error; // not ours — rethrow
 
-  if (isWeftErrorCode(error.code)) {
-    switch (error.code) {
-      case 'WorkflowAlreadyExistsError':
-        // idempotent retry — already running
-        break;
-      case 'WorkflowNotRegisteredError':
-        throw error; // a programming error, not a runtime condition
-      default:
-        console.error(`[${error.code}] ${error.message}`);
-    }
+  switch (error.code) {
+    case 'WorkflowAlreadyExistsError':
+      // idempotent retry — already running
+      break;
+    case 'WorkflowNotRegisteredError':
+      throw error; // a programming error, not a runtime condition
+    default:
+      console.error(`[${error.code}] ${error.message}`);
   }
 }
 ```
 
-`isWeftError` is an `instanceof` check — the right tool in the common case where the error came from the same module instance. If an error can reach you across a realm or a duplicate module load (multiple copies of `@lostgradient/weft` in one process), `instanceof` is unreliable; skip `isWeftError` and branch on `error.code` directly, since the string `code` survives those boundaries:
+`isWeftError` is an `instanceof` check — the right tool in the common case where the error came from the same module instance. If an error can reach you across a realm or a duplicate module load (multiple copies of `@lostgradient/weft` in one process), `instanceof` is unreliable; use `isWeftErrorLike` to narrow the caught value structurally:
 
 ```typescript
-import { isWeftErrorCode } from '@lostgradient/weft';
+import { isWeftErrorLike } from '@lostgradient/weft';
 
 function isAlreadyRunning(error: unknown): boolean {
-  const code = (error as { code?: unknown }).code;
-  return isWeftErrorCode(code) && code === 'WorkflowAlreadyExistsError';
+  return isWeftErrorLike(error) && error.code === 'WorkflowAlreadyExistsError';
 }
 ```
 
-The exported `WeftErrorCode` union lists every code that belongs to a public, exported error class; those codes are stable contract and safe to `switch` on exhaustively. Errors that are internal to Weft also extend `WeftError` but carry codes intentionally left out of `WeftErrorCode` — `isWeftErrorCode` returns `false` for them — so internal codes may change between releases without breaking your types.
+The exported `WeftErrorCode` union lists every code that belongs to a public, exported error class; those codes are stable contract and safe to `switch` on exhaustively. Errors that are internal to Weft also extend `WeftError` but carry codes intentionally left out of `WeftErrorCode` — `isWeftErrorCode` and `isWeftErrorLike` return `false` for them — so internal codes may change between releases without breaking your types.
 
 ## Installation
 

@@ -161,6 +161,59 @@ const handle = await engine.start('order', orderData, {
 
 If you omit `options.id`, Weft creates a fresh workflow id for this start. The `id` option is useful when you want idempotent starts—starting a workflow with an ID that already exists throws an error, so your caller can safely retry without creating duplicates and then reattach to the existing workflow.
 
+### Per-run services
+
+Most workflow state should be serializable and durable: inputs, local variables that survive checkpoints, activity results, session state, and offloaded artifacts. Sometimes the workflow also needs a live host capability that should never be written to storage, such as a database client, API client, closure, tool registry, or test double. Pass those capabilities through `engine.start(..., { services })` and read them from `ctx.services`:
+
+```typescript partial
+type OrderServices = {
+  reserveInventory: (orderId: string) => Promise<void>;
+};
+
+function isOrderServices(value: unknown): value is OrderServices {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'reserveInventory' in value &&
+    typeof value.reserveInventory === 'function'
+  );
+}
+
+engine.register(
+  workflow({ name: 'order' }).execute(async function* (ctx, input: { orderId: string }) {
+    if (!isOrderServices(ctx.services)) {
+      throw new Error('order services unavailable');
+    }
+
+    yield* ctx.run(ctx.services.reserveInventory, input.orderId);
+    return { reserved: true };
+  }),
+);
+
+await engine.start('order', { orderId: 'order-123' }, { services: orderServices });
+```
+
+`ctx.services` is typed `unknown` because Weft does not own your application dependency graph. Narrow it at the call site or with a local type guard. The value is available only in inline workflow execution. Passing `services` with `workflowExecutionMode: 'worker'` throws at `engine.start()`, because a non-serializable object cannot cross to a Worker.
+
+`services` is not durable data. Weft never checkpoints the object and never serializes it into workflow state. It persists only a presence marker for runs that were launched with services. On a fresh-process recovery, configure `Engine.create({ resolveWorkflowServices })` so the engine can rebuild that value before the generator advances:
+
+```typescript partial
+const engine = await Engine.create({
+  storage,
+  workflows: { order },
+  resolveWorkflowServices: async ({ workflowId, input }) => {
+    const orderId = (input as { orderId: string }).orderId;
+    const services = await buildOrderServices(orderId);
+    if (!services) {
+      return { status: 'unavailable', reason: `No services for ${workflowId}` };
+    }
+    return { status: 'available', services };
+  },
+});
+```
+
+The resolver runs only for recovered inline workflows that were originally launched with `services`; ordinary workflows do not pay that cost and do not fail if the resolver is absent. Returning `unavailable` or throwing fails only that recovered run with a system failure category. Child workflows do not inherit the parent's `services`; start each child with its own durable input and host services if it needs them.
+
 ## No history growth
 
 Unlike systems that replay an ever-growing event history, Weft's checkpoint is a constant-size snapshot of current state. It does not grow with the number of activities executed. A workflow can run for years, execute millions of activities, and its checkpoint stays the same size as it was after the first `yield*`. There is no history limit, no `continueAsNew`, no manual state serialization.
@@ -195,7 +248,17 @@ engine.register(
 );
 ```
 
-The offloaded data survives engine recovery—it is persisted to the same storage backend as checkpoints. The `OffloadReference` is small (just a key, workflow ID, and size) and serializes cleanly in the checkpoint.
+The offloaded data survives engine recovery and normal completion — it is persisted to the same storage backend as checkpoints. The `OffloadReference` is small (just a key, workflow ID, and size) and serializes cleanly in the checkpoint. After `handle.result()` resolves, callers outside the workflow can read the artifact with `engine.getOffload(workflowId, key)`:
+
+```typescript partial
+const result = await handle.result();
+const report = await engine.getOffload(handle.id, 'batch-results');
+
+void result;
+void report;
+```
+
+`getOffload()` returns the decoded value, or `null` when the key was never written, the workflow ID is unknown, or the artifact was swept after termination, cancellation, or timeout.
 
 ### Archiving historical data
 

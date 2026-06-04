@@ -11,7 +11,7 @@ Not every Weft surface carries the same stability promise. The tier is stated pe
 | **stable**       | No breaking changes without a deprecation cycle (see below). Removal requires at least one release with a deprecation warning.                               |
 | **experimental** | May change or be removed in any release, including patch releases. Experimental surfaces exist to collect real-world feedback before the contract is frozen. |
 
-**Stable surfaces (as of 0.1.x):** `Engine`, `TestEngine`, `SQLiteStorage` (Bun and Node), `LMDBStorage`, `RemoteWorker`, `serve()` and the `/v1/` REST surface, public error classes and `WeftErrorCode`, `WorkflowContext` method signatures, and `ActivityDefinition` fields.
+**Stable surfaces (as of 0.2.x):** `Engine`, `TestEngine`, `SQLiteStorage` (Bun and Node), `LMDBStorage`, `RemoteWorker`, `serve()` and the `/v1/` REST surface, public error classes and `WeftErrorCode`, `WorkflowContext` method signatures, and `ActivityDefinition` fields.
 
 **Experimental surfaces:** Browser runtime, MCP server, `IndexedDBStorage`, `WebExtensionStorage`, `HTTPStorage`, `CompressedStorage`, Turso storage (pending conformance proof), CLI commands beyond `serve` and `doctor`, OTel metric names, externally supplied dashboard mounting, and `ctx.step()` sugar.
 
@@ -22,7 +22,7 @@ Weft uses [Semantic Versioning](https://semver.org/): `MAJOR.MINOR.PATCH`.
 - **Pre-1.0 (`0.x.y`):** Breaking changes to stable surfaces are allowed but always announced in `CHANGELOG.md` with a migration path. The intent is to avoid unnecessary churn — pre-1.0 does not mean "anything goes."
 - **Post-1.0:** Breaking changes require a `MAJOR` version bump. `MINOR` adds backwards-compatible features. `PATCH` fixes bugs without changing the API contract.
 
-The project targets `0.2.0` as the next planned release. `1.0.0` requires all Tier-0 correctness work complete, stability-tier documentation in place, and the breaking-change policy frozen.
+The project is on the `0.2.x` release line. `1.0.0` requires all Tier-0 correctness work complete, stability-tier documentation in place, and the breaking-change policy frozen.
 
 ## What Counts as a Breaking Change
 

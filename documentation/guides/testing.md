@@ -138,6 +138,19 @@ recovered.register(workflow({ name: 'resilient' }).execute(resilientWorkflow));
 
 The recovered engine has its own `TimeControl` initialized to the current engine's virtual time.
 
+## Draining inline work between tests
+
+Inline workflow tests can queue promise continuations or a deferred inline launch just before a test disposes its engine. If the next test shares the same JavaScript process, that leftover work can run against the wrong timer state. Use the portable event-loop helpers from `@lostgradient/weft/testing` instead of test-runner-specific timer APIs:
+
+```typescript partial
+import { afterEach } from 'bun:test';
+import { yieldToPortableEventLoop } from '@lostgradient/weft/testing';
+
+afterEach(yieldToPortableEventLoop);
+```
+
+`yieldToPortableEventLoop()` yields one macrotask turn and then drains microtasks. If you only need queued promise continuations to settle, use `flushPortableMicrotasks()`.
+
 ## Test patterns with Bun's test runner
 
 Here's a complete test combining everything:

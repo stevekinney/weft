@@ -67,6 +67,33 @@ fenced ownership claim acquired before a resumed workflow executes — is a futu
 capability that is **not yet implemented**. Until it lands, treat single-engine-per-store as a hard
 operational constraint.
 
+## Rebuilding per-run services
+
+`StartOptions.services` is a live, non-serialized per-run channel for inline workflows. It is useful for host capabilities such as API clients, tool registries, closures, or test doubles that cannot be checkpointed. Because Weft never writes the service object to storage, a fresh process has to rebuild it before a recovered generator advances.
+
+Configure `resolveWorkflowServices` on the engine:
+
+```typescript partial
+const engine = await Engine.create({
+  storage,
+  workflows: { order },
+  resolveWorkflowServices: async ({ workflowId, workflowType, input }) => {
+    const services = await rebuildServicesFor(input);
+    if (!services) {
+      return {
+        status: 'unavailable',
+        reason: `Cannot rebuild services for ${workflowType}/${workflowId}`,
+      };
+    }
+    return { status: 'available', services };
+  },
+});
+```
+
+The resolver is consulted only for recovered inline workflows that were originally launched with `services`; Weft persists a presence marker for those runs and skips the resolver for ordinary workflows. If the resolver returns `unavailable` or throws, Weft fails that one recovered workflow with a system failure category and continues recovering siblings. If terminal failure cannot be committed because storage fails, recovery surfaces that storage problem like any other failed commit.
+
+Do not use `services` to hide durable business state outside checkpoints. Put durable decisions in workflow input, checkpointed local state, `ctx.state`, activities, or offloads. Use `services` only for live capabilities that can be reconstructed from durable input or deployment configuration.
+
 ## Acknowledging drift: `acknowledgeUnknownWorkflowTypes`
 
 Sometimes drift is intentional: a rolling deploy where old pods are still serving the workflow type the new pod doesn't know; a storage migration where you're copying records into a partial registry; a one-shot operator script that doesn't need to drive every workflow type the database holds.

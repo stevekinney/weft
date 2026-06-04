@@ -59,6 +59,7 @@ interface WorkflowContext {
   readonly executionTimeRemaining: number;
   readonly startedAt: number;
   readonly state: WorkflowStateNamespace;
+  readonly services?: unknown;
   run<TArguments extends unknown[], TResult>(
     fn: (...arguments_: TArguments) => Promise<TResult> | TResult,
     ...rest: TArguments
@@ -106,7 +107,7 @@ interface WorkflowContext {
 }
 ```
 
-`WorkflowContext` is the normal workflow authoring surface. You do not need to cast it to `Context` to call durable operations.
+`WorkflowContext` is the normal workflow authoring surface. You do not need to cast it to `Context` to call durable operations. `services` is optional host-supplied per-run data from `engine.start(..., { services })`; it is available only in inline execution, is never checkpointed, and is re-provided on fresh-process recovery through `EngineOptions.resolveWorkflowServices`.
 
 ### Composition Types
 
@@ -531,13 +532,14 @@ interface EngineOptions {
   broadcastEvents?: boolean;
   workflowExecutionMode?: 'inline' | 'worker';
   workerExecution?: WorkerExecutionOptions;
+  resolveWorkflowServices?: WorkflowServicesResolver;
   activityExecution?: ActivityExecutionOptions;
   alerts?: AlertOptions[];
   interceptors?: readonly Interceptor[];
 }
 ```
 
-See [Configuration](./configuration.md) for detailed field descriptions and defaults. `history.maxEvents` is the lifetime history circuit breaker; `history.retentionWindow` compacts event-log storage behind a checkpoint watermark; `archive` is a best-effort post-commit sink for compacted ranges; `payloadSize.maxBytes` rejects oversized workflow inputs, signal payloads, and activity results before durable writes. `workflowExecutionMode: 'worker'` requires `workerExecution` and applies Worker turn timeout and protocol-message bounds for untrusted workflow code; `workflowExecutionMode: 'inline'` rejects `workerExecution`.
+See [Configuration](./configuration.md) for detailed field descriptions and defaults. `history.maxEvents` is the lifetime history circuit breaker; `history.retentionWindow` compacts event-log storage behind a checkpoint watermark; `archive` is a best-effort post-commit sink for compacted ranges; `payloadSize.maxBytes` rejects oversized workflow inputs, signal payloads, and activity results before durable writes. `workflowExecutionMode: 'worker'` requires `workerExecution` and applies Worker turn timeout and protocol-message bounds for untrusted workflow code; `workflowExecutionMode: 'inline'` rejects `workerExecution`. `resolveWorkflowServices` is consulted only for recovered inline workflows that were originally launched with `StartOptions.services`.
 
 ### `CompressionOptions`
 
@@ -557,9 +559,47 @@ interface StartOptions {
   id?: string;
   idempotencyKey?: string;
   executionTimeout?: Duration;
+  startAt?: number;
+  startAfter?: Duration;
+  tags?: string[];
   searchAttributes?: Record<string, SearchAttributeValue>;
+  services?: unknown;
 }
 ```
+
+`services` is the only non-serialized start option. Use it for live per-run host capabilities that the workflow can read through `ctx.services`, not for durable workflow state.
+
+### `WorkflowServicesResolver`
+
+```ts partial
+type WorkflowServicesResolver = (
+  info: WorkflowServicesResolverInfo,
+) => WorkflowServicesResolution | Promise<WorkflowServicesResolution>;
+```
+
+`EngineOptions.resolveWorkflowServices` uses this callback to rebuild `ctx.services` before a recovered inline workflow advances.
+
+### `WorkflowServicesResolution`
+
+```ts partial
+type WorkflowServicesResolution =
+  | { status: 'available'; services: unknown }
+  | { status: 'unavailable'; reason: string };
+```
+
+`EngineOptions.resolveWorkflowServices` returns this explicit union when rebuilding `ctx.services` during recovery. `unavailable` fails only the recovered workflow that needed services; it does not abort recovery for sibling workflows.
+
+### `WorkflowServicesResolverInfo`
+
+```ts partial
+interface WorkflowServicesResolverInfo {
+  workflowId: string;
+  workflowType: string;
+  input: unknown;
+}
+```
+
+The resolver receives the original durable workflow input so applications can rebuild the right host dependencies without persisting a second side table.
 
 ### `Serializer`
 

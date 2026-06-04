@@ -110,6 +110,47 @@ Direct access to the mock registry.
 
 ---
 
+## Portable event-loop helpers
+
+These helpers are exported from `@lostgradient/weft/testing` for tests that run inline workflows in a shared process. They avoid importing test-runner-only timer APIs and keep cleanup portable across Bun, Jest-like, and browser-adjacent runners.
+
+### `flushPortableMicrotasks()`
+
+```ts partial
+async function flushPortableMicrotasks(turns = 3): Promise<void>;
+```
+
+Drain queued promise continuations without yielding a full event-loop turn.
+
+```ts partial
+import { flushPortableMicrotasks } from '@lostgradient/weft/testing';
+
+let ran = false;
+void Promise.resolve().then(() => {
+  ran = true;
+});
+
+await flushPortableMicrotasks();
+expect(ran).toBe(true);
+```
+
+### `yieldToPortableEventLoop()`
+
+```ts partial
+async function yieldToPortableEventLoop(): Promise<void>;
+```
+
+Yield one full event-loop turn, then drain microtasks. Use it in `afterEach` when a test starts inline workflow work that may have queued a deferred launch before disposal.
+
+```ts partial
+import { afterEach } from 'bun:test';
+import { yieldToPortableEventLoop } from '@lostgradient/weft/testing';
+
+afterEach(yieldToPortableEventLoop);
+```
+
+---
+
 ## `TimeControl`
 
 ```ts partial

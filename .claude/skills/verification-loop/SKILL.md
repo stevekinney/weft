@@ -102,6 +102,14 @@ bun run verify:jsdoc:doctests
 
 Use `bun run verify:jsdoc:full` when exported declarations or public JSDoc changed.
 
+When a release changes `package.json` or `src/version.ts`, also run:
+
+```bash
+bun run verify:release-version
+```
+
+The version gate keeps the package version, exported `VERSION`, and OpenAPI/OpenRPC/AsyncAPI/MCP discovery defaults in sync.
+
 ### Package Gates
 
 Run these when package exports, build exclusions, publish workflow, public subpaths, optional dependency isolation, JSDoc examples, or consumer install behavior changed:
