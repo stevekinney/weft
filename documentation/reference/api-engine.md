@@ -236,6 +236,20 @@ get storage(): Storage
 
 Direct access to the underlying storage backend. Primarily useful for `TestEngine` and debugging.
 
+### `schedule()`
+
+```ts partial
+schedule<TInput>(definition: ScheduleDefinition<TInput>): Promise<ScheduleHandle>;
+schedule(
+  type: string,
+  input: unknown,
+  spec: string | ScheduleSpec,
+  options?: ScheduleOptions,
+): Promise<ScheduleHandle>;
+```
+
+Register a recurring schedule that starts a workflow on a cron expression or fixed interval, returning a `ScheduleHandle` for pausing, resuming, updating, or cancelling it. Call it either with a `ScheduleDefinition` object (`{ workflow, cron | every, input, overlapPolicy? }`) or positionally with a workflow type, input, and a cron string or `ScheduleSpec`. The `ScheduleOptions.overlap` policy governs what happens when a tick fires while the previous run is still in flight. The `ScheduleDefinition`, `ScheduleSpec`, and `ScheduleOptions` types carry JSDoc describing the spec formats (`{ cron }` vs `{ every }`) and the overlap values.
+
 ### `scheduler` (getter)
 
 ```ts partial

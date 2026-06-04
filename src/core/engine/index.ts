@@ -947,6 +947,37 @@ export class Engine<
   ): Promise<BulkTagResult | BulkOperationDryRunResult> {
     return untagAllWorkflows(getInternals(this), filter, tags, options);
   }
+  /**
+   * Register a recurring schedule that starts a workflow on a cron expression or
+   * fixed interval. Returns a {@link ScheduleHandle} for pausing, resuming,
+   * updating, or cancelling the schedule.
+   *
+   * Two call forms:
+   * - A {@link ScheduleDefinition} object: `engine.schedule({ workflow, cron, input })`.
+   *   Carries the workflow (definition or type name), the `cron`/`every` spec,
+   *   optional `input`, `id`, `overlapPolicy`, and `backfill`.
+   * - Positional: `engine.schedule(type, input, spec, options?)` where `spec` is
+   *   a cron string or a {@link ScheduleSpec} (`{ cron }` or `{ every }`).
+   *
+   * The {@link ScheduleOptions.overlap} policy governs what happens when a tick
+   * fires while the previous run is still in flight.
+   *
+   * @example
+   * ```ts
+   * import { workflow, Engine } from '@lostgradient/weft';
+   *
+   * const engine = new Engine();
+   * engine.register(workflow({ name: 'sweep' }).execute(async function* () { return 'ok'; }));
+   *
+   * // Definition form: every day at 09:00, skip a tick if the prior run is still running.
+   * const handle = await engine.schedule({
+   *   workflow: 'sweep',
+   *   cron: '0 9 * * *',
+   *   overlapPolicy: 'skip',
+   * });
+   * await handle.pause();
+   * ```
+   */
   async schedule<TInput>(definition: ScheduleDefinition<TInput>): Promise<ScheduleHandle>;
   async schedule(
     type: string,

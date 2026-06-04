@@ -207,6 +207,15 @@ export class Context implements WorkflowContext {
   ): Generator<ContextOperationRequest, TResult, unknown> {
     return yield* runActivityWithRetry(this, activity, rest);
   }
+  /**
+   * Durably sleep for `duration` before continuing. Unlike a wall-clock
+   * `setTimeout`, this is a checkpointed operation: the engine persists the timer
+   * and resumes the workflow when it fires, so a sleep survives process restarts
+   * and spans of days. On replay an already-elapsed sleep is a no-op — a
+   * recovered workflow does not wait again. `duration` is milliseconds
+   * (`number`) or a duration string (`'30s'`, `'1h'`, `'2d'` — see
+   * {@link Duration}); drive it with `yield*` from a workflow body.
+   */
   *sleep(duration: Duration): Generator<ContextOperationRequest, void, unknown> {
     const internals = getInternals(this);
     const prepared = durableOperations.prepareSleepOperation(internals, duration);
