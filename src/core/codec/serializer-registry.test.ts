@@ -36,7 +36,7 @@ describe('registerSerializer', () => {
   });
 
   it('round-trips a registered Error subclass with its structured fields', () => {
-    registerSerializer(ValidationError, validationErrorHandlers);
+    registerSerializer(ValidationError, validationErrorHandlers, { tag: 'ValidationError' });
 
     const original = new ValidationError('invalid input', [
       { path: 'email', code: 'invalid_string' },
@@ -55,7 +55,7 @@ describe('registerSerializer', () => {
   });
 
   it('round-trips a registered serializer nested inside an array/object', () => {
-    registerSerializer(ValidationError, validationErrorHandlers);
+    registerSerializer(ValidationError, validationErrorHandlers, { tag: 'ValidationError' });
 
     const original = {
       step: 3,
@@ -68,6 +68,42 @@ describe('registerSerializer', () => {
     expect(restored.results[0]?.issues).toEqual([{ path: 'x', code: 'nope' }]);
   });
 
+  it('decodes by embedded tag, not registration order — order is irrelevant', () => {
+    // Regression for the registration-order-id hazard: bytes encoded when types
+    // were registered in one order must decode correctly when a later process
+    // registers them in a DIFFERENT order. The tag travels in the payload, so
+    // decode resolves the right handler regardless of order.
+    class Alpha {
+      constructor(readonly value: string) {}
+    }
+    class Beta {
+      constructor(readonly count: number) {}
+    }
+    const alphaHandlers: SerializerHandlers<Alpha> = {
+      toJSON: (a) => ({ value: a.value }),
+      fromJSON: (d) => new Alpha((d as { value: string }).value),
+    };
+    const betaHandlers: SerializerHandlers<Beta> = {
+      toJSON: (b) => ({ count: b.count }),
+      fromJSON: (d) => new Beta((d as { count: number }).count),
+    };
+
+    // Process 1: register Alpha THEN Beta, encode an Alpha instance.
+    registerSerializer(Alpha, alphaHandlers, { tag: 'alpha' });
+    registerSerializer(Beta, betaHandlers, { tag: 'beta' });
+    const bytes = encode(new Alpha('hello'));
+
+    // Process 2 (simulated): same tags, registered Beta THEN Alpha — the reverse.
+    resetSerializerRegistryForTesting();
+    registerSerializer(Beta, betaHandlers, { tag: 'beta' });
+    registerSerializer(Alpha, alphaHandlers, { tag: 'alpha' });
+
+    const restored = decode(bytes) as Alpha;
+    // Without tag-based decode (positional ids), this would deserialize as Beta.
+    expect(restored).toBeInstanceOf(Alpha);
+    expect(restored.value).toBe('hello');
+  });
+
   it('preserves undefined fields in a custom serializer result, like the public codec', () => {
     // A custom toJSON() result with an `undefined` field must round-trip with the
     // same semantics as the public encode(): the field is preserved as undefined
@@ -75,10 +111,14 @@ describe('registerSerializer', () => {
     class Boxed {
       constructor(readonly value: unknown) {}
     }
-    registerSerializer(Boxed, {
-      toJSON: (boxed) => ({ value: boxed.value }),
-      fromJSON: (data) => new Boxed((data as { value: unknown }).value),
-    });
+    registerSerializer(
+      Boxed,
+      {
+        toJSON: (boxed) => ({ value: boxed.value }),
+        fromJSON: (data) => new Boxed((data as { value: unknown }).value),
+      },
+      { tag: 'boxed' },
+    );
 
     const restored = decode(encode(new Boxed(undefined))) as Boxed;
     expect(restored).toBeInstanceOf(Boxed);
@@ -89,7 +129,7 @@ describe('registerSerializer', () => {
 
   it('leaves a plain Error on the generic name/message/stack encoding', () => {
     // Registering a subclass must not change how a base Error round-trips.
-    registerSerializer(ValidationError, validationErrorHandlers);
+    registerSerializer(ValidationError, validationErrorHandlers, { tag: 'ValidationError' });
 
     const restored = decode(encode(new Error('plain'))) as Error;
     expect(restored).toBeInstanceOf(Error);
@@ -110,14 +150,47 @@ describe('registerSerializer', () => {
   });
 
   it('throws on a second registration for the same constructor', () => {
-    registerSerializer(ValidationError, validationErrorHandlers);
-    expect(() => registerSerializer(ValidationError, validationErrorHandlers)).toThrow(
-      /already registered/i,
+    registerSerializer(ValidationError, validationErrorHandlers, { tag: 'ValidationError' });
+    expect(() =>
+      registerSerializer(ValidationError, validationErrorHandlers, { tag: 'ValidationError2' }),
+    ).toThrow(/already registered/i);
+  });
+
+  it('throws when two constructors share a tag', () => {
+    class First extends Error {}
+    class Second extends Error {}
+    const handlers: SerializerHandlers<Error> = {
+      toJSON: (error) => ({ message: error.message }),
+      fromJSON: (data) => new Error((data as { message: string }).message),
+    };
+    registerSerializer(First, handlers, { tag: 'shared' });
+    expect(() => registerSerializer(Second, handlers, { tag: 'shared' })).toThrow(/tag/i);
+  });
+
+  it('throws on an empty tag', () => {
+    expect(() => registerSerializer(ValidationError, validationErrorHandlers, { tag: '' })).toThrow(
+      /tag/i,
     );
   });
 
+  it('throws on decoding a tag that has no registered serializer', () => {
+    // Encode with a tag registered, then drop the registration and decode: the
+    // decoder must fail loudly rather than silently misread.
+    class Orphan {
+      constructor(readonly v: number) {}
+    }
+    registerSerializer(
+      Orphan,
+      { toJSON: (o) => ({ v: o.v }), fromJSON: (d) => new Orphan((d as { v: number }).v) },
+      { tag: 'orphan' },
+    );
+    const bytes = encode(new Orphan(1));
+    resetSerializerRegistryForTesting();
+    expect(() => decode(bytes)).toThrow(/no serializer registered for tag/i);
+  });
+
   it('measures the post-serializer encoded size at payload-size admission', () => {
-    registerSerializer(ValidationError, validationErrorHandlers);
+    registerSerializer(ValidationError, validationErrorHandlers, { tag: 'ValidationError' });
 
     // A serialized ValidationError with many issues is larger than its message
     // alone; payload-size admission must measure the encoded (post-toJSON) form.
@@ -131,21 +204,5 @@ describe('registerSerializer', () => {
     // A limit just under the encoded size rejects; a limit at/above it admits.
     expect(() => assertPayloadWithinLimit(error, encodedSize - 1, 'activity result')).toThrow();
     expect(() => assertPayloadWithinLimit(error, encodedSize, 'activity result')).not.toThrow();
-  });
-
-  it('exhausts the reserved extension-type range with a clear error', () => {
-    // Reserved range is 100..127 inclusive (28 slots). Registering past it throws.
-    for (let index = 0; index < 28; index++) {
-      registerSerializer(class extends Error {}, {
-        toJSON: (error) => ({ message: error.message }),
-        fromJSON: (data) => new Error((data as { message: string }).message),
-      });
-    }
-    expect(() =>
-      registerSerializer(class extends Error {}, {
-        toJSON: (error) => ({ message: error.message }),
-        fromJSON: (data) => new Error((data as { message: string }).message),
-      }),
-    ).toThrow(/reserved extension-type range is exhausted/i);
   });
 });
