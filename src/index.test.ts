@@ -3,7 +3,13 @@ import { describe, expect, it } from 'bun:test';
 import packageJson from '../package.json';
 import { workflow } from './core/types/workflow-function.ts';
 import type { WorkflowOperation, WorkflowReplay, WorkflowTimelineEntry } from './index';
-import { Engine, MemoryStorage, VERSION, WorkflowAlreadyExistsError } from './index';
+import {
+  Engine,
+  MemoryStorage,
+  StartOrSignalConflictError,
+  VERSION,
+  WorkflowAlreadyExistsError,
+} from './index';
 
 describe('weft', () => {
   it('exports a version string that matches package.json', () => {
@@ -63,6 +69,29 @@ describe('weft', () => {
       await expect(
         engine.start('duplicate-id', null, { id: 'duplicate-id' }),
       ).rejects.toBeInstanceOf(WorkflowAlreadyExistsError);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('exports StartOrSignalConflictError for startOrSignal against a terminal run', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const done = workflow({ name: 'startorsignal-terminal' }).execute(async function* () {
+      return 'ok';
+    });
+    engine.register(done);
+
+    try {
+      const handle = await engine.start('startorsignal-terminal', null, { id: 'sos-export' });
+      await handle.result();
+      await expect(
+        engine.startOrSignal(
+          'startorsignal-terminal',
+          null,
+          { name: 'noop', signalId: 'x' },
+          { id: 'sos-export' },
+        ),
+      ).rejects.toBeInstanceOf(StartOrSignalConflictError);
     } finally {
       await engine[Symbol.asyncDispose]();
     }

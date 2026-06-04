@@ -463,6 +463,17 @@ export const KEYS = {
   updateResponse: (updateId: string) => `upr:${updateId}`,
   updateIdempotency: (workflowId: string, key: string) =>
     `upk:${encodeStorageKeyComponent(workflowId)}:${key}`,
+  /**
+   * Maps a start `idempotencyKey` to the workflow id created for it. Written
+   * atomically with the workflow record under a `conditionalBatch` gated on this
+   * key being absent, so concurrent same-key starts converge on one workflow.
+   * Unlike `updateIdempotency`, it is keyed by the idempotency key alone (no
+   * workflow id) because the workflow id is the value it resolves to. It is
+   * intentionally NOT swept on terminal cleanup: it must outlive the run so a
+   * post-completion `startOrSignal` sees a terminal workflow (and conflicts)
+   * rather than missing the mapping and creating a fresh run.
+   */
+  startIdempotency: (key: string) => `start-idem:${encodeStorageKeyComponent(key)}`,
   budget: (namespace: string, period: string, date: string) =>
     `budget:${namespace}:${period}:${date}`,
   review: (workflowId: string, reviewId: string) =>

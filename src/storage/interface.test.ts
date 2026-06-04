@@ -168,6 +168,7 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.update('workflow-id', 'update-id'),
       KEYS.updateResponse('update-id'),
       KEYS.updateIdempotency('workflow-id', 'idempotency-key'),
+      KEYS.startIdempotency('idempotency-key'),
       KEYS.budget('namespace', 'period', 'date'),
       KEYS.review('workflow-id', 'review-id'),
       KEYS.workflowHeaders('workflow-id'),
@@ -646,6 +647,8 @@ describe('KEYS', () => {
     expect(KEYS.update(workflowId, 'update-1')).toBe(`upd:${encodedWorkflowId}:update-1`);
     expect(KEYS.updateResponse('update-1')).toBe('upr:update-1');
     expect(KEYS.updateIdempotency(workflowId, 'idem-1')).toBe(`upk:${encodedWorkflowId}:idem-1`);
+    expect(KEYS.startIdempotency('idem-1')).toBe('start-idem:idem-1');
+    expect(KEYS.startIdempotency('a:b')).toBe('start-idem:a%3Ab');
     expect(KEYS.budget('account-a', 'daily', '2026-04-14')).toBe(
       'budget:account-a:daily:2026-04-14',
     );

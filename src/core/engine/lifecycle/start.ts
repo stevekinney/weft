@@ -25,7 +25,7 @@ import {
   setWorkflowStartHeaders,
   type LifecycleCallbacks,
 } from './shared.ts';
-import { buildStartBatchOperations } from './start-batch.ts';
+import { buildAndCommitStartBatch, type BuildIdempotentStartOperations } from './start-commit.ts';
 import {
   assertDeferSupported,
   beginExecutionAwaitingLiveness,
@@ -91,13 +91,6 @@ function prepareStartWorkflow(
   };
 }
 
-async function persistStartBatch(
-  internals: EngineInternals,
-  startOperations: BatchOperation[],
-): Promise<void> {
-  await internals.storage.batch(startOperations);
-}
-
 function rollbackTransientStartState(internals: EngineInternals, workflowId: string): void {
   forgetCommittedCheckpointBytes(internals, workflowId);
   internals.checkpoints.delete(workflowId);
@@ -131,6 +124,7 @@ export async function startWorkflow(
   options: StartOptions | undefined,
   additionalStartOperations: BatchOperation[] | undefined,
   callbacks: LifecycleCallbacks,
+  buildIdempotentStartOperations?: BuildIdempotentStartOperations,
 ): Promise<WorkflowHandle> {
   const registration = internals.registrations.get(type);
   if (!registration) {
@@ -207,21 +201,25 @@ export async function startWorkflow(
     // Cache the workflow version tuple for forwarding to event-log entries.
     internals.workflowVersionTuples.set(workflowId, versionTuple);
 
-    const startOperations = buildStartBatchOperations(
-      internals,
-      workflowId,
-      state,
-      checkpoint,
-      registration,
-      options,
-      state.executionDeadline,
-      delayedStartTimer,
-      persistedWorkflowStartHeaders,
-      additionalStartOperations,
-      callbacks,
+    // Build the create batch (folding in the id-dependent idempotency mapping /
+    // signal) and commit it, gated on any idempotency preconditions. Throws
+    // StartIdempotencyRaceLostError when a concurrent same-key caller won the CAS,
+    // which the `finally` rollback below unwinds for the wrapper to handle.
+    await buildAndCommitStartBatch(
+      {
+        internals,
+        workflowId,
+        state,
+        checkpoint,
+        registration,
+        options,
+        delayedStartTimer,
+        persistedWorkflowStartHeaders,
+        additionalStartOperations,
+        callbacks,
+      },
+      buildIdempotentStartOperations,
     );
-
-    await persistStartBatch(internals, startOperations);
 
     // Hold the non-serialized per-run services in engine memory so the inline
     // Context can read them. The services value is never written to storage — it

@@ -41,6 +41,7 @@ export {
   EngineDisposedError,
   PersistedDataIncompatibleError,
   ScheduleHandle,
+  StartOrSignalConflictError,
   WorkflowAlreadyExistsError,
   WorkflowHandle,
   WorkflowNotFoundError,
@@ -48,7 +49,12 @@ export {
   WorkflowSuspendNotSupportedError,
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './core/engine';
-export type { EngineCreateOptions, EngineStateNamespace, RecoverAllOptions } from './core/engine';
+export type {
+  EngineCreateOptions,
+  EngineStateNamespace,
+  RecoverAllOptions,
+  StartOrSignalSignal,
+} from './core/engine';
 export {
   DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD,
   DEFAULT_MAX_NESTING_DEPTH,
