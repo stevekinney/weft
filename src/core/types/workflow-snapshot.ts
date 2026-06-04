@@ -8,10 +8,12 @@ import type { WorkflowStatus } from './identity.ts';
  * run and re-register it on a live surface, without awaiting the run's final
  * result.
  *
- * `step` is the highest committed checkpoint step: the number of generator
- * turns the run has durably advanced. It is `0` for a run that has persisted
- * its initial checkpoint but not yet advanced, and increases as the run makes
- * progress.
+ * `step` is the run's current checkpoint step: the number of generator turns it
+ * has advanced. For a run live in this engine it reflects the latest in-memory
+ * checkpoint (which may be one step ahead of the last durable commit); for a
+ * run inspected or recovered in a fresh process it reflects the durably
+ * persisted checkpoint. It is `0` for a run that has its initial checkpoint but
+ * has not yet advanced, and increases as the run makes progress.
  *
  * @example
  * ```ts
