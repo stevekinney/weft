@@ -390,10 +390,7 @@ export class Engine<
     const engine = new Engine<object, object>(options);
 
     try {
-      await assertCompatiblePersistedDataVersion(
-        getInternals(engine).storage,
-        options.allowLegacyData === undefined ? {} : { allowLegacyData: options.allowLegacyData },
-      );
+      await assertCompatiblePersistedDataVersion(getInternals(engine).storage);
       for (const [name, definition] of definitionEntries(options.activities)) {
         if (name !== definition.name) {
           throw new EngineCreateNameMismatchError('activity', name, definition.name);

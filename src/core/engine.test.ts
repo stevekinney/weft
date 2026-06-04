@@ -33,6 +33,10 @@ import {
 import { InlineExecutionStrategy } from './inline-execution-strategy.ts';
 import type { ActivityInterceptor, WorkflowInterceptor } from './interceptor.ts';
 import { ListFilterValidationError } from './list-filter-validation.ts';
+import {
+  CURRENT_PERSISTED_DATA_SCHEMA_VERSION,
+  PERSISTED_DATA_SCHEMA_VERSION_KEY,
+} from './persisted-data-incompatible-error.ts';
 import { WorkflowTimeoutError } from './timeouts.ts';
 import type {
   Checkpoint,
@@ -182,7 +186,6 @@ describe('Engine', () => {
 
   it('Engine.create registers activities before workflows and runs recovery by default', async () => {
     const storage = new MemoryStorage();
-    const firstEngine = new Engine({ storage });
     const formatFactoryGreeting = activity({
       name: 'formatFactoryGreeting',
       execute: async (input: { name: string }) => `Hello, ${input.name}`,
@@ -196,8 +199,14 @@ describe('Engine', () => {
       return `${greeting}${suffix}`;
     });
 
-    firstEngine.register(formatFactoryGreeting);
-    firstEngine.register(factoryWelcome);
+    // Populate via Engine.create so the schema-version sentinel is stamped, then
+    // recover the same storage with a fresh engine — the current setup.
+    const firstEngine = await Engine.create({
+      storage,
+      recover: false,
+      activities: { formatFactoryGreeting },
+      workflows: { factoryWelcome },
+    });
     await firstEngine.start('factoryWelcome', { name: 'Ada' }, { id: 'factory-recover-id' });
     await flush();
     firstEngine[Symbol.dispose]();
@@ -206,9 +215,6 @@ describe('Engine', () => {
       storage,
       activities: { formatFactoryGreeting },
       workflows: { factoryWelcome },
-      // Storage was populated by `new Engine({ storage })` above (before the
-      // schema-version sentinel was written), so opt into the migration path.
-      allowLegacyData: true,
     });
 
     expect(recoveredEngine.getActivityDefinition('formatFactoryGreeting')).toMatchObject({
@@ -245,8 +251,15 @@ describe('Engine', () => {
       updatedAt: 1,
     };
     await storage.put(KEYS.workflow('factory-unknown-id'), encode(unknownState));
+    // Stamp the current schema-version sentinel so Engine.create accepts the
+    // pre-seeded store; this test exercises recovery-preflight skipping, not the
+    // schema-version gate.
+    await storage.put(
+      PERSISTED_DATA_SCHEMA_VERSION_KEY,
+      new TextEncoder().encode(String(CURRENT_PERSISTED_DATA_SCHEMA_VERSION)),
+    );
 
-    const engine = await Engine.create({ storage, recover: false, allowLegacyData: true });
+    const engine = await Engine.create({ storage, recover: false });
     expect(await engine.get('factory-unknown-id')).toMatchObject({
       id: 'factory-unknown-id',
       type: 'factory-unknown',
