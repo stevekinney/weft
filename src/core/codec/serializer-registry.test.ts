@@ -68,6 +68,25 @@ describe('registerSerializer', () => {
     expect(restored.results[0]?.issues).toEqual([{ path: 'x', code: 'nope' }]);
   });
 
+  it('preserves undefined fields in a custom serializer result, like the public codec', () => {
+    // A custom toJSON() result with an `undefined` field must round-trip with the
+    // same semantics as the public encode(): the field is preserved as undefined
+    // (via the codec's undefined-sentinel preprocessing), not silently dropped.
+    class Boxed {
+      constructor(readonly value: unknown) {}
+    }
+    registerSerializer(Boxed, {
+      toJSON: (boxed) => ({ value: boxed.value }),
+      fromJSON: (data) => new Boxed((data as { value: unknown }).value),
+    });
+
+    const restored = decode(encode(new Boxed(undefined))) as Boxed;
+    expect(restored).toBeInstanceOf(Boxed);
+    // Round-trips as a present-but-undefined field, matching public encode().
+    expect('value' in (restored as object)).toBe(true);
+    expect(restored.value).toBeUndefined();
+  });
+
   it('leaves a plain Error on the generic name/message/stack encoding', () => {
     // Registering a subclass must not change how a base Error round-trips.
     registerSerializer(ValidationError, validationErrorHandlers);

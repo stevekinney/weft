@@ -27,9 +27,11 @@ export const extensionCodec = new ExtensionCodec();
 
 // Wire the user-serializer registry to this shared codec so registerSerializer()
 // attaches its custom extension encoders to the same instance encode()/decode()
-// use. Done before the built-in types register; order does not matter because
+// use, and hand it `replaceUndefined` (hoisted below) so custom-serializer
+// output is encoded with the same `undefined` semantics as the public encode().
+// Done before the built-in types register; order does not matter because
 // registrations are dynamic.
-bindSerializerRegistryToCodec(extensionCodec);
+bindSerializerRegistryToCodec(extensionCodec, replaceUndefined);
 
 // Date (ext type 1): float64 milliseconds since epoch
 extensionCodec.register({
@@ -242,7 +244,11 @@ function isNestedValueFree(value: object): boolean {
     value instanceof RegExp ||
     value instanceof Error ||
     value instanceof Uint8Array ||
-    value instanceof ArrayBuffer
+    value instanceof ArrayBuffer ||
+    // A registered-serializer instance must reach the extension codec with its
+    // class identity intact; do not walk it into a plain record here. Its own
+    // toJSON output gets replaceUndefined applied inside the custom encoder.
+    hasRegisteredSerializer(value)
   );
 }
 

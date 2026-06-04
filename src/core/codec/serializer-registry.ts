@@ -39,11 +39,11 @@ export type SerializerHandlers<T> = {
 };
 
 /**
- * Constructor of a registrable type. Uses an `unknown[]`-rest abstract
- * constructor so it accepts any class (concrete classes are assignable to an
- * abstract constructor type) without an `any`. The handlers, not the
- * constructor signature, own (de)serialization; the constructor is used only
- * for instance-identity matching and its `.name`.
+ * Constructor of a registrable type. Uses a `never[]`-rest abstract constructor
+ * so it accepts any class (a concrete class is assignable to an abstract
+ * constructor whose parameters are `never[]`) without an `any`. The handlers,
+ * not the constructor signature, own (de)serialization; the constructor is used
+ * only for instance-identity matching and its `.name`.
  */
 type RegistrableConstructor<T> = abstract new (...args: never[]) => T;
 
@@ -69,6 +69,13 @@ let nextTypeId = CUSTOM_SERIALIZER_TYPE_BASE;
  * through `handlers` instead of the generic structured-clone fallback (which,
  * for errors, would otherwise drop subclass fields like a `ZodError`'s
  * `.issues`).
+ *
+ * Matching is by exact constructor identity, and the built-in `Error` encoder
+ * defers to a registered serializer. The other built-in extension types
+ * (`Date`, `RegExp`, `Map`, `Set`) do NOT defer: registering a serializer for a
+ * subclass of one of those built-ins has no effect, because the built-in
+ * encoder matches the instance first. Register serializers for your own classes
+ * (or `Error` subclasses), not for built-in-collection subclasses.
  *
  * Registration is process-global and one-shot per constructor: call it once at
  * module load, before constructing any engine. A second registration for the
@@ -140,27 +147,44 @@ export function hasRegisteredSerializer(value: object): boolean {
 // must register encoders on the SAME shared extensionCodec instance, but
 // extension-codec.ts imports this module for `hasRegisteredSerializer`.
 let sharedExtensionCodec: ExtensionCodec | undefined;
+// The codec's own `undefined`-preprocessing, injected at bind time. Passed in
+// (rather than imported) to avoid a static cycle: extension-codec.ts imports
+// this module for `hasRegisteredSerializer`/`bindSerializerRegistryToCodec`.
+let replaceUndefinedInCodec: ((value: unknown, visited: Set<object>) => unknown) | undefined;
 
-/** Wire the shared extensionCodec so registrations attach to the live codec. */
-export function bindSerializerRegistryToCodec(codec: ExtensionCodec): void {
+/**
+ * Wire the shared extensionCodec so registrations attach to the live codec,
+ * along with the codec's `replaceUndefined` preprocessor so custom-serializer
+ * output is encoded with the same `undefined` semantics as the public `encode()`.
+ */
+export function bindSerializerRegistryToCodec(
+  codec: ExtensionCodec,
+  replaceUndefined: (value: unknown, visited: Set<object>) => unknown,
+): void {
   sharedExtensionCodec = codec;
+  replaceUndefinedInCodec = replaceUndefined;
 }
 
 function registerCustomExtensionType(entry: RegistryEntry): void {
-  if (sharedExtensionCodec === undefined) {
+  if (sharedExtensionCodec === undefined || replaceUndefinedInCodec === undefined) {
     throw new Error(
       'Serializer registry is not bound to a codec; this is an internal Weft wiring error.',
     );
   }
-  // Capture the bound codec as a non-undefined local so the encode/decode
-  // closures (invoked later) reference a definitely-defined codec, and so a
-  // custom serializer's own nested values round-trip through the same codec.
+  // Capture the bound codec + preprocessor as non-undefined locals so the
+  // encode/decode closures (invoked later) reference definitely-defined values,
+  // and so a custom serializer's own nested values round-trip through the same
+  // codec with identical `undefined` handling.
   const codec = sharedExtensionCodec;
+  const replaceUndefined = replaceUndefinedInCodec;
   codec.register({
     type: entry.typeId,
     encode(value: unknown): Uint8Array | null {
       if (typeof value === 'object' && value !== null && value.constructor === entry.constructor) {
-        return msgpackEncode(entry.handlers.toJSON(value), { extensionCodec: codec });
+        // Run the same undefined-preprocessing the public encode() applies, so a
+        // toJSON() result with `undefined` fields round-trips identically.
+        const preprocessed = replaceUndefined(entry.handlers.toJSON(value), new Set());
+        return msgpackEncode(preprocessed, { extensionCodec: codec });
       }
       return null;
     },
@@ -174,6 +198,14 @@ function registerCustomExtensionType(entry: RegistryEntry): void {
  * Test-only reset of the global registry. Production code never unregisters —
  * a stale serializer could misread a checkpoint — but tests need isolation
  * between registration cases.
+ *
+ * This clears the registry map and resets the type-id counter to the base. The
+ * encoders already attached to the shared `ExtensionCodec` are not removed (the
+ * msgpack codec has no removal API), but `ExtensionCodec.register` overwrites
+ * the entry for a given type id, so the next registration after a reset — which
+ * reuses the base type id — replaces both the encoder and decoder for that id.
+ * Reset is therefore safe for per-test isolation; it is not a general
+ * "unregister" for a long-lived process.
  */
 export function resetSerializerRegistryForTesting(): void {
   registryByConstructor.clear();
