@@ -136,6 +136,9 @@ Suspend the workflow without terminating it. Unlike `cancel()`, suspension is a 
 
 A suspended workflow is _not_ auto-recovered by `engine.recoverAll()` — resume it explicitly. Suspending a workflow that is not running is a no-op. Inline execution mode only; a worker-mode engine throws `WorkflowSuspendNotSupportedError` (and the server faults with `422 Unprocessable`).
 
+> [!NOTE] Durability vs. liveness on a failed suspend
+> `suspend()` evicts the run's in-memory state before its single durable write, matching how `cancel()`/timeout work. If that durable write fails (a storage fault), the run is not lost — it stays durably `'running'` with its checkpoint and is re-driven by `recoverAll()` on the next `Engine.create()` — but the current process no longer drives it, so this handle's `result()` stays pending until that restart. In-process repair is intentionally not attempted, since it would need the same storage that just failed.
+
 ```ts partial
 await handle.suspend();
 ```

@@ -110,10 +110,20 @@ export async function suspendWorkflow(
     //      state.
     //   2. "Durable suspended + in-memory live" divergence is structurally
     //      impossible: memory teardown precedes the only durable write. The sole
-    //      remaining failure mode — the commit throws after eviction — leaves the
-    //      durable status 'running' with no local ownership (checkpoint deleted),
-    //      which is exactly the crash case recoverAll() re-drives. Fail-safe, not
-    //      fail-divergent, so no defensive try/catch is needed.
+    //      remaining failure mode is the commit throwing after eviction. That is
+    //      DURABLY safe but NOT live-process continuous: the durable status stays
+    //      'running' with its checkpoint intact (the run is not lost), so
+    //      recoverAll() re-drives it on the next Engine.create(); but in the
+    //      still-live process the run is now un-driven and this handle's result()
+    //      stays pending until that restart. In-process repair is intentionally
+    //      NOT attempted — it would have to re-drive from storage that is, by
+    //      hypothesis, the thing that just failed the commit, so it would fail
+    //      too. This matches the engine's house failure posture: terminateWorkflow
+    //      and completeWorkflow likewise evict in-memory state before their durable
+    //      commit and rely on restart recovery if that commit throws. A live-
+    //      process suspending-gate that buffers signals without evicting the waiter
+    //      is the hardening path if cross-storage-fault liveness ever matters
+    //      (likely alongside MultiEngine); deliberately out of scope here.
     internals.inlineStrategy.parkWorkflow(workflowId);
     dropQueuedInlineWorkflowStart(internals, workflowId);
     internals.checkpoints.delete(workflowId);
