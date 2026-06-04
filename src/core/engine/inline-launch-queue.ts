@@ -34,12 +34,29 @@ export function queueInlineWorkflowExecutionStart(
   }, 0);
 }
 
+/**
+ * Discard a set of queued inline starts, firing each one's `onStarted` liveness
+ * callback so a `defer: false` awaiter settles instead of hanging on a run that
+ * will never become live. Used by every path that drops queued starts without
+ * executing them: abort-during-flush, synchronous dispose, and cancel-while-queued.
+ */
+function settleDiscardedInlineStarts(discarded: QueuedInlineWorkflowExecutionStart[]): void {
+  for (const start of discarded) {
+    start.onStarted?.();
+  }
+}
+
 export async function flushQueuedInlineWorkflowStarts(
   internals: EngineInternals,
   callbacks: InlineLaunchQueueCallbacks,
 ): Promise<void> {
   if (internals.abortController.signal.aborted) {
+    // The engine is tearing down. Discard the queue, but settle each start's
+    // liveness callback first so a defer:false awaiter does not hang on a run
+    // that will never execute against the aborted engine.
+    const discarded = internals.queuedInlineWorkflowStarts;
     internals.queuedInlineWorkflowStarts = [];
+    settleDiscardedInlineStarts(discarded);
     return;
   }
 
@@ -94,8 +111,16 @@ export async function drainQueuedInlineWorkflowStarts(
     passes < maxPasses
   ) {
     passes += 1;
-    await flushQueuedInlineWorkflowStarts(internals, callbacks);
+    // Swallow per-pass rejection so a single failing start cannot reject the
+    // whole drain — which, called from asyncDispose, would otherwise skip the
+    // synchronous teardown and leave the engine half-disposed. Mirrors the
+    // scheduled-flush path's swallowPromiseRejection wrapping.
+    await callbacks.swallowPromiseRejection(flushQueuedInlineWorkflowStarts(internals, callbacks));
   }
+  // The `passes < maxPasses` bound above is a backstop against a pathological
+  // self-enqueueing run spinning teardown forever; in normal operation the abort
+  // signal or an empty queue ends the loop first. Anything still queued at exit
+  // is discarded by the synchronous dispose that follows.
 }
 
 async function startQueuedInlineWorkflowExecution(
@@ -159,9 +184,7 @@ export function dropQueuedInlineWorkflowStart(
     // Settle the `defer: false` awaiter for a start dropped before it ran (e.g.
     // the workflow was cancelled/terminated while still queued). The run never
     // became live, but the awaiter must not hang. Mirrors the dispose path.
-    for (const start of dropped) {
-      start.onStarted?.();
-    }
+    settleDiscardedInlineStarts(dropped);
   }
   return internals.queuedInlineWorkflowStarts.length !== initialLength;
 }
@@ -173,9 +196,7 @@ export function disposeQueuedInlineWorkflowStarts(internals: EngineInternals): v
   // torn-down engine. (asyncDispose drains these instead of discarding them.)
   const discarded = internals.queuedInlineWorkflowStarts;
   internals.queuedInlineWorkflowStarts = [];
-  for (const start of discarded) {
-    start.onStarted?.();
-  }
+  settleDiscardedInlineStarts(discarded);
   internals.queuedInlineWorkflowStartIds.clear();
   internals.queuedOrLaunchingInlineWorkflowStartIds.clear();
 

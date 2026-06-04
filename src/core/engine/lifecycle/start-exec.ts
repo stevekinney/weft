@@ -1,5 +1,6 @@
 import { serializeCheckpoint } from '../../checkpoint.ts';
 import { WorkflowStartedEvent } from '../../events.ts';
+import { StartWorkflowValidationError } from '../../start-workflow-validation.ts';
 import type { Checkpoint, StartOptions, WorkflowState } from '../../types.ts';
 import type { EngineInternals } from '../internals.ts';
 import { type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
@@ -139,14 +140,14 @@ export function assertDeferSupported(
     return;
   }
   if (internals.inlineStrategy === null) {
-    throw new Error(
+    throw new StartWorkflowValidationError(
       'options.defer: false is only supported in inline execution mode; a ' +
         'worker-mode start cannot be awaited for inline liveness. Use ' +
         'workflowExecutionMode: "inline" or remove defer.',
     );
   }
   if (isDelayedStart) {
-    throw new Error(
+    throw new StartWorkflowValidationError(
       'options.defer: false is incompatible with a delayed start ' +
         '(startAt/startAfter): a scheduled run has not begun executing, so there ' +
         'is no liveness to await. Remove defer or the delayed-start option.',

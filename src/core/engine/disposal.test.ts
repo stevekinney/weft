@@ -7,8 +7,53 @@ import { disposeEngine } from './disposal.ts';
 import type { QueuedInlineWorkflowExecutionStart } from './engine-internal-types.ts';
 import { EngineDisposedError } from './errors.ts';
 import { Engine } from './index.ts';
-import { dropQueuedInlineWorkflowStart } from './inline-launch-queue.ts';
+import {
+  dropQueuedInlineWorkflowStart,
+  flushQueuedInlineWorkflowStarts,
+  type InlineLaunchQueueCallbacks,
+} from './inline-launch-queue.ts';
 import { getInternals } from './internals.ts';
+
+/**
+ * Seed a queued inline start directly into engine internals with an `onStarted`
+ * spy, so a test can drive the inline-launch-queue paths (skip, throw, abort,
+ * dispose) that settle a `defer: false` awaiter without racing the public start
+ * path. Returns the spy's fired-state accessor.
+ */
+function seedQueuedInlineStart(
+  internals: ReturnType<typeof getInternals>,
+  workflowId: string,
+  checkpoint: QueuedInlineWorkflowExecutionStart['checkpoint'],
+): { fired: () => boolean } {
+  let settled = false;
+  const queued: QueuedInlineWorkflowExecutionStart = {
+    workflowId,
+    workflowType: 'seeded',
+    input: null,
+    checkpoint,
+    nestingDepth: 0,
+    executionDeadline: undefined,
+    executionStateOwnerId: workflowId,
+    onStarted: () => {
+      settled = true;
+    },
+  };
+  internals.queuedInlineWorkflowStarts.push(queued);
+  internals.queuedInlineWorkflowStartIds.add(workflowId);
+  internals.queuedOrLaunchingInlineWorkflowStartIds.add(workflowId);
+  return { fired: () => settled };
+}
+
+const noopInlineLaunchCallbacks: InlineLaunchQueueCallbacks = {
+  processPendingUpdatesAfterInlineAdvance: async () => {},
+  swallowPromiseRejection: async (promise) => {
+    try {
+      await promise;
+    } catch {
+      // Swallow, mirroring the production callback used by the drain path.
+    }
+  },
+};
 
 // `disposeEngine` was extracted verbatim from `Engine[Symbol.dispose]`. The
 // broad engine test suite exercises disposal only *indirectly* (through
@@ -386,7 +431,120 @@ describe('dropQueuedInlineWorkflowStart settles defer:false awaiters', () => {
   });
 });
 
+describe('onStarted fires on every flush terminal path', () => {
+  it('fires onStarted when the queued start is skipped because state is not running', async () => {
+    // loadWorkflowState returns null for a workflowId with no persisted state, so
+    // startQueuedInlineWorkflowExecution returns early — but the finally block
+    // must still fire onStarted, or a defer:false awaiter hangs on a run that was
+    // cancelled/terminated between queueing and flush.
+    const engine = new Engine();
+    const internals = getInternals(engine);
+    const seeded = seedQueuedInlineStart(
+      internals,
+      'no-persisted-state',
+      {} as QueuedInlineWorkflowExecutionStart['checkpoint'],
+    );
+
+    await flushQueuedInlineWorkflowStarts(internals, noopInlineLaunchCallbacks);
+
+    expect(seeded.fired()).toBe(true);
+    engine[Symbol.dispose]();
+  });
+
+  it('fires onStarted when starting the queued workflow throws', async () => {
+    // A malformed checkpoint makes startWorkflowExecution throw inside the try.
+    // The finally block must still fire onStarted so a defer:false awaiter
+    // settles after a launch failure instead of hanging. The flush itself must
+    // not reject (production wraps it in swallowPromiseRejection).
+    const engine = new Engine();
+    engine.register(
+      workflow({ name: 'seeded' }).execute(async function* () {
+        return 'done';
+      }),
+    );
+    const internals = getInternals(engine);
+    // Persist a running state so the skip-path guard passes and execution is
+    // attempted, then hand a checkpoint stand-in that startWorkflowExecution
+    // cannot consume, forcing a throw inside the try.
+    const real = await engine.start('seeded', null, { id: 'will-throw' });
+    void real;
+    const seeded = seedQueuedInlineStart(
+      internals,
+      'will-throw',
+      null as unknown as QueuedInlineWorkflowExecutionStart['checkpoint'],
+    );
+
+    await noopInlineLaunchCallbacks.swallowPromiseRejection(
+      flushQueuedInlineWorkflowStarts(internals, noopInlineLaunchCallbacks),
+    );
+
+    expect(seeded.fired()).toBe(true);
+    engine[Symbol.dispose]();
+  });
+
+  it('settles a defer:false awaiter when the engine is disposed before flush', async () => {
+    // The abort early-return in flushQueuedInlineWorkflowStarts (reached when a
+    // post-dispose macrotask fires) must discard the queue AND fire onStarted, or
+    // a defer:false awaiter behind it hangs forever on the aborted engine.
+    const engine = new Engine();
+    const internals = getInternals(engine);
+    const seeded = seedQueuedInlineStart(
+      internals,
+      'aborted-before-flush',
+      {} as QueuedInlineWorkflowExecutionStart['checkpoint'],
+    );
+
+    // Abort the engine (as dispose does), then run the flush — it hits the
+    // abort early-return path.
+    internals.abortController.abort();
+    await flushQueuedInlineWorkflowStarts(internals, noopInlineLaunchCallbacks);
+
+    expect(seeded.fired()).toBe(true);
+    expect(internals.queuedInlineWorkflowStarts.length).toBe(0);
+    engine[Symbol.dispose]();
+  });
+});
+
 describe('drain pending inline launches on asyncDispose', () => {
+  it('completes synchronous disposal even when a queued start rejects mid-drain', async () => {
+    // If the drain rejects (e.g. a storage error loading a queued start), the
+    // asyncDispose try/finally must still run synchronous disposal, or the engine
+    // is left half-disposed: abort un-fired, awaiters hung, channels open.
+    const engine = new Engine();
+    const internals = getInternals(engine);
+    // Seed a start whose flush will reject: stub the storage read to throw, so
+    // startQueuedInlineWorkflowExecution propagates an error the drain swallows.
+    seedQueuedInlineStart(
+      internals,
+      'rejects-mid-drain',
+      {} as QueuedInlineWorkflowExecutionStart['checkpoint'],
+    );
+    const originalGet = internals.storage.get.bind(internals.storage);
+    internals.storage.get = async () => {
+      throw new Error('storage exploded during drain');
+    };
+
+    // asyncDispose must resolve (not reject) and fully dispose despite the error.
+    await engine[Symbol.asyncDispose]();
+
+    expect(internals.disposed).toBe(true);
+    expect(internals.abortController.signal.aborted).toBe(true);
+    expect(internals.queuedInlineWorkflowStarts.length).toBe(0);
+    internals.storage.get = originalGet;
+  });
+
+  it('is safe to call [Symbol.asyncDispose] after a synchronous dispose', async () => {
+    // The already-disposed guard skips the drain and just re-runs (idempotent)
+    // synchronous dispose. Mixing `dispose()` then `await asyncDispose()` must
+    // resolve cleanly rather than re-draining a torn-down engine.
+    const engine = new Engine();
+    engine[Symbol.dispose]();
+
+    await engine[Symbol.asyncDispose]();
+
+    expect(getInternals(engine).disposed).toBe(true);
+  });
+
   it('flushes queued inline starts before [Symbol.asyncDispose] returns', async () => {
     // A deferred start leaves a queued inline launch on a setTimeout(0)
     // macrotask. asyncDispose must drain that queue before returning, so a

@@ -80,9 +80,10 @@ export interface StartOptions {
    * soon as state is written and queues execution onto a macrotask, so a caller
    * cannot assume the run is live without a round-trip. Use `defer: false` when a
    * caller — or a test — must rely on the run being live immediately after
-   * `await engine.start(...)`. Inline mode only; throws at `engine.start()` under
-   * `workflowExecutionMode: 'worker'` or with a delayed start (`startAt`/
-   * `startAfter`), neither of which has inline liveness to await.
+   * `await engine.start(...)`. If the body throws on its first turn, `start()`
+   * still resolves; observe the failure via `handle.result()`. Inline mode only;
+   * throws at `engine.start()` under `workflowExecutionMode: 'worker'` or with a
+   * delayed start (`startAt`/`startAfter`), neither of which has liveness to await.
    */
   defer?: boolean;
 }
