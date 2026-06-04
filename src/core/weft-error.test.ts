@@ -213,6 +213,34 @@ describe('isWeftErrorLike', () => {
     expect(isWeftErrorLike({ code: 'EngineDisposedError', message: 123 })).toBe(false);
   });
 
+  it('returns false (does not throw) for an object with a throwing getter', () => {
+    // A type guard must be total and side-effect-free even for hostile input.
+    const hostile = {
+      get code(): string {
+        throw new Error('boom');
+      },
+      message: 'x',
+    };
+    expect(() => isWeftErrorLike(hostile)).not.toThrow();
+    expect(isWeftErrorLike(hostile)).toBe(false);
+  });
+
+  it('returns false (does not throw) for a Proxy that throws on property access', () => {
+    const hostile = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('proxy trap boom');
+        },
+        has() {
+          throw new Error('proxy has boom');
+        },
+      },
+    );
+    expect(() => isWeftErrorLike(hostile)).not.toThrow();
+    expect(isWeftErrorLike(hostile)).toBe(false);
+  });
+
   it('narrows code to WeftErrorCode in the branch body', () => {
     const error: unknown = foreignWeftError('WorkflowNotFoundError');
     if (isWeftErrorLike(error)) {

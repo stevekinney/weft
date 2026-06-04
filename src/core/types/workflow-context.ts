@@ -127,10 +127,13 @@ export interface WorkflowContext<
    * deliberate follow-on, not part of this surface yet. Optional so existing
    * structural `WorkflowContext` implementors are not source-broken.
    *
-   * Child workflows started from within a workflow do **not** inherit the
-   * parent's `services` — each run has its own. A child that needs services must
-   * be configured for them the same way (and re-provided on recovery by the
-   * engine's `resolveWorkflowServices`).
+   * Separate child *workflows* started from within a workflow (`ctx.startChild()`)
+   * do **not** inherit the parent's `services` — each run is its own workflow with
+   * its own services, configured the same way (and re-provided on recovery by the
+   * engine's `resolveWorkflowServices`). This is distinct from a *speculative
+   * child context*, which is the same run advanced in-memory for speculative
+   * replay (same `workflowId`) and therefore does carry the run's `services`
+   * across.
    */
   readonly services?: unknown;
   // ---------------------------------------------------------------------

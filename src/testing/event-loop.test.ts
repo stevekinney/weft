@@ -29,9 +29,23 @@ describe('yieldToPortableEventLoop', () => {
   it('falls back to setTimeout when MessageChannel is unavailable', async () => {
     const hadMessageChannel = 'MessageChannel' in globalThis;
     const original = globalThis.MessageChannel;
-    // Simulate a runtime without MessageChannel (the else branch).
-    // @ts-expect-error deliberately removing a global for the fallback path
-    delete globalThis.MessageChannel;
+    // The implementation gates on `typeof MessageChannel !== 'undefined'`, so
+    // override the value to `undefined` rather than `delete` it: a non-configurable
+    // global would make `delete` silently fail and let the test pass without ever
+    // exercising the setTimeout branch. Assignment makes `typeof` report
+    // 'undefined' deterministically. If even assignment is rejected, skip rather
+    // than assert against a branch we couldn't force.
+    try {
+      // @ts-expect-error deliberately blanking a global for the fallback path
+      globalThis.MessageChannel = undefined;
+    } catch {
+      return;
+    }
+    if (typeof MessageChannel !== 'undefined') {
+      // Could not force the fallback condition; don't assert vacuously.
+      globalThis.MessageChannel = original;
+      return;
+    }
     try {
       await expect(yieldToPortableEventLoop()).resolves.toBeUndefined();
     } finally {

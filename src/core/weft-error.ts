@@ -184,12 +184,21 @@ export function isWeftErrorCode(value: unknown): value is WeftErrorCode {
  * ```
  */
 export function isWeftErrorLike(value: unknown): value is { code: WeftErrorCode; message: string } {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'code' in value &&
-    isWeftErrorCode(value.code) &&
-    'message' in value &&
-    typeof value.message === 'string'
-  );
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  // A type guard must be side-effect-free and total: untrusted input may be a
+  // Proxy or carry throwing getters for `code`/`message`. Reading those is the
+  // observable side effect, so guard the access and treat any throw as "not a
+  // Weft error" rather than letting it escape the predicate.
+  try {
+    return (
+      'code' in value &&
+      isWeftErrorCode(value.code) &&
+      'message' in value &&
+      typeof value.message === 'string'
+    );
+  } catch {
+    return false;
+  }
 }
