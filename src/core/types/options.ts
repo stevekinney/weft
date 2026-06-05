@@ -30,10 +30,11 @@ import type {
  * assigns its own generated id and dedups through the key.
  *
  * The `idempotencyKey` mapping is durable and permanent: it survives the run
- * reaching a terminal state, so repeat calls keep returning the same handle. It
- * is removed only when the workflow record is purged or swept by retention; a
- * call with a key whose run has been purged throws {@link IdempotencyKeyPurgedError}
- * (mapped to HTTP 409 over REST/JSON-RPC) rather than silently starting a new run.
+ * reaching a terminal state, so repeat calls keep returning the same handle. When
+ * the workflow record is purged or swept by retention the mapping itself survives
+ * (purge does not touch the `start-idem:` keyspace) but now points at a gone run;
+ * a call with that spent key throws {@link IdempotencyKeyPurgedError} (mapped to
+ * HTTP 409 over REST/JSON-RPC) rather than silently starting a new run.
  *
  * Both `LocalClient.start` and `HttpClient.start` forward `idempotencyKey` and
  * `searchAttributes` to the server, so single-execution semantics hold across

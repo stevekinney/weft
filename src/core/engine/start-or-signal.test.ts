@@ -691,4 +691,51 @@ describe('engine.startOrSignal', () => {
       await engine[Symbol.asyncDispose]();
     }
   });
+
+  it('converges concurrent same-id callers when the signal is pre-buffered (no duplicate-id leak)', async () => {
+    // Regression for the CONVERGENCE OUTCOME with a pre-buffered signal: two
+    // concurrent same-id callers converge on one workflow, neither leaking a
+    // WorkflowAlreadyExistsError (Promise.all would reject if either did). The
+    // specific recovery LINE — the loser plain-creating, hitting
+    // WorkflowAlreadyExistsError, and resolving the winner — fires only on a rare
+    // mid-sequence interleaving that in-process storage produces by chance, not on
+    // command; in practice the loser usually resolves via the top-level lookup.
+    // That line is coverage-allowanced; this test pins the outcome it guards.
+    //
+    // `release-then-hold` parks on `hold` after consuming the pre-buffered
+    // `release`, so the winner stays non-terminal while the loser resolves it —
+    // making the loser deterministically receive the handle (not a terminal
+    // StartOrSignalConflictError, which is the correct-but-racy outcome if the
+    // winner had already completed).
+    const engine = createEngine();
+    try {
+      await engine.signal('sos-concurrent-prebuffered', 'release', 'go', {
+        signalId: 'shared-sig',
+      });
+
+      const [a, b] = await Promise.all([
+        engine.startOrSignal(
+          'release-then-hold',
+          null,
+          { name: 'release', payload: 'from-a', signalId: 'shared-sig' },
+          { id: 'sos-concurrent-prebuffered' },
+        ),
+        engine.startOrSignal(
+          'release-then-hold',
+          null,
+          { name: 'release', payload: 'from-b', signalId: 'shared-sig' },
+          { id: 'sos-concurrent-prebuffered' },
+        ),
+      ]);
+
+      // Both callers converge on the single parked run; neither leaked a
+      // WorkflowAlreadyExistsError (Promise.all would have rejected).
+      expect(a.id).toBe('sos-concurrent-prebuffered');
+      expect(b.id).toBe(a.id);
+      expect(await countWorkflowRecords(engine)).toBe(1);
+      // The run is parked on `hold` (never delivered); asyncDispose tears it down.
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
 });

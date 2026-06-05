@@ -155,11 +155,13 @@ export const startOrSignalWorkflowOperation = defineOperation<
     'Start a workflow or deliver a signal to it if it already exists (signal-with-start). An ' +
     'absent target is created and delivered the signal in one batch; a non-terminal target ' +
     '(running, pending, or suspended) is signalled; a terminal target faults with Conflict. ' +
-    'Requires `type`, `signalName`, and either `signalId` or `idempotencyKey` for convergence ' +
-    '(not both). Accepts `input`, `signalPayload`, and the same start options as ' +
-    'weft.workflows.start (`id`, `executionTimeout`, `startAt`/`startAfter`, `tags`, ' +
-    '`idempotencyKey`, `searchAttributes`). Returns the workflow `id`. Concurrent same-key ' +
-    'callers converge on one workflow and one signal.',
+    'Requires `type`, `signalName`, and exactly one of `signalId` or `idempotencyKey` (not ' +
+    'both). Accepts `input`, `signalPayload`, and the same start options as weft.workflows.start ' +
+    '(`id`, `executionTimeout`, `startAt`/`startAfter`, `tags`, `idempotencyKey`, ' +
+    '`searchAttributes`). Returns the workflow `id`. Concurrent callers converge on one workflow ' +
+    'and one signal only with a shared `idempotencyKey`, or a shared `id` plus `signalId`; a ' +
+    'bare `signalId` (no `id`/`idempotencyKey`) starts a fresh run per caller and does not ' +
+    'converge.',
   destructive: false,
   tags: ['Workflows', 'Signals'],
   inputSchema: startOrSignalWorkflowInput,

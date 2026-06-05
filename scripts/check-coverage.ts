@@ -1644,22 +1644,29 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   ['src/core/engine/bulk-operations-purge.ts', { lines: new Set([166, 214, 215, 216]) }],
   ['src/core/engine/construction.ts', { lines: new Set([97, 98, 99, 100, 101]) }],
   [
-    // start-or-signal's winner-resolution invariant paths. Line 154
-    // (startWithIdempotency rejecting an undefined key) is unreachable by
-    // construction — the engine only routes here when a key is set. Lines 467-469
-    // are the inter-attempt backoff in resolveWinnerWithSignal: reached only when a
-    // caller-id loser observes the winner's in-memory `pendingStarts` reservation
-    // before the winner's durable `wf:` record lands (a read-after-write lag that
-    // an in-process MemoryStorage never exhibits, so the loop resolves on attempt
-    // 0). Lines 471-474 are the exhaustion throw if that lagging record never
-    // appears within five reads — a genuine invariant violation, not a transient
-    // delay to swallow. Lines 488-491 (requireWinnerId finding the mapping vanished
-    // after a lost CAS) require the `start-idem:` keyspace to be mutated
-    // externally. The reachable success branch is covered by the white-box
-    // race-recovery test; contriving a mock to hit the lag/throws would test the
-    // mock, not the engine.
+    // start-or-signal edges. Line 127 (startWithIdempotency rejecting an undefined
+    // key) is unreachable by construction — the engine only routes here when a key
+    // is set. Lines 339-349 are the `signal-already-buffered` plain-create's
+    // WorkflowAlreadyExistsError recovery: the convergence OUTCOME (one record, no
+    // leaked WorkflowAlreadyExistsError, both callers converge) is covered by the
+    // concurrent pre-buffered regression test, but this specific recovery LINE fires
+    // only on a rare mid-sequence interleaving in-process storage produces by
+    // chance, not on command (the loser usually resolves via the top-level lookup).
+    // Contriving a mock to hit it would test the mock, not the engine.
     'src/core/engine/lifecycle/start-or-signal.ts',
-    { lines: new Set([154, 466, 467, 468, 469, 470, 471, 472, 473, 474, 488, 489, 491]) },
+    { lines: new Set([127, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348, 349]) },
+  ],
+  [
+    // start-or-signal-resolution's two invariant-violation throws. Lines 106-109
+    // are the resolveWinnerWithSignal exhaustion throw if a winning record never
+    // becomes readable within five delayed reads — reachable only if a caller that
+    // reserved `pendingStarts` never durably commits (e.g. it crashed mid-start).
+    // Lines 124-127 are requireWinnerId finding the mapping vanished after a lost
+    // CAS — reachable only by external `start-idem:` keyspace mutation. The
+    // reachable success branches of both helpers are covered by the white-box
+    // race-recovery test; contriving a mock to hit the throws would test the mock.
+    'src/core/engine/lifecycle/start-or-signal-resolution.ts',
+    { lines: new Set([106, 107, 108, 109, 124, 125, 126, 127]) },
   ],
   [
     'src/core/engine/pending-updates.ts',

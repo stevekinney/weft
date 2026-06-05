@@ -1,46 +1,32 @@
-import { sleep } from '../../../runtime/portable.ts';
 import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { KEYS, requireStorageCapability } from '../../../storage/interface.ts';
-import { decode, encode } from '../../codec.ts';
+import { encode } from '../../codec.ts';
 import {
   assertValidIdempotencyKey,
   StartWorkflowValidationError,
 } from '../../start-workflow-validation.ts';
 import type { StartOptions, StartOrSignalSignal } from '../../types.ts';
-import {
-  IdempotencyKeyPurgedError,
-  StartOrSignalConflictError,
-  WorkflowAlreadyExistsError,
-} from '../errors.ts';
+import { IdempotencyKeyPurgedError, WorkflowAlreadyExistsError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { buildCreateBatchSignalOperations } from '../signals.ts';
 import { loadWorkflowState } from '../storage-io.ts';
-import { isTerminalWorkflowStatus } from '../validation.ts';
 import { type LifecycleCallbacks } from './shared.ts';
 import {
   StartIdempotencyRaceLostError,
   type BuildIdempotentStartOperations,
 } from './start-commit.ts';
+import {
+  requireWinnerId,
+  resolveIdempotencyKeyWorkflowId,
+  resolveWinnerWithSignal,
+  signalOrConflictExistingWorkflow,
+  type StartIdempotencyMapping,
+  type StartOrSignalCallbacks,
+} from './start-or-signal-resolution.ts';
 import { startWorkflow } from './start.ts';
 
-/**
- * Callbacks {@link startOrSignal} needs beyond the lifecycle set: a way to
- * deliver a signal to an already-running workflow through the full engine signal
- * path (interceptors, events, parked-run wakeups). Supplied by the engine so the
- * "signal an existing non-terminal run" branch reuses `engine.signal` with the
- * same `signalId` the create batch would have used.
- */
-export type StartOrSignalCallbacks = LifecycleCallbacks & {
-  signalExistingWorkflow: (
-    workflowId: string,
-    signalName: string,
-    payload: unknown,
-    signalId: string,
-  ) => Promise<void>;
-};
-
-type StartIdempotencyMapping = { workflowId: string };
+export type { StartOrSignalCallbacks };
 
 /**
  * Resolve the signal id used for convergence. A caller-supplied `signalId` wins;
@@ -68,19 +54,6 @@ function resolveSignalId(
     'startOrSignal requires either signal.signalId or options.idempotencyKey so concurrent ' +
       'callers converge on a single delivered signal.',
   );
-}
-
-/** Resolve an existing workflow id for an idempotency key, if one was created. */
-async function resolveIdempotencyKeyWorkflowId(
-  internals: EngineInternals,
-  idempotencyKey: string,
-): Promise<string | undefined> {
-  const bytes = await internals.storage.get(KEYS.startIdempotency(idempotencyKey));
-  if (bytes === null) {
-    return undefined;
-  }
-  // Written by this module's create batch as `{ workflowId }`; trusted.
-  return (decode(bytes) as StartIdempotencyMapping).workflowId;
 }
 
 /**
@@ -246,9 +219,17 @@ function validateStartOrSignalConvergence(
  * - **Terminal** → throw {@link StartOrSignalConflictError}: a finished run
  *   cannot be signalled and is not silently replaced.
  *
- * Concurrent callers converge on one workflow and one signal: the create CAS (or
- * the caller-id reservation) picks a single creator, and every other caller
- * falls through to the signal path whose CAS dedups on the shared `signalId`.
+ * Convergence requires a SHARED workflow identity. Concurrent callers converge on
+ * one workflow and one signal only when they share an `options.idempotencyKey`
+ * (the durable mapping picks one creator and the signal id derives from the key)
+ * or an explicit `options.id` (the caller-id reservation picks one creator).
+ *
+ * A bare `signal.signalId` with NEITHER `options.id` nor `options.idempotencyKey`
+ * does NOT converge: each absent-target call generates its own workflow id, so
+ * concurrent callers create distinct runs and each delivers its own signal. In
+ * that mode `startOrSignal` is an atomic start-with-one-initial-signal, not a
+ * convergence primitive. Use `idempotencyKey` (id-free convergence) or
+ * `id` + `signalId` when concurrent callers must converge.
  */
 export async function startOrSignal(
   internals: EngineInternals,
@@ -302,29 +283,6 @@ export async function startOrSignal(
 }
 
 /**
- * For a workflow that already exists: signal it if non-terminal, conflict if
- * terminal. Returns the handle on a successful signal, or `undefined` when the
- * workflow record is not present (so the caller falls through to create).
- */
-async function signalOrConflictExistingWorkflow(
-  internals: EngineInternals,
-  workflowId: string,
-  signalSpec: StartOrSignalSignal,
-  signalId: string,
-  callbacks: StartOrSignalCallbacks,
-): Promise<WorkflowHandle | undefined> {
-  const state = await loadWorkflowState(internals, workflowId);
-  if (state === null) {
-    return undefined;
-  }
-  if (isTerminalWorkflowStatus(state.status)) {
-    throw new StartOrSignalConflictError(workflowId, state.status);
-  }
-  await callbacks.signalExistingWorkflow(workflowId, signalSpec.name, signalSpec.payload, signalId);
-  return callbacks.getHandle(workflowId);
-}
-
-/**
  * Create the workflow and deliver the signal atomically, recovering from a lost
  * create batch:
  *
@@ -371,8 +329,25 @@ async function createWithSignalOrFallback(
   if (outcome.kind === 'signal-already-buffered') {
     // No record exists and the signal is already in storage. Create the workflow
     // WITHOUT folding the signal in again (its `sig:`/`sigres:` are already
-    // present); first drive consumes the buffered signal.
-    return startWorkflow(internals, type, input, options, undefined, callbacks);
+    // present); first drive consumes the buffered signal. A concurrent same-id
+    // caller can win this plain create — both classified `signal-already-buffered`
+    // — so the loser resolves the winner and signals it, deduping against the
+    // pre-buffered `sigres:` (which survives consumption while non-terminal). That
+    // keeps the WorkflowAlreadyExistsError from leaking out of startOrSignal.
+    try {
+      return await startWorkflow(internals, type, input, options, undefined, callbacks);
+    } catch (error) {
+      if (error instanceof WorkflowAlreadyExistsError) {
+        return resolveWinnerWithSignal(
+          internals,
+          error.workflowId,
+          signalSpec,
+          signalId,
+          callbacks,
+        );
+      }
+      throw error;
+    }
   }
 
   // Lost the create race to a winner. Resolve the winner and deliver via the
@@ -426,69 +401,4 @@ async function resolveCreateRaceOutcome(
     }
     throw error;
   }
-}
-
-/** Number of times winner resolution re-reads a not-yet-readable record before erroring. */
-const WINNER_RESOLUTION_MAX_ATTEMPTS = 5;
-/**
- * Delay between winner-resolution reads, matching the coordinated-update guard's
- * retry cadence. Gives a winner that reserved `pendingStarts` but has not yet
- * durably committed time to land before the next read, instead of busy-spinning.
- */
-const WINNER_RESOLUTION_RETRY_DELAY_MS = 5;
-
-/**
- * Signal the race winner, bounded-retrying when its record is not yet readable. A
- * caller-id loser can observe the winner's in-memory `pendingStarts` reservation
- * (see start.ts) BEFORE the winner's durable commit lands, so the first read may
- * miss the record; a short delay between reads lets the commit settle. Throws
- * after {@link WINNER_RESOLUTION_MAX_ATTEMPTS} reads if the record never appears
- * — reachable only if a reserving caller never commits (e.g. it crashed mid-start
- * after reserving), which is a genuine invariant violation, not a transient delay.
- */
-async function resolveWinnerWithSignal(
-  internals: EngineInternals,
-  winnerId: string,
-  signalSpec: StartOrSignalSignal,
-  signalId: string,
-  callbacks: StartOrSignalCallbacks,
-): Promise<WorkflowHandle> {
-  for (let attempt = 0; attempt < WINNER_RESOLUTION_MAX_ATTEMPTS; attempt += 1) {
-    const resolved = await signalOrConflictExistingWorkflow(
-      internals,
-      winnerId,
-      signalSpec,
-      signalId,
-      callbacks,
-    );
-    if (resolved !== undefined) {
-      return resolved;
-    }
-    if (attempt < WINNER_RESOLUTION_MAX_ATTEMPTS - 1) {
-      await sleep(WINNER_RESOLUTION_RETRY_DELAY_MS);
-    }
-  }
-  throw new Error(
-    `startOrSignal resolved winning workflow "${winnerId}" but its record never became readable ` +
-      `after ${WINNER_RESOLUTION_MAX_ATTEMPTS} attempts.`,
-  );
-}
-
-/**
- * Read the winning workflow id from the idempotency mapping after a lost CAS. The
- * mapping must exist once any caller's create commits; its absence means the
- * `start-idem:` keyspace was mutated externally.
- */
-async function requireWinnerId(
-  internals: EngineInternals,
-  idempotencyKey: string,
-): Promise<string> {
-  const winnerId = await resolveIdempotencyKeyWorkflowId(internals, idempotencyKey);
-  if (winnerId === undefined) {
-    throw new Error(
-      `start idempotency mapping for key "${idempotencyKey}" vanished after a lost ` +
-        'compare-and-swap; the start-idem: keyspace may have been mutated externally.',
-    );
-  }
-  return winnerId;
 }

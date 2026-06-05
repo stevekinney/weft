@@ -316,8 +316,11 @@ export interface WeftClient {
    *
    * Pass `options.idempotencyKey` to dedup independent callers such as retried
    * webhooks: concurrent same-key callers converge on one workflow and one
-   * delivered signal, with the signal id derived from the key when
-   * `signal.signalId` is omitted. Supply exactly one of `signal.signalId` or
+   * delivered signal, with the signal id derived from the key. Convergence needs a
+   * shared workflow identity — `options.idempotencyKey` (id-free) or
+   * `options.id` + `signal.signalId`. A bare `signal.signalId` with neither is an
+   * atomic start-with-one-signal that does NOT converge concurrent callers (each
+   * gets its own run). Supply exactly one of `signal.signalId` or
    * `options.idempotencyKey`; `options.id` and `options.idempotencyKey` are
    * mutually exclusive.
    */
