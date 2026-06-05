@@ -1125,15 +1125,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = new Map<string, CoverageAllowa
     { functions: 2, lines: new Set([251, 258, 259, 260, 264, 265, 266, 267, 268]) },
   ],
   [
-    'src/storage/node-sqlite.ts',
-    {
-      functions: 1,
-      lines: new Set([
-        57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78,
-      ]),
-    },
-  ],
-  [
     'src/storage/turso.ts',
     {
       // This is the defensive rollback-suppression helper used after a libSQL
@@ -1402,15 +1393,6 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
     'src/storage/indexeddb-fault-harness.test-support.ts',
     {
       functions: 2,
-    },
-  ],
-  [
-    'src/storage/node-sqlite.ts',
-    {
-      functions: 1,
-      lines: new Set([
-        58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79,
-      ]),
     },
   ],
   [
@@ -1750,17 +1732,6 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   ['src/server/runtime/websocket-upgrade.ts', { lines: new Set([123, 124]) }],
   ['src/server/runtime/websocket-worker.ts', { lines: new Set([405, 406, 409, 410]) }],
   ['src/server/serve-internals.ts', { lines: new Set([236, 279, 334]) }],
-  [
-    'src/storage/node-sqlite.ts',
-    {
-      functions: 3,
-      lines: new Set([
-        58, 59, 60, 61, 62, 63, 64, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81,
-        82, 83, 84, 85, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104,
-        105, 106,
-      ]),
-    },
-  ],
 ]);
 
 const COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([

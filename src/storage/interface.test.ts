@@ -225,25 +225,61 @@ describe('assertDurableStorageForRecovery', () => {
     expect(() => assertDurableStorageForRecovery(storage)).not.toThrow();
   });
 
-  it('rejects ephemeral, remote, eventual, best-effort, non-atomic, and non-CAS backends', () => {
+  it('rejects ephemeral, eventual, best-effort, non-atomic, and non-CAS backends', () => {
     const storage = createCoreStorageAdapter();
     storage.capabilities = () => ({
       readAfterWrite: 'eventual',
       scanConsistency: 'best-effort',
-      persistence: 'remote',
+      persistence: 'ephemeral',
       atomicBatch: false,
       conditionalBatch: false,
       boundedRangeDelete: false,
     });
 
     expect(() => assertDurableStorageForRecovery(storage)).toThrow(
-      /persistence must be "local".*readAfterWrite must be "linearizable".*scanConsistency must be "snapshot".*atomicBatch must be true.*conditionalBatch must be true/s,
+      /persistence must be "local" or "remote".*readAfterWrite must be "linearizable".*scanConsistency must be "snapshot".*atomicBatch must be true.*conditionalBatch must be true/s,
     );
+  });
+
+  it('accepts a remote backend that meets every other axis at its strongest', () => {
+    // Neon Postgres reports persistence "remote" with linearizable/snapshot/
+    // atomic/CAS. Remote durability is acceptable for recovery precisely because
+    // the other four axes are still required at full strength.
+    const storage = createCoreStorageAdapter();
+    storage.capabilities = () => ({
+      readAfterWrite: 'linearizable',
+      scanConsistency: 'snapshot',
+      persistence: 'remote',
+      atomicBatch: true,
+      conditionalBatch: true,
+      boundedRangeDelete: true,
+    });
+
+    expect(() => assertDurableStorageForRecovery(storage)).not.toThrow();
+  });
+
+  it('rejects a remote backend whose read-after-write is only eventual', () => {
+    // Remote persistence passes, but eventual read-after-write does not — the
+    // rejection comes from the consistency axis, not the persistence scope.
+    const storage = createCoreStorageAdapter();
+    storage.capabilities = () => ({
+      readAfterWrite: 'eventual',
+      scanConsistency: 'snapshot',
+      persistence: 'remote',
+      atomicBatch: true,
+      conditionalBatch: true,
+      boundedRangeDelete: true,
+    });
+
+    expect(() => assertDurableStorageForRecovery(storage)).toThrow(
+      /readAfterWrite must be "linearizable"/,
+    );
+    expect(() => assertDurableStorageForRecovery(storage)).not.toThrow(/persistence must be/);
   });
 
   it('rejects MemoryStorage because it is ephemeral', () => {
     expect(() => assertDurableStorageForRecovery(new MemoryStorage())).toThrow(
-      /persistence must be "local"/,
+      /persistence must be "local" or "remote"/,
     );
   });
 
@@ -266,7 +302,9 @@ describe('assertDurableStorageForRecovery', () => {
   it('rejects in-memory BunSQLiteStorage because it is ephemeral', () => {
     using storage = new BunSQLiteStorage(':memory:');
 
-    expect(() => assertDurableStorageForRecovery(storage)).toThrow(/persistence must be "local"/);
+    expect(() => assertDurableStorageForRecovery(storage)).toThrow(
+      /persistence must be "local" or "remote"/,
+    );
   });
 
   it('rejects file-backed TursoStorage because read-after-write is session-scoped', () => {
@@ -287,12 +325,15 @@ describe('assertDurableStorageForRecovery', () => {
     }
   });
 
-  it('rejects HTTPStorage because remote eventual storage is not durable recovery storage', () => {
+  it('rejects HTTPStorage because its consistency is too weak for recovery', () => {
+    // Remote persistence is now acceptable, so the rejection comes from the
+    // consistency axes: HTTPStorage is eventual / best-effort / non-CAS by default.
     const storage = new HTTPStorage({ baseUrl: 'https://weft.example.invalid' });
 
     expect(() => assertDurableStorageForRecovery(storage)).toThrow(
-      /persistence must be "local".*readAfterWrite must be "linearizable".*scanConsistency must be "snapshot".*conditionalBatch must be true/s,
+      /readAfterWrite must be "linearizable".*scanConsistency must be "snapshot".*conditionalBatch must be true/s,
     );
+    expect(() => assertDurableStorageForRecovery(storage)).not.toThrow(/persistence must be/);
   });
 });
 

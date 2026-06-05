@@ -1,203 +1,33 @@
-import type { HTTPStorage } from './http.ts';
-import type { IndexedDBStorage } from './indexeddb.ts';
 import type { Storage } from './interface.ts';
-import type { LMDBStorage } from './lmdb.ts';
 import { MemoryStorage } from './memory.ts';
-import type { SQLiteStorageInstance } from './sqlite.ts';
-import type { TursoStorage } from './turso.ts';
-import type { WebExtensionStorage } from './web-extension.ts';
+import type {
+  AutoStorageConfiguration,
+  HTTPStorageConfiguration,
+  IndexedDBStorageConfiguration,
+  LMDBStorageConfiguration,
+  MemoryStorageConfiguration,
+  NeonStorageConfiguration,
+  ResolvedStorage,
+  SQLiteStorageConfiguration,
+  StorageConfiguration,
+  StorageConfigurationType,
+  TursoStorageConfiguration,
+  WebExtensionStorageConfiguration,
+} from './storage-configuration.ts';
 
-/**
- * Runtime configuration for in-memory storage.
- *
- * @example
- * ```ts
- * import { resolveStorage, type MemoryStorageConfiguration } from '@lostgradient/weft/storage/resolve';
- *
- * const configuration: MemoryStorageConfiguration = { type: 'memory' };
- * const storage = await resolveStorage(configuration);
- * void storage;
- * ```
- */
-export type MemoryStorageConfiguration = {
-  type: 'memory';
-};
-
-/**
- * Runtime configuration for SQLite storage.
- *
- * @example
- * ```ts
- * import { resolveStorage, type SQLiteStorageConfiguration } from '@lostgradient/weft/storage/resolve';
- *
- * const configuration: SQLiteStorageConfiguration = { type: 'sqlite', path: './weft.db' };
- * const storage = await resolveStorage(configuration);
- * void storage;
- * ```
- */
-export type SQLiteStorageConfiguration = {
-  type: 'sqlite';
-  path?: string;
-};
-
-/**
- * Runtime configuration for LMDB storage.
- *
- * @example
- * ```ts
- * import { resolveStorage, type LMDBStorageConfiguration } from '@lostgradient/weft/storage/resolve';
- *
- * const configuration: LMDBStorageConfiguration = { type: 'lmdb', path: './weft-data' };
- * const storage = await resolveStorage(configuration);
- * void storage;
- * ```
- */
-export type LMDBStorageConfiguration = {
-  type: 'lmdb';
-  path: string;
-};
-
-/**
- * Runtime configuration for Turso/libSQL storage.
- *
- * @example
- * ```ts
- * import { resolveStorage, type TursoStorageConfiguration } from '@lostgradient/weft/storage/resolve';
- *
- * const configuration: TursoStorageConfiguration = { type: 'turso', url: 'file:weft.db' };
- * const storage = await resolveStorage(configuration);
- * void storage;
- * ```
- */
-export type TursoStorageConfiguration = {
-  type: 'turso';
-  url: string;
-  authToken?: string;
-};
-
-/**
- * Runtime configuration for browser IndexedDB storage.
- *
- * @example
- * ```ts
- * import { resolveStorage, type IndexedDBStorageConfiguration } from '@lostgradient/weft/storage/resolve';
- *
- * const configuration: IndexedDBStorageConfiguration = { type: 'indexeddb', databaseName: 'weft' };
- * const storage = await resolveStorage(configuration);
- * void storage;
- * ```
- */
-export type IndexedDBStorageConfiguration = {
-  type: 'indexeddb';
-  databaseName?: string;
-};
-
-/**
- * Runtime configuration for WebExtension storage.
- *
- * @example
- * ```ts
- * import { resolveStorage, type WebExtensionStorageConfiguration } from '@lostgradient/weft/storage/resolve';
- *
- * const configuration: WebExtensionStorageConfiguration = { type: 'web-extension', area: 'local' };
- * const storage = await resolveStorage(configuration);
- * void storage;
- * ```
- */
-export type WebExtensionStorageConfiguration = {
-  type: 'web-extension';
-  area?: 'local' | 'sync' | 'session' | 'managed';
-};
-
-/**
- * Runtime configuration for remote HTTP storage.
- *
- * @example
- * ```ts
- * import { resolveStorage, type HTTPStorageConfiguration } from '@lostgradient/weft/storage/resolve';
- *
- * const configuration: HTTPStorageConfiguration = { type: 'http', baseUrl: 'https://weft.example.com' };
- * const storage = await resolveStorage(configuration);
- * void storage;
- * ```
- */
-export type HTTPStorageConfiguration = {
-  type: 'http';
-  baseUrl: string | URL;
-  headers?: Record<string, string>;
-};
-
-/**
- * Runtime configuration for automatic storage selection.
- *
- * @example
- * ```ts
- * import { resolveStorage, type AutoStorageConfiguration } from '@lostgradient/weft/storage/resolve';
- *
- * const configuration: AutoStorageConfiguration = { type: 'auto' };
- * const storage = await resolveStorage(configuration);
- * void storage;
- * ```
- */
-export type AutoStorageConfiguration = {
-  type: 'auto';
-};
-
-/**
- * Union of supported runtime-driven storage configurations.
- *
- * @example
- * ```ts
- * import { resolveStorage, type StorageConfiguration } from '@lostgradient/weft/storage/resolve';
- *
- * const configuration: StorageConfiguration = { type: 'memory' };
- * const storage = await resolveStorage(configuration);
- * void storage;
- * ```
- */
-export type StorageConfiguration =
-  | MemoryStorageConfiguration
-  | SQLiteStorageConfiguration
-  | LMDBStorageConfiguration
-  | TursoStorageConfiguration
-  | IndexedDBStorageConfiguration
-  | WebExtensionStorageConfiguration
-  | HTTPStorageConfiguration
-  | AutoStorageConfiguration;
-
-type StorageConfigurationType = StorageConfiguration['type'];
-
-/**
- * Storage adapter type resolved for a concrete {@link StorageConfiguration}.
- *
- * Use this when a configuration value is already narrowed and downstream code
- * needs the adapter-specific instance type that {@link resolveStorage} returns.
- *
- * @example
- * ```ts
- * import type { HTTPStorageConfiguration, ResolvedStorage } from '@lostgradient/weft/storage/resolve';
- *
- * type RemoteStorage = ResolvedStorage<HTTPStorageConfiguration>;
- * declare const storage: RemoteStorage;
- * void storage;
- * ```
- */
-export type ResolvedStorage<Configuration extends StorageConfiguration> =
-  Configuration extends MemoryStorageConfiguration
-    ? MemoryStorage
-    : Configuration extends SQLiteStorageConfiguration
-      ? SQLiteStorageInstance
-      : Configuration extends LMDBStorageConfiguration
-        ? LMDBStorage
-        : Configuration extends TursoStorageConfiguration
-          ? TursoStorage
-          : Configuration extends IndexedDBStorageConfiguration
-            ? IndexedDBStorage
-            : Configuration extends WebExtensionStorageConfiguration
-              ? WebExtensionStorage
-              : Configuration extends HTTPStorageConfiguration
-                ? HTTPStorage
-                : Storage;
+export type {
+  AutoStorageConfiguration,
+  HTTPStorageConfiguration,
+  IndexedDBStorageConfiguration,
+  LMDBStorageConfiguration,
+  MemoryStorageConfiguration,
+  NeonStorageConfiguration,
+  ResolvedStorage,
+  SQLiteStorageConfiguration,
+  StorageConfiguration,
+  TursoStorageConfiguration,
+  WebExtensionStorageConfiguration,
+} from './storage-configuration.ts';
 
 type StorageResolverMap = {
   [Type in StorageConfigurationType]: (
@@ -223,6 +53,7 @@ const BUN_SQLITE_STORAGE_MODULE = storageModuleSpecifier('./bun-sql.ts', './bun-
 const NODE_SQLITE_STORAGE_MODULE = storageModuleSpecifier('./node-sqlite.ts', './node-sqlite.js');
 const LMDB_STORAGE_MODULE = storageModuleSpecifier('./lmdb.ts', './lmdb.js');
 const TURSO_STORAGE_MODULE = storageModuleSpecifier('./turso.ts', './turso.js');
+const NEON_STORAGE_MODULE = storageModuleSpecifier('./neon.ts', './neon.js');
 const INDEXEDDB_STORAGE_MODULE = storageModuleSpecifier('./indexeddb.ts', './indexeddb.js');
 const WEB_EXTENSION_STORAGE_MODULE = storageModuleSpecifier(
   './web-extension.ts',
@@ -312,6 +143,11 @@ const storageResolvers = {
       url: configuration.url,
       ...(configuration.authToken === undefined ? {} : { authToken: configuration.authToken }),
     });
+  },
+  neon: async (configuration: NeonStorageConfiguration) => {
+    const { NeonStorage } =
+      await importStorageModule<typeof import('./neon.ts')>(NEON_STORAGE_MODULE);
+    return new NeonStorage({ url: configuration.url });
   },
   indexeddb: async (configuration: IndexedDBStorageConfiguration) => {
     const { IndexedDBStorage } =
@@ -441,6 +277,10 @@ const storageConfigurationValidators = {
       ...(authToken === undefined ? {} : { authToken }),
     };
   },
+  neon: (configuration) => ({
+    type: 'neon',
+    url: readRequiredString(configuration, 'url', 'Neon'),
+  }),
   indexeddb: (configuration) => {
     const databaseName = readOptionalString(configuration, 'databaseName', 'IndexedDB');
     return databaseName === undefined ? { type: 'indexeddb' } : { type: 'indexeddb', databaseName };

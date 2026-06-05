@@ -2,7 +2,8 @@
  * Verifies that per-backend submodule exports are correctly tree-shakable.
  *
  * Builds tiny consumer entries against the local dist/ and asserts that:
- *  - Importing from dist/storage/memory does NOT pull in lmdb or @libsql/client
+ *  - Importing from dist/storage/memory does NOT pull in lmdb, @libsql/client,
+ *    or @neondatabase/serverless
  *  - Importing from dist/storage/lmdb keeps lmdb as an external import (not inlined)
  *
  * Run after `bun run build`: bun run verify:exports
@@ -151,10 +152,11 @@ function resolveRealNodeExecutable(): string | null {
 const memoryBundle = await buildEntry('storage/memory.js', 'MemoryStorage', [
   'lmdb',
   '@libsql/client',
+  '@neondatabase/serverless',
   'bun:sqlite',
 ]);
 
-const heavyTokens = ['LMDBStorage', 'TursoStorage', 'BunSQLiteStorage'];
+const heavyTokens = ['LMDBStorage', 'TursoStorage', 'NeonStorage', 'BunSQLiteStorage'];
 const foundHeavy = heavyTokens.filter((token) => memoryBundle.includes(token));
 
 if (foundHeavy.length > 0) {
@@ -171,6 +173,7 @@ if (foundHeavy.length > 0) {
 const storageBarrelBundle = await buildEntry('storage/index.js', 'MemoryStorage', [
   'lmdb',
   '@libsql/client',
+  '@neondatabase/serverless',
   'bun:sqlite',
 ]);
 
@@ -190,6 +193,7 @@ if (foundInBarrel.length > 0) {
 const lmdbBundle = await buildEntry('storage/lmdb.js', 'LMDBStorage', [
   'lmdb',
   '@libsql/client',
+  '@neondatabase/serverless',
   'bun:sqlite',
 ]);
 
@@ -209,6 +213,7 @@ if (!lmdbBundle.includes('lmdb')) {
 const tursoBundle = await buildEntry('storage/turso.js', 'TursoStorage', [
   'lmdb',
   '@libsql/client',
+  '@neondatabase/serverless',
   'bun:sqlite',
 ]);
 
@@ -218,6 +223,26 @@ if (!tursoBundle.includes('@libsql/client')) {
   );
 } else {
   pass('@lostgradient/weft/storage/turso externalizes @libsql/client correctly');
+}
+
+// ---------------------------------------------------------------------------
+// Test 4b: storage/neon keeps @neondatabase/serverless as an external
+// ---------------------------------------------------------------------------
+const neonBundle = await buildEntry('storage/neon.js', 'NeonStorage', [
+  'lmdb',
+  '@libsql/client',
+  '@neondatabase/serverless',
+  'bun:sqlite',
+]);
+
+if (!neonBundle.includes('@neondatabase/serverless')) {
+  fail(
+    '@lostgradient/weft/storage/neon bundle has no reference to @neondatabase/serverless (should be external import)',
+  );
+} else if (neonBundle.includes('@libsql/client')) {
+  fail('@lostgradient/weft/storage/neon bundle unexpectedly contains @libsql/client');
+} else {
+  pass('@lostgradient/weft/storage/neon externalizes @neondatabase/serverless correctly');
 }
 
 // Test 5: root entrypoint must not export testing primitives
@@ -279,7 +304,12 @@ if (!tursoBundle.includes('@libsql/client')) {
 // ---------------------------------------------------------------------------
 // Test 6: root bundle must not contain testing source files or identifiers
 // ---------------------------------------------------------------------------
-const rootBundle = await buildEntry('index.js', 'Engine', ['lmdb', '@libsql/client', 'bun:sqlite']);
+const rootBundle = await buildEntry('index.js', 'Engine', [
+  'lmdb',
+  '@libsql/client',
+  '@neondatabase/serverless',
+  'bun:sqlite',
+]);
 
 const testingSourceTokens = [
   'src/testing/test-engine',
@@ -330,7 +360,7 @@ if (foundTestingBundleTokens.length > 0) {
       format: 'esm',
       minify: true,
       packages: 'bundle',
-      external: ['lmdb', '@libsql/client', 'bun:sqlite'],
+      external: ['lmdb', '@libsql/client', '@neondatabase/serverless', 'bun:sqlite'],
     });
 
     if (!result.success) {
@@ -442,10 +472,12 @@ const storageAdapterSubpathsScript = [
   "import { resolveStorage } from '@lostgradient/weft/storage/resolve';",
   "import { resolveDefaultStorage } from '@lostgradient/weft/storage/auto';",
   "import { WebExtensionStorage } from '@lostgradient/weft/storage/web-extension';",
+  "import { NeonStorage } from '@lostgradient/weft/storage/neon';",
   "if (typeof HTTPStorage !== 'function') throw new Error('HTTPStorage subpath failed');",
   "if (typeof WebExtensionStorage !== 'function') throw new Error('WebExtensionStorage subpath failed');",
   "if (typeof resolveDefaultStorage !== 'function') throw new Error('resolveDefaultStorage subpath failed');",
   "if (typeof resolveStorage !== 'function') throw new Error('resolveStorage subpath failed');",
+  "if (typeof NeonStorage !== 'function') throw new Error('NeonStorage subpath failed');",
 ].join('\n');
 
 const bunSqliteOverrideScript = [

@@ -84,7 +84,7 @@ try {
       outdir: tempDir,
       minify: false,
       // Heavy optional dependencies — not part of the portable surface.
-      external: ['@opentelemetry/api', 'lmdb', '@libsql/client'],
+      external: ['@opentelemetry/api', 'lmdb', '@libsql/client', '@neondatabase/serverless'],
     });
 
     if (!result.success) {

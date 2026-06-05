@@ -117,6 +117,17 @@ describe('resolveStorage', () => {
     storage[Symbol.dispose]();
   });
 
+  it('resolves Neon storage from a url without opening a connection', async () => {
+    // The Neon serverless pool is lazy, so resolving and disposing it never
+    // contacts the (bogus) endpoint.
+    const storage = await resolveStorage({
+      type: 'neon',
+      url: 'postgresql://user:pass@nonexistent.invalid/db',
+    });
+    expect(storage.constructor.name).toBe('NeonStorage');
+    storage[Symbol.dispose]();
+  });
+
   it('rejects unknown storage configuration variants', async () => {
     await expect(resolveStorage({ type: 'nope' } as never)).rejects.toThrow(
       'Unsupported storage configuration type: nope',
@@ -135,6 +146,9 @@ describe('resolveStorage', () => {
     );
     await expect(resolveStorage({ type: 'lmdb' } as never)).rejects.toThrow(
       'LMDB storage configuration requires "path" as a string.',
+    );
+    await expect(resolveStorage({ type: 'neon' } as never)).rejects.toThrow(
+      'Neon storage configuration requires "url" as a string.',
     );
     await expect(
       resolveStorage({ type: 'web-extension', area: 'chrome' } as never),

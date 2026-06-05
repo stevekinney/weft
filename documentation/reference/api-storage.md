@@ -120,7 +120,7 @@ The self-reported guarantee profile returned by [`capabilities()`](#capabilities
 function assertDurableStorageForRecovery(storage: Storage): void;
 ```
 
-Boot-time assertion for applications that require durable recovery. It accepts only the conservative recovery row: `persistence: 'local'`, `readAfterWrite: 'linearizable'`, `scanConsistency: 'snapshot'`, `atomicBatch: true`, and `conditionalBatch: true`. It throws an `Error` listing every missing guarantee.
+Boot-time assertion for applications that require durable recovery. It accepts the conservative recovery row: `persistence: 'local'` or `'remote'`, `readAfterWrite: 'linearizable'`, `scanConsistency: 'snapshot'`, `atomicBatch: true`, and `conditionalBatch: true`. A `remote` backend (such as `NeonStorage`) passes only because the other four axes are still required at their strongest—an eventually-consistent remote store is still rejected, by those axes rather than by its persistence scope. It throws an `Error` listing every missing guarantee.
 
 ```ts
 import { assertDurableStorageForRecovery } from '@lostgradient/weft';

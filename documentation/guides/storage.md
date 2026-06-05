@@ -26,17 +26,18 @@ This works under Bun and Node. The path lives under `${tmpdir()}/weft-default/<c
 
 Use the narrowest adapter that matches where the engine runs:
 
-| Backend                | Environment       | `capabilities().persistence`      | Stability tier                 | Optional dep     | Notes                                     |
-| ---------------------- | ----------------- | --------------------------------- | ------------------------------ | ---------------- | ----------------------------------------- |
-| `MemoryStorage`        | All               | `ephemeral`                       | Candidate-stable for tests/dev | None             | Tests/demos only—data lost on restart.    |
-| `SQLiteStorage` (Bun)  | Bun               | `ephemeral` or `local`            | Candidate-stable, provisional  | None             | Default for the Bun runtime.              |
-| `SQLiteStorage` (Node) | Node >= 22        | `ephemeral` or `local`            | Candidate-stable, provisional  | `better-sqlite3` | Default for the Node runtime.             |
-| `LMDBStorage`          | Bun/Node          | `local`                           | Candidate-stable, provisional  | `lmdb`           | High-throughput memory-mapped key-value.  |
-| `TursoStorage`         | Bun/Node          | `ephemeral`, `local`, or `remote` | Experimental                   | `@libsql/client` | Stable tier is pending conformance proof. |
-| `IndexedDBStorage`     | Browser           | `local`                           | Experimental                   | None             | Browser native; no SQL passthrough.       |
-| `WebExtensionStorage`  | Browser extension | `ephemeral`, `local`, or `remote` | Experimental                   | None             | `chrome.storage` / `browser.storage`.     |
-| `HTTPStorage`          | All               | `remote`                          | Experimental                   | None             | Connects to a remote Weft storage API.    |
-| `CompressedStorage`    | All               | Same as wrapped storage           | Experimental                   | None             | Wraps another adapter; compresses values. |
+| Backend                | Environment       | `capabilities().persistence`      | Stability tier                 | Optional dep               | Notes                                         |
+| ---------------------- | ----------------- | --------------------------------- | ------------------------------ | -------------------------- | --------------------------------------------- |
+| `MemoryStorage`        | All               | `ephemeral`                       | Candidate-stable for tests/dev | None                       | Tests/demos only—data lost on restart.        |
+| `SQLiteStorage` (Bun)  | Bun               | `ephemeral` or `local`            | Candidate-stable, provisional  | None                       | Default for the Bun runtime.                  |
+| `SQLiteStorage` (Node) | Node >= 22        | `ephemeral` or `local`            | Candidate-stable, provisional  | `better-sqlite3`           | Default for the Node runtime.                 |
+| `LMDBStorage`          | Bun/Node          | `local`                           | Candidate-stable, provisional  | `lmdb`                     | High-throughput memory-mapped key-value.      |
+| `TursoStorage`         | Bun/Node          | `ephemeral`, `local`, or `remote` | Experimental                   | `@libsql/client`           | Stable tier is pending conformance proof.     |
+| `NeonStorage`          | Bun/Node          | `remote`                          | Experimental                   | `@neondatabase/serverless` | Neon/Postgres for durable remote deployments. |
+| `IndexedDBStorage`     | Browser           | `local`                           | Experimental                   | None                       | Browser native; no SQL passthrough.           |
+| `WebExtensionStorage`  | Browser extension | `ephemeral`, `local`, or `remote` | Experimental                   | None                       | `chrome.storage` / `browser.storage`.         |
+| `HTTPStorage`          | All               | `remote`                          | Experimental                   | None                       | Connects to a remote Weft storage API.        |
+| `CompressedStorage`    | All               | Same as wrapped storage           | Experimental                   | None                       | Wraps another adapter; compresses values.     |
 
 > [!NOTE]
 > Candidate-stable is provisional while the [Tier-0 Behavioral Contract](../architecture/tier-0-behavioral-contract.md) is still shaping failure semantics. The storage adapters above keep their current capability contracts, but Tier-0 work may still add guarded failure modes when a deployment asks for behavior a backend cannot provide. The experimental browser adapters (`IndexedDBStorage`, `WebExtensionStorage`) graduate on a separate, mechanical criterion: their real-browser smoke tests must be green in a required CI gate. See the [browser-surface promotion gate](../roadmap-to-1.0.md#browser-surface-promotion-gate).
@@ -133,6 +134,7 @@ The honest profile per built-in adapter:
 | `LMDBStorage`         | `local`                           | `linearizable` | `snapshot`      | yes         | yes              | no                 |
 | `IndexedDBStorage`    | `local`                           | `linearizable` | `best-effort`   | yes         | yes              | yes                |
 | `TursoStorage`        | `ephemeral`, `local`, or `remote` | `session`      | `snapshot`      | yes         | yes              | yes                |
+| `NeonStorage`         | `remote`                          | `linearizable` | `snapshot`      | yes         | yes              | yes                |
 | `HTTPStorage`         | `remote`                          | `eventual`     | `best-effort`   | yes         | no (opt-in)      | no                 |
 | `WebExtensionStorage` | `ephemeral`, `local`, or `remote` | `session`      | `best-effort`   | yes         | no               | no                 |
 
@@ -300,6 +302,24 @@ The `url` accepts `libsql://` (remote Turso), `file:` (local libSQL), or `file::
 
 Like SQLite, the underlying schema is a single `kv` table using `WITHOUT ROWID`. Batch operations run inside a transaction.
 
+### `NeonStorage`
+
+Neon serverless Postgres for durable, remote deployments. Optional dependency: `@neondatabase/serverless`. Point it at the **primary** endpoint—`capabilities()` reports `readAfterWrite: 'linearizable'`, which a read-replica connection string would violate.
+
+```ts partial
+import { NeonStorage } from '@lostgradient/weft/storage/neon';
+
+await using storage = new NeonStorage({
+  url: process.env.NEON_DATABASE_URL,
+});
+```
+
+The underlying schema is a single `kv (key TEXT COLLATE "C", value BYTEA)` table. The `COLLATE "C"` is load-bearing: Postgres `TEXT` otherwise sorts by the database locale, which reorders punctuation and would break the lexicographic prefix scans the engine relies on—`COLLATE "C"` restores byte-wise ordering.
+
+`batch()` and `conditionalBatch()` each run on a single pinned pool connection inside one transaction, so a multi-statement batch is atomic. `conditionalBatch()` uses `SERIALIZABLE` isolation (not `SELECT ... FOR UPDATE`, which cannot lock an absent row) and retries on serialization failures, so concurrent compare-and-swap—the start-idempotency path—converges on exactly one winner.
+
+The Neon driver connects over WebSocket. Bun and Node 22+ provide a global `WebSocket`, so no extra wiring is needed; on Node ≤21, install `ws` and set `neonConfig.webSocketConstructor` before first use.
+
 ### `IndexedDBStorage`
 
 Browser-native storage—the equivalent of SQLite for the browser. Persists workflow state to IndexedDB, suitable for Service Worker deployments where the engine runs entirely in the browser.
@@ -373,7 +393,7 @@ Wraps any `Storage` implementation. Disposing the `CompressedStorage` disposes t
 
 ## Troubleshooting
 
-**Missing optional dependencies (`better-sqlite3`, `lmdb`, `@libsql/client`).** `NodeSQLiteStorage`, `LMDBStorage`, and `TursoStorage` import their dependencies lazily. If the package isn't installed, you'll see an error when you first call `resolveStorage` or instantiate the adapter. Install the adapter you selected with `bun add better-sqlite3`, `bun add lmdb`, or `bun add @libsql/client`.
+**Missing optional dependencies (`better-sqlite3`, `lmdb`, `@libsql/client`, `@neondatabase/serverless`).** `NodeSQLiteStorage`, `LMDBStorage`, `TursoStorage`, and `NeonStorage` import their dependencies lazily. If the package isn't installed, you'll see an error when you first call `resolveStorage` or instantiate the adapter. Install the adapter you selected with `bun add better-sqlite3`, `bun add lmdb`, `bun add @libsql/client`, or `bun add @neondatabase/serverless`.
 
 **`@lostgradient/weft/storage/auto` in a browser bundler.** The module statically imports Node built-ins, so bundlers like Vite or webpack will fail or warn when targeting the browser. Switch to `@lostgradient/weft/storage/indexeddb` directly, or use `setupServiceWorker()` from `@lostgradient/weft/service-worker`. If you need a single configuration that works across runtimes including browsers, use `resolveStorage({ type: 'auto' })` instead—it lazy-loads adapters and includes browser fallbacks.
 

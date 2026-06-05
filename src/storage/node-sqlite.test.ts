@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
-import { randomUUID } from 'node:crypto';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
+import { loadBetterSqlite3ForTest } from './node-sqlite-loader.ts';
 import { NodeSQLiteStorage } from './node-sqlite.ts';
 
 const MISSING_BETTER_SQLITE_ERROR =
@@ -155,53 +155,34 @@ function createFakeDatabaseConstructor() {
 }
 
 describe('NodeSQLiteStorage', () => {
-  it('throws a clear runtime error when the better-sqlite3 package is missing', async () => {
-    mock.module('node:module', () => ({
-      createRequire:
-        () =>
-        (specifier: string): never => {
-          const error = new Error(`Cannot find module '${specifier}'`) as Error & { code: string };
-          error.code = 'MODULE_NOT_FOUND';
-          throw error;
-        },
-    }));
-
-    try {
-      const { NodeSQLiteStorage: MissingDependencyStorage } = await import(
-        `./node-sqlite.ts?missingDependency=${randomUUID()}`
-      );
-
-      expect(() => new MissingDependencyStorage(':memory:')).toThrow(MISSING_BETTER_SQLITE_ERROR);
-    } finally {
-      mock.restore();
-    }
+  it('throws a clear runtime error when the better-sqlite3 package is missing', () => {
+    // Inject a throwing module resolver instead of mocking `node:module`. Bun's
+    // `mock.module('node:module', ...)` patches the CJS loader process-wide and
+    // `mock.restore()` does not revert it, which poisons `require()` for every
+    // later test in the same process. The injected-resolver seam tests the same
+    // missing-dependency path with no global side effect.
+    expect(() =>
+      loadBetterSqlite3ForTest(() => {
+        const error = new Error("Cannot find module 'better-sqlite3'") as Error & { code: string };
+        error.code = 'MODULE_NOT_FOUND';
+        throw error;
+      }),
+    ).toThrow(MISSING_BETTER_SQLITE_ERROR);
   });
 
-  it('throws a clear runtime error when better-sqlite3 fails while opening the database', async () => {
-    mock.module('node:module', () => ({
-      // A `new`-able constructor that throws on construction, simulating
-      // better-sqlite3's native-binding load failure under Bun. A constructor
-      // function (not a class) avoids the no-extraneous-class lint on a
-      // constructor-only body while staying newable for the loader path.
-      createRequire: () => (): new (path: string) => unknown =>
-        function NativeLoadFailureDatabase(this: unknown, _path: string): void {
-          const error = new Error("'better-sqlite3' is not yet supported in Bun.") as Error & {
-            code: string;
-          };
-          error.code = 'ERR_DLOPEN_FAILED';
-          throw error;
-        } as unknown as new (path: string) => unknown,
-    }));
-
-    try {
-      const { NodeSQLiteStorage: NativeLoadFailureStorage } = await import(
-        `./node-sqlite.ts?nativeLoadFailure=${randomUUID()}`
-      );
-
-      expect(() => new NativeLoadFailureStorage(':memory:')).toThrow(MISSING_BETTER_SQLITE_ERROR);
-    } finally {
-      mock.restore();
-    }
+  it('throws a clear runtime error when the better-sqlite3 native binding fails to load', () => {
+    // Simulate better-sqlite3's native binding failing to dlopen under Bun: the
+    // require itself rejects with ERR_DLOPEN_FAILED. The loader recognizes this as
+    // a load failure and reshapes it into the actionable peer-dependency error.
+    expect(() =>
+      loadBetterSqlite3ForTest(() => {
+        const error = new Error("'better-sqlite3' is not yet supported in Bun.") as Error & {
+          code: string;
+        };
+        error.code = 'ERR_DLOPEN_FAILED';
+        throw error;
+      }),
+    ).toThrow(MISSING_BETTER_SQLITE_ERROR);
   });
 
   if (IS_BUN) {
@@ -434,6 +415,18 @@ it('supports the adapter behavior under Bun when a database constructor is injec
     ':memory:',
     fake.Database as unknown as ConstructorParameters<typeof NodeSQLiteStorage>[1],
   );
+
+  // capabilities() is only reachable once an instance exists; under Bun the real
+  // better-sqlite3 binding cannot load, so the injected fake constructor is the
+  // only way to construct an instance and exercise this method here.
+  expect(storage.capabilities()).toEqual({
+    persistence: 'ephemeral',
+    readAfterWrite: 'linearizable',
+    scanConsistency: 'snapshot',
+    atomicBatch: true,
+    conditionalBatch: true,
+    boundedRangeDelete: false,
+  });
 
   await storage.put('a:1', new Uint8Array([1]));
   await storage.put('a:2', new Uint8Array([2]));

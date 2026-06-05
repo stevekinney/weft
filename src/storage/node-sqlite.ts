@@ -11,8 +11,6 @@
  * @module storage/node-sqlite
  */
 
-import { createRequire } from 'node:module';
-
 import type {
   BatchOperation,
   ConditionalBatchCondition,
@@ -22,6 +20,15 @@ import type {
 } from './interface.ts';
 import { storageValuesEqual } from './interface.ts';
 import {
+  createMissingBetterSqlite3Error,
+  isBetterSqlite3LoadFailure,
+  loadBetterSqlite3,
+  type BetterSqliteConstructor,
+  type BetterSqliteDatabase,
+  type BetterSqliteStatement,
+  type BetterSqliteTransaction,
+} from './node-sqlite-loader.ts';
+import {
   SQLITE_CREATE_KEY_VALUE_TABLE,
   SQLITE_DELETE_VALUE_BY_KEY,
   SQLITE_SELECT_VALUE_BY_KEY,
@@ -29,83 +36,7 @@ import {
   buildSqliteKeyValueRangeSelect,
 } from './sqlite-key-value-queries.ts';
 
-/**
- * Minimal subset of the `better-sqlite3` API surface that this adapter uses.
- * Defined here so the module compiles without the package installed — the
- * actual dependency is resolved lazily at construction time.
- */
-type BetterSqliteStatement = {
-  run(...parameters: unknown[]): unknown;
-  get(...parameters: unknown[]): Record<string, unknown> | undefined;
-  all(...parameters: unknown[]): Record<string, unknown>[];
-};
-
-type BetterSqliteTransaction = (...args: unknown[]) => unknown;
-
-type BetterSqliteDatabase = {
-  pragma(source: string): unknown;
-  exec(source: string): void;
-  prepare(source: string): BetterSqliteStatement;
-  transaction(fn: (...args: unknown[]) => unknown): BetterSqliteTransaction;
-  close(): void;
-};
-
-type BetterSqliteConstructor = new (path: string) => BetterSqliteDatabase;
-
-/** Lazily resolved `better-sqlite3` constructor. */
-let DatabaseConstructor: BetterSqliteConstructor | undefined;
-
 type NodeSQLiteStoragePersistence = NonNullable<StorageCapabilities['persistence']>;
-
-function createMissingBetterSqlite3Error(cause: unknown): Error {
-  return new Error(
-    'NodeSQLiteStorage requires the optional peer dependency "better-sqlite3". ' +
-      'Install it in your application with: bun add better-sqlite3 (or npm install better-sqlite3).',
-    { cause },
-  );
-}
-
-function isBetterSqlite3LoadFailure(error: unknown): boolean {
-  if (!(error instanceof Error)) return false;
-
-  const errorCode = (error as Error & { code?: unknown }).code;
-
-  if (errorCode === 'MODULE_NOT_FOUND') {
-    return (
-      error.message.includes("'better-sqlite3'") ||
-      error.message.includes('"better-sqlite3"') ||
-      error.message.includes("'bindings'") ||
-      error.message.includes('"bindings"')
-    );
-  }
-
-  if (errorCode === 'ERR_DLOPEN_FAILED') {
-    return error.message.includes('better-sqlite3');
-  }
-
-  return false;
-}
-
-function loadBetterSqlite3(): BetterSqliteConstructor {
-  if (DatabaseConstructor) return DatabaseConstructor;
-
-  // This package is ESM (`type: module` in package.json), so the global
-  // `require` is not defined. Use `createRequire` from `node:module` to get
-  // a CommonJS require for loading the native better-sqlite3 binding.
-  const requireFromHere = createRequire(import.meta.url);
-
-  let mod: { default?: BetterSqliteConstructor } & BetterSqliteConstructor;
-  try {
-    mod = requireFromHere('better-sqlite3') as {
-      default?: BetterSqliteConstructor;
-    } & BetterSqliteConstructor;
-  } catch (error) {
-    throw createMissingBetterSqlite3Error(error);
-  }
-
-  DatabaseConstructor = typeof mod.default === 'function' ? mod.default : mod;
-  return DatabaseConstructor;
-}
 
 /**
  * Runtime-neutral alias for the Node SQLite adapter. Consumers that import

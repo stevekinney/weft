@@ -85,8 +85,8 @@ async function writeUnbundledRuntimeModules(): Promise<void> {
 await writeUnbundledRuntimeModules();
 
 // Node/Bun target — per-backend storage and integration submodules.
-// Heavy backends (lmdb, @libsql/client) are externalized so consumers only pay
-// for what they actually import.
+// Heavy backends (lmdb, @libsql/client, @neondatabase/serverless) are
+// externalized so consumers only pay for what they actually import.
 await Bun.build({
   entrypoints: [
     // Storage submodule entry points (one per subpath export)
@@ -98,6 +98,7 @@ await Bun.build({
     './src/storage/resolve.ts',
     './src/storage/lmdb.ts',
     './src/storage/turso.ts',
+    './src/storage/neon.ts',
     './src/storage/node-sqlite.ts',
     './src/storage/auto.ts',
     './src/testing/index.ts',
@@ -115,7 +116,14 @@ await Bun.build({
   root: './src',
   naming: '[dir]/[name].js',
   minify: true,
-  external: ['lmdb', '@libsql/client', '@opentelemetry/api', 'bun:sqlite', 'better-sqlite3'],
+  external: [
+    'lmdb',
+    '@libsql/client',
+    '@neondatabase/serverless',
+    '@opentelemetry/api',
+    'bun:sqlite',
+    'better-sqlite3',
+  ],
 });
 
 // Keep the MCP public barrel as local binding re-exports. Bun 1.3.13 can
