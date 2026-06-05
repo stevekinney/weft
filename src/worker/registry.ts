@@ -1,6 +1,11 @@
 // Server-side worker tracking and pluggable routing policies.
-import { compareScores, scoreWorker } from './registry/fair-share.ts';
-import { matchesWorkerCapabilities, pickLeastLoaded } from './registry/routing.ts';
+import { FairShareCounters } from './registry/fair-share.ts';
+import {
+  matchesWorkerCapabilities,
+  pickFairShare,
+  pickLeastLoaded,
+  pickRoundRobin,
+} from './registry/routing.ts';
 import {
   deploymentHealth,
   projectDeploymentSummaries,
@@ -63,8 +68,8 @@ export class WorkerRegistry {
   #policy: RoutingPolicy;
   /** Keyed by `${queue}::${activity}` — independent cursors per (queue, activity) pair. */
   #roundRobinCursor: Map<string, number>;
-  /** Per-worker, per-key in-flight counts for fair-share routing. Outer key = workerId. */
-  #fairShareCounts: Map<string, Map<string, number>>;
+  /** Per-worker, per-key in-flight counts for fair-share routing. */
+  #fairShareCounts: FairShareCounters;
 
   constructor(options?: WorkerRegistryOptions) {
     this.#workers = new Map();
@@ -72,7 +77,7 @@ export class WorkerRegistry {
     this.#deploymentDrainStates = new Map();
     this.#policy = options?.policy ?? 'least-loaded';
     this.#roundRobinCursor = new Map();
-    this.#fairShareCounts = new Map();
+    this.#fairShareCounts = new FairShareCounters();
   }
 
   /** The routing policy this registry was configured with. */
@@ -110,7 +115,7 @@ export class WorkerRegistry {
     if (info === undefined) return undefined;
 
     this.#workers.delete(workerId);
-    this.#fairShareCounts.delete(workerId);
+    this.#fairShareCounts.purge(workerId);
 
     // Map iteration is safe while deleting: ECMAScript §23.1.3.5 guarantees
     // already-visited entries are not revisited and pre-visit deletes are skipped.
@@ -189,44 +194,12 @@ export class WorkerRegistry {
     fairShareKey: string | undefined,
   ): WorkerInfo {
     if (this.#policy === 'round-robin') {
-      return this.#pickRoundRobin(eligible, queue, activityName);
+      return pickRoundRobin(eligible, this.#roundRobinCursor, queue, activityName);
     }
     if (this.#policy === 'fair-share' && fairShareKey !== undefined) {
-      return this.#pickFairShare(eligible, fairShareKey);
+      return pickFairShare(eligible, this.#fairShareCounts, fairShareKey);
     }
     return pickLeastLoaded(eligible);
-  }
-
-  /** Round-robin with a per-(queue, activity) cursor so two activities sharing a queue don't interfere. */
-  #pickRoundRobin(
-    eligible: WorkerInfo[],
-    queue: string | undefined,
-    activityName: string,
-  ): WorkerInfo {
-    const key = `${queue ?? '__default__'}::${activityName}`;
-    const cursor = this.#roundRobinCursor.get(key) ?? 0;
-    const pick = eligible[cursor % eligible.length]!;
-    this.#roundRobinCursor.set(key, cursor + 1);
-    return pick;
-  }
-
-  /**
-   * Fair-share: fewest in-flight tasks for `fairShareKey` wins. Ties broken by
-   * overall inFlight then stable id order. Snapshot is built synchronously so
-   * the ranking is consistent across the full candidate set.
-   */
-  #pickFairShare(eligible: WorkerInfo[], fairShareKey: string): WorkerInfo {
-    const scores = eligible.map((worker) =>
-      scoreWorker({
-        id: worker.id,
-        inFlight: worker.inFlight,
-        keyLoad: this.#fairShareCounts.get(worker.id)?.get(fairShareKey) ?? 0,
-      }),
-    );
-    const winner = scores.reduce((best, candidate) =>
-      compareScores(candidate, best) < 0 ? candidate : best,
-    );
-    return this.#workers.get(winner.id)!;
   }
 
   /** Track a task assignment with a visibility timeout deadline. */
@@ -235,6 +208,7 @@ export class WorkerRegistry {
     operationId: string,
     visibilityTimeout: number,
     fairShareKey?: string,
+    attemptToken?: string,
   ): void {
     const deadline = Date.now() + visibilityTimeout;
 
@@ -244,14 +218,12 @@ export class WorkerRegistry {
       deadline,
       visibilityTimeout,
     };
+    if (attemptToken !== undefined) {
+      task.attemptToken = attemptToken;
+    }
     if (fairShareKey !== undefined) {
       task.fairShareKey = fairShareKey;
-      let workerCounts = this.#fairShareCounts.get(workerId);
-      if (workerCounts === undefined) {
-        workerCounts = new Map();
-        this.#fairShareCounts.set(workerId, workerCounts);
-      }
-      workerCounts.set(fairShareKey, (workerCounts.get(fairShareKey) ?? 0) + 1);
+      this.#fairShareCounts.increment(workerId, fairShareKey);
     }
     this.#inFlightTasks.set(operationId, task);
 
@@ -301,6 +273,35 @@ export class WorkerRegistry {
   /** True when `operationId` is in flight on `workerId` — used at the trust boundary to reject stale completions after takeover. */
   isAssignedToWorker(operationId: string, workerId: string): boolean {
     return this.#inFlightTasks.get(operationId)?.workerId === workerId;
+  }
+
+  /**
+   * True when `operationId` is in flight on `workerId` for the specific dispatch
+   * attempt identified by `attemptToken`. Layered after {@link isAssignedToWorker}
+   * to reject a stale completion from an EARLIER attempt that was reassigned to the
+   * same worker — the only case the workerId guard alone cannot catch.
+   *
+   * The token check is purely additive, so a worker that predates the field is
+   * never refused (no protocol version bump): it fires only when the tracked
+   * task has a stored token AND the completion echoes one AND they differ. A
+   * token-less task matches any echo, and an absent echo falls back to the
+   * workerId-only guard that already passed. The defended case — a stale earlier
+   * attempt — always echoes the OLD token it was dispatched with (present, wrong),
+   * so it is still rejected.
+   */
+  isAssignedToAttempt(
+    operationId: string,
+    workerId: string,
+    attemptToken: string | undefined,
+  ): boolean {
+    const task = this.#inFlightTasks.get(operationId);
+    if (task === undefined || task.workerId !== workerId) {
+      return false;
+    }
+    if (task.attemptToken === undefined || attemptToken === undefined) {
+      return true;
+    }
+    return task.attemptToken === attemptToken;
   }
 
   /** Check whether an operation is currently assigned to a worker. */
@@ -476,18 +477,7 @@ export class WorkerRegistry {
   /** Decrement the fair-share count for a completed or expired task. */
   #releaseFairShare(task: InFlightTask): void {
     if (task.fairShareKey === undefined) return;
-    const workerCounts = this.#fairShareCounts.get(task.workerId);
-    if (workerCounts === undefined) return;
-    const current = workerCounts.get(task.fairShareKey) ?? 0;
-    const next = Math.max(0, current - 1);
-    if (next === 0) {
-      workerCounts.delete(task.fairShareKey);
-      if (workerCounts.size === 0) {
-        this.#fairShareCounts.delete(task.workerId);
-      }
-    } else {
-      workerCounts.set(task.fairShareKey, next);
-    }
+    this.#fairShareCounts.release(task.workerId, task.fairShareKey);
   }
 }
 

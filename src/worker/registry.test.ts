@@ -861,6 +861,52 @@ describe('WorkerRegistry', () => {
     });
   });
 
+  describe('isAssignedToAttempt', () => {
+    it('returns false for an unknown operationId', () => {
+      const registry = new WorkerRegistry();
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      expect(registry.isAssignedToAttempt('nonexistent', 'w1', 'token-1')).toBe(false);
+    });
+
+    it('returns false when the assignment is to a different worker', () => {
+      const registry = new WorkerRegistry();
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'token-1');
+      expect(registry.isAssignedToAttempt('op-1', 'w2', 'token-1')).toBe(false);
+    });
+
+    it('matches any token when the in-flight task carries no stored token', () => {
+      // Backward-compat: a task assigned before the attempt-token field existed
+      // has no stored token, so it must not strand completions — any echoed
+      // token (including a present one or none at all) is accepted.
+      const registry = new WorkerRegistry();
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.assignTask('w1', 'op-1', 30_000);
+      expect(registry.isAssignedToAttempt('op-1', 'w1', 'whatever-token')).toBe(true);
+      expect(registry.isAssignedToAttempt('op-1', 'w1', undefined)).toBe(true);
+    });
+
+    it('falls back to the workerId guard when a token-bearing task gets no echoed token', () => {
+      // Additive guard, no protocol version bump: a worker that does not echo a
+      // token (e.g. one predating the field) is authorized on workerId alone, so
+      // the only worker in a singleton deployment is never live-locked.
+      const registry = new WorkerRegistry();
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'token-1');
+      expect(registry.isAssignedToAttempt('op-1', 'w1', undefined)).toBe(true);
+    });
+
+    it('rejects only a present-but-wrong echoed token against a token-bearing task', () => {
+      // The defended case: a stale earlier attempt echoes the OLD token it was
+      // dispatched with — present and wrong — and must be rejected.
+      const registry = new WorkerRegistry();
+      registry.register({ id: 'w1', queue: 'default', activities: ['doWork'], concurrency: 5 });
+      registry.assignTask('w1', 'op-1', 30_000, undefined, 'token-1');
+      expect(registry.isAssignedToAttempt('op-1', 'w1', 'token-1')).toBe(true);
+      expect(registry.isAssignedToAttempt('op-1', 'w1', 'token-stale')).toBe(false);
+    });
+  });
+
   describe('register preserves in-flight count on reconnect', () => {
     // Regression: a worker reconnect during the reconnect grace period must
     // not zero `inFlight` while tasks the close handler preserved are still

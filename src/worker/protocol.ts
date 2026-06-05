@@ -3,7 +3,8 @@
  *
  * This module owns the parser trust boundary: every guard below maps to one
  * documented schema field. Wire-shape types live in `./protocol-messages.ts`,
- * JSON Schema documents in `./protocol-schemas.ts`, and internal helpers in
+ * JSON Schema documents in `./protocol-schemas.ts`, the `taskResult` variant
+ * parser in `./protocol-task-result.ts`, and internal helpers in
  * `./protocol-internals.ts`. All are re-exported so the public surface
  * `@lostgradient/weft/worker-protocol` stays a single import path.
  *
@@ -45,6 +46,8 @@ import {
   REMOTE_WORKER_MESSAGE_SCHEMAS,
   REMOTE_WORKER_PROTOCOL_JSON_SCHEMA,
 } from './protocol-schemas.ts';
+import type { TaskResultMessage } from './protocol-task-result.ts';
+import { parseTaskResultMessage } from './protocol-task-result.ts';
 import type { RemoteWorkerProtocolVersion } from './protocol-version.ts';
 import {
   REMOTE_WORKER_MAX_PROTOCOL_VERSION,
@@ -79,24 +82,8 @@ export type {
   RemoteWorkerProtocolVersion,
   ShutdownMessage,
   TaskMessage,
+  TaskResultMessage,
 };
-
-/**
- * Worker-to-server task result message. Discriminated union over `status`.
- *
- * @example
- * ```ts
- * import type { TaskResultMessage } from '@lostgradient/weft/worker-protocol';
- *
- * const message: TaskResultMessage = {
- *   type: 'taskResult', operationId: 'op-1', status: 'completed', value: { ok: true },
- * };
- * ```
- */
-export type TaskResultMessage =
-  | CompletedTaskResultMessage
-  | FailedTaskResultMessage
-  | CancelledTaskResultMessage;
 
 /**
  * Messages accepted from a worker stream client.
@@ -204,95 +191,6 @@ function parseHeartbeatMessage(
   return { ok: true, message: { type: 'heartbeat', workerId } };
 }
 
-// --- parseTaskResultMessage -------------------------------------------------
-//
-// `taskResult` is a discriminated union over status `completed | failed |
-// cancelled`. Variant dispatch uses a `satisfies Record<TaskResultStatus, …>`
-// lookup so adding a new variant becomes a compile-time error.
-
-type TaskResultStatus = TaskResultMessage['status'];
-
-function parseCompletedTaskResult(
-  operationId: string,
-  record: Record<string, unknown>,
-): RemoteWorkerProtocolParseResult<CompletedTaskResultMessage> {
-  const value = record['value'];
-  if (!isRemoteWorkerJsonValue(value)) {
-    return protocolFailure('invalid_message', 'completed taskResult.value must be valid JSON');
-  }
-  return { ok: true, message: { type: 'taskResult', operationId, status: 'completed', value } };
-}
-
-function parseFailedTaskResult(
-  operationId: string,
-  record: Record<string, unknown>,
-): RemoteWorkerProtocolParseResult<FailedTaskResultMessage> {
-  const error = record['error'];
-  if (typeof error !== 'string') {
-    return protocolFailure('invalid_message', 'failed taskResult.error must be a string');
-  }
-  return { ok: true, message: { type: 'taskResult', operationId, status: 'failed', error } };
-}
-
-function parseCancelledTaskResult(
-  operationId: string,
-  record: Record<string, unknown>,
-): RemoteWorkerProtocolParseResult<CancelledTaskResultMessage> {
-  const error = record['error'];
-  if (typeof error !== 'string') {
-    return protocolFailure('invalid_message', 'cancelled taskResult.error must be a string');
-  }
-  const cancelled = record['cancelled'];
-  if (cancelled !== undefined && cancelled !== true) {
-    return protocolFailure('invalid_message', 'taskResult.cancelled must be true when present');
-  }
-  return {
-    ok: true,
-    message: {
-      type: 'taskResult',
-      operationId,
-      status: 'cancelled',
-      error,
-      ...(cancelled === true ? { cancelled } : {}),
-    },
-  };
-}
-
-const TASK_RESULT_VARIANT_PARSERS = {
-  completed: parseCompletedTaskResult,
-  failed: parseFailedTaskResult,
-  cancelled: parseCancelledTaskResult,
-} as const satisfies Record<
-  TaskResultStatus,
-  (
-    operationId: string,
-    record: Record<string, unknown>,
-  ) => RemoteWorkerProtocolParseResult<TaskResultMessage>
->;
-
-function isTaskResultStatus(value: unknown): value is TaskResultStatus {
-  return value === 'completed' || value === 'failed' || value === 'cancelled';
-}
-
-function parseTaskResultMessage(
-  record: Record<string, unknown>,
-): RemoteWorkerProtocolParseResult<TaskResultMessage> {
-  const operationId = record['operationId'];
-  if (!isNonEmptyString(operationId)) {
-    return protocolFailure('invalid_message', 'taskResult.operationId must be a non-empty string');
-  }
-
-  const status = record['status'];
-  if (!isTaskResultStatus(status)) {
-    return protocolFailure(
-      'invalid_message',
-      'taskResult.status must be completed, failed, or cancelled',
-    );
-  }
-
-  return TASK_RESULT_VARIANT_PARSERS[status](operationId, record);
-}
-
 // --- parseTaskMessage -------------------------------------------------------
 
 const TASK_FIELD_SPECS: readonly FieldSpec[] = [
@@ -301,6 +199,10 @@ const TASK_FIELD_SPECS: readonly FieldSpec[] = [
   ['input', true, isRemoteWorkerJsonValue, 'task.input must be valid JSON'],
   ['attempt', false, isFiniteNumber, 'task.attempt must be a finite number'],
   ['headers', false, isStringRecord, 'task.headers must be a string map'],
+  // Required: the server always stamps a per-dispatch token the worker echoes on
+  // completion. Optional in the spec table so a frame from an older server still
+  // parses; a missing token simply disables the worker-side echo for that task.
+  ['attemptToken', false, isNonEmptyString, 'task.attemptToken must be a non-empty string'],
 ];
 
 function parseTaskMessage(

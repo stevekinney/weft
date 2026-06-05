@@ -210,23 +210,31 @@ function onTaskResultMessage(
   // displaced by visibility-timeout reassignment — original worker
   // partitions, scanner reassigns to a peer — no longer matches and is
   // rejected here instead of mutating engine state.
-  //
-  // Limitation, documented and accepted in this PR: (operationId, workerId)
-  // is sufficient ONLY when takeover moves the task to a different
-  // workerId. If the scheduler re-selects the same workerId on a later
-  // attempt (e.g., a single-worker deployment where the only available
-  // worker is the one that just timed out), a stale completion from the
-  // earlier attempt can pass this guard. Production deployments that need
-  // to defend against this case must use multiple workers and a routing
-  // policy that avoids reselecting the displaced worker, or wait for a
-  // future protocol revision that adds an attempt token to the wire format.
-  // Adding an attempt token here would require a protocol-version bump and
-  // is explicitly out of scope.
   if (workerId === undefined || !context.registry.isAssignedToWorker(operationId, workerId)) {
     sendWorkerProtocolMessage(ws, {
       type: 'protocolError',
       code: 'invalid_message',
       message: `taskResult for operation "${operationId}" rejected — task not assigned to worker "${workerId ?? ''}"`,
+    });
+    return;
+  }
+  // Attempt guard, layered after the workerId guard. (operationId, workerId)
+  // alone cannot reject a stale completion when a LATER attempt is reassigned to
+  // the SAME workerId (e.g. a single-worker deployment where the only available
+  // worker is the one that just timed out). The per-dispatch attempt token —
+  // additive to the message payload, NOT a protocol-version change — is the only
+  // field distinguishing attempts: the worker echoes the token from the task it
+  // received, and a token from an earlier attempt no longer matches the registry's
+  // current entry. Reject without mutating engine state. The guard is purely
+  // additive: it fires only on a present-but-wrong token, so a worker that
+  // predates the field (or a task assigned before it existed) falls back to the
+  // workerId-only guard and is never live-locked — required to hold the no-version-
+  // bump promise for the singleton deployment this defends.
+  if (!context.registry.isAssignedToAttempt(operationId, workerId, message.attemptToken)) {
+    sendWorkerProtocolMessage(ws, {
+      type: 'protocolError',
+      code: 'invalid_message',
+      message: `taskResult for operation "${operationId}" rejected — stale attempt token`,
     });
     return;
   }

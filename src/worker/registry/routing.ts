@@ -1,7 +1,10 @@
 // ---------------------------------------------------------------------------
-// Stateless routing predicates and selectors
+// Routing predicates and policy selectors. The selectors take whatever live
+// state they need (round-robin cursor, fair-share counters) as parameters so
+// all worker-selection logic lives here rather than inline in the registry.
 // ---------------------------------------------------------------------------
 
+import { compareScores, type FairShareCounters, scoreWorker } from './fair-share.ts';
 import type { WorkerInfo } from './types.ts';
 
 /**
@@ -40,4 +43,50 @@ export function pickLeastLoaded(eligible: WorkerInfo[]): WorkerInfo {
     }
   }
   return best;
+}
+
+/**
+ * Round-robin selection with a per-(queue, activity) cursor so two activities
+ * sharing a queue advance independently. Mutates `cursor` in place, advancing
+ * the entry for this (queue, activity) pair.
+ *
+ * `eligible` must be non-empty — the caller is responsible for this precondition.
+ */
+export function pickRoundRobin(
+  eligible: WorkerInfo[],
+  cursor: Map<string, number>,
+  queue: string | undefined,
+  activityName: string,
+): WorkerInfo {
+  const key = `${queue ?? '__default__'}::${activityName}`;
+  const position = cursor.get(key) ?? 0;
+  const pick = eligible[position % eligible.length]!;
+  cursor.set(key, position + 1);
+  return pick;
+}
+
+/**
+ * Fair-share selection: the worker carrying the fewest in-flight tasks for
+ * `fairShareKey` wins, ties broken by overall in-flight count then stable id
+ * order. The score snapshot is built synchronously so the ranking is consistent
+ * across the full candidate set.
+ *
+ * `eligible` must be non-empty — the caller is responsible for this precondition.
+ */
+export function pickFairShare(
+  eligible: WorkerInfo[],
+  counters: FairShareCounters,
+  fairShareKey: string,
+): WorkerInfo {
+  const scores = eligible.map((worker) =>
+    scoreWorker({
+      id: worker.id,
+      inFlight: worker.inFlight,
+      keyLoad: counters.load(worker.id, fairShareKey),
+    }),
+  );
+  const winner = scores.reduce((best, candidate) =>
+    compareScores(candidate, best) < 0 ? candidate : best,
+  );
+  return eligible.find((worker) => worker.id === winner.id)!;
 }

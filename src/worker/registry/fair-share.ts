@@ -1,5 +1,7 @@
 // ---------------------------------------------------------------------------
-// Pure fair-share scoring helpers — no live registry references
+// Fair-share routing: pure scoring helpers plus the per-worker in-flight
+// counters those scores read from. The counter store lives here, beside the
+// scoring functions it feeds, so the fair-share relationship has one home.
 // ---------------------------------------------------------------------------
 
 /**
@@ -74,4 +76,62 @@ export function compareScores(a: WorkerScore, b: WorkerScore): number {
   if (a.keyLoad !== b.keyLoad) return a.keyLoad - b.keyLoad;
   if (a.inFlight !== b.inFlight) return a.inFlight - b.inFlight;
   return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+}
+
+/**
+ * Per-worker, per-key in-flight counters for fair-share routing. Keeping this
+ * state in one object — rather than an inline `Map<string, Map<string, number>>`
+ * in the registry — guarantees increments, releases, and per-worker purges all
+ * agree on the same idempotency rules, so the counts never drift from the
+ * in-flight task set that drives them.
+ *
+ * @example
+ * ```ts
+ * import { FairShareCounters } from './fair-share.ts';
+ * const counters = new FairShareCounters();
+ * counters.increment('w1', 'tenant-a');
+ * console.log(counters.load('w1', 'tenant-a')); // 1
+ * ```
+ */
+export class FairShareCounters {
+  /** Outer key = workerId, inner key = fair-share partition key, value = count. */
+  #counts = new Map<string, Map<string, number>>();
+
+  /** Current in-flight count for `workerId` on `key` (0 when untracked). */
+  load(workerId: string, key: string): number {
+    return this.#counts.get(workerId)?.get(key) ?? 0;
+  }
+
+  /** Increment the in-flight count for `workerId` on `key`. */
+  increment(workerId: string, key: string): void {
+    let workerCounts = this.#counts.get(workerId);
+    if (workerCounts === undefined) {
+      workerCounts = new Map();
+      this.#counts.set(workerId, workerCounts);
+    }
+    workerCounts.set(key, (workerCounts.get(key) ?? 0) + 1);
+  }
+
+  /**
+   * Decrement the in-flight count for `workerId` on `key`, pruning empty inner
+   * and outer maps so an idle worker leaves no residue. Floors at 0.
+   */
+  release(workerId: string, key: string): void {
+    const workerCounts = this.#counts.get(workerId);
+    if (workerCounts === undefined) return;
+    const next = Math.max(0, (workerCounts.get(key) ?? 0) - 1);
+    if (next === 0) {
+      workerCounts.delete(key);
+      if (workerCounts.size === 0) {
+        this.#counts.delete(workerId);
+      }
+    } else {
+      workerCounts.set(key, next);
+    }
+  }
+
+  /** Drop all counters for a worker that has disconnected. */
+  purge(workerId: string): void {
+    this.#counts.delete(workerId);
+  }
 }

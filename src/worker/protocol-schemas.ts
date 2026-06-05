@@ -87,6 +87,11 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
           operationId: { type: 'string', minLength: 1 },
           status: { const: 'completed' },
           value: jsonValueSchema,
+          // Echoed from the dispatched task so the server can reject a stale
+          // completion from an earlier attempt reassigned to the same worker.
+          // Optional on the wire (older workers omit it); the completion handler
+          // enforces it. Keeping it optional avoids a protocol-version bump.
+          attemptToken: { type: 'string', minLength: 1 },
         },
       },
       {
@@ -98,6 +103,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
           operationId: { type: 'string', minLength: 1 },
           status: { const: 'failed' },
           error: { type: 'string' },
+          attemptToken: { type: 'string', minLength: 1 },
         },
       },
       {
@@ -110,6 +116,7 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
           status: { const: 'cancelled' },
           error: { type: 'string' },
           cancelled: { const: true },
+          attemptToken: { type: 'string', minLength: 1 },
         },
       },
     ],
@@ -125,6 +132,12 @@ export const REMOTE_WORKER_MESSAGE_SCHEMAS = {
       input: jsonValueSchema,
       attempt: { type: 'number', minimum: 1 },
       headers: stringMapSchema,
+      // Unique, unguessable per-dispatch token. The server always stamps one and
+      // the worker echoes it on completion so the server can reject a stale
+      // earlier attempt. Optional in the wire SHAPE (not in `required`) so a frame
+      // from an older server still validates — adding it never bumps the protocol
+      // version; the completion handler is what enforces the token.
+      attemptToken: { type: 'string', minLength: 1 },
     },
   },
   cancel: {

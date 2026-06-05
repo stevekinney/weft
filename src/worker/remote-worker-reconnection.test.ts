@@ -180,6 +180,7 @@ describe('RemoteWorker durability — scanner-driven takeover', () => {
       operationId,
       status: 'completed',
       value: 'v',
+      attemptToken: dispatchToB.attemptToken!,
     });
 
     // The resolved record appears once the server processes the completion.
@@ -197,15 +198,12 @@ describe('RemoteWorker durability — scanner-driven takeover', () => {
 });
 
 describe('RemoteWorker durability — idempotent duplicate completion (different-worker takeover)', () => {
-  // Scope note: this scenario covers the case where takeover moves the task
-  // to a different `workerId`. The `(operationId, workerId)` ownership guard
-  // is sufficient there because the registry's current assignee no longer
-  // matches the stale worker's id. It does NOT defend against
-  // same-`workerId` reselection (a single-worker deployment whose only
-  // worker times out and is then re-selected for the next attempt). That
-  // case requires a protocol-level attempt or lease token and is out of
-  // scope for this task. See the comment in `onTaskResultMessage` for the
-  // production mitigation.
+  // Scope note: this scenario covers the case where takeover moves the task to a
+  // different `workerId`, which the `(operationId, workerId)` ownership guard
+  // alone rejects. The same-`workerId` reselection case (a single-worker
+  // deployment whose only worker times out and is then re-selected for the next
+  // attempt) is now defended by the per-dispatch attempt token — see the
+  // dedicated test below and the attempt guard in `onTaskResultMessage`.
   it('rejects a stale completion from a displaced worker before and after final resolution', async () => {
     const setup = createSetup();
     const workerA = await connectAndRegisterWorker(setup, 'worker-a');
@@ -258,6 +256,7 @@ describe('RemoteWorker durability — idempotent duplicate completion (different
       operationId,
       status: 'completed',
       value: 'real',
+      attemptToken: dispatchToB.attemptToken!,
     });
 
     let resolved: unknown;
@@ -286,6 +285,87 @@ describe('RemoteWorker durability — idempotent duplicate completion (different
 
     const stillResolved = await readResolvedRecord(setup.engine, operationId);
     expect(stillResolved !== undefined && stillResolved !== null).toBe(true);
+    await waitForInflightCleared(setup.engine, operationId);
+  });
+});
+
+describe('RemoteWorker durability — same-worker stale attempt (attempt token)', () => {
+  it('rejects a stale completion from an earlier attempt reselected on the same worker', async () => {
+    // The case the (operationId, workerId) guard alone cannot catch: a SINGLE
+    // worker whose attempt times out is re-selected for the next attempt, so the
+    // workerId still matches. The per-dispatch attempt token is the only field
+    // that distinguishes attempt 1 from attempt 2. We use exactly one worker so
+    // re-dispatch deterministically reselects it.
+    const setup = createSetup();
+    const workerA = await connectAndRegisterWorker(setup, 'worker-a');
+
+    const operationId = 'same-worker-stale-op';
+    void setup.server.dispatchTask({
+      operationId,
+      activityName: 'echo',
+      input: { value: 'v' },
+      // Short timeout so attempt 1 expires and the scanner re-dispatches to the
+      // only worker (worker-a) as attempt 2.
+      visibilityTimeout: 150,
+    });
+
+    const dispatch1 = await workerA.nextServerMessage(isTask, { timeoutMs: 2_000 });
+    if (!isTask(dispatch1)) throw new Error('expected first dispatch');
+    expect(dispatch1.operationId).toBe(operationId);
+    expect(dispatch1.attempt ?? 1).toBe(1);
+    expect(dispatch1.attemptToken).toBeString();
+
+    // Do NOT complete attempt 1. Wait for the visibility timeout to re-dispatch
+    // the SAME operation to the SAME worker as attempt 2 with a fresh token.
+    const dispatch2 = await workerA.nextServerMessage(isTask, { timeoutMs: 5_000 });
+    if (!isTask(dispatch2)) throw new Error('expected re-dispatch');
+    expect(dispatch2.operationId).toBe(operationId);
+    expect(dispatch2.attempt ?? 1).toBe(2);
+    expect(dispatch2.attemptToken).toBeString();
+    // The token rotated even though the worker id did not.
+    expect(dispatch2.attemptToken).not.toBe(dispatch1.attemptToken);
+
+    // Extend the deadline so the scanner cannot re-dispatch again mid-test.
+    workerA.send({ type: 'heartbeat', workerId: 'worker-a' });
+
+    // Stale completion: worker-a echoes attempt 1's token. Same workerId, so the
+    // ownership guard passes — the attempt guard must reject it.
+    const staleError = workerA.nextServerMessage((m) => m.type === 'protocolError', {
+      timeoutMs: 2_000,
+    });
+    workerA.send({
+      type: 'taskResult',
+      operationId,
+      status: 'completed',
+      value: 'stale-attempt-1',
+      attemptToken: dispatch1.attemptToken!,
+    });
+    const rejected = await staleError;
+    if (rejected.type !== 'protocolError') throw new Error('expected protocolError');
+    expect(rejected.code).toBe('invalid_message');
+    expect(rejected.message).toContain(operationId);
+
+    // The stale completion was a no-op: still in flight, not resolved.
+    const resolvedAfterStale = await readResolvedRecord(setup.engine, operationId);
+    expect(resolvedAfterStale === undefined || resolvedAfterStale === null).toBe(true);
+
+    // Fresh completion: worker-a echoes attempt 2's token — accepted.
+    workerA.send({
+      type: 'taskResult',
+      operationId,
+      status: 'completed',
+      value: 'fresh-attempt-2',
+      attemptToken: dispatch2.attemptToken!,
+    });
+
+    let resolved: unknown;
+    const deadline = Date.now() + 2_000;
+    while (Date.now() < deadline) {
+      resolved = await readResolvedRecord(setup.engine, operationId);
+      if (resolved !== undefined && resolved !== null) break;
+      await sleepForTesting(10);
+    }
+    expect(resolved !== undefined && resolved !== null).toBe(true);
     await waitForInflightCleared(setup.engine, operationId);
   });
 });
@@ -325,6 +405,7 @@ describe('RemoteWorker durability — transient reconnect continuity', () => {
       operationId,
       status: 'completed',
       value: 'v',
+      attemptToken: dispatch.attemptToken!,
     });
 
     let resolved: unknown;
@@ -403,6 +484,7 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
       operationId,
       status: 'completed',
       value: 'v',
+      attemptToken: dispatchToB.attemptToken!,
     });
 
     let resolved: unknown;
@@ -607,6 +689,9 @@ process.on('SIGINT', () => void stop(0));
       operationId,
       status: 'completed',
       value: 'restart-value',
+      // Re-dispatch after recovery routes through selectAndReserveWorker, which
+      // rotates the attempt token; echo the token from B's fresh dispatch.
+      attemptToken: dispatchToB.attemptToken!,
     });
 
     // Poll the rebooted subprocess's test-control endpoint for resolution.

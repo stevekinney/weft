@@ -130,7 +130,19 @@ async function selectAndReserveWorker(
 
   const now = Date.now();
   const existingQueuedRecord = await readQueuedRecord(options.engine.storage, task.operationId);
-  context.registry.assignTask(worker.id, task.operationId, visibilityTimeout, task.fairShareKey);
+  // Unique per-dispatch token. Generated once here and written to all three
+  // homes — the registry's in-flight entry (WebSocket completion validates
+  // against it), the durable inflight record, and the wire frame the worker
+  // echoes. Re-dispatch after a timeout/disconnect routes back through this
+  // function, so each attempt gets a fresh token by construction.
+  const attemptToken = crypto.randomUUID();
+  context.registry.assignTask(
+    worker.id,
+    task.operationId,
+    visibilityTimeout,
+    task.fairShareKey,
+    attemptToken,
+  );
 
   // Persist the in-flight record BEFORE sending the task frame on the wire.
   // If the worker is fast enough to ack-and-complete before this write
@@ -150,6 +162,7 @@ async function selectAndReserveWorker(
     visibilityTimeout,
     retryPolicy: task.retryPolicy,
     workflowId: task.workflowId,
+    attemptToken,
   };
   const normalizedInflightRecord = await transitionQueuedToInflight(
     options.engine.storage,
@@ -168,6 +181,7 @@ async function selectAndReserveWorker(
       activityName: task.activityName,
       input: task.input === undefined ? null : task.input,
       attempt: task.attempt ?? 1,
+      attemptToken,
       ...(task.headers ? { headers: task.headers } : {}),
     }),
   );

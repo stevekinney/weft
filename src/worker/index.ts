@@ -428,6 +428,12 @@ export class RemoteWorker implements Disposable {
       return;
     }
 
+    // Echo the per-dispatch attempt token back to the server so it can reject a
+    // stale completion from an earlier attempt. Spread conditionally: a task from
+    // an older server carries no token, and omitting the field (rather than
+    // sending `undefined`) keeps the frame on the additive, no-version-bump path.
+    const tokenEcho = task.attemptToken !== undefined ? { attemptToken: task.attemptToken } : {};
+
     const activityFunction = this.#activityTable[task.activityName];
     if (activityFunction === undefined) {
       this.#sendTaskResult({
@@ -435,6 +441,7 @@ export class RemoteWorker implements Disposable {
         operationId: task.operationId,
         status: 'failed',
         error: `Unknown activity: ${task.activityName}`,
+        ...tokenEcho,
       });
       return;
     }
@@ -456,6 +463,7 @@ export class RemoteWorker implements Disposable {
         operationId: task.operationId,
         status: 'completed',
         value: normalizeWorkerJsonValue(result),
+        ...tokenEcho,
       });
     } catch (error) {
       if (taskAbortController.signal.aborted) {
@@ -465,6 +473,7 @@ export class RemoteWorker implements Disposable {
           status: 'cancelled',
           cancelled: true,
           error: 'Task cancelled',
+          ...tokenEcho,
         });
       } else {
         this.#sendTaskResult({
@@ -472,6 +481,7 @@ export class RemoteWorker implements Disposable {
           operationId: task.operationId,
           status: 'failed',
           error: error instanceof Error ? error.message : String(error),
+          ...tokenEcho,
         });
       }
     } finally {

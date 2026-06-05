@@ -175,6 +175,7 @@ export class LongPollWorker implements Disposable {
           attempt?: number;
           headers?: Record<string, string>;
           workerId?: string;
+          attemptToken?: string;
         };
 
         void this.#executeTask(task, resultUrl);
@@ -195,6 +196,7 @@ export class LongPollWorker implements Disposable {
       attempt?: number;
       headers?: Record<string, string>;
       workerId?: string;
+      attemptToken?: string;
     },
     resultUrl: string,
   ): Promise<void> {
@@ -209,6 +211,7 @@ export class LongPollWorker implements Disposable {
           body: JSON.stringify({
             operationId: task.operationId,
             workerId: task.workerId,
+            attemptToken: task.attemptToken,
             status: 'failed',
             error: `Unknown activity: ${task.activityName}`,
           }),
@@ -229,6 +232,7 @@ export class LongPollWorker implements Disposable {
         body: JSON.stringify({
           operationId: task.operationId,
           workerId: task.workerId,
+          attemptToken: task.attemptToken,
           status: 'completed',
           value: result,
         }),
@@ -242,6 +246,7 @@ export class LongPollWorker implements Disposable {
           body: JSON.stringify({
             operationId: task.operationId,
             workerId: task.workerId,
+            attemptToken: task.attemptToken,
             status: 'failed',
             error: error instanceof Error ? error.message : String(error),
           }),

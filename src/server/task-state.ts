@@ -85,6 +85,14 @@ export interface InflightRecord extends TaskLifecycleFields {
   retryPolicy?: RetryPolicy | undefined;
   /** Workflow that dispatched this activity. Present when the dispatch included a workflowId. */
   workflowId?: string | undefined;
+  /**
+   * Unique, unguessable token identifying this dispatch attempt. Rotated on every
+   * (re-)dispatch because each dispatch writes a fresh InflightRecord. The
+   * long-poll completion handler rejects a result whose echoed token does not
+   * match this value. Optional for back-compatible decoding of records written
+   * before this field existed; a missing token disables the check for that record.
+   */
+  attemptToken?: string | undefined;
 }
 
 /** Persisted record for a task in the resolved state. */

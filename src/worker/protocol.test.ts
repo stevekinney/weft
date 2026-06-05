@@ -413,12 +413,43 @@ describe('RemoteWorker protocol contract', () => {
       parseWorkerToServerMessage({
         type: 'taskResult',
         operationId: 'op-1',
+        status: 'cancelled',
+        error: null,
+      }),
+    ).toMatchObject({
+      ok: false,
+      error: { message: 'cancelled taskResult.error must be a string' },
+    });
+
+    expect(
+      parseWorkerToServerMessage({
+        type: 'taskResult',
+        operationId: 'op-1',
         status: 'pending',
       }),
     ).toMatchObject({
       ok: false,
       error: { message: 'taskResult.status must be completed, failed, or cancelled' },
     });
+  });
+
+  it('rejects a taskResult whose echoed attemptToken is present but not a non-empty string', () => {
+    // The optional attemptToken echo is validated when present: a non-string (or
+    // empty string) is a malformed frame, distinct from omitting the field.
+    for (const badToken of [42, '', null]) {
+      expect(
+        parseWorkerToServerMessage({
+          type: 'taskResult',
+          operationId: 'op-1',
+          status: 'completed',
+          value: null,
+          attemptToken: badToken,
+        }),
+      ).toMatchObject({
+        ok: false,
+        error: { message: 'taskResult.attemptToken must be a non-empty string when present' },
+      });
+    }
   });
 
   it('parses server-to-worker acknowledgement, task, cancel, shutdown, and errors', () => {

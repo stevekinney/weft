@@ -1735,7 +1735,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   ['src/server/runtime/cors.ts', { lines: new Set([304]) }],
   ['src/server/runtime/request-gate.ts', { lines: new Set([118, 119]) }],
   ['src/server/runtime/websocket-upgrade.ts', { lines: new Set([123, 124]) }],
-  ['src/server/runtime/websocket-worker.ts', { lines: new Set([397, 398, 401, 402]) }],
+  ['src/server/runtime/websocket-worker.ts', { lines: new Set([405, 406, 409, 410]) }],
   ['src/server/serve-internals.ts', { lines: new Set([236, 279, 334]) }],
   [
     'src/storage/node-sqlite.ts',
