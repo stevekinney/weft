@@ -17,12 +17,7 @@ bun add @lostgradient/weft
 Create a file called `index.ts` and paste this:
 
 ```typescript
-import {
-  Engine,
-  WorkflowAlreadyExistsError,
-  workflow,
-  type WorkflowHandle,
-} from '@lostgradient/weft';
+import { Engine, workflow } from '@lostgradient/weft';
 import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 
 interface HelloWorldWelcomeInput {
@@ -48,14 +43,9 @@ const engine = await Engine.create({
 
 const workflowId = 'helloWorldWelcome:world';
 const workflowInput = { name: 'World' };
-let handle: WorkflowHandle;
-
-try {
-  handle = await engine.start('helloWorldWelcome', workflowInput, { id: workflowId });
-} catch (error) {
-  if (!(error instanceof WorkflowAlreadyExistsError)) throw error;
-  handle = await engine.resume(workflowId).catch(() => engine.getHandle(workflowId));
-}
+const handle = await engine.start('helloWorldWelcome', workflowInput, {
+  idempotencyKey: workflowId,
+});
 
 const result = await handle.result();
 console.log(result);
@@ -127,7 +117,7 @@ There's no replay happening here. Weft doesn't re-execute your workflow from the
 
 `Engine.create()` does the registration dance for you in one call: construct the engine, register every workflow in the `workflows` map (including each workflow's `.activities({ ... })` block), and then **recover by default** — `engine.recoverAll()` runs after registration so any workflows still running from a previous process pick up where they left off. Pass `recover: false` to skip recovery (handy for tests or pre-migration inspection). The map key (`helloWorldWelcome`) is canonical — Weft validates at runtime that the key matches its definition's `name` field, so you can't accidentally register `farewell` under the key `welcome`.
 
-`engine.start()` kicks off a new execution and returns a handle. `handle.result()` waits for the workflow to finish and gives you the output. Without `options.id`, each call gets a fresh UUID; with a stable id, the second run of this script throws `WorkflowAlreadyExistsError` instead of double-starting — which is what the `try`/`catch` block handles by resuming the existing workflow.
+`engine.start()` kicks off a new execution and returns a handle. `handle.result()` waits for the workflow to finish and gives you the output. Without `options.id` or `options.idempotencyKey`, each call gets a fresh UUID. With a stable `idempotencyKey`, retried starts converge on the same run instead of double-starting. The key-to-run mapping intentionally survives terminal cleanup; if retention later removes the workflow record, that key is spent and a repeat call returns a conflict instead of silently starting a replacement.
 
 If you'd rather wire registration up yourself — useful for tests or dynamic plugin loading — `new Engine({ storage })`, `engine.register()`, and `await engine.recoverAll()` are the same primitives. Register every workflow before recovering; each workflow carries its own `.activities({ ... })` declarations with it.
 

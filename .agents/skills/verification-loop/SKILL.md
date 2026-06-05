@@ -110,6 +110,14 @@ bun run verify:release-version
 
 The version gate keeps the package version, exported `VERSION`, and OpenAPI/OpenRPC/AsyncAPI/MCP discovery defaults in sync.
 
+When touching gate orchestration, benchmark wiring, or generated gate output, run the focused gate tests before the broader loop:
+
+```bash
+bun test scripts/run-gates.test.ts
+```
+
+Keep benchmark-only commands out of publish gates unless a release workflow explicitly invokes them; `prepack` should prove package contents and consumer compatibility, not long-running benchmark health.
+
 ### Package Gates
 
 Run these when package exports, build exclusions, publish workflow, public subpaths, optional dependency isolation, JSDoc examples, or consumer install behavior changed:

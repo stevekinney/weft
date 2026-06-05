@@ -633,6 +633,44 @@ interface Serializer {
 }
 ```
 
+### `SerializerHandlers`
+
+Handlers registered with `registerSerializer(...)` for one custom structured type.
+
+```ts partial
+interface SerializerHandlers<T> {
+  toJSON(value: T): unknown;
+  fromJSON(data: unknown): T;
+}
+```
+
+Call `registerSerializer(Constructor, handlers, { tag })` once at module load, before constructing engines. The tag is the durable discriminator stored inside checkpoints, so choose an explicit stable string and do not derive it from `constructor.name` in minified builds. Registration is process-global and one-shot per constructor and per tag. Custom serializers are meant for application classes and `Error` subclasses; built-in `Date`, `RegExp`, `Map`, and `Set` instances use Weft's built-in encoders first.
+
+### `LaunchMetadata`
+
+```ts partial
+interface LaunchMetadata {
+  input: unknown;
+  launchOptions: {
+    id: string;
+    tags?: string[];
+  };
+}
+```
+
+Returned by `WorkflowHandle.getLaunchMetadata()`. `tags` reflect the run's current durable tag set, not necessarily the exact tags supplied at launch.
+
+### `WorkflowSnapshot`
+
+```ts partial
+interface WorkflowSnapshot {
+  status: WorkflowStatus;
+  step: number;
+}
+```
+
+Returned by `WorkflowHandle.snapshot()` for recovered progress reattachment and operator views.
+
 ### `SearchAttributeValue`
 
 ```ts partial

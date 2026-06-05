@@ -22,6 +22,7 @@ description: >-
 - Changing storage capability reports, reserved key prefixes, string KV import helpers, or application-facing wrappers that share a storage backend with the engine.
 - Adding or deleting reserved workflow metadata markers such as `wf-has-services:`; marker writes, reads, cleanup, purge, and retention must stay aligned.
 - Normalizing failure-category values, changing workflow visibility index keys, or changing framed compressed-storage payloads.
+- Changing idempotent start storage (`start-idem:`), signal id derivation, `startOrSignal` convergence semantics, serializer registry tags, or recovered launch/snapshot public shapes.
 
 ## Do not use
 
@@ -46,6 +47,8 @@ description: >-
 13. For application storage wrappers, keep `disposeUnderlyingStorage: false` available and covered when the wrapper shares an engine-owned backend, and forward `conditionalBatch()` through text and typed codecs without changing compare bytes unexpectedly.
 14. For string KV imports, prove source and target paths cannot be identical, source table names are validated, reserved Weft prefixes are rejected, and existing target keys are never overwritten.
 15. For services markers, prove the marker is presence-only, is written atomically with start records, gates resolver calls on recovery, and is deleted by terminal cleanup, purge, and retention.
+16. For idempotent starts, keep key mappings permanent across terminal cleanup, purge, and retention; a key that maps to a missing workflow record is spent and must not create a replacement run.
+17. For serializer registration, treat `options.tag` as persisted data. Decode must resolve by tag regardless of registration order, reject missing or non-string tags, and fail clearly when a process has not registered the tag needed by an old checkpoint.
 
 ## Verification
 
@@ -54,4 +57,6 @@ description: >-
 - For registry codegen aliasing, run generator determinism, catalog drift, and type-level assignability tests against representative generated operation inputs.
 - For storage wrapper or importer changes, run the focused text-value, typed-storage, conditional-batch, and importer tests plus documentation verification when public guidance changes.
 - For services marker changes, run the recovered-services, workflow-services, delayed-start, purge, and retention tests that prove marker lifecycle across storage paths.
+- For idempotent start and signal-with-start changes, run the start workflow, start-or-signal, generated operation-client drift, and storage capability tests that prove convergence and conflict behavior.
+- For serializer registry changes, run focused codec tests for custom serializer round trips, corrupt extension payloads, duplicate constructor/tag rejection, and `Error` subclass field preservation.
 - Run the relevant focused test, then `bun run typecheck` and `bun run validate` before shipping.

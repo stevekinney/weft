@@ -128,6 +128,7 @@ Because recovery never re-executes the workflow from the beginning, your workflo
 | **Worker**           | A process or thread that executes activities. Inline by default; can run remote over WebSocket.                               |
 | **Interceptor**      | A composable hook that wraps context operations for tracing, validation, encryption, or any cross-cutting concern.            |
 | **Shared state**     | A compare-and-swap (CAS) durable mutable primitive for safe concurrent reads and writes across workflows.                     |
+| **Idempotent start** | A stable `idempotencyKey` that makes retried starts return the existing run instead of creating duplicates.                   |
 
 ## Features
 
@@ -195,6 +196,21 @@ for await (const event of tail) {
 ```
 
 The tail is single-consumer and stops on terminal workflow events or `tail.close()`. In runtimes without a built-in WebSocket, or where authenticated WebSockets need headers the platform constructor cannot send, provide `HttpClientOptions.webSocketFactory`.
+
+### Idempotent Starts and Signal-With-Start
+
+Retried webhooks and queue deliveries should not double-start workflows. Pass a stable `idempotencyKey` to `engine.start()` to make every retry return a handle for the same run. Use `engine.startOrSignal()` when the first event should create the workflow and later events should signal the existing non-terminal run.
+
+```typescript
+const handle = await engine.startOrSignal(
+  'approval',
+  { orderId: 'order-123' },
+  { name: 'payment', payload: { status: 'succeeded' } },
+  { idempotencyKey: 'payment-webhook-order-123' },
+);
+```
+
+The idempotency mapping intentionally outlives terminal cleanup. If retention removes the workflow record, the key is spent and future calls return a conflict instead of starting a replacement.
 
 ### Search Attributes
 

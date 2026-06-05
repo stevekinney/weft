@@ -132,14 +132,17 @@ The handler exposes the following routes under the `/v1` prefix:
 
 ### Workflows
 
-| Method   | Path                           | Description                                                                          |
-| -------- | ------------------------------ | ------------------------------------------------------------------------------------ |
-| `POST`   | `/api/v1/workflows`            | Start a new workflow                                                                 |
-| `GET`    | `/api/v1/workflows`            | List workflows — see [Visibility filters](#list-workflows----query-parameters) below |
-| `GET`    | `/api/v1/workflows/aggregate`  | Group-by counts over the same filter shape                                           |
-| `GET`    | `/api/v1/workflows/:id`        | Get workflow state                                                                   |
-| `DELETE` | `/api/v1/workflows/:id`        | Cancel a workflow                                                                    |
-| `GET`    | `/api/v1/workflows/:id/result` | Await workflow result (30s default long-poll timeout, configurable up to 60s)        |
+| Method   | Path                                | Description                                                                          |
+| -------- | ----------------------------------- | ------------------------------------------------------------------------------------ |
+| `POST`   | `/api/v1/workflows`                 | Start a new workflow                                                                 |
+| `GET`    | `/api/v1/workflows`                 | List workflows — see [Visibility filters](#list-workflows----query-parameters) below |
+| `GET`    | `/api/v1/workflows/aggregate`       | Group-by counts over the same filter shape                                           |
+| `POST`   | `/api/v1/workflows/start-or-signal` | Start a workflow or signal an existing non-terminal run atomically                   |
+| `GET`    | `/api/v1/workflows/:id`             | Get workflow state                                                                   |
+| `DELETE` | `/api/v1/workflows/:id`             | Cancel a workflow                                                                    |
+| `GET`    | `/api/v1/workflows/:id/result`      | Await workflow result (30s default long-poll timeout, configurable up to 60s)        |
+| `POST`   | `/api/v1/workflows/:id/suspend`     | Suspend an inline workflow without settling `result()`                               |
+| `POST`   | `/api/v1/workflows/:id/resume`      | Resume a suspended workflow or a persisted running workflow                          |
 
 #### Start Workflow -- Request Body
 
@@ -153,6 +156,20 @@ The handler exposes the following routes under the `/v1` prefix:
 ```
 
 Returns `201` with `{ "id": "<workflow-id>" }`.
+
+#### Start or Signal Workflow -- Request Body
+
+```json
+{
+  "type": "approval",
+  "input": { "orderId": "order-123" },
+  "signalName": "payment",
+  "signalPayload": { "status": "succeeded" },
+  "idempotencyKey": "payment-webhook-order-123"
+}
+```
+
+Returns `201` with `{ "id": "<workflow-id>" }`. Supply exactly one of `signalId` or `idempotencyKey`. Concurrent callers converge only with a shared `idempotencyKey`, or with a shared `id` plus `signalId`; a bare `signalId` does not converge absent-target callers because each one generates a different workflow id. Terminal targets and spent idempotency keys return `409 Conflict`.
 
 #### List Workflows -- Query Parameters
 

@@ -12,6 +12,12 @@ The default. Every cataloged operation has a REST binding with a conventional HT
 
 Discovery: `GET /openapi.json` returns the full OpenAPI 3.1 contract.
 
+Workflow control operations share the same operation catalog as JSON-RPC. Recent workflow-lifecycle operations are available directly over REST:
+
+- `POST /api/v1/workflows/start-or-signal` maps to `weft.workflows.startorsignal` and returns `201` with `{ "id": "<workflow-id>" }`.
+- `POST /api/v1/workflows/:id/suspend` pauses an inline workflow without cancelling it.
+- `POST /api/v1/workflows/:id/resume` re-drives a suspended workflow, or one left running by a previous process.
+
 ## JSON-RPC over HTTP (`POST /api/jsonrpc`)
 
 One endpoint, all operations, named by method. Use JSON-RPC HTTP when:

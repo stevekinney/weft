@@ -378,6 +378,22 @@ async resume(): Promise<void>
 
 Shorthand for `engine.resume(handle.id)`. Re-drives the workflow from its persisted checkpoint — after a `suspend()`, or after a process restart left it `'running'`. `result()` on this handle resolves when the resumed run completes.
 
+### `getLaunchMetadata()`
+
+```ts partial
+async getLaunchMetadata(): Promise<LaunchMetadata | null>
+```
+
+Shorthand for reading this workflow's original input and durable launch options from persisted state. Intended for recovered handles; returns `null` after purge or retention removes the workflow record.
+
+### `snapshot()`
+
+```ts partial
+async snapshot(): Promise<WorkflowSnapshot | null>
+```
+
+Read the workflow's current status and checkpoint step without awaiting the final result. Intended for progress reattachment after `recoverAll()`; returns `null` after purge or retention removes the workflow record.
+
 ### `update()`
 
 ```ts partial
