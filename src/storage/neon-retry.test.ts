@@ -13,8 +13,10 @@ import { bytes as encode } from './storage-adapter.test-support.ts';
  * whole `BEGIN → read → compare → write → COMMIT` cycle on every retry.
  */
 class FaultInjectingPool implements NeonPool {
-  /** Number of COMMITs that should fail with 40001 before one succeeds. */
+  /** Number of COMMITs that should fail before one succeeds. */
   #commitFailuresRemaining: number;
+  /** SQLSTATE the failing COMMITs throw (40001 serialization, 40P01 deadlock). */
+  #failureCode: string;
   /** Count of SELECTs issued per key, across all attempts. */
   readonly selectCounts = new Map<string, number>();
   /** Total number of BEGIN statements seen (one per transaction attempt). */
@@ -22,12 +24,17 @@ class FaultInjectingPool implements NeonPool {
   /** Whether end() was called. */
   ended = false;
 
-  constructor(commitFailures: number) {
+  constructor(commitFailures: number, failureCode = '40001') {
     this.#commitFailuresRemaining = commitFailures;
+    this.#failureCode = failureCode;
   }
 
-  async query(): Promise<{ rows: Array<Record<string, unknown>> }> {
-    // Single-statement hot paths (ensureTable) — return nothing meaningful.
+  async query(sql?: string): Promise<{ rows: Array<Record<string, unknown>> }> {
+    // ensureTable runs CREATE TABLE then the collation introspection; report the
+    // expected C collation so the adapter proceeds to the transaction under test.
+    if (sql?.includes('pg_collation')) {
+      return { rows: [{ collation: 'C' }] };
+    }
     return { rows: [] };
   }
 
@@ -41,8 +48,8 @@ class FaultInjectingPool implements NeonPool {
         if (sql === 'COMMIT') {
           if (this.#commitFailuresRemaining > 0) {
             this.#commitFailuresRemaining -= 1;
-            const error = Object.assign(new Error('could not serialize access'), {
-              code: '40001',
+            const error = Object.assign(new Error('transaction aborted, retry'), {
+              code: this.#failureCode,
             });
             throw error;
           }
@@ -105,5 +112,38 @@ describe('NeonStorage conditionalBatch serialization retry', () => {
     ).rejects.toThrow('exhausted 5 serialization retries');
 
     expect(pool.beginCount).toBe(5);
+  });
+
+  it('retries on a 40P01 deadlock the same way as a serialization failure', async () => {
+    // A deadlock victim's rollback is total, so the whole transaction must retry —
+    // a 40P01 escaping as an engine error would break CAS convergence under
+    // cross-key contention (which the single-key live test cannot reproduce).
+    const pool = new FaultInjectingPool(1, '40P01');
+    await using storage = new NeonStorage({ url: 'stub://', pool });
+
+    const applied = await storage.conditionalBatch(
+      [{ key: 'idem:k', expectedValue: null }],
+      [{ type: 'put', key: 'idem:k', value: encode('v') }],
+    );
+
+    expect(applied).toBe(true);
+    expect(pool.beginCount).toBe(2);
+  });
+
+  it('propagates a non-retryable error without retrying', async () => {
+    // A genuine error (not 40001/40P01) must surface immediately — retrying would
+    // mask a real failure and waste attempts.
+    const pool = new FaultInjectingPool(1, '23502'); // not_null_violation
+    await using storage = new NeonStorage({ url: 'stub://', pool });
+
+    await expect(
+      storage.conditionalBatch(
+        [{ key: 'idem:k', expectedValue: null }],
+        [{ type: 'put', key: 'idem:k', value: encode('v') }],
+      ),
+    ).rejects.toThrow('transaction aborted, retry');
+
+    // Exactly one attempt — no retry on a non-retryable code.
+    expect(pool.beginCount).toBe(1);
   });
 });

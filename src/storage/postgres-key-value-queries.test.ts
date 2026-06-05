@@ -34,9 +34,7 @@ describe('postgres key-value query constants', () => {
     expect(PG_COUNT_KEYS_BY_PREFIX).toBe(
       'SELECT COUNT(*) AS count FROM kv WHERE key >= $1 AND key < $2',
     );
-    expect(PG_DELETE_KEYS_BY_PREFIX).toBe(
-      'DELETE FROM kv WHERE key >= $1 AND key < $2 RETURNING key',
-    );
+    expect(PG_DELETE_KEYS_BY_PREFIX).toBe('DELETE FROM kv WHERE key >= $1 AND key < $2');
     // No `?` placeholders anywhere — those are SQLite-only.
     for (const sql of [
       PG_SELECT_VALUE_BY_KEY,
@@ -107,7 +105,7 @@ describe('buildPostgresKeyRangeDelete', () => {
   it('deletes the whole bounded range when no limit is set', () => {
     const normalized = normalizeDeleteRangeOptions({ lt: 'ev:wf:3' });
     const { sql, parameters } = buildPostgresKeyRangeDelete('ev:wf:', normalized);
-    expect(sql).toBe('DELETE FROM kv WHERE key >= $1 AND key < $2 AND key < $3 RETURNING key');
+    expect(sql).toBe('DELETE FROM kv WHERE key >= $1 AND key < $2 AND key < $3');
     expect(parameters).toEqual(['ev:wf:', 'ev:wf;', 'ev:wf:3']);
   });
 
@@ -115,7 +113,7 @@ describe('buildPostgresKeyRangeDelete', () => {
     const normalized = normalizeDeleteRangeOptions({ lt: 'ev:wf:9', limit: 2 });
     const { sql, parameters } = buildPostgresKeyRangeDelete('ev:wf:', normalized);
     expect(sql).toBe(
-      'DELETE FROM kv WHERE key IN (SELECT key FROM kv WHERE key >= $1 AND key < $2 AND key < $3 ORDER BY key ASC LIMIT $4) RETURNING key',
+      'DELETE FROM kv WHERE key IN (SELECT key FROM kv WHERE key >= $1 AND key < $2 AND key < $3 ORDER BY key ASC LIMIT $4)',
     );
     expect(parameters).toEqual(['ev:wf:', 'ev:wf;', 'ev:wf:9', 2]);
   });

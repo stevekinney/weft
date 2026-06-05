@@ -314,9 +314,13 @@ await using storage = new NeonStorage({
 });
 ```
 
-The underlying schema is a single `kv (key TEXT COLLATE "C", value BYTEA)` table. The `COLLATE "C"` is load-bearing: Postgres `TEXT` otherwise sorts by the database locale, which reorders punctuation and would break the lexicographic prefix scans the engine relies on—`COLLATE "C"` restores byte-wise ordering.
+The underlying schema is a single `kv (key TEXT COLLATE "C", value BYTEA)` table. The `COLLATE "C"` is load-bearing: Postgres `TEXT` otherwise sorts by the database locale, which reorders punctuation and would break the lexicographic prefix scans the engine relies on—`COLLATE "C"` restores byte-wise ordering. The adapter creates the table on first use and verifies the collation; if a `kv` table already exists with a different collation, it refuses to operate with an actionable error rather than silently corrupting scan order. Point the adapter at an empty database or one whose `kv` table it owns.
 
-`batch()` and `conditionalBatch()` each run on a single pinned pool connection inside one transaction, so a multi-statement batch is atomic. `conditionalBatch()` uses `SERIALIZABLE` isolation (not `SELECT ... FOR UPDATE`, which cannot lock an absent row) and retries on serialization failures, so concurrent compare-and-swap—the start-idempotency path—converges on exactly one winner.
+`batch()` and `conditionalBatch()` each run on a single pinned pool connection inside one transaction, so a multi-statement batch is atomic. `conditionalBatch()` uses `SERIALIZABLE` isolation (not `SELECT ... FOR UPDATE`, which cannot lock an absent row) and retries the whole transaction on a serialization failure (`40001`) or a deadlock (`40P01`), so concurrent compare-and-swap—the start-idempotency path—converges on exactly one winner.
+
+The `pool` option lets you reuse a pool you manage instead of one built from `url`. An injected pool stays **caller-owned**: disposing the `NeonStorage` will not close it, so it can be shared safely. A pool the adapter builds from `url` is closed on disposal.
+
+Both the direct and the connection-pooler (PgBouncer) Neon endpoints work, including the `SERIALIZABLE` compare-and-swap path through transaction-pooling. Use the **primary** endpoint either way—`capabilities()` reports `readAfterWrite: 'linearizable'`, which a read-replica would violate.
 
 The Neon driver connects over WebSocket. Bun and Node 22+ provide a global `WebSocket`, so no extra wiring is needed; on Node ≤21, install `ws` and set `neonConfig.webSocketConstructor` before first use.
 

@@ -15,6 +15,7 @@ import {
   buildPostgresKeyValueRangeSelect,
   buildPostgresPrefixRangeParameters,
   PG_BEGIN_READ_COMMITTED,
+  PG_BEGIN_READ_ONLY,
   PG_BEGIN_SERIALIZABLE,
   PG_COMMIT,
   PG_COUNT_KEYS_BY_PREFIX,
@@ -22,6 +23,7 @@ import {
   PG_DELETE_KEYS_BY_PREFIX,
   PG_DELETE_VALUE_BY_KEY,
   PG_ROLLBACK,
+  PG_SELECT_KEY_COLLATION,
   PG_SELECT_KEY_PRESENCE,
   PG_SELECT_VALUE_BY_KEY,
   PG_UPSERT_VALUE_BY_KEY,
@@ -30,12 +32,24 @@ import { assertReadOnlyQuery } from './read-only-query.ts';
 import { scopedStorage } from './scoped-storage.ts';
 
 /**
- * The Postgres `SQLSTATE` for a serialization failure. A `SERIALIZABLE`
- * transaction that conflicts with a concurrent transaction is aborted with this
- * code; the only correct response is to retry the whole transaction from the
- * start (re-reading every condition), which is what `conditionalBatch` does.
+ * Postgres `SQLSTATE`s that abort a transaction but mean "retry from the start",
+ * not "the operation is invalid":
+ * - `40001` serialization_failure — a `SERIALIZABLE` transaction conflicted with
+ *   a concurrent one and was rolled back.
+ * - `40P01` deadlock_detected — two transactions touched overlapping rows in
+ *   different orders; Postgres rolled one back as the deadlock victim. Two CAS
+ *   calls gated on different keys can deadlock, so this must converge through the
+ *   same retry path rather than escape as an engine error.
+ *
+ * A unique-violation (`23505`) is intentionally NOT retryable here: every write
+ * goes through `INSERT ... ON CONFLICT (key) DO UPDATE`, which resolves a key
+ * collision instead of raising `23505`, so it cannot occur on this UPSERT shape.
+ *
+ * The deadlock victim's rollback is total, so retrying the whole
+ * `BEGIN → read → compare → write → COMMIT` cycle (re-reading every condition) is
+ * as safe for `40P01` as for `40001`.
  */
-const POSTGRES_SERIALIZATION_FAILURE = '40001';
+const RETRYABLE_TRANSACTION_FAILURES = new Set(['40001', '40P01']);
 
 /**
  * Cap on `SERIALIZABLE` retries for a single `conditionalBatch`. A conflict
@@ -54,10 +68,25 @@ const MAX_SERIALIZATION_RETRIES = 5;
  * driver types. Keeping the seam minimal is what lets the PGlite test backend
  * stand in for the real `Pool` without pulling the optional dependency's types
  * into the build.
+ *
+ * `rowCount` (node-postgres) and `affectedRows` (PGlite) are the driver-specific
+ * names for the number of rows a write affected; both are optional here and read
+ * defensively so delete counts never require materializing the deleted rows.
  */
 type NeonQueryResult = {
   rows: Array<Record<string, unknown>>;
+  rowCount?: number | null;
+  affectedRows?: number;
 };
+
+/**
+ * Read the number of rows a write statement affected, tolerating the
+ * driver-specific field name (`rowCount` on node-postgres/Neon, `affectedRows`
+ * on PGlite). Falls back to `rows.length` for statements that return rows.
+ */
+function affectedRowCount(result: NeonQueryResult): number {
+  return result.rowCount ?? result.affectedRows ?? result.rows.length;
+}
 
 /**
  * A connection that can run a single interactive transaction. Obtained from
@@ -85,13 +114,12 @@ export type NeonPool = {
   end(): Promise<void>;
 };
 
-function isSerializationFailure(error: unknown): boolean {
-  return (
-    typeof error === 'object' &&
-    error !== null &&
-    'code' in error &&
-    (error as { code?: unknown }).code === POSTGRES_SERIALIZATION_FAILURE
-  );
+function isRetryableTransactionFailure(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null || !('code' in error)) {
+    return false;
+  }
+  const code = (error as { code?: unknown }).code;
+  return typeof code === 'string' && RETRYABLE_TRANSACTION_FAILURES.has(code);
 }
 
 /**
@@ -136,9 +164,13 @@ export type NeonStorageOptions = {
   /** Postgres connection string for the primary endpoint. */
   url: string;
   /**
-   * Optional pre-built pool. Provided so a test backend (e.g. PGlite) can stand
-   * in for the real Neon serverless pool; production callers pass only `url` and
-   * the adapter constructs the real pool. When supplied, `url` is ignored.
+   * Optional pre-built pool. Pass this to reuse a pool you manage (for example a
+   * test backend such as PGlite, or a shared application pool), instead of having
+   * the adapter construct its own from `url`. When supplied, `url` is ignored and
+   * **ownership stays with the caller**: disposing the `NeonStorage` does NOT
+   * close an injected pool, so it can be shared across adapters and the caller
+   * remains responsible for ending it. A pool the adapter constructs itself (from
+   * `url`) IS closed on disposal.
    */
   pool?: NeonPool;
 };
@@ -173,11 +205,16 @@ export type NeonStorageOptions = {
 export class NeonStorage implements Storage {
   #pool: NeonPool;
   #initialized = false;
+  // True only when this adapter constructed the pool itself. An injected pool is
+  // owned by the caller, so disposal must NOT close it — closing a shared pool
+  // would tear out connectivity for every other consumer of that pool.
+  #ownsPool: boolean;
 
   constructor(options: NeonStorageOptions) {
     // The structural NeonPool type is a subset of the driver's Pool surface; the
     // driver is externalized in the build, so importing it at module top mirrors
     // the Turso adapter and keeps it out of bundles that never select Neon.
+    this.#ownsPool = options.pool === undefined;
     this.#pool =
       options.pool ?? (new Pool({ connectionString: options.url }) as unknown as NeonPool);
   }
@@ -201,7 +238,36 @@ export class NeonStorage implements Storage {
   async #ensureTable(): Promise<void> {
     if (this.#initialized) return;
     await this.#pool.query(PG_CREATE_KEY_VALUE_TABLE);
+    await this.#assertKeyCollation();
     this.#initialized = true;
+  }
+
+  /**
+   * Verify the `kv.key` column uses the `C` collation. `CREATE TABLE IF NOT
+   * EXISTS` is a no-op against a pre-existing `kv` table, so a table created
+   * elsewhere with the database's default (locale) collation would silently break
+   * the lexicographic prefix scans the engine depends on. A table this adapter
+   * just created always has `COLLATE "C"`, so this only ever fails for a foreign,
+   * mis-collated `kv` — fail loudly with an actionable message rather than corrupt
+   * scan results.
+   */
+  async #assertKeyCollation(): Promise<void> {
+    const result = await this.#pool.query(PG_SELECT_KEY_COLLATION);
+    const collation = result.rows[0]?.['collation'];
+    if (collation === 'C') return;
+    // No row means the table is absent (unexpected — it was just created — but
+    // treat an unknowable collation as a hard error rather than assume success).
+    // The introspection query always selects a text column, so a non-string value
+    // is impossible in practice; describe it generically if it ever occurs.
+    const found =
+      collation === undefined
+        ? 'no kv table'
+        : typeof collation === 'string'
+          ? `"${collation}"`
+          : 'an unexpected collation value';
+    throw new Error(
+      `NeonStorage requires the "kv" table's "key" column to use COLLATE "C" (found ${found}). A "kv" table created without COLLATE "C" sorts keys by the database locale, which breaks Weft's lexicographic prefix scans. Use a fresh database, or recreate the table as: CREATE TABLE kv (key TEXT COLLATE "C" PRIMARY KEY, value BYTEA NOT NULL).`,
+    );
   }
 
   async get(key: string): Promise<Uint8Array | null> {
@@ -234,7 +300,7 @@ export class NeonStorage implements Storage {
     await this.#ensureTable();
     const [rangeStart, rangeEnd] = buildPostgresPrefixRangeParameters(prefix);
     const result = await this.#pool.query(PG_DELETE_KEYS_BY_PREFIX, [rangeStart, rangeEnd]);
-    return result.rows.length;
+    return affectedRowCount(result);
   }
 
   async deleteRange(prefix: string, options: DeleteRangeOptions): Promise<number> {
@@ -242,7 +308,7 @@ export class NeonStorage implements Storage {
     const normalized = normalizeDeleteRangeOptions(options);
     const { parameters, sql } = buildPostgresKeyRangeDelete(prefix, normalized);
     const result = await this.#pool.query(sql, parameters);
-    return result.rows.length;
+    return affectedRowCount(result);
   }
 
   async *scan(prefix: string, options: ScanOptions = {}): AsyncIterable<[string, Uint8Array]> {
@@ -282,7 +348,10 @@ export class NeonStorage implements Storage {
    * always released, and a failure rolls back before propagating.
    */
   async #withTransaction<T>(
-    beginStatement: typeof PG_BEGIN_SERIALIZABLE | typeof PG_BEGIN_READ_COMMITTED,
+    beginStatement:
+      | typeof PG_BEGIN_SERIALIZABLE
+      | typeof PG_BEGIN_READ_COMMITTED
+      | typeof PG_BEGIN_READ_ONLY,
     runner: (client: NeonPoolClient) => Promise<T>,
   ): Promise<T> {
     const client = await this.#pool.connect();
@@ -320,9 +389,9 @@ export class NeonStorage implements Storage {
     // SERIALIZABLE is required, not SELECT...FOR UPDATE: a condition with
     // expectedValue null asserts a key is ABSENT, and a row lock cannot lock a
     // nonexistent row — two concurrent absent-checks would both pass. Under
-    // SERIALIZABLE the conflicting transaction is aborted with 40001 instead, so
-    // exactly one writer wins. Retry the whole transaction (re-reading every
-    // condition) on 40001, bounded by the retry cap.
+    // SERIALIZABLE the conflicting transaction is aborted (40001, or 40P01 when
+    // it deadlocks), so exactly one writer wins. Retry the whole transaction
+    // (re-reading every condition) on a retryable abort, bounded by the cap.
     let lastError: unknown;
     for (let attempt = 0; attempt < MAX_SERIALIZATION_RETRIES; attempt += 1) {
       try {
@@ -339,7 +408,7 @@ export class NeonStorage implements Storage {
           return true;
         });
       } catch (error) {
-        if (!isSerializationFailure(error)) {
+        if (!isRetryableTransactionFailure(error)) {
           throw error;
         }
         lastError = error;
@@ -356,12 +425,20 @@ export class NeonStorage implements Storage {
 
   async query<T>(sql: string, parameters?: unknown[]): Promise<T[]> {
     await this.#ensureTable();
+    // Two layers: a fast textual reject for obvious writes, then a real READ ONLY
+    // transaction so Postgres rejects anything that mutates regardless of how the
+    // statement is phrased — a data-modifying CTE (`WITH x AS (DELETE ...) SELECT`)
+    // passes the textual check but errors at the database level here.
     assertReadOnlyQuery(sql);
-    const result = await this.#pool.query(sql, parameters ?? []);
-    return result.rows as T[];
+    return this.#withTransaction(PG_BEGIN_READ_ONLY, async (client) => {
+      const result = await client.query(sql, parameters ?? []);
+      return result.rows as T[];
+    });
   }
 
   [Symbol.dispose](): void {
+    // Only close a pool this adapter owns — an injected pool belongs to the caller.
+    if (!this.#ownsPool) return;
     // Storage requires a synchronous dispose, but pool teardown is async. Fire it
     // and swallow rejection so a teardown error never surfaces as an unhandled
     // rejection. `await using` callers get the awaited path via asyncDispose.
@@ -371,6 +448,8 @@ export class NeonStorage implements Storage {
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
+    // Only close a pool this adapter owns — an injected pool belongs to the caller.
+    if (!this.#ownsPool) return;
     await this.#pool.end();
   }
 }
