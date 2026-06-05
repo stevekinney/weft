@@ -4,12 +4,13 @@ This document defines how Weft manages API stability, communicates breaking chan
 
 ## Stability Tiers
 
-Not every Weft surface carries the same stability promise. The tier is stated per feature in the relevant guide. Assume `stable` unless the guide says otherwise.
+Not every Weft surface carries the same stability promise. The tier is stated per feature in the relevant guide. Assume `experimental` unless the guide says a surface is `stable` or `candidate-stable, provisional`.
 
-| Tier             | Guarantee                                                                                                                                                    |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **stable**       | No breaking changes without a deprecation cycle (see below). Removal requires at least one release with a deprecation warning.                               |
-| **experimental** | May change or be removed in any release, including patch releases. Experimental surfaces exist to collect real-world feedback before the contract is frozen. |
+| Tier                              | Guarantee                                                                                                                                                      |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **stable**                        | No breaking changes without a deprecation cycle (see below). Removal requires at least one release with a deprecation warning.                                 |
+| **candidate-stable, provisional** | Expected to graduate into the stable tier if Tier-0 work does not force a public-shape change; the full stable deprecation guarantee applies after graduation. |
+| **experimental**                  | May change or be removed in any release, including patch releases. Experimental surfaces exist to collect real-world feedback before the contract is frozen.   |
 
 **Candidate-stable, provisional surfaces (as of 0.2.x):** `Engine`, `TestEngine`, `SQLiteStorage` (Bun and Node), `LMDBStorage`, `RemoteWorker`, `serve()` and the `/v1/` REST surface, source/binary CLI commands `serve`, `doctor`, `version`, `--version`, and `-v`, public error classes and `WeftErrorCode`, `WorkflowContext` method signatures, and `ActivityDefinition` fields. These are the surfaces expected to graduate into the stable tier if Tier-0 work does not force a public-shape change; the full stable deprecation guarantee applies after graduation.
 

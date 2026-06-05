@@ -113,7 +113,7 @@ bun run verify:documentation    # Check documentation links, anchors, and versio
 bun run verify:portability      # Check that code avoids Bun-only APIs in portable modules
 bun run verify:jsdoc            # Validate JSDoc coverage on public API
 bun run verify:markdown-doctests # Check TypeScript code blocks in documentation
-bun run scripts/verify-release-version.ts --tag=v0.2.0  # Confirm package.json, VERSION, and tag consistency before a release
+bun run scripts/verify-release-version.ts --tag=vX.Y.Z  # Confirm package.json, VERSION, and tag consistency before a release
 ```
 
 ### Release package checks
