@@ -109,7 +109,7 @@ describe('NeonStorage conditionalBatch serialization retry', () => {
         [{ key: 'idem:k', expectedValue: null }],
         [{ type: 'put', key: 'idem:k', value: encode('v') }],
       ),
-    ).rejects.toThrow('exhausted 5 serialization retries');
+    ).rejects.toThrow('exhausted 5 retries after retryable transaction failures');
 
     expect(pool.beginCount).toBe(5);
   });

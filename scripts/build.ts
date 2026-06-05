@@ -292,6 +292,7 @@ await removePackagedArtifactLeaks();
 // list if a new test-only or build-only runtime dependency is introduced.
 async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
   const forbiddenPackageRoots = [
+    '@electric-sql/pglite',
     'bun:test',
     'bun-plugin-svelte',
     'fake-indexeddb',

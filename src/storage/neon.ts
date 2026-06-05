@@ -10,6 +10,12 @@ import {
   type StorageCapabilities,
 } from './interface.ts';
 import {
+  affectedRowCount,
+  toBytea,
+  toStorageValue,
+  type NeonQueryResult,
+} from './neon-value-mapping.ts';
+import {
   buildPostgresKeyRangeDelete,
   buildPostgresKeyRangeSelect,
   buildPostgresKeyValueRangeSelect,
@@ -62,33 +68,6 @@ const RETRYABLE_TRANSACTION_FAILURES = new Set(['40001', '40P01']);
 const MAX_SERIALIZATION_RETRIES = 5;
 
 /**
- * Minimal structural view of a node-postgres query result. The Neon serverless
- * driver and PGlite both return an object with a `rows` array; nothing else is
- * needed here, so the adapter depends only on this shape rather than the full
- * driver types. Keeping the seam minimal is what lets the PGlite test backend
- * stand in for the real `Pool` without pulling the optional dependency's types
- * into the build.
- *
- * `rowCount` (node-postgres) and `affectedRows` (PGlite) are the driver-specific
- * names for the number of rows a write affected; both are optional here and read
- * defensively so delete counts never require materializing the deleted rows.
- */
-type NeonQueryResult = {
-  rows: Array<Record<string, unknown>>;
-  rowCount?: number | null;
-  affectedRows?: number;
-};
-
-/**
- * Read the number of rows a write statement affected, tolerating the
- * driver-specific field name (`rowCount` on node-postgres/Neon, `affectedRows`
- * on PGlite). Falls back to `rows.length` for statements that return rows.
- */
-function affectedRowCount(result: NeonQueryResult): number {
-  return result.rowCount ?? result.affectedRows ?? result.rows.length;
-}
-
-/**
  * A connection that can run a single interactive transaction. Obtained from
  * {@link NeonPool.connect}; `release()` returns it to the pool. Both
  * `batch()` and `conditionalBatch()` drive `BEGIN`/`COMMIT`/`ROLLBACK` over one
@@ -114,37 +93,25 @@ export type NeonPool = {
   end(): Promise<void>;
 };
 
+/**
+ * Adapt the driver's `Pool` to the adapter's structural {@link NeonPool} view.
+ * `NeonPool` is a strict subset of the real `Pool`, but the driver types `query()`
+ * with overloads keyed to its own result generics rather than {@link NeonQueryResult},
+ * so a plain structural assignment is rejected. The double assertion is the narrowest
+ * escape — asserting only that the driver `Pool` meets this smaller contract, which
+ * it does by construction — and confining it here keeps driver-type leakage out of
+ * the rest of the adapter.
+ */
+function toNeonPool(pool: Pool): NeonPool {
+  return pool as unknown as NeonPool;
+}
+
 function isRetryableTransactionFailure(error: unknown): boolean {
   if (typeof error !== 'object' || error === null || !('code' in error)) {
     return false;
   }
   const code = (error as { code?: unknown }).code;
   return typeof code === 'string' && RETRYABLE_TRANSACTION_FAILURES.has(code);
-}
-
-/**
- * Normalize a BYTEA value read back from Postgres into a `Uint8Array`. The Neon
- * driver returns a Node `Buffer`, which may be a view onto a larger pooled
- * `ArrayBuffer`; `new Uint8Array(buffer)` copies the bytes into a standalone
- * array so the value cannot be corrupted by buffer reuse. PGlite already returns
- * a `Uint8Array`, and copying it is harmless.
- */
-function toStorageValue(raw: unknown): Uint8Array {
-  if (raw instanceof Uint8Array) {
-    return new Uint8Array(raw);
-  }
-  // Some drivers hand back an ArrayBuffer or array-like; coerce defensively.
-  return new Uint8Array(raw as ArrayBufferLike);
-}
-
-/**
- * Bind a storage value for a BYTEA parameter. node-postgres serializes a Node
- * `Buffer` as BYTEA; a bare `Uint8Array` can serialize incorrectly. `Buffer` is
- * a `Uint8Array` subclass, so PGlite accepts the same bound value — keeping a
- * single bind path means the PGlite test exercises exactly what Neon runs.
- */
-function toBytea(value: Uint8Array): Buffer {
-  return Buffer.from(value);
 }
 
 /**
@@ -204,7 +171,9 @@ export type NeonStorageOptions = {
  */
 export class NeonStorage implements Storage {
   #pool: NeonPool;
-  #initialized = false;
+  // Memoized table-initialization promise; see #ensureTable for the
+  // share-on-concurrent, clear-on-reject semantics.
+  #initializationPromise: Promise<void> | undefined;
   // True only when this adapter constructed the pool itself. An injected pool is
   // owned by the caller, so disposal must NOT close it — closing a shared pool
   // would tear out connectivity for every other consumer of that pool.
@@ -215,20 +184,14 @@ export class NeonStorage implements Storage {
   #poolShutdown: Promise<void> | undefined;
 
   constructor(options: NeonStorageOptions) {
-    // The structural NeonPool type is a subset of the driver's Pool surface; the
-    // driver is externalized in the build, so importing it at module top mirrors
-    // the Turso adapter and keeps it out of bundles that never select Neon.
     this.#ownsPool = options.pool === undefined;
-    this.#pool =
-      options.pool ?? (new Pool({ connectionString: options.url }) as unknown as NeonPool);
+    this.#pool = options.pool ?? toNeonPool(new Pool({ connectionString: options.url }));
   }
 
   capabilities(): StorageCapabilities {
-    // Neon serverless Postgres, primary endpoint. A committed write is visible to
-    // any later read through the same instance (linearizable on the primary);
-    // each statement observes a consistent snapshot; batch() and conditionalBatch()
-    // run inside a single transaction (atomic, compare-and-swap); deletePrefix and
-    // deleteRange are single range-scoped DELETEs.
+    // Neon serverless Postgres, primary endpoint: linearizable read-after-write,
+    // snapshot scans, transactional atomic + compare-and-swap batches, and
+    // single range-scoped DELETEs for deletePrefix/deleteRange.
     return {
       persistence: 'remote',
       readAfterWrite: 'linearizable',
@@ -239,11 +202,22 @@ export class NeonStorage implements Storage {
     };
   }
 
-  async #ensureTable(): Promise<void> {
-    if (this.#initialized) return;
+  /**
+   * Ensure the `kv` table exists and is correctly collated before any operation.
+   * Memoized so concurrent first calls share one initialization; cleared on
+   * rejection so a transient failure does not permanently wedge the adapter.
+   */
+  #ensureTable(): Promise<void> {
+    this.#initializationPromise ??= this.#initialize().catch((error: unknown) => {
+      this.#initializationPromise = undefined;
+      throw error;
+    });
+    return this.#initializationPromise;
+  }
+
+  async #initialize(): Promise<void> {
     await this.#pool.query(PG_CREATE_KEY_VALUE_TABLE);
     await this.#assertKeyCollation();
-    this.#initialized = true;
   }
 
   /**
@@ -420,9 +394,10 @@ export class NeonStorage implements Storage {
     }
 
     // Never silently return false on exhaustion: that is indistinguishable from a
-    // precondition mismatch and would corrupt compare-and-swap callers.
+    // precondition mismatch and would corrupt compare-and-swap callers. The cause
+    // carries the last abort (40001 serialization failure or 40P01 deadlock).
     throw new Error(
-      `conditionalBatch exhausted ${MAX_SERIALIZATION_RETRIES} serialization retries`,
+      `conditionalBatch exhausted ${MAX_SERIALIZATION_RETRIES} retries after retryable transaction failures`,
       { cause: lastError },
     );
   }

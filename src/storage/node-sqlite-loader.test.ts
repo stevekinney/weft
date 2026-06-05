@@ -85,7 +85,9 @@ describe('createMissingBetterSqlite3Error', () => {
 
 describe('loadBetterSqlite3ForTest', () => {
   it('returns the constructor when the resolver succeeds', () => {
-    class FakeDatabase {}
+    class FakeDatabase {
+      readonly path = ':memory:';
+    }
     const resolved = loadBetterSqlite3ForTest(
       () => FakeDatabase as unknown as ReturnType<typeof loadBetterSqlite3ForTest>,
     );
@@ -93,7 +95,9 @@ describe('loadBetterSqlite3ForTest', () => {
   });
 
   it('unwraps a module default export', () => {
-    class FakeDatabase {}
+    class FakeDatabase {
+      readonly path = ':memory:';
+    }
     const resolved = loadBetterSqlite3ForTest(
       () => ({ default: FakeDatabase }) as unknown as ReturnType<typeof loadBetterSqlite3ForTest>,
     );

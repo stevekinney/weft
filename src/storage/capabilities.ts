@@ -211,6 +211,9 @@ export function assertDurableStorageForRecovery(storage: Storage): void {
   const capabilities = storage.capabilities();
   const failures: string[] = [];
 
+  // `remote` is accepted here, not just `local`: a durable remote store (Neon)
+  // is fine for recovery as long as the other four axes below hold at full
+  // strength. `ephemeral` is the only persistence value this rejects.
   if (capabilities.persistence !== 'local' && capabilities.persistence !== 'remote') {
     failures.push(`persistence must be "local" or "remote" (got "${capabilities.persistence}")`);
   }

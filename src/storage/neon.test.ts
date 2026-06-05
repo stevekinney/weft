@@ -1,7 +1,8 @@
 import { PGlite } from '@electric-sql/pglite';
-import { afterAll, describe, expect, it } from 'bun:test';
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 
 import { NeonStorage, type NeonPool, type NeonPoolClient } from './neon.ts';
+import { PG_CREATE_KEY_VALUE_TABLE } from './postgres-key-value-queries.ts';
 import {
   collect,
   decodeText,
@@ -11,26 +12,19 @@ import {
 } from './storage-adapter.test-support.ts';
 
 /**
- * A single PGlite instance is booted once at module evaluation and shared by
- * every case in this file, for two reasons:
- *
- * 1. **Speed.** A fresh PGlite is a full WASM Postgres boot (~hundreds of ms).
- *    Booting one and resetting it between cases keeps the suite fast instead of
- *    re-booting per test.
- * 2. **Test isolation against a Bun `mock.module` leak.** `node-sqlite.test.ts`
- *    calls `mock.module('node:module', ...)` to simulate a missing native
- *    binding. Bun patches the CJS module loader process-wide and `mock.restore()`
- *    does not fully revert it, so any PGlite booted *after* that test runs hits a
- *    poisoned `require("url").fileURLToPath` inside its WASM glue and throws. A
- *    PGlite already booted before the poisoning keeps working, so booting once at
- *    module-eval (the import phase, before any test body runs) sidesteps the leak
- *    entirely. Constructing a new PGlite per case would reintroduce the failure.
- *
- * The boot uses a top-level await so module evaluation does not finish until the
- * instance is ready.
+ * A single PGlite instance is booted once in `beforeAll` and shared by every case
+ * in this file purely for speed: a fresh PGlite is a full WASM Postgres boot
+ * (~hundreds of ms), so booting one and truncating the table between cases keeps
+ * the suite fast instead of re-booting per test. Booting in a hook (not at
+ * module-eval) keeps the import phase side-effect-free and lets the boot await
+ * cleanly before the first case runs.
  */
-const sharedDatabase = await new PGlite();
-await sharedDatabase.query('SELECT 1');
+let sharedDatabase: PGlite;
+
+beforeAll(async () => {
+  sharedDatabase = await new PGlite();
+  await sharedDatabase.query('SELECT 1');
+});
 
 afterAll(async () => {
   await sharedDatabase.close();
@@ -273,6 +267,42 @@ describe('NeonStorage', () => {
     };
     await using storage = new NeonStorage({ url: 'stub://', pool });
     await expect(storage.put('k', encode('v'))).rejects.toThrow('no kv table');
+  });
+
+  it('retries initialization after a transient failure rather than wedging on a cached rejection', async () => {
+    // #ensureTable memoizes the init promise but must clear it on rejection: a
+    // dropped connection mid-CREATE should not permanently fail every later
+    // operation. The first query (the CREATE) throws once; the next operation
+    // must re-run init and succeed.
+    let createAttempts = 0;
+    const database = await new PGlite();
+    const failingPool: NeonPool = {
+      query: (sql, parameters) => {
+        if (sql === PG_CREATE_KEY_VALUE_TABLE) {
+          createAttempts += 1;
+          if (createAttempts === 1) {
+            return Promise.reject(new Error('connection dropped mid-CREATE'));
+          }
+        }
+        return database.query(sql, parameters as unknown[]);
+      },
+      connect: async () => ({
+        query: (sql, parameters) => database.query(sql, parameters as unknown[]),
+        release: () => {},
+      }),
+      end: async () => {
+        await database.close();
+      },
+    };
+    await using storage = new NeonStorage({ url: 'pglite://memory', pool: failingPool });
+
+    // First operation triggers init, which fails on the CREATE.
+    await expect(storage.put('k', encode('v'))).rejects.toThrow('connection dropped mid-CREATE');
+    // Second operation must retry init (proving the rejected promise was cleared)
+    // and succeed end-to-end.
+    await storage.put('k', encode('v'));
+    expect(decodeText((await storage.get('k'))!)).toBe('v');
+    expect(createAttempts).toBe(2);
   });
 
   it('scoped() returns a prefix-namespaced view backed by the same store', async () => {
