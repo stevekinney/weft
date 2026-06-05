@@ -83,9 +83,12 @@ function validateStartOrSignalWorkflowInput(
 }
 
 /**
- * Exactly one of `signalId` / `idempotencyKey` must be present so concurrent
- * callers converge on a single delivered signal — neither (no convergence token)
- * nor both (the key-derived id and a caller id would diverge) is allowed.
+ * Exactly one of `signalId` / `idempotencyKey` must be present to identify the
+ * signal to deliver — neither (no signal id to derive or use) nor both (the
+ * key-derived id and a caller-supplied id would diverge) is allowed. Convergence
+ * of concurrent callers additionally requires a shared workflow identity (a shared
+ * `idempotencyKey`, or a shared `id` plus `signalId`); a bare `signalId` satisfies
+ * this rule but does not converge.
  */
 function assertConvergenceTokenProvided(
   signalId: string | undefined,
@@ -93,8 +96,10 @@ function assertConvergenceTokenProvided(
 ): void {
   if (signalId === undefined && idempotencyKey === undefined) {
     throw invalidParamsFault(
-      'startOrSignal requires either signalId or idempotencyKey so concurrent callers converge ' +
-        'on a single delivered signal.',
+      'startOrSignal requires either signalId or idempotencyKey to identify the signal to ' +
+        'deliver. (Concurrent callers converge on one workflow and one signal only with a shared ' +
+        'idempotencyKey, or a shared id plus signalId; a bare signalId starts a fresh run per ' +
+        'caller.)',
     );
   }
   if (signalId !== undefined && idempotencyKey !== undefined) {

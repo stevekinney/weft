@@ -29,10 +29,12 @@ import { startWorkflow } from './start.ts';
 export type { StartOrSignalCallbacks };
 
 /**
- * Resolve the signal id used for convergence. A caller-supplied `signalId` wins;
- * otherwise it derives from the `idempotencyKey` so independent concurrent
- * callers — who share only the key — still converge on one signal. At least one
- * of the two must be present, enforced by {@link startOrSignal}.
+ * Resolve the signal id used for convergence. The `idempotencyKey` takes
+ * precedence when present (the two are mutually exclusive, so it is the only
+ * input in that case) so independent concurrent callers — who share only the key,
+ * never a signalId — derive the same signal id and converge on one delivered
+ * signal; otherwise a caller-supplied `signalId` is used directly. At least one of
+ * the two must be present, enforced by {@link startOrSignal}.
  */
 function resolveSignalId(
   signalSpec: StartOrSignalSignal,
@@ -51,8 +53,10 @@ function resolveSignalId(
     return signalSpec.signalId;
   }
   throw new StartWorkflowValidationError(
-    'startOrSignal requires either signal.signalId or options.idempotencyKey so concurrent ' +
-      'callers converge on a single delivered signal.',
+    'startOrSignal requires either signal.signalId or options.idempotencyKey to identify the ' +
+      'signal to deliver. (Concurrent callers converge on one workflow and one signal only with a ' +
+      'shared idempotencyKey, or a shared id plus signalId; a bare signalId starts a fresh run per ' +
+      'caller.)',
   );
 }
 

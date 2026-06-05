@@ -120,7 +120,8 @@ export const startWorkflowOperation = defineOperation<StartWorkflowInput, StartW
     'exclusive scheduling), `tags`, `idempotencyKey` (at-most-once dedup: a repeated key ' +
     'returns the existing run instead of starting a second), and `searchAttributes`. Returns ' +
     'the workflow `id`. Faults with InvalidParams for an unregistered type or malformed ' +
-    'options, and Conflict when a workflow with the same id already exists.',
+    'options, and Conflict when a workflow with the same id already exists or the supplied ' +
+    '`idempotencyKey` has been spent (its run was purged or swept by retention).',
   destructive: false,
   tags: ['Workflows'],
   inputSchema: startWorkflowInput,
