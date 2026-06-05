@@ -147,7 +147,7 @@ Three kinds of capability, treated differently:
 > [!WARNING] Eventual read-after-write
 > `HTTPStorage` reports `readAfterWrite: eventual`: the client offers no read-your-writes guarantee, so a resume immediately after a checkpoint write may read stale state. There is no runtime gate for this. Operators choosing an eventual backend accept that visibility trade-off; the built-in `linearizable` single-process adapters do not have it.
 
-For applications that should fail boot when durable recovery is misconfigured, call [`assertDurableStorageForRecovery()`](../reference/api-storage.md#assertdurablestorageforrecovery). It accepts only `persistence: 'local'`, `readAfterWrite: 'linearizable'`, `scanConsistency: 'snapshot'`, `atomicBatch: true`, and `conditionalBatch: true`.
+For applications that should fail boot when durable recovery is misconfigured, call [`assertDurableStorageForRecovery()`](../reference/api-storage.md#assertdurablestorageforrecovery). It accepts `persistence: 'local'` or `'remote'`, `readAfterWrite: 'linearizable'`, `scanConsistency: 'snapshot'`, `atomicBatch: true`, and `conditionalBatch: true`. A `remote` backend such as `NeonStorage` passes only because the other four axes still hold at full strength; `ephemeral` is the only persistence value it rejects.
 
 ```ts
 import { assertDurableStorageForRecovery } from '@lostgradient/weft';

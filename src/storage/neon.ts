@@ -93,19 +93,6 @@ export type NeonPool = {
   end(): Promise<void>;
 };
 
-/**
- * Adapt the driver's `Pool` to the adapter's structural {@link NeonPool} view.
- * `NeonPool` is a strict subset of the real `Pool`, but the driver types `query()`
- * with overloads keyed to its own result generics rather than {@link NeonQueryResult},
- * so a plain structural assignment is rejected. The double assertion is the narrowest
- * escape — asserting only that the driver `Pool` meets this smaller contract, which
- * it does by construction — and confining it here keeps driver-type leakage out of
- * the rest of the adapter.
- */
-function toNeonPool(pool: Pool): NeonPool {
-  return pool as unknown as NeonPool;
-}
-
 function isRetryableTransactionFailure(error: unknown): boolean {
   if (typeof error !== 'object' || error === null || !('code' in error)) {
     return false;
@@ -183,9 +170,21 @@ export class NeonStorage implements Storage {
   // rather than calling it again (which the driver rejects as "ended twice").
   #poolShutdown: Promise<void> | undefined;
 
-  constructor(options: NeonStorageOptions) {
+  /**
+   * @param options Connection configuration ({@link NeonStorageOptions}).
+   * @param poolFactory Internal seam for constructing the owned pool from `url`.
+   *   Defaults to the real driver `Pool`; tests inject a fake (for example one
+   *   whose `end()` rejects) to exercise owned-pool teardown without a network.
+   *   Used only when no `pool` is supplied; an injected `pool` stays caller-owned.
+   */
+  constructor(
+    options: NeonStorageOptions,
+    poolFactory: (url: string) => NeonPool = (url) => new Pool({ connectionString: url }),
+  ) {
     this.#ownsPool = options.pool === undefined;
-    this.#pool = options.pool ?? toNeonPool(new Pool({ connectionString: options.url }));
+    // The driver's Pool is structurally assignable to NeonPool (NeonPool is a
+    // strict subset of its surface), so the default factory needs no cast.
+    this.#pool = options.pool ?? poolFactory(options.url);
   }
 
   capabilities(): StorageCapabilities {

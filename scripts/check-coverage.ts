@@ -900,12 +900,17 @@ const COVERAGE_ALLOWANCE_OVERRIDES = new Map<string, CoverageAllowance>([
   [
     'src/storage/resolve.ts',
     {
+      // Pre-existing untestable runtime-detection and driver-import fallback
+      // branches: Node/web-extension/IndexedDB resolver paths (never the active
+      // runtime under the Bun test suite), the SQLite "neither runtime" throw,
+      // and the LMDB/Turso resolver + Turso validator bodies (need a real driver).
+      // Line numbers refreshed after the WS2 refactor moved the configuration
+      // types out into storage-configuration.ts; the function count is unchanged.
       functions: 6,
       lines: new Set([
-        238, 239, 240, 241, 242, 247, 248, 249, 250, 251, 255, 264, 266, 267, 268, 269, 270, 271,
-        273, 281, 283, 284, 285, 286, 287, 288, 290, 291, 292, 293, 294, 303, 304, 305, 308, 309,
-        310, 311, 312, 313, 346, 354, 367, 368, 379, 400, 407, 408, 409, 410, 436, 437, 438, 439,
-        440, 441,
+        69, 70, 71, 72, 73, 78, 79, 80, 81, 82, 86, 95, 97, 98, 99, 100, 101, 102, 104, 112, 114,
+        115, 116, 117, 118, 119, 121, 122, 123, 124, 125, 134, 135, 136, 139, 140, 141, 142, 143,
+        144, 182, 190, 215, 236, 243, 244, 245, 246, 272, 273, 274, 275, 276, 277,
       ]),
     },
   ],

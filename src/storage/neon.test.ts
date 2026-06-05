@@ -242,19 +242,23 @@ describe('NeonStorage', () => {
     // scans. The adapter must detect the wrong collation and refuse to operate.
     // A dedicated PGlite is used so the shared (correctly-collated) instance is untouched.
     const database = await new PGlite();
-    await database.query('CREATE TABLE kv (key TEXT PRIMARY KEY, value BYTEA NOT NULL)');
-    const pool: NeonPool = {
-      query: (sql, parameters) => database.query(sql, parameters as unknown[]),
-      connect: async () => ({
+    try {
+      await database.query('CREATE TABLE kv (key TEXT PRIMARY KEY, value BYTEA NOT NULL)');
+      const pool: NeonPool = {
         query: (sql, parameters) => database.query(sql, parameters as unknown[]),
-        release: () => {},
-      }),
-      end: async () => {
-        await database.close();
-      },
-    };
-    await using storage = new NeonStorage({ url: 'pglite://memory', pool });
-    await expect(storage.put('k', encode('v'))).rejects.toThrow('COLLATE "C"');
+        connect: async () => ({
+          query: (sql, parameters) => database.query(sql, parameters as unknown[]),
+          release: () => {},
+        }),
+        end: async () => {},
+      };
+      // The pool is injected, so it stays caller-owned and disposal never calls
+      // end(); close the dedicated instance directly in finally.
+      await using storage = new NeonStorage({ url: 'pglite://memory', pool });
+      await expect(storage.put('k', encode('v'))).rejects.toThrow('COLLATE "C"');
+    } finally {
+      await database.close();
+    }
   });
 
   it('throws when the collation introspection returns no row', async () => {
@@ -276,33 +280,64 @@ describe('NeonStorage', () => {
     // must re-run init and succeed.
     let createAttempts = 0;
     const database = await new PGlite();
-    const failingPool: NeonPool = {
-      query: (sql, parameters) => {
-        if (sql === PG_CREATE_KEY_VALUE_TABLE) {
-          createAttempts += 1;
-          if (createAttempts === 1) {
-            return Promise.reject(new Error('connection dropped mid-CREATE'));
+    try {
+      const failingPool: NeonPool = {
+        query: (sql, parameters) => {
+          if (sql === PG_CREATE_KEY_VALUE_TABLE) {
+            createAttempts += 1;
+            if (createAttempts === 1) {
+              return Promise.reject(new Error('connection dropped mid-CREATE'));
+            }
           }
-        }
-        return database.query(sql, parameters as unknown[]);
-      },
+          return database.query(sql, parameters as unknown[]);
+        },
+        connect: async () => ({
+          query: (sql, parameters) => database.query(sql, parameters as unknown[]),
+          release: () => {},
+        }),
+        end: async () => {},
+      };
+      // The pool is injected (caller-owned), so disposal never calls end(); close
+      // the dedicated instance directly in finally.
+      await using storage = new NeonStorage({ url: 'pglite://memory', pool: failingPool });
+
+      // First operation triggers init, which fails on the CREATE.
+      await expect(storage.put('k', encode('v'))).rejects.toThrow('connection dropped mid-CREATE');
+      // Second operation must retry init (proving the rejected promise was cleared)
+      // and succeed end-to-end.
+      await storage.put('k', encode('v'));
+      expect(decodeText((await storage.get('k'))!)).toBe('v');
+      expect(createAttempts).toBe(2);
+    } finally {
+      await database.close();
+    }
+  });
+
+  it('preserves the original failure when a transaction ROLLBACK itself fails', async () => {
+    // #withTransaction swallows a ROLLBACK error so the original operation error
+    // (the real cause) propagates instead of being masked by a secondary rollback
+    // failure. Stage a client whose BEGIN succeeds, whose operation throws, and
+    // whose ROLLBACK also rejects — the caller must see the operation error.
+    const operationError = new Error('operation failed inside the transaction');
+    const pool: NeonPool = {
+      // #ensureTable runs on the pool directly: CREATE succeeds, collation is "C".
+      query: async (sql) =>
+        sql.includes('pg_collation') ? { rows: [{ collation: 'C' }] } : { rows: [] },
       connect: async () => ({
-        query: (sql, parameters) => database.query(sql, parameters as unknown[]),
+        query: async (sql) => {
+          if (sql === 'BEGIN ISOLATION LEVEL READ COMMITTED') return { rows: [] };
+          if (sql === 'ROLLBACK') throw new Error('rollback also failed');
+          // The batched operation statement throws — triggering the rollback path.
+          throw operationError;
+        },
         release: () => {},
       }),
-      end: async () => {
-        await database.close();
-      },
+      end: async () => {},
     };
-    await using storage = new NeonStorage({ url: 'pglite://memory', pool: failingPool });
-
-    // First operation triggers init, which fails on the CREATE.
-    await expect(storage.put('k', encode('v'))).rejects.toThrow('connection dropped mid-CREATE');
-    // Second operation must retry init (proving the rejected promise was cleared)
-    // and succeed end-to-end.
-    await storage.put('k', encode('v'));
-    expect(decodeText((await storage.get('k'))!)).toBe('v');
-    expect(createAttempts).toBe(2);
+    await using storage = new NeonStorage({ url: 'stub://', pool });
+    await expect(storage.batch([{ type: 'put', key: 'k', value: encode('v') }])).rejects.toThrow(
+      operationError,
+    );
   });
 
   it('scoped() returns a prefix-namespaced view backed by the same store', async () => {
@@ -384,5 +419,46 @@ describe('NeonStorage', () => {
     });
     await expect(storage[Symbol.asyncDispose]()).resolves.toBeUndefined();
     await expect(storage[Symbol.asyncDispose]()).resolves.toBeUndefined();
+  });
+
+  it('swallows a teardown error from an owned pool on synchronous dispose', async () => {
+    // Synchronous [Symbol.dispose] fires the async owned-pool shutdown and swallows
+    // any rejection, so a failing end() never surfaces as an unhandled rejection or
+    // a thrown dispose. The internal poolFactory seam constructs an owned pool whose
+    // end() rejects, without contacting any network.
+    let endCalled = false;
+    const failingOwnedPool: NeonPool = {
+      query: async () => ({ rows: [] }),
+      connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
+      end: async () => {
+        endCalled = true;
+        throw new Error('pool teardown failed');
+      },
+    };
+    const storage = new NeonStorage({ url: 'stub://' }, () => failingOwnedPool);
+    expect(() => storage[Symbol.dispose]()).not.toThrow();
+    // Let the swallowed end() rejection settle; it must not escape.
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(endCalled).toBe(true);
+  });
+
+  it('propagates a teardown error from an owned pool on async dispose', async () => {
+    // The async path awaits the same owned-pool shutdown, so a failing end() DOES
+    // surface here (unlike the fire-and-forget sync path). Repeated async dispose
+    // reuses the one memoized (rejected) shutdown rather than calling end() again.
+    let endCalls = 0;
+    const failingOwnedPool: NeonPool = {
+      query: async () => ({ rows: [] }),
+      connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
+      end: async () => {
+        endCalls += 1;
+        throw new Error('pool teardown failed');
+      },
+    };
+    const storage = new NeonStorage({ url: 'stub://' }, () => failingOwnedPool);
+    await expect(storage[Symbol.asyncDispose]()).rejects.toThrow('pool teardown failed');
+    await expect(storage[Symbol.asyncDispose]()).rejects.toThrow('pool teardown failed');
+    expect(endCalls).toBe(1);
   });
 });
