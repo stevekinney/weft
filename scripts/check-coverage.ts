@@ -1646,7 +1646,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   [
     // start-or-signal edges. Line 132 (startWithIdempotency rejecting an undefined
     // key) is unreachable by construction — the engine only routes here when a key
-    // is set. Lines 423-427 are `plainCreateBufferedSignalOrResolve`'s
+    // is set. Lines 423-433 are `plainCreateBufferedSignalOrResolve`'s
     // WorkflowAlreadyExistsError recovery (catch + resolveCallerIdWinnerOrRetry):
     // the convergence OUTCOME (one record, no leaked WorkflowAlreadyExistsError,
     // both callers converge) is covered by the concurrent pre-buffered regression
@@ -1655,22 +1655,22 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
     // usually resolves via the top-level lookup). Contriving a mock to hit it would
     // test the mock, not the engine.
     'src/core/engine/lifecycle/start-or-signal.ts',
-    { lines: new Set([132, 423, 424, 425, 426, 427]) },
+    { lines: new Set([132, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433]) },
   ],
   [
-    // start-or-signal-resolution's two invariant-violation throws. Lines 202-205
+    // start-or-signal-resolution's two invariant-violation throws. Lines 205-208
     // are the resolveWinnerWithSignal exhaustion throw reached when a keyed winning
     // record never becomes readable within five delayed reads AND the re-read mapping
-    // cannot prove a purge — it resolves to a DIFFERENT id or vanished (lines 202-203
+    // cannot prove a purge — it resolves to a DIFFERENT id or vanished (line 205
     // being the fall-through past the matched-winner purged-key throw), reachable
-    // only by external `start-idem:` keyspace mutation. Lines 220-223 are
+    // only by external `start-idem:` keyspace mutation. Lines 223-226 are
     // requireWinnerId finding the mapping vanished after a lost CAS — reachable only
     // by the same external mutation. The reachable success branches of both helpers,
-    // and the keyed-exhaustion purged-key throw (line 201, matched winner), are
+    // and the keyed-exhaustion purged-key throw (line 204, matched winner), are
     // covered by the white-box race-recovery and purged-key tests; contriving a mock
     // to hit these invariant throws would test the mock.
     'src/core/engine/lifecycle/start-or-signal-resolution.ts',
-    { lines: new Set([202, 203, 204, 205, 220, 221, 223]) },
+    { lines: new Set([205, 206, 207, 208, 223, 224, 226]) },
   ],
   [
     'src/core/engine/pending-updates.ts',

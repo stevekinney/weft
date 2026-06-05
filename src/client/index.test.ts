@@ -598,6 +598,44 @@ describe('HttpClient', () => {
     });
   });
 
+  describe('startOrSignal', () => {
+    // End-to-end contract coverage for HttpClient.startOrSignal: it wires the
+    // `/workflows/start-or-signal` request path and flattens
+    // signalName/signalPayload/signalId onto the body, so exercise both the
+    // absent-target (create + deliver the initial signal) and existing-target
+    // (signal the running run) paths against the real serve() stack.
+    it('creates an absent target and delivers the initial signal', async () => {
+      // `client-contract-waiting` waits for the `continue` signal and returns
+      // `${input}:${signal}`, so a resolved result proves the create-batch signal
+      // was delivered over HTTP.
+      const handle = await client.startOrSignal(
+        'client-contract-waiting',
+        'http-sos',
+        { name: 'continue', payload: 'created', signalId: 'http-sos-create' },
+        { id: 'http-startorsignal-create' },
+      );
+      expect(handle.id).toBe('http-startorsignal-create');
+      expect(await handle.result()).toBe('http-sos:created');
+    });
+
+    it('signals an existing non-terminal target instead of starting a second run', async () => {
+      // Start a run that parks on `continue`, then startOrSignal the same id: the
+      // existing-target path delivers the signal to the running run (a fresh
+      // signalId, since the run already exists) rather than creating a duplicate.
+      const started = await client.start('client-contract-waiting', 'http-sos-existing', {
+        id: 'http-startorsignal-existing',
+      });
+      const signalled = await client.startOrSignal(
+        'client-contract-waiting',
+        'ignored-on-existing-target',
+        { name: 'continue', payload: 'signalled', signalId: 'http-sos-existing-signal' },
+        { id: 'http-startorsignal-existing' },
+      );
+      expect(signalled.id).toBe(started.id);
+      expect(await started.result()).toBe('http-sos-existing:signalled');
+    });
+  });
+
   describe('get', () => {
     it('returns the workflow state for a known workflow', async () => {
       const handle = await client.start('echo', 'data', { id: 'http-get-test' });

@@ -162,9 +162,10 @@ export const startOrSignalWorkflowOperation = defineOperation<
     '(running, pending, or suspended) is signalled; a terminal target faults with Conflict, as ' +
     'does a spent `idempotencyKey` whose run was purged or swept by retention. ' +
     'Requires `type`, `signalName`, and exactly one of `signalId` or `idempotencyKey` (not ' +
-    'both). Accepts `input`, `signalPayload`, and the same start options as weft.workflows.start ' +
-    '(`id`, `executionTimeout`, `startAt`/`startAfter`, `tags`, `idempotencyKey`, ' +
-    '`searchAttributes`). Returns the workflow `id`. Concurrent callers converge on one workflow ' +
+    'both). Accepts `input`, `signalPayload`, and the non-idempotency start options from ' +
+    'weft.workflows.start (`id`, `executionTimeout`, `startAt`/`startAfter`, `tags`, ' +
+    '`searchAttributes`); `idempotencyKey` is governed solely by the "exactly one of" rule above. ' +
+    'Returns the workflow `id`. Concurrent callers converge on one workflow ' +
     'and one signal only with a shared `idempotencyKey`, or a shared `id` plus `signalId`; a ' +
     'bare `signalId` (no `id`/`idempotencyKey`) starts a fresh run per caller and does not ' +
     'converge.',
