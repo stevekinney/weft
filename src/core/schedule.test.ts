@@ -200,7 +200,6 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
     ...overrides,
   };
 }
-}
 
 describe('recurring schedules', () => {
   it('cron parsing rejects invalid tokens, ranges, steps, and field counts', () => {
