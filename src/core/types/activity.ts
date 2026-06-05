@@ -259,12 +259,15 @@ export interface ActivityDefinition<
   /** Activity implementation called by the engine or worker. */
   execute: ActivityFunction<TInput, TOutput>;
   /**
-   * Optional post-execution verifier.
+   * Optional verifier, invoked in two phases (see
+   * `ActivityVerificationContext.phase`).
    *
    * During normal post-execution validation, return `true` to confirm the
    * activity result or `false` to reject it. During pre-dispatch crash recovery
-   * for keyed activities, return an explicit reconciliation state; legacy boolean
-   * answers are not treated as proof of external completion.
+   * for keyed activities, return an explicit reconciliation state. A boolean is
+   * the post-execution result shape, not a Tier-0 reconciliation state, so a
+   * boolean returned during pre-dispatch reconciliation fails closed rather than
+   * being treated as proof of external completion.
    */
   verify?: ActivityVerifier<TInput, TOutput>;
   retry?: RetryPolicy;

@@ -45,8 +45,9 @@ import type {
   TrackedWaiterKeys,
   WorkflowResultWaiter,
 } from './engine-internal-types.ts';
-import type { ScheduleHandleEngine, WorkflowHandle, WorkflowHandleEngine } from './handles.ts';
+import type { WorkflowHandle, WorkflowHandleEngine } from './handles.ts';
 import type { WorkflowFeedListener } from './index.ts';
+import type { ScheduleHandleEngine } from './schedule-handle.ts';
 
 type EngineRuntime = WorkflowHandleEngine & ScheduleHandleEngine;
 
@@ -97,11 +98,15 @@ export interface EngineInternals {
   activityRegistry: ActivityRegistry;
   /**
    * Per-workflow activity registries built from
-   * `workflow({ name }).activities({ ... }).execute(...)`. Indexed by workflow
-   * type. Phase 3 wires lookups via `activityRegistriesByWorkflow.get(type)`
-   * first, falling back to {@link EngineInternals.activityRegistry} so the
-   * legacy global path keeps working until Phase 6 removes it. Each registry
-   * is constructed from a defensive deep clone+freeze of the workflow's
+   * `workflow({ name }).activities({ ... }).execute(...)`, indexed by workflow
+   * type. Activity lookup is per-activity: it consults the workflow's
+   * `activityRegistriesByWorkflow.get(type)` registry first and, for any activity
+   * that registry does not contain, falls back to the engine-wide
+   * {@link EngineInternals.activityRegistry}. Both sources are first-class — a
+   * workflow can resolve some activities from its own `activities(...)` map and
+   * others (shared/globally-registered) from the global registry, and a workflow
+   * with no per-workflow map resolves entirely from the global one. Each
+   * per-workflow registry is a defensive deep clone+freeze of the workflow's
    * `activities` map so post-registration mutation cannot reach the engine.
    */
   activityRegistriesByWorkflow: Map<string, ActivityRegistry>;

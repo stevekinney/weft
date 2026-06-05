@@ -11,8 +11,8 @@ import type {
   WorkflowState,
 } from '../types.ts';
 import { WorkflowNotRegisteredError } from './errors.ts';
-import { ScheduleHandle } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
+import { ScheduleHandle } from './schedule-handle.ts';
 import { getNextScheduleOccurrence } from './schedule-occurrence.ts';
 import {
   clearScheduleCurrentWorkflow,
@@ -232,6 +232,23 @@ export async function updateSchedule(
   await writeScheduleState(internals, updatedState, { includeTimer: state.status === 'active' });
 }
 
+/**
+ * Whether a schedule's current run still occupies the schedule slot for overlap
+ * purposes. A `'suspended'` run is non-terminal and resumable — it has NOT
+ * finished, so it must keep the slot occupied exactly like `'running'`/`'pending'`,
+ * otherwise the next occurrence would start an overlapping run under a non-`allow`
+ * overlap policy (skip/queue/cancel-running) while the paused run still exists.
+ * This is deliberately a wider set than `workflowStatusCanRetainLocalOwnership`
+ * (which excludes `'suspended'` so recoverAll skips it): "occupies the schedule
+ * slot" is "not terminal", not "locally owned".
+ */
+function scheduledRunOccupiesSlot(
+  currentWorkflowState: WorkflowState | null | undefined,
+): currentWorkflowState is WorkflowState {
+  const status = currentWorkflowState?.status;
+  return status === 'running' || status === 'pending' || status === 'suspended';
+}
+
 export async function refreshScheduledWorkflowState(
   internals: EngineInternals,
   state: ScheduleState,
@@ -241,7 +258,7 @@ export async function refreshScheduledWorkflowState(
     return { state, currentWorkflowState: null };
   }
   const currentWorkflowState = await callbacks.loadWorkflowState(state.currentWorkflowId);
-  if (currentWorkflowState?.status === 'running' || currentWorkflowState?.status === 'pending') {
+  if (scheduledRunOccupiesSlot(currentWorkflowState)) {
     return { state, currentWorkflowState };
   }
   await internals.storage.delete(KEYS.scheduleRun(state.currentWorkflowId));
@@ -273,7 +290,7 @@ export async function startScheduledRun(
 function hasActiveScheduledWorkflow(
   currentWorkflowState: WorkflowState | null | undefined,
 ): boolean {
-  return currentWorkflowState?.status === 'running' || currentWorkflowState?.status === 'pending';
+  return scheduledRunOccupiesSlot(currentWorkflowState);
 }
 
 async function applyBlockedScheduleOccurrence(

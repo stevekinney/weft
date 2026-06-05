@@ -19,6 +19,7 @@ description: >-
 - Changing pending workflow updates during inline advance or resume, especially where durable update responses can drain before handlers are registered.
 - Changing out-of-band activity completion, including `ActivityContext.completeAsync()`, token claiming, REST/JSON-RPC completion, or payload rejection before token consumption.
 - Changing per-run workflow `services`, `resolveWorkflowServices`, delayed-start recovery, or the durable `wf-has-services:` marker that gates recovery re-provisioning.
+- Changing workflow suspend/resume, recovered-handle observation, idempotent start reservation, `startOrSignal`, inline launch deferral, or engine disposal while queued inline launches can still flush.
 
 ## Do not use
 
@@ -38,6 +39,7 @@ description: >-
 8. For pending updates, wait for registered update handlers before draining durable requests. A resumed or inline-advanced workflow must not reject a valid persisted update merely because the handler registry has not caught up yet.
 9. For async activity completion, claim a single-use token synchronously before storage awaits, but reject malformed or oversized completion payloads before that claim so a parked workflow can still be completed later.
 10. For recovered services, treat resolver success, unavailable results, throws, terminal commit faults, delayed-start timers, terminal cleanup, purge, and retention as distinct lifecycle outcomes.
+11. For inline launch queues, model `defer: false`, queued async launch, disposal before flush, and runtimes without `MessageChannel` as separate execution paths.
 
 ### Client event-streaming work
 
@@ -63,5 +65,8 @@ description: >-
 - For pending-update drains, cover resume and inline advancement paths where the update is durable before the handler is visible.
 - For async activity completion, cover double-completion races, malformed JSON, oversized payload rejection that preserves the token, and cross-transport parity between `LocalClient` and `HttpClient`.
 - For per-run services, cover normal start, Worker-mode rejection, running recovery, delayed-start recovery, resolver throw/unavailable sibling isolation, terminal cleanup, purge, and retention marker deletion.
+- For suspend/resume and recovered-handle observation, cover suspended workflows as non-terminal, explicit resume after recovery, terminal/nonexistent faults, `getLaunchMetadata()` null after purge, and `snapshot()` status/step reads without awaiting `result()`.
+- For start idempotency and `startOrSignal`, cover concurrent same-key callers, spent-key conflicts after retention or purge, terminal-target conflicts, bare-`signalId` non-convergence, and same-id pre-commit abort recovery.
+- For inline launch scheduling, cover queued launch draining on disposal, `defer: false` synchronous launch, and the timeout flush path when `MessageChannel` is unavailable.
 - Prove no test depends on unbounded waits or real-time sleeps.
 - Run the focused lifecycle or worker tests plus `bun run verify:no-test-sleeps` when relevant.

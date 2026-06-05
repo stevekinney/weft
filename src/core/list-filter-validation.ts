@@ -23,6 +23,7 @@ const WORKFLOW_STATUSES = [
   'failed',
   'cancelled',
   'timed-out',
+  'suspended',
 ] as const satisfies readonly WorkflowStatus[];
 
 const ID_PREFIX_PATTERN = /^[A-Za-z0-9_-]+$/;

@@ -15,6 +15,8 @@ import type { ClientHandle, ClientScheduleHandle } from './interface.ts';
 
 export interface WorkflowHandleDelegationClient {
   cancel(id: string): Promise<void>;
+  suspend(id: string): Promise<void>;
+  resume(id: string): Promise<ClientHandle>;
   tail(id: string): WorkflowEventTail;
   signal(
     id: string,
@@ -52,6 +54,16 @@ export abstract class WorkflowHandleDelegation<
     return this.client.cancel(this.id);
   }
 
+  async suspend(): Promise<void> {
+    return this.client.suspend(this.id);
+  }
+
+  async resume(): Promise<void> {
+    // The client's resume() returns a fresh ClientHandle; discard it because the
+    // caller already holds this handle, whose result() resolves on completion.
+    await this.client.resume(this.id);
+  }
+
   // Duplicate intentionally retained: the signal/update/query overload stacks
   // mirror the engine's `WorkflowHandle`, but TypeScript requires each class to
   // declare its full overload signatures locally to emit them into its `.d.ts`
@@ -59,6 +71,7 @@ export abstract class WorkflowHandleDelegation<
   // that one to a private `#engine`, so the bodies cannot share); rejected:
   // hoisting the signatures into a shared interface or mixin, which drops the
   // per-class overload declarations from the emitted declarations.
+  // jscpd:ignore-start
   async signal(name: SignalDefinition): Promise<void>;
   async signal<TInput>(
     name: SignalDefinition<TInput>,
@@ -105,6 +118,7 @@ export abstract class WorkflowHandleDelegation<
   async query(nameOrDefinition: MessageName, input?: unknown): Promise<unknown> {
     return this.client.query(this.id, messageName(nameOrDefinition), input);
   }
+  // jscpd:ignore-end
 
   async getAttributes(): Promise<Record<string, SearchAttributeValue> | null> {
     return this.client.getAttributes(this.id);

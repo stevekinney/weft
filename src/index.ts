@@ -39,12 +39,15 @@ export {
   Engine,
   EngineCreateNameMismatchError,
   EngineDisposedError,
+  IdempotencyKeyPurgedError,
   PersistedDataIncompatibleError,
   ScheduleHandle,
+  StartOrSignalConflictError,
   WorkflowAlreadyExistsError,
   WorkflowHandle,
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
+  WorkflowSuspendNotSupportedError,
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './core/engine';
 export type { EngineCreateOptions, EngineStateNamespace, RecoverAllOptions } from './core/engine';
@@ -115,6 +118,7 @@ export type {
   InferWorkflowEntries,
   InferWorkflowEntry,
   InitialBuilderState,
+  LaunchMetadata,
   ListFilter,
   ListOptions,
   MarkBuilderState,
@@ -153,6 +157,7 @@ export type {
   SignalMap,
   SignalPayload,
   StartOptions,
+  StartOrSignalSignal,
   SubmitReviewOptions,
   TerminationReason,
   UpdateDefinition,
@@ -176,6 +181,7 @@ export type {
   WorkflowServicesResolution,
   WorkflowServicesResolverInfo,
   WorkflowSessionState,
+  WorkflowSnapshot,
   WorkflowState,
   WorkflowStateNamespace,
   WorkflowStatus,
@@ -218,6 +224,7 @@ export {
   WorkflowRecoverySkippedEvent,
   WorkflowResumedEvent,
   WorkflowStartedEvent,
+  WorkflowSuspendedEvent,
   WorkflowTimedOutEvent,
 } from './core/events';
 export type { TypedEventTarget, WeftEventMap, WorkflowRecoverySkippedReason } from './core/events';
@@ -268,7 +275,13 @@ export type {
   TypedStorage,
 } from './storage/typed-storage';
 // Codec
-export { decode, encode, validateCloneable } from './core/codec';
+export {
+  decode,
+  encode,
+  registerSerializer,
+  validateCloneable,
+  type SerializerHandlers,
+} from './core/codec';
 // Payload-size cap
 export { PayloadSizeExceededError } from './core/payload-size';
 

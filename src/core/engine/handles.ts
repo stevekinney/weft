@@ -6,10 +6,9 @@ import {
 } from '../events.ts';
 import { WorkflowTimeoutError } from '../timeouts.ts';
 import type {
+  LaunchMetadata,
   MessageName,
   QueryDefinition,
-  ScheduleSpec,
-  ScheduleSummary,
   SearchAttributeValue,
   SignalDefinition,
   SignalDeliveryOptions,
@@ -17,6 +16,7 @@ import type {
   WorkflowState,
 } from '../types.ts';
 import { messageName } from '../types.ts';
+import type { WorkflowSnapshot } from '../types/workflow-snapshot.ts';
 import { createWorkflowHandleEventIterator } from './handle-iteration.ts';
 
 export function getWorkflowExecutionStartedAt(
@@ -72,6 +72,8 @@ export const HANDLE_RESULT_PROMISE = Symbol('handleResultPromise');
 export interface WorkflowHandleEngine extends EventTarget {
   [HANDLE_RESULT_PROMISE](workflowId: string): Promise<unknown>;
   cancel(workflowId: string): Promise<void>;
+  suspend(workflowId: string): Promise<void>;
+  resume(workflowId: string): Promise<WorkflowHandle>;
   signal(
     workflowId: string,
     name: string,
@@ -93,14 +95,13 @@ export interface WorkflowHandleEngine extends EventTarget {
   addTags(workflowId: string, ...tags: string[]): Promise<void>;
   removeTags(workflowId: string, ...tags: string[]): Promise<void>;
   get(workflowId: string): Promise<WorkflowState | null>;
-}
-
-export interface ScheduleHandleEngine {
-  pauseSchedule(scheduleId: string): Promise<void>;
-  resumeSchedule(scheduleId: string): Promise<void>;
-  cancelSchedule(scheduleId: string): Promise<void>;
-  updateSchedule(scheduleId: string, newSpec: string | ScheduleSpec): Promise<void>;
-  getSchedule(scheduleId: string): Promise<ScheduleSummary | null>;
+  /**
+   * Current checkpoint step (the run's cursor) for a workflow, or `null` when no
+   * checkpoint exists. Reads the in-memory checkpoint when the run is live in
+   * this engine, otherwise the durably persisted checkpoint — so it is correct
+   * for both an in-flight run and one recovered or inspected in a fresh process.
+   */
+  getCurrentCheckpointStep(workflowId: string): Promise<number | null>;
 }
 
 /**
@@ -171,6 +172,115 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
     return this.#engine.cancel(this.id);
   }
 
+  /**
+   * Suspend this workflow without terminating it: it transitions to the
+   * non-terminal `'suspended'` status, keeps its durable checkpoint, and is
+   * later resumable via {@link WorkflowHandle.resume}. Unlike `cancel()`, this
+   * does not run cancel handlers and does not settle `result()` — the result
+   * promise stays pending until a later `resume()` completes the run. A
+   * suspended workflow is NOT auto-recovered by `engine.recoverAll()`; resume it
+   * explicitly. Suspending a workflow that is not running is a no-op.
+   */
+  async suspend(): Promise<void> {
+    return this.#engine.suspend(this.id);
+  }
+
+  /**
+   * Resume this workflow from its persisted checkpoint after it was suspended
+   * (or left `'running'` by a prior process). The run is re-driven on this
+   * engine; `result()` on this handle resolves when the resumed run completes.
+   * Throws if the workflow is in a status that cannot be resumed (terminal,
+   * pending, or not found).
+   */
+  async resume(): Promise<void> {
+    await this.#engine.resume(this.id);
+  }
+
+  /**
+   * Reconstruct this workflow's launch context — its original `input` and the
+   * launch options recoverable from durable state — from the persisted
+   * {@link WorkflowState}. Resolves `null` if the workflow no longer exists
+   * (never started, or purged).
+   *
+   * Designed for the post-`recoverAll()` case: a recovered handle can recover
+   * the input a run was started with (and its `id`/`tags`) without the caller
+   * keeping a side table correlating recovered workflows back to their launch
+   * context. This is an async read (it loads state) so it behaves identically
+   * on handles from `start()`, `recoverAll()`, and `getHandle()` — none of which
+   * is special-cased — rather than a sync property that would be `undefined` on
+   * a handle created without a state load.
+   *
+   * @example
+   * ```ts
+   * import { Engine } from '@lostgradient/weft';
+   *
+   * const engine = new Engine();
+   * const handles = await engine.recoverAll();
+   * for (const handle of handles) {
+   *   const metadata = await handle.getLaunchMetadata();
+   *   if (metadata) {
+   *     // rebuild this run's dependencies from metadata.input
+   *     void metadata.input;
+   *   }
+   * }
+   * ```
+   */
+  async getLaunchMetadata(): Promise<LaunchMetadata | null> {
+    const state = await this.#engine.get(this.id);
+    if (state === null) {
+      return null;
+    }
+    return {
+      input: state.input,
+      launchOptions: {
+        id: state.id,
+        // Reflects the run's CURRENT tags from persisted state, not its
+        // launch-time tags: tags are mutable via addTags/removeTags. Omit the
+        // key entirely when there are none (exactOptionalPropertyTypes) rather
+        // than carrying an empty array.
+        ...(state.tags !== undefined && state.tags.length > 0 && { tags: state.tags }),
+      },
+    };
+  }
+
+  /**
+   * A point-in-time view of this workflow's progress: its status and current
+   * checkpoint step (cursor). Resolves `null` if the workflow no longer exists.
+   * The `status` matches `engine.get(id)` — notably it reports `'pending'` for a
+   * run whose inline start is still queued, even though its persisted status is
+   * `'running'`.
+   *
+   * Designed for observing a recovered run: after `engine.recoverAll()`, a
+   * caller can read where a resumed run currently is — and rebuild its own
+   * progress adapter to re-register the run on a live surface — without waiting
+   * for the run's final `result()`. It is an async read (loads state +
+   * checkpoint), so it behaves identically on handles from `start()`,
+   * `recoverAll()`, and `getHandle()`.
+   *
+   * @example
+   * ```ts
+   * import { Engine } from '@lostgradient/weft';
+   *
+   * const engine = new Engine();
+   * const handles = await engine.recoverAll();
+   * for (const handle of handles) {
+   *   const snapshot = await handle.snapshot();
+   *   if (snapshot) {
+   *     // re-register a progress adapter at snapshot.step
+   *     void snapshot.step;
+   *   }
+   * }
+   * ```
+   */
+  async snapshot(): Promise<WorkflowSnapshot | null> {
+    const state = await this.#engine.get(this.id);
+    if (state === null) {
+      return null;
+    }
+    const step = await this.#engine.getCurrentCheckpointStep(this.id);
+    return { status: state.status, step: step ?? 0 };
+  }
+
   // Duplicate intentionally retained: the signal/update/query overload stacks
   // mirror `WorkflowHandleDelegation`, but TypeScript requires each class to
   // declare its full overload signatures locally to emit them into its `.d.ts`
@@ -178,6 +288,7 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
   // `#engine`, that one to a `client` field, so the bodies cannot share);
   // rejected: hoisting the signatures into a shared interface or mixin, which
   // drops the per-class overload declarations from the emitted declarations.
+  // jscpd:ignore-start
   async signal(name: SignalDefinition): Promise<void>;
   async signal<TInput>(
     name: SignalDefinition<TInput>,
@@ -221,6 +332,7 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
   async query(nameOrDefinition: MessageName, input?: unknown): Promise<unknown> {
     return this.#engine.query(this.id, messageName(nameOrDefinition), input);
   }
+  // jscpd:ignore-end
 
   async getAttributes(): Promise<Record<string, SearchAttributeValue> | null> {
     return this.#engine.getAttributes(this.id);
@@ -367,61 +479,5 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
 
   async [Symbol.asyncDispose](): Promise<void> {
     // No-op for now; handles are lightweight
-  }
-}
-
-/**
- * Handle to a recurring schedule created by {@link Engine.schedule}. Use
- * `handle.pause()`, `handle.resume()`, `handle.cancel()`, or
- * `handle.update(cronExpression)` to manage the schedule lifecycle.
- * `handle.describe()` returns the current {@link ScheduleSummary}.
- *
- * @example
- * ```ts
- * import { workflow, Engine, ScheduleHandle } from '@lostgradient/weft';
- *
- * const engine = new Engine();
- * engine.register(workflow({ name: 'daily-report' }).execute(async function* () { return 'ok'; }));
- *
- * const handle = await engine.schedule('daily-report', null, '0 9 * * *');
- * const typedHandle: ScheduleHandle = handle;
- * await handle.pause();
- * const summary = await handle.describe();
- * void typedHandle;
- * console.log(summary.status); // 'paused'
- * await handle.cancel();
- * ```
- */
-export class ScheduleHandle {
-  readonly id: string;
-  readonly #engine: ScheduleHandleEngine;
-
-  constructor(id: string, engine: ScheduleHandleEngine) {
-    this.id = id;
-    this.#engine = engine;
-  }
-
-  async pause(): Promise<void> {
-    await this.#engine.pauseSchedule(this.id);
-  }
-
-  async resume(): Promise<void> {
-    await this.#engine.resumeSchedule(this.id);
-  }
-
-  async cancel(): Promise<void> {
-    await this.#engine.cancelSchedule(this.id);
-  }
-
-  async update(newSpec: string | ScheduleSpec): Promise<void> {
-    await this.#engine.updateSchedule(this.id, newSpec);
-  }
-
-  async describe(): Promise<ScheduleSummary> {
-    const schedule = await this.#engine.getSchedule(this.id);
-    if (!schedule) {
-      throw new Error(`Schedule "${this.id}" not found`);
-    }
-    return schedule;
   }
 }

@@ -37,20 +37,6 @@ export type EngineCreateOptions<
   workflows?: TWorkflowDefinitions;
   /** Activity definitions to register before workflows. */
   activities?: TActivityDefinitions;
-  /**
-   * Opt out of the persisted-data schema-version gate when opening a storage
-   * that contains workflow data written by `new Engine({ storage })` before
-   * the schema-version sentinel existed.
-   *
-   * The gate normally rejects any storage that already holds workflow records
-   * but lacks the sentinel — a safety check against silently classifying
-   * pre-sentinel data as schema-current. Set `allowLegacyData: true` only when
-   * you knowingly opened the same storage with the legacy constructor path and
-   * are intentionally recovering it via `Engine.create`. On success, the
-   * current schema-version sentinel is written. Remove the opt-in once the
-   * data has been migrated.
-   */
-  allowLegacyData?: boolean;
 } & (
     | {
         /**

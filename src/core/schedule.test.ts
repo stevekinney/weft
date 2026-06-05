@@ -11,6 +11,10 @@ import { MemoryStorage } from '../storage/memory.ts';
 import { decode, encode } from './codec.ts';
 import { Engine } from './engine.ts';
 import {
+  handleScheduledWorkflowTerminalForEngine,
+  settleBackfillScheduleStateForEngine,
+} from './engine/callback-creators-schedule.ts';
+import {
   CleanupWarningEvent,
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
@@ -24,6 +28,7 @@ import {
 import {
   schedule as defineSchedule,
   workflow as defineWorkflow,
+  type ScheduleState,
   type ScheduleSummary,
   type WorkflowContext,
   type WorkflowFunction,
@@ -179,6 +184,23 @@ async function createQueuedScheduleStartFailureFixture(): Promise<{
   return { engine, firstWorkflowId: firstWorkflowId! };
 }
 
+function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleState {
+  return {
+    createdAt: 1,
+    cronExpression: '* * * * *',
+    id: 'schedule-state',
+    input: null,
+    nextFireAt: 60_000,
+    status: 'active',
+    overlap: 'skip',
+    backfill: false,
+    queuedRuns: 0,
+    updatedAt: 1,
+    workflowType: 'workflow',
+    ...overrides,
+  };
+}
+
 describe('recurring schedules', () => {
   it('cron parsing rejects invalid tokens, ranges, steps, and field counts', () => {
     expect(() => parseCronExpression('* * * *')).toThrow(
@@ -191,6 +213,56 @@ describe('recurring schedules', () => {
     expect(() => parseCronExpression('5-1 * * * *')).toThrow('Invalid cron range "5-1"');
     expect(() => parseCronExpression('*/0 * * * *')).toThrow('Invalid cron step "*/0"');
     expect(() => parseCronExpression(', * * * *')).toThrow('Invalid cron field ","');
+  });
+
+  it('returns the same backfill state when no current workflow is active', async () => {
+    const engine = createEngine({ now: 1 });
+    const state = createScheduleState();
+
+    try {
+      await expect(settleBackfillScheduleStateForEngine(engine, state)).resolves.toEqual(state);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('drops corrupt schedule-run identifiers before loading schedule state', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine({ now: 1 }, storage);
+
+    try {
+      await storage.put(KEYS.scheduleRun('workflow-corrupt-run'), encode({ invalid: true }));
+
+      await handleScheduledWorkflowTerminalForEngine(engine, 'workflow-corrupt-run');
+
+      expect(await storage.get(KEYS.scheduleRun('workflow-corrupt-run'))).toBeNull();
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('returns when the schedule no longer points at the completed workflow', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine({ now: 1 }, storage);
+
+    try {
+      await storage.put(KEYS.scheduleRun('workflow-finished'), encode('schedule-finished'));
+      await storage.put(
+        KEYS.schedule('schedule-finished'),
+        encode(
+          createScheduleState({ id: 'schedule-finished', currentWorkflowId: 'other-workflow' }),
+        ),
+      );
+
+      await handleScheduledWorkflowTerminalForEngine(engine, 'workflow-finished');
+
+      const storedScheduleBytes = await storage.get(KEYS.schedule('schedule-finished'));
+      expect(storedScheduleBytes).not.toBeNull();
+      const storedSchedule = decode(storedScheduleBytes!) as ScheduleState;
+      expect(storedSchedule.currentWorkflowId).toBe('other-workflow');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
   });
 
   it('parses named month and weekday aliases, normalizes Sunday aliases, and validates max occurrence limits', () => {

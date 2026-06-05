@@ -21,17 +21,12 @@ const USER_DATA_PREFIXES = ['wf:', 'op:', 'schedule:', 'ev:', 'sig:', 'upd:', 'i
  * 3. Sentinel is absent. Only stamp the storage when it carries no user
  *    workflow data. Stamping a database that already holds workflow records,
  *    schedules, checkpoints, or any other `wf:` / `op:` / `schedule:` / `ev:`
- *    prefixed key would silently classify pre-versioned data (written by an
- *    older Weft binary or by the `new Engine({ storage })` constructor path
- *    before the sentinel was introduced) as schema-current and risk replaying
- *    incompatible records. When user data is already present without a
- *    sentinel, fail with `PersistedDataIncompatibleError(null, …)` so the
- *    operator can choose explicitly whether to wipe and start fresh.
+ *    prefixed key would silently classify unversioned data as schema-current
+ *    and risk replaying incompatible records. When user data is already present
+ *    without a sentinel, fail with `PersistedDataIncompatibleError(null, …)` so
+ *    the operator can choose explicitly whether to wipe and start fresh.
  */
-export async function assertCompatiblePersistedDataVersion(
-  storage: WeftStorage,
-  options: { allowLegacyData?: boolean } = {},
-): Promise<void> {
+export async function assertCompatiblePersistedDataVersion(storage: WeftStorage): Promise<void> {
   const raw = await storage.get(PERSISTED_DATA_SCHEMA_VERSION_KEY);
   if (raw !== null) {
     const text = new TextDecoder().decode(raw);
@@ -47,16 +42,12 @@ export async function assertCompatiblePersistedDataVersion(
     }
     return;
   }
-  // No sentinel. Only stamp when storage is clean of user data unless the
-  // caller opted in. Any user-data prefix means the database was written by a
-  // pre-sentinel engine; the safe default is to reject so the operator chooses
-  // explicitly. `allowLegacyData: true` is the documented opt-in for the
-  // `new Engine({ storage })` → `Engine.create({ storage })` migration path.
-  if (!options.allowLegacyData) {
-    for (const prefix of USER_DATA_PREFIXES) {
-      for await (const _entry of storage.scan(prefix, { limit: 1 })) {
-        throw new PersistedDataIncompatibleError(null, CURRENT_PERSISTED_DATA_SCHEMA_VERSION);
-      }
+  // No sentinel. Only stamp when storage is clean of user data. Any user-data
+  // prefix means the database holds unversioned records; reject so the operator
+  // chooses explicitly whether to wipe and start fresh.
+  for (const prefix of USER_DATA_PREFIXES) {
+    for await (const _entry of storage.scan(prefix, { limit: 1 })) {
+      throw new PersistedDataIncompatibleError(null, CURRENT_PERSISTED_DATA_SCHEMA_VERSION);
     }
   }
   await storage.put(

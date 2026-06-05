@@ -18,6 +18,10 @@ class WorkflowHandle extends EventTarget implements AsyncDisposable {
   async signal(name: string, payload?: unknown): Promise<void>;
   async update(name: string, payload?: unknown, options?: { timeout?: number }): Promise<unknown>;
   async cancel(): Promise<void>;
+  async suspend(): Promise<void>;
+  async resume(): Promise<void>;
+  async getLaunchMetadata(): Promise<LaunchMetadata | null>;
+  async snapshot(): Promise<WorkflowSnapshot | null>;
 
   async *[Symbol.asyncIterator](): AsyncIterableIterator<Event>;
   [Symbol.observable](): Observable;
@@ -112,6 +116,79 @@ Cancel the workflow. This:
 
 ```ts partial
 await handle.cancel();
+```
+
+Cancellation is _total_ over non-terminal states: cancelling a `'suspended'` workflow terminates it and rejects its still-pending `result()`, so a suspended-then-abandoned run never hangs.
+
+---
+
+### `suspend()`
+
+```ts partial
+async suspend(): Promise<void>;
+```
+
+Suspend the workflow without terminating it. Unlike `cancel()`, suspension is a _pause_, not a cancellation:
+
+1. Sets the workflow status to the non-terminal `'suspended'`
+2. Parks the run _without_ aborting its `AbortController` — no cancel handlers run, and nothing observing `ctx.signal.aborted` sees it go true
+3. Preserves the durable checkpoint, so the run is resumable
+4. Leaves `result()` pending — it does not settle
+5. Dispatches a `WorkflowSuspendedEvent`
+
+A suspended workflow is _not_ auto-recovered by `engine.recoverAll()` — resume it explicitly. Suspending a workflow that is not running is a no-op. Inline execution mode only; a worker-mode engine throws `WorkflowSuspendNotSupportedError` (and the server faults with `422 Unprocessable`).
+
+> [!NOTE] Durability vs. liveness on a failed suspend
+> `suspend()` evicts the run's in-memory state before its single durable write, matching how `cancel()`/timeout work. If that durable write fails (a storage fault), the run is not lost — it stays durably `'running'` with its checkpoint and is re-driven by `recoverAll()` on the next `Engine.create()` — but the current process no longer drives it, so this handle's `result()` stays pending until that restart. In-process repair is intentionally not attempted, since it would need the same storage that just failed.
+
+```ts partial
+await handle.suspend();
+```
+
+### `resume()`
+
+```ts partial
+async resume(): Promise<void>;
+```
+
+Re-drive the workflow from its persisted checkpoint, after a `suspend()` or after a process restart left it `'running'`. A suspended workflow is durably flipped back to `'running'` as part of resuming; `result()` on this handle resolves when the resumed run completes. Throws if the workflow is in a status that cannot be resumed (terminal, pending, or not found).
+
+```ts partial
+await handle.resume();
+```
+
+---
+
+### `getLaunchMetadata()`
+
+```ts partial
+async getLaunchMetadata(): Promise<LaunchMetadata | null>;
+```
+
+Reconstruct the workflow's original input and the launch options that can be read faithfully from durable state. This is designed for `engine.recoverAll()` flows where a recovered handle needs to rebuild application-side adapters without a separate launch-context table. It returns `null` when the workflow record no longer exists.
+
+`launchOptions` includes the workflow `id` and the run's current `tags` when present. It intentionally omits `executionTimeout`, `idempotencyKey`, `searchAttributes`, and `services`: those either are not persisted as launch options, live in separate indexes, or are re-provided through `resolveWorkflowServices`.
+
+```ts partial
+const metadata = await handle.getLaunchMetadata();
+if (metadata) {
+  console.log(metadata.input, metadata.launchOptions.id);
+}
+```
+
+### `snapshot()`
+
+```ts partial
+async snapshot(): Promise<WorkflowSnapshot | null>;
+```
+
+Read a point-in-time workflow cursor: the current workflow `status` plus the checkpoint `step`. Use it after recovery to rebuild progress adapters or operator state without waiting for `result()`. It returns `null` when the workflow record no longer exists. The status matches `engine.get(id)`, so an inline launch still queued in memory can report `pending` even though its durable record has already been initialized.
+
+```ts partial
+const snapshot = await handle.snapshot();
+if (snapshot) {
+  console.log(`${snapshot.status} at step ${snapshot.step}`);
+}
 ```
 
 ---

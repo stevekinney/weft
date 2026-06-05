@@ -84,6 +84,19 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
     },
   ],
   [
+    'scripts/run-gates.ts',
+    {
+      // `runPipeline` / `main` (ordering, fail-fast, framing, summary) are
+      // unit-tested in scripts/run-gates.test.ts with a stub gate runner. The
+      // excluded surface is `spawnGate` (lines 88-101) and the `import.meta.main`
+      // entrypoint (line 189): both shell out to real `bun run` child processes,
+      // exercised end-to-end by `bun run validate` / `bun run prepack`. This is
+      // the same allowance shape this script uses for its own shell wrapper.
+      functions: 1,
+      lines: createMergedLineSet(createLineSet(88, 101), new Set([189])),
+    },
+  ],
+  [
     'examples/hello-world/src/index.ts',
     {
       // The example module exports are covered in-process by `src/examples.test.ts`.
@@ -1643,6 +1656,35 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   ],
   ['src/core/engine/bulk-operations-purge.ts', { lines: new Set([166, 214, 215, 216]) }],
   ['src/core/engine/construction.ts', { lines: new Set([97, 98, 99, 100, 101]) }],
+  [
+    // start-or-signal edges. Line 132 (startWithIdempotency rejecting an undefined
+    // key) is unreachable by construction — the engine only routes here when a key
+    // is set. Lines 423-433 are `plainCreateBufferedSignalOrResolve`'s
+    // WorkflowAlreadyExistsError recovery (catch + resolveCallerIdWinnerOrRetry):
+    // the convergence OUTCOME (one record, no leaked WorkflowAlreadyExistsError,
+    // both callers converge) is covered by the concurrent pre-buffered regression
+    // test, but this specific recovery LINE fires only on a rare mid-sequence
+    // interleaving in-process storage produces by chance, not on command (the loser
+    // usually resolves via the top-level lookup). Contriving a mock to hit it would
+    // test the mock, not the engine.
+    'src/core/engine/lifecycle/start-or-signal.ts',
+    { lines: new Set([132, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433]) },
+  ],
+  [
+    // start-or-signal-resolution's two invariant-violation throws. Lines 205-208
+    // are the resolveWinnerWithSignal exhaustion throw reached when a keyed winning
+    // record never becomes readable within five delayed reads AND the re-read mapping
+    // cannot prove a purge — it resolves to a DIFFERENT id or vanished (line 205
+    // being the fall-through past the matched-winner purged-key throw), reachable
+    // only by external `start-idem:` keyspace mutation. Lines 223-226 are
+    // requireWinnerId finding the mapping vanished after a lost CAS — reachable only
+    // by the same external mutation. The reachable success branches of both helpers,
+    // and the keyed-exhaustion purged-key throw (line 204, matched winner), are
+    // covered by the white-box race-recovery and purged-key tests; contriving a mock
+    // to hit these invariant throws would test the mock.
+    'src/core/engine/lifecycle/start-or-signal-resolution.ts',
+    { lines: new Set([205, 206, 207, 208, 223, 224, 226]) },
+  ],
   [
     'src/core/engine/pending-updates.ts',
     {

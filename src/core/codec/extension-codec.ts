@@ -6,6 +6,7 @@ import {
   decodeCodecDate,
   encodeCodecDate,
 } from '../codec-helpers.ts';
+import { bindSerializerRegistryToCodec, hasRegisteredSerializer } from './serializer-registry.ts';
 
 // ---------------------------------------------------------------------------
 // Extension type identifiers
@@ -23,6 +24,14 @@ const EXTENSION_TYPE_ERROR = 6;
 // ---------------------------------------------------------------------------
 
 export const extensionCodec = new ExtensionCodec();
+
+// Wire the user-serializer registry to this shared codec so registerSerializer()
+// attaches its custom extension encoders to the same instance encode()/decode()
+// use, and hand it `replaceUndefined` (hoisted below) so custom-serializer
+// output is encoded with the same `undefined` semantics as the public encode().
+// Done before the built-in types register; order does not matter because
+// registrations are dynamic.
+bindSerializerRegistryToCodec(extensionCodec, replaceUndefined);
 
 // Date (ext type 1): float64 milliseconds since epoch
 extensionCodec.register({
@@ -127,11 +136,18 @@ extensionCodec.register({
   },
 });
 
-// Error (ext type 6): encoded as { name, message, stack } object
+// Error (ext type 6): encoded as { name, message, stack } object.
+// Defers to a user-registered serializer (see serializer-registry.ts) when the
+// value's exact constructor has one — so a registered Error subclass (e.g. a
+// ZodError) round-trips through its custom handler and keeps subclass fields
+// like `.issues`, instead of being flattened to name/message/stack here. The
+// deferral lives in this encoder (rather than relying on extension-codec
+// registration order) because msgpack tries encoders in registration order and
+// this generic Error encoder is registered first.
 extensionCodec.register({
   type: EXTENSION_TYPE_ERROR,
   encode(value: unknown): Uint8Array | null {
-    if (value instanceof Error) {
+    if (value instanceof Error && !hasRegisteredSerializer(value)) {
       return msgpackEncode({
         name: value.name,
         message: value.message,
@@ -228,7 +244,11 @@ function isNestedValueFree(value: object): boolean {
     value instanceof RegExp ||
     value instanceof Error ||
     value instanceof Uint8Array ||
-    value instanceof ArrayBuffer
+    value instanceof ArrayBuffer ||
+    // A registered-serializer instance must reach the extension codec with its
+    // class identity intact; do not walk it into a plain record here. Its own
+    // toJSON output gets replaceUndefined applied inside the custom encoder.
+    hasRegisteredSerializer(value)
   );
 }
 

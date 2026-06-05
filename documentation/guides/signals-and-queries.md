@@ -52,6 +52,21 @@ Both forms do the same thing. The handle version is convenient when you already 
 
 When retrying a sender request, pass a stable `signalId`. Weft uses it as an idempotency key for that workflow and signal name: the first delivery is accepted once, and duplicate retries return the same successful acknowledgement instead of queuing the signal again. This requires a storage adapter that supports `conditionalBatch`; plain signals without `signalId` continue to work without that capability.
 
+## Starting or signalling atomically
+
+Webhook-style integrations often need "start the workflow if this is the first event, otherwise deliver the event to the existing run." Use `engine.startOrSignal()` for that signal-with-start path.
+
+```typescript partial
+const handle = await engine.startOrSignal(
+  'approval',
+  { orderId: 'order-1' },
+  { name: approvalSignal.name, payload: { approved: true } },
+  { idempotencyKey: 'approval-webhook-order-1' },
+);
+```
+
+An absent target is created and receives the first signal in the same durable batch. A running, pending, or suspended target receives the signal through the normal signal path. A terminal target returns a conflict; it is not replaced. Concurrent callers converge on one workflow and one signal only when they share `idempotencyKey`, or when they share both `id` and `signalId`. A bare `signalId` starts a fresh generated workflow id per absent-target caller, so it is useful for single-call signal identity but not for multi-caller convergence.
+
 ## Signal durability
 
 Signals are persisted to [storage](storage.md) when they are sent. This means:

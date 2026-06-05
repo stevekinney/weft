@@ -30,6 +30,7 @@ import type {
   SignalDefinition,
   SignalDeliveryOptions,
   StartOptions,
+  StartOrSignalSignal,
   SubmitReviewOptions,
   TypedListFilter,
   UpdateDefinition,
@@ -73,6 +74,7 @@ import {
   signalWorkflowRequest,
   submitCoordinatedUpdateRequest,
   submitReviewRequest,
+  suspendWorkflowRequest,
   tagAllWorkflowRequests,
   timeoutWorkflowRequest,
   untagAllWorkflowRequests,
@@ -92,7 +94,7 @@ import type {
 import { openClientEventSubscription } from './open-event-subscription.ts';
 import { buildScheduleListSearchParams } from './schedule-list-search-params.ts';
 import { buildWorkflowListSearchParams } from './search-params.ts';
-import { buildStartBody, scheduleSpecToWireFields } from './start-body.ts';
+import { buildStartBody, buildStartOrSignalBody, scheduleSpecToWireFields } from './start-body.ts';
 import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow-name-typing.ts';
 
 /**
@@ -169,6 +171,7 @@ export class HttpClient implements WeftClient {
   // call-site inference (bodies differ: HTTP request + `HttpHandle` here vs a
   // `LocalHandle` over `#engine`); rejected: a shared base class, which drops
   // the per-class overload declarations from the emitted declarations.
+  // jscpd:ignore-start
   call<Name extends CatalogOperationName>(
     name: Name,
     input: CatalogOperationTypes[Name]['input'],
@@ -195,6 +198,36 @@ export class HttpClient implements WeftClient {
 
     return new HttpHandle(response.id, this);
   }
+
+  async startOrSignal<TName extends KnownWorkflowName>(
+    type: TName,
+    input: WorkflowInput<WorkflowRegistry, TName>,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
+  async startOrSignal<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
+    input: unknown,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<ClientHandle>;
+  async startOrSignal(
+    type: string,
+    input: unknown,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<ClientHandle> {
+    const body = buildStartOrSignalBody(type, input, signal, options);
+    const response = await request<{ id: string }>(
+      this.baseUrl,
+      '/workflows/start-or-signal',
+      this.headers,
+      { method: 'POST', body: JSON.stringify(body) },
+    );
+
+    return new HttpHandle(response.id, this);
+  }
+  // jscpd:ignore-end
 
   async schedule<TName extends KnownWorkflowName>(
     type: TName,
@@ -259,6 +292,10 @@ export class HttpClient implements WeftClient {
 
   async cancel(id: string): Promise<void> {
     return cancelWorkflowRequest(this, id);
+  }
+
+  async suspend(id: string): Promise<void> {
+    return suspendWorkflowRequest(this, id);
   }
 
   async pauseSchedule(id: string): Promise<void> {

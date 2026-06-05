@@ -202,6 +202,47 @@ function createExplicitSignalOperations(
   }));
 }
 
+/**
+ * Build the durable operations for a single keyed signal so it can be folded
+ * into a workflow's create batch by {@link startOrSignal}. Writes the same pair
+ * the live signal path writes — the `sig:` payload (consumed on first drive by
+ * `processWaitSignalOperation`) and the `sigres:` accepted-response marker — so a
+ * concurrent caller that falls back to the standard signal path dedups against
+ * the SAME `signalId`. The accepted-response marker is consumption-independent:
+ * even after the winning run consumes the `sig:` payload, a late loser finds the
+ * `sigres:` key and short-circuits instead of re-delivering, which is what
+ * guarantees "one signal per signalId" across the create and signal paths.
+ *
+ * Returns both the put operations and the CAS condition (the `sig:` key must be
+ * absent) so the caller can gate the create batch on it.
+ */
+export function buildCreateBatchSignalOperations(
+  internals: EngineInternals,
+  workflowId: string,
+  signalName: string,
+  payload: unknown,
+  signalId: string,
+): { operations: BatchOperation[]; condition: { key: string; expectedValue: null } } {
+  validateSignalId(signalId);
+  const signalKey = KEYS.signal(workflowId, signalName, signalId);
+  const acceptedResponseKey = KEYS.signalAcceptedResponse(workflowId, signalName, signalId);
+  return {
+    operations: [
+      {
+        type: 'put',
+        key: signalKey,
+        value: encodePayloadWithinLimit(
+          payload,
+          internals.options.payloadSizePolicy.maxBytes,
+          'signal payload',
+        ),
+      },
+      { type: 'put', key: acceptedResponseKey, value: encode(SIGNAL_ACCEPTED_RESPONSE) },
+    ],
+    condition: { key: signalKey, expectedValue: null },
+  };
+}
+
 function appendTerminalCleanupOperation(
   internals: EngineInternals,
   workflowId: string,

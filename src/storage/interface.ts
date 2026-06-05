@@ -463,6 +463,28 @@ export const KEYS = {
   updateResponse: (updateId: string) => `upr:${updateId}`,
   updateIdempotency: (workflowId: string, key: string) =>
     `upk:${encodeStorageKeyComponent(workflowId)}:${key}`,
+  /**
+   * Maps a start `idempotencyKey` to the workflow id created for it. Written
+   * atomically with the workflow record under a `conditionalBatch` gated on this
+   * key being absent, so concurrent same-key starts converge on one workflow.
+   * Unlike `updateIdempotency`, it is keyed by the idempotency key alone (no
+   * workflow id) because the workflow id is the value it resolves to. It is
+   * intentionally NOT swept on terminal cleanup: it must outlive the run so a
+   * post-completion `startOrSignal` sees a terminal workflow (and conflicts)
+   * rather than missing the mapping and creating a fresh run.
+   */
+  startIdempotency: (key: string) => `start-idem:${encodeStorageKeyComponent(key)}`,
+  /**
+   * The convergence signal id that `startOrSignal` derives from an idempotency
+   * key so independent same-key callers deliver ONE signal. Deliberately uses the
+   * RAW key (not `encodeStorageKeyComponent`): unlike `startIdempotency` this is a
+   * signal id, not a storage key, and `validateSignalId` is character-agnostic, so
+   * the raw key is always a valid id as long as it fits the byte cap (enforced as
+   * ≤117 bytes so `"start-idem:"` + key stays within the 128-byte signal-id
+   * ceiling). The two derivations are independent namespaces; both are individually
+   * correct, so the raw-vs-encoded difference is harmless.
+   */
+  startIdempotencySignalId: (key: string) => `start-idem:${key}`,
   budget: (namespace: string, period: string, date: string) =>
     `budget:${namespace}:${period}:${date}`,
   review: (workflowId: string, reviewId: string) =>

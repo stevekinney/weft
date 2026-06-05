@@ -180,7 +180,7 @@ function composeWorkflowInterceptors(
 ): ComposedWorkflowInterceptor;
 ```
 
-Compose an array of workflow interceptors into a single `ComposedWorkflowInterceptor`. The resulting object has fully-resolved `activity`, `sleep`, `waitForSignal`, and `workflowStart` hooks that chain through all registered interceptors in order.
+Compose an array of workflow interceptors into a single `ComposedWorkflowInterceptor`. The resulting object has fully-resolved `activity`, `sleep`, `waitForSignal`, `workflowStart`, `childWorkflow`, `query`, and `signalReceived` hooks that chain through all registered interceptors in order.
 
 The first interceptor in the array is the outermost wrapper; the last is closest to the final execute function.
 
@@ -192,29 +192,7 @@ const composed = composeWorkflowInterceptors([loggingInterceptor, tracingInterce
 
 #### `ComposedWorkflowInterceptor`
 
-```ts
-interface ComposedWorkflowInterceptor {
-  activity(
-    interception: ActivityInterception,
-    execute: (interception: ActivityInterception) => Generator<unknown, unknown, unknown>,
-  ): Generator<unknown, unknown, unknown>;
-
-  sleep(
-    interception: SleepInterception,
-    execute: (interception: SleepInterception) => Generator<unknown, void, unknown>,
-  ): Generator<unknown, void, unknown>;
-
-  waitForSignal(
-    interception: SignalInterception,
-    execute: (interception: SignalInterception) => Generator<unknown, unknown, unknown>,
-  ): Generator<unknown, unknown, unknown>;
-
-  workflowStart(
-    interception: WorkflowStartInterception,
-    execute: (interception: WorkflowStartInterception) => void,
-  ): void;
-}
-```
+`composeWorkflowInterceptors` returns a `ComposedWorkflowInterceptor`: a single object exposing the same workflow hooks as [`WorkflowInterceptor`](types.md#workflowinterceptor) (`activity`, `sleep`, `waitForSignal`, `workflowStart`, `childWorkflow`, `query`, `signalReceived`), each made non-optional and bound to run the supplied interceptor chain around the wrapped `execute`. Its exact per-hook signatures are the exported `ComposedWorkflowInterceptor` type — refer to that declaration rather than a copy here, so the contract has a single source of truth.
 
 ### `composeActivityInterceptors()`
 

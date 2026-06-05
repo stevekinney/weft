@@ -124,10 +124,10 @@ describe('weft.workflows.start', () => {
     expect(await response.json()).toEqual({ error: 'Provide only one of startAt or startAfter' });
   });
 
-  it('returns 400 when idempotencyKey is sent over raw REST', async () => {
+  it('enforces idempotencyKey over raw REST: a duplicate key returns the same id', async () => {
     engine = createEngine();
 
-    const response = await handleRequest(
+    const first = await handleRequest(
       jsonRequest('POST', '/v1/workflows', {
         type: 'echo',
         idempotencyKey: 'dedupe-key',
@@ -135,12 +135,56 @@ describe('weft.workflows.start', () => {
       engine,
       { operationRegistry: registry, restBindings: bindings },
     );
+    expect(first.status).toBe(201);
+    const firstBody = (await first.json()) as { id: string };
+
+    const second = await handleRequest(
+      jsonRequest('POST', '/v1/workflows', {
+        type: 'echo',
+        idempotencyKey: 'dedupe-key',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    expect(second.status).toBe(201);
+    const secondBody = (await second.json()) as { id: string };
+
+    // Same dedup key -> same run, no second workflow started.
+    expect(secondBody.id).toBe(firstBody.id);
+  });
+
+  it('returns 400 when both id and idempotencyKey are provided (mutually exclusive)', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      jsonRequest('POST', '/v1/workflows', {
+        type: 'echo',
+        id: 'explicit-id',
+        idempotencyKey: 'dedupe-key',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({
-      error:
-        'idempotencyKey is not supported over HttpClient because the start workflow HTTP protocol does not implement start idempotency',
-    });
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toMatch(/mutually exclusive/);
+  });
+
+  it('returns 400 when idempotencyKey is an empty string over raw REST', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      jsonRequest('POST', '/v1/workflows', {
+        type: 'echo',
+        idempotencyKey: '',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Field "idempotencyKey" must not be empty' });
   });
 
   it('coerces date-time search attributes before starting from raw REST', async () => {
@@ -244,6 +288,36 @@ describe('weft.workflows.start', () => {
     expect((await secondResponse.json()) as { error: string }).toEqual(
       expect.objectContaining({
         error: expect.stringContaining('already exists'),
+      }),
+    );
+  });
+
+  it('returns 409 when an idempotency key maps to a purged run (not a masked 500)', async () => {
+    engine = createEngine();
+
+    // First start creates the run and the durable `start-idem:` mapping.
+    const first = await handleRequest(
+      jsonRequest('POST', '/v1/workflows', { type: 'echo', idempotencyKey: 'purged-key' }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    expect(first.status).toBe(201);
+    const { id } = (await first.json()) as { id: string };
+    await engine.getHandle(id).result();
+    // Purge the run while the mapping intentionally lives on; the key is now spent.
+    await engine.purge({ idPrefix: id });
+
+    const second = await handleRequest(
+      jsonRequest('POST', '/v1/workflows', { type: 'echo', idempotencyKey: 'purged-key' }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    // Client-actionable conflict (pick a different key), not an opaque 500.
+    expect(second.status).toBe(409);
+    expect((await second.json()) as { error: string }).toEqual(
+      expect.objectContaining({
+        error: expect.stringContaining('no longer exists'),
       }),
     );
   });

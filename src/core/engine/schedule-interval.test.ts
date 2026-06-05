@@ -169,6 +169,56 @@ describe('interval schedules', () => {
     await releaseRunningWorkflows(engine);
   });
 
+  it('a suspended scheduled run still occupies the slot under the skip overlap policy', async () => {
+    // Regression: a suspended run is non-terminal and resumable, so it must keep
+    // the schedule slot occupied. If the slot predicate counted only
+    // running/pending, the next occurrence would start an overlapping second run
+    // under 'skip' while the paused run still exists.
+    const clock = { now: START };
+    engine = createEngine(clock);
+
+    registerWorkflow(engine, 'interval-overlap-suspend', async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('release');
+      return 'released';
+    });
+
+    const handle = await engine.schedule(
+      'interval-overlap-suspend',
+      null,
+      { every: '1m' },
+      { id: 'interval-suspend-skip', overlap: 'skip' },
+    );
+
+    await tickToNextFire(engine, clock, handle);
+    const running = await listRunningWorkflowIds(engine);
+    expect(running).toHaveLength(1);
+    const scheduledRunId = running[0]!;
+
+    // The schedule tracks this run as its current slot occupant.
+    const beforeSuspend = await handle.describe();
+    expect(beforeSuspend?.currentWorkflowId).toBe(scheduledRunId);
+
+    // Suspend the scheduled run: status becomes the non-terminal 'suspended'.
+    await engine.suspend(scheduledRunId);
+    await drainEngine();
+    const suspendedState = await engine.get(scheduledRunId);
+    expect(suspendedState?.status).toBe('suspended');
+
+    // Next boundary fires while the run is suspended → skip must NOT start a
+    // second run, and the schedule must still point at the suspended run.
+    await tickToNextFire(engine, clock, handle);
+    expect(await listRunningWorkflowIds(engine)).toHaveLength(0);
+    const suspendedList = await engine.list({ status: 'suspended' });
+    expect(suspendedList.items).toHaveLength(1);
+    const afterTick = await handle.describe();
+    expect(afterTick?.currentWorkflowId).toBe(scheduledRunId);
+
+    // Resume + release so the run completes and the slot frees cleanly.
+    await engine.resume(scheduledRunId);
+    await drainEngine();
+    await releaseRunningWorkflows(engine);
+  });
+
   it('honors the allow overlap policy without a separate code path', async () => {
     const clock = { now: START };
     engine = createEngine(clock);

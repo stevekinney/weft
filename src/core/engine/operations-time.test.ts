@@ -351,6 +351,56 @@ describe('engine time operation helpers', () => {
     expect(beginWorkflowExecution).toHaveBeenCalledTimes(1);
   });
 
+  // Both delayed-start terminal-cleanup tests share the same recovery harness:
+  // seed a workflow + checkpoint, run startDelayedWorkflow against a fresh-process
+  // internals object (empty in-memory cleanup set), and observe whether the run
+  // re-joins the set. They differ only in whether the durable terminalCleanupNeeded
+  // marker is present, so the marker decision and the final assertion stay at the
+  // call site while this helper owns the duplicated setup + invocation.
+  async function runDelayedStartTerminalCleanup(options: {
+    workflowId: string;
+    writeDurableMarker: boolean;
+  }): Promise<{
+    workflowsNeedingTerminalCleanup: Set<string>;
+    beginWorkflowExecution: ReturnType<typeof mock>;
+  }> {
+    const storage = new MemoryStorage();
+    const state = createWorkflowState(options.workflowId, {
+      executionStateOwnerId: options.workflowId,
+    });
+    const checkpoint = createCheckpoint(options.workflowId);
+    const registration = { handler: async function* () {}, version: '1' };
+    const beginWorkflowExecution = mock(() => {});
+    const workflowsNeedingTerminalCleanup = new Set<string>();
+
+    await storage.put(KEYS.workflow(options.workflowId), encode(state));
+    await storage.put(KEYS.checkpoint(options.workflowId), serializeCheckpoint(checkpoint));
+    if (options.writeDurableMarker) {
+      await storage.put(KEYS.terminalCleanupNeeded(options.workflowId), new Uint8Array(0));
+    }
+
+    await startDelayedWorkflow(
+      {
+        checkpoints: new Map<string, Checkpoint>(),
+        inlineStrategy: {},
+        workflowServices: new Map<string, unknown>(),
+        workflowsNeedingTerminalCleanup,
+        options: { getNow: () => 2_000 },
+        registrations: new Map([[state.type, registration]]),
+        storage,
+        workflowVersionTuples: new Map(),
+      } as never,
+      createDelayedStartEntry(options.workflowId, { executionTimeoutMs: 500 }),
+      createCallbacks({
+        beginWorkflowExecution,
+        loadWorkflowState: async () => state,
+        runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
+      }),
+    );
+
+    return { workflowsNeedingTerminalCleanup, beginWorkflowExecution };
+  }
+
   it('re-derives terminal-cleanup tracking from the durable marker on fresh-process recovery', async () => {
     // Regression: on a fresh process the in-memory workflowsNeedingTerminalCleanup
     // set is empty. A recovered delayed-start run whose durable terminalCleanupNeeded
@@ -358,42 +408,15 @@ describe('engine time operation helpers', () => {
     // must re-join the set, or completeWorkflow skips the deferred durable sweep and
     // leaks the run's per-run scratch (the wf-has-services marker). Mirrors the
     // running-workflow resume path's loadTerminalCleanupTrackedState.
-    const storage = new MemoryStorage();
-    const workflowId = 'workflow-delayed-rederive';
-    const state = createWorkflowState(workflowId, { executionStateOwnerId: workflowId });
-    const checkpoint = createCheckpoint(workflowId);
-    const registration = { handler: async function* () {}, version: '1' };
-    const beginWorkflowExecution = mock(() => {});
-    const workflowsNeedingTerminalCleanup = new Set<string>();
-
-    await storage.put(KEYS.workflow(workflowId), encode(state));
-    await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
-    // The durable marker is present (written at start for a services-bearing run),
-    // but the fresh-process in-memory set starts empty.
-    await storage.put(KEYS.terminalCleanupNeeded(workflowId), new Uint8Array(0));
-
-    await startDelayedWorkflow(
-      {
-        checkpoints: new Map<string, Checkpoint>(),
-        inlineStrategy: {},
-        workflowServices: new Map<string, unknown>(),
-        workflowsNeedingTerminalCleanup,
-        options: { getNow: () => 2_000 },
-        registrations: new Map([[state.type, registration]]),
-        storage,
-        workflowVersionTuples: new Map(),
-      } as never,
-      createDelayedStartEntry(workflowId, { executionTimeoutMs: 500 }),
-      createCallbacks({
-        beginWorkflowExecution,
-        loadWorkflowState: async () => state,
-        runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
-      }),
-    );
+    const { workflowsNeedingTerminalCleanup, beginWorkflowExecution } =
+      await runDelayedStartTerminalCleanup({
+        workflowId: 'workflow-delayed-rederive',
+        writeDurableMarker: true,
+      });
 
     // The run rejoined the cleanup set, so its later completion will schedule the
     // deferred durable sweep. Without the fix the set stays empty.
-    expect(workflowsNeedingTerminalCleanup.has(workflowId)).toBe(true);
+    expect(workflowsNeedingTerminalCleanup.has('workflow-delayed-rederive')).toBe(true);
     expect(beginWorkflowExecution).toHaveBeenCalledTimes(1);
   });
 
@@ -401,37 +424,13 @@ describe('engine time operation helpers', () => {
     // The complement: a delayed-start run with no durable terminalCleanupNeeded key
     // (no headers, no services) must NOT join the cleanup set — scheduling a sweep
     // for a run with nothing to sweep would be wasted work.
-    const storage = new MemoryStorage();
-    const workflowId = 'workflow-delayed-no-marker';
-    const state = createWorkflowState(workflowId, { executionStateOwnerId: workflowId });
-    const checkpoint = createCheckpoint(workflowId);
-    const registration = { handler: async function* () {}, version: '1' };
-    const beginWorkflowExecution = mock(() => {});
-    const workflowsNeedingTerminalCleanup = new Set<string>();
+    const { workflowsNeedingTerminalCleanup, beginWorkflowExecution } =
+      await runDelayedStartTerminalCleanup({
+        workflowId: 'workflow-delayed-no-marker',
+        writeDurableMarker: false,
+      });
 
-    await storage.put(KEYS.workflow(workflowId), encode(state));
-    await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
-
-    await startDelayedWorkflow(
-      {
-        checkpoints: new Map<string, Checkpoint>(),
-        inlineStrategy: {},
-        workflowServices: new Map<string, unknown>(),
-        workflowsNeedingTerminalCleanup,
-        options: { getNow: () => 2_000 },
-        registrations: new Map([[state.type, registration]]),
-        storage,
-        workflowVersionTuples: new Map(),
-      } as never,
-      createDelayedStartEntry(workflowId, { executionTimeoutMs: 500 }),
-      createCallbacks({
-        beginWorkflowExecution,
-        loadWorkflowState: async () => state,
-        runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
-      }),
-    );
-
-    expect(workflowsNeedingTerminalCleanup.has(workflowId)).toBe(false);
+    expect(workflowsNeedingTerminalCleanup.has('workflow-delayed-no-marker')).toBe(false);
     expect(beginWorkflowExecution).toHaveBeenCalledTimes(1);
   });
 });

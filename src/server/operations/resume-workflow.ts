@@ -23,11 +23,13 @@ export const resumeWorkflowOperation = createSingleWorkflowControlOperation<
   ResumeWorkflowOutput
 >({
   name: 'weft.workflows.resume',
-  summary: 'Resume a suspended workflow',
+  summary: 'Resume a suspended or recovered workflow',
   description:
-    'Resume a workflow that is suspended (for example, paused awaiting a human review or an ' +
-    'operator hold) by `workflowId`, returning the workflow `id`. Faults with NotFound when ' +
-    'the workflow is not visible.',
+    'Re-drive a workflow from its persisted checkpoint by `workflowId`, returning the workflow ' +
+    '`id`. Accepts a workflow that was explicitly suspended (`weft.workflows.suspend`) or one ' +
+    'left running by a prior process; a suspended workflow is durably flipped back to running as ' +
+    'part of resuming. Faults with NotFound when the workflow is not visible, or Conflict when it ' +
+    'is in a status that cannot be resumed (terminal or pending).',
   destructive: false,
   tags: ['Workflows'],
   inputSchema: resumeWorkflowInput,

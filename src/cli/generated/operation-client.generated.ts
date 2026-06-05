@@ -54,7 +54,9 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.workflows.resume',
   'weft.workflows.signal',
   'weft.workflows.start',
+  'weft.workflows.startorsignal',
   'weft.workflows.streams.chunks',
+  'weft.workflows.suspend',
   'weft.workflows.tags.add',
   'weft.workflows.tags.remove',
   'weft.workflows.timeline.get',
@@ -524,10 +526,33 @@ export type CatalogOperationTypes = {
     readonly output: { readonly id: string };
     readonly faults: 'Conflict';
   };
+  'weft.workflows.startorsignal': {
+    readonly input: {
+      readonly executionTimeout?: unknown;
+      readonly id?: unknown;
+      readonly idempotencyKey?: unknown;
+      readonly input?: unknown;
+      readonly searchAttributes?: unknown;
+      readonly signalId?: string;
+      readonly signalName: string;
+      readonly signalPayload?: unknown;
+      readonly startAfter?: unknown;
+      readonly startAt?: unknown;
+      readonly tags?: unknown;
+      readonly type: unknown;
+    };
+    readonly output: { readonly id: string };
+    readonly faults: 'Conflict';
+  };
   'weft.workflows.streams.chunks': {
     readonly input: { readonly after?: unknown; readonly key: string; readonly workflowId: string };
     readonly output: { readonly chunks: ReadonlyArray<unknown> };
     readonly faults: never;
+  };
+  'weft.workflows.suspend': {
+    readonly input: { readonly workflowId: string };
+    readonly output: unknown;
+    readonly faults: 'Unprocessable';
   };
   'weft.workflows.tags.add': {
     readonly input: { readonly tags?: unknown; readonly workflowId: string };

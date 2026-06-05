@@ -60,6 +60,11 @@ export function disposeEngine(internals: EngineInternals): void {
   internals.checkpoints.clear();
   internals.pendingExecutionStateOwnerId = undefined;
   internals.workflowNestingDepths.clear();
+  // Release per-run `services` held in engine memory. Only terminal cleanup and
+  // start-rollback delete these entries, so a run that never reaches a terminal
+  // state would otherwise strand its credential-bearing closures live past
+  // dispose. Clearing here closes that leak on engine teardown.
+  internals.workflowServices.clear();
   internals.workflowHeaders.clear();
   internals.pendingStarts.clear();
   internals.pendingScheduleCreations.clear();

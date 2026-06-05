@@ -230,6 +230,49 @@ describe('ctx.services — recovery re-provision', () => {
     await secondEngine[Symbol.asyncDispose]();
   });
 
+  it('fails a SUSPENDED run on cross-process resume when its services are unavailable (not stuck suspended)', async () => {
+    // Regression: cross-process resume of a suspended run runs the unavailable-
+    // services fail path BEFORE the suspended→running flip, while status is still
+    // 'suspended'. failWorkflow must accept 'suspended' (FORCIBLY_TERMINABLE_STATUSES)
+    // or the fail no-ops, resume aborts, and the run is stranded 'suspended' with
+    // result() pending forever.
+    const storage = new MemoryStorage();
+    const wf = workflow({ name: 'suspend-unresolvable' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.waitForSignal('go');
+      return (ctx.services as { v: number }).v;
+    });
+    const firstEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'suspend-unresolvable': wf },
+    });
+    const handle = await firstEngine.start('suspend-unresolvable', null, {
+      id: 'suspend-unresolvable-run',
+      services: { v: 1 },
+    });
+    await flush();
+    await handle.suspend();
+    const suspendedState = await firstEngine.get('suspend-unresolvable-run');
+    expect(suspendedState?.status).toBe('suspended');
+    await firstEngine[Symbol.asyncDispose]();
+
+    const secondEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'suspend-unresolvable': wf },
+      resolveWorkflowServices: () => ({ status: 'unavailable', reason: 'no config for run' }),
+    });
+    // Explicit resume of the suspended run: the unavailable resolver must fail the
+    // run terminally rather than leave it stranded 'suspended'.
+    await secondEngine.resume('suspend-unresolvable-run');
+    await flush();
+    const resumedState = await secondEngine.get('suspend-unresolvable-run');
+    expect(resumedState?.status).toBe('failed');
+    await secondEngine[Symbol.asyncDispose]();
+  });
+
   it('resumes a no-services run on a fresh engine without consulting the resolver', async () => {
     // A run that was started WITHOUT services must recover normally even when the
     // engine has a fail-closed resolver. The resolver exists to rebuild services

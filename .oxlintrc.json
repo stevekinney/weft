@@ -80,7 +80,7 @@
       }
     },
     {
-      "files": ["src/storage/interface.ts"],
+      "files": ["src/storage/interface.ts", "src/client/interface.ts", "src/client/http-client.ts"],
       "rules": {
         "max-lines": ["error", { "max": 600, "skipBlankLines": false, "skipComments": false }]
       }

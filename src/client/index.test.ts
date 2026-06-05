@@ -591,10 +591,48 @@ describe('HttpClient', () => {
       await handle.cancel();
     });
 
-    it('rejects StartOptions.idempotencyKey instead of silently dropping it', async () => {
-      await expect(
-        client.start('echo', 'dedupe', { idempotencyKey: 'dedupe-key' }),
-      ).rejects.toThrow('idempotencyKey is not supported over HttpClient');
+    it('enforces StartOptions.idempotencyKey: a duplicate key returns the same workflow', async () => {
+      const first = await client.start('echo', 'dedupe', { idempotencyKey: 'http-dedupe-key' });
+      const second = await client.start('echo', 'dedupe', { idempotencyKey: 'http-dedupe-key' });
+      expect(second.id).toBe(first.id);
+    });
+  });
+
+  describe('startOrSignal', () => {
+    // End-to-end contract coverage for HttpClient.startOrSignal: it wires the
+    // `/workflows/start-or-signal` request path and flattens
+    // signalName/signalPayload/signalId onto the body, so exercise both the
+    // absent-target (create + deliver the initial signal) and existing-target
+    // (signal the running run) paths against the real serve() stack.
+    it('creates an absent target and delivers the initial signal', async () => {
+      // `client-contract-waiting` waits for the `continue` signal and returns
+      // `${input}:${signal}`, so a resolved result proves the create-batch signal
+      // was delivered over HTTP.
+      const handle = await client.startOrSignal(
+        'client-contract-waiting',
+        'http-sos',
+        { name: 'continue', payload: 'created', signalId: 'http-sos-create' },
+        { id: 'http-startorsignal-create' },
+      );
+      expect(handle.id).toBe('http-startorsignal-create');
+      expect(await handle.result()).toBe('http-sos:created');
+    });
+
+    it('signals an existing non-terminal target instead of starting a second run', async () => {
+      // Start a run that parks on `continue`, then startOrSignal the same id: the
+      // existing-target path delivers the signal to the running run (a fresh
+      // signalId, since the run already exists) rather than creating a duplicate.
+      const started = await client.start('client-contract-waiting', 'http-sos-existing', {
+        id: 'http-startorsignal-existing',
+      });
+      const signalled = await client.startOrSignal(
+        'client-contract-waiting',
+        'ignored-on-existing-target',
+        { name: 'continue', payload: 'signalled', signalId: 'http-sos-existing-signal' },
+        { id: 'http-startorsignal-existing' },
+      );
+      expect(signalled.id).toBe(started.id);
+      expect(await started.result()).toBe('http-sos-existing:signalled');
     });
   });
 
@@ -668,6 +706,49 @@ describe('HttpClient', () => {
       await handle.result();
       // Cancelling a completed workflow — should not error
       await client.cancel('http-cancel-test');
+    });
+  });
+
+  describe('suspend', () => {
+    it('suspends a RUNNING workflow via POST /v1/workflows/:id/suspend', async () => {
+      // Drives POST /v1/workflows/:id/suspend end-to-end on a workflow that is
+      // genuinely running (parked on waitForSignal), so the test fails if the
+      // binding fired the wrong verb/path or hit a no-op. Asserts the actual
+      // 'running' → 'suspended' transition round-trips: client →
+      // suspendWorkflowRequest → server REST binding → engine.suspend.
+      const statusOfWorkflow = async (id: string): Promise<string | undefined> => {
+        const state = await client.get(id);
+        return state?.status;
+      };
+      const handle = await client.start('client-contract-waiting', 'data', {
+        id: 'http-suspend-live',
+      });
+      // Let the run reach 'running' (parked on waitForSignal('continue')).
+      for (let attempt = 0; attempt < 20; attempt++) {
+        if ((await statusOfWorkflow('http-suspend-live')) === 'running') break;
+        await sleepForTesting(5);
+      }
+      expect(await statusOfWorkflow('http-suspend-live')).toBe('running');
+
+      await client.suspend('http-suspend-live');
+      expect(await statusOfWorkflow('http-suspend-live')).toBe('suspended');
+
+      // Clean up: resume, signal, and AWAIT completion so the run does not
+      // linger past the test (avoids cross-test interference / flakiness).
+      await client.resume('http-suspend-live');
+      await client.signal('http-suspend-live', 'continue', 'go');
+      await handle.result();
+      expect(await statusOfWorkflow('http-suspend-live')).toBe('completed');
+    });
+
+    it('suspending a completed workflow over HTTP is a no-op', async () => {
+      // The CAS is gated to 'running', so suspending a terminal workflow is a
+      // documented no-op that must round-trip without error or status change.
+      const handle = await client.start('echo', 'data', { id: 'http-suspend-noop' });
+      await handle.result();
+      await client.suspend('http-suspend-noop');
+      const finalState = await client.get('http-suspend-noop');
+      expect(finalState?.status).toBe('completed');
     });
   });
 
@@ -861,6 +942,7 @@ describe('HttpClient', () => {
       // Both should have the same set of methods
       const clientMethods = [
         'start',
+        'startOrSignal',
         'schedule',
         'get',
         'getSchedule',

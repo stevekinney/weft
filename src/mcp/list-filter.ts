@@ -7,6 +7,7 @@ const WORKFLOW_STATUS_VALUES: readonly WorkflowStatus[] = [
   'failed',
   'cancelled',
   'timed-out',
+  'suspended',
 ];
 
 export type McpListFilterParseResult =

@@ -9,6 +9,10 @@ import type { PayloadSizePolicy } from './payload-size-policy.ts';
 import type { Duration, RetentionPolicy } from './retry-retention.ts';
 import type { SearchAttributeHandle, SearchAttributeValue } from './search-attributes.ts';
 import type { Serializer } from './serializer.ts';
+import type {
+  WorkflowServicesResolution,
+  WorkflowServicesResolverInfo,
+} from './services-resolution.ts';
 
 // ---------------------------------------------------------------------------
 // Start options for engine.start()
@@ -18,15 +22,23 @@ import type { Serializer } from './serializer.ts';
  * Options accepted by `engine.start(type, input, options?)`.
  *
  * Every field is optional. `id` lets you specify your own workflow ID;
- * `idempotencyKey` enforces single-execution semantics within a window;
- * `executionTimeout` caps wall-clock time; `startAt`/`startAfter` defer
+ * `idempotencyKey` enforces at-most-once starts (a repeated key returns the
+ * existing run instead of starting a second, even after it reaches a terminal
+ * state); `executionTimeout` caps wall-clock time; `startAt`/`startAfter` defer
  * execution; `tags` and `searchAttributes` make the workflow discoverable
- * via filters.
+ * via filters. `id` and `idempotencyKey` are mutually exclusive — idempotency
+ * assigns its own generated id and dedups through the key.
  *
- * `HttpClient.start` forwards `searchAttributes` to the server. It rejects
- * `idempotencyKey` until the HTTP start protocol exposes matching
- * single-execution semantics, so callers do not accidentally rely on a
- * silently dropped option.
+ * The `idempotencyKey` mapping is durable and permanent: it survives the run
+ * reaching a terminal state, so repeat calls keep returning the same handle. When
+ * the workflow record is purged or swept by retention the mapping itself survives
+ * (purge does not touch the `start-idem:` keyspace) but now points at a gone run;
+ * a call with that spent key throws {@link IdempotencyKeyPurgedError} (mapped to
+ * HTTP 409 over REST/JSON-RPC) rather than silently starting a new run.
+ *
+ * Both `LocalClient.start` and `HttpClient.start` forward `idempotencyKey` and
+ * `searchAttributes` to the server, so single-execution semantics hold across
+ * transports. Idempotent start requires a storage backend with `conditionalBatch`.
  *
  * @example Start a delayed workflow with tags and search attributes
  * ```ts
@@ -69,51 +81,19 @@ export interface StartOptions {
    * non-serializable value cannot cross to a Worker.
    */
   services?: unknown;
-}
-
-/**
- * Result of {@link EngineOptions.resolveWorkflowServices}. An explicit union
- * rather than a nullable return: `'unavailable'` is a deliberate, named outcome
- * (the run's dependencies cannot be rebuilt in this process) that fails just
- * that recovered run — it does not overload the resolved value with a lifecycle
- * signal.
- *
- * @example
- * ```ts
- * import { type WorkflowServicesResolution } from '@lostgradient/weft';
- *
- * const ok: WorkflowServicesResolution = {
- *   status: 'available',
- *   services: { db: { query: () => [] } },
- * };
- * const no: WorkflowServicesResolution = { status: 'unavailable', reason: 'no config' };
- * void ok;
- * void no;
- * ```
- */
-export type WorkflowServicesResolution =
-  | { status: 'available'; services: unknown }
-  | { status: 'unavailable'; reason: string };
-
-/**
- * Information passed to {@link EngineOptions.resolveWorkflowServices} for each
- * recovered workflow. `input` is the original durable launch input, available
- * at resume time — typically enough to rebuild the run's dependencies (tenant,
- * model, tool registry) without a side table.
- *
- * @example
- * ```ts
- * import { type WorkflowServicesResolverInfo } from '@lostgradient/weft';
- *
- * function describe(info: WorkflowServicesResolverInfo): string {
- *   return `${info.workflowType}/${info.workflowId}`;
- * }
- * ```
- */
-export interface WorkflowServicesResolverInfo {
-  workflowId: string;
-  workflowType: string;
-  input: unknown;
+  /**
+   * When `false`, `engine.start()` resolves only after the workflow has begun
+   * executing (its generator has been driven its first turn), not merely after
+   * the initial state is persisted. The default (`true`) returns a handle as
+   * soon as state is written and queues execution onto a macrotask, so a caller
+   * cannot assume the run is live without a round-trip. Use `defer: false` when a
+   * caller — or a test — must rely on the run being live immediately after
+   * `await engine.start(...)`. If the body throws on its first turn, `start()`
+   * still resolves; observe the failure via `handle.result()`. Inline mode only;
+   * throws at `engine.start()` under `workflowExecutionMode: 'worker'` or with a
+   * delayed start (`startAt`/`startAfter`), neither of which has liveness to await.
+   */
+  defer?: boolean;
 }
 
 /**

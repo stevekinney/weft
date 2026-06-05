@@ -406,6 +406,19 @@ export function timeoutWorkflowRequest(
   );
 }
 
+/** Suspend a running workflow (`POST /v1/workflows/:id/suspend`). */
+export function suspendWorkflowRequest(
+  context: HttpClientRequestContext,
+  id: string,
+): Promise<void> {
+  return request<void>(
+    context.baseUrl,
+    `/workflows/${encodeURIComponent(id)}/suspend`,
+    context.headers,
+    { method: 'POST' },
+  );
+}
+
 /** Pause a recurring schedule (`POST /v1/schedules/:id/pause`). */
 export function pauseScheduleRequest(context: HttpClientRequestContext, id: string): Promise<void> {
   return request<void>(

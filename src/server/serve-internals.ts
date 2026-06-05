@@ -48,7 +48,14 @@ const RECONCILIATION_MULTIPLIER = 12;
 const DEFAULT_WORKER_RECONNECT_GRACE_PERIOD_MS = 100;
 const MAX_WORKER_RECONNECT_GRACE_PERIOD_MS = 5_000;
 const AUTHENTICATION_REQUIRED_ENVIRONMENT_VARIABLE = 'WEFT_SERVER_AUTHENTICATION_REQUIRED';
-const NO_AUTHENTICATION_WARNING =
+/**
+ * @internal
+ *
+ * Warning emitted when a server starts with no authentication and no explicit
+ * `unauthenticatedAccess` policy. Exported only for internal tests (see
+ * `tests/auth-warning-filter.test.ts`) and not part of the public API surface.
+ */
+export const NO_AUTHENTICATION_WARNING =
   '[weft] WARNING: server started with NO authentication; all non-public operations are publicly accessible. Configure serve({ auth }) to lock down, or set unauthenticatedAccess: "reject" in production to fail closed.';
 const NO_AUTHENTICATION_REJECT_ERROR =
   '[weft] Refusing to start server with no authentication. Configure serve({ auth }) or set unauthenticatedAccess: "allow" only for trusted local development.';

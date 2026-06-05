@@ -82,7 +82,7 @@ describe('formatDiagnosticReport', () => {
         freelistCount: 50,
       },
       workflows: {
-        total: 150,
+        total: 154,
         statusCounts: {
           pending: 10,
           running: 50,
@@ -90,6 +90,7 @@ describe('formatDiagnosticReport', () => {
           failed: 5,
           cancelled: 3,
           timedOut: 2,
+          suspended: 4,
         },
         longestRunning: {
           id: 'wf-long',
@@ -123,10 +124,12 @@ describe('formatDiagnosticReport', () => {
     expect(output).toContain('Integrity: OK');
     expect(output).toContain('Fragmentation: 5%');
     expect(output).toContain('Workflows:');
-    expect(output).toContain('Total: 150');
+    expect(output).toContain('Total: 154');
     expect(output).toContain('50 running');
     expect(output).toContain('80 completed');
     expect(output).toContain('5 failed');
+    // The suspended-count branch renders only when the count is nonzero.
+    expect(output).toContain('4 suspended');
     expect(output).toContain('wf-long');
     expect(output).toContain('step 7');
     expect(output).toContain('wf-big');
@@ -178,6 +181,7 @@ describe('formatDiagnosticReport', () => {
           failed: 0,
           cancelled: 0,
           timedOut: 0,
+          suspended: 0,
         },
         longestRunning: null,
         largestCheckpoint: null,

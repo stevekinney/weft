@@ -658,10 +658,14 @@ describe('activity operation helpers', () => {
     );
   });
 
-  it('fails closed for legacy boolean and throwing pre-dispatch verifiers', async () => {
+  it('fails closed for boolean and throwing pre-dispatch verifiers', async () => {
+    // A boolean is the post-execution-validation result shape; it is NOT a
+    // Tier-0 pre-dispatch reconciliation state, so a verifier that returns one
+    // (or throws) during pre-dispatch reconciliation fails closed rather than
+    // redispatching the keyed activity.
     const cases = [
-      { idempotencyKey: 'legacy-true', verifier: mock(async () => true) },
-      { idempotencyKey: 'legacy-false', verifier: mock(async () => false) },
+      { idempotencyKey: 'boolean-true', verifier: mock(async () => true) },
+      { idempotencyKey: 'boolean-false', verifier: mock(async () => false) },
       {
         idempotencyKey: 'throwing-verifier',
         verifier: mock(async () => {

@@ -79,18 +79,17 @@ describe('Engine lifecycle ergonomics', () => {
       return `done:${suffix}`;
     });
 
-    const original = new Engine({ storage });
-    original.register(resumable);
+    // Populate via Engine.create so the schema-version sentinel is stamped, then
+    // reopen the same storage below — the current setup.
+    const original = await Engine.create({ storage, recover: false, workflows: { resumable } });
     const handle = await original.start('resumable', undefined, { id: 'recoverable-workflow' });
     handle.result().catch(() => {});
     await flush();
     original[Symbol.dispose]();
 
     // `recover: false` opts out of the default recovery sweep, leaving the
-    // workflow dormant for inspection. The store was populated by the legacy
-    // `new Engine({ storage })` path above, so opt into the migration path
-    // that stamps the schema-version sentinel for pre-sentinel data.
-    const inspecting = await Engine.create({ storage, recover: false, allowLegacyData: true });
+    // workflow dormant for inspection.
+    const inspecting = await Engine.create({ storage, recover: false });
     const dormantState = await inspecting.get('recoverable-workflow');
     expect(dormantState?.status).toBe('running');
     inspecting[Symbol.dispose]();

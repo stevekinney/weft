@@ -79,6 +79,17 @@ class WorkflowResumedEvent extends Event {
 }
 ```
 
+### `WorkflowSuspendedEvent`
+
+Emitted when a running workflow is explicitly suspended via `handle.suspend()` or `engine.suspend(id)`. Suspension is a non-terminal pause: the workflow keeps its checkpoint and `result()` stays pending until a later `resume()`. This event is _not_ terminal.
+
+```ts partial
+class WorkflowSuspendedEvent extends Event {
+  static readonly type = 'workflow:suspended';
+  readonly workflowId: string;
+}
+```
+
 ### `ActivityStartedEvent`
 
 Emitted when an activity begins executing.
@@ -310,6 +321,7 @@ interface WeftEventMap extends WeftReviewEventMap {
   'workflow:cancelled': WorkflowCancelledEvent;
   'workflow:timed-out': WorkflowTimedOutEvent;
   'workflow:resumed': WorkflowResumedEvent;
+  'workflow:suspended': WorkflowSuspendedEvent;
   'activity:started': ActivityStartedEvent;
   'activity:completed': ActivityCompletedEvent;
   'activity:failed': ActivityFailedEvent;

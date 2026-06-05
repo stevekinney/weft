@@ -62,6 +62,9 @@ bun test --parallel       # Parallel execution across files
 > [!NOTE]
 > The project's `bun run test` script wraps `bun test --timeout 15000`. Use `bun run test:coverage` (which sets `WEFT_COVERAGE_MODE=1`) for coverage with the project's configured timeout and environment.
 
+> [!NOTE]
+> Performance benchmarks live in `src/benchmarks/` and run separately via `bun run test:benchmarks`—serial, to keep timing honest. They're excluded from `bun run test`, `bun run validate`, and the publish gate; run them when you touch a performance-sensitive path. The coverage gate still exercises them.
+
 For the repository coverage gate, use the deterministic verifier:
 
 ```bash

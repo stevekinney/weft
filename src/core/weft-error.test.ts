@@ -13,9 +13,11 @@ import {
   EngineCreateNameMismatchError,
   EngineDisposedError,
   HttpClientError,
+  IdempotencyKeyPurgedError,
   PayloadSizeExceededError,
   PersistedDataIncompatibleError,
   ReviewTimeoutError,
+  StartOrSignalConflictError,
   UpdateTimeoutError,
   UpdateValidationError,
   VersionMismatchError,
@@ -98,6 +100,8 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
       issues: [{ message: 'Expected a string.', path: '/email' }],
     }),
   AsyncActivityTokenNotFoundError: () => new AsyncActivityTokenNotFoundError('token-abc'),
+  StartOrSignalConflictError: () => new StartOrSignalConflictError('wf-1', 'completed'),
+  IdempotencyKeyPurgedError: () => new IdempotencyKeyPurgedError('wf-1'),
 };
 
 describe('WeftError', () => {

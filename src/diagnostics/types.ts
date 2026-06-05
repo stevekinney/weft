@@ -64,6 +64,7 @@ export interface WorkflowStatusCounts {
   failed: number;
   cancelled: number;
   timedOut: number;
+  suspended: number;
 }
 
 /**

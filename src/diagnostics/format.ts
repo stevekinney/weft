@@ -111,8 +111,10 @@ function appendWorkflowsSection(lines: string[], workflows: DiagnosticReport['wo
     return;
   }
   const counts = workflows.statusCounts;
+  const suspendedSummary = counts.suspended > 0 ? `, ${counts.suspended} suspended` : '';
   lines.push(
-    `  Total: ${workflows.total} (${counts.running} running, ${counts.completed} completed, ${counts.failed} failed)`,
+    `  Total: ${workflows.total} (${counts.running} running, ${counts.completed} completed, ` +
+      `${counts.failed} failed${suspendedSummary})`,
   );
   if (workflows.longestRunning) {
     const longest = workflows.longestRunning;

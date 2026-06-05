@@ -15,7 +15,14 @@ type WorkflowId = string;
 ### `WorkflowStatus`
 
 ```ts partial
-type WorkflowStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out';
+type WorkflowStatus =
+  | 'pending'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'timed-out'
+  | 'suspended';
 ```
 
 ### `WorkflowState`
@@ -569,6 +576,20 @@ interface StartOptions {
 
 `services` is the only non-serialized start option. Use it for live per-run host capabilities that the workflow can read through `ctx.services`, not for durable workflow state.
 
+`idempotencyKey` enforces at-most-once starts: a repeated key returns the existing run rather than starting a second. It also powers `engine.startOrSignal` convergence — when `StartOrSignalSignal.signalId` is omitted, the delivered signal's id derives from the key. Requires a storage backend with `conditionalBatch`.
+
+### `StartOrSignalSignal`
+
+```ts partial
+interface StartOrSignalSignal {
+  name: string;
+  payload?: unknown;
+  signalId?: string;
+}
+```
+
+The signal half of `engine.startOrSignal` (signal-with-start). When `signalId` is omitted it derives from `StartOptions.idempotencyKey`; supply exactly one (not both) so concurrent callers converge on a single delivered signal.
+
 ### `WorkflowServicesResolver`
 
 ```ts partial
@@ -611,6 +632,44 @@ interface Serializer {
   deserialize(bytes: Uint8Array): unknown;
 }
 ```
+
+### `SerializerHandlers`
+
+Handlers registered with `registerSerializer(...)` for one custom structured type.
+
+```ts partial
+interface SerializerHandlers<T> {
+  toJSON(value: T): unknown;
+  fromJSON(data: unknown): T;
+}
+```
+
+Call `registerSerializer(Constructor, handlers, { tag })` once at module load, before constructing engines. The tag is the durable discriminator stored inside checkpoints, so choose an explicit stable string and do not derive it from `constructor.name` in minified builds. Registration is process-global and one-shot per constructor and per tag. Custom serializers are meant for application classes and `Error` subclasses; built-in `Date`, `RegExp`, `Map`, and `Set` instances use Weft's built-in encoders first.
+
+### `LaunchMetadata`
+
+```ts partial
+interface LaunchMetadata {
+  input: unknown;
+  launchOptions: {
+    id: string;
+    tags?: string[];
+  };
+}
+```
+
+Returned by `WorkflowHandle.getLaunchMetadata()`. `tags` reflect the run's current durable tag set, not necessarily the exact tags supplied at launch.
+
+### `WorkflowSnapshot`
+
+```ts partial
+interface WorkflowSnapshot {
+  status: WorkflowStatus;
+  step: number;
+}
+```
+
+Returned by `WorkflowHandle.snapshot()` for recovered progress reattachment and operator views.
 
 ### `SearchAttributeValue`
 
@@ -694,6 +753,7 @@ interface WeftEventMap {
   'workflow:cancelled': WorkflowCancelledEvent;
   'workflow:timed-out': WorkflowTimedOutEvent;
   'workflow:resumed': WorkflowResumedEvent;
+  'workflow:suspended': WorkflowSuspendedEvent;
   'activity:started': ActivityStartedEvent;
   'activity:completed': ActivityCompletedEvent;
   'activity:failed': ActivityFailedEvent;

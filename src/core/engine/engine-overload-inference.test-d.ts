@@ -18,8 +18,7 @@ import type {
   ListFilter,
   ScheduleDefinition,
 } from '../types.ts';
-import { ScheduleHandle } from './handles.ts';
-import { assertCompatiblePersistedDataVersion, Engine } from './index.ts';
+import { assertCompatiblePersistedDataVersion, Engine, ScheduleHandle } from './index.ts';
 
 declare const engine: Engine;
 
@@ -54,11 +53,11 @@ const mismatched: Promise<BulkCancelResult> = engine.cancelAll(filter, dryRunOpt
 void mismatched;
 
 // ---- assertCompatiblePersistedDataVersion semantic export ----------------
-// Exact signature: (storage, options?: { allowLegacyData?: boolean }) => Promise<void>.
+// Exact signature: (storage) => Promise<void>. The schema-version gate is
+// unconditional; there is no opt-out option.
 declare const storage: WeftStorage;
-const assertResult: Promise<void> = assertCompatiblePersistedDataVersion(storage, {
-  allowLegacyData: true,
-});
+const assertResult: Promise<void> = assertCompatiblePersistedDataVersion(storage);
 void assertResult;
-const assertNoOptions: Promise<void> = assertCompatiblePersistedDataVersion(storage);
-void assertNoOptions;
+// @ts-expect-error: the gate takes no options argument — there is no opt-out.
+const assertRejectsOptions: Promise<void> = assertCompatiblePersistedDataVersion(storage, {});
+void assertRejectsOptions;

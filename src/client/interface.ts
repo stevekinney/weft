@@ -36,6 +36,7 @@ import type {
   SignalDefinition,
   SignalDeliveryOptions,
   StartOptions,
+  StartOrSignalSignal,
   SubmitReviewOptions,
   TypedListFilter,
   UpdateDefinition,
@@ -103,6 +104,22 @@ export interface ClientHandle<TResult = unknown>
 
   /** Cancel this workflow. */
   cancel(): Promise<void>;
+
+  /**
+   * Suspend this workflow without terminating it: it moves to the non-terminal
+   * `suspended` status, keeps its checkpoint, and is later resumable via
+   * {@link ClientHandle.resume}. Unlike {@link ClientHandle.cancel}, it does not
+   * run cancel handlers and does not settle `result()`. Inline execution mode
+   * only (worker-mode servers fault with `Unprocessable`).
+   */
+  suspend(): Promise<void>;
+
+  /**
+   * Resume this workflow from its persisted checkpoint after a
+   * {@link ClientHandle.suspend} (or after a process restart left it running).
+   * `result()` resolves when the resumed run completes.
+   */
+  resume(): Promise<void>;
 
   /** Send a named signal with an optional payload. */
   signal(name: SignalDefinition): Promise<void>;
@@ -266,6 +283,13 @@ export interface WeftClient {
    * returned handle's `result()` to its output type. Without augmentation the
    * permissive string-name overload applies, so the client stays usable with
    * plain string names and no hard dependency on codegen.
+   *
+   * Pass `options.idempotencyKey` for at-most-once starts: a repeated key returns
+   * a handle to the existing run rather than starting a second. Conflicts (a
+   * duplicate `id`, or a key whose run was purged) are transport-dependent:
+   * `LocalClient` throws the typed error (`WorkflowAlreadyExistsError` /
+   * `IdempotencyKeyPurgedError`), while `HttpClient` throws `HttpClientError`
+   * with `status === 409` and `faultCode === 'Conflict'`.
    */
   start<TName extends KnownWorkflowName>(
     type: TName,
@@ -275,6 +299,41 @@ export interface WeftClient {
   start<TName extends string>(
     type: UnknownNameWhenRegistryEmpty<TName>,
     input: unknown,
+    options?: StartOptions,
+  ): Promise<ClientHandle>;
+
+  /**
+   * Atomically start a workflow or signal it if it already exists
+   * (signal-with-start). An absent target is created and delivered the signal in
+   * one batch; a non-terminal target (running, pending, or suspended) is
+   * signalled; a terminal target is rejected as a conflict.
+   *
+   * The rejection shape is transport-dependent: `LocalClient` throws the typed
+   * `StartOrSignalConflictError` (and `IdempotencyKeyPurgedError` for a spent
+   * key), while `HttpClient` throws `HttpClientError` with `status === 409` and
+   * `faultCode === 'Conflict'`. Branch on `faultCode`/`status` for code that runs
+   * over either transport.
+   *
+   * Pass `options.idempotencyKey` to dedup independent callers such as retried
+   * webhooks: concurrent same-key callers converge on one workflow and one
+   * delivered signal, with the signal id derived from the key. Convergence needs a
+   * shared workflow identity — `options.idempotencyKey` (id-free) or
+   * `options.id` + `signal.signalId`. A bare `signal.signalId` with neither is an
+   * atomic start-with-one-signal that does NOT converge concurrent callers (each
+   * gets its own run). Supply exactly one of `signal.signalId` or
+   * `options.idempotencyKey`; `options.id` and `options.idempotencyKey` are
+   * mutually exclusive.
+   */
+  startOrSignal<TName extends KnownWorkflowName>(
+    type: TName,
+    input: WorkflowInput<WorkflowRegistry, TName>,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
+  startOrSignal<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
+    input: unknown,
+    signal: StartOrSignalSignal,
     options?: StartOptions,
   ): Promise<ClientHandle>;
 
@@ -315,6 +374,13 @@ export interface WeftClient {
 
   /** Cancel a running workflow. */
   cancel(id: string): Promise<void>;
+
+  /**
+   * Suspend a running workflow without terminating it. It moves to the
+   * non-terminal `suspended` status, keeps its checkpoint, and is later
+   * resumable via {@link WeftClient.resume}. Inline execution mode only.
+   */
+  suspend(id: string): Promise<void>;
 
   /** Pause a recurring schedule. */
   pauseSchedule(id: string): Promise<void>;
@@ -375,7 +441,11 @@ export interface WeftClient {
   /** Out-of-band ("async") activity completion by task token. See {@link WeftClientActivity}. */
   readonly activity: WeftClientActivity;
 
-  /** Resume a failed or timed-out workflow. */
+  /**
+   * Re-drive a workflow from its persisted checkpoint. Accepts a workflow that
+   * was explicitly suspended (`suspend(id)`) or one left `'running'` by a prior
+   * process; throws for a status that cannot be resumed (terminal or pending).
+   */
   resume(id: string): Promise<ClientHandle>;
 
   /** Recover all interrupted workflows. */

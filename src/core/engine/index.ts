@@ -7,6 +7,7 @@ import {
   type RegisteredActivityFunction,
 } from '../activity-registry.ts';
 import { AtomicState, type AtomicStateOptions } from '../atomic-state.ts';
+import { deserializeCheckpoint } from '../checkpoint.ts';
 import type { StoredStreamChunk } from '../context.ts';
 import { createHandleCacheFinalizer } from '../engine-helpers.ts';
 import type { Interceptor } from '../interceptor.ts';
@@ -55,6 +56,7 @@ import {
   type SignalDefinition,
   type SignalDeliveryOptions,
   type StartOptions,
+  type StartOrSignalSignal,
   type SubmitReviewOptions,
   type TypedListFilter,
   type UpdateDefinition,
@@ -137,6 +139,7 @@ import {
 import {
   createCleanupIntervalTick,
   createQueuedInlineWorkflowStartHandler,
+  drainQueuedInlineWorkflowStartsForEngine,
   isActivityDefinition,
 } from './engine-runtime-helpers.ts';
 import type { EngineStateNamespace } from './engine-state-namespace.ts';
@@ -145,7 +148,7 @@ import {
   createWorkflowHandleWithResultPromise as createWorkflowHandleWithResultPromiseFromInternals,
   getWorkflowResultPromise as getWorkflowResultPromiseFromInternals,
 } from './handle-result.ts';
-import { HANDLE_RESULT_PROMISE, ScheduleHandle, WorkflowHandle } from './handles.ts';
+import { HANDLE_RESULT_PROMISE, WorkflowHandle } from './handles.ts';
 import { hasQueuedInlineWorkflowStart } from './inline-launch-queue.ts';
 import {
   handleStrategyMessage as handleStrategyMessageFromInternals,
@@ -157,9 +160,12 @@ import {
   fork as forkFromLifecycle,
   recoverAll as recoverAllFromLifecycle,
   resume as resumeFromLifecycle,
+  startOrSignal as startOrSignalFromLifecycle,
+  startWithIdempotency as startWithIdempotencyFromLifecycle,
   startWorkflow as startWorkflowFromLifecycle,
   type LifecycleCallbacks,
   type RecoverAllOptions,
+  type StartOrSignalCallbacks,
 } from './lifecycle.ts';
 import {
   addTags as addWorkflowTags,
@@ -194,6 +200,7 @@ import {
   listReviews as listReviewsFromInternals,
   submitReview as submitReviewFromInternals,
 } from './reviews.ts';
+import { ScheduleHandle } from './schedule-handle.ts';
 import {
   cancelSchedule as cancelScheduleFromInternals,
   listSchedules as listSchedulesFromInternals,
@@ -214,6 +221,7 @@ import {
   cancelWorkflow as cancelWorkflowFromTermination,
   cleanupWaiters as cleanupWaitersFromTermination,
   finalizePendingTimelineEntry,
+  suspendWorkflow as suspendWorkflowFromTermination,
   timeoutWorkflow as timeoutWorkflowFromTermination,
   type TerminationCallbacks,
 } from './termination.ts';
@@ -253,14 +261,18 @@ export {
   BulkOperationConfirmationError,
   EngineCreateNameMismatchError,
   EngineDisposedError,
+  IdempotencyKeyPurgedError,
   PersistedDataIncompatibleError,
+  StartOrSignalConflictError,
   WorkflowAlreadyExistsError,
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
+  WorkflowSuspendNotSupportedError,
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './errors.ts';
-export { HANDLE_RESULT_PROMISE, ScheduleHandle, WorkflowHandle } from './handles.ts';
+export { HANDLE_RESULT_PROMISE, WorkflowHandle } from './handles.ts';
 export type { RecoverAllOptions } from './lifecycle.ts';
+export { ScheduleHandle } from './schedule-handle.ts';
 export type {
   WorkflowFeedListener,
   WorkflowFeedRecord,
@@ -286,6 +298,7 @@ export const ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING = Symbol(
   'engineParkedWorkflowCountForTesting',
 );
 export const ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING = Symbol('engineSignalWaiterCountForTesting');
+export const ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING = Symbol('engineSleepResolverCountForTesting');
 
 /**
  * Durable execution engine.
@@ -390,10 +403,7 @@ export class Engine<
     const engine = new Engine<object, object>(options);
 
     try {
-      await assertCompatiblePersistedDataVersion(
-        getInternals(engine).storage,
-        options.allowLegacyData === undefined ? {} : { allowLegacyData: options.allowLegacyData },
-      );
+      await assertCompatiblePersistedDataVersion(getInternals(engine).storage);
       for (const [name, definition] of definitionEntries(options.activities)) {
         if (name !== definition.name) {
           throw new EngineCreateNameMismatchError('activity', name, definition.name);
@@ -803,6 +813,15 @@ export class Engine<
     options?: StartOptions,
   ): Promise<WorkflowHandle>;
   async start(type: string, input: unknown, options?: StartOptions): Promise<WorkflowHandle> {
+    if (options?.idempotencyKey !== undefined) {
+      return startWithIdempotencyFromLifecycle(
+        getInternals(this),
+        type,
+        input,
+        options,
+        this.#createLifecycleCallbacks(),
+      );
+    }
     return startWorkflowFromLifecycle(
       getInternals(this),
       type,
@@ -811,6 +830,57 @@ export class Engine<
       undefined,
       this.#createLifecycleCallbacks(),
     );
+  }
+  /**
+   * Atomically start a workflow or signal it if it already exists
+   * (signal-with-start). With an absent target, the workflow record and the
+   * first signal commit in one batch and the freshly-launched run consumes the
+   * signal on its first drive. A non-terminal target (running, pending, or
+   * suspended) is signalled through the normal signal path; a terminal target
+   * throws {@link StartOrSignalConflictError} rather than starting a new run or
+   * dropping the signal.
+   *
+   * Concurrent callers converge on one workflow and one delivered signal. Pass
+   * `options.idempotencyKey` to dedup independent callers (e.g. retried
+   * webhooks); the signal id derives from the key when `signal.signalId` is
+   * omitted, so callers that share only the key still converge. `signal.signalId`
+   * and `options.idempotencyKey` are mutually exclusive (provide exactly one), as
+   * are `options.id` and `options.idempotencyKey`. Requires a storage backend
+   * with `conditionalBatch`.
+   */
+  async startOrSignal<TName extends KnownWorkflowNames<TWorkflows>>(
+    type: TName,
+    input: WorkflowInput<TWorkflows, TName>,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<WorkflowHandle<WorkflowOutput<TWorkflows, TName>>>;
+  async startOrSignal<TName extends string>(
+    type: UnknownWorkflowNameWhenDefaultRegistryIsEmpty<TWorkflows, TName>,
+    input: unknown,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<WorkflowHandle>;
+  async startOrSignal(
+    type: string,
+    input: unknown,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<WorkflowHandle> {
+    return startOrSignalFromLifecycle(
+      getInternals(this),
+      type,
+      input,
+      signal,
+      options,
+      this.#createStartOrSignalCallbacks(),
+    );
+  }
+  #createStartOrSignalCallbacks(): StartOrSignalCallbacks {
+    return {
+      ...this.#createLifecycleCallbacks(),
+      signalExistingWorkflow: (workflowId, signalName, payload, signalId) =>
+        this.signal(workflowId, signalName, payload, { signalId }),
+    };
   }
   getHandle(workflowId: string): WorkflowHandle {
     const entry = getInternals(this).handleCache.get(workflowId);
@@ -949,6 +1019,37 @@ export class Engine<
   ): Promise<BulkTagResult | BulkOperationDryRunResult> {
     return untagAllWorkflows(getInternals(this), filter, tags, options);
   }
+  /**
+   * Register a recurring schedule that starts a workflow on a cron expression or
+   * fixed interval. Returns a {@link ScheduleHandle} for pausing, resuming,
+   * updating, or cancelling the schedule.
+   *
+   * Two call forms:
+   * - A {@link ScheduleDefinition} object: `engine.schedule({ workflow, cron, input })`.
+   *   Carries the workflow (definition or type name), the `cron`/`every` spec,
+   *   optional `input`, `id`, `overlapPolicy`, and `backfill`.
+   * - Positional: `engine.schedule(type, input, spec, options?)` where `spec` is
+   *   a cron string or a {@link ScheduleSpec} (`{ cron }` or `{ every }`).
+   *
+   * The {@link ScheduleOptions.overlap} policy governs what happens when a tick
+   * fires while the previous run is still in flight.
+   *
+   * @example
+   * ```ts
+   * import { workflow, Engine } from '@lostgradient/weft';
+   *
+   * const engine = new Engine();
+   * engine.register(workflow({ name: 'sweep' }).execute(async function* () { return 'ok'; }));
+   *
+   * // Definition form: every day at 09:00, skip a tick if the prior run is still running.
+   * const handle = await engine.schedule({
+   *   workflow: 'sweep',
+   *   cron: '0 9 * * *',
+   *   overlapPolicy: 'skip',
+   * });
+   * await handle.pause();
+   * ```
+   */
   async schedule<TInput>(definition: ScheduleDefinition<TInput>): Promise<ScheduleHandle>;
   async schedule(
     type: string,
@@ -1017,6 +1118,9 @@ export class Engine<
   }
   [ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING](): number {
     return getInternals(this).signalWaiters.size;
+  }
+  [ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING](): number {
+    return getInternals(this).sleepResolvers.size;
   }
   async signal(workflowId: string, name: SignalDefinition): Promise<void>;
   async signal<TInput>(
@@ -1149,6 +1253,13 @@ export class Engine<
       this.#createLifecycleCallbacks(),
     );
   }
+  /**
+   * Re-drive a workflow from its persisted checkpoint and return a live handle.
+   * Accepts a workflow left `'running'` (e.g. recovered after a process restart)
+   * or one explicitly `'suspended'` via {@link Engine.suspend} — a suspended
+   * workflow is durably flipped back to `'running'` as part of resuming. Throws
+   * if the workflow is in any other status (terminal, pending) or not found.
+   */
   async resume(workflowId: string): Promise<WorkflowHandle> {
     return resumeFromLifecycle(getInternals(this), workflowId, this.#createLifecycleCallbacks());
   }
@@ -1217,6 +1328,26 @@ export class Engine<
       this.#createTerminationCallbacks(),
     );
   }
+  /**
+   * Suspend a running workflow without terminating it. The workflow transitions
+   * to the non-terminal `'suspended'` status, keeps its durable checkpoint, and
+   * is later resumable via {@link Engine.resume} (or `handle.resume()`). Unlike
+   * {@link Engine.cancel}, this does not run cancel handlers and does not settle
+   * the result promise — `handle.result()` stays pending until a later `resume()`
+   * drives the run to completion.
+   *
+   * Suspension is client-driven preemption, so a suspended workflow is NOT
+   * auto-recovered by {@link Engine.recoverAll}; resume it explicitly. Calling
+   * `suspend` on a workflow that is not running (already terminal, or never
+   * started) is a no-op.
+   */
+  async suspend(workflowId: string): Promise<void> {
+    await suspendWorkflowFromTermination(
+      getInternals(this),
+      workflowId,
+      this.#createTerminationCallbacks(),
+    );
+  }
   async timeout(workflowId: string): Promise<void> {
     await timeoutWorkflowFromTermination(
       getInternals(this),
@@ -1233,6 +1364,21 @@ export class Engine<
       return { ...state, status: 'pending' };
     }
     return state;
+  }
+  async getCurrentCheckpointStep(workflowId: string): Promise<number | null> {
+    // Prefer the in-memory checkpoint: for a run live in this engine it is the
+    // freshest cursor, ahead of the last durable commit. Fall back to the
+    // persisted checkpoint so a recovered or cross-process-inspected run still
+    // reports its durable step.
+    const inMemory = getInternals(this).checkpoints.get(workflowId);
+    if (inMemory !== undefined) {
+      return inMemory.step;
+    }
+    const bytes = await getInternals(this).storage.get(KEYS.checkpoint(workflowId));
+    if (bytes === null) {
+      return null;
+    }
+    return deserializeCheckpoint(bytes).step;
   }
   async getAttributes(workflowId: string): Promise<Record<string, SearchAttributeValue> | null> {
     return getWorkflowAttributes(getInternals(this), workflowId);
@@ -1313,10 +1459,42 @@ export class Engine<
       this.#createUpdateCallbacks(),
     );
   }
+  /**
+   * Synchronous teardown (`using engine = ...`). Pending inline launches that
+   * have not yet run are **discarded**, not executed. When you need queued
+   * starts to complete before teardown — or want a clean event loop with no
+   * dangling deferred-launch macrotask — prefer {@link Engine[Symbol.asyncDispose]}
+   * via `await using`.
+   */
   [Symbol.dispose](): void {
     disposeEngine(getInternals(this));
   }
+  /**
+   * Async teardown (`await using engine = ...`). Drains pending inline launches
+   * so each queued workflow completes its first turn before disposal, leaving no
+   * deferred-launch macrotask to fire against torn-down state. The drain is
+   * bounded (a pass cap and the abort signal); in the pathological case where it
+   * cannot converge, anything still queued is discarded by the synchronous
+   * teardown that always follows. Prefer this over the synchronous
+   * {@link Engine[Symbol.dispose]} in async contexts and tests.
+   */
   async [Symbol.asyncDispose](): Promise<void> {
+    // Drain pending inline launches BEFORE synchronous disposal aborts the
+    // signal (which would discard them). This makes a disposed engine leave no
+    // dangling deferred-launch macrotask — the clean async teardown that lets
+    // callers (and test runners) avoid manual macrotask draining.
+    //
+    // The drain runs in try/finally so synchronous disposal ALWAYS completes,
+    // even if the drain rejects: a half-disposed engine (abort un-fired,
+    // awaiters hung, channels open) is worse than the footgun this fixes.
+    if (!getInternals(this).disposed) {
+      try {
+        await drainQueuedInlineWorkflowStartsForEngine(this);
+      } finally {
+        this[Symbol.dispose]();
+      }
+      return;
+    }
     this[Symbol.dispose]();
   }
   get storage(): WeftStorage {

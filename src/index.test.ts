@@ -3,7 +3,15 @@ import { describe, expect, it } from 'bun:test';
 import packageJson from '../package.json';
 import { workflow } from './core/types/workflow-function.ts';
 import type { WorkflowOperation, WorkflowReplay, WorkflowTimelineEntry } from './index';
-import { Engine, MemoryStorage, VERSION, WorkflowAlreadyExistsError } from './index';
+import {
+  Engine,
+  IdempotencyKeyPurgedError,
+  isWeftErrorLike,
+  MemoryStorage,
+  StartOrSignalConflictError,
+  VERSION,
+  WorkflowAlreadyExistsError,
+} from './index';
 
 describe('weft', () => {
   it('exports a version string that matches package.json', () => {
@@ -66,5 +74,61 @@ describe('weft', () => {
     } finally {
       await engine[Symbol.asyncDispose]();
     }
+  });
+
+  it('exports StartOrSignalConflictError for startOrSignal against a terminal run', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const done = workflow({ name: 'startorsignal-terminal' }).execute(async function* () {
+      return 'ok';
+    });
+    engine.register(done);
+
+    try {
+      const handle = await engine.start('startorsignal-terminal', null, { id: 'sos-export' });
+      await handle.result();
+      await expect(
+        engine.startOrSignal(
+          'startorsignal-terminal',
+          null,
+          { name: 'noop', signalId: 'x' },
+          { id: 'sos-export' },
+        ),
+      ).rejects.toBeInstanceOf(StartOrSignalConflictError);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('exports IdempotencyKeyPurgedError for a spent key whose run was purged', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const done = workflow({ name: 'idempotency-purged' }).execute(async function* () {
+      return 'ok';
+    });
+    engine.register(done);
+
+    try {
+      // First start with the key creates the run and the durable mapping.
+      const handle = await engine.start('idempotency-purged', null, {
+        idempotencyKey: 'spent-key',
+      });
+      await handle.result();
+      // Purge the run while the `start-idem:` mapping intentionally lives on.
+      await engine.purge({ idPrefix: handle.id });
+      // The key now maps to a workflow that no longer exists.
+      await expect(
+        engine.start('idempotency-purged', null, { idempotencyKey: 'spent-key' }),
+      ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('registers StartOrSignalConflictError and IdempotencyKeyPurgedError as public codes', () => {
+    // Both errors are public exports, so isWeftErrorLike (the cross-realm/duplicate-
+    // module discriminant) must recognize them — which only holds if their codes are
+    // in PUBLIC_WEFT_ERROR_CODES. A consumer routing faults to HTTP status by code
+    // would otherwise fall through to a 500 handler instead of the intended 409.
+    expect(isWeftErrorLike(new StartOrSignalConflictError('wf-1', 'completed'))).toBe(true);
+    expect(isWeftErrorLike(new IdempotencyKeyPurgedError('wf-1'))).toBe(true);
   });
 });

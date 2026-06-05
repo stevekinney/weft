@@ -36,6 +36,7 @@ export const WEFT_RESERVED_KEY_PREFIXES = [
   'sig:',
   'sigres:',
   'sigseq:',
+  'start-idem:',
   'state:',
   'tag:',
   'tool-effect:',

@@ -1,0 +1,47 @@
+import { describe, expect, it, mock } from 'bun:test';
+
+import { MemoryStorage } from '../../storage/memory.ts';
+import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { Engine } from '../engine.ts';
+import { CleanupWarningEvent } from '../events.ts';
+import { createCleanupIntervalTick } from './engine-runtime-helpers.ts';
+import { getInternals } from './internals.ts';
+
+describe('engine runtime helpers', () => {
+  it('clears the cleanup interval when the engine has been collected', () => {
+    const cleanupInterval = setInterval(() => {}, 1_000);
+    const tracker = { disposed: false, cleanupInterval, testToken: undefined };
+
+    const tick = createCleanupIntervalTick(
+      { deref: () => undefined } as WeakRef<Engine<object, object>>,
+      tracker,
+    );
+    tick();
+
+    expect(tracker.cleanupInterval).toBeNull();
+  });
+
+  it('routes cleanup tick failures through the engine cleanup warning path', async () => {
+    await using engine = new Engine({ storage: new MemoryStorage() });
+    const tracker = { disposed: false, cleanupInterval: null, testToken: undefined };
+    const cleanupExpiredResponses = mock(async () => {
+      throw new Error('cleanup exploded');
+    });
+    const warnings: CleanupWarningEvent[] = [];
+    engine.addEventListener(CleanupWarningEvent.type, (event) => {
+      warnings.push(event as CleanupWarningEvent);
+    });
+    getInternals(engine).updateCoordinator.cleanupExpiredResponses = cleanupExpiredResponses;
+
+    const tick = createCleanupIntervalTick(new WeakRef(engine), tracker);
+    tick();
+
+    await sleepForTesting(0);
+
+    expect(cleanupExpiredResponses).toHaveBeenCalledTimes(1);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.source).toBe('cleanupExpiredResponses');
+    expect(warnings[0]!.error.message).toBe('cleanup exploded');
+    expect(tracker.cleanupInterval).toBeNull();
+  });
+});

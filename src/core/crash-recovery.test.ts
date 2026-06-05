@@ -14,6 +14,10 @@ import { MemoryStorage } from '../storage/memory.ts';
 import { encode } from './codec.ts';
 import { Engine, WorkflowTypeNotRegisteredForRecoveryError } from './engine.ts';
 import { WorkflowRecoverySkippedEvent, WorkflowResumedEvent } from './events.ts';
+import {
+  CURRENT_PERSISTED_DATA_SCHEMA_VERSION,
+  PERSISTED_DATA_SCHEMA_VERSION_KEY,
+} from './persisted-data-incompatible-error.ts';
 import type { WorkflowState, WorkflowStatus } from './types.ts';
 import { workflow } from './types/workflow-function.ts';
 
@@ -47,6 +51,12 @@ async function seedStoredWorkflowState(
   await storage.put(
     STORAGE_KEYS.workflow(workflowId),
     encode(createStoredWorkflowState(workflowId, workflowType, status)),
+  );
+  // Stamp the current schema-version sentinel so Engine.create opens the seeded
+  // store and reaches recovery, rather than rejecting it at the schema gate.
+  await storage.put(
+    PERSISTED_DATA_SCHEMA_VERSION_KEY,
+    new TextEncoder().encode(String(CURRENT_PERSISTED_DATA_SCHEMA_VERSION)),
   );
 }
 
@@ -991,14 +1001,11 @@ describe('crash recovery', () => {
 
     // No `recover` field: recovery runs by default and the unregistered stored
     // type makes the boot fail loudly rather than silently abandoning it.
-    await expect(Engine.create({ storage, allowLegacyData: true })).rejects.toBeInstanceOf(
+    await expect(Engine.create({ storage })).rejects.toBeInstanceOf(
       WorkflowTypeNotRegisteredForRecoveryError,
     );
 
     // The escape hatch suppresses the throw and skips the unknown workflow.
-    // Note: allowLegacyData is omitted here — the first (failed) Engine.create
-    // call already wrote the schema-version sentinel, so the second does not
-    // need the legacy-data opt-in.
     const acknowledged = await Engine.create({
       storage,
       acknowledgeUnknownWorkflowTypes: true,

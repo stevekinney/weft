@@ -1,28 +1,18 @@
 import { z } from 'zod';
 
 import {
+  IdempotencyKeyPurgedError,
   WorkflowAlreadyExistsError,
   WorkflowNotRegisteredError,
 } from '../../core/engine/errors.ts';
 import { runtimeWorkflowEngine } from '../../core/runtime-workflow-engine.ts';
-import { validateAttributeType } from '../../core/search-attributes.ts';
-import {
-  assertExclusiveStartWorkflowOptions,
-  coerceStartWorkflowDuration,
-  coerceStartWorkflowId,
-  coerceStartWorkflowTags,
-  coerceStartWorkflowTimestamp,
-  StartWorkflowValidationError,
-} from '../../core/start-workflow-validation.ts';
-import type {
-  SearchAttributeSchema,
-  SearchAttributeValue,
-  StartOptions,
-} from '../../core/types.ts';
+import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
+import type { SearchAttributeSchema, StartOptions } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { buildSharedStartWorkflowOptions } from './start-workflow-options.ts';
 
 // Inputs are intentionally permissive at the schema boundary so REST
 // callers (and equivalent JSON-RPC callers) hit the same validation in
@@ -71,7 +61,7 @@ function validateStartWorkflowInput(
 
   let options: StartOptions;
   try {
-    options = buildStartWorkflowOptions(input, lookupSearchAttributeSchema(type));
+    options = buildSharedStartWorkflowOptions(input, lookupSearchAttributeSchema(type));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw invalidParamsFault(message);
@@ -86,8 +76,9 @@ function validateStartWorkflowInput(
  * Routing order (typed errors take precedence over string matching):
  *   1. WorkflowNotRegisteredError   → InvalidParams
  *   2. WorkflowAlreadyExistsError   → Conflict
- *   3. StartWorkflowValidationError → InvalidParams
- *   4. otherwise                    → EngineFailure
+ *   3. IdempotencyKeyPurgedError    → Conflict (key maps to a purged run)
+ *   4. StartWorkflowValidationError → InvalidParams
+ *   5. otherwise                    → EngineFailure
  */
 function resolveStartWorkflowAccess(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
@@ -95,7 +86,10 @@ function resolveStartWorkflowAccess(error: unknown): never {
   if (error instanceof WorkflowNotRegisteredError) {
     throw invalidParamsFault(message);
   }
-  if (error instanceof WorkflowAlreadyExistsError) {
+  if (error instanceof WorkflowAlreadyExistsError || error instanceof IdempotencyKeyPurgedError) {
+    // An id collision or a spent idempotency key (its run purged) are both
+    // client-actionable conflicts: pick a different id / key. Surface as Conflict
+    // (409) rather than letting the purged-key case mask to an opaque 500.
     const fault: OperationFault = {
       code: 'Conflict',
       message,
@@ -123,9 +117,11 @@ export const startWorkflowOperation = defineOperation<StartWorkflowInput, StartW
     'Start a new workflow execution of a registered type. Requires `type` (the registered ' +
     'workflow type name) and accepts an optional `input` payload plus start options: `id` ' +
     '(client-supplied workflow id), `executionTimeout`, `startAt`/`startAfter` (mutually ' +
-    'exclusive scheduling), `tags`, and `searchAttributes`. Returns the workflow `id`. Faults ' +
-    'with InvalidParams for an unregistered type or malformed options, and Conflict when a ' +
-    'workflow with the same id already exists.',
+    'exclusive scheduling), `tags`, `idempotencyKey` (at-most-once dedup: a repeated key ' +
+    'returns the existing run instead of starting a second), and `searchAttributes`. Returns ' +
+    'the workflow `id`. Faults with InvalidParams for an unregistered type or malformed ' +
+    'options, and Conflict when a workflow with the same id already exists or the supplied ' +
+    '`idempotencyKey` has been spent (its run was purged or swept by retention).',
   destructive: false,
   tags: ['Workflows'],
   inputSchema: startWorkflowInput,
@@ -156,128 +152,6 @@ export const startWorkflowOperation = defineOperation<StartWorkflowInput, StartW
     }
   },
 });
-
-function buildStartWorkflowOptions(
-  input: StartWorkflowInput,
-  searchAttributeSchema: SearchAttributeSchema | undefined,
-): StartOptions {
-  const options: StartOptions = {};
-
-  if (input.id !== undefined) {
-    options.id = coerceStartWorkflowId(input.id, 'Field "id"');
-  }
-  if (input.executionTimeout !== undefined) {
-    options.executionTimeout = coerceStartWorkflowDuration(
-      input.executionTimeout,
-      'Field "executionTimeout"',
-    );
-  }
-  if (input.startAt !== undefined) {
-    options.startAt = coerceStartWorkflowTimestamp(input.startAt, 'Field "startAt"');
-  }
-  if (input.startAfter !== undefined) {
-    options.startAfter = coerceStartWorkflowDuration(input.startAfter, 'Field "startAfter"');
-  }
-  if (input.tags !== undefined) {
-    options.tags = coerceStartWorkflowTags(input.tags, 'Field "tags"');
-  }
-  if (input.idempotencyKey !== undefined) {
-    throw new StartWorkflowValidationError(
-      'idempotencyKey is not supported over HttpClient because the start workflow HTTP protocol does not implement start idempotency',
-    );
-  }
-  if (input.searchAttributes !== undefined) {
-    options.searchAttributes = coerceStartWorkflowSearchAttributes(
-      input.searchAttributes,
-      'Field "searchAttributes"',
-      searchAttributeSchema,
-    );
-  }
-
-  assertExclusiveStartWorkflowOptions(options.startAt, options.startAfter);
-
-  return options;
-}
-
-function coerceStartWorkflowSearchAttributes(
-  value: unknown,
-  fieldName: string,
-  schema: SearchAttributeSchema | undefined,
-): Record<string, SearchAttributeValue> {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new StartWorkflowValidationError(`${fieldName} must be an object`);
-  }
-
-  // Null-prototype record keeps untrusted attribute keys from touching Object.prototype setters.
-  const attributes = Object.create(null) as Record<string, SearchAttributeValue>;
-  for (const [key, attributeValue] of Object.entries(value)) {
-    const coercedValue = coerceStartWorkflowSearchAttributeValue(
-      key,
-      attributeValue,
-      fieldName,
-      schema,
-    );
-    attributes[key] = coercedValue;
-  }
-
-  return attributes;
-}
-
-function coerceStartWorkflowSearchAttributeValue(
-  key: string,
-  value: unknown,
-  fieldName: string,
-  schema: SearchAttributeSchema | undefined,
-): SearchAttributeValue {
-  if (!isSearchAttributeValue(value)) {
-    throw new StartWorkflowValidationError(
-      `${fieldName}.${key} must be a string, number, boolean, Date, or string array`,
-    );
-  }
-
-  if (schema === undefined) {
-    return value;
-  }
-
-  const definition = schema[key];
-  if (definition === undefined) {
-    throw new StartWorkflowValidationError(
-      `Unknown search attribute "${key}". Registered attributes: ${Object.keys(schema).join(', ')}`,
-    );
-  }
-
-  const normalizedValue =
-    definition.type === 'string' && definition.format === 'date-time' && typeof value === 'string'
-      ? coerceDateTimeSearchAttribute(key, value, fieldName)
-      : value;
-
-  try {
-    validateAttributeType(key, normalizedValue, definition);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    throw new StartWorkflowValidationError(message);
-  }
-
-  return normalizedValue;
-}
-
-function coerceDateTimeSearchAttribute(key: string, value: string, fieldName: string): Date {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    throw new StartWorkflowValidationError(`${fieldName}.${key} must be a valid date-time string`);
-  }
-  return date;
-}
-
-function isSearchAttributeValue(value: unknown): value is SearchAttributeValue {
-  return (
-    typeof value === 'string' ||
-    typeof value === 'number' ||
-    typeof value === 'boolean' ||
-    value instanceof Date ||
-    (Array.isArray(value) && value.every((item) => typeof item === 'string'))
-  );
-}
 
 export const startWorkflowRestBinding: UnknownRestBinding = {
   method: 'POST',

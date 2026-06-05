@@ -1,0 +1,955 @@
+import { describe, expect, it } from 'bun:test';
+
+import { CompressedStorage } from '../../storage/compressed-storage.ts';
+import type { Storage } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/interface.ts';
+import { MemoryStorage } from '../../storage/memory.ts';
+import { TestEngine } from '../../testing/test-engine.ts';
+import { Engine } from '../engine.ts';
+import type { WorkflowContext } from '../types.ts';
+import { workflow } from '../types.ts';
+import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from './errors.ts';
+import { getInternals } from './internals.ts';
+
+const waitForRelease = workflow({ name: 'wait-for-release' }).execute(async function* (
+  ctx: WorkflowContext,
+) {
+  return yield* ctx.waitForSignal<string>('release');
+});
+
+const completesImmediately = workflow({ name: 'completes-immediately' }).execute(
+  async function* () {
+    return 'done';
+  },
+);
+
+// Stays parked after consuming the create-batch `release` signal: it then waits
+// for a second `hold` signal that the create batch never sends. Used by the
+// white-box race-recovery test so the winning run is still non-terminal when a
+// losing caller resolves it.
+const releaseThenHold = workflow({ name: 'release-then-hold' }).execute(async function* (
+  ctx: WorkflowContext,
+) {
+  yield* ctx.waitForSignal<string>('release');
+  return yield* ctx.waitForSignal<string>('hold');
+});
+
+function createEngine(storage: Storage = new MemoryStorage()): Engine {
+  const engine = new Engine({ storage });
+  engine.register(waitForRelease);
+  engine.register(completesImmediately);
+  engine.register(releaseThenHold);
+  return engine;
+}
+
+/**
+ * Wrap a storage so the first `get` matching `shouldSuppress` that would return a
+ * NON-NULL value is suppressed to `null` exactly once, then delegates normally.
+ *
+ * Used to force the create-batch CAS-loss recovery path deterministically:
+ * suppress the loser's post-commit read of the idempotency mapping key. The
+ * winner's pre-create lookup returns null naturally (the mapping does not exist
+ * yet), so it is NOT the suppressed read; the loser's later lookup — which would
+ * see the winner's real mapping — is the one nulled. The loser then skips the
+ * top-level mapping branch, builds its own create batch, loses the CAS, and falls
+ * into `requireWinnerId` → `resolveWinnerWithSignal`. Suppressing the first read of
+ * ANY kind would consume the one-shot on the winner's natural-null lookup and
+ * never exercise the recovery path.
+ */
+function storageWithOneShotNullGet(
+  inner: Storage,
+  shouldSuppress: (key: string) => boolean,
+): Storage {
+  let suppressed = false;
+  return new Proxy(inner, {
+    get(target, property, receiver) {
+      if (property === 'get') {
+        return async (key: string): Promise<Uint8Array | null> => {
+          const value = await target.get(key);
+          if (!suppressed && shouldSuppress(key) && value !== null) {
+            suppressed = true;
+            return null;
+          }
+          return value;
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+/**
+ * Wrap a storage so the FIRST `conditionalBatch` (the winning caller-id start's
+ * commit) parks until released, then throws — simulating a winner that reserved
+ * `pendingStarts` but aborts before its durable write (a storage failure, oversized
+ * payload, or throwing start interceptor all land here). `onParked` fires once the
+ * winner is parked mid-commit (reservation held); awaiting `release` then makes it
+ * throw. Every later `conditionalBatch` delegates, so the losing caller's retry
+ * commits normally. The loser's first attempt collides on the in-memory reservation
+ * at start.ts and never reaches `conditionalBatch`, so "first batch = winner" holds.
+ */
+function storageWithAbortingFirstConditionalBatch(
+  inner: Storage,
+  onParked: () => void,
+  release: Promise<void>,
+): Storage {
+  let parkedOnce = false;
+  return new Proxy(inner, {
+    get(target, property, receiver) {
+      if (property === 'conditionalBatch') {
+        return async (
+          conditions: Parameters<NonNullable<Storage['conditionalBatch']>>[0],
+          operations: Parameters<NonNullable<Storage['conditionalBatch']>>[1],
+        ): Promise<boolean> => {
+          if (!parkedOnce) {
+            parkedOnce = true;
+            onParked();
+            await release;
+            throw new Error('injected winner abort before durable commit');
+          }
+          return target.conditionalBatch!(conditions, operations);
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+/**
+ * Count durable workflow records currently in storage. The record key is exactly
+ * `wf:<encoded-id>` (one structural colon); sub-keys like the checkpoint
+ * `wf:<id>:ckpt` carry a second colon and are excluded, since a raw `:` in a key
+ * always denotes a separator (ids encode their own colons as `%3A`).
+ */
+async function countWorkflowRecords(engine: Engine): Promise<number> {
+  let count = 0;
+  for await (const [key] of engine.storage.scan('wf:')) {
+    if (key.indexOf(':', 'wf:'.length) === -1) {
+      count += 1;
+    }
+  }
+  return count;
+}
+
+/**
+ * Load-bearing precondition for atomic startOrSignal: a workflow consumes a
+ * signal that was durably present BEFORE it first ran. `processWaitSignalOperation`
+ * is scan-then-park — it calls `consumeSignal` (a durable storage scan) before
+ * registering any in-memory waiter — so a signal sitting in storage at launch is
+ * found on first drive rather than orphaned.
+ */
+describe('signal buffered before a workflow starts', () => {
+  it('is consumed on the first drive when present in storage at launch', async () => {
+    const engine = createEngine();
+    try {
+      const workflowId = 'buffered-before-start';
+      await engine.signal(workflowId, 'release', 'unblocked', { signalId: 'sig-1' });
+      const handle = await engine.start('wait-for-release', null, { id: workflowId });
+      expect(await handle.result()).toBe('unblocked');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('dedupes a duplicate signalId so a second identical signal is a no-op', async () => {
+    const engine = createEngine();
+    try {
+      const workflowId = 'dedupe-before-start';
+      await engine.signal(workflowId, 'release', 'first', { signalId: 'dup' });
+      await engine.signal(workflowId, 'release', 'second', { signalId: 'dup' });
+      const handle = await engine.start('wait-for-release', null, { id: workflowId });
+      expect(await handle.result()).toBe('first');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+});
+
+describe('engine.start idempotency', () => {
+  it('returns the same handle for a duplicate idempotency key', async () => {
+    const engine = createEngine();
+    try {
+      const first = await engine.start('wait-for-release', null, { idempotencyKey: 'key-1' });
+      const second = await engine.start('wait-for-release', null, { idempotencyKey: 'key-1' });
+      expect(second.id).toBe(first.id);
+      expect(await countWorkflowRecords(engine)).toBe(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('returns the existing handle for a duplicate key even after the run is terminal', async () => {
+    const engine = createEngine();
+    try {
+      const first = await engine.start('completes-immediately', null, { idempotencyKey: 'term-1' });
+      expect(await first.result()).toBe('done');
+
+      const second = await engine.start('completes-immediately', null, {
+        idempotencyKey: 'term-1',
+      });
+      expect(second.id).toBe(first.id);
+      // Dedup never restarts: the terminal handle is returned, not a fresh run.
+      expect(await second.result()).toBe('done');
+      expect(await countWorkflowRecords(engine)).toBe(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('creates distinct workflows for distinct idempotency keys', async () => {
+    const engine = createEngine();
+    try {
+      const first = await engine.start('wait-for-release', null, { idempotencyKey: 'a' });
+      const second = await engine.start('wait-for-release', null, { idempotencyKey: 'b' });
+      expect(second.id).not.toBe(first.id);
+      expect(await countWorkflowRecords(engine)).toBe(2);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('throws when the storage backend lacks conditionalBatch', async () => {
+    const engine = createEngine(new CompressedStorage(new MemoryStorage()));
+    try {
+      await expect(
+        engine.start('wait-for-release', null, { idempotencyKey: 'no-cas' }),
+      ).rejects.toThrow(/conditionalBatch/);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('converges concurrent same-key starts to one workflow and one shared handle id', async () => {
+    const engine = createEngine();
+    try {
+      const [a, b, c] = await Promise.all([
+        engine.start('wait-for-release', null, { idempotencyKey: 'race' }),
+        engine.start('wait-for-release', null, { idempotencyKey: 'race' }),
+        engine.start('wait-for-release', null, { idempotencyKey: 'race' }),
+      ]);
+      expect(b.id).toBe(a.id);
+      expect(c.id).toBe(a.id);
+      expect(await countWorkflowRecords(engine)).toBe(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('rejects supplying both id and idempotencyKey', async () => {
+    const engine = createEngine();
+    try {
+      await expect(
+        engine.start('wait-for-release', null, { id: 'fixed', idempotencyKey: 'k' }),
+      ).rejects.toThrow(/mutually exclusive/);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('rejects an empty idempotencyKey', async () => {
+    const engine = createEngine();
+    try {
+      await expect(engine.start('wait-for-release', null, { idempotencyKey: '' })).rejects.toThrow(
+        /must not be empty/,
+      );
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('rejects an idempotencyKey longer than the byte cap', async () => {
+    const engine = createEngine();
+    try {
+      await expect(
+        engine.start('wait-for-release', null, { idempotencyKey: 'k'.repeat(118) }),
+      ).rejects.toThrow(/at most 117 UTF-8 bytes/);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('throws IdempotencyKeyPurgedError when the key maps to a purged workflow', async () => {
+    const engine = createEngine();
+    try {
+      const first = await engine.start('completes-immediately', null, {
+        idempotencyKey: 'purge-me',
+      });
+      await first.result();
+      // The run is terminal; purge deletes its record but leaves the mapping.
+      await engine.purge({ idPrefix: first.id });
+
+      await expect(
+        engine.start('completes-immediately', null, { idempotencyKey: 'purge-me' }),
+      ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('throws IdempotencyKeyPurgedError when the post-CAS winner lookup hits a purged run (white-box)', async () => {
+    // White-box coverage for the keyed CAS-loss recovery line (startWithIdempotency
+    // line 164): after losing the mapping CAS, the winner id is read back from the
+    // surviving mapping and its record asserted present. If that record was purged
+    // since the key created, the recovery must reject with IdempotencyKeyPurgedError
+    // rather than hand back a handle to a vanished run — mirroring the top-level
+    // mapping hit. We force the CAS-loss branch deterministically: create + purge a
+    // keyed run (record gone, mapping survives), then suppress the top-level mapping
+    // lookup so the second start skips that early throw, builds its own create
+    // batch, loses the still-present mapping CAS, and recovers into the line under
+    // test — which re-reads the mapping and finds the record purged.
+    const inner = new MemoryStorage();
+    const mappingKey = KEYS.startIdempotency('start-cas-purged');
+    const engine = new Engine({
+      storage: storageWithOneShotNullGet(inner, (key) => key === mappingKey),
+    });
+    engine.register(completesImmediately);
+    try {
+      const first = await engine.start('completes-immediately', null, {
+        idempotencyKey: 'start-cas-purged',
+      });
+      await first.result();
+      await engine.purge({ idPrefix: first.id });
+
+      await expect(
+        engine.start('completes-immediately', null, { idempotencyKey: 'start-cas-purged' }),
+      ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('propagates an unregistered-type error from the keyed start path (not swallowed as a race)', async () => {
+    const engine = createEngine();
+    try {
+      // The keyed path commits via the idempotency CAS; an unregistered type
+      // throws WorkflowNotRegisteredError, which is NOT a lost-race sentinel and
+      // must surface rather than being mistaken for a concurrent winner.
+      await expect(
+        engine.start('not-registered', null, { idempotencyKey: 'unregistered-key' }),
+      ).rejects.toThrow(/No workflow registered/);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+});
+
+describe('engine.startOrSignal', () => {
+  it('creates the workflow and delivers the signal when the target is absent', async () => {
+    const engine = createEngine();
+    try {
+      const handle = await engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'go', signalId: 'sig-create' },
+        { id: 'sos-create' },
+      );
+      expect(handle.id).toBe('sos-create');
+      expect(await handle.result()).toBe('go');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('signals an existing running workflow without starting a second run', async () => {
+    const engine = createEngine();
+    try {
+      const started = await engine.start('wait-for-release', null, { id: 'sos-existing' });
+
+      const handle = await engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'late', signalId: 'sig-existing' },
+        { id: 'sos-existing' },
+      );
+      expect(handle.id).toBe(started.id);
+      expect(await started.result()).toBe('late');
+      expect(await countWorkflowRecords(engine)).toBe(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('signals a suspended workflow, which delivers on resume (non-terminal target)', async () => {
+    const engine = createEngine();
+    try {
+      const started = await engine.start('wait-for-release', null, { id: 'sos-suspended' });
+      await engine.suspend('sos-suspended');
+
+      await engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'after-suspend', signalId: 'sig-suspended' },
+        { id: 'sos-suspended' },
+      );
+
+      await engine.resume('sos-suspended');
+      expect(await started.result()).toBe('after-suspend');
+      expect(await countWorkflowRecords(engine)).toBe(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('throws StartOrSignalConflictError when the target is terminal', async () => {
+    const engine = createEngine();
+    try {
+      const completed = await engine.start('completes-immediately', null, { id: 'sos-terminal' });
+      expect(await completed.result()).toBe('done');
+
+      await expect(
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'too-late', signalId: 'sig-terminal' },
+          { id: 'sos-terminal' },
+        ),
+      ).rejects.toBeInstanceOf(StartOrSignalConflictError);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('requires a signalId or idempotencyKey for convergence', async () => {
+    const engine = createEngine();
+    try {
+      await expect(
+        engine.startOrSignal('wait-for-release', null, { name: 'release', payload: 'x' }, {}),
+      ).rejects.toThrow(/signalId or options\.idempotencyKey/);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('rejects supplying both signalId and idempotencyKey', async () => {
+    // They are mutually exclusive: the key-derived signal id is what makes
+    // concurrent callers converge, so honoring a caller signalId alongside a key
+    // would silently re-introduce double-delivery. Reject rather than pick one.
+    const engine = createEngine();
+    try {
+      await expect(
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'x', signalId: 'explicit' },
+          { idempotencyKey: 'also-a-key' },
+        ),
+      ).rejects.toThrow(/does not accept both/);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('converges concurrent idempotency-key callers (no caller signalId) to one signal', async () => {
+    // Independent callers share ONLY the idempotency key — they pass no signalId
+    // (the realistic webhook-retry case). Convergence relies on the key-derived
+    // id: exactly one signal is delivered to one workflow even though two callers
+    // raced, each with its own payload.
+    const engine = createEngine();
+    try {
+      const [a, b] = await Promise.all([
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'from-a' },
+          { idempotencyKey: 'converge' },
+        ),
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'from-b' },
+          { idempotencyKey: 'converge' },
+        ),
+      ]);
+      expect(b.id).toBe(a.id);
+      expect(await countWorkflowRecords(engine)).toBe(1);
+
+      // Exactly one signal landed: the workflow resolves to one of the two
+      // payloads and there is no buffered second signal left in storage.
+      const result = (await a.result()) as string;
+      expect(['from-a', 'from-b']).toContain(result);
+
+      let remainingSignals = 0;
+      for await (const _entry of engine.storage.scan(`sig:${a.id}:release:`)) {
+        remainingSignals += 1;
+      }
+      expect(remainingSignals).toBe(0);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('converges concurrent absent-target callers to one workflow and one signal', async () => {
+    const engine = createEngine();
+    try {
+      const [a, b, c] = await Promise.all([
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'go', signalId: 'same-id' },
+          { id: 'sos-concurrent' },
+        ),
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'go', signalId: 'same-id' },
+          { id: 'sos-concurrent' },
+        ),
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'go', signalId: 'same-id' },
+          { id: 'sos-concurrent' },
+        ),
+      ]);
+      expect(b.id).toBe(a.id);
+      expect(c.id).toBe(a.id);
+      expect(await countWorkflowRecords(engine)).toBe(1);
+      expect(await a.result()).toBe('go');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('throws when the storage backend lacks conditionalBatch', async () => {
+    const engine = createEngine(new CompressedStorage(new MemoryStorage()));
+    try {
+      await expect(
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'x', signalId: 'no-cas' },
+          { id: 'sos-no-cas' },
+        ),
+      ).rejects.toThrow(/conditionalBatch/);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('persists a key→id mapping so startOrSignal can dedup by idempotency key', async () => {
+    const engine = createEngine();
+    try {
+      const created = await engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'first' },
+        { idempotencyKey: 'sos-key' },
+      );
+      const mapping = await engine.storage.get(KEYS.startIdempotency('sos-key'));
+      expect(mapping).not.toBeNull();
+
+      // A second startOrSignal with the same key resolves the mapping and
+      // signals the existing run instead of creating a new one.
+      const again = await engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'second' },
+        { idempotencyKey: 'sos-key' },
+      );
+      expect(again.id).toBe(created.id);
+      expect(await countWorkflowRecords(engine)).toBe(1);
+      expect(await created.result()).toBe('first');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('does not deliver a second signal to a still-running run on a repeat same-key call', async () => {
+    // The convergence guarantee for a non-terminal run rests on the `sigres:`
+    // accepted-response marker outliving signal consumption: a repeat same-key
+    // call derives the same `start-idem:` signalId, and bufferSignalPayloads
+    // short-circuits on the existing marker rather than buffering a second signal.
+    // Asserted at the storage level (not via the run's result) so the dedup
+    // mechanism itself is pinned, independent of what the workflow observes.
+    const engine = createEngine();
+    try {
+      // `release-then-hold` consumes the create-batch `release` then parks on
+      // `hold` (never sent), so the run stays non-terminal across both calls.
+      const created = await engine.startOrSignal(
+        'release-then-hold',
+        null,
+        { name: 'release', payload: 'first' },
+        { idempotencyKey: 'sos-rerun-key' },
+      );
+
+      const acceptedResponseKey = KEYS.signalAcceptedResponse(
+        created.id,
+        'release',
+        KEYS.startIdempotencySignalId('sos-rerun-key'),
+      );
+      expect(await engine.storage.get(acceptedResponseKey)).not.toBeNull();
+
+      const again = await engine.startOrSignal(
+        'release-then-hold',
+        null,
+        { name: 'release', payload: 'second' },
+        { idempotencyKey: 'sos-rerun-key' },
+      );
+      expect(again.id).toBe(created.id);
+
+      // The dedup proof: exactly ONE accepted-response marker for this run's
+      // `release` signal id. The repeat same-key call derived the same signal id,
+      // saw the existing marker, and short-circuited — it did not accept and buffer
+      // a second signal. (We cannot await the run's result to force consumption: it
+      // is parked on `hold`, so we assert on the marker the dedup hinges on.)
+      let acceptedMarkers = 0;
+      for await (const _entry of engine.storage.scan(`sigres:v1:`)) {
+        acceptedMarkers += 1;
+      }
+      expect(acceptedMarkers).toBe(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('signals a pending (delayed-start) workflow, delivering once the timer fires', async () => {
+    const engine = new TestEngine({ startTime: 0 });
+    engine.register(waitForRelease);
+    try {
+      // A delayed-start run sits in 'pending' until its timer fires — a
+      // non-terminal target, so startOrSignal signals it (buffered durably).
+      const started = await engine.start('wait-for-release', null, {
+        id: 'sos-pending',
+        startAfter: '10s',
+      });
+      const pending = await engine.get('sos-pending');
+      expect(pending?.status).toBe('pending');
+
+      await engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'pre-launch', signalId: 'sig-pending' },
+        { id: 'sos-pending' },
+      );
+
+      // Fire the delayed-start timer: the run launches and consumes the signal
+      // that was buffered before it ever drove.
+      await engine.advanceTime('11s');
+      expect(await started.result()).toBe('pre-launch');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('rejects supplying both id and idempotencyKey', async () => {
+    const engine = createEngine();
+    try {
+      await expect(
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'x' },
+          { id: 'fixed', idempotencyKey: 'k' },
+        ),
+      ).rejects.toThrow(/mutually exclusive/);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('throws IdempotencyKeyPurgedError when the key maps to a purged workflow', async () => {
+    const engine = createEngine();
+    try {
+      const created = await engine.startOrSignal(
+        'completes-immediately',
+        null,
+        { name: 'release', payload: 'x' },
+        { idempotencyKey: 'sos-purge' },
+      );
+      await created.result();
+      await engine.purge({ idPrefix: created.id });
+
+      await expect(
+        engine.startOrSignal(
+          'completes-immediately',
+          null,
+          { name: 'release', payload: 'y' },
+          { idempotencyKey: 'sos-purge' },
+        ),
+      ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('propagates an unregistered-type error from the create path (not swallowed as a race)', async () => {
+    const engine = createEngine();
+    try {
+      // The absent-target branch attempts to create via the conditional batch; an
+      // unregistered type throws WorkflowNotRegisteredError, which is neither a
+      // mapping-CAS loss nor a caller-id collision, so it must surface unchanged.
+      await expect(
+        engine.startOrSignal(
+          'not-registered',
+          null,
+          { name: 'release', signalId: 'sos-unregistered' },
+          {},
+        ),
+      ).rejects.toThrow(/No workflow registered/);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('recovers a lost create CAS by resolving the winner and signalling it (white-box race path)', async () => {
+    // White-box coverage for the create-batch CAS-loss recovery path. A real
+    // concurrent race resolves the loser via the top-level mapping lookup, so the
+    // CAS-loss branch (requireWinnerId → resolveWinnerWithSignal) never fires in
+    // ordinary tests. Here we force it deterministically: caller A wins and stays
+    // PARKED (release-then-hold consumes the create-batch `release`, then waits on
+    // `hold`, which is never sent), so it is non-terminal when caller B resolves
+    // it. Caller B's first read of the idempotency mapping is suppressed to null,
+    // so B skips the early lookup, builds its own create batch, loses the CAS, and
+    // recovers by signalling the parked winner.
+    const inner = new MemoryStorage();
+    const mappingKey = KEYS.startIdempotency('race-recover');
+    const engine = new Engine({
+      storage: storageWithOneShotNullGet(inner, (key) => key === mappingKey),
+    });
+    engine.register(releaseThenHold);
+    try {
+      const winner = await engine.startOrSignal(
+        'release-then-hold',
+        null,
+        { name: 'release', payload: 'from-a' },
+        { idempotencyKey: 'race-recover' },
+      );
+
+      const loser = await engine.startOrSignal(
+        'release-then-hold',
+        null,
+        { name: 'release', payload: 'from-b' },
+        { idempotencyKey: 'race-recover' },
+      );
+
+      // Both callers converge on the single parked run; no second workflow exists.
+      expect(loser.id).toBe(winner.id);
+      expect(await countWorkflowRecords(engine)).toBe(1);
+      // The winner is intentionally parked on `hold` (never delivered); asyncDispose
+      // tears it down. We do not await completion — the point is the convergence.
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('creates and delivers a pre-buffered signal on the caller-id path (no sentinel leak)', async () => {
+    // Regression: a signal pre-buffered under the SAME signalId the caller-id
+    // create batch would derive made the batch's signal CAS fail, surfacing the
+    // internal StartIdempotencyRaceLostError sentinel to the caller — despite no
+    // concurrency and no idempotency key. The fix recognizes the caller-id path
+    // (whose only CAS condition is the signal's) and plain-creates the run; the
+    // buffered signal is consumed on first drive, and the caller's payload loses
+    // to the pre-buffered one by first-wins dedup.
+    const engine = createEngine();
+    try {
+      // Pre-buffer a signal for an id whose workflow record does not exist yet.
+      await engine.signal('sos-prebuffered', 'release', 'buffered', { signalId: 'shared-sig' });
+
+      const handle = await engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'from-caller', signalId: 'shared-sig' },
+        { id: 'sos-prebuffered' },
+      );
+
+      expect(handle.id).toBe('sos-prebuffered');
+      expect(await countWorkflowRecords(engine)).toBe(1);
+      // First-wins: the pre-buffered payload is delivered, not the caller's.
+      expect(await handle.result()).toBe('buffered');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('converges concurrent same-id callers when the signal is pre-buffered (no duplicate-id leak)', async () => {
+    // Regression for the CONVERGENCE OUTCOME with a pre-buffered signal: two
+    // concurrent same-id callers converge on one workflow, neither leaking a
+    // WorkflowAlreadyExistsError (Promise.all would reject if either did). The
+    // specific recovery LINE — the loser plain-creating, hitting
+    // WorkflowAlreadyExistsError, and resolving the winner — fires only on a rare
+    // mid-sequence interleaving that in-process storage produces by chance, not on
+    // command; in practice the loser usually resolves via the top-level lookup.
+    // That line is coverage-allowanced; this test pins the outcome it guards.
+    //
+    // `release-then-hold` parks on `hold` after consuming the pre-buffered
+    // `release`, so the winner stays non-terminal while the loser resolves it —
+    // making the loser deterministically receive the handle (not a terminal
+    // StartOrSignalConflictError, which is the correct-but-racy outcome if the
+    // winner had already completed).
+    const engine = createEngine();
+    try {
+      await engine.signal('sos-concurrent-prebuffered', 'release', 'go', {
+        signalId: 'shared-sig',
+      });
+
+      const [a, b] = await Promise.all([
+        engine.startOrSignal(
+          'release-then-hold',
+          null,
+          { name: 'release', payload: 'from-a', signalId: 'shared-sig' },
+          { id: 'sos-concurrent-prebuffered' },
+        ),
+        engine.startOrSignal(
+          'release-then-hold',
+          null,
+          { name: 'release', payload: 'from-b', signalId: 'shared-sig' },
+          { id: 'sos-concurrent-prebuffered' },
+        ),
+      ]);
+
+      // Both callers converge on the single parked run; neither leaked a
+      // WorkflowAlreadyExistsError (Promise.all would have rejected).
+      expect(a.id).toBe('sos-concurrent-prebuffered');
+      expect(b.id).toBe(a.id);
+      expect(await countWorkflowRecords(engine)).toBe(1);
+
+      // Signal dedup held: exactly one accepted-response marker. The loser's
+      // resolveWinnerWithSignal short-circuits on the pre-buffered `sigres:`
+      // (written atomically by the standalone engine.signal and surviving the
+      // winner's first-drive consumption), so no second signal was accepted.
+      let acceptedMarkers = 0;
+      for await (const _entry of engine.storage.scan(`sigres:v1:`)) {
+        acceptedMarkers += 1;
+      }
+      expect(acceptedMarkers).toBe(1);
+      // The run is parked on `hold` (never delivered); asyncDispose tears it down.
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('throws IdempotencyKeyPurgedError when winner resolution exhausts on a purged keyed run (white-box)', async () => {
+    // White-box coverage for the keyed-exhaustion branch in resolveWinnerWithSignal.
+    // The retry loop reads the WINNER RECORD (not the mapping). On the keyed path,
+    // if the record stays absent through every attempt because the run was purged —
+    // while the mapping survives — exhaustion must disambiguate: a still-present
+    // mapping means a spent key (IdempotencyKeyPurgedError), not the caller-id
+    // "reserved but never committed" invariant. We force the CAS-loss recovery
+    // branch deterministically: create + purge a keyed run (record gone, mapping
+    // survives), suppress the top-level mapping lookup so the second startOrSignal
+    // skips the early purged-throw, builds its own create+signal batch, loses the
+    // still-present mapping CAS, and routes into resolveWinnerWithSignal — whose
+    // record reads all return null (purged), driving it to the keyed-exhaustion
+    // re-read.
+    const inner = new MemoryStorage();
+    const mappingKey = KEYS.startIdempotency('sos-cas-purged');
+    const engine = new Engine({
+      storage: storageWithOneShotNullGet(inner, (key) => key === mappingKey),
+    });
+    engine.register(completesImmediately);
+    try {
+      const created = await engine.startOrSignal(
+        'completes-immediately',
+        null,
+        { name: 'release', payload: 'x' },
+        { idempotencyKey: 'sos-cas-purged' },
+      );
+      await created.result();
+      await engine.purge({ idPrefix: created.id });
+
+      await expect(
+        engine.startOrSignal(
+          'completes-immediately',
+          null,
+          { name: 'release', payload: 'y' },
+          { idempotencyKey: 'sos-cas-purged' },
+        ),
+      ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('retries the create when a caller-id winner aborts before its durable commit', async () => {
+    // Regression: a caller-id loser collides on the winner's in-memory
+    // pendingStarts reservation BEFORE the winner's durable commit. If that winner
+    // then aborts (storage failure, oversized payload, throwing start interceptor),
+    // no run ever exists — the loser must retry its own create and win, not strand
+    // waiting for a record that never appears. Deterministic via event ordering (no
+    // sleeps): the winner parks mid-conditionalBatch with its reservation held; once
+    // the loser has collided and entered winner-resolution, we release the winner so
+    // it throws; the loser then re-reads (absent), retries create, and succeeds.
+    const winnerParked = Promise.withResolvers<void>();
+    const releaseWinner = Promise.withResolvers<void>();
+    const loserCollided = Promise.withResolvers<void>();
+    const inner = new MemoryStorage();
+    const engine = new Engine({
+      storage: storageWithAbortingFirstConditionalBatch(
+        inner,
+        () => winnerParked.resolve(),
+        releaseWinner.promise,
+      ),
+    });
+    engine.register(waitForRelease);
+
+    // Fire `loserCollided` when the loser's start observes the winner's held
+    // reservation (has() returns true for this id). The winner's own pre-reserve
+    // check returns false, so only the loser's collision trips it.
+    const pendingStarts = getInternals(engine).pendingStarts;
+    const originalHas = pendingStarts.has.bind(pendingStarts);
+    pendingStarts.has = (id: string): boolean => {
+      const present = originalHas(id);
+      if (present && id === 'sos-abort') {
+        loserCollided.resolve();
+      }
+      return present;
+    };
+
+    try {
+      const winnerPromise = engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'winner', signalId: 'sig-abort' },
+        { id: 'sos-abort' },
+      );
+      await winnerParked.promise; // winner parked mid-commit; reservation held
+
+      const loserPromise = engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'loser', signalId: 'sig-abort' },
+        { id: 'sos-abort' },
+      );
+      await loserCollided.promise; // loser hit the held reservation → lost-caller-id
+
+      releaseWinner.resolve(); // winner throws → aborts → finally clears the reservation
+
+      // The winner's start rejects with the injected abort; the loser recovers by
+      // retrying its own create (the wrapper lets the second conditionalBatch
+      // through) and resolves to a real run.
+      await expect(winnerPromise).rejects.toThrow(/injected winner abort/);
+      const loser = await loserPromise;
+      expect(loser.id).toBe('sos-abort');
+      expect(await countWorkflowRecords(engine)).toBe(1);
+      expect(await loser.result()).toBe('loser');
+    } finally {
+      pendingStarts.has = originalHas;
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('throws after the create-attempt cap when every caller-id winner keeps aborting', async () => {
+    // White-box coverage for the CALLER_ID_CREATE_MAX_ATTEMPTS exhaustion throw: if
+    // every create attempt collides with a reservation that never clears into a
+    // committed record, the loser must surface a bounded error rather than loop
+    // forever. Hold a permanent reservation for the target id so every retry
+    // re-collides and the reservation never clears.
+    const engine = createEngine();
+    getInternals(engine).pendingStarts.add('sos-cap');
+    try {
+      await expect(
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'x', signalId: 'sig-cap' },
+          { id: 'sos-cap' },
+        ),
+      ).rejects.toThrow(/after 5 attempts/);
+    } finally {
+      getInternals(engine).pendingStarts.delete('sos-cap');
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+});
