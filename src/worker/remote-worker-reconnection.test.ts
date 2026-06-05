@@ -305,9 +305,15 @@ describe('RemoteWorker durability — same-worker stale attempt (attempt token)'
       operationId,
       activityName: 'echo',
       input: { value: 'v' },
-      // Short timeout so attempt 1 expires and the scanner re-dispatches to the
-      // only worker (worker-a) as attempt 2.
-      visibilityTimeout: 150,
+      // Short enough that attempt 1 expires and the scanner (20ms poll) re-
+      // dispatches to the only worker as attempt 2, but long enough that the
+      // attempt-2 window — which the heartbeat below extends by this same
+      // visibilityTimeout — comfortably outlasts the stale/fresh completion
+      // exchange. At 150ms a slow CI runner could let attempt 2 expire and
+      // re-dispatch as attempt 3 before the fresh completion lands, turning the
+      // fresh token stale and flaking the test; 500ms gives ample slack without
+      // changing the behavior under test.
+      visibilityTimeout: 500,
     });
 
     const dispatch1 = await workerA.nextServerMessage(isTask, { timeoutMs: 2_000 });

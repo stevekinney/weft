@@ -374,7 +374,19 @@ export function restoreInflightTasks(context: ServerContext, options: ServeOptio
       // stored visibilityTimeout to the original value so future heartbeat
       // extensions use the full duration, not the diminished remainder.
       const remaining = record.deadline - now;
-      context.registry.assignTask(record.workerId, record.operationId, remaining);
+      // Carry the durable record's attemptToken into the rehydrated registry
+      // entry. Without it the in-memory task would have no token, and
+      // isAssignedToAttempt treats a missing in-memory token as backward-
+      // compatible (accept any echo) — which would silently disable the stale-
+      // attempt guard for every in-flight task across a server restart, exactly
+      // when the durable record still holds the current attempt's token.
+      context.registry.assignTask(
+        record.workerId,
+        record.operationId,
+        remaining,
+        undefined,
+        record.attemptToken,
+      );
       context.deadlineTracker.add({ operationId: record.operationId, deadline: record.deadline });
       const tracked = context.registry
         .getWorkerTasks(record.workerId)

@@ -1,5 +1,6 @@
 import { describe, expect, it, spyOn } from 'bun:test';
 
+import { MemoryStorage } from '../storage/memory.ts';
 import {
   minimalServeOptions,
   minimalServerContext,
@@ -9,7 +10,9 @@ import {
   clampWorkerReconnectGracePeriod,
   registerStackDisposers,
   resolveNetworkConfig,
+  restoreInflightTasks,
 } from './serve-internals.ts';
+import { transitionQueuedToInflight } from './task-state.ts';
 
 import type { EventBroadcastingHandle } from './index.ts';
 
@@ -178,5 +181,60 @@ describe('registerStackDisposers', () => {
     timerCleanupDisposer!();
 
     expect(disposeSpy).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('restoreInflightTasks', () => {
+  /** Wait until the registry has rehydrated the operation, or throw on timeout. */
+  async function waitForRestored(
+    context: ReturnType<typeof minimalServerContext>,
+    operationId: string,
+  ): Promise<void> {
+    const deadline = Date.now() + 1_000;
+    while (Date.now() < deadline) {
+      if (context.registry.getTask(operationId) !== undefined) return;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    throw new Error(`operation "${operationId}" was not restored within 1s`);
+  }
+
+  it('rehydrates the attemptToken so the stale-attempt guard survives a server restart', async () => {
+    // Regression: restoreInflightTasks must carry the durable record's
+    // attemptToken into the rehydrated registry entry. If it drops the token,
+    // isAssignedToAttempt sees a token-less in-memory task and accepts ANY echo
+    // (backward-compat), silently disabling the stale-attempt guard for every
+    // in-flight task across a restart — even though storage still holds the
+    // current attempt's token.
+    const storage = new MemoryStorage();
+    const context = minimalServerContext();
+    const options = minimalServeOptions(storage);
+
+    const operationId = 'restore-op';
+    const workerId = 'worker-a';
+    const attemptToken = 'attempt-token-2';
+    // Seed a durable inflight record (token-bearing) as if a dispatch persisted
+    // it before the server went down. Deadline is in the future so restore keeps it.
+    await transitionQueuedToInflight(storage, operationId, {
+      operationId,
+      workerId,
+      deadline: Date.now() + 30_000,
+      activityName: 'charge',
+      queue: 'default',
+      input: { amount: 1 },
+      attempt: 2,
+      visibilityTimeout: 30_000,
+      attemptToken,
+    });
+
+    restoreInflightTasks(context, options);
+    await waitForRestored(context, operationId);
+
+    // A stale completion from the SAME worker echoing an EARLIER attempt's token
+    // must be rejected — proving the current token survived the restart.
+    expect(context.registry.isAssignedToAttempt(operationId, workerId, 'attempt-token-1')).toBe(
+      false,
+    );
+    // The current attempt's token is accepted.
+    expect(context.registry.isAssignedToAttempt(operationId, workerId, attemptToken)).toBe(true);
   });
 });
