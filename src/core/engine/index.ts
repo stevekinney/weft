@@ -261,6 +261,7 @@ export {
   BulkOperationConfirmationError,
   EngineCreateNameMismatchError,
   EngineDisposedError,
+  IdempotencyKeyPurgedError,
   PersistedDataIncompatibleError,
   StartOrSignalConflictError,
   WorkflowAlreadyExistsError,
@@ -817,7 +818,7 @@ export class Engine<
         getInternals(this),
         type,
         input,
-        { ...options, idempotencyKey: options.idempotencyKey },
+        options,
         this.#createLifecycleCallbacks(),
       );
     }
@@ -842,8 +843,10 @@ export class Engine<
    * Concurrent callers converge on one workflow and one delivered signal. Pass
    * `options.idempotencyKey` to dedup independent callers (e.g. retried
    * webhooks); the signal id derives from the key when `signal.signalId` is
-   * omitted, so callers that share only the key still converge. Requires a
-   * storage backend with `conditionalBatch`.
+   * omitted, so callers that share only the key still converge. `signal.signalId`
+   * and `options.idempotencyKey` are mutually exclusive (provide exactly one), as
+   * are `options.id` and `options.idempotencyKey`. Requires a storage backend
+   * with `conditionalBatch`.
    */
   async startOrSignal<TName extends KnownWorkflowNames<TWorkflows>>(
     type: TName,

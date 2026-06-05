@@ -5,6 +5,13 @@ import { assertValidWorkflowId } from './workflow-identifiers.ts';
 
 export const MAX_WORKFLOW_TAGS = 32;
 export const MAX_WORKFLOW_TAG_BYTES = 128;
+/**
+ * Upper bound on a start `idempotencyKey`, in UTF-8 bytes. `startOrSignal`
+ * derives a signal id of `start-idem:${key}` (an 11-byte prefix) from the key,
+ * and `validateSignalId` caps a signal id at 128 bytes — so the raw key must fit
+ * in `128 - 11 = 117` bytes for the derived id to stay within that ceiling.
+ */
+export const MAX_IDEMPOTENCY_KEY_BYTES = 117;
 
 const textEncoder = new TextEncoder();
 const EXCLUSIVE_START_WORKFLOW_OPTIONS_ERROR = 'Provide only one of startAt or startAfter';
@@ -47,8 +54,25 @@ export const coerceStartWorkflowIdempotencyKey = (value: unknown, fieldName: str
   if (typeof value !== 'string') {
     throw new StartWorkflowValidationError(`${fieldName} must be a string`);
   }
+  return assertValidIdempotencyKey(value, fieldName);
+};
+
+/**
+ * Validate an already-string `idempotencyKey`: non-empty (an empty key would
+ * collide across unrelated starts under the shared `start-idem:` mapping) and at
+ * most {@link MAX_IDEMPOTENCY_KEY_BYTES} UTF-8 bytes (so the derived
+ * `start-idem:${key}` signal id stays within the signal-id ceiling). Shared by
+ * the transport coercion and the engine boundary so a direct `engine.start`
+ * caller gets the same guarantees as an HTTP caller.
+ */
+export const assertValidIdempotencyKey = (value: string, fieldName: string): string => {
   if (value.length === 0) {
     throw new StartWorkflowValidationError(`${fieldName} must not be empty`);
+  }
+  if (textEncoder.encode(value).byteLength > MAX_IDEMPOTENCY_KEY_BYTES) {
+    throw new StartWorkflowValidationError(
+      `${fieldName} must be at most ${MAX_IDEMPOTENCY_KEY_BYTES} UTF-8 bytes`,
+    );
   }
   return value;
 };

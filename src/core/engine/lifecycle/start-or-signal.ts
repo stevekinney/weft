@@ -1,8 +1,16 @@
 import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { KEYS, requireStorageCapability } from '../../../storage/interface.ts';
 import { decode, encode } from '../../codec.ts';
+import {
+  assertValidIdempotencyKey,
+  StartWorkflowValidationError,
+} from '../../start-workflow-validation.ts';
 import type { StartOptions, StartOrSignalSignal } from '../../types.ts';
-import { StartOrSignalConflictError, WorkflowAlreadyExistsError } from '../errors.ts';
+import {
+  IdempotencyKeyPurgedError,
+  StartOrSignalConflictError,
+  WorkflowAlreadyExistsError,
+} from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { buildCreateBatchSignalOperations } from '../signals.ts';
@@ -55,7 +63,7 @@ function resolveSignalId(
   if (signalSpec.signalId !== undefined) {
     return signalSpec.signalId;
   }
-  throw new Error(
+  throw new StartWorkflowValidationError(
     'startOrSignal requires either signal.signalId or options.idempotencyKey so concurrent ' +
       'callers converge on a single delivered signal.',
   );
@@ -77,18 +85,15 @@ async function resolveIdempotencyKeyWorkflowId(
 /**
  * Build the `(workflowId) => { operations, conditions }` callback that folds the
  * idempotency mapping and (optionally) the create-batch signal into the start
- * batch, gated on the mapping key being absent. Returns `undefined` when neither
- * an idempotency key nor a signal needs to be persisted, so the plain start path
- * is used.
+ * batch, gated on the mapping key being absent. Every caller supplies at least
+ * one of `idempotencyKey` / `signal` (the plain start path skips this factory
+ * entirely), so the returned callback always contributes at least one operation.
  */
 function buildIdempotentStartOperationsFactory(
   internals: EngineInternals,
   idempotencyKey: string | undefined,
   signal: { name: string; payload: unknown; signalId: string } | undefined,
-): BuildIdempotentStartOperations | undefined {
-  if (idempotencyKey === undefined && signal === undefined) {
-    return undefined;
-  }
+): BuildIdempotentStartOperations {
   return (workflowId) => {
     const operations: BatchOperation[] = [];
     const conditions: ConditionalBatchCondition[] = [];
@@ -136,14 +141,28 @@ export async function startWithIdempotency(
   internals: EngineInternals,
   type: string,
   input: unknown,
-  options: StartOptions & { idempotencyKey: string },
+  options: StartOptions,
   callbacks: LifecycleCallbacks,
 ): Promise<WorkflowHandle> {
   requireStorageCapability(internals.storage, 'conditionalBatch', 'start idempotency');
   const { idempotencyKey } = options;
+  if (idempotencyKey === undefined) {
+    // The engine only routes here when a key is set; an undefined key is a
+    // programming error, not a runtime input — fail loudly rather than silently
+    // starting without idempotency.
+    throw new StartWorkflowValidationError('startWithIdempotency requires options.idempotencyKey');
+  }
+  assertValidIdempotencyKey(idempotencyKey, 'options.idempotencyKey');
+  assertIdAndIdempotencyKeyExclusive(options);
 
   const existingId = await resolveIdempotencyKeyWorkflowId(internals, idempotencyKey);
   if (existingId !== undefined) {
+    // The mapping survives terminal cleanup but NOT purge/delete. If the record
+    // is gone the key is spent — a fresh create would fail the mapping CAS and
+    // strand the caller; surface a clear error instead.
+    if ((await loadWorkflowState(internals, existingId)) === null) {
+      throw new IdempotencyKeyPurgedError(existingId);
+    }
     return callbacks.getHandle(existingId);
   }
 
@@ -158,18 +177,60 @@ export async function startWithIdempotency(
       buildIdempotentStartOperationsFactory(internals, idempotencyKey, undefined),
     );
   } catch (error) {
-    // Lost the race to a concurrent same-key caller, by either the idempotency-
-    // mapping CAS (random/typical id) or the caller-id reservation (a fixed
-    // `id` was also supplied — the loser's `callerProvidedId` check throws
-    // before the mapping CAS). Both resolve to the winner via the mapping.
-    const lostRace =
-      error instanceof StartIdempotencyRaceLostError || error instanceof WorkflowAlreadyExistsError;
-    if (!lostRace) {
+    // Only an idempotency-mapping CAS loss is a same-key race we resolve to the
+    // winner. A `WorkflowAlreadyExistsError` cannot reach here: the key path
+    // always uses a generated id (id + idempotencyKey is rejected above), so the
+    // caller-id reservation never collides — a genuine id collision is therefore
+    // impossible on this path and is not swallowed.
+    if (!(error instanceof StartIdempotencyRaceLostError)) {
       throw error;
     }
   }
 
   return callbacks.getHandle(await requireWinnerId(internals, idempotencyKey));
+}
+
+/**
+ * `id` and `idempotencyKey` are mutually exclusive. Idempotency assigns its own
+ * generated id and dedups through the `start-idem:` mapping; pinning a caller
+ * `id` alongside it would make the loser of a same-key race collide on the fixed
+ * id (a genuine `WorkflowAlreadyExistsError`) rather than converge through the
+ * mapping, conflating "id already taken" with "lost the idempotency race". Reject
+ * the combination so each concern stays separable.
+ */
+function assertIdAndIdempotencyKeyExclusive(options: StartOptions): void {
+  if (options.id !== undefined && options.idempotencyKey !== undefined) {
+    throw new StartWorkflowValidationError(
+      'options.id and options.idempotencyKey are mutually exclusive: idempotency assigns its own ' +
+        'workflow id and dedups through the idempotency key. Provide one or the other.',
+    );
+  }
+}
+
+/**
+ * Validate the convergence tokens for {@link startOrSignal}: when an
+ * `idempotencyKey` is present it must be well-formed, exclusive of `options.id`,
+ * and exclusive of a caller-supplied `signal.signalId` (the key derives the
+ * signal id). Throws {@link StartWorkflowValidationError} otherwise. The
+ * "exactly one of signalId / idempotencyKey is required" check happens later in
+ * {@link resolveSignalId}, after the absent case is known.
+ */
+function validateStartOrSignalConvergence(
+  signalSpec: StartOrSignalSignal,
+  options: StartOptions | undefined,
+): void {
+  const idempotencyKey = options?.idempotencyKey;
+  if (idempotencyKey === undefined) {
+    return;
+  }
+  assertValidIdempotencyKey(idempotencyKey, 'options.idempotencyKey');
+  assertIdAndIdempotencyKeyExclusive(options ?? {});
+  if (signalSpec.signalId !== undefined) {
+    throw new StartWorkflowValidationError(
+      'startOrSignal does not accept both signal.signalId and options.idempotencyKey: the signal ' +
+        'id derives from the idempotency key for convergence. Provide exactly one.',
+    );
+  }
 }
 
 /**
@@ -199,21 +260,14 @@ export async function startOrSignal(
   requireStorageCapability(internals.storage, 'conditionalBatch', 'startOrSignal');
 
   const idempotencyKey = options?.idempotencyKey;
-  if (idempotencyKey !== undefined && signalSpec.signalId !== undefined) {
-    // They are mutually exclusive: the key-derived id is what makes independent
-    // concurrent callers converge, so honoring a caller signalId alongside a key
-    // would silently re-introduce double-delivery. Reject rather than pick one.
-    throw new Error(
-      'startOrSignal does not accept both signal.signalId and options.idempotencyKey: the ' +
-        'signal id derives from the idempotency key for convergence. Provide exactly one.',
-    );
-  }
+  validateStartOrSignalConvergence(signalSpec, options);
   const signalId = resolveSignalId(signalSpec, idempotencyKey);
 
-  const existingId =
+  const mappedId =
     idempotencyKey !== undefined
       ? await resolveIdempotencyKeyWorkflowId(internals, idempotencyKey)
-      : options?.id;
+      : undefined;
+  const existingId = mappedId ?? options?.id;
 
   if (existingId !== undefined) {
     const resolved = await signalOrConflictExistingWorkflow(
@@ -226,8 +280,13 @@ export async function startOrSignal(
     if (resolved !== undefined) {
       return resolved;
     }
-    // The id is reserved (mapping present) but the record is not yet readable;
-    // fall through to the create path, which will lose the CAS and re-resolve.
+    // The record is absent. If it came from a resolved idempotency mapping, the
+    // key's run was purged — the key is spent (a create would fail the still-
+    // present mapping CAS and strand the caller). A caller-`id` with no record
+    // simply means "create it", so fall through only in that case.
+    if (mappedId !== undefined) {
+      throw new IdempotencyKeyPurgedError(mappedId);
+    }
   }
 
   return createWithSignalOrFallBack(
@@ -303,25 +362,51 @@ async function createWithSignalOrFallBack(
     }
   }
 
-  // Lost the create race. Resolve the winner and deliver via the signal path,
-  // whose CAS dedups against the winner's create-batch signal (same signalId).
+  // Lost the create race to a concurrent caller. Resolve the winner and deliver
+  // via the signal path, whose CAS dedups against the winner's create-batch
+  // signal (same signalId). The winner's record may not be readable on the first
+  // read if its commit is still settling, so resolution is bounded-retried.
   const winnerId =
     idempotencyKey !== undefined
       ? await requireWinnerId(internals, idempotencyKey)
-      : requireCallerProvidedId(options);
-  const resolved = await signalOrConflictExistingWorkflow(
-    internals,
-    winnerId,
-    signalSpec,
-    signalId,
-    callbacks,
-  );
-  if (resolved === undefined) {
-    throw new Error(
-      `startOrSignal resolved winning workflow "${winnerId}" but its record is missing.`,
+      : // id+key is rejected, so a WorkflowAlreadyExistsError loss is the id-only
+        // path: the caller-supplied id is the winner.
+        (options?.id ?? '');
+  return resolveWinnerWithSignal(internals, winnerId, signalSpec, signalId, callbacks);
+}
+
+/** Number of times winner resolution re-reads a not-yet-readable record before erroring. */
+const WINNER_RESOLUTION_MAX_ATTEMPTS = 5;
+
+/**
+ * Signal the race winner, bounded-retrying when its record is not yet readable
+ * (a loser can observe the reservation before the winner's durable commit lands).
+ * Throws after {@link WINNER_RESOLUTION_MAX_ATTEMPTS} reads if the record never
+ * appears — a genuine invariant violation rather than a transient delay.
+ */
+async function resolveWinnerWithSignal(
+  internals: EngineInternals,
+  winnerId: string,
+  signalSpec: StartOrSignalSignal,
+  signalId: string,
+  callbacks: StartOrSignalCallbacks,
+): Promise<WorkflowHandle> {
+  for (let attempt = 0; attempt < WINNER_RESOLUTION_MAX_ATTEMPTS; attempt += 1) {
+    const resolved = await signalOrConflictExistingWorkflow(
+      internals,
+      winnerId,
+      signalSpec,
+      signalId,
+      callbacks,
     );
+    if (resolved !== undefined) {
+      return resolved;
+    }
   }
-  return resolved;
+  throw new Error(
+    `startOrSignal resolved winning workflow "${winnerId}" but its record never became readable ` +
+      `after ${WINNER_RESOLUTION_MAX_ATTEMPTS} attempts.`,
+  );
 }
 
 /**
@@ -341,15 +426,4 @@ async function requireWinnerId(
     );
   }
   return winnerId;
-}
-
-/** The caller-provided id is the winner when an id-only create loses its reservation. */
-function requireCallerProvidedId(options: StartOptions | undefined): string {
-  if (options?.id === undefined) {
-    throw new Error(
-      'startOrSignal lost a caller-id create race without a caller-provided id; this is ' +
-        'unreachable because WorkflowAlreadyExistsError is only thrown for a supplied id.',
-    );
-  }
-  return options.id;
 }

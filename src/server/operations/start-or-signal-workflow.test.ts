@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
+import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
@@ -118,6 +119,136 @@ describe('weft.workflows.startorsignal', () => {
     expect(response.status).toBe(409);
   });
 
+  it('forwards executionTimeout, startAfter, and tags to the create path', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      startOrSignalRequest({
+        type: 'wait-for-release',
+        signalName: 'release',
+        signalId: 'sig-options',
+        id: 'sos-rest-options',
+        executionTimeout: '30s',
+        startAfter: '1s',
+        tags: ['alpha', 'beta'],
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ id: 'sos-rest-options' });
+  });
+
+  it('forwards startAt as an absolute scheduling timestamp', async () => {
+    engine = createEngine();
+
+    // `startAt` is a non-negative epoch-millisecond timestamp; a far-future value
+    // keeps the run pending so the create path is exercised without it running.
+    const farFuture = Date.UTC(2999, 0, 1);
+    const response = await handleRequest(
+      startOrSignalRequest({
+        type: 'wait-for-release',
+        signalName: 'release',
+        signalId: 'sig-start-at',
+        id: 'sos-rest-start-at',
+        startAt: farFuture,
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ id: 'sos-rest-start-at' });
+  });
+
+  it('returns 400 when a start option is malformed (e.g. a non-string id)', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      startOrSignalRequest({
+        type: 'wait-for-release',
+        signalName: 'release',
+        signalId: 'sig-bad-id',
+        id: 42,
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toMatch(/Field "id"/);
+  });
+
+  it('returns 400 when startAt and startAfter are both provided', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      startOrSignalRequest({
+        type: 'wait-for-release',
+        signalName: 'release',
+        signalId: 'sig-both-schedules',
+        startAt: Date.UTC(2999, 0, 1),
+        startAfter: '1s',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Provide only one of startAt or startAfter' });
+  });
+
+  it('returns 400 when the request body is invalid JSON', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      new Request('http://localhost/v1/workflows/start-or-signal', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{ not json',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Invalid JSON body' });
+  });
+
+  it('returns 400 when the request body is JSON null (not an object)', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(startOrSignalRequest(null), engine, {
+      operationRegistry: registry,
+      restBindings: bindings,
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Request body must be a JSON object' });
+  });
+
+  it('returns 400 when engine.startOrSignal throws StartWorkflowValidationError', async () => {
+    engine = createEngine();
+    const original = engine.startOrSignal.bind(engine);
+    engine.startOrSignal = async () => {
+      throw new StartWorkflowValidationError('Field "id" must be a string');
+    };
+
+    try {
+      const response = await handleRequest(
+        startOrSignalRequest({ type: 'wait-for-release', signalName: 'release', signalId: 'x' }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: 'Field "id" must be a string' });
+    } finally {
+      engine.startOrSignal = original;
+    }
+  });
+
   it('honors searchAttributes on the create path over REST (not silently dropped)', async () => {
     engine = createEngine();
 
@@ -187,9 +318,11 @@ describe('weft.workflows.startorsignal', () => {
     expect(await response.json()).toEqual({ error: 'Missing required field: type' });
   });
 
-  it('returns 400 when the signalName is missing', async () => {
+  it('returns 400 when the signalName is missing (rejected by the schema)', async () => {
     engine = createEngine();
 
+    // signalName is `z.string().min(1)`, so an absent value is rejected at the
+    // schema boundary with the generic invalid-params message.
     const response = await handleRequest(
       startOrSignalRequest({ type: 'wait-for-release', signalId: 'x' }),
       engine,
@@ -197,7 +330,20 @@ describe('weft.workflows.startorsignal', () => {
     );
 
     expect(response.status).toBe(400);
-    expect(await response.json()).toEqual({ error: 'Missing required field: signalName' });
+    expect(await response.json()).toEqual({ error: 'invalid params' });
+  });
+
+  it('returns 400 when the signalName is an empty string (rejected by the schema)', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      startOrSignalRequest({ type: 'wait-for-release', signalName: '', signalId: 'x' }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'invalid params' });
   });
 
   it('enforces idempotencyKey: a duplicate key returns the same id', async () => {
@@ -228,6 +374,81 @@ describe('weft.workflows.startorsignal', () => {
     );
     expect(second.status).toBe(201);
     expect((await second.json()) as { id: string }).toEqual(firstBody);
+  });
+
+  it('returns 409 when an idempotency key maps to a purged run (not a masked 500)', async () => {
+    engine = createEngine();
+
+    // First call creates the run and the durable `start-idem:` mapping, then we
+    // release and let it complete so it can be purged.
+    const first = await handleRequest(
+      startOrSignalRequest({
+        type: 'wait-for-release',
+        signalName: 'release',
+        signalPayload: 'go',
+        idempotencyKey: 'sos-purged-key',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    expect(first.status).toBe(201);
+    const { id } = (await first.json()) as { id: string };
+    await engine.getHandle(id).result();
+    // Purge the run; the `start-idem:` mapping intentionally survives, so the key
+    // now resolves to a workflow that no longer exists.
+    await engine.purge({ idPrefix: id });
+
+    const second = await handleRequest(
+      startOrSignalRequest({
+        type: 'wait-for-release',
+        signalName: 'release',
+        signalPayload: 'again',
+        idempotencyKey: 'sos-purged-key',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(second.status).toBe(409);
+    expect((await second.json()) as { error: string }).toEqual(
+      expect.objectContaining({
+        error: expect.stringContaining('no longer exists'),
+      }),
+    );
+  });
+
+  it('returns 400 InvalidParams when the workflow type is not registered', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      startOrSignalRequest({ type: 'not-registered', signalName: 'release', signalId: 'x' }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toMatch(/not-registered/);
+  });
+
+  it('masks an unexpected engine failure to a 500 generic error body', async () => {
+    engine = createEngine();
+    const original = engine.startOrSignal.bind(engine);
+    engine.startOrSignal = async () => {
+      throw new Error('startOrSignal failed internally');
+    };
+
+    try {
+      const response = await handleRequest(
+        startOrSignalRequest({ type: 'wait-for-release', signalName: 'release', signalId: 'x' }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+      expect(response.status).toBe(500);
+      expect(await response.json()).toEqual({ error: 'Internal server error' });
+    } finally {
+      engine.startOrSignal = original;
+    }
   });
 });
 

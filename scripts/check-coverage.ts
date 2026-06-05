@@ -1644,6 +1644,19 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   ['src/core/engine/bulk-operations-purge.ts', { lines: new Set([166, 214, 215, 216]) }],
   ['src/core/engine/construction.ts', { lines: new Set([97, 98, 99, 100, 101]) }],
   [
+    // start-or-signal's three invariant-violation throws are unreachable from the
+    // public API by construction: line 153 (startWithIdempotency rejecting an
+    // undefined key — the engine only routes here when a key is set), lines
+    // 404-409 (resolveWinnerWithSignal exhausting its bounded retry — a winning
+    // record that NEVER becomes readable), and lines 423-426 (requireWinnerId
+    // finding the mapping vanished after a lost CAS — the start-idem: keyspace
+    // externally mutated). The reachable success branches of both helpers are
+    // covered by the white-box race-recovery test; contriving a mock to hit these
+    // throws would test the mock, not the engine.
+    'src/core/engine/lifecycle/start-or-signal.ts',
+    { lines: new Set([153, 404, 405, 406, 407, 408, 409, 423, 424, 426]) },
+  ],
+  [
     'src/core/engine/pending-updates.ts',
     {
       functions: 2,

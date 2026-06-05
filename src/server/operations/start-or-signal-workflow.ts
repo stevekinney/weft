@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  IdempotencyKeyPurgedError,
   StartOrSignalConflictError,
   WorkflowNotRegisteredError,
 } from '../../core/engine/errors.ts';
@@ -27,7 +28,7 @@ import { coerceStartWorkflowSearchAttributes } from './start-workflow-search-att
 const startOrSignalWorkflowInput = z.object({
   type: z.unknown().describe('Workflow type name. Runtime validation requires a non-empty string.'),
   input: z.unknown().optional(),
-  signalName: z.unknown().describe('Signal name. Runtime validation requires a non-empty string.'),
+  signalName: z.string().min(1).describe('Signal name. Must be a non-empty string.'),
   signalPayload: z.unknown().optional(),
   signalId: z
     .string()
@@ -67,9 +68,8 @@ function validateStartOrSignalWorkflowInput(
   if (typeof input.type !== 'string' || input.type.length === 0) {
     throw invalidParamsFault('Missing required field: type');
   }
-  if (typeof input.signalName !== 'string' || input.signalName.length === 0) {
-    throw invalidParamsFault('Missing required field: signalName');
-  }
+  // `signalName` is `z.string().min(1)` — Zod rejects an absent or empty value
+  // at the schema boundary before `invoke`, so no manual guard is needed here.
 
   let options: StartOptions;
   try {
@@ -162,8 +162,9 @@ function buildStartOrSignalOptions(
  * Routing order (typed errors take precedence over string matching):
  *   1. WorkflowNotRegisteredError   → InvalidParams
  *   2. StartOrSignalConflictError   → Conflict (target already terminal)
- *   3. StartWorkflowValidationError → InvalidParams
- *   4. otherwise                    → EngineFailure
+ *   3. IdempotencyKeyPurgedError    → Conflict (key maps to a purged run)
+ *   4. StartWorkflowValidationError → InvalidParams
+ *   5. otherwise                    → EngineFailure
  */
 function resolveStartOrSignalWorkflowFault(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
@@ -171,7 +172,10 @@ function resolveStartOrSignalWorkflowFault(error: unknown): never {
   if (error instanceof WorkflowNotRegisteredError) {
     throw invalidParamsFault(message);
   }
-  if (error instanceof StartOrSignalConflictError) {
+  if (error instanceof StartOrSignalConflictError || error instanceof IdempotencyKeyPurgedError) {
+    // Both are client-actionable convergence conflicts: a terminal target, or a
+    // spent key whose run was purged. Surface as Conflict (409) so the caller can
+    // choose a different id / idempotency key — not an opaque masked 500.
     const fault: OperationFault = {
       code: 'Conflict',
       message,

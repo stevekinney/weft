@@ -534,7 +534,7 @@ export type CatalogOperationTypes = {
       readonly input?: unknown;
       readonly searchAttributes?: unknown;
       readonly signalId?: string;
-      readonly signalName: unknown;
+      readonly signalName: string;
       readonly signalPayload?: unknown;
       readonly startAfter?: unknown;
       readonly startAt?: unknown;

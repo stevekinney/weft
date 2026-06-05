@@ -19,12 +19,8 @@ export function scheduleSpecToWireFields(spec: string | ScheduleSpec): Record<st
   return { cronExpression: spec.cron };
 }
 
-export function buildStartBody(
-  type: string,
-  input: unknown,
-  options?: StartOptions,
-): Record<string, unknown> {
-  const body: Record<string, unknown> = { type, input };
+/** Copy the shared `StartOptions` wire fields onto a request body, omitting undefined. */
+function applyStartOptionsToBody(body: Record<string, unknown>, options?: StartOptions): void {
   setIfDefined(body, 'id', options?.id);
   setIfDefined(body, 'executionTimeout', options?.executionTimeout);
   setIfDefined(body, 'startAt', options?.startAt);
@@ -32,6 +28,15 @@ export function buildStartBody(
   setIfDefined(body, 'tags', options?.tags);
   setIfDefined(body, 'idempotencyKey', options?.idempotencyKey);
   setIfDefined(body, 'searchAttributes', options?.searchAttributes);
+}
+
+export function buildStartBody(
+  type: string,
+  input: unknown,
+  options?: StartOptions,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = { type, input };
+  applyStartOptionsToBody(body, options);
   return body;
 }
 
@@ -49,12 +54,6 @@ export function buildStartOrSignalBody(
   const body: Record<string, unknown> = { type, input, signalName: signal.name };
   setIfDefined(body, 'signalPayload', signal.payload);
   setIfDefined(body, 'signalId', signal.signalId);
-  setIfDefined(body, 'id', options?.id);
-  setIfDefined(body, 'executionTimeout', options?.executionTimeout);
-  setIfDefined(body, 'startAt', options?.startAt);
-  setIfDefined(body, 'startAfter', options?.startAfter);
-  setIfDefined(body, 'tags', options?.tags);
-  setIfDefined(body, 'idempotencyKey', options?.idempotencyKey);
-  setIfDefined(body, 'searchAttributes', options?.searchAttributes);
+  applyStartOptionsToBody(body, options);
   return body;
 }

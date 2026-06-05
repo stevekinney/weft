@@ -362,4 +362,34 @@ export class StartOrSignalConflictError extends WeftError<'StartOrSignalConflict
   }
 }
 
+/**
+ * Thrown by {@link Engine.start} / {@link Engine.startOrSignal} when an
+ * `idempotencyKey` resolves to a workflow that no longer exists — its run was
+ * purged or bulk-deleted while the durable `start-idem:` mapping (intentionally
+ * not swept on cleanup) lived on. The key is "spent": it can neither return the
+ * gone run nor safely start a fresh one under the same key (a concurrent caller
+ * may still hold the mapping). Use a different idempotency key to start anew.
+ *
+ * @example
+ * ```ts
+ * import { IdempotencyKeyPurgedError } from '@lostgradient/weft';
+ *
+ * function isPurgedIdempotencyKey(error: unknown): boolean {
+ *   return error instanceof IdempotencyKeyPurgedError;
+ * }
+ * ```
+ */
+export class IdempotencyKeyPurgedError extends WeftError<'IdempotencyKeyPurgedError'> {
+  readonly workflowId: string;
+
+  constructor(workflowId: string) {
+    super(
+      'IdempotencyKeyPurgedError',
+      `The idempotency key maps to workflow "${workflowId}", which no longer exists (it was ` +
+        'purged or deleted). Use a different idempotency key to start a new run.',
+    );
+    this.workflowId = workflowId;
+  }
+}
+
 export { PersistedDataIncompatibleError } from '../persisted-data-incompatible-error.ts';

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  IdempotencyKeyPurgedError,
   WorkflowAlreadyExistsError,
   WorkflowNotRegisteredError,
 } from '../../core/engine/errors.ts';
@@ -83,8 +84,9 @@ function validateStartWorkflowInput(
  * Routing order (typed errors take precedence over string matching):
  *   1. WorkflowNotRegisteredError   → InvalidParams
  *   2. WorkflowAlreadyExistsError   → Conflict
- *   3. StartWorkflowValidationError → InvalidParams
- *   4. otherwise                    → EngineFailure
+ *   3. IdempotencyKeyPurgedError    → Conflict (key maps to a purged run)
+ *   4. StartWorkflowValidationError → InvalidParams
+ *   5. otherwise                    → EngineFailure
  */
 function resolveStartWorkflowAccess(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
@@ -92,7 +94,10 @@ function resolveStartWorkflowAccess(error: unknown): never {
   if (error instanceof WorkflowNotRegisteredError) {
     throw invalidParamsFault(message);
   }
-  if (error instanceof WorkflowAlreadyExistsError) {
+  if (error instanceof WorkflowAlreadyExistsError || error instanceof IdempotencyKeyPurgedError) {
+    // An id collision or a spent idempotency key (its run purged) are both
+    // client-actionable conflicts: pick a different id / key. Surface as Conflict
+    // (409) rather than letting the purged-key case mask to an opaque 500.
     const fault: OperationFault = {
       code: 'Conflict',
       message,

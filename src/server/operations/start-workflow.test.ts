@@ -274,6 +274,36 @@ describe('weft.workflows.start', () => {
     );
   });
 
+  it('returns 409 when an idempotency key maps to a purged run (not a masked 500)', async () => {
+    engine = createEngine();
+
+    // First start creates the run and the durable `start-idem:` mapping.
+    const first = await handleRequest(
+      jsonRequest('POST', '/v1/workflows', { type: 'echo', idempotencyKey: 'purged-key' }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    expect(first.status).toBe(201);
+    const { id } = (await first.json()) as { id: string };
+    await engine.getHandle(id).result();
+    // Purge the run while the mapping intentionally lives on; the key is now spent.
+    await engine.purge({ idPrefix: id });
+
+    const second = await handleRequest(
+      jsonRequest('POST', '/v1/workflows', { type: 'echo', idempotencyKey: 'purged-key' }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    // Client-actionable conflict (pick a different key), not an opaque 500.
+    expect(second.status).toBe(409);
+    expect((await second.json()) as { error: string }).toEqual(
+      expect.objectContaining({
+        error: expect.stringContaining('no longer exists'),
+      }),
+    );
+  });
+
   it('masks unexpected engine failures to a generic 500 (no raw message leak)', async () => {
     engine = createEngine();
     const originalStart = engine.start.bind(engine);

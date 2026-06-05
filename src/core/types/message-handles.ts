@@ -145,16 +145,16 @@ export interface SignalDeliveryOptions {
  * ```ts
  * import type { StartOrSignalSignal } from '@lostgradient/weft';
  *
- * const signal: StartOrSignalSignal<{ event: string }> = {
+ * const signal: StartOrSignalSignal = {
  *   name: 'webhook',
  *   payload: { event: 'payment.succeeded' },
  * };
  * void signal;
  * ```
  */
-export interface StartOrSignalSignal<TPayload = unknown> {
+export interface StartOrSignalSignal {
   readonly name: string;
-  readonly payload?: TPayload;
+  readonly payload?: unknown;
   readonly signalId?: string;
 }
 

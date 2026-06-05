@@ -581,14 +581,14 @@ interface StartOptions {
 ### `StartOrSignalSignal`
 
 ```ts partial
-interface StartOrSignalSignal<TPayload = unknown> {
+interface StartOrSignalSignal {
   name: string;
-  payload?: TPayload;
+  payload?: unknown;
   signalId?: string;
 }
 ```
 
-The signal half of `engine.startOrSignal` (signal-with-start). When `signalId` is omitted it derives from `StartOptions.idempotencyKey`; supply one or the other so concurrent callers converge on a single delivered signal.
+The signal half of `engine.startOrSignal` (signal-with-start). When `signalId` is omitted it derives from `StartOptions.idempotencyKey`; supply exactly one (not both) so concurrent callers converge on a single delivered signal.
 
 ### `WorkflowServicesResolver`
 

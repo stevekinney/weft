@@ -5,6 +5,7 @@ import { workflow } from './core/types/workflow-function.ts';
 import type { WorkflowOperation, WorkflowReplay, WorkflowTimelineEntry } from './index';
 import {
   Engine,
+  IdempotencyKeyPurgedError,
   MemoryStorage,
   StartOrSignalConflictError,
   VERSION,
@@ -92,6 +93,30 @@ describe('weft', () => {
           { id: 'sos-export' },
         ),
       ).rejects.toBeInstanceOf(StartOrSignalConflictError);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('exports IdempotencyKeyPurgedError for a spent key whose run was purged', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const done = workflow({ name: 'idempotency-purged' }).execute(async function* () {
+      return 'ok';
+    });
+    engine.register(done);
+
+    try {
+      // First start with the key creates the run and the durable mapping.
+      const handle = await engine.start('idempotency-purged', null, {
+        idempotencyKey: 'spent-key',
+      });
+      await handle.result();
+      // Purge the run while the `start-idem:` mapping intentionally lives on.
+      await engine.purge({ idPrefix: handle.id });
+      // The key now maps to a workflow that no longer exists.
+      await expect(
+        engine.start('idempotency-purged', null, { idempotencyKey: 'spent-key' }),
+      ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
     } finally {
       await engine[Symbol.asyncDispose]();
     }

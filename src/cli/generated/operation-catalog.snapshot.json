@@ -3755,7 +3755,9 @@
             "type": "string"
           },
           "signalName": {
-            "description": "Signal name. Runtime validation requires a non-empty string."
+            "description": "Signal name. Must be a non-empty string.",
+            "minLength": 1,
+            "type": "string"
           },
           "signalPayload": {},
           "startAfter": {},
