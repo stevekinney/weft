@@ -63,13 +63,29 @@ function validateTaskResultBody(body: Record<string, unknown>): ValidatedTaskRes
     return Response.json({ error: 'status must be "completed" or "failed"' }, { status: 400 });
   }
 
+  // Distinguish a MISSING attemptToken (an old worker that does not echo —
+  // backward-compatible, falls back to the workerId guard) from a PRESENT but
+  // malformed one. A present non-string token is a protocol error, rejected here
+  // the same way the WebSocket parser rejects it, so the two transports stay
+  // consistent and a `{ attemptToken: 42 }` is never silently treated as absent.
+  const rawAttemptToken = body['attemptToken'];
+  if (
+    rawAttemptToken !== undefined &&
+    (typeof rawAttemptToken !== 'string' || rawAttemptToken === '')
+  ) {
+    return Response.json(
+      { error: 'attemptToken must be a non-empty string when present' },
+      { status: 400 },
+    );
+  }
+
   return {
     operationId,
     status,
     workerId: typeof body['workerId'] === 'string' ? body['workerId'] : undefined,
     value: body['value'],
     error: typeof body['error'] === 'string' ? body['error'] : undefined,
-    attemptToken: typeof body['attemptToken'] === 'string' ? body['attemptToken'] : undefined,
+    attemptToken: rawAttemptToken,
   };
 }
 

@@ -346,6 +346,53 @@ describe('handleTaskPollRequest', () => {
     expect(accepted?.status).toBe(200);
   });
 
+  it('rejects a present-but-malformed attemptToken with 400 (not silently treated as absent)', async () => {
+    // A MISSING token is backward-compatible (falls back to the workerId guard).
+    // A PRESENT but non-string/empty token is a malformed frame and must be
+    // rejected — the same strictness the WebSocket parser applies — so the long-
+    // poll transport cannot be coerced into treating `{ attemptToken: 42 }` as an
+    // old-worker absent echo and bypassing the attempt guard on a token-bearing record.
+    const context = minimalServerContext();
+    const options = minimalServeOptions();
+    context.taskQueue.enqueue('default', {
+      operationId: 'op-malformed-token',
+      activityName: 'charge',
+      input: { amount: 1 },
+    });
+
+    const pollRequest = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
+      method: 'GET',
+    });
+    const pollResponse = await handleTaskPollRequest(
+      context,
+      options,
+      pollRequest,
+      new URL(pollRequest.url),
+      WORKER_PRINCIPAL,
+    );
+    const task = await pollResponse?.json();
+    expect(task.attemptToken).toBeString();
+
+    for (const malformed of [42, null, '']) {
+      const rejected = await handleTaskResultRequest(
+        context,
+        options,
+        makePostRequest({
+          operationId: 'op-malformed-token',
+          status: 'completed',
+          value: 1,
+          workerId: task.workerId,
+          attemptToken: malformed,
+        }),
+        makeUrl('/v1/tasks/default/result'),
+        WORKER_PRINCIPAL,
+      );
+      expect(rejected?.status).toBe(400);
+      const body = await rejected?.json();
+      expect(body.error).toMatch(/attemptToken/);
+    }
+  });
+
   it('authorizes a matching-workerId completion when the worker omits the echoed token', async () => {
     // Backward-compat / no-version-bump: the claim's in-flight record HAS a token
     // (the current server always stamps one), but an older long-poll worker echoes

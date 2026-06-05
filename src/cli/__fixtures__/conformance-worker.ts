@@ -5,6 +5,11 @@ export type ConformanceWorkerFixture = 'conforming';
 type InFlightTask = {
   activityName: string;
   timeout?: ReturnType<typeof setTimeout>;
+  // The token captured from THIS dispatch. Carried on the per-dispatch task object
+  // (not a side map keyed by operationId) so a re-dispatch of the same operation
+  // cannot overwrite an earlier attempt's token — echoing the wrong token would
+  // mask the very stale-attempt bug the conformance suite exists to catch.
+  attemptToken?: string;
 };
 
 const serverUrl = Bun.env['WEFT_WORKER_URL'];
@@ -23,10 +28,6 @@ if (serverUrl === undefined) {
 }
 
 const inFlightTasks = new Map<string, InFlightTask>();
-// Per-operation attempt token, captured from the dispatched task and echoed on
-// the result so the server can reject a stale earlier attempt. Cleared when the
-// result is sent.
-const attemptTokens = new Map<string, string>();
 const socket = new WebSocket(serverUrl);
 let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
 
@@ -43,32 +44,30 @@ function startHeartbeats(): void {
   }, heartbeatIntervalMs);
 }
 
-/** Take and clear the captured attempt token for an operation, echoing it on the result. */
-function takeAttemptToken(operationId: string): string | undefined {
-  const token = attemptTokens.get(operationId);
-  attemptTokens.delete(operationId);
-  return token;
+/** Build the attempt-token echo, omitting the field when this dispatch carried none. */
+function tokenEcho(attemptToken: string | undefined): { attemptToken?: string } {
+  return attemptToken !== undefined ? { attemptToken } : {};
 }
 
-function complete(operationId: string, value: unknown): void {
+function complete(operationId: string, value: unknown, attemptToken: string | undefined): void {
   inFlightTasks.delete(operationId);
   send({
     type: 'taskResult',
     operationId,
     status: 'completed',
     value: value === undefined ? null : value,
-    attemptToken: takeAttemptToken(operationId),
+    ...tokenEcho(attemptToken),
   });
 }
 
-function fail(operationId: string, error: string): void {
+function fail(operationId: string, error: string, attemptToken: string | undefined): void {
   inFlightTasks.delete(operationId);
   send({
     type: 'taskResult',
     operationId,
     status: 'failed',
     error,
-    attemptToken: takeAttemptToken(operationId),
+    ...tokenEcho(attemptToken),
   });
 }
 
@@ -84,7 +83,8 @@ function cancel(operationId: string): void {
     status: 'cancelled',
     cancelled: true,
     error: 'Task cancelled',
-    attemptToken: takeAttemptToken(operationId),
+    // Echo the token captured on THIS dispatch's in-flight task object.
+    ...tokenEcho(task?.attemptToken),
   });
 }
 
@@ -103,36 +103,38 @@ function handleTask(message: Record<string, unknown>): void {
   const activityName = message['activityName'];
   if (typeof operationId !== 'string' || typeof activityName !== 'string') return;
 
-  // Capture the per-dispatch token so the result echoes it.
-  const attemptToken = message['attemptToken'];
-  if (typeof attemptToken === 'string') {
-    attemptTokens.set(operationId, attemptToken);
-  }
+  // Capture the per-dispatch token from THIS task and carry it on the dispatch —
+  // either passed straight to the synchronous result or stored on the in-flight
+  // task object for the deferred ones. Never looked up later by operationId.
+  const rawToken = message['attemptToken'];
+  const attemptToken = typeof rawToken === 'string' ? rawToken : undefined;
 
   if (activityName === 'weft.conformance.echo') {
-    complete(operationId, message['input']);
+    complete(operationId, message['input'], attemptToken);
     return;
   }
 
+  const tokenField = attemptToken !== undefined ? { attemptToken } : {};
+
   if (activityName === 'weft.conformance.sleep') {
     const timeout = setTimeout(
-      () => complete(operationId, message['input']),
+      () => complete(operationId, message['input'], attemptToken),
       millisecondsFromInput(message['input']),
     );
-    inFlightTasks.set(operationId, { activityName, timeout });
+    inFlightTasks.set(operationId, { activityName, timeout, ...tokenField });
     return;
   }
 
   if (activityName === 'weft.conformance.cancel') {
     const timeout = setTimeout(
-      () => fail(operationId, 'Cancel was not delivered'),
+      () => fail(operationId, 'Cancel was not delivered', attemptToken),
       millisecondsFromInput(message['input']),
     );
-    inFlightTasks.set(operationId, { activityName, timeout });
+    inFlightTasks.set(operationId, { activityName, timeout, ...tokenField });
     return;
   }
 
-  fail(operationId, `Unknown activity: ${activityName}`);
+  fail(operationId, `Unknown activity: ${activityName}`, attemptToken);
 }
 
 socket.addEventListener('open', () => {
