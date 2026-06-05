@@ -10,7 +10,6 @@ import { IdempotencyKeyPurgedError, WorkflowAlreadyExistsError } from '../errors
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { buildCreateBatchSignalOperations } from '../signals.ts';
-import { loadWorkflowState } from '../storage-io.ts';
 import { type LifecycleCallbacks } from './shared.ts';
 import {
   StartIdempotencyRaceLostError,
@@ -18,6 +17,7 @@ import {
 } from './start-commit.ts';
 import {
   requireWinnerId,
+  resolveExistingRunOrThrowPurged,
   resolveIdempotencyKeyWorkflowId,
   resolveWinnerWithSignal,
   signalOrConflictExistingWorkflow,
@@ -131,13 +131,10 @@ export async function startWithIdempotency(
 
   const existingId = await resolveIdempotencyKeyWorkflowId(internals, idempotencyKey);
   if (existingId !== undefined) {
-    // The mapping survives terminal cleanup but NOT purge/delete. If the record
-    // is gone the key is spent — a fresh create would fail the mapping CAS and
-    // strand the caller; surface a clear error instead.
-    if ((await loadWorkflowState(internals, existingId)) === null) {
-      throw new IdempotencyKeyPurgedError(existingId);
-    }
-    return callbacks.getHandle(existingId);
+    // The mapping survives terminal cleanup but NOT purge/delete; a present
+    // mapping whose record is gone means the key is spent, so reject rather than
+    // return a handle to a vanished run.
+    return callbacks.getHandle(await resolveExistingRunOrThrowPurged(internals, existingId));
   }
 
   try {
@@ -161,7 +158,15 @@ export async function startWithIdempotency(
     }
   }
 
-  return callbacks.getHandle(await requireWinnerId(internals, idempotencyKey));
+  // Mirror the synchronous mapping hit above: the winner's record may have been
+  // purged since it created, so assert it still exists before handing back a
+  // handle rather than returning one to a vanished run.
+  return callbacks.getHandle(
+    await resolveExistingRunOrThrowPurged(
+      internals,
+      await requireWinnerId(internals, idempotencyKey),
+    ),
+  );
 }
 
 /**
@@ -338,12 +343,15 @@ async function createWithSignalOrFallback(
       return await startWorkflow(internals, type, input, options, undefined, callbacks);
     } catch (error) {
       if (error instanceof WorkflowAlreadyExistsError) {
+        // Caller-id path (no idempotency key): exhaustion here is the genuine
+        // reserved-but-never-committed invariant, never a purged key.
         return resolveWinnerWithSignal(
           internals,
           error.workflowId,
           signalSpec,
           signalId,
           callbacks,
+          undefined,
         );
       }
       throw error;
@@ -353,8 +361,17 @@ async function createWithSignalOrFallback(
   // Lost the create race to a winner. Resolve the winner and deliver via the
   // signal path, whose CAS dedups against the winner's create-batch signal (same
   // signalId). The winner's record may not be readable on the first read if its
-  // commit is still settling, so resolution is bounded-retried.
-  return resolveWinnerWithSignal(internals, outcome.id, signalSpec, signalId, callbacks);
+  // commit is still settling, so resolution is bounded-retried. On the keyed path
+  // the idempotency key lets exhaustion distinguish a purged run from the
+  // never-committed invariant.
+  return resolveWinnerWithSignal(
+    internals,
+    outcome.id,
+    signalSpec,
+    signalId,
+    callbacks,
+    idempotencyKey,
+  );
 }
 
 /**

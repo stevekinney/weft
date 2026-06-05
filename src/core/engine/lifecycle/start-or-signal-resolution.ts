@@ -2,7 +2,7 @@ import { sleep } from '../../../runtime/portable.ts';
 import { KEYS } from '../../../storage/interface.ts';
 import { decode } from '../../codec.ts';
 import type { StartOrSignalSignal } from '../../types.ts';
-import { StartOrSignalConflictError } from '../errors.ts';
+import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { loadWorkflowState } from '../storage-io.ts';
@@ -42,6 +42,25 @@ export async function resolveIdempotencyKeyWorkflowId(
 }
 
 /**
+ * Resolve a key-mapped workflow id to a handle id, asserting its record still
+ * exists. The `start-idem:` mapping outlives terminal cleanup but NOT purge or
+ * delete, so a present mapping whose record is gone means the key is spent: a
+ * fresh create would fail the still-present mapping CAS and strand the caller.
+ * Surface {@link IdempotencyKeyPurgedError} instead of handing back a handle to a
+ * vanished run. Shared by the synchronous mapping hit and the post-race winner
+ * lookup so both reject a purged key identically.
+ */
+export async function resolveExistingRunOrThrowPurged(
+  internals: EngineInternals,
+  workflowId: string,
+): Promise<string> {
+  if ((await loadWorkflowState(internals, workflowId)) === null) {
+    throw new IdempotencyKeyPurgedError(workflowId);
+  }
+  return workflowId;
+}
+
+/**
  * For a workflow that already exists: signal it if non-terminal, conflict if
  * terminal. Returns the handle on a successful signal, or `undefined` when the
  * workflow record is not present (so the caller falls through to create).
@@ -77,10 +96,14 @@ const WINNER_RESOLUTION_RETRY_DELAY_MS = 5;
  * Signal the race winner, bounded-retrying when its record is not yet readable. A
  * caller-id loser can observe the winner's in-memory `pendingStarts` reservation
  * (see start.ts) BEFORE the winner's durable commit lands, so the first read may
- * miss the record; a short delay between reads lets the commit settle. Throws
- * after {@link WINNER_RESOLUTION_MAX_ATTEMPTS} reads if the record never appears
- * — reachable only if a reserving caller never commits (e.g. it crashed mid-start
- * after reserving), which is a genuine invariant violation, not a transient delay.
+ * miss the record; a short delay between reads lets the commit settle.
+ *
+ * After {@link WINNER_RESOLUTION_MAX_ATTEMPTS} reads with no record, disambiguate:
+ * on the keyed path (`idempotencyKey` supplied), re-read the mapping — if it still
+ * resolves, the winner's run was purged out from under the still-present mapping,
+ * so the key is spent and we throw {@link IdempotencyKeyPurgedError}. A vanished
+ * mapping, or the caller-id path (no key), is the genuine "reserved but never
+ * committed" invariant violation and keeps the hard throw.
  */
 export async function resolveWinnerWithSignal(
   internals: EngineInternals,
@@ -88,6 +111,7 @@ export async function resolveWinnerWithSignal(
   signalSpec: StartOrSignalSignal,
   signalId: string,
   callbacks: StartOrSignalCallbacks,
+  idempotencyKey: string | undefined,
 ): Promise<WorkflowHandle> {
   for (let attempt = 0; attempt < WINNER_RESOLUTION_MAX_ATTEMPTS; attempt += 1) {
     const resolved = await signalOrConflictExistingWorkflow(
@@ -102,6 +126,13 @@ export async function resolveWinnerWithSignal(
     }
     if (attempt < WINNER_RESOLUTION_MAX_ATTEMPTS - 1) {
       await sleep(WINNER_RESOLUTION_RETRY_DELAY_MS);
+    }
+  }
+  if (idempotencyKey !== undefined) {
+    // Keyed path: the mapping still pointing at this id while the record stays
+    // absent means the run was purged — the key is spent, not mid-commit.
+    if ((await resolveIdempotencyKeyWorkflowId(internals, idempotencyKey)) !== undefined) {
+      throw new IdempotencyKeyPurgedError(winnerId);
     }
   }
   throw new Error(

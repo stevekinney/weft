@@ -249,6 +249,38 @@ describe('engine.start idempotency', () => {
     }
   });
 
+  it('throws IdempotencyKeyPurgedError when the post-CAS winner lookup hits a purged run (white-box)', async () => {
+    // White-box coverage for the keyed CAS-loss recovery line (startWithIdempotency
+    // line 164): after losing the mapping CAS, the winner id is read back from the
+    // surviving mapping and its record asserted present. If that record was purged
+    // since the key created, the recovery must reject with IdempotencyKeyPurgedError
+    // rather than hand back a handle to a vanished run — mirroring the top-level
+    // mapping hit. We force the CAS-loss branch deterministically: create + purge a
+    // keyed run (record gone, mapping survives), then suppress the top-level mapping
+    // lookup so the second start skips that early throw, builds its own create
+    // batch, loses the still-present mapping CAS, and recovers into the line under
+    // test — which re-reads the mapping and finds the record purged.
+    const inner = new MemoryStorage();
+    const mappingKey = KEYS.startIdempotency('start-cas-purged');
+    const engine = new Engine({
+      storage: storageWithOneShotNullGet(inner, (key) => key === mappingKey),
+    });
+    engine.register(completesImmediately);
+    try {
+      const first = await engine.start('completes-immediately', null, {
+        idempotencyKey: 'start-cas-purged',
+      });
+      await first.result();
+      await engine.purge({ idPrefix: first.id });
+
+      await expect(
+        engine.start('completes-immediately', null, { idempotencyKey: 'start-cas-purged' }),
+      ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
   it('propagates an unregistered-type error from the keyed start path (not swallowed as a race)', async () => {
     const engine = createEngine();
     try {
@@ -744,6 +776,48 @@ describe('engine.startOrSignal', () => {
       }
       expect(acceptedMarkers).toBe(1);
       // The run is parked on `hold` (never delivered); asyncDispose tears it down.
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('throws IdempotencyKeyPurgedError when winner resolution exhausts on a purged keyed run (white-box)', async () => {
+    // White-box coverage for the keyed-exhaustion branch in resolveWinnerWithSignal.
+    // The retry loop reads the WINNER RECORD (not the mapping). On the keyed path,
+    // if the record stays absent through every attempt because the run was purged —
+    // while the mapping survives — exhaustion must disambiguate: a still-present
+    // mapping means a spent key (IdempotencyKeyPurgedError), not the caller-id
+    // "reserved but never committed" invariant. We force the CAS-loss recovery
+    // branch deterministically: create + purge a keyed run (record gone, mapping
+    // survives), suppress the top-level mapping lookup so the second startOrSignal
+    // skips the early purged-throw, builds its own create+signal batch, loses the
+    // still-present mapping CAS, and routes into resolveWinnerWithSignal — whose
+    // record reads all return null (purged), driving it to the keyed-exhaustion
+    // re-read.
+    const inner = new MemoryStorage();
+    const mappingKey = KEYS.startIdempotency('sos-cas-purged');
+    const engine = new Engine({
+      storage: storageWithOneShotNullGet(inner, (key) => key === mappingKey),
+    });
+    engine.register(completesImmediately);
+    try {
+      const created = await engine.startOrSignal(
+        'completes-immediately',
+        null,
+        { name: 'release', payload: 'x' },
+        { idempotencyKey: 'sos-cas-purged' },
+      );
+      await created.result();
+      await engine.purge({ idPrefix: created.id });
+
+      await expect(
+        engine.startOrSignal(
+          'completes-immediately',
+          null,
+          { name: 'release', payload: 'y' },
+          { idempotencyKey: 'sos-cas-purged' },
+        ),
+      ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
     } finally {
       await engine[Symbol.asyncDispose]();
     }

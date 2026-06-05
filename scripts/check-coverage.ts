@@ -1646,7 +1646,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   [
     // start-or-signal edges. Line 127 (startWithIdempotency rejecting an undefined
     // key) is unreachable by construction — the engine only routes here when a key
-    // is set. Lines 339-349 are the `signal-already-buffered` plain-create's
+    // is set. Lines 344-357 are the `signal-already-buffered` plain-create's
     // WorkflowAlreadyExistsError recovery: the convergence OUTCOME (one record, no
     // leaked WorkflowAlreadyExistsError, both callers converge) is covered by the
     // concurrent pre-buffered regression test, but this specific recovery LINE fires
@@ -1654,19 +1654,23 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
     // chance, not on command (the loser usually resolves via the top-level lookup).
     // Contriving a mock to hit it would test the mock, not the engine.
     'src/core/engine/lifecycle/start-or-signal.ts',
-    { lines: new Set([127, 339, 340, 341, 342, 343, 344, 345, 346, 347, 348, 349]) },
+    { lines: new Set([127, 344, 345, 348, 349, 350, 351, 352, 353, 354, 355, 356, 357]) },
   ],
   [
-    // start-or-signal-resolution's two invariant-violation throws. Lines 106-109
-    // are the resolveWinnerWithSignal exhaustion throw if a winning record never
-    // becomes readable within five delayed reads — reachable only if a caller that
-    // reserved `pendingStarts` never durably commits (e.g. it crashed mid-start).
-    // Lines 124-127 are requireWinnerId finding the mapping vanished after a lost
-    // CAS — reachable only by external `start-idem:` keyspace mutation. The
-    // reachable success branches of both helpers are covered by the white-box
-    // race-recovery test; contriving a mock to hit the throws would test the mock.
+    // start-or-signal-resolution's two invariant-violation throws. Lines 136-140
+    // are the resolveWinnerWithSignal exhaustion throw reached when a winning record
+    // never becomes readable within five delayed reads AND the key path cannot prove
+    // a purge (the mapping vanished between exhaustion and the re-read, lines 136-137
+    // being the fall-through past the purged-key throw) — reachable only if a caller
+    // that reserved `pendingStarts` never durably commits (e.g. it crashed
+    // mid-start) or the keyspace was mutated externally. Lines 155-158 are
+    // requireWinnerId finding the mapping vanished after a lost CAS — reachable only
+    // by external `start-idem:` keyspace mutation. The reachable success branches of
+    // both helpers, and the keyed-exhaustion purged-key throw (line 135), are covered
+    // by the white-box race-recovery and purged-key tests; contriving a mock to hit
+    // these invariant throws would test the mock.
     'src/core/engine/lifecycle/start-or-signal-resolution.ts',
-    { lines: new Set([106, 107, 108, 109, 124, 125, 126, 127]) },
+    { lines: new Set([136, 137, 138, 139, 140, 155, 156, 158]) },
   ],
   [
     'src/core/engine/pending-updates.ts',
