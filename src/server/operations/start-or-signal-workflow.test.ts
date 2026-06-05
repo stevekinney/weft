@@ -473,9 +473,11 @@ describe('weft.workflows.startorsignal', () => {
 
 describe('weft.workflows.startorsignal over JSON-RPC HTTP', () => {
   const servers: WeftServer[] = [];
+  const engines: Engine[] = [];
 
   afterEach(async () => {
     await Promise.all(servers.splice(0).map((server) => server.stop()));
+    await Promise.all(engines.splice(0).map((engine) => engine[Symbol.asyncDispose]()));
   });
 
   async function postJsonRpc(
@@ -497,6 +499,7 @@ describe('weft.workflows.startorsignal over JSON-RPC HTTP', () => {
 
   it('creates and signals over JSON-RPC, returning the workflow id', async () => {
     const engine = createEngine();
+    engines.push(engine);
     const server = serve({ engine, port: 0 });
     servers.push(server);
 
@@ -515,6 +518,7 @@ describe('weft.workflows.startorsignal over JSON-RPC HTTP', () => {
 
   it('maps a terminal target to a JSON-RPC Conflict error', async () => {
     const engine = createEngine();
+    engines.push(engine);
     const server = serve({ engine, port: 0 });
     servers.push(server);
 

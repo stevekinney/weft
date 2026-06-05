@@ -159,7 +159,8 @@ export const startOrSignalWorkflowOperation = defineOperation<
   description:
     'Start a workflow or deliver a signal to it if it already exists (signal-with-start). An ' +
     'absent target is created and delivered the signal in one batch; a non-terminal target ' +
-    '(running, pending, or suspended) is signalled; a terminal target faults with Conflict. ' +
+    '(running, pending, or suspended) is signalled; a terminal target faults with Conflict, as ' +
+    'does a spent `idempotencyKey` whose run was purged or swept by retention. ' +
     'Requires `type`, `signalName`, and exactly one of `signalId` or `idempotencyKey` (not ' +
     'both). Accepts `input`, `signalPayload`, and the same start options as weft.workflows.start ' +
     '(`id`, `executionTimeout`, `startAt`/`startAfter`, `tags`, `idempotencyKey`, ' +
