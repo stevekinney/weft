@@ -11,8 +11,9 @@ describe('inline launch queue', () => {
   it('falls back to a timeout flush when no message channel is available', async () => {
     await using engine = new Engine({ storage: new MemoryStorage() });
     const internals = getInternals(engine);
+    internals.queuedInlineWorkflowStartChannel?.port1.close();
+    internals.queuedInlineWorkflowStartChannel?.port2.close();
     internals.queuedInlineWorkflowStartChannel = null;
-
     const onStarted = mock(() => {});
     const swallowPromiseRejection = mock(async (promise: Promise<unknown> | undefined) => {
       await promise;

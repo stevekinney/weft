@@ -186,18 +186,20 @@ async function createQueuedScheduleStartFailureFixture(): Promise<{
 
 function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleState {
   return {
-    backfills: [],
-    catchupWindow: 0,
     createdAt: 1,
     cronExpression: '* * * * *',
     id: 'schedule-state',
     input: null,
     nextFireAt: 60_000,
     status: 'active',
+    overlap: 'skip',
+    backfill: false,
+    queuedRuns: 0,
     updatedAt: 1,
     workflowType: 'workflow',
     ...overrides,
-  } as ScheduleState;
+  };
+}
 }
 
 describe('recurring schedules', () => {
