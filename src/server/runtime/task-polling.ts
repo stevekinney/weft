@@ -108,7 +108,17 @@ async function applyTaskResult(
   }
 }
 
-export function createLongPollInflightRecord(queue: string, task: PendingTask): InflightRecord {
+/**
+ * A freshly created long-poll inflight record always carries an `attemptToken`.
+ * The intersection makes that invariant a compile-time fact so the claim can read
+ * the token directly without an unreachable empty-string fallback.
+ */
+type TokenedInflightRecord = InflightRecord & { attemptToken: string };
+
+export function createLongPollInflightRecord(
+  queue: string,
+  task: PendingTask,
+): TokenedInflightRecord {
   const now = Date.now();
   const visibilityTimeout = task.visibilityTimeout ?? DEFAULT_VISIBILITY_TIMEOUT;
   const deadline = now + visibilityTimeout;
@@ -165,8 +175,10 @@ export async function markTaskClaimedByLongPollWorker(
   recordTaskBacklogMetric(context.metricsCollector, context.taskQueue);
   return {
     workerId: normalizedInflightRecord.workerId,
-    // createLongPollInflightRecord always sets attemptToken; transition preserves it.
-    attemptToken: normalizedInflightRecord.attemptToken ?? inflightRecord.attemptToken ?? '',
+    // The token is read from the freshly created record (typed to always carry
+    // one), not from the normalized round-trip, so the claim never hands the
+    // worker an empty or missing token to echo.
+    attemptToken: inflightRecord.attemptToken,
   };
 }
 

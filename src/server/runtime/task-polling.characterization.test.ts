@@ -346,6 +346,51 @@ describe('handleTaskPollRequest', () => {
     expect(accepted?.status).toBe(200);
   });
 
+  it('authorizes a matching-workerId completion when the worker omits the echoed token', async () => {
+    // Backward-compat / no-version-bump: the claim's in-flight record HAS a token
+    // (the current server always stamps one), but an older long-poll worker echoes
+    // none. The attempt guard fires only on a present-but-wrong token, so a missing
+    // echo falls back to the workerId-only guard and is accepted — the only worker
+    // in a singleton deployment is never live-locked.
+    const context = minimalServerContext();
+    const options = minimalServeOptions();
+    context.taskQueue.enqueue('default', {
+      operationId: 'op-omit-echo',
+      activityName: 'charge',
+      input: { amount: 42 },
+    });
+
+    const pollRequest = new Request('http://localhost/v1/tasks/default?activity=charge&timeout=0', {
+      method: 'GET',
+    });
+    const pollResponse = await handleTaskPollRequest(
+      context,
+      options,
+      pollRequest,
+      new URL(pollRequest.url),
+      WORKER_PRINCIPAL,
+    );
+    const task = await pollResponse?.json();
+    // The record carries a token, and the claim never hands out an empty one.
+    expect(task.attemptToken).toBeString();
+    expect(task.attemptToken.length).toBeGreaterThan(0);
+
+    const accepted = await handleTaskResultRequest(
+      context,
+      options,
+      // No attemptToken echoed — the old-worker case.
+      makePostRequest({
+        operationId: 'op-omit-echo',
+        status: 'completed',
+        value: 42,
+        workerId: task.workerId,
+      }),
+      makeUrl('/v1/tasks/default/result'),
+      WORKER_PRINCIPAL,
+    );
+    expect(accepted?.status).toBe(200);
+  });
+
   it('authorizes a matching-workerId completion against a token-less in-flight record', async () => {
     // Backward-compat: an in-flight record written before the attempt-token field
     // existed carries no token. A completion that echoes the correct workerId must

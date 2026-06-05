@@ -435,20 +435,28 @@ describe('RemoteWorker protocol contract', () => {
 
   it('rejects a taskResult whose echoed attemptToken is present but not a non-empty string', () => {
     // The optional attemptToken echo is validated when present: a non-string (or
-    // empty string) is a malformed frame, distinct from omitting the field.
-    for (const badToken of [42, '', null]) {
-      expect(
-        parseWorkerToServerMessage({
-          type: 'taskResult',
-          operationId: 'op-1',
-          status: 'completed',
-          value: null,
-          attemptToken: badToken,
-        }),
-      ).toMatchObject({
-        ok: false,
-        error: { message: 'taskResult.attemptToken must be a non-empty string when present' },
-      });
+    // empty string) is a malformed frame, distinct from omitting the field. The
+    // same `parseEchoedAttemptToken` guard runs for all three status variants, so
+    // pin every variant rather than trusting the shared helper.
+    const variants = [
+      { status: 'completed', value: null },
+      { status: 'failed', error: 'boom' },
+      { status: 'cancelled', error: 'boom' },
+    ] as const;
+    for (const variant of variants) {
+      for (const badToken of [42, '', null]) {
+        expect(
+          parseWorkerToServerMessage({
+            type: 'taskResult',
+            operationId: 'op-1',
+            ...variant,
+            attemptToken: badToken,
+          }),
+        ).toMatchObject({
+          ok: false,
+          error: { message: 'taskResult.attemptToken must be a non-empty string when present' },
+        });
+      }
     }
   });
 

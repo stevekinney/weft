@@ -16,6 +16,7 @@ import { mkdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { decode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
 import { serve, type ServeOptions, type WeftServer } from '../server/index.ts';
 import { KEYS } from '../storage/interface.ts';
@@ -366,6 +367,9 @@ describe('RemoteWorker durability — same-worker stale attempt (attempt token)'
       await sleepForTesting(10);
     }
     expect(resolved !== undefined && resolved !== null).toBe(true);
+    // The fresh attempt's value won; the rejected stale completion never wrote.
+    const resolvedRecord = decode(resolved as Uint8Array) as { value?: unknown };
+    expect(resolvedRecord.value).toBe('fresh-attempt-2');
     await waitForInflightCleared(setup.engine, operationId);
   });
 });
@@ -683,6 +687,8 @@ process.on('SIGINT', () => void stop(0));
     if (!isTask(dispatchToB)) throw new Error('expected task on B');
     expect(dispatchToB.operationId).toBe(operationId);
     expect((dispatchToB.attempt ?? 1) >= 2).toBe(true);
+    // Recovery re-dispatch stamps a fresh token; fail clearly here if it did not.
+    expect(dispatchToB.attemptToken).toBeString();
 
     workerB.send({
       type: 'taskResult',
