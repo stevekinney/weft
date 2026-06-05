@@ -1,3 +1,4 @@
+import { ExtData, encode as encodeMessagePack } from '@msgpack/msgpack';
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { assertPayloadWithinLimit } from '../payload-size.ts';
@@ -187,6 +188,16 @@ describe('registerSerializer', () => {
     const bytes = encode(new Orphan(1));
     resetSerializerRegistryForTesting();
     expect(() => decode(bytes)).toThrow(/no serializer registered for tag/i);
+  });
+
+  it('throws on decoding a corrupt custom payload without a tag', () => {
+    const bytes = encodeMessagePack(new ExtData(100, encodeMessagePack({ data: { value: 1 } })));
+    expect(() => decode(bytes)).toThrow('Corrupt custom-serializer payload: missing tag.');
+  });
+
+  it('throws on decoding a custom payload with a non-string tag', () => {
+    const bytes = encodeMessagePack(new ExtData(100, encodeMessagePack({ tag: 42, data: null })));
+    expect(() => decode(bytes)).toThrow('Corrupt custom-serializer payload: tag is not a string.');
   });
 
   it('measures the post-serializer encoded size at payload-size admission', () => {
