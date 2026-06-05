@@ -152,6 +152,10 @@ import {
   signalWorkflowOperation,
   signalWorkflowRestBinding,
 } from './operations/signal-workflow.ts';
+import {
+  startOrSignalWorkflowOperation,
+  startOrSignalWorkflowRestBinding,
+} from './operations/start-or-signal-workflow.ts';
 import { startWorkflowOperation, startWorkflowRestBinding } from './operations/start-workflow.ts';
 import {
   storageBatchOperation,
@@ -233,6 +237,7 @@ export type UnknownRestBinding = RestBinding<any, any>;
  */
 export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   startWorkflowRestBinding,
+  startOrSignalWorkflowRestBinding,
   recoverAllRestBinding,
   listWorkflowsRestBinding,
   aggregateWorkflowsRestBinding,
@@ -404,6 +409,7 @@ export function createLiveOperationRegistry(
   const resolved: LiveOperationRegistryOptions = options ?? {};
   return createOperationRegistry([
     startWorkflowOperation,
+    startOrSignalWorkflowOperation,
     recoverAllOperation,
     listWorkflowsOperation,
     aggregateWorkflowsOperation,

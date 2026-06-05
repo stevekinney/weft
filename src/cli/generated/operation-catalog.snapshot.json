@@ -3683,7 +3683,7 @@
       "name": "weft.workflows.start",
       "kind": "unary",
       "summary": "Start a new workflow",
-      "description": "Start a new workflow execution of a registered type. Requires `type` (the registered workflow type name) and accepts an optional `input` payload plus start options: `id` (client-supplied workflow id), `executionTimeout`, `startAt`/`startAfter` (mutually exclusive scheduling), `tags`, and `searchAttributes`. Returns the workflow `id`. Faults with InvalidParams for an unregistered type or malformed options, and Conflict when a workflow with the same id already exists.",
+      "description": "Start a new workflow execution of a registered type. Requires `type` (the registered workflow type name) and accepts an optional `input` payload plus start options: `id` (client-supplied workflow id), `executionTimeout`, `startAt`/`startAfter` (mutually exclusive scheduling), `tags`, `idempotencyKey` (at-most-once dedup: a repeated key returns the existing run instead of starting a second), and `searchAttributes`. Returns the workflow `id`. Faults with InvalidParams for an unregistered type or malformed options, and Conflict when a workflow with the same id already exists.",
       "tags": ["Workflows"],
       "destructive": false,
       "access": {
@@ -3712,6 +3712,60 @@
           }
         },
         "required": ["type"],
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": ["id"],
+        "type": "object"
+      }
+    },
+    {
+      "name": "weft.workflows.startorsignal",
+      "kind": "unary",
+      "summary": "Atomically start a workflow or signal it if it already exists",
+      "description": "Start a workflow or deliver a signal to it if it already exists (signal-with-start). An absent target is created and delivered the signal in one batch; a non-terminal target (running, pending, or suspended) is signalled; a terminal target faults with Conflict. Requires `type`, `signalName`, and either `signalId` or `idempotencyKey` for convergence (not both). Accepts `input`, `signalPayload`, and the same start options as weft.workflows.start (`id`, `executionTimeout`, `startAt`/`startAfter`, `tags`, `idempotencyKey`, `searchAttributes`). Returns the workflow `id`. Concurrent same-key callers converge on one workflow and one signal.",
+      "tags": ["Signals", "Workflows"],
+      "destructive": false,
+      "access": {
+        "kind": "public"
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": true,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": true
+      },
+      "producibleFaults": ["Conflict"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "executionTimeout": {},
+          "id": {},
+          "idempotencyKey": {},
+          "input": {},
+          "searchAttributes": {},
+          "signalId": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "signalName": {
+            "description": "Signal name. Runtime validation requires a non-empty string."
+          },
+          "signalPayload": {},
+          "startAfter": {},
+          "startAt": {},
+          "tags": {},
+          "type": {
+            "description": "Workflow type name. Runtime validation requires a non-empty string."
+          }
+        },
+        "required": ["type", "signalName"],
         "type": "object"
       },
       "outputSchema": {

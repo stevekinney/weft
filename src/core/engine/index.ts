@@ -56,6 +56,7 @@ import {
   type SignalDefinition,
   type SignalDeliveryOptions,
   type StartOptions,
+  type StartOrSignalSignal,
   type SubmitReviewOptions,
   type TypedListFilter,
   type UpdateDefinition,
@@ -165,7 +166,6 @@ import {
   type LifecycleCallbacks,
   type RecoverAllOptions,
   type StartOrSignalCallbacks,
-  type StartOrSignalSignal,
 } from './lifecycle.ts';
 import {
   addTags as addWorkflowTags,
@@ -270,7 +270,7 @@ export {
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './errors.ts';
 export { HANDLE_RESULT_PROMISE, WorkflowHandle } from './handles.ts';
-export type { RecoverAllOptions, StartOrSignalSignal } from './lifecycle.ts';
+export type { RecoverAllOptions } from './lifecycle.ts';
 export { ScheduleHandle } from './schedule-handle.ts';
 export type {
   WorkflowFeedListener,

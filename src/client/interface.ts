@@ -36,6 +36,7 @@ import type {
   SignalDefinition,
   SignalDeliveryOptions,
   StartOptions,
+  StartOrSignalSignal,
   SubmitReviewOptions,
   TypedListFilter,
   UpdateDefinition,
@@ -291,6 +292,30 @@ export interface WeftClient {
   start<TName extends string>(
     type: UnknownNameWhenRegistryEmpty<TName>,
     input: unknown,
+    options?: StartOptions,
+  ): Promise<ClientHandle>;
+
+  /**
+   * Atomically start a workflow or signal it if it already exists
+   * (signal-with-start). An absent target is created and delivered the signal in
+   * one batch; a non-terminal target (running, pending, or suspended) is
+   * signalled; a terminal target rejects with `StartOrSignalConflictError`.
+   *
+   * Pass `options.idempotencyKey` to dedup independent callers such as retried
+   * webhooks: concurrent same-key callers converge on one workflow and one
+   * delivered signal, with the signal id derived from the key when
+   * `signal.signalId` is omitted.
+   */
+  startOrSignal<TName extends KnownWorkflowName>(
+    type: TName,
+    input: WorkflowInput<WorkflowRegistry, TName>,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
+  startOrSignal<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
+    input: unknown,
+    signal: StartOrSignalSignal,
     options?: StartOptions,
   ): Promise<ClientHandle>;
 

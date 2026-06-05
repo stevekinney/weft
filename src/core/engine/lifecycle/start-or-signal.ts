@@ -1,7 +1,7 @@
 import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { KEYS, requireStorageCapability } from '../../../storage/interface.ts';
 import { decode, encode } from '../../codec.ts';
-import type { StartOptions } from '../../types.ts';
+import type { StartOptions, StartOrSignalSignal } from '../../types.ts';
 import { StartOrSignalConflictError, WorkflowAlreadyExistsError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
@@ -14,34 +14,6 @@ import {
   type BuildIdempotentStartOperations,
 } from './start-commit.ts';
 import { startWorkflow } from './start.ts';
-
-/**
- * The signal half of `engine.startOrSignal`: a signal name, an optional payload,
- * and an optional `signalId`. When `signalId` is omitted, it is derived from the
- * `idempotencyKey`. The id is load-bearing — two concurrent callers converge to
- * one delivered signal only when they share it, and independent webhook
- * deliveries share only the idempotency key — so a caller-supplied `signalId` is
- * for the single-caller case, and convergence relies on the derived-from-key
- * value.
- *
- * @example Signal-with-start for an idempotent webhook
- * ```ts
- * import { Engine, type StartOrSignalSignal } from '@lostgradient/weft';
- *
- * const engine = new Engine();
- * const signal: StartOrSignalSignal<{ event: string }> = {
- *   name: 'webhook',
- *   payload: { event: 'payment.succeeded' },
- * };
- * void signal;
- * void engine;
- * ```
- */
-export type StartOrSignalSignal<TPayload = unknown> = {
-  name: string;
-  payload?: TPayload;
-  signalId?: string;
-};
 
 /**
  * Callbacks {@link startOrSignal} needs beyond the lifecycle set: a way to
@@ -71,11 +43,17 @@ function resolveSignalId(
   signalSpec: StartOrSignalSignal,
   idempotencyKey: string | undefined,
 ): string {
-  if (signalSpec.signalId !== undefined) {
-    return signalSpec.signalId;
-  }
+  // The idempotency key wins when present. Independent concurrent callers (e.g.
+  // retried webhooks) share only the key, never a signalId, so deriving from the
+  // key is what makes them converge on ONE delivered signal. A caller-supplied
+  // signalId alongside a key would let racers each write a distinct signal — the
+  // exact double-delivery the dedup exists to prevent — so the two are mutually
+  // exclusive (rejected at the API boundary; see `startOrSignal`).
   if (idempotencyKey !== undefined) {
     return `start-idem:${idempotencyKey}`;
+  }
+  if (signalSpec.signalId !== undefined) {
+    return signalSpec.signalId;
   }
   throw new Error(
     'startOrSignal requires either signal.signalId or options.idempotencyKey so concurrent ' +
@@ -180,12 +158,17 @@ export async function startWithIdempotency(
       buildIdempotentStartOperationsFactory(internals, idempotencyKey, undefined),
     );
   } catch (error) {
-    if (!(error instanceof StartIdempotencyRaceLostError)) {
+    // Lost the race to a concurrent same-key caller, by either the idempotency-
+    // mapping CAS (random/typical id) or the caller-id reservation (a fixed
+    // `id` was also supplied — the loser's `callerProvidedId` check throws
+    // before the mapping CAS). Both resolve to the winner via the mapping.
+    const lostRace =
+      error instanceof StartIdempotencyRaceLostError || error instanceof WorkflowAlreadyExistsError;
+    if (!lostRace) {
       throw error;
     }
   }
 
-  // Lost the create CAS to a concurrent same-key caller — resolve to the winner.
   return callbacks.getHandle(await requireWinnerId(internals, idempotencyKey));
 }
 
@@ -216,6 +199,15 @@ export async function startOrSignal(
   requireStorageCapability(internals.storage, 'conditionalBatch', 'startOrSignal');
 
   const idempotencyKey = options?.idempotencyKey;
+  if (idempotencyKey !== undefined && signalSpec.signalId !== undefined) {
+    // They are mutually exclusive: the key-derived id is what makes independent
+    // concurrent callers converge, so honoring a caller signalId alongside a key
+    // would silently re-introduce double-delivery. Reject rather than pick one.
+    throw new Error(
+      'startOrSignal does not accept both signal.signalId and options.idempotencyKey: the ' +
+        'signal id derives from the idempotency key for convergence. Provide exactly one.',
+    );
+  }
   const signalId = resolveSignalId(signalSpec, idempotencyKey);
 
   const existingId =

@@ -39,7 +39,6 @@ export {
   startOrSignal,
   startWithIdempotency,
   type StartOrSignalCallbacks,
-  type StartOrSignalSignal,
 } from './lifecycle/start-or-signal.ts';
 
 export {

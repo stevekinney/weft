@@ -236,10 +236,30 @@ describe('engine.startOrSignal', () => {
     }
   });
 
-  it('derives the signalId from the idempotency key so different caller ids still converge', async () => {
-    // Two concurrent callers, SAME idempotencyKey, DIFFERENT caller-supplied
-    // signalIds. Convergence must rely on the key-derived id, not the caller's
-    // signalId — so exactly one signal is delivered to one workflow.
+  it('rejects supplying both signalId and idempotencyKey', async () => {
+    // They are mutually exclusive: the key-derived signal id is what makes
+    // concurrent callers converge, so honoring a caller signalId alongside a key
+    // would silently re-introduce double-delivery. Reject rather than pick one.
+    const engine = createEngine();
+    try {
+      await expect(
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'x', signalId: 'explicit' },
+          { idempotencyKey: 'also-a-key' },
+        ),
+      ).rejects.toThrow(/does not accept both/);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('converges concurrent idempotency-key callers (no caller signalId) to one signal', async () => {
+    // Independent callers share ONLY the idempotency key — they pass no signalId
+    // (the realistic webhook-retry case). Convergence relies on the key-derived
+    // id: exactly one signal is delivered to one workflow even though two callers
+    // raced, each with its own payload.
     const engine = createEngine();
     try {
       const [a, b] = await Promise.all([

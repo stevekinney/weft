@@ -45,6 +45,7 @@ import type {
   SignalDefinition,
   SignalDeliveryOptions,
   StartOptions,
+  StartOrSignalSignal,
   SubmitReviewOptions,
   TypedListFilter,
   UpdateDefinition,
@@ -213,6 +214,28 @@ export class LocalClient implements WeftClient {
   ): Promise<ClientHandle>;
   async start(type: string, input: unknown, options?: StartOptions): Promise<ClientHandle> {
     const handle = await this.#engine.start(type, input, options);
+    return new LocalHandle(handle, this);
+  }
+
+  async startOrSignal<TName extends KnownWorkflowName>(
+    type: TName,
+    input: WorkflowInput<WorkflowRegistry, TName>,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
+  async startOrSignal<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
+    input: unknown,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<ClientHandle>;
+  async startOrSignal(
+    type: string,
+    input: unknown,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<ClientHandle> {
+    const handle = await this.#engine.startOrSignal(type, input, signal, options);
     return new LocalHandle(handle, this);
   }
   // jscpd:ignore-end

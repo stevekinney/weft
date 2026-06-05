@@ -133,6 +133,32 @@ export interface SignalDeliveryOptions {
 }
 
 /**
+ * The signal half of `startOrSignal` (signal-with-start): a signal `name`, an
+ * optional `payload`, and an optional `signalId`. When `signalId` is omitted it
+ * is derived from `options.idempotencyKey`. The id is load-bearing for
+ * convergence — concurrent callers deliver one signal only when they share it,
+ * and independent webhook retries share only the idempotency key — so a
+ * caller-supplied `signalId` covers the single-caller case while idempotent
+ * convergence relies on the derived-from-key value.
+ *
+ * @example
+ * ```ts
+ * import type { StartOrSignalSignal } from '@lostgradient/weft';
+ *
+ * const signal: StartOrSignalSignal<{ event: string }> = {
+ *   name: 'webhook',
+ *   payload: { event: 'payment.succeeded' },
+ * };
+ * void signal;
+ * ```
+ */
+export interface StartOrSignalSignal<TPayload = unknown> {
+  readonly name: string;
+  readonly payload?: TPayload;
+  readonly signalId?: string;
+}
+
+/**
  * Create a typed workflow signal handle. When an `inputSchema` is supplied
  * via options, the payload type is inferred from the schema's
  * `~standard.types.output` marker — no explicit generic required, and

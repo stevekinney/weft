@@ -30,6 +30,7 @@ import type {
   SignalDefinition,
   SignalDeliveryOptions,
   StartOptions,
+  StartOrSignalSignal,
   SubmitReviewOptions,
   TypedListFilter,
   UpdateDefinition,
@@ -93,7 +94,7 @@ import type {
 import { openClientEventSubscription } from './open-event-subscription.ts';
 import { buildScheduleListSearchParams } from './schedule-list-search-params.ts';
 import { buildWorkflowListSearchParams } from './search-params.ts';
-import { buildStartBody, scheduleSpecToWireFields } from './start-body.ts';
+import { buildStartBody, buildStartOrSignalBody, scheduleSpecToWireFields } from './start-body.ts';
 import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow-name-typing.ts';
 
 /**
@@ -194,6 +195,35 @@ export class HttpClient implements WeftClient {
       method: 'POST',
       body: JSON.stringify(body),
     });
+
+    return new HttpHandle(response.id, this);
+  }
+
+  async startOrSignal<TName extends KnownWorkflowName>(
+    type: TName,
+    input: WorkflowInput<WorkflowRegistry, TName>,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
+  async startOrSignal<TName extends string>(
+    type: UnknownNameWhenRegistryEmpty<TName>,
+    input: unknown,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<ClientHandle>;
+  async startOrSignal(
+    type: string,
+    input: unknown,
+    signal: StartOrSignalSignal,
+    options?: StartOptions,
+  ): Promise<ClientHandle> {
+    const body = buildStartOrSignalBody(type, input, signal, options);
+    const response = await request<{ id: string }>(
+      this.baseUrl,
+      '/workflows/start-or-signal',
+      this.headers,
+      { method: 'POST', body: JSON.stringify(body) },
+    );
 
     return new HttpHandle(response.id, this);
   }

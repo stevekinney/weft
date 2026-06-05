@@ -53,6 +53,7 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
 
   // Reads, additive starts, and reversible control-plane operations.
   'weft.workflows.start': false,
+  'weft.workflows.startorsignal': false,
   'weft.workflows.fork': false,
   'weft.workflows.resume': false,
   'weft.workflows.suspend': false,

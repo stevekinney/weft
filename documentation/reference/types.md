@@ -576,6 +576,20 @@ interface StartOptions {
 
 `services` is the only non-serialized start option. Use it for live per-run host capabilities that the workflow can read through `ctx.services`, not for durable workflow state.
 
+`idempotencyKey` enforces at-most-once starts: a repeated key returns the existing run rather than starting a second. It also powers `engine.startOrSignal` convergence — when `StartOrSignalSignal.signalId` is omitted, the delivered signal's id derives from the key. Requires a storage backend with `conditionalBatch`.
+
+### `StartOrSignalSignal`
+
+```ts partial
+interface StartOrSignalSignal<TPayload = unknown> {
+  name: string;
+  payload?: TPayload;
+  signalId?: string;
+}
+```
+
+The signal half of `engine.startOrSignal` (signal-with-start). When `signalId` is omitted it derives from `StartOptions.idempotencyKey`; supply one or the other so concurrent callers converge on a single delivered signal.
+
 ### `WorkflowServicesResolver`
 
 ```ts partial

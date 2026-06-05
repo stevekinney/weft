@@ -38,6 +38,21 @@ export const coerceStartWorkflowId = (value: unknown, fieldName: string): string
   }
 };
 
+/**
+ * Coerce a transport-supplied idempotency key to a non-empty string. The key is
+ * a caller-chosen dedup token (it becomes part of a `start-idem:` storage key),
+ * so an empty string — which would collide across unrelated starts — is rejected.
+ */
+export const coerceStartWorkflowIdempotencyKey = (value: unknown, fieldName: string): string => {
+  if (typeof value !== 'string') {
+    throw new StartWorkflowValidationError(`${fieldName} must be a string`);
+  }
+  if (value.length === 0) {
+    throw new StartWorkflowValidationError(`${fieldName} must not be empty`);
+  }
+  return value;
+};
+
 export function coerceStartWorkflowTimestamp(value: unknown, fieldName: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new StartWorkflowValidationError(

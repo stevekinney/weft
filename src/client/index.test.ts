@@ -591,10 +591,10 @@ describe('HttpClient', () => {
       await handle.cancel();
     });
 
-    it('rejects StartOptions.idempotencyKey instead of silently dropping it', async () => {
-      await expect(
-        client.start('echo', 'dedupe', { idempotencyKey: 'dedupe-key' }),
-      ).rejects.toThrow('idempotencyKey is not supported over HttpClient');
+    it('enforces StartOptions.idempotencyKey: a duplicate key returns the same workflow', async () => {
+      const first = await client.start('echo', 'dedupe', { idempotencyKey: 'http-dedupe-key' });
+      const second = await client.start('echo', 'dedupe', { idempotencyKey: 'http-dedupe-key' });
+      expect(second.id).toBe(first.id);
     });
   });
 
@@ -904,6 +904,7 @@ describe('HttpClient', () => {
       // Both should have the same set of methods
       const clientMethods = [
         'start',
+        'startOrSignal',
         'schedule',
         'get',
         'getSchedule',
