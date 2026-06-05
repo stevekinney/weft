@@ -167,6 +167,9 @@ Pass `options.idempotencyKey` to deduplicate independent callers such as retried
 > [!NOTE] Terminal-transition race
 > The non-terminal check and the signal write are not a single atomic step. If the target workflow transitions to terminal in the narrow window between the two, the signal is dropped (the underlying signal path does not buffer onto a terminal run) and the returned handle is for the now-terminal run. This is the same at-least-once-detection / no-delivery-on-terminal behavior as `engine.signal`; it is not specific to `startOrSignal`.
 
+> [!NOTE] Concurrent same-id pre-commit abort
+> When two callers race on the same `options.id` (or the same `idempotencyKey`), one reserves the id in memory before its durable record commits. If that winner then _aborts_ before committing — a storage failure, an oversized payload, or a start interceptor that throws — the loser sees a collision against a run that never materializes and surfaces a retryable error rather than a stranded run. This is a property of the shared start path (a bare `engine.start` with the same interleaving behaves identically), not specific to `startOrSignal`: the caller should retry, which then wins cleanly.
+
 | Parameter | Type                  | Description                                           |
 | --------- | --------------------- | ----------------------------------------------------- |
 | `type`    | `string`              | Name of the registered workflow                       |
