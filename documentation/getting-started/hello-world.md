@@ -41,10 +41,10 @@ const engine = await Engine.create({
   workflows: { helloWorldWelcome },
 });
 
-const workflowId = 'helloWorldWelcome:world';
+const welcomeIdempotencyKey = 'helloWorldWelcome:world';
 const workflowInput = { name: 'World' };
 const handle = await engine.start('helloWorldWelcome', workflowInput, {
-  idempotencyKey: workflowId,
+  idempotencyKey: welcomeIdempotencyKey,
 });
 
 const result = await handle.result();
