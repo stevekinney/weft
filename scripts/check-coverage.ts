@@ -1646,20 +1646,20 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   [
     // start-or-signal's winner-resolution invariant paths. Line 154
     // (startWithIdempotency rejecting an undefined key) is unreachable by
-    // construction — the engine only routes here when a key is set. Lines 434-436
+    // construction — the engine only routes here when a key is set. Lines 467-469
     // are the inter-attempt backoff in resolveWinnerWithSignal: reached only when a
     // caller-id loser observes the winner's in-memory `pendingStarts` reservation
     // before the winner's durable `wf:` record lands (a read-after-write lag that
     // an in-process MemoryStorage never exhibits, so the loop resolves on attempt
-    // 0). Lines 438-441 are the exhaustion throw if that lagging record never
+    // 0). Lines 471-474 are the exhaustion throw if that lagging record never
     // appears within five reads — a genuine invariant violation, not a transient
-    // delay to swallow. Lines 455-458 (requireWinnerId finding the mapping vanished
+    // delay to swallow. Lines 488-491 (requireWinnerId finding the mapping vanished
     // after a lost CAS) require the `start-idem:` keyspace to be mutated
     // externally. The reachable success branch is covered by the white-box
     // race-recovery test; contriving a mock to hit the lag/throws would test the
     // mock, not the engine.
     'src/core/engine/lifecycle/start-or-signal.ts',
-    { lines: new Set([154, 433, 434, 435, 436, 437, 438, 439, 440, 441, 455, 456, 458]) },
+    { lines: new Set([154, 466, 467, 468, 469, 470, 471, 472, 473, 474, 488, 489, 491]) },
   ],
   [
     'src/core/engine/pending-updates.ts',

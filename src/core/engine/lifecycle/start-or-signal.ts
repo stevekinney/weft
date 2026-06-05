@@ -290,7 +290,7 @@ export async function startOrSignal(
     }
   }
 
-  return createWithSignalOrFallBack(
+  return createWithSignalOrFallback(
     internals,
     type,
     input,
@@ -325,13 +325,21 @@ async function signalOrConflictExistingWorkflow(
 }
 
 /**
- * Create the workflow and deliver the signal atomically. If the create batch
- * loses to a concurrent caller — by idempotency-mapping CAS
- * ({@link StartIdempotencyRaceLostError}) or by caller-id reservation
- * ({@link WorkflowAlreadyExistsError}) — resolve the winner and signal it (or
- * conflict if it has already gone terminal).
+ * Create the workflow and deliver the signal atomically, recovering from a lost
+ * create batch:
+ *
+ * - **Lost to a winner** — by idempotency-mapping CAS
+ *   ({@link StartIdempotencyRaceLostError} on the keyed path) or caller-id
+ *   reservation ({@link WorkflowAlreadyExistsError}): a record exists, so resolve
+ *   the winner and signal it (or conflict if it has gone terminal).
+ * - **Signal already buffered** — `StartIdempotencyRaceLostError` on the
+ *   caller-`id` path: the only CAS condition there is the signal's, so the loss
+ *   means a `sig:` with this signalId was pre-buffered and (the batch being
+ *   atomic) the `wf:` record was NOT written. Plain-create the workflow; the
+ *   buffered signal is consumed on first drive (scan-then-park), and the caller's
+ *   payload loses to the pre-buffered one by the same first-wins dedup.
  */
-async function createWithSignalOrFallBack(
+async function createWithSignalOrFallback(
   internals: EngineInternals,
   type: string,
   input: unknown,
@@ -341,7 +349,7 @@ async function createWithSignalOrFallBack(
   callbacks: StartOrSignalCallbacks,
 ): Promise<WorkflowHandle> {
   const idempotencyKey = options?.idempotencyKey;
-  const winnerId = await resolveCreateRaceWinnerId(internals, idempotencyKey, async () => {
+  const outcome = await resolveCreateRaceOutcome(internals, options, async () => {
     return startWorkflow(
       internals,
       type,
@@ -356,30 +364,49 @@ async function createWithSignalOrFallBack(
       }),
     );
   });
-  if (winnerId.kind === 'created') {
-    return winnerId.handle;
+
+  if (outcome.kind === 'created') {
+    return outcome.handle;
+  }
+  if (outcome.kind === 'signal-already-buffered') {
+    // No record exists and the signal is already in storage. Create the workflow
+    // WITHOUT folding the signal in again (its `sig:`/`sigres:` are already
+    // present); first drive consumes the buffered signal.
+    return startWorkflow(internals, type, input, options, undefined, callbacks);
   }
 
-  // Lost the create race to a concurrent caller. Resolve the winner and deliver
-  // via the signal path, whose CAS dedups against the winner's create-batch
-  // signal (same signalId). The winner's record may not be readable on the first
-  // read if its commit is still settling, so resolution is bounded-retried.
-  return resolveWinnerWithSignal(internals, winnerId.id, signalSpec, signalId, callbacks);
+  // Lost the create race to a winner. Resolve the winner and deliver via the
+  // signal path, whose CAS dedups against the winner's create-batch signal (same
+  // signalId). The winner's record may not be readable on the first read if its
+  // commit is still settling, so resolution is bounded-retried.
+  return resolveWinnerWithSignal(internals, outcome.id, signalSpec, signalId, callbacks);
 }
 
 /**
- * Run the create batch. On success, return the new handle. On a lost create race
- * — by idempotency-mapping CAS ({@link StartIdempotencyRaceLostError}) or by
- * caller-id reservation ({@link WorkflowAlreadyExistsError}) — return the winner's
- * id so the caller can resolve and signal it. The caller-id loss carries the
- * winning id directly on the error; the mapping loss reads it back from the
- * `start-idem:` mapping. Any other error propagates.
+ * Classify the result of running the create batch:
+ *
+ * - `created` — the batch committed; carries the new handle.
+ * - `lost` — lost to a concurrent winner whose record exists; carries the winner
+ *   id (from {@link WorkflowAlreadyExistsError.workflowId} on the caller-id path,
+ *   or read back from the `start-idem:` mapping on the keyed path).
+ * - `signal-already-buffered` — caller-id path only: the batch's sole CAS
+ *   condition (the signal) failed because the signal was pre-buffered, so no
+ *   record was written and the workflow must still be created.
+ *
+ * The keyed path's create batch uses a freshly generated workflow id, so its
+ * signal `sig:` condition cannot collide with a pre-buffered signal; a keyed
+ * {@link StartIdempotencyRaceLostError} is therefore always a genuine
+ * mapping-CAS loss. Any other error propagates.
  */
-async function resolveCreateRaceWinnerId(
+async function resolveCreateRaceOutcome(
   internals: EngineInternals,
-  idempotencyKey: string | undefined,
+  options: StartOptions | undefined,
   runCreate: () => Promise<WorkflowHandle>,
-): Promise<{ kind: 'created'; handle: WorkflowHandle } | { kind: 'lost'; id: string }> {
+): Promise<
+  | { kind: 'created'; handle: WorkflowHandle }
+  | { kind: 'lost'; id: string }
+  | { kind: 'signal-already-buffered' }
+> {
   try {
     return { kind: 'created', handle: await runCreate() };
   } catch (error) {
@@ -388,8 +415,14 @@ async function resolveCreateRaceWinnerId(
       // path; the error carries the reserved (winning) id directly.
       return { kind: 'lost', id: error.workflowId };
     }
-    if (error instanceof StartIdempotencyRaceLostError && idempotencyKey !== undefined) {
-      return { kind: 'lost', id: await requireWinnerId(internals, idempotencyKey) };
+    if (error instanceof StartIdempotencyRaceLostError) {
+      const idempotencyKey = options?.idempotencyKey;
+      if (idempotencyKey !== undefined) {
+        return { kind: 'lost', id: await requireWinnerId(internals, idempotencyKey) };
+      }
+      // Caller-id path: the only CAS condition was the signal's, so this is a
+      // pre-buffered signal, not a concurrent winner — create the workflow.
+      return { kind: 'signal-already-buffered' };
     }
     throw error;
   }

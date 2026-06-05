@@ -662,4 +662,33 @@ describe('engine.startOrSignal', () => {
       await engine[Symbol.asyncDispose]();
     }
   });
+
+  it('creates and delivers a pre-buffered signal on the caller-id path (no sentinel leak)', async () => {
+    // Regression: a signal pre-buffered under the SAME signalId the caller-id
+    // create batch would derive made the batch's signal CAS fail, surfacing the
+    // internal StartIdempotencyRaceLostError sentinel to the caller — despite no
+    // concurrency and no idempotency key. The fix recognizes the caller-id path
+    // (whose only CAS condition is the signal's) and plain-creates the run; the
+    // buffered signal is consumed on first drive, and the caller's payload loses
+    // to the pre-buffered one by first-wins dedup.
+    const engine = createEngine();
+    try {
+      // Pre-buffer a signal for an id whose workflow record does not exist yet.
+      await engine.signal('sos-prebuffered', 'release', 'buffered', { signalId: 'shared-sig' });
+
+      const handle = await engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'from-caller', signalId: 'shared-sig' },
+        { id: 'sos-prebuffered' },
+      );
+
+      expect(handle.id).toBe('sos-prebuffered');
+      expect(await countWorkflowRecords(engine)).toBe(1);
+      // First-wins: the pre-buffered payload is delivered, not the caller's.
+      expect(await handle.result()).toBe('buffered');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
 });
