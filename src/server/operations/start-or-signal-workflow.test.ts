@@ -5,6 +5,7 @@ import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
+import { serve, type WeftServer } from '../index.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import { jsonRequest } from './operation-test-helpers.test-support.ts';
 import {
@@ -227,5 +228,67 @@ describe('weft.workflows.startorsignal', () => {
     );
     expect(second.status).toBe(201);
     expect((await second.json()) as { id: string }).toEqual(firstBody);
+  });
+});
+
+describe('weft.workflows.startorsignal over JSON-RPC HTTP', () => {
+  const servers: WeftServer[] = [];
+
+  afterEach(async () => {
+    await Promise.all(servers.splice(0).map((server) => server.stop()));
+  });
+
+  async function postJsonRpc(
+    server: WeftServer,
+    params: Record<string, unknown>,
+  ): Promise<{ status: number; body: { result?: { id?: string }; error?: { message?: string } } }> {
+    const response = await fetch(`${server.url}/jsonrpc`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: crypto.randomUUID(),
+        method: 'weft.workflows.startorsignal',
+        params,
+      }),
+    });
+    return { status: response.status, body: await response.json() };
+  }
+
+  it('creates and signals over JSON-RPC, returning the workflow id', async () => {
+    const engine = createEngine();
+    const server = serve({ engine, port: 0 });
+    servers.push(server);
+
+    const created = await postJsonRpc(server, {
+      type: 'wait-for-release',
+      signalName: 'release',
+      signalPayload: 'rpc-go',
+      signalId: 'sig-rpc',
+      id: 'sos-rpc-create',
+    });
+
+    expect(created.status).toBe(200);
+    expect(created.body.result?.id).toBe('sos-rpc-create');
+    expect(await engine.getHandle('sos-rpc-create').result()).toBe('rpc-go');
+  });
+
+  it('maps a terminal target to a JSON-RPC Conflict error', async () => {
+    const engine = createEngine();
+    const server = serve({ engine, port: 0 });
+    servers.push(server);
+
+    const completed = await engine.start('completes-immediately', null, { id: 'sos-rpc-terminal' });
+    await completed.result();
+
+    const conflict = await postJsonRpc(server, {
+      type: 'wait-for-release',
+      signalName: 'release',
+      signalId: 'sig-rpc-terminal',
+      id: 'sos-rpc-terminal',
+    });
+
+    expect(conflict.body.error).toBeDefined();
+    expect(conflict.body.error?.message).toMatch(/terminal/i);
   });
 });
