@@ -733,6 +733,16 @@ describe('engine.startOrSignal', () => {
       expect(a.id).toBe('sos-concurrent-prebuffered');
       expect(b.id).toBe(a.id);
       expect(await countWorkflowRecords(engine)).toBe(1);
+
+      // Signal dedup held: exactly one accepted-response marker. The loser's
+      // resolveWinnerWithSignal short-circuits on the pre-buffered `sigres:`
+      // (written atomically by the standalone engine.signal and surviving the
+      // winner's first-drive consumption), so no second signal was accepted.
+      let acceptedMarkers = 0;
+      for await (const _entry of engine.storage.scan(`sigres:v1:`)) {
+        acceptedMarkers += 1;
+      }
+      expect(acceptedMarkers).toBe(1);
       // The run is parked on `hold` (never delivered); asyncDispose tears it down.
     } finally {
       await engine[Symbol.asyncDispose]();
