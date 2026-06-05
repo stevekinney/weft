@@ -208,6 +208,34 @@ class WorkflowStateGetFailureStorage extends MemoryStorage {
   }
 }
 
+class TerminalWorkflowReloadRaceStorage extends MemoryStorage {
+  workflowIdToFlip: string | null = null;
+  workflowReadCount = 0;
+
+  override async get(key: string): Promise<Uint8Array | null> {
+    const value = await super.get(key);
+    if (
+      value === null ||
+      this.workflowIdToFlip === null ||
+      key !== KEYS.workflow(this.workflowIdToFlip)
+    ) {
+      return value;
+    }
+
+    this.workflowReadCount += 1;
+    if (this.workflowReadCount !== 2) {
+      return value;
+    }
+
+    const workflowState = decode(value) as WorkflowState;
+    return encode({
+      ...workflowState,
+      status: 'running',
+      updatedAt: workflowState.updatedAt + 1,
+    } satisfies WorkflowState);
+  }
+}
+
 class BulkSignalFailureStorage extends MemoryStorage {
   workflowIdToFail: string | null = null;
 
@@ -799,6 +827,25 @@ describe('bulk workflow operations', () => {
       expect(storage.workflowStateGetCount).toBe(0);
     } finally {
       storage.shouldFailWorkflowStateGet = false;
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('revalidates terminal workflows before deleting them and rejects a late non-terminal reload', async () => {
+    const storage = new TerminalWorkflowReloadRaceStorage();
+    const engine = new Engine({ storage });
+    const echoWorkflow6 = workflow({ name: 'echo' }).execute(echoWorkflow);
+    engine.register(echoWorkflow6);
+
+    try {
+      await createCompletedWorkflow(engine, 'bulk-delete-reload-race', ['bulk-delete-reload-race']);
+      storage.workflowIdToFlip = 'bulk-delete-reload-race';
+
+      await expect(engine.deleteAll({ tags: ['bulk-delete-reload-race'] })).rejects.toBeInstanceOf(
+        BulkDeleteRequiresTerminalWorkflowsError,
+      );
+      expect(await engine.get('bulk-delete-reload-race')).not.toBeNull();
+    } finally {
       await engine[Symbol.asyncDispose]();
     }
   });
