@@ -24,19 +24,24 @@ export const PG_CREATE_KEY_VALUE_TABLE = `CREATE TABLE IF NOT EXISTS kv (
 )`;
 
 /**
- * Introspect the collation of the `kv.key` column. Returns one row with a
- * `collation` field: the named collation (`C` for a correctly-created table) or
- * `default` when the column inherits the database default collation. Returns zero
- * rows when the `kv` table does not exist yet. Used to detect a pre-existing
- * `kv` table whose key collation would break lexicographic prefix scans — a
- * `CREATE TABLE IF NOT EXISTS` would otherwise silently adopt it.
+ * Introspect the collation of the `key` column on the `kv` table the adapter's
+ * own unqualified queries resolve to. Returns one row with a `collation` field:
+ * the named collation (`C` for a correctly-created table) or `default` when the
+ * column inherits the database default collation. Returns zero rows when no `kv`
+ * table is visible on the search path.
+ *
+ * `to_regclass('kv')` resolves the same search-path-visible relation that
+ * unqualified DDL/DML hits, so a `kv` table in another schema cannot be inspected
+ * by mistake (which would falsely pass a mis-collated active table or falsely
+ * reject a valid one). Detects a pre-existing `kv` whose key collation would break
+ * lexicographic prefix scans — a `CREATE TABLE IF NOT EXISTS` would otherwise
+ * silently adopt it.
  */
 export const PG_SELECT_KEY_COLLATION = `
   SELECT COALESCE(co.collname, 'default') AS collation
   FROM pg_attribute a
-  JOIN pg_class c ON c.oid = a.attrelid
   LEFT JOIN pg_collation co ON co.oid = a.attcollation
-  WHERE c.relname = 'kv' AND a.attname = 'key' AND a.attnum > 0
+  WHERE a.attrelid = to_regclass('kv') AND a.attname = 'key' AND a.attnum > 0
 `;
 
 /** Begin a transaction at SERIALIZABLE isolation (conditionalBatch's CAS path). */

@@ -209,6 +209,10 @@ export class NeonStorage implements Storage {
   // owned by the caller, so disposal must NOT close it — closing a shared pool
   // would tear out connectivity for every other consumer of that pool.
   #ownsPool: boolean;
+  // The single owned-pool shutdown, memoized so disposal is idempotent: a second
+  // dispose (sync-then-async, or either twice) awaits/observes the same `end()`
+  // rather than calling it again (which the driver rejects as "ended twice").
+  #poolShutdown: Promise<void> | undefined;
 
   constructor(options: NeonStorageOptions) {
     // The structural NeonPool type is a subset of the driver's Pool surface; the
@@ -436,21 +440,29 @@ export class NeonStorage implements Storage {
     });
   }
 
+  /**
+   * Close the owned pool exactly once, memoizing the shutdown so repeated disposal
+   * (sync then async, or either called twice) reuses the same `end()` promise. A
+   * no-op for an injected, caller-owned pool. Returns the shutdown promise so the
+   * async path can await it.
+   */
+  #endPoolOnce(): Promise<void> {
+    if (!this.#ownsPool) return Promise.resolve();
+    this.#poolShutdown ??= this.#pool.end();
+    return this.#poolShutdown;
+  }
+
   [Symbol.dispose](): void {
-    // Only close a pool this adapter owns — an injected pool belongs to the caller.
-    if (!this.#ownsPool) return;
-    // Storage requires a synchronous dispose, but pool teardown is async. Fire it
-    // and swallow rejection so a teardown error never surfaces as an unhandled
-    // rejection. `await using` callers get the awaited path via asyncDispose.
-    void this.#pool.end().catch(() => {
+    // Storage requires a synchronous dispose, but pool teardown is async. Fire the
+    // one-time shutdown and swallow rejection so a teardown error never surfaces as
+    // an unhandled rejection. `await using` callers get the awaited path via asyncDispose.
+    void this.#endPoolOnce().catch(() => {
       // Best-effort teardown.
     });
   }
 
   async [Symbol.asyncDispose](): Promise<void> {
-    // Only close a pool this adapter owns — an injected pool belongs to the caller.
-    if (!this.#ownsPool) return;
-    await this.#pool.end();
+    await this.#endPoolOnce();
   }
 }
 

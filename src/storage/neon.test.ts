@@ -335,16 +335,24 @@ describe('NeonStorage', () => {
     await expect(storage[Symbol.asyncDispose]()).resolves.toBeUndefined();
   });
 
-  it('swallows a rejected pool.end() on synchronous dispose', async () => {
-    // The sync dispose is fire-and-forget: a rejected end() must never surface as
-    // an unhandled rejection. Disposing twice makes the owned pool's second end()
-    // reject ("Called end on pool more than once"), exercising the swallow.
+  it('disposal is idempotent: a real owned pool is ended exactly once across repeated dispose', async () => {
+    // The Neon Pool rejects a second end() ("Called end on pool more than once").
+    // Memoized shutdown means repeated disposal — sync then async, or either
+    // twice — reuses the one end() and never triggers that rejection.
     const storage = new NeonStorage({
       url: 'postgresql://user:pass@nonexistent.invalid/db',
     });
     storage[Symbol.dispose]();
     expect(() => storage[Symbol.dispose]()).not.toThrow();
-    // Let the swallowed rejection settle.
-    await Promise.resolve();
+    // A following async dispose awaits the same memoized shutdown and resolves.
+    await expect(storage[Symbol.asyncDispose]()).resolves.toBeUndefined();
+  });
+
+  it('async disposal is idempotent across repeated calls', async () => {
+    const storage = new NeonStorage({
+      url: 'postgresql://user:pass@nonexistent.invalid/db',
+    });
+    await expect(storage[Symbol.asyncDispose]()).resolves.toBeUndefined();
+    await expect(storage[Symbol.asyncDispose]()).resolves.toBeUndefined();
   });
 });
