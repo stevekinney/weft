@@ -23,14 +23,21 @@ import {
  * (via a fault-injecting stub in neon-retry.test.ts), while this suite is the
  * only place real contention is observed.
  *
- * Each NeonStorage shares the single `kv` table, so cases that need isolation
- * scope their keys with a unique prefix.
+ * Every adapter shares the single `kv` table on the remote endpoint (unlike the
+ * PGlite suite, where each case gets a fresh in-process database), so `create()`
+ * truncates the table first to isolate cases that scan the whole keyspace.
  */
 const NEON_DATABASE_URL = process.env['NEON_DATABASE_URL'];
 const describeLive = NEON_DATABASE_URL ? describe : describe.skip;
 
-function createLiveNeonStorage(): NeonStorage {
-  return new NeonStorage({ url: NEON_DATABASE_URL! });
+async function createLiveNeonStorage(): Promise<NeonStorage> {
+  const storage = new NeonStorage({ url: NEON_DATABASE_URL! });
+  // Reset the shared remote table so each case starts from an empty store. The
+  // adapter's #ensureTable creates the table on first use; a put-then-delete via
+  // the public surface both guarantees the table exists and clears it.
+  await storage.put('__reset__', new Uint8Array([0]));
+  await storage.deletePrefix('');
+  return storage;
 }
 
 if (NEON_DATABASE_URL) {
@@ -58,7 +65,7 @@ describeLive('NeonStorage (live) concurrent compare-and-swap', () => {
     // gated on it being absent. Under SERIALIZABLE, the conflicting transactions
     // abort with 40001 and retry; the second attempt sees the key present and
     // returns false. Exactly one must commit.
-    await using storage = createLiveNeonStorage();
+    await using storage = await createLiveNeonStorage();
     const key = `start-idem:live:${crypto.randomUUID()}`;
     const contenders = Array.from({ length: 8 }, (_, index) =>
       storageConditionalBatch(
