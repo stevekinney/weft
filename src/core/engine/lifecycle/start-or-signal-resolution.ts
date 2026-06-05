@@ -43,12 +43,13 @@ export async function resolveIdempotencyKeyWorkflowId(
 
 /**
  * Resolve a key-mapped workflow id to a handle id, asserting its record still
- * exists. The `start-idem:` mapping outlives terminal cleanup but NOT purge or
- * delete, so a present mapping whose record is gone means the key is spent: a
- * fresh create would fail the still-present mapping CAS and strand the caller.
- * Surface {@link IdempotencyKeyPurgedError} instead of handing back a handle to a
- * vanished run. Shared by the synchronous mapping hit and the post-race winner
- * lookup so both reject a purged key identically.
+ * exists. The `start-idem:` mapping is permanent — it survives BOTH terminal
+ * cleanup AND purge/retention (those reclaim the workflow record, never the
+ * `start-idem:` keyspace) — so a present mapping whose record is gone means the
+ * key is spent: a fresh create would fail the still-present mapping CAS and strand
+ * the caller. Surface {@link IdempotencyKeyPurgedError} instead of handing back a
+ * handle to a vanished run. Shared by the synchronous mapping hit and the
+ * post-race winner lookup so both reject a purged key identically.
  */
 export async function resolveExistingRunOrThrowPurged(
   internals: EngineInternals,
@@ -129,9 +130,14 @@ export async function resolveWinnerWithSignal(
     }
   }
   if (idempotencyKey !== undefined) {
-    // Keyed path: the mapping still pointing at this id while the record stays
-    // absent means the run was purged — the key is spent, not mid-commit.
-    if ((await resolveIdempotencyKeyWorkflowId(internals, idempotencyKey)) !== undefined) {
+    // Keyed path: the permanent mapping STILL pointing at this exact winner while
+    // its record stays absent means the run was purged — the key is spent, not
+    // mid-commit. Require the re-read to match `winnerId`: a mapping that now
+    // resolves to a DIFFERENT id (or vanished) cannot prove this winner was purged,
+    // so it falls through to the invariant throw rather than mislabelling external
+    // keyspace mutation as a spent key.
+    const remappedId = await resolveIdempotencyKeyWorkflowId(internals, idempotencyKey);
+    if (remappedId === winnerId) {
       throw new IdempotencyKeyPurgedError(winnerId);
     }
   }

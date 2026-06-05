@@ -1657,20 +1657,21 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
     { lines: new Set([127, 344, 345, 348, 349, 350, 351, 352, 353, 354, 355, 356, 357]) },
   ],
   [
-    // start-or-signal-resolution's two invariant-violation throws. Lines 136-140
+    // start-or-signal-resolution's two invariant-violation throws. Lines 142-146
     // are the resolveWinnerWithSignal exhaustion throw reached when a winning record
     // never becomes readable within five delayed reads AND the key path cannot prove
-    // a purge (the mapping vanished between exhaustion and the re-read, lines 136-137
-    // being the fall-through past the purged-key throw) — reachable only if a caller
-    // that reserved `pendingStarts` never durably commits (e.g. it crashed
-    // mid-start) or the keyspace was mutated externally. Lines 155-158 are
-    // requireWinnerId finding the mapping vanished after a lost CAS — reachable only
-    // by external `start-idem:` keyspace mutation. The reachable success branches of
-    // both helpers, and the keyed-exhaustion purged-key throw (line 135), are covered
-    // by the white-box race-recovery and purged-key tests; contriving a mock to hit
-    // these invariant throws would test the mock.
+    // a purge — the re-read mapping resolves to a DIFFERENT id or vanished (lines
+    // 142-143 being the fall-through past the matched-winner purged-key throw),
+    // reachable only if a caller that reserved `pendingStarts` never durably commits
+    // (e.g. it crashed mid-start) or the keyspace was mutated externally. Lines
+    // 161-164 are requireWinnerId finding the mapping vanished after a lost CAS —
+    // reachable only by external `start-idem:` keyspace mutation. The reachable
+    // success branches of both helpers, and the keyed-exhaustion purged-key throw
+    // (line 141, matched winner), are covered by the white-box race-recovery and
+    // purged-key tests; contriving a mock to hit these invariant throws would test
+    // the mock.
     'src/core/engine/lifecycle/start-or-signal-resolution.ts',
-    { lines: new Set([136, 137, 138, 139, 140, 155, 156, 158]) },
+    { lines: new Set([142, 143, 144, 145, 146, 161, 162, 164]) },
   ],
   [
     'src/core/engine/pending-updates.ts',
