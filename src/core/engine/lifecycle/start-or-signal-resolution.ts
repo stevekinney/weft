@@ -61,6 +61,73 @@ export async function resolveExistingRunOrThrowPurged(
   return workflowId;
 }
 
+/** Maximum waits for a winner's in-memory `pendingStarts` reservation to clear. */
+const RESERVATION_CLEAR_MAX_ATTEMPTS = 5;
+/** Delay between `pendingStarts` reservation-clearance checks. */
+const RESERVATION_CLEAR_RETRY_DELAY_MS = 5;
+
+/**
+ * Wait for a winner's in-memory `pendingStarts` reservation to clear, yielding the
+ * event loop between checks so the winner's `start` `finally` can run (a busy spin
+ * would starve it — Weft runs one engine per durable store, single event loop, so
+ * the reservation set is authoritative). Returns once the reservation is gone, or
+ * after {@link RESERVATION_CLEAR_MAX_ATTEMPTS} waits. The caller then reads the
+ * record to discriminate a committed winner (resolve) from an aborted reservation
+ * (retry create): the reservation clears whether `start` committed or rolled back
+ * (its `finally` always deletes it), so a cleared reservation with no record means
+ * the winner aborted before its durable write.
+ */
+async function awaitReservationCleared(
+  internals: EngineInternals,
+  workflowId: string,
+): Promise<void> {
+  for (let attempt = 0; attempt < RESERVATION_CLEAR_MAX_ATTEMPTS; attempt += 1) {
+    if (!internals.pendingStarts.has(workflowId)) {
+      return;
+    }
+    await sleep(RESERVATION_CLEAR_RETRY_DELAY_MS);
+  }
+}
+
+/**
+ * Resolve a caller-`id` create-race loss without conflating an in-memory
+ * reservation with a durable record. A loser collides on the winner's
+ * `pendingStarts` reservation (start.ts) BEFORE the winner commits, so the bare
+ * collision proves nothing about whether a run will exist.
+ *
+ * Read the winner's record FIRST: this catches a winner that has already committed
+ * but is still non-terminal before it can complete (a fast workflow consumes its
+ * create-batch signal and finishes the moment it is driven — reading immediately
+ * resolves it instead of racing it to a terminal-conflict). Only when the record is
+ * absent do we wait for the reservation to clear and read once more to discriminate:
+ *
+ * - **record present** — the winner committed: signal it (or conflict if terminal)
+ *   and return the handle.
+ * - **record absent after the reservation clears** — the winner aborted before
+ *   committing (storage failure, oversized payload, throwing start interceptor): no
+ *   run exists, so return `undefined` and let the caller retry its own create.
+ */
+export async function resolveCallerIdWinnerOrRetry(
+  internals: EngineInternals,
+  winnerId: string,
+  signalSpec: StartOrSignalSignal,
+  signalId: string,
+  callbacks: StartOrSignalCallbacks,
+): Promise<WorkflowHandle | undefined> {
+  const resolved = await signalOrConflictExistingWorkflow(
+    internals,
+    winnerId,
+    signalSpec,
+    signalId,
+    callbacks,
+  );
+  if (resolved !== undefined) {
+    return resolved;
+  }
+  await awaitReservationCleared(internals, winnerId);
+  return signalOrConflictExistingWorkflow(internals, winnerId, signalSpec, signalId, callbacks);
+}
+
 /**
  * For a workflow that already exists: signal it if non-terminal, conflict if
  * terminal. Returns the handle on a successful signal, or `undefined` when the
@@ -94,17 +161,20 @@ const WINNER_RESOLUTION_MAX_ATTEMPTS = 5;
 const WINNER_RESOLUTION_RETRY_DELAY_MS = 5;
 
 /**
- * Signal the race winner, bounded-retrying when its record is not yet readable. A
- * caller-id loser can observe the winner's in-memory `pendingStarts` reservation
- * (see start.ts) BEFORE the winner's durable commit lands, so the first read may
- * miss the record; a short delay between reads lets the commit settle.
+ * Signal a KEYED race winner, bounded-retrying when its record is not yet readable.
+ * The keyed winner commits its record atomically with the `start-idem:` mapping, so
+ * the record is guaranteed to exist — but the loser may read before the commit
+ * settles, so a short delay between reads lets it land. (Caller-`id` winners can
+ * abort before committing and are handled by `resolveCallerIdWinnerOrRetry`, not
+ * here.)
  *
- * After {@link WINNER_RESOLUTION_MAX_ATTEMPTS} reads with no record, disambiguate:
- * on the keyed path (`idempotencyKey` supplied), re-read the mapping — if it still
- * resolves, the winner's run was purged out from under the still-present mapping,
- * so the key is spent and we throw {@link IdempotencyKeyPurgedError}. A vanished
- * mapping, or the caller-id path (no key), is the genuine "reserved but never
- * committed" invariant violation and keeps the hard throw.
+ * After {@link WINNER_RESOLUTION_MAX_ATTEMPTS} reads with no record, the record is
+ * absent for a committed-with-mapping winner only because it was purged: re-read
+ * the mapping, and if it still resolves to this exact `winnerId` the key is spent —
+ * throw {@link IdempotencyKeyPurgedError}. A mapping that now resolves to a
+ * DIFFERENT id (or vanished) cannot prove this winner was purged, so it falls
+ * through to the invariant throw rather than mislabelling external keyspace
+ * mutation as a spent key.
  */
 export async function resolveWinnerWithSignal(
   internals: EngineInternals,
@@ -112,7 +182,7 @@ export async function resolveWinnerWithSignal(
   signalSpec: StartOrSignalSignal,
   signalId: string,
   callbacks: StartOrSignalCallbacks,
-  idempotencyKey: string | undefined,
+  idempotencyKey: string,
 ): Promise<WorkflowHandle> {
   for (let attempt = 0; attempt < WINNER_RESOLUTION_MAX_ATTEMPTS; attempt += 1) {
     const resolved = await signalOrConflictExistingWorkflow(
@@ -129,17 +199,9 @@ export async function resolveWinnerWithSignal(
       await sleep(WINNER_RESOLUTION_RETRY_DELAY_MS);
     }
   }
-  if (idempotencyKey !== undefined) {
-    // Keyed path: the permanent mapping STILL pointing at this exact winner while
-    // its record stays absent means the run was purged — the key is spent, not
-    // mid-commit. Require the re-read to match `winnerId`: a mapping that now
-    // resolves to a DIFFERENT id (or vanished) cannot prove this winner was purged,
-    // so it falls through to the invariant throw rather than mislabelling external
-    // keyspace mutation as a spent key.
-    const remappedId = await resolveIdempotencyKeyWorkflowId(internals, idempotencyKey);
-    if (remappedId === winnerId) {
-      throw new IdempotencyKeyPurgedError(winnerId);
-    }
+  const remappedId = await resolveIdempotencyKeyWorkflowId(internals, idempotencyKey);
+  if (remappedId === winnerId) {
+    throw new IdempotencyKeyPurgedError(winnerId);
   }
   throw new Error(
     `startOrSignal resolved winning workflow "${winnerId}" but its record never became readable ` +

@@ -9,6 +9,7 @@ import { Engine } from '../engine.ts';
 import type { WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
 import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from './errors.ts';
+import { getInternals } from './internals.ts';
 
 const waitForRelease = workflow({ name: 'wait-for-release' }).execute(async function* (
   ctx: WorkflowContext,
@@ -70,6 +71,44 @@ function storageWithOneShotNullGet(
             return null;
           }
           return value;
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  });
+}
+
+/**
+ * Wrap a storage so the FIRST `conditionalBatch` (the winning caller-id start's
+ * commit) parks until released, then throws — simulating a winner that reserved
+ * `pendingStarts` but aborts before its durable write (a storage failure, oversized
+ * payload, or throwing start interceptor all land here). `onParked` fires once the
+ * winner is parked mid-commit (reservation held); awaiting `release` then makes it
+ * throw. Every later `conditionalBatch` delegates, so the losing caller's retry
+ * commits normally. The loser's first attempt collides on the in-memory reservation
+ * at start.ts and never reaches `conditionalBatch`, so "first batch = winner" holds.
+ */
+function storageWithAbortingFirstConditionalBatch(
+  inner: Storage,
+  onParked: () => void,
+  release: Promise<void>,
+): Storage {
+  let parkedOnce = false;
+  return new Proxy(inner, {
+    get(target, property, receiver) {
+      if (property === 'conditionalBatch') {
+        return async (
+          conditions: Parameters<NonNullable<Storage['conditionalBatch']>>[0],
+          operations: Parameters<NonNullable<Storage['conditionalBatch']>>[1],
+        ): Promise<boolean> => {
+          if (!parkedOnce) {
+            parkedOnce = true;
+            onParked();
+            await release;
+            throw new Error('injected winner abort before durable commit');
+          }
+          return target.conditionalBatch!(conditions, operations);
         };
       }
       const value = Reflect.get(target, property, receiver);
@@ -819,6 +858,97 @@ describe('engine.startOrSignal', () => {
         ),
       ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
     } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('retries the create when a caller-id winner aborts before its durable commit', async () => {
+    // Regression: a caller-id loser collides on the winner's in-memory
+    // pendingStarts reservation BEFORE the winner's durable commit. If that winner
+    // then aborts (storage failure, oversized payload, throwing start interceptor),
+    // no run ever exists — the loser must retry its own create and win, not strand
+    // waiting for a record that never appears. Deterministic via event ordering (no
+    // sleeps): the winner parks mid-conditionalBatch with its reservation held; once
+    // the loser has collided and entered winner-resolution, we release the winner so
+    // it throws; the loser then re-reads (absent), retries create, and succeeds.
+    const winnerParked = Promise.withResolvers<void>();
+    const releaseWinner = Promise.withResolvers<void>();
+    const loserCollided = Promise.withResolvers<void>();
+    const inner = new MemoryStorage();
+    const engine = new Engine({
+      storage: storageWithAbortingFirstConditionalBatch(
+        inner,
+        () => winnerParked.resolve(),
+        releaseWinner.promise,
+      ),
+    });
+    engine.register(waitForRelease);
+
+    // Fire `loserCollided` when the loser's start observes the winner's held
+    // reservation (has() returns true for this id). The winner's own pre-reserve
+    // check returns false, so only the loser's collision trips it.
+    const pendingStarts = getInternals(engine).pendingStarts;
+    const originalHas = pendingStarts.has.bind(pendingStarts);
+    pendingStarts.has = (id: string): boolean => {
+      const present = originalHas(id);
+      if (present && id === 'sos-abort') {
+        loserCollided.resolve();
+      }
+      return present;
+    };
+
+    try {
+      const winnerPromise = engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'winner', signalId: 'sig-abort' },
+        { id: 'sos-abort' },
+      );
+      await winnerParked.promise; // winner parked mid-commit; reservation held
+
+      const loserPromise = engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'loser', signalId: 'sig-abort' },
+        { id: 'sos-abort' },
+      );
+      await loserCollided.promise; // loser hit the held reservation → lost-caller-id
+
+      releaseWinner.resolve(); // winner throws → aborts → finally clears the reservation
+
+      // The winner's start rejects with the injected abort; the loser recovers by
+      // retrying its own create (the wrapper lets the second conditionalBatch
+      // through) and resolves to a real run.
+      await expect(winnerPromise).rejects.toThrow(/injected winner abort/);
+      const loser = await loserPromise;
+      expect(loser.id).toBe('sos-abort');
+      expect(await countWorkflowRecords(engine)).toBe(1);
+      expect(await loser.result()).toBe('loser');
+    } finally {
+      pendingStarts.has = originalHas;
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('throws after the create-attempt cap when every caller-id winner keeps aborting', async () => {
+    // White-box coverage for the CALLER_ID_CREATE_MAX_ATTEMPTS exhaustion throw: if
+    // every create attempt collides with a reservation that never clears into a
+    // committed record, the loser must surface a bounded error rather than loop
+    // forever. Hold a permanent reservation for the target id so every retry
+    // re-collides and the reservation never clears.
+    const engine = createEngine();
+    getInternals(engine).pendingStarts.add('sos-cap');
+    try {
+      await expect(
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'x', signalId: 'sig-cap' },
+          { id: 'sos-cap' },
+        ),
+      ).rejects.toThrow(/after 5 attempts/);
+    } finally {
+      getInternals(engine).pendingStarts.delete('sos-cap');
       await engine[Symbol.asyncDispose]();
     }
   });

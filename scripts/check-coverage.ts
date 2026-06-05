@@ -1644,34 +1644,33 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   ['src/core/engine/bulk-operations-purge.ts', { lines: new Set([166, 214, 215, 216]) }],
   ['src/core/engine/construction.ts', { lines: new Set([97, 98, 99, 100, 101]) }],
   [
-    // start-or-signal edges. Line 127 (startWithIdempotency rejecting an undefined
+    // start-or-signal edges. Line 132 (startWithIdempotency rejecting an undefined
     // key) is unreachable by construction — the engine only routes here when a key
-    // is set. Lines 344-357 are the `signal-already-buffered` plain-create's
-    // WorkflowAlreadyExistsError recovery: the convergence OUTCOME (one record, no
-    // leaked WorkflowAlreadyExistsError, both callers converge) is covered by the
-    // concurrent pre-buffered regression test, but this specific recovery LINE fires
-    // only on a rare mid-sequence interleaving in-process storage produces by
-    // chance, not on command (the loser usually resolves via the top-level lookup).
-    // Contriving a mock to hit it would test the mock, not the engine.
+    // is set. Lines 423-427 are `plainCreateBufferedSignalOrResolve`'s
+    // WorkflowAlreadyExistsError recovery (catch + resolveCallerIdWinnerOrRetry):
+    // the convergence OUTCOME (one record, no leaked WorkflowAlreadyExistsError,
+    // both callers converge) is covered by the concurrent pre-buffered regression
+    // test, but this specific recovery LINE fires only on a rare mid-sequence
+    // interleaving in-process storage produces by chance, not on command (the loser
+    // usually resolves via the top-level lookup). Contriving a mock to hit it would
+    // test the mock, not the engine.
     'src/core/engine/lifecycle/start-or-signal.ts',
-    { lines: new Set([127, 344, 345, 348, 349, 350, 351, 352, 353, 354, 355, 356, 357]) },
+    { lines: new Set([132, 423, 424, 425, 426, 427]) },
   ],
   [
-    // start-or-signal-resolution's two invariant-violation throws. Lines 142-146
-    // are the resolveWinnerWithSignal exhaustion throw reached when a winning record
-    // never becomes readable within five delayed reads AND the key path cannot prove
-    // a purge — the re-read mapping resolves to a DIFFERENT id or vanished (lines
-    // 142-143 being the fall-through past the matched-winner purged-key throw),
-    // reachable only if a caller that reserved `pendingStarts` never durably commits
-    // (e.g. it crashed mid-start) or the keyspace was mutated externally. Lines
-    // 161-164 are requireWinnerId finding the mapping vanished after a lost CAS —
-    // reachable only by external `start-idem:` keyspace mutation. The reachable
-    // success branches of both helpers, and the keyed-exhaustion purged-key throw
-    // (line 141, matched winner), are covered by the white-box race-recovery and
-    // purged-key tests; contriving a mock to hit these invariant throws would test
-    // the mock.
+    // start-or-signal-resolution's two invariant-violation throws. Lines 202-205
+    // are the resolveWinnerWithSignal exhaustion throw reached when a keyed winning
+    // record never becomes readable within five delayed reads AND the re-read mapping
+    // cannot prove a purge — it resolves to a DIFFERENT id or vanished (lines 202-203
+    // being the fall-through past the matched-winner purged-key throw), reachable
+    // only by external `start-idem:` keyspace mutation. Lines 220-223 are
+    // requireWinnerId finding the mapping vanished after a lost CAS — reachable only
+    // by the same external mutation. The reachable success branches of both helpers,
+    // and the keyed-exhaustion purged-key throw (line 201, matched winner), are
+    // covered by the white-box race-recovery and purged-key tests; contriving a mock
+    // to hit these invariant throws would test the mock.
     'src/core/engine/lifecycle/start-or-signal-resolution.ts',
-    { lines: new Set([142, 143, 144, 145, 146, 161, 162, 164]) },
+    { lines: new Set([202, 203, 204, 205, 220, 221, 223]) },
   ],
   [
     'src/core/engine/pending-updates.ts',
