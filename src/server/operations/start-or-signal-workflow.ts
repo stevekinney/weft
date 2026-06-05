@@ -7,21 +7,13 @@ import {
 } from '../../core/engine/errors.ts';
 import { runtimeWorkflowEngine } from '../../core/runtime-workflow-engine.ts';
 import { isSignalIdWithinByteLimit } from '../../core/signal-id.ts';
-import {
-  assertExclusiveStartWorkflowOptions,
-  coerceStartWorkflowDuration,
-  coerceStartWorkflowId,
-  coerceStartWorkflowIdempotencyKey,
-  coerceStartWorkflowTags,
-  coerceStartWorkflowTimestamp,
-  StartWorkflowValidationError,
-} from '../../core/start-workflow-validation.ts';
+import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
 import type { SearchAttributeSchema, StartOptions, StartOrSignalSignal } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
-import { coerceStartWorkflowSearchAttributes } from './start-workflow-search-attributes.ts';
+import { buildSharedStartWorkflowOptions } from './start-workflow-options.ts';
 
 // Permissive at the schema boundary so all field validation lives in `invoke()`,
 // giving one cross-transport contract (mirrors weft.workflows.start).
@@ -73,7 +65,7 @@ function validateStartOrSignalWorkflowInput(
 
   let options: StartOptions;
   try {
-    options = buildStartOrSignalOptions(input, lookupSearchAttributeSchema(input.type));
+    options = buildSharedStartWorkflowOptions(input, lookupSearchAttributeSchema(input.type));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw invalidParamsFault(message);
@@ -111,49 +103,6 @@ function assertConvergenceTokenProvided(
         'from the idempotency key for convergence. Provide exactly one.',
     );
   }
-}
-
-function buildStartOrSignalOptions(
-  input: StartOrSignalWorkflowInput,
-  searchAttributeSchema: SearchAttributeSchema | undefined,
-): StartOptions {
-  const options: StartOptions = {};
-
-  if (input.id !== undefined) {
-    options.id = coerceStartWorkflowId(input.id, 'Field "id"');
-  }
-  if (input.executionTimeout !== undefined) {
-    options.executionTimeout = coerceStartWorkflowDuration(
-      input.executionTimeout,
-      'Field "executionTimeout"',
-    );
-  }
-  if (input.startAt !== undefined) {
-    options.startAt = coerceStartWorkflowTimestamp(input.startAt, 'Field "startAt"');
-  }
-  if (input.startAfter !== undefined) {
-    options.startAfter = coerceStartWorkflowDuration(input.startAfter, 'Field "startAfter"');
-  }
-  if (input.tags !== undefined) {
-    options.tags = coerceStartWorkflowTags(input.tags, 'Field "tags"');
-  }
-  if (input.idempotencyKey !== undefined) {
-    options.idempotencyKey = coerceStartWorkflowIdempotencyKey(
-      input.idempotencyKey,
-      'Field "idempotencyKey"',
-    );
-  }
-  if (input.searchAttributes !== undefined) {
-    options.searchAttributes = coerceStartWorkflowSearchAttributes(
-      input.searchAttributes,
-      'Field "searchAttributes"',
-      searchAttributeSchema,
-    );
-  }
-
-  assertExclusiveStartWorkflowOptions(options.startAt, options.startAfter);
-
-  return options;
 }
 
 /**

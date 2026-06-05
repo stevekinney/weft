@@ -474,6 +474,17 @@ export const KEYS = {
    * rather than missing the mapping and creating a fresh run.
    */
   startIdempotency: (key: string) => `start-idem:${encodeStorageKeyComponent(key)}`,
+  /**
+   * The convergence signal id that `startOrSignal` derives from an idempotency
+   * key so independent same-key callers deliver ONE signal. Deliberately uses the
+   * RAW key (not `encodeStorageKeyComponent`): unlike `startIdempotency` this is a
+   * signal id, not a storage key, and `validateSignalId` is character-agnostic, so
+   * the raw key is always a valid id as long as it fits the byte cap (enforced as
+   * ≤117 bytes so `"start-idem:"` + key stays within the 128-byte signal-id
+   * ceiling). The two derivations are independent namespaces; both are individually
+   * correct, so the raw-vs-encoded difference is harmless.
+   */
+  startIdempotencySignalId: (key: string) => `start-idem:${key}`,
   budget: (namespace: string, period: string, date: string) =>
     `budget:${namespace}:${period}:${date}`,
   review: (workflowId: string, reviewId: string) =>

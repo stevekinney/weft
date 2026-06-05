@@ -153,6 +153,24 @@ describe('weft.workflows.start', () => {
     expect(secondBody.id).toBe(firstBody.id);
   });
 
+  it('returns 400 when both id and idempotencyKey are provided (mutually exclusive)', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      jsonRequest('POST', '/v1/workflows', {
+        type: 'echo',
+        id: 'explicit-id',
+        idempotencyKey: 'dedupe-key',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toMatch(/mutually exclusive/);
+  });
+
   it('returns 400 when idempotencyKey is an empty string over raw REST', async () => {
     engine = createEngine();
 

@@ -1,3 +1,4 @@
+import { sleep } from '../../../runtime/portable.ts';
 import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { KEYS, requireStorageCapability } from '../../../storage/interface.ts';
 import { decode, encode } from '../../codec.ts';
@@ -58,7 +59,7 @@ function resolveSignalId(
   // exact double-delivery the dedup exists to prevent — so the two are mutually
   // exclusive (rejected at the API boundary; see `startOrSignal`).
   if (idempotencyKey !== undefined) {
-    return `start-idem:${idempotencyKey}`;
+    return KEYS.startIdempotencySignalId(idempotencyKey);
   }
   if (signalSpec.signalId !== undefined) {
     return signalSpec.signalId;
@@ -86,10 +87,10 @@ async function resolveIdempotencyKeyWorkflowId(
  * Build the `(workflowId) => { operations, conditions }` callback that folds the
  * idempotency mapping and (optionally) the create-batch signal into the start
  * batch, gated on the mapping key being absent. Every caller supplies at least
- * one of `idempotencyKey` / `signal` (the plain start path skips this factory
+ * one of `idempotencyKey` / `signal` (the plain start path skips this builder
  * entirely), so the returned callback always contributes at least one operation.
  */
-function buildIdempotentStartOperationsFactory(
+function idempotentStartOperationsFor(
   internals: EngineInternals,
   idempotencyKey: string | undefined,
   signal: { name: string; payload: unknown; signalId: string } | undefined,
@@ -174,7 +175,7 @@ export async function startWithIdempotency(
       options,
       undefined,
       callbacks,
-      buildIdempotentStartOperationsFactory(internals, idempotencyKey, undefined),
+      idempotentStartOperationsFor(internals, idempotencyKey, undefined),
     );
   } catch (error) {
     // Only an idempotency-mapping CAS loss is a same-key race we resolve to the
@@ -340,49 +341,77 @@ async function createWithSignalOrFallBack(
   callbacks: StartOrSignalCallbacks,
 ): Promise<WorkflowHandle> {
   const idempotencyKey = options?.idempotencyKey;
-  try {
-    return await startWorkflow(
+  const winnerId = await resolveCreateRaceWinnerId(internals, idempotencyKey, async () => {
+    return startWorkflow(
       internals,
       type,
       input,
       options,
       undefined,
       callbacks,
-      buildIdempotentStartOperationsFactory(internals, idempotencyKey, {
+      idempotentStartOperationsFor(internals, idempotencyKey, {
         name: signalSpec.name,
         payload: signalSpec.payload,
         signalId,
       }),
     );
-  } catch (error) {
-    const lostByMapping = error instanceof StartIdempotencyRaceLostError;
-    const lostByCallerId = error instanceof WorkflowAlreadyExistsError;
-    if (!lostByMapping && !lostByCallerId) {
-      throw error;
-    }
+  });
+  if (winnerId.kind === 'created') {
+    return winnerId.handle;
   }
 
   // Lost the create race to a concurrent caller. Resolve the winner and deliver
   // via the signal path, whose CAS dedups against the winner's create-batch
   // signal (same signalId). The winner's record may not be readable on the first
   // read if its commit is still settling, so resolution is bounded-retried.
-  const winnerId =
-    idempotencyKey !== undefined
-      ? await requireWinnerId(internals, idempotencyKey)
-      : // id+key is rejected, so a WorkflowAlreadyExistsError loss is the id-only
-        // path: the caller-supplied id is the winner.
-        (options?.id ?? '');
-  return resolveWinnerWithSignal(internals, winnerId, signalSpec, signalId, callbacks);
+  return resolveWinnerWithSignal(internals, winnerId.id, signalSpec, signalId, callbacks);
+}
+
+/**
+ * Run the create batch. On success, return the new handle. On a lost create race
+ * — by idempotency-mapping CAS ({@link StartIdempotencyRaceLostError}) or by
+ * caller-id reservation ({@link WorkflowAlreadyExistsError}) — return the winner's
+ * id so the caller can resolve and signal it. The caller-id loss carries the
+ * winning id directly on the error; the mapping loss reads it back from the
+ * `start-idem:` mapping. Any other error propagates.
+ */
+async function resolveCreateRaceWinnerId(
+  internals: EngineInternals,
+  idempotencyKey: string | undefined,
+  runCreate: () => Promise<WorkflowHandle>,
+): Promise<{ kind: 'created'; handle: WorkflowHandle } | { kind: 'lost'; id: string }> {
+  try {
+    return { kind: 'created', handle: await runCreate() };
+  } catch (error) {
+    if (error instanceof WorkflowAlreadyExistsError) {
+      // id+key is mutually exclusive, so a caller-id collision is the id-only
+      // path; the error carries the reserved (winning) id directly.
+      return { kind: 'lost', id: error.workflowId };
+    }
+    if (error instanceof StartIdempotencyRaceLostError && idempotencyKey !== undefined) {
+      return { kind: 'lost', id: await requireWinnerId(internals, idempotencyKey) };
+    }
+    throw error;
+  }
 }
 
 /** Number of times winner resolution re-reads a not-yet-readable record before erroring. */
 const WINNER_RESOLUTION_MAX_ATTEMPTS = 5;
+/**
+ * Delay between winner-resolution reads, matching the coordinated-update guard's
+ * retry cadence. Gives a winner that reserved `pendingStarts` but has not yet
+ * durably committed time to land before the next read, instead of busy-spinning.
+ */
+const WINNER_RESOLUTION_RETRY_DELAY_MS = 5;
 
 /**
- * Signal the race winner, bounded-retrying when its record is not yet readable
- * (a loser can observe the reservation before the winner's durable commit lands).
- * Throws after {@link WINNER_RESOLUTION_MAX_ATTEMPTS} reads if the record never
- * appears — a genuine invariant violation rather than a transient delay.
+ * Signal the race winner, bounded-retrying when its record is not yet readable. A
+ * caller-id loser can observe the winner's in-memory `pendingStarts` reservation
+ * (see start.ts) BEFORE the winner's durable commit lands, so the first read may
+ * miss the record; a short delay between reads lets the commit settle. Throws
+ * after {@link WINNER_RESOLUTION_MAX_ATTEMPTS} reads if the record never appears
+ * — reachable only if a reserving caller never commits (e.g. it crashed mid-start
+ * after reserving), which is a genuine invariant violation, not a transient delay.
  */
 async function resolveWinnerWithSignal(
   internals: EngineInternals,
@@ -401,6 +430,9 @@ async function resolveWinnerWithSignal(
     );
     if (resolved !== undefined) {
       return resolved;
+    }
+    if (attempt < WINNER_RESOLUTION_MAX_ATTEMPTS - 1) {
+      await sleep(WINNER_RESOLUTION_RETRY_DELAY_MS);
     }
   }
   throw new Error(

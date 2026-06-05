@@ -283,6 +283,13 @@ export interface WeftClient {
    * returned handle's `result()` to its output type. Without augmentation the
    * permissive string-name overload applies, so the client stays usable with
    * plain string names and no hard dependency on codegen.
+   *
+   * Pass `options.idempotencyKey` for at-most-once starts: a repeated key returns
+   * a handle to the existing run rather than starting a second. Conflicts (a
+   * duplicate `id`, or a key whose run was purged) are transport-dependent:
+   * `LocalClient` throws the typed error (`WorkflowAlreadyExistsError` /
+   * `IdempotencyKeyPurgedError`), while `HttpClient` throws `HttpClientError`
+   * with `status === 409` and `faultCode === 'Conflict'`.
    */
   start<TName extends KnownWorkflowName>(
     type: TName,
@@ -299,12 +306,20 @@ export interface WeftClient {
    * Atomically start a workflow or signal it if it already exists
    * (signal-with-start). An absent target is created and delivered the signal in
    * one batch; a non-terminal target (running, pending, or suspended) is
-   * signalled; a terminal target rejects with `StartOrSignalConflictError`.
+   * signalled; a terminal target is rejected as a conflict.
+   *
+   * The rejection shape is transport-dependent: `LocalClient` throws the typed
+   * `StartOrSignalConflictError` (and `IdempotencyKeyPurgedError` for a spent
+   * key), while `HttpClient` throws `HttpClientError` with `status === 409` and
+   * `faultCode === 'Conflict'`. Branch on `faultCode`/`status` for code that runs
+   * over either transport.
    *
    * Pass `options.idempotencyKey` to dedup independent callers such as retried
    * webhooks: concurrent same-key callers converge on one workflow and one
    * delivered signal, with the signal id derived from the key when
-   * `signal.signalId` is omitted.
+   * `signal.signalId` is omitted. Supply exactly one of `signal.signalId` or
+   * `options.idempotencyKey`; `options.id` and `options.idempotencyKey` are
+   * mutually exclusive.
    */
   startOrSignal<TName extends KnownWorkflowName>(
     type: TName,

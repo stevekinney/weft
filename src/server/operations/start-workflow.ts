@@ -6,21 +6,13 @@ import {
   WorkflowNotRegisteredError,
 } from '../../core/engine/errors.ts';
 import { runtimeWorkflowEngine } from '../../core/runtime-workflow-engine.ts';
-import {
-  assertExclusiveStartWorkflowOptions,
-  coerceStartWorkflowDuration,
-  coerceStartWorkflowId,
-  coerceStartWorkflowIdempotencyKey,
-  coerceStartWorkflowTags,
-  coerceStartWorkflowTimestamp,
-  StartWorkflowValidationError,
-} from '../../core/start-workflow-validation.ts';
+import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
 import type { SearchAttributeSchema, StartOptions } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
-import { coerceStartWorkflowSearchAttributes } from './start-workflow-search-attributes.ts';
+import { buildSharedStartWorkflowOptions } from './start-workflow-options.ts';
 
 // Inputs are intentionally permissive at the schema boundary so REST
 // callers (and equivalent JSON-RPC callers) hit the same validation in
@@ -69,7 +61,7 @@ function validateStartWorkflowInput(
 
   let options: StartOptions;
   try {
-    options = buildStartWorkflowOptions(input, lookupSearchAttributeSchema(type));
+    options = buildSharedStartWorkflowOptions(input, lookupSearchAttributeSchema(type));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw invalidParamsFault(message);
@@ -159,49 +151,6 @@ export const startWorkflowOperation = defineOperation<StartWorkflowInput, StartW
     }
   },
 });
-
-function buildStartWorkflowOptions(
-  input: StartWorkflowInput,
-  searchAttributeSchema: SearchAttributeSchema | undefined,
-): StartOptions {
-  const options: StartOptions = {};
-
-  if (input.id !== undefined) {
-    options.id = coerceStartWorkflowId(input.id, 'Field "id"');
-  }
-  if (input.executionTimeout !== undefined) {
-    options.executionTimeout = coerceStartWorkflowDuration(
-      input.executionTimeout,
-      'Field "executionTimeout"',
-    );
-  }
-  if (input.startAt !== undefined) {
-    options.startAt = coerceStartWorkflowTimestamp(input.startAt, 'Field "startAt"');
-  }
-  if (input.startAfter !== undefined) {
-    options.startAfter = coerceStartWorkflowDuration(input.startAfter, 'Field "startAfter"');
-  }
-  if (input.tags !== undefined) {
-    options.tags = coerceStartWorkflowTags(input.tags, 'Field "tags"');
-  }
-  if (input.idempotencyKey !== undefined) {
-    options.idempotencyKey = coerceStartWorkflowIdempotencyKey(
-      input.idempotencyKey,
-      'Field "idempotencyKey"',
-    );
-  }
-  if (input.searchAttributes !== undefined) {
-    options.searchAttributes = coerceStartWorkflowSearchAttributes(
-      input.searchAttributes,
-      'Field "searchAttributes"',
-      searchAttributeSchema,
-    );
-  }
-
-  assertExclusiveStartWorkflowOptions(options.startAt, options.startAfter);
-
-  return options;
-}
 
 export const startWorkflowRestBinding: UnknownRestBinding = {
   method: 'POST',

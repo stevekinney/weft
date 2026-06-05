@@ -49,7 +49,9 @@ export type WeftErrorCode =
   | 'ActivityReconciliationConflictError'
   | 'ActivityReconciliationIndeterminateError'
   | 'AsyncActivityTokenNotFoundError'
-  | 'PayloadSizeExceededError';
+  | 'PayloadSizeExceededError'
+  | 'StartOrSignalConflictError'
+  | 'IdempotencyKeyPurgedError';
 
 /**
  * Generic abstract base for all Weft library errors. The `TCode` parameter
@@ -112,6 +114,8 @@ const publicWeftErrorCodeMap = {
   ActivityReconciliationIndeterminateError: true,
   AsyncActivityTokenNotFoundError: true,
   PayloadSizeExceededError: true,
+  StartOrSignalConflictError: true,
+  IdempotencyKeyPurgedError: true,
 } satisfies Record<WeftErrorCode, true>;
 
 const PUBLIC_WEFT_ERROR_CODES = new Set<string>(Object.keys(publicWeftErrorCodeMap));

@@ -1,6 +1,84 @@
 import { validateAttributeType } from '../../core/search-attributes.ts';
-import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
-import type { SearchAttributeSchema, SearchAttributeValue } from '../../core/types.ts';
+import {
+  assertExclusiveStartWorkflowOptions,
+  coerceStartWorkflowDuration,
+  coerceStartWorkflowId,
+  coerceStartWorkflowIdempotencyKey,
+  coerceStartWorkflowTags,
+  coerceStartWorkflowTimestamp,
+  StartWorkflowValidationError,
+} from '../../core/start-workflow-validation.ts';
+import type {
+  SearchAttributeSchema,
+  SearchAttributeValue,
+  StartOptions,
+} from '../../core/types.ts';
+
+/**
+ * The raw, transport-supplied start-option fields shared by `weft.workflows.start`
+ * and `weft.workflows.startorsignal`. Each is `unknown` because validation happens
+ * in {@link buildSharedStartWorkflowOptions}, not at the schema boundary, so both
+ * surfaces hit one cross-transport error path.
+ */
+export type SharedStartWorkflowOptionInput = {
+  id?: unknown;
+  executionTimeout?: unknown;
+  startAt?: unknown;
+  startAfter?: unknown;
+  tags?: unknown;
+  idempotencyKey?: unknown;
+  searchAttributes?: unknown;
+};
+
+/**
+ * Coerce the shared start-option fields into a validated {@link StartOptions}.
+ * Both start operations call this so they cannot drift in how they validate `id`,
+ * `executionTimeout`, `startAt`/`startAfter`, `tags`, `idempotencyKey`, and
+ * `searchAttributes` (a new field added here covers both surfaces at once). Throws
+ * {@link StartWorkflowValidationError} on any malformed field.
+ */
+export function buildSharedStartWorkflowOptions(
+  input: SharedStartWorkflowOptionInput,
+  searchAttributeSchema: SearchAttributeSchema | undefined,
+): StartOptions {
+  const options: StartOptions = {};
+
+  if (input.id !== undefined) {
+    options.id = coerceStartWorkflowId(input.id, 'Field "id"');
+  }
+  if (input.executionTimeout !== undefined) {
+    options.executionTimeout = coerceStartWorkflowDuration(
+      input.executionTimeout,
+      'Field "executionTimeout"',
+    );
+  }
+  if (input.startAt !== undefined) {
+    options.startAt = coerceStartWorkflowTimestamp(input.startAt, 'Field "startAt"');
+  }
+  if (input.startAfter !== undefined) {
+    options.startAfter = coerceStartWorkflowDuration(input.startAfter, 'Field "startAfter"');
+  }
+  if (input.tags !== undefined) {
+    options.tags = coerceStartWorkflowTags(input.tags, 'Field "tags"');
+  }
+  if (input.idempotencyKey !== undefined) {
+    options.idempotencyKey = coerceStartWorkflowIdempotencyKey(
+      input.idempotencyKey,
+      'Field "idempotencyKey"',
+    );
+  }
+  if (input.searchAttributes !== undefined) {
+    options.searchAttributes = coerceStartWorkflowSearchAttributes(
+      input.searchAttributes,
+      'Field "searchAttributes"',
+      searchAttributeSchema,
+    );
+  }
+
+  assertExclusiveStartWorkflowOptions(options.startAt, options.startAfter);
+
+  return options;
+}
 
 /**
  * Coerce a transport-supplied `searchAttributes` object into validated

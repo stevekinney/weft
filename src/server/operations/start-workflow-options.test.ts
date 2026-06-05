@@ -2,9 +2,63 @@ import { describe, expect, it } from 'bun:test';
 
 import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
 import type { SearchAttributeSchema } from '../../core/types.ts';
-import { coerceStartWorkflowSearchAttributes } from './start-workflow-search-attributes.ts';
+import {
+  buildSharedStartWorkflowOptions,
+  coerceStartWorkflowSearchAttributes,
+} from './start-workflow-options.ts';
 
 const FIELD = 'Field "searchAttributes"';
+
+describe('buildSharedStartWorkflowOptions', () => {
+  it('returns an empty options object when no fields are supplied', () => {
+    expect(buildSharedStartWorkflowOptions({}, undefined)).toEqual({});
+  });
+
+  it('coerces every supported field in one pass', () => {
+    const startAt = Date.UTC(2999, 0, 1);
+    const options = buildSharedStartWorkflowOptions(
+      {
+        id: 'wf-1',
+        executionTimeout: '30s',
+        startAt,
+        tags: ['alpha', 'beta'],
+        idempotencyKey: 'key-1',
+      },
+      undefined,
+    );
+
+    expect(options.id).toBe('wf-1');
+    expect(options.startAt).toBe(startAt);
+    expect(options.tags).toEqual(['alpha', 'beta']);
+    expect(options.idempotencyKey).toBe('key-1');
+    expect(options.executionTimeout).toBeDefined();
+  });
+
+  it('rejects supplying both startAt and startAfter', () => {
+    expect(() =>
+      buildSharedStartWorkflowOptions(
+        { startAt: Date.UTC(2999, 0, 1), startAfter: '1s' },
+        undefined,
+      ),
+    ).toThrow(new StartWorkflowValidationError('Provide only one of startAt or startAfter'));
+  });
+
+  it('coerces searchAttributes against the supplied schema', () => {
+    const schema: SearchAttributeSchema = { customerId: { type: 'string' } };
+    const options = buildSharedStartWorkflowOptions(
+      { searchAttributes: { customerId: 'acme' } },
+      schema,
+    );
+
+    expect(options.searchAttributes).toEqual({ customerId: 'acme' });
+  });
+
+  it('propagates a malformed-field validation error (e.g. a non-string id)', () => {
+    expect(() => buildSharedStartWorkflowOptions({ id: 42 }, undefined)).toThrow(
+      StartWorkflowValidationError,
+    );
+  });
+});
 
 describe('coerceStartWorkflowSearchAttributes', () => {
   it('rejects a non-object value', () => {

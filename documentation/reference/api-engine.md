@@ -132,6 +132,8 @@ Start a new workflow execution. Names declared in the augmentable `WorkflowRegis
 
 Pass `options.idempotencyKey` for at-most-once starts: the first call commits the workflow and a durable key→id mapping in one compare-and-swap, and every later call with the same key returns a handle to that run instead of starting a second (even after it reaches a terminal state). Concurrent same-key callers converge on one run. `id` and `idempotencyKey` are mutually exclusive — idempotency assigns its own generated id and dedups through the key, so supply one or the other. Idempotent start requires a storage backend with `conditionalBatch` and throws if it is absent.
 
+The key→id mapping is permanent: it deliberately outlives terminal cleanup so repeat calls keep returning the same handle. It is removed only when the workflow record itself is purged or swept by retention. Once that happens the key is **spent** — a subsequent call with the same key throws `IdempotencyKeyPurgedError` (HTTP 409 over REST/JSON-RPC) rather than silently starting a new run, because a concurrent caller may still hold the mapping. Treat that error as "this key is consumed; start fresh with a different key," or keep retention longer than your deduplication window.
+
 `options.services` is inline-only host data exposed as `ctx.services`. It is never checkpointed. When recovering a workflow that was launched with services in a fresh process, configure `EngineOptions.resolveWorkflowServices` to rebuild the value before the generator advances. Passing `services` in Worker execution mode throws at start because the value cannot cross to a Worker.
 
 | Parameter | Type           | Description                                 |
@@ -161,6 +163,9 @@ async startOrSignal<TName extends keyof WorkflowRegistry & string>(
 Atomically start a workflow or signal it if it already exists (signal-with-start). When the target is absent, the workflow record and the first signal commit in one batch and the freshly-launched run consumes the signal on its first drive. When the target is **non-terminal** — running, pending, or suspended — the signal is delivered through the normal signal path. When the target is **terminal**, this throws `StartOrSignalConflictError`: a finished run cannot be signalled and is not silently replaced.
 
 Pass `options.idempotencyKey` to deduplicate independent callers such as retried webhooks. Concurrent callers converge on one workflow and one delivered signal: the signal id derives from the idempotency key when `signal.signalId` is omitted, so callers that share only the key still converge. Supply `signal.signalId` or `options.idempotencyKey` (not both) — exactly one is required for convergence. `options.idempotencyKey` and `options.id` are likewise mutually exclusive. Requires a storage backend with `conditionalBatch`.
+
+> [!NOTE] Terminal-transition race
+> The non-terminal check and the signal write are not a single atomic step. If the target workflow transitions to terminal in the narrow window between the two, the signal is dropped (the underlying signal path does not buffer onto a terminal run) and the returned handle is for the now-terminal run. This is the same at-least-once-detection / no-delivery-on-terminal behavior as `engine.signal`; it is not specific to `startOrSignal`.
 
 | Parameter | Type                  | Description                                           |
 | --------- | --------------------- | ----------------------------------------------------- |

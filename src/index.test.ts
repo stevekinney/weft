@@ -6,6 +6,7 @@ import type { WorkflowOperation, WorkflowReplay, WorkflowTimelineEntry } from '.
 import {
   Engine,
   IdempotencyKeyPurgedError,
+  isWeftErrorLike,
   MemoryStorage,
   StartOrSignalConflictError,
   VERSION,
@@ -120,5 +121,14 @@ describe('weft', () => {
     } finally {
       await engine[Symbol.asyncDispose]();
     }
+  });
+
+  it('registers StartOrSignalConflictError and IdempotencyKeyPurgedError as public codes', () => {
+    // Both errors are public exports, so isWeftErrorLike (the cross-realm/duplicate-
+    // module discriminant) must recognize them — which only holds if their codes are
+    // in PUBLIC_WEFT_ERROR_CODES. A consumer routing faults to HTTP status by code
+    // would otherwise fall through to a 500 handler instead of the intended 409.
+    expect(isWeftErrorLike(new StartOrSignalConflictError('wf-1', 'completed'))).toBe(true);
+    expect(isWeftErrorLike(new IdempotencyKeyPurgedError('wf-1'))).toBe(true);
   });
 });

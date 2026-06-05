@@ -42,23 +42,34 @@ function createEngine(storage: Storage = new MemoryStorage()): Engine {
 }
 
 /**
- * Wrap a storage so the first `get` of `targetKey` returns `null` exactly once,
- * then delegates normally. Lets a sequential second caller skip the top-level
- * idempotency-mapping lookup and fall into the create-batch CAS-loss recovery
- * path (`requireWinnerId` → `resolveWinnerWithSignal`) deterministically, without
- * needing a real concurrent race.
+ * Wrap a storage so the first `get` matching `shouldSuppress` that would return a
+ * NON-NULL value is suppressed to `null` exactly once, then delegates normally.
+ *
+ * Used to force the create-batch CAS-loss recovery path deterministically:
+ * suppress the loser's post-commit read of the idempotency mapping key. The
+ * winner's pre-create lookup returns null naturally (the mapping does not exist
+ * yet), so it is NOT the suppressed read; the loser's later lookup — which would
+ * see the winner's real mapping — is the one nulled. The loser then skips the
+ * top-level mapping branch, builds its own create batch, loses the CAS, and falls
+ * into `requireWinnerId` → `resolveWinnerWithSignal`. Suppressing the first read of
+ * ANY kind would consume the one-shot on the winner's natural-null lookup and
+ * never exercise the recovery path.
  */
-function storageWithOneShotNullGet(inner: Storage, targetKey: string): Storage {
+function storageWithOneShotNullGet(
+  inner: Storage,
+  shouldSuppress: (key: string) => boolean,
+): Storage {
   let suppressed = false;
   return new Proxy(inner, {
     get(target, property, receiver) {
       if (property === 'get') {
         return async (key: string): Promise<Uint8Array | null> => {
-          if (!suppressed && key === targetKey) {
+          const value = await target.get(key);
+          if (!suppressed && shouldSuppress(key) && value !== null) {
             suppressed = true;
             return null;
           }
-          return target.get(key);
+          return value;
         };
       }
       const value = Reflect.get(target, property, receiver);
@@ -474,6 +485,54 @@ describe('engine.startOrSignal', () => {
     }
   });
 
+  it('does not deliver a second signal to a still-running run on a repeat same-key call', async () => {
+    // The convergence guarantee for a non-terminal run rests on the `sigres:`
+    // accepted-response marker outliving signal consumption: a repeat same-key
+    // call derives the same `start-idem:` signalId, and bufferSignalPayloads
+    // short-circuits on the existing marker rather than buffering a second signal.
+    // Asserted at the storage level (not via the run's result) so the dedup
+    // mechanism itself is pinned, independent of what the workflow observes.
+    const engine = createEngine();
+    try {
+      // `release-then-hold` consumes the create-batch `release` then parks on
+      // `hold` (never sent), so the run stays non-terminal across both calls.
+      const created = await engine.startOrSignal(
+        'release-then-hold',
+        null,
+        { name: 'release', payload: 'first' },
+        { idempotencyKey: 'sos-rerun-key' },
+      );
+
+      const acceptedResponseKey = KEYS.signalAcceptedResponse(
+        created.id,
+        'release',
+        KEYS.startIdempotencySignalId('sos-rerun-key'),
+      );
+      expect(await engine.storage.get(acceptedResponseKey)).not.toBeNull();
+
+      const again = await engine.startOrSignal(
+        'release-then-hold',
+        null,
+        { name: 'release', payload: 'second' },
+        { idempotencyKey: 'sos-rerun-key' },
+      );
+      expect(again.id).toBe(created.id);
+
+      // The dedup proof: exactly ONE accepted-response marker for this run's
+      // `release` signal id. The repeat same-key call derived the same signal id,
+      // saw the existing marker, and short-circuited — it did not accept and buffer
+      // a second signal. (We cannot await the run's result to force consumption: it
+      // is parked on `hold`, so we assert on the marker the dedup hinges on.)
+      let acceptedMarkers = 0;
+      for await (const _entry of engine.storage.scan(`sigres:v1:`)) {
+        acceptedMarkers += 1;
+      }
+      expect(acceptedMarkers).toBe(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
   it('signals a pending (delayed-start) workflow, delivering once the timer fires', async () => {
     const engine = new TestEngine({ startTime: 0 });
     engine.register(waitForRelease);
@@ -575,7 +634,9 @@ describe('engine.startOrSignal', () => {
     // recovers by signalling the parked winner.
     const inner = new MemoryStorage();
     const mappingKey = KEYS.startIdempotency('race-recover');
-    const engine = new Engine({ storage: storageWithOneShotNullGet(inner, mappingKey) });
+    const engine = new Engine({
+      storage: storageWithOneShotNullGet(inner, (key) => key === mappingKey),
+    });
     engine.register(releaseThenHold);
     try {
       const winner = await engine.startOrSignal(

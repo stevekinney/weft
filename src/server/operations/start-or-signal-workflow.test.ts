@@ -268,6 +268,25 @@ describe('weft.workflows.startorsignal', () => {
     expect(await engine.getAttributes('sos-rest-attrs')).toEqual({ customerId: 'acme' });
   });
 
+  it('returns 400 when both id and idempotencyKey are provided (mutually exclusive)', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      startOrSignalRequest({
+        type: 'wait-for-release',
+        signalName: 'release',
+        idempotencyKey: 'sos-rest-id-key',
+        id: 'sos-rest-explicit-id',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toMatch(/mutually exclusive/);
+  });
+
   it('returns 400 when both signalId and idempotencyKey are provided', async () => {
     engine = createEngine();
 

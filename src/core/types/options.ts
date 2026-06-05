@@ -22,15 +22,22 @@ import type {
  * Options accepted by `engine.start(type, input, options?)`.
  *
  * Every field is optional. `id` lets you specify your own workflow ID;
- * `idempotencyKey` enforces single-execution semantics within a window;
- * `executionTimeout` caps wall-clock time; `startAt`/`startAfter` defer
+ * `idempotencyKey` enforces at-most-once starts (a repeated key returns the
+ * existing run instead of starting a second, even after it reaches a terminal
+ * state); `executionTimeout` caps wall-clock time; `startAt`/`startAfter` defer
  * execution; `tags` and `searchAttributes` make the workflow discoverable
- * via filters.
+ * via filters. `id` and `idempotencyKey` are mutually exclusive — idempotency
+ * assigns its own generated id and dedups through the key.
  *
- * `HttpClient.start` forwards `searchAttributes` to the server. It rejects
- * `idempotencyKey` until the HTTP start protocol exposes matching
- * single-execution semantics, so callers do not accidentally rely on a
- * silently dropped option.
+ * The `idempotencyKey` mapping is durable and permanent: it survives the run
+ * reaching a terminal state, so repeat calls keep returning the same handle. It
+ * is removed only when the workflow record is purged or swept by retention; a
+ * call with a key whose run has been purged throws {@link IdempotencyKeyPurgedError}
+ * (mapped to HTTP 409 over REST/JSON-RPC) rather than silently starting a new run.
+ *
+ * Both `LocalClient.start` and `HttpClient.start` forward `idempotencyKey` and
+ * `searchAttributes` to the server, so single-execution semantics hold across
+ * transports. Idempotent start requires a storage backend with `conditionalBatch`.
  *
  * @example Start a delayed workflow with tags and search attributes
  * ```ts
