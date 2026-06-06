@@ -1,9 +1,13 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { Engine } from '../engine.ts';
-import { bootstrapWorkflowResultResolver, createWorkflowResultWaiter } from './handle-result.ts';
+import {
+  bootstrapWorkflowResultResolver,
+  createWorkflowHandleWithResultPromise,
+  createWorkflowResultWaiter,
+} from './handle-result.ts';
 import { getInternals } from './internals.ts';
 
 class WorkflowStateReadFailureStorage extends MemoryStorage {
@@ -44,5 +48,21 @@ describe('workflow result resolution', () => {
     currentWaiter.resolve('resolved through replacement');
 
     await expect(replacementWaiter.promise).resolves.toBe('resolved through replacement');
+  });
+
+  it('unregisters the previous cached handle token before replacing it', async () => {
+    await using engine = new Engine({ storage: new MemoryStorage() });
+    const internals = getInternals(engine);
+    const unregisterSpy = spyOn(internals.finalizationRegistry, 'unregister');
+
+    const firstHandle = createWorkflowHandleWithResultPromise(internals, 'wf-cache');
+    const firstCachedEntry = internals.handleCache.get('wf-cache');
+    const secondHandle = createWorkflowHandleWithResultPromise(internals, 'wf-cache');
+
+    expect(firstHandle.id).toBe('wf-cache');
+    expect(secondHandle.id).toBe('wf-cache');
+    expect(firstCachedEntry).toBeDefined();
+    expect(unregisterSpy).toHaveBeenCalledTimes(1);
+    expect(unregisterSpy).toHaveBeenCalledWith(firstCachedEntry!.unregisterToken);
   });
 });

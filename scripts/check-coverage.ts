@@ -1226,7 +1226,18 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
   ],
   ['src/cli/utilities.ts', { lines: new Set([127]) }],
   ['src/client/http-client-requests.ts', { lines: new Set([133]) }],
-  ['src/client/local.ts', { functions: 1, lines: new Set([129]) }],
+  [
+    'src/client/local.ts',
+    {
+      // Bun still reports the LocalClient class declaration line as uncovered
+      // even though the constructor and every wrapper method are exercised.
+      // The June 6 coverage pass added explicit LocalClient.startOrSignal
+      // coverage and confirmed the remaining miss is line-mapping drift on the
+      // class declaration after nearby JSDoc moved the source line number.
+      functions: 1,
+      lines: new Set([152]),
+    },
+  ],
   [
     'src/core/checkpoint/serialization.ts',
     {
@@ -1412,6 +1423,15 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
     },
   ],
   ['src/storage/indexeddb.ts', { functions: 1 }],
+  [
+    'src/worker/registry/fair-share.ts',
+    {
+      // The characterization suite now drives every fair-share method and line,
+      // but Bun still counts one synthetic class function as uncovered in the
+      // emitted LCOV totals. Keep this scoped to the function counter only.
+      functions: 1,
+    },
+  ],
   [
     'src/storage/scoped-storage.ts',
     {
@@ -1616,7 +1636,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   ['src/client/http-client-requests.ts', { lines: new Set([141]) }],
   ['src/client/http-operations.ts', { lines: new Set([84, 85, 86, 87]) }],
   ['src/client/local-event-tail.ts', { functions: 2, lines: new Set([157, 158]) }],
-  ['src/client/local.ts', { functions: 1, lines: new Set([151]) }],
+  ['src/client/local.ts', { functions: 1, lines: new Set([152]) }],
   ['src/client/open-event-subscription.ts', { lines: new Set([51]) }],
   ['src/client/start-body.ts', { lines: new Set([15, 16, 17, 18]) }],
   ['src/connection.ts', { functions: 2, lines: new Set([211, 250, 251, 256, 257, 258, 259]) }],

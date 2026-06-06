@@ -183,6 +183,36 @@ describe('LocalClient', () => {
     });
   });
 
+  describe('startOrSignal', () => {
+    it('creates an absent target and delivers the initial signal', async () => {
+      const handle = await client.startOrSignal(
+        'client-contract-waiting',
+        'local-sos',
+        { name: 'continue', payload: 'created', signalId: 'local-sos-create' },
+        { id: 'local-startorsignal-create' },
+      );
+
+      expect(handle.id).toBe('local-startorsignal-create');
+      expect(await handle.result()).toBe('local-sos:created');
+    });
+
+    it('signals an existing non-terminal target instead of starting a second run', async () => {
+      const started = await client.start('client-contract-waiting', 'local-sos-existing', {
+        id: 'local-startorsignal-existing',
+      });
+
+      const signalled = await client.startOrSignal(
+        'client-contract-waiting',
+        'ignored-on-existing-target',
+        { name: 'continue', payload: 'signalled', signalId: 'local-sos-existing-signal' },
+        { id: 'local-startorsignal-existing' },
+      );
+
+      expect(signalled.id).toBe(started.id);
+      expect(await started.result()).toBe('local-sos-existing:signalled');
+    });
+  });
+
   describe('get', () => {
     it('returns the workflow state for a known workflow', async () => {
       const handle = await client.start('echo', 'data');

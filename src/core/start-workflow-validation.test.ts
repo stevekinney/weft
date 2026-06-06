@@ -4,8 +4,10 @@ import {
   assertExclusiveStartWorkflowOptions,
   coerceStartWorkflowDuration,
   coerceStartWorkflowId,
+  coerceStartWorkflowIdempotencyKey,
   coerceStartWorkflowTags,
   coerceStartWorkflowTimestamp,
+  MAX_IDEMPOTENCY_KEY_BYTES,
   MAX_WORKFLOW_TAG_BYTES,
   parseStartWorkflowDuration,
   StartWorkflowValidationError,
@@ -49,6 +51,28 @@ describe('start workflow validation', () => {
 
     expect(error).toEqual(
       new StartWorkflowValidationError('options.id must not be an empty string'),
+    );
+  });
+
+  it('validates idempotency keys as non-empty strings within the byte limit', () => {
+    expect(coerceStartWorkflowIdempotencyKey('dedupe-key', 'options.idempotencyKey')).toBe(
+      'dedupe-key',
+    );
+    expect(() => coerceStartWorkflowIdempotencyKey(42, 'options.idempotencyKey')).toThrow(
+      new StartWorkflowValidationError('options.idempotencyKey must be a string'),
+    );
+    expect(() => coerceStartWorkflowIdempotencyKey('', 'options.idempotencyKey')).toThrow(
+      new StartWorkflowValidationError('options.idempotencyKey must not be empty'),
+    );
+    expect(() =>
+      coerceStartWorkflowIdempotencyKey(
+        'x'.repeat(MAX_IDEMPOTENCY_KEY_BYTES + 1),
+        'options.idempotencyKey',
+      ),
+    ).toThrow(
+      new StartWorkflowValidationError(
+        `options.idempotencyKey must be at most ${MAX_IDEMPOTENCY_KEY_BYTES} UTF-8 bytes`,
+      ),
     );
   });
 

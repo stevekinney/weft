@@ -10,7 +10,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { WorkerRegistry } from './registry.ts';
-import { compareScores, scoreWorker } from './registry/fair-share.ts';
+import { compareScores, FairShareCounters, scoreWorker } from './registry/fair-share.ts';
 import { projectWorkerSummaries } from './registry/summary.ts';
 
 // ---------------------------------------------------------------------------
@@ -201,6 +201,35 @@ describe('scoreWorker and compareScores', () => {
     const a = scoreWorker({ id: 'same', inFlight: 2, keyLoad: 1 });
     const b = scoreWorker({ id: 'same', inFlight: 2, keyLoad: 1 });
     expect(compareScores(a, b)).toBe(0);
+  });
+});
+
+describe('FairShareCounters', () => {
+  it('increments, releases, and purges worker fair-share counters', () => {
+    const counters = new FairShareCounters();
+
+    expect(counters.load('worker-a', 'tenant-a')).toBe(0);
+
+    counters.increment('worker-a', 'tenant-a');
+    counters.increment('worker-a', 'tenant-a');
+    counters.increment('worker-a', 'tenant-b');
+    expect(counters.load('worker-a', 'tenant-a')).toBe(2);
+    expect(counters.load('worker-a', 'tenant-b')).toBe(1);
+
+    counters.release('worker-a', 'tenant-a');
+    expect(counters.load('worker-a', 'tenant-a')).toBe(1);
+
+    counters.release('worker-a', 'tenant-a');
+    counters.release('worker-a', 'tenant-b');
+    expect(counters.load('worker-a', 'tenant-a')).toBe(0);
+    expect(counters.load('worker-a', 'tenant-b')).toBe(0);
+
+    counters.increment('worker-b', 'tenant-c');
+    counters.purge('worker-b');
+    expect(counters.load('worker-b', 'tenant-c')).toBe(0);
+
+    counters.release('missing-worker', 'missing-key');
+    expect(counters.load('missing-worker', 'missing-key')).toBe(0);
   });
 });
 

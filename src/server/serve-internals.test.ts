@@ -7,6 +7,8 @@ import {
 } from './runtime/server-context.test-support.ts';
 import {
   assertAuthenticationPosture,
+  buildBunServeConfig,
+  buildFetchHandler,
   clampWorkerReconnectGracePeriod,
   registerStackDisposers,
   resolveNetworkConfig,
@@ -149,6 +151,53 @@ describe('assertAuthenticationPosture', () => {
 });
 
 describe('registerStackDisposers', () => {
+  it('returns 503 until the server holder has been populated', async () => {
+    const fetchHandler = buildFetchHandler(
+      { current: null },
+      minimalServerContext(),
+      resolveNetworkConfig(minimalServeOptions()).serverOptions,
+    );
+
+    const response = await fetchHandler(new Request('http://localhost/health'));
+
+    expect(response).toBeInstanceOf(Response);
+    expect(response?.status).toBe(503);
+    expect(await response?.text()).toBe('Server not ready');
+  });
+
+  it('adds tls to the Bun serve config only when tls options exist', () => {
+    const websocketCallbacks: Parameters<typeof buildBunServeConfig>[6] = {
+      open() {},
+      message() {},
+      close() {},
+    };
+
+    const baseConfig = buildBunServeConfig(
+      7233,
+      '127.0.0.1',
+      true,
+      {},
+      undefined,
+      async () => new Response('ok'),
+      websocketCallbacks,
+    );
+    expect(baseConfig.tls).toBeUndefined();
+
+    const tlsOptions = { key: 'key', cert: 'cert' } as unknown as ReturnType<
+      typeof resolveNetworkConfig
+    >['tlsOptions'];
+    const tlsConfig = buildBunServeConfig(
+      7233,
+      '127.0.0.1',
+      false,
+      {},
+      tlsOptions,
+      async () => new Response('ok'),
+      websocketCallbacks,
+    );
+    expect(tlsConfig.tls).toBe(tlsOptions);
+  });
+
   it('disposes the task queue from the timer-cleanup disposer', () => {
     const context = minimalServerContext();
     // registerStackDisposers wires terminal/cancellation listeners onto the
@@ -181,6 +230,45 @@ describe('registerStackDisposers', () => {
     timerCleanupDisposer!();
 
     expect(disposeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears pending timeout handles from the timer-cleanup disposer', () => {
+    const context = minimalServerContext();
+    const options = {
+      ...minimalServeOptions(),
+      engine: { addEventListener() {}, removeEventListener() {} },
+    } as unknown as ReturnType<typeof minimalServeOptions>;
+
+    const timeoutHandle = setTimeout(() => {}, 60_000);
+    context.pendingTimers.add(timeoutHandle);
+
+    const clearTimeoutSpy = spyOn(globalThis, 'clearTimeout');
+    const deferred: Array<() => void | Promise<void>> = [];
+    const stack = {
+      defer(callback: () => void | Promise<void>) {
+        deferred.push(callback);
+      },
+    } as unknown as AsyncDisposableStack;
+
+    registerStackDisposers(
+      stack,
+      context,
+      options,
+      { dispose() {} } as unknown as EventBroadcastingHandle,
+      () => {},
+    );
+
+    try {
+      const timerCleanupDisposer = deferred.at(-1);
+      expect(timerCleanupDisposer).toBeDefined();
+      timerCleanupDisposer!();
+
+      expect(clearTimeoutSpy).toHaveBeenCalledWith(timeoutHandle);
+      expect(context.pendingTimers.size).toBe(0);
+    } finally {
+      clearTimeout(timeoutHandle);
+      clearTimeoutSpy.mockRestore();
+    }
   });
 });
 
