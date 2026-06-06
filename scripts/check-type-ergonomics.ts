@@ -59,18 +59,16 @@ const gitListOutput =
     .quiet()
     .text();
 
-// The sanctioned home for the WorkflowContext -> Context boundary. The engine
-// always invokes a handler with the concrete `Context`, so internal
-// infrastructure that must drive the durable machinery recovers it through
-// `asConcreteContext` here (one justified cast) rather than scattering inline
-// `as Context` casts across handler-shaped code. This rule guards authoring
-// examples and handler bodies, not that single boundary helper.
-const CONTEXT_BOUNDARY_FILE = 'src/core/context/run-operation.ts';
+// The owner of the `Context` internals WeakMap. Its `hasContextInternals`
+// probe casts an arbitrary `object` to the WeakMap's `Context` key type purely
+// to ask `INTERNALS.has(value)` — a presence check, not handler code or an
+// authoring example. This rule guards the latter, not the WeakMap owner.
+const CONTEXT_INTERNALS_FILE = 'src/core/context/internals.ts';
 
 for (const relPath of gitListOutput.split('\0')) {
   if (
     relPath === '' ||
-    relPath === CONTEXT_BOUNDARY_FILE ||
+    relPath === CONTEXT_INTERNALS_FILE ||
     relPath.endsWith('.test.ts') ||
     relPath.endsWith('.spec.ts') ||
     relPath.endsWith('.test-d.ts') ||

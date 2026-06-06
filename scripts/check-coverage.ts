@@ -1630,14 +1630,15 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   ],
   [
     // Invariant-violation guards unreachable by construction: the three
-    // "Invalid checkpointed/completed activity retry ..." throws (102-104,
-    // 125-127, 189-192) and the "Missing activity retry policy" throw (385)
-    // fire only on corrupt persisted retry state; line 313 is the non-`Error`
+    // "Invalid checkpointed/completed activity retry ..." throws (112-114,
+    // 135-137, 199-202) and the "Missing activity retry policy" throw (395)
+    // fire only on corrupt persisted retry state; line 323 is the non-`Error`
     // fall-through in `isNonRetryableActivityError`, which the suite never hits
     // because activities always throw `Error` instances. Line numbers shifted
-    // when `asConcreteContext` was added at the top of the file.
+    // when `asConcreteContext` / `hasContextInternals` were added near the top
+    // of the file.
     'src/core/context/run-operation.ts',
-    { lines: new Set([102, 103, 104, 125, 126, 127, 189, 190, 191, 192, 313, 385]) },
+    { lines: new Set([112, 113, 114, 135, 136, 137, 199, 200, 201, 202, 323, 395]) },
   ],
   [
     'src/core/engine/activity-reconciliation.ts',

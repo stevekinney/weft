@@ -71,3 +71,15 @@ export function getInternals(context: Context): ContextInternals {
   if (!internals) throw new Error('Context internals not initialized');
   return internals;
 }
+
+/**
+ * Non-throwing probe: is `value` a concrete {@link Context} with initialized
+ * internals? Used to distinguish the inline-mode `Context` (which carries the
+ * `stepIndex`/`accumulatedResults` replay machinery) from the minimal
+ * worker-mode `WorkerWorkflowContext`, which is a different shape. WeakMap
+ * `.has` accepts any object key and returns `false` for non-`Context` objects,
+ * so this is safe to call on any context-shaped value.
+ */
+export function hasContextInternals(value: object): value is Context {
+  return INTERNALS.has(value as Context);
+}

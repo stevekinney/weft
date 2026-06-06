@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { MemoryStorage } from '../storage/memory';
+import { asConcreteContext } from './context/run-operation';
 import { Engine } from './engine';
 import {
   compileStepWorkflow,
@@ -416,4 +417,23 @@ describe('step-context durability', () => {
 
     engine[Symbol.dispose]();
   }, 5_000);
+
+  it('rejects a non-concrete (worker-mode) context with an actionable inline-only error', () => {
+    // Worker execution mode drives the handler with a minimal
+    // `WorkerWorkflowContext` (Pick of workflowId/signal/startedAt) that has no
+    // entry in the Context internals WeakMap, so it cannot drive the durable
+    // step machinery. `asConcreteContext` must detect that and throw the
+    // inline-only guidance, NOT the cryptic "Context internals not initialized"
+    // a downstream `getInternals` call would emit. A plain object stands in for
+    // the worker context (same: no internals).
+    const workerLikeContext = {
+      workflowId: 'wf-worker',
+      signal: new AbortController().signal,
+      startedAt: 0,
+    } as unknown as WorkflowContext;
+
+    expect(() => asConcreteContext(workerLikeContext)).toThrow(
+      /require workflowExecutionMode: 'inline'/,
+    );
+  });
 });

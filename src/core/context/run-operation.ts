@@ -6,23 +6,33 @@ import {
   type WorkflowContext,
 } from '../types.ts';
 import type { Context } from './index.ts';
-import { getInternals, type ContextInternals } from './internals.ts';
+import { getInternals, hasContextInternals, type ContextInternals } from './internals.ts';
 import type { ContextOperationRequest } from './operation-request.ts';
 import { isActivityCallOptions } from './session-state.ts';
 import { captureCallerStack } from './validation.ts';
 
 /**
  * Recover the concrete {@link Context} from the public {@link WorkflowContext}
- * the engine passes to a workflow handler. The engine always invokes a handler
- * with the concrete `Context` instance (see `InlineExecutionStrategy`), so this
- * narrowing is sound at runtime. Internal infrastructure such as
- * `compileStepWorkflow` uses this to drive the durable activity machinery
- * instead of an inline `as Context` cast in handler-shaped code, which the
- * type-ergonomics guard forbids.
+ * the engine passes to a workflow handler. Under the inline execution strategy
+ * the engine invokes a handler with the concrete `Context` instance (carrying
+ * the `stepIndex`/`accumulatedResults` replay machinery). Worker execution mode
+ * instead drives the handler with a minimal `WorkerWorkflowContext`, which has
+ * no replay internals — so infrastructure such as `compileStepWorkflow` cannot
+ * drive the durable activity machinery there. This probes for the inline
+ * internals (via the `hasContextInternals` type guard, which narrows without a
+ * cast) and throws an actionable error rather than the cryptic
+ * "Context internals not initialized" from a downstream `getInternals` call.
  */
 export function asConcreteContext(context: WorkflowContext): Context {
-  // Trusted by construction: the engine constructs and passes a `Context`.
-  return context as Context;
+  if (!hasContextInternals(context)) {
+    throw new Error(
+      'Step-based workflows (compileStepWorkflow / ctx.step) require ' +
+        "workflowExecutionMode: 'inline'. The worker execution strategy runs " +
+        'workflows with a different context that has no durable step machinery. ' +
+        'Use the generator workflow API for worker execution mode.',
+    );
+  }
+  return context;
 }
 
 type ActivityInput = string | (Function & { retry?: RetryPolicy });

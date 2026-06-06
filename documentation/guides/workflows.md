@@ -34,7 +34,7 @@ engine.register(
 
 Each `ctx.step()` call is a checkpoint boundary, just like `yield*` in the generator API. The result is persisted to the checkpoint, and a step that already completed is replayed from storage -- not re-run -- when the workflow recovers from a crash. `compileStepWorkflow(...)` compiles the step-based function into the generator shape the engine runs internally; the compilation step is explicit so the type system knows what `.execute(...)` is receiving.
 
-The step-based API is a subset of the full API. It supports sequential steps only -- and you must `await` each step before starting the next, because durability is positional: a step is matched on replay by the order it ran, not by its name. When you need durable timers (`sleep()`), external signals (`waitForSignal()`), or parallel execution (`all()`, `race()`), graduate to the generator API described below.
+The step-based API is a subset of the full API. It supports sequential steps only -- and you must `await` each step before starting the next, because durability is positional: a step is matched on replay by the order it ran, not by its name. It also requires `workflowExecutionMode: 'inline'` (the default); worker execution mode has no step machinery. When you need durable timers (`sleep()`), external signals (`waitForSignal()`), parallel execution (`all()`, `race()`), or worker-mode isolation, graduate to the generator API described below.
 
 ## Generator functions as workflows
 

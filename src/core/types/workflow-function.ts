@@ -84,6 +84,9 @@ export interface StepWorkflowContext {
    * concurrently (so a continuation enqueues further steps in completion order)
    * can return a wrong cached value after a crash. For parallelism, durable
    * timers, or signals, use the generator API instead.
+   *
+   * Requires `workflowExecutionMode: 'inline'` (the default); the worker
+   * execution strategy has no step machinery and throws an actionable error.
    */
   step<T>(name: string, fn: () => Promise<T> | T): Promise<T>;
 }

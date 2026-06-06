@@ -537,6 +537,9 @@ Execute a named step as a durable operation. Each `step()` call routes through t
 > [!WARNING] Await steps in order
 > Step durability is **positional**: a step is identified on replay by the order in which it ran, not by its `name`. You must `await` each `ctx.step(...)` before starting the next one. Firing steps concurrently -- e.g. `await Promise.all([ctx.step('a', ...), ctx.step('b', ...)])` where a `.then(...)` continuation enqueues further steps -- can change the order steps are queued between the original run and a recovered run, which silently returns the wrong cached value after a crash. When you need parallelism, durable timers, or signals, graduate to the generator API.
 
+> [!NOTE] Inline execution mode only
+> Step-based workflows require `workflowExecutionMode: 'inline'` (the default). Worker execution mode drives workflows with a different context that has no step machinery, so a `compileStepWorkflow` workflow throws there -- use the generator API for worker mode.
+
 ```ts partial
 engine.register(
   workflow({ name: 'onboard' }).execute(
