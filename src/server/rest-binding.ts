@@ -118,12 +118,14 @@ export type RestBinding<Input, Output> = {
    * expects: most use `shapeRestFault`, which masks an `EngineFailure` to a
    * flat `{ error: "Internal server error" }` with status `500` (never
    * leaking internal detail over REST) and maps the remaining fault codes to
-   * their HTTP statuses. A few operations supply a bespoke shaper when an
-   * operation needs a fault-specific message or status that the shared map
-   * does not give it (for example, `get-workflow-result` returns
-   * `"Timeout waiting for workflow result"` on a `Timeout`, and
-   * `get-stream-chunks` maps `InvalidParams` to `400`). This per-operation
-   * hook is the current contract, not a transitional shim.
+   * their HTTP statuses. A few operations supply a bespoke shaper to special-case
+   * a particular fault — typically to override its message or to handle one code
+   * explicitly — while delegating the rest. The status often matches what the
+   * shared map would already produce; the shaper exists for the operation-specific
+   * detail (for example, `get-workflow-result` returns the custom message
+   * `"Timeout waiting for workflow result"` on a `Timeout`, and `get-stream-chunks`
+   * handles `InvalidParams` inline). This per-operation hook is the current
+   * contract, not a transitional shim.
    */
   readonly shapeFault?: (fault: OperationFault) => Response;
 };
