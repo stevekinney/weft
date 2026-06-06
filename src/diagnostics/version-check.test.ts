@@ -46,6 +46,37 @@ describe('runVersionCheck', () => {
     expect(report.overallVerdict).toBe('safe');
   });
 
+  it('ignores wf: side-records (timeline) when scanning for running workflows', async () => {
+    const storage = new MemoryStorage();
+    await seedWorkflow(
+      storage,
+      makeWorkflowState({ id: 'wf-1', type: 'order', version: '1.0.0', status: 'running' }),
+    );
+    // A timeline side-record under the `wf:` prefix with a `status: 'running'`
+    // field would, without the top-level-key filter, decode as a WorkflowState and
+    // form a spurious group (e.g. `type === undefined`).
+    await storage.put(
+      KEYS.timeline('wf-1', 1),
+      encode({
+        step: 1,
+        operationType: 'activity',
+        operationLabel: 'charge',
+        inputSummary: '{}',
+        timestamp: 1,
+        status: 'running',
+      }),
+    );
+
+    const registrations: Record<string, WorkflowRegistration> = {
+      order: { version: '1.0.0', handler: () => dummyHandler() },
+    };
+
+    const report = await runVersionCheck(storage, registrations);
+
+    expect(report.workflowTypes).toHaveLength(1);
+    expect(report.workflowTypes[0]!.type).toBe('order');
+  });
+
   it('returns safe when all running workflows match registered versions', async () => {
     const storage = new MemoryStorage();
     await seedWorkflow(

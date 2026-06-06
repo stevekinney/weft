@@ -225,6 +225,34 @@ describe('workflow statistics', () => {
     expect(report.workflows.statusCounts.timedOut).toBe(1);
   });
 
+  it('excludes wf: side-records (timeline) from the workflow scan', async () => {
+    const storage = new MemoryStorage();
+
+    await storage.put(
+      KEYS.workflow('wf-real'),
+      encode(makeWorkflowState({ id: 'wf-real', status: 'running' })),
+    );
+    // A timeline side-record lives under the `wf:` prefix and carries a
+    // `status: 'running'` field — without the top-level-key filter it would decode
+    // as a WorkflowState and inflate the running count.
+    await storage.put(
+      KEYS.timeline('wf-real', 1),
+      encode({
+        step: 1,
+        operationType: 'activity',
+        operationLabel: 'charge',
+        inputSummary: '{}',
+        timestamp: 1,
+        status: 'running',
+      }),
+    );
+
+    const report = await collectDiagnostics(storage, ':memory:');
+
+    expect(report.workflows.total).toBe(1);
+    expect(report.workflows.statusCounts.running).toBe(1);
+  });
+
   it('identifies the longest running workflow', async () => {
     const storage = new MemoryStorage();
     const now = Date.now();

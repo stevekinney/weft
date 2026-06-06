@@ -14,9 +14,10 @@ export type WorkflowFeedSelector = 'events' | 'tokens';
 
 /**
  * Hard-coded stream key for the `tokens` selector. Every transport that
- * exposes the token feed (in-process `tail()`, REST SSE, WebSocket watch)
- * keys its stored chunks under this single value, so a resumption cursor
- * issued by one transport round-trips through another.
+ * exposes the token feed — `engine.getStreamChunks(id, 'tokens')` and the REST
+ * SSE / WebSocket stream-chunk routes layered on it — keys its stored chunks
+ * under this single value, so a resumption cursor issued by one transport
+ * round-trips through another.
  */
 export const TOKENS_STREAM_KEY = 'tokens';
 

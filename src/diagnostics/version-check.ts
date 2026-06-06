@@ -9,6 +9,7 @@
  */
 
 import { decodeWorkflowState } from '../core/engine/validation.ts';
+import { isTopLevelWorkflowStateKey } from '../core/engine/workflow-state-stream.ts';
 import { DEFAULT_WORKFLOW_VERSION, checkVersionCompatibility } from '../core/versioning.ts';
 import type { Storage } from '../storage/interface.ts';
 import type { VersionCheckReport, WorkflowTypeReport } from './types.ts';
@@ -24,7 +25,11 @@ async function groupActiveWorkflowsByType(
 ): Promise<Map<string, WorkflowTypeGroup>> {
   const groups = new Map<string, WorkflowTypeGroup>();
   for await (const [key, bytes] of storage.scan('wf:')) {
-    if (key.includes(':ckpt')) continue;
+    // `wf:` also matches side-records (`wf:{id}:ckpt`, `:timeline:`, `:offload`,
+    // `:archive`, index keys). Only top-level `wf:{id}` records are workflow states;
+    // a side-record would decode into a bogus WorkflowState and form spurious
+    // groups. Use the same allowlist filter as the engine's own scans.
+    if (!isTopLevelWorkflowStateKey(key)) continue;
     // Decode through `decodeWorkflowState` so older flat-shaped persisted records
     // are lifted into the current `versionTuple` representation before we read it.
     const state = decodeWorkflowState(bytes);
