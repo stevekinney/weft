@@ -230,9 +230,9 @@ Key operations:
 - `assignTask(workerId, operationId, visibilityTimeout)`: track task with deadline
 - `checkExpiredTasks(now)`: find tasks whose visibility timeout has expired
 - `extendVisibility(operationId, extension)`: extend a task's deadline (heartbeat-driven)
-- `isAssignedToWorker(operationId, workerId)`: trust-boundary ownership check for task results
+- `isAssignedToAttempt(operationId, workerId, attemptToken?)`: trust-boundary ownership check for task results, including same-worker stale-attempt rejection when the token is present
 
-The `checkExpiredTasks()` method returns tasks that have exceeded their visibility timeout, enabling the server to reassign them to other workers. When a task has been reassigned to a different worker, a late `taskResult` from the displaced worker is rejected with `protocolError` and ignored. In v1 this guard is keyed by `(operationId, workerId)`, so a stale completion from the same `workerId` on a later attempt still requires a future protocol revision with an attempt token on the wire.
+The `checkExpiredTasks()` method returns tasks that have exceeded their visibility timeout, enabling the server to reassign them to another attempt. Each dispatch carries an optional `attemptToken`; upgraded workers echo it on `taskResult`, and the server validates `(operationId, workerId, attemptToken)` when the token is present. A late result from a displaced worker, or from an earlier attempt that was reassigned to the same `workerId`, is rejected with `protocolError` and ignored instead of mutating engine state. Missing tokens fall back to worker-id ownership for older workers and token-less in-flight records, but a present token must be non-empty and match the current attempt.
 
 ## Long-poll fallback
 

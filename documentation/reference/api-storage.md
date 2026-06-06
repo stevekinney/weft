@@ -71,7 +71,7 @@ Execute multiple put/delete operations atomically. In `BunSQLiteStorage`, this r
 query?<T>(sql: string, params?: unknown[]): Promise<T[]>
 ```
 
-Raw SQL passthrough. Only available on `BunSQLiteStorage`. Useful for dashboard queries and debugging.
+Raw SQL passthrough. Available on SQL-backed adapters such as `BunSQLiteStorage` and `NeonStorage`. `NeonStorage` runs passthrough queries inside `BEGIN READ ONLY`, so data-modifying statements are rejected by Postgres rather than by a text-only check. Use this for diagnostics and operator queries; engine code should stay on the storage primitives when it needs portable behavior.
 
 ### `deleteRange()` (optional)
 
@@ -672,7 +672,7 @@ function resolveStorage<Configuration extends StorageConfiguration>(
 ): Promise<ResolvedStorage<Configuration>>;
 ```
 
-Resolves a storage backend from runtime configuration. Lazy-loads adapter modules so optional dependencies (like `lmdb` or `@libsql/client`) are only required when their configuration type is selected.
+Resolves a storage backend from runtime configuration. Lazy-loads adapter modules so optional dependencies (like `lmdb`, `@libsql/client`, or `@neondatabase/serverless`) are only required when their configuration type is selected.
 
 ```ts
 import { resolveStorage } from '@lostgradient/weft/storage';
@@ -692,6 +692,7 @@ type StorageConfiguration =
   | { type: 'sqlite'; path?: string }
   | { type: 'lmdb'; path: string }
   | { type: 'turso'; url: string; authToken?: string }
+  | { type: 'neon'; url: string }
   | { type: 'indexeddb'; databaseName?: string }
   | { type: 'web-extension'; area?: 'local' | 'sync' | 'session' | 'managed' }
   | { type: 'http'; baseUrl: string | URL; headers?: Record<string, string> }
@@ -704,6 +705,7 @@ type StorageConfiguration =
 | `sqlite`        | —               | `path` (defaults to `:memory:`)   |
 | `lmdb`          | `path`          | —                                 |
 | `turso`         | `url`           | `authToken`                       |
+| `neon`          | `url`           | —                                 |
 | `indexeddb`     | —               | `databaseName` (default `'weft'`) |
 | `web-extension` | —               | `area` (default `'local'`)        |
 | `http`          | `baseUrl`       | `headers`                         |
@@ -728,6 +730,7 @@ The mapping:
 | `SQLiteStorageConfiguration`       | `SQLiteStorageInstance` |
 | `LMDBStorageConfiguration`         | `LMDBStorage`           |
 | `TursoStorageConfiguration`        | `TursoStorage`          |
+| `NeonStorageConfiguration`         | `NeonStorage`           |
 | `IndexedDBStorageConfiguration`    | `IndexedDBStorage`      |
 | `WebExtensionStorageConfiguration` | `WebExtensionStorage`   |
 | `HTTPStorageConfiguration`         | `HTTPStorage`           |

@@ -292,12 +292,15 @@ A small `Storage` interface over string keys and `Uint8Array` values: five requi
 - **`NodeSQLiteStorage`** (subpath `@lostgradient/weft/storage/sqlite/node`) for an explicit Node.js SQLite override via `better-sqlite3`
 - **`LMDBStorage`** (subpath `@lostgradient/weft/storage/lmdb`) for embedded high-throughput workloads
 - **`TursoStorage`** (subpath `@lostgradient/weft/storage/turso`) for distributed libSQL deployments
+- **`NeonStorage`** (subpath `@lostgradient/weft/storage/neon`) for durable remote Neon/Postgres deployments
 - **`IndexedDBStorage`** (subpath `@lostgradient/weft/storage/indexeddb`) for browser environments
 - **`WebExtensionStorage`** (subpath `@lostgradient/weft/storage/web-extension`) for extension contexts using `browser.storage` or `chrome.storage`
 - **`HTTPStorage`** (subpath `@lostgradient/weft/storage/http`) for remote storage over Weft's HTTP storage routes
 - **`CompressedStorage`** wrapper for transparent `gzip` or `brotli` compression
 
 Bring your own backend by implementing the interface—five methods is enough.
+
+Production recovery needs one engine process per durable store. Use a local durable adapter (`SQLiteStorage` or `LMDBStorage`) when the service owns its disk, or `NeonStorage` when the deployment wants managed Postgres durability and point-in-time restore. In either case, validate the store at boot with `assertDurableStorageForRecovery()` and enforce the singleton topology in infrastructure; the [singleton service deployment guide](documentation/guides/singleton-service-deployment.md) covers the checklist and the optional warn-only second-instance detector.
 
 For long-running workflows, `history.retentionWindow` can compact old event-log records behind the latest checkpoint while preserving verification through a durable watermark. `history.maxEvents` remains a lifetime circuit breaker even after compaction. Use `payloadSize.maxBytes` when operators need an admission-time cap on workflow inputs, signal payloads, and activity results before those values reach storage.
 
@@ -439,6 +442,7 @@ Storage backends and adapters are exported under subpaths so they only load when
 import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
 import { LMDBStorage } from '@lostgradient/weft/storage/lmdb';
 import { TursoStorage } from '@lostgradient/weft/storage/turso';
+import { NeonStorage } from '@lostgradient/weft/storage/neon';
 import { IndexedDBStorage } from '@lostgradient/weft/storage/indexeddb';
 import { WebExtensionStorage } from '@lostgradient/weft/storage/web-extension';
 import { HTTPStorage } from '@lostgradient/weft/storage/http';

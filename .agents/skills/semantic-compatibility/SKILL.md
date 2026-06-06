@@ -20,9 +20,10 @@ description: >-
 - Generating or validating cross-process declarations from registry snapshots, or wrapping byte-oriented storage for string-oriented consumers.
 - Refactoring registry-driven generated clients, especially when JSON Schema shapes become shared aliases instead of inline object types.
 - Changing storage capability reports, reserved key prefixes, string KV import helpers, or application-facing wrappers that share a storage backend with the engine.
+- Adding or changing SQL-backed storage adapters such as `NeonStorage`, especially `TEXT COLLATE "C"` key ordering, opaque `BYTEA` value mapping, read-only query passthrough, and `SERIALIZABLE` compare-and-swap retries.
 - Adding or deleting reserved workflow metadata markers such as `wf-has-services:`; marker writes, reads, cleanup, purge, and retention must stay aligned.
 - Normalizing failure-category values, changing workflow visibility index keys, or changing framed compressed-storage payloads.
-- Changing idempotent start storage (`start-idem:`), signal id derivation, `startOrSignal` convergence semantics, serializer registry tags, or recovered launch/snapshot public shapes.
+- Changing idempotent start storage (`start-idem:`), signal id derivation, `startOrSignal` convergence semantics, serializer registry tags, recovered launch/snapshot public shapes, or durable task in-flight records such as `attemptToken`.
 
 ## Do not use
 
@@ -49,6 +50,8 @@ description: >-
 15. For services markers, prove the marker is presence-only, is written atomically with start records, gates resolver calls on recovery, and is deleted by terminal cleanup, purge, and retention.
 16. For idempotent starts, keep key mappings permanent across terminal cleanup, purge, and retention; a key that maps to a missing workflow record is spent and must not create a replacement run.
 17. For serializer registration, treat `options.tag` as persisted data. Decode must resolve by tag regardless of registration order, reject missing or non-string tags, and fail clearly when a process has not registered the tag needed by an old checkpoint.
+18. For Neon/Postgres storage, treat key collation and byte mapping as semantic compatibility: `kv.key` must use `COLLATE "C"`, values must remain opaque `BYTEA`, read-only queries must reject writes at the database level, and retryable `40001`/`40P01` transaction aborts must retry the whole CAS transaction before throwing on cap exhaustion.
+19. For task attempt tokens, preserve additive wire compatibility: missing tokens keep worker-id fallback for older workers and token-less records, while present-but-wrong or malformed tokens reject without completing the task.
 
 ## Verification
 
@@ -59,4 +62,6 @@ description: >-
 - For services marker changes, run the recovered-services, workflow-services, delayed-start, purge, and retention tests that prove marker lifecycle across storage paths.
 - For idempotent start and signal-with-start changes, run the start workflow, start-or-signal, generated operation-client drift, and storage capability tests that prove convergence and conflict behavior.
 - For serializer registry changes, run focused codec tests for custom serializer round trips, corrupt extension payloads, duplicate constructor/tag rejection, and `Error` subclass field preservation.
+- For Neon/Postgres storage, run PGlite-backed storage contract tests, retry fault-injection tests, resolver tests, and any env-gated live Neon tests when `NEON_DATABASE_URL` is available.
+- For task attempt-token changes, run protocol parser tests, WebSocket stale-attempt regressions, long-poll completion authorization tests, conformance fixtures, and server restart restoration tests.
 - Run the relevant focused test, then `bun run typecheck` and `bun run validate` before shipping.
