@@ -40,6 +40,13 @@ function createLeakedEngine(): void {
   void new Engine();
 }
 
+function createLeakedDetectorEngine(): void {
+  // Detection on → the engine holds a live second-instance interval, so the
+  // finalizer must clear THAT interval too (not only the cleanup interval) when
+  // the engine is collected without [Symbol.dispose]().
+  void new Engine({ detectSecondInstance: true });
+}
+
 describe('Engine lifecycle ergonomics', () => {
   afterEach(() => {
     setEngineLeakWarningOverrideForTesting(undefined);
@@ -51,6 +58,18 @@ describe('Engine lifecycle ergonomics', () => {
 
     const token = Symbol('leaked engine warning');
     const emittedWarning = await captureLeakWarning(createLeakedEngine, token);
+
+    expect(emittedWarning).toBe(true);
+    clearEngineLeakWarningTokenForTesting(token);
+  });
+
+  it('clears the second-instance detection interval when a detector engine is collected without disposal', async () => {
+    setEngineLeakWarningOverrideForTesting(true);
+
+    const token = Symbol('leaked detector engine warning');
+    // The finalizer fires (warning emitted) AND its detection-interval clear arm
+    // runs because the leaked engine had detection enabled.
+    const emittedWarning = await captureLeakWarning(createLeakedDetectorEngine, token);
 
     expect(emittedWarning).toBe(true);
     clearEngineLeakWarningTokenForTesting(token);

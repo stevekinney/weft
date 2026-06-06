@@ -101,7 +101,7 @@ await using engine = new Engine({ storage, detectSecondInstance: true });
 void engine;
 ```
 
-When enabled, each engine writes a periodic heartbeat to the store and warns (via `process.emitWarning`) if it sees another instance's heartbeat advancing while it is also running. That is precisely the autoscaling-to-two or overlapping-deploy case. The warning carries the name `WeftSecondInstanceWarning`. Make sure something is actually listening: `process.emitWarning` output goes to `stderr` by default, but a custom logger that swallows the process `warning` event—or a runtime that discards it—will hide the alarm. Subscribe to `process.on('warning', …)` (or run with `--trace-warnings`) so it reaches the logs you watch.
+When enabled, each engine writes a periodic heartbeat to the store and warns (via `process.emitWarning`) if it sees another instance's heartbeat advancing while it is also running. That is precisely the autoscaling-to-two or overlapping-deploy case. The emitted warning's `name` is `WeftSecondInstanceWarning`, so you can filter on `warning.name` rather than scraping the message text. Make sure something is actually listening: `process.emitWarning` output goes to `stderr` by default, but a custom logger that swallows the process `warning` event—or a runtime that discards it—will hide the alarm. Subscribe to `process.on('warning', …)` (or run with `--trace-warnings`) so it reaches the logs you watch.
 
 > [!WARNING]
 > This is a smoke alarm, not a safety mechanism. It is **liveness detection, not fenced ownership**: it never blocks boot, gates recovery, or prevents duplicate execution. Infrastructure-level enforcement is still the real control. The detector only tells you—after the fact—that two instances are running.

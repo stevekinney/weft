@@ -7,6 +7,12 @@
 export type EngineCleanupIntervalDisposalTracker = {
   disposed: boolean;
   cleanupInterval: ReturnType<typeof setInterval> | null;
+  /**
+   * The optional second-instance detector interval, tracked alongside the
+   * cleanup interval so the same finalizer clears it when an engine is
+   * garbage-collected without `[Symbol.dispose]()`. Null when detection is off.
+   */
+  secondInstanceDetectionInterval: ReturnType<typeof setInterval> | null;
   testToken: symbol | undefined;
 };
 
@@ -22,6 +28,11 @@ export const engineCleanupIntervalFinalizer =
     if (tracker.cleanupInterval !== null) {
       clearInterval(tracker.cleanupInterval);
       tracker.cleanupInterval = null;
+    }
+
+    if (tracker.secondInstanceDetectionInterval !== null) {
+      clearInterval(tracker.secondInstanceDetectionInterval);
+      tracker.secondInstanceDetectionInterval = null;
     }
 
     if (!tracker.disposed && shouldEmitEngineLeakWarning()) {

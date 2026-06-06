@@ -542,6 +542,7 @@ export class Engine<
     const cleanupIntervalDisposalTracker: EngineCleanupIntervalDisposalTracker = {
       disposed: false,
       cleanupInterval: null,
+      secondInstanceDetectionInterval: null,
       testToken: consumeNextEngineLeakWarningTokenForTesting(),
     };
     const cleanupInterval = setInterval(
@@ -576,8 +577,10 @@ export class Engine<
   /**
    * Start the best-effort second-instance liveness detector when enabled. The
    * engine owns the interval so disposal clears it through the same path as the
-   * other engine intervals (no leak warning). A `WeakRef` keeps the interval from
-   * pinning the engine alive past garbage collection.
+   * other engine intervals (no leak warning). A `WeakRef` keeps the interval
+   * from pinning the engine alive past garbage collection, and the interval is
+   * tracked on the cleanup disposal tracker so the shared finalizer clears it on
+   * a GC-without-dispose (the timer would otherwise keep the event loop alive).
    */
   #startSecondInstanceDetection(): void {
     const internals = getInternals(this);
@@ -590,10 +593,18 @@ export class Engine<
     });
     internals.secondInstanceDetector = detector;
     const weakEngine = new WeakRef(this);
-    internals.secondInstanceDetectionInterval = setInterval(
+    const detectionInterval = setInterval(
       createSecondInstanceDetectionTick(createSecondInstanceDetectorResolver(weakEngine)),
       internals.options.secondInstanceHeartbeatIntervalMs,
     );
+    internals.secondInstanceDetectionInterval = detectionInterval;
+    // Track the interval on the cleanup disposal tracker so the shared engine
+    // finalizer clears it if the engine is garbage-collected without
+    // [Symbol.dispose]() — otherwise the timer keeps the event loop alive
+    // forever (ticks no-op via the WeakRef resolver, but the handle persists).
+    if (internals.cleanupIntervalDisposalTracker !== null) {
+      internals.cleanupIntervalDisposalTracker.secondInstanceDetectionInterval = detectionInterval;
+    }
   }
 
   #hasConfiguredRetention(): boolean {

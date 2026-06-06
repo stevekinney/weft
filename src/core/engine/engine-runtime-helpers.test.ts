@@ -13,7 +13,12 @@ import { getInternals } from './internals.ts';
 describe('engine runtime helpers', () => {
   it('clears the cleanup interval when the engine has been collected', () => {
     const cleanupInterval = setInterval(() => {}, 1_000);
-    const tracker = { disposed: false, cleanupInterval, testToken: undefined };
+    const tracker = {
+      disposed: false,
+      cleanupInterval,
+      secondInstanceDetectionInterval: null,
+      testToken: undefined,
+    };
 
     const tick = createCleanupIntervalTick(
       { deref: () => undefined } as WeakRef<Engine<object, object>>,
@@ -26,7 +31,12 @@ describe('engine runtime helpers', () => {
 
   it('routes cleanup tick failures through the engine cleanup warning path', async () => {
     await using engine = new Engine({ storage: new MemoryStorage() });
-    const tracker = { disposed: false, cleanupInterval: null, testToken: undefined };
+    const tracker = {
+      disposed: false,
+      cleanupInterval: null,
+      secondInstanceDetectionInterval: null,
+      testToken: undefined,
+    };
     const cleanupExpiredResponses = mock(async () => {
       throw new Error('cleanup exploded');
     });

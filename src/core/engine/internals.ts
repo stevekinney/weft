@@ -45,6 +45,7 @@ import type {
   TrackedWaiterKeys,
   WorkflowResultWaiter,
 } from './engine-internal-types.ts';
+import type { EngineCleanupIntervalDisposalTracker } from './engine-leak-warnings.ts';
 import type { WorkflowHandle, WorkflowHandleEngine } from './handles.ts';
 import type { WorkflowFeedListener } from './index.ts';
 import type { ScheduleHandleEngine } from './schedule-handle.ts';
@@ -158,10 +159,7 @@ export interface EngineInternals {
   pendingScheduleCreations: Set<string>;
   workflowsNeedingTerminalCleanup: Set<string>;
   cleanupInterval: ReturnType<typeof setInterval> | null;
-  cleanupIntervalDisposalTracker: {
-    disposed: boolean;
-    cleanupInterval: ReturnType<typeof setInterval> | null;
-  } | null;
+  cleanupIntervalDisposalTracker: EngineCleanupIntervalDisposalTracker | null;
   retentionSweepInterval: ReturnType<typeof setInterval> | null;
   retentionSweepInFlight: Promise<void> | null;
   nextRetentionSweepAt: number | null;

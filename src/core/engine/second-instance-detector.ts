@@ -111,9 +111,21 @@ export type SecondInstanceDetectorOptions = {
    * interval also sets how long a deploy overlap must last before it warns.
    */
   intervalMs: number;
-  /** Emit a warning (defaults to `process.emitWarning`); injected for tests. */
+  /**
+   * Emit a warning. Defaults to `process.emitWarning(message, WARNING_NAME)`,
+   * so the emitted `Warning.name` is `WeftSecondInstanceWarning` and consumers
+   * can filter on `warning.name` rather than scraping the message. Injected for
+   * tests; the seam is message-only because the name is a fixed constant.
+   */
   warn?: (message: string) => void;
 };
+
+/**
+ * The `name` of the emitted warning. A stable, filterable identifier on the
+ * `Warning` object — consumers subscribe to the process `warning` event and
+ * match `warning.name === WARNING_NAME` (see the singleton-deployment guide).
+ */
+export const SECOND_INSTANCE_WARNING_NAME = 'WeftSecondInstanceWarning';
 
 /**
  * A running detector. `tick()` runs one heartbeat round (exposed for tests and
@@ -153,7 +165,9 @@ export function createSecondInstanceDetector(
   options: SecondInstanceDetectorOptions,
 ): SecondInstanceDetector {
   const { storage, instanceId, getNow, intervalMs } = options;
-  const warn = options.warn ?? ((message: string) => process.emitWarning(message));
+  const warn =
+    options.warn ??
+    ((message: string) => process.emitWarning(message, SECOND_INSTANCE_WARNING_NAME));
   const stalenessWindowMs = intervalMs * (ADVANCE_TICKS_BEFORE_WARN + 1);
 
   let sequence = 0;
@@ -220,8 +234,11 @@ export function createSecondInstanceDetector(
 
       if (advances >= ADVANCE_TICKS_BEFORE_WARN && !warnedInstanceIds.has(heartbeat.instanceId)) {
         warnedInstanceIds.add(heartbeat.instanceId);
+        // The name (WeftSecondInstanceWarning) rides on the Warning object via
+        // the default sink — keep it out of the message so output does not
+        // double-print it as `WeftSecondInstanceWarning: WeftSecondInstance…`.
         warn(
-          `WeftSecondInstanceWarning: another engine instance (${heartbeat.instanceId}) is writing to this durable store. ` +
+          `another engine instance (${heartbeat.instanceId}) is writing to this durable store. ` +
             'Weft supports one engine process per store; running two can cause duplicate workflow execution. ' +
             'Enforce a single instance at the infrastructure layer (for example, one replica with a Recreate deploy strategy).',
         );
@@ -246,6 +263,7 @@ export function createSecondInstanceDetector(
   async function tick(): Promise<void> {
     if (stopped || tickInFlight) return;
     tickInFlight = true;
+    let wroteHeartbeat = false;
     try {
       const now = getNow();
       const peers = await readPeers();
@@ -264,11 +282,22 @@ export function createSecondInstanceDetector(
       if (stopped) return;
       sequence += 1;
       const heartbeat: LivenessHeartbeat = { instanceId, heartbeatAt: now, sequence };
+      wroteHeartbeat = true;
       await storage.put(KEYS.liveness(instanceId), encodeHeartbeat(heartbeat)).catch(() => {
         // Best-effort: a failed heartbeat write must not break the engine.
       });
     } finally {
       tickInFlight = false;
+      // Narrow residual race: `stop()` can land AFTER the re-check above but
+      // before/while the put() resolves, so the put resurrects our key after
+      // disposal deleted it. If we wrote and are now stopped, delete it again so
+      // disposal wins. Best-effort — if storage is already closed this throws
+      // (caught) and the key lingers until the next boot's staleness sweep.
+      if (wroteHeartbeat && stopped) {
+        await storage.delete(KEYS.liveness(instanceId)).catch(() => {
+          // Best-effort: a delete race or closed store must not break the tick.
+        });
+      }
     }
   }
 

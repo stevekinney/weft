@@ -5,6 +5,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import {
   createSecondInstanceDetectionTick,
   createSecondInstanceDetector,
+  SECOND_INSTANCE_WARNING_NAME,
   type SecondInstanceDetector,
   type SecondInstanceDetectorOptions,
 } from './second-instance-detector.ts';
@@ -35,6 +36,39 @@ async function seedHeartbeat(
     KEYS.liveness(instanceId),
     new TextEncoder().encode(JSON.stringify({ instanceId, heartbeatAt, sequence })),
   );
+}
+
+/**
+ * Wrap a store's `put` so the first call parks until `release()` is invoked, and
+ * `entered` resolves the moment that first put is reached. Lets a test position
+ * a tick *inside* its heartbeat write — past the post-await `stopped` re-check —
+ * then race `stop()` against the still-pending put. The `entered` promise (not a
+ * spin on a boolean) is how the test awaits that position deterministically.
+ */
+function gatedPut(storage: MemoryStorage): {
+  put: MemoryStorage['put'];
+  release: () => void;
+  entered: Promise<void>;
+} {
+  let release!: () => void;
+  let signalEntered!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const entered = new Promise<void>((resolve) => {
+    signalEntered = resolve;
+  });
+  let gated = false;
+  const basePut = storage.put.bind(storage);
+  const put = async (key: string, value: Uint8Array): Promise<void> => {
+    if (!gated) {
+      gated = true;
+      signalEntered();
+      await gate;
+    }
+    return basePut(key, value);
+  };
+  return { put, release, entered };
 }
 
 function detectorOptions(
@@ -113,7 +147,10 @@ describe('createSecondInstanceDetector', () => {
     await seedHeartbeat(storage, 'peer', clock.now(), 3);
     await detector.tick();
     expect(warnings.length).toBe(1);
-    expect(warnings[0]).toContain('WeftSecondInstanceWarning');
+    // The injected sink sees only the message; the WeftSecondInstanceWarning
+    // name rides on the Warning object via the default process.emitWarning sink
+    // (asserted separately). Pin stable message content here.
+    expect(warnings[0]).toContain('writing to this durable store');
     expect(warnings[0]).toContain('peer');
   });
 
@@ -497,6 +534,59 @@ describe('createSecondInstanceDetector', () => {
     expect(await storage.get(KEYS.liveness('self'))).toBeNull();
   });
 
+  it('deletes the resurrected heartbeat when stop() races a put already past the re-check', async () => {
+    // The narrow residual race: the tick passes the post-await `stopped` re-check
+    // (stopped is still false), THEN stop() lands and deletes our key, THEN the
+    // in-flight put() resolves and resurrects it. The tick's finally must delete
+    // the key again so disposal wins. Gate on put() (not scan) so the tick gets
+    // all the way past the re-check before stop() runs.
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const { put, release: releasePut, entered: putEntered } = gatedPut(storage);
+    storage.put = put;
+    const detector = createSecondInstanceDetector(detectorOptions({ storage, getNow: clock.now }));
+
+    const inFlight = detector.tick(); // runs to the put() and stalls on the gate
+    // Wait until the tick is parked INSIDE put() — i.e. it passed the post-await
+    // `stopped` re-check with wroteHeartbeat=true. The entered promise resolves
+    // only once the tick reaches the put, so this is past the re-check.
+    await putEntered;
+    await detector.stop(); // sets stopped, deletes our key — but the put is queued
+    releasePut(); // the queued put now resolves and resurrects the key
+    await inFlight; // finally runs: wroteHeartbeat && stopped → delete again
+
+    // Disposal wins: the resurrected key was cleaned up by the tick's finally.
+    expect(await storage.get(KEYS.liveness('self'))).toBeNull();
+  });
+
+  it('swallows a finally-delete failure when storage is closed during the put-after-stop race', async () => {
+    // Same race as above, but the cleanup delete throws (e.g. the store was
+    // already closed by disposal). The tick must still resolve — the residual
+    // key then lingers until the next boot's staleness sweep, which is the
+    // documented best-effort fallback.
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const { put, release: releasePut, entered: putEntered } = gatedPut(storage);
+    storage.put = put;
+    const detector = createSecondInstanceDetector(detectorOptions({ storage, getNow: clock.now }));
+
+    const inFlight = detector.tick(); // runs to the put() and stalls on the gate
+    // Park the tick INSIDE put(), past the re-check (wroteHeartbeat=true), before
+    // disposing — otherwise it returns at the re-check and the finally-delete
+    // branch never runs.
+    await putEntered;
+    // stop() deletes once (swallowed), then make every later delete throw so the
+    // tick's finally-delete hits its catch arm.
+    await detector.stop();
+    storage.delete = async () => {
+      throw new Error('store closed');
+    };
+    releasePut();
+
+    // The tick resolves despite the finally-delete throwing.
+    await expect(inFlight).resolves.toBeUndefined();
+  });
+
   it('sweeps by the scanned key, never a key rebuilt from a spoofed instanceId', async () => {
     // A malformed value parked under liveness:other claims instanceId "live-peer".
     // Sweeping by the decoded instanceId would delete liveness:live-peer (a real,
@@ -553,13 +643,19 @@ describe('createSecondInstanceDetector', () => {
     expect(await storage.get(KEYS.liveness('imposter-key'))).not.toBeNull();
   });
 
-  it('uses process.emitWarning by default when no warn sink is injected', async () => {
+  it('uses process.emitWarning by default, emitting the WeftSecondInstanceWarning name', async () => {
     const storage = new MemoryStorage();
     const clock = makeClock();
-    const emitted: string[] = [];
+    const emitted: Array<{ message: string; name: string | undefined }> = [];
     const originalEmitWarning = process.emitWarning;
-    process.emitWarning = ((message: string | Error) => {
-      emitted.push(typeof message === 'string' ? message : message.message);
+    // Capture BOTH args: the name now rides on the second positional argument
+    // (the warning type), not the message, so consumers can filter on
+    // `warning.name === 'WeftSecondInstanceWarning'`.
+    process.emitWarning = ((message: string | Error, name?: unknown) => {
+      emitted.push({
+        message: typeof message === 'string' ? message : message.message,
+        name: typeof name === 'string' ? name : undefined,
+      });
     }) as typeof process.emitWarning;
     try {
       const detector = createSecondInstanceDetector(
@@ -575,6 +671,11 @@ describe('createSecondInstanceDetector', () => {
       process.emitWarning = originalEmitWarning;
     }
 
-    expect(emitted.some((m) => m.includes('WeftSecondInstanceWarning'))).toBe(true);
+    const warning = emitted.find((entry) => entry.name === SECOND_INSTANCE_WARNING_NAME);
+    expect(warning).toBeDefined();
+    // The name is the filterable identifier; the message no longer repeats it.
+    expect(warning!.name).toBe('WeftSecondInstanceWarning');
+    expect(warning!.message).toContain('writing to this durable store');
+    expect(warning!.message).not.toContain('WeftSecondInstanceWarning');
   });
 });
