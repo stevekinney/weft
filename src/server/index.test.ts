@@ -4668,10 +4668,26 @@ describe('worker disconnection triggers task reassignment', () => {
         activityName: 'charge',
         input: null,
       });
-      await waitForRealTimersForTesting(50);
+      // Wait until the task is actually in flight on the worker before closing
+      // the socket — a fixed delay here under-waited on a loaded machine, so the
+      // disconnect found no in-flight task to requeue and the error never fired.
+      await waitFor(() => server.registry.isAssigned('disconnect-redispatch-fail-op'), {
+        label: 'task dispatched to worker',
+      });
 
       ws.close();
-      await waitForRealTimersForTesting(150);
+
+      // Wait for the requeue (after the reconnect grace period) to attempt a
+      // redispatch and fail on the throwing storage put, which logs this error.
+      // Condition-based so it tolerates close-propagation + grace-period jitter
+      // under load instead of guessing a fixed duration.
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some(
+            (call) => call[0] === '[weft] Redispatch failed for "disconnect-redispatch-fail-op":',
+          ),
+        { label: 'redispatch failure logged' },
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Redispatch failed for "disconnect-redispatch-fail-op":',

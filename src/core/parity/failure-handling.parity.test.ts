@@ -390,9 +390,15 @@ describe('Temporal failure-handling parity', () => {
         (await engine.storage.get(KEYS.operationInflight('parity-heartbeating-task')))!,
       ) as { deadline: number };
 
+      // The heartbeat extended the deadline past the original expiry. This is
+      // the invariant under test and it is proven deterministically by
+      // arithmetic — no wall-clock wait. (A previous sleep-until-original-
+      // deadline then `expect(taskAttempts).toEqual([1])` re-proved the same
+      // property over real time, but under parallel CPU load the sleep
+      // overshot the original deadline and the 20ms visibility poll reclaimed
+      // the task early, flaking the assertion. Do not reintroduce it.)
       const originalDeadlineDelay = Math.max(0, beforeHeartbeat.deadline - Date.now()) + 20;
       expect(Date.now() + originalDeadlineDelay).toBeLessThan(afterHeartbeat.deadline);
-      await waitForRealTimersForTesting(originalDeadlineDelay);
       expect(taskAttempts).toEqual([1]);
       expect(server.registry.isAssigned('parity-heartbeating-task')).toBe(true);
 

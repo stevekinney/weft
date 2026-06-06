@@ -93,6 +93,10 @@ export type TestRunOutcome =
 export const LOAD_SENSITIVE_TEST_PATHS = [
   'src/storage/bun-sql-benchmark.test.ts',
   'src/core/bulk-operations.test.ts',
+  // Spawns a real `tsc --noEmit` subprocess to typecheck the generated-client
+  // fixture; its wall-clock cost is unbounded under CPU contention and cannot be
+  // made deterministic (the work is in an external process). CI runs it isolated.
+  'src/cli/codegen-typecheck.test.ts',
 ] as const;
 
 function normalizedTestPath(file: string): string {
