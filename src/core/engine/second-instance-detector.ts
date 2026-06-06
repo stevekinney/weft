@@ -55,6 +55,23 @@ function encodeHeartbeat(heartbeat: LivenessHeartbeat): Uint8Array {
 }
 
 /**
+ * Run a best-effort storage operation that must never surface a failure to the
+ * caller. `.catch()` alone only swallows a rejected promise — an external
+ * `Storage` implementation is free to throw *synchronously* before it returns a
+ * promise, which `.catch()` would miss. The `try`/`catch` around the `await`
+ * covers both: a sync throw and an async rejection are equally ignored. Used for
+ * every detector write/delete so a hostile or transient store can't break a tick
+ * or make the fire-and-forget `stop()` reject during disposal.
+ */
+async function bestEffort(operation: () => Promise<unknown>): Promise<void> {
+  try {
+    await operation();
+  } catch {
+    // Best-effort: the detector is a smoke alarm, never a correctness path.
+  }
+}
+
+/**
  * True only when every field is the right type AND a *usable* value:
  * `heartbeatAt` must be finite (a `NaN`/`Infinity` timestamp would defeat both
  * the staleness sweep — `NaN < staleBefore` is always false — and recency), and
@@ -206,9 +223,7 @@ export function createSecondInstanceDetector(
       if (peer.heartbeat.heartbeatAt < staleBefore) {
         // Deleting a provably-dead marker is garbage collection, not coordination.
         // Delete the scanned key, never a key rebuilt from the decoded value.
-        await storage.delete(peer.key).catch(() => {
-          // Best-effort: a delete race or transient error must not break the tick.
-        });
+        await bestEffort(() => storage.delete(peer.key));
       }
     }
   }
@@ -283,9 +298,7 @@ export function createSecondInstanceDetector(
       sequence += 1;
       const heartbeat: LivenessHeartbeat = { instanceId, heartbeatAt: now, sequence };
       wroteHeartbeat = true;
-      await storage.put(KEYS.liveness(instanceId), encodeHeartbeat(heartbeat)).catch(() => {
-        // Best-effort: a failed heartbeat write must not break the engine.
-      });
+      await bestEffort(() => storage.put(KEYS.liveness(instanceId), encodeHeartbeat(heartbeat)));
     } finally {
       tickInFlight = false;
       // Narrow residual race: `stop()` can land AFTER the re-check above but
@@ -294,18 +307,17 @@ export function createSecondInstanceDetector(
       // disposal wins. Best-effort — if storage is already closed this throws
       // (caught) and the key lingers until the next boot's staleness sweep.
       if (wroteHeartbeat && stopped) {
-        await storage.delete(KEYS.liveness(instanceId)).catch(() => {
-          // Best-effort: a delete race or closed store must not break the tick.
-        });
+        await bestEffort(() => storage.delete(KEYS.liveness(instanceId)));
       }
     }
   }
 
   async function stop(): Promise<void> {
     stopped = true;
-    await storage.delete(KEYS.liveness(instanceId)).catch(() => {
-      // Best-effort cleanup so the next boot starts without our stale heartbeat.
-    });
+    // Best-effort cleanup so the next boot starts without our stale heartbeat.
+    // stop() is fire-and-forget from disposal, so it must never reject — bestEffort
+    // swallows a synchronous throw from the store as well as an async rejection.
+    await bestEffort(() => storage.delete(KEYS.liveness(instanceId)));
   }
 
   return { tick, stop };

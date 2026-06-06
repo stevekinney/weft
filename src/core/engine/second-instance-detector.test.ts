@@ -329,6 +329,32 @@ describe('createSecondInstanceDetector', () => {
     await expect(detector.stop()).resolves.toBeUndefined();
   });
 
+  it('swallows a SYNCHRONOUS throw from storage (put, sweep delete, and stop delete)', async () => {
+    // An external Storage may throw synchronously, BEFORE returning a promise.
+    // `.catch()` only attaches to a returned promise, so it would miss a sync
+    // throw — the bestEffort wrapper uses try/catch around the await to cover
+    // both. These overrides are deliberately NON-async so they throw on the call
+    // itself, not via a rejected promise.
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    await seedHeartbeat(storage, 'crashed', clock.now() - STALENESS_WINDOW_MS * 11);
+    const syncThrow = (): never => {
+      throw new Error('synchronous store failure');
+    };
+    // Cast through unknown: these test doubles intentionally violate the async
+    // signature to simulate a sync-throwing external Storage implementation.
+    storage.put = syncThrow as unknown as MemoryStorage['put'];
+    storage.delete = syncThrow as unknown as MemoryStorage['delete'];
+    const detector = createSecondInstanceDetector(detectorOptions({ storage, getNow: clock.now }));
+
+    // tick(): the first-tick sweep delete AND the heartbeat put both throw
+    // synchronously; the tick must still resolve.
+    await expect(detector.tick()).resolves.toBeUndefined();
+    // stop(): the delete throws synchronously; stop() is fire-and-forget and must
+    // never reject.
+    await expect(detector.stop()).resolves.toBeUndefined();
+  });
+
   it('two real detectors over one shared store each warn about the other (autoscaling=2)', async () => {
     // The end-to-end proof: detector A's put() must feed detector B's scan(), and
     // vice versa, through a single shared store — not a puppet-seeded key. Tick the
