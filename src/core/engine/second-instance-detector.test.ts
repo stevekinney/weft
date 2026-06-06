@@ -393,19 +393,25 @@ describe('createSecondInstanceDetector', () => {
     expect(warningsB[0]).toContain('instance-a');
   });
 
-  it('createSecondInstanceDetectionTick skips when the detector resolver returns null', () => {
-    // Simulates a garbage-collected or disposed engine: no detector to tick.
-    let ticked = false;
-    const stubDetector: SecondInstanceDetector = {
-      tick: async () => {
-        ticked = true;
-      },
-      stop: async () => {},
+  it('createSecondInstanceDetectionTick self-clears its interval when the resolver returns null', () => {
+    // Simulates a garbage-collected or disposed engine: no detector to tick. The
+    // tick must clear its own interval (via the tracker handle) so a leaked engine
+    // does not leave a no-op timer alive — not relying on the finalizer backstop.
+    const interval = setInterval(() => {}, 1_000);
+    const tracker = {
+      disposed: false,
+      cleanupInterval: null,
+      secondInstanceDetectionInterval: interval,
+      testToken: undefined,
     };
-    void stubDetector;
-    const tick = createSecondInstanceDetectionTick(() => null);
+    const tick = createSecondInstanceDetectionTick(() => null, tracker);
     expect(() => tick()).not.toThrow();
-    expect(ticked).toBe(false);
+    // The interval handle was cleared and nulled on the tracker.
+    expect(tracker.secondInstanceDetectionInterval).toBeNull();
+    // Idempotent: a second null-resolver tick with the handle already null is a
+    // no-op (covers the `!== null` guard's false arm).
+    expect(() => tick()).not.toThrow();
+    expect(tracker.secondInstanceDetectionInterval).toBeNull();
   });
 
   it('createSecondInstanceDetectionTick drives a live detector and swallows tick failures', async () => {
@@ -417,13 +423,24 @@ describe('createSecondInstanceDetector', () => {
       },
       stop: async () => {},
     };
-    const tick = createSecondInstanceDetectionTick(() => failingDetector);
+    const interval = setInterval(() => {}, 1_000);
+    const tracker = {
+      disposed: false,
+      cleanupInterval: null,
+      secondInstanceDetectionInterval: interval,
+      testToken: undefined,
+    };
+    const tick = createSecondInstanceDetectionTick(() => failingDetector, tracker);
     // The synchronous call must not throw even though tick() rejects.
     expect(() => tick()).not.toThrow();
     // Let the swallowed rejection settle.
     await Promise.resolve();
     await Promise.resolve();
     expect(ticks).toBe(1);
+    // A live detector tick leaves the interval untouched (it only self-clears
+    // when the engine is gone).
+    expect(tracker.secondInstanceDetectionInterval).toBe(interval);
+    clearInterval(interval);
   });
 
   it('warns on a peer whose clock is FROZEN but whose sequence still advances', async () => {

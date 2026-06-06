@@ -59,4 +59,38 @@ describe('second-instance detection wiring', () => {
     });
     expect(getInternals(engine).secondInstanceDetector).not.toBeNull();
   });
+
+  it('ignores an invalid secondInstanceHeartbeatInterval when detection is DISABLED', () => {
+    // The option is documented as "ignored when detection is disabled", so an
+    // invalid interval must NOT make an off-by-default config fatal at
+    // construction. (Detection is off by default, so this is the common path.)
+    using storage = new MemoryStorage();
+    let engine: Engine<object, object> | undefined;
+    expect(() => {
+      engine = new Engine({
+        storage,
+        detectSecondInstance: false,
+        secondInstanceHeartbeatInterval: 'not-a-duration',
+      });
+    }).not.toThrow();
+    expect(getInternals(engine!).secondInstanceDetector).toBeNull();
+    engine![Symbol.dispose]();
+  });
+
+  it('rejects an invalid secondInstanceHeartbeatInterval when detection is ENABLED', () => {
+    // When detection IS enabled the interval is live config and an invalid value
+    // is a genuine construction error — the validation still applies. Capturing
+    // the result keeps the constructor from being a bare side-effecting `new`; if
+    // it ever stopped throwing, the leaked engine would also surface here.
+    using storage = new MemoryStorage();
+    let leaked: Engine<object, object> | undefined;
+    expect(() => {
+      leaked = new Engine({
+        storage,
+        detectSecondInstance: true,
+        secondInstanceHeartbeatInterval: 'not-a-duration',
+      });
+    }).toThrow();
+    leaked?.[Symbol.dispose]();
+  });
 });

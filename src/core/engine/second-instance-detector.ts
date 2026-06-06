@@ -37,6 +37,7 @@
  */
 
 import { KEYS, type Storage } from '../../storage/interface.ts';
+import type { EngineCleanupIntervalDisposalTracker } from './engine-leak-warnings.ts';
 
 /** A single engine's liveness heartbeat, JSON-encoded as the stored value. */
 type LivenessHeartbeat = {
@@ -326,17 +327,28 @@ export function createSecondInstanceDetector(
 /**
  * Build the `setInterval` callback that drives a detector tick. `resolveDetector`
  * returns the live detector, or `null` when the engine has been garbage-collected
- * or disposed — in which case the tick is skipped. Extracted (rather than inlined
- * in the engine) so the skip-when-gone guard is directly testable without a timer.
- * A tick failure is swallowed: the detector is a smoke alarm, never a correctness
- * path, so it must not surface as an unhandled rejection.
+ * or disposed. When it returns `null` the tick SELF-CLEARS its own interval (via
+ * `tracker.secondInstanceDetectionInterval`) and returns — mirroring
+ * {@link createCleanupIntervalTick}. This is the prompt cleanup path: a leaked
+ * engine's first post-GC tick clears the timer immediately, rather than relying
+ * on the `FinalizationRegistry` backstop, whose callbacks are not guaranteed to
+ * run promptly (or at all). Extracted so the skip/clear guard is directly
+ * testable without a timer. A tick failure is swallowed: the detector is a smoke
+ * alarm, never a correctness path, so it must not surface as an unhandled rejection.
  */
 export function createSecondInstanceDetectionTick(
   resolveDetector: () => SecondInstanceDetector | null,
+  tracker: EngineCleanupIntervalDisposalTracker,
 ): () => void {
   return function secondInstanceDetectionTick() {
     const detector = resolveDetector();
-    if (detector === null) return;
+    if (detector === null) {
+      if (tracker.secondInstanceDetectionInterval !== null) {
+        clearInterval(tracker.secondInstanceDetectionInterval);
+        tracker.secondInstanceDetectionInterval = null;
+      }
+      return;
+    }
     void detector.tick().catch(() => {
       // Swallow — best-effort liveness, not a correctness path.
     });

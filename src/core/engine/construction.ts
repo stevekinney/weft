@@ -252,13 +252,20 @@ const DEFAULT_SECOND_INSTANCE_HEARTBEAT_INTERVAL_MS = 15_000;
 function resolveSecondInstanceFields(
   options: EngineConstructorOptions | undefined,
 ): Pick<ResolvedOptions, 'secondInstanceDetectionEnabled' | 'secondInstanceHeartbeatIntervalMs'> {
-  return {
-    secondInstanceDetectionEnabled: defaultTo(options?.detectSecondInstance, false),
-    secondInstanceHeartbeatIntervalMs:
-      normalizeRetentionDuration(
+  const enabled = defaultTo(options?.detectSecondInstance, false);
+  // The option is documented as "ignored when detection is disabled", so do NOT
+  // validate it when detection is off — an invalid interval must not make an
+  // off-by-default config fatal at construction. Only normalize (and thus
+  // potentially throw) when detection is actually enabled.
+  const intervalMs = enabled
+    ? (normalizeRetentionDuration(
         options?.secondInstanceHeartbeatInterval,
         'options.secondInstanceHeartbeatInterval',
-      ) ?? DEFAULT_SECOND_INSTANCE_HEARTBEAT_INTERVAL_MS,
+      ) ?? DEFAULT_SECOND_INSTANCE_HEARTBEAT_INTERVAL_MS)
+    : DEFAULT_SECOND_INSTANCE_HEARTBEAT_INTERVAL_MS;
+  return {
+    secondInstanceDetectionEnabled: enabled,
+    secondInstanceHeartbeatIntervalMs: intervalMs,
   };
 }
 

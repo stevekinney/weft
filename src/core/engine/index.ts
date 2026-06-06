@@ -577,10 +577,11 @@ export class Engine<
   /**
    * Start the best-effort second-instance liveness detector when enabled. The
    * engine owns the interval so disposal clears it through the same path as the
-   * other engine intervals (no leak warning). A `WeakRef` keeps the interval
-   * from pinning the engine alive past garbage collection, and the interval is
-   * tracked on the cleanup disposal tracker so the shared finalizer clears it on
-   * a GC-without-dispose (the timer would otherwise keep the event loop alive).
+   * other engine intervals (no leak warning). A `WeakRef` keeps the interval from
+   * pinning the engine alive past garbage collection. On a GC-without-dispose the
+   * interval is cleared two ways: the tick self-clears on its first post-GC fire
+   * (prompt, via the tracker handle) and the shared finalizer clears it on
+   * collection (backstop). Mirrors the cleanup-interval lifecycle exactly.
    */
   #startSecondInstanceDetection(): void {
     const internals = getInternals(this);
@@ -592,19 +593,21 @@ export class Engine<
       intervalMs: internals.options.secondInstanceHeartbeatIntervalMs,
     });
     internals.secondInstanceDetector = detector;
+    const tracker = internals.cleanupIntervalDisposalTracker;
+    // The tracker is constructed unconditionally just before this method runs, so
+    // it is always present here; guard defensively rather than assert.
+    if (tracker === null) return;
     const weakEngine = new WeakRef(this);
     const detectionInterval = setInterval(
-      createSecondInstanceDetectionTick(createSecondInstanceDetectorResolver(weakEngine)),
+      createSecondInstanceDetectionTick(createSecondInstanceDetectorResolver(weakEngine), tracker),
       internals.options.secondInstanceHeartbeatIntervalMs,
     );
     internals.secondInstanceDetectionInterval = detectionInterval;
-    // Track the interval on the cleanup disposal tracker so the shared engine
-    // finalizer clears it if the engine is garbage-collected without
-    // [Symbol.dispose]() — otherwise the timer keeps the event loop alive
-    // forever (ticks no-op via the WeakRef resolver, but the handle persists).
-    if (internals.cleanupIntervalDisposalTracker !== null) {
-      internals.cleanupIntervalDisposalTracker.secondInstanceDetectionInterval = detectionInterval;
-    }
+    // Track the interval on the cleanup disposal tracker so BOTH cleanup paths
+    // clear it: the tick self-clears via this handle on the first post-GC fire
+    // (prompt), and the shared engine finalizer clears it on collection (backstop,
+    // since FinalizationRegistry callbacks are not guaranteed to run promptly).
+    tracker.secondInstanceDetectionInterval = detectionInterval;
   }
 
   #hasConfiguredRetention(): boolean {
