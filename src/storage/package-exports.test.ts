@@ -36,7 +36,7 @@ describe('storage package exports', () => {
     expect(Object.hasOwn(packageJson.exports, './storage/resolve')).toBe(true);
   });
 
-  it('exposes the text-value-store compatibility wrapper as a subpath', () => {
+  it('exposes the text-value-store string key/value facade as a subpath', () => {
     expect(packageJson.exports['./storage/text-value-store']).toEqual({
       types: './dist/storage/text-value-store.d.ts',
       bun: './dist/storage/text-value-store.js',

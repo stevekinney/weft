@@ -212,7 +212,7 @@ async function* _typedContextSignal() {
   const approval = yield* ctx.waitForSignal('approve');
   void (approval.approverId satisfies string);
 
-  // Unknown signal names still typecheck via the legacy `name: string`
+  // Unknown signal names still typecheck via the dynamic `name: string`
   // fallback overload, but the payload type is whatever generic T the caller
   // supplies (default `unknown`). This is intentional — we cannot reject
   // arbitrary signal names because signals are dispatched via storage and
@@ -235,7 +235,7 @@ function _typedContextOnUpdate() {
     return { ok: true };
   });
   // Known limitation: the looser `onUpdate(name: string, handler: (payload:
-  // unknown) => unknown)` legacy overload exists for valid reasons (ad-hoc
+  // unknown) => unknown)` dynamic overload exists for valid reasons (ad-hoc
   // string-keyed updates) and accepts any handler. When TS sees a typed-key
   // call with a wrong return shape, it falls through from the typed overload
   // to the looser one rather than reporting a clean error. This is a TS
@@ -264,9 +264,10 @@ function _typedContextGetAttribute() {
 }
 
 // ---------------------------------------------------------------------------
-// Bare-WorkflowContext legacy callers still work because of defaulted
-// generics. This is the regression guard for the 154 files referencing
-// `WorkflowContext` without generics.
+// Bare-WorkflowContext callers (no generic arguments) work because of the
+// defaulted generics — this is current first-class authoring support. This is
+// the regression guard for the many files referencing `WorkflowContext`
+// without generics.
 // ---------------------------------------------------------------------------
 
 declare const bare: WorkflowContext;
@@ -279,7 +280,7 @@ async function* _bareContext() {
   const payload = yield* bare.waitForSignal(handle);
   void (payload satisfies { ok: boolean });
 
-  // setAttribute with arbitrary string keys still accepted via the legacy
+  // setAttribute with arbitrary string keys still accepted via the dynamic
   // string-key overload. The typed-key `TSearchAttributes` overload defaults
   // to `{}`, so `keyof {} & string = never`, and the typed overload doesn't
   // match — TS falls through cleanly.
@@ -289,7 +290,7 @@ async function* _bareContext() {
   // files (`src/core/type-ergonomics.test-d.ts`) augment the global
   // `ActivityTypes` interface, and the test-d typecheck includes them all
   // together. With that augmentation in scope, `'anyName'` no longer matches
-  // any overload's name parameter. The legacy bare-context call path is
+  // any overload's name parameter. The bare-context dynamic-name call path is
   // covered exhaustively in type-ergonomics.test-d.ts.
 }
 

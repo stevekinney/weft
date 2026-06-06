@@ -15,9 +15,12 @@ import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
 import { createOperationRegistry, executeOperation } from './index.ts';
 import { catalogWorkflow } from './workflow-adapter.ts';
 
-/** Local alias for the legacy `WorkflowRegistration` shape — name-less form
- * still used by these tests to construct registration metadata bags. */
-type WorkflowRegistration<TInput, TOutput> = Omit<WorkflowDefinition<TInput, TOutput>, 'name'>;
+/** A test fixture shape for a registration metadata bag: a `WorkflowDefinition`
+ * minus its `name` (the adapter supplies the name separately). */
+type WorkflowRegistrationFixture<TInput, TOutput> = Omit<
+  WorkflowDefinition<TInput, TOutput>,
+  'name'
+>;
 
 const checkoutWorkflow = workflow({ name: 'checkout' }).execute(async function* (
   _context: WorkflowContext,
@@ -85,7 +88,7 @@ function checkoutWorkflowRegistration() {
     handler: async function* (_context: WorkflowContext) {
       return { completed: true };
     },
-  } satisfies WorkflowRegistration<CheckoutInput, { completed: true }>;
+  } satisfies WorkflowRegistrationFixture<CheckoutInput, { completed: true }>;
   return registration;
 }
 
@@ -269,7 +272,7 @@ describe('catalogWorkflow', () => {
   });
 
   it('uses workflow registration metadata as adapter defaults', async () => {
-    const registration: WorkflowRegistration<CheckoutInput, { completed: true }> =
+    const registration: WorkflowRegistrationFixture<CheckoutInput, { completed: true }> =
       checkoutWorkflowRegistration();
     const engine = createEngine();
     engine.register(

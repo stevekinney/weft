@@ -72,10 +72,11 @@ export type WorkflowGenerator<
  * `TSearchAttributes`), and the builder threads its normalised maps through
  * this alias so `.execute(fn)` sees the right `ctx` shape inside `fn`.
  *
- * Legacy bare-`WorkflowContext` callers continue to typecheck because the
- * interface's generics all default to empty/permissive shapes, so the typed
- * overloads de-prioritise to `never` and existing string-name/callable
- * overloads still match.
+ * Bare-`WorkflowContext` callers (no declared activity/signal/etc. maps)
+ * typecheck because the interface's generics all default to permissive shapes:
+ * the typed overloads de-prioritise to `never` and the dynamic string-name /
+ * callable overloads match instead. This permissive path is current API — it is
+ * how untyped, ad-hoc-name authoring is supported, not a compatibility shim.
  */
 export type WorkflowContextOf<
   TActivities extends ActivityMap = ActivityMap,

@@ -233,4 +233,3 @@ If between runs you remove `recoveryDemoWaiter` from the `workflows` map, the se
 
 - [Hello World](../getting-started/hello-world.md) — the basic boot pattern with `Engine.create`.
 - [Server guide](./server.md) — exposing `recoverAll` over HTTP.
-- [Migration guide](./migration.md) — upgrading existing call sites.

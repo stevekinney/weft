@@ -318,7 +318,7 @@ export class ActivityResolutionError extends WeftError<'ActivityResolutionError'
       'ActivityResolutionError',
       `No activity registered with name "${activityName}" for workflow type "${workflowType}". ` +
         'Register the activity via `workflow({ name }).activities({ ... })` on the workflow that runs it, ' +
-        'or via `engine.register(activityDefinition)` for the legacy global registry.',
+        'or via `engine.register(activityDefinition)` to make it available to every workflow.',
     );
     this.workflowType = workflowType;
     this.activityName = activityName;

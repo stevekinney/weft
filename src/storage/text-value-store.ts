@@ -1,12 +1,11 @@
 /**
- * Text-value compatibility wrapper.
+ * Text-value storage facade.
  *
- * Adapts Weft's `Uint8Array`-keyed {@link Storage} to a generic
+ * Adapts Weft's `Uint8Array`-valued {@link Storage} to a generic
  * string-valued key/value interface with an array-returning prefix
- * list. The shape is what downstream consumers that expect a string
- * `KeyValueStore` typically require. The wrapper lives in Weft so
- * that adopting Weft storage does not require any runtime dependency
- * on those consumers.
+ * list — the shape a string `KeyValueStore` consumer expects. It ships
+ * in Weft as a first-class integration surface, so adopting Weft
+ * storage behind a string KV interface needs no extra dependency.
  *
  * Encoding is UTF-8 with fatal decoding: invalid byte sequences raise
  * `TypeError` rather than silently producing replacement characters,
@@ -40,9 +39,10 @@ import {
  */
 export type TextValueStoreOptions = {
   /**
-   * Whether `close()` disposes the wrapped storage. Defaults to `true` so the
-   * existing owning-wrapper behavior is preserved. Set `false` when the same
-   * storage instance is shared by the Weft engine and application state.
+   * Whether `close()` disposes the wrapped storage. Defaults to `true` — the
+   * facade owns the storage it wraps and tears it down on close. Set `false`
+   * when the same storage instance is shared by the Weft engine and application
+   * state, so closing the facade must not dispose storage the engine still uses.
    */
   disposeUnderlyingStorage?: boolean;
 };

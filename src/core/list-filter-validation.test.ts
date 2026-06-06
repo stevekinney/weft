@@ -15,7 +15,7 @@ describe('normalizeListFilter', () => {
       expect(normalizeListFilter(undefined)).toEqual({});
     });
 
-    it('accepts the legacy filter shape (status/type/tags/attributes/limit/offset)', () => {
+    it('accepts the full filter shape (status/type/tags/attributes/limit/offset)', () => {
       const filter: ListFilter = {
         status: ['running', 'pending'],
         type: 'order',
