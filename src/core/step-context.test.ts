@@ -389,4 +389,31 @@ describe('step-context durability', () => {
 
     engine[Symbol.dispose]();
   });
+
+  it('does not hang when the only step rejects (no follow-up steps to drain)', async () => {
+    // Regression guard for a drain-loop deadlock: after a step rejects, the
+    // generator loop re-enters `dequeue()`. The user function's rejection
+    // propagates and runs `signalDone()` on a later microtask. `dequeue()`
+    // checks `#done` synchronously before parking AND `signalDone()` notifies a
+    // parked waiter, so both interleavings terminate. Bound the assertion with
+    // a timeout so a future regression surfaces as a failure, not a hang.
+    const engine = new Engine({ storage: new MemoryStorage() });
+    engine.register(
+      workflow({ name: 'lone-failing-step' }).execute(
+        compileStepWorkflow(async (ctx: StepWorkflowContext) => {
+          // The ONLY operation is a rejecting step — nothing follows it, so the
+          // loop must terminate via `signalDone()`, not via another dequeue.
+          await ctx.step('only-step', () => {
+            throw new Error('lone boom');
+          });
+          return 'unreachable';
+        }),
+      ),
+    );
+
+    const handle = await engine.start('lone-failing-step', null, { id: 'wf-lone-failing' });
+    await expect(handle.result()).rejects.toThrow('lone boom');
+
+    engine[Symbol.dispose]();
+  }, 5_000);
 });
