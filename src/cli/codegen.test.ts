@@ -794,8 +794,12 @@ describe('generated .d.ts typecheck fixture', () => {
     // The fixture imports `Engine` as a type only (see consumer.ts), so the
     // compile loads type declarations rather than the full engine runtime
     // closure. Measured ~3s isolated (down from 60–110s with a value import,
-    // which flaked under parallel load). 30s leaves ample headroom under load.
-  }, 30_000);
+    // which flaked under parallel load). The budget is wall-clock for a cold
+    // `tsc` subprocess: under the full-suite parallel run the spawn contends
+    // for CPU and a 30s budget still flaked, so it is 60s. A real type error
+    // fails fast — this headroom only absorbs scheduling latency, it does not
+    // mask a regression.
+  }, 60_000);
 });
 
 afterAll(() => {

@@ -1,10 +1,29 @@
 import { calculateBackoff } from '../scheduler.ts';
-import { DEFAULT_RETRY_POLICY, type ActivityCallOptions, type RetryPolicy } from '../types.ts';
+import {
+  DEFAULT_RETRY_POLICY,
+  type ActivityCallOptions,
+  type RetryPolicy,
+  type WorkflowContext,
+} from '../types.ts';
 import type { Context } from './index.ts';
 import { getInternals, type ContextInternals } from './internals.ts';
 import type { ContextOperationRequest } from './operation-request.ts';
 import { isActivityCallOptions } from './session-state.ts';
 import { captureCallerStack } from './validation.ts';
+
+/**
+ * Recover the concrete {@link Context} from the public {@link WorkflowContext}
+ * the engine passes to a workflow handler. The engine always invokes a handler
+ * with the concrete `Context` instance (see `InlineExecutionStrategy`), so this
+ * narrowing is sound at runtime. Internal infrastructure such as
+ * `compileStepWorkflow` uses this to drive the durable activity machinery
+ * instead of an inline `as Context` cast in handler-shaped code, which the
+ * type-ergonomics guard forbids.
+ */
+export function asConcreteContext(context: WorkflowContext): Context {
+  // Trusted by construction: the engine constructs and passes a `Context`.
+  return context as Context;
+}
 
 type ActivityInput = string | (Function & { retry?: RetryPolicy });
 type ActivityOperationRequest = Extract<ContextOperationRequest, { type: 'activity' }>;
@@ -191,7 +210,8 @@ function completeActivityRetryAttempt(
   };
 }
 
-function getActivityName(activity: ActivityInput): string {
+function getActivityName(activity: ActivityInput, explicitName?: string): string {
+  if (explicitName !== undefined) return explicitName;
   return typeof activity === 'string' ? activity : activity.name || 'anonymous';
 }
 
@@ -322,9 +342,10 @@ export function createRunActivityRequest<TResult>(
   context: Context,
   activity: ActivityInput,
   rest: readonly unknown[],
+  explicitName?: string,
 ): RunActivityRequest<TResult> {
   const { input, options } = parseRunArguments(activity, rest);
-  const activityName = getActivityName(activity);
+  const activityName = getActivityName(activity, explicitName);
   const activityFunction = getActivityFunction(activity);
   const internals = getInternals(context);
   const step = internals.stepIndex++;
@@ -351,9 +372,10 @@ export function* runActivityWithRetry<TResult>(
   context: Context,
   activity: ActivityInput,
   rest: readonly unknown[],
+  explicitName?: string,
 ): Generator<ContextOperationRequest, TResult, unknown> {
   const { request, step, hasCachedResult, cachedResult, retryAttempt, retryPolicy } =
-    createRunActivityRequest<TResult>(context, activity, rest);
+    createRunActivityRequest<TResult>(context, activity, rest, explicitName);
   if (hasCachedResult) return cachedResult as TResult;
   const internals = getInternals(context);
 

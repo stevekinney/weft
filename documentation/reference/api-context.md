@@ -525,14 +525,17 @@ The step context is a subset of the full `Context`. It exposes `workflowId`, `si
 step<T>(name: string, fn: () => Promise<T> | T): Promise<T>
 ```
 
-Execute a named step as a durable operation. Under the hood, each `step()` call compiles to a `yield` in the generator protocol. Steps execute sequentially -- one at a time.
+Execute a named step as a durable operation. Each `step()` call routes through the same durable activity machinery as `ctx.run(...)`: the engine assigns it a positional replay slot, persists the result to the checkpoint, and -- on crash recovery -- returns the stored result without re-running `fn`. Completed steps are not re-executed when a workflow resumes. Steps execute sequentially -- one at a time.
 
-| Parameter | Type                    | Description                             |
-| --------- | ----------------------- | --------------------------------------- |
-| `name`    | `string`                | A descriptive name for the step         |
-| `fn`      | `() => Promise<T> \| T` | The function to execute (sync or async) |
+| Parameter | Type                    | Description                                                    |
+| --------- | ----------------------- | -------------------------------------------------------------- |
+| `name`    | `string`                | The durable step label (shown in the timeline and diagnostics) |
+| `fn`      | `() => Promise<T> \| T` | The function to execute (sync or async)                        |
 
 **Returns:** A promise that resolves with the step function's return value.
+
+> [!WARNING] Await steps in order
+> Step durability is **positional**: a step is identified on replay by the order in which it ran, not by its `name`. You must `await` each `ctx.step(...)` before starting the next one. Firing steps concurrently -- e.g. `await Promise.all([ctx.step('a', ...), ctx.step('b', ...)])` where a `.then(...)` continuation enqueues further steps -- can change the order steps are queued between the original run and a recovered run, which silently returns the wrong cached value after a crash. When you need parallelism, durable timers, or signals, graduate to the generator API.
 
 ```ts partial
 engine.register(

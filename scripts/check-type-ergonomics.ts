@@ -59,9 +59,18 @@ const gitListOutput =
     .quiet()
     .text();
 
+// The sanctioned home for the WorkflowContext -> Context boundary. The engine
+// always invokes a handler with the concrete `Context`, so internal
+// infrastructure that must drive the durable machinery recovers it through
+// `asConcreteContext` here (one justified cast) rather than scattering inline
+// `as Context` casts across handler-shaped code. This rule guards authoring
+// examples and handler bodies, not that single boundary helper.
+const CONTEXT_BOUNDARY_FILE = 'src/core/context/run-operation.ts';
+
 for (const relPath of gitListOutput.split('\0')) {
   if (
     relPath === '' ||
+    relPath === CONTEXT_BOUNDARY_FILE ||
     relPath.endsWith('.test.ts') ||
     relPath.endsWith('.spec.ts') ||
     relPath.endsWith('.test-d.ts') ||

@@ -8,7 +8,7 @@
  * @module core/step-context
  */
 
-import type { ContextOperationRequest } from './context.ts';
+import { asConcreteContext, runActivityWithRetry } from './context/run-operation.ts';
 import type { StepWorkflowContext, WorkflowFunction } from './types.ts';
 
 // ---------------------------------------------------------------------------
@@ -16,7 +16,10 @@ import type { StepWorkflowContext, WorkflowFunction } from './types.ts';
 // ---------------------------------------------------------------------------
 
 interface QueuedOperation {
-  request: ContextOperationRequest;
+  /** Explicit, user-supplied step name. Used as the durable activity label. */
+  name: string;
+  /** The zero-argument step body. Executed by the engine as an inline activity. */
+  fn: () => unknown;
   resolve: (value: unknown) => void;
   reject: (reason: unknown) => void;
 }
@@ -27,10 +30,12 @@ interface QueuedOperation {
 
 /**
  * Internal implementation of {@link StepWorkflowContext} for step-based
- * ("progressive disclosure") workflows. Wraps the generator protocol in a
- * queue so that plain `async function` workflows can be registered on the
- * engine without writing explicit generators. Build via
- * {@link compileStepWorkflow} rather than constructing directly.
+ * ("progressive disclosure") workflows. Each `step()` call is a thin async
+ * enqueue; the compiled generator (see {@link compileStepWorkflow}) drains the
+ * queue and runs each step through the engine's durable activity machinery, so
+ * a completed step is replayed from the checkpoint rather than re-executed
+ * after a crash. Build via {@link compileStepWorkflow} rather than constructing
+ * directly.
  *
  * @example
  * ```ts
@@ -56,20 +61,13 @@ export class StepContext implements StepWorkflowContext {
   }
 
   async step<T>(name: string, fn: () => Promise<T> | T): Promise<T> {
-    const operationId = crypto.randomUUID();
     const { promise, resolve, reject } = Promise.withResolvers<unknown>();
 
-    this.#queue.push({
-      request: {
-        type: 'activity',
-        operationId,
-        activityName: name,
-        fn: fn as (input: unknown) => unknown,
-        input: undefined,
-      },
-      resolve,
-      reject,
-    });
+    // Thin enqueue only: this method is `async` and cannot `yield*` into the
+    // generator protocol. The compiled generator loop dequeues the step and
+    // runs it through the engine's durable activity machinery, which assigns
+    // the positional replay slot and persists the checkpoint.
+    this.#queue.push({ name, fn, resolve, reject });
 
     this.#notifyQueue?.();
 
@@ -129,9 +127,13 @@ export class StepContext implements StepWorkflowContext {
 export function compileStepWorkflow<TInput = unknown, TOutput = unknown>(
   stepFunction: (context: StepWorkflowContext, input: TInput) => Promise<TOutput>,
 ): WorkflowFunction<TInput, TOutput> {
-  return async function* (_rawContext, input) {
-    // Extract workflowId and signal from the raw context
-    const rawContext = _rawContext as { workflowId: string; signal: AbortSignal };
+  return async function* (publicContext, input) {
+    // The engine always invokes a workflow handler with the concrete `Context`
+    // instance (see InlineExecutionStrategy.startWorkflow). Its internals —
+    // `stepIndex` and the `accumulatedResults` map the engine pre-populates on
+    // resume — are already initialized. We need the full `Context` to drive the
+    // durable activity machinery below.
+    const rawContext = asConcreteContext(publicContext);
     const stepContext = new StepContext(rawContext.workflowId, rawContext.signal);
 
     let workflowResult: TOutput | undefined;
@@ -149,13 +151,19 @@ export function compileStepWorkflow<TInput = unknown, TOutput = unknown>(
         stepContext.signalDone();
       });
 
-    // Generator loop: yield operations to the engine one at a time
+    // Generator loop: run each step through the engine's durable activity
+    // machinery, one at a time. `runActivityWithRetry` assigns the positional
+    // replay slot (`stepIndex++`), short-circuits to the cached result on
+    // replay, and persists the checkpoint — so completed steps are not
+    // re-executed after a crash. Delegating with `yield*` forwards the inner
+    // retry-sleep yields to the engine driver. The step name is the durable
+    // activity label (observability only — replay is keyed by position).
     while (true) {
       const queued = await stepContext.dequeue();
       if (queued === null) break;
 
       try {
-        const result = yield queued.request;
+        const result = yield* runActivityWithRetry(rawContext, queued.fn, [], queued.name);
         queued.resolve(result);
       } catch (error) {
         queued.reject(error);

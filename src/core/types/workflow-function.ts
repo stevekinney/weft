@@ -71,6 +71,20 @@ export type WorkflowFunction<TInput = unknown, TOutput = unknown> = (
 export interface StepWorkflowContext {
   readonly workflowId: string;
   readonly signal: AbortSignal;
+  /**
+   * Run `fn` as a durable step. Each call routes through the same machinery as
+   * `ctx.run(...)`: the engine assigns a positional replay slot, persists the
+   * result to the checkpoint, and on crash recovery returns the stored result
+   * without re-running `fn`. `name` is the durable activity label (timeline and
+   * diagnostics only) — replay is keyed by position, not by name.
+   *
+   * Because durability is positional, you must `await` each step before
+   * starting the next: steps must be queued in a deterministic order so the
+   * original run and a recovered run agree on which slot is which. Firing steps
+   * concurrently (so a continuation enqueues further steps in completion order)
+   * can return a wrong cached value after a crash. For parallelism, durable
+   * timers, or signals, use the generator API instead.
+   */
   step<T>(name: string, fn: () => Promise<T> | T): Promise<T>;
 }
 

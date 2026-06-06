@@ -256,3 +256,137 @@ describe('step-context', () => {
     expect(isGeneratorResult(iteratorLike)).toBe(false);
   });
 });
+
+describe('step-context durability', () => {
+  /** Drain microtasks so fire-and-forget engine work settles. */
+  async function flush(): Promise<void> {
+    await sleepForTesting(10);
+  }
+
+  it('does not re-execute completed steps after a crash and recovery', async () => {
+    const storage = new MemoryStorage();
+
+    // Per-step side-effect counters. These survive the "crash" (they live in
+    // the closure, not the engine) so we can detect whether a checkpointed step
+    // is wrongly re-executed on replay. A happy-path "it resumes" assertion
+    // would not catch a positional-slot mismatch — the counter is the
+    // discriminator.
+    let step1Calls = 0;
+    let step2Calls = 0;
+
+    // Step 2 blocks forever on the first engine so the workflow is parked AFTER
+    // step 1 is checkpointed but BEFORE step 2 settles — the deterministic crash
+    // point. The recovered engine bypasses the gate via `firstEngineActive`, so
+    // step 2 completes there. The gate is never resolved: engine 1's parked
+    // step-2 fn stays pending after dispose, which is harmless.
+    const neverResolves = new Promise<void>(() => {});
+    let firstEngineActive = true;
+
+    function makeWorkflow() {
+      return workflow({ name: 'durable-steps' }).execute(
+        compileStepWorkflow(async (ctx: StepWorkflowContext, input: unknown) => {
+          const seed = (input as { seed: string }).seed;
+          const r1 = await ctx.step('first', () => {
+            step1Calls++;
+            return `r1:${seed}`;
+          });
+          const r2 = await ctx.step('second', async () => {
+            step2Calls++;
+            // Only the first engine parks at the gate; the recovered engine
+            // skips it and completes.
+            if (firstEngineActive) await neverResolves;
+            return `r2:${r1}`;
+          });
+          return r2;
+        }),
+      );
+    }
+
+    // --- First engine: step 1 checkpoints, step 2 parks at the gate ---
+    const engine1 = new Engine({ storage });
+    engine1.register(makeWorkflow());
+    await engine1.start('durable-steps', { seed: 'hello' }, { id: 'wf-durable-steps' });
+    await flush();
+
+    // Step 1 ran once and completed; step 2 was dispatched (entered fn) but is
+    // parked at the gate.
+    expect(step1Calls).toBe(1);
+
+    // "Crash" the engine while step 2 is in flight. The recovered engine
+    // bypasses the gate via `firstEngineActive = false`; we intentionally do
+    // NOT release the gate for the disposed engine 1 (its parked step-2 fn is
+    // harmless left pending, and resolving it into a dead engine would be a
+    // post-dispose write race that could mask re-execution).
+    engine1[Symbol.dispose]();
+    firstEngineActive = false;
+
+    // Reset counters to detect re-execution on replay.
+    step1Calls = 0;
+    step2Calls = 0;
+
+    // --- Second engine: recover ---
+    const engine2 = new Engine({ storage });
+    engine2.register(makeWorkflow());
+    const handles = await engine2.recoverAll();
+    expect(handles).toHaveLength(1);
+
+    const result = await handles[0]!.result();
+    expect(result).toBe('r2:r1:hello');
+
+    // Step 1 was checkpointed on engine 1 — it MUST NOT re-execute on replay.
+    expect(step1Calls).toBe(0);
+    // Step 2 was in flight and never checkpointed at the crash — it MUST
+    // re-execute exactly once on recovery. This pins the boundary precisely at
+    // step 1, so an over-caching bug (step 2 wrongly treated as cached) fails
+    // here instead of passing silently.
+    expect(step2Calls).toBe(1);
+
+    engine2[Symbol.dispose]();
+  });
+
+  it('uses the explicit step name as the durable activity label, not fn.name', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    engine.register(
+      workflow({ name: 'named-steps' }).execute(
+        compileStepWorkflow(async (ctx: StepWorkflowContext) => {
+          // A function with its own `.name`: the explicit step name must win,
+          // so the timeline label is the step name, not `someInternalName`.
+          const namedFn = function someInternalName() {
+            return 42;
+          };
+          await ctx.step('explicit-charge-label', namedFn);
+          return 'ok';
+        }),
+      ),
+    );
+
+    const handle = await engine.start('named-steps', null, { id: 'wf-named-step' });
+    await handle.result();
+
+    const timeline = await engine.getTimeline('wf-named-step');
+    const labels = timeline.map((e) => e.operationLabel);
+    expect(labels).toContain('explicit-charge-label');
+    expect(labels).not.toContain('someInternalName');
+
+    engine[Symbol.dispose]();
+  });
+
+  it('propagates a step error to the awaiting step caller', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    engine.register(
+      workflow({ name: 'failing-step' }).execute(
+        compileStepWorkflow(async (ctx: StepWorkflowContext) => {
+          await ctx.step('boom', () => {
+            throw new Error('step blew up');
+          });
+          return 'unreachable';
+        }),
+      ),
+    );
+
+    const handle = await engine.start('failing-step', null, { id: 'wf-failing-step' });
+    await expect(handle.result()).rejects.toThrow('step blew up');
+
+    engine[Symbol.dispose]();
+  });
+});
