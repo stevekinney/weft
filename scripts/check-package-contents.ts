@@ -4,10 +4,10 @@ const repositoryPath = join(import.meta.dir, '..');
 const expectedPackageName = '@lostgradient/weft';
 const maximumPackedBytes = 5 * 1024 * 1024;
 const maximumUnpackedBytes = 12 * 1024 * 1024;
-// Raised for the 0.3.0 surface (Neon storage adapter, durable ctx.step, the
-// RemoteWorker attempt-token protocol files) — all legitimate dist/ output, no
-// test or fixture files. The packed/unpacked byte budgets remain the primary
-// bloat backstop (the 0.3.0 tarball is ~2 MB / ~8 MB, well under 5 MB / 12 MB).
+// A guardrail against accidentally publishing files that should not ship (test,
+// fixture, or stray build output) rather than a hard size ceiling — the packed
+// and unpacked byte budgets above are the primary bloat backstop. Bump this
+// when the published `dist/` surface legitimately grows.
 const maximumEntryCount = 1200;
 
 type PackFile = {

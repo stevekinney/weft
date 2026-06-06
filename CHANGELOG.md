@@ -22,10 +22,12 @@ worker mode.
 ### Added — Neon/Postgres storage adapter
 
 New `@lostgradient/weft/storage/neon` export with `NeonStorage` and
-`resolveStorage({ type: 'neon' })`, backed by the official Neon serverless
-driver as a lazy optional dependency. Stores opaque bytes with lexicographic
-scan ordering and full `get`/`put`/`delete`/`scan`/`batch`/`conditionalBatch`
-support. `assertDurableStorageForRecovery()` now accepts `persistence: 'remote'`
+`resolveStorage({ type: 'neon' })`, backed by the official `@neondatabase/serverless`
+driver. The driver is an **optional peer dependency** — it is not installed
+automatically; add it to your project (`bun add @neondatabase/serverless`) when
+you use `NeonStorage`, and the adapter imports it lazily. Stores opaque bytes
+with lexicographic scan ordering and full
+`get`/`put`/`delete`/`scan`/`batch`/`conditionalBatch` support. `assertDurableStorageForRecovery()` now accepts `persistence: 'remote'`
 for a durable remote store that proves linearizable read-after-write, snapshot
 scans, atomic batches, and `conditionalBatch`. Neon integration tests skip
 cleanly without `NEON_DATABASE_URL`.
