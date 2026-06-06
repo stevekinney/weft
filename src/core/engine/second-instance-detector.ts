@@ -55,18 +55,12 @@ function encodeHeartbeat(heartbeat: LivenessHeartbeat): Uint8Array {
 }
 
 /**
- * Decode a stored heartbeat value, tolerating anything that is not a
- * well-formed heartbeat (returns `null`). The detector is best-effort and runs
- * over a shared, reserved storage prefix, so a malformed, hostile, or foreign
- * value is simply ignored rather than thrown on or fed into the algorithm.
- *
- * Beyond shape, the numeric fields are validated as *usable* values:
+ * True only when every field is the right type AND a *usable* value:
  * `heartbeatAt` must be finite (a `NaN`/`Infinity` timestamp would defeat both
  * the staleness sweep — `NaN < staleBefore` is always false — and recency), and
- * `sequence` must be a finite, non-negative integer (the advance check compares
+ * `sequence` must be a non-negative integer (the advance check compares
  * sequences, so a `NaN`/fractional/negative value must never enter `observed`).
  */
-/** True only when every field is the right type AND a usable value. */
 function isUsableHeartbeat(candidate: {
   instanceId: unknown;
   heartbeatAt: unknown;
@@ -84,6 +78,13 @@ function isUsableHeartbeat(candidate: {
   );
 }
 
+/**
+ * Decode a stored heartbeat value, tolerating anything that is not a
+ * well-formed heartbeat (returns `null`). The detector is best-effort and runs
+ * over a shared, reserved storage prefix, so a malformed, hostile, or foreign
+ * value is simply ignored rather than thrown on or fed into the algorithm. The
+ * numeric-validity guard lives in {@link isUsableHeartbeat}.
+ */
 function decodeHeartbeat(raw: Uint8Array): LivenessHeartbeat | null {
   let parsed: unknown;
   try {

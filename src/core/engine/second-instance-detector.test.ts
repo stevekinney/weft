@@ -200,13 +200,19 @@ describe('createSecondInstanceDetector', () => {
     const detector = createSecondInstanceDetector(detectorOptions({ storage, getNow: clock.now }));
     await detector.tick();
     const afterFirst = deleteCount;
-    // A second tick must not sweep again (nothing stale remains, and the sweep is
-    // first-tick-only regardless).
     clock.advance(INTERVAL_MS);
+
+    // Introduce FRESH stale material before the second tick. Without the
+    // first-tick-only `swept` guard, this would be swept on tick 2 — so the
+    // assertion below genuinely discriminates the guard rather than relying on
+    // tick 1 having already emptied the store.
+    await seedHeartbeat(storage, 'crashed-2', clock.now() - STALENESS_WINDOW_MS * 11);
     await detector.tick();
 
     expect(afterFirst).toBe(1);
     expect(deleteCount).toBe(1);
+    // Behavioral proof: the guard left the newly-stale key in place.
+    expect(await storage.get(KEYS.liveness('crashed-2'))).not.toBeNull();
   });
 
   it('ignores malformed liveness values without throwing', async () => {
@@ -217,6 +223,14 @@ describe('createSecondInstanceDetector', () => {
     await storage.put(
       KEYS.liveness('wrong-shape'),
       new TextEncoder().encode(JSON.stringify({ instanceId: 'x' })), // missing fields
+    );
+    // A non-string instanceId (right keys, wrong type) — rejected by the
+    // type half of isUsableHeartbeat, not just the numeric-validity half.
+    await storage.put(
+      KEYS.liveness('numeric-id'),
+      new TextEncoder().encode(
+        JSON.stringify({ instanceId: 42, heartbeatAt: clock.now(), sequence: 1 }),
+      ),
     );
     // Valid JSON that decodes to a non-object (a bare number) — rejected before
     // the field checks even run.
