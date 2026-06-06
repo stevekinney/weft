@@ -42,6 +42,10 @@ export interface ResolvedOptions {
   /** Operator-supplied sink for compacted event-log ranges; `null` when none. */
   archiveAdapter: ArchiveAdapter | null;
   payloadSizePolicy: NormalizedPayloadSizePolicy;
+  /** Whether the best-effort second-instance liveness detector is enabled. */
+  secondInstanceDetectionEnabled: boolean;
+  /** Heartbeat interval (ms) for the second-instance detector when enabled. */
+  secondInstanceHeartbeatIntervalMs: number;
   getNow: () => number;
   /**
    * Re-provides the non-serialized per-run `services` value on recovery; `null`

@@ -169,6 +169,7 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.updateResponse('update-id'),
       KEYS.updateIdempotency('workflow-id', 'idempotency-key'),
       KEYS.startIdempotency('idempotency-key'),
+      KEYS.liveness('instance-id'),
       KEYS.budget('namespace', 'period', 'date'),
       KEYS.review('workflow-id', 'review-id'),
       KEYS.workflowHeaders('workflow-id'),

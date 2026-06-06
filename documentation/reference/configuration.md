@@ -24,6 +24,8 @@ interface EngineOptions {
   checkpointSizeWarningThreshold?: number;
   maxNestingDepth?: number;
   broadcastEvents?: boolean;
+  detectSecondInstance?: boolean;
+  secondInstanceHeartbeatInterval?: Duration;
   workflowExecutionMode?: 'inline' | 'worker';
   workerExecution?: WorkerExecutionOptions;
   activityExecution?: ActivityExecutionOptions;
@@ -32,27 +34,29 @@ interface EngineOptions {
 }
 ```
 
-| Field                            | Type                       | Default               | Description                                                                                                                |
-| -------------------------------- | -------------------------- | --------------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `storage`                        | `Storage`                  | `new MemoryStorage()` | Storage backend. Use `SQLiteStorage` for persistence or `MemoryStorage` for ephemeral/testing use.                         |
-| `development`                    | `boolean`                  | `false`               | Enable development mode. Validates checkpoint round-trips and emits `DevelopmentWarningEvent` for non-serializable fields. |
-| `serializer`                     | `Serializer`               | Built-in codec        | Pluggable serialization. The default uses structured clone via the built-in `encode`/`decode` codec.                       |
-| `retention`                      | `RetentionPolicy`          | `undefined`           | Default retention policy for completed, failed, and cancelled workflows.                                                   |
-| `retentionSweepInterval`         | `Duration`                 | internal default      | Interval for automatic retention sweeps.                                                                                   |
-| `retentionSweepBatchSize`        | `number`                   | internal default      | Maximum workflows considered by one retention sweep.                                                                       |
-| `history`                        | `HistoryPolicy`            | `undefined`           | History circuit-breaker and event-log compaction policy. Omit to disable both.                                             |
-| `archive`                        | `ArchiveAdapter`           | `undefined`           | Best-effort sink for event-log ranges discarded by compaction.                                                             |
-| `payloadSize`                    | `PayloadSizePolicy`        | `undefined`           | Optional admission-time cap for workflow inputs, signal payloads, and activity results.                                    |
-| `compression`                    | `CompressionOptions`       | `undefined`           | Enable framed storage payload compression for checkpoints and activity results.                                            |
-| `checkpointHistory`              | `number`                   | `10`                  | Number of historical checkpoints to retain per workflow.                                                                   |
-| `checkpointSizeWarningThreshold` | `number`                   | `65_536` (64 KB)      | Checkpoint size in bytes at which a `CheckpointSizeWarningEvent` is emitted.                                               |
-| `maxNestingDepth`                | `number`                   | `10`                  | Maximum child workflow nesting depth.                                                                                      |
-| `broadcastEvents`                | `boolean`                  | `false`               | Enable `BroadcastChannel` for cross-worker event coordination. Lazily creates the channel on first use.                    |
-| `workflowExecutionMode`          | `'inline' \| 'worker'`     | `'inline'`            | Choose inline or Worker workflow execution. Omitting defaults to inline; Worker mode requires `workerExecution`.           |
-| `workerExecution`                | `WorkerExecutionOptions`   | `undefined`           | Configuration for offloading workflow execution to Web Workers                                                             |
-| `activityExecution`              | `ActivityExecutionOptions` | `undefined`           | Configuration for activity execution behavior                                                                              |
-| `alerts`                         | `AlertOptions[]`           | `undefined`           | Metric alert thresholds that fire `AlertFiredEvent` / `AlertResolvedEvent`                                                 |
-| `interceptors`                   | `readonly Interceptor[]`   | `undefined`           | Unified workflow/activity interceptors registered at construction.                                                         |
+| Field                             | Type                       | Default               | Description                                                                                                                                                                                          |
+| --------------------------------- | -------------------------- | --------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `storage`                         | `Storage`                  | `new MemoryStorage()` | Storage backend. Use `SQLiteStorage` for persistence or `MemoryStorage` for ephemeral/testing use.                                                                                                   |
+| `development`                     | `boolean`                  | `false`               | Enable development mode. Validates checkpoint round-trips and emits `DevelopmentWarningEvent` for non-serializable fields.                                                                           |
+| `serializer`                      | `Serializer`               | Built-in codec        | Pluggable serialization. The default uses structured clone via the built-in `encode`/`decode` codec.                                                                                                 |
+| `retention`                       | `RetentionPolicy`          | `undefined`           | Default retention policy for completed, failed, and cancelled workflows.                                                                                                                             |
+| `retentionSweepInterval`          | `Duration`                 | internal default      | Interval for automatic retention sweeps.                                                                                                                                                             |
+| `retentionSweepBatchSize`         | `number`                   | internal default      | Maximum workflows considered by one retention sweep.                                                                                                                                                 |
+| `history`                         | `HistoryPolicy`            | `undefined`           | History circuit-breaker and event-log compaction policy. Omit to disable both.                                                                                                                       |
+| `archive`                         | `ArchiveAdapter`           | `undefined`           | Best-effort sink for event-log ranges discarded by compaction.                                                                                                                                       |
+| `payloadSize`                     | `PayloadSizePolicy`        | `undefined`           | Optional admission-time cap for workflow inputs, signal payloads, and activity results.                                                                                                              |
+| `compression`                     | `CompressionOptions`       | `undefined`           | Enable framed storage payload compression for checkpoints and activity results.                                                                                                                      |
+| `checkpointHistory`               | `number`                   | `10`                  | Number of historical checkpoints to retain per workflow.                                                                                                                                             |
+| `checkpointSizeWarningThreshold`  | `number`                   | `65_536` (64 KB)      | Checkpoint size in bytes at which a `CheckpointSizeWarningEvent` is emitted.                                                                                                                         |
+| `maxNestingDepth`                 | `number`                   | `10`                  | Maximum child workflow nesting depth.                                                                                                                                                                |
+| `broadcastEvents`                 | `boolean`                  | `false`               | Enable `BroadcastChannel` for cross-worker event coordination. Lazily creates the channel on first use.                                                                                              |
+| `detectSecondInstance`            | `boolean`                  | `false`               | Enable a best-effort, warn-only liveness detector for a second engine on the same store. See the [singleton guide](../guides/singleton-service-deployment.md#optional-the-second-instance-detector). |
+| `secondInstanceHeartbeatInterval` | `Duration`                 | `15s`                 | Heartbeat interval for `detectSecondInstance`. Keep it above your deploy drain window and clock skew. Ignored when detection is off.                                                                 |
+| `workflowExecutionMode`           | `'inline' \| 'worker'`     | `'inline'`            | Choose inline or Worker workflow execution. Omitting defaults to inline; Worker mode requires `workerExecution`.                                                                                     |
+| `workerExecution`                 | `WorkerExecutionOptions`   | `undefined`           | Configuration for offloading workflow execution to Web Workers                                                                                                                                       |
+| `activityExecution`               | `ActivityExecutionOptions` | `undefined`           | Configuration for activity execution behavior                                                                                                                                                        |
+| `alerts`                          | `AlertOptions[]`           | `undefined`           | Metric alert thresholds that fire `AlertFiredEvent` / `AlertResolvedEvent`                                                                                                                           |
+| `interceptors`                    | `readonly Interceptor[]`   | `undefined`           | Unified workflow/activity interceptors registered at construction.                                                                                                                                   |
 
 **Example:**
 

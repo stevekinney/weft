@@ -12,6 +12,7 @@ import {
   type InlineLaunchQueueCallbacks,
 } from './inline-launch-queue.ts';
 import { getInternals, type EngineInternals } from './internals.ts';
+import type { SecondInstanceDetector } from './second-instance-detector.ts';
 import { swallowPromiseRejection } from './strategy-helpers.ts';
 
 export function isActivityDefinition(value: unknown): value is AnyActivityDefinition {
@@ -99,6 +100,26 @@ export function createCleanupIntervalTick<TWorkflows extends object, TActivities
     createExpiredResponseCleanupTick(internals.updateCoordinator, (source, error) =>
       createTerminationCallbacks(engine).handleCleanupError(source, error),
     )();
+  };
+}
+
+/**
+ * Build the resolver the second-instance detection interval uses to find its live
+ * detector. Returns `null` when the engine has been garbage-collected or disposed
+ * (so the tick is skipped), otherwise the engine's current detector. Extracted
+ * here — like {@link createCleanupIntervalTick} — so the deref/disposed guard is
+ * directly testable without driving a real interval.
+ */
+export function createSecondInstanceDetectorResolver<
+  TWorkflows extends object,
+  TActivities extends object,
+>(weakEngine: WeakRef<Engine<TWorkflows, TActivities>>): () => SecondInstanceDetector | null {
+  return function resolveLiveSecondInstanceDetector() {
+    const engine = weakEngine.deref();
+    if (engine === undefined) return null;
+    const internals = getInternals(engine);
+    if (internals.disposed) return null;
+    return internals.secondInstanceDetector;
   };
 }
 

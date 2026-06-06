@@ -27,6 +27,7 @@ export const WEFT_RESERVED_KEY_PREFIXES = [
   'budget-charged:',
   'ev:',
   'idx:',
+  'liveness:',
   'offload:',
   'op:',
   'review:',

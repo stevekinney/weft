@@ -152,6 +152,25 @@ export interface EngineOptions {
   retentionSweepInterval?: Duration;
   retentionSweepBatchSize?: number;
   /**
+   * Enable a best-effort, warn-only detector for a SECOND engine instance writing
+   * to the same durable store — a smoke alarm for singleton misconfiguration (an
+   * autoscaler above one replica, or overlapping rolling deploys). Default `false`.
+   * This is **liveness, not fencing**: it never blocks boot, gates recovery, or
+   * prevents duplicate execution — enforce one instance at the infrastructure layer
+   * (one replica + a `Recreate` deploy, or a single systemd unit). When enabled,
+   * each engine writes a periodic heartbeat and warns (`process.emitWarning`) when
+   * it sees another instance's heartbeat advancing while it runs. The periodic
+   * writes are an ongoing cost, so leave it off unless you want the backstop.
+   */
+  detectSecondInstance?: boolean;
+  /**
+   * Heartbeat interval for {@link EngineOptions.detectSecondInstance} (default
+   * `15s`). A foreign heartbeat must advance across two intervals before warning,
+   * so this also sets how long a deploy overlap must last before it warns — keep it
+   * well above your deploy drain window. Ignored when detection is disabled.
+   */
+  secondInstanceHeartbeatInterval?: Duration;
+  /**
    * History circuit-breaker thresholds. When `history.maxEvents` is set, a
    * workflow whose event-log record count would exceed it is forced to a
    * terminal `timed-out` state with reason {@link HISTORY_CIRCUIT_BREAKER_REASON}.

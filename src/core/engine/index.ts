@@ -139,6 +139,7 @@ import {
 import {
   createCleanupIntervalTick,
   createQueuedInlineWorkflowStartHandler,
+  createSecondInstanceDetectorResolver,
   drainQueuedInlineWorkflowStartsForEngine,
   isActivityDefinition,
 } from './engine-runtime-helpers.ts';
@@ -210,6 +211,10 @@ import {
   toScheduleSummary,
   updateSchedule as updateScheduleFromInternals,
 } from './schedules.ts';
+import {
+  createSecondInstanceDetectionTick,
+  createSecondInstanceDetector,
+} from './second-instance-detector.ts';
 import { signal as signalWorkflow } from './signals.ts';
 import { loadScheduleState, loadWorkflowState } from './storage-io.ts';
 import {
@@ -554,6 +559,8 @@ export class Engine<
     getInternals(this).retentionSweepInterval = null;
     getInternals(this).retentionSweepInFlight = null;
     getInternals(this).nextRetentionSweepAt = null;
+    getInternals(this).secondInstanceDetectionInterval = null;
+    getInternals(this).secondInstanceDetector = null;
     getInternals(this).eventLogHeads = new Map();
     getInternals(this).workflowFeedListeners = new Map();
     getInternals(this).workflowVersionTuples = new Map();
@@ -563,6 +570,30 @@ export class Engine<
     getInternals(this).strategy.onMessage(this.#handleStrategyMessage.bind(this));
     getInternals(this).alertManager = createAlertManagerForEngine(this, options?.alerts, getNow);
     this.#ensureRetentionSweepInterval();
+    this.#startSecondInstanceDetection();
+  }
+
+  /**
+   * Start the best-effort second-instance liveness detector when enabled. The
+   * engine owns the interval so disposal clears it through the same path as the
+   * other engine intervals (no leak warning). A `WeakRef` keeps the interval from
+   * pinning the engine alive past garbage collection.
+   */
+  #startSecondInstanceDetection(): void {
+    const internals = getInternals(this);
+    if (!internals.options.secondInstanceDetectionEnabled) return;
+    const detector = createSecondInstanceDetector({
+      storage: internals.storage,
+      instanceId: crypto.randomUUID(),
+      getNow: internals.options.getNow,
+      intervalMs: internals.options.secondInstanceHeartbeatIntervalMs,
+    });
+    internals.secondInstanceDetector = detector;
+    const weakEngine = new WeakRef(this);
+    internals.secondInstanceDetectionInterval = setInterval(
+      createSecondInstanceDetectionTick(createSecondInstanceDetectorResolver(weakEngine)),
+      internals.options.secondInstanceHeartbeatIntervalMs,
+    );
   }
 
   #hasConfiguredRetention(): boolean {

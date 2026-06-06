@@ -36,6 +36,8 @@ Embedded beats networked for this workload. A Temporal-style architecture requir
 
 The durable execution hot path is _many small reads and writes_, not complex relational queries. An embedded database eliminates the network entirely.
 
+This is a default, not a prohibition. Embedded SQLite and LMDB remain the right call for the in-process hot path, but some deployments want their durable state owned by a managed, externally-durable service rather than a local file—point-in-time restore, branching, and zero local disk to back up. For those, [`NeonStorage`](../guides/storage.md#choosing-a-backend) is a deliberate _remote_ option over Neon/Postgres. You trade the in-process latency above for managed durability; whether that trade is right depends on your operational constraints, not on throughput alone. See [Running Weft as a Singleton Service](../guides/singleton-service-deployment.md) for the deployment model a remote durable store fits into.
+
 ## The storage interface
 
 The storage interface is KV-oriented (not SQL-oriented) so it can support SQLite, LMDB, and IndexedDB with the same contract.

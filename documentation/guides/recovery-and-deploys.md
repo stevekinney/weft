@@ -67,6 +67,10 @@ fenced ownership claim acquired before a resumed workflow executes — is a futu
 capability that is **not yet implemented**. Until it lands, treat single-engine-per-store as a hard
 operational constraint.
 
+For the operator's checklist on enforcing this—infrastructure-level single-instance configuration,
+boot assertions, backup/restore, and an optional second-instance detector—see
+[Running Weft as a Singleton Service](singleton-service-deployment.md).
+
 ## Rebuilding per-run services
 
 `StartOptions.services` is a live, non-serialized per-run channel for inline workflows. It is useful for host capabilities such as API clients, tool registries, closures, or test doubles that cannot be checkpointed. Because Weft never writes the service object to storage, a fresh process has to rebuild it before a recovered generator advances.

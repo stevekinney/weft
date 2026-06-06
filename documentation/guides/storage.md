@@ -20,7 +20,7 @@ This works under Bun and Node. The path lives under `${tmpdir()}/weft-default/<c
 > [!WARNING]
 > `@lostgradient/weft/storage/auto` requires Bun or Node. For browsers, import `IndexedDBStorage` from `@lostgradient/weft/storage/indexeddb` directly, or use `setupServiceWorker()` from `@lostgradient/weft/service-worker`.
 
-`resolveDefaultStorage()` is for development, demos, and Hello World. Production deployments usually pick an explicit adapter so the storage path and backend are part of deployment configuration.
+`resolveDefaultStorage()` is for development, demos, and Hello World. Production deployments usually pick an explicit adapter so the storage path and backend are part of deployment configuration. For the production topology itself—one engine per durable store, enforced at the infrastructure layer—see [Running Weft as a Singleton Service](singleton-service-deployment.md).
 
 ## Choosing a backend
 

@@ -485,6 +485,10 @@ export const KEYS = {
    * correct, so the raw-vs-encoded difference is harmless.
    */
   startIdempotencySignalId: (key: string) => `start-idem:${key}`,
+  /** Scan prefix for engine liveness heartbeats (best-effort second-instance detection). */
+  livenessPrefix: () => 'liveness:',
+  /** Per-engine liveness heartbeat key. One key per engine instance under the shared store. */
+  liveness: (instanceId: string) => `liveness:${encodeStorageKeyComponent(instanceId)}`,
   budget: (namespace: string, period: string, date: string) =>
     `budget:${namespace}:${period}:${date}`,
   review: (workflowId: string, reviewId: string) =>

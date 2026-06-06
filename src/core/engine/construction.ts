@@ -246,6 +246,22 @@ function resolveHistoryFields(
   };
 }
 
+/** Default heartbeat interval for the best-effort second-instance detector. */
+const DEFAULT_SECOND_INSTANCE_HEARTBEAT_INTERVAL_MS = 15_000;
+
+function resolveSecondInstanceFields(
+  options: EngineConstructorOptions | undefined,
+): Pick<ResolvedOptions, 'secondInstanceDetectionEnabled' | 'secondInstanceHeartbeatIntervalMs'> {
+  return {
+    secondInstanceDetectionEnabled: defaultTo(options?.detectSecondInstance, false),
+    secondInstanceHeartbeatIntervalMs:
+      normalizeRetentionDuration(
+        options?.secondInstanceHeartbeatInterval,
+        'options.secondInstanceHeartbeatInterval',
+      ) ?? DEFAULT_SECOND_INSTANCE_HEARTBEAT_INTERVAL_MS,
+  };
+}
+
 export function resolveEngineOptions(
   storage: WeftStorage,
   options: EngineConstructorOptions | undefined,
@@ -259,6 +275,7 @@ export function resolveEngineOptions(
     ...resolveNumericDefaults(options),
     ...resolveRetentionFields(options),
     ...resolveHistoryFields(options),
+    ...resolveSecondInstanceFields(options),
   };
 }
 

@@ -48,6 +48,7 @@ import type {
 import type { WorkflowHandle, WorkflowHandleEngine } from './handles.ts';
 import type { WorkflowFeedListener } from './index.ts';
 import type { ScheduleHandleEngine } from './schedule-handle.ts';
+import type { SecondInstanceDetector } from './second-instance-detector.ts';
 
 type EngineRuntime = WorkflowHandleEngine & ScheduleHandleEngine;
 
@@ -164,6 +165,10 @@ export interface EngineInternals {
   retentionSweepInterval: ReturnType<typeof setInterval> | null;
   retentionSweepInFlight: Promise<void> | null;
   nextRetentionSweepAt: number | null;
+  /** Interval driving the best-effort second-instance detector; `null` when off. */
+  secondInstanceDetectionInterval: ReturnType<typeof setInterval> | null;
+  /** The active second-instance detector; `null` when detection is disabled. */
+  secondInstanceDetector: SecondInstanceDetector | null;
   reviewCoordinator: ReviewCoordinator;
   reviewWaiters: Map<string, (decision: HumanReviewResult) => void>;
   reviewWaitersByWorkflow: Map<string, TrackedWaiterKeys>;

@@ -32,6 +32,7 @@ export function disposeEngine(internals: EngineInternals): void {
     internals.retentionSweepInterval = null;
   }
   internals.nextRetentionSweepAt = null;
+  disposeSecondInstanceDetection(internals);
   internals.handleCache.clear();
   // Reject pending result waiters before clearing so external `handle.result()`
   // callers observe a deterministic rejection instead of a promise that never
@@ -77,4 +78,21 @@ export function disposeEngine(internals: EngineInternals): void {
   internals.workflowTypeByWorkflowId.clear();
   internals.broadcastChannel?.close();
   internals.broadcastChannel = null;
+}
+
+/**
+ * Tear down the best-effort second-instance detector: clear its interval and
+ * fire its best-effort heartbeat cleanup. The `stop()` delete is fire-and-forget —
+ * disposal is synchronous and must not await a storage round-trip. A no-op when
+ * detection was never enabled.
+ */
+function disposeSecondInstanceDetection(internals: EngineInternals): void {
+  if (internals.secondInstanceDetectionInterval !== null) {
+    clearInterval(internals.secondInstanceDetectionInterval ?? undefined);
+    internals.secondInstanceDetectionInterval = null;
+  }
+  if (internals.secondInstanceDetector !== null) {
+    void internals.secondInstanceDetector.stop();
+    internals.secondInstanceDetector = null;
+  }
 }
