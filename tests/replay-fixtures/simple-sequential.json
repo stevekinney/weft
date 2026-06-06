@@ -30,7 +30,9 @@
     "type": "simple-sequential",
     "status": "completed",
     "input": "hello",
-    "version": "1",
+    "versionTuple": {
+      "workflowVersion": "1"
+    },
     "executionStateOwnerId": "wf-simple-sequential",
     "createdAt": 0,
     "startedAt": 0,
@@ -46,7 +48,7 @@
     "wf-idx-type:simple-sequential:wf-simple-sequential": "",
     "wf-idx-updated:0000000000000000:wf-simple-sequential": "",
     "wf-terminal:0000000000000000:wf-simple-sequential": "",
-    "wf:wf-simple-sequential": "iqJpZLR3Zi1zaW1wbGUtc2VxdWVudGlhbKR0eXBlsXNpbXBsZS1zZXF1ZW50aWFspnN0YXR1c6ljb21wbGV0ZWSlaW5wdXSlaGVsbG+ndmVyc2lvbqExtWV4ZWN1dGlvblN0YXRlT3duZXJJZLR3Zi1zaW1wbGUtc2VxdWVudGlhbKljcmVhdGVkQXQAqXN0YXJ0ZWRBdACpdXBkYXRlZEF0AKZyZXN1bHSvcHJvY2Vzc2VkOmhlbGxv",
+    "wf:wf-simple-sequential": "iqJpZLR3Zi1zaW1wbGUtc2VxdWVudGlhbKR0eXBlsXNpbXBsZS1zZXF1ZW50aWFspnN0YXR1c6ljb21wbGV0ZWSlaW5wdXSlaGVsbG+sdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMbVleGVjdXRpb25TdGF0ZU93bmVySWS0d2Ytc2ltcGxlLXNlcXVlbnRpYWypY3JlYXRlZEF0AKlzdGFydGVkQXQAqXVwZGF0ZWRBdACmcmVzdWx0r3Byb2Nlc3NlZDpoZWxsbw==",
     "wf:wf-simple-sequential:ckpt": "iap3b3JrZmxvd0lktHdmLXNpbXBsZS1zZXF1ZW50aWFspHN0ZXABpmxvY2Fsc4CyYWNjdW11bGF0ZWRSZXN1bHRzkK5wZW5kaW5nU2lnbmFsc5Cwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
     "wf:wf-simple-sequential:ckpt:0000000001": "iap3b3JrZmxvd0lktHdmLXNpbXBsZS1zZXF1ZW50aWFspHN0ZXABpmxvY2Fsc4CyYWNjdW11bGF0ZWRSZXN1bHRzkK5wZW5kaW5nU2lnbmFsc5Cwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
     "wf:wf-simple-sequential:timeline:0000000001": "iaRzdGVwAa1vcGVyYXRpb25UeXBlqGFjdGl2aXR5rm9wZXJhdGlvbkxhYmVsqWFub255bW91c6xpbnB1dFN1bW1hcnmnImhlbGxvIql0aW1lc3RhbXAApnN0YXR1c6ljb21wbGV0ZWSsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMa1vdXRwdXRTdW1tYXJ5sSJwcm9jZXNzZWQ6aGVsbG8iqGR1cmF0aW9uAA=="

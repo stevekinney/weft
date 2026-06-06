@@ -8,8 +8,7 @@
  * @module diagnostics/version-check
  */
 
-import { decode } from '../core/codec.ts';
-import type { WorkflowState } from '../core/types.ts';
+import { decodeWorkflowState } from '../core/engine/validation.ts';
 import { DEFAULT_WORKFLOW_VERSION, checkVersionCompatibility } from '../core/versioning.ts';
 import type { Storage } from '../storage/interface.ts';
 import type { VersionCheckReport, WorkflowTypeReport } from './types.ts';
@@ -26,16 +25,19 @@ async function groupActiveWorkflowsByType(
   const groups = new Map<string, WorkflowTypeGroup>();
   for await (const [key, bytes] of storage.scan('wf:')) {
     if (key.includes(':ckpt')) continue;
-    const state = decode(bytes) as WorkflowState;
+    // Decode through `decodeWorkflowState` so older flat-shaped persisted records
+    // are lifted into the current `versionTuple` representation before we read it.
+    const state = decodeWorkflowState(bytes);
     if (state.status !== 'running' && state.status !== 'pending') continue;
 
+    const storedVersion = state.versionTuple.workflowVersion;
     let group = groups.get(state.type);
     if (!group) {
       group = { count: 0, versionCounts: new Map() };
       groups.set(state.type, group);
     }
     group.count++;
-    group.versionCounts.set(state.version, (group.versionCounts.get(state.version) ?? 0) + 1);
+    group.versionCounts.set(storedVersion, (group.versionCounts.get(storedVersion) ?? 0) + 1);
   }
   return groups;
 }

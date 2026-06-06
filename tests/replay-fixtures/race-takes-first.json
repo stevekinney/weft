@@ -30,7 +30,9 @@
     "type": "race-takes-first",
     "status": "completed",
     "input": null,
-    "version": "1",
+    "versionTuple": {
+      "workflowVersion": "1"
+    },
     "executionStateOwnerId": "wf-race-takes-first",
     "createdAt": 0,
     "startedAt": 0,
@@ -46,7 +48,7 @@
     "wf-idx-type:race-takes-first:wf-race-takes-first": "",
     "wf-idx-updated:0000000000000000:wf-race-takes-first": "",
     "wf-terminal:0000000000000000:wf-race-takes-first": "",
-    "wf:wf-race-takes-first": "iqJpZLN3Zi1yYWNlLXRha2VzLWZpcnN0pHR5cGWwcmFjZS10YWtlcy1maXJzdKZzdGF0dXOpY29tcGxldGVkpWlucHV0wKd2ZXJzaW9uoTG1ZXhlY3V0aW9uU3RhdGVPd25lcklks3dmLXJhY2UtdGFrZXMtZmlyc3SpY3JlYXRlZEF0AKlzdGFydGVkQXQAqXVwZGF0ZWRBdACmcmVzdWx0pGZhc3Q=",
+    "wf:wf-race-takes-first": "iqJpZLN3Zi1yYWNlLXRha2VzLWZpcnN0pHR5cGWwcmFjZS10YWtlcy1maXJzdKZzdGF0dXOpY29tcGxldGVkpWlucHV0wKx2ZXJzaW9uVHVwbGWBr3dvcmtmbG93VmVyc2lvbqExtWV4ZWN1dGlvblN0YXRlT3duZXJJZLN3Zi1yYWNlLXRha2VzLWZpcnN0qWNyZWF0ZWRBdACpc3RhcnRlZEF0AKl1cGRhdGVkQXQApnJlc3VsdKRmYXN0",
     "wf:wf-race-takes-first:ckpt": "iap3b3JrZmxvd0lks3dmLXJhY2UtdGFrZXMtZmlyc3Skc3RlcAGmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQrnBlbmRpbmdTaWduYWxzkLBzZWFyY2hBdHRyaWJ1dGVzgKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0AA==",
     "wf:wf-race-takes-first:ckpt:0000000001": "iap3b3JrZmxvd0lks3dmLXJhY2UtdGFrZXMtZmlyc3Skc3RlcAGmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQrnBlbmRpbmdTaWduYWxzkLBzZWFyY2hBdHRyaWJ1dGVzgKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0AA==",
     "wf:wf-race-takes-first:timeline:0000000001": "iaRzdGVwAa1vcGVyYXRpb25UeXBlpHJhY2Wub3BlcmF0aW9uTGFiZWykcmFjZaxpbnB1dFN1bW1hcnm0eyJvcGVyYXRpb25Db3VudCI6Mn2pdGltZXN0YW1wAKZzdGF0dXOpY29tcGxldGVkrHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTGtb3V0cHV0U3VtbWFyeaYiZmFzdCKoZHVyYXRpb24A"

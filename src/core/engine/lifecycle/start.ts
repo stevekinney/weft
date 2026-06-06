@@ -320,18 +320,12 @@ function buildInitialIdentitySlice(
     type,
     status: delayedStartTimer ? 'pending' : 'running',
     input,
-    version: versionTuple.workflowVersion,
+    versionTuple,
     executionStateOwnerId,
     createdAt: now,
     ...(!delayedStartTimer && { startedAt: now }),
     updatedAt: now,
     ...(tags !== undefined && { tags }),
-    ...(versionTuple.agentVersion !== undefined && {
-      agentVersion: versionTuple.agentVersion,
-    }),
-    ...(versionTuple.toolVersions !== undefined && {
-      toolVersions: versionTuple.toolVersions,
-    }),
   };
 }
 

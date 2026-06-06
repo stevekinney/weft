@@ -13,9 +13,10 @@ import { loadStoredStreamChunks } from './stream-chunk-loading.ts';
 export type WorkflowFeedSelector = 'events' | 'tokens';
 
 /**
- * Hard-coded stream key for the `tokens` selector. Matches the
- * legacy REST SSE endpoint's key so resumption cursors round-trip
- * across transports.
+ * Hard-coded stream key for the `tokens` selector. Every transport that
+ * exposes the token feed (in-process `tail()`, REST SSE, WebSocket watch)
+ * keys its stored chunks under this single value, so a resumption cursor
+ * issued by one transport round-trips through another.
  */
 export const TOKENS_STREAM_KEY = 'tokens';
 
@@ -98,11 +99,12 @@ export async function snapshotWorkflowFeedTail(
     const loaded = await eventLog.loadHead();
     return loaded.sequence;
   }
-  // `tokens` — scan is O(n) in stored chunks. The legacy stream-
-  // chunk storage model does not persist a tail record, so a full
-  // prefix iteration is unavoidable without a schema change.
-  // Acceptable for now; the typical token stream is short-lived
-  // and reconnect frequency is low.
+  // `tokens` — scan is O(n) in stored chunks. The token feed persists each
+  // chunk under the `tokens` prefix and keeps no separate tail record, so the
+  // tail sequence is the max over a full prefix iteration. This is a deliberate
+  // tradeoff: the typical token stream is short-lived and reconnect frequency is
+  // low, so the simpler per-chunk layout is preferred over maintaining a tail
+  // pointer that every chunk write would have to update.
   const chunks = await loadStoredStreamChunks(internals.storage, workflowId, TOKENS_STREAM_KEY);
   if (chunks.length === 0) return -1;
   let max = -1;

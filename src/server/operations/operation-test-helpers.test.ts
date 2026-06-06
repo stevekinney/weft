@@ -26,7 +26,7 @@ function workflowState(status: WorkflowStatus, workflowId = 'helper-status'): Wo
     status,
     type: 'helper',
     updatedAt: Date.now(),
-    version: 'test-version',
+    versionTuple: { workflowVersion: 'test-version' },
   };
 }
 

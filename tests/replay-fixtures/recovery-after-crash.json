@@ -50,7 +50,9 @@
     "type": "recovery-after-crash",
     "status": "completed",
     "input": null,
-    "version": "1",
+    "versionTuple": {
+      "workflowVersion": "1"
+    },
     "executionStateOwnerId": "wf-recovery-after-crash",
     "createdAt": 0,
     "startedAt": 0,
@@ -67,7 +69,7 @@
     "wf-idx-type:recovery-after-crash:wf-recovery-after-crash": "",
     "wf-idx-updated:0000000000000000:wf-recovery-after-crash": "",
     "wf-terminal:0000000000000000:wf-recovery-after-crash": "",
-    "wf:wf-recovery-after-crash": "iqJpZLd3Zi1yZWNvdmVyeS1hZnRlci1jcmFzaKR0eXBltHJlY292ZXJ5LWFmdGVyLWNyYXNopnN0YXR1c6ljb21wbGV0ZWSlaW5wdXTAp3ZlcnNpb26hMbVleGVjdXRpb25TdGF0ZU93bmVySWS3d2YtcmVjb3ZlcnktYWZ0ZXItY3Jhc2ipY3JlYXRlZEF0AKlzdGFydGVkQXQAqXVwZGF0ZWRBdACmcmVzdWx0tXJlc3VtZWQ6Y2hlY2twb2ludC1tZQ==",
+    "wf:wf-recovery-after-crash": "iqJpZLd3Zi1yZWNvdmVyeS1hZnRlci1jcmFzaKR0eXBltHJlY292ZXJ5LWFmdGVyLWNyYXNopnN0YXR1c6ljb21wbGV0ZWSlaW5wdXTArHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTG1ZXhlY3V0aW9uU3RhdGVPd25lcklkt3dmLXJlY292ZXJ5LWFmdGVyLWNyYXNoqWNyZWF0ZWRBdACpc3RhcnRlZEF0AKl1cGRhdGVkQXQApnJlc3VsdLVyZXN1bWVkOmNoZWNrcG9pbnQtbWU=",
     "wf:wf-recovery-after-crash:ckpt": "iap3b3JrZmxvd0lkt3dmLXJlY292ZXJ5LWFmdGVyLWNyYXNopHN0ZXACpmxvY2Fsc4CyYWNjdW11bGF0ZWRSZXN1bHRzkZIArWNoZWNrcG9pbnQtbWWucGVuZGluZ1NpZ25hbHOQsHNlYXJjaEF0dHJpYnV0ZXOAp3ZlcnNpb26hMa1zY2hlbWFWZXJzaW9uAqljcmVhdGVkQXQA",
     "wf:wf-recovery-after-crash:ckpt:0000000001": "iap3b3JrZmxvd0lkt3dmLXJlY292ZXJ5LWFmdGVyLWNyYXNopHN0ZXABpmxvY2Fsc4CyYWNjdW11bGF0ZWRSZXN1bHRzkK5wZW5kaW5nU2lnbmFsc5Cwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
     "wf:wf-recovery-after-crash:ckpt:0000000002": "iap3b3JrZmxvd0lkt3dmLXJlY292ZXJ5LWFmdGVyLWNyYXNopHN0ZXACpmxvY2Fsc4CyYWNjdW11bGF0ZWRSZXN1bHRzkZIArWNoZWNrcG9pbnQtbWWucGVuZGluZ1NpZ25hbHOQsHNlYXJjaEF0dHJpYnV0ZXOAp3ZlcnNpb26hMa1zY2hlbWFWZXJzaW9uAqljcmVhdGVkQXQA",

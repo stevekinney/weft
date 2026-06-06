@@ -47,7 +47,17 @@ export interface WorkflowState {
    * leaves this `undefined`).
    */
   terminationReason?: TerminationReason;
-  version: string;
+  /**
+   * The `(workflowVersion, agentVersion?, toolVersions?)` tuple captured for
+   * this workflow. This is the single canonical representation of version
+   * metadata on the state: it shares the {@link WorkflowVersionTuple} shape the
+   * event log records, so the two cannot drift, and it is rewritten on every
+   * versioned persist. `workflowVersion` is always present;
+   * `agentVersion`/`toolVersions` are present only when the workflow declares
+   * them. Resuming compares this against the currently registered definition to
+   * detect version drift.
+   */
+  versionTuple: WorkflowVersionTuple;
   /**
    * Owner identifier for execution-scoped durable state. Top-level workflows
    * own their own execution state; durable child workflows inherit the
@@ -55,16 +65,6 @@ export interface WorkflowState {
    * tree.
    */
   executionStateOwnerId?: string;
-  /**
-   * Legacy version tuple metadata retained so existing persisted workflow
-   * states can still be decoded and compared during recovery.
-   */
-  agentVersion?: string;
-  /**
-   * Legacy version tuple metadata retained so existing persisted workflow
-   * states can still be decoded and compared during recovery.
-   */
-  toolVersions?: string[];
   createdAt: number;
   startedAt?: number;
   updatedAt: number;

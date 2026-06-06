@@ -7,6 +7,7 @@ import { encode } from '../codec.ts';
 import type { WorkflowStartInterception } from '../interceptor/interception-contexts.ts';
 import type { Checkpoint, WorkflowState } from '../types.ts';
 import { workflow } from '../types.ts';
+import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 import { createLifecycleCallbacks as createEngineLifecycleCallbacks } from './callback-creators.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
@@ -82,19 +83,26 @@ function createCheckpoint(workflowId: string, overrides: Partial<Checkpoint> = {
 
 function createWorkflowState(
   workflowId: string,
-  overrides: Partial<WorkflowState> = {},
+  overrides: Partial<Omit<WorkflowState, 'versionTuple'>> & {
+    versionTuple?: Partial<WorkflowVersionTuple>;
+  } = {},
 ): WorkflowState {
+  const { versionTuple: versionTupleOverride, ...rest } = overrides;
+  const versionTuple: WorkflowVersionTuple = {
+    workflowVersion: '1',
+    ...versionTupleOverride,
+  };
   return {
     id: workflowId,
     type: overrides.type ?? 'workflow',
     status: overrides.status ?? 'running',
     input: overrides.input ?? { value: 1 },
-    version: overrides.version ?? '1',
     executionStateOwnerId: overrides.executionStateOwnerId ?? workflowId,
     createdAt: overrides.createdAt ?? 1_000,
     startedAt: overrides.startedAt ?? 1_000,
     updatedAt: overrides.updatedAt ?? 1_000,
-    ...overrides,
+    ...rest,
+    versionTuple,
   };
 }
 
@@ -393,12 +401,14 @@ describe('engine lifecycle coverage helpers', () => {
 
     expect(state).toEqual(
       expect.objectContaining({
-        agentVersion: 'agent-2',
         executionStateOwnerId: 'owner-workflow',
         status: 'pending',
         tags: ['critical'],
-        toolVersions: ['search@3'],
-        version: '2',
+        versionTuple: {
+          agentVersion: 'agent-2',
+          toolVersions: ['search@3'],
+          workflowVersion: '2',
+        },
       }),
     );
     expect(state.startedAt).toBeUndefined();
@@ -421,9 +431,11 @@ describe('engine lifecycle coverage helpers', () => {
       workflowVersionTupleFromState(
         {} as never,
         createWorkflowState('workflow-versioned', {
-          agentVersion: 'agent-1',
-          toolVersions: ['database@4'],
-          version: 'workflow-1',
+          versionTuple: {
+            agentVersion: 'agent-1',
+            toolVersions: ['database@4'],
+            workflowVersion: 'workflow-1',
+          },
         }),
         createLifecycleCallbacks() as never,
       ),
@@ -438,9 +450,11 @@ describe('engine lifecycle coverage helpers', () => {
     const storage = new MemoryStorage();
     const workflowId = 'workflow-migrated-resume';
     const state = createWorkflowState(workflowId, {
-      agentVersion: 'agent-1',
-      toolVersions: ['oldTool@1'],
-      version: '1',
+      versionTuple: {
+        agentVersion: 'agent-1',
+        toolVersions: ['oldTool@1'],
+        workflowVersion: '1',
+      },
     });
     const checkpoint = createCheckpoint(workflowId, { locals: { before: true }, version: '1' });
     const registration = {
@@ -471,11 +485,11 @@ describe('engine lifecycle coverage helpers', () => {
     expect(prepared.state).toEqual(
       expect.objectContaining({
         updatedAt: 30_000,
-        version: '2',
+        versionTuple: { workflowVersion: '2' },
       }),
     );
-    expect(prepared.state.agentVersion).toBeUndefined();
-    expect(prepared.state.toolVersions).toBeUndefined();
+    expect(prepared.state.versionTuple.agentVersion).toBeUndefined();
+    expect(prepared.state.versionTuple.toolVersions).toBeUndefined();
 
     await prepareResumeState(
       internals as never,
@@ -492,7 +506,9 @@ describe('engine lifecycle coverage helpers', () => {
   });
 
   it('throws version mismatch errors with tuple drift details', () => {
-    const state = createWorkflowState('workflow-version-mismatch', { version: '1' });
+    const state = createWorkflowState('workflow-version-mismatch', {
+      versionTuple: { workflowVersion: '1' },
+    });
 
     expect(() =>
       throwVersionMismatch(
@@ -522,8 +538,10 @@ describe('engine lifecycle coverage helpers', () => {
       workflowStateWithVersionTuple(
         { options: { getNow: () => 50_000 } } as never,
         createWorkflowState('workflow-state-version', {
-          agentVersion: 'old-agent',
-          toolVersions: ['old@1'],
+          versionTuple: {
+            agentVersion: 'old-agent',
+            toolVersions: ['old@1'],
+          },
         }),
         {
           agentVersion: 'new-agent',
@@ -534,10 +552,12 @@ describe('engine lifecycle coverage helpers', () => {
       ),
     ).toEqual(
       expect.objectContaining({
-        agentVersion: 'new-agent',
-        toolVersions: ['new@2'],
         updatedAt: 50_000,
-        version: '3',
+        versionTuple: {
+          agentVersion: 'new-agent',
+          toolVersions: ['new@2'],
+          workflowVersion: '3',
+        },
       }),
     );
   });
@@ -771,10 +791,12 @@ describe('engine lifecycle coverage helpers', () => {
     expect(lineage).toEqual({ step: 4, workflowId: 'workflow-source' });
     expect(forkedState).toEqual(
       expect.objectContaining({
-        agentVersion: 'agent-1',
         forkedFrom: lineage,
-        toolVersions: ['tool@1'],
-        version: '2',
+        versionTuple: {
+          agentVersion: 'agent-1',
+          toolVersions: ['tool@1'],
+          workflowVersion: '2',
+        },
       }),
     );
     expect(forkCheckpoint.searchAttributes).toEqual({

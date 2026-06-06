@@ -70,7 +70,9 @@
     "type": "saga-with-compensation",
     "status": "completed",
     "input": null,
-    "version": "1",
+    "versionTuple": {
+      "workflowVersion": "1"
+    },
     "executionStateOwnerId": "wf-saga-with-compensation",
     "createdAt": 0,
     "startedAt": 0,
@@ -88,7 +90,7 @@
     "wf-idx-type:saga-with-compensation:wf-saga-with-compensation": "",
     "wf-idx-updated:0000000000000000:wf-saga-with-compensation": "",
     "wf-terminal:0000000000000000:wf-saga-with-compensation": "",
-    "wf:wf-saga-with-compensation": "iqJpZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9upHR5cGW2c2FnYS13aXRoLWNvbXBlbnNhdGlvbqZzdGF0dXOpY29tcGxldGVkpWlucHV0wKd2ZXJzaW9uoTG1ZXhlY3V0aW9uU3RhdGVPd25lcklkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26pY3JlYXRlZEF0AKlzdGFydGVkQXQAqXVwZGF0ZWRBdACmcmVzdWx0tmNvbXBlbnNhdGVkOm91dHB1dC1vbmU=",
+    "wf:wf-saga-with-compensation": "iqJpZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9upHR5cGW2c2FnYS13aXRoLWNvbXBlbnNhdGlvbqZzdGF0dXOpY29tcGxldGVkpWlucHV0wKx2ZXJzaW9uVHVwbGWBr3dvcmtmbG93VmVyc2lvbqExtWV4ZWN1dGlvblN0YXRlT3duZXJJZLl3Zi1zYWdhLXdpdGgtY29tcGVuc2F0aW9uqWNyZWF0ZWRBdACpc3RhcnRlZEF0AKl1cGRhdGVkQXQApnJlc3VsdLZjb21wZW5zYXRlZDpvdXRwdXQtb25l",
     "wf:wf-saga-with-compensation:ckpt": "iap3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAOmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHORkgCqb3V0cHV0LW9uZa5wZW5kaW5nU2lnbmFsc5Cwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",
     "wf:wf-saga-with-compensation:ckpt:0000000001": "iap3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAGmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQrnBlbmRpbmdTaWduYWxzkLBzZWFyY2hBdHRyaWJ1dGVzgKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0AA==",
     "wf:wf-saga-with-compensation:ckpt:0000000002": "iap3b3JrZmxvd0lkuXdmLXNhZ2Etd2l0aC1jb21wZW5zYXRpb26kc3RlcAKmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHORkgCqb3V0cHV0LW9uZa5wZW5kaW5nU2lnbmFsc5Cwc2VhcmNoQXR0cmlidXRlc4CndmVyc2lvbqExrXNjaGVtYVZlcnNpb24CqWNyZWF0ZWRBdAA=",

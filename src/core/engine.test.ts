@@ -246,7 +246,7 @@ describe('Engine', () => {
       type: 'factory-unknown',
       status: 'running',
       input: null,
-      version: '1',
+      versionTuple: { workflowVersion: '1' },
       createdAt: 1,
       updatedAt: 1,
     };
@@ -1102,6 +1102,109 @@ describe('Engine', () => {
     engine2[Symbol.dispose]();
   });
 
+  // Acceptance-critical (version-tuple unification): a workflow persisted before
+  // the version tuple was unified carries the tuple as three flat fields
+  // (`version`, `agentVersion`, `toolVersions`) instead of a nested
+  // `versionTuple`. Such a record must fully RESUME and be rewritten in the
+  // current shape, with the flat keys lifted into `versionTuple`.
+  it('recovers and resumes a workflow whose persisted state carries a flat version tuple', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'flat-version-tuple-resume';
+
+    const registerWorkflow = (engine: Engine) => {
+      engine.register(
+        workflow({ name: 'flat-tuple-wait', version: '1.0.0' }).execute(async function* (
+          ctx: WorkflowContext,
+        ) {
+          const value = yield* ctx.waitForSignal<string>('go');
+          return `resumed:${value}`;
+        }),
+      );
+    };
+
+    const engine1 = new Engine({ storage });
+    registerWorkflow(engine1);
+    await engine1.start('flat-tuple-wait', null, { id: workflowId });
+    await flush();
+    engine1[Symbol.dispose]();
+    await flush();
+
+    // Simulate a pre-unification persisted record: strip `versionTuple` and graft
+    // the flat fields back on, exactly as an older engine would have stored them.
+    // The flat tuple matches the registered definition (workflow version only),
+    // so recovery resumes without drift.
+    const persisted = decode((await storage.get(KEYS.workflow(workflowId)))!) as Record<
+      string,
+      unknown
+    >;
+    delete persisted['versionTuple'];
+    persisted['version'] = '1.0.0';
+    await storage.put(KEYS.workflow(workflowId), encode(persisted));
+
+    const engine2 = new Engine({ storage });
+    registerWorkflow(engine2);
+    const recoveredHandles = await engine2.recoverAll();
+    expect(recoveredHandles).toHaveLength(1);
+
+    await engine2.signal(workflowId, 'go', 'value');
+    await expect(recoveredHandles[0]!.result()).resolves.toBe('resumed:value');
+
+    // The flat key must be lifted into `versionTuple` and dropped from the state.
+    const resumedState = decode((await storage.get(KEYS.workflow(workflowId)))!) as Record<
+      string,
+      unknown
+    >;
+    expect(resumedState['versionTuple']).toEqual({ workflowVersion: '1.0.0' });
+    expect('version' in resumedState).toBe(false);
+
+    engine2[Symbol.dispose]();
+  });
+
+  // The lifted flat tuple must still feed version-drift detection: a flat record
+  // whose agent/tool versions no longer match the registered definition (which
+  // declares none) must throw VersionMismatchError on recovery, not silently
+  // resume with stale tuple metadata.
+  it('detects version drift from a lifted flat version tuple on recovery', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'flat-tuple-drift';
+
+    const registerWorkflow = (engine: Engine) => {
+      engine.register(
+        workflow({ name: 'flat-tuple-drift-wait', version: '1.0.0' }).execute(async function* (
+          ctx: WorkflowContext,
+        ) {
+          const value = yield* ctx.waitForSignal<string>('go');
+          return `resumed:${value}`;
+        }),
+      );
+    };
+
+    const engine1 = new Engine({ storage });
+    registerWorkflow(engine1);
+    await engine1.start('flat-tuple-drift-wait', null, { id: workflowId });
+    await flush();
+    engine1[Symbol.dispose]();
+    await flush();
+
+    // Graft a flat tuple whose agent/tool versions drift from the registration
+    // (which declares none) and provide no `migrate`, so recovery must reject it.
+    const persisted = decode((await storage.get(KEYS.workflow(workflowId)))!) as Record<
+      string,
+      unknown
+    >;
+    delete persisted['versionTuple'];
+    persisted['version'] = '1.0.0';
+    persisted['agentVersion'] = 'agent-legacy';
+    persisted['toolVersions'] = ['search@1'];
+    await storage.put(KEYS.workflow(workflowId), encode(persisted));
+
+    const engine2 = new Engine({ storage });
+    registerWorkflow(engine2);
+    await expect(engine2.recoverAll()).rejects.toThrow('Version mismatch');
+
+    engine2[Symbol.dispose]();
+  });
+
   it('recoverAll() migrates checkpoint state across a workflow version bump and resumes', async () => {
     const storage = new MemoryStorage();
     const workflowId = 'version-migration-recovery';
@@ -1159,7 +1262,7 @@ describe('Engine', () => {
     expect(migratedCheckpoint.accumulatedResults).toEqual([]);
 
     const migratedState = decode((await storage.get(KEYS.workflow(workflowId)))!) as WorkflowState;
-    expect(migratedState.version).toBe('2.0.0');
+    expect(migratedState.versionTuple.workflowVersion).toBe('2.0.0');
     expect(await engine2.query(workflowId, 'phase')).toBe('waiting');
     expect(engine2[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(1);
 
@@ -4265,7 +4368,7 @@ describe('Engine', () => {
       status: 'failed',
       input: null,
       error: 'old failure',
-      version: '1',
+      versionTuple: { workflowVersion: '1' },
       createdAt: 1000,
       updatedAt: 2000,
     };

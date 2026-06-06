@@ -59,7 +59,7 @@ describe('WorkflowHandle.snapshot — observe a recovered run as a live handle',
       type: 'whatever',
       status: 'running',
       input: null,
-      version: '1',
+      versionTuple: { workflowVersion: '1' },
       createdAt: 1,
       updatedAt: 1,
     };

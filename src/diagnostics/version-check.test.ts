@@ -8,15 +8,20 @@ import type { WorkflowRegistration } from './validate.ts';
 import { runVersionCheck } from './version-check.ts';
 
 function makeWorkflowState(
-  overrides: Partial<WorkflowState> & { id: string; type: string },
+  overrides: Partial<Omit<WorkflowState, 'versionTuple'>> & {
+    id: string;
+    type: string;
+    version?: string;
+  },
 ): WorkflowState {
+  const { version = '1.0.0', ...rest } = overrides;
   return {
     status: 'running',
     input: {},
-    version: '1.0.0',
     createdAt: Date.now(),
     updatedAt: Date.now(),
-    ...overrides,
+    ...rest,
+    versionTuple: { workflowVersion: version },
   };
 }
 

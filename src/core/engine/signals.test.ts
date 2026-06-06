@@ -25,7 +25,7 @@ function createWorkflowState(workflowId: string, status: WorkflowState['status']
     status,
     type: 'workflow',
     updatedAt: 1,
-    version: '1',
+    versionTuple: { workflowVersion: '1' },
   };
 }
 

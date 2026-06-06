@@ -47,17 +47,11 @@ export function createForkedWorkflowState(
     type: sourceState.type,
     status: 'running',
     input: sourceState.input,
-    version: versionTuple.workflowVersion,
+    versionTuple,
     executionStateOwnerId: workflowId,
     createdAt: forkedAt,
     startedAt: forkedAt,
     updatedAt: forkedAt,
-    ...(versionTuple.agentVersion !== undefined && {
-      agentVersion: versionTuple.agentVersion,
-    }),
-    ...(versionTuple.toolVersions !== undefined && {
-      toolVersions: versionTuple.toolVersions,
-    }),
     forkedFrom: lineage,
   };
 }

@@ -68,7 +68,9 @@
     "type": "fork-from-checkpoint",
     "status": "completed",
     "input": null,
-    "version": "1",
+    "versionTuple": {
+      "workflowVersion": "1"
+    },
     "executionStateOwnerId": "wf-fork-original",
     "createdAt": 0,
     "startedAt": 0,
@@ -104,13 +106,13 @@
     "wf-idx-updated:0000000000000000:wf-fork-original": "",
     "wf-terminal:0000000000000000:00000000-0000-4000-8000-000000000003": "",
     "wf-terminal:0000000000000000:wf-fork-original": "",
-    "wf:00000000-0000-4000-8000-000000000003": "jKJpZNkkMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzpHR5cGW0Zm9yay1mcm9tLWNoZWNrcG9pbnSmc3RhdHVzqWNvbXBsZXRlZKVpbnB1dMCndmVyc2lvbqExtWV4ZWN1dGlvblN0YXRlT3duZXJJZNkkMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzqWNyZWF0ZWRBdACpc3RhcnRlZEF0AKl1cGRhdGVkQXQAqmZvcmtlZEZyb22CqndvcmtmbG93SWSwd2YtZm9yay1vcmlnaW5hbKRzdGVwAqZyZXN1bHSvcGhhc2Utb25lOnJpZ2h0tHRlcm1pbmFsQ2xlYW51cFRva2Vu2SQwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMGE=",
+    "wf:00000000-0000-4000-8000-000000000003": "jKJpZNkkMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDAzpHR5cGW0Zm9yay1mcm9tLWNoZWNrcG9pbnSmc3RhdHVzqWNvbXBsZXRlZKVpbnB1dMCsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMbVleGVjdXRpb25TdGF0ZU93bmVySWTZJDAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwM6ljcmVhdGVkQXQAqXN0YXJ0ZWRBdACpdXBkYXRlZEF0AKpmb3JrZWRGcm9tgqp3b3JrZmxvd0lksHdmLWZvcmstb3JpZ2luYWykc3RlcAKmcmVzdWx0r3BoYXNlLW9uZTpyaWdodLR0ZXJtaW5hbENsZWFudXBUb2tlbtkkMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDBh",
     "wf:00000000-0000-4000-8000-000000000003:ckpt": "iap3b3JrZmxvd0lk2SQwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDOkc3RlcASmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHORkgCpcGhhc2Utb25lrnBlbmRpbmdTaWduYWxzkLBzZWFyY2hBdHRyaWJ1dGVzga93ZWZ0OmZvcmtlZEZyb22wd2YtZm9yay1vcmlnaW5hbKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0AA==",
     "wf:00000000-0000-4000-8000-000000000003:ckpt:0000000003": "iap3b3JrZmxvd0lk2SQwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDOkc3RlcAOmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHORkgCpcGhhc2Utb25lrnBlbmRpbmdTaWduYWxzkLBzZWFyY2hBdHRyaWJ1dGVzga93ZWZ0OmZvcmtlZEZyb22wd2YtZm9yay1vcmlnaW5hbKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0AA==",
     "wf:00000000-0000-4000-8000-000000000003:ckpt:0000000004": "iap3b3JrZmxvd0lk2SQwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDOkc3RlcASmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHORkgCpcGhhc2Utb25lrnBlbmRpbmdTaWduYWxzkLBzZWFyY2hBdHRyaWJ1dGVzga93ZWZ0OmZvcmtlZEZyb22wd2YtZm9yay1vcmlnaW5hbKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0AA==",
     "wf:00000000-0000-4000-8000-000000000003:timeline:0000000003": "h6RzdGVwA61vcGVyYXRpb25UeXBlq3dhaXQtc2lnbmFsrm9wZXJhdGlvbkxhYmVspmJyYW5jaKxpbnB1dFN1bW1hcnm3eyJzaWduYWxOYW1lIjoiYnJhbmNoIn2pdGltZXN0YW1wAKZzdGF0dXOncnVubmluZ6x2ZXJzaW9uVHVwbGWBr3dvcmtmbG93VmVyc2lvbqEx",
     "wf:00000000-0000-4000-8000-000000000003:timeline:0000000004": "iaRzdGVwBK1vcGVyYXRpb25UeXBlq3dhaXQtc2lnbmFsrm9wZXJhdGlvbkxhYmVspmJyYW5jaKxpbnB1dFN1bW1hcnm3eyJzaWduYWxOYW1lIjoiYnJhbmNoIn2pdGltZXN0YW1wAKZzdGF0dXOpY29tcGxldGVkrHZlcnNpb25UdXBsZYGvd29ya2Zsb3dWZXJzaW9uoTGtb3V0cHV0U3VtbWFyeacicmlnaHQiqGR1cmF0aW9uAA==",
-    "wf:wf-fork-original": "i6JpZLB3Zi1mb3JrLW9yaWdpbmFspHR5cGW0Zm9yay1mcm9tLWNoZWNrcG9pbnSmc3RhdHVzqWNvbXBsZXRlZKVpbnB1dMCndmVyc2lvbqExtWV4ZWN1dGlvblN0YXRlT3duZXJJZLB3Zi1mb3JrLW9yaWdpbmFsqWNyZWF0ZWRBdACpc3RhcnRlZEF0AKl1cGRhdGVkQXQApnJlc3VsdK5waGFzZS1vbmU6bGVmdLR0ZXJtaW5hbENsZWFudXBUb2tlbtkkMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA5",
+    "wf:wf-fork-original": "i6JpZLB3Zi1mb3JrLW9yaWdpbmFspHR5cGW0Zm9yay1mcm9tLWNoZWNrcG9pbnSmc3RhdHVzqWNvbXBsZXRlZKVpbnB1dMCsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMbVleGVjdXRpb25TdGF0ZU93bmVySWSwd2YtZm9yay1vcmlnaW5hbKljcmVhdGVkQXQAqXN0YXJ0ZWRBdACpdXBkYXRlZEF0AKZyZXN1bHSucGhhc2Utb25lOmxlZnS0dGVybWluYWxDbGVhbnVwVG9rZW7ZJDAwMDAwMDAwLTAwMDAtNDAwMC04MDAwLTAwMDAwMDAwMDAwOQ==",
     "wf:wf-fork-original:ckpt": "iap3b3JrZmxvd0lksHdmLWZvcmstb3JpZ2luYWykc3RlcAOmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHORkgCpcGhhc2Utb25lrnBlbmRpbmdTaWduYWxzkLBzZWFyY2hBdHRyaWJ1dGVzgKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0AA==",
     "wf:wf-fork-original:ckpt:0000000001": "iap3b3JrZmxvd0lksHdmLWZvcmstb3JpZ2luYWykc3RlcAGmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHOQrnBlbmRpbmdTaWduYWxzkLBzZWFyY2hBdHRyaWJ1dGVzgKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0AA==",
     "wf:wf-fork-original:ckpt:0000000002": "iap3b3JrZmxvd0lksHdmLWZvcmstb3JpZ2luYWykc3RlcAKmbG9jYWxzgLJhY2N1bXVsYXRlZFJlc3VsdHORkgCpcGhhc2Utb25lrnBlbmRpbmdTaWduYWxzkLBzZWFyY2hBdHRyaWJ1dGVzgKd2ZXJzaW9uoTGtc2NoZW1hVmVyc2lvbgKpY3JlYXRlZEF0AA==",
@@ -127,7 +129,9 @@
         "type": "fork-from-checkpoint",
         "status": "completed",
         "input": null,
-        "version": "1",
+        "versionTuple": {
+          "workflowVersion": "1"
+        },
         "executionStateOwnerId": "00000000-0000-4000-8000-000000000003",
         "createdAt": 0,
         "startedAt": 0,

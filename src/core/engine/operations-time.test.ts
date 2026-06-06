@@ -18,7 +18,7 @@ function createWorkflowState(
     status: 'pending',
     type: 'delayed-workflow',
     updatedAt: 1_000,
-    version: '1',
+    versionTuple: { workflowVersion: '1' },
     ...overrides,
   };
 }

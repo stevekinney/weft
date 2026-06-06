@@ -29,7 +29,7 @@ async function writeDistinctTypeWorkflows(storage: MemoryStorage, count: number)
         type: `distinct-type-${index}`,
         status: 'completed',
         input: null,
-        version: 'test',
+        versionTuple: { workflowVersion: 'test' },
         createdAt: now + index,
         updatedAt: now + index,
       };

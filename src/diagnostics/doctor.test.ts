@@ -25,7 +25,7 @@ function makeWorkflowState(overrides: Partial<WorkflowState> = {}): WorkflowStat
     type: 'testWorkflow',
     status: 'running',
     input: null,
-    version: '1.0.0',
+    versionTuple: { workflowVersion: '1.0.0' },
     createdAt: Date.now() - 60_000,
     updatedAt: Date.now(),
     ...overrides,

@@ -36,7 +36,7 @@ function createStoredWorkflowState(
     type: workflowType,
     status,
     input: null,
-    version: '1',
+    versionTuple: { workflowVersion: '1' },
     createdAt: 1,
     updatedAt: 1,
   };

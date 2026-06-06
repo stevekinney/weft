@@ -18,7 +18,7 @@ function createWorkflowState(
     status: 'running',
     type: 'child',
     updatedAt: 1,
-    version: '1',
+    versionTuple: { workflowVersion: '1' },
     ...overrides,
   };
 }

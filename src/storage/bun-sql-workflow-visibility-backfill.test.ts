@@ -47,7 +47,7 @@ function makeWorkflowState(overrides: Partial<WorkflowState>): WorkflowState {
     type: 'order-fulfillment',
     status: 'running',
     input: null,
-    version: '1',
+    versionTuple: { workflowVersion: '1' },
     createdAt: 1_700_000_000_000,
     updatedAt: 1_700_000_000_500,
     tags: [],

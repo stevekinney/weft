@@ -48,7 +48,9 @@
     "type": "signal-and-wait",
     "status": "completed",
     "input": null,
-    "version": "1",
+    "versionTuple": {
+      "workflowVersion": "1"
+    },
     "executionStateOwnerId": "wf-signal-and-wait",
     "createdAt": 0,
     "startedAt": 0,
@@ -71,7 +73,7 @@
     "wf-idx-type:signal-and-wait:wf-signal-and-wait": "",
     "wf-idx-updated:0000000000000000:wf-signal-and-wait": "",
     "wf-terminal:0000000000000000:wf-signal-and-wait": "",
-    "wf:wf-signal-and-wait": "i6JpZLJ3Zi1zaWduYWwtYW5kLXdhaXSkdHlwZa9zaWduYWwtYW5kLXdhaXSmc3RhdHVzqWNvbXBsZXRlZKVpbnB1dMCndmVyc2lvbqExtWV4ZWN1dGlvblN0YXRlT3duZXJJZLJ3Zi1zaWduYWwtYW5kLXdhaXSpY3JlYXRlZEF0AKlzdGFydGVkQXQAqXVwZGF0ZWRBdACmcmVzdWx0gahyZWNlaXZlZKdwcm9jZWVktHRlcm1pbmFsQ2xlYW51cFRva2Vu2SQwMDAwMDAwMC0wMDAwLTQwMDAtODAwMC0wMDAwMDAwMDAwMDQ=",
+    "wf:wf-signal-and-wait": "i6JpZLJ3Zi1zaWduYWwtYW5kLXdhaXSkdHlwZa9zaWduYWwtYW5kLXdhaXSmc3RhdHVzqWNvbXBsZXRlZKVpbnB1dMCsdmVyc2lvblR1cGxlga93b3JrZmxvd1ZlcnNpb26hMbVleGVjdXRpb25TdGF0ZU93bmVySWSyd2Ytc2lnbmFsLWFuZC13YWl0qWNyZWF0ZWRBdACpc3RhcnRlZEF0AKl1cGRhdGVkQXQApnJlc3VsdIGocmVjZWl2ZWSncHJvY2VlZLR0ZXJtaW5hbENsZWFudXBUb2tlbtkkMDAwMDAwMDAtMDAwMC00MDAwLTgwMDAtMDAwMDAwMDAwMDA0",
     "wf:wf-signal-and-wait:ckpt": "iap3b3JrZmxvd0lksndmLXNpZ25hbC1hbmQtd2FpdKRzdGVwAqZsb2NhbHOAsmFjY3VtdWxhdGVkUmVzdWx0c5CucGVuZGluZ1NpZ25hbHOQsHNlYXJjaEF0dHJpYnV0ZXOAp3ZlcnNpb26hMa1zY2hlbWFWZXJzaW9uAqljcmVhdGVkQXQA",
     "wf:wf-signal-and-wait:ckpt:0000000001": "iap3b3JrZmxvd0lksndmLXNpZ25hbC1hbmQtd2FpdKRzdGVwAaZsb2NhbHOAsmFjY3VtdWxhdGVkUmVzdWx0c5CucGVuZGluZ1NpZ25hbHOQsHNlYXJjaEF0dHJpYnV0ZXOAp3ZlcnNpb26hMa1zY2hlbWFWZXJzaW9uAqljcmVhdGVkQXQA",
     "wf:wf-signal-and-wait:ckpt:0000000002": "iap3b3JrZmxvd0lksndmLXNpZ25hbC1hbmQtd2FpdKRzdGVwAqZsb2NhbHOAsmFjY3VtdWxhdGVkUmVzdWx0c5CucGVuZGluZ1NpZ25hbHOQsHNlYXJjaEF0dHJpYnV0ZXOAp3ZlcnNpb26hMa1zY2hlbWFWZXJzaW9uAqljcmVhdGVkQXQA",

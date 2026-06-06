@@ -32,7 +32,7 @@ function createCompletedWorkflowState(workflowId: string, updatedAt: number): Wo
     status: 'completed',
     type: 'workflow',
     updatedAt,
-    version: '1',
+    versionTuple: { workflowVersion: '1' },
   };
 }
 

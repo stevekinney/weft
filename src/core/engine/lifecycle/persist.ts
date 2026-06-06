@@ -32,11 +32,7 @@ export function workflowVersionTupleFromState(
   state: WorkflowState,
   _callbacks: LifecycleCallbacks,
 ): WorkflowVersionTuple {
-  return {
-    workflowVersion: state.version,
-    ...(state.agentVersion !== undefined && { agentVersion: state.agentVersion }),
-    ...(state.toolVersions !== undefined && { toolVersions: state.toolVersions }),
-  };
+  return state.versionTuple;
 }
 
 export function workflowStateWithVersionTuple(
@@ -45,22 +41,10 @@ export function workflowStateWithVersionTuple(
   versionTuple: WorkflowVersionTuple,
   _callbacks: LifecycleCallbacks,
 ): WorkflowState {
-  const {
-    agentVersion: _existingAgentVersion,
-    toolVersions: _existingToolVersions,
-    ...rest
-  } = state;
-
   return {
-    ...rest,
-    version: versionTuple.workflowVersion,
+    ...state,
+    versionTuple,
     updatedAt: internals.options.getNow(),
-    ...(versionTuple.agentVersion !== undefined && {
-      agentVersion: versionTuple.agentVersion,
-    }),
-    ...(versionTuple.toolVersions !== undefined && {
-      toolVersions: versionTuple.toolVersions,
-    }),
   };
 }
 
@@ -188,7 +172,7 @@ export function throwVersionMismatch(
   throw new VersionMismatchError(
     workflowId,
     state.type,
-    state.version,
+    state.versionTuple.workflowVersion,
     registration.version,
     undefined,
     versionDiff,

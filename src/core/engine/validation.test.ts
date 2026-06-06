@@ -26,7 +26,7 @@ function createWorkflowState(overrides: Partial<WorkflowState> = {}): WorkflowSt
     status: 'running',
     type: 'workflow',
     updatedAt: 1,
-    version: '1',
+    versionTuple: { workflowVersion: '1' },
     ...overrides,
   };
 }
@@ -202,6 +202,88 @@ describe('engine validation helpers', () => {
     const decoded = decodeWorkflowState(encode(legacyState));
     expect('tenant' in decoded).toBe(false);
     expect(decoded.id).toBe('wf-legacy');
+  });
+
+  it('lifts a pre-unification flat version tuple into versionTuple on decode', () => {
+    const flatState = {
+      id: 'wf-flat',
+      type: 'checkout',
+      status: 'running',
+      input: null,
+      createdAt: 1,
+      updatedAt: 2,
+      version: '3.1.0',
+      agentVersion: 'agent-9',
+      toolVersions: ['search@2', 'database@4'],
+    };
+
+    const decoded = decodeWorkflowState(encode(flatState));
+
+    expect(decoded.versionTuple).toEqual({
+      workflowVersion: '3.1.0',
+      agentVersion: 'agent-9',
+      toolVersions: ['search@2', 'database@4'],
+    });
+    // The flat keys are dropped so the rest of the engine sees one shape.
+    expect('version' in decoded).toBe(false);
+    expect('agentVersion' in decoded).toBe(false);
+    expect('toolVersions' in decoded).toBe(false);
+  });
+
+  it('lifts a flat record that carries only the workflow version', () => {
+    const flatState = {
+      id: 'wf-flat-minimal',
+      type: 'checkout',
+      status: 'running',
+      input: null,
+      createdAt: 1,
+      updatedAt: 2,
+      version: '1.0.0',
+    };
+
+    const decoded = decodeWorkflowState(encode(flatState));
+
+    expect(decoded.versionTuple).toEqual({ workflowVersion: '1.0.0' });
+    expect('version' in decoded).toBe(false);
+  });
+
+  it('leaves a current versionTuple record untouched on decode', () => {
+    const currentState = {
+      id: 'wf-current',
+      type: 'checkout',
+      status: 'running',
+      input: null,
+      createdAt: 1,
+      updatedAt: 2,
+      versionTuple: { workflowVersion: '2.0.0', agentVersion: 'agent-1' },
+    };
+
+    const decoded = decodeWorkflowState(encode(currentState));
+
+    expect(decoded.versionTuple).toEqual({ workflowVersion: '2.0.0', agentVersion: 'agent-1' });
+    expect('version' in decoded).toBe(false);
+  });
+
+  it('drops stray flat version keys when a versionTuple is already present', () => {
+    // An intermediate build could have written both shapes; the nested tuple wins
+    // and the stray flat keys are cleaned up.
+    const mixedState = {
+      id: 'wf-mixed',
+      type: 'checkout',
+      status: 'running',
+      input: null,
+      createdAt: 1,
+      updatedAt: 2,
+      version: 'stale',
+      agentVersion: 'stale-agent',
+      versionTuple: { workflowVersion: '5.0.0' },
+    };
+
+    const decoded = decodeWorkflowState(encode(mixedState));
+
+    expect(decoded.versionTuple).toEqual({ workflowVersion: '5.0.0' });
+    expect('version' in decoded).toBe(false);
+    expect('agentVersion' in decoded).toBe(false);
   });
 
   it('drops malformed decoded tags while preserving the rest of workflow state', () => {

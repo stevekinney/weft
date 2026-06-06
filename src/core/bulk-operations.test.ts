@@ -98,7 +98,7 @@ async function writePendingWorkflowState(
       status: 'pending',
       type: 'echo',
       updatedAt: timestamp,
-      version: '1',
+      versionTuple: { workflowVersion: '1' },
     } satisfies WorkflowState),
   );
 }
@@ -419,7 +419,7 @@ describe('bulk workflow operations', () => {
         tags: ['bulk-cancel-remaining'],
         type: 'workflow',
         updatedAt: 1,
-        version: '1',
+        versionTuple: { workflowVersion: '1' },
       } satisfies WorkflowState),
     );
 
@@ -463,7 +463,7 @@ describe('bulk workflow operations', () => {
       tags: ['bulk-delete-deadline'],
       type: 'workflow',
       updatedAt: 5_000,
-      version: '1',
+      versionTuple: { workflowVersion: '1' },
     } satisfies WorkflowState;
 
     await storage.put(KEYS.workflow(workflowId), encode(state));

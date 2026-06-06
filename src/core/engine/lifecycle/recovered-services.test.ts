@@ -23,7 +23,7 @@ function makeState(id = 'run-1', type = 'wf'): WorkflowState {
     type,
     status: 'running',
     input: { tenant: 'acme' },
-    version: '1',
+    versionTuple: { workflowVersion: '1' },
     createdAt: 1,
     updatedAt: 1,
   };

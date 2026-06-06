@@ -28,7 +28,7 @@ function createWorkflowState(overrides: Partial<WorkflowState> = {}): WorkflowSt
     status: 'running',
     type: 'workflow',
     updatedAt: 1,
-    version: '1',
+    versionTuple: { workflowVersion: '1' },
     ...overrides,
   };
 }

@@ -191,7 +191,7 @@ function summaryFromState(
     type: state.type,
     status: state.status,
     ...(state.tags !== undefined && { tags: state.tags }),
-    version: state.version,
+    version: state.versionTuple.workflowVersion,
     createdAt: state.createdAt,
     updatedAt: state.updatedAt,
     ...(state.executionDeadline !== undefined && { executionDeadline: state.executionDeadline }),
