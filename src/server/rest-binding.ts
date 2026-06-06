@@ -108,13 +108,19 @@ export type RestBinding<Input, Output> = {
   /**
    * Optional override for fault → HTTP response mapping. When absent,
    * the transport adapter falls back to `faultToHttpResponse` (the
-   * canonical `{ error: { code, message, data? } }` shape).
+   * canonical `{ error: { code, message, data? } }` shape that JSON-RPC
+   * also returns).
    *
-   * During Milestone 1, bindings for REST operations that already exist
-   * with a different legacy error shape MUST provide this so their
-   * parity diff test passes byte-for-byte against the legacy handler.
-   * Milestone 2 drops the per-binding override and all REST endpoints
-   * move to the canonical fault shape.
+   * REST operations provide this to shape faults the way a REST client
+   * expects rather than the canonical structured shape: most use
+   * `shapeRestFault`, which masks an `EngineFailure` to a flat
+   * `{ error: "Internal server error" }` with status `500` (never leaking
+   * internal detail over REST) and maps the remaining fault codes to their
+   * HTTP statuses. A few operations supply a bespoke shaper for
+   * operation-specific status mapping (for example, a timeout → `408` or an
+   * invalid-parameter detail → `400`). This per-operation hook is the current
+   * contract, not a transitional shim — REST and JSON-RPC deliberately differ
+   * in fault shape, so the binding owns its REST projection.
    */
   readonly shapeFault?: (fault: OperationFault) => Response;
 };

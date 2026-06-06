@@ -153,15 +153,6 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
     },
   ],
   [
-    'src/core/checkpoint/serialization.ts',
-    {
-      // The serializer's defensive legacy-shape cleanup stays uncovered even
-      // after the direct checkpoint compatibility suite exercises the reachable
-      // public paths through the higher-level checkpoint APIs.
-      lines: new Set([115, 116, 117]),
-    },
-  ],
-  [
     'src/core/context/child-workflow-pipe.ts',
     {
       lines: new Set([44, 46, 47, 64, 65, 101, 114]),
@@ -500,15 +491,6 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
     'src/server/handler/index.ts',
     {
       lines: new Set([85, 86]),
-    },
-  ],
-  [
-    'src/server/openapi.ts',
-    {
-      // The legacy-route requestBody branch is retained for future unmigrated
-      // write routes, but the current route table has no non-GET/DELETE route
-      // left outside REST_BINDINGS, so this branch is unreachable today.
-      lines: createLineSet(114, 116),
     },
   ],
   [
