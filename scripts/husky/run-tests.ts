@@ -97,6 +97,11 @@ export const LOAD_SENSITIVE_TEST_PATHS = [
   // fixture; its wall-clock cost is unbounded under CPU contention and cannot be
   // made deterministic (the work is in an external process). CI runs it isolated.
   'src/cli/codegen-typecheck.test.ts',
+  // Runs real Worker isolates with a sub-second (100ms) workflow-turn timeout to
+  // assert timeout behavior. Under the parallel run the isolate cannot start and
+  // hit the budget reliably, so the timing assertion flakes — it cannot be both
+  // short-enough-to-trip-fast and load-robust. CI runs it isolated.
+  'src/core/worker-execution-suspension.test.ts',
 ] as const;
 
 function normalizedTestPath(file: string): string {

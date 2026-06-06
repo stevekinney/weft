@@ -30,10 +30,10 @@
 export const TEST_FILE_GLOBS = ['src/**/*.{test,spec}.ts', 'scripts/**/*.{test,spec}.ts'] as const;
 
 const bunSleepPattern = /\bBun\.sleep\s*\(/;
-// A literal numeric delay: optional sign/whitespace then a digit, allowing
-// numeric separators (1_000). Computed durations (identifiers/expressions) are
-// out of scope — see the module comment.
-const fixedRealTimerSleepPattern = /\bwaitForRealTimersForTesting\s*\(\s*[+]?\s*\d[\d_]*/;
+// A literal numeric delay: optional leading sign/whitespace then a digit,
+// allowing numeric separators (1_000). Computed durations
+// (identifiers/expressions) are out of scope — see the module comment.
+const fixedRealTimerSleepPattern = /\bwaitForRealTimersForTesting\s*\(\s*[+-]?\s*\d[\d_]*/;
 const exemptionPattern = /\/\/\s*fixed delay:/;
 // A recognized exemption must name why no event can be awaited. Anything else
 // (a bare `// fixed delay:` or an unrecognized reason) is rejected.
