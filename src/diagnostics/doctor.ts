@@ -8,6 +8,7 @@
  */
 
 import { decode } from '../core/codec.ts';
+import { decodeWorkflowState } from '../core/engine/validation.ts';
 import type { Checkpoint, WorkflowState } from '../core/types.ts';
 import { fileSize } from '../runtime/portable.ts';
 import type { Storage } from '../storage/interface.ts';
@@ -200,7 +201,10 @@ async function aggregateWorkflowScan(storage: Storage, now: number): Promise<Wor
 
   for await (const [key, value] of storage.scan('wf:')) {
     if (key.includes(':ckpt')) continue;
-    const state = decode(value) as WorkflowState;
+    // Decode through `decodeWorkflowState` so older flat-shaped persisted records
+    // are normalized (e.g. flat version fields lifted into `versionTuple`) before
+    // any field is read, matching the version-check diagnostics path.
+    const state = decodeWorkflowState(value);
     total++;
     statusCounts[mapStatusKey(state.status)]++;
 

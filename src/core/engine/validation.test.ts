@@ -247,6 +247,26 @@ describe('engine validation helpers', () => {
     expect('version' in decoded).toBe(false);
   });
 
+  it('falls back to DEFAULT_WORKFLOW_VERSION when a record has neither version nor versionTuple', () => {
+    // A corrupt record missing both shapes degrades to the default workflow
+    // version rather than producing an undefined workflowVersion. For a
+    // versioned workflow this default then drives the normal drift/mismatch path
+    // on recovery; for an unversioned (0.0.0) workflow it matches and is inert.
+    const corruptState = {
+      id: 'wf-corrupt-version',
+      type: 'checkout',
+      status: 'running',
+      input: null,
+      createdAt: 1,
+      updatedAt: 2,
+    };
+
+    const decoded = decodeWorkflowState(encode(corruptState));
+
+    expect(decoded.versionTuple).toEqual({ workflowVersion: '0.0.0' });
+    expect('version' in decoded).toBe(false);
+  });
+
   it('leaves a current versionTuple record untouched on decode', () => {
     const currentState = {
       id: 'wf-current',
