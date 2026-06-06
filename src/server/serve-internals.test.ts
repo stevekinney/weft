@@ -221,7 +221,10 @@ describe('registerStackDisposers', () => {
       },
     } as unknown as AsyncDisposableStack;
 
-    const broadcastingHandle = { dispose() {} } as unknown as EventBroadcastingHandle;
+    const broadcastingHandle = {
+      cleanupWorkflow() {},
+      dispose() {},
+    } as unknown as EventBroadcastingHandle;
 
     registerStackDisposers(stack, context, options, broadcastingHandle, () => {});
 
@@ -254,7 +257,10 @@ describe('registerStackDisposers', () => {
       stack,
       context,
       options,
-      { dispose() {} } as unknown as EventBroadcastingHandle,
+      {
+        cleanupWorkflow() {},
+        dispose() {},
+      } as unknown as EventBroadcastingHandle,
       () => {},
     );
 
