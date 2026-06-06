@@ -25,6 +25,7 @@ export type {
   ResolvedStorage,
   SQLiteStorageConfiguration,
   StorageConfiguration,
+  StorageConfigurationType,
   TursoStorageConfiguration,
   WebExtensionStorageConfiguration,
 } from './storage-configuration.ts';

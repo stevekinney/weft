@@ -112,7 +112,14 @@ export function loadBetterSqlite3(
   try {
     mod = resolveModule();
   } catch (error) {
-    throw createMissingBetterSqlite3Error(error);
+    // Only a recognized load failure (package absent or native dlopen failure)
+    // is reshaped into the actionable peer-dependency message. An unrecognized
+    // error — a permission failure, or a syntax/runtime error while evaluating
+    // the module — is rethrown unchanged so its real cause is not masked.
+    if (isBetterSqlite3LoadFailure(error)) {
+      throw createMissingBetterSqlite3Error(error);
+    }
+    throw error;
   }
 
   DatabaseConstructor = typeof mod.default === 'function' ? mod.default : mod;

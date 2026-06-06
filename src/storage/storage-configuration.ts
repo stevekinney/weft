@@ -197,7 +197,20 @@ export type StorageConfiguration =
   | HTTPStorageConfiguration
   | AutoStorageConfiguration;
 
-/** Discriminant union of every supported `StorageConfiguration` `type`. */
+/**
+ * Discriminant union of every supported `StorageConfiguration` `type` — the
+ * string literals (`'memory'`, `'sqlite'`, `'neon'`, …) that select a backend.
+ * Useful for typing a storage-kind value before building the full configuration.
+ *
+ * @example
+ * ```ts
+ * import { resolveStorage, type StorageConfigurationType } from '@lostgradient/weft/storage/resolve';
+ *
+ * const kind: StorageConfigurationType = 'memory';
+ * const storage = await resolveStorage({ type: kind });
+ * void storage;
+ * ```
+ */
 export type StorageConfigurationType = StorageConfiguration['type'];
 
 /**

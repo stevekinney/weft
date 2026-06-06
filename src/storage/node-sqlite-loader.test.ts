@@ -104,11 +104,28 @@ describe('loadBetterSqlite3ForTest', () => {
     expect(resolved).toBe(FakeDatabase as unknown as typeof resolved);
   });
 
-  it('reshapes a resolver failure into the actionable peer-dependency error', () => {
+  it('reshapes a recognized resolver failure into the actionable peer-dependency error', () => {
     expect(() =>
       loadBetterSqlite3ForTest(() => {
         throw errorWithCode("Cannot find module 'better-sqlite3'", 'MODULE_NOT_FOUND');
       }),
     ).toThrow(MISSING_BETTER_SQLITE_ERROR);
+  });
+
+  it('rethrows an unrecognized resolver failure unchanged rather than masking it', () => {
+    // A permission error (or a syntax/runtime error while evaluating the module) is
+    // NOT a missing-dependency failure; reshaping it would hide the real cause. The
+    // original error must propagate untouched.
+    const permissionError = errorWithCode('EACCES: permission denied', 'EACCES');
+    let thrown: unknown;
+    try {
+      loadBetterSqlite3ForTest(() => {
+        throw permissionError;
+      });
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBe(permissionError);
+    expect((thrown as Error).message).not.toContain('better-sqlite3');
   });
 });
