@@ -323,6 +323,13 @@ export class NeonStorage implements Storage {
    * a transaction lands on the same connection — `pool.query()` alone may scatter
    * statements across pooled connections, breaking atomicity. The connection is
    * always released, and a failure rolls back before propagating.
+   *
+   * `shouldCommit` decides COMMIT vs ROLLBACK from the runner's result (default:
+   * always commit). `conditionalBatch` passes a predicate so a no-op result (a
+   * precondition mismatch that wrote nothing) ROLLs BACK instead of committing: a
+   * read-only `SERIALIZABLE` transaction's COMMIT can still abort with `40001`,
+   * which would turn a legitimate `false` compare-and-swap into a retried (and
+   * possibly thrown) serialization failure. A ROLLBACK never raises `40001`.
    */
   async #withTransaction<T>(
     beginStatement:
@@ -330,13 +337,14 @@ export class NeonStorage implements Storage {
       | typeof PG_BEGIN_READ_COMMITTED
       | typeof PG_BEGIN_READ_ONLY,
     runner: (client: NeonPoolClient) => Promise<T>,
+    shouldCommit: (result: T) => boolean = () => true,
   ): Promise<T> {
     const client = await this.#pool.connect();
     try {
       await client.query(beginStatement);
       try {
         const result = await runner(client);
-        await client.query(PG_COMMIT);
+        await client.query(shouldCommit(result) ? PG_COMMIT : PG_ROLLBACK);
         return result;
       } catch (error) {
         await client.query(PG_ROLLBACK).catch(() => {
@@ -372,18 +380,26 @@ export class NeonStorage implements Storage {
     let lastError: unknown;
     for (let attempt = 0; attempt < MAX_SERIALIZATION_RETRIES; attempt += 1) {
       try {
-        return await this.#withTransaction(PG_BEGIN_SERIALIZABLE, async (client) => {
-          for (const condition of conditions) {
-            const result = await client.query(PG_SELECT_VALUE_BY_KEY, [condition.key]);
-            const raw = result.rows[0]?.['value'];
-            const currentValue = raw === null || raw === undefined ? null : toStorageValue(raw);
-            if (!storageValuesEqual(currentValue, condition.expectedValue)) {
-              return false;
+        return await this.#withTransaction(
+          PG_BEGIN_SERIALIZABLE,
+          async (client) => {
+            for (const condition of conditions) {
+              const result = await client.query(PG_SELECT_VALUE_BY_KEY, [condition.key]);
+              const raw = result.rows[0]?.['value'];
+              const currentValue = raw === null || raw === undefined ? null : toStorageValue(raw);
+              if (!storageValuesEqual(currentValue, condition.expectedValue)) {
+                return false;
+              }
             }
-          }
-          await applyBatchOperations(client, operations);
-          return true;
-        });
+            await applyBatchOperations(client, operations);
+            return true;
+          },
+          // Only COMMIT when the CAS actually wrote (returned true). A precondition
+          // mismatch (false) wrote nothing, so ROLL BACK — committing a read-only
+          // SERIALIZABLE txn can abort with 40001 and turn a clean `false` into a
+          // retried/thrown serialization failure.
+          (committed) => committed,
+        );
       } catch (error) {
         if (!isRetryableTransactionFailure(error)) {
           throw error;

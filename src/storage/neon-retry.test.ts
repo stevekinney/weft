@@ -146,4 +146,59 @@ describe('NeonStorage conditionalBatch serialization retry', () => {
     // Exactly one attempt — no retry on a non-retryable code.
     expect(pool.beginCount).toBe(1);
   });
+
+  it('rolls back (does not commit) a precondition mismatch, so a 40001-throwing COMMIT cannot turn a clean false into a thrown retry', async () => {
+    // A read-only SERIALIZABLE transaction's COMMIT can abort with 40001 under
+    // contention. If the mismatch path (which wrote nothing) committed, that abort
+    // would be caught by the retry loop and — if it persisted — thrown after the
+    // cap, corrupting a legitimate `false` compare-and-swap. The mismatch path must
+    // ROLLBACK instead; ROLLBACK never raises 40001, so the call returns false on
+    // the first attempt.
+    let commitCount = 0;
+    let rollbackCount = 0;
+    let beginCount = 0;
+    const pool: NeonPool = {
+      query: async (sql?: string) =>
+        sql?.includes('pg_collation') ? { rows: [{ collation: 'C' }] } : { rows: [] },
+      connect: async () => ({
+        query: async (sql: string) => {
+          if (sql.startsWith('BEGIN')) {
+            beginCount += 1;
+            return { rows: [] };
+          }
+          if (sql === 'COMMIT') {
+            commitCount += 1;
+            // A COMMIT here would be the bug; make it abort with 40001 so a
+            // pre-fix implementation throws after exhausting retries.
+            throw Object.assign(new Error('could not serialize access'), { code: '40001' });
+          }
+          if (sql === 'ROLLBACK') {
+            rollbackCount += 1;
+            return { rows: [] };
+          }
+          if (sql.startsWith('SELECT value')) {
+            // Report an EXISTING value so the `expectedValue: null` precondition
+            // mismatches and the runner returns false (the no-op path).
+            return { rows: [{ value: encode('already-here') }] };
+          }
+          return { rows: [] };
+        },
+        release: () => {},
+      }),
+      end: async () => {},
+    };
+    await using storage = new NeonStorage({ url: 'stub://', pool });
+
+    const applied = await storage.conditionalBatch(
+      [{ key: 'idem:k', expectedValue: null }],
+      [{ type: 'put', key: 'idem:k', value: encode('v') }],
+    );
+
+    expect(applied).toBe(false);
+    // One transaction, no COMMIT attempted (the no-op path rolls back), and exactly
+    // one ROLLBACK. Pre-fix this would COMMIT, throw 40001, retry, and throw.
+    expect(beginCount).toBe(1);
+    expect(commitCount).toBe(0);
+    expect(rollbackCount).toBe(1);
+  });
 });
