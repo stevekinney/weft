@@ -13,16 +13,32 @@
  *
  * Legitimate fixed delays remain for the cases that genuinely cannot await an
  * event — a NEGATIVE assertion (proving something did NOT happen within a
- * window) or a pre-dispatch settle with no observable "ready" signal. Mark
- * those with a `// fixed delay:` comment on the sleep line or the line directly
- * above it; the check treats that comment as an explicit, reviewed exemption.
+ * window), a pre-dispatch settle with no observable "ready" signal, or a hang
+ * guard on a real subprocess/integration step. Mark those with a structured
+ * `// fixed delay: <negative assertion|pre-dispatch settle|hang guard> ...`
+ * comment on the sleep line or the line directly above it; the check treats a
+ * recognized category as an explicit, reviewed exemption and rejects an
+ * unstructured `// fixed delay:` so the exemption cannot become a silent dodge.
+ *
+ * Scope: this is a LITERAL-numeric-delay check, by design. It targets the real
+ * flake pattern — a hard-coded millisecond guess used as a barrier. A computed
+ * duration (`waitForRealTimersForTesting(intervalMs)`) is almost always a
+ * deliberate interval, not a guessed wait, so it is intentionally not flagged.
+ * It is a lint-grade heuristic, not an AST analysis.
  */
 
 export const TEST_FILE_GLOBS = ['src/**/*.{test,spec}.ts', 'scripts/**/*.{test,spec}.ts'] as const;
 
 const bunSleepPattern = /\bBun\.sleep\s*\(/;
-const fixedRealTimerSleepPattern = /\bwaitForRealTimersForTesting\s*\(\s*\d/;
+// A literal numeric delay: optional sign/whitespace then a digit, allowing
+// numeric separators (1_000). Computed durations (identifiers/expressions) are
+// out of scope — see the module comment.
+const fixedRealTimerSleepPattern = /\bwaitForRealTimersForTesting\s*\(\s*[+]?\s*\d[\d_]*/;
 const exemptionPattern = /\/\/\s*fixed delay:/;
+// A recognized exemption must name why no event can be awaited. Anything else
+// (a bare `// fixed delay:` or an unrecognized reason) is rejected.
+const recognizedExemptionPattern =
+  /\/\/\s*fixed delay:\s*(negative assertion|pre-dispatch settle|hang guard)\b/;
 const expectPattern = /\bexpect\s*\(/;
 // How many non-blank lines after the sleep to scan for an assertion before
 // concluding the sleep does not gate an expect (teardown drains have none).
@@ -47,10 +63,20 @@ function gatesAnAssertion(lines: string[], sleepLineIndex: number): boolean {
   return false;
 }
 
-function isExempt(lines: string[], sleepLineIndex: number): boolean {
-  const onLine = lines[sleepLineIndex] ?? '';
-  const above = lines[sleepLineIndex - 1] ?? '';
-  return exemptionPattern.test(onLine) || exemptionPattern.test(above);
+/** A `// fixed delay:` exemption appears on the sleep line or directly above it. */
+function hasExemptionComment(lines: string[], sleepLineIndex: number): boolean {
+  return (
+    exemptionPattern.test(lines[sleepLineIndex] ?? '') ||
+    exemptionPattern.test(lines[sleepLineIndex - 1] ?? '')
+  );
+}
+
+/** The exemption names a recognized category (not a bare/unstructured comment). */
+function hasRecognizedExemption(lines: string[], sleepLineIndex: number): boolean {
+  return (
+    recognizedExemptionPattern.test(lines[sleepLineIndex] ?? '') ||
+    recognizedExemptionPattern.test(lines[sleepLineIndex - 1] ?? '')
+  );
 }
 
 /**
@@ -73,20 +99,35 @@ export function findTestSleepViolations(text: string): SleepViolation[] {
       continue;
     }
 
-    if (
-      fixedRealTimerSleepPattern.test(line) &&
-      gatesAnAssertion(lines, lineIndex) &&
-      !isExempt(lines, lineIndex)
-    ) {
+    if (!fixedRealTimerSleepPattern.test(line) || !gatesAnAssertion(lines, lineIndex)) {
+      continue;
+    }
+
+    // A recognized exemption clears it; a bare/unstructured `// fixed delay:`
+    // does not — it is flagged so the exemption cannot become a silent dodge.
+    if (hasRecognizedExemption(lines, lineIndex)) {
+      continue;
+    }
+
+    if (hasExemptionComment(lines, lineIndex)) {
       violations.push({
         line: lineIndex + 1,
         kind: 'fixed-sleep-before-assert',
         message:
-          'fixed waitForRealTimersForTesting(<number>) immediately before expect() — ' +
-          'wait for the observable condition (waitFor/waitForCondition) instead, ' +
-          'or add a "// fixed delay: <reason>" comment if this is a negative assertion or pre-dispatch settle',
+          'unstructured "// fixed delay:" exemption — name the category: ' +
+          '"fixed delay: negative assertion", "fixed delay: pre-dispatch settle", or "fixed delay: hang guard"',
       });
+      continue;
     }
+
+    violations.push({
+      line: lineIndex + 1,
+      kind: 'fixed-sleep-before-assert',
+      message:
+        'fixed waitForRealTimersForTesting(<number>) immediately before expect() — ' +
+        'wait for the observable condition (waitFor/waitForCondition) instead, ' +
+        'or add a "// fixed delay: <negative assertion|pre-dispatch settle|hang guard> ..." comment',
+    });
   }
 
   return violations;

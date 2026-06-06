@@ -65,7 +65,7 @@ describe('findTestSleepViolations', () => {
     expect(violations).toHaveLength(0);
   });
 
-  it('respects an exemption comment on the same line', () => {
+  it('respects a recognized exemption comment on the same line', () => {
     const violations = findTestSleepViolations(`
       it('x', async () => {
         await waitForRealTimersForTesting(200); // fixed delay: negative assertion (no event to await)
@@ -75,15 +75,48 @@ describe('findTestSleepViolations', () => {
     expect(violations).toHaveLength(0);
   });
 
-  it('respects an exemption comment on the line directly above', () => {
+  it('respects a recognized exemption comment on the line directly above', () => {
     const violations = findTestSleepViolations(`
       it('x', async () => {
-        // fixed delay: waits for subscription to establish (no observable ready signal)
+        // fixed delay: pre-dispatch settle (no observable ready signal)
         await waitForRealTimersForTesting(50);
         expect(items.length).toBe(1);
       });
     `);
     expect(violations).toHaveLength(0);
+  });
+
+  it('accepts the "hang guard" exemption category', () => {
+    const violations = findTestSleepViolations(`
+      it('x', async () => {
+        // fixed delay: hang guard on a real subprocess
+        await waitForRealTimersForTesting(300);
+        expect(result.exitCode).toBe(1);
+      });
+    `);
+    expect(violations).toHaveLength(0);
+  });
+
+  it('flags a bare/unstructured "// fixed delay:" exemption', () => {
+    const violations = findTestSleepViolations(`
+      it('x', async () => {
+        await waitForRealTimersForTesting(200); // fixed delay: because reasons
+        expect(items.length).toBe(0);
+      });
+    `);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.message).toContain('unstructured');
+  });
+
+  it('catches a literal delay with a numeric separator', () => {
+    const violations = findTestSleepViolations(`
+      it('x', async () => {
+        await waitForRealTimersForTesting(1_000);
+        expect(value).toBe(1);
+      });
+    `);
+    expect(violations).toHaveLength(1);
+    expect(violations[0]?.kind).toBe('fixed-sleep-before-assert');
   });
 
   it('does NOT exempt a Bun.sleep even with a fixed-delay comment', () => {

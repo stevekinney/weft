@@ -1514,8 +1514,9 @@ describe('worker WebSocket protocol', () => {
       deadline: number;
     };
 
-    // fixed delay: ensures wall-clock advances so the heartbeat-extended deadline
-    // is measurably greater than `before` (no event to await for the gap itself)
+    // ensures wall-clock advances so the heartbeat-extended deadline is
+    // measurably greater than `before` (no event to await for the gap itself)
+    // fixed delay: pre-dispatch settle
     await waitForRealTimersForTesting(25);
     ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-extend' }));
     await waitFor(
@@ -1835,9 +1836,10 @@ describe('worker WebSocket protocol', () => {
         concurrency: 5,
       }),
     );
-    await waitFor(() => server.registry.size === 0, {
-      label: 'non-worker register message ignored',
-    });
+    // `size === 0` is true immediately, so a condition-wait would return before
+    // the message could be wrongly handled; give the server time to (not) process it.
+    // fixed delay: negative assertion
+    await waitForRealTimersForTesting(50);
 
     // Registry should be empty — register messages are only processed on worker paths
     expect(server.registry.size).toBe(0);
@@ -3251,7 +3253,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     const ws2 = await connectStream(server, 'wf-multi');
     const messages1 = collectMessages(ws1);
     const messages2 = collectMessages(ws2);
-    // fixed delay: waits for both stream subscriptions to establish (no observable ready signal)
+    // fixed delay: pre-dispatch settle — waits for both stream subscriptions to establish (no observable ready signal)
     await waitForRealTimersForTesting(50);
 
     engine.dispatchEvent(new TokenEvent('wf-multi', 'shared-token', 'gpt-4'));
