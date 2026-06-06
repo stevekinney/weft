@@ -71,7 +71,7 @@ Execute multiple put/delete operations atomically. In `BunSQLiteStorage`, this r
 query?<T>(sql: string, params?: unknown[]): Promise<T[]>
 ```
 
-Raw SQL passthrough. Available on SQL-backed adapters such as `BunSQLiteStorage` and `NeonStorage`. `NeonStorage` runs passthrough queries inside `BEGIN READ ONLY`, so data-modifying statements are rejected by Postgres rather than by a text-only check. Use this for diagnostics and operator queries; engine code should stay on the storage primitives when it needs portable behavior.
+Raw SQL passthrough. Available on SQL-backed adapters such as `BunSQLiteStorage` and `NeonStorage`. `NeonStorage` first rejects non-read-only SQL with `assertReadOnlyQuery(sql)`, then runs accepted queries inside `BEGIN READ ONLY` so Postgres also enforces the boundary. Use this for diagnostics and operator queries; engine code should stay on the storage primitives when it needs portable behavior.
 
 ### `deleteRange()` (optional)
 
