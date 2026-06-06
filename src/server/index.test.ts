@@ -1288,7 +1288,7 @@ describe('worker WebSocket protocol', () => {
     expect(server.registry.size).toBe(1);
 
     ws.close();
-    await waitForRealTimersForTesting(100);
+    await waitFor(() => server.registry.size === 0, { label: 'worker unregistered on close' });
 
     expect(server.registry.size).toBe(0);
   });
@@ -1637,7 +1637,7 @@ describe('worker WebSocket protocol', () => {
 
     expect(dispatched).toBe(true);
 
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => received.length === 1, { label: 'task delivered to worker' });
 
     expect(received.length).toBe(1);
     expect(received[0]?.type).toBe('task');
@@ -1815,7 +1815,9 @@ describe('worker WebSocket protocol', () => {
         concurrency: 5,
       }),
     );
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.size === 0, {
+      label: 'non-worker register message ignored',
+    });
 
     // Registry should be empty — register messages are only processed on worker paths
     expect(server.registry.size).toBe(0);
@@ -1851,7 +1853,9 @@ describe('worker WebSocket protocol', () => {
     await server.dispatchTask({ operationId: 'op-a', activityName: 'charge', input: null });
     await server.dispatchTask({ operationId: 'op-b', activityName: 'charge', input: null });
 
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => received1.length === 1 && received2.length === 1, {
+      label: 'each worker received one task',
+    });
 
     // Each worker should have received exactly one task
     expect(received1.length).toBe(1);
@@ -1904,7 +1908,9 @@ describe('worker WebSocket protocol', () => {
       expect(dispatched).toBe(true);
     }
 
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => [...receivedByWorker.values()].every((tasks) => tasks.length === 2), {
+      label: 'every worker received two alpha tasks',
+    });
 
     // Every worker received exactly two alpha tasks.
     for (const [workerId, tasks] of receivedByWorker) {
@@ -2011,14 +2017,18 @@ describe('worker WebSocket protocol', () => {
     expect(server.registry.getWorker('w-recover')?.inFlight).toBe(1);
 
     // Wait for task result to arrive and decrement inFlight
-    await waitForRealTimersForTesting(100);
+    await waitFor(() => server.registry.getWorker('w-recover')?.inFlight === 0, {
+      label: 'first task result decremented inFlight',
+    });
     expect(server.registry.getWorker('w-recover')?.inFlight).toBe(0);
 
     // Dispatch second task — worker should accept it since capacity recovered
     await server.dispatchTask({ operationId: 'r-2', activityName: 'compute', input: null });
     expect(server.registry.getWorker('w-recover')?.inFlight).toBe(1);
 
-    await waitForRealTimersForTesting(100);
+    await waitFor(() => server.registry.getWorker('w-recover')?.inFlight === 0, {
+      label: 'second task result decremented inFlight',
+    });
     expect(server.registry.getWorker('w-recover')?.inFlight).toBe(0);
 
     // Both tasks were dispatched directly to the WebSocket worker (not queued)
@@ -2051,14 +2061,18 @@ describe('worker WebSocket protocol', () => {
     ws.send(
       JSON.stringify({ type: 'taskResult', operationId: 't-1', status: 'completed', value: null }),
     );
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => worker().concurrency - worker().inFlight === 2, {
+      label: 'first task completion freed capacity',
+    });
     expect(worker().concurrency - worker().inFlight).toBe(2);
 
     // Complete the other
     ws.send(
       JSON.stringify({ type: 'taskResult', operationId: 't-2', status: 'completed', value: null }),
     );
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => worker().concurrency - worker().inFlight === 3, {
+      label: 'second task completion freed capacity',
+    });
     expect(worker().concurrency - worker().inFlight).toBe(3);
 
     ws.close();
@@ -2088,7 +2102,7 @@ describe('worker WebSocket protocol', () => {
     });
 
     await worker.connect();
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.size === 1, { label: 'remote worker registered' });
 
     // Server should have registered the worker
     expect(server.registry.size).toBe(1);
@@ -2105,13 +2119,17 @@ describe('worker WebSocket protocol', () => {
     expect(dispatched).toBe(true);
 
     // Wait for the worker to process the task and send the result
-    await waitForRealTimersForTesting(200);
+    await waitFor(() => server.registry.getAll()[0]?.inFlight === 0, {
+      label: 'remote task result decremented inFlight',
+    });
 
     // in-flight should be back to 0 after the result is received
     expect(server.registry.getAll()[0]?.inFlight).toBe(0);
 
     await worker.disconnect();
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.size === 0, {
+      label: 'remote worker unregistered after disconnect',
+    });
 
     // Worker should be unregistered after disconnect
     expect(server.registry.size).toBe(0);
@@ -2185,7 +2203,9 @@ describe('worker WebSocket protocol', () => {
       workflowId: 'wf-sticky-1',
       sticky: true,
     });
-    await waitForRealTimersForTesting(100);
+    await waitFor(() => firstReceived.some((m) => m.operationId === 'sticky-op-2'), {
+      label: 'sticky dispatch routed op-2 to the same worker',
+    });
 
     // The same worker that handled op-1 should also get op-2.
     expect(firstReceived.some((m) => m.operationId === 'sticky-op-2')).toBe(true);
@@ -2228,7 +2248,9 @@ describe('worker WebSocket protocol', () => {
       workflowId: 'wf-cap',
       sticky: true,
     });
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => received2.some((m) => m.operationId === 'cap-op-2'), {
+      label: 'sticky dispatch fell back to second worker',
+    });
 
     expect(received2.some((m) => m.operationId === 'cap-op-2')).toBe(true);
 
@@ -2349,7 +2371,9 @@ describe('queue-aware worker stream', () => {
       queue: 'billing',
     });
 
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => billingReceived.length === 1, {
+      label: 'billing worker received the task',
+    });
 
     // Only the billing worker should receive the task
     expect(billingReceived.length).toBe(1);
@@ -2399,7 +2423,7 @@ describe('queue-aware worker stream', () => {
       input: null,
     });
 
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => received.length === 1, { label: 'task routed to default queue worker' });
 
     expect(received.length).toBe(1);
     expect(received[0]?.operationId).toBe('default-op');
@@ -2437,7 +2461,9 @@ describe('queue-aware worker stream', () => {
       input: null,
     });
 
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => defaultReceived.length === 1, {
+      label: 'default-queue task reached default worker',
+    });
 
     expect(defaultReceived.length).toBe(1);
     expect(billingReceived.length).toBe(0);
@@ -2469,7 +2495,9 @@ describe('queue-aware worker stream', () => {
     });
 
     await worker.connect();
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.size === 1, {
+      label: 'remote worker registered on billing queue',
+    });
 
     // Worker should be registered on the billing queue
     expect(server.registry.size).toBe(1);
@@ -2486,7 +2514,9 @@ describe('queue-aware worker stream', () => {
     });
     expect(dispatched).toBe(true);
 
-    await waitForRealTimersForTesting(200);
+    await waitFor(() => registered.inFlight === 0, {
+      label: 'billing-queue task completed',
+    });
 
     // Task should be completed
     expect(registered.inFlight).toBe(0);
@@ -2609,7 +2639,9 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     // Dispatch token events directly on the engine
     engine.dispatchEvent(new TokenEvent(id, 'Hello', 'gpt-4'));
     engine.dispatchEvent(new TokenEvent(id, ' world', 'gpt-4'));
-    await waitForRealTimersForTesting(200);
+    await waitFor(() => messages.filter((m) => m.type === TokenEvent.type).length === 2, {
+      label: 'both token events streamed to client',
+    });
 
     // Should have received the two token events
     const tokenMessages = messages.filter((m) => m.type === TokenEvent.type);
@@ -2633,7 +2665,12 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     await waitForRealTimersForTesting(50);
 
     engine.dispatchEvent(new TokenEvent(workflowId, 'encoded-live', 'gpt-4'));
-    await waitForRealTimersForTesting(200);
+    await waitFor(
+      () => messages.filter((message) => message.type === TokenEvent.type).length === 1,
+      {
+        label: 'encoded-id token event streamed to client',
+      },
+    );
 
     const tokenMessages = messages.filter((message) => message.type === TokenEvent.type);
     expect(tokenMessages).toHaveLength(1);
@@ -2653,7 +2690,10 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     await waitForRealTimersForTesting(50);
 
     engine.dispatchEvent(new WorkflowCompletedEvent(workflowId, 'encoded-watch', 1));
-    await waitForRealTimersForTesting(200);
+    await waitFor(
+      () => messages.filter((message) => message.type === WorkflowCompletedEvent.type).length >= 1,
+      { label: 'encoded-id watch completion event streamed to client' },
+    );
 
     const completionMessages = messages.filter(
       (message) => message.type === WorkflowCompletedEvent.type,
@@ -2679,7 +2719,9 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     // Dispatch token events for two different workflows
     engine.dispatchEvent(new TokenEvent('wf-a', 'for-a', 'gpt-4'));
     engine.dispatchEvent(new TokenEvent('wf-b', 'for-b', 'gpt-4'));
-    await waitForRealTimersForTesting(200);
+    await waitFor(() => messages.filter((m) => m.type === TokenEvent.type).length === 1, {
+      label: 'only the subscribed workflow token event streamed',
+    });
 
     // Should only see the event for wf-a
     const tokenMessages = messages.filter((m) => m.type === TokenEvent.type);
