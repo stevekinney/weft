@@ -4,7 +4,11 @@ const repositoryPath = join(import.meta.dir, '..');
 const expectedPackageName = '@lostgradient/weft';
 const maximumPackedBytes = 5 * 1024 * 1024;
 const maximumUnpackedBytes = 12 * 1024 * 1024;
-const maximumEntryCount = 1100;
+// Raised for the 0.3.0 surface (Neon storage adapter, durable ctx.step, the
+// RemoteWorker attempt-token protocol files) — all legitimate dist/ output, no
+// test or fixture files. The packed/unpacked byte budgets remain the primary
+// bloat backstop (the 0.3.0 tarball is ~2 MB / ~8 MB, well under 5 MB / 12 MB).
+const maximumEntryCount = 1200;
 
 type PackFile = {
   path: string;
