@@ -107,20 +107,23 @@ export type RestBinding<Input, Output> = {
   readonly shapeSuccess?: (output: Output, request: Request) => Response;
   /**
    * Optional override for fault → HTTP response mapping. When absent,
-   * the transport adapter falls back to `faultToHttpResponse` (the
-   * canonical `{ error: { code, message, data? } }` shape that JSON-RPC
-   * also returns).
+   * the transport adapter falls back to `faultToHttpResponse`, which emits
+   * the REST fault body `{ error: { code, message, data? } }`. This is
+   * distinct from the JSON-RPC fault object (`faultToJsonRpcError`): JSON-RPC
+   * uses a flat `{ code, message, data }` with a numeric `code` and the
+   * symbolic name relocated to `data.weftCode`. REST and JSON-RPC deliberately
+   * differ in fault shape, so each transport owns its own projection.
    *
    * REST operations provide this to shape faults the way a REST client
-   * expects rather than the canonical structured shape: most use
-   * `shapeRestFault`, which masks an `EngineFailure` to a flat
-   * `{ error: "Internal server error" }` with status `500` (never leaking
-   * internal detail over REST) and maps the remaining fault codes to their
-   * HTTP statuses. A few operations supply a bespoke shaper for
-   * operation-specific status mapping (for example, a timeout → `408` or an
-   * invalid-parameter detail → `400`). This per-operation hook is the current
-   * contract, not a transitional shim — REST and JSON-RPC deliberately differ
-   * in fault shape, so the binding owns its REST projection.
+   * expects: most use `shapeRestFault`, which masks an `EngineFailure` to a
+   * flat `{ error: "Internal server error" }` with status `500` (never
+   * leaking internal detail over REST) and maps the remaining fault codes to
+   * their HTTP statuses. A few operations supply a bespoke shaper when an
+   * operation needs a fault-specific message or status that the shared map
+   * does not give it (for example, `get-workflow-result` returns
+   * `"Timeout waiting for workflow result"` on a `Timeout`, and
+   * `get-stream-chunks` maps `InvalidParams` to `400`). This per-operation
+   * hook is the current contract, not a transitional shim.
    */
   readonly shapeFault?: (fault: OperationFault) => Response;
 };
