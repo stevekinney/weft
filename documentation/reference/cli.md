@@ -149,7 +149,7 @@ weft --version
 weft -v
 ```
 
-The output is the bare version string (for example, `0.2.1`) so scripts can capture it without parsing decoration. The exit code is `0`.
+The output is the bare version string (for example, `0.3.0`) so scripts can capture it without parsing decoration. The exit code is `0`.
 
 Version is recognized only as the _leading_ token, which keeps each subcommand in control of its own option line. `weft serve --version` does not print the version—`serve` rejects `--version` as an unknown option—so a real command never silently short-circuits to version output. This is the same command surfaced as `version` in `--help` and shell completions.
 

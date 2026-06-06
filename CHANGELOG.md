@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-06-06
+
+### Added — durable step-based workflows
+
+`ctx.step(name, fn)` (the "progressive disclosure" API compiled with
+`compileStepWorkflow`) is now genuinely crash-durable. Each step routes through
+the same positional replay machinery as `ctx.run`, so a completed step is
+replayed from the checkpoint rather than re-executed on recovery. Durability is
+positional, so steps must be awaited in order; step workflows require
+`workflowExecutionMode: 'inline'` and fail fast with an actionable error under
+worker mode.
+
+### Added — Neon/Postgres storage adapter
+
+New `@lostgradient/weft/storage/neon` export with `NeonStorage` and
+`resolveStorage({ type: 'neon' })`, backed by the official Neon serverless
+driver as a lazy optional dependency. Stores opaque bytes with lexicographic
+scan ordering and full `get`/`put`/`delete`/`scan`/`batch`/`conditionalBatch`
+support. `assertDurableStorageForRecovery()` now accepts `persistence: 'remote'`
+for a durable remote store that proves linearizable read-after-write, snapshot
+scans, atomic batches, and `conditionalBatch`. Neon integration tests skip
+cleanly without `NEON_DATABASE_URL`.
+
+### Added — idempotent starts and atomic `startOrSignal`
+
+`engine.start(..., { idempotencyKey })` now enforces at-most-once creation with
+a durable `start-idem:` mapping committed atomically via `conditionalBatch`; `id`
+and `idempotencyKey` are mutually exclusive. New `engine.startOrSignal()`
+(signal-with-start) creates a workflow and persists a signal atomically when
+absent, signals when running, and reports a `Conflict` fault when terminal.
+Surfaced through `Engine`, `LocalClient`, `HttpClient`, REST, JSON-RPC, and the
+generated operation client. A spent idempotency key whose workflow record is
+gone surfaces a conflict rather than starting a replacement.
+
+### Added — RemoteWorker attempt tokens
+
+Each dispatched attempt now carries a unique `attemptToken` that the worker
+echoes on completion; the server validates `(operationId, workerId,
+attemptToken)` so a stale same-worker completion after reassignment is rejected.
+Validation is lenient (an absent echo falls back to the prior workerId-only
+check) to keep single-worker deployments from livelocking. No worker protocol
+version bump.
+
+### Changed — suspend/resume stabilization
+
+`engine.suspend()` / `engine.resume()` are surfaced through `LocalClient`,
+`HttpClient`, REST, and JSON-RPC. Suspend parks before the durable commit;
+cancel/fail now transition a suspended workflow to terminal and reject
+outstanding `result()` waiters (previously they could hang); the execution
+deadline is re-armed on resume; worker-mode suspend loads state before rejecting
+the mode.
+
+### Added — singleton second-instance detector
+
+Optional, best-effort startup guard (`detectSecondInstance`, default off) that
+warns when a second engine process appears to be running against the same
+durable store. Detection is sequence-based (a foreign monotonic heartbeat
+sequence advancing across two of our ticks), so it survives skewed or frozen
+peer clocks. This is a misconfiguration warning, not fencing — Weft remains one
+engine process per durable store. Ships with a singleton-deployment guide.
+
 ### Added — history circuit breaker
 
 New `EngineOptions.history: { maxEvents?: number }`. Activation rehydrates a

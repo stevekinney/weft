@@ -119,7 +119,7 @@ describe('generateOpenRpcDocument — basic shape', () => {
     expect(document['openrpc']).toBe('1.3.2');
     expect(typeof document['info']).toBe('object');
     expect((document['info'] as Record<string, unknown>)['title']).toBeDefined();
-    expect((document['info'] as Record<string, unknown>)['version']).toBe('0.2.1');
+    expect((document['info'] as Record<string, unknown>)['version']).toBe('0.3.0');
     expect(Array.isArray(document['methods'])).toBe(true);
   });
 

@@ -12,7 +12,7 @@ describe('MCP discovery document', () => {
       protocolVersion: '2025-11-25',
       serverInfo: {
         name: 'weft',
-        version: '0.2.1',
+        version: '0.3.0',
       },
       transports: {
         streamableHttp: {

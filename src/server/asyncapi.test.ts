@@ -177,7 +177,7 @@ describe('AsyncAPI document', () => {
     }) as AsyncApiDocument;
 
     expect(document.info?.title).toBe('Weft Workflow Engine');
-    expect(document.info?.version).toBe('0.2.1');
+    expect(document.info?.version).toBe('0.3.0');
   });
 
   it('uses ws for non-TLS server URLs', () => {
