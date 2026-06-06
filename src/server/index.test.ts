@@ -1304,7 +1304,9 @@ describe('worker WebSocket protocol', () => {
     await waitForRealTimersForTesting(50);
 
     ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w3' }));
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => (server.registry.getAll()[0]?.lastHeartbeat ?? 0) > before, {
+      label: 'heartbeat timestamp updated',
+    });
 
     const after = server.registry.getAll()[0]?.lastHeartbeat ?? 0;
     expect(after).toBeGreaterThanOrEqual(before);
@@ -1512,9 +1514,19 @@ describe('worker WebSocket protocol', () => {
       deadline: number;
     };
 
+    // fixed delay: ensures wall-clock advances so the heartbeat-extended deadline
+    // is measurably greater than `before` (no event to await for the gap itself)
     await waitForRealTimersForTesting(25);
     ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-extend' }));
-    await waitForRealTimersForTesting(75);
+    await waitFor(
+      async () => {
+        const current = decode(
+          (await engine.storage.get(KEYS.operationInflight('heartbeat-op')))!,
+        ) as { deadline: number };
+        return current.deadline > before.deadline;
+      },
+      { label: 'heartbeat extended the inflight deadline' },
+    );
 
     const after = decode((await engine.storage.get(KEYS.operationInflight('heartbeat-op')))!) as {
       deadline: number;
@@ -1545,7 +1557,15 @@ describe('worker WebSocket protocol', () => {
       await storage.put(KEYS.operationInflight('heartbeat-corrupt-op'), encode({ broken: true }));
 
       ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-corrupt' }));
-      await waitForRealTimersForTesting(100);
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some(
+            (call) =>
+              call[0] ===
+              '[weft] Corrupt inflight record for task "heartbeat-corrupt-op" during heartbeat — skipping visibility extension',
+          ),
+        { label: 'corrupt inflight heartbeat warning logged' },
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Corrupt inflight record for task "heartbeat-corrupt-op" during heartbeat — skipping visibility extension',
@@ -2744,7 +2764,12 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     // Now connect — client should receive replay of existing token events
     const ws = await connectStream(server, 'wf-replay');
     const messages = collectMessages(ws);
-    await waitForRealTimersForTesting(200);
+    await waitFor(
+      () => messages.filter((message) => message.type === TokenEvent.type).length >= 2,
+      {
+        label: 'replayed token events received',
+      },
+    );
 
     const replayMessages = messages.filter((message) => message.type === TokenEvent.type);
     expect(replayMessages.length).toBeGreaterThanOrEqual(2);
@@ -2837,7 +2862,9 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     server = serve({ engine, port: 0 });
 
     engine.dispatchEvent(new TokenEvent('wf-sequence', 'new', 'gpt-4'));
-    await waitForRealTimersForTesting(200);
+    await waitFor(async () => (await storage.get(KEYS.event('wf-sequence', 5))) !== null, {
+      label: 'event persistence at next sequence',
+    });
 
     expect(await storage.get(KEYS.event('wf-sequence', 4))).not.toBeNull();
     expect(await storage.get(KEYS.event('wf-sequence', 5))).not.toBeNull();
@@ -2849,7 +2876,12 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     server = serve({ engine, port: 0 });
 
     engine.dispatchEvent(new TokenEvent('wf-token-blob', 'alpha', 'gpt-4'));
-    await waitForRealTimersForTesting(200);
+    await waitFor(
+      async () => (await storage.get(KEYS.streamChunk('wf-token-blob', 'tokens', 0))) !== null,
+      {
+        label: 'token chunk persistence',
+      },
+    );
 
     const storedChunk = await storage.get(KEYS.streamChunk('wf-token-blob', 'tokens', 0));
     expect(storedChunk).not.toBeNull();
@@ -2880,9 +2912,13 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
     try {
       engine.dispatchEvent(new TokenEvent('wf-sequence-retry', 'first', 'gpt-4'));
-      await waitForRealTimersForTesting(200);
+      await waitFor(() => errorSpy.mock.calls.length > 0, {
+        label: 'initial event sequence scan failure to surface',
+      });
       engine.dispatchEvent(new TokenEvent('wf-sequence-retry', 'second', 'gpt-4'));
-      await waitForRealTimersForTesting(200);
+      await waitFor(async () => (await storage.get(KEYS.event('wf-sequence-retry', 0))) !== null, {
+        label: 'event persistence after retry',
+      });
 
       expect(await storage.get(KEYS.event('wf-sequence-retry', 0))).not.toBeNull();
       expect(errorSpy).toHaveBeenCalled();
@@ -2947,7 +2983,12 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
     const ws = await connectStream(server, 'wf-resume', { resumeFrom: 0 });
     const messages = collectMessages(ws);
-    await waitForRealTimersForTesting(200);
+    await waitFor(
+      () => messages.filter((message) => message.type === TokenEvent.type).length === 1,
+      {
+        label: 'missing token replay to stream client',
+      },
+    );
 
     const replayMessages = messages.filter((message) => message.type === TokenEvent.type);
     expect(replayMessages).toHaveLength(1);
@@ -2970,7 +3011,12 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     await waitForRealTimersForTesting(50);
 
     engine.dispatchEvent(new TokenEvent('wf-resume-clamped', 'second', 'gpt-4'));
-    await waitForRealTimersForTesting(200);
+    await waitFor(
+      () => messages.filter((message) => message.type === TokenEvent.type).length === 1,
+      {
+        label: 'clamped resume live token to stream client',
+      },
+    );
 
     const tokenMessages = messages.filter((message) => message.type === TokenEvent.type);
     expect(tokenMessages).toHaveLength(1);
@@ -2990,7 +3036,12 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     await waitForRealTimersForTesting(50);
 
     engine.dispatchEvent(new TokenEvent('wf-resume-empty', 'live', 'gpt-4'));
-    await waitForRealTimersForTesting(200);
+    await waitFor(
+      () => messages.filter((message) => message.type === TokenEvent.type).length === 1,
+      {
+        label: 'empty replay live token to stream client',
+      },
+    );
 
     const tokenMessages = messages.filter((message) => message.type === TokenEvent.type);
     expect(tokenMessages).toHaveLength(1);
@@ -3015,7 +3066,12 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     await waitForRealTimersForTesting(50);
 
     engine.dispatchEvent(new TokenEvent('wf-resume-malformed', 'live', 'gpt-4'));
-    await waitForRealTimersForTesting(200);
+    await waitFor(
+      () => messages.filter((message) => message.type === TokenEvent.type).length === 1,
+      {
+        label: 'malformed replay live token to stream client',
+      },
+    );
 
     const tokenMessages = messages.filter((message) => message.type === TokenEvent.type);
     expect(tokenMessages).toHaveLength(1);
@@ -3063,7 +3119,16 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     await waitForRealTimersForTesting(50);
 
     releaseReplay();
-    await waitForRealTimersForTesting(250);
+    await waitFor(
+      () =>
+        messages
+          .filter((message) => message.type === TokenEvent.type)
+          .map((message) => message['sequence'])
+          .join(',') === '1,2',
+      {
+        label: 'buffered overlap replay and live token sequence',
+      },
+    );
 
     const tokenMessages = messages.filter((message) => message.type === TokenEvent.type);
     expect(tokenMessages.map((message) => message['sequence'])).toEqual([1, 2]);
@@ -3095,7 +3160,12 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
     const ws = await connectStream(server, 'wf-restart', { resumeFrom: -1 });
     const messages = collectMessages(ws);
-    await waitForRealTimersForTesting(200);
+    await waitFor(
+      () => messages.filter((message) => message.type === TokenEvent.type).length === 1,
+      {
+        label: 'restart token replay to stream client',
+      },
+    );
 
     const replayMessages = messages.filter((message) => message.type === TokenEvent.type);
     expect(replayMessages).toHaveLength(1);
@@ -3124,7 +3194,16 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
     try {
       const ws = await connectStream(server, 'wf-replay-failure');
-      await waitForRealTimersForTesting(100);
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some(
+            (call) =>
+              call[0] === '[weft] Failed to replay token stream for workflow "wf-replay-failure":',
+          ),
+        {
+          label: 'token replay failure log',
+        },
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Failed to replay token stream for workflow "wf-replay-failure":',
@@ -3155,7 +3234,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
         concurrency: 5,
       }),
     );
-    await waitForRealTimersForTesting(50);
+    await waitForRealTimersForTesting(50); // fixed delay: negative assertion (no event to await)
 
     // Registry should be empty — register messages are only for worker paths
     expect(server.registry.size).toBe(0);
@@ -3172,10 +3251,16 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     const ws2 = await connectStream(server, 'wf-multi');
     const messages1 = collectMessages(ws1);
     const messages2 = collectMessages(ws2);
+    // fixed delay: waits for both stream subscriptions to establish (no observable ready signal)
     await waitForRealTimersForTesting(50);
 
     engine.dispatchEvent(new TokenEvent('wf-multi', 'shared-token', 'gpt-4'));
-    await waitForRealTimersForTesting(200);
+    await waitFor(
+      () =>
+        messages1.filter((m) => m.type === TokenEvent.type).length >= 1 &&
+        messages2.filter((m) => m.type === TokenEvent.type).length >= 1,
+      { label: 'both stream clients received the shared token event' },
+    );
 
     // Both clients should receive the token event
     const tokens1 = messages1.filter((m) => m.type === TokenEvent.type);
@@ -3541,7 +3626,9 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     });
 
     // Wait for the worker to poll, execute, and complete
-    await waitForRealTimersForTesting(500);
+    await waitFor(() => server.taskQueue.pendingCount('default') === 0 && worker.inFlight === 0, {
+      label: 'long-poll worker to drain dispatched task',
+    });
 
     // Worker should be running with no in-flight tasks
     expect(worker.running).toBe(true);
@@ -3624,7 +3711,7 @@ describe('task assignment deduplication', () => {
     expect(first).toBe(true);
     expect(second).toBe(false);
 
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => received.length === 1, { label: 'duplicate task dispatch delivered once' });
 
     // Worker should receive exactly one task
     expect(received.length).toBe(1);
@@ -3734,7 +3821,11 @@ describe('task assignment deduplication', () => {
 
     expect(server.registry.isAssigned('clear-op')).toBe(true);
 
-    await waitForRealTimersForTesting(100);
+    await waitFor(
+      () =>
+        !server.registry.isAssigned('clear-op') && server.registry.getWorker('w1')?.inFlight === 0,
+      { label: 'clear-op task result to clear in-flight tracking' },
+    );
 
     // After the result arrives, the task should no longer be tracked
     expect(server.registry.isAssigned('clear-op')).toBe(false);
@@ -3808,7 +3899,11 @@ describe('task assignment deduplication', () => {
       input: null,
     });
 
-    await waitForRealTimersForTesting(100);
+    await waitFor(
+      async () =>
+        (await engine.storage.get(KEYS.operationResolved('cancelled-status-op'))) !== null,
+      { label: 'cancelled-status-op task result to resolve' },
+    );
 
     expect(await engine.storage.get(KEYS.operationInflight('cancelled-status-op'))).toBeNull();
     expect(await engine.storage.get(KEYS.operationResolved('cancelled-status-op'))).not.toBeNull();
@@ -3858,7 +3953,15 @@ describe('task assignment deduplication', () => {
         input: null,
       });
 
-      await waitForRealTimersForTesting(150);
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some(
+            (call) =>
+              call[0] ===
+              '[weft] Failed to transition task "task-result-fail" to resolved — inflight record may leak:',
+          ),
+        { label: 'task result persistence failure to be logged' },
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Failed to transition task "task-result-fail" to resolved — inflight record may leak:',
@@ -3922,7 +4025,9 @@ describe('task assignment deduplication', () => {
       await registerWorker(ws2, { workerId: 'reconnecting-worker', activities: ['charge'] });
 
       ws1.close();
-      await waitForRealTimersForTesting(100);
+      await waitFor(() => warningSpy.mock.calls.length > 0, {
+        label: 'stale socket close warning to be logged',
+      });
 
       expect(server.registry.getWorker('reconnecting-worker')).toBeDefined();
       expect(warningSpy).toHaveBeenCalled();
@@ -3975,7 +4080,9 @@ describe('task assignment deduplication', () => {
     });
     expect(second).toBe(true);
 
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => received.filter((message) => message.type === 'task').length === 2, {
+      label: 'reuse-op to dispatch twice',
+    });
 
     // Worker should have received two tasks
     const taskMessages = received.filter((m) => m.type === 'task');
@@ -4045,7 +4152,9 @@ describe('visibility timeout persistence', () => {
       activityName: 'charge',
       input: { amount: 100 },
     });
-    await waitForRealTimersForTesting(50);
+    await waitFor(async () => (await storage.get(KEYS.operationInflight('vt-op-1'))) !== null, {
+      label: 'vt-op-1 in-flight record to persist',
+    });
 
     const key = KEYS.operationInflight('vt-op-1');
     const raw = await storage.get(key);
@@ -4111,7 +4220,9 @@ describe('visibility timeout persistence', () => {
       input: null,
       visibilityTimeout: customTimeout,
     });
-    await waitForRealTimersForTesting(50);
+    await waitFor(async () => (await storage.get(KEYS.operationInflight('vt-op-3'))) !== null, {
+      label: 'vt-op-3 to be inflight',
+    });
 
     const key = KEYS.operationInflight('vt-op-3');
     const raw = await storage.get(key);
@@ -4138,7 +4249,9 @@ describe('visibility timeout persistence', () => {
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
 
     await server.dispatchTask({ operationId: 'vt-op-4', activityName: 'charge', input: null });
-    await waitForRealTimersForTesting(50);
+    await waitFor(async () => (await storage.get(KEYS.operationInflight('vt-op-4'))) !== null, {
+      label: 'vt-op-4 to be inflight',
+    });
 
     const key = KEYS.operationInflight('vt-op-4');
     const raw = await storage.get(key);
@@ -4170,7 +4283,9 @@ describe('visibility timeout persistence', () => {
 
     // Start the server — it should restore the in-flight record
     server = serve({ engine, port: 0 });
-    await waitForRealTimersForTesting(100); // Allow async restore to complete
+    await waitFor(() => server.registry.isAssigned('restored-op'), {
+      label: 'restored-op to be assigned',
+    });
 
     // The registry should now track the restored task
     expect(server.registry.isAssigned('restored-op')).toBe(true);
@@ -4207,7 +4322,13 @@ describe('visibility timeout persistence', () => {
     });
 
     engine.dispatchEvent(new WorkflowCancelledEvent('wf-restored-cancel'));
-    await waitForRealTimersForTesting(100);
+    await waitFor(
+      () =>
+        received.some((message) => {
+          return message.type === 'cancel' && message.operationId === 'restored-cancel-op';
+        }),
+      { label: 'restored-cancel-op cancellation message' },
+    );
 
     expect(
       received.some((message) => {
@@ -4226,7 +4347,16 @@ describe('visibility timeout persistence', () => {
 
     try {
       server = serve({ engine, port: 0 });
-      await waitForRealTimersForTesting(100);
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some((call) => {
+            return (
+              call[0] ===
+              '[weft] Corrupt inflight record at "op:inflight:restore-corrupt-op" during restore — skipping'
+            );
+          }),
+        { label: 'corrupt inflight restore error log' },
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Corrupt inflight record at "op:inflight:restore-corrupt-op" during restore — skipping',
@@ -4255,7 +4385,13 @@ describe('visibility timeout persistence', () => {
 
     try {
       server = serve({ engine, port: 0 });
-      await waitForRealTimersForTesting(250);
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some((call) => {
+            return call[0] === '[weft] Failed to restore in-flight tasks from storage:';
+          }),
+        { label: 'restore scan failure error log' },
+      );
 
       expect(warningSpy).toHaveBeenCalled();
       expect(errorSpy).toHaveBeenCalledWith(
@@ -4286,7 +4422,9 @@ describe('visibility timeout persistence', () => {
     await storage.put(KEYS.operationInflight('expired-op'), encode(expiredRecord));
 
     server = serve({ engine, port: 0 });
-    await waitForRealTimersForTesting(100);
+    await waitFor(async () => (await storage.get(KEYS.operationInflight('expired-op'))) === null, {
+      label: 'expired-op inflight record cleanup',
+    });
 
     // The expired record should be removed from storage
     const raw = await storage.get(KEYS.operationInflight('expired-op'));
@@ -4369,13 +4507,17 @@ describe('worker disconnection triggers task reassignment', () => {
       activityName: 'charge',
       input: { amount: 42 },
     });
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.isAssigned('requeue-op-1'), {
+      label: 'requeue-op-1 to be assigned',
+    });
 
     expect(server.registry.isAssigned('requeue-op-1')).toBe(true);
 
     // Disconnect w1 — its in-flight task should be reassigned to w2
     ws1.close();
-    await waitForRealTimersForTesting(200);
+    await waitFor(() => received.filter((m) => m.type === 'task').length === 1, {
+      label: 'requeue-op-1 task reassignment',
+    });
 
     const taskMessages = received.filter((m) => m.type === 'task');
     expect(taskMessages.length).toBe(1);
@@ -4410,7 +4552,13 @@ describe('worker disconnection triggers task reassignment', () => {
 
     // Disconnect w1 — task should be re-dispatched with attempt 3
     ws1.close();
-    await waitForRealTimersForTesting(200);
+    await waitFor(
+      () => {
+        const taskMessages = received.filter((m) => m.type === 'task');
+        return taskMessages.length === 1 && taskMessages[0]?.attempt === 3;
+      },
+      { label: 'attempt-op reassignment with incremented attempt' },
+    );
 
     const taskMessages = received.filter((m) => m.type === 'task');
     expect(taskMessages.length).toBe(1);
@@ -4435,7 +4583,9 @@ describe('worker disconnection triggers task reassignment', () => {
       activityName: 'charge',
       input: null,
     });
-    await waitForRealTimersForTesting(50);
+    await waitFor(async () => (await storage.get(KEYS.operationInflight('cleanup-op'))) !== null, {
+      label: 'cleanup-op to be inflight',
+    });
 
     // Verify the original in-flight record exists
     const keyBefore = KEYS.operationInflight('cleanup-op');
@@ -4443,7 +4593,9 @@ describe('worker disconnection triggers task reassignment', () => {
 
     // Disconnect w1
     ws1.close();
-    await waitForRealTimersForTesting(200);
+    await waitFor(() => server.registry.getTask('cleanup-op')?.workerId === 'w2', {
+      label: 'cleanup-op reassigned to w2',
+    });
 
     // The old in-flight record should be deleted (a new one is created for w2)
     // The task should now be assigned in the registry (to w2)
@@ -4465,13 +4617,17 @@ describe('worker disconnection triggers task reassignment', () => {
       activityName: 'charge',
       input: { amount: 99 },
     });
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.isAssigned('fallback-op'), {
+      label: 'fallback-op to be assigned',
+    });
 
     expect(server.registry.isAssigned('fallback-op')).toBe(true);
 
     // Disconnect the only worker — task should go to long-poll queue
     ws.close();
-    await waitForRealTimersForTesting(200);
+    await waitFor(() => server.taskQueue.pendingCount('default') === 1, {
+      label: 'fallback-op queued for long-poll',
+    });
 
     // The task should be available via long-poll
     expect(server.taskQueue.pendingCount('default')).toBe(1);
@@ -4609,7 +4765,15 @@ describe('worker disconnection triggers task reassignment', () => {
       await storage.put(KEYS.operationInflight('disconnect-corrupt-op'), encode({ bad: true }));
 
       ws.close();
-      await waitForRealTimersForTesting(150);
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some(
+            (call) =>
+              call[0] ===
+              '[weft] Corrupt inflight record for task "disconnect-corrupt-op" — skipping reassignment',
+          ),
+        { label: 'corrupt disconnect inflight record logged' },
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Corrupt inflight record for task "disconnect-corrupt-op" — skipping reassignment',
@@ -4637,7 +4801,15 @@ describe('worker disconnection triggers task reassignment', () => {
       await storage.delete(KEYS.operationInflight('disconnect-missing-op'));
 
       ws.close();
-      await waitForRealTimersForTesting(150);
+      await waitFor(
+        () =>
+          warningSpy.mock.calls.some(
+            (call) =>
+              call[0] ===
+              '[weft] No inflight record found in storage for task "disconnect-missing-op" — skipping reassignment',
+          ),
+        { label: 'missing disconnect inflight record warning logged' },
+      );
 
       expect(warningSpy).toHaveBeenCalledWith(
         '[weft] No inflight record found in storage for task "disconnect-missing-op" — skipping reassignment',
@@ -4673,7 +4845,15 @@ describe('worker disconnection triggers task reassignment', () => {
       await waitForRealTimersForTesting(50);
 
       ws.close();
-      await waitForRealTimersForTesting(150);
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some(
+            (call) =>
+              call[0] ===
+              '[weft] Failed to reassign task "disconnect-get-fail-op" from worker "w-disconnect-get-fail":',
+          ),
+        { label: 'disconnect reassignment failure logged' },
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Failed to reassign task "disconnect-get-fail-op" from worker "w-disconnect-get-fail":',
@@ -4754,7 +4934,7 @@ describe('worker disconnection triggers task reassignment', () => {
 
     // Disconnect without any dispatched tasks
     ws.close();
-    await waitForRealTimersForTesting(100);
+    await waitFor(() => server.registry.size === 0, { label: 'worker with no tasks unregistered' });
 
     // Worker should be unregistered, no tasks in queue
     expect(server.registry.size).toBe(0);
@@ -4849,7 +5029,9 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       input: { amount: 42 },
       visibilityTimeout: 100, // 100ms — will expire quickly
     });
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.isAssigned('expiry-op-1'), {
+      label: 'expiry-op-1 assigned to worker',
+    });
 
     // Task should be assigned
     expect(server.registry.isAssigned('expiry-op-1')).toBe(true);
@@ -4906,7 +5088,12 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       attempt: 2,
       visibilityTimeout: 100,
     });
-    await waitForRealTimersForTesting(300);
+    await waitFor(
+      () =>
+        received.filter((m) => m.type === 'task' && m.operationId === 'attempt-expiry-op').length >=
+        2,
+      { label: 'attempt-expiry task re-dispatched after visibility expiry' },
+    );
 
     const taskMessages = received.filter(
       (m) => m.type === 'task' && m.operationId === 'attempt-expiry-op',
@@ -4940,7 +5127,12 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       input: null,
       visibilityTimeout: 60_000,
     });
-    await waitForRealTimersForTesting(200);
+    await waitFor(
+      () =>
+        server.registry.isAssigned('noexpiry-op') &&
+        received.filter((m) => m.type === 'task' && m.operationId === 'noexpiry-op').length === 1,
+      { label: 'noexpiry-op initial dispatch' },
+    );
 
     // The task should still be assigned, not reassigned
     expect(server.registry.isAssigned('noexpiry-op')).toBe(true);
@@ -5071,7 +5263,14 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     // Orphaned records (not tracked in the deadline heap) are only discovered
     // by the periodic full-storage reconciliation, which runs at 12x the
     // visibility poll interval (50ms * 12 = 600ms here).
-    await waitForRealTimersForTesting(800);
+    await waitFor(
+      () =>
+        received.some(
+          (message) =>
+            message.type === 'task' && message.operationId === 'orphan-op' && message.attempt === 2,
+        ),
+      { label: 'orphaned expired record reassigned' },
+    );
 
     const taskMessages = received.filter((m) => m.type === 'task' && m.operationId === 'orphan-op');
     expect(taskMessages.length).toBe(1);
@@ -5115,14 +5314,16 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     ws.send(JSON.stringify({ type: 'heartbeat', workerId: 'w-heartbeat-stale-heap' }));
 
     let extendedDeadline = initialRecord.deadline;
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const persisted = decode(
-        (await storage.get(KEYS.operationInflight('heartbeat-stale-heap-op')))!,
-      ) as { deadline: number };
-      extendedDeadline = persisted.deadline;
-      if (extendedDeadline > initialRecord.deadline) break;
-      await waitForRealTimersForTesting(10);
-    }
+    await waitFor(
+      async () => {
+        const persisted = decode(
+          (await storage.get(KEYS.operationInflight('heartbeat-stale-heap-op')))!,
+        ) as { deadline: number };
+        extendedDeadline = persisted.deadline;
+        return extendedDeadline > initialRecord.deadline;
+      },
+      { label: 'heartbeat extended stale heap deadline' },
+    );
 
     expect(extendedDeadline).toBeGreaterThan(initialRecord.deadline);
 
@@ -5202,7 +5403,13 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
     try {
       server = serve({ engine, port: 0, visibilityPollIntervalMs: 25 });
-      await waitForRealTimersForTesting(200);
+      await waitFor(
+        () =>
+          injectedStaleEntry &&
+          addCountForOperation >= 2 &&
+          server.registry.isAssigned(operationId),
+        { label: 'stale heap entry ignored while task remains assigned' },
+      );
 
       expect(injectedStaleEntry).toBe(true);
       expect(addCountForOperation).toBeGreaterThanOrEqual(2);
@@ -5236,7 +5443,15 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       await waitForRealTimersForTesting(50);
       await storage.put(KEYS.operationInflight('visibility-corrupt-op'), encode({ invalid: true }));
 
-      await waitForRealTimersForTesting(200);
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some(
+            (call) =>
+              call[0] ===
+              '[weft] Corrupt inflight record for task "visibility-corrupt-op" — skipping',
+          ),
+        { label: 'corrupt visibility inflight record logged' },
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Corrupt inflight record for task "visibility-corrupt-op" — skipping',
@@ -5346,6 +5561,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       // 120ms (10ms × RECONCILIATION_MULTIPLIER). The delayed read parks for
       // 200ms, spanning at least one reconciliation tick, so the bug would
       // produce a duplicate failure event.
+      // fixed delay: negative assertion (no event to await)
       await waitForRealTimersForTesting(700);
 
       const relevant = failedOperationIds.filter((id) => id === targetOperationId);
@@ -5382,7 +5598,15 @@ describe('visibility timeout expiry triggers task reassignment', () => {
         input: null,
         visibilityTimeout: 100,
       });
-      await waitForRealTimersForTesting(200);
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some(
+            (call) =>
+              call[0] ===
+              '[weft] Failed to process expired task "visibility-retry-op" — will retry:',
+          ),
+        { label: 'visibility retry failure logged' },
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Failed to process expired task "visibility-retry-op" — will retry:',
@@ -5408,7 +5632,13 @@ describe('visibility timeout expiry triggers task reassignment', () => {
         throw new Error('drain expired failed');
       };
 
-      await waitForRealTimersForTesting(80);
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some(
+            (call) => call[0] === '[weft] Visibility timeout scanner error:',
+          ),
+        { label: 'visibility scanner failure logged' },
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Visibility timeout scanner error:',
@@ -5461,6 +5691,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       }),
     );
 
+    // fixed delay: negative assertion (orphan must NOT be reassigned yet)
     await waitForRealTimersForTesting(300);
 
     const earlyTaskMessages = received.filter((message) => {
@@ -5468,7 +5699,12 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     });
     expect(earlyTaskMessages).toHaveLength(0);
 
-    await waitForRealTimersForTesting(500);
+    await waitFor(
+      () =>
+        received.filter((m) => m.type === 'task' && m.operationId === 'orphan-track-op').length >=
+        1,
+      { label: 'orphaned task eventually reassigned' },
+    );
 
     const taskMessages = received.filter((message) => {
       return message.type === 'task' && message.operationId === 'orphan-track-op';
@@ -5489,7 +5725,13 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       await waitForRealTimersForTesting(50);
       await storage.put(KEYS.operationInflight('reconcile-bad-op'), new Uint8Array([1, 2, 3]));
 
-      await waitForRealTimersForTesting(300);
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some(
+            (call) => call[0] === '[weft] Failed to reconcile inflight record — skipping:',
+          ),
+        { label: 'inflight reconciliation failure log' },
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Failed to reconcile inflight record — skipping:',
@@ -5520,7 +5762,11 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     server = serve({ engine, port: 0, visibilityPollIntervalMs: 20 });
 
     try {
-      await waitForRealTimersForTesting(320);
+      await waitFor(
+        () =>
+          errorSpy.mock.calls.some((call) => call[0] === '[weft] Reconciliation scanner error:'),
+        { label: 'reconciliation scanner error log' },
+      );
 
       expect(errorSpy).toHaveBeenCalledWith(
         '[weft] Reconciliation scanner error:',
@@ -5668,7 +5914,9 @@ describe('concurrent scanner deduplication', () => {
       input: null,
       visibilityTimeout: 60, // expires in 60ms, well before the 600ms reconciliation
     });
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.isAssigned('dedup-scan-op'), {
+      label: 'dedup scan task assigned',
+    });
     expect(server.registry.isAssigned('dedup-scan-op')).toBe(true);
 
     // Wait for at least one full reconciliation cycle (600ms) plus some slack
@@ -5852,18 +6100,20 @@ describe('concurrent scanner deduplication', () => {
 
       await reconciliationBlocked;
 
-      let observedReadd = false;
-      for (let attempt = 0; attempt < 20; attempt++) {
-        await waitForRealTimersForTesting(25);
-        observedReadd = readdedEntries > 0;
-        if (observedReadd) break;
-      }
+      await waitFor(() => readdedEntries > 0, {
+        label: 'reconciliation re-added the queued entry',
+      });
 
-      expect(observedReadd).toBe(true);
+      expect(readdedEntries).toBeGreaterThan(0);
       expect(readdedEntries).toBe(1);
 
       releaseBlockedBatch();
-      await waitForRealTimersForTesting(100);
+      await waitFor(
+        async () => (await innerStorage.get(KEYS.operationQueued(operationId))) !== null,
+        {
+          label: 'dedup readd operation queued',
+        },
+      );
 
       expect(await innerStorage.get(KEYS.operationQueued(operationId))).not.toBeNull();
     } finally {
@@ -6007,10 +6257,13 @@ describe('retry policy respected on reassignment', () => {
       attempt: 2,
       retryPolicy: testRetryPolicy, // maxAttempts = 2, already at attempt 2
     });
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.isAssigned('max-attempt-disconnect-op'), {
+      label: 'max-attempt task assigned to w1 before disconnect',
+    });
 
     // Disconnect w1 — task should NOT be reassigned to w2 since maxAttempts reached
     ws1.close();
+    // fixed delay: negative assertion (task must NOT be reassigned after maxAttempts)
     await waitForRealTimersForTesting(200);
 
     const taskMessages = received.filter(
@@ -6062,10 +6315,20 @@ describe('retry policy respected on reassignment', () => {
       visibilityTimeout: 100,
       retryPolicy: { ...testRetryPolicy, maxAttempts: 3 },
     });
-    await waitForRealTimersForTesting(50);
+    await waitFor(
+      () =>
+        received.filter((m) => m.type === 'task' && m.operationId === 'within-limit-expiry-op')
+          .length >= 1,
+      { label: 'within-limit task initially dispatched' },
+    );
 
     // Wait for the visibility timeout to expire and the scanner to re-dispatch
-    await waitForRealTimersForTesting(300);
+    await waitFor(
+      () =>
+        received.filter((m) => m.type === 'task' && m.operationId === 'within-limit-expiry-op')
+          .length >= 2,
+      { label: 'within-limit task re-dispatched after visibility expiry' },
+    );
 
     const taskMessages = received.filter(
       (m) => m.type === 'task' && m.operationId === 'within-limit-expiry-op',
@@ -6117,7 +6380,9 @@ describe('retry policy respected on reassignment', () => {
     });
 
     // Wait long enough for: visibility timeout (80ms) + backoff (100ms) + scanner intervals
-    await waitForRealTimersForTesting(500);
+    await waitFor(() => timestamps.length >= 2, {
+      label: 'backoff expiry redispatch received',
+    });
 
     // Should have received both dispatches
     expect(timestamps.length).toBeGreaterThanOrEqual(2);
@@ -6167,7 +6432,9 @@ describe('retry policy respected on reassignment', () => {
     ws1.close();
 
     // Wait for the backoff delay to complete
-    await waitForRealTimersForTesting(400);
+    await waitFor(() => timestamps.length === 1, {
+      label: 'backoff disconnect redispatch received',
+    });
 
     expect(timestamps.length).toBe(1);
     // The re-dispatch should have been delayed by at least the backoff (150ms)
@@ -6243,7 +6510,10 @@ describe('retry policy respected on reassignment', () => {
       input: null,
       retryPolicy: testRetryPolicy,
     });
-    await waitForRealTimersForTesting(50);
+    await waitFor(
+      async () => (await storage.get(KEYS.operationInflight('policy-stored-op'))) !== null,
+      { label: 'retry policy inflight record stored' },
+    );
 
     const inflightKey = KEYS.operationInflight('policy-stored-op');
     const raw = await storage.get(inflightKey);
@@ -6290,10 +6560,18 @@ describe('retry policy respected on reassignment', () => {
       input: null,
       visibilityTimeout: 100,
     });
-    await waitForRealTimersForTesting(50);
+    await waitFor(
+      () =>
+        received.filter((m) => m.type === 'task' && m.operationId === 'no-policy-op').length >= 1,
+      { label: 'no-policy task initially dispatched' },
+    );
 
     // Wait for visibility timeout expiry + scanner
-    await waitForRealTimersForTesting(300);
+    await waitFor(
+      () =>
+        received.filter((m) => m.type === 'task' && m.operationId === 'no-policy-op').length >= 2,
+      { label: 'no-policy task re-dispatched after visibility expiry' },
+    );
 
     const taskMessages = received.filter(
       (m) => m.type === 'task' && m.operationId === 'no-policy-op',
@@ -6374,7 +6652,9 @@ describe('worker shutdown and cancel propagation', () => {
     expect(shutdownMessage).toBeDefined();
 
     // The worker should be unregistered after disconnect
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.getWorker('shutdown-w1') === undefined, {
+      label: 'shutdown worker unregistered',
+    });
     expect(server.registry.getWorker('shutdown-w1')).toBeUndefined();
   });
 
@@ -6426,7 +6706,9 @@ describe('worker shutdown and cancel propagation', () => {
 
     await server.shutdownAllWorkers({ timeoutMs: 5000 });
 
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.size === 0, {
+      label: 'all workers unregistered after shutdown',
+    });
     expect(server.registry.size).toBe(0);
   });
 
@@ -6469,12 +6751,16 @@ describe('worker shutdown and cancel propagation', () => {
       activityName: 'charge',
       input: { amount: 100 },
     });
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.isAssigned('cancel-op-1'), {
+      label: 'cancel task assignment registered',
+    });
 
     const result = server.cancelTask('cancel-op-1');
 
     expect(result).toBe(true);
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => received.some((m) => m.type === 'cancel'), {
+      label: 'cancel message received',
+    });
 
     const cancelMessage = received.find((m) => m.type === 'cancel');
     expect(cancelMessage).toBeDefined();
@@ -6518,7 +6804,9 @@ describe('worker shutdown and cancel propagation', () => {
     const { WorkflowCancelledEvent: CancelledEvent } = await import('../core/events.ts');
     engine.dispatchEvent(new CancelledEvent('workflow-to-cancel'));
 
-    await waitForRealTimersForTesting(100);
+    await waitFor(() => received.filter((m) => m.type === 'cancel').length === 1, {
+      label: 'workflow cancellation message received',
+    });
 
     const cancelMessages = received.filter((m) => m.type === 'cancel');
     expect(cancelMessages.length).toBe(1);
@@ -6587,7 +6875,9 @@ describe('header propagation in task dispatch', () => {
       headers: { 'x-trace-id': 'trace-123', 'x-auth': 'bearer-token' },
     });
 
-    await waitForRealTimersForTesting(100);
+    await waitFor(() => received.some((m) => m['type'] === 'task'), {
+      label: 'header task message received',
+    });
 
     const taskMessage = received.find((m) => m['type'] === 'task');
     expect(taskMessage).toBeDefined();
@@ -6623,7 +6913,9 @@ describe('header propagation in task dispatch', () => {
       input: { amount: 50 },
     });
 
-    await waitForRealTimersForTesting(100);
+    await waitFor(() => received.some((m) => m['type'] === 'task'), {
+      label: 'no-header task message received',
+    });
 
     const taskMessage = received.find((m) => m['type'] === 'task');
     expect(taskMessage).toBeDefined();
@@ -6690,7 +6982,9 @@ describe('header propagation in task dispatch', () => {
     });
 
     await worker.connect();
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.size === 1, {
+      label: 'remote worker registered for header propagation',
+    });
 
     expect(server.registry.size).toBe(1);
 
@@ -6703,7 +6997,10 @@ describe('header propagation in task dispatch', () => {
     expect(dispatched).toBe(true);
 
     // Wait for the worker to process the task through its interceptor chain
-    await waitForRealTimersForTesting(300);
+    await waitFor(
+      () => capturedHeaders !== undefined && server.registry.getAll()[0]?.inFlight === 0,
+      { label: 'headers captured and task completed' },
+    );
 
     // The interceptor should have captured the headers as a Map
     expect(capturedHeaders).toBeDefined();
@@ -6756,7 +7053,9 @@ describe('header propagation in task dispatch', () => {
       input: 'payload',
     });
 
-    await waitForRealTimersForTesting(300);
+    await waitFor(() => capturedHeaders?.size === 0, {
+      label: 'empty headers captured',
+    });
 
     // The interceptor should still receive a headers Map, just empty
     expect(capturedHeaders).toBeDefined();

@@ -2,10 +2,7 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import {
-  sleepForTesting,
-  waitForRealTimersForTesting,
-} from '../../testing/fake-timers.test-support.ts';
+import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { encode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
 import {
@@ -171,9 +168,14 @@ describe('engine callback creators', () => {
     );
 
     createRegistrationCallbacks(engine).ensureRetentionSweepInterval();
-    await waitForRealTimersForTesting(80);
+    // Advance the logical clock past the retention window, then wait for the
+    // sweep interval (5ms real time) to actually delete the record — a
+    // condition-based wait instead of two fixed sleeps that flaked under load.
     now += 10;
-    await waitForRealTimersForTesting(80);
+    await waitForCondition(
+      async () => (await storage.get(KEYS.workflow('workflow-retention-callback'))) === null,
+      { label: 'retention sweep deleted the completed workflow' },
+    );
 
     expect(await storage.get(KEYS.workflow('workflow-retention-callback'))).toBeNull();
     expect(internals.signalWaiters.has('workflow-retention-callback:done')).toBe(false);

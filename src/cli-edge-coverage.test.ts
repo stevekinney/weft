@@ -115,7 +115,10 @@ describe('CLI edge coverage', () => {
       stderr: 'Error: replay not found for diff 1 -> 99',
       exitCode: 1,
     });
-  }, 2_000);
+    // Real-DB integration test (seed + two timeline executions); the budget is a
+    // hang guard, not a perf assertion. 2s flaked under the full-suite parallel
+    // run where in-process SQLite I/O contends for CPU.
+  }, 15_000);
 
   it('shows a friendly message when a workflow has no timeline entries', async () => {
     const databasePath = createTimelineDatabasePath();
