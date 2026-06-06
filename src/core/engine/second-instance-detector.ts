@@ -20,6 +20,14 @@
  * heartbeats advance forever → both warn) from a dead-but-recent predecessor (a
  * clean `Recreate` deploy → old heartbeat never advances after handoff → quiet).
  *
+ * **Advance is measured by sequence, not wall clock.** Each heartbeat carries a
+ * per-instance monotonic `sequence`; a peer counts as advancing only when its
+ * `sequence` grows between two of *our* ticks. A peer's sequence cannot increase
+ * unless it is alive and ticking in our own time frame, so detection never
+ * compares clocks across hosts — it stays correct even if a peer's clock is
+ * frozen, skewed, or stepped backward. `heartbeatAt` exists only for the boot
+ * staleness sweep that garbage-collects long-dead instances' keys.
+ *
  * Each engine writes its own heartbeat under `liveness:<instanceId>` and scans
  * the `liveness:` prefix to observe peers. Per-instance keys (not one shared,
  * clobbered key) keep every heartbeat independently observable and the sequence
@@ -48,9 +56,34 @@ function encodeHeartbeat(heartbeat: LivenessHeartbeat): Uint8Array {
 
 /**
  * Decode a stored heartbeat value, tolerating anything that is not a
- * well-formed heartbeat (returns `null`). The detector is best-effort, so a
- * malformed or foreign value is simply ignored rather than thrown on.
+ * well-formed heartbeat (returns `null`). The detector is best-effort and runs
+ * over a shared, reserved storage prefix, so a malformed, hostile, or foreign
+ * value is simply ignored rather than thrown on or fed into the algorithm.
+ *
+ * Beyond shape, the numeric fields are validated as *usable* values:
+ * `heartbeatAt` must be finite (a `NaN`/`Infinity` timestamp would defeat both
+ * the staleness sweep — `NaN < staleBefore` is always false — and recency), and
+ * `sequence` must be a finite, non-negative integer (the advance check compares
+ * sequences, so a `NaN`/fractional/negative value must never enter `observed`).
  */
+/** True only when every field is the right type AND a usable value. */
+function isUsableHeartbeat(candidate: {
+  instanceId: unknown;
+  heartbeatAt: unknown;
+  sequence: unknown;
+}): candidate is LivenessHeartbeat {
+  const { instanceId, heartbeatAt, sequence } = candidate;
+  return (
+    typeof instanceId === 'string' &&
+    instanceId.length > 0 &&
+    typeof heartbeatAt === 'number' &&
+    Number.isFinite(heartbeatAt) &&
+    typeof sequence === 'number' &&
+    Number.isInteger(sequence) &&
+    sequence >= 0
+  );
+}
+
 function decodeHeartbeat(raw: Uint8Array): LivenessHeartbeat | null {
   let parsed: unknown;
   try {
@@ -58,17 +91,11 @@ function decodeHeartbeat(raw: Uint8Array): LivenessHeartbeat | null {
   } catch {
     return null;
   }
-  if (
-    typeof parsed !== 'object' ||
-    parsed === null ||
-    typeof (parsed as { instanceId?: unknown }).instanceId !== 'string' ||
-    typeof (parsed as { heartbeatAt?: unknown }).heartbeatAt !== 'number' ||
-    typeof (parsed as { sequence?: unknown }).sequence !== 'number'
-  ) {
+  if (typeof parsed !== 'object' || parsed === null) {
     return null;
   }
-  const { instanceId, heartbeatAt, sequence } = parsed as LivenessHeartbeat;
-  return { instanceId, heartbeatAt, sequence };
+  const candidate = parsed as { instanceId: unknown; heartbeatAt: unknown; sequence: unknown };
+  return isUsableHeartbeat(candidate) ? candidate : null;
 }
 
 /** Options for {@link createSecondInstanceDetector}. */
@@ -131,55 +158,69 @@ export function createSecondInstanceDetector(
   let sequence = 0;
   let swept = false;
   let stopped = false;
-  // Per foreign instanceId: the heartbeat last observed, and how many of our
-  // ticks in a row we have seen it advance. Reset to 0 when it stops advancing
-  // (so a peer that goes stale mid-run cannot keep its advance streak).
-  const observed = new Map<string, { heartbeatAt: number; advances: number }>();
+  // Per foreign instanceId: the sequence last observed, and how many of our
+  // ticks in a row we have seen that sequence advance. Reset to 0 when it stops
+  // advancing (so a peer that goes quiet mid-run cannot keep its advance streak).
+  const observed = new Map<string, { sequence: number; advances: number }>();
   // Foreign instances we have already warned about; one warning per peer.
   const warnedInstanceIds = new Set<string>();
 
-  async function readPeers(): Promise<LivenessHeartbeat[]> {
-    const peers: LivenessHeartbeat[] = [];
-    for await (const [, value] of storage.scan(KEYS.livenessPrefix())) {
+  // A peer carries the storage key it was scanned under, so sweeps and deletes
+  // target the *actual* key — never a key reconstructed from the (untrusted,
+  // possibly spoofed) decoded instanceId.
+  type ObservedPeer = { key: string; heartbeat: LivenessHeartbeat };
+
+  async function readPeers(): Promise<ObservedPeer[]> {
+    const peers: ObservedPeer[] = [];
+    for await (const [key, value] of storage.scan(KEYS.livenessPrefix())) {
       const heartbeat = decodeHeartbeat(value);
+      // Keep every decodable foreign record (with its scanned key) so the
+      // staleness sweep can garbage-collect ancient cruft regardless of whether
+      // its stored instanceId matches the key. The anti-spoof identity check
+      // lives in evaluatePeers, gating advance/warn only — not the sweep.
       if (heartbeat !== null && heartbeat.instanceId !== instanceId) {
-        peers.push(heartbeat);
+        peers.push({ key, heartbeat });
       }
     }
     return peers;
   }
 
-  async function sweepStaleHeartbeats(peers: LivenessHeartbeat[], now: number): Promise<void> {
+  async function sweepStaleHeartbeats(peers: ObservedPeer[], now: number): Promise<void> {
     const staleBefore = now - stalenessWindowMs * STALE_SWEEP_WINDOW_MULTIPLE;
     for (const peer of peers) {
-      if (peer.heartbeatAt < staleBefore) {
+      if (peer.heartbeat.heartbeatAt < staleBefore) {
         // Deleting a provably-dead marker is garbage collection, not coordination.
-        await storage.delete(KEYS.liveness(peer.instanceId)).catch(() => {
+        // Delete the scanned key, never a key rebuilt from the decoded value.
+        await storage.delete(peer.key).catch(() => {
           // Best-effort: a delete race or transient error must not break the tick.
         });
       }
     }
   }
 
-  function evaluatePeers(peers: LivenessHeartbeat[], now: number): void {
-    const recentThreshold = now - stalenessWindowMs;
+  function evaluatePeers(peers: ObservedPeer[]): void {
     const seenThisTick = new Set<string>();
-    for (const peer of peers) {
-      seenThisTick.add(peer.instanceId);
-      const previous = observed.get(peer.instanceId);
-      const isRecent = peer.heartbeatAt >= recentThreshold;
-      const advanced = previous !== undefined && peer.heartbeatAt > previous.heartbeatAt;
-      const advances = advanced && isRecent ? previous.advances + 1 : 0;
-      observed.set(peer.instanceId, { heartbeatAt: peer.heartbeatAt, advances });
+    for (const { key, heartbeat } of peers) {
+      // Anti-spoof: only let a record drive advance/warn for the instance whose
+      // key it actually occupies. A value parked under liveness:other that claims
+      // instanceId "live-peer" must not impersonate live-peer's advance streak.
+      if (KEYS.liveness(heartbeat.instanceId) !== key) continue;
+      seenThisTick.add(heartbeat.instanceId);
+      const previous = observed.get(heartbeat.instanceId);
+      // Advance is measured by the peer's MONOTONIC sequence, not its wall-clock
+      // timestamp. A peer's sequence cannot increase between two of OUR ticks
+      // unless that peer is alive and running in our own time frame — so this
+      // needs no cross-host clock comparison and survives a peer whose clock is
+      // frozen, skewed, or stepped backward (`heartbeatAt` would not advance, but
+      // `sequence` still does). `heartbeatAt` serves only the boot staleness sweep.
+      const advanced = previous !== undefined && heartbeat.sequence > previous.sequence;
+      const advances = advanced ? previous.advances + 1 : 0;
+      observed.set(heartbeat.instanceId, { sequence: heartbeat.sequence, advances });
 
-      if (
-        isRecent &&
-        advances >= ADVANCE_TICKS_BEFORE_WARN &&
-        !warnedInstanceIds.has(peer.instanceId)
-      ) {
-        warnedInstanceIds.add(peer.instanceId);
+      if (advances >= ADVANCE_TICKS_BEFORE_WARN && !warnedInstanceIds.has(heartbeat.instanceId)) {
+        warnedInstanceIds.add(heartbeat.instanceId);
         warn(
-          `WeftSecondInstanceWarning: another engine instance (${peer.instanceId}) is writing to this durable store. ` +
+          `WeftSecondInstanceWarning: another engine instance (${heartbeat.instanceId}) is writing to this durable store. ` +
             'Weft supports one engine process per store; running two can cause duplicate workflow execution. ' +
             'Enforce a single instance at the infrastructure layer (for example, one replica with a Recreate deploy strategy).',
         );
@@ -194,23 +235,40 @@ export function createSecondInstanceDetector(
     }
   }
 
+  // Guards against overlapping ticks: `setInterval` fires regardless of whether
+  // the previous async tick finished, and on a slow remote store a tick can
+  // outlast the interval. Concurrent ticks would race the shared `sequence`,
+  // `observed`, and `swept` state, so a tick that arrives while one is in flight
+  // is dropped — a smoke alarm can skip a beat, it must not mutate concurrently.
+  let tickInFlight = false;
+
   async function tick(): Promise<void> {
-    if (stopped) return;
-    const now = getNow();
-    const peers = await readPeers();
+    if (stopped || tickInFlight) return;
+    tickInFlight = true;
+    try {
+      const now = getNow();
+      const peers = await readPeers();
 
-    if (!swept) {
-      swept = true;
-      await sweepStaleHeartbeats(peers, now);
+      if (!swept) {
+        swept = true;
+        await sweepStaleHeartbeats(peers, now);
+      }
+
+      evaluatePeers(peers);
+
+      // Re-check after the awaits above: `stop()` may have run (and deleted our
+      // key) while this tick was reading peers. Writing now would resurrect a
+      // stale, live-looking heartbeat that outlives disposal until the next
+      // sweep window. A stopped detector must never write.
+      if (stopped) return;
+      sequence += 1;
+      const heartbeat: LivenessHeartbeat = { instanceId, heartbeatAt: now, sequence };
+      await storage.put(KEYS.liveness(instanceId), encodeHeartbeat(heartbeat)).catch(() => {
+        // Best-effort: a failed heartbeat write must not break the engine.
+      });
+    } finally {
+      tickInFlight = false;
     }
-
-    evaluatePeers(peers, now);
-
-    sequence += 1;
-    const heartbeat: LivenessHeartbeat = { instanceId, heartbeatAt: now, sequence };
-    await storage.put(KEYS.liveness(instanceId), encodeHeartbeat(heartbeat)).catch(() => {
-      // Best-effort: a failed heartbeat write must not break the engine.
-    });
   }
 
   async function stop(): Promise<void> {
