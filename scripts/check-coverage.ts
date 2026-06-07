@@ -97,6 +97,15 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
     },
   ],
   [
+    'scripts/verify-no-test-sleeps.ts',
+    {
+      // The detector and CLI status handling are unit-tested in-process. The
+      // remaining two lines are the `import.meta.main` wrapper that only
+      // executes when Bun launches the script as a standalone program.
+      lines: new Set([190, 191]),
+    },
+  ],
+  [
     'examples/hello-world/src/index.ts',
     {
       // The example module exports are covered in-process by `src/examples.test.ts`.
@@ -1629,16 +1638,11 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
     { functions: 1, lines: new Set([57, 58, 59, 60, 61, 62, 63, 137, 141, 142, 143]) },
   ],
   [
-    // Invariant-violation guards unreachable by construction: the three
-    // "Invalid checkpointed/completed activity retry ..." throws (112-114,
-    // 135-137, 199-202) and the "Missing activity retry policy" throw (395)
-    // fire only on corrupt persisted retry state; line 323 is the non-`Error`
-    // fall-through in `isNonRetryableActivityError`, which the suite never hits
-    // because activities always throw `Error` instances. Line numbers shifted
-    // when `asConcreteContext` / `hasContextInternals` were added near the top
-    // of the file.
+    // The retry-state corruption guards and non-Error retryability path are now
+    // covered by focused unit tests. Bun still reports the generator loop's
+    // closing brace as uncovered after the retry back-edge executes.
     'src/core/context/run-operation.ts',
-    { lines: new Set([112, 113, 114, 135, 136, 137, 199, 200, 201, 202, 323, 395]) },
+    { lines: new Set([421]) },
   ],
   [
     'src/core/engine/activity-reconciliation.ts',

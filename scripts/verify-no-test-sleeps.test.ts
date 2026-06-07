@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'bun:test';
 
-import { findTestSleepViolations } from './verify-no-test-sleeps.ts';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import {
+  findTestSleepViolations,
+  runVerifyNoTestSleepsCli,
+  verifyNoTestSleeps,
+} from './verify-no-test-sleeps.ts';
 
 describe('findTestSleepViolations', () => {
   it('flags a direct Bun.sleep call', () => {
@@ -160,5 +168,125 @@ describe('findTestSleepViolations', () => {
     `);
     expect(violations).toHaveLength(2);
     expect(violations.map((v) => v.kind)).toEqual(['bun-sleep', 'fixed-sleep-before-assert']);
+  });
+});
+
+describe('verifyNoTestSleeps', () => {
+  async function withTemporaryTestDirectory(
+    run: (rootDirectory: string) => Promise<void>,
+  ): Promise<void> {
+    const rootDirectory = await mkdtemp(join(tmpdir(), 'weft-test-sleeps-'));
+    try {
+      await mkdir(join(rootDirectory, 'scripts'), { recursive: true });
+      await mkdir(join(rootDirectory, 'src'), { recursive: true });
+      await run(rootDirectory);
+    } finally {
+      await rm(rootDirectory, { force: true, recursive: true });
+    }
+  }
+
+  it('reports violations from scanned files and skips this script’s fixture file', async () => {
+    await withTemporaryTestDirectory(async (rootDirectory) => {
+      await Bun.write(
+        join(rootDirectory, 'scripts/verify-no-test-sleeps.test.ts'),
+        `
+        it('fixture', async () => {
+          await Bun.sleep(10);
+          expect(true).toBe(true);
+        });
+        `,
+      );
+      await Bun.write(
+        join(rootDirectory, 'src/flaky.test.ts'),
+        `
+        it('flaky', async () => {
+          await waitForRealTimersForTesting(25);
+          expect(items.length).toBe(1);
+        });
+        `,
+      );
+      const errors: string[] = [];
+      const logs: string[] = [];
+
+      const failures = await verifyNoTestSleeps(
+        {
+          error(message) {
+            errors.push(message);
+          },
+          log(message) {
+            logs.push(message);
+          },
+        },
+        rootDirectory,
+      );
+
+      expect(failures).toBe(1);
+      expect(errors).toHaveLength(2);
+      expect(errors[0]).toContain('src/flaky.test.ts:3');
+      expect(errors[1]).toContain('Found 1 load-sensitive test sleep(s).');
+      expect(logs).toHaveLength(0);
+    });
+  });
+
+  it('logs success when the scanned files are clean', async () => {
+    await withTemporaryTestDirectory(async (rootDirectory) => {
+      await Bun.write(
+        join(rootDirectory, 'src/clean.test.ts'),
+        `
+        it('clean', async () => {
+          await waitFor(() => received.length === 1, { label: 'task delivered' });
+          expect(received.length).toBe(1);
+        });
+        `,
+      );
+      const errors: string[] = [];
+      const logs: string[] = [];
+
+      const failures = await verifyNoTestSleeps(
+        {
+          error(message) {
+            errors.push(message);
+          },
+          log(message) {
+            logs.push(message);
+          },
+        },
+        rootDirectory,
+      );
+
+      expect(failures).toBe(0);
+      expect(errors).toHaveLength(0);
+      expect(logs).toEqual([
+        'No direct Bun.sleep calls or fixed-sleep-before-assert patterns found in test files.',
+      ]);
+    });
+  });
+});
+
+describe('runVerifyNoTestSleepsCli', () => {
+  it('does not exit when verification succeeds', async () => {
+    let exitCode: number | null = null;
+
+    await runVerifyNoTestSleepsCli(
+      async () => 0,
+      (code) => {
+        exitCode = code;
+      },
+    );
+
+    expect(exitCode).toBeNull();
+  });
+
+  it('exits with status 1 when verification fails', async () => {
+    let exitCode: number | null = null;
+
+    await runVerifyNoTestSleepsCli(
+      async () => 2,
+      (code) => {
+        exitCode = code;
+      },
+    );
+
+    expect(exitCode).toBe(1);
   });
 });
