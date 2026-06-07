@@ -342,6 +342,17 @@ async function verifyEngineCreateInference(): Promise<void> {
   // @ts-expect-error unknown workflow acknowledgement is invalid when recovery is opted out.
   await Engine.create({ recover: false, acknowledgeUnknownWorkflowTypes: true });
 
+  // Regression guard for #455: Engine.create({ workflows: {} }) must carry the
+  // DefaultWorkflowRegistry brand — semantically identical to Engine.create
+  // with no workflows map. The Equals check enforces exact type equality, not
+  // mere assignability, so it catches any drift in branding.
+  const absentWorkflows = await Engine.create({ recover: false });
+  const emptyWorkflows = await Engine.create({ workflows: {}, recover: false });
+  type AbsentType = typeof absentWorkflows;
+  type EmptyMapType = typeof emptyWorkflows;
+  const emptyEqualsAbsent: Equals<AbsentType, EmptyMapType> = true;
+  void emptyEqualsAbsent;
+
   // workflows-only narrows TWorkflows to the inferred map keys; activities
   // stay empty until added explicitly.
   const workflowsOnly = await Engine.create({

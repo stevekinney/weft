@@ -127,6 +127,7 @@ import { disposeEngine } from './disposal.ts';
 import {
   type ActivityDefinitionName,
   type EngineCreateOptions,
+  type EngineCreateWorkflowRegistry,
   type RegisteredActivityDefinitionExecute,
   type UnknownWorkflowNameWhenDefaultRegistryIsEmpty,
 } from './engine-create-types.ts';
@@ -386,7 +387,7 @@ export class Engine<
       activities?: undefined;
       workflows: TWorkflowDefinitions;
     },
-  ): Promise<Engine<InferWorkflowEntries<TWorkflowDefinitions>>>;
+  ): Promise<Engine<EngineCreateWorkflowRegistry<TWorkflowDefinitions>>>;
   static create<TActivityDefinitions extends Record<string, AnyActivityDefinition>>(
     options: EngineCreateOptions<EmptyWorkflowDefinitions, TActivityDefinitions> & {
       activities: TActivityDefinitions;
@@ -402,7 +403,10 @@ export class Engine<
       workflows: TWorkflowDefinitions;
     },
   ): Promise<
-    Engine<InferWorkflowEntries<TWorkflowDefinitions>, InferActivityEntries<TActivityDefinitions>>
+    Engine<
+      EngineCreateWorkflowRegistry<TWorkflowDefinitions>,
+      InferActivityEntries<TActivityDefinitions>
+    >
   >;
   static async create(options: EngineCreateRuntimeOptions): Promise<unknown> {
     const engine = new Engine<object, object>(options);

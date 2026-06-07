@@ -1,6 +1,8 @@
 import type {
   AnyActivityDefinition,
   AnyWorkflowDefinition,
+  DefaultWorkflowRegistry,
+  InferWorkflowEntries,
   IsDefaultWorkflowRegistry,
 } from '../types.ts';
 import type { UnknownNameWhenRegistryHasNoKnownNames } from '../types/registry-type-helpers.ts';
@@ -60,6 +62,24 @@ export type EngineCreateOptions<
         acknowledgeUnknownWorkflowTypes?: never;
       }
   );
+
+/**
+ * Resolves the workflow registry type for `Engine.create` return values.
+ *
+ * When the provided workflow definition map is empty (`{}`), the resulting
+ * engine carries the same `DefaultWorkflowRegistry` brand as an engine
+ * constructed without a `workflows` map at all — the two are semantically
+ * identical. A non-empty map routes to `InferWorkflowEntries` so literal
+ * workflow-name inference is preserved.
+ */
+export type EngineCreateWorkflowRegistry<
+  TWorkflowDefinitions extends Record<string, AnyWorkflowDefinition>,
+  // The tuple wrap mirrors the guard inside `InferWorkflowEntries` and avoids the
+  // naked-`extends`-never distributive-conditional pitfall (which would collapse
+  // to `never` and silently drop the brand).
+> = [keyof TWorkflowDefinitions & string] extends [never]
+  ? DefaultWorkflowRegistry
+  : InferWorkflowEntries<TWorkflowDefinitions>;
 
 export type UnknownWorkflowNameWhenDefaultRegistryIsEmpty<
   TWorkflows extends object,
