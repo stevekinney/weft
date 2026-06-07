@@ -77,6 +77,10 @@ The verifier removes stale `coverage/` output, runs Bun coverage once with LCOV 
 
 Test files live next to the source they test, using the `.test.ts` suffix. A separate `tsconfig.test.json` provides relaxed TypeScript settings for test code. Oxlint rules are also relaxed for test files (`*.test.ts`, `*.spec.ts`, `test/**`, `__tests__/**`)—you can freely use `any`, non-null assertions, unused variables, and other patterns that would normally be flagged in production code.
 
+Prefer condition-based synchronization over fixed wall-clock sleeps. The `verify:no-test-sleeps` gate rejects direct `Bun.sleep(...)` calls in tests and literal `waitForRealTimersForTesting(<number>)` barriers immediately before assertions. If a real integration case cannot await an observable condition, mark the delay with one of the structured categories enforced by the verifier: `negative assertion`, `pre-dispatch settle`, or `hang guard`.
+
+The pre-commit hook excludes a small, reviewed `LOAD_SENSITIVE_TEST_PATHS` list from its parallel full-suite pass. Add to that list only after proving the case cannot be made load-insensitive, splitting it into its own file, and keeping the ceiling assertion in `scripts/husky/run-tests.test.ts` honest. CI still runs those tests in the normal full suite; the exclusion is local-hook load control, not a correctness skip.
+
 ## Code quality
 
 Three tools keep the codebase consistent:

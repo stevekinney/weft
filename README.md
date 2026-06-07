@@ -466,7 +466,7 @@ const welcome = workflow({ name: 'welcome' }).execute(
 engine.register(welcome);
 ```
 
-Each `ctx.step()` is a checkpoint boundary. The engine compiles step-style workflows to generator form at registration time. When you need durable timers, signals, or parallel execution, switch to the generator API.
+Each `ctx.step()` is a checkpoint boundary. Completed steps replay from storage after crash recovery instead of re-running, and `compileStepWorkflow(...)` compiles the step-style function into the generator form the engine runs internally. Await each step before starting the next. When you need durable timers, signals, parallel execution, or worker-mode isolation, switch to the generator API.
 
 ## Weft vs. Temporal
 

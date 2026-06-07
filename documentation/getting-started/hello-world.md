@@ -102,7 +102,7 @@ console.log(result);
 // { greeting: "Hello, World!", notified: true }
 ```
 
-Each `ctx.step()` call is a checkpoint boundary. `compileStepWorkflow(...)` compiles the step-based function into the generator shape the engine runs internally. When you need features like durable timers, signals, or parallel execution, switch to the chained builder form shown above. Use `engine.register(workflow(...).execute(...))` or `engine.registerWorkflows({ ... })` to wire workflows into the engine.
+Each `ctx.step()` call is a checkpoint boundary. Completed steps replay from storage after crash recovery instead of re-running, and `compileStepWorkflow(...)` compiles the step-based function into the generator shape the engine runs internally. Await each step before starting the next. When you need features like durable timers, signals, parallel execution, or worker-mode isolation, switch to the chained builder form shown above. Use `engine.register(workflow(...).execute(...))` or `engine.registerWorkflows({ ... })` to wire workflows into the engine.
 
 ## How It Works
 
