@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -6,6 +6,7 @@ import { join } from 'node:path';
 
 import {
   findTestSleepViolations,
+  normalizeScannedTestFilePath,
   runVerifyNoTestSleepsCli,
   verifyNoTestSleeps,
 } from './verify-no-test-sleeps.ts';
@@ -261,6 +262,48 @@ describe('verifyNoTestSleeps', () => {
       ]);
     });
   });
+
+  it('uses the default reporter to write failures to console.error', async () => {
+    await withTemporaryTestDirectory(async (rootDirectory) => {
+      await Bun.write(
+        join(rootDirectory, 'src/flaky.test.ts'),
+        `
+        it('flaky', async () => {
+          await waitForRealTimersForTesting(25);
+          expect(items.length).toBe(1);
+        });
+        `,
+      );
+      using consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      const failures = await verifyNoTestSleeps(undefined, rootDirectory);
+
+      expect(failures).toBe(1);
+      expect(consoleErrorSpy).toHaveBeenCalled();
+    });
+  });
+
+  it('uses the default reporter to write clean results to console.log', async () => {
+    await withTemporaryTestDirectory(async (rootDirectory) => {
+      await Bun.write(
+        join(rootDirectory, 'src/clean.test.ts'),
+        `
+        it('clean', async () => {
+          await waitFor(() => received.length === 1, { label: 'task delivered' });
+          expect(received.length).toBe(1);
+        });
+        `,
+      );
+      using consoleLogSpy = spyOn(console, 'log').mockImplementation(() => {});
+
+      const failures = await verifyNoTestSleeps(undefined, rootDirectory);
+
+      expect(failures).toBe(0);
+      expect(consoleLogSpy).toHaveBeenCalledWith(
+        'No direct Bun.sleep calls or fixed-sleep-before-assert patterns found in test files.',
+      );
+    });
+  });
 });
 
 describe('runVerifyNoTestSleepsCli', () => {
@@ -288,5 +331,27 @@ describe('runVerifyNoTestSleepsCli', () => {
     );
 
     expect(exitCode).toBe(1);
+  });
+
+  it('uses the default exit wrapper when verification fails', async () => {
+    using processExitSpy = spyOn(process, 'exit').mockImplementation(() => undefined as never);
+
+    await runVerifyNoTestSleepsCli(async () => 2);
+
+    expect(processExitSpy).toHaveBeenCalledWith(1);
+  });
+});
+
+describe('normalizeScannedTestFilePath', () => {
+  it('strips a leading ./ prefix', () => {
+    expect(normalizeScannedTestFilePath('./scripts/verify-no-test-sleeps.test.ts')).toBe(
+      'scripts/verify-no-test-sleeps.test.ts',
+    );
+  });
+
+  it('converts Windows separators to forward slashes', () => {
+    expect(normalizeScannedTestFilePath('scripts\\verify-no-test-sleeps.test.ts')).toBe(
+      'scripts/verify-no-test-sleeps.test.ts',
+    );
   });
 });

@@ -154,6 +154,10 @@ export function findTestSleepViolations(text: string): SleepViolation[] {
 // not scan itself.
 const SELF_TEST_PATH = 'scripts/verify-no-test-sleeps.test.ts';
 
+export function normalizeScannedTestFilePath(filePath: string): string {
+  return filePath.replaceAll('\\', '/').replace(/^\.\//, '');
+}
+
 export async function verifyNoTestSleeps(
   reporter: SleepViolationReporter = defaultSleepViolationReporter,
   rootDirectory = process.cwd(),
@@ -166,7 +170,7 @@ export async function verifyNoTestSleeps(
       cwd: rootDirectory,
       onlyFiles: true,
     })) {
-      if (filePath === SELF_TEST_PATH) continue;
+      if (normalizeScannedTestFilePath(filePath) === SELF_TEST_PATH) continue;
       const text = await Bun.file(join(rootDirectory, filePath)).text();
       for (const violation of findTestSleepViolations(text)) {
         failures++;
