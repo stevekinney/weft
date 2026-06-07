@@ -286,6 +286,14 @@ describe('discoverTestFiles', () => {
     const files = await discoverTestFiles();
     expect(files.every((file) => file.endsWith('.test.ts'))).toBe(true);
   });
+
+  it('keeps the load-sensitive exclusion list bounded', () => {
+    // The policy (see the JSDoc on LOAD_SENSITIVE_TEST_PATHS) is fix-first:
+    // a test joins this list only when it genuinely cannot be made
+    // load-insensitive. This ceiling forces every addition to be a deliberate,
+    // reviewed bump rather than silent list creep that erodes pre-commit signal.
+    expect(LOAD_SENSITIVE_TEST_PATHS.length).toBeLessThanOrEqual(5);
+  });
 });
 
 describe('runTestSuite (injected dependencies)', () => {

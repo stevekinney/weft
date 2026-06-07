@@ -80,9 +80,10 @@ export type TestRunOutcome =
  * {@link discoverTestFiles}). These two benchmark-shaped suites live outside that
  * directory for historical reasons and exhibit the same load sensitivity: one
  * asserts raw throughput numbers (`bun-sql-benchmark.test.ts`), the other depends
- * on tight timing windows (`bulk-operations.test.ts`). CI runs them in isolation;
- * pre-commit excludes them so a throughput regression doesn't masquerade as a
- * failed local commit.
+ * on tight timing windows (`bulk-operations.test.ts`). Pre-commit excludes them
+ * from the parallel full-suite step so a throughput regression doesn't
+ * masquerade as a failed local commit; CI runs them in its full suite (CI's
+ * runner does not reproduce the local parallel-load contention).
  *
  * Before adding a new entry: prefer fixing the timing dependency. When
  * {@link runTestSuite} reports a file as `failedButPassedInIsolation` and the
@@ -95,13 +96,26 @@ export const LOAD_SENSITIVE_TEST_PATHS = [
   'src/core/bulk-operations.test.ts',
   // Spawns a real `tsc --noEmit` subprocess to typecheck the generated-client
   // fixture; its wall-clock cost is unbounded under CPU contention and cannot be
-  // made deterministic (the work is in an external process). CI runs it isolated.
+  // made deterministic (the work is in an external process). Excluded from the
+  // pre-commit parallel run; CI runs it in the full suite (CI's runner does not
+  // reproduce the local parallel-load contention).
   'src/cli/codegen-typecheck.test.ts',
   // Runs real Worker isolates with a sub-second (100ms) workflow-turn timeout to
   // assert timeout behavior. Under the parallel run the isolate cannot start and
   // hit the budget reliably, so the timing assertion flakes — it cannot be both
-  // short-enough-to-trip-fast and load-robust. CI runs it isolated.
+  // short-enough-to-trip-fast and load-robust. Excluded from the pre-commit
+  // parallel run; CI runs it in the full suite (CI's runner does not reproduce
+  // the local parallel-load contention).
   'src/core/worker-execution-suspension.test.ts',
+  // Drives a real serve() instance, a real WebSocket worker, and the real 20ms
+  // visibility poll racing a real task deadline. Under CPU contention the
+  // heartbeat round-trip can land after the original deadline expires, so the
+  // poll reclaims the task early and the [1] → [1, 2] attempt-sequence assertion
+  // flakes. The deadline-extension invariant is deterministic; the
+  // attempt-sequence invariant is real-time by construction. Excluded from the
+  // pre-commit parallel run; CI runs it in the full suite (CI's runner does not
+  // reproduce the local parallel-load contention).
+  'src/core/parity/remote-task-heartbeat-reclaim.parity.test.ts',
 ] as const;
 
 function normalizedTestPath(file: string): string {
