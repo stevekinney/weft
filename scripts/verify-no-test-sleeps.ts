@@ -59,6 +59,15 @@ export interface SleepViolationReporter {
   log(message: string): void;
 }
 
+const defaultSleepViolationReporter: SleepViolationReporter = {
+  error(message) {
+    console.error(message);
+  },
+  log(message) {
+    console.log(message);
+  },
+};
+
 function gatesAnAssertion(lines: string[], sleepLineIndex: number): boolean {
   let seen = 0;
   for (let i = sleepLineIndex + 1; i < lines.length && seen < ASSERTION_LOOKAHEAD; i++) {
@@ -146,7 +155,7 @@ export function findTestSleepViolations(text: string): SleepViolation[] {
 const SELF_TEST_PATH = 'scripts/verify-no-test-sleeps.test.ts';
 
 export async function verifyNoTestSleeps(
-  reporter: SleepViolationReporter = console,
+  reporter: SleepViolationReporter = defaultSleepViolationReporter,
   rootDirectory = process.cwd(),
 ): Promise<number> {
   let failures = 0;
@@ -179,7 +188,7 @@ export async function verifyNoTestSleeps(
 
 export async function runVerifyNoTestSleepsCli(
   verify = verifyNoTestSleeps,
-  exit: (code: number) => never | void = process.exit,
+  exit: (code: number) => never | void = (code) => process.exit(code),
 ): Promise<void> {
   const failures = await verify();
   if (failures > 0) {
