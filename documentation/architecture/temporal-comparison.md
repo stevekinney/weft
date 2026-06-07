@@ -4,16 +4,17 @@ Temporal's replay-based architecture creates a cascade of constraints—determin
 
 Here's the mental model comparison for someone writing their first workflow.
 
-| Concept                | Temporal                          | Weft                                    |
-| ---------------------- | --------------------------------- | --------------------------------------- |
-| Core mental model      | Replay determinism                | Generators pause and resume             |
-| Activity invocation    | `proxyActivities()` + type import | `yield* ctx.run('activityName', input)` |
-| Timer                  | Deterministic `workflow.sleep()`  | `yield* ctx.sleep("1 hour")`            |
-| Signal                 | `setHandler` + `condition`        | `yield* ctx.waitForSignal(name)`        |
-| Versioning             | `patched()` / `deprecatePatch()`  | Deploy new code (migration optional)    |
-| Long-running workflows | `continueAsNew()`                 | Nothing (checkpoints are fixed-size)    |
-| Dev environment        | Docker Compose + Temporal server  | `bun add @lostgradient/weft`            |
-| Bundling               | Webpack for workflow sandbox      | None                                    |
+| Concept                               | Temporal                                  | Weft                                                                               |
+| ------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------- |
+| Core mental model                     | Replay determinism                        | Generators pause and resume                                                        |
+| Activity invocation                   | `proxyActivities()` + type import         | `yield* ctx.run('activityName', input)`                                            |
+| Timer                                 | Deterministic `workflow.sleep()`          | `yield* ctx.sleep("1 hour")`                                                       |
+| Signal                                | `setHandler` + `condition`                | `yield* ctx.waitForSignal(name)`                                                   |
+| Versioning                            | `patched()` / `deprecatePatch()`          | Deploy new code (migration optional)                                               |
+| Long-running workflows                | `continueAsNew()`                         | Nothing (checkpoints are fixed-size)                                               |
+| Dev environment                       | Docker Compose + Temporal server          | `bun add @lostgradient/weft`                                                       |
+| Bundling                              | Webpack for workflow sandbox              | None                                                                               |
+| Activity liveness / heartbeat timeout | `heartbeatTimeout` in `proxyActivities()` | `visibilityTimeout` on the activity definition or per-call override (default 30 s) |
 
 Now let's walk through each of the ten design failures in detail.
 
@@ -192,6 +193,41 @@ async function* example(ctx: Context) {
   const payment = yield* ctx.run('charge', order, { timeout: '60s' });
 }
 ```
+
+### Terminology: `heartbeatTimeout` → `visibilityTimeout`
+
+Temporal calls this concept `heartbeatTimeout`; Weft names it `visibilityTimeout` because it governs the exclusive claim window—how long a worker holds a task before the server considers it abandoned and makes it available for reassignment. They're analogous but not identical: Temporal's timeout is heartbeat-gap-specific, while Weft's is the claim window itself.
+
+Set a definition-level default on the `activity()` builder:
+
+```typescript partial
+import { activity } from '@lostgradient/weft';
+
+// Temporal (before):
+// const { processFile } = proxyActivities<typeof activities>({
+//   heartbeatTimeout: '2m',
+// });
+
+// Weft (after):
+export const processFile = activity({
+  name: 'processFile',
+  visibilityTimeout: '2m',
+
+  async execute(path: string): Promise<void> {
+    // long-running file processing…
+  },
+});
+```
+
+Or override per-call when a single invocation needs more runway:
+
+```typescript partial
+async function* example(ctx: Context) {
+  yield* ctx.run('processFile', '/data/large.csv', { visibilityTimeout: '5m' });
+}
+```
+
+Calling `ActivityContext.heartbeat()` resets and extends the deadline each time it is called.
 
 ## Payload size sensitivity
 
