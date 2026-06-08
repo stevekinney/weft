@@ -53,6 +53,16 @@ const engine = new Engine({
 
 `history.maxEvents` is a circuit breaker on lifetime event-log sequence. `history.retentionWindow` is optional compaction that reclaims old event-log records behind a confirmed checkpoint and durable watermark; it does not reset the lifetime counter. `archive` receives compacted ranges after deletion commits and is best-effort only. `payloadSize.maxBytes` rejects oversized workflow inputs, signal payloads, and activity results before any storage write, measuring the codec-encoded value before storage compression.
 
+### `create()`
+
+```ts partial
+static create(options: EngineCreateOptions): Promise<Engine>
+```
+
+Construct an engine, register any `activities` first, register every workflow in the `workflows` map, then run recovery by default. Pass `recover: false` for tests, `ScopedStorage` isolation, or pre-migration inspection. Map keys are validated against each definition's runtime `name` so an accidentally mismatched key fails during startup.
+
+TypeScript treats `Engine.create({ workflows: {} })` the same as omitting `workflows`: both return the default-registry engine type. A non-empty map narrows the returned engine to those workflow definitions, so `engine.start(...)` autocompletes their names and checks their input/output types.
+
 ### `register()`
 
 ```ts partial

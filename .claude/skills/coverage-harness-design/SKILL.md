@@ -20,6 +20,7 @@ description: >-
 - Covering callback creator bundles whose wrappers delegate to cleanup handlers, including time-operation and stream cleanup-error paths that coverage may miss until invoked directly.
 - Covering `.test-support.ts` harness modules whose consumers execute the behavior but Bun reports nested callback or unnamed-function misses.
 - Restoring coverage after feature work by adding focused regressions for real edge paths before touching allowances, such as `LocalClient.startOrSignal`, start-body helpers, fair-share counters, pre-ready health, TLS server config, cleanup timers, workflow handle cache replacement, corrupt serializer payloads, MCP list filters, and bulk-delete terminal revalidation.
+- Restoring retry/checkpoint coverage around `run-operation` by proving corrupt persisted retry attempts or sleep counts fail, missing retry policies on replay fail, non-`Error` failures still honor `nonRetryableErrors`, and retry-to-sleep-to-success paths checkpoint correctly.
 - Editing coverage orchestration itself, especially when a failing child coverage process could be accidentally masked.
 - Deciding whether a coverage allowance is justified.
 - Building a structural test double to reach a branch hidden by normal constructors or registries.
@@ -51,11 +52,13 @@ description: >-
 17. For callback bundle coverage, prefer a focused test that calls the created wrapper and asserts the delegated cleanup handler receives the same error over an allowance for a reachable delegator.
 18. For coverage-restoration-only pull requests, classify each miss before editing allowances: add direct behavior tests for reachable code, use structural doubles for otherwise hidden branches, and update line-keyed allowances only after a fresh `coverage/lcov.info` proves the residual miss is Bun reporting drift.
 19. For load-sensitive tests, replace fixed sleeps with condition-based synchronization first. Add a file to `LOAD_SENSITIVE_TEST_PATHS` only when the real-time invariant cannot be made load-robust, after splitting the case into its own file and keeping the list ceiling assertion explicit.
+20. For retry-state coverage, drive the persisted-state edge rather than asserting the helper directly when possible; only expose `ForTesting` helpers when the branch is otherwise unreachable through a real workflow drive.
 
 ## Verification
 
 - Run `bun run scripts/check-coverage.ts`; it clears stale coverage, runs one Bun coverage pass, parses `coverage/lcov.info`, applies explicit allowances, and enforces adjusted 100 percent line and function coverage.
 - For changes to the coverage runner itself, also run the focused `scripts/check-coverage.test.ts` tests that cover coverage-process failure, LCOV parsing, and allowance handling.
 - For feature-adjacent coverage restoration, run the focused tests that exercise the newly covered behavior before `bun run scripts/check-coverage.ts`, so the coverage gate is not the only proof that the assertion is meaningful.
+- For retry-state coverage, run `bun test src/core/context/run-operation.test.ts` before the coverage gate.
 - When editing the test-sleep verifier or load-sensitive list, run `bun test scripts/verify-no-test-sleeps.test.ts scripts/husky/run-tests.test.ts` and `bun run scripts/verify-no-test-sleeps.ts`.
 - Run broader validation only when the coverage fix also changes production code, public APIs, or documentation.

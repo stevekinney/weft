@@ -21,6 +21,7 @@ description: >-
 - Removing dead, never-exported helpers while keeping public examples on primitive patterns such as `new URL('./workflow-worker.ts', import.meta.url)`.
 - Deduplicating CLI suggestion helpers or generated operation-client type output while claiming user-visible CLI wording, thresholds, or TypeScript inference are unchanged.
 - Deduplicating client or handle overload implementations where `.d.ts` emission and call-site inference still require each public class to declare its overloads locally.
+- Changing `Engine.create` overloads or helper types where an empty workflow map must keep the same default-registry brand as omitting `workflows`.
 
 ## Do not use
 
@@ -47,10 +48,12 @@ description: >-
 15. For `LocalClient`, `HttpClient`, `WorkflowHandle`, and `WorkflowHandleDelegation`, do not replace duplicated overload declarations with a shared base unless type-level tests prove emitted declarations and inference remain identical.
 16. For `@lostgradient/weft/server` export cleanup, keep `/server` self-sufficient for server option and handle types while leaving `Engine` on the root package. Add internal and built-package `.test-d.ts` assertions instead of relying on JSDoc claims.
 17. For RemoteWorker cleanup, preserve the required `workflows` map and qualified activity-name behavior; do not add a compatibility alias for removed `activities`.
+18. For `Engine.create` type ergonomics, pin both the integration shape and the exact type: `Engine.create({ workflows: {} })` must satisfy `ServeOptions['engine']` and equal the absent-workflows default-registry return type, while a non-empty map keeps literal workflow-name inference.
 
 ## Verification
 
 - Add or update runtime tests for ordering, event sequence, and return shape invariants.
 - Add type-level coverage when the refactor changes public TypeScript ergonomics.
+- For `Engine.create` overload changes, run the focused `.test-d.ts` files that cover server options and core type ergonomics.
 - Run focused tests, `bun run typecheck`, and documentation verification when examples changed.
 - For generated client cleanup, also run `bun run scripts/generate-operation-client.ts && bun run scripts/check-catalog-drift.ts` and `jscpd` against `src/cli/generated/operation-client.generated.ts`.
