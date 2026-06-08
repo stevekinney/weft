@@ -50,10 +50,12 @@ description: >-
 16. For Bun anonymous-function instrumentation drift in callback-heavy test-support modules, prefer direct helper tests first and document any residual function-only allowance as instrumentation drift, not unreachable behavior.
 17. For callback bundle coverage, prefer a focused test that calls the created wrapper and asserts the delegated cleanup handler receives the same error over an allowance for a reachable delegator.
 18. For coverage-restoration-only pull requests, classify each miss before editing allowances: add direct behavior tests for reachable code, use structural doubles for otherwise hidden branches, and update line-keyed allowances only after a fresh `coverage/lcov.info` proves the residual miss is Bun reporting drift.
+19. For load-sensitive tests, replace fixed sleeps with condition-based synchronization first. Add a file to `LOAD_SENSITIVE_TEST_PATHS` only when the real-time invariant cannot be made load-robust, after splitting the case into its own file and keeping the list ceiling assertion explicit.
 
 ## Verification
 
 - Run `bun run scripts/check-coverage.ts`; it clears stale coverage, runs one Bun coverage pass, parses `coverage/lcov.info`, applies explicit allowances, and enforces adjusted 100 percent line and function coverage.
 - For changes to the coverage runner itself, also run the focused `scripts/check-coverage.test.ts` tests that cover coverage-process failure, LCOV parsing, and allowance handling.
 - For feature-adjacent coverage restoration, run the focused tests that exercise the newly covered behavior before `bun run scripts/check-coverage.ts`, so the coverage gate is not the only proof that the assertion is meaningful.
+- When editing the test-sleep verifier or load-sensitive list, run `bun test scripts/verify-no-test-sleeps.test.ts scripts/husky/run-tests.test.ts` and `bun run scripts/verify-no-test-sleeps.ts`.
 - Run broader validation only when the coverage fix also changes production code, public APIs, or documentation.

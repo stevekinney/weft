@@ -97,6 +97,8 @@ it('retries after a delay', async () => {
 
 TimeControl does NOT monkey-patch global timers. It provides an explicit virtual clock that the engine's scheduler respects.
 
+For real-timer integration tests, prefer `waitFor(...)` or `waitForCondition(...)` over fixed sleeps before assertions. Only use fixed delays for `negative assertion`, `pre-dispatch settle`, or `hang guard`, annotated with the structured comment required by `verify:no-test-sleeps`.
+
 ### ActivityMockRegistry — Activity Isolation
 
 Use `testEngine.mock(activity, implementation)` to substitute activity implementations. Returns a `MockHandle` for inspecting calls.

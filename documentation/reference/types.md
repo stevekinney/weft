@@ -37,12 +37,20 @@ interface WorkflowState {
   input: unknown;
   result?: unknown;
   error?: string;
-  version: string;
+  versionTuple: WorkflowVersionTuple;
   createdAt: number;
   updatedAt: number;
   executionDeadline?: number;
 }
+
+interface WorkflowVersionTuple {
+  workflowVersion: string;
+  agentVersion?: string;
+  toolVersions?: string[];
+}
 ```
+
+`versionTuple` is the canonical persisted workflow version metadata. It is captured at workflow start and compared against the currently registered workflow definition during recovery. `workflowVersion` is always present; `agentVersion` and `toolVersions` appear only when the workflow declares them. `WorkflowSummary.version` remains the public list-result shortcut for `versionTuple.workflowVersion`.
 
 ### `WorkflowFunction`
 

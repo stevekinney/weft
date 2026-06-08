@@ -115,3 +115,16 @@ void taskQueue;
 // constructable from `/server` — not merely nameable as a type.
 const constructedRegistry = new WorkerRegistry();
 void constructedRegistry;
+
+// Regression guard for #455: Engine.create({ storage, workflows: {} }) must
+// produce an Engine<DefaultWorkflowRegistry> and therefore satisfy
+// ServeOptions['engine'] — identical to Engine.create({ storage }) with no
+// workflows map. Before the fix, the empty-object map routed to a custom
+// registry overload returning Engine<{}>, which was missing the
+// [defaultWorkflowRegistry] brand and therefore could not satisfy ServeOptions.
+async function verifyEmptyWorkflowsEngineAcceptedByServe(): Promise<void> {
+  const emptyMapEngine = await Engine.create({ storage: new MemoryStorage(), workflows: {} });
+  const options: ServeOptions = { engine: emptyMapEngine };
+  void options;
+}
+void verifyEmptyWorkflowsEngineAcceptedByServe;

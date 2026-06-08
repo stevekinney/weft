@@ -24,6 +24,7 @@ description: >-
 - Adding or deleting reserved workflow metadata markers such as `wf-has-services:`; marker writes, reads, cleanup, purge, and retention must stay aligned.
 - Normalizing failure-category values, changing workflow visibility index keys, or changing framed compressed-storage payloads.
 - Changing idempotent start storage (`start-idem:`), signal id derivation, `startOrSignal` convergence semantics, serializer registry tags, recovered launch/snapshot public shapes, or durable task in-flight records such as `attemptToken`.
+- Changing workflow version metadata on persisted `WorkflowState`; the current canonical state shape is `versionTuple`, while old flat version fields are read-normalized only.
 
 ## Do not use
 
@@ -52,6 +53,7 @@ description: >-
 17. For serializer registration, treat `options.tag` as persisted data. Decode must resolve by tag regardless of registration order, reject missing or non-string tags, and fail clearly when a process has not registered the tag needed by an old checkpoint.
 18. For Neon/Postgres storage, treat key collation and byte mapping as semantic compatibility: `kv.key` must use `COLLATE "C"`, values must remain opaque `BYTEA`, read-only queries must reject writes at the database level, and retryable `40001`/`40P01` transaction aborts must retry the whole CAS transaction before throwing on cap exhaustion.
 19. For task attempt tokens, preserve additive wire compatibility: missing tokens keep worker-id fallback for older workers and token-less records, while present-but-wrong or malformed tokens reject without completing the task.
+20. For persisted workflow version metadata, write only `versionTuple` on fresh state, lift old flat `version` / `agentVersion` / `toolVersions` records through `decodeWorkflowState()`, route diagnostics through the decoder, and regenerate replay/checkpoint fixtures only after verifying the diff is shape-only.
 
 ## Verification
 
@@ -64,4 +66,5 @@ description: >-
 - For serializer registry changes, run focused codec tests for custom serializer round trips, corrupt extension payloads, duplicate constructor/tag rejection, and `Error` subclass field preservation.
 - For Neon/Postgres storage, run PGlite-backed storage contract tests, retry fault-injection tests, resolver tests, and any env-gated live Neon tests when `NEON_DATABASE_URL` is available.
 - For task attempt-token changes, run protocol parser tests, WebSocket stale-attempt regressions, long-poll completion authorization tests, conformance fixtures, and server restart restoration tests.
+- For workflow-state version-shape changes, run decode-lift tests, recovery/version-drift tests, diagnostics scans, and fixture regeneration review that proves no unrelated replay data changed.
 - Run the relevant focused test, then `bun run typecheck` and `bun run validate` before shipping.

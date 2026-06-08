@@ -6857,6 +6857,25 @@ describe('header propagation in task dispatch', () => {
     await waitForRealTimersForTesting(50);
   }
 
+  function createCapturedHeadersProbe(label: string): {
+    interceptor: import('../core/interceptor.ts').ActivityInterceptor;
+    waitForCapturedHeaders: () => Promise<Map<string, string>>;
+  } {
+    let capturedHeaders: Map<string, string> | undefined;
+    return {
+      interceptor: {
+        execute(context, next) {
+          capturedHeaders = context.headers;
+          return next(context);
+        },
+      },
+      async waitForCapturedHeaders() {
+        await waitFor(() => capturedHeaders !== undefined, { label });
+        return capturedHeaders!;
+      },
+    };
+  }
+
   it('includes headers when dispatching to WebSocket workers', async () => {
     engine = createEngine();
     server = serve({ engine, port: 0 });
@@ -6959,14 +6978,9 @@ describe('header propagation in task dispatch', () => {
 
     const { RemoteWorker } = await import('../worker/index.ts');
 
-    let capturedHeaders: Map<string, string> | undefined;
-
-    const interceptor: import('../core/interceptor.ts').ActivityInterceptor = {
-      execute(context, next) {
-        capturedHeaders = context.headers;
-        return next(context);
-      },
-    };
+    const { interceptor, waitForCapturedHeaders } = createCapturedHeadersProbe(
+      'headers captured by activity interceptor',
+    );
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}/v1/tasks/default/stream`,
@@ -6998,16 +7012,14 @@ describe('header propagation in task dispatch', () => {
     });
     expect(dispatched).toBe(true);
 
-    // Wait for the worker to process the task through its interceptor chain
-    await waitFor(
-      () => capturedHeaders !== undefined && server.registry.getAll()[0]?.inFlight === 0,
-      { label: 'headers captured and task completed' },
-    );
+    const capturedHeaders = await waitForCapturedHeaders();
+    await waitFor(() => server.registry.getAll()[0]?.inFlight === 0, {
+      label: 'header task completed',
+    });
 
     // The interceptor should have captured the headers as a Map
-    expect(capturedHeaders).toBeDefined();
-    expect(capturedHeaders!.get('x-trace-id')).toBe('trace-e2e-789');
-    expect(capturedHeaders!.get('x-custom')).toBe('value-42');
+    expect(capturedHeaders.get('x-trace-id')).toBe('trace-e2e-789');
+    expect(capturedHeaders.get('x-custom')).toBe('value-42');
 
     // The task should have completed successfully
     expect(server.registry.getAll()[0]?.inFlight).toBe(0);
@@ -7022,14 +7034,9 @@ describe('header propagation in task dispatch', () => {
 
     const { RemoteWorker } = await import('../worker/index.ts');
 
-    let capturedHeaders: Map<string, string> | undefined;
-
-    const interceptor: import('../core/interceptor.ts').ActivityInterceptor = {
-      execute(context, next) {
-        capturedHeaders = context.headers;
-        return next(context);
-      },
-    };
+    const { interceptor, waitForCapturedHeaders } = createCapturedHeadersProbe(
+      'empty headers captured by activity interceptor',
+    );
 
     const worker = new RemoteWorker({
       serverUrl: `ws://localhost:${server.port}/v1/tasks/default/stream`,
@@ -7047,7 +7054,9 @@ describe('header propagation in task dispatch', () => {
     });
 
     await worker.connect();
-    await waitForRealTimersForTesting(50);
+    await waitFor(() => server.registry.size === 1, {
+      label: 'remote worker registered for empty header propagation',
+    });
 
     await server.dispatchTask({
       operationId: 'header-e2e-no-op',
@@ -7055,13 +7064,10 @@ describe('header propagation in task dispatch', () => {
       input: 'payload',
     });
 
-    await waitFor(() => capturedHeaders?.size === 0, {
-      label: 'empty headers captured',
-    });
+    const capturedHeaders = await waitForCapturedHeaders();
 
     // The interceptor should still receive a headers Map, just empty
-    expect(capturedHeaders).toBeDefined();
-    expect(capturedHeaders!.size).toBe(0);
+    expect(capturedHeaders.size).toBe(0);
 
     await worker.disconnect();
     await waitForRealTimersForTesting(50);
