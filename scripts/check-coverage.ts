@@ -102,7 +102,7 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
       // The detector and CLI status handling are unit-tested in-process. The
       // remaining two lines are the `import.meta.main` wrapper that only
       // executes when Bun launches the script as a standalone program.
-      lines: new Set([203, 204]),
+      lines: new Set([204, 205]),
     },
   ],
   [

@@ -170,11 +170,12 @@ export async function verifyNoTestSleeps(
       cwd: rootDirectory,
       onlyFiles: true,
     })) {
-      if (normalizeScannedTestFilePath(filePath) === SELF_TEST_PATH) continue;
+      const normalizedFilePath = normalizeScannedTestFilePath(filePath);
+      if (normalizedFilePath === SELF_TEST_PATH) continue;
       const text = await Bun.file(join(rootDirectory, filePath)).text();
       for (const violation of findTestSleepViolations(text)) {
         failures++;
-        reporter.error(`${filePath}:${violation.line}: ${violation.message}`);
+        reporter.error(`${normalizedFilePath}:${violation.line}: ${violation.message}`);
       }
     }
   }
