@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 /**
  * Fails when test files use wall-clock sleeps that make assertions flaky:
  *
@@ -51,6 +53,20 @@ export interface SleepViolation {
   kind: SleepViolationKind;
   message: string;
 }
+
+export interface SleepViolationReporter {
+  error(message: string): void;
+  log(message: string): void;
+}
+
+const defaultSleepViolationReporter: SleepViolationReporter = {
+  error(message) {
+    console.error(message);
+  },
+  log(message) {
+    console.log(message);
+  },
+};
 
 function gatesAnAssertion(lines: string[], sleepLineIndex: number): boolean {
   let seen = 0;
@@ -138,30 +154,53 @@ export function findTestSleepViolations(text: string): SleepViolation[] {
 // not scan itself.
 const SELF_TEST_PATH = 'scripts/verify-no-test-sleeps.test.ts';
 
-async function main(): Promise<void> {
+export function normalizeScannedTestFilePath(filePath: string): string {
+  return filePath.replaceAll('\\', '/').replace(/^\.\//, '');
+}
+
+export async function verifyNoTestSleeps(
+  reporter: SleepViolationReporter = defaultSleepViolationReporter,
+  rootDirectory = process.cwd(),
+): Promise<number> {
   let failures = 0;
 
   for (const glob of TEST_FILE_GLOBS) {
-    for await (const filePath of new Bun.Glob(glob).scan({ absolute: false, onlyFiles: true })) {
-      if (filePath === SELF_TEST_PATH) continue;
-      const text = await Bun.file(filePath).text();
+    for await (const filePath of new Bun.Glob(glob).scan({
+      absolute: false,
+      cwd: rootDirectory,
+      onlyFiles: true,
+    })) {
+      const normalizedFilePath = normalizeScannedTestFilePath(filePath);
+      if (normalizedFilePath === SELF_TEST_PATH) continue;
+      const text = await Bun.file(join(rootDirectory, filePath)).text();
       for (const violation of findTestSleepViolations(text)) {
         failures++;
-        console.error(`${filePath}:${violation.line}: ${violation.message}`);
+        reporter.error(`${normalizedFilePath}:${violation.line}: ${violation.message}`);
       }
     }
   }
 
   if (failures > 0) {
-    console.error(`\nFound ${failures} load-sensitive test sleep(s). See the guidance above.`);
-    process.exit(1);
+    reporter.error(`\nFound ${failures} load-sensitive test sleep(s). See the guidance above.`);
+    return failures;
   }
 
-  console.log(
+  reporter.log(
     'No direct Bun.sleep calls or fixed-sleep-before-assert patterns found in test files.',
   );
+  return failures;
+}
+
+export async function runVerifyNoTestSleepsCli(
+  verify = verifyNoTestSleeps,
+  exit: (code: number) => never | void = (code) => process.exit(code),
+): Promise<void> {
+  const failures = await verify();
+  if (failures > 0) {
+    exit(1);
+  }
 }
 
 if (import.meta.main) {
-  await main();
+  await runVerifyNoTestSleepsCli();
 }

@@ -125,6 +125,8 @@ function readActivityRetryAttempt(internals: ContextInternals, step: number): nu
   return attempt;
 }
 
+export const readActivityRetryAttemptForTesting = readActivityRetryAttempt;
+
 function readCompletedRetrySleepCount(internals: ContextInternals, step: number): number {
   const state = internals.checkpointLocals[ACTIVITY_RETRY_STATE_LOCAL_KEY];
   if (!isActivityRetryState(state)) return 0;
@@ -138,6 +140,8 @@ function readCompletedRetrySleepCount(internals: ContextInternals, step: number)
   }
   return count;
 }
+
+export const readCompletedRetrySleepCountForTesting = readCompletedRetrySleepCount;
 
 function writeActivityRetryAttempt(
   internals: ContextInternals,
@@ -219,6 +223,8 @@ function completeActivityRetryAttempt(
     } satisfies ActivityRetryState,
   };
 }
+
+export const completeActivityRetryAttemptForTesting = completeActivityRetryAttempt;
 
 function getActivityName(activity: ActivityInput, explicitName?: string): string {
   if (explicitName !== undefined) return explicitName;
