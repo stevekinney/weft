@@ -5152,6 +5152,148 @@ describe('Engine', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // onQuery handler accessible while workflow is parked on waitForSignal
+  // ---------------------------------------------------------------------------
+
+  describe('query() for a workflow parked on waitForSignal', () => {
+    it('invokes the onQuery handler while the workflow is parked', async () => {
+      const engine = new Engine();
+      let phase = 'before-signal';
+
+      engine.register(
+        workflow({ name: 'parked-query-workflow' }).execute(async function* (ctx: WorkflowContext) {
+          ctx.onQuery('phase', () => phase);
+          phase = 'waiting';
+          yield* ctx.waitForSignal('go');
+          phase = 'done';
+          return 'finished';
+        }),
+      );
+
+      const handle = await engine.start('parked-query-workflow', null);
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        if (engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1) break;
+        await flush();
+      }
+      expect(engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]()).toBe(1);
+
+      // Query while parked — this should invoke the handler
+      const result = await engine.query(handle.id, 'phase');
+      expect(result).toBe('waiting');
+
+      engine[Symbol.dispose]();
+    });
+
+    it('invokes the onQuery handler from the post-resume context after a parked workflow resumes', async () => {
+      const engine = new Engine();
+      let phase = 'before-signal';
+
+      // Two parking points so a query can run while parked the SECOND time —
+      // that only succeeds against the freshly installed post-resume context,
+      // proving the resume path replaces the stale parked context (not a smoke
+      // test of signal delivery).
+      engine.register(
+        workflow({ name: 'parked-query-resume-workflow' }).execute(async function* (
+          ctx: WorkflowContext,
+        ) {
+          ctx.onQuery('phase', () => phase);
+          phase = 'waiting';
+          yield* ctx.waitForSignal('go1');
+          phase = 'resumed';
+          yield* ctx.waitForSignal('go2');
+          phase = 'done';
+          return 'finished';
+        }),
+      );
+
+      const handle = await engine.start('parked-query-resume-workflow', null);
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        if (engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1) break;
+        await flush();
+      }
+      expect(engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]()).toBe(1);
+      await expect(engine.query(handle.id, 'phase')).resolves.toBe('waiting');
+
+      // Resume past the first park; the workflow advances then parks again.
+      await engine.signal(handle.id, 'go1', null);
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        if (engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1) break;
+        await flush();
+      }
+      expect(engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]()).toBe(1);
+      // Querying while parked the second time hits the post-resume context.
+      await expect(engine.query(handle.id, 'phase')).resolves.toBe('resumed');
+
+      await engine.signal(handle.id, 'go2', null);
+      await expect(handle.result()).resolves.toBe('finished');
+
+      engine[Symbol.dispose]();
+    });
+
+    it('returns undefined for an unregistered query name on a parked workflow', async () => {
+      const engine = new Engine();
+
+      engine.register(
+        workflow({ name: 'parked-no-handler-workflow' }).execute(async function* (
+          ctx: WorkflowContext,
+        ) {
+          ctx.onQuery('phase', () => 'waiting');
+          yield* ctx.waitForSignal('go');
+          return 'finished';
+        }),
+      );
+
+      const handle = await engine.start('parked-no-handler-workflow', null);
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        if (engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1) break;
+        await flush();
+      }
+      expect(engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]()).toBe(1);
+
+      // Query a name that was never registered
+      const result = await engine.query(handle.id, 'nonexistent');
+      expect(result).toBeUndefined();
+
+      engine[Symbol.dispose]();
+    });
+
+    it('returns undefined for a query after the workflow reaches terminal state', async () => {
+      const engine = new Engine();
+
+      engine.register(
+        workflow({ name: 'parked-query-terminal-workflow' }).execute(async function* (
+          ctx: WorkflowContext,
+        ) {
+          ctx.onQuery('phase', () => 'waiting');
+          yield* ctx.waitForSignal('go');
+          return 'finished';
+        }),
+      );
+
+      const handle = await engine.start('parked-query-terminal-workflow', null);
+
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        if (engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1) break;
+        await flush();
+      }
+      expect(engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]()).toBe(1);
+
+      await engine.signal(handle.id, 'go', null);
+      await expect(handle.result()).resolves.toBe('finished');
+      await flush();
+
+      // After terminal, querying should return undefined (context cleaned up)
+      const result = await engine.query(handle.id, 'phase');
+      expect(result).toBeUndefined();
+
+      engine[Symbol.dispose]();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // Heartbeat details queryable via activityProgress
   // ---------------------------------------------------------------------------
 

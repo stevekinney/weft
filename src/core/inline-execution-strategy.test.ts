@@ -485,6 +485,262 @@ describe('InlineExecutionStrategy', () => {
   });
 
   // -------------------------------------------------------------------------
+  // parkWorkflow: retained parked context for query handlers
+  // -------------------------------------------------------------------------
+
+  describe('parkWorkflow', () => {
+    it('retains the context in parkedContexts after parking with retainContext', async () => {
+      setup();
+
+      registrations.set('parkable', {
+        handler: async function* (_context, _input) {
+          yield {
+            type: 'activity',
+            operationId: 'op-1',
+            activityName: 'doWork',
+            fn: () => {},
+            input: undefined,
+          };
+        },
+        version: '1',
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-1',
+        workflowType: 'parkable',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+
+      await sleepForTesting(10);
+
+      // Capture context before parking
+      const contextBeforePark = strategy.getContext('wf-1');
+      expect(contextBeforePark).toBeDefined();
+
+      strategy.parkWorkflow('wf-1', { retainContext: true });
+
+      // Live context is gone; parked context is retained
+      expect(strategy.getContext('wf-1')).toBeUndefined();
+      expect(strategy.hasGenerator('wf-1')).toBe(false);
+      expect(strategy.getParkedContext('wf-1')).toBe(contextBeforePark);
+    });
+
+    it('keeps the retained context across a second retaining park (idempotent retain)', async () => {
+      setup();
+
+      registrations.set('parkable', {
+        handler: async function* (_context, _input) {
+          yield {
+            type: 'activity',
+            operationId: 'op-1',
+            activityName: 'doWork',
+            fn: () => {},
+            input: undefined,
+          };
+        },
+        version: '1',
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-1',
+        workflowType: 'parkable',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+
+      await sleepForTesting(10);
+      const contextBeforePark = strategy.getContext('wf-1');
+      expect(contextBeforePark).toBeDefined();
+
+      // First retaining park moves the context into #parkedContexts.
+      strategy.parkWorkflow('wf-1', { retainContext: true });
+      expect(strategy.getParkedContext('wf-1')).toBe(contextBeforePark);
+
+      // A second retaining park with no live context must not drop the retained
+      // entry — the retain path falls back to #parkedContexts.
+      strategy.parkWorkflow('wf-1', { retainContext: true });
+      expect(strategy.getParkedContext('wf-1')).toBe(contextBeforePark);
+    });
+
+    it('evicts the context by default (no retainContext) so suspend leaves nothing queryable', async () => {
+      setup();
+
+      registrations.set('parkable', {
+        handler: async function* (_context, _input) {
+          yield {
+            type: 'activity',
+            operationId: 'op-1',
+            activityName: 'doWork',
+            fn: () => {},
+            input: undefined,
+          };
+        },
+        version: '1',
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-1',
+        workflowType: 'parkable',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+
+      await sleepForTesting(10);
+      expect(strategy.getContext('wf-1')).toBeDefined();
+
+      // The default (suspend/terminate) form hard-evicts: no parked Context.
+      strategy.parkWorkflow('wf-1');
+      expect(strategy.getContext('wf-1')).toBeUndefined();
+      expect(strategy.getParkedContext('wf-1')).toBeUndefined();
+    });
+
+    it('drops the retained context when a signal-parked workflow is later evicted (suspend)', async () => {
+      setup();
+
+      registrations.set('parkable', {
+        handler: async function* (_context, _input) {
+          yield {
+            type: 'activity',
+            operationId: 'op-1',
+            activityName: 'doWork',
+            fn: () => {},
+            input: undefined,
+          };
+        },
+        version: '1',
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-1',
+        workflowType: 'parkable',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+
+      await sleepForTesting(10);
+
+      // Signal-park retains the context.
+      strategy.parkWorkflow('wf-1', { retainContext: true });
+      expect(strategy.getParkedContext('wf-1')).toBeDefined();
+
+      // A later default park (e.g. suspend landing on a signal-parked run) must
+      // tear the retained context down — query handlers must not survive suspend.
+      strategy.parkWorkflow('wf-1');
+      expect(strategy.getParkedContext('wf-1')).toBeUndefined();
+    });
+
+    it('clears the parked context when cancelWorkflow is called', async () => {
+      setup();
+
+      registrations.set('parkable-cancel', {
+        handler: async function* (_context, _input) {
+          yield {
+            type: 'activity',
+            operationId: 'op-1',
+            activityName: 'doWork',
+            fn: () => {},
+            input: undefined,
+          };
+        },
+        version: '1',
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-1',
+        workflowType: 'parkable-cancel',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+
+      await sleepForTesting(10);
+      strategy.parkWorkflow('wf-1', { retainContext: true });
+      expect(strategy.getParkedContext('wf-1')).toBeDefined();
+
+      strategy.cancelWorkflow('wf-1');
+      expect(strategy.getParkedContext('wf-1')).toBeUndefined();
+    });
+
+    it('clears the parked context when adoptWorkflow is called (resume path)', async () => {
+      setup();
+
+      registrations.set('parkable-resume', {
+        handler: async function* (_context, _input) {
+          yield {
+            type: 'activity',
+            operationId: 'op-1',
+            activityName: 'doWork',
+            fn: () => {},
+            input: undefined,
+          };
+        },
+        version: '1',
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-1',
+        workflowType: 'parkable-resume',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+
+      await sleepForTesting(10);
+      strategy.parkWorkflow('wf-1', { retainContext: true });
+      expect(strategy.getParkedContext('wf-1')).toBeDefined();
+
+      const newAbortController = new AbortController();
+      const newContext = new Context({
+        workflowId: 'wf-1',
+        workflowType: 'parkable-resume',
+        startedAt: Date.now(),
+        abortController: newAbortController,
+        getNow: Date.now,
+        nestingDepth: 0,
+      });
+      const newGenerator = (async function* (): AsyncGenerator {
+        return 'done';
+      })();
+
+      strategy.adoptWorkflow('wf-1', newGenerator, newContext, newAbortController);
+
+      // Parked context is gone; new live context is installed
+      expect(strategy.getParkedContext('wf-1')).toBeUndefined();
+      expect(strategy.getContext('wf-1')).toBe(newContext);
+    });
+
+    it('clears the parked context on dispose', async () => {
+      setup();
+
+      registrations.set('parkable-dispose', {
+        handler: async function* (_context, _input) {
+          yield {
+            type: 'activity',
+            operationId: 'op-1',
+            activityName: 'doWork',
+            fn: () => {},
+            input: undefined,
+          };
+        },
+        version: '1',
+      });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-1',
+        workflowType: 'parkable-dispose',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+
+      await sleepForTesting(10);
+      strategy.parkWorkflow('wf-1', { retainContext: true });
+      expect(strategy.getParkedContext('wf-1')).toBeDefined();
+
+      strategy[Symbol.dispose]();
+      expect(strategy.getParkedContext('wf-1')).toBeUndefined();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   // resumeWorkflow (via the ExecutionStrategy interface)
   // -------------------------------------------------------------------------
 

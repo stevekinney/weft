@@ -76,7 +76,10 @@ export async function parkInlineWorkflowAfterCheckpoint(
         return false;
       }
 
-      inlineStrategy.parkWorkflow(workflowId);
+      // Retain the run's Context so ctx.onQuery handlers stay callable while it
+      // is parked on waitForSignal. Other teardown paths, such as suspend, use
+      // the default eviction.
+      inlineStrategy.parkWorkflow(workflowId, { retainContext: true });
       internals.parkedInlineWorkflows.add(workflowId);
       return true;
     },
