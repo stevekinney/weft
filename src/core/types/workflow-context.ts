@@ -107,6 +107,12 @@ export interface WorkflowContext<
   TSearchAttributes extends SearchAttributeSchema = {},
 > {
   readonly workflowId: WorkflowId;
+  /**
+   * The registered workflow type name for this run (the `name` field from
+   * `workflow({ name: '...' })`). Useful for logging and self-inspection
+   * without capturing the name at the workflow definition site.
+   */
+  readonly workflowType: string;
   readonly signal: AbortSignal;
   readonly executionTimeRemaining: number;
   readonly startedAt: number;
