@@ -151,7 +151,7 @@ describe('engine inline parking helpers', () => {
 
   it('fails the workflow when replaying a wait-signal operation throws without an inline strategy', async () => {
     const storage = new MemoryStorage();
-    const engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
     const workflowId = 'workflow-inline-process-failure';
     const operationError = new Error('inline process failed');
     await storage.put(KEYS.workflow(workflowId), encode(createWorkflowState(workflowId)));
@@ -185,13 +185,11 @@ describe('engine inline parking helpers', () => {
       callbacks,
     );
 
-    await sleepForTesting(10);
+    await sleepForTesting(0);
     await expect(loadWorkflowState(getInternals(engine), workflowId)).resolves.toMatchObject({
       error: 'inline process failed',
       failureCategory: 'system',
       status: 'failed',
     });
-
-    engine[Symbol.dispose]();
   });
 });
