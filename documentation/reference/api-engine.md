@@ -56,12 +56,22 @@ const engine = new Engine({
 ### `create()`
 
 ```ts partial
-static create(options: EngineCreateOptions): Promise<Engine>
+static create<
+  TWorkflowDefinitions extends Record<string, AnyWorkflowDefinition> = {},
+  TActivityDefinitions extends Record<string, AnyActivityDefinition> = {},
+>(
+  options: EngineCreateOptions<TWorkflowDefinitions, TActivityDefinitions>,
+): Promise<
+  Engine<
+    EngineCreateWorkflowRegistry<TWorkflowDefinitions>,
+    InferActivityEntries<TActivityDefinitions>
+  >
+>
 ```
 
 Construct an engine, register any `activities` first, register every workflow in the `workflows` map, then run recovery by default. Pass `recover: false` for tests, `ScopedStorage` isolation, or pre-migration inspection. Map keys are validated against each definition's runtime `name` so an accidentally mismatched key fails during startup.
 
-TypeScript treats `Engine.create({ workflows: {} })` the same as omitting `workflows`: both return the default-registry engine type. A non-empty map narrows the returned engine to those workflow definitions, so `engine.start(...)` autocompletes their names and checks their input/output types.
+TypeScript treats `Engine.create({ workflows: {} })` the same as omitting `workflows`: both return the default-registry engine type. A non-empty map narrows the returned engine type to those workflow definitions, so `engine.start(...)` autocompletes their names and checks their input/output types.
 
 ### `register()`
 
