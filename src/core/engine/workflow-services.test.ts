@@ -11,7 +11,11 @@
  */
 
 import { describe, expect, it } from 'bun:test';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import {
+  sleepForTesting,
+  waitForCondition,
+  yieldToEventLoop,
+} from '../../testing/fake-timers.test-support.ts';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
@@ -24,6 +28,14 @@ import { cleanupWorkflowStorage } from './termination/cleanup.ts';
 /** Drain microtasks so fire-and-forget inline work completes. */
 async function flush(): Promise<void> {
   await sleepForTesting(10);
+}
+
+/** Advance engine clock and scheduler then drain pending inline work. */
+async function tickEngine(engine: Engine, clock: { now: number }, nextNow: number): Promise<void> {
+  clock.now = nextNow;
+  await engine.scheduler.tick(clock.now);
+  await yieldToEventLoop();
+  await yieldToEventLoop();
 }
 
 describe('ctx.services — launch path (inline)', () => {
@@ -457,6 +469,275 @@ describe('ctx.services — terminal cleanup', () => {
     const purged = await engine.purge();
     expect(purged.deleted).toBeGreaterThanOrEqual(1);
     expect(await storage.get(KEYS.workflowHasServices('purge-run'))).toBeNull();
+    await engine[Symbol.asyncDispose]();
+  });
+});
+
+describe('ctx.services — scheduled workflow (engine.schedule)', () => {
+  it('provides resolved services to a scheduled workflow occurrence via resolveWorkflowServices', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const results: string[] = [];
+    let resolverCalls = 0;
+
+    const engine = new Engine({
+      storage: new MemoryStorage(),
+      getNow: () => clock.now,
+      resolveWorkflowServices: () => {
+        resolverCalls++;
+        return { status: 'available' as const, services: { generate: () => 'from-resolver' } };
+      },
+    });
+
+    const wf = workflow({ name: 'scheduled-with-services' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      const services = ctx.services as { generate: () => string };
+      const value = services.generate();
+      results.push(value);
+      return value;
+    });
+    engine.register(wf);
+
+    const handle = await engine.schedule('scheduled-with-services', null, '* * * * *');
+    const description = await handle.describe();
+    expect(description.nextFireAt).not.toBeNull();
+
+    await tickEngine(engine, clock, description.nextFireAt!);
+
+    // Condition wait rather than a fixed event-loop settle: the inline launch drain
+    // is a macrotask, so the body's output is not guaranteed on a fixed number of
+    // turns. Wait for it explicitly to keep the test load-insensitive.
+    await waitForCondition(() => results.length > 0, { label: 'scheduled occurrence body' });
+    expect(resolverCalls).toBeGreaterThanOrEqual(1);
+    expect(results).toEqual(['from-resolver']);
+    await engine[Symbol.asyncDispose]();
+  });
+
+  it('fails only the occurrence when the resolver returns unavailable — schedule stays active', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    let callCount = 0;
+
+    const engine = new Engine({
+      storage: new MemoryStorage(),
+      getNow: () => clock.now,
+      resolveWorkflowServices: () => {
+        callCount++;
+        if (callCount === 1) {
+          return { status: 'unavailable' as const, reason: 'first-call-unavailable' };
+        }
+        return { status: 'available' as const, services: { generate: () => 'recovered' } };
+      },
+    });
+
+    const results: string[] = [];
+    const wf = workflow({ name: 'scheduled-unavailable' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      // Push an observable sentinel BEFORE any services dereference. If the body
+      // runs at all (the race lost), 'body-ran' lands even though the subsequent
+      // `services.generate()` would throw on undefined — so the length assertion
+      // below genuinely catches body execution, not just a body crash.
+      results.push('body-ran');
+      const services = ctx.services as { generate: () => string };
+      results.push(services.generate());
+      return 'ok';
+    });
+    engine.register(wf);
+
+    const schedule = await engine.schedule('scheduled-unavailable', null, '* * * * *');
+    const firstDescription = await schedule.describe();
+
+    // First occurrence: resolver unavailable → run fails, schedule stays active.
+    await tickEngine(engine, clock, firstDescription.nextFireAt!);
+    await flush();
+
+    const scheduleAfterFirst = await schedule.describe();
+    expect(scheduleAfterFirst.status).toBe('active');
+
+    // The body must NEVER run on the unavailable path. startScheduledRun starts the
+    // run (queuing its inline launch) then awaits failWorkflow; failWorkflow commits
+    // 'failed' on the awaited microtask continuation, before the macrotask-scheduled
+    // launch drain reads the status gate (inline-launch-queue: status !== 'running'
+    // skips the body). The 'body-ran' sentinel never appearing is the direct proof
+    // the launch-vs-fail ordering closes the race. The ONLY interleaving that would
+    // invalidate this is `startWorkflow` synchronously draining the inline launch
+    // queue before it returns; it does not (beginExecutionAwaitingLiveness only
+    // enqueues for a non-`defer:false` start and a scheduled run never passes
+    // `defer:false`), so this assertion guards that. (The error/category assertions
+    // below are the second regression layer: a removed failWorkflow lets the body
+    // run and throw a TypeError with category 'application', not 'system'.)
+    expect(results).toHaveLength(0);
+
+    // Find the failed workflow run from the first occurrence and assert it failed
+    // via the intended unavailableServicesError path, not an incidental body crash.
+    const failedRuns = await engine.list({ status: 'failed' });
+    expect(failedRuns.items).toHaveLength(1);
+    expect(failedRuns.items[0]!.status).toBe('failed');
+
+    // Pin the fault: engine.get returns the full WorkflowState including error and
+    // failureCategory, which are absent from the WorkflowSummary returned by list().
+    // A regression that removed the failWorkflow call would let the body run with
+    // ctx.services === undefined → TypeError, producing a different error message
+    // and category ('application' for a body throw, not 'system').
+    const failedState = await engine.get(failedRuns.items[0]!.id);
+    expect(failedState).toBeDefined();
+    expect(failedState!.error).toContain('services unavailable');
+    expect(failedState!.failureCategory).toBe('system');
+
+    // Second occurrence: resolver available → run completes successfully. The body
+    // pushes its 'body-ran' sentinel, then the resolved service's 'recovered' value.
+    const secondDescription = await schedule.describe();
+    await tickEngine(engine, clock, secondDescription.nextFireAt!);
+    await waitForCondition(() => results.includes('recovered'), {
+      label: 'second occurrence body',
+    });
+
+    expect(results).toEqual(['body-ran', 'recovered']);
+    await engine[Symbol.asyncDispose]();
+  });
+
+  it('coerces a resolver that THROWS to unavailable — occurrence fails (system), schedule stays active', async () => {
+    // resolveScheduledRunServices wraps the resolver in try/catch and coerces a
+    // throw to { status: 'unavailable' } so one bad occurrence cannot escape into
+    // the schedule timer's error boundary and pause the whole schedule.
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+
+    const engine = new Engine({
+      storage: new MemoryStorage(),
+      getNow: () => clock.now,
+      resolveWorkflowServices: () => {
+        throw new Error('resolver-exploded');
+      },
+    });
+
+    const results: string[] = [];
+    const wf = workflow({ name: 'scheduled-resolver-throws' }).execute(async function* () {
+      results.push('body-ran');
+      return 'ok';
+    });
+    engine.register(wf);
+
+    const schedule = await engine.schedule('scheduled-resolver-throws', null, '* * * * *');
+    const description = await schedule.describe();
+    await tickEngine(engine, clock, description.nextFireAt!);
+    await flush();
+
+    // The body must never run; the occurrence fails via the unavailable path.
+    expect(results).toHaveLength(0);
+    const failed = await engine.list({ status: 'failed' });
+    expect(failed.items).toHaveLength(1);
+    const state = await engine.get(failed.items[0]!.id);
+    expect(state!.error).toContain('services unavailable');
+    expect(state!.failureCategory).toBe('system');
+
+    // The resolver throw is contained: the schedule itself stays active.
+    const scheduleAfterThrow = await schedule.describe();
+    expect(scheduleAfterThrow.status).toBe('active');
+    await engine[Symbol.asyncDispose]();
+  });
+
+  it('a scheduled workflow that does not use services still works when a resolver is configured', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    let resolverCalls = 0;
+    const executions: string[] = [];
+
+    const engine = new Engine({
+      storage: new MemoryStorage(),
+      getNow: () => clock.now,
+      resolveWorkflowServices: () => {
+        resolverCalls++;
+        return { status: 'available' as const, services: { tag: 'resolver-tag' } };
+      },
+    });
+
+    const wf = workflow({ name: 'scheduled-no-services' }).execute(async function* (
+      _ctx: WorkflowContext,
+    ) {
+      executions.push('ran');
+      return 'done';
+    });
+    engine.register(wf);
+
+    const schedule = await engine.schedule('scheduled-no-services', null, '* * * * *');
+    const description = await schedule.describe();
+
+    await tickEngine(engine, clock, description.nextFireAt!);
+    await flush();
+
+    expect(executions).toEqual(['ran']);
+    // Resolver consulted because a resolver is configured for this inline engine.
+    expect(resolverCalls).toBeGreaterThanOrEqual(1);
+    await engine[Symbol.asyncDispose]();
+  });
+
+  it('does not consult the resolver for scheduled workflows when none is configured', async () => {
+    // Regression: scheduled runs must still work on an engine with no resolver.
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const executions: string[] = [];
+
+    const engine = new Engine({
+      storage: new MemoryStorage(),
+      getNow: () => clock.now,
+      // No resolveWorkflowServices.
+    });
+
+    const wf = workflow({ name: 'scheduled-plain' }).execute(async function* () {
+      executions.push('ran');
+      return 'done';
+    });
+    engine.register(wf);
+
+    const schedule = await engine.schedule('scheduled-plain', null, '* * * * *');
+    const description = await schedule.describe();
+
+    await tickEngine(engine, clock, description.nextFireAt!);
+    await flush();
+
+    expect(executions).toEqual(['ran']);
+    await engine[Symbol.asyncDispose]();
+  });
+
+  it('writes and sweeps the workflowHasServices marker on terminal cleanup when the resolver is configured', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const storage = new MemoryStorage();
+    let firstWorkflowId: string | undefined;
+
+    const engine = new Engine({
+      storage,
+      getNow: () => clock.now,
+      resolveWorkflowServices: ({ workflowId }) => {
+        // Pin to the first occurrence only; later occurrences must not overwrite.
+        firstWorkflowId ??= workflowId;
+        return { status: 'available' as const, services: { v: 1 } };
+      },
+    });
+
+    const wf = workflow({ name: 'scheduled-marker' }).execute(async function* () {
+      return 'ok';
+    });
+    engine.register(wf);
+
+    const schedule = await engine.schedule('scheduled-marker', null, '* * * * *');
+    const description = await schedule.describe();
+
+    // Fire the first occurrence and let it complete.
+    await tickEngine(engine, clock, description.nextFireAt!);
+    await flush();
+    expect(firstWorkflowId).toBeDefined();
+
+    // Positive presence check: marker must have been written before any sweep fires.
+    // Without this assertion a regression that never wrote the marker would still pass
+    // the toBeNull check below (null === null vacuously).
+    expect(await storage.get(KEYS.workflowHasServices(firstWorkflowId!))).not.toBeNull();
+
+    // Pause the schedule so that advancing time to fire the cleanup timer does not
+    // spawn new occurrences and race with the marker we are asserting on.
+    await schedule.pause();
+
+    // Marker is written at workflow creation time; after terminal cleanup it is swept.
+    // Advance past the 60-second TERMINAL_CLEANUP_DELAY_MS to let the cleanup timer fire.
+    await engine.scheduler.tick(clock.now + 90_000);
+    expect(await storage.get(KEYS.workflowHasServices(firstWorkflowId!))).toBeNull();
     await engine[Symbol.asyncDispose]();
   });
 });

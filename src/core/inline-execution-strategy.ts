@@ -10,95 +10,19 @@
  * @module core/inline-execution-strategy
  */
 
-import type { ContextOperationRequest, ContextOptions } from './context.ts';
+import type { ContextOperationRequest } from './context.ts';
 import { Context, setContextWorkflowInterceptor } from './context.ts';
 import type { ExecutionStrategy } from './execution-strategy.ts';
 import {
   classifyErrorAsFailureCategory,
   errorFromFailedOperationOutcome,
 } from './failure-categories.ts';
-import type { ComposedWorkflowInterceptor } from './interceptor.ts';
 import type {
-  FailureCategory,
-  OperationOutcome,
-  SearchAttributeSchema,
-  WorkerOutboundMessage,
-  WorkflowFunction,
-} from './types.ts';
-
-// ---------------------------------------------------------------------------
-// Dependencies injected by the engine
-// ---------------------------------------------------------------------------
-
-export interface InlineExecutionDependencies {
-  getRegistration: (workflowType: string) =>
-    | {
-        handler: WorkflowFunction;
-        version: string;
-        searchAttributes?: SearchAttributeSchema;
-      }
-    | undefined;
-  getNow: () => number;
-  resolveWorkflowType?: (target: string | Function) => string;
-  maxNestingDepth: number;
-  development?: boolean;
-  getComposedWorkflowInterceptor?: () => ComposedWorkflowInterceptor | null;
-  registerCancelHandler?: (workflowId: string, handler: () => Promise<void> | void) => () => void;
-  /**
-   * Look up the non-serialized per-run `services` value for a workflow, exposed
-   * to the body as `ctx.services`. Returns `undefined` when none was supplied.
-   */
-  getWorkflowServices?: (workflowId: string) => unknown;
-}
-
-type InlineWorkflowRegistration = NonNullable<
-  ReturnType<InlineExecutionDependencies['getRegistration']>
->;
-
-type InlineStartWorkflowParameters = {
-  workflowId: string;
-  workflowType: string;
-  input: unknown;
-  checkpoint: ArrayBuffer | Uint8Array;
-  nestingDepth?: number;
-  executionStateOwnerId?: string;
-  startedAt?: number;
-  sleepReferenceTime?: number;
-  deadline?: number;
-  headers?: [string, string][];
-};
-
-function createInlineContextOptions(
-  dependencies: InlineExecutionDependencies,
-  registration: InlineWorkflowRegistration,
-  parameters: InlineStartWorkflowParameters,
-  workflowAbort: AbortController,
-): ContextOptions {
-  const { registerCancelHandler } = dependencies;
-  return {
-    workflowId: parameters.workflowId,
-    workflowType: parameters.workflowType,
-    startedAt: parameters.startedAt ?? dependencies.getNow(),
-    abortController: workflowAbort,
-    getNow: dependencies.getNow,
-    nestingDepth: parameters.nestingDepth ?? 0,
-    executionStateOwnerId: parameters.executionStateOwnerId ?? parameters.workflowId,
-    ...(parameters.sleepReferenceTime !== undefined && {
-      sleepReferenceTime: parameters.sleepReferenceTime,
-    }),
-    ...(dependencies.resolveWorkflowType !== undefined && {
-      resolveWorkflowType: dependencies.resolveWorkflowType,
-    }),
-    ...(registration.searchAttributes && {
-      searchAttributeSchema: registration.searchAttributes,
-    }),
-    ...(parameters.deadline !== undefined && { deadline: parameters.deadline }),
-    ...(registerCancelHandler !== undefined && {
-      registerCancelHandler: (handler) => registerCancelHandler(parameters.workflowId, handler),
-    }),
-    services: dependencies.getWorkflowServices?.(parameters.workflowId),
-  };
-}
+  InlineExecutionDependencies,
+  InlineStartWorkflowParameters,
+} from './inline-execution-strategy.context-options.ts';
+import { createInlineContextOptions } from './inline-execution-strategy.context-options.ts';
+import type { FailureCategory, OperationOutcome, WorkerOutboundMessage } from './types.ts';
 
 // ---------------------------------------------------------------------------
 // InlineExecutionStrategy
@@ -109,6 +33,8 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
   readonly #generators: Map<string, AsyncGenerator>;
   readonly #abortControllers: Map<string, AbortController>;
   readonly #contexts: Map<string, Context>;
+  /** Contexts retained for parked workflows so `ctx.onQuery` handlers remain callable. */
+  readonly #parkedContexts: Map<string, Context>;
   readonly #workflowAdvances: Map<string, Promise<void>>;
   readonly #workflowTurns: Map<string, Promise<void>>;
   #messageHandler: ((message: WorkerOutboundMessage) => void | Promise<void>) | null;
@@ -118,6 +44,7 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     this.#generators = new Map();
     this.#abortControllers = new Map();
     this.#contexts = new Map();
+    this.#parkedContexts = new Map();
     this.#workflowAdvances = new Map();
     this.#workflowTurns = new Map();
     this.#messageHandler = null;
@@ -211,16 +138,56 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     this.#cleanup(workflowId);
   }
 
-  parkWorkflow(workflowId: string): void {
+  /**
+   * Evict a workflow's in-memory execution state (generator, abort controller,
+   * live context, tracked turns/advances).
+   *
+   * By default this is a hard eviction: nothing about the run stays reachable —
+   * which is what the suspend/general teardown path requires. The inline
+   * `waitForSignal` parking optimization opts into `retainContext: true` so the
+   * run's Context survives in `#parkedContexts` and its `ctx.onQuery` handlers
+   * stay callable while the run is parked. Retention is therefore strictly
+   * opt-in at the one call site that wants it; every other caller gets eviction.
+   */
+  parkWorkflow(workflowId: string, options?: { retainContext?: boolean }): void {
+    // On the retain path, fall back to an already-parked context so a second
+    // retaining park (no intervening resume) is idempotent rather than dropping
+    // the retained entry. The default (evict) path reads nothing — that is what
+    // makes suspend/terminate a true hard eviction and must NOT consult
+    // #parkedContexts, or the suspend-on-signal-parked leak returns.
+    const context = options?.retainContext
+      ? (this.#contexts.get(workflowId) ?? this.#parkedContexts.get(workflowId))
+      : undefined;
     this.#cleanup(workflowId);
+    if (context !== undefined) {
+      this.#parkedContexts.set(workflowId, context);
+    }
   }
 
   // -------------------------------------------------------------------------
   // Context access (for the engine to look up active contexts)
   // -------------------------------------------------------------------------
 
+  /** Returns the live Context for a workflow, or `undefined` if not running. For parked workflows use {@link getParkedContext}. */
   getContext(workflowId: string): Context | undefined {
     return this.#contexts.get(workflowId);
+  }
+
+  /** Returns the retained Context for a parked workflow, or `undefined` if not parked or already cleaned up. */
+  getParkedContext(workflowId: string): Context | undefined {
+    return this.#parkedContexts.get(workflowId);
+  }
+
+  /**
+   * Drop any retained parked Context for a workflow without touching the abort
+   * controller or other live state. Terminal cleanup calls this so a workflow
+   * that reached a terminal status while parked (e.g. a failed resume, or normal
+   * completion of a run that had parked) cannot keep resolving `ctx.onQuery`
+   * handlers from a stale parked Context — and so the Context is not retained
+   * for the engine's lifetime.
+   */
+  clearParkedContext(workflowId: string): void {
+    this.#parkedContexts.delete(workflowId);
   }
 
   getAbortController(workflowId: string): AbortController | undefined {
@@ -264,8 +231,9 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
   }
 
   /**
-   * Store a context and generator that were created externally (used by
-   * the engine's resume() path where context setup is more complex).
+   * Store a context and generator created externally (engine resume path).
+   * Clears any retained parked context so a concurrent query sees the new
+   * live context rather than the stale parked one.
    */
   adoptWorkflow(
     workflowId: string,
@@ -273,6 +241,7 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     context: Context,
     abortController: AbortController,
   ): void {
+    this.#parkedContexts.delete(workflowId);
     this.#generators.set(workflowId, generator);
     this.#contexts.set(workflowId, context);
     this.#abortControllers.set(workflowId, abortController);
@@ -286,6 +255,7 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     this.#generators.clear();
     this.#abortControllers.clear();
     this.#contexts.clear();
+    this.#parkedContexts.clear();
     this.#workflowAdvances.clear();
     this.#workflowTurns.clear();
     this.#messageHandler = null;
@@ -461,6 +431,7 @@ export class InlineExecutionStrategy implements ExecutionStrategy {
     this.#generators.delete(workflowId);
     this.#abortControllers.delete(workflowId);
     this.#contexts.delete(workflowId);
+    this.#parkedContexts.delete(workflowId);
     if (!options?.preserveTrackedAdvance) {
       this.#workflowAdvances.delete(workflowId);
     }

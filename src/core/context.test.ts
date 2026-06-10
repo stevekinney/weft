@@ -12,7 +12,7 @@ import {
   MAX_SESSION_STATE_SERIALIZED_BYTES,
   SessionStateValidationError,
 } from './session-state.ts';
-import type { SearchAttributeValue } from './types.ts';
+import type { SearchAttributeValue, WorkflowContext } from './types.ts';
 
 function createContext(overrides: Partial<ConstructorParameters<typeof Context>[0]> = {}) {
   return new Context({
@@ -1086,6 +1086,24 @@ describe('Context', () => {
       const context = createContext();
       const child = context.createSpeculativeChild();
       expect(child.services).toBeUndefined();
+    });
+  });
+
+  describe('ctx.workflowType', () => {
+    it('exposes the workflowType passed at construction', () => {
+      const context = createContext({ workflowType: 'my-workflow' });
+      expect(context.workflowType).toBe('my-workflow');
+    });
+
+    it('is readable through the WorkflowContext interface type', () => {
+      // Reading workflowType off a WorkflowContext-typed binding will not compile
+      // if the interface lacks the member, so this read pins the interface
+      // contract at compile time; the runtime expect confirms the value flows
+      // through. (The drift guard in type-ergonomics.test-d.ts is the primary
+      // enforcement; this is the consumer-facing companion.)
+      const context = createContext({ workflowType: 'interface-check' });
+      const asInterface: WorkflowContext = context;
+      expect(asInterface.workflowType).toBe('interface-check');
     });
   });
 

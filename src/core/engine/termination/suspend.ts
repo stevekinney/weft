@@ -21,7 +21,9 @@ import { evictSuspendedWorkflowWaiters, type TerminationCallbacks } from './clea
  *   cancellation, so user code observing `ctx.signal.aborted` or registered
  *   abort listeners must not fire. The live inline run is *parked*
  *   (`parkWorkflow`: evict execution state without aborting), the same primitive
- *   the engine uses for signal-parking,
+ *   the engine uses for signal-parking — but with the default eviction, not the
+ *   `retainContext` form signal-parking uses, so suspend leaves no queryable
+ *   Context behind,
  * - does NOT run cancel handlers,
  * - does NOT settle the result promise (`handle.result()` stays pending until a
  *   later `resume()` drives the run to completion, or a `cancel()` terminates it),

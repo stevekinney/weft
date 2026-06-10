@@ -91,10 +91,12 @@ export async function reprovideRecoveredServices(
 }
 
 /**
- * The canonical terminal error for a recovered run whose services could not be
- * re-provided. Shared by both recovery paths so they fail with an identical
- * message (the failure category is `system`, the default for `failWorkflow`).
+ * The canonical terminal error for any run whose services could not be provided —
+ * both recovery re-provision paths and a scheduled-occurrence launch. Shared so
+ * every caller fails with an identical message (the failure category is `system`,
+ * the default for `failWorkflow`). The message is recovery-agnostic because a
+ * freshly launched scheduled occurrence has never been recovered.
  */
 export function unavailableServicesError(workflowId: string, reason: string): Error {
-  return new Error(`Recovered workflow "${workflowId}" services unavailable: ${reason}`);
+  return new Error(`Workflow "${workflowId}" services unavailable: ${reason}`);
 }

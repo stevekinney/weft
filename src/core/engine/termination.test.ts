@@ -247,6 +247,54 @@ describe('termination helpers', () => {
     engine[Symbol.dispose]();
   });
 
+  it('failWorkflow clears the retained parked query context (no query after terminal)', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+
+    const parkedFailQueryWorkflow = workflow({ name: 'parked-fail-query' }).execute(
+      async function* (ctx: WorkflowContext) {
+        ctx.onQuery('phase', () => 'waiting');
+        yield* ctx.waitForSignal('finish');
+        return 'done';
+      },
+    );
+    engine.register(parkedFailQueryWorkflow);
+
+    const handle = await engine.start('parked-fail-query', null, {
+      id: 'parked-fail-query-id',
+    });
+    await flush();
+
+    const internals = getInternals(engine);
+
+    // Precondition: the run is parked on waitForSignal, its Context is retained
+    // in the inline strategy, and the query handler resolves against it.
+    expect(internals.inlineStrategy?.getParkedContext(handle.id)).toBeDefined();
+    expect(await engine.query(handle.id, 'phase')).toBe('waiting');
+
+    // Fail the workflow externally while it is still parked — this path never
+    // resumes the generator (so adoptWorkflow never clears the parked context)
+    // and never calls strategy.cancelWorkflow (unlike terminate/cancel).
+    const callbacks = createTerminationCallbacks({
+      loadWorkflowState: async (workflowId) => await loadWorkflowState(internals, workflowId),
+      runSerializedWorkflowStateWrite: async (workflowId, writeOperation) =>
+        await runSerializedWorkflowStateWrite(internals, workflowId, writeOperation),
+      commitWorkflowStateOperations: async (state, operations) =>
+        await commitWorkflowStateOperations(internals, state, operations),
+    });
+    await failWorkflow(internals, handle.id, new Error('boom'), callbacks);
+
+    const persistedState = await loadWorkflowState(internals, handle.id);
+    expect(persistedState?.status).toBe('failed');
+
+    // Terminal cleanup must drop the strategy-side parked Context: querying a
+    // terminal run returns undefined and the Context is not leaked.
+    expect(internals.inlineStrategy?.getParkedContext(handle.id)).toBeUndefined();
+    expect(await engine.query(handle.id, 'phase')).toBeUndefined();
+
+    engine[Symbol.dispose]();
+  });
+
   it('cancelWorkflow rejects the pending result when synchronous cleanup throws', async () => {
     const storage = new MemoryStorage();
     const engine = new Engine({ storage });

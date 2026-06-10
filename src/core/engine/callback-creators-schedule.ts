@@ -22,7 +22,7 @@ import {
 } from './schedules.ts';
 import { loadWorkflowState } from './storage-io.ts';
 import { feedOperationResult } from './strategy-helpers.ts';
-import { ensureTerminalCleanupTracked, failWorkflow } from './termination.ts';
+import { ensureTerminalCleanupTracked, failWorkflow, handleCleanupError } from './termination.ts';
 
 export function createScheduleCallbacks<TWorkflows extends object, TActivities extends object>(
   engine: Engine<TWorkflows, TActivities>,
@@ -50,6 +50,12 @@ export function createScheduleCallbacks<TWorkflows extends object, TActivities e
         getInternals(engine),
         createInlineLaunchQueueCallbacks(engine),
       ),
+    failWorkflow: (workflowId, error) =>
+      failWorkflow(getInternals(engine), workflowId, error, createTerminationCallbacks(engine)),
+    handleCleanupError: (source, error, workflowId) =>
+      handleCleanupError(getInternals(engine), source, error, workflowId, {
+        dispatchEvent: (event) => engine.dispatchEvent(event),
+      }),
   };
 }
 

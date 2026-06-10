@@ -16,7 +16,15 @@ export async function query(
   if (!inlineStrategy) {
     throw new Error('Workflow queries are not supported when using the worker execution strategy.');
   }
-  const context = inlineStrategy.getContext(workflowId);
+  // When the inline waitForSignal parking optimization evicts a run's live
+  // generator (parkWorkflow with retainContext), it retains the run's Context in
+  // parkedContexts so query handlers registered via ctx.onQuery stay callable.
+  // (A waitForSignal yield that kept a live context — e.g. one with update
+  // handlers or exposed accessors that inline-parking does not park — is served
+  // by getContext below.) Check the live context first so a query racing with a
+  // resume always sees the freshly installed context.
+  const context =
+    inlineStrategy.getContext(workflowId) ?? inlineStrategy.getParkedContext(workflowId);
   if (!context) {
     return undefined;
   }

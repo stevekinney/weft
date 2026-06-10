@@ -319,6 +319,12 @@ export function cleanupTerminalWorkflowMemory(
   internals.eventLogHeads.delete(workflowId);
   internals.pendingTimelineEntries.delete(workflowId);
   internals.parkedInlineWorkflows.delete(workflowId);
+  // Strategy-side twin of parkedInlineWorkflows above: a run that parked retains
+  // its Context in the inline strategy so query handlers stay callable. Drop it
+  // on every terminal path (complete/fail route here without strategy.cancelWorkflow),
+  // or query() would resolve handlers against a terminal run and the Context would
+  // leak for the engine's lifetime. Idempotent with terminate's cancelWorkflow.
+  internals.inlineStrategy?.clearParkedContext(workflowId);
   internals.workflowVersionTuples.delete(workflowId);
   internals.cancelHandlersByWorkflow.delete(workflowId);
   // Drop any remaining feed-listener buckets for this workflow.

@@ -46,6 +46,17 @@ const sleeper = workflow({ name: 'sleeps' }).execute(async function* (ctx: Workf
   return 'awake';
 });
 
+// Registers a query handler, then parks on waitForSignal. While signal-parked
+// the handler is queryable (the #457 retention); once suspended, suspend's
+// eviction must tear that retained context down so query() no longer resolves.
+const queryableWaiter = workflow({ name: 'queryable-waits' }).execute(async function* (
+  ctx: WorkflowContext,
+) {
+  ctx.onQuery('phase', () => 'waiting');
+  yield* ctx.waitForSignal('go');
+  return 'done';
+});
+
 describe('suspend/resume', () => {
   it('flips a running workflow to the non-terminal suspended status', async () => {
     await using engine = new Engine();
@@ -291,6 +302,40 @@ describe('suspend/resume', () => {
 
     // Resume re-drives; the buffered signal is consumed and the run completes.
     await handle.resume();
+    await flush();
+    expect(await handle.result()).toBe('done');
+  });
+
+  it('suspend tears down the retained query context: query() returns undefined after suspend', async () => {
+    // #457 retains a signal-parked run's Context so ctx.onQuery handlers stay
+    // callable while parked. Suspend evicts ALL in-memory execution state, so a
+    // suspended (non-running) run must NOT keep resolving queries — and its
+    // Context must not leak for the engine's lifetime.
+    await using engine = new Engine();
+    engine.register(queryableWaiter);
+
+    const handle = await engine.start('queryable-waits', null, { id: 'sus-query' });
+    await waitForCondition(() => engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
+      label: 'inline workflow parked on waitForSignal',
+    });
+
+    // While signal-parked, the query handler resolves (the retained context).
+    expect(await engine.query('sus-query', 'phase')).toBe('waiting');
+
+    await handle.suspend();
+    expect(await statusOf(engine, 'sus-query')).toBe('suspended');
+
+    // After suspend, the retained context is gone: query() resolves nothing.
+    expect(await engine.query('sus-query', 'phase')).toBeUndefined();
+
+    // Resume re-drives from storage; the handler is callable again, then completes.
+    await handle.resume();
+    await waitForCondition(() => engine[ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING]() === 1, {
+      label: 'inline workflow re-parked on waitForSignal after resume',
+    });
+    expect(await engine.query('sus-query', 'phase')).toBe('waiting');
+
+    await engine.signal('sus-query', 'go');
     await flush();
     expect(await handle.result()).toBe('done');
   });

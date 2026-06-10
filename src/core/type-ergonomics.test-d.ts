@@ -73,7 +73,8 @@ type RequiredWorkflowContextKeys =
   | 'streamUrl'
   | 'suspendUntil'
   | 'waitForSignal'
-  | 'waitForUpdate';
+  | 'waitForUpdate'
+  | 'workflowType';
 
 type MissingWorkflowContextKeys = Exclude<RequiredWorkflowContextKeys, keyof WorkflowContext>;
 type AssertNever<T extends never> = T;
