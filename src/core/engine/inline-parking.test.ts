@@ -1,13 +1,21 @@
 import { describe, expect, it, mock } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { encode } from '../codec/api.ts';
+import { Engine } from '../engine.ts';
 import type { WorkflowState } from '../types.ts';
+import { createInlineParkingCallbacks } from './callback-creators.ts';
 import {
   getParkedWorkflowResumeDisposition,
+  handleStrategyMessage,
   resumeParkedInlineWorkflow,
   type InlineParkingCallbacks,
   type ParkedWorkflowResumeDisposition,
 } from './inline-parking.ts';
+import { getInternals } from './internals.ts';
+import { loadWorkflowState } from './storage-io.ts';
 
 function createWorkflowState(
   workflowId: string,
@@ -139,5 +147,51 @@ describe('engine inline parking helpers', () => {
         }),
       ),
     ).resolves.toBe('resumable');
+  });
+
+  it('fails the workflow when replaying a wait-signal operation throws without an inline strategy', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const workflowId = 'workflow-inline-process-failure';
+    const operationError = new Error('inline process failed');
+    await storage.put(KEYS.workflow(workflowId), encode(createWorkflowState(workflowId)));
+    getInternals(engine).inlineStrategy = null;
+
+    const callbacks = {
+      ...createInlineParkingCallbacks(engine),
+      evaluateConstraints: async () => false,
+      parkInlineWorkflowAfterCheckpoint: async () => false,
+      persistCheckpoint: async () => {},
+      processOperation: async () => {
+        throw operationError;
+      },
+      translateOperationRequest: () =>
+        ({
+          operationId: 'wait-signal-operation',
+          type: 'wait-signal',
+          signalName: 'wake',
+        }) as const,
+      validateDevelopmentCheckpoint: () => {},
+    };
+
+    await handleStrategyMessage(
+      getInternals(engine),
+      {
+        type: 'checkpoint',
+        workflowId,
+        checkpoint: new ArrayBuffer(0),
+        operationRequest: {} as never,
+      },
+      callbacks,
+    );
+
+    await sleepForTesting(10);
+    await expect(loadWorkflowState(getInternals(engine), workflowId)).resolves.toMatchObject({
+      error: 'inline process failed',
+      failureCategory: 'system',
+      status: 'failed',
+    });
+
+    engine[Symbol.dispose]();
   });
 });
