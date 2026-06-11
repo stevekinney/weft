@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it } from 'bun:test';
 
 import { createDiskBackedTestFixture } from '../testing/storage-backends.test-support.ts';
 import { LMDBStorage } from './lmdb';
-import { runStorageCapabilityConformance } from './storage-adapter.test-support.ts';
+import {
+  runBinaryAndLargeScanStorageConformance,
+  runStorageCapabilityConformance,
+} from './storage-adapter.test-support.ts';
 
 runStorageCapabilityConformance('LMDBStorage', {
   create: () =>
@@ -50,6 +53,8 @@ describe('LMDBStorage', () => {
     fixtureCleanups.push(fixture.cleanup);
     return new LMDBStorage(fixture.path);
   }
+
+  runBinaryAndLargeScanStorageConformance('LMDBStorage', { create: createStorage });
 
   afterEach(() => {
     for (const cleanup of fixtureCleanups) {
@@ -229,33 +234,6 @@ describe('LMDBStorage', () => {
     storage[Symbol.dispose]();
     // After dispose, reads should throw because the environment is closed.
     await expect(storage.get('key')).rejects.toThrow('LMDBStorage is closed');
-  });
-
-  it('binary values round-trip correctly', async () => {
-    const storage = createStorage();
-    const binaryData = new Uint8Array([0, 1, 127, 128, 255, 42, 0, 13, 10]);
-    await storage.put('binary', binaryData);
-    const result = await storage.get('binary');
-    expect(result).toEqual(binaryData);
-    storage[Symbol.dispose]();
-  });
-
-  it('large key count (1000 entries): scan returns all in correct order', async () => {
-    const storage = createStorage();
-    const operations = Array.from({ length: 1000 }, (_, index) => ({
-      type: 'put' as const,
-      key: `item:${String(index).padStart(4, '0')}`,
-      value: encode(String(index)),
-    }));
-    await storage.batch(operations);
-
-    const entries = await collect(storage.scan('item:'));
-    expect(entries).toHaveLength(1000);
-
-    for (let index = 0; index < entries.length; index++) {
-      expect(entries[index]![0]).toBe(`item:${String(index).padStart(4, '0')}`);
-    }
-    storage[Symbol.dispose]();
   });
 
   it('reads are synchronous zero-copy (get returns without awaiting disk)', async () => {

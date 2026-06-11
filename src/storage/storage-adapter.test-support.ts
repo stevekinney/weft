@@ -166,6 +166,43 @@ export type CapabilityConformanceOptions = {
   readonly supportsConcurrentWrites?: boolean;
 };
 
+export type BinaryAndLargeScanConformanceOptions = {
+  /** Construct a fresh, empty adapter for each conformance case. */
+  readonly create: () => Storage | Promise<Storage>;
+};
+
+export function runBinaryAndLargeScanStorageConformance(
+  name: string,
+  options: BinaryAndLargeScanConformanceOptions,
+): void {
+  describe(`${name} binary and large-scan conformance`, () => {
+    it('round-trips binary values correctly', async () => {
+      using storage = await options.create();
+      const binaryData = new Uint8Array([0, 1, 127, 128, 255, 42, 0, 13, 10]);
+      await storage.put('binary', binaryData);
+      const result = await storage.get('binary');
+      expect(result).toEqual(binaryData);
+    });
+
+    it('returns 1000 scanned keys in sorted order', async () => {
+      using storage = await options.create();
+      const operations = Array.from({ length: 1000 }, (_, index) => ({
+        type: 'put' as const,
+        key: `item:${String(index).padStart(4, '0')}`,
+        value: bytes(String(index)),
+      }));
+      await storage.batch(operations);
+
+      const entries = await collect(storage.scan('item:'));
+      expect(entries).toHaveLength(1000);
+
+      for (let index = 0; index < entries.length; index += 1) {
+        expect(entries[index]![0]).toBe(`item:${String(index).padStart(4, '0')}`);
+      }
+    });
+  });
+}
+
 /**
  * Register a shared `describe` block that proves an adapter's declared
  * {@link StorageCapabilities} against its actual behavior — not just its

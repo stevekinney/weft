@@ -4,7 +4,10 @@ import {
   createDiskBackedTestFixture,
   sqliteDatabaseSidecarSuffixes,
 } from '../testing/storage-backends.test-support.ts';
-import { runStorageCapabilityConformance } from './storage-adapter.test-support.ts';
+import {
+  runBinaryAndLargeScanStorageConformance,
+  runStorageCapabilityConformance,
+} from './storage-adapter.test-support.ts';
 import { TursoStorage } from './turso';
 
 runStorageCapabilityConformance('TursoStorage', {
@@ -72,6 +75,10 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 describe('TursoStorage', () => {
+  runBinaryAndLargeScanStorageConformance('TursoStorage', {
+    create: () => new TursoStorage({ url: 'file::memory:' }),
+  });
+
   it('allows only one competing file-backed conditionalBatch caller to win', async () => {
     const first = createFileBackedTursoStorage('turso-cas-contention');
     const second = new TursoStorage({ url: first.url });
@@ -267,33 +274,6 @@ describe('TursoStorage', () => {
     storage[Symbol.dispose]();
     // After dispose, the underlying client is closed.
     expect(() => storage.get('key')).toThrow();
-  });
-
-  it('binary values round-trip correctly', async () => {
-    const storage = new TursoStorage({ url: 'file::memory:' });
-    const binaryData = new Uint8Array([0, 1, 127, 128, 255, 42, 0, 13, 10]);
-    await storage.put('binary', binaryData);
-    const result = await storage.get('binary');
-    expect(result).toEqual(binaryData);
-    storage[Symbol.dispose]();
-  });
-
-  it('large key count (1000 entries): scan returns all in correct order', async () => {
-    const storage = new TursoStorage({ url: 'file::memory:' });
-    const operations = Array.from({ length: 1000 }, (_, index) => ({
-      type: 'put' as const,
-      key: `item:${String(index).padStart(4, '0')}`,
-      value: encode(String(index)),
-    }));
-    await storage.batch(operations);
-
-    const entries = await collect(storage.scan('item:'));
-    expect(entries).toHaveLength(1000);
-
-    for (let index = 0; index < entries.length; index++) {
-      expect(entries[index]![0]).toBe(`item:${String(index).padStart(4, '0')}`);
-    }
-    storage[Symbol.dispose]();
   });
 
   it('query returns results for raw SQL passthrough', async () => {

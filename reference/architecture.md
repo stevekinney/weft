@@ -3,7 +3,7 @@
 > _Weft_ — the cross-threads in weaving that bind the warp together.
 
 > [!NOTE]
-> Weft's built-in agent surface — `ctx.agent()`, `ctx.handoff()`, `ctx.debate()`, `ctx.supervise()`, and the agent types, events, and runtime that backed them — was removed in v0.1.0. Weft does not ship an agent primitive. Build durable agent loops on `ctx.run()` and `ctx.review()`, or run them in an external agent framework. See the [`CHANGELOG`](../CHANGELOG.md) for the full removed-export list and migration path.
+> Weft's built-in agent surface — `ctx.agent()`, `ctx.handoff()`, `ctx.debate()`, `ctx.supervise()`, and the agent types, events, and runtime that backed them — was removed in v0.1.0. Weft does not ship an agent primitive. Build durable agent loops on `ctx.run()` and `ctx.review()`, or run them in an external agent framework. See the [`CHANGELOG`](../CHANGELOG.md) for the full removed-export list and upgrade notes.
 
 ---
 
@@ -54,7 +54,7 @@ Here is what a developer must learn to write their first workflow:
 | Activity invocation    | `proxyActivities()` + type import | `yield* ctx.run(fn, args)`           |
 | Timer                  | Deterministic `workflow.sleep()`  | `yield* ctx.sleep("1 hour")`         |
 | Signal                 | `setHandler` + `condition`        | `yield* ctx.waitForSignal(name)`     |
-| Versioning             | `patched()` / `deprecatePatch()`  | Deploy new code (migration optional) |
+| Versioning             | `patched()` / `deprecatePatch()`  | Version-pinned recovery guard        |
 | Long-running workflows | `continueAsNew()`                 | Nothing (checkpoints are fixed-size) |
 | Dev environment        | Docker Compose + Temporal server  | `bun add @lostgradient/weft`         |
 | Bundling               | Webpack for workflow sandbox      | None                                 |
@@ -109,7 +109,7 @@ ActivityFailedError: charge failed after 3 attempts
 
 **The Temporal problem.** Changing workflow code while workflows are in-flight requires either the `patched()` / `deprecatePatch()` API — which litters your code with version branches that never go away — or Worker Versioning, a whole deployment orchestration system. The Temporal docs themselves acknowledge this is complex enough that they deprecated their first versioning approach and replaced it in 2025. Developers routinely report confusion about which changes are safe versus which break replay.
 
-**The Weft answer.** Checkpointing means code before the current checkpoint never re-executes. Changing steps after the current checkpoint is inherently safe. Versioning only matters for the step you are currently on — and even then, the migration path is a pure data transformation on the checkpoint, not code-path branching. (See: [Workflow Versioning](#13-workflow-versioning).)
+**The Weft answer.** Checkpointing means code before the current checkpoint never re-executes. Changing steps after the current checkpoint is inherently safe. Versioning only matters for the step you are currently on, and Weft treats version drift as an operator decision point instead of branching inside workflow code. (See: [Workflow Versioning](#13-workflow-versioning).)
 
 ```typescript
 // Temporal: version branches that accumulate forever
@@ -120,14 +120,10 @@ if (workflow.patched('v2-shipping')) {
 }
 // v3? Now you have TWO version branches. v4? Three. They never go away.
 
-// Weft: deploy new code. Old checkpoints migrate automatically.
+// Weft: deploy new code under a new version. Old checkpoints stop at recovery.
 engine.register('order', {
   version: '2.0.0',
   handler: orderWorkflow,
-  migrate: (checkpoint, fromVersion) => ({
-    ...checkpoint,
-    shippingOptions: { express: true }, // add the new field
-  }),
 });
 ```
 
@@ -141,15 +137,14 @@ order (v1.0.0 → v2.0.0):
     checkpoint shape: { payment: PaymentResult }
     new code at step 1 expects: { payment: PaymentResult, region: string }
     INCOMPATIBLE: missing field "region"
-    migration function: PROVIDED (will add region: "us-east-1")
 
   12 running workflows at step 0 (pre-charge)
-    COMPATIBLE: no migration needed
+    COMPATIBLE: checkpoint can resume under v2.0.0
 
-Result: 47 workflows require migration. Migration function provided. Safe to deploy.
+Result: 47 workflows require operator resolution before deploying v2.0.0.
 ```
 
-**Going further: automatic checkpoint schema inference.** Since checkpoints use `structuredClone` semantics and the engine knows the generator's local variables at each yield point, the engine can automatically record a checkpoint schema for each step. On resume, if the shapes diverge and no migration is provided, the error message says exactly which fields changed: "field `address` was a string in v1, expected an object in v2" — not just `VersionMismatchError`.
+**Going further: automatic checkpoint schema inference.** Since checkpoints use `structuredClone` semantics and the engine knows the generator's local variables at each yield point, the engine can automatically record a checkpoint schema for each step. On resume, if the shapes diverge, the error message says exactly which fields changed: "field `address` was a string in v1, expected an object in v2" — not just `VersionMismatchError`.
 
 ### 3. Steep Learning Curve and Conceptual Overhead
 
@@ -2886,7 +2881,7 @@ class Engine extends EventTarget implements Disposable {
 
 When you deploy new workflow code while workflows are in-flight, you need to answer: which version of the code runs when a checkpointed workflow resumes?
 
-Weft's checkpoint model makes this fundamentally simpler than Temporal. Since we resume from a checkpoint (not replay from the beginning), the only compatibility requirement is that the new code can handle the checkpoint's shape at the specific step where execution paused. No patching API. No version gates in workflow code. Migration is a pure data transformation.
+Weft's checkpoint model makes this fundamentally simpler than Temporal. Since we resume from a checkpoint (not replay from the beginning), the compatibility requirement is explicit: the stored workflow version must match the registered version, the recorded version tuple must not drift, and the code must still understand the checkpoint shape at the specific step where execution paused. No patching API. No version gates in workflow code.
 
 #### Registration API
 
@@ -2895,34 +2890,24 @@ interface WorkflowRegistration {
   name: string;
   version: string; // Semver string, e.g., "2.0.0"
   handler: WorkflowFunction;
-  /** Optional: migrate a checkpoint from a previous version. */
-  migrate?: (checkpoint: unknown, fromVersion: string) => unknown;
 }
 
-// Full registration with version and migration
+// Full registration with an explicit recovery boundary.
 engine.register('order', {
   version: '2.0.0',
   handler: orderWorkflowV2,
-  migrate(checkpoint, fromVersion) {
-    if (fromVersion.startsWith('1.')) {
-      // V1 stored `address` as a string; V2 uses an Address object
-      return { ...checkpoint, address: parseAddress(checkpoint.address) };
-    }
-    return checkpoint;
-  },
 });
 
-// Shorthand still works — defaults to version "0.0.0", no migration
+// Shorthand still works — defaults to version "0.0.0".
 engine.register('order', orderWorkflow);
 ```
 
 #### Resume Logic
 
 1. **Version pinned at start.** When `engine.start()` is called, the workflow state blob records the version of the currently registered handler.
-2. **On resume, versions are compared.** If they match: resume normally. If they differ: call `migrate()` if provided.
-3. **No migration function = resume as-is.** This works when the new code is backward-compatible with the checkpoint shape (common, since checkpoint data is just local variables that pass `structuredClone`).
-4. **Incompatible checkpoint = clear error.** If the new code fails because the checkpoint shape is wrong and no migration was provided, the workflow fails with a `VersionMismatchError` that includes both versions and the workflow ID.
-5. **Migrated checkpoint persisted atomically.** After successful migration, the updated checkpoint and version are written to storage in one `batch()` call.
+2. **On resume, versions are compared.** If they match and the version tuple has not drifted: resume normally. If they differ: throw `VersionMismatchError`.
+3. **Checkpoint shape remains the operator's responsibility.** The new code must understand the stored checkpoint at the paused step.
+4. **Incompatible checkpoint = clear error.** Version and tuple mismatches fail with `VersionMismatchError` that includes both versions and the workflow ID.
 
 #### Why Simpler Than Temporal
 
@@ -2930,29 +2915,23 @@ In Temporal, version changes require `workflow.getVersion()` / `patched()` becau
 
 - No replay means no code-path determinism requirement.
 - The checkpoint captures the complete state at the pause point.
-- Migration is a pure data transformation on the checkpoint, not code-path branching.
-- Developers think about "can my new code handle this checkpoint shape?" rather than "is my new code deterministically compatible with the old event history?"
+- Recovery starts from the checkpoint instead of replaying the full event history.
+- Developers think about "can my new code resume this checkpoint under the same recorded version tuple?" rather than "is my new code deterministically compatible with the old event history?"
 
 #### Usage Examples
 
 ```typescript
-// Simple case: checkpoint shape didn't change, just the logic after the current step
+// Simple case: checkpoint shape did not change, just the logic after the current step.
 engine.register('order', {
-  version: '1.1.0',
+  version: '1.0.0',
   handler: orderWorkflowV2,
-  // No migrate needed — checkpoint shape is compatible
 });
 
-// Migration case: V2 added a `region` field
+// Breaking case: V2 added a required `region` field.
 engine.register('order', {
   version: '2.0.0',
   handler: orderWorkflowV2,
-  migrate(checkpoint, fromVersion) {
-    if (fromVersion.startsWith('1.')) {
-      return { ...checkpoint, region: 'us-east-1' };
-    }
-    return checkpoint;
-  },
+  // Running v1 checkpoints stop with VersionMismatchError until resolved.
 });
 ```
 
@@ -3744,7 +3723,7 @@ Three files. Webpack bundling. `proxyActivities` ceremony. Separate worker proce
 
 9. **Naming:** Weft. Ship it.
 
-10. **Workflow versioning:** Version pinned at start, stored in workflow state, optional migration function on resume. No patching API needed — checkpoint model avoids replay compatibility concerns.
+10. **Workflow versioning:** Version pinned at start and stored in workflow state; recovery stops on workflow-version or version-tuple drift. No patching API needed — checkpoint model avoids replay compatibility concerns.
 
 11. **Workflow timeouts:** Execution timeout (maximum wall-clock time for a workflow), stored as absolute deadline in storage, enforced by the scheduler via AbortController.
 
@@ -3891,13 +3870,11 @@ Three files. Webpack bundling. `proxyActivities` ceremony. Separate worker proce
 ### Workflow Versioning
 
 - [x] **Workflow version stored in `wf:{id}` state blob.** Set at workflow start from the currently registered version.
-- [x] **`engine.register()` accepts a version and optional migration function.** Shorthand `engine.register(name, fn)` defaults to version `"0.0.0"`.
-- [x] **Version mismatch triggers migration on resume.** `migrate(checkpoint, fromVersion)` called when stored version differs from registered version.
-- [x] **No migration function = resume as-is.** Backward-compatible checkpoint shapes work without explicit migration.
-- [x] **Failed migration produces a `VersionMismatchError`.** Error includes both versions, workflow ID, and workflow type.
-- [x] **Migrated checkpoint is persisted atomically.** Updated checkpoint and version written to storage in one `batch()` call.
+- [x] **`engine.register()` accepts a version.** Shorthand registration defaults to version `"0.0.0"`.
+- [x] **Version mismatch stops recovery.** Stored and registered workflow versions must match before a checkpoint resumes.
+- [x] **Version-tuple drift stops recovery.** Workflow, agent, and tool version metadata must remain aligned with the stored tuple.
+- [x] **Version mismatch produces a `VersionMismatchError`.** Error includes both versions, workflow ID, and workflow type.
 - [x] **Version visible in API and dashboard.** `GET /v1/workflows/:id` returns the version field.
-- [x] **Migration function receives structuredClone-compatible data.** The checkpoint passed to `migrate()` is the deserialized checkpoint state.
 
 ### Workflow-Level Timeouts
 
@@ -4117,8 +4094,8 @@ The roadmap below carries forward the implementation work derived from that rese
 
 - [x] `src/observability/metrics.ts` exposes `weft.dpmo.defects` and `weft.dpmo.operations`, with a derived `weft_dpmo` gauge exported via the existing Prometheus path.
 - [x] Event log entries (Track 1) record `(workflowVersion, toolVersions[])` on every event.
-- [x] Resuming a workflow whose recorded version tuple is incompatible with the currently-registered versions, with no migration hook provided, throws `VersionMismatchError` with a structured breakdown of which component mismatched.
-- [x] `bun test` passes a test that resumes a mid-flight workflow across a tool-schema version bump, with and without a migration hook.
+- [x] Resuming a workflow whose recorded version tuple is incompatible with the currently registered versions throws `VersionMismatchError` with a structured breakdown of which component mismatched.
+- [x] `bun test` passes a test that rejects a mid-flight workflow across a tool-schema version bump.
 
 ### Track 6 — Storage ergonomics
 

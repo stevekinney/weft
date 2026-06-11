@@ -5,6 +5,7 @@ import {
   collect,
   bytes as encode,
   runBasicStorageContract,
+  runBinaryAndLargeScanStorageConformance,
   runStorageCapabilityConformance,
 } from './storage-adapter.test-support.ts';
 
@@ -21,6 +22,9 @@ runStorageCapabilityConformance('BunSQLiteStorage', {
 });
 
 runBasicStorageContract('BunSQLiteStorage', { create: () => new BunSQLiteStorage(':memory:') });
+runBinaryAndLargeScanStorageConformance('BunSQLiteStorage', {
+  create: () => new BunSQLiteStorage(':memory:'),
+});
 
 describe('BunSQLiteStorage', () => {
   it('delete on nonexistent key is a no-op', async () => {
@@ -87,34 +91,6 @@ describe('BunSQLiteStorage', () => {
     storage[Symbol.dispose]();
     // After dispose, operations should throw because the database is closed.
     expect(() => storage.get('key')).toThrow();
-  });
-
-  it('binary values round-trip correctly', async () => {
-    const storage = new BunSQLiteStorage(':memory:');
-    const binaryData = new Uint8Array([0, 1, 127, 128, 255, 42, 0, 13, 10]);
-    await storage.put('binary', binaryData);
-    const result = await storage.get('binary');
-    expect(result).toEqual(binaryData);
-    storage[Symbol.dispose]();
-  });
-
-  it('large key count (1000 entries): scan returns all in correct order', async () => {
-    const storage = new BunSQLiteStorage(':memory:');
-    const operations = Array.from({ length: 1000 }, (_, index) => ({
-      type: 'put' as const,
-      key: `item:${String(index).padStart(4, '0')}`,
-      value: encode(String(index)),
-    }));
-    await storage.batch(operations);
-
-    const entries = await collect(storage.scan('item:'));
-    expect(entries).toHaveLength(1000);
-
-    // Verify sorted order
-    for (let index = 0; index < entries.length; index++) {
-      expect(entries[index]![0]).toBe(`item:${String(index).padStart(4, '0')}`);
-    }
-    storage[Symbol.dispose]();
   });
 
   it('WITHOUT ROWID table verified', async () => {

@@ -3328,7 +3328,11 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
     const pollResponse = await fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=1000`);
     expect(pollResponse.status).toBe(200);
-    const task = (await pollResponse.json()) as { operationId: string; workerId: string };
+    const task = (await pollResponse.json()) as {
+      operationId: string;
+      workerId: string;
+      attemptToken: string;
+    };
     expect(task.operationId).toBe('long-poll-diagnostics-op');
 
     const resultResponse = await fetch(`${server.url}/v1/tasks/default/result`, {
@@ -3337,6 +3341,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
       body: JSON.stringify({
         operationId: 'long-poll-diagnostics-op',
         workerId: task.workerId,
+        attemptToken: task.attemptToken,
         status: 'completed',
         value: { result: 42 },
       }),

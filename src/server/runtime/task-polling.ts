@@ -63,11 +63,10 @@ function validateTaskResultBody(body: Record<string, unknown>): ValidatedTaskRes
     return Response.json({ error: 'status must be "completed" or "failed"' }, { status: 400 });
   }
 
-  // Distinguish a MISSING attemptToken (an old worker that does not echo —
-  // backward-compatible, falls back to the workerId guard) from a PRESENT but
-  // malformed one. A present non-string token is a protocol error, rejected here
-  // the same way the WebSocket parser rejects it, so the two transports stay
-  // consistent and a `{ attemptToken: 42 }` is never silently treated as absent.
+  // Distinguish a missing attemptToken from a present but malformed one. A
+  // present non-string token is a protocol error, rejected here the same way the
+  // WebSocket parser rejects it, so the two transports stay consistent and a
+  // `{ attemptToken: 42 }` is never silently treated as absent.
   const rawAttemptToken = body['attemptToken'];
   if (
     rawAttemptToken !== undefined &&
@@ -295,12 +294,8 @@ export async function handleTaskResultRequest(
  *   on claim — a missing workerId is rejected, not treated as a wildcard.
  * - **attemptToken**: the per-claim token distinguishes a re-claimed earlier
  *   attempt (same operationId, possibly reusable workerId) from the current one.
- *   The check is purely additive (no protocol version bump): it rejects only when
- *   the record has a token AND the completion echoes one AND they differ. Records
- *   written before this field existed carry no token, and a worker that does not
- *   echo one falls back to the workerId-only guard — neither is stranded. A stale
- *   earlier attempt echoes the OLD token it was dispatched with (present, wrong)
- *   and is still rejected.
+ *   When the in-flight record carries a token, the submitter must echo the same
+ *   non-empty token. A missing or different token is rejected.
  */
 function isLongPollCompletionAuthorized(
   inflightRecord: InflightRecord,
@@ -311,7 +306,6 @@ function isLongPollCompletionAuthorized(
   }
   if (
     inflightRecord.attemptToken !== undefined &&
-    validated.attemptToken !== undefined &&
     validated.attemptToken !== inflightRecord.attemptToken
   ) {
     return false;
