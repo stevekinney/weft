@@ -321,6 +321,26 @@ export async function consumeSignal(
   return { found: false };
 }
 
+/**
+ * Read the first buffered signal payload WITHOUT deleting it. Use when a caller
+ * must check for a buffered signal but might not end up consuming it — e.g. a
+ * `ctx.race` / `ctx.all` wait-signal branch that could lose, where a destructive
+ * {@link consumeSignal} on the losing path would silently drop the signal. The
+ * winner still calls {@link consumeSignal} exactly once to perform the durable
+ * delete.
+ */
+export async function peekSignal(
+  internals: EngineInternals,
+  workflowId: string,
+  signalName: string,
+): Promise<ConsumedSignalResult> {
+  const prefix = `sig:${encodeStorageKeyComponent(workflowId)}:${signalName}:`;
+  for await (const [, value] of internals.storage.scan(prefix, { limit: 1 })) {
+    return { found: true, payload: decode(value) };
+  }
+  return { found: false };
+}
+
 function getSingleSignalId(
   deliveries: readonly BufferedSignalDelivery[],
   defaultOptions: SignalDeliveryOptions,

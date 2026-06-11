@@ -10,6 +10,7 @@ import {
   type RunAllBranch,
   type RunAllBranchOutcome,
 } from '../engine-helpers.ts';
+import { finalizeAndUnwrap } from './deferred-consume-envelope.ts';
 import type { EngineInternals } from './internals.ts';
 import {
   executeActivityOperationResult as executeActivityOperationResultFromInternals,
@@ -30,6 +31,52 @@ type WaitSignalOperation = Extract<ContextOperationRequest, { type: 'wait-signal
 type ParallelOperation = Extract<ContextOperationRequest, { type: 'parallel' }>;
 type RaceOperation = Extract<ContextOperationRequest, { type: 'race' }>;
 type RunAllOperation = Extract<ContextOperationRequest, { type: 'run-all' }>;
+
+/**
+ * Validate the wait-signal branches of a `ctx.race` / `ctx.all` before any branch
+ * runs. Two rules, both enforced across the whole coordination tree:
+ *
+ * 1. A `wait-signal` may only appear as a DIRECT branch of the top-level
+ *    coordination, never below a nested `race` / `parallel`. A nested coordinator
+ *    returns its result up to the outer one for the single deferred consume; a
+ *    nested `ctx.all` returns an array holding the deferred-consume envelope,
+ *    which the current scalar finalize step does not unwrap — so the envelope
+ *    would reach the durable cache and the signal would never consume. Rather
+ *    than corrupt signal state silently, reject the unsupported shape loudly at
+ *    validation time. (Nested wait-signal support is a planned follow-up.)
+ * 2. No two `wait-signal` branches may wait on the SAME signal name: siblings
+ *    share the `${workflowId}:${signalName}` waiter key and would clobber each
+ *    other at registration, leaving one branch permanently unreachable. Distinct
+ *    names (the event-or-close idiom) are unaffected.
+ */
+export function assertSupportedSignalBranches(
+  operations: readonly ContextOperationRequest[],
+): void {
+  const seen = new Set<string>();
+  const walk = (subOperations: readonly ContextOperationRequest[], nested: boolean): void => {
+    for (const subOperation of subOperations) {
+      if (subOperation.type === 'wait-signal') {
+        if (nested) {
+          throw new Error(
+            'ctx.waitForSignal is not yet supported inside a nested ctx.race / ctx.all: ' +
+              'use it as a direct branch of the top-level coordination.',
+          );
+        }
+        if (seen.has(subOperation.signalName)) {
+          throw new Error(
+            `ctx.race / ctx.all cannot have two branches waiting on the same signal "${subOperation.signalName}": ` +
+              'sibling wait-signal branches share one waiter and would clobber each other. ' +
+              'Wait on the signal once, or use distinct signal names.',
+          );
+        }
+        seen.add(subOperation.signalName);
+      } else if (subOperation.type === 'race' || subOperation.type === 'parallel') {
+        walk(subOperation.operations, true);
+      }
+    }
+  };
+  walk(operations, false);
+}
 
 export type CoordinationOperationCallbacks = {
   completeOperation: (workflowId: string, value: unknown) => void;
@@ -109,6 +156,7 @@ export async function processParallelOperation(
   // instead of re-running, which fixes the duplicate-side-effects bug
   // when one branch in `ctx.all` fails.
   return callbacks.runOperationWithResult(workflowId, operation, async () => {
+    assertSupportedSignalBranches(operation.operations);
     const resumedSlots = extractResumedSlots(operation.resumedCacheEntry);
     const operationIds = operation.operations.map((sub, i) =>
       typeof sub.operationId === 'string' ? sub.operationId : `parallel:${operation.step}:${i}`,
@@ -116,7 +164,17 @@ export async function processParallelOperation(
     const { slots, hasFirstError, firstError } = await dispatchBranchesAllSettled(
       operationIds,
       resumedSlots,
-      (index) => callbacks.executeSubOperation(workflowId, operation.operations[index]!),
+      // Finalize-and-unwrap each branch BEFORE its value enters the slot: every
+      // branch of a settled `ctx.all` is a winner, so a wait-signal branch's
+      // deferred-consume envelope must consume here. Unwrapping before the slot
+      // is built keeps the envelope (which carries a function) out of the durable
+      // cache entry. wait-signal is only allowed as a DIRECT branch here (nested
+      // wait-signal is rejected by assertSupportedSignalBranches), so each branch
+      // value is a scalar — never a nested-coordinator array of envelopes.
+      async (index) =>
+        finalizeAndUnwrap(
+          await callbacks.executeSubOperation(workflowId, operation.operations[index]!),
+        ),
     );
 
     const entry = buildEntryFromSlots('all', slots);
@@ -186,6 +244,7 @@ export async function processRaceOperation(
   callbacks: Pick<CoordinationOperationCallbacks, 'executeSubOperation' | 'runOperationWithResult'>,
 ): Promise<void> {
   return callbacks.runOperationWithResult(workflowId, operation, async () => {
+    assertSupportedSignalBranches(operation.operations);
     // Abort losing sub-operations once the race settles so background work does
     // not keep consuming budget or emit events with no observer.
     const controller = new AbortController();
@@ -199,7 +258,12 @@ export async function processRaceOperation(
     // rejections.
     void Promise.allSettled(subOperations);
     try {
-      return await Promise.race(subOperations);
+      // Finalize-and-unwrap the winner: a winning wait-signal branch resolves
+      // with a deferred-consume envelope, and this is the linearization point of
+      // "this branch won", so consuming here (after the race settles, before the
+      // result reaches the durable cache) deletes the signal exactly once and
+      // only for the winner. Losers' envelopes are dropped unfinalized below.
+      return await finalizeAndUnwrap(await Promise.race(subOperations));
     } finally {
       controller.abort();
     }

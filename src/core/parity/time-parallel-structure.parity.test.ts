@@ -6,8 +6,9 @@
  *   - Durable sleep that does not resolve until the timer boundary is crossed.
  *   - Timeout race: workflow-level executionTimeout fires when work exceeds
  *     the deadline; ctx.race between two activities resolves to the first
- *     to complete. Note: ctx.sleep is a top-level durable operation and
- *     cannot be a branch inside ctx.race.
+ *     to complete. ctx.race / ctx.all also accept ctx.sleep and
+ *     ctx.waitForSignal branches (see race-branches.test.ts for the
+ *     timeout/debounce/supersede/event-or-close idioms built on that).
  *   - Parallel fan-out: ctx.all resolves all branches; partial-failure
  *     semantics match the documented contract.
  *   - Child workflows: parent starts child, awaits result; child failure
@@ -117,12 +118,11 @@ describe('durable sleep (ctx.sleep)', () => {
 // 2. Timeout race
 // ---------------------------------------------------------------------------
 
-// NOTE: ctx.race only supports activity-level sub-operations (activities,
-// child workflows, memo). ctx.sleep is a top-level durable operation and
-// cannot be a branch inside ctx.race. The equivalent of Temporal's
-// Promise.race([activity, timer]) in Weft is `executionTimeout` on the
-// workflow, or a dedicated child workflow that sleeps and signals back.
-// These tests document the actual supported pattern.
+// NOTE: these tests cover the workflow-level executionTimeout pattern and a
+// ctx.race between two activities. The equivalent of Temporal's
+// Promise.race([activity, timer]) — race([ctx.run(...), ctx.sleep(...)]) — and
+// the debounce/idle-timeout/supersede/event-or-close idioms (race against
+// ctx.sleep / ctx.waitForSignal branches) are covered in race-branches.test.ts.
 
 describe('timeout race', () => {
   it('workflow-level executionTimeout fires when work exceeds the deadline', async () => {
