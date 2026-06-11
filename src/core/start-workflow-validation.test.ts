@@ -214,8 +214,10 @@ describe('assertOnTerminalConflictUnsupported', () => {
   });
 
   it("rejects even the 'error' policy value as smuggled-in on an unsupported surface", () => {
-    // The runtime backstop rejects the field's mere presence; the surface does
-    // not negotiate the value, it simply does not accept the option at all.
+    // The runtime backstop rejects any DEFINED value — even the harmless default
+    // `'error'` — because the surface does not negotiate the value, it simply does
+    // not accept the option at all. (A key present with an `undefined` value is
+    // indistinguishable from an absent key, so that case is allowed; see above.)
     const error = captureValidationError(() =>
       assertOnTerminalConflictUnsupported({ onTerminalConflict: 'error' }, 'startOrSignal'),
     );

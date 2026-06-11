@@ -137,9 +137,11 @@ export async function startWithIdempotency(
   assertValidIdempotencyKey(idempotencyKey, 'options.idempotencyKey');
   assertIdAndIdempotencyKeyExclusive(options);
   // An existing-key call returns early below, skipping startWorkflow's own
-  // assertValidOnTerminalConflict — so reject the (type-legal on
-  // StartWorkflowOptions) `idempotencyKey` + `onTerminalConflict` combination
-  // here, before the mapping lookup, so it is caught even on the dedup path.
+  // assertValidOnTerminalConflict — so run that validation here, before the
+  // mapping lookup, so it is caught even on the dedup path. It rejects
+  // `idempotencyKey` combined with `onTerminalConflict: 'start-new'` (a permanent
+  // at-most-once mapping cannot restart a terminal run); the default `'error'` and
+  // an absent value are accepted, as on the plain start path.
   assertValidOnTerminalConflict(options);
 
   const existingId = await resolveIdempotencyKeyWorkflowId(internals, idempotencyKey);
