@@ -231,6 +231,29 @@ describe('#456 ctx.race / ctx.all with sleep branches', () => {
     await expect(sleepBranch).rejects.toThrow();
     engine[Symbol.dispose]();
   });
+
+  it('a PAST-DUE sleep branch rejects (does not resolve) when the engine is already aborted', async () => {
+    // The engine-abort check must precede the zero/past-due fast path: a disposed
+    // engine must reject even an immediately-due sleep, else the branch reports
+    // success after the engine is gone.
+    const engine = new Engine();
+    const internals = getInternals(engine);
+    internals.abortController.abort();
+    const sleepBranch = executeSubOperation(
+      internals,
+      'sleep-pastdue-aborted',
+      // Already past due: remaining delay clamps to 0, so the fast path would
+      // resolve immediately if the abort check did not come first.
+      {
+        type: 'sleep',
+        operationId: 's',
+        scheduledFireAt: internals.options.getNow() - 1000,
+      } as never,
+      SUB_OPERATION_CALLBACKS,
+    );
+    await expect(sleepBranch).rejects.toThrow();
+    engine[Symbol.dispose]();
+  });
 });
 
 describe('#456 nextSleepTimerDelayMs clamps to the host setTimeout ceiling', () => {
@@ -538,6 +561,49 @@ describe('#456 wait-signal inside ctx.all is unbounded by design', () => {
     // Delivering the signal lets the all settle; the failing branch then surfaces.
     await engine.signal('all-unbounded', 'ev', 'unblock');
     await expect(handle.result()).rejects.toThrow('branch failed');
+  });
+
+  it('does not consume the signal while a slower sibling is still pending (deferred finalize)', async () => {
+    // ctx.all finalizes fulfilled wait-signal envelopes only AFTER every branch
+    // settles — not when the signal arrives. So delivering `ev` while a slow
+    // sibling activity is still running must NOT consume the durable `sig:` record
+    // yet: consuming early would open a wait-for-siblings window where the signal
+    // is gone but the `all` result is not checkpointed (a crash there would hang
+    // recovery). The record must survive until the slow sibling settles.
+    await using engine = new Engine();
+    let releaseSlow: (v: string) => void = () => {};
+    engine.register(
+      workflow({ name: 'all-deferred-finalize' })
+        .activities({ slow: async () => new Promise<string>((resolve) => (releaseSlow = resolve)) })
+        .execute(async function* (ctx: WorkflowContext) {
+          return yield* ctx.all([ctx.waitForSignal<string>('ev'), ctx.run('slow')]);
+        }),
+    );
+
+    const handle = await engine.start('all-deferred-finalize', null, { id: 'adf' });
+    await waitForCondition(() => getInternals(engine).signalWaiters.has('adf:ev'), {
+      timeoutMs: 2000,
+      label: 'wait-signal branch registered its waiter',
+    });
+    await engine.signal('adf', 'ev', 'ev-payload');
+
+    // The signal was delivered (waking the branch) but the `all` is still waiting
+    // for the slow activity, so the durable `sig:` record must NOT be consumed yet.
+    const internals = getInternals(engine);
+    await waitForCondition(() => !internals.signalWaiters.has('adf:ev'), {
+      timeoutMs: 2000,
+      label: 'wait-signal branch woke and resolved with an (unfinalized) envelope',
+    });
+    const stillBuffered = await peekSignal(internals, 'adf', 'ev');
+    expect(stillBuffered.found).toBe(true);
+    expect(stillBuffered.found && stillBuffered.payload).toBe('ev-payload');
+
+    // Release the slow sibling; now the all settles, finalize consumes `ev` once,
+    // and the result carries the consumed payload in branch order.
+    releaseSlow('slow-done');
+    expect(await handle.result()).toEqual(['ev-payload', 'slow-done']);
+    const afterSettle = await peekSignal(internals, 'adf', 'ev');
+    expect(afterSettle.found).toBe(false);
   });
 });
 

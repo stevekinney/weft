@@ -150,16 +150,23 @@ export async function processParallelOperation(
     const { slots, hasFirstError, firstError } = await dispatchBranchesAllSettled(
       operationIds,
       resumedSlots,
-      // Finalize-and-unwrap each branch BEFORE its value enters the slot: every
-      // branch of a settled `ctx.all` is a winner, so a wait-signal branch's
-      // deferred-consume envelope (and any envelopes inside a nested-coordinator
-      // array result) must consume here. Unwrapping before the slot is built keeps
-      // envelopes (which carry a function) out of the durable cache entry.
-      async (index) =>
-        finalizeAndUnwrap(
-          await callbacks.executeSubOperation(workflowId, operation.operations[index]!),
-        ),
+      // Branches return their RAW result (a wait-signal envelope stays unfinalized)
+      // so a fast wait-signal does not consume its durable signal while `ctx.all`
+      // is still waiting for slower siblings — that would open a wait-for-siblings
+      // window where the signal is gone but the `all` result is not yet
+      // checkpointed. Finalization is deferred to `finalizeFulfilledSlots` below,
+      // after every branch has settled.
+      (index) => callbacks.executeSubOperation(workflowId, operation.operations[index]!),
     );
+
+    // Now that all branches have settled, finalize the fulfilled wait-signal
+    // envelopes (and envelopes nested inside a coordinator array result) in place,
+    // immediately before the cache entry is built. This keeps envelopes — which
+    // carry a function and cannot encode — out of the durable cache, and shrinks
+    // the consume-vs-checkpoint window to the same adjacency the top-level signal
+    // path already has. Runs before the `hasFirstError` branch so the partial
+    // entry persisted on a sibling failure also holds finalized values.
+    await finalizeFulfilledSlots(slots);
 
     const entry = buildEntryFromSlots('all', slots);
     const partialEntryWritten = writePartialEntry(internals, workflowId, operation.step, entry);
@@ -177,6 +184,26 @@ export async function processParallelOperation(
     }
     return valuesFromSlots(slots);
   });
+}
+
+/**
+ * Finalize-and-unwrap the value of every fulfilled slot in place, after all
+ * `ctx.all` branches have settled. A fulfilled wait-signal branch's value is a
+ * deferred-consume envelope (or an array holding one, from a nested coordinator);
+ * `finalizeAndUnwrap` is idempotent on non-envelope values, so resumed/decoded
+ * slots pass through untouched. Finalizing here — rather than as each branch
+ * settles — avoids consuming a fast signal while slower siblings are still
+ * pending, keeping the durable signal alive until the operation is about to
+ * checkpoint.
+ */
+async function finalizeFulfilledSlots(slots: ParallelBranchSlot[]): Promise<void> {
+  await Promise.all(
+    slots.map(async (slot) => {
+      if (slot.status === 'fulfilled') {
+        slot.value = await finalizeAndUnwrap(slot.value);
+      }
+    }),
+  );
 }
 
 /** Pull resumed slots out of an opaque cache entry, validating the shape. */

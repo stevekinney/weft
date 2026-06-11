@@ -318,6 +318,11 @@ function executeSleepSubOperation(
   signal?.throwIfAborted();
 
   const engineAbort = internals.abortController.signal;
+  // A disposed engine must reject even a past-due sleep — resolving it would let a
+  // branch report success after the engine is gone. Check before the fast path.
+  if (engineAbort.aborted) {
+    return Promise.reject(engineAbort.reason ?? new Error('aborted'));
+  }
   if (nextSleepTimerDelayMs(operation.scheduledFireAt, internals.options.getNow()) === 0) {
     return Promise.resolve();
   }
@@ -351,12 +356,11 @@ function executeSleepSubOperation(
       timer = setTimeout(arm, remainingMs);
     };
 
+    // The engine-already-aborted case is handled by the early `Promise.reject`
+    // guard above (before this executor runs), so only a future abort needs a
+    // listener here.
     signal?.addEventListener('abort', onAbort, { once: true });
     engineAbort.addEventListener('abort', onAbort, { once: true });
-    if (engineAbort.aborted) {
-      onAbort();
-      return;
-    }
     arm();
   });
 }
