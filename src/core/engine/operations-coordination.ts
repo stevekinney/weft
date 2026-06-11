@@ -159,25 +159,37 @@ export async function processParallelOperation(
       (index) => callbacks.executeSubOperation(workflowId, operation.operations[index]!),
     );
 
-    // Now that all branches have settled, finalize the fulfilled wait-signal
-    // envelopes (and envelopes nested inside a coordinator array result) in place,
-    // immediately before the cache entry is built. This keeps envelopes — which
-    // carry a function and cannot encode — out of the durable cache, and shrinks
-    // the consume-vs-checkpoint window to the same adjacency the top-level signal
-    // path already has. Runs before the `hasFirstError` branch so the partial
-    // entry persisted on a sibling failure also holds finalized values.
-    await finalizeFulfilledSlots(slots);
-
-    const entry = buildEntryFromSlots('all', slots);
-    const partialEntryWritten = writePartialEntry(internals, workflowId, operation.step, entry);
-
+    // On the failure path, decide whether this execution mode can persist the
+    // partial entry BEFORE finalizing — and throw the "unsupported" error first
+    // if it cannot. `assertPartialFailurePersistenceSupported` only throws when
+    // the partial cannot be written yet a fulfilled slot exists, so a worker-mode
+    // `ctx.all` with a fulfilled wait-signal branch is destined to throw. Running
+    // the check here, ahead of `finalizeFulfilledSlots`, means that doomed
+    // operation never consumes a durable signal it could never checkpoint.
+    // `canPersistPartialEntry` is finalize-independent and side-effect-free, so
+    // probing it early does not perturb the slots.
     if (hasFirstError) {
       assertPartialFailurePersistenceSupported(
-        partialEntryWritten,
+        canPersistPartialEntry(internals, workflowId),
         slots,
         'ctx.all',
         'worker execution mode',
       );
+    }
+
+    // Now that all branches have settled (and any unsupported worker-mode failure
+    // has already thrown without consuming), finalize the fulfilled wait-signal
+    // envelopes (and envelopes nested inside a coordinator array result) in place,
+    // immediately before the cache entry is built. This keeps envelopes — which
+    // carry a function and cannot encode — out of the durable cache, and shrinks
+    // the consume-vs-checkpoint window to the same adjacency the top-level signal
+    // path already has.
+    await finalizeFulfilledSlots(slots);
+
+    const entry = buildEntryFromSlots('all', slots);
+    writePartialEntry(internals, workflowId, operation.step, entry);
+
+    if (hasFirstError) {
       // Rethrow the original reason as-is (could be a string, number,
       // undefined, or any non-Error value) to mirror Promise.all.
       throw firstError;
@@ -221,6 +233,18 @@ async function finalizeFulfilledSlots(slots: ParallelBranchSlot[]): Promise<void
 function extractResumedSlots(resumedCacheEntry: unknown): ParallelBranchSlot[] | undefined {
   if (!isParallelOperationCacheEntry(resumedCacheEntry)) return undefined;
   return resumedCacheEntry.branches;
+}
+
+/**
+ * Whether the current execution mode can persist a partial cache entry for this
+ * workflow. Only the inline strategy exposes a context whose `accumulatedResults`
+ * the next checkpoint flushes; worker mode has no inline context, so a partial
+ * entry can never be written there. This read is side-effect-free, so it is safe
+ * to probe on the failure path BEFORE finalizing — letting an unsupported
+ * worker-mode `ctx.all` throw without first consuming a durable signal.
+ */
+function canPersistPartialEntry(internals: EngineInternals, workflowId: string): boolean {
+  return internals.inlineStrategy?.getContext(workflowId) !== undefined;
 }
 
 /**

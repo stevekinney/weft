@@ -500,10 +500,14 @@ describe('#456 wait-signal branch sub-operation paths (driven directly)', () => 
     expect(internals.signalWaiters.size).toBe(0);
   });
 
-  it('releases the waiter and consumes nothing when the engine aborts MID-wait (after registration)', async () => {
+  it('releases the waiter and rejects with the engine-abort reason when the engine aborts MID-wait', async () => {
     // Distinct from the already-aborted-before-registration path: the waiter is
     // registered and parked on delivery when the engine tears down. The branch
     // must reject, release its registered waiter, and consume no buffered signal.
+    // A parked wait-signal branch has no per-race `signal` (it is a top-level
+    // ctx.waitForSignal-shaped sub-operation), so onAbort must fall back to
+    // `engineAbort.reason` — not a generic Error — so a disposed engine surfaces
+    // its own teardown reason. This pins that fallback.
     const internals = createSignalInternals(
       createSequencedStorage(signalScanPrefix('wf-mid-abort', 'ev'), [[], []]),
     );
@@ -513,14 +517,16 @@ describe('#456 wait-signal branch sub-operation paths (driven directly)', () => 
       { type: 'wait-signal', operationId: 'ws', signalName: 'ev' } as never,
       SUB_OPERATION_CALLBACKS,
     );
-    // Wait until the waiter is registered, then abort the engine mid-wait.
+    // Wait until the waiter is registered, then abort the engine mid-wait with a
+    // distinct reason so we can assert the branch surfaces THAT reason.
     await waitForCondition(() => internals.signalWaiters.has('wf-mid-abort:ev'), {
       timeoutMs: 2000,
       label: 'wait-signal waiter registered before engine abort',
     });
-    internals.abortController.abort();
+    const teardownReason = new Error('engine disposed mid-wait');
+    internals.abortController.abort(teardownReason);
 
-    await expect(branch).rejects.toThrow();
+    await expect(branch).rejects.toBe(teardownReason);
     expect(internals.signalWaiters.size).toBe(0);
     expect(internals.signalWaitersByWorkflow.size).toBe(0);
   });

@@ -426,7 +426,10 @@ function executeWaitSignalSubOperation(
       if (registered) {
         releaseSignalWaiter(internals, workflowId, waiterKey, deliver);
       }
-      reject(signal?.reason ?? new Error('aborted'));
+      // Prefer the race-loser `signal`'s reason; fall back to the engine-abort
+      // reason on teardown (mirrors `executeSleepSubOperation`) so a disposed
+      // engine surfaces its own abort reason rather than a generic Error.
+      reject(signal?.reason ?? engineAbort.reason ?? new Error('aborted'));
     };
 
     const win = () => {

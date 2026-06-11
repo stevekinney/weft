@@ -103,6 +103,62 @@ describe('partial-failure preservation worker-mode boundary', () => {
     );
   });
 
+  it('does not consume a wait-signal envelope when worker-mode ctx.all is destined to throw unsupported', async () => {
+    // The worker-mode "unsupported" check must run BEFORE finalizeFulfilledSlots:
+    // a ctx.all whose fulfilled branch is a wait-signal envelope and whose sibling
+    // failed will throw "not supported in worker execution mode". If finalize ran
+    // first, it would consume (delete) the durable signal for an operation that can
+    // never checkpoint — dropping the signal silently. The early assert prevents
+    // any finalize from running on that doomed path.
+    let finalizeRan = false;
+    const operation: Extract<ContextOperationRequest, { type: 'parallel' }> = {
+      type: 'parallel',
+      operationId: 'parallel:0',
+      step: 0,
+      operations: [
+        { type: 'wait-signal', operationId: 'parallel:0:0', signalName: 'won' },
+        {
+          type: 'activity',
+          operationId: 'parallel:0:1',
+          activityName: 'fail',
+          fn: async () => {
+            throw new Error('boom');
+          },
+          input: undefined,
+        },
+      ],
+    };
+
+    let captured: unknown;
+    await processParallelOperation(createWorkerModeInternals(), 'wf-worker-envelope', operation, {
+      executeSubOperation: async (_workflowId, subOperation) => {
+        if (subOperation.type === 'wait-signal') {
+          return createDeferredConsumeEnvelope(async () => {
+            finalizeRan = true;
+            return 'won-payload';
+          });
+        }
+        if (subOperation.type !== 'activity') throw new Error('unexpected operation');
+        if (subOperation.fn === undefined) throw new Error('missing activity function');
+        return subOperation.fn(subOperation.input);
+      },
+      runOperationWithResult: async (_workflowId, _operation, execute) => {
+        try {
+          await execute();
+        } catch (error) {
+          captured = error;
+        }
+      },
+    });
+
+    expect(captured).toBeInstanceOf(Error);
+    expect((captured as Error).message).toContain(
+      'ctx.all partial-failure preservation is not supported in worker execution mode',
+    );
+    // The deferred consume never ran: the unsupported throw fired before finalize.
+    expect(finalizeRan).toBe(false);
+  });
+
   it('rejects ctx.runAll partial preservation when worker mode cannot persist fulfilled slots', async () => {
     const operation: Extract<ContextOperationRequest, { type: 'run-all' }> = {
       type: 'run-all',
