@@ -2,9 +2,24 @@ import { calculateBackoff } from '../scheduler.ts';
 import {
   DEFAULT_RETRY_POLICY,
   type ActivityCallOptions,
+  type Duration,
   type RetryPolicy,
   type WorkflowContext,
 } from '../types.ts';
+import {
+  completeActivityRetryAttempt,
+  readActivityRetryAttempt,
+  readCompletedRetrySleepCount,
+  readOrInitActivityDispatchedAt,
+  writeActivityRetryAttempt,
+} from './activity-retry-state.ts';
+import {
+  ActivityScheduleToCloseTimeoutError,
+  isScheduleToCloseBudgetExhausted,
+  parseScheduleToCloseBudgetMs,
+  resolveActivityScheduleToCloseTimeout,
+  type ScheduleToCloseBudget,
+} from './activity-schedule-to-close.ts';
 import type { Context } from './index.ts';
 import { getInternals, hasContextInternals, type ContextInternals } from './internals.ts';
 import type { ContextOperationRequest } from './operation-request.ts';
@@ -38,16 +53,6 @@ export function asConcreteContext(context: WorkflowContext): Context {
 type ActivityInput = string | (Function & { retry?: RetryPolicy });
 type ActivityOperationRequest = Extract<ContextOperationRequest, { type: 'activity' }>;
 
-const ACTIVITY_RETRY_STATE_LOCAL_KEY = '__weftActivityRetryState';
-const ACTIVITY_RETRY_STATE_VERSION = 1;
-const MAX_CHECKPOINTED_RETRY_ATTEMPT = 10_000;
-
-interface ActivityRetryState {
-  version: typeof ACTIVITY_RETRY_STATE_VERSION;
-  attempts: Record<string, number>;
-  completedRetrySleeps?: Record<string, number>;
-}
-
 interface RunActivityRequest<TResult> {
   request: ActivityOperationRequest;
   step: number;
@@ -55,6 +60,7 @@ interface RunActivityRequest<TResult> {
   cachedResult?: TResult;
   retryAttempt: number;
   retryPolicy?: RetryPolicy;
+  scheduleToCloseTimeout?: Duration;
 }
 
 interface ParsedRunArguments {
@@ -94,137 +100,23 @@ function parseRunArguments(activity: ActivityInput, rest: readonly unknown[]): P
   return { input: values[0], options };
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
-}
-
-function isActivityRetryState(value: unknown): value is ActivityRetryState {
-  return (
-    isRecord(value) &&
-    value['version'] === ACTIVITY_RETRY_STATE_VERSION &&
-    isRecord(value['attempts']) &&
-    (value['completedRetrySleeps'] === undefined || isRecord(value['completedRetrySleeps']))
-  );
-}
-
-function assertValidRetryAttempt(attempt: number, step: number): void {
-  if (!Number.isInteger(attempt) || attempt <= 1 || attempt > MAX_CHECKPOINTED_RETRY_ATTEMPT) {
-    throw new Error(
-      `Invalid checkpointed activity retry attempt ${String(attempt)} for step ${String(step)}`,
-    );
-  }
-}
-
-function readActivityRetryAttempt(internals: ContextInternals, step: number): number | undefined {
-  const state = internals.checkpointLocals[ACTIVITY_RETRY_STATE_LOCAL_KEY];
-  if (!isActivityRetryState(state)) return undefined;
-
-  const attempt = state.attempts[String(step)];
-  if (attempt === undefined) return undefined;
-  assertValidRetryAttempt(attempt, step);
-  return attempt;
-}
-
 export const readActivityRetryAttemptForTesting = readActivityRetryAttempt;
-
-function readCompletedRetrySleepCount(internals: ContextInternals, step: number): number {
-  const state = internals.checkpointLocals[ACTIVITY_RETRY_STATE_LOCAL_KEY];
-  if (!isActivityRetryState(state)) return 0;
-
-  const count = state.completedRetrySleeps?.[String(step)];
-  if (count === undefined) return 0;
-  if (!Number.isInteger(count) || count < 0 || count > MAX_CHECKPOINTED_RETRY_ATTEMPT) {
-    throw new Error(
-      `Invalid checkpointed activity retry sleep count ${String(count)} for step ${String(step)}`,
-    );
-  }
-  return count;
-}
-
 export const readCompletedRetrySleepCountForTesting = readCompletedRetrySleepCount;
-
-function writeActivityRetryAttempt(
-  internals: ContextInternals,
-  step: number,
-  attempt: number,
-): void {
-  assertValidRetryAttempt(attempt, step);
-  const current = internals.checkpointLocals[ACTIVITY_RETRY_STATE_LOCAL_KEY];
-  const attempts = isActivityRetryState(current) ? { ...current.attempts } : {};
-  attempts[String(step)] = attempt;
-  // Preserve any completedRetrySleeps already recorded for earlier steps;
-  // rebuilding the slot with only `attempts` would erase them, causing a
-  // recovered workflow to re-run backoff sleeps it already completed.
-  const completedRetrySleeps = isActivityRetryState(current)
-    ? current.completedRetrySleeps
-    : undefined;
-  internals.checkpointLocals = {
-    ...internals.checkpointLocals,
-    [ACTIVITY_RETRY_STATE_LOCAL_KEY]: {
-      version: ACTIVITY_RETRY_STATE_VERSION,
-      attempts,
-      ...(completedRetrySleeps === undefined ? {} : { completedRetrySleeps }),
-    } satisfies ActivityRetryState,
-  };
-}
-
-function clearActivityRetryAttempt(internals: ContextInternals, step: number): void {
-  const current = internals.checkpointLocals[ACTIVITY_RETRY_STATE_LOCAL_KEY];
-  if (!isActivityRetryState(current)) return;
-
-  const attempts = { ...current.attempts };
-  delete attempts[String(step)];
-  const completedRetrySleeps = current.completedRetrySleeps;
-  const { [ACTIVITY_RETRY_STATE_LOCAL_KEY]: _removed, ...remainingLocals } =
-    internals.checkpointLocals;
-  if (Object.keys(attempts).length === 0 && completedRetrySleeps === undefined) {
-    internals.checkpointLocals = remainingLocals;
-    return;
-  }
-  internals.checkpointLocals = {
-    ...remainingLocals,
-    [ACTIVITY_RETRY_STATE_LOCAL_KEY]: {
-      version: ACTIVITY_RETRY_STATE_VERSION,
-      attempts,
-      ...(completedRetrySleeps === undefined ? {} : { completedRetrySleeps }),
-    } satisfies ActivityRetryState,
-  };
-}
-
-function completeActivityRetryAttempt(
-  internals: ContextInternals,
-  step: number,
-  completedRetrySleepCount: number,
-): void {
-  if (
-    !Number.isInteger(completedRetrySleepCount) ||
-    completedRetrySleepCount < 0 ||
-    completedRetrySleepCount > MAX_CHECKPOINTED_RETRY_ATTEMPT
-  ) {
-    throw new Error(
-      `Invalid completed activity retry sleep count ${String(completedRetrySleepCount)} for step ${String(step)}`,
-    );
-  }
-  clearActivityRetryAttempt(internals, step);
-  if (completedRetrySleepCount === 0) return;
-
-  const current = internals.checkpointLocals[ACTIVITY_RETRY_STATE_LOCAL_KEY];
-  const attempts = isActivityRetryState(current) ? { ...current.attempts } : {};
-  const completedRetrySleeps = isActivityRetryState(current)
-    ? { ...current.completedRetrySleeps }
-    : {};
-  completedRetrySleeps[String(step)] = completedRetrySleepCount;
-  internals.checkpointLocals = {
-    ...internals.checkpointLocals,
-    [ACTIVITY_RETRY_STATE_LOCAL_KEY]: {
-      version: ACTIVITY_RETRY_STATE_VERSION,
-      attempts,
-      completedRetrySleeps,
-    } satisfies ActivityRetryState,
-  };
-}
-
 export const completeActivityRetryAttemptForTesting = completeActivityRetryAttempt;
+
+/** Parse the schedule-to-close budget and anchor it to the step's first dispatch. */
+function resolveScheduleToCloseBudget(
+  internals: ContextInternals,
+  step: number,
+  scheduleToCloseTimeout: Duration | undefined,
+): ScheduleToCloseBudget | undefined {
+  const budgetMs = parseScheduleToCloseBudgetMs(scheduleToCloseTimeout);
+  if (budgetMs === undefined) return undefined;
+  return {
+    budgetMs,
+    dispatchedAt: readOrInitActivityDispatchedAt(internals, step, internals.getNow()),
+  };
+}
 
 function getActivityName(activity: ActivityInput, explicitName?: string): string {
   if (explicitName !== undefined) return explicitName;
@@ -368,6 +260,7 @@ export function createRunActivityRequest<TResult>(
   const cachedRequest = getCachedRunActivityRequest<TResult>(internals, step, activityName, input);
   if (cachedRequest.hasCachedResult) return cachedRequest;
   const retryPolicy = resolveActivityRetryPolicy(activity, options);
+  const scheduleToCloseTimeout = resolveActivityScheduleToCloseTimeout(activity, options);
   return {
     request: createFreshRunActivityRequest(
       internals,
@@ -381,6 +274,7 @@ export function createRunActivityRequest<TResult>(
     hasCachedResult: false,
     retryAttempt: cachedRequest.retryAttempt,
     ...(retryPolicy === undefined ? {} : { retryPolicy }),
+    ...(scheduleToCloseTimeout === undefined ? {} : { scheduleToCloseTimeout }),
   };
 }
 
@@ -390,10 +284,22 @@ export function* runActivityWithRetry<TResult>(
   rest: readonly unknown[],
   explicitName?: string,
 ): Generator<ContextOperationRequest, TResult, unknown> {
-  const { request, step, hasCachedResult, cachedResult, retryAttempt, retryPolicy } =
-    createRunActivityRequest<TResult>(context, activity, rest, explicitName);
+  const {
+    request,
+    step,
+    hasCachedResult,
+    cachedResult,
+    retryAttempt,
+    retryPolicy,
+    scheduleToCloseTimeout,
+  } = createRunActivityRequest<TResult>(context, activity, rest, explicitName);
   if (hasCachedResult) return cachedResult as TResult;
   const internals = getInternals(context);
+
+  // Anchor the schedule-to-close budget at the FIRST dispatch (read-first so a
+  // replay never resets it). Writing it before the dispatch `yield` below lands
+  // it in that checkpoint. The budget is enforced at the retry boundary.
+  const budget = resolveScheduleToCloseBudget(internals, step, scheduleToCloseTimeout);
 
   let attempt = retryAttempt;
   if (attempt > 1) {
@@ -403,6 +309,22 @@ export function* runActivityWithRetry<TResult>(
     yield* context.sleep(calculateBackoff(attempt - 1, retryPolicy));
   }
   while (true) {
+    // Enforce the schedule-to-close budget at the retry boundary, at the TOP of
+    // the loop (not the catch branch) so it also fires on a recovered frontier
+    // attempt — where the backoff sleep replays from cache and the catch branch is
+    // never reached — and when a long backoff pushes wall time past the deadline.
+    // Attempt 1 is exempt: an activity always gets one try.
+    if (
+      budget !== undefined &&
+      attempt > 1 &&
+      isScheduleToCloseBudgetExhausted(budget, internals.getNow())
+    ) {
+      throw new ActivityScheduleToCloseTimeoutError(
+        request.activityName,
+        internals.getNow() - budget.dispatchedAt,
+        budget.budgetMs,
+      );
+    }
     try {
       const result = yield prepareActivityRetryRequest(request, attempt);
       context.accumulatedResults.set(step, result);

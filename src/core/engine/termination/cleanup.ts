@@ -311,6 +311,7 @@ export function cleanupTerminalWorkflowMemory(
   forgetCommittedCheckpointBytes(internals, workflowId);
   internals.checkpoints.delete(workflowId);
   internals.heartbeatDetails.delete(workflowId);
+  internals.lastHeartbeatDetailsByStep.delete(workflowId);
   for (const [token, pending] of internals.pendingAsyncActivities) {
     if (pending.workflowId === workflowId) {
       internals.pendingAsyncActivities.delete(token);

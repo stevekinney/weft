@@ -66,10 +66,11 @@ Every activity function can optionally receive an `ActivityContext` as its secon
 interface ActivityContext {
   signal: AbortSignal;
   heartbeat(details?: unknown): void;
+  lastHeartbeatDetails?: unknown;
 }
 ```
 
-The `signal` is an `AbortSignal` that fires when the workflow is cancelled or the activity times out. Pass it to `fetch`, database clients, or anything else that accepts an abort signal.
+The `signal` is an `AbortSignal` that fires when the **workflow is cancelled** (`engine.cancel(id)` / `handle.cancel()`). Pass it to `fetch`, database clients, or anything else that accepts an abort signal. It does _not_ fire when a `ctx.race` branch loses—see [Cancelling a running activity](#cancelling-a-running-activity) below.
 
 ```typescript partial
 const fetchData = async (url: string, context?: ActivityContext) => {
@@ -90,6 +91,35 @@ const processLargeFile = async (path: string, context?: ActivityContext) => {
   return { processed: lines.length };
 };
 ```
+
+### Cancelling a running activity
+
+Activity cancellation in Weft is **cooperative**, and it fires on exactly one event: **workflow cancellation**. When you call `engine.cancel(id)` (or `handle.cancel()`), Weft aborts the workflow's `AbortController`, and every in-flight activity sees its `ActivityContext.signal` flip to aborted. An activity that does nothing with the signal still runs to completion—the signal is an _offer_ to stop, not a forced interrupt. This is different from Temporal's `CancellationScope.cancel()`, which interrupts at `await` boundaries preemptively. To make an activity actually stop, it has to check the signal:
+
+```typescript partial
+const pollUntilReady = async (jobId: string, context?: ActivityContext) => {
+  while (true) {
+    context?.signal.throwIfAborted(); // bail out promptly on workflow cancellation
+    const status = await checkStatus(jobId);
+    if (status === 'ready') return status;
+    await sleep(1000);
+  }
+};
+```
+
+Pass `context.signal` straight through to anything that accepts one—`fetch`, streaming readers, database drivers—so the network request is interrupted too, not just your loop:
+
+```typescript partial
+const streamReport = async (url: string, context?: ActivityContext) => {
+  const response = await fetch(url, { signal: context?.signal });
+  return response.text();
+};
+```
+
+> [!WARNING] `ctx.race` does not cancel a losing activity
+> It is tempting to read `ctx.race([ctx.run('longJob'), ctx.sleep('5s')])` as "run the job, but cancel it after 5 seconds." It is not. `ctx.race` is a _result-selection_ primitive: when the sleep wins, the race stops _awaiting_ `longJob`, but `longJob` keeps running to completion—its `ActivityContext.signal` never fires. The losing activity's result is discarded; its work, and its side effects, are not.
+>
+> So `ctx.race` is **not** a `CancellationScope` replacement for activities. It is the right tool when the losing work is cheap enough to let finish (a sub-second call, an idempotent fetch). To genuinely stop a long-running activity, you need one of: workflow-level cancellation (`engine.cancel`, the only thing that fires the signal), an activity that imposes its own internal deadline, or a cancellation token you pass through the activity's _input_ and check cooperatively. Choose race-with-sleep only when running the loser to completion is acceptable.
 
 ### Out-of-band completion
 

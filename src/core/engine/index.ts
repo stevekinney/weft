@@ -526,6 +526,7 @@ export class Engine<
       );
     }
     getInternals(this).heartbeatDetails = new Map();
+    getInternals(this).lastHeartbeatDetailsByStep = new Map();
     getInternals(this).workflowServices = new Map();
     getInternals(this).pendingAsyncActivities = new Map();
     getInternals(this).pendingStarts = new Set();

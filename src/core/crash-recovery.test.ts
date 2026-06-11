@@ -19,6 +19,7 @@ import {
   PERSISTED_DATA_SCHEMA_VERSION_KEY,
 } from './persisted-data-incompatible-error.ts';
 import type { WorkflowState, WorkflowStatus } from './types.ts';
+import { activity } from './types.ts';
 import { workflow } from './types/workflow-function.ts';
 
 /** Drain microtasks so fire-and-forget work completes. */
@@ -1080,5 +1081,72 @@ describe('crash recovery', () => {
     });
     expect(await acknowledged.get('unknown-default-id')).not.toBeNull();
     acknowledged[Symbol.dispose]();
+  });
+
+  it('does not re-execute a keyed activity (idempotencyKey) when recovering from a durable crash (#444)', async () => {
+    // Per-activity `idempotencyKey` is the shipped tool-level cross-crash dedup
+    // primitive. This pins the recovery contract: an activity that completed
+    // before the crash returns its cached result on recovery WITHOUT running the
+    // side effect a second time. The activity parks the workflow on a signal AFTER
+    // it completes, so recovery re-enters the run while the activity result is
+    // already durably recorded — exactly the at-least-once re-drive window where a
+    // non-idempotent tool would double-execute.
+    const storage = new MemoryStorage();
+    let executeCount = 0;
+    const sideEffect = activity({
+      name: 'side-effect',
+      execute: async () => {
+        executeCount += 1;
+        return `executed-${executeCount}`;
+      },
+    });
+
+    const buildEngine = () => {
+      const engine = new Engine({ storage });
+      engine.register(
+        workflow({ name: 'idem-crash' })
+          .activities({ 'side-effect': sideEffect })
+          .execute(async function* (ctx) {
+            const first = yield* ctx.run(sideEffect, undefined, { idempotencyKey: 'order:1' });
+            // Park AFTER the keyed activity completes so the crash window straddles
+            // a recovered run whose activity result is already durable.
+            yield* ctx.waitForSignal('gate');
+            return first;
+          }),
+      );
+      return engine;
+    };
+
+    const firstEngine = buildEngine();
+    await firstEngine.start('idem-crash', null, { id: 'idem-crash-444' });
+    // The activity executed once and the workflow is parked on 'gate'.
+    await waitForCondition(
+      async () => {
+        const state = await firstEngine.get('idem-crash-444');
+        return state?.status === 'running' && executeCount === 1;
+      },
+      { timeoutMs: 2000, label: 'keyed activity completed and workflow parked' },
+    );
+    expect(executeCount).toBe(1);
+    firstEngine[Symbol.dispose]();
+
+    // Recover on the SAME storage. The keyed activity must NOT re-execute.
+    const recoveredEngine = buildEngine();
+    await recoveredEngine.recoverAll();
+    await recoveredEngine.signal('idem-crash-444', 'gate', null);
+    await waitForCondition(
+      async () => {
+        const state = await recoveredEngine.get('idem-crash-444');
+        return state?.status === 'completed';
+      },
+      { timeoutMs: 2000, label: 'recovered workflow completed' },
+    );
+
+    const recovered = await recoveredEngine.get('idem-crash-444');
+    expect(recovered?.status).toBe('completed');
+    expect(recovered?.result).toBe('executed-1');
+    // The side effect ran EXACTLY once across the crash boundary.
+    expect(executeCount).toBe(1);
+    recoveredEngine[Symbol.dispose]();
   });
 });
