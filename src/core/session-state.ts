@@ -2,7 +2,6 @@ import { encode } from './codec.ts';
 import { WeftError } from './weft-error.ts';
 
 export const SESSION_STATE_LOCAL_KEY = 'stateSession';
-export const LEGACY_SESSION_STATE_LOCAL_KEY = 'sessionState';
 export const MAX_SESSION_STATE_ENTRY_COUNT = 256;
 export const MAX_SESSION_STATE_KEY_LENGTH = 256;
 export const MAX_SESSION_STATE_SERIALIZED_BYTES = 32 * 1024;
@@ -99,9 +98,7 @@ export function normalizeSessionStateLocals(
     return undefined;
   }
 
-  return normalizeSessionStateRecord(
-    locals[SESSION_STATE_LOCAL_KEY] ?? locals[LEGACY_SESSION_STATE_LOCAL_KEY],
-  );
+  return normalizeSessionStateRecord(locals[SESSION_STATE_LOCAL_KEY]);
 }
 
 export function validateSessionStateStore(store: Record<string, unknown>): void {

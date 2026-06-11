@@ -332,7 +332,7 @@ describe('Context', () => {
       expect(session.get()).toBe(0);
     });
 
-    it('restores legacy checkpoint-local session state and normalizes new writes', () => {
+    it('ignores retired checkpoint-local sessionState records and writes stateSession', () => {
       const context = createContext({
         locals: {
           retained: true,
@@ -343,7 +343,7 @@ describe('Context', () => {
       });
       const session = context.state.session<number>('counter');
 
-      expect(session.get()).toBe(2);
+      expect(session.get()).toBeUndefined();
 
       session.set(3);
 
@@ -353,7 +353,6 @@ describe('Context', () => {
           counter: 3,
         },
       });
-      expect('sessionState' in context.checkpointLocals).toBe(false);
     });
 
     it('returns undefined after clear when no initial value is configured', () => {

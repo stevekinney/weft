@@ -561,7 +561,7 @@ for (const backend of storageBackends) {
       }
     });
 
-    it('workflows without schema still accept any key (backward compatible)', async () => {
+    it('workflows without schema accept any search attribute key', async () => {
       const result = backend.factory();
       cleanup = result.cleanup;
       engine = new Engine({ storage: result.storage });

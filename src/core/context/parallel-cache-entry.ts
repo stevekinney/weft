@@ -169,11 +169,11 @@ export function isParallelOperationCacheEntry(
  * replay behavior.
  *
  * NOT an `asserts` predicate: a value without the marker is also a
- * valid input here (it just means the cache slot held a non-parallel
- * legacy value). Callers still narrow via `isParallelOperationCacheEntry`
- * after calling this — using `asserts` would over-narrow plain
- * non-parallel cached values and mark the legacy fallback paths
- * (`return cached as unknown[]`) as dead code in TypeScript.
+ * valid input here (it means the cache slot held a plain cached value).
+ * Callers still narrow via `isParallelOperationCacheEntry` after calling
+ * this. Using `asserts` would over-narrow plain non-parallel cached
+ * values and mark the current plain-value return path as dead code in
+ * TypeScript.
  */
 export function assertValidParallelOperationCacheEntry(value: unknown): void {
   if (hasParallelOperationCacheMarker(value) && !isParallelOperationCacheEntry(value)) {

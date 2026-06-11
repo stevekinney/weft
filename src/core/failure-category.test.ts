@@ -209,7 +209,7 @@ describe('failureCategory search attribute indexing', () => {
     expect(result.items[0]!.id).toBe('wf-fail');
   });
 
-  it('engine.list({ attributes: [{ key: "failureCategory", value: "application" }] }) matches legacy indexed categories', async () => {
+  it('engine.list({ attributes: [{ key: "failureCategory", value: "application" }] }) matches previous indexed category names', async () => {
     const storage = new MemoryStorage();
     engine = new Engine({ storage });
     const workflowId = 'wf-legacy-planning-index';
@@ -224,7 +224,7 @@ describe('failureCategory search attribute indexing', () => {
         updatedAt: Date.now(),
         input: null,
         output: undefined,
-        error: 'legacy planning failure',
+        error: 'previous planning failure',
         failureCategory: null,
         tags: [],
       }),

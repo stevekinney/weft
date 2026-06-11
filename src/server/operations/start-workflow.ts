@@ -13,7 +13,10 @@ import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import { buildSharedStartWorkflowOptions } from './start-workflow-options.ts';
-import { extractSharedStartWorkflowRestInput } from './start-workflow-rest-input.ts';
+import {
+  extractSharedStartWorkflowRestFields,
+  parseStartWorkflowRequestRecord,
+} from './start-workflow-rest-input.ts';
 
 // Inputs are intentionally permissive at the schema boundary so REST
 // callers (and equivalent JSON-RPC callers) hit the same validation in
@@ -170,7 +173,9 @@ export const startWorkflowRestBinding: UnknownRestBinding = {
     idempotencyKey: { kind: 'body-field', bodyField: 'idempotencyKey' },
     searchAttributes: { kind: 'body-field', bodyField: 'searchAttributes' },
   },
-  extractInput: extractSharedStartWorkflowRestInput,
+  extractInput: async (request) => {
+    return extractSharedStartWorkflowRestFields(await parseStartWorkflowRequestRecord(request));
+  },
   success: { kind: 'json', status: 201 },
   shapeFault: shapeRestFault,
 };

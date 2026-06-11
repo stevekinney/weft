@@ -1,9 +1,8 @@
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 /**
- * Track 8 acceptance — verifies that `serve()` wires the live
- * `OperationRegistry` + `REST_BINDINGS` into `handleRequest`, and that
- * the migrated `weft.workflows.get` route resolves end-to-end through
- * the shared pipeline.
+ * Operation-catalog live verification — verifies that `serve()` wires the
+ * live `OperationRegistry` + `REST_BINDINGS` into `handleRequest`, and that
+ * `weft.workflows.get` resolves end-to-end through the shared pipeline.
  */
 
 import { afterEach, describe, expect, it } from 'bun:test';
@@ -23,7 +22,7 @@ const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
   return yield* ctx.waitForSignal<string>('release');
 });
 
-const TEST_SECRET = 'track-8-milestone-1-secret-1234567890';
+const TEST_SECRET = 'operation-catalog-live-secret-1234567890';
 
 function createHoldEngine(): Engine {
   const storage = new MemoryStorage();
@@ -48,7 +47,7 @@ async function waitForStatus(
 }
 
 async function issueJwt(): Promise<string> {
-  return signJWT({ sub: 'track-8-user' }, TEST_SECRET);
+  return signJWT({ sub: 'operation-catalog-user' }, TEST_SECRET);
 }
 
 async function postJsonRpc(
@@ -72,7 +71,7 @@ async function postJsonRpc(
   });
 }
 
-describe('Track 8 — live operation registry matches REST_BINDINGS', () => {
+describe('operation catalog — live operation registry matches REST_BINDINGS', () => {
   it('The runtime API has one transport-neutral operation catalog', async () => {
     const engine = createHoldEngine();
     const getHandle = await engine.start('hold', { track: 'get' }, { id: 'track8-get' });
@@ -176,7 +175,7 @@ describe('Track 8 — live operation registry matches REST_BINDINGS', () => {
   });
 });
 
-describe('Track 8 — end-to-end serve() → REST pipeline', () => {
+describe('operation catalog — end-to-end serve() to REST pipeline', () => {
   let server: WeftServer | undefined;
 
   afterEach(async () => {
@@ -197,7 +196,7 @@ describe('Track 8 — end-to-end serve() → REST pipeline', () => {
     expect(body.id).toBe(handle.id);
   });
 
-  it('GET /openapi.json returns a valid OpenAPI 3.1 document that includes the migrated route', async () => {
+  it('GET /openapi.json returns a valid OpenAPI 3.1 document that includes the route', async () => {
     const engine = createHoldEngine();
     server = serve({ engine, port: 0 });
 

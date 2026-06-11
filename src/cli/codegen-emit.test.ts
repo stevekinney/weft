@@ -472,7 +472,7 @@ describe('jsonSchemaToTypeScript arrays (draft-2020-12)', () => {
     ).toBe('[string, ...unknown[]]');
   });
 
-  it('legacy items as array + additionalItems false emits fixed tuple', () => {
+  it('draft-07 items array + additionalItems false emits fixed tuple', () => {
     expect(
       jsonSchemaToTypeScript({
         type: 'array',
@@ -482,7 +482,7 @@ describe('jsonSchemaToTypeScript arrays (draft-2020-12)', () => {
     ).toBe('[string, number]');
   });
 
-  it('legacy items as array + additionalItems schema emits tuple with rest', () => {
+  it('draft-07 items array + additionalItems schema emits tuple with rest', () => {
     expect(
       jsonSchemaToTypeScript({
         type: 'array',
@@ -492,7 +492,7 @@ describe('jsonSchemaToTypeScript arrays (draft-2020-12)', () => {
     ).toBe('[string, ...number[]]');
   });
 
-  it('legacy items as array defaults to an unknown rest tuple when additionalItems is absent', () => {
+  it('draft-07 items array defaults to an unknown rest tuple when additionalItems is absent', () => {
     expect(
       jsonSchemaToTypeScript({
         type: 'array',

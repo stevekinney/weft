@@ -15,8 +15,8 @@ import { sleep } from '../runtime/portable.ts';
 // Types
 // ---------------------------------------------------------------------------
 
-// FailureCategory is the canonical export from core/types — re-exported here
-// for backwards-compatible imports from testing/chaos.
+// FailureCategory is part of the testing/chaos type surface because chaos
+// scenarios and summaries are grouped by the same execution taxonomy.
 export type { FailureCategory } from '../core/types.ts';
 
 /**

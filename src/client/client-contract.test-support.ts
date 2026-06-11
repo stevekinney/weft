@@ -41,6 +41,59 @@ type ClientContractTestOptions = {
   expectTokenNotFound: (error: unknown) => void;
 };
 
+const sharedWeftClientMethodNames = [
+  'start',
+  'startOrSignal',
+  'schedule',
+  'get',
+  'getSchedule',
+  'list',
+  'listSchedules',
+  'cancel',
+  'pauseSchedule',
+  'resumeSchedule',
+  'cancelSchedule',
+  'updateSchedule',
+  'signal',
+  'query',
+  'update',
+  'resume',
+  'recoverAll',
+  'timeout',
+  'getAttributes',
+  'setAttributes',
+  'addTags',
+  'removeTags',
+  'getEvents',
+  'tail',
+  'getTimeline',
+  'replayTo',
+  'listReviews',
+  'submitReview',
+  'getStreamChunks',
+  'fork',
+  'getRetentionOverview',
+  'purge',
+  'cancelAll',
+  'signalAll',
+  'deleteAll',
+  'tagAll',
+  'untagAll',
+  'submitCoordinatedUpdate',
+  'getUpdateResult',
+] as const satisfies readonly (keyof WeftClient)[];
+
+export function expectSharedWeftClientMethodSurface(client: WeftClient): void {
+  for (const methodName of sharedWeftClientMethodNames) {
+    expect(client[methodName], `WeftClient.${methodName}`).toBeFunction();
+  }
+  expect(client.activity.complete, 'WeftClient.activity.complete').toBeFunction();
+  expect(
+    client.activity.completeExceptionally,
+    'WeftClient.activity.completeExceptionally',
+  ).toBeFunction();
+}
+
 export const clientContractEchoWorkflow = workflow({ name: 'client-contract-echo' }).execute(
   async function* (_ctx: WorkflowContext, input: unknown) {
     return input;

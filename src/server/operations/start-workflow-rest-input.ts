@@ -1,18 +1,22 @@
 import { invalidParamsFault } from './operation-helpers.ts';
 
-export type SharedStartWorkflowRestInput = {
-  type: unknown;
-  input: unknown;
-  id: unknown;
-  executionTimeout: unknown;
-  startAt: unknown;
-  startAfter: unknown;
-  tags: unknown;
-  idempotencyKey: unknown;
-  searchAttributes: unknown;
+export type SharedStartWorkflowRestFields = {
+  readonly type: unknown;
+  readonly input: unknown;
+  readonly id: unknown;
+  readonly executionTimeout: unknown;
+  readonly startAt: unknown;
+  readonly startAfter: unknown;
+  readonly tags: unknown;
+  readonly idempotencyKey: unknown;
+  readonly searchAttributes: unknown;
 };
 
-export async function readStartWorkflowRestBodyRecord(
+function isJsonObjectLikeRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+export async function parseStartWorkflowRequestRecord(
   request: Request,
 ): Promise<Record<string, unknown>> {
   let body: unknown;
@@ -22,22 +26,18 @@ export async function readStartWorkflowRestBodyRecord(
     throw invalidParamsFault('Invalid JSON body');
   }
 
-  if (typeof body !== 'object' || body === null) {
+  // Arrays are typeof 'object', so they pass this guard and fall through to the
+  // operation validator. That preserves the current cross-transport error path.
+  if (body === null || typeof body !== 'object') {
     throw invalidParamsFault('Request body must be a JSON object');
   }
 
-  return body as Record<string, unknown>;
+  return isJsonObjectLikeRecord(body) ? body : {};
 }
 
-export async function extractSharedStartWorkflowRestInput(
-  request: Request,
-): Promise<SharedStartWorkflowRestInput> {
-  return pickSharedStartWorkflowRestInput(await readStartWorkflowRestBodyRecord(request));
-}
-
-export function pickSharedStartWorkflowRestInput(
+export function extractSharedStartWorkflowRestFields(
   record: Record<string, unknown>,
-): SharedStartWorkflowRestInput {
+): SharedStartWorkflowRestFields {
   return {
     type: record['type'],
     input: record['input'],

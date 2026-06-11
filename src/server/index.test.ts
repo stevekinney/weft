@@ -113,7 +113,7 @@ async function waitForWorkerMessage(
   return matched!;
 }
 
-type WorkerRegistrationOptions = {
+type WebSocketWorkerRegistrationOptions = {
   workerId: string;
   activities: string[];
   concurrency?: number;
@@ -126,27 +126,26 @@ type WorkerRegistrationOptions = {
   capabilities?: Record<string, unknown>;
 };
 
-async function connectWorker(
-  wsServer: WeftServer,
+async function connectWebSocketWorker(
+  server: WeftServer,
   path = '/v1/tasks/default/stream',
 ): Promise<WebSocket> {
-  const wsUrl = wsServer.url.replace('http://', 'ws://');
-  const ws = new WebSocket(`${wsUrl}${path}`);
+  const webSocketUrl = server.url.replace('http://', 'ws://');
+  const webSocket = new WebSocket(`${webSocketUrl}${path}`);
 
   await new Promise<void>((resolve, reject) => {
-    ws.addEventListener('open', () => resolve());
-    ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
+    webSocket.addEventListener('open', () => resolve());
+    webSocket.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
   });
 
-  return ws;
+  return webSocket;
 }
 
-function workerStreamPath(queue: string): string {
-  return `/v1/tasks/${encodeURIComponent(queue)}/stream`;
-}
-
-async function registerWorker(ws: WebSocket, options: WorkerRegistrationOptions): Promise<void> {
-  ws.send(
+async function registerWebSocketWorker(
+  webSocket: WebSocket,
+  options: WebSocketWorkerRegistrationOptions,
+): Promise<void> {
+  webSocket.send(
     JSON.stringify({
       type: 'register',
       protocolVersion: 2,
@@ -163,6 +162,13 @@ async function registerWorker(ws: WebSocket, options: WorkerRegistrationOptions)
     }),
   );
   await waitForRealTimersForTesting(50);
+}
+
+const connectWorker = connectWebSocketWorker;
+const registerWorker = registerWebSocketWorker;
+
+function workerStreamPath(queue: string): string {
+  return `/v1/tasks/${encodeURIComponent(queue)}/stream`;
 }
 
 /** Count keys under a prefix by draining an async iterator. */
@@ -6361,7 +6367,7 @@ describe('retry policy respected on reassignment', () => {
     });
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
 
-    // No retryPolicy — should still re-dispatch (backwards compatible)
+    // Missing retryPolicy uses the current default redispatch behavior.
     await server.dispatchTask({
       operationId: 'no-policy-op',
       activityName: 'charge',

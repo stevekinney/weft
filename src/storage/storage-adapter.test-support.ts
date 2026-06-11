@@ -177,27 +177,35 @@ export function runBinaryAndLargeScanStorageConformance(
 ): void {
   describe(`${name} binary and large-scan conformance`, () => {
     it('round-trips binary values correctly', async () => {
-      using storage = await options.create();
-      const binaryData = new Uint8Array([0, 1, 127, 128, 255, 42, 0, 13, 10]);
-      await storage.put('binary', binaryData);
-      const result = await storage.get('binary');
-      expect(result).toEqual(binaryData);
+      const storage = await options.create();
+      try {
+        const binaryData = new Uint8Array([0, 1, 127, 128, 255, 42, 0, 13, 10]);
+        await storage.put('binary', binaryData);
+        const result = await storage.get('binary');
+        expect(result).toEqual(binaryData);
+      } finally {
+        storage[Symbol.dispose]();
+      }
     });
 
     it('returns 1000 scanned keys in sorted order', async () => {
-      using storage = await options.create();
-      const operations = Array.from({ length: 1000 }, (_, index) => ({
-        type: 'put' as const,
-        key: `item:${String(index).padStart(4, '0')}`,
-        value: bytes(String(index)),
-      }));
-      await storage.batch(operations);
+      const storage = await options.create();
+      try {
+        const operations = Array.from({ length: 1000 }, (_, index) => ({
+          type: 'put' as const,
+          key: `item:${String(index).padStart(4, '0')}`,
+          value: bytes(String(index)),
+        }));
+        await storage.batch(operations);
 
-      const entries = await collect(storage.scan('item:'));
-      expect(entries).toHaveLength(1000);
+        const entries = await collect(storage.scan('item:'));
+        expect(entries).toHaveLength(1000);
 
-      for (let index = 0; index < entries.length; index += 1) {
-        expect(entries[index]![0]).toBe(`item:${String(index).padStart(4, '0')}`);
+        for (let index = 0; index < entries.length; index += 1) {
+          expect(entries[index]![0]).toBe(`item:${String(index).padStart(4, '0')}`);
+        }
+      } finally {
+        storage[Symbol.dispose]();
       }
     });
   });

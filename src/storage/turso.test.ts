@@ -32,6 +32,10 @@ runStorageCapabilityConformance('TursoStorage', {
   supportsConcurrentWrites: false,
 });
 
+runBinaryAndLargeScanStorageConformance('TursoStorage', {
+  create: () => new TursoStorage({ url: 'file::memory:' }),
+});
+
 function createFileBackedTursoStorage(prefix: string): {
   readonly storage: TursoStorage;
   readonly url: string;

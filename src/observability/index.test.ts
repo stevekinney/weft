@@ -1791,7 +1791,7 @@ describe('createObservabilityInterceptors', () => {
       expect(spans.length).toBe(spanCountBefore);
     });
 
-    it('does nothing when no eventTarget is provided (backwards compatible)', () => {
+    it('does nothing when no eventTarget is provided', () => {
       const { tracer, spans } = createRecordingTracer();
       const { interceptor, dispose } = createObservabilityInterceptors({
         openTelemetryApi: createMockOpenTelemetryApi(tracer),

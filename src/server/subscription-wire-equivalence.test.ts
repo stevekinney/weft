@@ -3,7 +3,7 @@
  *
  * Drives `createJsonRpcWebSocketSession` and asserts every emitted frame
  * matches the corresponding fixture in
- * `__fixtures__/subscription-wire/{legacy-wire,new-error-contract}` after
+ * `__fixtures__/subscription-wire/{current-contract,new-error-contract}` after
  * non-deterministic fields (subscriptionId, cursor, emittedAtMs,
  * workflowId) are normalized to the placeholders documented in
  * `__fixtures__/subscription-wire/README.md`.
@@ -37,7 +37,7 @@ import {
 
 const FIXTURE_DIR = new URL('./__fixtures__/subscription-wire/', import.meta.url).pathname;
 
-function loadFixture(group: 'legacy-wire' | 'new-error-contract', file: string): unknown {
+function loadFixture(group: 'current-contract' | 'new-error-contract', file: string): unknown {
   const path = join(FIXTURE_DIR, group, file);
   return JSON.parse(readFileSync(path, 'utf-8'));
 }
@@ -111,7 +111,7 @@ function makeEnvelope(sequence: number, workflowId = 'wf-fixture') {
   };
 }
 
-describe('subscription wire-format fixtures — legacy-wire', () => {
+describe('subscription wire-format fixtures — current-contract', () => {
   it('subscribe + ack + deliver + unsubscribe + terminated-client-unsubscribed', async () => {
     const backend = createInMemoryEventBackend();
     const feed: WorkflowEventFeed = createWorkflowEventFeed(backend);
@@ -125,7 +125,7 @@ describe('subscription wire-format fixtures — legacy-wire', () => {
     });
 
     await session.handleMessage(
-      JSON.stringify(loadFixture('legacy-wire', 'subscribe-request.json')),
+      JSON.stringify(loadFixture('current-contract', 'subscribe-request.json')),
     );
 
     // Subscribe FIRST, then append — the deliver path is live-only, not
@@ -141,7 +141,7 @@ describe('subscription wire-format fixtures — legacy-wire', () => {
     });
     if (ackFrame === undefined) throw new Error('expected subscribe ack');
     expect(normalize(JSON.parse(ackFrame))).toEqual(
-      loadFixture('legacy-wire', 'subscribe-ack.json'),
+      loadFixture('current-contract', 'subscribe-ack.json'),
     );
 
     const deliverFrame = emitter.sent.find(
@@ -149,7 +149,7 @@ describe('subscription wire-format fixtures — legacy-wire', () => {
     );
     if (deliverFrame === undefined) throw new Error('expected deliver frame');
     expect(normalize(JSON.parse(deliverFrame))).toEqual(
-      loadFixture('legacy-wire', 'event-deliver.json'),
+      loadFixture('current-contract', 'event-deliver.json'),
     );
 
     // Pull subscriptionId out of the ack to use in unsubscribe.
@@ -181,7 +181,7 @@ describe('subscription wire-format fixtures — legacy-wire', () => {
     });
     if (terminatedFrame === undefined) throw new Error('expected terminated frame');
     expect(normalize(JSON.parse(terminatedFrame))).toEqual(
-      loadFixture('legacy-wire', 'terminated-client-unsubscribed.json'),
+      loadFixture('current-contract', 'terminated-client-unsubscribed.json'),
     );
 
     await session.close();
@@ -221,7 +221,7 @@ describe('subscription wire-format fixtures — legacy-wire', () => {
     if (errorFrame === undefined) throw new Error('expected error frame for invalid subscribe');
 
     expect(normalizeErrorEnvelope(JSON.parse(errorFrame))).toEqual(
-      loadFixture('legacy-wire', 'subscribe-invalid-params-error.json'),
+      loadFixture('current-contract', 'subscribe-invalid-params-error.json'),
     );
 
     await session.close();

@@ -55,7 +55,8 @@ export type OpenApiOptions = {
   serverUrl?: string;
   /**
    * Security schemes the live server actually supports. When omitted,
-   * emit both schemes for backward-compatible call sites.
+   * emit both current API-key scheme names so generated clients can choose
+   * either header-oriented convention.
    */
   supportedSchemes?: ReadonlySet<OpenApiSecuritySchemeName>;
 };

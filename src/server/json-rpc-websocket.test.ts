@@ -141,6 +141,51 @@ function makeEnvelope(sequence: number, workflowId = 'wf-1') {
   };
 }
 
+async function createSubscribedWorkflowSession(feed: WorkflowEventFeed): Promise<{
+  readonly emitter: ReturnType<typeof makeEmitter>;
+  readonly session: ReturnType<typeof createJsonRpcWebSocketSession>;
+  readonly subscriptionId: string;
+  readonly unsubscribe: () => Promise<void>;
+}> {
+  const emitter = makeEmitter();
+  const session = createJsonRpcWebSocketSession({
+    registry: createOperationRegistry([]),
+    engine: fakeEngine,
+    principal: subscribePrincipal(),
+    emitter,
+    feed,
+  });
+
+  await session.handleMessage(
+    JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'weft.workflows.subscribe',
+      params: { workflowId: 'wf-1', selector: 'events' },
+      id: 'sub-1',
+    }),
+  );
+  await emitter.waitForSentCount(1);
+  const subscribeResponse = JSON.parse(emitter.sent[0]!) as {
+    readonly result: { readonly subscriptionId: string };
+  };
+  const subscriptionId = subscribeResponse.result.subscriptionId;
+
+  return {
+    emitter,
+    session,
+    subscriptionId,
+    unsubscribe: () =>
+      session.handleMessage(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'weft.workflows.unsubscribe',
+          params: { subscriptionId },
+          id: 'unsub-1',
+        }),
+      ),
+  };
+}
+
 describe('createJsonRpcWebSocketSession — frame dispatch', () => {
   it('dispatches a single request and emits the response as a JSON frame', async () => {
     const registry = createOperationRegistry([
@@ -619,34 +664,9 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
       dispose() {},
     };
 
-    const emitter = makeEmitter();
-    const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
-      engine: fakeEngine,
-      principal: subscribePrincipal(),
-      emitter,
-      feed,
-    });
-    await session.handleMessage(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'weft.workflows.subscribe',
-        params: { workflowId: 'wf-1', selector: 'events' },
-        id: 'sub-1',
-      }),
-    );
-    await emitter.waitForSentCount(1);
-    const subscribeResponse = JSON.parse(emitter.sent[0]!);
-    const subscriptionId = subscribeResponse.result.subscriptionId;
+    const { session, unsubscribe } = await createSubscribedWorkflowSession(feed);
 
-    await session.handleMessage(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'weft.workflows.unsubscribe',
-        params: { subscriptionId },
-        id: 'unsub-1',
-      }),
-    );
+    await unsubscribe();
     await cleanupDidStart;
 
     let closeSettled = false;
@@ -692,35 +712,10 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
       dispose() {},
     };
 
-    const emitter = makeEmitter();
-    const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
-      engine: fakeEngine,
-      principal: subscribePrincipal(),
-      emitter,
-      feed,
-    });
+    const { emitter, session, subscriptionId, unsubscribe } =
+      await createSubscribedWorkflowSession(feed);
 
-    await session.handleMessage(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'weft.workflows.subscribe',
-        params: { workflowId: 'wf-1', selector: 'events' },
-        id: 'sub-1',
-      }),
-    );
-    await emitter.waitForSentCount(1);
-    const subscribeResponse = JSON.parse(emitter.sent[0]!);
-    const subscriptionId = subscribeResponse.result.subscriptionId;
-
-    await session.handleMessage(
-      JSON.stringify({
-        jsonrpc: '2.0',
-        method: 'weft.workflows.unsubscribe',
-        params: { subscriptionId },
-        id: 'unsub-1',
-      }),
-    );
+    await unsubscribe();
 
     // Wait for `client-unsubscribed` AND give the pump a chance to land
     // its catch block — otherwise we'd assert before the (incorrect)

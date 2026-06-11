@@ -59,15 +59,15 @@ const invalidDashboardServeOptions: ServeOptions = {
 void invalidDashboardServeOptions;
 
 // @ts-expect-error `metricsCollector` is no longer a public server option.
-const legacyServeOptions: ServeOptions = { engine, metricsCollector: new MetricsCollector() };
-void legacyServeOptions;
+const rejectedServeOptions: ServeOptions = { engine, metricsCollector: new MetricsCollector() };
+void rejectedServeOptions;
 
 const handlerOptions: HandlerOptions = { prometheusExporter };
 void handlerOptions;
 
 // @ts-expect-error `metricsCollector` is no longer a public handler option.
-const legacyHandlerOptions: HandlerOptions = { metricsCollector: new MetricsCollector() };
-void legacyHandlerOptions;
+const rejectedHandlerOptions: HandlerOptions = { metricsCollector: new MetricsCollector() };
+void rejectedHandlerOptions;
 
 // Every option/handle TYPE named in ServeOptions / WeftServer / TaskDispatch is
 // importable from the '@lostgradient/weft/server' entry point — a consumer never

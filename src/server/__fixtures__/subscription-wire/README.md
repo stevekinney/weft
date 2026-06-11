@@ -5,11 +5,11 @@ emitted by `createJsonRpcWebSocketSession`. The fixture-equivalence test
 at `subscription-wire-equivalence.test.ts` asserts the live code emits
 each frame byte-for-byte after non-deterministic fields are normalized.
 
-## `legacy-wire/`
+## `current-contract/`
 
-Frames captured from the production code path. These pin
-backward-compatible wire format — no PR may modify these without an
-explicit wire-format migration.
+Frames captured from the production code path. These pin the current
+wire contract, so any pull request that modifies them must review the
+subscription protocol change end-to-end.
 
 - `subscribe-request.json` — JSON-RPC request a client sends to subscribe.
 - `subscribe-ack.json` — server's response containing `subscriptionId` and

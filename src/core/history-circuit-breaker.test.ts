@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../storage/interface.ts';
+import { KEYS, type BatchOperation, type Storage as WeftStorage } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import { decode, encode } from './codec.ts';
@@ -21,6 +21,55 @@ async function flush(): Promise<void> {
 }
 
 const noop = async () => null;
+
+class TimedOutTransitionFailingStorage implements WeftStorage {
+  failTimedOutTransition = false;
+
+  constructor(readonly underlying = new MemoryStorage()) {}
+
+  capabilities(): ReturnType<MemoryStorage['capabilities']> {
+    return this.underlying.capabilities();
+  }
+
+  get(key: string): Promise<Uint8Array | null> {
+    return this.underlying.get(key);
+  }
+
+  put(key: string, value: Uint8Array): Promise<void> {
+    return this.underlying.put(key, value);
+  }
+
+  delete(key: string): Promise<void> {
+    return this.underlying.delete(key);
+  }
+
+  scan(prefix: string, options?: Parameters<MemoryStorage['scan']>[1]) {
+    return this.underlying.scan(prefix, options);
+  }
+
+  conditionalBatch(
+    conditions: Parameters<NonNullable<MemoryStorage['conditionalBatch']>>[0],
+    operations: Parameters<NonNullable<MemoryStorage['conditionalBatch']>>[1],
+  ): Promise<boolean> {
+    return this.underlying.conditionalBatch(conditions, operations);
+  }
+
+  async batch(operations: BatchOperation[]): Promise<void> {
+    const transitionsToTimedOut = operations.some((operation) => {
+      if (operation.type !== 'put' || !/^wf:[^:]+$/.test(operation.key)) return false;
+      const decoded = decode(operation.value) as WorkflowState;
+      return decoded.status === 'timed-out';
+    });
+    if (this.failTimedOutTransition && transitionsToTimedOut) {
+      throw new Error('state write failed during circuit-breaker termination');
+    }
+    return this.underlying.batch(operations);
+  }
+
+  [Symbol.dispose](): void {
+    this.underlying[Symbol.dispose]();
+  }
+}
 
 /** Suppress unhandled rejection from a handle's result promise. */
 function suppressResult(handle: { result(): Promise<unknown> }): void {
@@ -229,40 +278,16 @@ describe('history circuit breaker — enforcement failure', () => {
     // guarantee is the pre-replay guard: the next resume re-attempts and
     // succeeds. Both halves are asserted below.
     {
-      const underlying = new MemoryStorage();
-      let failTimedOutTransition = false;
-
       // Proxy storage that fails only the batch that transitions a workflow to
       // `timed-out` — i.e. the circuit-breaker termination's state write. The
       // breaching checkpoint batch and the initial start batch both commit; only
       // termination fails, so we exercise the post-failure invariant precisely.
-      const storage = {
-        capabilities: underlying.capabilities.bind(underlying),
-        conditionalBatch: underlying.conditionalBatch.bind(underlying),
-        delete: underlying.delete.bind(underlying),
-        get: underlying.get.bind(underlying),
-        put: underlying.put.bind(underlying),
-        scan: underlying.scan.bind(underlying),
-        batch: async (operations: Parameters<MemoryStorage['batch']>[0]) => {
-          const transitionsToTimedOut = operations.some((op) => {
-            if (op.type !== 'put' || !/^wf:[^:]+$/.test(op.key)) return false;
-            const decoded = decode(op.value) as WorkflowState;
-            return decoded.status === 'timed-out';
-          });
-          if (failTimedOutTransition && transitionsToTimedOut) {
-            throw new Error('state write failed during circuit-breaker termination');
-          }
-          return underlying.batch(operations);
-        },
-        [Symbol.dispose]() {
-          underlying[Symbol.dispose]();
-        },
-      };
+      const storage = new TimedOutTransitionFailingStorage();
 
       const engine = new Engine({ storage, history: { maxEvents: 2 } });
       registerCountingWorkflow(engine, 10);
 
-      failTimedOutTransition = true;
+      storage.failTimedOutTransition = true;
       const handle = await engine.start('counting', null);
       suppressResult(handle);
       await flush();
@@ -273,12 +298,12 @@ describe('history circuit breaker — enforcement failure', () => {
       const state = await loadState(engine, handle.id);
       expect(state.status).toBe('running');
       expect(state.terminationReason).toBeUndefined();
-      expect(await countCheckpointHistory(underlying, handle.id)).toBe(3);
+      expect(await countCheckpointHistory(storage.underlying, handle.id)).toBe(3);
       engine[Symbol.dispose]();
 
       // On the next resume, the pre-replay guard fires and termination now
       // succeeds — durability comes from the guard, not the thrown error.
-      failTimedOutTransition = false;
+      storage.failTimedOutTransition = false;
       const recoverEngine = new Engine({ storage, history: { maxEvents: 2 } });
       registerCountingWorkflow(recoverEngine, 10);
       const resumed = await recoverEngine.resume(handle.id);
@@ -455,33 +480,11 @@ describe('history circuit breaker — pre-replay guard', () => {
     // (write-path termination is made to fail), then resume() is called — the
     // ownership check would otherwise short-circuit, but the pre-replay guard
     // must still fire.
-    const underlying = new MemoryStorage();
-    let failTimedOutTransition = false;
-    const storage = {
-      capabilities: underlying.capabilities.bind(underlying),
-      conditionalBatch: underlying.conditionalBatch.bind(underlying),
-      delete: underlying.delete.bind(underlying),
-      get: underlying.get.bind(underlying),
-      put: underlying.put.bind(underlying),
-      scan: underlying.scan.bind(underlying),
-      batch: async (operations: Parameters<MemoryStorage['batch']>[0]) => {
-        const transitionsToTimedOut = operations.some((op) => {
-          if (op.type !== 'put' || !/^wf:[^:]+$/.test(op.key)) return false;
-          return (decode(op.value) as WorkflowState).status === 'timed-out';
-        });
-        if (failTimedOutTransition && transitionsToTimedOut) {
-          throw new Error('state write failed during circuit-breaker termination');
-        }
-        return underlying.batch(operations);
-      },
-      [Symbol.dispose]() {
-        underlying[Symbol.dispose]();
-      },
-    };
+    const storage = new TimedOutTransitionFailingStorage();
 
     const engine = new Engine({ storage, history: { maxEvents: 2 } });
     registerCountingWorkflow(engine, 10);
-    failTimedOutTransition = true;
+    storage.failTimedOutTransition = true;
     const handle = await engine.start('counting', null);
     suppressResult(handle);
     await flush();
@@ -491,7 +494,7 @@ describe('history circuit breaker — pre-replay guard', () => {
     expect(stuck.status).toBe('running');
 
     // Resume on the SAME engine. Allow the timed-out transition to succeed now.
-    failTimedOutTransition = false;
+    storage.failTimedOutTransition = false;
     const resumed = await engine.resume(handle.id);
     suppressResult(resumed);
     await flush();
