@@ -1,32 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
-import { waitForRealTimersForTesting } from '../../testing/fake-timers.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { activity, workflow, type WorkflowContext } from '../types.ts';
-
-async function waitFor(
-  predicate: () => boolean | Promise<boolean>,
-  {
-    timeoutMs = 2_000,
-    intervalMs = 5,
-    label = 'condition',
-  }: { timeoutMs?: number; intervalMs?: number; label?: string } = {},
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let lastError: unknown;
-  while (Date.now() < deadline) {
-    try {
-      if (await predicate()) return;
-    } catch (error) {
-      lastError = error;
-    }
-    await waitForRealTimersForTesting(intervalMs);
-  }
-  const message = `Timed out after ${timeoutMs}ms waiting for ${label}`;
-  throw lastError instanceof Error
-    ? new Error(`${message}: ${lastError.message}`)
-    : new Error(message);
-}
+import { waitForParityCondition } from './real-timer-wait.test-support.ts';
 
 describe('Temporal failure-handling parity', () => {
   it('retries a transient activity with exponential backoff, then succeeds', async () => {
@@ -52,13 +28,13 @@ describe('Temporal failure-handling parity', () => {
     );
 
     const handle = await engine.start('parity-retry-success', null);
-    await waitFor(() => attempts.length === 1, { label: 'first retry attempt' });
+    await waitForParityCondition(() => attempts.length === 1, { label: 'first retry attempt' });
 
     await engine.advanceTime(99);
     expect(attempts).toEqual([0]);
 
     await engine.advanceTime(1);
-    await waitFor(() => attempts.length === 2, { label: 'second retry attempt' });
+    await waitForParityCondition(() => attempts.length === 2, { label: 'second retry attempt' });
     expect(attempts).toEqual([0, 100]);
 
     await engine.advanceTime(199);
@@ -89,7 +65,7 @@ describe('Temporal failure-handling parity', () => {
     );
 
     const handle = await engine.start('parity-retry-exhausted', null);
-    await waitFor(() => attempts === 1, { label: 'first failing attempt' });
+    await waitForParityCondition(() => attempts === 1, { label: 'first failing attempt' });
     await engine.advanceTime(50);
 
     await expect(handle.result()).rejects.toThrow('terminal failure 2');
@@ -122,7 +98,9 @@ describe('Temporal failure-handling parity', () => {
     );
 
     const handle = await engine.start('parity-idempotent-retry', null);
-    await waitFor(() => attempts.length === 1, { label: 'first idempotent attempt' });
+    await waitForParityCondition(() => attempts.length === 1, {
+      label: 'first idempotent attempt',
+    });
     await engine.advanceTime(25);
 
     await expect(handle.result()).resolves.toBe('charge:ok');
@@ -152,7 +130,9 @@ describe('Temporal failure-handling parity', () => {
 
     engine.register(restartWorkflow);
     const originalHandle = await engine.start('parity-retry-restart', null);
-    await waitFor(() => attempts.length === 1, { label: 'first restart retry attempt' });
+    await waitForParityCondition(() => attempts.length === 1, {
+      label: 'first restart retry attempt',
+    });
 
     using recovered = engine.recover();
     engine[Symbol.dispose]();
@@ -209,10 +189,16 @@ describe('Temporal failure-handling parity', () => {
     // First activity fails, completes its 50ms backoff, succeeds. Second activity
     // then fails and parks on its 75ms backoff — the moment its retry attempt is
     // written, which must keep the first step's completedRetrySleeps intact.
-    await waitFor(() => firstAttempts.length === 1, { label: 'first activity attempt' });
+    await waitForParityCondition(() => firstAttempts.length === 1, {
+      label: 'first activity attempt',
+    });
     await engine.advanceTime(50);
-    await waitFor(() => firstAttempts.length === 2, { label: 'first activity retry' });
-    await waitFor(() => secondAttempts.length === 1, { label: 'second activity attempt' });
+    await waitForParityCondition(() => firstAttempts.length === 2, {
+      label: 'first activity retry',
+    });
+    await waitForParityCondition(() => secondAttempts.length === 1, {
+      label: 'second activity attempt',
+    });
 
     // Recover with the second activity still parked on backoff.
     using recovered = engine.recover();

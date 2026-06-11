@@ -14,6 +14,10 @@ import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import { buildSharedStartWorkflowOptions } from './start-workflow-options.ts';
+import {
+  extractSharedStartWorkflowRestFields,
+  parseJsonObjectRequestBody,
+} from './start-workflow-rest-input.ts';
 
 // Permissive at the schema boundary so all field validation lives in `invoke()`,
 // giving one cross-transport contract (mirrors weft.workflows.start).
@@ -212,30 +216,12 @@ export const startOrSignalWorkflowRestBinding: UnknownRestBinding = {
     searchAttributes: { kind: 'body-field', bodyField: 'searchAttributes' },
   },
   extractInput: async (request) => {
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      throw invalidParamsFault('Invalid JSON body');
-    }
-    if (typeof body !== 'object' || body === null) {
-      throw invalidParamsFault('Request body must be a JSON object');
-    }
-
-    const record = body as Record<string, unknown>;
+    const record = await parseJsonObjectRequestBody(request);
     return {
-      type: record['type'],
-      input: record['input'],
+      ...extractSharedStartWorkflowRestFields(record),
       signalName: record['signalName'],
       signalPayload: record['signalPayload'],
       signalId: record['signalId'],
-      id: record['id'],
-      executionTimeout: record['executionTimeout'],
-      startAt: record['startAt'],
-      startAfter: record['startAfter'],
-      tags: record['tags'],
-      idempotencyKey: record['idempotencyKey'],
-      searchAttributes: record['searchAttributes'],
     };
   },
   success: { kind: 'json', status: 201 },

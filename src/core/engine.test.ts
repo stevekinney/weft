@@ -57,6 +57,70 @@ async function flush(): Promise<void> {
   await sleepForTesting(10);
 }
 
+type WorkflowHandleObservable = {
+  [Symbol.observable](): {
+    subscribe(observer: {
+      next(event: Event): void;
+      error?(error: Error): void;
+      complete?(): void;
+    }): { unsubscribe(): void };
+  };
+};
+
+type SettledObservableExpectation =
+  | { eventType: string; settles: 'complete' }
+  | { eventType: string; settles: 'error'; expectError(error: Error | undefined): void };
+
+async function expectSettledHandleObservable(
+  handle: WorkflowHandleObservable,
+  expectation: SettledObservableExpectation,
+): Promise<void> {
+  const receivedTypes: string[] = [];
+  let completeCallCount = 0;
+  let capturedError: Error | undefined;
+  const { promise, resolve } = Promise.withResolvers<void>();
+
+  const observable = handle[Symbol.observable]();
+  const subscription = observable.subscribe({
+    next: (event: Event) => {
+      receivedTypes.push(event.type);
+    },
+    error: (error: Error) => {
+      capturedError = error;
+      if (expectation.settles === 'error') {
+        resolve();
+      }
+    },
+    complete: () => {
+      completeCallCount++;
+      if (expectation.settles === 'complete') {
+        resolve();
+      }
+    },
+  });
+
+  const result = await withTimeout(
+    promise.then(() => expectation.settles),
+    500,
+    `workflow observable ${expectation.settles}`,
+  );
+
+  expect(result).toBe(expectation.settles);
+  if (expectation.settles === 'error') {
+    // Give any erroneously-queued `complete()` call a chance to fire so the
+    // assertion below is meaningful.
+    await flush();
+
+    expectation.expectError(capturedError);
+    // Observable contract: `error` and `complete` are mutually exclusive.
+    expect(completeCallCount).toBe(0);
+  } else {
+    expect(completeCallCount).toBe(1);
+  }
+  expect(receivedTypes).toContain(expectation.eventType);
+  subscription.unsubscribe();
+}
+
 async function findStoredTimerEntry(
   storage: MemoryStorage,
   predicate: (entry: TimerEntry) => boolean,
@@ -1051,17 +1115,17 @@ describe('Engine', () => {
     engine2[Symbol.dispose]();
   });
 
-  // Acceptance-critical: a workflow persisted before multi-tenancy was removed
-  // carries a legacy `tenant` field on its state record. Such a record must not
-  // just decode — it must fully RESUME on a tenancy-free engine (decode → find
-  // registration → deserialize checkpoint → relaunch handler → run to result).
-  it('recovers and resumes a workflow whose persisted state carries a legacy tenant field', async () => {
+  // Acceptance-critical: a workflow state record may carry a retired `tenant`
+  // field. Such a record must not just decode — it must fully RESUME on the
+  // current engine (decode → find registration → deserialize checkpoint →
+  // relaunch handler → run to result).
+  it('recovers and resumes a workflow whose persisted state carries a retired tenant field', async () => {
     const storage = new MemoryStorage();
-    const workflowId = 'legacy-tenant-resume';
+    const workflowId = 'retired-tenant-resume';
 
     const registerWorkflow = (engine: Engine) => {
       engine.register(
-        workflow({ name: 'legacy-tenant-wait' }).execute(async function* (ctx: WorkflowContext) {
+        workflow({ name: 'retired-tenant-wait' }).execute(async function* (ctx: WorkflowContext) {
           const value = yield* ctx.waitForSignal<string>('go');
           return `resumed:${value}`;
         }),
@@ -1070,7 +1134,7 @@ describe('Engine', () => {
 
     const engine1 = new Engine({ storage });
     registerWorkflow(engine1);
-    await engine1.start('legacy-tenant-wait', null, { id: workflowId });
+    await engine1.start('retired-tenant-wait', null, { id: workflowId });
     await flush();
     engine1[Symbol.dispose]();
     await flush();
@@ -1647,25 +1711,25 @@ describe('Engine', () => {
     engine[Symbol.dispose]();
   });
 
-  it('list() backfills legacy failed workflow failureCategory only when requested', async () => {
+  it('list() reads attribute-backed failureCategory only when requested', async () => {
     const storage = new AttributeReadCountingStorage();
     const engine = new Engine({ storage });
     engine.register(
       workflow({ name: 'attribute-backed-category' }).execute(async function* () {
-        throw new Error('legacy failure');
+        throw new Error('attribute-backed failure');
       }),
     );
 
     const handle = await engine.start('attribute-backed-category', null, {
       id: 'wf-attribute-category',
     });
-    await expect(handle.result()).rejects.toThrow('legacy failure');
+    await expect(handle.result()).rejects.toThrow('attribute-backed failure');
 
     const stateBytes = await storage.get(KEYS.workflow(handle.id));
     expect(stateBytes).not.toBeNull();
-    const legacyState = decode(stateBytes!) as WorkflowState;
-    legacyState.failureCategory = null;
-    await storage.put(KEYS.workflow(handle.id), encode(legacyState));
+    const stateWithAttributeBackedCategory = decode(stateBytes!) as WorkflowState;
+    stateWithAttributeBackedCategory.failureCategory = null;
+    await storage.put(KEYS.workflow(handle.id), encode(stateWithAttributeBackedCategory));
     await storage.put(KEYS.attribute(handle.id), encode({ failureCategory: 'planning' }));
 
     storage.attributeReadCount = 0;
@@ -1720,12 +1784,12 @@ describe('Engine', () => {
     engine[Symbol.dispose]();
   });
 
-  it('list() reads requested legacy failureCategory attributes concurrently within constrained chunks', async () => {
+  it('list() reads requested attribute-backed failureCategory values concurrently within constrained chunks', async () => {
     const storage = new ConcurrentAttributeReadCountingStorage();
     const engine = new Engine({ storage });
     engine.register(
       workflow({ name: 'attribute-backed-category-concurrent' }).execute(async function* () {
-        throw new Error('legacy failure');
+        throw new Error('attribute-backed failure');
       }),
     );
 
@@ -1738,12 +1802,12 @@ describe('Engine', () => {
     );
 
     for (const handle of handles) {
-      await expect(handle.result()).rejects.toThrow('legacy failure');
+      await expect(handle.result()).rejects.toThrow('attribute-backed failure');
       const stateBytes = await storage.get(KEYS.workflow(handle.id));
       expect(stateBytes).not.toBeNull();
-      const legacyState = decode(stateBytes!) as WorkflowState;
-      legacyState.failureCategory = null;
-      await storage.put(KEYS.workflow(handle.id), encode(legacyState));
+      const stateWithAttributeBackedCategory = decode(stateBytes!) as WorkflowState;
+      stateWithAttributeBackedCategory.failureCategory = null;
+      await storage.put(KEYS.workflow(handle.id), encode(stateWithAttributeBackedCategory));
       await storage.put(KEYS.attribute(handle.id), encode({ failureCategory: 'planning' }));
     }
 
@@ -3208,28 +3272,10 @@ describe('Engine', () => {
     await handle.result();
     await flush();
 
-    const receivedTypes: string[] = [];
-    const { promise, resolve } = Promise.withResolvers<void>();
-
-    const observable = handle[Symbol.observable]();
-    const subscription = observable.subscribe({
-      next: (event: Event) => {
-        receivedTypes.push(event.type);
-      },
-      complete: () => {
-        resolve();
-      },
+    await expectSettledHandleObservable(handle, {
+      eventType: 'workflow:completed',
+      settles: 'complete',
     });
-
-    const result = await withTimeout(
-      promise.then(() => 'completed' as const),
-      500,
-      'workflow observable completion',
-    );
-
-    expect(result).toBe('completed');
-    expect(receivedTypes).toContain('workflow:completed');
-    subscription.unsubscribe();
     engine[Symbol.dispose]();
   });
 
@@ -3245,41 +3291,13 @@ describe('Engine', () => {
     await handle.result().catch(() => {});
     await flush();
 
-    const receivedTypes: string[] = [];
-    let completeCallCount = 0;
-    let capturedError: Error | undefined;
-    const { promise, resolve } = Promise.withResolvers<void>();
-
-    const observable = handle[Symbol.observable]();
-    const subscription = observable.subscribe({
-      next: (event: Event) => {
-        receivedTypes.push(event.type);
-      },
-      error: (error: Error) => {
-        capturedError = error;
-        resolve();
-      },
-      complete: () => {
-        completeCallCount++;
+    await expectSettledHandleObservable(handle, {
+      eventType: 'workflow:failed',
+      settles: 'error',
+      expectError: (error) => {
+        expect(error?.message).toBe('kaboom');
       },
     });
-
-    const result = await withTimeout(
-      promise.then(() => 'errored' as const),
-      500,
-      'workflow observable error',
-    );
-
-    // Give any erroneously-queued `complete()` call a chance to fire so the
-    // assertion below is meaningful.
-    await flush();
-
-    expect(result).toBe('errored');
-    expect(capturedError?.message).toBe('kaboom');
-    // Observable contract: `error` and `complete` are mutually exclusive.
-    expect(completeCallCount).toBe(0);
-    expect(receivedTypes).toContain('workflow:failed');
-    subscription.unsubscribe();
     engine[Symbol.dispose]();
   });
 
@@ -3301,28 +3319,10 @@ describe('Engine', () => {
     await resultPromise;
     await flush();
 
-    const receivedTypes: string[] = [];
-    const { promise, resolve } = Promise.withResolvers<void>();
-
-    const observable = handle[Symbol.observable]();
-    const subscription = observable.subscribe({
-      next: (event: Event) => {
-        receivedTypes.push(event.type);
-      },
-      complete: () => {
-        resolve();
-      },
+    await expectSettledHandleObservable(handle, {
+      eventType: 'workflow:cancelled',
+      settles: 'complete',
     });
-
-    const result = await withTimeout(
-      promise.then(() => 'completed' as const),
-      500,
-      'workflow observable completion',
-    );
-
-    expect(result).toBe('completed');
-    expect(receivedTypes).toContain('workflow:cancelled');
-    subscription.unsubscribe();
     engine[Symbol.dispose]();
   });
 
@@ -3349,41 +3349,13 @@ describe('Engine', () => {
     await flush();
     await resultPromise;
 
-    const receivedTypes: string[] = [];
-    let completeCallCount = 0;
-    let capturedError: Error | undefined;
-    const { promise, resolve } = Promise.withResolvers<void>();
-
-    const observable = handle[Symbol.observable]();
-    const subscription = observable.subscribe({
-      next: (event: Event) => {
-        receivedTypes.push(event.type);
-      },
-      error: (error: Error) => {
-        capturedError = error;
-        resolve();
-      },
-      complete: () => {
-        completeCallCount++;
+    await expectSettledHandleObservable(handle, {
+      eventType: 'workflow:timed-out',
+      settles: 'error',
+      expectError: (error) => {
+        expect(error).toBeInstanceOf(WorkflowTimeoutError);
       },
     });
-
-    const result = await withTimeout(
-      promise.then(() => 'errored' as const),
-      500,
-      'workflow observable error',
-    );
-
-    // Give any erroneously-queued `complete()` call a chance to fire so the
-    // assertion below is meaningful.
-    await flush();
-
-    expect(result).toBe('errored');
-    expect(capturedError).toBeInstanceOf(WorkflowTimeoutError);
-    // Observable contract: `error` and `complete` are mutually exclusive.
-    expect(completeCallCount).toBe(0);
-    expect(receivedTypes).toContain('workflow:timed-out');
-    subscription.unsubscribe();
     engine[Symbol.dispose]();
   });
 

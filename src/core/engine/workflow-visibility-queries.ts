@@ -6,7 +6,7 @@
  *
  * Every helper assumes the visibility-index watermark is `current` — the
  * caller checks {@link getWorkflowVisibilityWatermark} once per query and
- * falls back to the legacy scan path when it is `stale`.
+ * uses the current full-scan correctness path when it is `stale`.
  *
  * @module core/engine/workflow-visibility-queries
  */

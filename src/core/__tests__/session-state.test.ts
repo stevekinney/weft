@@ -151,9 +151,9 @@ describe('Acceptance criterion: Virtual-Object-style session state', () => {
     expect(() => deserializeCheckpoint(corruptedCheckpoint)).toThrow();
   });
 
-  it('validates legacy checkpoint-local session state records during recovery', () => {
-    const legacyState = Object.create(null) as Record<string, unknown>;
-    legacyState['__proto__'] = 1;
+  it('ignores the retired checkpoint-local sessionState key during recovery', () => {
+    const retiredState = Object.create(null) as Record<string, unknown>;
+    retiredState['__proto__'] = 1;
 
     expect(() =>
       validateSessionStateLocals({
@@ -165,9 +165,9 @@ describe('Acceptance criterion: Virtual-Object-style session state', () => {
 
     expect(() =>
       validateSessionStateLocals({
-        sessionState: legacyState,
+        sessionState: retiredState,
       }),
-    ).toThrow();
+    ).not.toThrow();
   });
 
   it('rejects corrupted checkpoint locals whose session-state root is not a plain object', () => {

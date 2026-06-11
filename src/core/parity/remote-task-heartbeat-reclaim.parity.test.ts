@@ -5,6 +5,7 @@ import { KEYS } from '../../storage/interface.ts';
 import { waitForRealTimersForTesting } from '../../testing/fake-timers.test-support.ts';
 import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
+import { waitForParityCondition } from './real-timer-wait.test-support.ts';
 
 /**
  * This case is intentionally separated from the rest of the failure-handling
@@ -23,30 +24,6 @@ import { Engine } from '../engine.ts';
  * does not reproduce the local parallel-load contention). See the codegen-tsc
  * and worker-execution-suspension entries for the same rationale.
  */
-
-async function waitFor(
-  predicate: () => boolean | Promise<boolean>,
-  {
-    timeoutMs = 2_000,
-    intervalMs = 5,
-    label = 'condition',
-  }: { timeoutMs?: number; intervalMs?: number; label?: string } = {},
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let lastError: unknown;
-  while (Date.now() < deadline) {
-    try {
-      if (await predicate()) return;
-    } catch (error) {
-      lastError = error;
-    }
-    await waitForRealTimersForTesting(intervalMs);
-  }
-  const message = `Timed out after ${timeoutMs}ms waiting for ${label}`;
-  throw lastError instanceof Error
-    ? new Error(`${message}: ${lastError.message}`)
-    : new Error(message);
-}
 
 describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () => {
   it('keeps a heartbeating remote task assigned while reclaiming one that stops heartbeating', async () => {
@@ -85,7 +62,9 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
         taskAttempts.push(message.attempt ?? 1);
       });
 
-      await waitFor(() => server?.registry.size === 1, { label: 'remote worker registration' });
+      await waitForParityCondition(() => server?.registry.size === 1, {
+        label: 'remote worker registration',
+      });
 
       await server.dispatchTask({
         operationId: 'parity-heartbeating-task',
@@ -94,7 +73,9 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
         visibilityTimeout: 120,
       });
 
-      await waitFor(() => taskAttempts.length === 1, { label: 'first remote task dispatch' });
+      await waitForParityCondition(() => taskAttempts.length === 1, {
+        label: 'first remote task dispatch',
+      });
       const beforeHeartbeat = decode(
         (await engine.storage.get(KEYS.operationInflight('parity-heartbeating-task')))!,
       ) as { deadline: number };
@@ -104,7 +85,7 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
         throw new Error('Remote worker socket was not initialized');
       }
       socket.send(JSON.stringify({ type: 'heartbeat', workerId: 'parity-heartbeat-worker' }));
-      await waitFor(
+      await waitForParityCondition(
         async () => {
           const current = decode(
             (await engine.storage.get(KEYS.operationInflight('parity-heartbeating-task')))!,
@@ -129,7 +110,7 @@ describe('Temporal failure-handling parity (remote-task heartbeat reclaim)', () 
       expect(taskAttempts).toEqual([1]);
       expect(server.registry.isAssigned('parity-heartbeating-task')).toBe(true);
 
-      await waitFor(
+      await waitForParityCondition(
         () => {
           return taskAttempts.length >= 2;
         },

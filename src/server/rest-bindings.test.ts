@@ -1,5 +1,5 @@
 /**
- * Phase 15 — REST_BINDINGS registry invariants.
+ * REST_BINDINGS registry invariants.
  *
  * Tests the structural invariants the HTTP router relies on:
  *
@@ -9,9 +9,9 @@
  *     form enforced by the operation registry.
  *   - `pathParamNames` must agree with the `:name` tokens in `path`.
  *
- * An empty registry satisfies every invariant by construction; the
- * suite still runs so Phase 15c's first migration immediately exercises
- * the guards without having to re-derive them.
+ * An empty registry satisfies every invariant by construction, and the
+ * live registry assertion keeps the route table and operation factory
+ * aligned.
  */
 
 import { describe, expect, it } from 'bun:test';

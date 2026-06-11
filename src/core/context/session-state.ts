@@ -4,7 +4,6 @@ import {
   cloneSessionStateValue,
   createSessionStateStore,
   hasSessionStateKey,
-  LEGACY_SESSION_STATE_LOCAL_KEY,
   SESSION_STATE_LOCAL_KEY,
   validateSessionStateStore,
 } from '../session-state.ts';
@@ -61,9 +60,7 @@ export function createCheckpointLocals(
   const localEntries =
     existingLocals === undefined
       ? []
-      : Object.entries(existingLocals).filter(
-          ([key]) => key !== SESSION_STATE_LOCAL_KEY && key !== LEGACY_SESSION_STATE_LOCAL_KEY,
-        );
+      : Object.entries(existingLocals).filter(([key]) => key !== SESSION_STATE_LOCAL_KEY);
 
   if (stateSessionStore === undefined) {
     if (localEntries.length === 0) {

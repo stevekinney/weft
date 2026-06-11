@@ -15,6 +15,7 @@ import {
   clientContractWaitingObjectWorkflow,
   clientContractWaitingTwiceWorkflow,
   clientContractWaitingWorkflow,
+  expectSharedWeftClientMethodSurface,
   runWeftClientContractTests,
 } from './client-contract.test-support.ts';
 import { ScheduleHandleDelegation, WorkflowHandleDelegation } from './handle-delegation.ts';
@@ -115,42 +116,8 @@ describe('LocalClient', () => {
   });
 
   it('implements WeftClient', () => {
-    expect(client.start).toBeFunction();
-    expect(client.schedule).toBeFunction();
-    expect(client.get).toBeFunction();
-    expect(client.getSchedule).toBeFunction();
-    expect(client.list).toBeFunction();
-    expect(client.listSchedules).toBeFunction();
-    expect(client.cancel).toBeFunction();
     expect(client.suspend).toBeFunction();
-    expect(client.pauseSchedule).toBeFunction();
-    expect(client.resumeSchedule).toBeFunction();
-    expect(client.cancelSchedule).toBeFunction();
-    expect(client.updateSchedule).toBeFunction();
-    expect(client.signal).toBeFunction();
-    expect(client.query).toBeFunction();
-    expect(client.update).toBeFunction();
-    expect(client.resume).toBeFunction();
-    expect(client.recoverAll).toBeFunction();
-    expect(client.timeout).toBeFunction();
-    expect(client.getAttributes).toBeFunction();
-    expect(client.setAttributes).toBeFunction();
-    expect(client.getEvents).toBeFunction();
-    expect(client.getTimeline).toBeFunction();
-    expect(client.replayTo).toBeFunction();
-    expect(client.listReviews).toBeFunction();
-    expect(client.submitReview).toBeFunction();
-    expect(client.getStreamChunks).toBeFunction();
-    expect(client.fork).toBeFunction();
-    expect(client.getRetentionOverview).toBeFunction();
-    expect(client.purge).toBeFunction();
-    expect(client.cancelAll).toBeFunction();
-    expect(client.signalAll).toBeFunction();
-    expect(client.deleteAll).toBeFunction();
-    expect(client.tagAll).toBeFunction();
-    expect(client.untagAll).toBeFunction();
-    expect(client.submitCoordinatedUpdate).toBeFunction();
-    expect(client.getUpdateResult).toBeFunction();
+    expectSharedWeftClientMethodSurface(client);
   });
 
   describe('start', () => {

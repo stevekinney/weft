@@ -19,39 +19,13 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
-import { createOperationRegistry } from '../operation-catalog.ts';
-import { principalFromApiKey } from '../principal.ts';
-import { listSchedulesOperation, listSchedulesRestBinding } from './list-schedules.ts';
-
-const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
-  _ctx: WorkflowContext,
-  input: unknown,
-) {
-  return input;
-});
-
-function createEngine(): Engine {
-  const engine = new Engine({ storage: new MemoryStorage() });
-  engine.register(echoWorkflow);
-  return engine;
-}
-
-/** AuthContext that satisfies the access:authenticated check. */
-function apiKeyAuthContext() {
-  return {
-    authContext: {
-      method: 'api-key' as const,
-      principal: principalFromApiKey({ subject: 'test', scopes: [] }),
-    },
-  };
-}
-
-const registry = createOperationRegistry([listSchedulesOperation]);
-const bindings = [listSchedulesRestBinding];
+import {
+  createListSchedulesApiKeyAuthContext,
+  createListSchedulesTestEngine,
+  listSchedulesTestRegistry,
+  listSchedulesTestRestBindings,
+} from './list-schedules.test-support.ts';
 
 function getRequest(query: string): Request {
   return new Request(`http://localhost/v1/schedules?${query}`, { method: 'GET' });
@@ -69,11 +43,11 @@ describe('list-schedules — validation precedence', () => {
   // workflowType always arrives as a string from the query string, so pairing
   // status with limit is the next meaningful multi-field invalid scenario.
   it('reports status error before limit error when both are invalid', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
     const response = await handleRequest(getRequest('status=bad-status&limit=-1'), engine, {
-      operationRegistry: registry,
-      restBindings: bindings,
-      ...apiKeyAuthContext(),
+      operationRegistry: listSchedulesTestRegistry,
+      restBindings: listSchedulesTestRestBindings,
+      ...createListSchedulesApiKeyAuthContext(),
     });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
@@ -83,11 +57,11 @@ describe('list-schedules — validation precedence', () => {
 
   // --- adjacent pair: limit before offset ---
   it('reports limit error before offset error when both are invalid', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
     const response = await handleRequest(getRequest('limit=0&offset=-1'), engine, {
-      operationRegistry: registry,
-      restBindings: bindings,
-      ...apiKeyAuthContext(),
+      operationRegistry: listSchedulesTestRegistry,
+      restBindings: listSchedulesTestRestBindings,
+      ...createListSchedulesApiKeyAuthContext(),
     });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
@@ -97,11 +71,11 @@ describe('list-schedules — validation precedence', () => {
 
   // --- offset validated alone ---
   it('reports offset error for a negative offset', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
     const response = await handleRequest(getRequest('offset=-1'), engine, {
-      operationRegistry: registry,
-      restBindings: bindings,
-      ...apiKeyAuthContext(),
+      operationRegistry: listSchedulesTestRegistry,
+      restBindings: listSchedulesTestRestBindings,
+      ...createListSchedulesApiKeyAuthContext(),
     });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({
@@ -111,11 +85,11 @@ describe('list-schedules — validation precedence', () => {
 
   // --- all-bad: status (first validatable field) wins ---
   it('reports status error when status and limit and offset are all invalid', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
     const response = await handleRequest(getRequest('status=invalid&limit=0&offset=-1'), engine, {
-      operationRegistry: registry,
-      restBindings: bindings,
-      ...apiKeyAuthContext(),
+      operationRegistry: listSchedulesTestRegistry,
+      restBindings: listSchedulesTestRestBindings,
+      ...createListSchedulesApiKeyAuthContext(),
     });
     expect(response.status).toBe(400);
     expect(await response.json()).toEqual({

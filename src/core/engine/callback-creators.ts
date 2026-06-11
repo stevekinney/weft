@@ -36,8 +36,8 @@ import { loadWorkflowState, runSerializedWorkflowStateWrite } from './storage-io
 import { swallowPromiseRejection } from './strategy-helpers.ts';
 import { cleanupWaiters, terminateWorkflow, type TerminationCallbacks } from './termination.ts';
 
-// Re-export the core/bundle factories so existing import sites (Engine class
-// shims, tests) keep resolving through `./callback-creators.ts`.
+// Keep the callback factory families available from the engine callback module
+// that owns their shared construction surface.
 export { createUpdateCallbacks } from './callback-creators-bundles.ts';
 export {
   createBroadcastCallbacks,

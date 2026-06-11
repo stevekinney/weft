@@ -106,6 +106,49 @@ function createWorkflowState(
   };
 }
 
+type ResumeWorkflowFromStorageInternalsOptions = {
+  storage: unknown;
+  terminalizingWorkflows?: Set<string>;
+  strategy?: unknown;
+  workflowNestingDepths?: Map<string, number>;
+  workflowVersionTuples?: Map<string, { workflowVersion: string }>;
+};
+
+function createResumeWorkflowFromStorageInternals({
+  storage,
+  strategy = { startWorkflow: mock(() => {}) },
+  terminalizingWorkflows = new Set<string>(),
+  workflowNestingDepths = new Map<string, number>(),
+  workflowVersionTuples = new Map<string, { workflowVersion: string }>(),
+}: ResumeWorkflowFromStorageInternalsOptions): Parameters<typeof resumeWorkflowFromStorage>[0] {
+  return {
+    checkpoints: new Map(),
+    eventLogHeads: new Map(),
+    inlineStrategy: null,
+    options: { development: false, getNow: () => 1_000, historyPolicy: { maxEvents: null } },
+    parkedInlineWorkflows: new Set<string>(),
+    registrations: new Map([
+      [
+        'workflow',
+        {
+          handler: async function* () {
+            return 'done';
+          },
+          version: '1',
+        },
+      ],
+    ]),
+    storage,
+    strategy,
+    terminalizingWorkflows,
+    workflowHeaders: new Map<string, Map<string, string>>(),
+    workflowNestingDepths,
+    workflowTypeByWorkflowId: new Map<string, string>(),
+    workflowVersionTuples,
+    workflowsNeedingTerminalCleanup: new Set<string>(),
+  } as never;
+}
+
 describe('engine lifecycle coverage helpers', () => {
   it('start delegates to startWorkflow with the engine lifecycle callbacks', async () => {
     const engine = new Engine();
@@ -1068,32 +1111,10 @@ describe('engine lifecycle coverage helpers', () => {
 
     await expect(
       resumeWorkflowFromStorage(
-        {
-          checkpoints: new Map(),
-          eventLogHeads: new Map(),
-          inlineStrategy: null,
-          options: { development: false, getNow: () => 1_000, historyPolicy: { maxEvents: null } },
-          parkedInlineWorkflows: new Set<string>(),
-          registrations: new Map([
-            [
-              'workflow',
-              {
-                handler: async function* () {
-                  return 'done';
-                },
-                version: '1',
-              },
-            ],
-          ]),
+        createResumeWorkflowFromStorageInternals({
           storage,
-          strategy: { startWorkflow: mock(() => {}) },
           terminalizingWorkflows,
-          workflowHeaders: new Map<string, Map<string, string>>(),
-          workflowNestingDepths: new Map(),
-          workflowTypeByWorkflowId: new Map<string, string>(),
-          workflowVersionTuples: new Map(),
-          workflowsNeedingTerminalCleanup: new Set<string>(),
-        } as never,
+        }),
         workflowId,
         true,
         createLifecycleCallbacks({
@@ -1115,32 +1136,9 @@ describe('engine lifecycle coverage helpers', () => {
 
     await expect(
       resumeWorkflowFromStorage(
-        {
-          checkpoints: new Map(),
-          eventLogHeads: new Map(),
-          inlineStrategy: null,
-          options: { development: false, getNow: () => 1_000, historyPolicy: { maxEvents: null } },
-          parkedInlineWorkflows: new Set<string>(),
-          registrations: new Map([
-            [
-              'workflow',
-              {
-                handler: async function* () {
-                  return 'done';
-                },
-                version: '1',
-              },
-            ],
-          ]),
+        createResumeWorkflowFromStorageInternals({
           storage,
-          strategy: { startWorkflow: mock(() => {}) },
-          terminalizingWorkflows: new Set<string>(),
-          workflowHeaders: new Map<string, Map<string, string>>(),
-          workflowNestingDepths: new Map(),
-          workflowTypeByWorkflowId: new Map<string, string>(),
-          workflowVersionTuples: new Map(),
-          workflowsNeedingTerminalCleanup: new Set<string>(),
-        } as never,
+        }),
         workflowId,
         true,
         createLifecycleCallbacks({

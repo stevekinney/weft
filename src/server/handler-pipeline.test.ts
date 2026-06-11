@@ -413,7 +413,7 @@ describe('handler pipeline — authContextToPrincipal branches', () => {
 
     const { registry, bindings, captured } = buildPrincipalSpy();
     // Use the real factory so the principal's type is authoritative
-    // and `hasScope` doesn't need ad-hoc typed shims.
+    // and `hasScope` exercises the production principal shape.
     const forwardedPrincipal = principalFromApiKey({
       subject: 'forwarded-subject',
       scopes: ['schedules:write'],

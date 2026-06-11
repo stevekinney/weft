@@ -190,15 +190,16 @@ describe('workflow-scoped state default-scope invariant', () => {
     expect(dataKey).not.toBe('state:workflow-scope:invoice:cursor');
   });
 
-  it('cannot alias a legacy state:workflow:<tenantId>: key even when the tenant id equals DEFAULT_SCOPE', () => {
-    // Pre-removal, workflow-shared state was keyed `state:workflow:<tenantId>:…`.
+  it('cannot alias a retired state:workflow:<tenantId>: key even when the tenant id equals DEFAULT_SCOPE', () => {
+    // Earlier workflow-shared state was keyed `state:workflow:<tenantId>:...`.
     // A deployment whose tenant id happened to equal DEFAULT_SCOPE ('default')
-    // would alias into the new global namespace if we reused the `state:workflow:`
-    // prefix. The `state:workflow-scope:` segment makes that structurally
-    // impossible: the new key never starts with the legacy prefix.
+    // would alias into the current global namespace if we reused the
+    // `state:workflow:` prefix. The `state:workflow-scope:` segment makes that
+    // structurally impossible: the current key never starts with the retired
+    // prefix.
     const dataKey = atomicStateDataKey({ type: 'workflow', workflowType: 'invoice' }, 'cursor');
-    const legacyKeyForTenantNamedDefault = `state:workflow:${DEFAULT_SCOPE}:invoice:cursor`;
-    expect(dataKey).not.toBe(legacyKeyForTenantNamedDefault);
+    const retiredKeyForTenantNamedDefault = `state:workflow:${DEFAULT_SCOPE}:invoice:cursor`;
+    expect(dataKey).not.toBe(retiredKeyForTenantNamedDefault);
     expect(dataKey.startsWith('state:workflow:')).toBe(false);
   });
 

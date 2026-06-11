@@ -17,40 +17,17 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
-import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { anonymousPrincipal, principalFromApiKey } from '../principal.ts';
 import { createLiveOperationRegistry } from '../rest-bindings.ts';
+import {
+  createListSchedulesApiKeyAuthContext,
+  createListSchedulesTestEngine,
+  listSchedulesTestRegistry,
+} from './list-schedules.test-support.ts';
 import { listSchedulesOperation, listSchedulesRestBinding } from './list-schedules.ts';
-
-const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
-  _ctx: WorkflowContext,
-  input: unknown,
-) {
-  return input;
-});
-
-function createEngine(): Engine {
-  const engine = new Engine({ storage: new MemoryStorage() });
-  engine.register(echoWorkflow);
-  return engine;
-}
-
-/** AuthContext for handleRequest that satisfies the access:authenticated check. */
-function apiKeyAuthContext() {
-  return {
-    authContext: {
-      method: 'api-key' as const,
-      principal: principalFromApiKey({ subject: 'test', scopes: [] }),
-    },
-  };
-}
-
-const registry = createOperationRegistry([listSchedulesOperation]);
 
 describe('weft.schedules.list', () => {
   let engine: Engine | undefined;
@@ -60,7 +37,7 @@ describe('weft.schedules.list', () => {
   });
 
   it('returns a paginated list of schedules on the happy path', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
     await engine.schedule('echo', { x: 1 }, '0 * * * *', { id: 'sched-a' });
     await engine.schedule('echo', { x: 2 }, '30 * * * *', { id: 'sched-b' });
 
@@ -68,9 +45,9 @@ describe('weft.schedules.list', () => {
       new Request('http://localhost/v1/schedules', { method: 'GET' }),
       engine,
       {
-        operationRegistry: registry,
+        operationRegistry: listSchedulesTestRegistry,
         restBindings: [listSchedulesRestBinding],
-        ...apiKeyAuthContext(),
+        ...createListSchedulesApiKeyAuthContext(),
       },
     );
 
@@ -90,15 +67,15 @@ describe('weft.schedules.list', () => {
   });
 
   it('returns 400 when the status query param is not valid', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
 
     const response = await handleRequest(
       new Request('http://localhost/v1/schedules?status=INVALID', { method: 'GET' }),
       engine,
       {
-        operationRegistry: registry,
+        operationRegistry: listSchedulesTestRegistry,
         restBindings: [listSchedulesRestBinding],
-        ...apiKeyAuthContext(),
+        ...createListSchedulesApiKeyAuthContext(),
       },
     );
 
@@ -108,7 +85,7 @@ describe('weft.schedules.list', () => {
   });
 
   it('rejects non-string workflowType values via executeOperation', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
 
     const liveRegistry = createLiveOperationRegistry();
     const principal = principalFromApiKey({ subject: 'svc', scopes: [] });
@@ -125,7 +102,7 @@ describe('weft.schedules.list', () => {
   });
 
   it('accepts valid status values: active, paused, cancelled', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
     await engine.schedule('echo', {}, '0 * * * *', { id: 'active-sched' });
 
     for (const status of ['active', 'paused', 'cancelled']) {
@@ -133,9 +110,9 @@ describe('weft.schedules.list', () => {
         new Request(`http://localhost/v1/schedules?status=${status}`, { method: 'GET' }),
         engine,
         {
-          operationRegistry: registry,
+          operationRegistry: listSchedulesTestRegistry,
           restBindings: [listSchedulesRestBinding],
-          ...apiKeyAuthContext(),
+          ...createListSchedulesApiKeyAuthContext(),
         },
       );
       expect(response.status).toBe(200);
@@ -143,16 +120,16 @@ describe('weft.schedules.list', () => {
   });
 
   it('caps limit at 1000 internally without returning an error', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
 
     // limit=9999 should be silently clamped to 1000 — not rejected.
     const response = await handleRequest(
       new Request('http://localhost/v1/schedules?limit=9999', { method: 'GET' }),
       engine,
       {
-        operationRegistry: registry,
+        operationRegistry: listSchedulesTestRegistry,
         restBindings: [listSchedulesRestBinding],
-        ...apiKeyAuthContext(),
+        ...createListSchedulesApiKeyAuthContext(),
       },
     );
 
@@ -162,15 +139,15 @@ describe('weft.schedules.list', () => {
   });
 
   it('returns 400 when limit is not a positive integer', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
 
     const response = await handleRequest(
       new Request('http://localhost/v1/schedules?limit=0', { method: 'GET' }),
       engine,
       {
-        operationRegistry: registry,
+        operationRegistry: listSchedulesTestRegistry,
         restBindings: [listSchedulesRestBinding],
-        ...apiKeyAuthContext(),
+        ...createListSchedulesApiKeyAuthContext(),
       },
     );
 
@@ -178,15 +155,15 @@ describe('weft.schedules.list', () => {
   });
 
   it('returns 400 when offset is negative', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
 
     const response = await handleRequest(
       new Request('http://localhost/v1/schedules?offset=-1', { method: 'GET' }),
       engine,
       {
-        operationRegistry: registry,
+        operationRegistry: listSchedulesTestRegistry,
         restBindings: [listSchedulesRestBinding],
-        ...apiKeyAuthContext(),
+        ...createListSchedulesApiKeyAuthContext(),
       },
     );
 
@@ -194,7 +171,7 @@ describe('weft.schedules.list', () => {
   });
 
   it('rejects an unauthenticated principal with Unauthorized', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
 
     const liveRegistry = createLiveOperationRegistry();
     const result = await executeOperation(
@@ -214,7 +191,7 @@ describe('weft.schedules.list', () => {
   });
 
   it('maps EngineFailure faults to 500 with "Internal server error"', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
 
     const failingOperation = {
       ...listSchedulesOperation,
@@ -234,7 +211,7 @@ describe('weft.schedules.list', () => {
       {
         operationRegistry: createOperationRegistry([failingOperation]),
         restBindings: [listSchedulesRestBinding],
-        ...apiKeyAuthContext(),
+        ...createListSchedulesApiKeyAuthContext(),
       },
     );
 
@@ -243,7 +220,7 @@ describe('weft.schedules.list', () => {
   });
 
   it('shapes Unauthorized faults as 401', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
 
     const unauthorizedOperation = {
       ...listSchedulesOperation,
@@ -262,7 +239,7 @@ describe('weft.schedules.list', () => {
       {
         operationRegistry: createOperationRegistry([unauthorizedOperation]),
         restBindings: [listSchedulesRestBinding],
-        ...apiKeyAuthContext(),
+        ...createListSchedulesApiKeyAuthContext(),
       },
     );
 
@@ -271,7 +248,7 @@ describe('weft.schedules.list', () => {
   });
 
   it('uses the fallback HTTP mapper for non-special-cased faults', async () => {
-    engine = createEngine();
+    engine = createListSchedulesTestEngine();
 
     const conflictOperation = {
       ...listSchedulesOperation,
@@ -290,7 +267,7 @@ describe('weft.schedules.list', () => {
       {
         operationRegistry: createOperationRegistry([conflictOperation]),
         restBindings: [listSchedulesRestBinding],
-        ...apiKeyAuthContext(),
+        ...createListSchedulesApiKeyAuthContext(),
       },
     );
 
