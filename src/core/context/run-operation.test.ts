@@ -199,9 +199,20 @@ describe('#449 scheduleToCloseTimeout retry-state anchor', () => {
     // branch sees `now (1_002_000) + backoff (1000) - dispatchedAt >= 1000` and
     // throws rather than scheduling a backoff that lands well past the deadline.
     now += 2000; // jump past the 1000ms budget
-    expect(() => generator.throw(new Error('retryable failure'))).toThrow(
-      ActivityScheduleToCloseTimeoutError,
-    );
+    let thrown: unknown;
+    try {
+      generator.throw(new Error('retryable failure'));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ActivityScheduleToCloseTimeoutError);
+    const error = thrown as ActivityScheduleToCloseTimeoutError;
+    // Actual elapsed already exceeds the budget here, so this is the GENUINELY-elapsed
+    // case even though it fires in the catch branch: "exceeded" wording, no projection.
+    expect(error.elapsed).toBe(2000);
+    expect(error.budget).toBe(1000);
+    expect(error.projectedNextDispatchElapsed).toBeUndefined();
+    expect(error.message).toContain('exceeded its scheduleToCloseTimeout budget of 1000ms');
   });
 
   it('fails at the retry DECISION point when the next backoff would overshoot, while elapsed is still under budget', () => {
@@ -233,7 +244,7 @@ describe('#449 scheduleToCloseTimeout retry-state anchor', () => {
     expect(error.elapsed).toBe(1000);
     expect(error.budget).toBe(10_000);
     // The projected next dispatch (31000ms after first dispatch) is the decider.
-    expect(error.projectedNextDispatch).toBe(31_000);
+    expect(error.projectedNextDispatchElapsed).toBe(31_000);
     expect(error.message).toContain('will not retry within its scheduleToCloseTimeout budget');
     expect(error.message).toContain('next retry would start at 31000ms');
   });
@@ -265,7 +276,21 @@ describe('#449 scheduleToCloseTimeout retry-state anchor', () => {
     // next dispatch the top-of-loop check fires: attempt 2 > 1 and `now -
     // dispatchedAt = 2000 >= 1000`.
     now += 2000;
-    expect(() => generator.next()).toThrow(ActivityScheduleToCloseTimeoutError);
+    let thrown: unknown;
+    try {
+      generator.next();
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ActivityScheduleToCloseTimeoutError);
+    const error = thrown as ActivityScheduleToCloseTimeoutError;
+    // Top-of-loop is always the genuinely-elapsed case: actual elapsed (2000ms)
+    // reported, "exceeded" wording, and NO projection (a regression that leaked a
+    // projection into this path would fail here).
+    expect(error.elapsed).toBe(2000);
+    expect(error.budget).toBe(1000);
+    expect(error.projectedNextDispatchElapsed).toBeUndefined();
+    expect(error.message).toContain('exceeded its scheduleToCloseTimeout budget of 1000ms');
   });
 
   it('allows exactly one attempt for a zero-budget activity, then throws at the retry boundary', () => {

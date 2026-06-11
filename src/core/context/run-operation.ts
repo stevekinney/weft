@@ -337,12 +337,11 @@ export function* runActivityWithRetry<TResult>(
       // as the deciding reason. The top-of-loop check handles crash-during-backoff
       // (where this catch branch never runs on recovery).
       const backoff = calculateBackoff(attempt, retryPolicy);
-      assertScheduleToCloseBudgetNotExhausted(
-        budget,
-        request.activityName,
-        internals.getNow(),
-        internals.getNow() + backoff,
-      );
+      // Read the clock ONCE so the reported elapsed and the projected next-dispatch
+      // decision come from the same instant (a custom getNow could drift between
+      // two reads).
+      const now = internals.getNow();
+      assertScheduleToCloseBudgetNotExhausted(budget, request.activityName, now, now + backoff);
 
       const nextAttempt = attempt + 1;
       writeActivityRetryAttempt(internals, step, nextAttempt);

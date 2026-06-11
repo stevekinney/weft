@@ -11,8 +11,9 @@ import { WeftError } from '../weft-error.ts';
  *   or downtime during a backoff sleep pushed wall time past the deadline.
  * - The budget has NOT yet elapsed, but the next retry's backoff would start it at
  *   or after the deadline — so Weft refuses to schedule a doomed sleep and fails at
- *   the retry decision point. In this case {@link projectedNextDispatch} is set to
- *   the wall-clock time the skipped retry would have started.
+ *   the retry decision point. In this case {@link projectedNextDispatchElapsed} is
+ *   set to the elapsed milliseconds after first dispatch at which the skipped retry
+ *   would have started.
  *
  * The name is registered as a `timeout` failure category, so it classifies and is
  * searchable the same way the other timeout errors are.
@@ -34,30 +35,32 @@ export class ActivityScheduleToCloseTimeoutError extends WeftError<'ActivitySche
   /**
    * When the failure is the early retry-decision case (the budget has not yet
    * elapsed but the next backoff would start the retry at or after the deadline),
-   * the wall-clock time that skipped retry would have started. `undefined` when the
-   * budget had genuinely elapsed at the throw.
+   * the elapsed milliseconds after first dispatch at which that skipped retry would
+   * have started. `undefined` when the budget had genuinely elapsed at the throw.
    */
-  readonly projectedNextDispatch?: number;
+  readonly projectedNextDispatchElapsed?: number;
 
   constructor(
     activityName: string,
     elapsed: number,
     budget: number,
-    projectedNextDispatch?: number,
+    projectedNextDispatchElapsed?: number,
   ) {
     super(
       'ActivityScheduleToCloseTimeoutError',
-      projectedNextDispatch === undefined
+      projectedNextDispatchElapsed === undefined
         ? `Activity "${activityName}" exceeded its scheduleToCloseTimeout budget of ${budget}ms ` +
             `(elapsed ${elapsed}ms across retries)`
         : `Activity "${activityName}" will not retry within its scheduleToCloseTimeout budget of ` +
-            `${budget}ms (elapsed ${elapsed}ms; next retry would start at ${projectedNextDispatch}ms ` +
+            `${budget}ms (elapsed ${elapsed}ms; next retry would start at ${projectedNextDispatchElapsed}ms ` +
             `after first dispatch, at or beyond the deadline)`,
     );
     this.activityName = activityName;
     this.elapsed = elapsed;
     this.budget = budget;
-    if (projectedNextDispatch !== undefined) this.projectedNextDispatch = projectedNextDispatch;
+    if (projectedNextDispatchElapsed !== undefined) {
+      this.projectedNextDispatchElapsed = projectedNextDispatchElapsed;
+    }
   }
 }
 
@@ -115,16 +118,17 @@ export function isScheduleToCloseBudgetExhausted(
  * boundary, both routing through this single check; the thrown error always
  * reports the ACTUAL elapsed time at `now`, never a projected one:
  *
- * - **Top of the retry loop** (`now = getNow()`, no `projectedNextDispatch`):
+ * - **Top of the retry loop** (`now = getNow()`, no `projectedNextDispatchClock`):
  *   the live clock has reached or passed the deadline — an attempt overran, or
  *   downtime during a backoff replay pushed wall time past it. Exhaustion is
  *   checked at `now`; the error reports `now - dispatchedAt` and no projection.
- * - **Catch branch** (`now = getNow()`, `projectedNextDispatch = getNow() +
- *   nextBackoff`): the budget may not have elapsed yet, but the next backoff would
- *   start the retry at or after the deadline, so we refuse to schedule that doomed
- *   sleep and fail at the retry decision point. Exhaustion is checked at the
- *   PROJECTED dispatch; the error still reports the actual `now - dispatchedAt`
- *   elapsed plus the projected next-dispatch as the deciding reason.
+ * - **Catch branch** (`now = getNow()`, `projectedNextDispatchClock = now +
+ *   nextBackoff`, both from a single clock read): the budget may not have elapsed
+ *   yet, but the next backoff would start the retry at or after the deadline, so we
+ *   refuse to schedule that doomed sleep and fail at the retry decision point.
+ *   Exhaustion is checked at the PROJECTED dispatch clock; the error still reports
+ *   the actual `now - dispatchedAt` elapsed plus the projected next-dispatch
+ *   (as elapsed-since-first-dispatch ms) as the deciding reason.
  *
  * `budget` is `undefined` when no `scheduleToCloseTimeout` is configured, in which
  * case this is a no-op.
@@ -133,21 +137,22 @@ export function assertScheduleToCloseBudgetNotExhausted(
   budget: ScheduleToCloseBudget | undefined,
   activityName: string,
   now: number,
-  projectedNextDispatch?: number,
+  projectedNextDispatchClock?: number,
 ): void {
   if (budget === undefined) return;
-  // The catch branch decides on the projected next dispatch; the top-of-loop
+  // The catch branch decides on the projected next-dispatch clock; the top-of-loop
   // decides on the live clock. Either way the reported elapsed is actual (`now`).
-  const decisionClock = projectedNextDispatch ?? now;
+  const decisionClock = projectedNextDispatchClock ?? now;
   if (!isScheduleToCloseBudgetExhausted(budget, decisionClock)) return;
   throw new ActivityScheduleToCloseTimeoutError(
     activityName,
     now - budget.dispatchedAt,
     budget.budgetMs,
-    // Only surface the projection when it (not the actual clock) is the decider:
-    // a genuinely-elapsed budget at the top of the loop has no meaningful projection.
-    projectedNextDispatch !== undefined && now - budget.dispatchedAt < budget.budgetMs
-      ? projectedNextDispatch - budget.dispatchedAt
+    // Only surface the projection (as elapsed-since-first-dispatch ms) when it (not
+    // the actual clock) is the decider: a genuinely-elapsed budget at the top of the
+    // loop has no meaningful projection.
+    projectedNextDispatchClock !== undefined && now - budget.dispatchedAt < budget.budgetMs
+      ? projectedNextDispatchClock - budget.dispatchedAt
       : undefined,
   );
 }
