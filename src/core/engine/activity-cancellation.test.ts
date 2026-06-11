@@ -11,7 +11,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 
-import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { flushMicrotasks, waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import type { ActivityContext, WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
 import { Engine } from './index.ts';
@@ -57,6 +57,9 @@ describe('#453 cooperative activity cancellation', () => {
 
     const winner = await handle.result();
     expect(winner).toBe('signal-wins');
+    // Drain pending microtasks so that if a race loss WERE going to abort the
+    // loser's signal, the abort listener would have fired by now. It must not.
+    await flushMicrotasks();
     // The race settled — but the losing activity's signal was NOT aborted.
     expect(losingSignalAborted).toBe(false);
     // The loser is still running (we never released it); it was abandoned, not

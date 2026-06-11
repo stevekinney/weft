@@ -1149,4 +1149,80 @@ describe('crash recovery', () => {
     expect(executeCount).toBe(1);
     recoveredEngine[Symbol.dispose]();
   });
+
+  it('measures scheduleToCloseTimeout from the original dispatch across a crash, firing the top-of-loop check on recovery (#449)', async () => {
+    // The honest crash scenario the top-of-loop budget check exists for: the
+    // backoff sleep is scheduled (catch-branch check passes because the budget is
+    // far from exhausted), the workflow parks ON that sleep, then the process is
+    // down long past the deadline. On recovery the past-due backoff replays and the
+    // TOP-of-loop check fires before attempt 2 is dispatched — because the
+    // `dispatchedAt` anchor (T0) survived in the checkpoint, the budget is measured
+    // from the original dispatch, NOT reset to the recovery clock.
+    const storage = new MemoryStorage();
+    const T0 = 1_000_000;
+    let executeCount = 0;
+    const flaky = activity({
+      name: 'flaky',
+      // 60s budget, 2s backoff: on engine 1 (clock fixed at T0) the catch-branch
+      // check `T0 + 2000 - T0 = 2000 >= 60000` is false, so the 2s backoff IS
+      // scheduled and the workflow parks on it. The fixed clock never advances, so
+      // the sleep never expires — the crash window stays open until we dispose.
+      retry: { maxAttempts: 5, initialBackoff: '2s', backoffMultiplier: 1, maxBackoff: '2s' },
+      scheduleToCloseTimeout: 60_000,
+      execute: async () => {
+        executeCount += 1;
+        throw new Error('always-fails');
+      },
+    });
+
+    const buildEngine = (now: number) => {
+      const engine = new Engine({ storage, getNow: () => now });
+      engine.register(
+        workflow({ name: 'stc-crash' })
+          .activities({ flaky })
+          .execute(async function* (ctx) {
+            return yield* ctx.run(flaky);
+          }),
+      );
+      return engine;
+    };
+
+    // Engine 1: attempt 1 fails, the 2s backoff is scheduled, the workflow parks on
+    // it (clock frozen at T0 so the timer never fires), and the retry checkpoint —
+    // including the dispatchedAt anchor at T0 — is committed.
+    const firstEngine = buildEngine(T0);
+    await firstEngine.start('stc-crash', null, { id: 'stc-crash-449' });
+    await waitForCondition(
+      async () => {
+        const state = await firstEngine.get('stc-crash-449');
+        return state?.status === 'running' && executeCount === 1;
+      },
+      { timeoutMs: 2000, label: 'attempt 1 failed and the workflow parked on the backoff sleep' },
+    );
+    expect(executeCount).toBe(1);
+    firstEngine[Symbol.dispose]();
+
+    // Engine 2: recover with the clock jumped 120s past T0 — well beyond the 60s
+    // budget. The past-due backoff sleep replays and fires immediately, then the
+    // top-of-loop check throws (`(T0 + 120_000) - T0 = 120_000 >= 60_000`) before
+    // attempt 2 dispatches. If the anchor had been reset to the recovery clock, the
+    // budget would measure 0ms elapsed and the activity would wrongly retry.
+    const recoveredEngine = buildEngine(T0 + 120_000);
+    await recoveredEngine.recoverAll();
+    await waitForCondition(
+      async () => {
+        const state = await recoveredEngine.get('stc-crash-449');
+        return state?.status === 'failed';
+      },
+      { timeoutMs: 2000, label: 'recovered workflow failed at the schedule-to-close boundary' },
+    );
+
+    const recovered = await recoveredEngine.get('stc-crash-449');
+    expect(recovered?.status).toBe('failed');
+    expect(recovered?.failureCategory).toBe('timeout');
+    // The activity did NOT run a second time on the recovered engine — the budget
+    // (anchored at T0) was already exhausted, so attempt 2 never dispatched.
+    expect(executeCount).toBe(1);
+    recoveredEngine[Symbol.dispose]();
+  });
 });

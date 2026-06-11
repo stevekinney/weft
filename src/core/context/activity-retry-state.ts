@@ -179,8 +179,20 @@ export function readOrInitActivityDispatchedAt(
 ): number {
   const current = currentRetryState(internals);
   const existing = current?.dispatchedAt?.[String(step)];
-  if (typeof existing === 'number' && Number.isFinite(existing) && existing > 0) {
+  // Honor any finite anchor, including 0: a test clock can legitimately report 0,
+  // and an `existing > 0` guard would treat that as "unset" and re-anchor on every
+  // replay, resetting the wall-clock budget.
+  if (typeof existing === 'number' && Number.isFinite(existing)) {
     return existing;
+  }
+  // A present-but-non-finite anchor is corrupt persisted data. Fail loudly rather
+  // than silently re-initializing to `now`: silent re-init would reset the
+  // schedule-to-close window — the exact contract the anchor exists to uphold.
+  // Only an ABSENT anchor (undefined) is a legitimate first dispatch / old record.
+  if (existing !== undefined) {
+    throw new Error(
+      `Invalid checkpointed activity dispatch anchor ${String(existing)} for step ${String(step)}`,
+    );
   }
   const attempts = current ? { ...current.attempts } : {};
   const dispatchedAt = current?.dispatchedAt ? { ...current.dispatchedAt } : {};

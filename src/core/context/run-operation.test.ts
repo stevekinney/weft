@@ -184,20 +184,75 @@ describe('#449 scheduleToCloseTimeout retry-state anchor', () => {
     expect(afterRetry.dispatchedAt).toEqual({ '0': 1_000_000 });
   });
 
-  it('throws ActivityScheduleToCloseTimeoutError at the retry boundary once the budget is exhausted', () => {
+  it('throws in the CATCH branch when the next backoff would itself carry past the budget', () => {
+    // The budget covers the backoff between attempts, so when `now + nextBackoff`
+    // already exceeds the deadline we refuse to schedule that doomed sleep and
+    // throw at the retry decision point — `generator.throw` itself throws, before
+    // a sleep is ever yielded.
     let now = 1_000_000;
     const context = createContext({ getNow: () => now });
 
     const generator = runActivityWithRetry(context, ACTIVITY_DEF(1000), ['payload']);
     generator.next(); // first dispatch at t=1_000_000
 
-    // Fail the first attempt; the retry sleep is yielded.
+    // Fail the first attempt with the clock already past the budget; the catch
+    // branch sees `now (1_002_000) + backoff (1000) - dispatchedAt >= 1000` and
+    // throws rather than scheduling a backoff that lands well past the deadline.
     now += 2000; // jump past the 1000ms budget
-    generator.throw(new Error('retryable failure'));
+    expect(() => generator.throw(new Error('retryable failure'))).toThrow(
+      ActivityScheduleToCloseTimeoutError,
+    );
+  });
 
-    // Replay the (cached/past-due) backoff sleep, then the top-of-loop budget check
-    // must fire before dispatching attempt 2.
+  it('throws at the TOP of the loop when downtime during backoff pushes wall time past the budget', () => {
+    // The distinct branch the catch check cannot cover: the backoff is scheduled
+    // (small enough that `now + backoff` is still within budget), the workflow
+    // parks on the sleep, and only THEN does wall time jump past the deadline —
+    // the crash-during-backoff / long-park case. On the next dispatch, the
+    // top-of-loop check fires before attempt 2 is dispatched.
+    const SMALL_BACKOFF_DEF = Object.assign((_input: unknown) => 'unused', {
+      retry: { maxAttempts: 5, initialBackoff: 10, backoffMultiplier: 1, maxBackoff: 10 },
+      scheduleToCloseTimeout: 1000,
+    });
+    let now = 1_000_000;
+    const context = createContext({ getNow: () => now });
+
+    const generator = runActivityWithRetry(context, SMALL_BACKOFF_DEF, ['payload']);
+    generator.next(); // first dispatch at t=1_000_000, dispatchedAt = 1_000_000
+
+    // Fail attempt 1 with the clock unmoved: catch-branch check is `1_000_000 + 10
+    // - 1_000_000 = 10 >= 1000`? No → it schedules the 10ms backoff sleep and
+    // records attempt 2. `generator.throw` returns the sleep yield (does NOT throw).
+    const retrySleep = generator.throw(new Error('retryable failure'));
+    expect(retrySleep.done).toBe(false);
+    expect(retrySleep.value).toMatchObject({ type: 'sleep' });
+
+    // Now the park outlasts the budget (e.g. the process was down for 2s). On the
+    // next dispatch the top-of-loop check fires: attempt 2 > 1 and `now -
+    // dispatchedAt = 2000 >= 1000`.
+    now += 2000;
     expect(() => generator.next()).toThrow(ActivityScheduleToCloseTimeoutError);
+  });
+
+  it('allows exactly one attempt for a zero-budget activity, then throws at the retry boundary', () => {
+    // A 0ms budget is exhausted the instant any time would be spent on a retry: the
+    // activity gets its one guaranteed attempt, then `now + backoff - dispatchedAt
+    // >= 0` is trivially true in the catch branch, so attempt 2 is never dispatched.
+    const ZERO_BUDGET_DEF = Object.assign((_input: unknown) => 'unused', {
+      retry: { maxAttempts: 5, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0 },
+      scheduleToCloseTimeout: 0,
+    });
+    const now = 1_000_000;
+    const context = createContext({ getNow: () => now });
+
+    const generator = runActivityWithRetry(context, ZERO_BUDGET_DEF, ['payload']);
+    generator.next(); // the one guaranteed attempt
+
+    // Fail attempt 1 without advancing the clock: `now + 0 - dispatchedAt = 0 >= 0`
+    // → the catch branch throws immediately. No second attempt, no sleep.
+    expect(() => generator.throw(new Error('retryable failure'))).toThrow(
+      ActivityScheduleToCloseTimeoutError,
+    );
   });
 
   it('does not write a dispatchedAt anchor when no scheduleToCloseTimeout is set', () => {
@@ -215,6 +270,31 @@ describe('#449 scheduleToCloseTimeout retry-state anchor', () => {
       | undefined;
     // No anchor written — the slot is absent entirely on a clean first dispatch.
     expect(slot?.dispatchedAt).toBeUndefined();
+  });
+
+  it('fails loudly on a corrupt (non-finite) persisted dispatchedAt anchor instead of resetting the window', () => {
+    // A present-but-non-finite anchor is corrupt checkpoint data. Silently
+    // re-initializing it to `now` would reset the schedule-to-close window — the
+    // exact contract the anchor upholds — so the read throws instead. (An ABSENT
+    // anchor is a legitimate first dispatch / old record and is NOT an error.)
+    const context = createContext({ getNow: () => 1_000_000 });
+    const internals = getInternals(context);
+    internals.checkpointLocals = {
+      ...internals.checkpointLocals,
+      [ACTIVITY_RETRY_STATE_LOCAL_KEY]: {
+        version: 1,
+        attempts: {},
+        // NaN survives a JSON-free codec round-trip as a number-typed non-finite.
+        dispatchedAt: { '0': Number.NaN },
+      },
+    };
+
+    // The anchor is read when the generator dispatches (resolveScheduleToCloseBudget),
+    // so drive the first `next()` — that is where the corrupt anchor is rejected.
+    const generator = runActivityWithRetry(context, ACTIVITY_DEF(60_000), ['payload']);
+    expect(() => generator.next()).toThrow(
+      'Invalid checkpointed activity dispatch anchor NaN for step 0',
+    );
   });
 
   it('reuses an existing dispatchedAt anchor on replay instead of resetting the window', () => {

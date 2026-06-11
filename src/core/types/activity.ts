@@ -1,3 +1,4 @@
+import type { ActivityVerifier } from './activity-verification.ts';
 import type { DefinitionSchema, InferSchemaOutput } from './definition-schema.ts';
 import { validateWorkflowOrActivityName } from './name-grammar.ts';
 import type { Duration, RetryPolicy } from './retry-retention.ts';
@@ -85,11 +86,17 @@ export interface ActivityContext {
    * ```ts
    * import { activity, type ActivityContext } from '@lostgradient/weft';
    *
+   * function resumeFrom(details: unknown): number {
+   *   return typeof details === 'object' && details !== null && 'done' in details &&
+   *     typeof (details as { done: unknown }).done === 'number'
+   *     ? (details as { done: number }).done
+   *     : 0;
+   * }
+   *
    * const postBatches = activity({
    *   name: 'postBatches',
    *   execute: async (batches: string[][], ctx?: ActivityContext) => {
-   *     const progress = ctx?.lastHeartbeatDetails as { done: number } | undefined;
-   *     let done = progress?.done ?? 0;
+   *     let done = resumeFrom(ctx?.lastHeartbeatDetails);
    *     for (; done < batches.length; done += 1) {
    *       await postBatch(batches[done]!);
    *       ctx?.heartbeat({ done: done + 1 });
@@ -198,80 +205,6 @@ export interface ActivityCallOptions {
    */
   scheduleToCloseTimeout?: Duration;
 }
-
-/**
- * Identifies whether an activity verifier is checking a fresh result or
- * reconciling a prior keyed dispatch before redispatch.
- *
- * @example
- * ```ts
- * import type { ActivityVerificationPhase } from '@lostgradient/weft';
- *
- * const phase: ActivityVerificationPhase = 'pre-dispatch-reconciliation';
- * console.log(phase);
- * ```
- */
-export type ActivityVerificationPhase = 'post-execution-validation' | 'pre-dispatch-reconciliation';
-
-/**
- * Metadata passed to a Tier-0 activity verifier.
- *
- * @example
- * ```ts
- * import type { ActivityVerificationContext } from '@lostgradient/weft';
- *
- * function shouldQueryExternalSystem(context: ActivityVerificationContext): boolean {
- *   return context.phase === 'pre-dispatch-reconciliation';
- * }
- * ```
- */
-export interface ActivityVerificationContext<TInput = unknown> {
-  phase: ActivityVerificationPhase;
-  workflowId: string;
-  activityName: string;
-  operationId: string;
-  input: TInput;
-  idempotencyKey?: string;
-  attempt: number;
-}
-
-/**
- * Return value for activity verification. Post-execution validation uses a
- * boolean; pre-dispatch reconciliation can report whether a prior keyed side
- * effect completed, did not complete, or is indeterminate.
- *
- * @example
- * ```ts
- * import type { ActivityVerificationResult } from '@lostgradient/weft';
- *
- * const result: ActivityVerificationResult<string> = {
- *   status: 'completed-with-result',
- *   result: 'already-finished',
- * };
- * console.log(result.status);
- * ```
- */
-export type ActivityVerificationResult<TOutput = unknown> =
-  | boolean
-  | 'not-completed'
-  | 'completed-result-unavailable'
-  | 'indeterminate'
-  | { status: 'completed-with-result'; result: TOutput };
-
-export type ActivityPostExecutionVerifier<TOutput = unknown> = {
-  bivarianceHack(result: TOutput): Promise<boolean> | boolean;
-}['bivarianceHack'];
-
-export type ActivityTier0Verifier<TInput = unknown, TOutput = unknown> = {
-  bivarianceHack(
-    result: TOutput | undefined,
-    context: ActivityVerificationContext<TInput>,
-  ): Promise<ActivityVerificationResult<TOutput>> | ActivityVerificationResult<TOutput>;
-}['bivarianceHack'];
-
-export type ActivityVerifier<TInput = unknown, TOutput = unknown> =
-  | ActivityPostExecutionVerifier<TOutput>
-  | ActivityTier0Verifier<TInput, TOutput>;
 
 // ---------------------------------------------------------------------------
 // Activity metadata (from activity() helper)

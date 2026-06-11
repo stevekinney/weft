@@ -56,7 +56,10 @@ export function parseScheduleToCloseBudgetMs(
 /**
  * Resolve the cross-attempt wall-clock budget for a `ctx.run` call: a per-call
  * `scheduleToCloseTimeout` overrides the activity definition's default. String
- * activities have no definition fields, so only the per-call option applies.
+ * activities have no definition fields, so only the per-call option applies. The
+ * by-reference arm is `Function & { scheduleToCloseTimeout?: Duration }` to match
+ * the caller's `ActivityInput` (a callable carrying the activity definition); this
+ * resolver reads only the single `scheduleToCloseTimeout` field off it.
  */
 export function resolveActivityScheduleToCloseTimeout(
   activity: string | (Function & { scheduleToCloseTimeout?: Duration }),
@@ -68,15 +71,40 @@ export function resolveActivityScheduleToCloseTimeout(
 }
 
 /**
- * Whether the schedule-to-close budget is exhausted at this retry boundary. Only
- * meaningful from attempt 2 onward (an activity always gets one try); the caller
- * is responsible for that guard. Compares the live engine clock against the
- * persisted first-dispatch anchor, so only the frontier (uncached) attempt is
- * ever governed — exactly the wall-clock semantic the budget promises.
+ * Whether the schedule-to-close budget is exhausted at the given clock value.
+ * The comparison is `>=` so an exact-deadline or zero-budget retry is treated as
+ * exhausted — a `0`ms budget allows exactly one attempt, then throws.
  */
 export function isScheduleToCloseBudgetExhausted(
   budget: ScheduleToCloseBudget,
   now: number,
 ): boolean {
-  return now - budget.dispatchedAt > budget.budgetMs;
+  return now - budget.dispatchedAt >= budget.budgetMs;
+}
+
+/**
+ * Throw {@link ActivityScheduleToCloseTimeoutError} if the budget is exhausted at
+ * `now`, otherwise return. Called two ways at the retry boundary, both routing
+ * through this single check so the catch branch carries no extra inline branch:
+ *
+ * - Top of the retry loop with the live clock (`getNow()`), catching a crash whose
+ *   downtime pushed wall time past the deadline — the path replay reaches when the
+ *   backoff sleep replays from cache and the catch branch never runs.
+ * - In the catch branch with `getNow() + nextBackoff`, refusing to schedule a
+ *   backoff that would itself carry past the deadline.
+ *
+ * `budget` is `undefined` when no `scheduleToCloseTimeout` is configured, in which
+ * case this is a no-op.
+ */
+export function assertScheduleToCloseBudgetNotExhausted(
+  budget: ScheduleToCloseBudget | undefined,
+  activityName: string,
+  now: number,
+): void {
+  if (budget === undefined || !isScheduleToCloseBudgetExhausted(budget, now)) return;
+  throw new ActivityScheduleToCloseTimeoutError(
+    activityName,
+    now - budget.dispatchedAt,
+    budget.budgetMs,
+  );
 }

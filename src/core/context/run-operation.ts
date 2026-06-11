@@ -14,8 +14,7 @@ import {
   writeActivityRetryAttempt,
 } from './activity-retry-state.ts';
 import {
-  ActivityScheduleToCloseTimeoutError,
-  isScheduleToCloseBudgetExhausted,
+  assertScheduleToCloseBudgetNotExhausted,
   parseScheduleToCloseBudgetMs,
   resolveActivityScheduleToCloseTimeout,
   type ScheduleToCloseBudget,
@@ -314,16 +313,8 @@ export function* runActivityWithRetry<TResult>(
     // attempt — where the backoff sleep replays from cache and the catch branch is
     // never reached — and when a long backoff pushes wall time past the deadline.
     // Attempt 1 is exempt: an activity always gets one try.
-    if (
-      budget !== undefined &&
-      attempt > 1 &&
-      isScheduleToCloseBudgetExhausted(budget, internals.getNow())
-    ) {
-      throw new ActivityScheduleToCloseTimeoutError(
-        request.activityName,
-        internals.getNow() - budget.dispatchedAt,
-        budget.budgetMs,
-      );
+    if (attempt > 1) {
+      assertScheduleToCloseBudgetNotExhausted(budget, request.activityName, internals.getNow());
     }
     try {
       const result = yield prepareActivityRetryRequest(request, attempt);
@@ -335,9 +326,22 @@ export function* runActivityWithRetry<TResult>(
         throw error;
       }
 
+      // Refuse to schedule a backoff sleep that would itself carry wall time past
+      // the deadline: the budget covers the backoff between attempts, so a sleep
+      // that lands past it is doomed. Throw at this decision point — before the
+      // durable `writeActivityRetryAttempt`/`sleep` — rather than parking for a
+      // sleep we already know exhausts the budget. The top-of-loop check handles
+      // crash-during-backoff (where this catch branch never runs on recovery).
+      const backoff = calculateBackoff(attempt, retryPolicy);
+      assertScheduleToCloseBudgetNotExhausted(
+        budget,
+        request.activityName,
+        internals.getNow() + backoff,
+      );
+
       const nextAttempt = attempt + 1;
       writeActivityRetryAttempt(internals, step, nextAttempt);
-      yield* context.sleep(calculateBackoff(attempt, retryPolicy));
+      yield* context.sleep(backoff);
       attempt = nextAttempt;
     }
   }

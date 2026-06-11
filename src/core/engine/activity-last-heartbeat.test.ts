@@ -94,4 +94,47 @@ describe('#450 ActivityContext.lastHeartbeatDetails', () => {
     // Step B's first (only) attempt saw no heartbeat — step A's {a:1} did NOT bleed.
     expect(bSawOnFirstRun).toBeUndefined();
   });
+
+  it('does not bleed a ctx.all branch heartbeat into a later top-level step (sub-operations carry distinct steps)', async () => {
+    // The concern behind the `operation.step ?? 0` fallback: if a ctx.all branch
+    // activity reached buildActivityContext without a distinct step, its heartbeat
+    // would key to step 0 and could bleed into a later top-level activity's first
+    // attempt. It cannot — each branch's request is built through the same
+    // `stepIndex++` path as a top-level run, so branches get distinct steps and a
+    // later top-level step reads `undefined`. This pins that invariant end-to-end.
+    await using engine = new Engine();
+    let laterStepSawOnFirstRun: unknown = 'unset';
+
+    const branch = activity({
+      name: 'branch',
+      execute: async (_input?: unknown, ctx?: ActivityContext) => {
+        ctx?.heartbeat({ fromBranch: true });
+        return 'branch-done';
+      },
+    });
+    const laterStep = activity({
+      name: 'later-step',
+      execute: async (_input?: unknown, ctx?: ActivityContext) => {
+        laterStepSawOnFirstRun = ctx?.lastHeartbeatDetails;
+        return 'later-done';
+      },
+    });
+
+    engine.register(
+      workflow({ name: 'all-then-step-wf' })
+        .activities({ branch, 'later-step': laterStep })
+        .execute(async function* (ctx: WorkflowContext) {
+          // Two concurrent branches both heartbeat; neither retries (ctx.all
+          // activities don't), so the keying just has to keep them off step 0.
+          yield* ctx.all([ctx.run(branch), ctx.run(branch)]);
+          yield* ctx.run(laterStep);
+          return 'done';
+        }),
+    );
+
+    const handle = await engine.start('all-then-step-wf', null, { id: 'all-then-step-1' });
+    await handle.result();
+    // The later top-level step's first attempt saw no heartbeat — no branch bled in.
+    expect(laterStepSawOnFirstRun).toBeUndefined();
+  });
 });

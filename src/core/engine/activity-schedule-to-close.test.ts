@@ -26,9 +26,11 @@ describe('#449 scheduleToCloseTimeout', () => {
 
   it('fails with a timeout error at the retry boundary once the budget is exhausted', async () => {
     // A controllable clock: the budget is 1000ms. The first attempt happens at
-    // t=0; we then jump the clock past the budget so the SECOND attempt is blocked
-    // at the top-of-loop check — failing with the schedule-to-close error rather
-    // than continuing to maxAttempts (which is 5).
+    // t=0 and advances the clock past the budget before failing. With zero backoff,
+    // the retry boundary blocks attempt 2 in the catch branch (`now + backoff`
+    // already exceeds the deadline) — failing with the schedule-to-close error
+    // rather than continuing to maxAttempts (which is 5). The dedicated unit tests
+    // in run-operation.test.ts pin the catch-branch vs top-of-loop split directly.
     let now = 1_000_000;
     await using engine = new Engine({ getNow: () => now });
     let attempts = 0;
@@ -60,8 +62,8 @@ describe('#449 scheduleToCloseTimeout', () => {
     await expect(handle.result()).rejects.toThrow(
       'exceeded its scheduleToCloseTimeout budget of 1000ms',
     );
-    // Exactly ONE attempt ran: the budget blocked attempt 2 before dispatch,
-    // well short of maxAttempts: 5.
+    // Exactly ONE attempt ran: the retry boundary blocked attempt 2 before
+    // dispatch, well short of maxAttempts: 5.
     expect(attempts).toBe(1);
     const failed = await engine.get('stc-1');
     expect(failed?.status).toBe('failed');
