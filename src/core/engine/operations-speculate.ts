@@ -1,6 +1,7 @@
 import type { ContextOperationRequest } from '../context.ts';
 import { finalizeAndUnwrap } from './deferred-consume-envelope.ts';
 import type { EngineInternals } from './internals.ts';
+import { assertSupportedSignalBranches } from './operations-coordination.ts';
 import type { OperationWithCallerStack } from './operations-router.ts';
 import { SpeculativeExecutionState } from './speculative-execution-state.ts';
 
@@ -100,6 +101,19 @@ export async function driveSpeculativeGenerator(
 
     const nextOperation = iterationResult.value;
     try {
+      // The top-level `processRaceOperation` / `processParallelOperation`
+      // reject a `race` / `all` whose branches wait on the same signal name
+      // (a shared waiter key would clobber). The speculate driver routes a
+      // yielded `race` / `parallel` straight to the nested executors, which
+      // never run that check — so enforce it here, on the input op, BEFORE
+      // dispatch (the clobbering registration happens inside execute) and
+      // INSIDE the try (so a throw routes through `generator.throw` and
+      // surfaces at the workflow's `yield*`, matching top-level catchability).
+      // `assertSupportedSignalBranches` walks nested race/parallel recursively,
+      // so one call covers the whole subtree.
+      if (nextOperation.type === 'race' || nextOperation.type === 'parallel') {
+        assertSupportedSignalBranches(nextOperation.operations);
+      }
       const nextResult = await callbacks.executeSubOperation(
         workflowId,
         nextOperation,

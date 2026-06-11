@@ -1048,3 +1048,82 @@ describe('#456 nested ctx.all releases parked siblings when a branch rejects', (
     expect(result.late).toBe('late-payload');
   });
 });
+
+describe('#456 ctx.speculate enforces the same-signal-name branch rejection', () => {
+  it('rejects a speculative branch.race with two branches waiting on the same signal', async () => {
+    // assertSupportedSignalBranches runs in the top-level coordinators, but a
+    // yielded race under ctx.speculate routes through the nested executor, which
+    // does not. The speculate driver re-applies the check on the input op so two
+    // wait-signal branches on the same name throw instead of clobbering the shared
+    // waiter (which would hang the run). The throw surfaces at the workflow's
+    // yield* (the speculation rolls back), so handle.result() rejects.
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'speculate-race-dup-signal' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        return yield* ctx.speculate(async function* (branch) {
+          return yield* branch.race([
+            branch.waitForSignal<string>('ev'),
+            branch.waitForSignal<string>('ev'),
+          ]);
+        });
+      }),
+    );
+
+    const handle = await engine.start('speculate-race-dup-signal', null, { id: 'srd' });
+    await expect(handle.result()).rejects.toThrow(
+      'cannot have two branches waiting on the same signal "ev"',
+    );
+    // No waiter was leaked by the rejected validation.
+    expect(getInternals(engine).signalWaiters.size).toBe(0);
+  });
+
+  it('rejects a speculative branch.all with two branches waiting on the same signal', async () => {
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'speculate-all-dup-signal' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        return yield* ctx.speculate(async function* (branch) {
+          return yield* branch.all([
+            branch.waitForSignal<string>('ev'),
+            branch.waitForSignal<string>('ev'),
+          ]);
+        });
+      }),
+    );
+
+    const handle = await engine.start('speculate-all-dup-signal', null, { id: 'sad' });
+    await expect(handle.result()).rejects.toThrow(
+      'cannot have two branches waiting on the same signal "ev"',
+    );
+    expect(getInternals(engine).signalWaiters.size).toBe(0);
+  });
+
+  it('rejects a NESTED same-signal dup under speculate (recursive walk fires via the driver)', async () => {
+    // A dup that only appears across nesting levels — race([ waitForSignal('ev'),
+    // all([ waitForSignal('ev'), run ]) ]) — must still be rejected. This proves
+    // assertSupportedSignalBranches's recursive walk runs when the driver validates
+    // the top-level yielded race, not just a flat same-level scan.
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'speculate-nested-dup-signal' })
+        .activities({ work: async () => 'work-done' })
+        .execute(async function* (ctx: WorkflowContext) {
+          return yield* ctx.speculate(async function* (branch) {
+            return yield* branch.race([
+              branch.waitForSignal<string>('ev'),
+              branch.all([branch.waitForSignal<string>('ev'), branch.run('work')]),
+            ]);
+          });
+        }),
+    );
+
+    const handle = await engine.start('speculate-nested-dup-signal', null, { id: 'snd' });
+    await expect(handle.result()).rejects.toThrow(
+      'cannot have two branches waiting on the same signal "ev"',
+    );
+    expect(getInternals(engine).signalWaiters.size).toBe(0);
+  });
+});
