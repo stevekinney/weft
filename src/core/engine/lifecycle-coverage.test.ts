@@ -446,23 +446,17 @@ describe('engine lifecycle coverage helpers', () => {
     });
   });
 
-  it('migrates prepared resume state when workflow version metadata drifts', async () => {
+  it('keeps prepared resume state unchanged when workflow version metadata matches', async () => {
     const storage = new MemoryStorage();
-    const workflowId = 'workflow-migrated-resume';
+    const workflowId = 'workflow-prepared-resume';
     const state = createWorkflowState(workflowId, {
       versionTuple: {
-        agentVersion: 'agent-1',
-        toolVersions: ['oldTool@1'],
         workflowVersion: '1',
       },
     });
     const checkpoint = createCheckpoint(workflowId, { locals: { before: true }, version: '1' });
     const registration = {
-      migrate: (value: unknown) => ({
-        ...(value as Checkpoint),
-        locals: { migrated: true },
-      }),
-      version: '2',
+      version: '1',
     };
     const internals = {
       options: { getNow: () => 30_000 },
@@ -478,20 +472,12 @@ describe('engine lifecycle coverage helpers', () => {
       createLifecycleCallbacks() as never,
     );
 
-    expect(prepared.shouldPersistPreparedState).toBe(true);
-    expect(prepared.checkpoint).toEqual(
-      expect.objectContaining({ locals: { migrated: true }, version: '2' }),
-    );
-    expect(prepared.state).toEqual(
-      expect.objectContaining({
-        updatedAt: 30_000,
-        versionTuple: { workflowVersion: '2' },
-      }),
-    );
-    expect(prepared.state.versionTuple.agentVersion).toBeUndefined();
-    expect(prepared.state.versionTuple.toolVersions).toBeUndefined();
+    expect(prepared.shouldPersistPreparedState).toBe(false);
+    expect(prepared.checkpoint).toBe(checkpoint);
+    expect(prepared.state).toBe(state);
+    expect(prepared.versionTuple).toEqual({ workflowVersion: '1' });
 
-    await prepareResumeState(
+    const preparedForResume = await prepareResumeState(
       internals as never,
       workflowId,
       state,
@@ -501,8 +487,9 @@ describe('engine lifecycle coverage helpers', () => {
       createLifecycleCallbacks() as never,
     );
 
-    expect(await storage.get(KEYS.workflow(workflowId))).not.toBeNull();
-    expect(await storage.get(KEYS.checkpoint(workflowId))).not.toBeNull();
+    expect(preparedForResume.serializedCheckpoint).toEqual(serializeCheckpoint(checkpoint));
+    expect(await storage.get(KEYS.workflow(workflowId))).toBeNull();
+    expect(await storage.get(KEYS.checkpoint(workflowId))).toBeNull();
   });
 
   it('throws version mismatch errors with tuple drift details', () => {

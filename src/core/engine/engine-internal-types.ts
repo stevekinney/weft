@@ -22,7 +22,6 @@ export interface RegistrationEntry {
   tags?: ReadonlyArray<string>;
   inputSchema?: DefinitionSchema;
   outputSchema?: DefinitionSchema;
-  migrate?: (checkpoint: unknown, fromVersion: string) => unknown;
   searchAttributes?: SearchAttributeSchema;
   retention?: NormalizedRetentionPolicy;
   constraints?: ConstraintDefinition[];

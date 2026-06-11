@@ -119,24 +119,24 @@ engine.register(
 );
 ```
 
-When you need versioning or migration support, pass them as builder options.
+When you need a recovery boundary for a workflow definition, pass a `version`
+builder option.
 
 ```typescript partial
 engine.register(
   workflow({
     name: 'order',
     version: '2',
-    migrate: (checkpoint, fromVersion) => {
-      // Transform checkpoint data from an older version
-      return checkpoint;
-    },
   }).execute(async function* (ctx, input) {
     // ...
   }),
 );
 ```
 
-The `version` string tags every checkpoint so that Weft knows which schema produced it. The optional `migrate` function transforms old checkpoints to the current shape when a workflow resumes after a code deploy.
+The `version` string tags every checkpoint so that Weft knows which workflow
+definition produced it. Recovery rejects a stored checkpoint when the registered
+version differs, which prevents a new handler from silently resuming state it may
+not understand.
 
 The builder also accepts `retention` (how long to keep terminal workflow state) and `constraints` (resource-level execution limits) as options, and exposes a chained `.searchAttributes(schema)` method to declare indexed attributes for this workflow type. See the [search attributes guide](./search-attributes.md) for `searchAttributes` usage.
 

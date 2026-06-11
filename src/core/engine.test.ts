@@ -39,7 +39,6 @@ import {
 } from './persisted-data-incompatible-error.ts';
 import { WorkflowTimeoutError } from './timeouts.ts';
 import type {
-  Checkpoint,
   DefinitionSchema,
   TimerEntry,
   WorkerOutboundMessage,
@@ -1187,7 +1186,7 @@ describe('Engine', () => {
     await flush();
 
     // Graft a flat tuple whose agent/tool versions drift from the registration
-    // (which declares none) and provide no `migrate`, so recovery must reject it.
+    // (which declares none), so recovery must reject it.
     const persisted = decode((await storage.get(KEYS.workflow(workflowId)))!) as Record<
       string,
       unknown
@@ -1205,13 +1204,12 @@ describe('Engine', () => {
     engine2[Symbol.dispose]();
   });
 
-  it('recoverAll() migrates checkpoint state across a workflow version bump and resumes', async () => {
+  it('recoverAll() rejects checkpoint state from a different workflow version', async () => {
     const storage = new MemoryStorage();
-    const workflowId = 'version-migration-recovery';
-    const migrationCalls: Array<{ fromVersion: string; step: number }> = [];
+    const workflowId = 'version-bump-recovery-rejected';
 
     const versionedWorkflowV1 = workflow({
-      name: 'version-migration-workflow',
+      name: 'version-bump-workflow',
       version: '1.0.0',
     }).execute(async function* (ctx: WorkflowContext, input: { prefix: string }) {
       ctx.expose({ phase: () => 'waiting' });
@@ -1220,19 +1218,8 @@ describe('Engine', () => {
     });
 
     const versionedWorkflowV2 = workflow({
-      name: 'version-migration-workflow',
+      name: 'version-bump-workflow',
       version: '2.0.0',
-      migrate: (checkpoint, fromVersion) => {
-        const typedCheckpoint = checkpoint as Checkpoint;
-        migrationCalls.push({ fromVersion, step: typedCheckpoint.step });
-        return {
-          ...typedCheckpoint,
-          locals: {
-            ...typedCheckpoint.locals,
-            migratedBy: 'version-migration-workflow@2.0.0',
-          },
-        };
-      },
     }).execute(async function* (ctx: WorkflowContext, input: { prefix: string }) {
       ctx.expose({ phase: () => 'waiting' });
       const value = yield* ctx.waitForSignal<string>('continue');
@@ -1241,41 +1228,18 @@ describe('Engine', () => {
 
     const engine1 = new Engine({ storage });
     engine1.register(versionedWorkflowV1);
-    await engine1.start('version-migration-workflow', { prefix: 'ready' }, { id: workflowId });
+    await engine1.start('version-bump-workflow', { prefix: 'ready' }, { id: workflowId });
     await flush();
     engine1[Symbol.dispose]();
     await flush();
 
     const engine2 = new Engine({ storage });
     engine2.register(versionedWorkflowV2);
-    const recoveredHandles = await engine2.recoverAll();
-    await flush();
+    await expect(engine2.recoverAll()).rejects.toThrow('Version mismatch');
 
-    expect(recoveredHandles).toHaveLength(1);
-    expect(migrationCalls).toEqual([{ fromVersion: '1.0.0', step: 1 }]);
-
-    const migratedCheckpoint = deserializeCheckpoint(
-      (await storage.get(KEYS.checkpoint(workflowId)))!,
-    );
-    expect(migratedCheckpoint.version).toBe('2.0.0');
-    expect(migratedCheckpoint.locals['migratedBy']).toBe('version-migration-workflow@2.0.0');
-    expect(migratedCheckpoint.accumulatedResults).toEqual([]);
-
-    const migratedState = decode((await storage.get(KEYS.workflow(workflowId)))!) as WorkflowState;
-    expect(migratedState.versionTuple.workflowVersion).toBe('2.0.0');
-    expect(await engine2.query(workflowId, 'phase')).toBe('waiting');
-    expect(engine2[ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING]()).toBe(1);
-
-    await withTimeout(
-      engine2.signal(workflowId, 'continue', 'go'),
-      500,
-      'version migration signal',
-    );
-    await flush();
-    expect(await engine2.get(workflowId)).toMatchObject({ status: 'completed' });
-    await expect(
-      withTimeout(recoveredHandles[0]!.result(), 500, 'version migration result'),
-    ).resolves.toBe('v2:ready:go');
+    const checkpoint = deserializeCheckpoint((await storage.get(KEYS.checkpoint(workflowId)))!);
+    expect(checkpoint.version).toBe('1.0.0');
+    expect(checkpoint.accumulatedResults).toEqual([]);
 
     engine2[Symbol.dispose]();
   });

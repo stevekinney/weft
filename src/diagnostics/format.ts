@@ -213,7 +213,6 @@ export function formatVersionCheckReport(report: VersionCheckReport): string {
     );
     lines.push(`  ${typeReport.runningCount} running workflows`);
     lines.push(`  Compatibility: ${typeReport.compatibility}`);
-    lines.push(`  Migration: ${typeReport.hasMigration ? 'provided' : 'not provided'}`);
     lines.push('');
   }
 
@@ -222,11 +221,8 @@ export function formatVersionCheckReport(report: VersionCheckReport): string {
     case 'safe':
       lines.push(`Result: ${color.green('Safe to deploy.')}`);
       break;
-    case 'needs-migration':
-      lines.push(`Result: ${color.yellow('Needs migration. Migration functions provided.')}`);
-      break;
     case 'unsafe':
-      lines.push(`Result: ${color.red('UNSAFE: missing migration functions.')}`);
+      lines.push(`Result: ${color.red('UNSAFE: version mismatches found.')}`);
       break;
   }
 

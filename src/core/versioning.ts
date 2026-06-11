@@ -1,15 +1,12 @@
 /**
- * Workflow version comparison and checkpoint migration.
+ * Workflow version comparison and checkpoint diagnostics.
  *
  * Provides utilities for detecting version mismatches between stored
- * and registered workflow definitions, running checkpoint migrations,
- * and building atomic batch operations for version updates.
+ * and registered workflow definitions.
  *
  * @module versioning
  */
 
-import type { BatchOperation } from '../storage/interface.ts';
-import { KEYS } from '../storage/interface.ts';
 import { WeftError } from './weft-error.ts';
 import type { WorkflowVersionDiff } from './workflow-version-tuple.ts';
 import { formatWorkflowVersionDiff } from './workflow-version-tuple.ts';
@@ -25,7 +22,7 @@ export const DEFAULT_WORKFLOW_VERSION = '0.0.0';
 // Types
 // ---------------------------------------------------------------------------
 
-export type VersionCompatibility = 'compatible' | 'needs-migration' | 'incompatible';
+export type VersionCompatibility = 'compatible' | 'incompatible';
 
 // ---------------------------------------------------------------------------
 // Version comparison
@@ -35,82 +32,26 @@ export type VersionCompatibility = 'compatible' | 'needs-migration' | 'incompati
  * Compare a stored workflow version with the currently registered version.
  *
  * - `"compatible"` — versions match; no action needed.
- * - `"needs-migration"` — versions differ and a migration function is available.
- * - `"incompatible"` — versions differ and no migration is available; the engine
- *   will throw a {@link VersionMismatchError} instead of resuming silently.
+ * - `"incompatible"` — versions differ; the engine will throw a
+ *   {@link VersionMismatchError} instead of resuming silently.
  *
  * @example
  * ```ts
  * import { checkVersionCompatibility } from '@lostgradient/weft';
  *
- * console.log(checkVersionCompatibility('1.0.0', '1.0.0', false)); // 'compatible'
- * console.log(checkVersionCompatibility('1.0.0', '2.0.0', true));  // 'needs-migration'
- * console.log(checkVersionCompatibility('1.0.0', '2.0.0', false)); // 'incompatible'
+ * console.log(checkVersionCompatibility('1.0.0', '1.0.0')); // 'compatible'
+ * console.log(checkVersionCompatibility('1.0.0', '2.0.0')); // 'incompatible'
  * ```
  */
 export function checkVersionCompatibility(
   storedVersion: string,
   registeredVersion: string,
-  hasMigration: boolean,
 ): VersionCompatibility {
   if (storedVersion === registeredVersion) {
     return 'compatible';
   }
 
-  return hasMigration ? 'needs-migration' : 'incompatible';
-}
-
-// ---------------------------------------------------------------------------
-// Checkpoint migration
-// ---------------------------------------------------------------------------
-
-/**
- * Run a migration function on checkpoint data, transforming it from one
- * version to another.
- *
- * The caller is responsible for serializing the result back to bytes if needed.
- *
- * @example
- * ```ts
- * import { migrateCheckpoint } from '@lostgradient/weft';
- *
- * const oldData = { step: 0, locals: { counter: 1 }, version: '1.0.0' };
- * const migrated = migrateCheckpoint(oldData, '1.0.0', '2.0.0', (data) => {
- *   const d = data as typeof oldData;
- *   return { ...d, locals: { ...d.locals, newField: 'default' } };
- * });
- * void migrated;
- * ```
- */
-export function migrateCheckpoint(
-  checkpointData: unknown,
-  fromVersion: string,
-  _toVersion: string,
-  migrate: (checkpoint: unknown, fromVersion: string) => unknown,
-): unknown {
-  return migrate(checkpointData, fromVersion);
-}
-
-// ---------------------------------------------------------------------------
-// Batch operations for atomic version updates
-// ---------------------------------------------------------------------------
-
-/**
- * Build batch operations that atomically update the checkpoint and workflow
- * state after a successful migration.
- *
- * The returned operations are suitable for passing to `Storage.batch()`.
- */
-export function buildVersionUpdateOperations(
-  workflowId: string,
-  newCheckpointBytes: Uint8Array,
-  _newVersion: string,
-  workflowStateBytes: Uint8Array,
-): BatchOperation[] {
-  return [
-    { type: 'put', key: KEYS.checkpoint(workflowId), value: newCheckpointBytes },
-    { type: 'put', key: KEYS.workflow(workflowId), value: workflowStateBytes },
-  ];
+  return 'incompatible';
 }
 
 // ---------------------------------------------------------------------------
@@ -263,7 +204,7 @@ export type ShapeDiffOptions = {
 
 /**
  * Thrown when a workflow's stored version does not match its registered
- * version and no migration path is available or the migration failed.
+ * version.
  *
  * When shape information is provided, the error message includes a
  * field-level diff describing exactly which fields changed.

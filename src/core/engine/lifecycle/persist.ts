@@ -1,19 +1,11 @@
-import { serializeCheckpoint } from '../../checkpoint.ts';
-import { encode } from '../../codec.ts';
 import type { Checkpoint, WorkflowState } from '../../types.ts';
-import {
-  VersionMismatchError,
-  buildVersionUpdateOperations,
-  checkVersionCompatibility,
-  migrateCheckpoint,
-} from '../../versioning.ts';
+import { VersionMismatchError, checkVersionCompatibility } from '../../versioning.ts';
 import {
   diffWorkflowVersionTuples,
   type WorkflowVersionDiff,
   type WorkflowVersionTuple,
 } from '../../workflow-version-tuple.ts';
 import type { EngineInternals } from '../internals.ts';
-import { buildWorkflowVisibilityIndexTransition } from '../workflow-indexes.ts';
 import { type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
 
 /** Build a {@link WorkflowVersionTuple} from a {@link RegistrationEntry}. */
@@ -61,11 +53,7 @@ export function derivePreparedExecutionState(
   versionTuple: WorkflowVersionTuple;
   shouldPersistPreparedState: boolean;
 } {
-  const compatibility = checkVersionCompatibility(
-    checkpoint.version,
-    registration.version,
-    !!registration.migrate,
-  );
+  const compatibility = checkVersionCompatibility(checkpoint.version, registration.version);
   const registeredVersionTuple = createWorkflowVersionTuple(internals, registration, callbacks);
   const versionDiff = diffWorkflowVersionTuples(
     workflowVersionTupleFromState(internals, state, callbacks),
@@ -76,37 +64,15 @@ export function derivePreparedExecutionState(
     versionDiff.agentVersion !== undefined ||
     versionDiff.toolVersions !== undefined;
 
-  if (compatibility === 'incompatible' || (hasVersionTupleDrift && !registration.migrate)) {
+  if (compatibility === 'incompatible' || hasVersionTupleDrift) {
     throwVersionMismatch(internals, workflowId, state, registration, versionDiff, callbacks);
   }
 
-  let preparedState = state;
-  let preparedCheckpoint = checkpoint;
-  let shouldPersistPreparedState = false;
-
-  if ((compatibility === 'needs-migration' || hasVersionTupleDrift) && registration.migrate) {
-    const migrated = migrateCheckpoint(
-      checkpoint,
-      checkpoint.version,
-      registration.version,
-      registration.migrate,
-    ) as Checkpoint;
-    migrated.version = registeredVersionTuple.workflowVersion;
-    preparedCheckpoint = migrated;
-    preparedState = workflowStateWithVersionTuple(
-      internals,
-      state,
-      registeredVersionTuple,
-      callbacks,
-    );
-    shouldPersistPreparedState = true;
-  }
-
   return {
-    state: preparedState,
-    checkpoint: preparedCheckpoint,
+    state,
+    checkpoint,
     versionTuple: registeredVersionTuple,
-    shouldPersistPreparedState,
+    shouldPersistPreparedState: false,
   };
 }
 
@@ -133,29 +99,10 @@ export async function prepareResumeState(
     callbacks,
   );
 
-  if (preparedExecutionState.shouldPersistPreparedState) {
-    const versionVisibilityOperations = buildWorkflowVisibilityIndexTransition(
-      workflowId,
-      state,
-      preparedExecutionState.state,
-    ).batchOps;
-    await internals.storage.batch([
-      ...buildVersionUpdateOperations(
-        workflowId,
-        serializeCheckpoint(preparedExecutionState.checkpoint),
-        preparedExecutionState.versionTuple.workflowVersion,
-        encode(preparedExecutionState.state),
-      ),
-      ...versionVisibilityOperations,
-    ]);
-  }
-
   return {
     state: preparedExecutionState.state,
     checkpoint: preparedExecutionState.checkpoint,
-    serializedCheckpoint: preparedExecutionState.shouldPersistPreparedState
-      ? serializeCheckpoint(preparedExecutionState.checkpoint)
-      : checkpointBytes,
+    serializedCheckpoint: checkpointBytes,
     versionTuple: preparedExecutionState.versionTuple,
   };
 }

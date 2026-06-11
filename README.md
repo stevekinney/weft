@@ -481,7 +481,7 @@ Each `ctx.step()` is a checkpoint boundary. Completed steps replay from storage 
 | Activity invocation    | `proxyActivities()` + type import             | `yield* ctx.run('activityName', input)` (declared in `.activities({...})`) |
 | Timer                  | Deterministic `workflow.sleep()`              | `yield* ctx.sleep("1 hour")`                                               |
 | Signal                 | `setHandler` + `condition`                    | `yield* ctx.waitForSignal(name)`                                           |
-| Versioning             | `patched()` / `deprecatePatch()`              | Deploy new code (migration optional)                                       |
+| Versioning             | `patched()` / `deprecatePatch()`              | Stored and registered versions must match during recovery                  |
 | Long-running workflows | `continueAsNew()`                             | None needed (checkpoint size is bounded by live state, not history length) |
 | Dev environment        | Docker Compose + Temporal server              | `bun add @lostgradient/weft`                                               |
 | Bundling               | Webpack for workflow sandbox                  | None                                                                       |

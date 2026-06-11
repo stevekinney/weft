@@ -10,7 +10,7 @@ Here's the mental model comparison for someone writing their first workflow.
 | Activity invocation                   | `proxyActivities()` + type import         | `yield* ctx.run('activityName', input)`                                            |
 | Timer                                 | Deterministic `workflow.sleep()`          | `yield* ctx.sleep("1 hour")`                                                       |
 | Signal                                | `setHandler` + `condition`                | `yield* ctx.waitForSignal(name)`                                                   |
-| Versioning                            | `patched()` / `deprecatePatch()`          | Deploy new code (migration optional)                                               |
+| Versioning                            | `patched()` / `deprecatePatch()`          | Stored and registered versions must match during recovery                          |
 | Long-running workflows                | `continueAsNew()`                         | Nothing (checkpoints are fixed-size)                                               |
 | Dev environment                       | Docker Compose + Temporal server          | `bun add @lostgradient/weft`                                                       |
 | Bundling                              | Webpack for workflow sandbox              | None                                                                               |
@@ -47,7 +47,7 @@ In Temporal, you discover serialization problems at replay time in production. I
 
 **The Temporal problem.** Changing workflow code while workflows are in-flight requires either the `patched()` / `deprecatePatch()` API—which litters your code with version branches that never go away—or Worker Versioning, a whole deployment orchestration system. The Temporal docs themselves acknowledge this is complex enough that they deprecated their first versioning approach and replaced it in 2025.
 
-**The Weft answer.** Checkpointing means code before the current checkpoint never re-executes. Changing steps after the current checkpoint is inherently safe. Versioning only matters for the step you're currently on—and even then, the migration path is a pure data transformation on the checkpoint, not code-path branching.
+**The Weft answer.** Checkpointing means code before the current checkpoint never re-executes. Changing steps after the current checkpoint can be safe, but recovery still requires the stored workflow version to match the registered version. If they differ, Weft stops with `VersionMismatchError` instead of silently resuming state with code that may not understand it.
 
 ```typescript pseudocode
 // Temporal: version branches that accumulate forever
@@ -58,20 +58,11 @@ if (workflow.patched('v2-shipping')) {
 }
 // v3? Now you have TWO version branches. v4? Three. They never go away.
 
-// Weft: deploy new code. Old checkpoints migrate automatically.
-engine.register(
-  workflow({
-    name: 'order',
-    version: '2.0.0',
-    migrate: (checkpoint, fromVersion) => ({
-      ...checkpoint,
-      shippingOptions: { express: true },
-    }),
-  }).execute(orderWorkflow),
-);
+// Weft: pin the version and detect incompatible stored state before recovery.
+engine.register(workflow({ name: 'order', version: '2.0.0' }).execute(orderWorkflow));
 ```
 
-Weft's CLI also provides `weft version:check`, which analyzes registered workflows against the existing database and reports compatibility _before_ deployment—telling you exactly how many running workflows need migration and whether your migration function covers them. Installing `@lostgradient/weft` provides both `weft` and `weft-mcp`.
+Weft's CLI also provides `weft version:check`, which analyzes registered workflows against the existing database and reports compatibility _before_ deployment. Installing `@lostgradient/weft` provides both `weft` and `weft-mcp`.
 
 ## Steep learning curve
 

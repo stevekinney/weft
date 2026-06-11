@@ -69,7 +69,7 @@ static create<
 >
 ```
 
-Construct an engine, register any `activities` first, register every workflow in the `workflows` map, then run recovery by default. Pass `recover: false` for tests, `ScopedStorage` isolation, or pre-migration inspection. Map keys are validated against each definition's runtime `name` so an accidentally mismatched key fails during startup.
+Construct an engine, register any `activities` first, register every workflow in the `workflows` map, then run recovery by default. Pass `recover: false` for tests, `ScopedStorage` isolation, or explicit operator inspection. Map keys are validated against each definition's runtime `name` so an accidentally mismatched key fails during startup.
 
 TypeScript treats `Engine.create({ workflows: {} })` the same as omitting `workflows`: both return the default-registry engine type. A non-empty map narrows the returned engine type to those workflow definitions, so `engine.start(...)` autocompletes their names and checks their input/output types.
 
@@ -79,7 +79,7 @@ TypeScript treats `Engine.create({ workflows: {} })` the same as omitting `workf
 register(definition: WorkflowDefinition | ActivityDefinition): void
 ```
 
-Register a workflow or activity definition built with the chained builder API. Workflow definitions are produced by `workflow({...}).execute(handler)` and can carry execution metadata (`version`, `migrate`, retention) and catalog-neutral definition metadata (`description`, `tags`, `inputSchema`, `outputSchema`) as builder options, plus `.searchAttributes(...)` as a chained method.
+Register a workflow or activity definition built with the chained builder API. Workflow definitions are produced by `workflow({...}).execute(handler)` and can carry execution metadata (`version`, retention) and catalog-neutral definition metadata (`description`, `tags`, `inputSchema`, `outputSchema`) as builder options, plus `.searchAttributes(...)` as a chained method.
 
 The schema fields are introspection metadata. Core workflow registration validates their Standard Schema metadata shape, but workflow execution does not validate input or output from these fields unless an adapter explicitly opts into that validation.
 
@@ -580,7 +580,6 @@ interface WorkflowRegistration<TInput = unknown, TOutput = unknown> {
   inputSchema?: DefinitionSchema<unknown, TInput>;
   outputSchema?: DefinitionSchema<unknown, TOutput>;
   handler: WorkflowFunction<TInput, TOutput>;
-  migrate?: (checkpoint: unknown, fromVersion: string) => unknown;
   searchAttributes?: SearchAttributeSchema;
 }
 ```

@@ -1,137 +1,68 @@
 # Workflow Versioning
 
-You've shipped a new version of your order workflow, but there are 200 orders mid-flight using the old code. What happens when they resume? In Temporal, you'd be adding version gates and deterministic code-path branches. In Weft, you write a data migration function and move on.
+Workflow versions are a recovery guard. When a workflow starts, Weft records the
+registered workflow version in the workflow state and checkpoint. During
+recovery, Weft compares the stored version with the currently registered
+version.
 
-## Why this is simpler
+If the versions match, recovery continues. If they differ, recovery stops with a
+`VersionMismatchError` so the operator can decide how to handle the in-flight
+workflow deliberately.
 
-Weft resumes from checkpoints, not by replaying event histories. The checkpoint captures the complete state at the pause point—local variables, step index, search attributes. When a workflow resumes, it picks up from that snapshot. The only compatibility question is: "Can my new code handle this checkpoint's shape at the step where execution paused?"
+## Version Pinning
 
-No replay means no code-path determinism requirement. No `getVersion()` gates. No patching API. Migration is a pure data transformation.
-
-## Version pinning
-
-When `engine.start()` creates a workflow, it records the version of the currently registered handler in the workflow state. The default version is `'1'` if you don't specify one.
+The default workflow version is `'1'` when you do not specify one during
+registration.
 
 ```typescript partial
-// Shorthand: version defaults to '1'
 engine.register(workflow({ name: 'order' }).execute(orderWorkflow));
+```
 
-// Explicit version
+Set an explicit version when you want a recovery boundary around a workflow
+definition:
+
+```typescript partial
 engine.register(workflow({ name: 'order', version: '2.0.0' }).execute(orderWorkflowV2));
 ```
 
-The version string is stored alongside the checkpoint. On resume, the engine compares the stored version against the currently registered version.
+The version string is stored with the checkpoint. A later process that registers
+`order` with a different version cannot silently resume that checkpoint.
 
-## The `checkVersionCompatibility()` function
+## Compatibility Check
 
-The comparison logic is straightforward:
+`checkVersionCompatibility()` has two outcomes:
 
-- **`'compatible'`**: versions match. Resume normally.
-- **`'needs-migration'`**: versions differ and a migration function is registered. Run the migration first.
-- **`'incompatible'`**: versions differ and no migration function is registered. The engine throws `VersionMismatchError` rather than resuming.
-
-## Writing a migration
-
-The `migrate` function receives the checkpoint data and the version it came from. It returns the transformed checkpoint.
+- **`'compatible'`**: versions match and recovery can continue.
+- **`'incompatible'`**: versions differ and recovery must stop.
 
 ```typescript partial
-engine.register(
-  workflow({
-    name: 'order',
-    version: '2.0.0',
-    migrate(checkpoint, fromVersion) {
-      if (fromVersion.startsWith('1.')) {
-        // V1 stored `address` as a string; V2 uses an Address object
-        return {
-          ...checkpoint,
-          address: parseAddress(checkpoint.address),
-        };
-      }
-      return checkpoint;
-    },
-  }).execute(orderWorkflowV2),
-);
+import { checkVersionCompatibility } from '@lostgradient/weft';
+
+checkVersionCompatibility('1.0.0', '1.0.0'); // 'compatible'
+checkVersionCompatibility('1.0.0', '2.0.0'); // 'incompatible'
 ```
 
-The `migrateCheckpoint()` utility runs this function internally:
+## Handling Mismatches
+
+When recovery sees an incompatible version, it throws `VersionMismatchError`.
+The error carries the workflow id, workflow type, stored version, registered
+version, and optional shape/version-drift details.
 
 ```typescript partial
-const migrated = migrateCheckpoint(
-  checkpointData,
-  storedVersion,
-  registeredVersion,
-  migrationFunction,
-);
-```
+import { VersionMismatchError } from '@lostgradient/weft';
 
-After a successful migration, the updated checkpoint and new version are written to storage atomically via `buildVersionUpdateOperations()`. Both the checkpoint bytes and the workflow state blob are updated in a single `batch()` call. No window for inconsistency.
-
-## When migration fails
-
-If your new code can't handle the checkpoint shape and no migration was provided (or the migration throws), the workflow fails with a `VersionMismatchError`. The error includes everything you need to diagnose the problem:
-
-```typescript partial
 try {
-  await handle.result();
+  await engine.recoverAll();
 } catch (error) {
   if (error instanceof VersionMismatchError) {
-    console.log(error.workflowId); // 'order-abc-123'
-    console.log(error.workflowType); // 'order'
-    console.log(error.storedVersion); // '1.0.0'
-    console.log(error.registeredVersion); // '2.0.0'
-    console.log(error.fieldDiffs); // populated when checkpoint shape drifted
-    console.log(error.versionDiff); // workflow version delta
+    console.log(error.workflowId);
+    console.log(error.workflowType);
+    console.log(error.storedVersion);
+    console.log(error.registeredVersion);
   }
 }
 ```
 
-## Practical patterns
-
-For simple changes where the checkpoint shape didn't change—you only modified logic after the current pause point—skip the migration entirely:
-
-```typescript partial
-engine.register(
-  workflow({ name: 'order', version: '1.1.0' }).execute(orderWorkflowV1WithBugfix),
-  // No migrate needed
-);
-```
-
-For additive changes where you need a new field with a default:
-
-```typescript partial
-engine.register(
-  workflow({
-    name: 'order',
-    version: '2.0.0',
-    migrate(checkpoint, fromVersion) {
-      if (fromVersion.startsWith('1.')) {
-        return { ...checkpoint, region: 'us-east-1' };
-      }
-      return checkpoint;
-    },
-  }).execute(orderWorkflowV2),
-);
-```
-
-For breaking changes across multiple major versions, chain the transformations:
-
-```typescript partial
-engine.register(
-  workflow({
-    name: 'order',
-    version: '3.0.0',
-    migrate(checkpoint, fromVersion) {
-      let migrated = checkpoint;
-      if (fromVersion.startsWith('1.')) {
-        migrated = { ...migrated, address: parseAddress(migrated.address) };
-      }
-      if (fromVersion.startsWith('1.') || fromVersion.startsWith('2.')) {
-        migrated = { ...migrated, currency: 'USD' };
-      }
-      return migrated;
-    },
-  }).execute(orderWorkflowV3),
-);
-```
-
-The beauty of this approach is that you think about data shapes, not execution paths. "What does my checkpoint look like, and what does my new code expect?" is a much simpler question than "Is my new code deterministically compatible with every possible event history?"
+Use `weft version:check` before deployment to see active workflow types whose
+stored versions do not match the code you are about to run. Resolve those runs
+explicitly before deploying the new workflow version.

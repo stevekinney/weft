@@ -217,7 +217,6 @@ describe('formatVersionCheckReport', () => {
           registeredVersion: '1.0.0',
           runningCount: 5,
           compatibility: 'compatible',
-          hasMigration: false,
         },
       ],
       overallVerdict: 'safe',
@@ -231,31 +230,7 @@ describe('formatVersionCheckReport', () => {
     expect(output).toContain('Safe to deploy');
   });
 
-  it('shows "Needs migration" when migrations are needed', () => {
-    const report: VersionCheckReport = {
-      workflowTypes: [
-        {
-          type: 'order',
-          storedVersion: '1.0.0',
-          registeredVersion: '2.0.0',
-          runningCount: 3,
-          compatibility: 'needs-migration',
-          hasMigration: true,
-        },
-      ],
-      overallVerdict: 'needs-migration',
-    };
-
-    const output = formatVersionCheckReport(report);
-
-    expect(output).toContain('order (1.0.0');
-    expect(output).toContain('2.0.0');
-    expect(output).toContain('needs-migration');
-    expect(output).toContain('provided');
-    expect(output).toContain('Needs migration');
-  });
-
-  it('shows "UNSAFE" when migration functions are missing', () => {
+  it('shows "UNSAFE" when versions are incompatible', () => {
     const report: VersionCheckReport = {
       workflowTypes: [
         {
@@ -264,7 +239,6 @@ describe('formatVersionCheckReport', () => {
           registeredVersion: '3.0.0',
           runningCount: 2,
           compatibility: 'incompatible',
-          hasMigration: false,
         },
       ],
       overallVerdict: 'unsafe',
@@ -273,7 +247,7 @@ describe('formatVersionCheckReport', () => {
     const output = formatVersionCheckReport(report);
 
     expect(output).toContain('UNSAFE');
-    expect(output).toContain('not provided');
+    expect(output).toContain('version mismatches found');
   });
 
   it('shows "Safe to deploy" for empty workflow types', () => {

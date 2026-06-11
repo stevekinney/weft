@@ -65,7 +65,7 @@ export class WorkflowBuilderError extends WeftError<'WorkflowBuilderError'> {
 /**
  * Initial options accepted by the builder-form `workflow({ name, ... })` call.
  * Extra metadata fields (`version`, `description`, `tags`, `retention`,
- * `inputSchema`, `outputSchema`, `migrate`, `constraints`) are passed through
+ * `inputSchema`, `outputSchema`, `constraints`) are passed through
  * onto the returned {@link BuiltWorkflowDefinition} when `.execute(fn)` runs.
  * Only `name` is required.
  *
@@ -88,7 +88,6 @@ export interface WorkflowBuilderOptions<TName extends string = string> {
   tags?: ReadonlyArray<string>;
   retention?: RetentionPolicy;
   constraints?: ConstraintDefinition[];
-  migrate?: (checkpoint: unknown, fromVersion: string) => unknown;
   inputSchema?: DefinitionSchema<unknown, unknown>;
   outputSchema?: DefinitionSchema<unknown, unknown>;
   /**
@@ -238,7 +237,6 @@ export class WorkflowBuilderImpl<TName extends string> {
       ...(this.#options.constraints !== undefined
         ? { constraints: this.#options.constraints }
         : {}),
-      ...(this.#options.migrate !== undefined ? { migrate: this.#options.migrate } : {}),
       ...(this.#options.inputSchema !== undefined
         ? { inputSchema: this.#options.inputSchema }
         : {}),

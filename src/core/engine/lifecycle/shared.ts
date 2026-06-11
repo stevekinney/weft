@@ -32,7 +32,7 @@ export const EMPTY_STORAGE_VALUE = new Uint8Array(0);
 export type RecoverAllOptions = {
   /**
    * Skip stored running workflows whose type is not registered. Use only for
-   * rolling deploys or explicit storage migrations.
+   * rolling deploys or explicit operator storage repair.
    */
   acknowledgeUnknownWorkflowTypes?: boolean;
 };
