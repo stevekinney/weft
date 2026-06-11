@@ -1,5 +1,4 @@
 import type { BatchOperation } from '../../../storage/interface.ts';
-import { KEYS } from '../../../storage/interface.ts';
 import { createCheckpoint } from '../../checkpoint.ts';
 import { assertPayloadWithinLimit } from '../../payload-size.ts';
 import { normalizeStorageTimestamp } from '../../scheduler.ts';
@@ -20,15 +19,12 @@ import type {
   WorkflowState,
 } from '../../types.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
-import { purgeWorkflow, type CleanupWaiters } from '../bulk-operations-purge.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { WorkflowAlreadyExistsError, WorkflowNotRegisteredError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { createDelayedStartTimerEntry } from '../operations-time.ts';
 import { selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
-import { cleanupWaiters } from '../termination/cleanup.ts';
-import { decodeWorkflowState, isTerminalWorkflowStatus } from '../validation.ts';
 import { createWorkflowVersionTuple } from './persist.ts';
 import {
   createWorkflowHandle,
@@ -42,6 +38,10 @@ import {
   beginExecutionAwaitingLiveness,
   runWorkflowStartInterceptor,
 } from './start-exec.ts';
+import {
+  prepareTerminalRunPurge,
+  resolveTerminalConflictForRestart,
+} from './start-terminal-conflict-purge.ts';
 
 export async function start(
   internals: EngineInternals,
@@ -128,63 +128,6 @@ function assertServicesSupportedForMode(
   }
 }
 
-/**
- * Decide what a caller-supplied workflow id that already has a persisted record
- * means, WITHOUT performing any destructive action. Only invoked when the caller
- * supplied the id — a generated v4 UUID is effectively unique, so skipping this
- * read keeps generated-id starts on the single-write hot path.
- *
- * - default (`'error'`): throw {@link WorkflowAlreadyExistsError} (the existing
- *   contract — a duplicate id is always a conflict).
- * - `'start-new'` on a **terminal** run: return that run's {@link WorkflowState}
- *   so the caller can purge it *after* all deterministic new-run validation has
- *   succeeded (see {@link startWorkflow}). This keeps the destructive purge as
- *   the last possible step before the atomic create commit, so a restart that is
- *   rejected by any later validation (payload size, execution-timeout overflow, a
- *   start interceptor throwing) leaves the prior terminal run intact.
- * - `'start-new'` on a **non-terminal** run: throw
- *   {@link WorkflowAlreadyExistsError} — `'start-new'` never displaces a live run.
- *
- * Returns `null` when there is no existing record (the create proceeds normally).
- */
-async function resolveTerminalConflictForRestart(
-  internals: EngineInternals,
-  workflowId: string,
-  options: StartWorkflowOptions | undefined,
-): Promise<WorkflowState | null> {
-  const existingBytes = await internals.storage.get(KEYS.workflow(workflowId));
-  if (existingBytes === null) {
-    return null;
-  }
-  if (options?.onTerminalConflict !== 'start-new') {
-    throw new WorkflowAlreadyExistsError(workflowId);
-  }
-  const existingState = decodeWorkflowState(existingBytes);
-  if (!isTerminalWorkflowStatus(existingState.status)) {
-    throw new WorkflowAlreadyExistsError(workflowId);
-  }
-  return existingState;
-}
-
-/**
- * Purge a prior terminal run so its id can be reused by a `'start-new'` restart.
- * `purgeWorkflow` is the single source of truth for removing every record a
- * workflow id owns (state, checkpoints, timeline, events, signals, indexes, and
- * the in-memory waiters/maps). `cleanupWaiters` only needs `swallowPromiseRejection`,
- * which `LifecycleCallbacks` already exposes — no termination-callback wiring.
- */
-async function purgeForRestart(
-  internals: EngineInternals,
-  state: WorkflowState,
-  callbacks: LifecycleCallbacks,
-): Promise<void> {
-  const cleanupWaitersForStart: CleanupWaiters = (id) =>
-    cleanupWaiters(internals, id, {
-      swallowPromiseRejection: callbacks.swallowPromiseRejection,
-    });
-  await purgeWorkflow(internals, state, cleanupWaitersForStart);
-}
-
 export async function startWorkflow(
   internals: EngineInternals,
   type: string,
@@ -264,13 +207,17 @@ export async function startWorkflow(
 
     // Last possible moment before the create commit, and after every throwing
     // build step above (version tuple, state/deadline, checkpoint, start
-    // interceptor). Purging here means a `'start-new'` restart rejected by any of
-    // those leaves the prior terminal run intact. It also runs BEFORE the new
-    // run's in-memory maps are written below, so it sweeps the old run's
-    // bookkeeping without clobbering the fresh entries.
-    if (terminalRunToPurge !== null) {
-      await purgeForRestart(internals, terminalRunToPurge, callbacks);
-    }
+    // interceptor). Preparing here means a `'start-new'` restart rejected by any of
+    // those leaves the prior terminal run intact. This clears the OLD run's
+    // in-memory caches BEFORE the new run's maps are written below (so the clear
+    // can't wipe fresh entries) but does NOT commit the destructive storage
+    // delete — that is folded into the atomic create batch below as
+    // `purgeDeleteOperations`, so purge-and-recreate either both happen or neither
+    // does. A create-batch failure can no longer strand the id with no record.
+    const purgeDeleteOperations =
+      terminalRunToPurge !== null
+        ? await prepareTerminalRunPurge(internals, terminalRunToPurge, callbacks)
+        : undefined;
 
     internals.checkpoints.set(workflowId, checkpoint);
     setWorkflowStartHeaders(internals, workflowId, workflowStartHeaders, callbacks);
@@ -279,9 +226,10 @@ export async function startWorkflow(
     internals.workflowVersionTuples.set(workflowId, versionTuple);
 
     // Build the create batch (folding in the id-dependent idempotency mapping /
-    // signal) and commit it, gated on any idempotency preconditions. Throws
-    // StartIdempotencyRaceLostError when a concurrent same-key caller won the CAS,
-    // which the `finally` rollback below unwinds for the wrapper to handle.
+    // signal, and prepending any restart purge deletes) and commit it, gated on
+    // any idempotency preconditions. Throws StartIdempotencyRaceLostError when a
+    // concurrent same-key caller won the CAS, which the `finally` rollback below
+    // unwinds for the wrapper to handle.
     await buildAndCommitStartBatch(
       {
         internals,
@@ -294,6 +242,7 @@ export async function startWorkflow(
         persistedWorkflowStartHeaders,
         additionalStartOperations,
         callbacks,
+        purgeDeleteOperations,
       },
       buildIdempotentStartOperations,
     );

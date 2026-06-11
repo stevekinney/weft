@@ -346,6 +346,68 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
 
       engine[Symbol.dispose]();
     });
+
+    it('a create-batch commit failure leaves the prior terminal run fully intact', async () => {
+      // The Cursor Bugbot finding: previously the purge committed its own batch
+      // BEFORE the create batch, so a failed create stranded the id with no record.
+      // Now purge+create are ONE batch — a commit failure rolls back both, so the
+      // prior run survives. Inject a one-shot failure on the create commit (the
+      // restart's batch carries the new run's `wf:{id}` state put) and assert the
+      // prior terminal run is untouched.
+      const backing = new MemoryStorage();
+      let failNextStatePut = false;
+      // Wrap only `batch`; delegate every other method to `backing`. Bind each
+      // method to `backing` in the trap — MemoryStorage uses private fields, so a
+      // method invoked with the Proxy as `this` would throw. The create commit
+      // carries the new run's `wf:commit-fail` state put — fail that one batch once
+      // to simulate a mid-commit storage error.
+      const storage: Storage = new Proxy(backing, {
+        get(target, property, receiver) {
+          if (property === 'batch') {
+            return async (operations: Parameters<Storage['batch']>[0]) => {
+              if (
+                failNextStatePut &&
+                operations.some(
+                  (operation) =>
+                    operation.type === 'put' && operation.key === KEYS.workflow('commit-fail'),
+                )
+              ) {
+                failNextStatePut = false;
+                throw new Error('injected create-batch failure');
+              }
+              return target.batch(operations);
+            };
+          }
+          const value = Reflect.get(target, property, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+      const engine = createEngine(storage);
+
+      const first = await engine.start('echo-input', 'survivor', {
+        id: 'commit-fail',
+        defer: false,
+      });
+      expect(await first.result()).toBe('survivor');
+
+      failNextStatePut = true;
+      await expect(
+        engine.start('echo-input', 'replacement', {
+          id: 'commit-fail',
+          onTerminalConflict: 'start-new',
+          defer: false,
+        }),
+      ).rejects.toThrow('injected create-batch failure');
+
+      // Prior run intact: the purge delete that would have removed it was in the
+      // SAME batch as the failed create put, so it never committed. Reads rebuild
+      // from storage even though the restart cleared the old run's in-memory caches.
+      const survivor = await engine.get('commit-fail');
+      expect(survivor?.status).toBe('completed');
+      expect(survivor?.input).toBe('survivor');
+
+      engine[Symbol.dispose]();
+    });
   });
 
   it('sweeps the prior run’s timeline keys so a reused id cannot read stale steps', async () => {
@@ -403,6 +465,46 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     expect(
       await countKeysWithPrefix(storage, KEYS.attributeIndex('customerId', 'acme', 'no-inherit')),
     ).toBe(0);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('commits the new run atomically: the overlapping state key carries the NEW run’s value', async () => {
+    // Discriminating test for the atomic purge+create fold. The purge delete-set
+    // and the create put-set OVERLAP on `wf:{id}` (the workflow state) and the
+    // checkpoint key. A non-atomic or wrongly-ordered batch (delete AFTER the put)
+    // would clobber the new run's state. Give the overlapping state key a DIFFERENT
+    // value old→new (a fresh input) so put-wins is distinguishable from delete-wins.
+    //
+    // The restart uses `defer: true` so the run parks at `pending` WITHOUT
+    // executing — the state read below reflects the START BATCH directly, before
+    // any workflow-completion commit could rewrite `wf:{id}`. (With `defer: false`
+    // the echo run completes immediately and that completion would re-establish
+    // `wf:{id}` with the new input even under a buggy delete-wins start batch,
+    // masking the ordering bug. Reading the parked state isolates the start batch.)
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+
+    const first = await engine.start('echo-input', 'old-input', {
+      id: 'atomic-restart',
+      defer: false,
+    });
+    expect(await first.result()).toBe('old-input');
+
+    await engine.start('echo-input', 'new-input', {
+      id: 'atomic-restart',
+      onTerminalConflict: 'start-new',
+      defer: true,
+    });
+
+    // The parked run's durable state is exactly what the start batch committed —
+    // the new run's `wf:{id}` put survived the same-key delete prepended ahead of
+    // it (put-wins). A delete-wins batch would leave no record (engine.get → null).
+    const state = await engine.get('atomic-restart');
+    expect(state?.input).toBe('new-input');
+    expect(state?.status).toBe('pending');
+    // The checkpoint key the start batch wrote survived the same-key delete too.
+    expect(await storage.get(KEYS.checkpoint('atomic-restart'))).not.toBeNull();
 
     engine[Symbol.dispose]();
   });

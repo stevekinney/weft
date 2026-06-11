@@ -78,6 +78,13 @@ export type StartBatchContext = {
   persistedWorkflowStartHeaders: Map<string, string> | undefined;
   additionalStartOperations: BatchOperation[] | undefined;
   callbacks: LifecycleCallbacks;
+  /**
+   * Storage deletes for a prior terminal run being displaced by an
+   * `onTerminalConflict: 'start-new'` restart. Prepended ahead of the create puts
+   * so purge-and-recreate commit as one atomic batch (see
+   * {@link buildStartBatchOperations}). Undefined for an ordinary start.
+   */
+  purgeDeleteOperations: BatchOperation[] | undefined;
 };
 
 /**
@@ -107,6 +114,7 @@ export async function buildAndCommitStartBatch(
     context.persistedWorkflowStartHeaders,
     mergeAdditionalStartOperations(context.additionalStartOperations, idempotent?.operations),
     context.callbacks,
+    context.purgeDeleteOperations,
   );
 
   const committed = await persistStartBatch(internals, startOperations, idempotent?.conditions);

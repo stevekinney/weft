@@ -1657,7 +1657,11 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
       lines: new Set([73, 74, 76, 77, 78, 166, 178, 180, 181, 182, 183, 184, 186, 187, 192, 197]),
     },
   ],
-  ['src/core/engine/bulk-operations-purge.ts', { lines: new Set([166, 214, 215, 216]) }],
+  // Lines 214-216 (the `pendingAsyncActivities` purge loop) moved to 254-256 when
+  // `purgeWorkflow`'s in-memory clears were extracted into the shared
+  // `clearPurgedWorkflowInMemoryState` helper for the atomic restart path; the code
+  // and its subprocess-only coverage are unchanged, only the line numbers shifted.
+  ['src/core/engine/bulk-operations-purge.ts', { lines: new Set([166, 254, 255, 256]) }],
   ['src/core/engine/construction.ts', { lines: new Set([97, 98, 99, 100, 101]) }],
   [
     // start-or-signal edges. Line 132 (startWithIdempotency rejecting an undefined
