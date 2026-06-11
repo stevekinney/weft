@@ -21,7 +21,7 @@ description: >-
 - Refactoring registry-driven generated clients, especially when JSON Schema shapes become shared aliases instead of inline object types.
 - Changing storage capability reports, reserved key prefixes, string KV import helpers, or application-facing wrappers that share a storage backend with the engine.
 - Adding or changing SQL-backed storage adapters such as `NeonStorage`, especially `TEXT COLLATE "C"` key ordering, opaque `BYTEA` value mapping, read-only query passthrough, and `SERIALIZABLE` compare-and-swap retries.
-- Adding or deleting reserved workflow metadata markers such as `wf-has-services:`; marker writes, reads, cleanup, purge, and retention must stay aligned.
+- Adding or deleting reserved workflow metadata markers such as `wf-has-services:`; marker writes, reads, scheduled-occurrence starts, cleanup, purge, and retention must stay aligned.
 - Normalizing failure-category values, changing workflow visibility index keys, or changing framed compressed-storage payloads.
 - Changing idempotent start storage (`start-idem:`), signal id derivation, `startOrSignal` convergence semantics, serializer registry tags, recovered launch/snapshot public shapes, or durable task in-flight records such as `attemptToken`.
 - Changing workflow version metadata on persisted `WorkflowState`; the current canonical state shape is `versionTuple`, while old flat version fields are read-normalized only.
@@ -48,7 +48,7 @@ description: >-
 12. For `payloadSize.maxBytes`, prove oversize workflow inputs, signal payloads, and activity results fail before durable writes while already-persisted data remains replayable under the current policy.
 13. For application storage wrappers, keep `disposeUnderlyingStorage: false` available and covered when the wrapper shares an engine-owned backend, and forward `conditionalBatch()` through text and typed codecs without changing compare bytes unexpectedly.
 14. For string KV imports, prove source and target paths cannot be identical, source table names are validated, reserved Weft prefixes are rejected, and existing target keys are never overwritten.
-15. For services markers, prove the marker is presence-only, is written atomically with start records, gates resolver calls on recovery, and is deleted by terminal cleanup, purge, and retention.
+15. For services markers, prove the marker is presence-only, is written atomically with start records and scheduled occurrences, gates resolver calls on recovery, and is deleted by terminal cleanup, purge, and retention.
 16. For idempotent starts, keep key mappings permanent across terminal cleanup, purge, and retention; a key that maps to a missing workflow record is spent and must not create a replacement run.
 17. For serializer registration, treat `options.tag` as persisted data. Decode must resolve by tag regardless of registration order, reject missing or non-string tags, and fail clearly when a process has not registered the tag needed by an old checkpoint.
 18. For Neon/Postgres storage, treat key collation and byte mapping as semantic compatibility: `kv.key` must use `COLLATE "C"`, values must remain opaque `BYTEA`, read-only queries must reject writes at the database level, and retryable `40001`/`40P01` transaction aborts must retry the whole CAS transaction before throwing on cap exhaustion.
@@ -61,7 +61,7 @@ description: >-
 - Test fresh execution and replay produce the same normalized content shape.
 - For registry codegen aliasing, run generator determinism, catalog drift, and type-level assignability tests against representative generated operation inputs.
 - For storage wrapper or importer changes, run the focused text-value, typed-storage, conditional-batch, and importer tests plus documentation verification when public guidance changes.
-- For services marker changes, run the recovered-services, workflow-services, delayed-start, purge, and retention tests that prove marker lifecycle across storage paths.
+- For services marker changes, run the recovered-services, workflow-services, delayed-start, schedule, purge, and retention tests that prove marker lifecycle across storage paths.
 - For idempotent start and signal-with-start changes, run the start workflow, start-or-signal, generated operation-client drift, and storage capability tests that prove convergence and conflict behavior.
 - For serializer registry changes, run focused codec tests for custom serializer round trips, corrupt extension payloads, duplicate constructor/tag rejection, and `Error` subclass field preservation.
 - For Neon/Postgres storage, run PGlite-backed storage contract tests, retry fault-injection tests, resolver tests, and any env-gated live Neon tests when `NEON_DATABASE_URL` is available.

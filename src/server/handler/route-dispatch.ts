@@ -379,8 +379,9 @@ export function isOperationFaultLike(value: unknown): value is OperationFault {
 
 /**
  * Convert the REST transport's `authContext` into a `Principal`. The
- * authenticator (`serve()`) only reports method + optional claims; this
- * shim bridges that into the richer `Principal` the pipeline expects.
+ * authenticator (`serve()`) reports method + optional claims; this maps
+ * that transport authentication result into the `Principal` used by the
+ * operation pipeline.
  * Returns `anonymousPrincipal()` when no context is provided (public
  * request).
  *

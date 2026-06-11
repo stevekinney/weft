@@ -13,6 +13,10 @@ import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import { buildSharedStartWorkflowOptions } from './start-workflow-options.ts';
+import {
+  extractSharedStartWorkflowRestFields,
+  parseStartWorkflowRequestRecord,
+} from './start-workflow-rest-input.ts';
 
 // Inputs are intentionally permissive at the schema boundary so REST
 // callers (and equivalent JSON-RPC callers) hit the same validation in
@@ -170,32 +174,7 @@ export const startWorkflowRestBinding: UnknownRestBinding = {
     searchAttributes: { kind: 'body-field', bodyField: 'searchAttributes' },
   },
   extractInput: async (request) => {
-    let body: unknown;
-    try {
-      body = await request.json();
-    } catch {
-      throw invalidParamsFault('Invalid JSON body');
-    }
-
-    // arrays are typeof 'object', so they pass this guard and
-    // fall through to the "Missing required field: type" check in `invoke`
-    // (the single cross-transport validator).
-    if (typeof body !== 'object' || body === null) {
-      throw invalidParamsFault('Request body must be a JSON object');
-    }
-
-    const record = body as Record<string, unknown>;
-    return {
-      type: record['type'],
-      input: record['input'],
-      id: record['id'],
-      executionTimeout: record['executionTimeout'],
-      startAt: record['startAt'],
-      startAfter: record['startAfter'],
-      tags: record['tags'],
-      idempotencyKey: record['idempotencyKey'],
-      searchAttributes: record['searchAttributes'],
-    };
+    return extractSharedStartWorkflowRestFields(await parseStartWorkflowRequestRecord(request));
   },
   success: { kind: 'json', status: 201 },
   shapeFault: shapeRestFault,

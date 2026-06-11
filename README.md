@@ -125,7 +125,7 @@ Because recovery never re-executes the workflow from the beginning, your workflo
 | **Checkpoint**       | A serialized snapshot of a workflow's position and local variables, written at every yield.                                   |
 | **Signal**           | A fire-and-forget message sent _into_ a running workflow. Workflows pause at `ctx.waitForSignal()` until one arrives.         |
 | **Update**           | A request-response message sent into a running workflow. The caller blocks until the workflow returns a result.               |
-| **Query**            | A read-only peek at a running workflow's state. Never mutates anything.                                                       |
+| **Query**            | A read-only request sent with `engine.query()` or `handle.query()` to inspect workflow state without mutating it.             |
 | **Search attribute** | Indexed metadata on a workflow (customer ID, region, status) set via `ctx.setAttribute()` and queryable through the list API. |
 | **Worker**           | A process or thread that executes activities. Inline by default; can run remote over WebSocket.                               |
 | **Interceptor**      | A composable hook that wraps context operations for tracing, validation, encryption, or any cross-cutting concern.            |
@@ -137,6 +137,8 @@ Because recovery never re-executes the workflow from the beginning, your workflo
 ### Durable Workflows
 
 Generator functions with automatic checkpointing at every `yield*` boundary. Activities, sleeps, signals, queries, updates, parallel execution via `ctx.all()`, race semantics via `ctx.race()`, memoization via `ctx.memo()`, sagas via `ctx.saga()`, child workflows, and forks.
+
+Every workflow context exposes `ctx.workflowId` and `ctx.workflowType`. `workflowType` is the registered name from `workflow({ name })`, so shared workflow code can log, tag, or branch on the current workflow type without closing over definition-site state.
 
 ```typescript
 const checkout = workflow({ name: 'checkout' })

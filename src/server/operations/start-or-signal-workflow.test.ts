@@ -229,6 +229,18 @@ describe('weft.workflows.startorsignal', () => {
     expect(await response.json()).toEqual({ error: 'Request body must be a JSON object' });
   });
 
+  it('returns 400 InvalidParams when body is a JSON array', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(startOrSignalRequest([]), engine, {
+      operationRegistry: registry,
+      restBindings: bindings,
+    });
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'invalid params' });
+  });
+
   it('returns 400 when engine.startOrSignal throws StartWorkflowValidationError', async () => {
     engine = createEngine();
     const original = engine.startOrSignal.bind(engine);

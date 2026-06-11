@@ -6,7 +6,7 @@ import {
   hasScopedBulkWorkflowFilter,
 } from './bulk-workflow-filter.ts';
 
-describe('hasScopedBulkWorkflowFilter — legacy scopes', () => {
+describe('hasScopedBulkWorkflowFilter — current scope keys', () => {
   it('accepts a status filter', () => {
     expect(hasScopedBulkWorkflowFilter({ status: 'completed' })).toBe(true);
     expect(hasScopedBulkWorkflowFilter({ status: ['completed', 'failed'] })).toBe(true);

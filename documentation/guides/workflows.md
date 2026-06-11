@@ -212,7 +212,7 @@ const engine = await Engine.create({
 });
 ```
 
-The resolver runs only for recovered inline workflows that were originally launched with `services`; ordinary workflows do not pay that cost and do not fail if the resolver is absent. Returning `unavailable` or throwing fails only that recovered run with a system failure category. Child workflows do not inherit the parent's `services`; start each child with its own durable input and host services if it needs them.
+Fresh-process recovery consults the resolver only for inline runs that were launched with `services`, using the durable presence marker written at start. Scheduled inline occurrences are different: when `resolveWorkflowServices` is configured, each occurrence consults it before the workflow body runs. Returning `unavailable` or throwing fails only that run or scheduled occurrence with a system failure category. Child workflows do not inherit the parent's `services`; start each child with its own durable input and host services if it needs them.
 
 ## No history growth
 

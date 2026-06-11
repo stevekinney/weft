@@ -5,12 +5,12 @@
  * accepts a JSON body. Each test sends a known-good request with one
  * extra top-level field and asserts the same status code the route
  * returns today. The captured disposition — 'reject' vs 'strip' vs
- * 'passthrough' — is the baseline each migrated operation's
+ * 'passthrough' — is the baseline each operation's
  * `unknownKeyPolicy.http` must preserve.
  *
- * Scope (Phase 15a):
+ * Scope:
  *   - Top-level only. Nested-object dispositions are captured per
- *     operation during its individual migration test.
+ *     operation in its focused operation test.
  *   - Only routes that read a JSON body (GET/HEAD excluded).
  *   - Each route is probed with the minimal valid body that reaches
  *     the engine plus one extra `__auditExtraKey__` field; the test
@@ -118,7 +118,7 @@ const AUDIT_CASES: ReadonlyArray<AuditCase> = [
   // audit probes it, and the two probes run against independent engine
   // instances. That non-determinism makes the case unfit for this
   // baseline audit — the signal route's unknown-key behavior is locked
-  // instead by its per-operation migration test in a later phase.
+  // instead by its focused operation test.
   {
     name: 'POST /v1/workflows/:id/tags (addWorkflowTags)',
     method: 'POST',
@@ -184,13 +184,13 @@ const AUDIT_CASES: ReadonlyArray<AuditCase> = [
   // audited here. `engine.timeout()` on a nonexistent id silently
   // succeeds (204) on one storage backend and may raise on another,
   // making the baseline non-portable. The route's unknown-key
-  // behavior is locked by its migration test in a later phase.
+  // behavior is locked by its focused operation test.
   //
   // NOTE: POST /v1/workflows/:id/update/:name (updateWorkflow) is not
   // audited here. The update coordinator uses Promise.race with a
   // 30s timeout against a workflow that never materializes when the
   // id is nonexistent — the baseline probe hangs. Locked by its
-  // migration test in a later phase.
+  // focused operation test.
   {
     name: 'POST /v1/reviews/:reviewId/decision (submitReviewDecision) — nonexistent id → 404',
     method: 'POST',

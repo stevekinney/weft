@@ -306,8 +306,8 @@ function arrayTypeScript(node: Record<string, unknown>, depth: number): string {
     return `[${[...positions, `...${restType}[]`].join(', ')}]`;
   }
 
-  // Legacy draft: `items` may be an array of position schemas, in
-  // which case `additionalItems` plays the rest-controller role.
+  // Draft-07 tuple form: `items` may be an array of position schemas,
+  // in which case `additionalItems` plays the rest-controller role.
   if (Array.isArray(itemsRaw)) {
     const positions = itemsRaw.map((p) => jsonSchemaToTypeScriptAtDepth(p, childDepth));
     if (additionalItemsRaw === false) {

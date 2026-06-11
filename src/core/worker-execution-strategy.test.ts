@@ -53,6 +53,33 @@ function dispatchToMockWorker(worker: MockWorker, type: string, event: Event): v
   }
 }
 
+async function withMockBroadcastChannel(
+  run: (harness: {
+    latestListener: () => ((event: MessageEvent) => void) | undefined;
+  }) => Promise<void>,
+): Promise<void> {
+  const originalBroadcastChannel = globalThis.BroadcastChannel;
+  let broadcastListener: ((event: MessageEvent) => void) | undefined;
+
+  class MockBroadcastChannel {
+    addEventListener(_type: string, listener: (event: MessageEvent) => void): void {
+      broadcastListener = listener;
+    }
+
+    removeEventListener(): void {}
+
+    close(): void {}
+  }
+
+  globalThis.BroadcastChannel = MockBroadcastChannel as unknown as typeof BroadcastChannel;
+
+  try {
+    await run({ latestListener: () => broadcastListener });
+  } finally {
+    globalThis.BroadcastChannel = originalBroadcastChannel;
+  }
+}
+
 function createMockPool(workers: MockWorker[]): WorkerPool {
   const available = [...workers];
   const pending: Array<(worker: Worker) => void> = [];
@@ -262,22 +289,7 @@ describe('WorkerExecutionStrategy', () => {
 
   describe('broadcast forwarding', () => {
     it('forwards signal:received messages from BroadcastChannel to the assigned worker', async () => {
-      const originalBroadcastChannel = globalThis.BroadcastChannel;
-      let broadcastListener: ((event: MessageEvent) => void) | undefined;
-
-      class MockBroadcastChannel {
-        addEventListener(_type: string, listener: (event: MessageEvent) => void): void {
-          broadcastListener = listener;
-        }
-
-        removeEventListener(): void {}
-
-        close(): void {}
-      }
-
-      globalThis.BroadcastChannel = MockBroadcastChannel as unknown as typeof BroadcastChannel;
-
-      try {
+      await withMockBroadcastChannel(async ({ latestListener }) => {
         setup();
         strategy[Symbol.dispose]();
         strategy = new WorkerExecutionStrategy(mockPool, { broadcastEvents: true });
@@ -297,6 +309,7 @@ describe('WorkerExecutionStrategy', () => {
 
         const worker = firstWorker();
         const callsBefore = worker.postMessage.mock.calls.length;
+        const broadcastListener = latestListener();
         expect(broadcastListener).toBeDefined();
 
         broadcastListener!(
@@ -311,28 +324,11 @@ describe('WorkerExecutionStrategy', () => {
           workflowId: 'wf-broadcast',
           signalName: 'ready',
         });
-      } finally {
-        globalThis.BroadcastChannel = originalBroadcastChannel;
-      }
+      });
     });
 
     it('forwards signal:received messages from BroadcastChannel to a parked worker', async () => {
-      const originalBroadcastChannel = globalThis.BroadcastChannel;
-      let broadcastListener: ((event: MessageEvent) => void) | undefined;
-
-      class MockBroadcastChannel {
-        addEventListener(_type: string, listener: (event: MessageEvent) => void): void {
-          broadcastListener = listener;
-        }
-
-        removeEventListener(): void {}
-
-        close(): void {}
-      }
-
-      globalThis.BroadcastChannel = MockBroadcastChannel as unknown as typeof BroadcastChannel;
-
-      try {
+      await withMockBroadcastChannel(async ({ latestListener }) => {
         setup();
         strategy[Symbol.dispose]();
         strategy = new WorkerExecutionStrategy(mockPool, { broadcastEvents: true });
@@ -369,6 +365,7 @@ describe('WorkerExecutionStrategy', () => {
         );
 
         const callsBefore = worker.postMessage.mock.calls.length;
+        const broadcastListener = latestListener();
         expect(broadcastListener).toBeDefined();
 
         broadcastListener!(
@@ -387,9 +384,7 @@ describe('WorkerExecutionStrategy', () => {
           workflowId: 'wf-parked-broadcast',
           signalName: 'ready',
         });
-      } finally {
-        globalThis.BroadcastChannel = originalBroadcastChannel;
-      }
+      });
     });
 
     it('ignores missing BroadcastChannel support when broadcastEvents is enabled', () => {

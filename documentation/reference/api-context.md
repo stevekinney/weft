@@ -31,7 +31,7 @@ Typically constructed by the engine -- you will not create `Context` instances d
 | `nestingDepth`           | `number`      | How many levels deep this workflow is as a child workflow. `0` for top-level workflows. |
 
 > [!NOTE]
-> `stepIndex` and `nestingDepth` are available on the concrete `Context` class for debugging purposes. They are not part of the `WorkflowContext` public interface defined in `types.ts`.
+> `workflowType` is part of the public `WorkflowContext` interface. `stepIndex` and `nestingDepth` are available on the concrete `Context` class for debugging purposes; they are not part of the public interface.
 
 ---
 
@@ -445,6 +445,34 @@ Register a synchronous handler for named updates. When `engine.update()` is call
 ```ts partial
 let progress = 0;
 context.onUpdate('getProgress', () => progress);
+```
+
+### `onQuery()`
+
+```ts partial
+onQuery<TInput, TOutput>(
+  definition: QueryDefinition<TInput, TOutput>,
+  handler: (input: TInput) => TOutput | Promise<TOutput>,
+): void
+onQuery<TOutput>(
+  definition: QueryDefinition<void, TOutput>,
+  handler: () => TOutput | Promise<TOutput>,
+): void
+onQuery(name: string, handler: (input: unknown) => unknown): void
+```
+
+Register a read-only handler for workflow queries. Prefer a typed `query()` definition, which carries the query input and output types through `ctx.onQuery()`, `engine.query()`, and `handle.query()`. String names are still accepted for untyped registries. When a matching query is called, the handler runs against the workflow's current context and returns its value to the caller.
+
+Signal-parked inline workflows keep query handlers callable while they wait at `waitForSignal()`. If the workflow resumes and parks again, queries use the fresh post-resume context. After the workflow is suspended or reaches a terminal state, the retained context is torn down and a query with that name returns `undefined`.
+
+```ts partial
+async function* example(context: Context) {
+  const phaseQuery = query<void, string>('phase');
+  let phase = 'starting';
+  context.onQuery(phaseQuery, () => phase);
+  phase = 'waiting';
+  yield* context.waitForSignal('continue');
+}
 ```
 
 ### `expose()`

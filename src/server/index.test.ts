@@ -113,6 +113,57 @@ async function waitForWorkerMessage(
   return matched!;
 }
 
+type WebSocketWorkerRegistrationOptions = {
+  workerId: string;
+  activities: string[];
+  concurrency?: number;
+  queue?: string;
+  deploymentName?: string;
+  buildId?: string;
+  runtimeVersion?: string;
+  gitSha?: string;
+  startedAt?: number;
+  capabilities?: Record<string, unknown>;
+};
+
+async function connectWebSocketWorker(
+  server: WeftServer,
+  path = '/v1/tasks/default/stream',
+): Promise<WebSocket> {
+  const webSocketUrl = server.url.replace('http://', 'ws://');
+  const webSocket = new WebSocket(`${webSocketUrl}${path}`);
+
+  await new Promise<void>((resolve, reject) => {
+    webSocket.addEventListener('open', () => resolve());
+    webSocket.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
+  });
+
+  return webSocket;
+}
+
+async function registerWebSocketWorker(
+  webSocket: WebSocket,
+  options: WebSocketWorkerRegistrationOptions,
+): Promise<void> {
+  webSocket.send(
+    JSON.stringify({
+      type: 'register',
+      protocolVersion: 2,
+      workerId: options.workerId,
+      activities: options.activities,
+      concurrency: options.concurrency ?? 10,
+      ...(options.queue !== undefined ? { queue: options.queue } : {}),
+      ...(options.deploymentName !== undefined ? { deploymentName: options.deploymentName } : {}),
+      ...(options.buildId !== undefined ? { buildId: options.buildId } : {}),
+      ...(options.runtimeVersion !== undefined ? { runtimeVersion: options.runtimeVersion } : {}),
+      ...(options.gitSha !== undefined ? { gitSha: options.gitSha } : {}),
+      ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
+      ...(options.capabilities !== undefined ? { capabilities: options.capabilities } : {}),
+    }),
+  );
+  await waitForRealTimersForTesting(50);
+}
+
 /** Count keys under a prefix by draining an async iterator. */
 async function countKeys(engine: Engine, prefix: string): Promise<number> {
   let count = 0;
@@ -1039,56 +1090,8 @@ describe('worker WebSocket protocol', () => {
     engine?.[Symbol.dispose]();
   });
 
-  /** Open a WebSocket to the worker stream endpoint and wait for the connection. */
-  async function connectWorker(
-    wsServer: WeftServer,
-    path = '/v1/tasks/default/stream',
-  ): Promise<WebSocket> {
-    const wsUrl = wsServer.url.replace('http://', 'ws://');
-    const ws = new WebSocket(`${wsUrl}${path}`);
-
-    await new Promise<void>((resolve, reject) => {
-      ws.addEventListener('open', () => resolve());
-      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
-    });
-
-    return ws;
-  }
-
-  /** Send a register message and wait for it to be processed. */
-  async function registerWorker(
-    ws: WebSocket,
-    options: {
-      workerId: string;
-      activities: string[];
-      concurrency?: number;
-      queue?: string;
-      deploymentName?: string;
-      buildId?: string;
-      runtimeVersion?: string;
-      gitSha?: string;
-      startedAt?: number;
-      capabilities?: Record<string, unknown>;
-    },
-  ): Promise<void> {
-    ws.send(
-      JSON.stringify({
-        type: 'register',
-        protocolVersion: 2,
-        workerId: options.workerId,
-        activities: options.activities,
-        concurrency: options.concurrency ?? 10,
-        queue: options.queue ?? 'default',
-        ...(options.deploymentName !== undefined ? { deploymentName: options.deploymentName } : {}),
-        ...(options.buildId !== undefined ? { buildId: options.buildId } : {}),
-        ...(options.runtimeVersion !== undefined ? { runtimeVersion: options.runtimeVersion } : {}),
-        ...(options.gitSha !== undefined ? { gitSha: options.gitSha } : {}),
-        ...(options.startedAt !== undefined ? { startedAt: options.startedAt } : {}),
-        ...(options.capabilities !== undefined ? { capabilities: options.capabilities } : {}),
-      }),
-    );
-    await waitForRealTimersForTesting(50);
-  }
+  const connectWorker = connectWebSocketWorker;
+  const registerWorker = registerWebSocketWorker;
 
   it('tracks a worker after register message', async () => {
     engine = createEngine();
@@ -3654,36 +3657,8 @@ describe('task assignment deduplication', () => {
     engine?.[Symbol.dispose]();
   });
 
-  async function connectWorker(
-    wsServer: WeftServer,
-    path = '/v1/tasks/default/stream',
-  ): Promise<WebSocket> {
-    const wsUrl = wsServer.url.replace('http://', 'ws://');
-    const ws = new WebSocket(`${wsUrl}${path}`);
-
-    await new Promise<void>((resolve, reject) => {
-      ws.addEventListener('open', () => resolve());
-      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
-    });
-
-    return ws;
-  }
-
-  async function registerWorker(
-    ws: WebSocket,
-    options: { workerId: string; activities: string[]; concurrency?: number },
-  ): Promise<void> {
-    ws.send(
-      JSON.stringify({
-        type: 'register',
-        protocolVersion: 2,
-        workerId: options.workerId,
-        activities: options.activities,
-        concurrency: options.concurrency ?? 10,
-      }),
-    );
-    await waitForRealTimersForTesting(50);
-  }
+  const connectWorker = connectWebSocketWorker;
+  const registerWorker = registerWebSocketWorker;
 
   it('rejects duplicate dispatch of the same operationId to WebSocket workers', async () => {
     engine = createEngine();
@@ -4458,34 +4433,8 @@ describe('worker disconnection triggers task reassignment', () => {
     return { engine: e, storage: s };
   }
 
-  async function connectWorker(
-    wsServer: WeftServer,
-    path = '/v1/tasks/default/stream',
-  ): Promise<WebSocket> {
-    const wsUrl = wsServer.url.replace('http://', 'ws://');
-    const ws = new WebSocket(`${wsUrl}${path}`);
-    await new Promise<void>((resolve, reject) => {
-      ws.addEventListener('open', () => resolve());
-      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
-    });
-    return ws;
-  }
-
-  async function registerWorker(
-    ws: WebSocket,
-    options: { workerId: string; activities: string[]; concurrency?: number },
-  ): Promise<void> {
-    ws.send(
-      JSON.stringify({
-        type: 'register',
-        protocolVersion: 2,
-        workerId: options.workerId,
-        activities: options.activities,
-        concurrency: options.concurrency ?? 10,
-      }),
-    );
-    await waitForRealTimersForTesting(50);
-  }
+  const connectWorker = connectWebSocketWorker;
+  const registerWorker = registerWebSocketWorker;
 
   it('requeues in-flight tasks to another worker on disconnect', async () => {
     ({ engine, storage } = createEngineWithStorage());
@@ -4965,34 +4914,8 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     return { engine: e, storage: s };
   }
 
-  async function connectWorker(
-    wsServer: WeftServer,
-    path = '/v1/tasks/default/stream',
-  ): Promise<WebSocket> {
-    const wsUrl = wsServer.url.replace('http://', 'ws://');
-    const ws = new WebSocket(`${wsUrl}${path}`);
-    await new Promise<void>((resolve, reject) => {
-      ws.addEventListener('open', () => resolve());
-      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
-    });
-    return ws;
-  }
-
-  async function registerWorker(
-    ws: WebSocket,
-    options: { workerId: string; activities: string[]; concurrency?: number },
-  ): Promise<void> {
-    ws.send(
-      JSON.stringify({
-        type: 'register',
-        protocolVersion: 2,
-        workerId: options.workerId,
-        activities: options.activities,
-        concurrency: options.concurrency ?? 10,
-      }),
-    );
-    await waitForRealTimersForTesting(50);
-  }
+  const connectWorker = connectWebSocketWorker;
+  const registerWorker = registerWebSocketWorker;
 
   it('reassigns tasks whose visibility timeout has expired via storage scan', async () => {
     ({ engine, storage } = createEngineWithStorage());
@@ -6147,34 +6070,8 @@ describe('retry policy respected on reassignment', () => {
     return { engine: e, storage: s };
   }
 
-  async function connectWorker(
-    wsServer: WeftServer,
-    path = '/v1/tasks/default/stream',
-  ): Promise<WebSocket> {
-    const wsUrl = wsServer.url.replace('http://', 'ws://');
-    const ws = new WebSocket(`${wsUrl}${path}`);
-    await new Promise<void>((resolve, reject) => {
-      ws.addEventListener('open', () => resolve());
-      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
-    });
-    return ws;
-  }
-
-  async function registerWorker(
-    ws: WebSocket,
-    options: { workerId: string; activities: string[]; concurrency?: number },
-  ): Promise<void> {
-    ws.send(
-      JSON.stringify({
-        type: 'register',
-        protocolVersion: 2,
-        workerId: options.workerId,
-        activities: options.activities,
-        concurrency: options.concurrency ?? 10,
-      }),
-    );
-    await waitForRealTimersForTesting(50);
-  }
+  const connectWorker = connectWebSocketWorker;
+  const registerWorker = registerWebSocketWorker;
 
   const testRetryPolicy: RetryPolicy = {
     maxAttempts: 2,
@@ -6555,7 +6452,7 @@ describe('retry policy respected on reassignment', () => {
     });
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
 
-    // No retryPolicy — should still re-dispatch (backwards compatible)
+    // Missing retryPolicy uses the current default redispatch behavior.
     await server.dispatchTask({
       operationId: 'no-policy-op',
       activityName: 'charge',
@@ -6598,34 +6495,8 @@ describe('worker shutdown and cancel propagation', () => {
     engine?.[Symbol.dispose]();
   });
 
-  async function connectWorker(
-    wsServer: WeftServer,
-    path = '/v1/tasks/default/stream',
-  ): Promise<WebSocket> {
-    const wsUrl = wsServer.url.replace('http://', 'ws://');
-    const ws = new WebSocket(`${wsUrl}${path}`);
-    await new Promise<void>((resolve, reject) => {
-      ws.addEventListener('open', () => resolve());
-      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
-    });
-    return ws;
-  }
-
-  async function registerWorker(
-    ws: WebSocket,
-    options: { workerId: string; activities: string[]; concurrency?: number },
-  ): Promise<void> {
-    ws.send(
-      JSON.stringify({
-        type: 'register',
-        protocolVersion: 2,
-        workerId: options.workerId,
-        activities: options.activities,
-        concurrency: options.concurrency ?? 10,
-      }),
-    );
-    await waitForRealTimersForTesting(50);
-  }
+  const connectWorker = connectWebSocketWorker;
+  const registerWorker = registerWebSocketWorker;
 
   it('shutdownWorker sends shutdown message and waits for disconnect', async () => {
     engine = createEngine();
@@ -6828,34 +6699,8 @@ describe('header propagation in task dispatch', () => {
     engine?.[Symbol.dispose]();
   });
 
-  async function connectWorker(
-    wsServer: WeftServer,
-    path = '/v1/tasks/default/stream',
-  ): Promise<WebSocket> {
-    const wsUrl = wsServer.url.replace('http://', 'ws://');
-    const ws = new WebSocket(`${wsUrl}${path}`);
-    await new Promise<void>((resolve, reject) => {
-      ws.addEventListener('open', () => resolve());
-      ws.addEventListener('error', () => reject(new Error('WebSocket connection failed')));
-    });
-    return ws;
-  }
-
-  async function registerWorker(
-    ws: WebSocket,
-    options: { workerId: string; activities: string[]; concurrency?: number },
-  ): Promise<void> {
-    ws.send(
-      JSON.stringify({
-        type: 'register',
-        protocolVersion: 2,
-        workerId: options.workerId,
-        activities: options.activities,
-        concurrency: options.concurrency ?? 10,
-      }),
-    );
-    await waitForRealTimersForTesting(50);
-  }
+  const connectWorker = connectWebSocketWorker;
+  const registerWorker = registerWebSocketWorker;
 
   function createCapturedHeadersProbe(label: string): {
     interceptor: import('../core/interceptor.ts').ActivityInterceptor;

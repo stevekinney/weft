@@ -347,11 +347,11 @@ describe('handleTaskPollRequest', () => {
   });
 
   it('rejects a present-but-malformed attemptToken with 400 (not silently treated as absent)', async () => {
-    // A MISSING token is backward-compatible (falls back to the workerId guard).
-    // A PRESENT but non-string/empty token is a malformed frame and must be
-    // rejected — the same strictness the WebSocket parser applies — so the long-
-    // poll transport cannot be coerced into treating `{ attemptToken: 42 }` as an
-    // old-worker absent echo and bypassing the attempt guard on a token-bearing record.
+    // An absent token falls back to the workerId guard. A PRESENT but
+    // non-string/empty token is a malformed frame and must be rejected — the
+    // same strictness the WebSocket parser applies — so the long-poll transport
+    // cannot be coerced into treating `{ attemptToken: 42 }` as an absent echo
+    // and bypassing the attempt guard on a token-bearing record.
     const context = minimalServerContext();
     const options = minimalServeOptions();
     context.taskQueue.enqueue('default', {
@@ -425,7 +425,7 @@ describe('handleTaskPollRequest', () => {
     const accepted = await handleTaskResultRequest(
       context,
       options,
-      // No attemptToken echoed — the old-worker case.
+      // No attemptToken echoed: this exercises the absent-token workerId guard.
       makePostRequest({
         operationId: 'op-omit-echo',
         status: 'completed',

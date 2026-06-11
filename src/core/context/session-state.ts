@@ -4,7 +4,6 @@ import {
   cloneSessionStateValue,
   createSessionStateStore,
   hasSessionStateKey,
-  LEGACY_SESSION_STATE_LOCAL_KEY,
   SESSION_STATE_LOCAL_KEY,
   validateSessionStateStore,
 } from '../session-state.ts';
@@ -18,6 +17,7 @@ import type { ContextInternals } from './internals.ts';
 import type { ContextOperationRequest } from './operation-request.ts';
 
 const EMPTY_CHECKPOINT_LOCALS = Object.freeze({}) as Record<string, unknown>;
+const RETIRED_SESSION_STATE_LOCAL_KEY = 'sessionState';
 
 const ACTIVITY_CALL_OPTION_KEYS = new Set<string>([
   'timeout',
@@ -64,7 +64,7 @@ export function createCheckpointLocals(
     existingLocals === undefined
       ? []
       : Object.entries(existingLocals).filter(
-          ([key]) => key !== SESSION_STATE_LOCAL_KEY && key !== LEGACY_SESSION_STATE_LOCAL_KEY,
+          ([key]) => key !== SESSION_STATE_LOCAL_KEY && key !== RETIRED_SESSION_STATE_LOCAL_KEY,
         );
 
   if (stateSessionStore === undefined) {

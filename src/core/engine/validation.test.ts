@@ -96,7 +96,7 @@ describe('engine validation helpers', () => {
     ).toBe(true);
   });
 
-  it('normalizes legacy workflow failure categories while decoding persisted state', () => {
+  it('normalizes previous workflow failure category names while decoding persisted state', () => {
     expect(
       decodeWorkflowState(encode(createWorkflowState({ failureCategory: 'planning' as never })))
         .failureCategory,
@@ -190,8 +190,8 @@ describe('engine validation helpers', () => {
     });
   });
 
-  it('tolerate-and-drops a legacy tenant field on a decoded workflow state', () => {
-    const legacyState = {
+  it('drops tenant fields from decoded workflow state records', () => {
+    const stateWithTenant = {
       id: 'wf-legacy',
       type: 'checkout',
       status: 'running',
@@ -199,7 +199,7 @@ describe('engine validation helpers', () => {
       updatedAt: 2,
       tenant: { id: 'acme', attributes: { region: 'us' } },
     };
-    const decoded = decodeWorkflowState(encode(legacyState));
+    const decoded = decodeWorkflowState(encode(stateWithTenant));
     expect('tenant' in decoded).toBe(false);
     expect(decoded.id).toBe('wf-legacy');
   });

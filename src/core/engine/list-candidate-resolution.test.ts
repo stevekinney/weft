@@ -125,7 +125,7 @@ describe('resolveListCandidateIds', () => {
     }
   });
 
-  it('uses legacy failureCategory alias indexes for top-level list filters', async () => {
+  it('uses previous failureCategory index names for top-level list filters', async () => {
     const storage = new ScanCountingStorage();
     const engine = new Engine({ storage });
     try {
