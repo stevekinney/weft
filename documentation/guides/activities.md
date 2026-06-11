@@ -60,13 +60,19 @@ So out of the box, a failing activity retries up to 3 times with backoff delays 
 
 ## ActivityContext
 
-Every activity function can optionally receive an `ActivityContext` as its second argument. This gives you two things: a standard `AbortSignal` for cancellation, and a `heartbeat()` function for long-running work.
+Every activity function can optionally receive an `ActivityContext` as its second argument. It exposes a standard `AbortSignal` for cancellation, a `heartbeat()` function for long-running work, the previous attempt's heartbeat via `lastHeartbeatDetails` (for resumable retries), and `completeAsync()` for out-of-band completion.
 
 ```typescript
 interface ActivityContext {
   signal: AbortSignal;
   heartbeat(details?: unknown): void;
+  // The heartbeat the PREVIOUS attempt recorded, or `undefined` on the first
+  // attempt / after a restart / for worker-executed activities — let a retry
+  // resume mid-stream instead of re-running from the start.
   lastHeartbeatDetails?: unknown;
+  // Park the workflow at this step and complete it later by durable task token.
+  // See "Out-of-band completion" below.
+  completeAsync(): never;
 }
 ```
 
