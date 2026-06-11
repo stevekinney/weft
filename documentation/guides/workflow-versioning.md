@@ -9,7 +9,9 @@ version drift.
 Recovery continues only when the workflow versions match and the stored version
 tuple has not drifted. A workflow version mismatch or version-tuple drift stops
 recovery with a `VersionMismatchError` so the operator can decide how to handle
-the in-flight workflow deliberately.
+the in-flight workflow deliberately. Weft does not run a checkpoint migration
+hook during recovery; changing a workflow version is an explicit recovery
+boundary, not an automatic data-upgrade path.
 
 ## Version Pinning
 

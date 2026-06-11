@@ -22,6 +22,7 @@ description: >-
 - Restoring coverage after feature work by adding focused regressions for real edge paths before touching allowances, such as `LocalClient.startOrSignal`, start-body helpers, fair-share counters, pre-ready health, TLS server config, cleanup timers, workflow handle cache replacement, corrupt serializer payloads, MCP list filters, and bulk-delete terminal revalidation.
 - Restoring retry/checkpoint coverage around `run-operation` by proving corrupt persisted retry attempts or sleep counts fail, missing retry policies on replay fail, non-`Error` failures still honor `nonRetryableErrors`, and retry-to-sleep-to-success paths checkpoint correctly.
 - Covering inline parking regressions where a workflow waiting on `waitForSignal()` replays, resumes, or serves `ctx.onQuery()` from a retained context.
+- Covering `ctx.race()` / `ctx.all()` sleep and wait-signal branches, including nested deferred-consume envelopes, `ctx.speculate` finalization, duplicate signal-name rejection, and long sleep disposal.
 - Editing coverage orchestration itself, especially when a failing child coverage process could be accidentally masked.
 - Deciding whether a coverage allowance is justified.
 - Building a structural test double to reach a branch hidden by normal constructors or registries.
@@ -55,6 +56,7 @@ description: >-
 19. For load-sensitive tests, replace fixed sleeps with condition-based synchronization first. Add a file to `LOAD_SENSITIVE_TEST_PATHS` only when the real-time invariant cannot be made load-robust, after splitting the case into its own file and keeping the list ceiling assertion explicit.
 20. For retry-state coverage, drive the persisted-state edge rather than asserting the helper directly when possible; only expose `ForTesting` helpers when the branch is otherwise unreachable through a real workflow drive.
 21. For inline parking coverage, prefer a real workflow that parks on `waitForSignal()`, queries while parked, resumes to a second park, and proves replay failure handling instead of only inspecting parked-context maps.
+22. For race/all branch coverage, drive real workflows through top-level and nested coordinators before adding helper-level assertions. Prove losing signal branches do not consume `sig:` records, winning branches checkpoint encoded values, and `ctx.all` waits for all finalizers before throwing.
 
 ## Verification
 
@@ -63,5 +65,6 @@ description: >-
 - For feature-adjacent coverage restoration, run the focused tests that exercise the newly covered behavior before `bun run scripts/check-coverage.ts`, so the coverage gate is not the only proof that the assertion is meaningful.
 - For retry-state coverage, run `bun test src/core/context/run-operation.test.ts` before the coverage gate.
 - For inline parking coverage, run `bun test src/core/engine/inline-parking.test.ts src/core/engine.test.ts src/core/engine/suspend-resume.test.ts` before the coverage gate.
+- For race/all branch coverage, run `bun test src/core/engine/race-branches.test.ts src/core/engine/operations-coordination.test.ts src/core/crash-recovery.test.ts` before the coverage gate.
 - When editing the test-sleep verifier or load-sensitive list, run `bun test scripts/verify-no-test-sleeps.test.ts scripts/husky/run-tests.test.ts` and `bun run scripts/verify-no-test-sleeps.ts`.
 - Run broader validation only when the coverage fix also changes production code, public APIs, or documentation.

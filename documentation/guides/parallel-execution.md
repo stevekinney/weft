@@ -20,7 +20,7 @@ async function* enrichOrder(ctx: Context, order: Order) {
 
 Rejection mirrors `Promise.all()`—any branch fails and the whole operation fails. If a branch rejects, surviving branches still finish and their values become recoverable on the next yield—see [Advanced: failure semantics](#advanced-failure-semantics).
 
-You can mix operation types freely. Sleeps, signals, and activity calls all work inside `ctx.all()`:
+You can mix operation types freely. Activity calls, sleeps, and signal waits all work inside `ctx.all()` and `ctx.race()`:
 
 ```typescript partial
 async function* example(ctx: Context) {
@@ -82,6 +82,8 @@ async function* example(ctx: Context) {
 }
 ```
 
+Signal waits can also participate in a race. A losing `ctx.waitForSignal()` branch does not consume its durable signal; the signal remains buffered for a later wait or replay. Only the winning coordinator finalizes the signal value, and nested `ctx.all()` / `ctx.race()` coordinators carry that deferred consume up to the top coordinator before the result is checkpointed.
+
 ## Under the hood
 
 Both `ctx.all()` and `ctx.race()` work by collecting the first yielded operation from each generator you pass in, then emitting a single `parallel` or `race` operation request. The engine handles the concurrent dispatch and result collection internally.
@@ -111,4 +113,4 @@ Use `ctx.race()` when you need _any_ result. Hedged requests, timeout wrappers, 
 
 If you're building something more complex—like "run five tasks, return when any three complete"—compose these primitives. Run the five tasks, track completions via [signals](./signals-and-queries.md), and use `ctx.race()` with a counter to detect when your threshold is met.
 
-Both primitives nest cleanly. You can `all()` inside a `race()` or vice versa, and checkpointing works correctly at every level.
+Both primitives nest cleanly. You can `all()` inside a `race()` or vice versa, and checkpointing works correctly at every level. Do not wait on the same signal name in sibling branches of one coordination tree; Weft rejects that shape because the branches would share one waiter key.

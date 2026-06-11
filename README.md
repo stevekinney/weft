@@ -136,7 +136,7 @@ Because recovery never re-executes the workflow from the beginning, your workflo
 
 ### Durable Workflows
 
-Generator functions with automatic checkpointing at every `yield*` boundary. Activities, sleeps, signals, queries, updates, parallel execution via `ctx.all()`, race semantics via `ctx.race()`, memoization via `ctx.memo()`, sagas via `ctx.saga()`, child workflows, and forks.
+Generator functions with automatic checkpointing at every `yield*` boundary. Activities, sleeps, signals, queries, updates, parallel execution via `ctx.all()`, race semantics via `ctx.race()`, memoization via `ctx.memo()`, sagas via `ctx.saga()`, child workflows, and forks. `ctx.all()` and `ctx.race()` can branch over activities, sleeps, and signal waits; use `ctx.race([ctx.waitForSignal(name), ctx.sleep(deadline)])` for signal deadlines instead of placing an unbounded signal wait directly in `ctx.all()`.
 
 Every workflow context exposes `ctx.workflowId` and `ctx.workflowType`. `workflowType` is the registered name from `workflow({ name })`, so shared workflow code can log, tag, or branch on the current workflow type without closing over definition-site state.
 
@@ -481,7 +481,7 @@ Each `ctx.step()` is a checkpoint boundary. Completed steps replay from storage 
 | Activity invocation    | `proxyActivities()` + type import             | `yield* ctx.run('activityName', input)` (declared in `.activities({...})`) |
 | Timer                  | Deterministic `workflow.sleep()`              | `yield* ctx.sleep("1 hour")`                                               |
 | Signal                 | `setHandler` + `condition`                    | `yield* ctx.waitForSignal(name)`                                           |
-| Versioning             | `patched()` / `deprecatePatch()`              | Stored and registered versions must match during recovery                  |
+| Versioning             | `patched()` / `deprecatePatch()`              | Stored and registered versions are strict recovery guards                  |
 | Long-running workflows | `continueAsNew()`                             | None needed (checkpoint size is bounded by live state, not history length) |
 | Dev environment        | Docker Compose + Temporal server              | `bun add @lostgradient/weft`                                               |
 | Bundling               | Webpack for workflow sandbox                  | None                                                                       |

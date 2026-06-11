@@ -20,6 +20,7 @@ description: >-
 - Changing out-of-band activity completion, including `ActivityContext.completeAsync()`, token claiming, REST/JSON-RPC completion, or payload rejection before token consumption.
 - Changing per-run workflow `services`, `resolveWorkflowServices`, delayed-start recovery, scheduled occurrences, or the durable `wf-has-services:` marker that gates re-provisioning.
 - Changing inline `waitForSignal()` parking, retained contexts, or query-handler availability while a workflow is parked, resumed, suspended, or cleaned up.
+- Changing `ctx.race()` / `ctx.all()` branch execution for sleeps or signal waits, especially deferred-consume envelopes, nested coordinator propagation, `ctx.speculate`, duplicate signal-name validation, abort ordering, or engine-disposal cleanup.
 - Changing workflow suspend/resume, recovered-handle observation, idempotent start reservation, `startOrSignal`, inline launch deferral, or engine disposal while queued inline launches can still flush.
 - Changing RemoteWorker or long-poll task completion authorization, including per-dispatch `attemptToken` generation, echoing, registry restore, malformed-token rejection, and missing-token compatibility.
 
@@ -43,6 +44,7 @@ description: >-
 10. For workflow services, treat resolver success, unavailable results, throws, scheduled occurrences, terminal commit faults, delayed-start timers, terminal cleanup, purge, and retention as distinct lifecycle outcomes.
 11. For inline launch queues, model `defer: false`, queued async launch, disposal before flush, and runtimes without `MessageChannel` as separate execution paths.
 12. For queryable parked workflows, retain only the context needed for `ctx.onQuery()` while parked on `waitForSignal()`, prefer the live context after resume, and evict retained contexts on suspend and terminal cleanup.
+13. For race/all signal branches, model the top-level coordinator, nested `race`/`all`, and `ctx.speculate` as separate consumers. Losers must release waiters without consuming durable signals, and winners must finalize before checkpointing encoded results.
 
 ### Client event-streaming work
 
@@ -70,6 +72,7 @@ description: >-
 - For async activity completion, cover double-completion races, malformed JSON, oversized payload rejection that preserves the token, and cross-transport parity between `LocalClient` and `HttpClient`.
 - For per-run services, cover normal start, Worker-mode rejection, running recovery, delayed-start recovery, scheduled occurrences, resolver throw/unavailable sibling isolation, terminal cleanup, purge, and retention marker deletion.
 - For queryable parked workflows, cover the first signal park, a post-resume second park, unregistered query names, suspend teardown, terminal teardown, and wait-signal replay failure paths.
+- For race/all signal branches, cover top-level and nested wait-signal winners and losers, `ctx.speculate` finalization, duplicate signal-name rejection, `ctx.all` finalize-after-all-settle behavior, abort reason propagation, and engine-disposal cleanup for long sleep branches.
 - For suspend/resume and recovered-handle observation, cover suspended workflows as non-terminal, explicit resume after recovery, terminal/nonexistent faults, `getLaunchMetadata()` null after purge, and `snapshot()` status/step reads without awaiting `result()`.
 - For start idempotency and `startOrSignal`, cover concurrent same-key callers, spent-key conflicts after retention or purge, terminal-target conflicts, bare-`signalId` non-convergence, and same-id pre-commit abort recovery.
 - For inline launch scheduling, cover queued launch draining on disposal, `defer: false` synchronous launch, and the timeout flush path when `MessageChannel` is unavailable.
