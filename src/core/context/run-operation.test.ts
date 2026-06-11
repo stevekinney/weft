@@ -204,6 +204,40 @@ describe('#449 scheduleToCloseTimeout retry-state anchor', () => {
     );
   });
 
+  it('fails at the retry DECISION point when the next backoff would overshoot, while elapsed is still under budget', () => {
+    // Codex's round-2 scenario: fail attempt 1 at elapsed 1s, budget 10s, backoff
+    // 30s. The actual elapsed (1s) is well WITHIN budget, but the next retry would
+    // start at 31s — past the 10s deadline. We refuse to schedule that doomed sleep
+    // and fail now. The error must report the ACTUAL elapsed (1000ms), not a
+    // fictional 31000ms, and surface the projected next-dispatch as the reason.
+    const DECISION_DEF = Object.assign((_input: unknown) => 'unused', {
+      retry: { maxAttempts: 5, initialBackoff: 30_000, backoffMultiplier: 1, maxBackoff: 30_000 },
+      scheduleToCloseTimeout: 10_000,
+    });
+    let now = 1_000_000;
+    const context = createContext({ getNow: () => now });
+
+    const generator = runActivityWithRetry(context, DECISION_DEF, ['payload']);
+    generator.next(); // first dispatch at t=1_000_000, dispatchedAt = 1_000_000
+
+    now += 1000; // attempt 1 fails at elapsed 1000ms — still under the 10_000ms budget
+    let thrown: unknown;
+    try {
+      generator.throw(new Error('retryable failure'));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(ActivityScheduleToCloseTimeoutError);
+    const error = thrown as ActivityScheduleToCloseTimeoutError;
+    // Actual elapsed, not the projected 31000ms.
+    expect(error.elapsed).toBe(1000);
+    expect(error.budget).toBe(10_000);
+    // The projected next dispatch (31000ms after first dispatch) is the decider.
+    expect(error.projectedNextDispatch).toBe(31_000);
+    expect(error.message).toContain('will not retry within its scheduleToCloseTimeout budget');
+    expect(error.message).toContain('next retry would start at 31000ms');
+  });
+
   it('throws at the TOP of the loop when downtime during backoff pushes wall time past the budget', () => {
     // The distinct branch the catch check cannot cover: the backoff is scheduled
     // (small enough that `now + backoff` is still within budget), the workflow

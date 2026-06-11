@@ -328,14 +328,19 @@ export function* runActivityWithRetry<TResult>(
 
       // Refuse to schedule a backoff sleep that would itself carry wall time past
       // the deadline: the budget covers the backoff between attempts, so a sleep
-      // that lands past it is doomed. Throw at this decision point — before the
-      // durable `writeActivityRetryAttempt`/`sleep` — rather than parking for a
-      // sleep we already know exhausts the budget. The top-of-loop check handles
-      // crash-during-backoff (where this catch branch never runs on recovery).
+      // that lands past it is doomed. Fail at this retry DECISION point — before the
+      // durable `writeActivityRetryAttempt`/`sleep` — rather than parking for a sleep
+      // we already know exhausts the budget. (The deferred top-of-loop check would
+      // reject this same attempt anyway, after the sleep advanced the clock; this
+      // front-runs that rejection and skips the useless park. No winnable retry is
+      // denied.) The error reports actual elapsed plus the projected next dispatch
+      // as the deciding reason. The top-of-loop check handles crash-during-backoff
+      // (where this catch branch never runs on recovery).
       const backoff = calculateBackoff(attempt, retryPolicy);
       assertScheduleToCloseBudgetNotExhausted(
         budget,
         request.activityName,
+        internals.getNow(),
         internals.getNow() + backoff,
       );
 

@@ -189,19 +189,25 @@ export interface ActivityCallOptions {
   visibilityTimeout?: Duration;
   /**
    * Total wall-clock budget for this activity across ALL retry attempts and the
-   * backoff waits between them — the equivalent of Temporal's
-   * `scheduleToCloseTimeout`. Unlike `timeout` (a per-attempt cap, reset on every
-   * attempt), this budget is measured from the first dispatch and is not reset
-   * between attempts. When the budget is exhausted, the activity fails with an
-   * {@link ActivityScheduleToCloseTimeoutError} (a `timeout` failure category)
-   * instead of starting another attempt.
+   * backoff waits between them — close to Temporal's `scheduleToCloseTimeout`.
+   * Unlike `timeout` (a per-attempt cap, reset on every attempt), this budget is
+   * measured from the first dispatch and is not reset between attempts. When the
+   * budget bars the next attempt, the activity fails with an
+   * {@link ActivityScheduleToCloseTimeoutError} (a `timeout` failure category).
    *
-   * The budget is enforced at the retry boundary, so it has **no effect unless a
-   * retry policy is configured** — a non-retried activity fails on its first
-   * error before the budget is ever consulted. Use `timeout` to bound a single
-   * attempt. It also applies to top-level `ctx.run` activities only; an activity
-   * inside `ctx.all` / `ctx.race` does not retry, so this budget never engages
-   * there.
+   * Enforcement is at the **retry decision point**, not by waiting out the clock:
+   * the activity fails when the next retry's backoff would start it at or after the
+   * deadline (or when an attempt has already overrun the budget), rather than
+   * parking for a backoff that is already doomed. So a retry whose backoff would
+   * overshoot the budget is skipped immediately even though the actual elapsed time
+   * is still under the budget — the error reports the actual elapsed time and the
+   * projected next-dispatch that triggered the decision.
+   *
+   * It has **no effect unless a retry policy is configured** — a non-retried
+   * activity fails on its first error before the budget is ever consulted. Use
+   * `timeout` to bound a single attempt. It also applies to top-level `ctx.run`
+   * activities only; an activity inside `ctx.all` / `ctx.race` does not retry, so
+   * this budget never engages there.
    */
   scheduleToCloseTimeout?: Duration;
 }
@@ -270,9 +276,10 @@ export interface ActivityDefinition<
   /**
    * Total wall-clock budget across all retry attempts and their backoff waits,
    * measured from the first dispatch. The per-call {@link ActivityCallOptions.scheduleToCloseTimeout}
-   * overrides this default. Enforced at the retry boundary, so it only engages
-   * for a retried, top-level `ctx.run` activity. See the per-call option for the
-   * full contract.
+   * overrides this default. Enforced at the retry decision point (the activity
+   * fails when the next retry would start at or after the deadline, not by waiting
+   * out the clock), so it only engages for a retried, top-level `ctx.run` activity.
+   * See the per-call option for the full contract.
    */
   scheduleToCloseTimeout?: Duration;
   /**
