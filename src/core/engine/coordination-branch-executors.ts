@@ -97,9 +97,14 @@ export function executeSleepSubOperation(
       timer = setTimeout(arm, remainingMs);
     };
 
-    // The engine-already-aborted case is handled by the early `Promise.reject`
-    // guard above (before this executor runs), so only a future abort needs a
-    // listener here.
+    // No post-registration re-check is needed (unlike `executeWaitSignalSubOperation`,
+    // which awaits `peekSignal` after registering): there is no `await` between the
+    // early `engineAbort.aborted` guard above and these listener registrations, so
+    // the executor runs synchronously through here. JS run-to-completion means a
+    // concurrent `abortController.abort()` (its own event-loop task) cannot
+    // interleave in that span — the abort is either already set (caught by the
+    // early `Promise.reject`) or fires strictly later (caught by this listener).
+    // A re-check here would be unreachable dead code.
     signal?.addEventListener('abort', onAbort, { once: true });
     engineAbort.addEventListener('abort', onAbort, { once: true });
     arm();
