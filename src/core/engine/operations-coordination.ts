@@ -195,15 +195,26 @@ export async function processParallelOperation(
  * settles — avoids consuming a fast signal while slower siblings are still
  * pending, keeping the durable signal alive until the operation is about to
  * checkpoint.
+ *
+ * Uses `allSettled` rather than `Promise.all` so that EVERY finalizer completes
+ * before this returns or throws: a `Promise.all` reject on the first finalize
+ * failure would leave sibling `consumeSignal` deletions running in the background
+ * after the operation has already exited, mutating durable state for an operation
+ * that will never checkpoint. The first finalization error (if any) is re-thrown
+ * only after all consumes have stopped.
  */
 async function finalizeFulfilledSlots(slots: ParallelBranchSlot[]): Promise<void> {
-  await Promise.all(
+  const outcomes = await Promise.allSettled(
     slots.map(async (slot) => {
       if (slot.status === 'fulfilled') {
         slot.value = await finalizeAndUnwrap(slot.value);
       }
     }),
   );
+  const failure = outcomes.find((outcome) => outcome.status === 'rejected');
+  if (failure) {
+    throw failure.reason;
+  }
 }
 
 /** Pull resumed slots out of an opaque cache entry, validating the shape. */

@@ -3,6 +3,7 @@ import { describe, expect, it, mock } from 'bun:test';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
+import { createDeferredConsumeEnvelope } from './deferred-consume-envelope.ts';
 import type { EngineInternals } from './internals.ts';
 import {
   executeRunAllOperationResult,
@@ -132,6 +133,49 @@ describe('partial-failure preservation worker-mode boundary', () => {
     expect((captured as Error).message).toContain(
       'ctx.runAll partial-failure preservation is not supported in worker execution mode',
     );
+  });
+
+  it('waits for every ctx.all slot finalizer to settle before throwing a finalize error', async () => {
+    // finalizeFulfilledSlots must use allSettled, not Promise.all: if one fulfilled
+    // wait-signal envelope's deferred consume throws, the sibling consumes must
+    // still complete before the operation rejects — a Promise.all would leave them
+    // running in the background, mutating durable state for an operation that will
+    // never checkpoint.
+    let siblingFinalized = false;
+    const operation: Extract<ContextOperationRequest, { type: 'parallel' }> = {
+      type: 'parallel',
+      operationId: 'parallel:0',
+      step: 0,
+      operations: [
+        { type: 'wait-signal', operationId: 'parallel:0:0', signalName: 'boom' },
+        { type: 'wait-signal', operationId: 'parallel:0:1', signalName: 'ok' },
+      ],
+    };
+
+    let captured: unknown;
+    await processParallelOperation(createWorkerModeInternals(), 'wf-finalize-fail', operation, {
+      executeSubOperation: async (_workflowId, subOperation) =>
+        subOperation.operationId === 'parallel:0:0'
+          ? createDeferredConsumeEnvelope(async () => {
+              throw new Error('consume exploded');
+            })
+          : createDeferredConsumeEnvelope(async () => {
+              siblingFinalized = true;
+              return 'ok';
+            }),
+      runOperationWithResult: async (_workflowId, _operation, execute) => {
+        try {
+          await execute();
+        } catch (error) {
+          captured = error;
+        }
+      },
+    });
+
+    expect(captured).toBeInstanceOf(Error);
+    expect((captured as Error).message).toBe('consume exploded');
+    // The sibling finalizer ran to completion before the operation rejected.
+    expect(siblingFinalized).toBe(true);
   });
 
   it('cleans up a wait-signal waiter when cancellation lands after waiter registration', async () => {
