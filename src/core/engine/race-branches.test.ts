@@ -24,13 +24,14 @@ import { encodeStorageKeyComponent } from '../../storage/interface.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { encode } from '../codec.ts';
 import type { WorkflowContext } from '../types.ts';
-import { workflow } from '../types.ts';
+import { activity, workflow } from '../types.ts';
+import { MAX_TIMER_DELAY_MS, nextSleepTimerDelayMs } from './coordination-branch-executors.ts';
 import { isDeferredConsumeEnvelope } from './deferred-consume-envelope.ts';
 import { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import { getInternals } from './internals.ts';
 import { peekSignal } from './signals.ts';
-import { executeSubOperation, MAX_TIMER_DELAY_MS, nextSleepTimerDelayMs } from './sub-operation.ts';
+import { executeSubOperation } from './sub-operation.ts';
 
 /**
  * A minimal `internals` for driving `executeWaitSignalSubOperation` directly,
@@ -838,5 +839,212 @@ describe('#456 a winning wait-signal survives replay without re-consuming', () =
     const result = (await handle.result()) as { both: unknown; gate: unknown };
     expect(result.both).toEqual(['ev-payload', 'work-done']);
     expect(result.gate).toBe('gate-payload');
+  });
+});
+
+describe('#456 wait-signal branches inside ctx.speculate finalize their envelope', () => {
+  it('speculative race won by waitForSignal yields the payload (not an envelope) and consumes once', async () => {
+    // ctx.speculate drives its own generator: a yielded race/all routes straight to
+    // the nested executors (no outer processRaceOperation), which return RAW
+    // envelopes. The speculate driver is the top-level coordinator for that yield,
+    // so it must finalize-and-unwrap before feeding the result to the generator —
+    // otherwise the workflow sees a `{ finalize }` function and the signal is never
+    // consumed.
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'speculate-race-signal' })
+        .activities({ slow: async () => new Promise<string>(() => {}) })
+        .execute(async function* (ctx: WorkflowContext) {
+          const winner = yield* ctx.speculate(async function* (branch) {
+            return yield* branch.race([branch.waitForSignal<string>('ev'), branch.run('slow')]);
+          });
+          return winner;
+        }),
+    );
+
+    const handle = await engine.start('speculate-race-signal', null, { id: 'srs' });
+    await waitForCondition(() => getInternals(engine).signalWaiters.has('srs:ev'), {
+      timeoutMs: 2000,
+      label: 'speculative wait-signal branch registered its waiter',
+    });
+    await engine.signal('srs', 'ev', 'ev-payload');
+
+    // The generator received the unwrapped payload, NOT a deferred-consume envelope.
+    const winner = await handle.result();
+    expect(winner).toBe('ev-payload');
+    expect(isDeferredConsumeEnvelope(winner)).toBe(false);
+    // The durable signal was consumed exactly once by the driver's finalize.
+    const internals = getInternals(engine);
+    const after = await peekSignal(internals, 'srs', 'ev');
+    expect(after.found).toBe(false);
+    expect(internals.signalWaiters.size).toBe(0);
+  });
+
+  it('speculative ctx.all with a wait-signal branch unwraps the array of envelopes', async () => {
+    // A nested ctx.all under speculate returns an ARRAY whose wait-signal slot is a
+    // raw envelope. finalizeAndUnwrap walks the array, so the workflow sees plain
+    // payloads and a function never reaches the durable speculate result.
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'speculate-all-signal' })
+        .activities({ work: async () => 'work-done' })
+        .execute(async function* (ctx: WorkflowContext) {
+          const both = yield* ctx.speculate(async function* (branch) {
+            return yield* branch.all([branch.waitForSignal<string>('ev'), branch.run('work')]);
+          });
+          // Assert no envelope leaked into the speculate result before returning it.
+          const containsEnvelope =
+            Array.isArray(both) && both.some((value) => isDeferredConsumeEnvelope(value));
+          return { both, containsEnvelope };
+        }),
+    );
+
+    const handle = await engine.start('speculate-all-signal', null, { id: 'sas' });
+    await waitForCondition(() => getInternals(engine).signalWaiters.has('sas:ev'), {
+      timeoutMs: 2000,
+      label: 'speculative all wait-signal branch registered its waiter',
+    });
+    await engine.signal('sas', 'ev', 'ev-payload');
+
+    const result = (await handle.result()) as { both: unknown[]; containsEnvelope: boolean };
+    expect(result.both).toEqual(['ev-payload', 'work-done']);
+    expect(result.containsEnvelope).toBe(false);
+    const internals = getInternals(engine);
+    const afterAll = await peekSignal(internals, 'sas', 'ev');
+    expect(afterAll.found).toBe(false);
+  });
+
+  it('a signal consumed inside a speculation that later rolls back stays consumed', async () => {
+    // The driver finalizes (consumes) the winning wait-signal's durable record
+    // during driving. A consume is a durable effect that — like an uncompensated
+    // speculative activity write — is NOT auto-reversed when the speculation rolls
+    // back (buildActivityCompensation returns undefined without a user `compensate`,
+    // so the engine never auto-undoes durable effects). This pins that the signal
+    // stays consumed after a verify-failure rollback, matching activity semantics.
+    await using engine = new Engine();
+    const failingVerify = activity({
+      name: 'failing-verify',
+      execute: async () => 'verified-value',
+      verify: async () => false,
+    });
+    engine.register(
+      workflow({ name: 'speculate-rollback-signal' })
+        .activities({ 'failing-verify': failingVerify })
+        .execute(async function* (ctx: WorkflowContext) {
+          try {
+            yield* ctx.speculate(async function* (branch) {
+              // Win the race via the signal FIRST (the slow branch never settles),
+              // which consumes `ev`. THEN run a verified activity whose verification
+              // fails → drainVerifications throws → the whole speculation rolls back.
+              const won = yield* branch.race([
+                branch.waitForSignal<string>('ev'),
+                branch.sleep('30s'),
+              ]);
+              yield* branch.run('failing-verify');
+              return won;
+            });
+            return { rolledBack: false };
+          } catch {
+            return { rolledBack: true };
+          }
+        }),
+    );
+
+    const handle = await engine.start('speculate-rollback-signal', null, { id: 'srb' });
+    await waitForCondition(() => getInternals(engine).signalWaiters.has('srb:ev'), {
+      timeoutMs: 2000,
+      label: 'speculative wait-signal branch registered its waiter',
+    });
+    await engine.signal('srb', 'ev', 'ev-payload');
+
+    const result = (await handle.result()) as { rolledBack: boolean };
+    expect(result.rolledBack).toBe(true);
+    // The signal consumed during the (now rolled-back) speculation stays consumed.
+    const internals = getInternals(engine);
+    const afterRollback = await peekSignal(internals, 'srb', 'ev');
+    expect(afterRollback.found).toBe(false);
+  });
+});
+
+describe('#456 nested ctx.all releases parked siblings when a branch rejects', () => {
+  it('a rejecting branch in a nested ctx.all releases a parked wait-signal sibling without consuming it', async () => {
+    // Nested executeParallelSubOperation keeps Promise.all reject-fast semantics,
+    // but must abort siblings when one branch rejects — otherwise a parked
+    // wait-signal sibling waiter leaks until engine disposal. This pins both halves:
+    // the waiter is released (size 0) AND the durable signal is NOT consumed (a
+    // later waitForSignal could still receive it).
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'nested-all-reject-releases' })
+        .activities({
+          boom: async () => {
+            throw new Error('nested branch failed');
+          },
+        })
+        .execute(async function* (ctx: WorkflowContext) {
+          // The outer race lets the nested all (which rejects) settle the race; the
+          // nested all's failing branch must release the parked wait-signal sibling.
+          const outcome = yield* ctx.race([
+            ctx.run('boom'),
+            ctx.all([ctx.waitForSignal<string>('ev'), ctx.run('boom')]),
+          ]);
+          return outcome;
+        }),
+    );
+
+    const handle = await engine.start('nested-all-reject-releases', null, { id: 'narr' });
+    // The race rejects (both branches fail); the workflow surfaces the error.
+    await expect(handle.result()).rejects.toThrow('nested branch failed');
+
+    // The parked wait-signal sibling inside the nested all was released — not leaked.
+    const internals = getInternals(engine);
+    expect(internals.signalWaiters.size).toBe(0);
+    expect(internals.signalWaitersByWorkflow.has('narr')).toBe(false);
+  });
+
+  it('does not consume a parked wait-signal sibling when a nested ctx.all branch rejects', async () => {
+    // Same shape, but the workflow continues to a top-level waitForSignal after the
+    // nested all fails, and we deliver the signal LATE. The signal must survive the
+    // nested-all rejection (released, not consumed) and reach the later waiter.
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'nested-all-reject-survives' })
+        .activities({
+          boom: async () => {
+            throw new Error('boom');
+          },
+        })
+        .execute(async function* (ctx: WorkflowContext) {
+          let first: unknown;
+          try {
+            first = yield* ctx.race([
+              ctx.run('boom'),
+              ctx.all([ctx.waitForSignal<string>('ev'), ctx.run('boom')]),
+            ]);
+          } catch (error) {
+            first = { error: error instanceof Error ? error.message : String(error) };
+          }
+          const late = yield* ctx.waitForSignal<string>('ev');
+          return { first, late };
+        }),
+    );
+
+    const handle = await engine.start('nested-all-reject-survives', null, { id: 'nars' });
+    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('nars'), {
+      timeoutMs: 2000,
+      label: 'parked on the top-level waitForSignal after the nested all rejected',
+    });
+    // The nested wait-signal waiter was released (not leaked) when the nested all
+    // rejected — size 0 — and the workflow is now parked on the top-level waiter.
+    const internals = getInternals(engine);
+    expect(internals.signalWaiters.size).toBe(0);
+
+    // The signal was never consumed by the dead nested branch, so a LATE delivery
+    // still reaches the surviving top-level waiter. (Had the nested branch consumed
+    // it, this delivery would target a non-existent buffered record and the
+    // top-level waiter would hang.)
+    await engine.signal('nars', 'ev', 'late-payload');
+    const result = (await handle.result()) as { late: unknown };
+    expect(result.late).toBe('late-payload');
   });
 });

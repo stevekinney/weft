@@ -1,4 +1,5 @@
 import type { ContextOperationRequest } from '../context.ts';
+import { finalizeAndUnwrap } from './deferred-consume-envelope.ts';
 import type { EngineInternals } from './internals.ts';
 import type { OperationWithCallerStack } from './operations-router.ts';
 import { SpeculativeExecutionState } from './speculative-execution-state.ts';
@@ -105,7 +106,22 @@ export async function driveSpeculativeGenerator(
         undefined,
         speculativeState,
       );
-      return advance(nextResult, undefined);
+      // This driver is a top-level coordinator: a `race` / `parallel` sub-operation
+      // yielded here resolves with an unfinalized deferred-consume envelope (or an
+      // array of them, from a nested coordinator) when a `wait-signal` branch wins,
+      // because only the TOP coordinator finalizes. There is no outer
+      // `processRaceOperation` wrapping this — `executeSubOperation` routes straight
+      // to the nested executors — so the speculate driver IS the linearization
+      // point of "this yielded op produced this result". Finalize-and-unwrap before
+      // feeding the value to the generator, both so the workflow sees the payload
+      // (not a `{ finalize }` function) and so the winner's durable signal is
+      // consumed exactly once. `finalizeAndUnwrap` is idempotent on non-envelope
+      // values and the envelope is Symbol-branded, so applying it unconditionally is
+      // safe for every operation type. The consume is a durable effect that, like an
+      // uncompensated speculative activity write, persists even if the speculation
+      // later rolls back.
+      const finalizedResult = await finalizeAndUnwrap(nextResult);
+      return advance(finalizedResult, undefined);
     } catch (error) {
       return advance(lastResult, error instanceof Error ? error : new Error(String(error)));
     }
