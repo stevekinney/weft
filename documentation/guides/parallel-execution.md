@@ -32,7 +32,7 @@ async function* example(ctx: Context) {
 ```
 
 > [!WARNING] `ctx.waitForSignal` inside `ctx.all` is unbounded
-> `ctx.all()` waits for _every_ branch and never aborts a sibling, so a `ctx.waitForSignal` branch blocks the whole `all` until its signal arrives—exactly like a top-level wait. A failing sibling does not unblock it. Guarantee the signal will be delivered, or pair the wait with a deadline using `ctx.race([ctx.waitForSignal('done'), ctx.sleep('30s')])` instead.
+> `ctx.all()` waits for every branch and never aborts a sibling, so a `ctx.waitForSignal` branch blocks the whole `all` until its signal arrives—exactly like a top-level wait. A failing sibling does not unblock it. Guarantee the signal will be delivered, or pair the wait with a deadline using `ctx.race([ctx.waitForSignal('done'), ctx.sleep('30s')])` instead.
 
 ## Advanced: failure semantics
 

@@ -1,4 +1,4 @@
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
 /**
  * End-to-end crash recovery tests.
  *
@@ -9,7 +9,7 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS as STORAGE_KEYS } from '../storage/interface.ts';
+import { encodeStorageKeyComponent, KEYS as STORAGE_KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { encode } from './codec.ts';
 import { Engine, WorkflowTypeNotRegisteredForRecoveryError } from './engine.ts';
@@ -534,6 +534,15 @@ describe('crash recovery', () => {
       });
     }
 
+    // Detect a buffered `ev` signal record directly in durable storage (the
+    // `sig:<encoded-id>:ev:` keyspace), so the assertions below do not reach into
+    // engine internals from outside the engine module.
+    const evSignalPrefix = `sig:${encodeStorageKeyComponent('wf-race-signal')}:ev:`;
+    const hasBufferedEv = async () => {
+      for await (const _entry of storage.scan(evSignalPrefix, { limit: 1 })) return true;
+      return false;
+    };
+
     // First engine: deliver `ev` so the race resolves and checkpoints, then crash
     // while parked on `gate`.
     const engine1 = new Engine({ storage });
@@ -541,7 +550,16 @@ describe('crash recovery', () => {
     await engine1.start('race-signal-crash', null, { id: 'wf-race-signal' });
     await flush();
     await engine1.signal('wf-race-signal', 'ev', 'ev-payload');
-    await flush();
+    // Wait until the race has actually consumed `ev` and checkpointed — proving
+    // the race settled BEFORE the crash, rather than racing two `flush()` calls.
+    // The consumed `ev` record being gone is the durable evidence the race won and
+    // committed; recovery therefore cannot pass by consuming the original `ev` for
+    // the first time.
+    await waitForCondition(async () => !(await hasBufferedEv()), {
+      timeoutMs: 2000,
+      label: 'race consumed the ev signal and checkpointed before the crash',
+    });
+    expect(await storage.get(STORAGE_KEYS.checkpoint('wf-race-signal'))).not.toBeNull();
     engine1[Symbol.dispose]();
 
     // Recover from durable storage: no in-memory accumulatedResults survives.

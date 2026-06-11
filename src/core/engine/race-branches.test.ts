@@ -20,6 +20,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 
+import { encodeStorageKeyComponent } from '../../storage/interface.ts';
 import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { encode } from '../codec.ts';
 import type { WorkflowContext } from '../types.ts';
@@ -28,6 +29,7 @@ import { isDeferredConsumeEnvelope } from './deferred-consume-envelope.ts';
 import { Engine } from './index.ts';
 import type { EngineInternals } from './internals.ts';
 import { getInternals } from './internals.ts';
+import { peekSignal } from './signals.ts';
 import { executeSubOperation, MAX_TIMER_DELAY_MS, nextSleepTimerDelayMs } from './sub-operation.ts';
 
 /**
@@ -47,11 +49,27 @@ function createSignalInternals(storage: unknown): EngineInternals {
   } as unknown as EngineInternals;
 }
 
-function createSequencedStorage(entriesByScan: Array<Array<[string, Uint8Array]> | (() => never)>) {
+/** The real durable scan prefix `peekSignal` / `consumeSignal` build for a signal. */
+function signalScanPrefix(workflowId: string, signalName: string): string {
+  return `sig:${encodeStorageKeyComponent(workflowId)}:${signalName}:`;
+}
+
+/**
+ * A storage fake whose scans return a different result per call. It VALIDATES the
+ * scan prefix and `limit` against `expectedPrefix` so a bug in the production
+ * prefix construction (wrong workflow-id encoding or signal name) fails the test
+ * rather than silently passing on a loose match.
+ */
+function createSequencedStorage(
+  expectedPrefix: string,
+  entriesByScan: Array<Array<[string, Uint8Array]> | (() => never)>,
+) {
   let scanIndex = 0;
   return {
     async delete() {},
-    scan() {
+    scan(prefix: string, options?: { limit?: number }) {
+      expect(prefix).toBe(expectedPrefix);
+      expect(options?.limit).toBe(1);
       const entries = entriesByScan[scanIndex++] ?? [];
       if (typeof entries === 'function') entries();
       const concrete = entries as Array<[string, Uint8Array]>;
@@ -63,19 +81,24 @@ function createSequencedStorage(entriesByScan: Array<Array<[string, Uint8Array]>
 }
 
 /**
- * A tiny stateful KV that yields the empty set on the FIRST scan and the seeded
- * entry on every later scan until a matching `delete`. This drives the
+ * A stateful KV that yields the empty set on the FIRST scan and the seeded entry
+ * on every later scan until a matching `delete`. This drives the
  * register-then-re-peek win path while still letting the envelope's deferred
- * `consumeSignal` find (and delete) the record on a later scan.
+ * `consumeSignal` find (and delete) the record on a later scan. It also validates
+ * the scan prefix and seeds a key UNDER that real prefix, so a wrong-prefix bug
+ * is caught.
  */
-function createDeferredVisibleStorage(key: string, value: Uint8Array) {
+function createDeferredVisibleStorage(expectedPrefix: string, value: Uint8Array) {
+  const key = `${expectedPrefix}0`;
   let firstScanDone = false;
   let present = true;
   return {
     async delete(deleteKey: string) {
       if (deleteKey === key) present = false;
     },
-    scan() {
+    scan(prefix: string, options?: { limit?: number }) {
+      expect(prefix).toBe(expectedPrefix);
+      expect(options?.limit).toBe(1);
       const visible = firstScanDone && present;
       firstScanDone = true;
       return (async function* () {
@@ -165,6 +188,48 @@ describe('#456 ctx.race / ctx.all with sleep branches', () => {
 
     const handle = await engine.start('all-run-sleep', null);
     expect(await handle.result()).toEqual([42, undefined]);
+  });
+
+  it('a long sleep branch is aborted (its host timer cleared) when the engine disposes', async () => {
+    // ctx.all has no loser to abort, so a long sleep branch's host timer must be
+    // tied to the ENGINE abort signal, not just the coordination signal — else a
+    // multi-day `ctx.all([ctx.sleep('30d')])` would keep a real setTimeout alive
+    // after the engine is gone. Driven at the sub-operation level so the abort is
+    // deterministic: arm the branch, abort the engine controller, assert rejection.
+    const engine = new Engine();
+    const internals = getInternals(engine);
+    const sleepBranch = executeSubOperation(
+      internals,
+      'sleep-engine-abort',
+      // 30 days, well beyond any test timeout — only the engine abort can settle it.
+      {
+        type: 'sleep',
+        operationId: 's',
+        scheduledFireAt: internals.options.getNow() + 30 * 86_400_000,
+      } as never,
+      SUB_OPERATION_CALLBACKS,
+    );
+    internals.abortController.abort();
+    await expect(sleepBranch).rejects.toThrow();
+    engine[Symbol.dispose]();
+  });
+
+  it('a sleep branch created after the engine is already aborted rejects without arming a timer', async () => {
+    const engine = new Engine();
+    const internals = getInternals(engine);
+    internals.abortController.abort();
+    const sleepBranch = executeSubOperation(
+      internals,
+      'sleep-pre-aborted',
+      {
+        type: 'sleep',
+        operationId: 's',
+        scheduledFireAt: internals.options.getNow() + 30 * 86_400_000,
+      } as never,
+      SUB_OPERATION_CALLBACKS,
+    );
+    await expect(sleepBranch).rejects.toThrow();
+    engine[Symbol.dispose]();
   });
 });
 
@@ -334,8 +399,11 @@ describe('#456 a losing wait-signal branch must not consume the signal', () => {
     await engine.signal('sig-once', 'ev', 'only-once');
     expect(await handle.result()).toBe('only-once');
 
-    // The durable signal record was consumed exactly once: no residue, no waiter.
+    // The durable signal record was consumed exactly once: the `sig:` record is
+    // gone (not just the in-memory waiter), proving finalize actually deleted it.
     const internals = getInternals(engine);
+    const residual = await peekSignal(internals, 'sig-once', 'ev');
+    expect(residual.found).toBe(false);
     expect(internals.signalWaiters.size).toBe(0);
     expect(internals.signalWaitersByWorkflow.has('sig-once')).toBe(false);
   });
@@ -347,7 +415,7 @@ describe('#456 wait-signal branch sub-operation paths (driven directly)', () => 
     // must release its waiter and resolve with an envelope (NOT a consumed value);
     // the envelope's finalize() performs the single consume on demand.
     const internals = createSignalInternals(
-      createDeferredVisibleStorage('sig:key', encode('buffered')),
+      createDeferredVisibleStorage(signalScanPrefix('wf-rebuffer', 'ev'), encode('buffered')),
     );
 
     const result = await executeSubOperation(
@@ -370,7 +438,7 @@ describe('#456 wait-signal branch sub-operation paths (driven directly)', () => 
     // `.catch(fail)` must reject the branch promise and release the waiter, rather
     // than surfacing an unhandled rejection.
     const internals = createSignalInternals(
-      createSequencedStorage([
+      createSequencedStorage(signalScanPrefix('wf-fail', 'ev'), [
         [],
         () => {
           throw new Error('storage exploded');
@@ -393,7 +461,9 @@ describe('#456 wait-signal branch sub-operation paths (driven directly)', () => 
   it('rejects synchronously when the engine is already aborted before registration', async () => {
     // Engine tearing down: engineAbort is already set when the branch starts, so it
     // must reject immediately without registering a waiter.
-    const internals = createSignalInternals(createSequencedStorage([[], []]));
+    const internals = createSignalInternals(
+      createSequencedStorage(signalScanPrefix('wf-aborted', 'ev'), [[], []]),
+    );
     internals.abortController.abort();
 
     await expect(
@@ -405,6 +475,31 @@ describe('#456 wait-signal branch sub-operation paths (driven directly)', () => 
       ),
     ).rejects.toThrow();
     expect(internals.signalWaiters.size).toBe(0);
+  });
+
+  it('releases the waiter and consumes nothing when the engine aborts MID-wait (after registration)', async () => {
+    // Distinct from the already-aborted-before-registration path: the waiter is
+    // registered and parked on delivery when the engine tears down. The branch
+    // must reject, release its registered waiter, and consume no buffered signal.
+    const internals = createSignalInternals(
+      createSequencedStorage(signalScanPrefix('wf-mid-abort', 'ev'), [[], []]),
+    );
+    const branch = executeSubOperation(
+      internals,
+      'wf-mid-abort',
+      { type: 'wait-signal', operationId: 'ws', signalName: 'ev' } as never,
+      SUB_OPERATION_CALLBACKS,
+    );
+    // Wait until the waiter is registered, then abort the engine mid-wait.
+    await waitForCondition(() => internals.signalWaiters.has('wf-mid-abort:ev'), {
+      timeoutMs: 2000,
+      label: 'wait-signal waiter registered before engine abort',
+    });
+    internals.abortController.abort();
+
+    await expect(branch).rejects.toThrow();
+    expect(internals.signalWaiters.size).toBe(0);
+    expect(internals.signalWaitersByWorkflow.size).toBe(0);
   });
 });
 

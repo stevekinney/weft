@@ -241,16 +241,23 @@ export async function processRaceOperation(
     // without a handler those would surface as unhandled promise
     // rejections.
     void Promise.allSettled(subOperations);
+    let winner: unknown;
     try {
-      // Finalize-and-unwrap the winner: a winning wait-signal branch resolves
-      // with a deferred-consume envelope, and this is the linearization point of
-      // "this branch won", so consuming here (after the race settles, before the
-      // result reaches the durable cache) deletes the signal exactly once and
-      // only for the winner. Losers' envelopes are dropped unfinalized below.
-      return await finalizeAndUnwrap(await Promise.race(subOperations));
+      winner = await Promise.race(subOperations);
     } finally {
+      // Abort losers as soon as the race settles — BEFORE the (possibly slow)
+      // finalize below — so background work does not keep running, consuming
+      // budget, or emitting events with no observer while the winner's signal is
+      // consumed. The winning branch has already settled, so aborting cannot
+      // un-resolve it or disturb its deferred-consume envelope.
       controller.abort();
     }
+    // Finalize-and-unwrap the winner: a winning wait-signal branch resolves with
+    // a deferred-consume envelope, and this is the linearization point of "this
+    // branch won", so consuming here (after the race settles, before the result
+    // reaches the durable cache) deletes the signal exactly once and only for the
+    // winner. Losers' envelopes are dropped unfinalized.
+    return finalizeAndUnwrap(winner);
   });
 }
 

@@ -303,6 +303,12 @@ export function nextSleepTimerDelayMs(scheduledFireAt: number, now: number): num
  * race is not driven by a virtual-clock `advanceTime`; tests should use short
  * real durations for sleep-wins paths (sleep-loses paths need no timing — the
  * abort fires).
+ *
+ * The timer also observes the engine abort signal so a long sleep branch does
+ * not outlive engine disposal. `ctx.all` does not abort siblings (it has no
+ * loser), so without watching `internals.abortController.signal` a multi-day
+ * `ctx.all([ctx.sleep('30d')])` branch would keep a host timer alive after the
+ * engine is gone.
  */
 function executeSleepSubOperation(
   internals: EngineInternals,
@@ -311,6 +317,7 @@ function executeSleepSubOperation(
 ): Promise<void> {
   signal?.throwIfAborted();
 
+  const engineAbort = internals.abortController.signal;
   if (nextSleepTimerDelayMs(operation.scheduledFireAt, internals.options.getNow()) === 0) {
     return Promise.resolve();
   }
@@ -318,9 +325,15 @@ function executeSleepSubOperation(
   return new Promise<void>((resolve, reject) => {
     let timer: ReturnType<typeof setTimeout>;
 
+    const cleanup = () => {
+      signal?.removeEventListener('abort', onAbort);
+      engineAbort.removeEventListener('abort', onAbort);
+    };
+
     const onAbort = () => {
       clearTimeout(timer);
-      reject(signal?.reason ?? new Error('aborted'));
+      cleanup();
+      reject(signal?.reason ?? engineAbort.reason ?? new Error('aborted'));
     };
 
     const arm = () => {
@@ -329,7 +342,7 @@ function executeSleepSubOperation(
         internals.options.getNow(),
       );
       if (remainingMs === 0) {
-        signal?.removeEventListener('abort', onAbort);
+        cleanup();
         resolve();
         return;
       }
@@ -339,6 +352,11 @@ function executeSleepSubOperation(
     };
 
     signal?.addEventListener('abort', onAbort, { once: true });
+    engineAbort.addEventListener('abort', onAbort, { once: true });
+    if (engineAbort.aborted) {
+      onAbort();
+      return;
+    }
     arm();
   });
 }
