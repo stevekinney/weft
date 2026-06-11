@@ -3,7 +3,7 @@
 A synthesis of 30 research papers on durable execution, checkpoint-restore, transactional tool use, rollback, event sourcing, and fault tolerance for AI agents — mapped against the current state of Weft (`/Users/stevekinney/Developer/weft`).
 
 > [!NOTE]
-> This analysis predates v0.1.0, which **removed Weft's built-in agent surface** (`ctx.agent()`, `executeAgentLoop`, `weft.agent()`, `handoff`/`debate`/`supervise`, and the agent types and events). Weft no longer ships an agent primitive; agent loops are built in userland on `ctx.run()` and `ctx.review()` or in an external framework. Some recommendations below have since shipped as engine-level, agent-agnostic primitives — most notably the effect log (`src/core/effect-log/`, exporting `EffectLog`) and workflow versioning (`src/core/versioning.ts`). Where the text says "the agent loop should…," read it as "the userland loop you build on `ctx.run()` should…." See the [`CHANGELOG`](../../CHANGELOG.md) for the removed-export list and migration path.
+> This analysis predates v0.1.0, which **removed Weft's built-in agent surface** (`ctx.agent()`, `executeAgentLoop`, `weft.agent()`, `handoff`/`debate`/`supervise`, and the agent types and events). Weft no longer ships an agent primitive; agent loops are built in userland on `ctx.run()` and `ctx.review()` or in an external framework. Some recommendations below have since shipped as engine-level, agent-agnostic primitives — most notably the effect log (`src/core/effect-log/`, exporting `EffectLog`) and workflow versioning (`src/core/versioning.ts`). Where the text says "the agent loop should…," read it as "the userland loop you build on `ctx.run()` should…." See the [`CHANGELOG`](../../CHANGELOG.md) for the removed-export list and upgrade notes.
 
 The goal is not a wishlist. The goal is to point at the specific places where Weft's architecture is ahead of the academic literature, the specific places where it is vulnerable or underspecified, and the specific places where a bounded amount of engineering work would convert a research insight into a durable, verifiable Weft primitive.
 
@@ -202,11 +202,11 @@ The confidence-weighted voting and dynamic n-sizing sit entirely in the userland
 
 ## 9. Versioning across workflow, agent, and tool definitions (AgentOrchestra)
 
-AgentOrchestra (2506.12508) argues that **Tool, Environment, and Agent** are all independently versioned components, and that a durable execution system should support rolling each one forward or back without invalidating in-flight workflows. Weft already versions workflows (`src/core/versioning.ts`) with explicit `migrate(checkpoint, fromVersion)` hooks. The remaining gap is tool versioning:
+AgentOrchestra (2506.12508) argues that **Tool, Environment, and Agent** are all independently versioned components, and that a durable execution system should support rolling each one forward or back without invalidating in-flight workflows. Weft already versions workflows (`src/core/versioning.ts`) with explicit recovery guards. The remaining gap is tool versioning:
 
 - **Tools**: if the schema of a tool an activity calls changes mid-flight, the workflow may produce output incompatible with the new schema. No detection today.
 
-Now that Weft has no built-in agent or provider surface, "agent versioning" and "provider versioning" are userland concerns — the userland loop pins whatever model and prompt it uses. The engine-level fix is mechanical once §4 (event log) is in place: record the version tuple `(workflowVersion, toolVersions[])` in every event, and refuse to resume a workflow whose version tuple is incompatible with the currently-registered versions unless a migration hook exists. This gives you zero-downtime deploys for tool-schema changes, which is a hole every production system hits within six months.
+Now that Weft has no built-in agent or provider surface, "agent versioning" and "provider versioning" are userland concerns — the userland loop pins whatever model and prompt it uses. The engine-level fix is mechanical once §4 (event log) is in place: record the version tuple `(workflowVersion, toolVersions[])` in every event, and refuse to resume a workflow whose version tuple is incompatible with the currently registered versions. This gives operators a clear pre-deploy stop for tool-schema changes, which is a hole every production system hits within six months.
 
 ---
 

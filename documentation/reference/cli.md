@@ -186,7 +186,6 @@ export default {
     description: 'Runs order fulfillment',
     tags: ['orders'],
     handler: orderWorkflow,
-    migrate: migrateOrder,
   },
   onboard: { version: '1.0.0', handler: onboardWorkflow },
 } satisfies Record<string, WorkflowRegistration>;
@@ -195,8 +194,8 @@ export default {
 **Verdicts:**
 
 - **Safe**: All stored workflow versions match registered versions.
-- **Needs migration**: Version mismatches exist, but all affected types provide migration functions.
-- **Unsafe**: Version mismatches exist without migration functions. Do not deploy.
+- **Unsafe**: Version mismatches exist. Do not deploy until active workflows are
+  resolved or the registered versions match the stored versions.
 
 ### schedule
 

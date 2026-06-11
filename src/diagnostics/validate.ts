@@ -48,7 +48,6 @@ export interface WorkflowRegistration<TInput = unknown, TOutput = unknown> {
   inputSchema?: DefinitionSchema<unknown, TInput>;
   outputSchema?: DefinitionSchema<unknown, TOutput>;
   handler: WorkflowFunction<TInput, TOutput>;
-  migrate?: (checkpoint: unknown, fromVersion: string) => unknown;
   searchAttributes?: SearchAttributeSchema;
   retention?: RetentionPolicy;
   constraints?: ConstraintDefinition[];

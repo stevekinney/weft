@@ -546,7 +546,7 @@ describe('task state invariant (server integration)', () => {
     const claimResponse = await fetch(
       `${server.url}/v1/tasks/default?activity=charge&timeout=1000`,
     );
-    const task = (await claimResponse.json()) as { workerId: string };
+    const task = (await claimResponse.json()) as { workerId: string; attemptToken: string };
     await sleepForTesting(50);
 
     // Complete via POST → resolved
@@ -556,6 +556,7 @@ describe('task state invariant (server integration)', () => {
       body: JSON.stringify({
         operationId: 'lp-done-1',
         workerId: task.workerId,
+        attemptToken: task.attemptToken,
         status: 'completed',
         value: 'done',
       }),

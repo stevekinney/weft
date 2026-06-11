@@ -27,20 +27,22 @@
  *     no-jsdoc -> always fail.
  */
 
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import ts from 'typescript';
 
 import {
   buildManifest,
+  loadPackageJson,
+  pickTypesField,
   type Classification,
   type Manifest,
   type ManifestEntry,
+  type PackageJson as PkgJson,
   type SymbolKind,
 } from './lib/jsdoc-manifest.ts';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
-const PACKAGE_JSON = resolve(REPO_ROOT, 'package.json');
 
 type CurrentState = 'no-jsdoc' | 'prose-only' | 'has-example';
 
@@ -71,15 +73,6 @@ function parseArgs(argv: string[]): Selector {
 // package.json `exports` lookup with key normalization.
 // ---------------------------------------------------------------------------
 
-type PkgJson = {
-  name: string;
-  exports?: Record<string, unknown>;
-};
-
-function loadPackageJson(): PkgJson {
-  return JSON.parse(readFileSync(PACKAGE_JSON, 'utf8'));
-}
-
 function loadCompilerOptions(): ts.CompilerOptions {
   const config = ts.findConfigFile(REPO_ROOT, ts.sys.fileExists.bind(ts.sys), 'tsconfig.json');
   if (!config) throw new Error('tsconfig.json not found');
@@ -96,25 +89,6 @@ function normalizeExportKey(importPath: string, packageName: string): string {
     return `./${importPath.slice(packageName.length + 1)}`;
   }
   throw new Error(`importPath ${importPath} does not start with package name ${packageName}`);
-}
-
-function pickTypesField(value: unknown): string | null {
-  // Mirrors the logic in scripts/lib/jsdoc-manifest.ts: a plain-string export
-  // carries no type info, and a conditional shape with platform-specific
-  // types but no top-level `types` field is ambiguous — explicit per-platform
-  // subpaths must cover those cases.
-  if (typeof value === 'string') return null;
-  if (value === null || typeof value !== 'object') return null;
-  const obj = value as Record<string, unknown>;
-  if (typeof obj['types'] === 'string') return obj['types'];
-  for (const key of ['bun', 'node', 'import', 'default'] as const) {
-    const inner = obj[key];
-    if (inner && typeof inner === 'object' && !Array.isArray(inner)) {
-      const innerTypes = (inner as Record<string, unknown>)['types'];
-      if (typeof innerTypes === 'string') return null;
-    }
-  }
-  return null;
 }
 
 function declarationFileFor(importPath: string, pkg: PkgJson): string {

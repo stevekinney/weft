@@ -179,8 +179,8 @@ export interface DiagnosticReport {
  * pending) workflows.
  *
  * Contains the most prevalent stored version, the currently registered version,
- * a running-workflow count, a {@link VersionCompatibility} verdict, and whether
- * a migration exists.  Included in a {@link VersionCheckReport}.
+ * a running-workflow count, and a {@link VersionCompatibility} verdict.
+ * Included in a {@link VersionCheckReport}.
  */
 export interface WorkflowTypeReport {
   type: string;
@@ -188,19 +188,18 @@ export interface WorkflowTypeReport {
   registeredVersion: string;
   runningCount: number;
   compatibility: VersionCompatibility;
-  hasMigration: boolean;
 }
 
 /**
  * Deployment-safety report produced by `weft version:check`.
  *
  * Summarises per-type version compatibility across all active workflows and
- * gives an `overallVerdict` of `'safe'`, `'unsafe'`, or `'needs-migration'`.
+ * gives an `overallVerdict` of `'safe'` or `'unsafe'`.
  * Returned by {@link runVersionCheck} — consumers do not construct it directly.
  */
 export interface VersionCheckReport {
   workflowTypes: WorkflowTypeReport[];
-  overallVerdict: 'safe' | 'unsafe' | 'needs-migration';
+  overallVerdict: 'safe' | 'unsafe';
 }
 
 // ---------------------------------------------------------------------------

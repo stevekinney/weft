@@ -373,7 +373,6 @@ export {
   checkVersionCompatibility,
   diffCheckpointShapes,
   inferShape,
-  migrateCheckpoint,
 } from './core/versioning';
 export type { FieldDiff, ShapeDescriptor, ShapeDiffOptions } from './core/versioning';
 

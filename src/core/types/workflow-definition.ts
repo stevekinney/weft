@@ -2,8 +2,8 @@
  * The `WorkflowDefinition` type — the runtime shape produced by
  * `workflow({ name }).execute(fn)`. Carries the workflow name, the generator
  * handler, and the colocated metadata the engine reads at registration time
- * (version, schemas, retention, search attributes, migration, domain
- * constraints, tags, description).
+ * (version, schemas, retention, search attributes, domain constraints, tags,
+ * description).
  */
 
 import type { ConstraintDefinition } from '../constraint.ts';
@@ -15,9 +15,8 @@ import type { WorkflowFunction } from './workflow-function.ts';
 /**
  * Named workflow definition returned by {@link workflow}. The runtime object
  * carries the workflow name, the generator handler, and optional metadata
- * (version, schemas, retention policy, search-attribute schema, checkpoint
- * migration, and domain constraints) that the engine reads at registration
- * time.
+ * (version, schemas, retention policy, search-attribute schema, and domain
+ * constraints) that the engine reads at registration time.
  *
  * @example
  * ```ts
@@ -38,7 +37,7 @@ export interface WorkflowDefinition<
   name: TName;
   /** Workflow generator function executed by the engine. */
   handler: WorkflowFunction<TInput, TOutput>;
-  /** Version recorded with workflow state and used for checkpoint migration. */
+  /** Version recorded with workflow state and checked during recovery. */
   version?: string;
   /** User-facing description for catalog, code generation, and tool surfaces. */
   description?: string;
@@ -48,8 +47,6 @@ export interface WorkflowDefinition<
   inputSchema?: DefinitionSchema<unknown, TInput>;
   /** Optional output schema metadata for introspection; registration validates metadata shape only. */
   outputSchema?: DefinitionSchema<unknown, TOutput>;
-  /** Optional checkpoint migration from a prior workflow version. */
-  migrate?: (checkpoint: unknown, fromVersion: string) => unknown;
   /** Search-attribute schema used to validate indexed workflow metadata. */
   searchAttributes?: SearchAttributeSchema;
   /** Retention policy for terminal workflow records. */

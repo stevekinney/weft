@@ -103,7 +103,7 @@ class Engine extends EventTarget implements Disposable {
 
 When you deploy new workflow code while workflows are in-flight, you need to answer: which version of the code runs when a checkpointed workflow resumes?
 
-Weft's checkpoint model makes this fundamentally simpler than Temporal. Since we resume from a checkpoint (not replay from the beginning), the only compatibility requirement is that the new code can handle the checkpoint's shape at the specific step where execution paused. No patching API. No version gates in workflow code. Migration is a pure data transformation.
+Weft's checkpoint model makes this fundamentally simpler than Temporal. Since we resume from a checkpoint (not replay from the beginning), the compatibility requirement is explicit: the stored workflow version must match the registered version, the recorded version tuple must not drift, and the code must still understand the checkpoint shape at the specific step where execution paused. No patching API. No version gates in workflow code.
 
 #### Registration API
 
@@ -112,34 +112,24 @@ interface WorkflowRegistration {
   name: string;
   version: string; // Semver string, e.g., "2.0.0"
   handler: WorkflowFunction;
-  /** Optional: migrate a checkpoint from a previous version. */
-  migrate?: (checkpoint: unknown, fromVersion: string) => unknown;
 }
 
-// Full registration with version and migration
+// Full registration with an explicit recovery boundary.
 engine.register('order', {
   version: '2.0.0',
   handler: orderWorkflowV2,
-  migrate(checkpoint, fromVersion) {
-    if (fromVersion.startsWith('1.')) {
-      // V1 stored `address` as a string; V2 uses an Address object
-      return { ...checkpoint, address: parseAddress(checkpoint.address) };
-    }
-    return checkpoint;
-  },
 });
 
-// Shorthand still works — defaults to version "0.0.0", no migration
+// Shorthand still works — defaults to version "0.0.0".
 engine.register('order', orderWorkflow);
 ```
 
 #### Resume Logic
 
 1. **Version pinned at start.** When `engine.start()` is called, the workflow state blob records the version of the currently registered handler.
-2. **On resume, versions are compared.** If they match: resume normally. If they differ: call `migrate()` if provided.
-3. **No migration function = resume as-is.** This works when the new code is backward-compatible with the checkpoint shape (common, since checkpoint data is just local variables that pass `structuredClone`).
-4. **Incompatible checkpoint = clear error.** If the new code fails because the checkpoint shape is wrong and no migration was provided, the workflow fails with a `VersionMismatchError` that includes both versions and the workflow ID.
-5. **Migrated checkpoint persisted atomically.** After successful migration, the updated checkpoint and version are written to storage in one `batch()` call.
+2. **On resume, versions are compared.** If they match and the version tuple has not drifted: resume normally. If they differ: throw `VersionMismatchError`.
+3. **Checkpoint shape remains the operator's responsibility.** The new code must understand the stored checkpoint at the paused step.
+4. **Incompatible checkpoint = clear error.** Version and tuple mismatches fail with `VersionMismatchError` that includes both versions and the workflow ID.
 
 #### Why Simpler Than Temporal
 
@@ -147,29 +137,23 @@ In Temporal, version changes require `workflow.getVersion()` / `patched()` becau
 
 - No replay means no code-path determinism requirement.
 - The checkpoint captures the complete state at the pause point.
-- Migration is a pure data transformation on the checkpoint, not code-path branching.
-- Developers think about "can my new code handle this checkpoint shape?" rather than "is my new code deterministically compatible with the old event history?"
+- Recovery starts from the checkpoint instead of replaying the full event history.
+- Developers think about "can my new code resume this checkpoint under the same recorded version tuple?" rather than "is my new code deterministically compatible with the old event history?"
 
 #### Usage Examples
 
 ```typescript
-// Simple case: checkpoint shape didn't change, just the logic after the current step
+// Simple case: checkpoint shape did not change, just the logic after the current step.
 engine.register('order', {
-  version: '1.1.0',
+  version: '1.0.0',
   handler: orderWorkflowV2,
-  // No migrate needed — checkpoint shape is compatible
 });
 
-// Migration case: V2 added a `region` field
+// Breaking case: V2 added a required `region` field.
 engine.register('order', {
   version: '2.0.0',
   handler: orderWorkflowV2,
-  migrate(checkpoint, fromVersion) {
-    if (fromVersion.startsWith('1.')) {
-      return { ...checkpoint, region: 'us-east-1' };
-    }
-    return checkpoint;
-  },
+  // Running v1 checkpoints stop with VersionMismatchError until resolved.
 });
 ```
 

@@ -232,7 +232,7 @@ Three files. Webpack bundling. `proxyActivities` ceremony. Separate worker proce
 
 9. **Naming:** Weft. Ship it.
 
-10. **Workflow versioning:** Version pinned at start, stored in workflow state, optional migration function on resume. No patching API needed — checkpoint model avoids replay compatibility concerns.
+10. **Workflow versioning:** Version pinned at start and stored in workflow state; recovery stops on workflow-version or version-tuple drift. No patching API needed — checkpoint model avoids replay compatibility concerns.
 
 11. **Workflow timeouts:** Execution timeout (maximum wall-clock time for a workflow), stored as absolute deadline in storage, enforced by the scheduler via AbortController.
 

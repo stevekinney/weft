@@ -1319,7 +1319,7 @@ export class Engine<
    * registered workflow type on this engine.
    *
    * `acknowledgeUnknownWorkflowTypes` is a dangerous escape hatch for rolling
-   * deploys or explicit storage migrations.
+   * deploys or explicit operator storage repair.
    * When set, unknown workflow types are skipped and reported through
    * {@link WorkflowRecoverySkippedEvent}.
    */

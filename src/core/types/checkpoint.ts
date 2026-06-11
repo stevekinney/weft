@@ -113,13 +113,12 @@ export interface Checkpoint {
   workerReplayFailures?: Array<[number, WorkerReplayOperationFailure]>;
   pendingSignals: string[];
   searchAttributes: Record<string, SearchAttributeValue>;
-  /** User-defined workflow code version. Used for code migrations. */
+  /** User-defined workflow code version. Checked during recovery. */
   version: string;
   /**
    * Checkpoint schema version. Distinct from `version` (which is the
    * user's workflow code version). Bumped whenever the engine changes
-   * the on-disk checkpoint format. Pre-1.0: refuse to load older
-   * versions; post-1.0: every bump must ship a migration.
+   * the on-disk checkpoint format. Pre-1.0: refuse to load older versions.
    */
   schemaVersion: number;
   createdAt: number;

@@ -101,10 +101,9 @@ describe('runVersionCheck', () => {
     expect(report.workflowTypes[0]!.registeredVersion).toBe('1.0.0');
     expect(report.workflowTypes[0]!.runningCount).toBe(2);
     expect(report.workflowTypes[0]!.compatibility).toBe('compatible');
-    expect(report.workflowTypes[0]!.hasMigration).toBe(false);
   });
 
-  it('returns needs-migration when versions differ and migration is provided', async () => {
+  it('returns unsafe when versions differ', async () => {
     const storage = new MemoryStorage();
     await seedWorkflow(
       storage,
@@ -115,29 +114,7 @@ describe('runVersionCheck', () => {
       order: {
         version: '2.0.0',
         handler: () => dummyHandler(),
-        migrate: (checkpoint: unknown) => checkpoint,
       },
-    };
-
-    const report = await runVersionCheck(storage, registrations);
-
-    expect(report.overallVerdict).toBe('needs-migration');
-    expect(report.workflowTypes).toHaveLength(1);
-    expect(report.workflowTypes[0]!.compatibility).toBe('needs-migration');
-    expect(report.workflowTypes[0]!.hasMigration).toBe(true);
-    expect(report.workflowTypes[0]!.storedVersion).toBe('1.0.0');
-    expect(report.workflowTypes[0]!.registeredVersion).toBe('2.0.0');
-  });
-
-  it('returns unsafe when versions differ and no migration is provided', async () => {
-    const storage = new MemoryStorage();
-    await seedWorkflow(
-      storage,
-      makeWorkflowState({ id: 'wf-1', type: 'order', version: '1.0.0', status: 'running' }),
-    );
-
-    const registrations: Record<string, WorkflowRegistration> = {
-      order: { version: '2.0.0', handler: () => dummyHandler() },
     };
 
     const report = await runVersionCheck(storage, registrations);
@@ -145,7 +122,8 @@ describe('runVersionCheck', () => {
     expect(report.overallVerdict).toBe('unsafe');
     expect(report.workflowTypes).toHaveLength(1);
     expect(report.workflowTypes[0]!.compatibility).toBe('incompatible');
-    expect(report.workflowTypes[0]!.hasMigration).toBe(false);
+    expect(report.workflowTypes[0]!.storedVersion).toBe('1.0.0');
+    expect(report.workflowTypes[0]!.registeredVersion).toBe('2.0.0');
   });
 
   it('uses the worst-case verdict when multiple workflow types have different compatibility', async () => {
@@ -157,13 +135,13 @@ describe('runVersionCheck', () => {
       makeWorkflowState({ id: 'wf-1', type: 'order', version: '1.0.0', status: 'running' }),
     );
 
-    // onboard: needs migration (has migrate function)
+    // onboard: incompatible
     await seedWorkflow(
       storage,
-      makeWorkflowState({ id: 'wf-2', type: 'onboard', version: '1.0.0', status: 'running' }),
+      makeWorkflowState({ id: 'wf-2', type: 'onboard', version: '1.0.0', status: 'pending' }),
     );
 
-    // payment: unsafe (version mismatch, no migrate)
+    // payment: incompatible
     await seedWorkflow(
       storage,
       makeWorkflowState({ id: 'wf-3', type: 'payment', version: '1.0.0', status: 'pending' }),
@@ -171,17 +149,12 @@ describe('runVersionCheck', () => {
 
     const registrations: Record<string, WorkflowRegistration> = {
       order: { version: '1.0.0', handler: () => dummyHandler() },
-      onboard: {
-        version: '2.0.0',
-        handler: () => dummyHandler(),
-        migrate: (checkpoint: unknown) => checkpoint,
-      },
+      onboard: { version: '2.0.0', handler: () => dummyHandler() },
       payment: { version: '3.0.0', handler: () => dummyHandler() },
     };
 
     const report = await runVersionCheck(storage, registrations);
 
-    // unsafe is the worst case
     expect(report.overallVerdict).toBe('unsafe');
     expect(report.workflowTypes).toHaveLength(3);
   });

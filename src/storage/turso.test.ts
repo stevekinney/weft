@@ -79,6 +79,10 @@ async function collect<T>(iterable: AsyncIterable<T>): Promise<T[]> {
 }
 
 describe('TursoStorage', () => {
+  runBinaryAndLargeScanStorageConformance('TursoStorage', {
+    create: () => new TursoStorage({ url: 'file::memory:' }),
+  });
+
   it('allows only one competing file-backed conditionalBatch caller to win', async () => {
     const first = createFileBackedTursoStorage('turso-cas-contention');
     const second = new TursoStorage({ url: first.url });

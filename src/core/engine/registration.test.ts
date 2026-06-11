@@ -36,24 +36,6 @@ describe('resolveWorkflowTypeTarget', () => {
     engine[Symbol.dispose]();
   });
 
-  it('preserves migration functions on registration entries', () => {
-    const engine = new Engine();
-    const migrate = (checkpoint: unknown) => checkpoint;
-
-    const migratedWorkflow = workflow({
-      name: 'migrated-workflow',
-      migrate,
-      version: '2',
-    }).execute(async function* () {
-      return 'done';
-    });
-    engine.register(migratedWorkflow);
-
-    expect(getInternals(engine).registrations.get('migrated-workflow')?.migrate).toBe(migrate);
-
-    engine[Symbol.dispose]();
-  });
-
   it('rejects non-workflow registration inputs with a clear error', () => {
     const engine = new Engine();
 

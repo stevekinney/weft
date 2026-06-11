@@ -232,7 +232,7 @@ describe('weft.workflows.startorsignal', () => {
   it('returns 400 InvalidParams when body is a JSON array', async () => {
     engine = createEngine();
 
-    const response = await handleRequest(startOrSignalRequest([]), engine, {
+    const response = await handleRequest(startOrSignalRequest(['not-an-object']), engine, {
       operationRegistry: registry,
       restBindings: bindings,
     });

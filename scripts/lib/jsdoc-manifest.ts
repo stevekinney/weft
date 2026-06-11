@@ -55,9 +55,9 @@ const PROSE_ONLY_NAME_PATTERN =
 // package.json `exports` reading.
 // ---------------------------------------------------------------------------
 
-type PackageJson = { name: string; exports?: Record<string, unknown> };
+export type PackageJson = { name: string; exports?: Record<string, unknown> };
 
-function loadPackageJson(): PackageJson {
+export function loadPackageJson(): PackageJson {
   return JSON.parse(readFileSync(PACKAGE_JSON, 'utf8'));
 }
 
@@ -68,7 +68,7 @@ function distToSource(distRelative: string): string {
     .replace(/\.d\.ts$/, '.ts');
 }
 
-function pickTypesField(value: unknown): string | null {
+export function pickTypesField(value: unknown): string | null {
   if (typeof value === 'string') return null;
   if (value === null || typeof value !== 'object') return null;
   const obj = value as Record<string, unknown>;

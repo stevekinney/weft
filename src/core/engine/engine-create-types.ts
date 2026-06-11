@@ -45,13 +45,13 @@ export type EngineCreateOptions<
          * Recover stored running workflows after registration. Defaults to
          * `true`: a fresh engine booting against durable storage resumes any
          * workflows left in flight by a previous process. Pass `recover: false`
-         * to opt out (tests, `ScopedStorage` isolation, pre-migration
+         * to opt out (tests, `ScopedStorage` isolation, explicit operator
          * inspection).
          */
         recover?: true | undefined;
         /**
          * Forwarded to `Engine.recoverAll`. Only use this during rolling
-         * deploys or explicit storage migrations.
+         * deploys or explicit operator storage repair.
          */
         acknowledgeUnknownWorkflowTypes?: boolean;
       }

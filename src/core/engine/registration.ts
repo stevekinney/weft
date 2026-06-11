@@ -87,9 +87,6 @@ function applyOptionalRegistrationFields(
   entry: RegistrationEntry,
   registration: WorkflowDefinition,
 ): void {
-  if (registration.migrate) {
-    entry.migrate = registration.migrate;
-  }
   if (registration.searchAttributes && Object.keys(registration.searchAttributes).length > 0) {
     entry.searchAttributes = registration.searchAttributes;
   }

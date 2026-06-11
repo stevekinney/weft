@@ -3,7 +3,7 @@
 > _Weft_ — the cross-threads in weaving that bind the warp together.
 
 > [!NOTE]
-> Weft's built-in agent surface — `ctx.agent()`, `ctx.handoff()`, `ctx.debate()`, `ctx.supervise()`, and the agent types, events, and runtime that backed them — was removed in v0.1.0. Weft does not ship an agent primitive. Build durable agent loops on `ctx.run()` and `ctx.review()`, or run them in an external agent framework. See the [`CHANGELOG`](../../CHANGELOG.md) for the full removed-export list and migration path.
+> Weft's built-in agent surface — `ctx.agent()`, `ctx.handoff()`, `ctx.debate()`, `ctx.supervise()`, and the agent types, events, and runtime that backed them — was removed in v0.1.0. Weft does not ship an agent primitive. Build durable agent loops on `ctx.run()` and `ctx.review()`, or run them in an external agent framework. See the [`CHANGELOG`](../../CHANGELOG.md) for the full removed-export list and upgrade notes.
 
 ---
 
@@ -56,7 +56,7 @@ Here is what a developer must learn to write their first workflow:
 | Activity invocation    | `proxyActivities()` + type import | `yield* ctx.run(fn, args)`           |
 | Timer                  | Deterministic `workflow.sleep()`  | `yield* ctx.sleep("1 hour")`         |
 | Signal                 | `setHandler` + `condition`        | `yield* ctx.waitForSignal(name)`     |
-| Versioning             | `patched()` / `deprecatePatch()`  | Deploy new code (migration optional) |
+| Versioning             | `patched()` / `deprecatePatch()`  | Version-pinned recovery guard        |
 | Long-running workflows | `continueAsNew()`                 | Nothing (checkpoints are fixed-size) |
 | Dev environment        | Docker Compose + Temporal server  | `bun add @lostgradient/weft`         |
 | Bundling               | Webpack for workflow sandbox      | None                                 |
@@ -111,7 +111,7 @@ ActivityFailedError: charge failed after 3 attempts
 
 **The Temporal problem.** Changing workflow code while workflows are in-flight requires either the `patched()` / `deprecatePatch()` API — which litters your code with version branches that never go away — or Worker Versioning, a whole deployment orchestration system. The Temporal docs themselves acknowledge this is complex enough that they deprecated their first versioning approach and replaced it in 2025. Developers routinely report confusion about which changes are safe versus which break replay.
 
-**The Weft answer.** Checkpointing means code before the current checkpoint never re-executes. Changing steps after the current checkpoint is inherently safe. Versioning only matters for the step you are currently on — and even then, the migration path is a pure data transformation on the checkpoint, not code-path branching. (See: [Workflow Versioning](./workflow-platform-features.md#13-workflow-versioning).)
+**The Weft answer.** Checkpointing means code before the current checkpoint never re-executes. Changing steps after the current checkpoint is inherently safe. Versioning only matters for the step you are currently on, and Weft treats version drift as an operator decision point instead of branching inside workflow code. (See: [Workflow Versioning](./workflow-platform-features.md#13-workflow-versioning).)
 
 ```typescript
 // Temporal: version branches that accumulate forever
@@ -122,14 +122,10 @@ if (workflow.patched('v2-shipping')) {
 }
 // v3? Now you have TWO version branches. v4? Three. They never go away.
 
-// Weft: deploy new code. Old checkpoints migrate automatically.
+// Weft: deploy new code under a new version. Old checkpoints stop at recovery.
 engine.register('order', {
   version: '2.0.0',
   handler: orderWorkflow,
-  migrate: (checkpoint, fromVersion) => ({
-    ...checkpoint,
-    shippingOptions: { express: true }, // add the new field
-  }),
 });
 ```
 
@@ -143,15 +139,14 @@ order (v1.0.0 → v2.0.0):
     checkpoint shape: { payment: PaymentResult }
     new code at step 1 expects: { payment: PaymentResult, region: string }
     INCOMPATIBLE: missing field "region"
-    migration function: PROVIDED (will add region: "us-east-1")
 
   12 running workflows at step 0 (pre-charge)
-    COMPATIBLE: no migration needed
+    COMPATIBLE: checkpoint can resume under v2.0.0
 
-Result: 47 workflows require migration. Migration function provided. Safe to deploy.
+Result: 47 workflows require operator resolution before deploying v2.0.0.
 ```
 
-**Going further: automatic checkpoint schema inference.** Since checkpoints use `structuredClone` semantics and the engine knows the generator's local variables at each yield point, the engine can automatically record a checkpoint schema for each step. On resume, if the shapes diverge and no migration is provided, the error message says exactly which fields changed: "field `address` was a string in v1, expected an object in v2" — not just `VersionMismatchError`.
+**Going further: automatic checkpoint schema inference.** Since checkpoints use `structuredClone` semantics and the engine knows the generator's local variables at each yield point, the engine can automatically record a checkpoint schema for each step. On resume, if the shapes diverge, the error message says exactly which fields changed: "field `address` was a string in v1, expected an object in v2" — not just `VersionMismatchError`.
 
 ### 3. Steep Learning Curve and Conceptual Overhead
 

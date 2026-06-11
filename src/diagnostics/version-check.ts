@@ -70,8 +70,7 @@ function buildWorkflowTypeReports(
 
     const storedVersion = findMostCommonVersion(group.versionCounts);
     const registeredVersion = registration.version ?? DEFAULT_WORKFLOW_VERSION;
-    const hasMigration = !!registration.migrate;
-    const compatibility = checkVersionCompatibility(storedVersion, registeredVersion, hasMigration);
+    const compatibility = checkVersionCompatibility(storedVersion, registeredVersion);
 
     reports.push({
       type,
@@ -79,7 +78,6 @@ function buildWorkflowTypeReports(
       registeredVersion,
       runningCount: group.count,
       compatibility,
-      hasMigration,
     });
   }
   return reports;
@@ -88,12 +86,10 @@ function buildWorkflowTypeReports(
 function computeOverallVerdict(
   reports: WorkflowTypeReport[],
 ): VersionCheckReport['overallVerdict'] {
-  let verdict: VersionCheckReport['overallVerdict'] = 'safe';
   for (const report of reports) {
     if (report.compatibility === 'incompatible') return 'unsafe';
-    if (report.compatibility === 'needs-migration') verdict = 'needs-migration';
   }
-  return verdict;
+  return 'safe';
 }
 
 /**
@@ -102,7 +98,7 @@ function computeOverallVerdict(
  * versions to determine deployment safety.
  *
  * Returns a {@link VersionCheckReport} with a per-type breakdown and an
- * `overallVerdict` of `'safe'`, `'unsafe'`, or `'needs-migration'`.  Typically
+ * `overallVerdict` of `'safe'` or `'unsafe'`. Typically
  * called by the `weft version:check` CLI command.
  *
  * @example
