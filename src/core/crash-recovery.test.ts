@@ -512,6 +512,56 @@ describe('crash recovery', () => {
     engine2[Symbol.dispose]();
   });
 
+  it('does not re-consume a wait-signal that already won a ctx.race when recovering from a durable crash (#456)', async () => {
+    // A ctx.race won by waitForSignal consumes the durable `sig:` record and
+    // checkpoints the CONSUMED value (not the deferred-consume envelope, which
+    // carries a function and cannot encode). After a full crash — a new Engine on
+    // the same durable storage, with no in-memory cache — replay must short-circuit
+    // the race from its checkpointed value, NOT re-run the branch. Re-running would
+    // re-consume a now-deleted record and yield `undefined` (a different winner on
+    // replay = non-determinism). This is the durable analogue of the in-memory
+    // park/resume replay test in race-branches.test.ts.
+    const storage = new MemoryStorage();
+
+    function makeWorkflow() {
+      return workflow({ name: 'race-signal-crash' }).execute(async function* (ctx) {
+        const c = ctx;
+        const winner = yield* c.race([c.waitForSignal<string>('ev'), c.sleep('30s')]);
+        // Crash point: park on a second signal so the race is checkpointed before
+        // the workflow can finish.
+        const gate = yield* c.waitForSignal<string>('gate');
+        return { winner, gate };
+      });
+    }
+
+    // First engine: deliver `ev` so the race resolves and checkpoints, then crash
+    // while parked on `gate`.
+    const engine1 = new Engine({ storage });
+    engine1.register(makeWorkflow());
+    await engine1.start('race-signal-crash', null, { id: 'wf-race-signal' });
+    await flush();
+    await engine1.signal('wf-race-signal', 'ev', 'ev-payload');
+    await flush();
+    engine1[Symbol.dispose]();
+
+    // Recover from durable storage: no in-memory accumulatedResults survives.
+    const engine2 = new Engine({ storage });
+    engine2.register(makeWorkflow());
+    const handles = await engine2.recoverAll();
+    expect(handles).toHaveLength(1);
+    await flush();
+
+    // Unblock the gate; the recovered run must report the race winner it already
+    // consumed before the crash.
+    await engine2.signal('wf-race-signal', 'gate', 'gate-payload');
+    const result = (await handles[0]!.result()) as { winner: unknown; gate: unknown };
+    // If recovery re-consumed the (now-deleted) record, winner would be undefined.
+    expect(result.winner).toBe('ev-payload');
+    expect(result.gate).toBe('gate-payload');
+
+    engine2[Symbol.dispose]();
+  });
+
   it('resumes after crash during sleep and completes when timer fires', async () => {
     const { TestEngine } = await import('../testing/test-engine.ts');
 

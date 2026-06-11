@@ -20,10 +20,9 @@
  *
  * Envelopes must never reach the durable operation cache (a function cannot
  * round-trip `encode`/`decode`), so the coordinator finalize-and-unwraps every
- * winning branch's envelope before the operation result is written. wait-signal
- * is currently allowed only as a DIRECT branch of the top-level coordination, so
- * an envelope is always a scalar branch result here; nested wait-signal (where a
- * nested `ctx.all` could surface envelopes inside an array) is rejected upstream.
+ * winning branch's envelope before the operation result is written — including
+ * envelopes nested at arbitrary positions inside a `ctx.all` array result that a
+ * nested coordinator surfaces up to its parent.
  */
 
 const DEFERRED_CONSUME_BRAND: unique symbol = Symbol('weft.deferredConsume');
@@ -57,16 +56,26 @@ export function isDeferredConsumeEnvelope(value: unknown): value is DeferredCons
 /**
  * Finalize-and-unwrap a coordination result before it is written to the durable
  * cache. A winning `wait-signal` branch surfaces a {@link DeferredConsumeEnvelope}
- * whose `finalize()` performs the single consume; any other value passes through
- * untouched.
+ * whose `finalize()` performs the single consume; a nested `ctx.all` branch
+ * surfaces an ARRAY that may hold envelopes at arbitrary positions, so arrays are
+ * walked and each element finalized. Any other value passes through untouched.
  *
  * This runs only on the WINNING path (race winner, or every branch of a settled
  * `ctx.all`), so finalizing here is exactly the linearization point of "this
- * branch won" — the consume happens strictly after the coordinator settled.
+ * branch won" — the consume happens strictly after the coordinator settled, and a
+ * losing branch's envelope is never reached, so its signal is never consumed.
+ *
+ * The array walk reconstructs arrays via `Promise.all(map(...))`. This is safe
+ * because coordination results are cache-safe encoded data: they round-trip
+ * `encode`/`decode` for the durable cache, so sparse holes, custom array
+ * properties, subclasses, and array identity are not preserved semantics here.
  */
 export async function finalizeAndUnwrap(value: unknown): Promise<unknown> {
   if (isDeferredConsumeEnvelope(value)) {
     return value.finalize();
+  }
+  if (Array.isArray(value)) {
+    return Promise.all(value.map((element) => finalizeAndUnwrap(element)));
   }
   return value;
 }

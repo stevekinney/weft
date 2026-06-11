@@ -33,35 +33,21 @@ type RaceOperation = Extract<ContextOperationRequest, { type: 'race' }>;
 type RunAllOperation = Extract<ContextOperationRequest, { type: 'run-all' }>;
 
 /**
- * Validate the wait-signal branches of a `ctx.race` / `ctx.all` before any branch
- * runs. Two rules, both enforced across the whole coordination tree:
- *
- * 1. A `wait-signal` may only appear as a DIRECT branch of the top-level
- *    coordination, never below a nested `race` / `parallel`. A nested coordinator
- *    returns its result up to the outer one for the single deferred consume; a
- *    nested `ctx.all` returns an array holding the deferred-consume envelope,
- *    which the current scalar finalize step does not unwrap — so the envelope
- *    would reach the durable cache and the signal would never consume. Rather
- *    than corrupt signal state silently, reject the unsupported shape loudly at
- *    validation time. (Nested wait-signal support is a planned follow-up.)
- * 2. No two `wait-signal` branches may wait on the SAME signal name: siblings
- *    share the `${workflowId}:${signalName}` waiter key and would clobber each
- *    other at registration, leaving one branch permanently unreachable. Distinct
- *    names (the event-or-close idiom) are unaffected.
+ * Reject a `ctx.race` / `ctx.all` whose branches wait on the SAME signal name,
+ * recursively through nested `race` / `parallel` branches. Sibling wait-signal
+ * branches share the `${workflowId}:${signalName}` waiter key, so two anywhere in
+ * the coordination tree would clobber each other at registration, leaving one
+ * branch permanently unreachable (the run would hang). Reject the meaningless
+ * shape deterministically rather than silently dropping a branch. Distinct names
+ * (the event-or-close idiom) are unaffected.
  */
 export function assertSupportedSignalBranches(
   operations: readonly ContextOperationRequest[],
 ): void {
   const seen = new Set<string>();
-  const walk = (subOperations: readonly ContextOperationRequest[], nested: boolean): void => {
+  const walk = (subOperations: readonly ContextOperationRequest[]): void => {
     for (const subOperation of subOperations) {
       if (subOperation.type === 'wait-signal') {
-        if (nested) {
-          throw new Error(
-            'ctx.waitForSignal is not yet supported inside a nested ctx.race / ctx.all: ' +
-              'use it as a direct branch of the top-level coordination.',
-          );
-        }
         if (seen.has(subOperation.signalName)) {
           throw new Error(
             `ctx.race / ctx.all cannot have two branches waiting on the same signal "${subOperation.signalName}": ` +
@@ -71,11 +57,11 @@ export function assertSupportedSignalBranches(
         }
         seen.add(subOperation.signalName);
       } else if (subOperation.type === 'race' || subOperation.type === 'parallel') {
-        walk(subOperation.operations, true);
+        walk(subOperation.operations);
       }
     }
   };
-  walk(operations, false);
+  walk(operations);
 }
 
 export type CoordinationOperationCallbacks = {
@@ -166,11 +152,9 @@ export async function processParallelOperation(
       resumedSlots,
       // Finalize-and-unwrap each branch BEFORE its value enters the slot: every
       // branch of a settled `ctx.all` is a winner, so a wait-signal branch's
-      // deferred-consume envelope must consume here. Unwrapping before the slot
-      // is built keeps the envelope (which carries a function) out of the durable
-      // cache entry. wait-signal is only allowed as a DIRECT branch here (nested
-      // wait-signal is rejected by assertSupportedSignalBranches), so each branch
-      // value is a scalar — never a nested-coordinator array of envelopes.
+      // deferred-consume envelope (and any envelopes inside a nested-coordinator
+      // array result) must consume here. Unwrapping before the slot is built keeps
+      // envelopes (which carry a function) out of the durable cache entry.
       async (index) =>
         finalizeAndUnwrap(
           await callbacks.executeSubOperation(workflowId, operation.operations[index]!),

@@ -12,11 +12,11 @@
  * resolves with a deferred-consume envelope, and ONLY the coordinator finalizes
  * (the single destructive consume) on the winner, strictly after the race/all
  * settles. So a losing wait-signal branch leaves the signal intact for a later
- * `waitForSignal` or a replay. These tests pin both halves of that contract.
- *
- * `wait-signal` is supported only as a DIRECT branch of the top-level
- * coordination. Nesting it below another `ctx.race` / `ctx.all` is rejected at
- * validation time (the envelope-propagation plumbing is a follow-up).
+ * `waitForSignal` or a replay. The envelope propagates up through NESTED
+ * coordinators (a nested `ctx.all` surfaces an array of envelopes), and the
+ * top-level coordinator finalize-and-unwraps the winner — including walking
+ * arrays — before the result reaches the durable cache. These tests pin both
+ * halves of that contract, at the top level and nested.
  */
 import { describe, expect, it } from 'bun:test';
 
@@ -285,50 +285,6 @@ describe('#456 ctx.race / ctx.all with wait-signal branches', () => {
     const handle = await engine.start('dup-signal-race', null);
     await expect(handle.result()).rejects.toThrow(/same signal "ev"/);
   });
-
-  it('rejects a wait-signal nested inside a nested ctx.race (not yet supported)', async () => {
-    // A nested coordinator surfaces its result to the outer one for the single
-    // deferred consume, but the nesting plumbing (envelope propagation through a
-    // nested-`all` array, hardened abort propagation) is a follow-up. Reject the
-    // unsupported shape loudly at validation time rather than corrupt signal state.
-    await using engine = new Engine();
-    engine.register(
-      workflow({ name: 'nested-race-signal' })
-        .activities({ noop: async () => 'noop' })
-        .execute(async function* (ctx: WorkflowContext) {
-          yield* ctx.race([
-            ctx.run('noop'),
-            ctx.race([ctx.waitForSignal<string>('ev'), ctx.sleep('5s')]),
-          ]);
-          return 'unreachable';
-        }),
-    );
-
-    const handle = await engine.start('nested-race-signal', null);
-    await expect(handle.result()).rejects.toThrow(
-      /not yet supported inside a nested ctx\.race \/ ctx\.all/,
-    );
-  });
-
-  it('rejects a wait-signal nested inside a nested ctx.all (not yet supported)', async () => {
-    await using engine = new Engine();
-    engine.register(
-      workflow({ name: 'nested-all-signal' })
-        .activities({ noop: async () => 'noop', work: async () => 'work' })
-        .execute(async function* (ctx: WorkflowContext) {
-          yield* ctx.all([
-            ctx.run('noop'),
-            ctx.all([ctx.waitForSignal<string>('ev'), ctx.run('work')]),
-          ]);
-          return 'unreachable';
-        }),
-    );
-
-    const handle = await engine.start('nested-all-signal', null);
-    await expect(handle.result()).rejects.toThrow(
-      /not yet supported inside a nested ctx\.race \/ ctx\.all/,
-    );
-  });
 });
 
 describe('#456 a losing wait-signal branch must not consume the signal', () => {
@@ -487,5 +443,233 @@ describe('#456 wait-signal inside ctx.all is unbounded by design', () => {
     // Delivering the signal lets the all settle; the failing branch then surfaces.
     await engine.signal('all-unbounded', 'ev', 'unblock');
     await expect(handle.result()).rejects.toThrow('branch failed');
+  });
+});
+
+describe('#456 nested wait-signal branches (envelope propagation through nested coordinators)', () => {
+  it('nested ctx.all that WINS the outer race finalizes its envelope exactly once', async () => {
+    // race([ run(slow), all([ waitForSignal, run(fast) ]) ]). The nested all
+    // settles fast (the signal arrives while run(slow) is still pending), so the
+    // nested all WINS the outer race. Its array result holds the wait-signal
+    // envelope; the outer coordinator must walk the array and finalize it once.
+    await using engine = new Engine();
+    let releaseSlow: (v: string) => void = () => {};
+    engine.register(
+      workflow({ name: 'nested-all-wins' })
+        .activities({
+          slow: async () => new Promise<string>((resolve) => (releaseSlow = resolve)),
+          fast: async () => 'fast-done',
+        })
+        .execute(async function* (ctx: WorkflowContext) {
+          const winner = yield* ctx.race([
+            ctx.run('slow'),
+            ctx.all([ctx.waitForSignal<string>('ev'), ctx.run('fast')]),
+          ]);
+          return winner;
+        }),
+    );
+
+    const handle = await engine.start('nested-all-wins', null, { id: 'naw' });
+    await waitForCondition(() => getInternals(engine).signalWaiters.has('naw:ev'), {
+      timeoutMs: 2000,
+      label: 'nested wait-signal registered',
+    });
+    await engine.signal('naw', 'ev', 'ev-payload');
+    // The nested all wins the outer race; its result is [signal-payload, fast].
+    expect(await handle.result()).toEqual(['ev-payload', 'fast-done']);
+    // Slow never resolves; releasing it now is a no-op (workflow already done).
+    releaseSlow('ignored');
+    const internals = getInternals(engine);
+    expect(internals.signalWaiters.size).toBe(0);
+    expect(internals.signalWaitersByWorkflow.has('naw')).toBe(false);
+  });
+
+  it('nested ctx.all that LOSES the outer race releases its waiter and consumes nothing', async () => {
+    // race([ run(fast), all([ waitForSignal, sleep ]) ]). run(fast) wins; the
+    // nested all (and its wait-signal branch) loses and must release its waiter
+    // WITHOUT consuming. A later top-level waitForSignal still receives the signal.
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'nested-all-loses' })
+        .activities({ fast: async () => 'fast-won' })
+        .execute(async function* (ctx: WorkflowContext) {
+          const first = yield* ctx.race([
+            ctx.run('fast'),
+            ctx.all([ctx.waitForSignal<string>('ev'), ctx.sleep('30s')]),
+          ]);
+          const second = yield* ctx.waitForSignal<string>('ev');
+          return { first, second };
+        }),
+    );
+
+    const handle = await engine.start('nested-all-loses', null, { id: 'nal' });
+    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('nal'), {
+      timeoutMs: 2000,
+      label: 'parked on the top-level waitForSignal after the outer race settled',
+    });
+    // No leaked nested waiter survived the loss.
+    expect(getInternals(engine).signalWaiters.size).toBe(0);
+    await engine.signal('nal', 'ev', 'late-ev');
+
+    const result = (await handle.result()) as { first: unknown; second: unknown };
+    expect(result.first).toBe('fast-won');
+    expect(result.second).toBe('late-ev');
+  });
+
+  it('nested ctx.race that LOSES the outer race with late delivery does not orphan the signal', async () => {
+    // race([ run(fast), race([ waitForSignal, sleep ]) ]). run(fast) wins; the
+    // nested race's wait-signal loses. A signal delivered AFTER the outer race
+    // settles must NOT be silently swallowed by the dead nested branch — a later
+    // top-level waitForSignal must receive it.
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'nested-race-loses' })
+        .activities({ fast: async () => 'fast-won' })
+        .execute(async function* (ctx: WorkflowContext) {
+          const first = yield* ctx.race([
+            ctx.run('fast'),
+            ctx.race([ctx.waitForSignal<string>('ev'), ctx.sleep('30s')]),
+          ]);
+          const second = yield* ctx.waitForSignal<string>('ev');
+          return { first, second };
+        }),
+    );
+
+    const handle = await engine.start('nested-race-loses', null, { id: 'nrl' });
+    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('nrl'), {
+      timeoutMs: 2000,
+      label: 'parked on the top-level waitForSignal after the outer race settled',
+    });
+    expect(getInternals(engine).signalWaiters.size).toBe(0);
+    await engine.signal('nrl', 'ev', 'late-ev');
+
+    const result = (await handle.result()) as { first: unknown; second: unknown };
+    expect(result.first).toBe('fast-won');
+    expect(result.second).toBe('late-ev');
+  });
+
+  it('top-level ctx.all containing a nested ctx.race with a wait-signal finalizes correctly', async () => {
+    // all([ run, race([ waitForSignal, sleep ]) ]). The top coordinator is a
+    // `parallel`, which finalizes each branch via executeOne before the slot is
+    // built — including the nested race's envelope. Exercises the top-`all`
+    // finalize-on-nested-result path (a different call site than the top-`race`
+    // winner path).
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'all-with-nested-race' })
+        .activities({ work: async () => 'work-done' })
+        .execute(async function* (ctx: WorkflowContext) {
+          return yield* ctx.all([
+            ctx.run('work'),
+            ctx.race([ctx.waitForSignal<string>('ev'), ctx.sleep('30s')]),
+          ]);
+        }),
+    );
+
+    const handle = await engine.start('all-with-nested-race', null, { id: 'awnr' });
+    await waitForCondition(() => getInternals(engine).signalWaiters.has('awnr:ev'), {
+      timeoutMs: 2000,
+      label: 'nested wait-signal registered',
+    });
+    await engine.signal('awnr', 'ev', 'ev-payload');
+    expect(await handle.result()).toEqual(['work-done', 'ev-payload']);
+    const internals = getInternals(engine);
+    expect(internals.signalWaiters.size).toBe(0);
+    expect(internals.signalWaitersByWorkflow.has('awnr')).toBe(false);
+  });
+
+  it('nested ctx.race that WINS the outer race finalizes its single envelope once', async () => {
+    // race([ run(slow), race([ waitForSignal, sleep ]) ]). The signal arrives while
+    // run(slow) is pending, so the nested race wins the outer race; its single
+    // envelope must finalize once and the workflow sees the signal payload.
+    await using engine = new Engine();
+    let releaseSlow: (v: string) => void = () => {};
+    engine.register(
+      workflow({ name: 'nested-race-wins' })
+        .activities({ slow: async () => new Promise<string>((resolve) => (releaseSlow = resolve)) })
+        .execute(async function* (ctx: WorkflowContext) {
+          const winner = yield* ctx.race([
+            ctx.run('slow'),
+            ctx.race([ctx.waitForSignal<string>('ev'), ctx.sleep('30s')]),
+          ]);
+          return winner;
+        }),
+    );
+
+    const handle = await engine.start('nested-race-wins', null, { id: 'nrw' });
+    await waitForCondition(() => getInternals(engine).signalWaiters.has('nrw:ev'), {
+      timeoutMs: 2000,
+      label: 'nested wait-signal registered',
+    });
+    await engine.signal('nrw', 'ev', 'ev-wins');
+    expect(await handle.result()).toBe('ev-wins');
+    releaseSlow('ignored');
+    const internals = getInternals(engine);
+    expect(internals.signalWaiters.size).toBe(0);
+    expect(internals.signalWaitersByWorkflow.has('nrw')).toBe(false);
+  });
+});
+
+describe('#456 a winning wait-signal survives replay without re-consuming', () => {
+  it('a race won by waitForSignal returns the cached payload after a later park/resume replay', async () => {
+    // ev wins the race and the durable `sig:ev` record is consumed. A LATER
+    // waitForSignal('gate') parks the workflow; resuming replays the whole
+    // generator, including the race op. The race must short-circuit from its
+    // cached consumed value ('ev-payload') and NOT re-run the branch — re-running
+    // would re-consume a now-deleted record, yielding `undefined` (a different
+    // winner on replay = non-determinism). Pins that the CONSUMED value, not the
+    // envelope, is what was cached.
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'signal-wins-replay' }).execute(async function* (ctx: WorkflowContext) {
+        const winner = yield* ctx.race([ctx.waitForSignal<string>('ev'), ctx.sleep('30s')]);
+        const gate = yield* ctx.waitForSignal<string>('gate');
+        return { winner, gate };
+      }),
+    );
+
+    const handle = await engine.start('signal-wins-replay', null, { id: 'swr' });
+    await engine.signal('swr', 'ev', 'ev-payload');
+    // The workflow now parks on the second waitForSignal('gate'); resume replays.
+    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('swr'), {
+      timeoutMs: 2000,
+      label: 'parked on waitForSignal(gate) after the race resolved',
+    });
+    await engine.signal('swr', 'gate', 'gate-payload');
+
+    const result = (await handle.result()) as { winner: unknown; gate: unknown };
+    // If replay re-consumed, winner would be undefined.
+    expect(result.winner).toBe('ev-payload');
+    expect(result.gate).toBe('gate-payload');
+  });
+
+  it('an all branch won by waitForSignal reuses its fulfilled slot value after a park/resume replay', async () => {
+    // all([ waitForSignal, run ]) where the wait-signal branch already won and the
+    // signal was consumed. A LATER waitForSignal('gate') parks; resume replays the
+    // `all` op. dispatchBranchesAllSettled must reuse the already-fulfilled slot's
+    // CONSUMED value and not re-dispatch the wait-signal branch (the durable record
+    // is gone). Exercises the partial-cache slot-resume path with a wait-signal.
+    await using engine = new Engine();
+    engine.register(
+      workflow({ name: 'all-signal-replay' })
+        .activities({ work: async () => 'work-done' })
+        .execute(async function* (ctx: WorkflowContext) {
+          const both = yield* ctx.all([ctx.waitForSignal<string>('ev'), ctx.run('work')]);
+          const gate = yield* ctx.waitForSignal<string>('gate');
+          return { both, gate };
+        }),
+    );
+
+    const handle = await engine.start('all-signal-replay', null, { id: 'asr' });
+    await engine.signal('asr', 'ev', 'ev-payload');
+    await waitForCondition(() => getInternals(engine).parkedInlineWorkflows.has('asr'), {
+      timeoutMs: 2000,
+      label: 'parked on waitForSignal(gate) after the all resolved',
+    });
+    await engine.signal('asr', 'gate', 'gate-payload');
+
+    const result = (await handle.result()) as { both: unknown; gate: unknown };
+    expect(result.both).toEqual(['ev-payload', 'work-done']);
+    expect(result.gate).toBe('gate-payload');
   });
 });
