@@ -16,7 +16,7 @@ import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import { buildSharedStartWorkflowOptions } from './start-workflow-options.ts';
 import {
   extractSharedStartWorkflowRestFields,
-  parseJsonObjectRequestBody,
+  parseStartWorkflowRequestRecord,
 } from './start-workflow-rest-input.ts';
 
 // Permissive at the schema boundary so all field validation lives in `invoke()`,
@@ -216,7 +216,7 @@ export const startOrSignalWorkflowRestBinding: UnknownRestBinding = {
     searchAttributes: { kind: 'body-field', bodyField: 'searchAttributes' },
   },
   extractInput: async (request) => {
-    const record = await parseJsonObjectRequestBody(request);
+    const record = await parseStartWorkflowRequestRecord(request);
     return {
       ...extractSharedStartWorkflowRestFields(record),
       signalName: record['signalName'],

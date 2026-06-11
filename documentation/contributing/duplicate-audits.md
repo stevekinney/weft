@@ -6,6 +6,6 @@ Generated artifacts are allowed to repeat schema fragments when the generator ou
 
 Reference documentation can mirror public declarations when the documentation is the consumer-facing source for generated API references. If the mirror changes, run the documentation verification command that owns the generated reference output.
 
-Script cross-checks may intentionally duplicate a small parsing helper when the duplicate is the independence mechanism. `scripts/audit-jsdoc-manifest.ts` duplicates `pickTypesField()` and `distToSource()` from `scripts/lib/jsdoc-manifest.ts` so the audit can catch mistakes in the manifest builder. Do not extract that pair unless the audit gets another independent denominator.
+Script cross-checks may intentionally duplicate a small parsing helper when the duplicate is the independence mechanism. `scripts/audit-jsdoc-manifest.ts` duplicates `pickTypesField()` and `distToSource()` from `scripts/lib/jsdoc-manifest.ts` so the audit can catch mistakes in the manifest builder. Do not extract that pair unless the audit gets another independent implementation to compare against.
 
 Hand-authored production TypeScript under `src/` remains actionable by default. Do not add a broad `src/` or `documentation/` ignore to make a cleanup audit quiet.

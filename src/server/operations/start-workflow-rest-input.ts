@@ -12,11 +12,11 @@ export type SharedStartWorkflowRestFields = {
   readonly searchAttributes: unknown;
 };
 
-function isJsonObjectRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+function isJsonObjectLikeRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
-export async function parseJsonObjectRequestBody(
+export async function parseStartWorkflowRequestRecord(
   request: Request,
 ): Promise<Record<string, unknown>> {
   let body: unknown;
@@ -32,7 +32,7 @@ export async function parseJsonObjectRequestBody(
     throw invalidParamsFault('Request body must be a JSON object');
   }
 
-  return isJsonObjectRecord(body) ? body : Object.fromEntries(Object.entries(body));
+  return isJsonObjectLikeRecord(body) ? body : {};
 }
 
 export function extractSharedStartWorkflowRestFields(

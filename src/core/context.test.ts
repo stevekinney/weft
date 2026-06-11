@@ -349,9 +349,6 @@ describe('Context', () => {
 
       expect(context.checkpointLocals).toEqual({
         retained: true,
-        sessionState: {
-          counter: 2,
-        },
         stateSession: {
           counter: 3,
         },

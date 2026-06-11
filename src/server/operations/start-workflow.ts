@@ -15,7 +15,7 @@ import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 import { buildSharedStartWorkflowOptions } from './start-workflow-options.ts';
 import {
   extractSharedStartWorkflowRestFields,
-  parseJsonObjectRequestBody,
+  parseStartWorkflowRequestRecord,
 } from './start-workflow-rest-input.ts';
 
 // Inputs are intentionally permissive at the schema boundary so REST
@@ -174,7 +174,7 @@ export const startWorkflowRestBinding: UnknownRestBinding = {
     searchAttributes: { kind: 'body-field', bodyField: 'searchAttributes' },
   },
   extractInput: async (request) => {
-    return extractSharedStartWorkflowRestFields(await parseJsonObjectRequestBody(request));
+    return extractSharedStartWorkflowRestFields(await parseStartWorkflowRequestRecord(request));
   },
   success: { kind: 'json', status: 201 },
   shapeFault: shapeRestFault,
