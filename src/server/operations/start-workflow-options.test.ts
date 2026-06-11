@@ -53,6 +53,16 @@ describe('buildSharedStartWorkflowOptions', () => {
     expect(options.searchAttributes).toEqual({ customerId: 'acme' });
   });
 
+  it('ignores onTerminalConflict — it is not part of the shared transport surface', () => {
+    // onTerminalConflict is an in-process engine.start-only policy; the shared
+    // builder (used by start AND startOrSignal) must not coerce or forward it.
+    const options = buildSharedStartWorkflowOptions(
+      { id: 'wf-restart', onTerminalConflict: 'start-new' } as Record<string, unknown>,
+      undefined,
+    );
+    expect('onTerminalConflict' in options).toBe(false);
+  });
+
   it('propagates a malformed-field validation error (e.g. a non-string id)', () => {
     expect(() => buildSharedStartWorkflowOptions({ id: 42 }, undefined)).toThrow(
       StartWorkflowValidationError,

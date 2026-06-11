@@ -12,6 +12,7 @@ export * from './types/definition-schema.ts';
 export * from './types/history-policy.ts';
 export * from './types/identity.ts';
 export * from './types/launch-metadata.ts';
+export * from './types/list-options.ts';
 export * from './types/message-handles.ts';
 export * from './types/options.ts';
 export * from './types/payload-size-policy.ts';

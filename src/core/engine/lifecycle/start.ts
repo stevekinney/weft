@@ -6,18 +6,29 @@ import { normalizeStorageTimestamp } from '../../scheduler.ts';
 import {
   StartWorkflowValidationError,
   assertExclusiveStartWorkflowOptions,
+  assertValidOnTerminalConflict,
   coerceStartWorkflowId,
   coerceStartWorkflowTimestamp,
   parseStartWorkflowDuration,
 } from '../../start-workflow-validation.ts';
-import type { Checkpoint, Duration, StartOptions, TimerEntry, WorkflowState } from '../../types.ts';
+import type {
+  Checkpoint,
+  Duration,
+  StartOptions,
+  StartWorkflowOptions,
+  TimerEntry,
+  WorkflowState,
+} from '../../types.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
+import { purgeWorkflow, type CleanupWaiters } from '../bulk-operations-purge.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { WorkflowAlreadyExistsError, WorkflowNotRegisteredError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { createDelayedStartTimerEntry } from '../operations-time.ts';
 import { selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
+import { cleanupWaiters } from '../termination/cleanup.ts';
+import { decodeWorkflowState, isTerminalWorkflowStatus } from '../validation.ts';
 import { createWorkflowVersionTuple } from './persist.ts';
 import {
   createWorkflowHandle,
@@ -36,7 +47,7 @@ export async function start(
   internals: EngineInternals,
   type: string,
   input: unknown,
-  options: StartOptions | undefined,
+  options: StartWorkflowOptions | undefined,
   callbacks: LifecycleCallbacks,
 ): Promise<WorkflowHandle> {
   return startWorkflow(internals, type, input, options, undefined, callbacks);
@@ -117,11 +128,68 @@ function assertServicesSupportedForMode(
   }
 }
 
+/**
+ * Decide what a caller-supplied workflow id that already has a persisted record
+ * means, WITHOUT performing any destructive action. Only invoked when the caller
+ * supplied the id — a generated v4 UUID is effectively unique, so skipping this
+ * read keeps generated-id starts on the single-write hot path.
+ *
+ * - default (`'error'`): throw {@link WorkflowAlreadyExistsError} (the existing
+ *   contract — a duplicate id is always a conflict).
+ * - `'start-new'` on a **terminal** run: return that run's {@link WorkflowState}
+ *   so the caller can purge it *after* all deterministic new-run validation has
+ *   succeeded (see {@link startWorkflow}). This keeps the destructive purge as
+ *   the last possible step before the atomic create commit, so a restart that is
+ *   rejected by any later validation (payload size, execution-timeout overflow, a
+ *   start interceptor throwing) leaves the prior terminal run intact.
+ * - `'start-new'` on a **non-terminal** run: throw
+ *   {@link WorkflowAlreadyExistsError} — `'start-new'` never displaces a live run.
+ *
+ * Returns `null` when there is no existing record (the create proceeds normally).
+ */
+async function resolveTerminalConflictForRestart(
+  internals: EngineInternals,
+  workflowId: string,
+  options: StartWorkflowOptions | undefined,
+): Promise<WorkflowState | null> {
+  const existingBytes = await internals.storage.get(KEYS.workflow(workflowId));
+  if (existingBytes === null) {
+    return null;
+  }
+  if (options?.onTerminalConflict !== 'start-new') {
+    throw new WorkflowAlreadyExistsError(workflowId);
+  }
+  const existingState = decodeWorkflowState(existingBytes);
+  if (!isTerminalWorkflowStatus(existingState.status)) {
+    throw new WorkflowAlreadyExistsError(workflowId);
+  }
+  return existingState;
+}
+
+/**
+ * Purge a prior terminal run so its id can be reused by a `'start-new'` restart.
+ * `purgeWorkflow` is the single source of truth for removing every record a
+ * workflow id owns (state, checkpoints, timeline, events, signals, indexes, and
+ * the in-memory waiters/maps). `cleanupWaiters` only needs `swallowPromiseRejection`,
+ * which `LifecycleCallbacks` already exposes — no termination-callback wiring.
+ */
+async function purgeForRestart(
+  internals: EngineInternals,
+  state: WorkflowState,
+  callbacks: LifecycleCallbacks,
+): Promise<void> {
+  const cleanupWaitersForStart: CleanupWaiters = (id) =>
+    cleanupWaiters(internals, id, {
+      swallowPromiseRejection: callbacks.swallowPromiseRejection,
+    });
+  await purgeWorkflow(internals, state, cleanupWaitersForStart);
+}
+
 export async function startWorkflow(
   internals: EngineInternals,
   type: string,
   input: unknown,
-  options: StartOptions | undefined,
+  options: StartWorkflowOptions | undefined,
   additionalStartOperations: BatchOperation[] | undefined,
   callbacks: LifecycleCallbacks,
   buildIdempotentStartOperations?: BuildIdempotentStartOperations,
@@ -132,6 +200,7 @@ export async function startWorkflow(
   }
 
   assertServicesSupportedForMode(internals, options);
+  assertValidOnTerminalConflict(options);
 
   const preparation = prepareStartWorkflow(internals, options, callbacks);
   const { workflowId, callerProvidedId, parentHeaders, executionStateOwnerId, delayedStartTimer } =
@@ -148,21 +217,18 @@ export async function startWorkflow(
   let startSucceeded = false;
 
   try {
-    // Only hit storage to dedup when the caller supplied the id. A
-    // freshly-generated v4 UUID is (for all practical purposes) unique, so
-    // the extra round trip is wasted work on the hot start path. This is
-    // the dominant optimization behind the workflow-start benchmark — the
-    // get → batch sequence was two storage calls per start, now one.
-    if (callerProvidedId) {
-      const existingBytes = await internals.storage.get(KEYS.workflow(workflowId));
-      if (existingBytes !== null) {
-        throw new WorkflowAlreadyExistsError(workflowId);
-      }
-    }
+    // Only caller-supplied ids can collide; a generated UUID skips the read.
+    // Decide the duplicate-id outcome up front (throws for a non-terminal or
+    // default-policy collision), but DEFER any destructive purge until just
+    // before the create commit below — so a `'start-new'` restart rejected by
+    // later validation leaves the prior terminal run intact. The `pendingStarts`
+    // reservation is held across the whole decide → build → purge → create
+    // window, so a concurrent same-id start cannot race into the gap.
+    const terminalRunToPurge = callerProvidedId
+      ? await resolveTerminalConflictForRestart(internals, workflowId, options)
+      : null;
 
-    // Reject oversized input before any durable write, but after the
-    // duplicate-id checks above so a retried known id still reports
-    // WorkflowAlreadyExistsError rather than a payload-size error.
+    // Reject oversized input before any durable write (and before the purge).
     assertPayloadWithinLimit(input, internals.options.payloadSizePolicy.maxBytes, 'workflow input');
 
     const versionTuple = createWorkflowVersionTuple(internals, registration, callbacks);
@@ -195,6 +261,17 @@ export async function startWorkflow(
       callbacks,
     );
     const persistedWorkflowStartHeaders = selectPersistedWorkflowStartHeaders(workflowStartHeaders);
+
+    // Last possible moment before the create commit, and after every throwing
+    // build step above (version tuple, state/deadline, checkpoint, start
+    // interceptor). Purging here means a `'start-new'` restart rejected by any of
+    // those leaves the prior terminal run intact. It also runs BEFORE the new
+    // run's in-memory maps are written below, so it sweeps the old run's
+    // bookkeeping without clobbering the fresh entries.
+    if (terminalRunToPurge !== null) {
+      await purgeForRestart(internals, terminalRunToPurge, callbacks);
+    }
+
     internals.checkpoints.set(workflowId, checkpoint);
     setWorkflowStartHeaders(internals, workflowId, workflowStartHeaders, callbacks);
 

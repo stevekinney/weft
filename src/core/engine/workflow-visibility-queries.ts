@@ -18,7 +18,7 @@ import {
   type Storage,
 } from '../../storage/interface.ts';
 import type { FailureCategory, WorkflowStatus } from '../types/identity.ts';
-import type { TimeRange } from '../types/options.ts';
+import type { TimeRange } from '../types/list-options.ts';
 
 function isFinitePositive(value: number): boolean {
   return Number.isFinite(value) && value >= 0;

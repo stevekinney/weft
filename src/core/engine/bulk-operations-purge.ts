@@ -344,6 +344,11 @@ function workflowPurgePrefixes(workflowId: string): string[] {
   const encodedWorkflowId = encodeStorageKeyComponent(workflowId);
   return [
     `wf:${encodedWorkflowId}:ckpt:`,
+    // Compacted-checkpoint timeline entries (`wf:{id}:timeline:{step}`). These
+    // are read back during checkpoint reconstruction (checkpoint-reads.ts), so a
+    // stale entry left behind after purge would let a reused id — e.g. an
+    // `onTerminalConflict: 'start-new'` restart — read the prior run's timeline.
+    `wf:${encodedWorkflowId}:timeline:`,
     `ev:${encodedWorkflowId}:`,
     `sig:${encodedWorkflowId}:`,
     `review:${encodedWorkflowId}:`,

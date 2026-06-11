@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { ListFilter } from './types/options.ts';
+import type { ListFilter } from './types/list-options.ts';
 
 import {
   ListFilterValidationError,

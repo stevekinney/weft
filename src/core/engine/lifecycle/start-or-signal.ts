@@ -2,7 +2,10 @@ import type { BatchOperation, ConditionalBatchCondition } from '../../../storage
 import { KEYS, requireStorageCapability } from '../../../storage/interface.ts';
 import { encode } from '../../codec.ts';
 import {
+  assertIdAndIdempotencyKeyExclusive,
+  assertOnTerminalConflictUnsupported,
   assertValidIdempotencyKey,
+  assertValidOnTerminalConflict,
   StartWorkflowValidationError,
 } from '../../start-workflow-validation.ts';
 import type { StartOptions, StartOrSignalSignal } from '../../types.ts';
@@ -133,6 +136,11 @@ export async function startWithIdempotency(
   }
   assertValidIdempotencyKey(idempotencyKey, 'options.idempotencyKey');
   assertIdAndIdempotencyKeyExclusive(options);
+  // An existing-key call returns early below, skipping startWorkflow's own
+  // assertValidOnTerminalConflict — so reject the (type-legal on
+  // StartWorkflowOptions) `idempotencyKey` + `onTerminalConflict` combination
+  // here, before the mapping lookup, so it is caught even on the dedup path.
+  assertValidOnTerminalConflict(options);
 
   const existingId = await resolveIdempotencyKeyWorkflowId(internals, idempotencyKey);
   if (existingId !== undefined) {
@@ -172,23 +180,6 @@ export async function startWithIdempotency(
       await requireWinnerId(internals, idempotencyKey),
     ),
   );
-}
-
-/**
- * `id` and `idempotencyKey` are mutually exclusive. Idempotency assigns its own
- * generated id and dedups through the `start-idem:` mapping; pinning a caller
- * `id` alongside it would make the loser of a same-key race collide on the fixed
- * id (a genuine `WorkflowAlreadyExistsError`) rather than converge through the
- * mapping, conflating "id already taken" with "lost the idempotency race". Reject
- * the combination so each concern stays separable.
- */
-function assertIdAndIdempotencyKeyExclusive(options: StartOptions): void {
-  if (options.id !== undefined && options.idempotencyKey !== undefined) {
-    throw new StartWorkflowValidationError(
-      'options.id and options.idempotencyKey are mutually exclusive: idempotency assigns its own ' +
-        'workflow id and dedups through the idempotency key. Provide one or the other.',
-    );
-  }
 }
 
 /**
@@ -250,6 +241,9 @@ export async function startOrSignal(
   callbacks: StartOrSignalCallbacks,
 ): Promise<WorkflowHandle> {
   requireStorageCapability(internals.storage, 'conditionalBatch', 'startOrSignal');
+  // Runtime backstop for a transport/JS caller smuggling the engine.start-only
+  // `onTerminalConflict` past the type boundary (see the assert's JSDoc, #489).
+  assertOnTerminalConflictUnsupported(options, 'startOrSignal');
 
   const idempotencyKey = options?.idempotencyKey;
   validateStartOrSignalConvergence(signalSpec, options);

@@ -36,6 +36,12 @@ export type SharedStartWorkflowOptionInput = {
  * `executionTimeout`, `startAt`/`startAfter`, `tags`, `idempotencyKey`, and
  * `searchAttributes` (a new field added here covers both surfaces at once). Throws
  * {@link StartWorkflowValidationError} on any malformed field.
+ *
+ * `onTerminalConflict` is intentionally NOT part of this shared path: it is an
+ * in-process `engine.start`-only policy (its purge-and-restart would make the
+ * transport `weft.workflows.start` operation conditionally destructive and would
+ * violate `startOrSignal`'s at-most-once identity), so it is not exposed over
+ * REST/JSON-RPC. See follow-up issue #489.
  */
 export function buildSharedStartWorkflowOptions(
   input: SharedStartWorkflowOptionInput,

@@ -57,6 +57,7 @@ import {
   type SignalDeliveryOptions,
   type StartOptions,
   type StartOrSignalSignal,
+  type StartWorkflowOptions,
   type SubmitReviewOptions,
   type TypedListFilter,
   type UpdateDefinition,
@@ -855,14 +856,18 @@ export class Engine<
   async start<TName extends KnownWorkflowNames<TWorkflows>>(
     type: TName,
     input: WorkflowInput<TWorkflows, TName>,
-    options?: StartOptions,
+    options?: StartWorkflowOptions,
   ): Promise<WorkflowHandle<WorkflowOutput<TWorkflows, TName>>>;
   async start<TName extends string>(
     type: UnknownWorkflowNameWhenDefaultRegistryIsEmpty<TWorkflows, TName>,
     input: unknown,
-    options?: StartOptions,
+    options?: StartWorkflowOptions,
   ): Promise<WorkflowHandle>;
-  async start(type: string, input: unknown, options?: StartOptions): Promise<WorkflowHandle> {
+  async start(
+    type: string,
+    input: unknown,
+    options?: StartWorkflowOptions,
+  ): Promise<WorkflowHandle> {
     if (options?.idempotencyKey !== undefined) {
       return startWithIdempotencyFromLifecycle(
         getInternals(this),
