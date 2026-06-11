@@ -297,8 +297,13 @@ export function* runActivityWithRetry<TResult>(
 
   // Anchor the schedule-to-close budget at the FIRST dispatch (read-first so a
   // replay never resets it). Writing it before the dispatch `yield` below lands
-  // it in that checkpoint. The budget is enforced at the retry boundary.
-  const budget = resolveScheduleToCloseBudget(internals, step, scheduleToCloseTimeout);
+  // it in that checkpoint. The budget is enforced ONLY at the retry boundary, so
+  // without a retry policy it is never consulted — skip the anchor entirely rather
+  // than churning a durable `dispatchedAt` write that nothing will read.
+  const budget =
+    retryPolicy === undefined
+      ? undefined
+      : resolveScheduleToCloseBudget(internals, step, scheduleToCloseTimeout);
 
   let attempt = retryAttempt;
   if (attempt > 1) {

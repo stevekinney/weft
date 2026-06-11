@@ -75,7 +75,11 @@ export type ScheduleToCloseBudget = {
 
 /**
  * Parse a `scheduleToCloseTimeout` duration to milliseconds, or `undefined` when
- * unset.
+ * unset. `parseDuration` validates the result is finite and non-negative on every
+ * input path (numeric and string, via `assertValidDurationMilliseconds`) and
+ * throws otherwise — so the budget can never silently become `NaN`/`Infinity`
+ * (which would make `elapsed >= budgetMs` always-false) or negative. `0` is valid
+ * (it permits exactly one attempt).
  */
 export function parseScheduleToCloseBudgetMs(
   scheduleToCloseTimeout: Duration | undefined,

@@ -314,6 +314,19 @@ describe('#449 scheduleToCloseTimeout retry-state anchor', () => {
     );
   });
 
+  it('rejects a negative scheduleToCloseTimeout budget at dispatch (via parseDuration)', () => {
+    // parseDuration validates finite/non-negative on every path and throws, so a
+    // NaN/Infinity/negative budget can never silently disable the timeout. This pins
+    // that the rejection actually surfaces from a ctx.run dispatch.
+    const context = createContext({ getNow: () => 1_000_000 });
+    const negative = Object.assign((_input: unknown) => 'unused', {
+      retry: { maxAttempts: 3, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0 },
+      scheduleToCloseTimeout: -1,
+    });
+    const generator = runActivityWithRetry(context, negative, ['payload']);
+    expect(() => generator.next()).toThrow('finite, non-negative number');
+  });
+
   it('does not write a dispatchedAt anchor when no scheduleToCloseTimeout is set', () => {
     const context = createContext();
     const internals = getInternals(context);
