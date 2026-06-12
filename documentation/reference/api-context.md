@@ -186,15 +186,17 @@ async function* example(context: Context) {
 
 Run multiple durable operations in parallel. All operations must complete before the workflow continues. Rejection mirrors `Promise.all`—any branch fails, the whole operation fails. But timing is different: `ctx.all` waits for every sibling to settle before throwing the error. That delay is deliberate; it lets successful branches get persisted.
 
-| Parameter    | Type          | Description                                                         |
-| ------------ | ------------- | ------------------------------------------------------------------- |
-| `operations` | `Generator[]` | An array of generators from `context.run()`, `context.memo()`, etc. |
+| Parameter    | Type          | Description                                                                                                       |
+| ------------ | ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `operations` | `Generator[]` | An array of generators from `context.run()`, `context.sleep()`, `context.waitForSignal()`, `context.memo()`, etc. |
 
 **Returns:** An array of results in the same order as the input operations.
 
 **Failure semantics.** When any branch rejects, every fulfilled branch's value is written to the parent's in-memory cache entry before the error is thrown into the workflow generator. The entry becomes durable on the next checkpoint write (the workflow's next yield). If the workflow catches the rejection and yields again, that next yield persists the partial entry; a resumed run replays at the same step and reuses fulfilled slots without re-dispatch. If the workflow fails terminally without yielding again, the partial entry is **not** persisted—no resumed run can reuse it. This partial-preservation guarantee requires the default inline execution strategy; `workerExecution` cannot persist fulfilled branch slots after a sibling branch fails and reports that unsupported boundary explicitly.
 
 See the [parallel execution guide](../guides/parallel-execution.md) for the full contract, including the deterministic-branch-order requirement and the explicit catch-and-yield boundary.
+
+`context.waitForSignal()` inside `context.all()` is unbounded: the parent waits until that signal branch and every sibling settle. Use `context.race([context.waitForSignal(name), context.sleep('30s')])` when the signal wait needs a relative timeout.
 
 ```ts partial
 async function* example(context: Context) {
@@ -215,13 +217,15 @@ async function* example(context: Context) {
 
 Run multiple durable operations in parallel, returning the result of whichever completes first. Analogous to `Promise.race`.
 
-| Parameter    | Type          | Description            |
-| ------------ | ------------- | ---------------------- |
-| `operations` | `Generator[]` | An array of generators |
+| Parameter    | Type          | Description                                                                                                       |
+| ------------ | ------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `operations` | `Generator[]` | An array of generators from `context.run()`, `context.sleep()`, `context.waitForSignal()`, `context.memo()`, etc. |
 
 **Returns:** The result of the first operation to complete.
 
-**Loser results are abandoned.** Losers are aborted and their results discarded—Weft does not preserve them. Design branches to be idempotent or pair them with compensation, because the engine will not clean up after a loser.
+**Loser results are abandoned.** Once a winner is selected, Weft stops driving the losing branch generators and discards their results. In-flight activities that already started keep running unless the workflow is cancelled, so design race branches to be idempotent or pair them with compensation.
+
+Signal-wait losers are non-destructive. If a `context.waitForSignal()` branch loses the race, it releases its waiter without consuming the durable signal record. Nested `all()` / `race()` branches defer signal consumption until the top coordinator has selected the winning result.
 
 ```ts partial
 async function* example(context: Context) {

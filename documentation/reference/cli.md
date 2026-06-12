@@ -197,6 +197,11 @@ export default {
 - **Unsafe**: Version mismatches exist. Do not deploy until active workflows are
   resolved or the registered versions match the stored versions.
 
+`version:check` reports safe or unsafe only. Weft no longer exposes a
+`needs-migration` verdict or a checkpoint migration hook; mismatched active
+workflows must be drained, cancelled, repaired, or served by code with the stored
+version before the new workflow version recovers them.
+
 ### schedule
 
 Manage durable schedules.

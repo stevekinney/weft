@@ -49,6 +49,7 @@ description: >-
 16. For `@lostgradient/weft/server` export cleanup, keep `/server` self-sufficient for server option and handle types while leaving `Engine` on the root package. Add internal and built-package `.test-d.ts` assertions instead of relying on JSDoc claims.
 17. For RemoteWorker cleanup, preserve the required `workflows` map and qualified activity-name behavior; do not add a compatibility alias for removed `activities`.
 18. For `Engine.create` type ergonomics, pin both the integration shape and the exact type: `Engine.create({ workflows: {} })` must satisfy `ServeOptions['engine']` and equal the absent-workflows default-registry return type, while a non-empty map keeps literal workflow-name inference.
+19. For cleanup-audit work, classify generated artifacts, documentation mirrors, and intentional script cross-checks before extracting shared helpers. `scripts/audit-jsdoc-manifest.ts` intentionally duplicates selected parsing helpers from `scripts/lib/jsdoc-manifest.ts` so the audit has an independent implementation to compare against.
 
 ## Verification
 
@@ -57,3 +58,4 @@ description: >-
 - For `Engine.create` overload changes, run the focused `.test-d.ts` files that cover server options and core type ergonomics.
 - Run focused tests, `bun run typecheck`, and documentation verification when examples changed.
 - For generated client cleanup, also run `bun run scripts/generate-operation-client.ts && bun run scripts/check-catalog-drift.ts` and `jscpd` against `src/cli/generated/operation-client.generated.ts`.
+- For duplicate-audit cleanup, run `jscpd src scripts documentation tests --min-lines 18 --min-tokens 120 --exit-code 0` and document any intentionally independent duplicate with a concrete owner instead of adding broad ignores.
