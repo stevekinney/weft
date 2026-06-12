@@ -8,6 +8,13 @@ export type ConditionOperationCallbacks = Pick<
   CoordinationOperationCallbacks,
   'completeOperation'
 > & {
+  /**
+   * Fail the pending operation, feeding the error to the generator so it
+   * re-throws at the `yield* ctx.waitUntil` site. Used when the user predicate
+   * throws — a throwing predicate must surface as a catchable workflow failure,
+   * not park the run forever.
+   */
+  failOperation: (workflowId: string, operation: WaitConditionOperation, error: unknown) => void;
   /** Whether the workflow is still running — gates completion after a wake. */
   isWorkflowRunning: (workflowId: string) => Promise<boolean>;
   /** Schedule the deterministic deadline timer (`cond:${workflowId}:${step}`). */
@@ -29,11 +36,11 @@ export type ConditionOperationCallbacks = Pick<
  * delivery is intentionally NOT a re-drive trigger — `onUpdate` is the push path.)
  *
  * On every wake the check order is predicate-first, deadline-second, so a
- * predicate that became true exactly at the deadline resolves as MET (`true`),
+ * predicate that became true exactly at the deadline resolves as met (`true`),
  * not timed-out. A single `settled` guard ensures exactly one completion even if
  * the timer fires in the same tick as a poke. The immediately-true case is
  * settled before the deadline timer is armed, so an already-satisfied timed wait
- * does no wasteful timer write+cancel.
+ * does no wasteful timer write and cancel.
  *
  * Completion is a single durable write: `completeOperation` feeds the result to
  * the generator, which runs to its next yield and the checkpoint captures
@@ -79,32 +86,45 @@ export async function processWaitConditionOperation(
 
   if (abortSignal.aborted) return;
 
-  // Settle the immediately-true / already-expired cases BEFORE arming the timer,
-  // so an already-satisfied timed wait avoids a wasteful timer write+cancel.
-  const initial = evaluateConditionOutcome(internals, predicate, deadline);
-  if (initial.done) {
-    complete(initial.value);
-    return;
-  }
-
-  // Arm the deadline timer exactly once, before the loop. Arming inside the loop
-  // would schedule a duplicate timer on every poke. The timer id keys by `step`
-  // (stable across replay) while the in-process waiter keys by `workflowId`.
-  if (deadline !== undefined) {
-    await callbacks.scheduleConditionDeadline(workflowId, operation.step, deadline);
-  }
-
   try {
-    let step = await runConditionWaitStep(internals, workflowId, predicate, deadline, callbacks);
-    while (step.status === 'continue') {
-      step = await runConditionWaitStep(internals, workflowId, predicate, deadline, callbacks);
+    // Settle the immediately-true / already-expired cases BEFORE arming the
+    // timer, so an already-satisfied timed wait avoids a wasteful timer
+    // write and cancel.
+    const initial = evaluateConditionOutcome(internals, predicate, deadline);
+    if (initial.done) {
+      complete(initial.value);
+      return;
     }
-    if (step.status === 'complete') complete(step.value);
-  } finally {
-    releaseConditionWaiter(internals, workflowId);
+
+    // Arm the deadline timer exactly once, before the loop. Arming inside the
+    // loop would schedule a duplicate timer on every poke. The timer id keys by
+    // `step` (stable across replay) while the in-process waiter keys by
+    // `workflowId`.
     if (deadline !== undefined) {
-      await callbacks.cancelConditionDeadline(workflowId, operation.step);
+      await callbacks.scheduleConditionDeadline(workflowId, operation.step, deadline);
     }
+
+    try {
+      let step = await runConditionWaitStep(internals, workflowId, predicate, deadline, callbacks);
+      while (step.status === 'continue') {
+        step = await runConditionWaitStep(internals, workflowId, predicate, deadline, callbacks);
+      }
+      if (step.status === 'complete') complete(step.value);
+    } finally {
+      releaseConditionWaiter(internals, workflowId);
+      if (deadline !== undefined) {
+        await callbacks.cancelConditionDeadline(workflowId, operation.step);
+      }
+    }
+  } catch (error) {
+    // A user predicate is arbitrary code and can throw on its initial evaluation
+    // or on any update-driven re-evaluation (the lost-wakeup re-check). Route the
+    // throw through `failOperation` so it re-throws at the `yield* ctx.waitUntil`
+    // site (like a throwing activity/memo) instead of becoming an unhandled
+    // rejection that parks the run forever. This is the only path that can settle
+    // the op as failed, and it is reached only when the body threw before
+    // completing — so no `settled` guard is needed here.
+    callbacks.failOperation(workflowId, operation, error);
   }
 }
 

@@ -1639,7 +1639,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   ['src/connection.ts', { functions: 2, lines: new Set([211, 250, 251, 256, 257, 258, 259]) }],
   [
     'src/core/context/durable-operations.ts',
-    { lines: new Set([57, 58, 59, 60, 61, 62, 63, 237, 241, 242, 243]) },
+    { lines: new Set([57, 58, 59, 60, 61, 62, 63, 239, 243, 244, 245]) },
   ],
   [
     // The retry-state corruption guards and non-Error retryability path are now

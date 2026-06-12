@@ -143,8 +143,10 @@ export function readOrInitConditionDeadline(
  * Wait until `predicate` returns `true`, re-evaluated by the engine each time the
  * workflow is driven forward (an `onUpdate` handler mutating state, or the
  * optional timeout). The predicate is a non-serializable closure held in-process,
- * never checkpointed; on replay an already-satisfied wait returns its cached
- * outcome and the predicate is not re-invoked. Inline execution only.
+ * never checkpointed. Once the wait outcome has been checkpointed, replay returns
+ * the cached outcome and does not re-invoke the predicate. A predicate that
+ * throws fails the workflow at the `yield*` call site (like a throwing activity).
+ * Inline execution only.
  *
  * With no `timeout` the generator yields `void` (waits forever). With a `timeout`
  * it yields `true` when the predicate was met or `false` when the deadline

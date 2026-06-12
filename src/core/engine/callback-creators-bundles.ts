@@ -37,6 +37,7 @@ import type { CoordinationOperationCallbacks } from './operations-coordination.t
 import type { DataOperationCallbacks } from './operations-data.ts';
 import {
   completeOperation,
+  failOperation,
   runOperationWithResult,
   runOperationWithoutResult,
   type OperationWithCallerStack,
@@ -119,6 +120,8 @@ export function createConditionOperationCallbacks<
 >(engine: Engine<TWorkflows, TActivities>): ConditionOperationCallbacks {
   return {
     completeOperation: (workflowId, value) => completeOperationForEngine(engine, workflowId, value),
+    failOperation: (workflowId, operation, error) =>
+      failOperationForEngine(engine, workflowId, operation, error),
     isWorkflowRunning: async (workflowId) => {
       const state = await loadWorkflowState(getInternals(engine), workflowId);
       return state?.status === 'running';
@@ -329,6 +332,27 @@ export function completeOperationForEngine<TWorkflows extends object, TActivitie
   value: unknown,
 ): void {
   return completeOperation(getInternals(engine), workflowId, value, callRouterCallbacks(engine));
+}
+
+/**
+ * Fail the pending operation for a workflow, feeding the error to the generator
+ * so it re-throws at the `yield*` site (catchable by the workflow body). Used by
+ * the wait-condition processor when the user predicate throws, so a throwing
+ * predicate surfaces as a workflow failure instead of parking the run forever.
+ */
+export function failOperationForEngine<TWorkflows extends object, TActivities extends object>(
+  engine: Engine<TWorkflows, TActivities>,
+  workflowId: string,
+  operation: OperationWithCallerStack,
+  error: unknown,
+): void {
+  return failOperation(
+    getInternals(engine),
+    workflowId,
+    operation,
+    error,
+    callRouterCallbacks(engine),
+  );
 }
 
 export async function runOperationWithResultForEngine<

@@ -309,11 +309,15 @@ export interface WorkflowContext<
    * workflow-local state (`ctx.state`, locals, search attributes) and must not
    * perform I/O, generate randomness, or read wall-clock time. It is a
    * non-serializable closure (like `ctx.memo`'s function), held in-process and
-   * never checkpointed; on replay an already-satisfied wait returns its cached
-   * outcome and the predicate is not re-invoked.
+   * never checkpointed. Once the wait outcome has been checkpointed, replay
+   * returns the cached outcome and does not re-invoke the predicate. A predicate
+   * that throws fails the workflow at the `yield* ctx.waitUntil` call site (like
+   * a throwing activity), so the workflow body can `try`/`catch` it.
    *
-   * Inline execution only — calling it under `workflowExecutionMode: 'worker'`
-   * throws, because the predicate closure cannot cross to a worker process.
+   * Inline execution only — worker execution does not expose this operation (it
+   * is omitted from the worker context type), because the predicate closure
+   * cannot cross to a worker process. It also cannot be a branch of `ctx.race`,
+   * `ctx.all`, or `ctx.speculate`; used there it throws an actionable error.
    *
    * Without `timeout` it resolves `void` once the predicate is met (waits
    * forever). With `timeout` it resolves `true` when the predicate was met or

@@ -150,12 +150,12 @@ waitUntil(predicate: () => boolean, timeout: Duration): WorkflowOperation<boolea
 
 Wait until `predicate` returns `true`. The engine re-evaluates the predicate whenever the workflow is driven forward—each time an `onUpdate` handler mutates workflow-local state, or when the optional `timeout` elapses. This is the condition-variable primitive (Temporal's `condition()`): a `waitUntil` whose predicate reads state mutated by `onUpdate` handlers re-checks in-process without polling.
 
-The predicate must be **pure**. It may read only checkpoint-restored workflow-local state and must not perform I/O, generate randomness, or read wall-clock time. It is a non-serializable closure (like `ctx.memo`'s function), held in-process and never checkpointed; on replay an already-satisfied wait returns its cached outcome and the predicate is not re-invoked.
+The predicate must be **pure**. It may read only checkpoint-restored workflow-local state and must not perform I/O, generate randomness, or read wall-clock time. It is a non-serializable closure (like `ctx.memo`'s function), held in-process and never checkpointed. Once the wait outcome has been checkpointed, replay returns the cached outcome and does not re-invoke the predicate. A predicate that throws fails the workflow at the `yield* context.waitUntil` call site (like a throwing activity), so the workflow body can `try`/`catch` it.
 
 > [!NOTE]
 > Weft signals are pull-only (`ctx.waitForSignal`) and run no state-mutating handler, so signal delivery does **not** re-drive a `waitUntil`. Use `onUpdate` to push the state a predicate observes.
 
-`waitUntil` is inline-execution only—calling it under `workflowExecutionMode: 'worker'` throws, because the predicate closure cannot cross to a worker process. It also cannot be a `ctx.race` / `ctx.all` branch; await it directly.
+`waitUntil` is inline-execution only: worker execution does not expose this operation (it is omitted from the worker context type), because the predicate closure cannot cross to a worker process. It also cannot be a `ctx.race`, `ctx.all`, or `ctx.speculate` branch; await it directly.
 
 | Parameter   | Type            | Description                                                |
 | ----------- | --------------- | ---------------------------------------------------------- |

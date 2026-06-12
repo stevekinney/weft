@@ -102,7 +102,8 @@ describe('ctx.waitUntil', () => {
 
   it('resolves false when the deadline elapses before the predicate is met', async () => {
     let now = 1_000_000;
-    using engine = new Engine({ getNow: () => now });
+    const storage = new MemoryStorage();
+    using engine = new Engine({ storage, getNow: () => now });
     engine.register(
       workflow({ name: 'times-out' }).execute(async function* (ctx: WorkflowContext) {
         const met = yield* ctx.waitUntil(() => false, '5m');
@@ -113,6 +114,12 @@ describe('ctx.waitUntil', () => {
     const handle = await engine.start('times-out', null);
     await flush();
     expect(await engine.get(handle.id).then((s) => s?.status)).toBe('running');
+
+    // The deterministic deadline timer must be durably scheduled before it can
+    // fire. Asserting its index key exists fails the test if a regression drops
+    // `scheduleConditionDeadline` — without it `fireTimer` below would be a no-op
+    // and the false-on-timeout path would silently stop being exercised.
+    expect(await storage.get(`timer-idx:cond:${handle.id}:0`)).not.toBeNull();
 
     // Advance past the deadline and fire the deterministic condition timer
     // (step 0 — it is the first durable op in the body).
@@ -125,6 +132,44 @@ describe('ctx.waitUntil', () => {
     });
 
     await expect(handle.result()).resolves.toBe(false);
+  });
+
+  it('polls once and resolves false for a zero timeout when the predicate is unmet', async () => {
+    let now = 1_000_000;
+    using engine = new Engine({ getNow: () => now });
+    engine.register(
+      workflow({ name: 'zero-timeout' }).execute(async function* (ctx: WorkflowContext) {
+        // A `0` timeout means "evaluate once, then give up": the deadline equals
+        // `now`, so the engine's initial predicate-first/deadline-second check
+        // resolves it immediately. Same semantics as `ctx.sleep(0)` — `0` is a
+        // valid duration; only negatives are rejected.
+        const met = yield* ctx.waitUntil(() => false, 0);
+        return met;
+      }),
+    );
+
+    const handle = await engine.start('zero-timeout', null);
+    await expect(handle.result()).resolves.toBe(false);
+    // It never needs the deadline timer — settled before arming.
+    now += 1;
+    expect(await engine.get(handle.id).then((s) => s?.status)).toBe('completed');
+  });
+
+  it('fails the workflow for a negative timeout (parseDuration rejects it, like ctx.sleep)', async () => {
+    using engine = new Engine();
+    engine.register(
+      workflow({ name: 'negative-timeout' }).execute(async function* (ctx: WorkflowContext) {
+        // A negative duration is invalid. `parseDuration` throws a RangeError
+        // inside the generator before the request is ever yielded, so the
+        // workflow fails at the call site — no waitUntil-specific validation.
+        const met = yield* ctx.waitUntil(() => false, -1);
+        return met;
+      }),
+    );
+
+    const handle = await engine.start('negative-timeout', null);
+    await expect(handle.result()).rejects.toThrow();
+    expect(await engine.get(handle.id).then((s) => s?.status)).toBe('failed');
   });
 
   it('resolves true (met) over false (timeout) when the predicate becomes true at the deadline', async () => {
@@ -198,7 +243,7 @@ describe('ctx.waitUntil', () => {
     // resolving the branch and hanging on the 1h sleep.
     const handle = await engine.start('race-misuse-true', null);
     await expect(handle.result()).rejects.toThrow(
-      'ctx.waitUntil() cannot be used as a ctx.race() / ctx.all() branch',
+      'ctx.waitUntil() cannot be used as a ctx.race() / ctx.all() / ctx.speculate() branch',
     );
   });
 
@@ -213,8 +258,58 @@ describe('ctx.waitUntil', () => {
 
     const handle = await engine.start('race-misuse-false', null);
     await expect(handle.result()).rejects.toThrow(
-      'ctx.waitUntil() cannot be used as a ctx.race() / ctx.all() branch',
+      'ctx.waitUntil() cannot be used as a ctx.race() / ctx.all() / ctx.speculate() branch',
     );
+  });
+
+  it('fails the workflow (does not hang) when the predicate throws on its initial evaluation', async () => {
+    using engine = new Engine();
+    engine.register(
+      workflow({ name: 'predicate-throws-initial' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        yield* ctx.waitUntil(() => {
+          throw new Error('predicate boom');
+        });
+        return 'unreachable';
+      }),
+    );
+
+    const handle = await engine.start('predicate-throws-initial', null);
+    // A throwing predicate must surface as a workflow failure at the
+    // `yield* ctx.waitUntil` site (like a throwing activity/memo), not park the
+    // run forever. The `result()` promise resolving either way proves no hang.
+    await expect(handle.result()).rejects.toThrow('predicate boom');
+    expect(await engine.get(handle.id).then((s) => s?.status)).toBe('failed');
+  });
+
+  it('fails the workflow (does not hang) when the predicate throws on an update-driven re-evaluation', async () => {
+    using engine = new Engine();
+    engine.register(
+      workflow({ name: 'predicate-throws-redrive' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        let armed = false;
+        ctx.onUpdate('arm', () => {
+          armed = true;
+        });
+        // First evaluation (armed === false) is benign and parks. The update
+        // arms the flag and re-drives, and THAT re-evaluation throws.
+        yield* ctx.waitUntil(() => {
+          if (armed) throw new Error('redrive boom');
+          return false;
+        });
+        return 'unreachable';
+      }),
+    );
+
+    const handle = await engine.start('predicate-throws-redrive', null);
+    await flush();
+    expect(await engine.get(handle.id).then((s) => s?.status)).toBe('running');
+
+    await engine.update(handle.id, 'arm', null);
+    await expect(handle.result()).rejects.toThrow('redrive boom');
+    expect(await engine.get(handle.id).then((s) => s?.status)).toBe('failed');
   });
 
   it('tears down the waiter when the workflow is cancelled while parked', async () => {
