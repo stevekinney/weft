@@ -383,6 +383,54 @@ export function tryDecodeStorageKeyComponent(value: string): string | null {
 const formatSortableTimestamp = (timestamp: number): string => String(timestamp).padStart(16, '0');
 
 /**
+ * Reserved sort-class (`'0'`) for a `startOrSignal` start-signal in
+ * {@link KEYS.signal}. It sorts before {@link SIGNAL_SORT_CLASS_NORMAL} so the
+ * scan-first consume always takes the start-signal first (issue #458).
+ *
+ * @example
+ * ```ts
+ * import { KEYS, SIGNAL_SORT_CLASS_START } from '@lostgradient/weft/storage/interface';
+ *
+ * KEYS.signal('workflow-id', 'approve', 'start-sig', SIGNAL_SORT_CLASS_START);
+ * // 'sig:workflow-id:approve:0:start-sig'
+ * ```
+ */
+export const SIGNAL_SORT_CLASS_START = '0';
+
+/**
+ * Sort-class (`'1'`) for every non-start signal in {@link KEYS.signal}. It sorts
+ * after {@link SIGNAL_SORT_CLASS_START}; within this class, anonymous ids keep
+ * their existing sequence ordering.
+ *
+ * @example
+ * ```ts
+ * import { KEYS, SIGNAL_SORT_CLASS_NORMAL } from '@lostgradient/weft/storage/interface';
+ *
+ * KEYS.signal('workflow-id', 'approve', 'signal-1', SIGNAL_SORT_CLASS_NORMAL);
+ * // 'sig:workflow-id:approve:1:signal-1'
+ * ```
+ */
+export const SIGNAL_SORT_CLASS_NORMAL = '1';
+
+/**
+ * The sort-class component accepted by {@link KEYS.signal}: the start-signal
+ * class ({@link SIGNAL_SORT_CLASS_START}) or the normal class
+ * ({@link SIGNAL_SORT_CLASS_NORMAL}). Required so each signal declares its
+ * consumption-order class explicitly (#458).
+ *
+ * @example
+ * ```ts
+ * import {
+ *   SIGNAL_SORT_CLASS_NORMAL,
+ *   type SignalSortClass,
+ * } from '@lostgradient/weft/storage/interface';
+ *
+ * const sortClass: SignalSortClass = SIGNAL_SORT_CLASS_NORMAL;
+ * ```
+ */
+export type SignalSortClass = typeof SIGNAL_SORT_CLASS_START | typeof SIGNAL_SORT_CLASS_NORMAL;
+
+/**
  * Key layout constants for hierarchical key encoding. Timestamps are
  * zero-padded to 16 digits for lexicographic ordering.
  *
@@ -436,8 +484,8 @@ export const KEYS = {
     `ev:${encodeStorageKeyComponent(workflowId)}:${String(sequence).padStart(10, '0')}`,
   eventHead: (workflowId: string) => `ev:${encodeStorageKeyComponent(workflowId)}:head`,
   eventWatermark: (workflowId: string) => `ev:${encodeStorageKeyComponent(workflowId)}:watermark`,
-  signal: (workflowId: string, name: string, id: string) =>
-    `sig:${encodeStorageKeyComponent(workflowId)}:${name}:${encodeStorageKeyComponent(id)}`,
+  signal: (workflowId: string, name: string, id: string, sortClass: SignalSortClass) =>
+    `sig:${encodeStorageKeyComponent(workflowId)}:${name}:${sortClass}:${encodeStorageKeyComponent(id)}`,
   signalSequence: (workflowId: string) => `sigseq:v1:${encodeStorageKeyComponent(workflowId)}`,
   signalAcceptedResponsePrefix: (workflowId: string) =>
     `sigres:v1:${encodeStorageKeyComponent(workflowId)}:`,

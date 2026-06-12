@@ -243,6 +243,8 @@ export { storageDeleteRange } from './storage/delete-range';
 export type { DeleteRangeOptions } from './storage/delete-range';
 export {
   KEYS,
+  SIGNAL_SORT_CLASS_NORMAL,
+  SIGNAL_SORT_CLASS_START,
   WEFT_RESERVED_KEY_PREFIXES,
   assertDurableStorageForRecovery,
   requireStorageCapability,
@@ -254,6 +256,7 @@ export type {
   ConditionalBatchCondition,
   GatedStorageCapabilityKey,
   ScanOptions,
+  SignalSortClass,
   Storage,
   StorageCapabilities,
 } from './storage/interface';

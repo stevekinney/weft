@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { CompressedStorage } from '../../storage/compressed-storage.ts';
 import type { BatchOperation, Storage } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import { encodeStorageKeyComponent, KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { Engine } from '../engine.ts';
@@ -35,11 +35,29 @@ const releaseThenHold = workflow({ name: 'release-then-hold' }).execute(async fu
   return yield* ctx.waitForSignal<string>('hold');
 });
 
+// Consumes `ev` signals in a loop, recording each payload's tag, and returns the
+// ordered list when a signal carries `stop: true`. Used to prove FIFO buffering:
+// the order of the returned tags is the order the engine consumed the signals.
+const collectEvents = workflow({ name: 'collect-events' }).execute(async function* (
+  ctx: WorkflowContext,
+) {
+  const events: string[] = [];
+  for (;;) {
+    const event = (yield* ctx.waitForSignal<{ t: string; stop?: boolean }>('ev')) as {
+      t: string;
+      stop?: boolean;
+    };
+    events.push(event.t);
+    if (event.stop) return { events };
+  }
+});
+
 function createEngine(storage: Storage = new MemoryStorage()): Engine {
   const engine = new Engine({ storage });
   engine.register(waitForRelease);
   engine.register(completesImmediately);
   engine.register(releaseThenHold);
+  engine.register(collectEvents);
   return engine;
 }
 
@@ -1059,6 +1077,158 @@ describe('engine.startOrSignal', () => {
           { id: 'buffered-batch-failure' },
         ),
       ).rejects.toThrow('injected plain create batch failure');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+});
+
+describe('startOrSignal start-signal FIFO ordering (#458)', () => {
+  it('consumes the start-signal before later same-tick signals', async () => {
+    // Regression for #458: a startOrSignal start-signal must be consumed before
+    // signals delivered later in the same event-loop tick (before the workflow
+    // reaches its first park). Previously the start-signal's storage key sorted
+    // AFTER same-name anonymous keys, so a scan-first consume took the later
+    // signals first; if one carried `stop`, the workflow returned before ever
+    // consuming the start payload — silent data loss.
+    const engine = createEngine();
+    try {
+      const id = 'fifo-start';
+      const handle = await engine.startOrSignal(
+        'collect-events',
+        null,
+        { name: 'ev', payload: { t: 'a' }, signalId: 's-a' },
+        { id },
+      );
+      // Two more signals in the same tick (no awaits between sends).
+      const pending = Promise.all([
+        engine.signal(id, 'ev', { t: 'b' }),
+        engine.signal(id, 'ev', { t: 'c', stop: true }),
+      ]);
+      await pending;
+
+      expect(await handle.result()).toEqual({ events: ['a', 'b', 'c'] });
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('orders the start-signal first even when the explicit signalId sorts low', async () => {
+    // The start payload must win regardless of how its signalId sorts against the
+    // anonymous-id namespace. `0-...` sorts lexically before `anonymous%3A...`, so
+    // a fix that merely relied on explicit ids sorting after anonymous ones would
+    // regress here; the sort-class component guarantees the start-signal first.
+    const engine = createEngine();
+    try {
+      const id = 'fifo-start-low-id';
+      const handle = await engine.startOrSignal(
+        'collect-events',
+        null,
+        { name: 'ev', payload: { t: 'a' }, signalId: '0-start' },
+        { id },
+      );
+      await Promise.all([
+        engine.signal(id, 'ev', { t: 'b' }),
+        engine.signal(id, 'ev', { t: 'c', stop: true }),
+      ]);
+
+      const result = (await handle.result()) as { events: string[] };
+      expect(result.events[0]).toBe('a');
+      expect(result.events).toContain('b');
+      expect(result.events).toContain('c');
+      expect(result.events).toHaveLength(3);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('dedups a pre-buffered signal against a startOrSignal create on the same signalId', async () => {
+    // The dedup identity is the `sigres:` accepted-response marker (keyed by
+    // signalId alone), NOT the `sig:` payload key. The FIFO sort-class makes the
+    // start-signal's `sig:` key (class `0`) differ from the live path's (class
+    // `1`), so a `sig:`-keyed create CAS would NOT collide with a pre-buffered
+    // signal and the create batch would write a SECOND copy — the exact double-
+    // delivery the marker exists to prevent. Both write paths gate on `sigres:`.
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    try {
+      const id = 'prebuffer-create-dedup';
+      // Buffer a signal for a not-yet-existent run (class `1`, plus its `sigres:`).
+      await engine.signal(id, 'ev', { t: 'x' }, { signalId: 'dup' });
+
+      // startOrSignal sees no record → create path. Its start-signal shares the
+      // signalId `dup`; the create-batch CAS must collide on the pre-buffered
+      // `sigres:` and create the run WITHOUT folding a second `ev` signal in.
+      await engine.startOrSignal(
+        'collect-events',
+        null,
+        { name: 'ev', payload: { t: 'y' }, signalId: 'dup' },
+        { id },
+      );
+
+      // Exactly one `ev` payload may be buffered for signalId `dup`.
+      const buffered: string[] = [];
+      for await (const [key] of storage.scan(`sig:${encodeStorageKeyComponent(id)}:ev:`)) {
+        buffered.push(key);
+      }
+      expect(buffered).toHaveLength(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('dedups a live signal whose accepted-response read races a startOrSignal commit (TOCTOU)', async () => {
+    // The live signal path reads `sigres:` once, then CASes. A startOrSignal that
+    // creates the run+start-signal can commit in that read→CAS gap. Because the
+    // start-signal's `sig:` key is class `0` and the live path's is class `1`, a
+    // `sig:`-keyed CAS would still pass (the keys differ) and buffer a second copy.
+    // Gating the live CAS on the class-independent `sigres:` marker closes the gap:
+    // the start batch's `sigres:` makes the live CAS fail, so it deduplicates.
+    const id = 'toctou-live-vs-create';
+    const inner = new MemoryStorage();
+    const acceptedResponseKey = KEYS.signalAcceptedResponse(id, 'ev', 'dup');
+
+    let injected = false;
+    let runCreateInGap: (() => Promise<unknown>) | undefined;
+
+    const storage = new Proxy(inner, {
+      get(target, property, receiver) {
+        if (property === 'get') {
+          return async (key: string): Promise<Uint8Array | null> => {
+            const value = await target.get(key);
+            // The live path's pre-CAS read of the accepted-response marker: commit
+            // the competing startOrSignal create here, in the read→CAS gap.
+            if (!injected && key === acceptedResponseKey && runCreateInGap !== undefined) {
+              injected = true;
+              await runCreateInGap();
+            }
+            return value;
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const engine = createEngine(storage);
+    runCreateInGap = () =>
+      engine.startOrSignal(
+        'collect-events',
+        null,
+        { name: 'ev', payload: { t: 'created' }, signalId: 'dup' },
+        { id },
+      );
+
+    try {
+      // The live signal sees no run yet (buffer-before-start); its accepted-response
+      // read fires the injected create, then its CAS must lose to the start batch.
+      await engine.signal(id, 'ev', { t: 'live' }, { signalId: 'dup' });
+
+      const buffered: string[] = [];
+      for await (const [key] of inner.scan(`sig:${encodeStorageKeyComponent(id)}:ev:`)) {
+        buffered.push(key);
+      }
+      expect(buffered).toHaveLength(1);
     } finally {
       await engine[Symbol.asyncDispose]();
     }

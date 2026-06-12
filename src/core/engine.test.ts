@@ -6,7 +6,7 @@ import type {
   StorageCapabilities,
   Storage as WeftStorage,
 } from '../storage/interface.ts';
-import { encodeStorageKeyComponent, KEYS } from '../storage/interface.ts';
+import { encodeStorageKeyComponent, KEYS, SIGNAL_SORT_CLASS_NORMAL } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { AtomicStateConflictEvent } from './atomic-state.ts';
 import { deserializeCheckpoint } from './checkpoint.ts';
@@ -5755,7 +5755,7 @@ describe('Engine', () => {
       const handle = await engine.start('deferred-terminal-cleanup', null);
       await flush();
 
-      const signalKey = KEYS.signal(handle.id, 'pre', 'entry');
+      const signalKey = KEYS.signal(handle.id, 'pre', 'entry', SIGNAL_SORT_CLASS_NORMAL);
       const reviewKey = KEYS.review(handle.id, 'manual-review');
       const workflowHeaderKey = KEYS.workflowHeaders(handle.id);
 
@@ -5797,7 +5797,7 @@ describe('Engine', () => {
       const handle = await firstEngine.start('restart-terminal-cleanup', null);
       await flush();
 
-      const signalKey = KEYS.signal(handle.id, 'pre', 'entry');
+      const signalKey = KEYS.signal(handle.id, 'pre', 'entry', SIGNAL_SORT_CLASS_NORMAL);
       const reviewKey = KEYS.review(handle.id, 'manual-review');
 
       await storage.put(signalKey, encode({ ignored: true }));
@@ -5898,7 +5898,7 @@ describe('Engine', () => {
       const handle = await engine.start('fallback-terminal-cleanup', null);
       await flush();
 
-      const signalKey = KEYS.signal(handle.id, 'pre', 'entry');
+      const signalKey = KEYS.signal(handle.id, 'pre', 'entry', SIGNAL_SORT_CLASS_NORMAL);
       const reviewKey = KEYS.review(handle.id, 'manual-review');
       const workflowHeaderKey = KEYS.workflowHeaders(handle.id);
 
@@ -5973,7 +5973,12 @@ describe('Engine', () => {
       });
       await flush();
 
-      const retainedSignalKey = KEYS.signal(secondHandle.id, 'keep', 'entry');
+      const retainedSignalKey = KEYS.signal(
+        secondHandle.id,
+        'keep',
+        'entry',
+        SIGNAL_SORT_CLASS_NORMAL,
+      );
       const retainedReviewKey = KEYS.review(secondHandle.id, 'keep-review');
 
       const secondResultPromise = secondHandle.result();

@@ -3,7 +3,6 @@ import { describe, expect, it, mock } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
-import { encode } from '../codec.ts';
 import type { SignalReceivedInterception } from '../interceptor/interception-contexts.ts';
 import type { WorkflowState } from '../types.ts';
 import {
@@ -374,23 +373,34 @@ describe('engine signals', () => {
     });
   });
 
-  it('does not redeliver when the signal exists but the accepted response must be repaired', async () => {
+  it('delivers a keyed signal exactly once and keeps the first payload on a duplicate', async () => {
+    // Dedup is by signalId via the `sigres:` accepted-response marker: a second
+    // delivery with the same signalId is a no-op (no redelivery, the first payload
+    // is preserved), regardless of the signal's sort-class storage key (#458).
     const storage = new MemoryStorage();
     const internals = createSignalInternals(storage);
-    const callbacks = createSignalCallbacks();
-    await storage.put(KEYS.signal('workflow-repair', 'release', 'signal-1'), encode('first'));
+    const first = createSignalCallbacks();
+    await signal(internals as never, 'workflow-dedup', 'release', 'first', first, {
+      signalId: 'signal-1',
+    });
+    expect(first.dispatchEvent).toHaveBeenCalledTimes(1);
 
-    await signal(internals as never, 'workflow-repair', 'release', 'second', callbacks, {
+    const second = createSignalCallbacks();
+    await signal(internals as never, 'workflow-dedup', 'release', 'second', second, {
       signalId: 'signal-1',
     });
 
-    expect(callbacks.dispatchEvent).not.toHaveBeenCalled();
+    expect(second.dispatchEvent).not.toHaveBeenCalled();
     expect(
-      await storage.get(KEYS.signalAcceptedResponse('workflow-repair', 'release', 'signal-1')),
+      await storage.get(KEYS.signalAcceptedResponse('workflow-dedup', 'release', 'signal-1')),
     ).not.toBeNull();
-    expect(await consumeSignal(internals as never, 'workflow-repair', 'release')).toEqual({
+    // Exactly one payload buffered, and it is the FIRST.
+    expect(await consumeSignal(internals as never, 'workflow-dedup', 'release')).toEqual({
       found: true,
       payload: 'first',
+    });
+    expect(await consumeSignal(internals as never, 'workflow-dedup', 'release')).toEqual({
+      found: false,
     });
   });
 

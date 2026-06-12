@@ -312,11 +312,12 @@ const CALLER_ID_CREATE_MAX_ATTEMPTS = 5;
  *   committed winner or — if it aborted — retry the create. Bounded by
  *   {@link CALLER_ID_CREATE_MAX_ATTEMPTS}.
  * - **Signal already buffered** — `StartIdempotencyRaceLostError` on the
- *   caller-`id` path: the only CAS condition there is the signal's, so the loss
- *   means a `sig:` with this signalId was pre-buffered and (the batch being
- *   atomic) the `wf:` record was NOT written. Plain-create the workflow; the
- *   buffered signal is consumed on first drive (scan-then-park), and the caller's
- *   payload loses to the pre-buffered one by the same first-wins dedup.
+ *   caller-`id` path: the only CAS condition there is the signal's `sigres:`
+ *   accepted-response marker, so the loss means a signal with this signalId was
+ *   pre-buffered and (the batch being atomic) the `wf:` record was NOT written.
+ *   Plain-create the workflow; the buffered signal is consumed on first drive
+ *   (scan-then-park), and the caller's payload loses to the pre-buffered one by
+ *   the same first-wins dedup.
  */
 async function createWithSignalOrFallback(
   internals: EngineInternals,
@@ -442,11 +443,12 @@ async function plainCreateBufferedSignalOrResolve(
  *   back from the `start-idem:` mapping) and the key. The mapping commits
  *   atomically with the record, so the winner is guaranteed committed.
  * - `signal-already-buffered` — caller-id path only: the batch's sole CAS
- *   condition (the signal) failed because the signal was pre-buffered, so no
- *   record was written and the workflow must still be created.
+ *   condition (the signal's `sigres:` accepted-response marker) failed because a
+ *   signal with the same signalId was pre-buffered, so no record was written and
+ *   the workflow must still be created.
  *
  * The keyed path's create batch uses a freshly generated workflow id, so its
- * signal `sig:` condition cannot collide with a pre-buffered signal; a keyed
+ * signal `sigres:` condition cannot collide with a pre-buffered signal; a keyed
  * {@link StartIdempotencyRaceLostError} is therefore always a genuine
  * mapping-CAS loss. Any other error propagates.
  */
@@ -484,8 +486,9 @@ async function resolveCreateRaceOutcome(
           idempotencyKey,
         };
       }
-      // Caller-id path: the only CAS condition was the signal's, so this is a
-      // pre-buffered signal, not a concurrent winner — create the workflow.
+      // Caller-id path: the only CAS condition was the signal's `sigres:` marker,
+      // so this is a pre-buffered signal of the same signalId, not a concurrent
+      // winner — create the workflow.
       return { kind: 'signal-already-buffered' };
     }
     throw error;

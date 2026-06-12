@@ -1,6 +1,6 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS, SIGNAL_SORT_CLASS_NORMAL } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 import { Engine } from '../engine.ts';
@@ -460,7 +460,10 @@ describe('termination helpers', () => {
     const workflowId = 'cleanup-batched';
 
     for (let index = 0; index < 1_001; index++) {
-      await storage.put(KEYS.signal(workflowId, 'release', `signal-${index}`), new Uint8Array([1]));
+      await storage.put(
+        KEYS.signal(workflowId, 'release', `signal-${index}`, SIGNAL_SORT_CLASS_NORMAL),
+        new Uint8Array([1]),
+      );
     }
     await storage.put(
       KEYS.activityReconciliation(workflowId, 'charge-card', 'digest'),
@@ -470,8 +473,14 @@ describe('termination helpers', () => {
 
     await cleanupWorkflowStorage({ storage } as never, workflowId, false);
 
-    expect(await storage.get(KEYS.signal(workflowId, 'release', 'signal-0'))).toBeNull();
-    expect(await storage.get(KEYS.signal(workflowId, 'release', 'signal-1000'))).toBeNull();
+    expect(
+      await storage.get(KEYS.signal(workflowId, 'release', 'signal-0', SIGNAL_SORT_CLASS_NORMAL)),
+    ).toBeNull();
+    expect(
+      await storage.get(
+        KEYS.signal(workflowId, 'release', 'signal-1000', SIGNAL_SORT_CLASS_NORMAL),
+      ),
+    ).toBeNull();
     expect(await storage.get(KEYS.signalSequence(workflowId))).toBeNull();
     expect(
       await storage.get(KEYS.activityReconciliation(workflowId, 'charge-card', 'digest')),
