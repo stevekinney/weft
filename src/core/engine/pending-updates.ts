@@ -150,27 +150,40 @@ export async function processPendingUpdatesForHandlers(
   const pendingUpdates = await internals.updateCoordinator.getPendingUpdates(workflowId);
   if (pendingUpdates.length === 0) return;
 
-  let deliveredAny = false;
-  for (const update of pendingUpdates) {
-    const handler = handlers.get(update.name);
-    if (!handler) continue;
+  // Whether any handler ran (mutating state a predicate may read). Tracked in
+  // `finally` so the re-drive still fires if a LATER update's durable write
+  // throws after an earlier handler already ran — otherwise a parked
+  // `ctx.waitUntil` could miss a state change. `deliverPendingUpdate` catches
+  // handler throws internally, so only a `storage.batch` failure escapes here.
+  let handlerRan = false;
+  try {
+    for (const update of pendingUpdates) {
+      const handler = handlers.get(update.name);
+      if (!handler) continue;
 
-    // Claim the id synchronously before any `await`, so a racing drain that
-    // scanned the same id (before this drain's durable delete commits) skips it.
-    if (!claimPendingUpdateForDelivery(internals, workflowId, update.updateId)) continue;
+      // Claim the id synchronously before any `await`, so a racing drain that
+      // scanned the same id (before this drain's durable delete commits) skips it.
+      if (!claimPendingUpdateForDelivery(internals, workflowId, update.updateId)) continue;
 
-    const validatorRejectionError = await runValidatorIfPresent(context, update);
-    if (validatorRejectionError !== null) {
-      await rejectPendingUpdate(internals, workflowId, update, validatorRejectionError, callbacks);
-      continue;
+      const validatorRejectionError = await runValidatorIfPresent(context, update);
+      if (validatorRejectionError !== null) {
+        await rejectPendingUpdate(
+          internals,
+          workflowId,
+          update,
+          validatorRejectionError,
+          callbacks,
+        );
+        continue;
+      }
+
+      handlerRan = true;
+      await deliverPendingUpdate(internals, workflowId, update, handler, callbacks);
     }
-
-    await deliverPendingUpdate(internals, workflowId, update, handler, callbacks);
-    deliveredAny = true;
-  }
-
-  if (deliveredAny) {
-    notifyConditionWaiters(internals, workflowId);
+  } finally {
+    if (handlerRan) {
+      notifyConditionWaiters(internals, workflowId);
+    }
   }
 }
 

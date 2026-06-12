@@ -50,9 +50,10 @@ export type ConditionOperationCallbacks = Pick<
  */
 /**
  * Evaluate a wait-condition's terminal outcome. Predicate-first, deadline-second
- * (so a predicate true exactly at the deadline resolves MET, not timed-out).
- * Returns the value to complete with, or `'pending'` to keep waiting. Shared by
- * the pre-loop check and the in-loop lost-wakeup re-check so they cannot diverge.
+ * (so a predicate true exactly at the deadline resolves met, not timed-out).
+ * Returns `{ done: true, value }` with the value to complete with, or
+ * `{ done: false }` to keep waiting. Shared by the pre-loop check and the in-loop
+ * lost-wakeup re-check so they cannot diverge.
  */
 function evaluateConditionOutcome(
   internals: EngineInternals,
