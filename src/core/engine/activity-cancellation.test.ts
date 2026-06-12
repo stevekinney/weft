@@ -131,10 +131,12 @@ describe('#453 cooperative activity cancellation', () => {
     // The canonical cooperative-cancellation pattern in the docs: a polling loop
     // calls `ctx.signal.throwIfAborted()` at the top of each iteration so the
     // activity stops the moment the workflow is cancelled — no iteration runs after
-    // the abort, and the throw propagates as the activity failure. The loop is
-    // gated on a test-controlled promise per iteration (a deterministic stand-in
-    // for "wait for the next poll tick") so cancellation can interleave between
-    // polls without relying on wall-clock timing.
+    // the abort. The throw stops the activity, but the workflow handle still rejects
+    // with the engine's terminal cancellation error ("Workflow cancelled"), not the
+    // activity's own thrown error, since `engine.cancel()` tears the run down. The
+    // loop is gated on a test-controlled promise per iteration (a deterministic
+    // stand-in for "wait for the next poll tick") so cancellation can interleave
+    // between polls without relying on wall-clock timing.
     await using engine = new Engine();
     let iterations = 0;
     let started = false;
@@ -178,8 +180,11 @@ describe('#453 cooperative activity cancellation', () => {
     const handle = await engine.start('poll-wf', null, { id: 'poll-1' });
     await waitForCondition(() => started, { timeoutMs: 2000, label: 'polling activity started' });
     const settled = handle.result().then(
-      () => 'resolved',
-      () => 'rejected',
+      () => ({ outcome: 'resolved' as const, message: '' }),
+      (error: unknown) => ({
+        outcome: 'rejected' as const,
+        message: error instanceof Error ? error.message : String(error),
+      }),
     );
 
     // Let a couple of polls run, then cancel while the activity is parked on the gate.
@@ -199,7 +204,11 @@ describe('#453 cooperative activity cancellation', () => {
       label: 'polling activity bailed out via throwIfAborted',
     });
     expect(bailedOut).toBe(true);
-    expect(await settled).toBe('rejected');
+    // The workflow rejects with the engine's stable terminal cancellation error,
+    // not the activity's own thrown error.
+    const result = await settled;
+    expect(result.outcome).toBe('rejected');
+    expect(result.message).toContain('Workflow cancelled');
 
     // The bail-out happened at the top of the resumed iteration: no further poll ran.
     expect(iterations).toBe(iterationsBeforeCancel);
