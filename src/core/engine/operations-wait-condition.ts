@@ -121,9 +121,17 @@ export async function processWaitConditionOperation(
     // or on any update-driven re-evaluation (the lost-wakeup re-check). Route the
     // throw through `failOperation` so it re-throws at the `yield* ctx.waitUntil`
     // site (like a throwing activity/memo) instead of becoming an unhandled
-    // rejection that parks the run forever. This is the only path that can settle
-    // the op as failed, and it is reached only when the body threw before
-    // completing — so no `settled` guard is needed here.
+    // rejection that parks the run forever.
+    //
+    // This catch can ALSO see a throw from the inner `finally`'s
+    // `cancelConditionDeadline` AFTER `complete()` already settled the op (a
+    // storage failure during teardown). That is a benign double-settle: the
+    // generator already ran to its `return`, so the inline strategy's `#cleanup`
+    // removed it from `#generators`; the subsequent `failOperation` →
+    // `feedOperationResult` → `inlineStrategy.throwIntoWorkflow` finds no
+    // generator (`if (!generator) return`) and is absorbed — the workflow stays
+    // completed. So no `settled` guard is needed here. Pinned by the "no
+    // double-settle" test.
     callbacks.failOperation(workflowId, operation, error);
   }
 }

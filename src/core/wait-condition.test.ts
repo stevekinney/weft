@@ -312,6 +312,48 @@ describe('ctx.waitUntil', () => {
     expect(await engine.get(handle.id).then((s) => s?.status)).toBe('failed');
   });
 
+  it('stays completed when deadline-timer cancellation throws after the wait is satisfied (no double-settle)', async () => {
+    // After a timed wait is satisfied, the `finally` cancels the deadline timer.
+    // If that storage cancel throws, the error propagates to the operation's
+    // outer catch — which would call `failOperation` on an ALREADY-completed op
+    // (a double-settle). This proves the downstream terminal guards absorb it:
+    // the workflow stays `completed` and its result is unchanged.
+    const storage = new MemoryStorage();
+    const originalBatch = storage.batch.bind(storage);
+    storage.batch = async (operations) => {
+      // The cancel path deletes the `timer-idx:cond:<id>:<step>` index key.
+      // Throw exactly there to force the post-completion teardown failure.
+      const cancelsConditionTimer = operations.some(
+        (op) => op.type === 'delete' && op.key.startsWith('timer-idx:cond:'),
+      );
+      if (cancelsConditionTimer) throw new Error('storage cancel boom');
+      return originalBatch(operations);
+    };
+
+    using engine = new Engine({ storage });
+    engine.register(
+      workflow({ name: 'cancel-throws-after-satisfied' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        let ready = false;
+        ctx.onUpdate('go', () => {
+          ready = true;
+        });
+        const met = yield* ctx.waitUntil(() => ready, '5m');
+        return met;
+      }),
+    );
+
+    const handle = await engine.start('cancel-throws-after-satisfied', null);
+    await flush();
+
+    // Satisfy the predicate via update; the wait completes (`true`) and then the
+    // teardown cancel throws. The op was already settled as completed.
+    await engine.update(handle.id, 'go', null);
+    await expect(handle.result()).resolves.toBe(true);
+    expect(await engine.get(handle.id).then((s) => s?.status)).toBe('completed');
+  });
+
   it('tears down the waiter when the workflow is cancelled while parked', async () => {
     using engine = new Engine();
     engine.register(
