@@ -1,8 +1,6 @@
 import type { BatchOperation } from '../../storage/interface.ts';
 import {
   KEYS,
-  SIGNAL_SORT_CLASS_NORMAL,
-  SIGNAL_SORT_CLASS_START,
   encodeStorageKeyComponent,
   requireStorageCapability,
   storageConditionalBatch,
@@ -202,7 +200,7 @@ function createExplicitSignalOperations(
 ): BatchOperation[] {
   return deliveries.map(({ signalName, payload }) => ({
     type: 'put',
-    key: KEYS.signal(workflowId, signalName, signalId, SIGNAL_SORT_CLASS_NORMAL),
+    key: KEYS.signal(workflowId, signalName, signalId),
     value: encodePayloadWithinLimit(
       payload,
       internals.options.payloadSizePolicy.maxBytes,
@@ -239,10 +237,10 @@ export function buildCreateBatchSignalOperations(
   signalId: string,
 ): { operations: BatchOperation[]; condition: { key: string; expectedValue: null } } {
   validateSignalId(signalId);
-  // Class `0`: the start-signal must be consumed before any signal delivered
-  // later in the same tick (before the workflow's first park). See
-  // SIGNAL_SORT_CLASS_START and issue #458.
-  const signalKey = KEYS.signal(workflowId, signalName, signalId, SIGNAL_SORT_CLASS_START);
+  // `KEYS.startSignal` sorts the start-signal before any signal delivered later
+  // in the same tick (before the workflow's first park); see `KEYS.startSignal`
+  // and issue #458.
+  const signalKey = KEYS.startSignal(workflowId, signalName, signalId);
   const acceptedResponseKey = KEYS.signalAcceptedResponse(workflowId, signalName, signalId);
   return {
     operations: [

@@ -1655,14 +1655,10 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
     },
   ],
   [
-    // Line numbers shifted when the `KEYS.signal` call here gained the #458
-    // sort-class argument (a one-line call expanded to six, plus one import line);
-    // the forgiven branches (CAS-exhaustion throw, extract-null/decode-error paths),
-    // the two subprocess-only functions, and their coverage are otherwise unchanged.
     'src/core/engine/anonymous-signal-sequence.ts',
     {
       functions: 2,
-      lines: new Set([75, 77, 78, 79, 172, 184, 186, 187, 188, 189, 190, 192, 193, 198, 203]),
+      lines: new Set([73, 74, 76, 77, 78, 166, 178, 180, 181, 182, 183, 184, 186, 187, 192, 197]),
     },
   ],
   // Lines 214-216 (the `pendingAsyncActivities` purge loop) moved to 254-256 when

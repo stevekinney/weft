@@ -1,7 +1,6 @@
 import type { BatchOperation } from '../../storage/interface.ts';
 import {
   KEYS,
-  SIGNAL_SORT_CLASS_NORMAL,
   encodeStorageKeyComponent,
   requireStorageCapability,
   storageConditionalBatch,
@@ -121,12 +120,7 @@ function createAnonymousSignalOperations(
 ): BatchOperation[] {
   const operations: BatchOperation[] = deliveries.map(({ signalName, payload }, index) => ({
     type: 'put',
-    key: KEYS.signal(
-      workflowId,
-      signalName,
-      generatedSignalId(nextSequence + index),
-      SIGNAL_SORT_CLASS_NORMAL,
-    ),
+    key: KEYS.signal(workflowId, signalName, generatedSignalId(nextSequence + index)),
     value: encodePayloadWithinLimit(
       payload,
       internals.options.payloadSizePolicy.maxBytes,

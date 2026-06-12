@@ -15,7 +15,6 @@ import {
   KEYS,
   matchesScanOptions,
   resolvePrefixRangeEnd,
-  SIGNAL_SORT_CLASS_NORMAL,
   storageConditionalBatch,
   storageCount,
   storageDeletePrefix,
@@ -156,7 +155,7 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.event('workflow-id', 1),
       KEYS.eventHead('workflow-id'),
       KEYS.eventWatermark('workflow-id'),
-      KEYS.signal('workflow-id', 'signal-name', 'signal-id', SIGNAL_SORT_CLASS_NORMAL),
+      KEYS.signal('workflow-id', 'signal-name', 'signal-id'),
       KEYS.signalSequence('workflow-id'),
       KEYS.signalAcceptedResponse('workflow-id', 'signal-name', 'signal-id'),
       KEYS.deadline(1, 'workflow-id'),
@@ -668,10 +667,10 @@ describe('KEYS', () => {
     expect(KEYS.eventPrefix(workflowId)).toBe(`ev:${encodedWorkflowId}:`);
     expect(KEYS.event(workflowId, 9)).toBe(`ev:${encodedWorkflowId}:0000000009`);
     expect(KEYS.eventHead(workflowId)).toBe(`ev:${encodedWorkflowId}:head`);
-    expect(KEYS.signal(workflowId, 'approve', 'signal:1', SIGNAL_SORT_CLASS_NORMAL)).toBe(
+    expect(KEYS.signal(workflowId, 'approve', 'signal:1')).toBe(
       `sig:${encodedWorkflowId}:approve:1:signal%3A1`,
     );
-    expect(KEYS.signal(workflowId, 'approve', 'signal:1', '0')).toBe(
+    expect(KEYS.startSignal(workflowId, 'approve', 'signal:1')).toBe(
       `sig:${encodedWorkflowId}:approve:0:signal%3A1`,
     );
     expect(KEYS.signalSequence(workflowId)).toBe(`sigseq:v1:${encodedWorkflowId}`);

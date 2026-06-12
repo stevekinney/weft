@@ -214,7 +214,7 @@ const KEYS: {
   operation: (queue: string, scheduledAt: number, id: string) => string;
   operationInflight: (id: string) => string;
   event: (workflowId: string, sequence: number) => string;
-  signal: (workflowId: string, name: string, id: string, sortClass: SignalSortClass) => string;
+  signal: (workflowId: string, name: string, id: string) => string;
   deadline: (deadline: number, workflowId: string) => string;
   attribute: (workflowId: string) => string;
   attributeIndex: (attributeName: string, encodedValue: string, workflowId: string) => string;
@@ -232,14 +232,12 @@ const KEYS: {
 Key layout constants for hierarchical key encoding. All timestamps are zero-padded to 16 digits for correct lexicographic ordering. The `KEYS` object is the canonical source for key construction -- never hand-build keys.
 
 ```ts
-import { KEYS, SIGNAL_SORT_CLASS_NORMAL } from '@lostgradient/weft';
+import { KEYS } from '@lostgradient/weft';
 
 const key = KEYS.workflow('my-workflow-id');
 // => "wf:my-workflow-id"
 
-// The 4th argument is the consumption sort-class: SIGNAL_SORT_CLASS_START ('0')
-// for a startOrSignal start-signal, SIGNAL_SORT_CLASS_NORMAL ('1') otherwise.
-const signalKey = KEYS.signal('wf-123', 'approval', 'sig-456', SIGNAL_SORT_CLASS_NORMAL);
+const signalKey = KEYS.signal('wf-123', 'approval', 'sig-456');
 // => "sig:wf-123:approval:1:sig-456"
 
 const executionStateKey = KEYS.stateExecution('wf-123', 'counter');

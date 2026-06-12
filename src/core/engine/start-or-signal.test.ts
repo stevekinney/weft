@@ -1091,6 +1091,12 @@ describe('startOrSignal start-signal FIFO ordering (#458)', () => {
     // AFTER same-name anonymous keys, so a scan-first consume took the later
     // signals first; if one carried `stop`, the workflow returned before ever
     // consuming the start payload — silent data loss.
+    //
+    // The terminator is decoupled from the same-tick pair: `b` and `c` are both
+    // un-awaited anonymous signals whose relative order is best-effort, so the
+    // `stop` is sent separately afterward (anonymously, so it draws the highest
+    // sequence and is consumed last). The invariant under test is "start-signal
+    // first", not the b-vs-c order.
     const engine = createEngine();
     try {
       const id = 'fifo-start';
@@ -1101,13 +1107,13 @@ describe('startOrSignal start-signal FIFO ordering (#458)', () => {
         { id },
       );
       // Two more signals in the same tick (no awaits between sends).
-      const pending = Promise.all([
-        engine.signal(id, 'ev', { t: 'b' }),
-        engine.signal(id, 'ev', { t: 'c', stop: true }),
-      ]);
-      await pending;
+      await Promise.all([engine.signal(id, 'ev', { t: 'b' }), engine.signal(id, 'ev', { t: 'c' })]);
+      await engine.signal(id, 'ev', { t: 'stop', stop: true });
 
-      expect(await handle.result()).toEqual({ events: ['a', 'b', 'c'] });
+      const result = (await handle.result()) as { events: string[] };
+      expect(result.events[0]).toBe('a');
+      expect(result.events.at(-1)).toBe('stop');
+      expect(result.events.slice(1, -1).toSorted()).toEqual(['b', 'c']);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -1127,16 +1133,12 @@ describe('startOrSignal start-signal FIFO ordering (#458)', () => {
         { name: 'ev', payload: { t: 'a' }, signalId: '0-start' },
         { id },
       );
-      await Promise.all([
-        engine.signal(id, 'ev', { t: 'b' }),
-        engine.signal(id, 'ev', { t: 'c', stop: true }),
-      ]);
+      await Promise.all([engine.signal(id, 'ev', { t: 'b' }), engine.signal(id, 'ev', { t: 'c' })]);
+      await engine.signal(id, 'ev', { t: 'stop', stop: true });
 
       const result = (await handle.result()) as { events: string[] };
       expect(result.events[0]).toBe('a');
-      expect(result.events).toContain('b');
-      expect(result.events).toContain('c');
-      expect(result.events).toHaveLength(3);
+      expect(result.events.slice(1).toSorted()).toEqual(['b', 'c', 'stop']);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
