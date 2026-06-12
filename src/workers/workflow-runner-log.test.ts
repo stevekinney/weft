@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import type { WorkerLoggerReplayState } from '../core/context/workflow-logger.ts';
-import type { OperationRequest, WorkflowLogRecord } from '../core/types.ts';
+import type { OperationRequest } from '../core/types.ts';
+import { captureWorkflowLogConsole } from '../testing/workflow-log-capture.test-support.ts';
 import {
   createWorkerWorkflowContext,
   createWorkflowRunnerContext,
@@ -9,29 +10,6 @@ import {
   handleRunMessage,
   type WorkerWorkflowContext,
 } from './workflow-runner.ts';
-
-/** Capture console.{debug,info,warn,error} records for assertions. */
-function captureConsole(): { records: WorkflowLogRecord[]; restore: () => void } {
-  const records: WorkflowLogRecord[] = [];
-  const originals = {
-    debug: console.debug,
-    info: console.info,
-    warn: console.warn,
-    error: console.error,
-  };
-  for (const method of ['debug', 'info', 'warn', 'error'] as const) {
-    console[method] = mock((record: unknown) => records.push(record as WorkflowLogRecord));
-  }
-  return {
-    records,
-    restore: () => {
-      console.debug = originals.debug;
-      console.info = originals.info;
-      console.warn = originals.warn;
-      console.error = originals.error;
-    },
-  };
-}
 
 function activityOperation(
   workflowId: string,
@@ -52,9 +30,9 @@ function activityOperation(
 }
 
 describe('worker ctx.log', () => {
-  let captured: ReturnType<typeof captureConsole>;
+  let captured: ReturnType<typeof captureWorkflowLogConsole>;
   beforeEach(() => {
-    captured = captureConsole();
+    captured = captureWorkflowLogConsole();
   });
   afterEach(() => {
     captured.restore();
@@ -134,7 +112,7 @@ describe('worker ctx.log', () => {
     // frontier → emitted, and the recovered run must request op2 (proving the
     // replay reached the right position, not just that the log sequence matched).
     captured.restore();
-    captured = captureConsole();
+    captured = captureWorkflowLogConsole();
     const recoveredContext = createWorkflowRunnerContext();
     const recovered = await handleRunMessage(
       recoveredContext,

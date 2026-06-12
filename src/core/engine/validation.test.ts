@@ -96,23 +96,14 @@ describe('engine validation helpers', () => {
     ).toBe(true);
   });
 
-  it('normalizes previous workflow failure category names while decoding persisted state', () => {
-    expect(
-      decodeWorkflowState(encode(createWorkflowState({ failureCategory: 'planning' as never })))
-        .failureCategory,
-    ).toBe('application');
-    expect(
-      decodeWorkflowState(encode(createWorkflowState({ failureCategory: 'action' as never })))
-        .failureCategory,
-    ).toBe('application');
-    expect(
-      decodeWorkflowState(encode(createWorkflowState({ failureCategory: 'reflection' as never })))
-        .failureCategory,
-    ).toBe('application');
-    expect(
-      decodeWorkflowState(encode(createWorkflowState({ failureCategory: 'memory' as never })))
-        .failureCategory,
-    ).toBe('resource');
+  it('drops previous workflow failure category names while decoding persisted state', () => {
+    for (const category of ['planning', 'action', 'reflection', 'memory']) {
+      expect(
+        decodeWorkflowState(encode(createWorkflowState({ failureCategory: category as never })))
+          .failureCategory,
+      ).toBeUndefined();
+    }
+
     expect(
       decodeWorkflowState(encode(createWorkflowState({ failureCategory: 'system' })))
         .failureCategory,

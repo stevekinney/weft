@@ -60,7 +60,7 @@ async function startFailedWorkflowWithSplitFailureCategory(
   const state = decode(stateBytes!) as WorkflowState;
   state.failureCategory = null;
   await storage.put(KEYS.workflow(id), encode(state));
-  await storage.put(KEYS.attribute(id), encode({ failureCategory: 'planning' }));
+  await storage.put(KEYS.attribute(id), encode({ failureCategory: 'application' }));
 }
 
 const registry = createOperationRegistry([listWorkflowsOperation]);

@@ -1,7 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { captureWorkflowLogConsole } from '../../testing/workflow-log-capture.test-support.ts';
 import { Engine } from '../engine.ts';
 import { activity } from '../types.ts';
 import type { WorkflowLogRecord } from '../types/workflow-context.ts';
@@ -19,29 +20,6 @@ async function flush(): Promise<void> {
   await sleepForTesting(10);
 }
 
-/** Capture every console.{debug,info,warn,error} record. */
-function captureConsole(): { records: WorkflowLogRecord[]; restore: () => void } {
-  const records: WorkflowLogRecord[] = [];
-  const originals = {
-    debug: console.debug,
-    info: console.info,
-    warn: console.warn,
-    error: console.error,
-  };
-  for (const method of ['debug', 'info', 'warn', 'error'] as const) {
-    console[method] = mock((record: unknown) => records.push(record as WorkflowLogRecord));
-  }
-  return {
-    records,
-    restore: () => {
-      console.debug = originals.debug;
-      console.info = originals.info;
-      console.warn = originals.warn;
-      console.error = originals.error;
-    },
-  };
-}
-
 /** Messages emitted at our marker levels, in order (ignores engine debug noise). */
 function loggedMessages(records: WorkflowLogRecord[], type: string): string[] {
   return records
@@ -50,9 +28,9 @@ function loggedMessages(records: WorkflowLogRecord[], type: string): string[] {
 }
 
 describe('ctx.log engine-level replay safety', () => {
-  let captured: ReturnType<typeof captureConsole>;
+  let captured: ReturnType<typeof captureWorkflowLogConsole>;
   beforeEach(() => {
-    captured = captureConsole();
+    captured = captureWorkflowLogConsole();
   });
   afterEach(() => {
     captured.restore();
@@ -93,7 +71,7 @@ describe('ctx.log engine-level replay safety', () => {
     // sits before the cached `noop('x')` step → suppressed. Nothing new emits
     // until the signal resumes the run past the replayed prefix.
     captured.restore();
-    captured = captureConsole();
+    captured = captureWorkflowLogConsole();
     using recovered = new Engine({ storage });
     build(recovered);
     const [handle] = await recovered.recoverAll();
@@ -151,7 +129,7 @@ describe('ctx.log engine-level replay safety', () => {
     // proof that the peek tracks the real post-parallel frontier (a hand-set
     // index could not distinguish these two positions).
     captured.restore();
-    captured = captureConsole();
+    captured = captureWorkflowLogConsole();
     using recovered = new Engine({ storage });
     build(recovered);
     const [handle] = await recovered.recoverAll();
@@ -189,7 +167,7 @@ describe('ctx.log engine-level replay safety', () => {
     }
 
     captured.restore();
-    captured = captureConsole();
+    captured = captureWorkflowLogConsole();
     using recovered = new Engine({ storage });
     build(recovered);
     const [handle] = await recovered.recoverAll();

@@ -47,7 +47,7 @@ function createCrashEngine(storage = new MemoryStorage()): Engine {
   return engine;
 }
 
-async function startLegacyFailedWorkflow(
+async function startSplitFailureCategoryWorkflow(
   engine: Engine,
   storage: MemoryStorage,
   id: string,
@@ -60,7 +60,7 @@ async function startLegacyFailedWorkflow(
   const state = decode(stateBytes!) as WorkflowState;
   state.failureCategory = null;
   await storage.put(KEYS.workflow(id), encode(state));
-  await storage.put(KEYS.attribute(id), encode({ failureCategory: 'planning' }));
+  await storage.put(KEYS.attribute(id), encode({ failureCategory: 'application' }));
 }
 
 async function waitForStatus(
@@ -167,7 +167,7 @@ describe('serve() — POST /jsonrpc', () => {
   it('dispatches weft.workflows.list with include failureCategory parameters', async () => {
     const storage = new MemoryStorage();
     const engine = createCrashEngine(storage);
-    await startLegacyFailedWorkflow(engine, storage, 'json-rpc-failed-with-category');
+    await startSplitFailureCategoryWorkflow(engine, storage, 'json-rpc-failed-with-category');
 
     server = serve({ engine, port: 0 });
 

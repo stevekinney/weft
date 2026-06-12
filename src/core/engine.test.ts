@@ -1694,7 +1694,7 @@ describe('Engine', () => {
     const stateWithAttributeBackedCategory = decode(stateBytes!) as WorkflowState;
     stateWithAttributeBackedCategory.failureCategory = null;
     await storage.put(KEYS.workflow(handle.id), encode(stateWithAttributeBackedCategory));
-    await storage.put(KEYS.attribute(handle.id), encode({ failureCategory: 'planning' }));
+    await storage.put(KEYS.attribute(handle.id), encode({ failureCategory: 'application' }));
 
     storage.attributeReadCount = 0;
 
@@ -1728,7 +1728,7 @@ describe('Engine', () => {
       id: 'wf-state-category',
     });
     await expect(handle.result()).rejects.toThrow('state failure');
-    await storage.put(KEYS.attribute(handle.id), encode({ failureCategory: 'planning' }));
+    await storage.put(KEYS.attribute(handle.id), encode({ failureCategory: 'application' }));
 
     storage.attributeReadCount = 0;
 
@@ -1772,7 +1772,7 @@ describe('Engine', () => {
       const stateWithAttributeBackedCategory = decode(stateBytes!) as WorkflowState;
       stateWithAttributeBackedCategory.failureCategory = null;
       await storage.put(KEYS.workflow(handle.id), encode(stateWithAttributeBackedCategory));
-      await storage.put(KEYS.attribute(handle.id), encode({ failureCategory: 'planning' }));
+      await storage.put(KEYS.attribute(handle.id), encode({ failureCategory: 'application' }));
     }
 
     storage.attributeReadCount = 0;

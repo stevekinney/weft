@@ -489,7 +489,7 @@ describe('InlineExecutionStrategy', () => {
   // -------------------------------------------------------------------------
 
   describe('parkWorkflow', () => {
-    it('retains the context in parkedContexts after parking with retainContext', async () => {
+    async function startParkableWorkflowAndCaptureContext(): Promise<Context> {
       setup();
 
       registrations.set('parkable', {
@@ -514,10 +514,13 @@ describe('InlineExecutionStrategy', () => {
 
       await sleepForTesting(10);
 
-      // Capture context before parking
       const contextBeforePark = strategy.getContext('wf-1');
       expect(contextBeforePark).toBeDefined();
+      return contextBeforePark!;
+    }
 
+    it('retains the context in parkedContexts after parking with retainContext', async () => {
+      const contextBeforePark = await startParkableWorkflowAndCaptureContext();
       strategy.parkWorkflow('wf-1', { retainContext: true });
 
       // Live context is gone; parked context is retained
@@ -527,31 +530,7 @@ describe('InlineExecutionStrategy', () => {
     });
 
     it('keeps the retained context across a second retaining park (idempotent retain)', async () => {
-      setup();
-
-      registrations.set('parkable', {
-        handler: async function* (_context, _input) {
-          yield {
-            type: 'activity',
-            operationId: 'op-1',
-            activityName: 'doWork',
-            fn: () => {},
-            input: undefined,
-          };
-        },
-        version: '1',
-      });
-
-      strategy.startWorkflow({
-        workflowId: 'wf-1',
-        workflowType: 'parkable',
-        input: null,
-        checkpoint: new ArrayBuffer(0),
-      });
-
-      await sleepForTesting(10);
-      const contextBeforePark = strategy.getContext('wf-1');
-      expect(contextBeforePark).toBeDefined();
+      const contextBeforePark = await startParkableWorkflowAndCaptureContext();
 
       // First retaining park moves the context into #parkedContexts.
       strategy.parkWorkflow('wf-1', { retainContext: true });
