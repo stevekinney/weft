@@ -361,6 +361,30 @@ export interface WeftClient {
   /** Get the full persisted state of a workflow, or `null` if not found. */
   get(id: string): Promise<WorkflowState | null>;
 
+  /**
+   * Re-attach a {@link ClientHandle} to an existing workflow by id, or `null`
+   * when no workflow with that id exists.
+   *
+   * Unlike {@link WeftClient.start} / {@link WeftClient.startOrSignal} —
+   * which mint a handle as a side effect of creating or reviving a run —
+   * `getHandle` hands back the full handle ergonomics (`result()`,
+   * `addEventListener`, `cancel()`, `signal()`, …) for a run you did not start
+   * yourself. `result()` on an already-terminal run resolves (or rejects) from
+   * persisted state, so a fire-and-forget producer's run can be observed later
+   * without re-implementing terminal-status polling by hand.
+   *
+   * Like {@link WeftClient.start}, the workflow name narrows the handle's
+   * `result()` to the registered workflow's output type when the
+   * {@link WorkflowRegistry} is augmented and the name is supplied as a type
+   * argument (`getHandle<'my-workflow'>(id)`); otherwise `result()` is
+   * `unknown`. The name is a type hint only — the `id` alone identifies the
+   * run, so no runtime workflow-type argument is required.
+   */
+  getHandle<TName extends KnownWorkflowName>(
+    id: string,
+  ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>> | null>;
+  getHandle(id: string): Promise<ClientHandle | null>;
+
   /** Get the current summary of a recurring schedule, or `null` if not found. */
   getSchedule(id: string): Promise<ScheduleSummary | null>;
 

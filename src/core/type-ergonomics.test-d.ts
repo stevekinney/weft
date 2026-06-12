@@ -212,6 +212,29 @@ async function verifyModuleAugmentedClientStart(): Promise<void> {
 }
 void verifyModuleAugmentedClientStart;
 
+async function verifyModuleAugmentedClientGetHandle(): Promise<void> {
+  // Supplying the augmented workflow name as a type argument narrows the
+  // re-attached handle's `result()` to that workflow's output type. The `id`
+  // alone identifies the run, so no runtime workflow-type argument is required.
+  const handle = await typedClient.getHandle<'moduleAugmentedWelcome'>('welcome-1');
+  if (handle === null) return;
+
+  const typedHandle: ClientHandle<WelcomeOutput> = handle;
+  void typedHandle;
+
+  const output = await handle.result();
+  output.greeting.toUpperCase();
+  const outputCheck: Equals<typeof output, WelcomeOutput> = true;
+  void outputCheck;
+
+  // Without a type argument, `result()` stays `unknown`.
+  const untyped = await typedClient.getHandle('welcome-2');
+  if (untyped === null) return;
+  const untypedCheck: Equals<Awaited<ReturnType<typeof untyped.result>>, unknown> = true;
+  void untypedCheck;
+}
+void verifyModuleAugmentedClientGetHandle;
+
 async function verifyModuleAugmentedClientSchedule(): Promise<void> {
   // @ts-expect-error client schedule input must match the module-augmented input type.
   void typedClient.schedule('moduleAugmentedWelcome', { id: 'wrong' }, '0 9 * * 1');

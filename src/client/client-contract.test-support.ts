@@ -59,6 +59,7 @@ const sharedWeftClientMethodNames = [
   'update',
   'resume',
   'recoverAll',
+  'getHandle',
   'timeout',
   'getAttributes',
   'setAttributes',
@@ -327,6 +328,45 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
 
       await handle.signal('continue', 'done');
       await expect(handle.result()).resolves.toBe('payload:done');
+    });
+
+    it('getHandle re-attaches to a running workflow and awaits its result', async () => {
+      const client = getClient();
+      const started = await client.start(workflowTypes.waiting, 'reattach', {
+        id: `${idPrefix}-get-handle-running`,
+      });
+
+      await waitForRunning?.(started.id);
+      await waitForQueryReadyForTesting(client, started.id);
+
+      // Re-attach with only the id — no reference to the original handle.
+      const reattached = await client.getHandle(started.id);
+      if (reattached === null) throw new Error('getHandle returned null for a running workflow');
+      expect(reattached.id).toBe(started.id);
+
+      await reattached.signal('continue', 'done');
+      const reattachedResult = (await reattached.result()) as string;
+      expect(reattachedResult).toBe('reattach:done');
+    });
+
+    it('getHandle on an already-terminal workflow resolves result() from persisted state', async () => {
+      const client = getClient();
+      const started = await client.start(workflowTypes.echo, 'finished', {
+        id: `${idPrefix}-get-handle-terminal`,
+      });
+      // Let it run to completion before re-attaching, so result() must come from
+      // persisted state rather than a live in-flight subscription.
+      await expect(started.result()).resolves.toBe('finished');
+
+      const reattached = await client.getHandle(started.id);
+      if (reattached === null) throw new Error('getHandle returned null for a terminal workflow');
+      const reattachedResult = (await reattached.result()) as string;
+      expect(reattachedResult).toBe('finished');
+    });
+
+    it('getHandle returns null for an unknown workflow id', async () => {
+      const client = getClient();
+      await expect(client.getHandle(`${idPrefix}-get-handle-missing`)).resolves.toBeNull();
     });
 
     it('round-trips workflow attributes and tag mutations through handle helpers', async () => {
