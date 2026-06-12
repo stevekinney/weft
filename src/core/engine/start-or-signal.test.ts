@@ -999,17 +999,25 @@ describe('engine.startOrSignal', () => {
     const engine = createEngine();
     const pendingStarts = getInternals(engine).pendingStarts;
     const originalHas = pendingStarts.has.bind(pendingStarts);
-    let targetHasChecks = 0;
     let competingStartPromise: Promise<ReturnType<Engine['getHandle']>> | undefined;
+    let isStartingCompetingWorkflow = false;
 
     pendingStarts.has = ((workflowId: string) => {
-      if (workflowId === 'buffered-collision') {
-        targetHasChecks += 1;
-        if (targetHasChecks === 2 && competingStartPromise === undefined) {
-          competingStartPromise = engine.start('release-then-hold', null, { id: workflowId });
-        }
+      const isPendingStart = originalHas(workflowId);
+      if (
+        workflowId === 'buffered-collision' &&
+        !isPendingStart &&
+        competingStartPromise === undefined &&
+        !isStartingCompetingWorkflow
+      ) {
+        isStartingCompetingWorkflow = true;
+        competingStartPromise = engine
+          .start('release-then-hold', null, { id: workflowId })
+          .finally(() => {
+            isStartingCompetingWorkflow = false;
+          });
       }
-      return originalHas(workflowId);
+      return isPendingStart;
     }) as typeof pendingStarts.has;
 
     try {

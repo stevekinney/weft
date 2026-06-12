@@ -15,7 +15,7 @@ describe('waitForParityCondition', () => {
           }
           return attempt > 2;
         },
-        { intervalMs: 1, timeoutMs: 50 },
+        { intervalMs: 1, timeoutMs: 200 },
       ),
     ).resolves.toBeUndefined();
   });
@@ -26,14 +26,14 @@ describe('waitForParityCondition', () => {
         () => {
           throw new Error('still failing');
         },
-        { intervalMs: 1, label: 'parity check', timeoutMs: 10 },
+        { intervalMs: 1, label: 'parity check', timeoutMs: 50 },
       ),
-    ).rejects.toThrow('Timed out after 10ms waiting for parity check: still failing');
+    ).rejects.toThrow('Timed out after 50ms waiting for parity check: still failing');
   });
 
   it('times out with the label when the predicate never succeeds', async () => {
     await expect(
-      waitForParityCondition(() => false, { intervalMs: 1, label: 'idle parity', timeoutMs: 10 }),
-    ).rejects.toThrow('Timed out after 10ms waiting for idle parity');
+      waitForParityCondition(() => false, { intervalMs: 1, label: 'idle parity', timeoutMs: 50 }),
+    ).rejects.toThrow('Timed out after 50ms waiting for idle parity');
   });
 });

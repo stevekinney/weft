@@ -4,6 +4,7 @@ import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { encode } from '../codec.ts';
+import { CleanupWarningEvent } from '../events.ts';
 import type { WorkflowState } from '../types.ts';
 import {
   createStreamOperationCallbacks,
@@ -127,6 +128,10 @@ describe('engine callback creators', () => {
 
   it('routes schedule cleanup errors through engine callbacks', async () => {
     const engine = new Engine();
+    const warnings: CleanupWarningEvent[] = [];
+    engine.addEventListener(CleanupWarningEvent.type, (event) => {
+      warnings.push(event as CleanupWarningEvent);
+    });
 
     createScheduleCallbacks(engine).handleCleanupError(
       'schedule-cleanup',
@@ -134,6 +139,11 @@ describe('engine callback creators', () => {
       'workflow-schedule',
     );
     await sleepForTesting(0);
+
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.source).toBe('schedule-cleanup');
+    expect(warnings[0]!.workflowId).toBe('workflow-schedule');
+    expect(warnings[0]!.error.message).toBe('schedule cleanup failed');
 
     engine[Symbol.dispose]();
   });
