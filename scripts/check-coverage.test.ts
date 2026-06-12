@@ -36,6 +36,11 @@ describe('parseLcov', () => {
       '../../../../../../var/folders/x_/tmp',
       '../../../../../private/var/folders/x_/T',
       '../../../../../var/folders/x_/T',
+      // Deep git-worktree forms (#503): a worktree nested under .claude/worktrees/<name>
+      // records temp-fixture paths with more `../` segments and a `private/tmp/` or
+      // bare `tmp/` root instead of `var/folders/`. These must be filtered too.
+      '../../../../../../../private/tmp/claude-501',
+      '../../../../../../../tmp/claude-501',
     ];
 
     for (const generatedPrefix of generatedPrefixes) {
