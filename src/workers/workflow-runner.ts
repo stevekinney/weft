@@ -5,6 +5,7 @@ import {
   serializeCheckpoint,
 } from '../core/checkpoint.ts';
 import { WorkflowAtomicStateHandle } from '../core/context/state-namespace.ts';
+import { createWorkerWorkflowLogger } from '../core/context/workflow-logger.ts';
 import {
   classifyErrorAsFailureCategory,
   errorFromFailedOperationOutcome,
@@ -18,6 +19,7 @@ import type {
   WorkerReplayOperationFailure,
   WorkflowAtomicStateOptions,
   WorkflowContext,
+  WorkflowLogger,
   WorkflowSessionState,
   WorkflowStateNamespace,
 } from '../core/types.ts';
@@ -39,6 +41,10 @@ import {
  */
 export type WorkerWorkflowContext = Pick<WorkflowContext, 'workflowId' | 'signal' | 'startedAt'> & {
   readonly state: WorkflowStateNamespace;
+  // Always present at runtime (the engine populates it), but the public
+  // WorkflowContext types it `log?` for structural implementors, so this Pick
+  // makes it non-optional to reflect the worker runtime guarantee.
+  readonly log: WorkflowLogger;
 };
 
 interface RunMessageShape {
@@ -59,12 +65,18 @@ interface RunMessageShape {
 export function createWorkerWorkflowContext(
   message: RunMessageShape,
   controller: AbortController,
+  getReplayState: () => WorkerReplayState | undefined,
 ): WorkerWorkflowContext {
   return {
     workflowId: message.workflowId,
     signal: controller.signal,
     startedAt: Date.now(),
     state: createWorkerStateNamespace(message),
+    // `WorkerReplayState` is a superset of the `WorkerLoggerReplayState` slice the
+    // logger reads (accumulatedResults + nextStepIndex), so the closure passes
+    // straight through. The replay state is registered after this context is
+    // built (see `handleRunMessage`), hence reading it through the closure.
+    log: createWorkerWorkflowLogger(message.workflowId, message.workflowType, getReplayState),
   };
 }
 
@@ -157,7 +169,9 @@ export async function handleRunMessage(
   context.abortControllers.set(message.workflowId, controller);
 
   try {
-    const workerContext = createWorkerWorkflowContext(message, controller);
+    const workerContext = createWorkerWorkflowContext(message, controller, () =>
+      context.replayStates.get(message.workflowId),
+    );
     const generator = handler(workerContext, message.input);
     context.replayStates.set(message.workflowId, createReplayState(message));
     const step = await generator.next();

@@ -8,6 +8,7 @@ import {
 } from '../checkpoint.ts';
 import { encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
+import { hasPendingAttributeChanges } from '../context/context-presence.ts';
 import { EMPTY_EVENT_HEAD, EventLog } from '../event-log.ts';
 import {
   AttributesChangedEvent,
@@ -144,7 +145,7 @@ async function persistInlineCheckpoint(
 
   const previousAttributes = { ...current.searchAttributes };
   const pendingAttributeChanges = context.checkpointPendingAttributeChanges;
-  const hasPendingAttributeChanges = context.hasPendingAttributeChanges;
+  const hasPendingAttributeChangesValue = hasPendingAttributeChanges(context);
   const advanced = advanceCheckpoint(current, context.checkpointLocals, {
     accumulatedResults: context.checkpointAccumulatedResults,
     now: internals.options.getNow(),
@@ -161,11 +162,11 @@ async function persistInlineCheckpoint(
     commit,
     previousAttributes,
     pendingAttributeChanges,
-    hasPendingAttributeChanges,
+    hasPendingAttributeChangesValue,
     callbacks,
   );
   await commitCheckpoint(internals, workflowId, operation, commit, callbacks);
-  if (hasPendingAttributeChanges) {
+  if (hasPendingAttributeChangesValue) {
     callbacks.dispatchEvent(new AttributesChangedEvent(workflowId, { ...pendingAttributeChanges }));
   }
 }

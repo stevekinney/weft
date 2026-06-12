@@ -15,6 +15,7 @@ import type {
   SignalDefinition,
   UpdateDefinition,
   WorkflowContext,
+  WorkflowLogger,
   WorkflowMapOptions,
   WorkflowOperation,
   WorkflowOperationTupleResult,
@@ -48,6 +49,7 @@ import type {
   StreamSink,
 } from './types.ts';
 import * as contextUpdates from './updates.ts';
+import { createInlineWorkflowLogger } from './workflow-logger.ts';
 export type { ContextOperationRequest } from './operation-request.ts';
 export type {
   ContextOptions,
@@ -99,6 +101,9 @@ export class Context implements WorkflowContext {
   get services(): unknown {
     return getInternals(this).services;
   }
+  get log(): WorkflowLogger {
+    return createInlineWorkflowLogger(this.workflowId, this.workflowType, () => getInternals(this));
+  }
   get stepIndex(): number {
     return getInternals(this).stepIndex;
   }
@@ -148,18 +153,6 @@ export class Context implements WorkflowContext {
   get checkpointPendingAttributeChanges(): Record<string, SearchAttributeValue> | undefined {
     const pendingAttributeChanges = getInternals(this).pendingAttributeChanges;
     return pendingAttributeChanges ? { ...pendingAttributeChanges } : undefined;
-  }
-  get hasPendingAttributeChanges(): boolean {
-    const pendingAttributeChanges = getInternals(this).pendingAttributeChanges;
-    return pendingAttributeChanges !== undefined && Object.keys(pendingAttributeChanges).length > 0;
-  }
-  get hasUpdateHandlers(): boolean {
-    const updateHandlers = getInternals(this).updateHandlers;
-    return updateHandlers !== undefined && updateHandlers.size > 0;
-  }
-  get hasExposedAccessors(): boolean {
-    const exposedValues = getInternals(this).exposedValues;
-    return exposedValues !== undefined && exposedValues.size > 0;
   }
   createSpeculativeChild(): Context {
     return createSpeculativeChildState(this, (options) => new Context(options));

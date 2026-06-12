@@ -20,15 +20,16 @@ Typically constructed by the engine -- you will not create `Context` instances d
 
 ### Read-only Properties
 
-| Property                 | Type          | Description                                                                             |
-| ------------------------ | ------------- | --------------------------------------------------------------------------------------- |
-| `workflowId`             | `string`      | The workflow's unique identifier                                                        |
-| `workflowType`           | `string`      | The registered workflow type name                                                       |
-| `startedAt`              | `number`      | Epoch timestamp when the workflow started                                               |
-| `signal`                 | `AbortSignal` | Abort signal -- fires when the workflow is cancelled                                    |
-| `executionTimeRemaining` | `number`      | Milliseconds until execution deadline. `Infinity` if no deadline is set.                |
-| `stepIndex`              | `number`      | Current step counter (incremented by each durable operation)                            |
-| `nestingDepth`           | `number`      | How many levels deep this workflow is as a child workflow. `0` for top-level workflows. |
+| Property                 | Type             | Description                                                                             |
+| ------------------------ | ---------------- | --------------------------------------------------------------------------------------- |
+| `workflowId`             | `string`         | The workflow's unique identifier                                                        |
+| `workflowType`           | `string`         | The registered workflow type name                                                       |
+| `startedAt`              | `number`         | Epoch timestamp when the workflow started                                               |
+| `signal`                 | `AbortSignal`    | Abort signal -- fires when the workflow is cancelled                                    |
+| `executionTimeRemaining` | `number`         | Milliseconds until execution deadline. `Infinity` if no deadline is set.                |
+| `log`                    | `WorkflowLogger` | Replay-safe structured logger scoped to this run. See [`log`](#log).                    |
+| `stepIndex`              | `number`         | Current step counter (incremented by each durable operation)                            |
+| `nestingDepth`           | `number`         | How many levels deep this workflow is as a child workflow. `0` for top-level workflows. |
 
 > [!NOTE]
 > `workflowType` is part of the public `WorkflowContext` interface. `stepIndex` and `nestingDepth` are available on the concrete `Context` class for debugging purposes; they are not part of the public interface.
@@ -490,6 +491,27 @@ explain(enabled?: boolean): void
 ```
 
 Enable or disable explain mode. When enabled, durable operations log detailed checkpoint and dispatch information to the console. Useful for debugging workflow replay behavior.
+
+### `log`
+
+```ts partial
+readonly log: WorkflowLogger;
+```
+
+A structured logger scoped to the run. Each method — `debug`, `info`, `warn`, `error` — emits a record to the host console (`console.debug` / `console.info` / `console.warn` / `console.error`) with `workflowId`, `workflowType`, `level`, and `timestamp` auto-attached:
+
+```ts partial
+ctx.log.info('charge succeeded', { amount: 1999, currency: 'usd' });
+```
+
+Caller-supplied attributes are nested under their own `attributes` key in the record, so they can never shadow an envelope field — `ctx.log.info('x', { workflowId: 'spoof' })` keeps the real `workflowId` on the envelope and quarantines `{ workflowId: 'spoof' }` inside `attributes`.
+
+`ctx.log` is **replay-safe**. A workflow body re-executes from the start on recovery to rebuild state (replay); log calls in the already-committed replay window are suppressed, so a recovered run does not re-emit logs it already emitted. This holds in both inline and worker execution modes — unlike `ctx.services`-injected loggers, which are inline-only. `ctx.log` is **not** a durable operation: it consumes no step index and is never checkpointed.
+
+> [!NOTE]
+> A log placed _after_ the last committed step re-fires on recovery, because there is no cached step to suppress it — the same caveat Temporal's workflow logger carries. Logs inside `ctx.all` / `ctx.runAll` branches follow that branch's re-execution semantics. Records are emitted to the host console; in worker-pool mode that is the worker process's console, not the engine host. A pluggable host sink and worker-mode host log routing are tracked in [issue #491](https://github.com/stevekinney/weft/issues/491).
+
+`log` is typed `readonly log?: WorkflowLogger` on the public `WorkflowContext` interface (optional, so existing structural implementors are not source-broken), but the engine always populates it at runtime — within a real workflow body it is always present. The `WorkflowLogger` type is exported so a host can also type a logger it injects through `ctx.services`.
 
 ### `state`
 

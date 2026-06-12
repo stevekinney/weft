@@ -176,6 +176,7 @@ export type {
   WorkflowFunction,
   WorkflowGenerator,
   WorkflowId,
+  WorkflowLogger,
   WorkflowRegistry,
   WorkflowReplay,
   WorkflowServicesResolution,
