@@ -358,8 +358,7 @@ function buildDirectRouteResponses(route: DirectHttpRouteDefinition): Record<str
 }
 
 function buildDirectRouteSecurity(route: DirectHttpRouteDefinition): [] | undefined {
-  if (route.access === 'public') return [];
-  return undefined;
+  return route.access === 'public' ? [] : undefined;
 }
 
 function emitDirectRoutes(

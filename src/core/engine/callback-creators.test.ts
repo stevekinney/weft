@@ -9,7 +9,10 @@ import {
   createStreamOperationCallbacks,
   createTimeOperationCallbacks,
 } from './callback-creators-bundles.ts';
-import { createSubmitReviewCallbacks } from './callback-creators-schedule.ts';
+import {
+  createScheduleCallbacks,
+  createSubmitReviewCallbacks,
+} from './callback-creators-schedule.ts';
 import {
   createInlineParkingCallbacks,
   createLifecycleCallbacks,
@@ -18,6 +21,7 @@ import {
 } from './callback-creators.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
+import { type ScheduleCallbacks, startScheduledRun } from './schedules.ts';
 
 function createCompletedWorkflowState(workflowId: string, updatedAt: number): WorkflowState {
   return {
@@ -119,6 +123,73 @@ describe('engine callback creators', () => {
     expect(listener).toHaveBeenCalledWith(event);
 
     engine[Symbol.dispose]();
+  });
+
+  it('routes schedule cleanup errors through engine callbacks', async () => {
+    const engine = new Engine();
+
+    createScheduleCallbacks(engine).handleCleanupError(
+      'schedule-cleanup',
+      new Error('schedule cleanup failed'),
+      'workflow-schedule',
+    );
+    await sleepForTesting(0);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('reports cleanup errors when failing an unavailable scheduled run also fails', async () => {
+    const engine = new Engine({
+      resolveWorkflowServices: async () => ({
+        status: 'unavailable' as const,
+        reason: 'missing service',
+      }),
+    });
+    const cleanupErrors: Array<{ workflowId: string; message: string }> = [];
+
+    try {
+      const callbacks: Pick<
+        ScheduleCallbacks,
+        'failWorkflow' | 'handleCleanupError' | 'startWorkflow'
+      > = {
+        failWorkflow: async (workflowId, error) => {
+          throw new Error(`${workflowId}:${error.message}`);
+        },
+        handleCleanupError: (source, error, workflowId) => {
+          cleanupErrors.push({
+            workflowId,
+            message: `${source}:${error instanceof Error ? error.message : String(error)}`,
+          });
+        },
+        startWorkflow: async () => {},
+      };
+
+      await startScheduledRun(
+        getInternals(engine),
+        {
+          backfill: false,
+          createdAt: 1,
+          cronExpression: '* * * * *',
+          id: 'schedule-cleanup-error',
+          input: null,
+          nextFireAt: 60_000,
+          overlap: 'skip',
+          queuedRuns: 0,
+          status: 'active',
+          updatedAt: 1,
+          workflowType: 'workflow',
+        },
+        callbacks,
+      );
+
+      expect(cleanupErrors).toHaveLength(1);
+      expect(cleanupErrors[0]!.workflowId).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+      );
+      expect(cleanupErrors[0]!.message).toContain('startScheduledRun:');
+    } finally {
+      engine[Symbol.dispose]();
+    }
   });
 
   it('routes stream cleanup errors and time operation helpers through engine callbacks', async () => {

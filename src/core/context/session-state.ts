@@ -135,11 +135,7 @@ export function clearSessionStateValue(internals: ContextInternals, key: string)
     return;
   }
 
-  const candidate = cloneSessionStateStore(internals.stateSession);
-  if (!candidate) {
-    return;
-  }
-
+  const candidate = cloneSessionStateStore(internals.stateSession) ?? createSessionStateStore();
   delete candidate[key];
   commitSessionStateStore(internals, Object.keys(candidate).length === 0 ? undefined : candidate);
 }
