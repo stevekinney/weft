@@ -157,7 +157,7 @@ const subOperationExecutors: SubOperationExecutorMap = {
     // "Unsupported sub-operation type" path.
     throw new Error(
       'ctx.waitUntil() cannot be used as a ctx.race() / ctx.all() / ctx.speculate() branch. ' +
-        'Await it directly, or gate it behind a signal/update the coordinator resolves.',
+        'Use `yield* ctx.waitUntil(...)` directly, or gate it behind a signal/update the coordinator resolves.',
     );
   },
 };

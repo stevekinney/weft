@@ -155,7 +155,7 @@ The predicate must be **pure**. It may read only checkpoint-restored workflow-lo
 > [!NOTE]
 > Weft signals are pull-only (`ctx.waitForSignal`) and run no state-mutating handler, so signal delivery does **not** re-drive a `waitUntil`. Use `onUpdate` to push the state a predicate observes.
 
-`waitUntil` is inline-execution only: worker execution does not expose this operation (it is omitted from the worker context type), because the predicate closure cannot cross to a worker process. It also cannot be a `ctx.race`, `ctx.all`, or `ctx.speculate` branch; await it directly.
+`waitUntil` is inline-execution only: worker execution does not expose this operation (it is omitted from the worker context type), because the predicate closure cannot cross to a worker process. It also cannot be a `ctx.race`, `ctx.all`, or `ctx.speculate` branch; use `yield* ctx.waitUntil(...)` directly.
 
 | Parameter   | Type            | Description                                                |
 | ----------- | --------------- | ---------------------------------------------------------- |

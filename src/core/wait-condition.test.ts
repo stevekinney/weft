@@ -22,8 +22,8 @@ async function flush(): Promise<void> {
 }
 
 describe('ctx.waitUntil', () => {
-  it('returns immediately (no yield) when the predicate is already true', async () => {
-    using engine = new Engine();
+  it('completes on the spot (yields once, engine settles immediately) when the predicate is already true', async () => {
+    await using engine = new Engine();
     engine.register(
       workflow({ name: 'already-true' }).execute(async function* (ctx: WorkflowContext) {
         yield* ctx.waitUntil(() => true);
@@ -36,7 +36,7 @@ describe('ctx.waitUntil', () => {
   });
 
   it('returns true immediately when a timed predicate is already true', async () => {
-    using engine = new Engine();
+    await using engine = new Engine();
     engine.register(
       workflow({ name: 'timed-already-true' }).execute(async function* (ctx: WorkflowContext) {
         const met = yield* ctx.waitUntil(() => true, '1h');
@@ -49,7 +49,7 @@ describe('ctx.waitUntil', () => {
   });
 
   it('re-evaluates the predicate when an inline update handler mutates state', async () => {
-    using engine = new Engine();
+    await using engine = new Engine();
     engine.register(
       workflow({ name: 'update-driven' }).execute(async function* (ctx: WorkflowContext) {
         let value = 0;
@@ -77,7 +77,7 @@ describe('ctx.waitUntil', () => {
   });
 
   it('re-evaluates even when the update handler throws after mutating state (catch-path hook)', async () => {
-    using engine = new Engine();
+    await using engine = new Engine();
     engine.register(
       workflow({ name: 'throwing-update' }).execute(async function* (ctx: WorkflowContext) {
         let armed = false;
@@ -103,7 +103,7 @@ describe('ctx.waitUntil', () => {
   it('resolves false when the deadline elapses before the predicate is met', async () => {
     let now = 1_000_000;
     const storage = new MemoryStorage();
-    using engine = new Engine({ storage, getNow: () => now });
+    await using engine = new Engine({ storage, getNow: () => now });
     engine.register(
       workflow({ name: 'times-out' }).execute(async function* (ctx: WorkflowContext) {
         const met = yield* ctx.waitUntil(() => false, '5m');
@@ -136,7 +136,7 @@ describe('ctx.waitUntil', () => {
 
   it('polls once and resolves false for a zero timeout when the predicate is unmet', async () => {
     let now = 1_000_000;
-    using engine = new Engine({ getNow: () => now });
+    await using engine = new Engine({ getNow: () => now });
     engine.register(
       workflow({ name: 'zero-timeout' }).execute(async function* (ctx: WorkflowContext) {
         // A `0` timeout means "evaluate once, then give up": the deadline equals
@@ -156,7 +156,7 @@ describe('ctx.waitUntil', () => {
   });
 
   it('fails the workflow for a negative timeout (parseDuration rejects it, like ctx.sleep)', async () => {
-    using engine = new Engine();
+    await using engine = new Engine();
     engine.register(
       workflow({ name: 'negative-timeout' }).execute(async function* (ctx: WorkflowContext) {
         // A negative duration is invalid. `parseDuration` throws a RangeError
@@ -174,7 +174,7 @@ describe('ctx.waitUntil', () => {
 
   it('resolves true (met) over false (timeout) when the predicate becomes true at the deadline', async () => {
     let now = 1_000_000;
-    using engine = new Engine({ getNow: () => now });
+    await using engine = new Engine({ getNow: () => now });
     engine.register(
       workflow({ name: 'tie-break' }).execute(async function* (ctx: WorkflowContext) {
         let ready = false;
@@ -205,7 +205,7 @@ describe('ctx.waitUntil', () => {
   });
 
   it('waits forever (no timeout) until the predicate is satisfied', async () => {
-    using engine = new Engine();
+    await using engine = new Engine();
     let unblocked = 0;
     engine.register(
       workflow({ name: 'wait-forever' }).execute(async function* (ctx: WorkflowContext) {
@@ -229,7 +229,7 @@ describe('ctx.waitUntil', () => {
   });
 
   it('rejects ctx.waitUntil used as a ctx.race branch (true predicate) with an actionable error', async () => {
-    using engine = new Engine();
+    await using engine = new Engine();
     engine.register(
       workflow({ name: 'race-misuse-true' }).execute(async function* (ctx: WorkflowContext) {
         yield* ctx.race([ctx.waitUntil(() => true), ctx.sleep('1h')]);
@@ -248,7 +248,7 @@ describe('ctx.waitUntil', () => {
   });
 
   it('rejects ctx.waitUntil used as a ctx.race branch (false predicate) with an actionable error', async () => {
-    using engine = new Engine();
+    await using engine = new Engine();
     engine.register(
       workflow({ name: 'race-misuse-false' }).execute(async function* (ctx: WorkflowContext) {
         yield* ctx.race([ctx.waitUntil(() => false), ctx.sleep('1h')]);
@@ -263,7 +263,7 @@ describe('ctx.waitUntil', () => {
   });
 
   it('fails the workflow (does not hang) when the predicate throws on its initial evaluation', async () => {
-    using engine = new Engine();
+    await using engine = new Engine();
     engine.register(
       workflow({ name: 'predicate-throws-initial' }).execute(async function* (
         ctx: WorkflowContext,
@@ -284,7 +284,7 @@ describe('ctx.waitUntil', () => {
   });
 
   it('fails the workflow (does not hang) when the predicate throws on an update-driven re-evaluation', async () => {
-    using engine = new Engine();
+    await using engine = new Engine();
     engine.register(
       workflow({ name: 'predicate-throws-redrive' }).execute(async function* (
         ctx: WorkflowContext,
@@ -330,7 +330,7 @@ describe('ctx.waitUntil', () => {
       return originalBatch(operations);
     };
 
-    using engine = new Engine({ storage });
+    await using engine = new Engine({ storage });
     engine.register(
       workflow({ name: 'cancel-throws-after-satisfied' }).execute(async function* (
         ctx: WorkflowContext,
@@ -355,7 +355,7 @@ describe('ctx.waitUntil', () => {
   });
 
   it('tears down the waiter when the workflow is cancelled while parked', async () => {
-    using engine = new Engine();
+    await using engine = new Engine();
     engine.register(
       workflow({ name: 'cancel-while-waiting' }).execute(async function* (ctx: WorkflowContext) {
         ctx.onUpdate('noop', () => undefined);
@@ -383,7 +383,7 @@ describe('ctx.waitUntil', () => {
     // which invokes the handler but — before the fix — did NOT call
     // `notifyConditionWaiters`. So a `waitUntil` parked after registration never
     // re-evaluated and hung until timeout.
-    using engine = new Engine();
+    await using engine = new Engine();
     engine.register(
       workflow({ name: 'pending-drain-redrive' }).execute(async function* (ctx: WorkflowContext) {
         // Park first with NO update handler, so the incoming update has nowhere
@@ -423,7 +423,7 @@ describe('ctx.waitUntil', () => {
     // re-deliver them). So both buffered updates apply exactly once — `[1, 11]`,
     // NOT `[10, 20, 21, 22]` from a mid-loop re-entrant advance — and then the
     // single post-drain poke wakes the satisfied wait.
-    using engine = new Engine();
+    await using engine = new Engine();
     const seen: number[] = [];
     engine.register(
       workflow({ name: 'pending-drain-reentrancy' }).execute(async function* (
@@ -464,7 +464,7 @@ describe('ctx.waitUntil', () => {
   });
 
   it('ignores an update poke when no waitUntil is active (notify no-op branch)', async () => {
-    using engine = new Engine();
+    await using engine = new Engine();
     engine.register(
       workflow({ name: 'update-without-wait' }).execute(async function* (ctx: WorkflowContext) {
         ctx.onUpdate('ping', () => 'pong');
