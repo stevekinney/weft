@@ -147,6 +147,17 @@ const subOperationExecutors: SubOperationExecutorMap = {
     executeSleepSubOperation(context.internals, operation, context.signal),
   'wait-signal': (context, operation) =>
     executeWaitSignalSubOperation(context.internals, context.workflowId, operation, context.signal),
+  'wait-condition': () => {
+    // `ctx.waitUntil` cannot be a `ctx.race` / `ctx.all` branch in v1: a
+    // condition wait holds its predicate closure and re-evaluates in-process, and
+    // there is no abortable sub-operation executor for it yet. Throw a clear,
+    // actionable error rather than letting it fall through to the generic
+    // "Unsupported sub-operation type" path.
+    throw new Error(
+      'ctx.waitUntil() cannot be used as a ctx.race() / ctx.all() branch. ' +
+        'Await it directly, or gate it behind a signal/update the race resolves.',
+    );
+  },
 };
 
 async function executeActivitySubOperation(

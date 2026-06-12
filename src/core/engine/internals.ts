@@ -83,6 +83,23 @@ export interface EngineInternals {
   resultResolvers: Map<string, WorkflowResultWaiter>;
   signalWaiters: Map<string, () => void>;
   signalWaitersByWorkflow: Map<string, TrackedWaiterKeys>;
+  /**
+   * In-process resolvers for inline `ctx.waitUntil` waits, keyed by `workflowId`
+   * ALONE — a workflow has at most one active wait-condition because its inline
+   * generator is suspended at exactly one yield, and the top-level-only guard in
+   * `executeSubOperation` rejects `waitUntil` as a `race`/`all`/`speculate`
+   * branch. So unlike `signalWaiters` (which need a per-workflow string-or-Set
+   * index because they CAN be concurrent sub-operations), this is a flat map with
+   * no secondary index. Calling the resolver wakes `processWaitConditionOperation`
+   * to re-evaluate its predicate. Never checkpointed — engine-memory state cleared
+   * on terminal cleanup.
+   *
+   * Note: the deadline TIMER is still keyed `cond:${workflowId}:${step}` (step is
+   * stable across replay, so recovery does not double-arm). Only this waiter map
+   * keys by `workflowId`. If `waitUntil`-in-`race`/`all`/`speculate` is ever
+   * supported, this keying must revert to `${workflowId}:${step}` + a Set index.
+   */
+  conditionWaiters: Map<string, () => void>;
   updateWaiters: Map<string, (payload: unknown) => void>;
   updateWaitersByWorkflow: Map<string, TrackedWaiterKeys>;
   sleepResolvers: Map<string, () => void>;

@@ -20,6 +20,10 @@ export function disposeEngine(internals: EngineInternals): void {
   }
   internals.signalWaiters.clear();
   internals.signalWaitersByWorkflow.clear();
+  for (const resolveConditionWaiter of internals.conditionWaiters.values()) {
+    resolveConditionWaiter();
+  }
+  internals.conditionWaiters.clear();
   disposeQueuedInlineWorkflowStarts(internals);
   internals.scheduler[Symbol.dispose]();
   internals.strategy[Symbol.dispose]();

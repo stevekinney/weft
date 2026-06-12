@@ -328,9 +328,27 @@ export async function handleTimerFired(
 
   if (entry.kind === 'sleep') {
     resolveSleepTimer(internals, entry);
+  } else if (entry.kind === 'wait-condition') {
+    resolveConditionTimer(internals, entry);
   } else if (entry.kind === 'execution-deadline') {
     await callbacks.timeout(entry.workflowId);
   }
+}
+
+/**
+ * Wake a parked `ctx.waitUntil` whose deadline timer fired. The processor's loop
+ * re-checks the predicate first, then observes the elapsed deadline and completes
+ * with `false`. The timer's only job is to GUARANTEE a wake at the deadline — it
+ * does not itself decide the outcome, so a predicate that became true at the
+ * deadline still resolves as met. The timer id encodes `step`
+ * (`cond:${workflowId}:${step}`) for deterministic replay-safe scheduling, but the
+ * in-process waiter is keyed by `workflowId` alone (one active wait per workflow),
+ * so the wake looks up by `entry.workflowId` — the timer's `step` is irrelevant
+ * here.
+ */
+function resolveConditionTimer(internals: EngineInternals, entry: TimerEntry): void {
+  const resolver = internals.conditionWaiters.get(entry.workflowId);
+  if (resolver) resolver();
 }
 
 async function handleReviewTimer(

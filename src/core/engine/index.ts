@@ -475,6 +475,7 @@ export class Engine<
     getInternals(this).resultResolvers = new Map();
     getInternals(this).signalWaiters = new Map();
     getInternals(this).signalWaitersByWorkflow = new Map();
+    getInternals(this).conditionWaiters = new Map();
     getInternals(this).updateWaiters = new Map();
     getInternals(this).updateWaitersByWorkflow = new Map();
     getInternals(this).sleepResolvers = new Map();

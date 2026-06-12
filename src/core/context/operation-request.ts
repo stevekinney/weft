@@ -65,6 +65,34 @@ export type ContextOperationRequest =
       callerStack?: string;
     }
   | {
+      type: 'wait-condition';
+      operationId: string;
+      /**
+       * Deterministic workflow step index for this `ctx.waitUntil` call. Stable
+       * across replay (unlike `operationId`, which is regenerated each yield), so
+       * it anchors both the deterministic deadline timer key
+       * (`cond:${workflowId}:${step}`) and the in-process condition waiter to a
+       * fixed step. Re-using a regenerated `operationId` would arm duplicate
+       * durable timers on recovery.
+       */
+      step: number;
+      /**
+       * The condition predicate. A non-serializable closure (like `memo.fn`) held
+       * in-process by the engine processor and re-evaluated on every wake; it is
+       * never checkpointed. The workflow re-yields a fresh request after each
+       * replay, so the engine always has a live closure to call. Must be pure and
+       * read only checkpoint-restored workflow-local state.
+       */
+      predicate: () => boolean;
+      /**
+       * Absolute deadline (epoch millis) after which the wait completes with
+       * `false`. Anchored once via `readOrInitConditionDeadline` so crash/replay
+       * never resets the window. Absent means "wait forever".
+       */
+      deadline?: number;
+      callerStack?: string;
+    }
+  | {
       type: 'parallel';
       operationId: string;
       operations: ContextOperationRequest[];

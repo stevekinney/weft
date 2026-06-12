@@ -136,6 +136,7 @@ function createCleanupInternals(storage: MemoryStorage, checkpoint: Checkpoint):
     scheduler: { cancel: async () => {} },
     signalWaiters: new Map(),
     signalWaitersByWorkflow: new Map(),
+    conditionWaiters: new Map(),
     sleepResolvers: new Map(),
     sleepResolversByWorkflow: new Map(),
     updateWaiters: new Map(),

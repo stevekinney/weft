@@ -22,6 +22,7 @@ function createSignalInternals(storage = new MemoryStorage()): EngineInternals {
     inlineStrategy: null,
     signalWaiters: new Map<string, () => void>(),
     signalWaitersByWorkflow: new Map(),
+    conditionWaiters: new Map<string, () => void>(),
     storage,
   } as unknown as EngineInternals;
 }

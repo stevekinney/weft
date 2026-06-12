@@ -44,6 +44,7 @@ import {
 import type { StateOperationCallbacks } from './operations-state.ts';
 import type { StreamOperationCallbacks } from './operations-stream.ts';
 import type { TimeOperationCallbacks } from './operations-time.ts';
+import type { ConditionOperationCallbacks } from './operations-wait-condition.ts';
 import { schedulePendingInlineUpdateDrain } from './pending-updates.ts';
 import { processReviewOperation } from './reviews.ts';
 import { loadWorkflowState, runSerializedWorkflowStateWrite } from './storage-io.ts';
@@ -109,6 +110,28 @@ export function createCoordinationOperationCallbacks<
     executeSubOperation: (workflowId, operation, signal, speculativeState) =>
       executeSubOperationForEngine(engine, workflowId, operation, signal, speculativeState),
     getActivityOperationCallbacks: () => createActivityOperationCallbacks(engine),
+  };
+}
+
+export function createConditionOperationCallbacks<
+  TWorkflows extends object,
+  TActivities extends object,
+>(engine: Engine<TWorkflows, TActivities>): ConditionOperationCallbacks {
+  return {
+    completeOperation: (workflowId, value) => completeOperationForEngine(engine, workflowId, value),
+    isWorkflowRunning: async (workflowId) => {
+      const state = await loadWorkflowState(getInternals(engine), workflowId);
+      return state?.status === 'running';
+    },
+    scheduleConditionDeadline: (workflowId, step, fireAt) =>
+      getInternals(engine).scheduler.schedule({
+        id: `cond:${workflowId}:${step}`,
+        workflowId,
+        fireAt,
+        kind: 'wait-condition',
+      }),
+    cancelConditionDeadline: (workflowId, step) =>
+      getInternals(engine).scheduler.cancel(`cond:${workflowId}:${step}`, workflowId),
   };
 }
 

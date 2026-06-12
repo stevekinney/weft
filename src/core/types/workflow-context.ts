@@ -295,6 +295,34 @@ export interface WorkflowContext<
   waitForUpdate<T = unknown>(
     name: string,
   ): WorkflowOperation<{ payload: T; respond: (result: unknown) => void }>;
+  /**
+   * Wait until `predicate` returns `true`, re-evaluated by the engine each time
+   * the workflow is driven forward — when an `onUpdate` handler mutates
+   * workflow-local state, or when the optional `timeout` elapses. This is the
+   * condition-variable primitive (Temporal's `condition()`): a `waitUntil` whose
+   * predicate reads state mutated by `onUpdate` handlers re-checks in-process
+   * without polling. (Weft signals are pull-only via `ctx.waitForSignal`; they
+   * run no state-mutating handler, so signal delivery does not re-drive a
+   * `waitUntil` — use `onUpdate` to push state a predicate observes.)
+   *
+   * The predicate must be PURE — it may read only checkpoint-restored
+   * workflow-local state (`ctx.state`, locals, search attributes) and must not
+   * perform I/O, generate randomness, or read wall-clock time. It is a
+   * non-serializable closure (like `ctx.memo`'s function), held in-process and
+   * never checkpointed; on replay an already-satisfied wait returns its cached
+   * outcome and the predicate is not re-invoked.
+   *
+   * Inline execution only — calling it under `workflowExecutionMode: 'worker'`
+   * throws, because the predicate closure cannot cross to a worker process.
+   *
+   * Without `timeout` it resolves `void` once the predicate is met (waits
+   * forever). With `timeout` it resolves `true` when the predicate was met or
+   * `false` when the deadline elapsed first; if both happen on the same tick the
+   * predicate wins (resolves `true`). `timeout` is milliseconds (`number`) or a
+   * duration string (`'30s'`, `'5m'` — see {@link Duration}).
+   */
+  waitUntil(predicate: () => boolean): WorkflowOperation<void>;
+  waitUntil(predicate: () => boolean, timeout: Duration): WorkflowOperation<boolean>;
   review(options: HumanReviewOptions): WorkflowOperation<HumanReviewResult>;
   all<const TOperations extends readonly WorkflowOperation<unknown>[]>(
     operations: TOperations,

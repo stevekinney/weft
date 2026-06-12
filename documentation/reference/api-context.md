@@ -141,6 +141,41 @@ Suspend the workflow until a named update is received. Similar to `waitForSignal
 
 **Returns:** The update envelope with the payload typed as `T` and a `respond(result)` callback.
 
+### `waitUntil()`
+
+```ts partial
+waitUntil(predicate: () => boolean): WorkflowOperation<void>
+waitUntil(predicate: () => boolean, timeout: Duration): WorkflowOperation<boolean>
+```
+
+Wait until `predicate` returns `true`. The engine re-evaluates the predicate whenever the workflow is driven forward—each time an `onUpdate` handler mutates workflow-local state, or when the optional `timeout` elapses. This is the condition-variable primitive (Temporal's `condition()`): a `waitUntil` whose predicate reads state mutated by `onUpdate` handlers re-checks in-process without polling.
+
+The predicate must be **pure**. It may read only checkpoint-restored workflow-local state and must not perform I/O, generate randomness, or read wall-clock time. It is a non-serializable closure (like `ctx.memo`'s function), held in-process and never checkpointed; on replay an already-satisfied wait returns its cached outcome and the predicate is not re-invoked.
+
+> [!NOTE]
+> Weft signals are pull-only (`ctx.waitForSignal`) and run no state-mutating handler, so signal delivery does **not** re-drive a `waitUntil`. Use `onUpdate` to push the state a predicate observes.
+
+`waitUntil` is inline-execution only—calling it under `workflowExecutionMode: 'worker'` throws, because the predicate closure cannot cross to a worker process. It also cannot be a `ctx.race` / `ctx.all` branch; await it directly.
+
+| Parameter   | Type            | Description                                                |
+| ----------- | --------------- | ---------------------------------------------------------- |
+| `predicate` | `() => boolean` | Pure condition re-evaluated on each state change           |
+| `timeout`   | `Duration`      | Optional deadline; without it the wait blocks indefinitely |
+
+**Returns:** `void` once the predicate is met (no timeout), or `boolean`—`true` when the predicate was met, `false` when the deadline elapsed first. If both happen on the same tick the predicate wins (`true`).
+
+```ts partial
+async function* example(context: Context) {
+  let votes = 0;
+  context.onUpdate('vote', () => {
+    votes += 1;
+  });
+  // Block until three votes arrive, or give up after an hour.
+  const reached = yield* context.waitUntil(() => votes >= 3, '1h');
+  return reached ? 'quorum' : 'timed-out';
+}
+```
+
 ### `all()`
 
 ```ts partial
