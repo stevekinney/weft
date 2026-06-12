@@ -196,7 +196,7 @@ Run multiple durable operations in parallel. All operations must complete before
 
 See the [parallel execution guide](../guides/parallel-execution.md) for the full contract, including the deterministic-branch-order requirement and the explicit catch-and-yield boundary.
 
-`context.waitForSignal()` inside `context.all()` is unbounded: the parent waits until that signal branch and every sibling settle. Use `context.race([context.waitForSignal(name), context.sleep(deadline)])` when the signal wait needs a deadline.
+`context.waitForSignal()` inside `context.all()` is unbounded: the parent waits until that signal branch and every sibling settle. Use `context.race([context.waitForSignal(name), context.sleep('30s')])` when the signal wait needs a relative timeout.
 
 ```ts partial
 async function* example(context: Context) {
@@ -223,7 +223,7 @@ Run multiple durable operations in parallel, returning the result of whichever c
 
 **Returns:** The result of the first operation to complete.
 
-**Loser results are abandoned.** Losers are aborted and their results discarded—Weft does not preserve them. Design branches to be idempotent or pair them with compensation, because the engine will not clean up after a loser.
+**Loser results are abandoned.** Once a winner is selected, Weft stops driving the losing branch generators and discards their results. In-flight activities that already started keep running unless the workflow is cancelled, so design race branches to be idempotent or pair them with compensation.
 
 Signal-wait losers are non-destructive. If a `context.waitForSignal()` branch loses the race, it releases its waiter without consuming the durable signal record. Nested `all()` / `race()` branches defer signal consumption until the top coordinator has selected the winning result.
 

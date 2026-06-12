@@ -216,7 +216,7 @@ Sent when an in-flight task completes, fails, or is cancelled.
 
 The server stores `completed` as a completed task and treats `failed` and `cancelled` as failed terminal resolutions. Missing `operationId`, missing `value` on completed results, unknown statuses, non-string errors on failed or cancelled results, and non-string or empty `attemptToken` values are malformed messages. The server sends `protocolError` and closes the socket with `1002`.
 
-For a well-formed result, the server verifies that the WebSocket connection still owns the `operationId`, and then validates the echoed `attemptToken` against the stored in-flight record. When the stored record has an attempt token, the result must echo the same token; a missing or wrong echo is rejected with `protocolError` and ignored. Records without a token still fall back to the worker ownership guard so already in-flight work can finish without live-locking. This protects both different-worker takeovers and stale completions from an earlier attempt that was reassigned to the same `workerId`.
+For a well-formed result, the server verifies that the WebSocket connection still owns the `operationId`, and then validates the echoed `attemptToken` when the result includes one. WebSocket task results use an additive compatibility guard: an absent token falls back to the worker ownership check, while a present-but-wrong token is rejected with `protocolError` and ignored. This protects upgraded workers from stale completions without live-locking older workers that do not echo tokens yet.
 
 Upgraded workers echo the token when the `task` frame includes one:
 
