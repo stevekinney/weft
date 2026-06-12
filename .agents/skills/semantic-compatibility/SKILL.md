@@ -22,7 +22,7 @@ description: >-
 - Changing storage capability reports, reserved key prefixes, string KV import helpers, or application-facing wrappers that share a storage backend with the engine.
 - Adding or changing SQL-backed storage adapters such as `NeonStorage`, especially `TEXT COLLATE "C"` key ordering, opaque `BYTEA` value mapping, read-only query passthrough, and `SERIALIZABLE` compare-and-swap retries.
 - Adding or deleting reserved workflow metadata markers such as `wf-has-services:`; marker writes, reads, scheduled-occurrence starts, cleanup, purge, and retention must stay aligned.
-- Normalizing failure-category values, changing workflow visibility index keys, or changing framed compressed-storage payloads.
+- Changing failure-category values, workflow visibility index keys, or framed compressed-storage payloads.
 - Changing idempotent start storage (`start-idem:`), signal id derivation, `startOrSignal` convergence semantics, serializer registry tags, recovered launch/snapshot public shapes, or durable task in-flight records such as `attemptToken`.
 - Changing workflow version metadata on persisted `WorkflowState`; the current canonical state shape is `versionTuple`, while old flat version fields are read-normalized only.
 - Removing or changing workflow version recovery behavior. Current recovery has no checkpoint migration hook: stored and registered versions plus `versionTuple` metadata are strict recovery guards that fail with `VersionMismatchError` on drift.
@@ -41,7 +41,7 @@ description: >-
 4. Normalize replayed values through the same path as fresh values, especially JSON-safe outputs and lossy codec values.
 5. For registry codegen, pin deterministic output and make unsupported JSON Schema keywords degrade to `unknown` rather than emitting an unsound type.
 6. When hoisting repeated registry shapes into aliases, derive the deduplication key and emitted TypeScript from the same normalized representation so two shapes alias only when they render identically. Keep alias names deterministic and collision-checked.
-7. For failure-category changes, preserve read/query compatibility for legacy stored values while keeping new public filter input limited to the current taxonomy.
+7. For failure-category changes, keep the current public taxonomy limited to `application`, `timeout`, `cancellation`, `resource`, and `system`. Do not reintroduce alias normalization or search expansion for older category names unless a task explicitly restores that compatibility and includes old-record fixtures.
 8. For compression changes, keep the two-byte framing contract pinned so gzip, brotli, and uncompressed values remain distinguishable without storage-side metadata.
 9. Keep external compatibility structural and dev/test-only; do not import sibling package runtime types into Weft runtime source.
 10. For bounded storage deletion, prove the operation cannot become an unbounded wipe through malformed options, negative limits, reverse iteration, or scoped-storage prefix smuggling.
@@ -69,5 +69,6 @@ description: >-
 - For Neon/Postgres storage, run PGlite-backed storage contract tests, retry fault-injection tests, resolver tests, and any env-gated live Neon tests when `NEON_DATABASE_URL` is available.
 - For task attempt-token changes, run protocol parser tests, WebSocket stale-attempt regressions, long-poll completion authorization tests, conformance fixtures, and server restart restoration tests.
 - For workflow-state version-shape changes, run decode-lift tests, recovery/version-drift tests, diagnostics scans, and fixture regeneration review that proves no unrelated replay data changed.
+- For failure-category compatibility changes, run `bun test src/core/failure-category.test.ts src/core/list-filter-validation.test.ts src/core/engine/validation.test.ts src/core/engine/list-candidate-resolution.test.ts src/server/operations/list-workflows.test.ts src/server/json-rpc-http-integration.test.ts`.
 - For versioning-surface removals or recovery-guard changes, run `bun test src/core/versioning.test.ts src/diagnostics/version-check.test.ts src/diagnostics/format.test.ts src/core/engine.test.ts` plus `bun run verify:documentation`.
 - Run the relevant focused test, then `bun run typecheck` and `bun run validate` before shipping.

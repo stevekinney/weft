@@ -136,7 +136,7 @@ Because recovery never re-executes the workflow from the beginning, your workflo
 
 ### Durable Workflows
 
-Generator functions with automatic checkpointing at every `yield*` boundary. Activities, sleeps, signals, queries, updates, parallel execution via `ctx.all()`, race semantics via `ctx.race()`, memoization via `ctx.memo()`, sagas via `ctx.saga()`, child workflows, and forks. `ctx.all()` and `ctx.race()` can branch over activities, sleeps, and signal waits; use `ctx.race([ctx.waitForSignal(name), ctx.sleep(timeout)])` for signal timeouts instead of placing an unbounded signal wait directly in `ctx.all()`.
+Generator functions with automatic checkpointing at every `yield*` boundary. Activities, sleeps, signals, condition gates with `ctx.waitUntil()`, queries, updates, structured logs with `ctx.log`, parallel execution via `ctx.all()`, race semantics via `ctx.race()`, memoization via `ctx.memo()`, sagas via `ctx.saga()`, child workflows, and forks. `ctx.all()` and `ctx.race()` can branch over activities, sleeps, and signal waits; use `ctx.race([ctx.waitForSignal(name), ctx.sleep(timeout)])` for signal timeouts instead of placing an unbounded signal wait directly in `ctx.all()`.
 
 Every workflow context exposes `ctx.workflowId` and `ctx.workflowType`. `workflowType` is the registered name from `workflow({ name })`, so shared workflow code can log, tag, or branch on the current workflow type without closing over definition-site state.
 
@@ -182,6 +182,25 @@ const approval = workflow({ name: 'approval' })
 // From an HTTP handler, another workflow, or anywhere with engine access:
 const handle = await engine.start('approval', { orderId: 'order-123' });
 await engine.signal(handle.id, approvalSignal, { approved: true });
+```
+
+For state that changes through synchronous updates, use `ctx.waitUntil(predicate, timeout?)` as a durable condition gate. It re-checks a pure predicate when `ctx.onUpdate()` handlers mutate workflow-local state, or when the optional timeout fires. It is inline-only because the predicate closure stays in the engine process; signals do not re-drive it because signals are pull-based messages consumed by `ctx.waitForSignal()`.
+
+```typescript partial
+const quorum = workflow({ name: 'quorum' })
+  .updates({
+    vote: update<void, number>('vote'),
+  })
+  .execute(async function* (ctx) {
+    let votes = 0;
+    ctx.onUpdate('vote', () => {
+      votes += 1;
+      return votes;
+    });
+
+    const reached = yield* ctx.waitUntil(() => votes >= 3, '1h');
+    return reached ? 'accepted' : 'expired';
+  });
 ```
 
 ### Live Workflow Events
@@ -242,6 +261,8 @@ const orders = await engine.list({
 ```
 
 Workflow visibility extends the same list surface with operator filters for `idPrefix`, failure categories, created/updated/deadline ranges, and status arrays. Use `engine.aggregate()` or `GET /api/v1/workflows/aggregate` for grouped counts by status, type, failure category, or a search attribute. Existing Bun SQLite deployments should run the [workflow visibility backfill](documentation/guides/workflow-visibility-backfill.md) before relying on the indexed fast path for older workflows.
+
+Failure-category filters use the current execution taxonomy only: `application`, `timeout`, `cancellation`, `resource`, and `system`. Older category names from pre-1.0 experiments are dropped during decode and are not expanded in list or aggregate filters.
 
 ### Human-in-the-Loop Review
 
@@ -367,6 +388,8 @@ const engine = new Engine({
   interceptors: [interceptors.interceptor],
 });
 ```
+
+Inside workflow code, `ctx.log` emits structured console records with `workflowId`, `workflowType`, `level`, and `timestamp` attached. Caller attributes are nested under `attributes`, so they cannot overwrite the envelope. Logs at already-restored checkpoint positions are suppressed on recovery; logs at the live frontier still emit, and in worker mode the destination is the worker process console.
 
 ### Testing
 

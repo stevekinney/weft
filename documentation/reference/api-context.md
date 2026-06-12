@@ -27,7 +27,7 @@ Typically constructed by the engine -- you will not create `Context` instances d
 | `startedAt`              | `number`         | Epoch timestamp when the workflow started                                               |
 | `signal`                 | `AbortSignal`    | Abort signal -- fires when the workflow is cancelled                                    |
 | `executionTimeRemaining` | `number`         | Milliseconds until execution deadline. `Infinity` if no deadline is set.                |
-| `log`                    | `WorkflowLogger` | Replay-safe structured logger scoped to this run. See [`log`](#log).                    |
+| `log`                    | `WorkflowLogger` | Checkpoint-aware structured logger scoped to this run. See [`log`](#log).               |
 | `stepIndex`              | `number`         | Current step counter (incremented by each durable operation)                            |
 | `nestingDepth`           | `number`         | How many levels deep this workflow is as a child workflow. `0` for top-level workflows. |
 
@@ -62,7 +62,7 @@ async function* example(context: Context) {
 ): WorkflowOperation<ActivityResultFor<TActivities[TName]>>
 ```
 
-Execute a registered activity durably by name. The engine checkpoints before the call and records the result. On replay, cached results are returned without re-executing the activity. The `name` is the activity's registered name—the durable dispatch key Weft uses for local dispatch and for remote dispatch alike. When the workflow is typed through its `.activities({ ... })` registry, `TActivities` carries the declared names, so `name` autocompletes and the input and result types are inferred (the exported `ActivityArgsFor` and `ActivityResultFor` helpers let you spell those types out by hand). An optional `ActivityCallOptions` argument may follow the input to override retry, timeout, queue, or idempotency for a single call.
+Execute a registered activity durably by name. The engine checkpoints before the call and records the result. When recovery reaches a checkpoint-restored step, cached results are returned without re-executing the activity. The `name` is the activity's registered name—the durable dispatch key Weft uses for local dispatch and for remote dispatch alike. When the workflow is typed through its `.activities({ ... })` registry, `TActivities` carries the declared names, so `name` autocompletes and the input and result types are inferred (the exported `ActivityArgsFor` and `ActivityResultFor` helpers let you spell those types out by hand). An optional `ActivityCallOptions` argument may follow the input to override retry, timeout, queue, or idempotency for a single call.
 
 | Parameter | Type                  | Description                            |
 | --------- | --------------------- | -------------------------------------- |
@@ -150,7 +150,7 @@ waitUntil(predicate: () => boolean, timeout: Duration): WorkflowOperation<boolea
 
 Wait until `predicate` returns `true`. The engine re-evaluates the predicate whenever the workflow is driven forward—each time an `onUpdate` handler mutates workflow-local state, or when the optional `timeout` elapses. This is the condition-variable primitive (Temporal's `condition()`): a `waitUntil` whose predicate reads state mutated by `onUpdate` handlers re-checks in-process without polling.
 
-The predicate must be **pure**. It may read only checkpoint-restored workflow-local state and must not perform I/O, generate randomness, or read wall-clock time. It is a non-serializable closure (like `ctx.memo`'s function), held in-process and never checkpointed. Once the wait outcome has been checkpointed, replay returns the cached outcome and does not re-invoke the predicate. A predicate that throws fails the workflow at the `yield* context.waitUntil` call site (like a throwing activity), so the workflow body can `try`/`catch` it.
+The predicate must be **pure**. It may read only checkpoint-restored workflow-local state and must not perform I/O, generate randomness, or read wall-clock time. It is a non-serializable closure (like `ctx.memo`'s function), held in-process and never checkpointed. Once the wait outcome has been checkpointed, recovery returns the cached outcome and does not re-invoke the predicate. A predicate that throws fails the workflow at the `yield* context.waitUntil` call site (like a throwing activity), so the workflow body can `try`/`catch` it.
 
 > [!NOTE]
 > Weft signals are pull-only (`ctx.waitForSignal`) and run no state-mutating handler, so signal delivery does **not** re-drive a `waitUntil`. Use `onUpdate` to push the state a predicate observes.
@@ -529,7 +529,7 @@ Expose named read-only accessors for external introspection.
 explain(enabled?: boolean): void
 ```
 
-Enable or disable explain mode. When enabled, durable operations log detailed checkpoint and dispatch information to the console. Useful for debugging workflow replay behavior.
+Enable or disable explain mode. When enabled, durable operations log detailed checkpoint and dispatch information to the console. Useful for debugging checkpoint cache-hit and dispatch behavior.
 
 ### `log`
 
@@ -545,10 +545,10 @@ ctx.log.info('charge succeeded', { amount: 1999, currency: 'usd' });
 
 Caller-supplied attributes are nested under their own `attributes` key in the record, so they can never shadow an envelope field. `ctx.log.info('x', { workflowId: 'spoof' })` keeps the real `workflowId` on the envelope and quarantines `{ workflowId: 'spoof' }` inside `attributes`.
 
-`ctx.log` is replay-safe. A workflow body re-executes from the start on recovery to rebuild state (replay); log calls in the already-committed replay window are suppressed, so a recovered run does not re-emit logs it already emitted. This holds in both inline and worker execution modes, unlike `ctx.services`-injected loggers, which are inline-only. `ctx.log` is _not_ a durable operation: it consumes no step index and is never checkpointed.
+`ctx.log` is checkpoint-aware. When the engine reaches a step position whose result was restored from the checkpoint, the logger suppresses the call so a recovered run does not re-emit logs it already emitted. At an uncached live frontier, the log emits normally. This holds in both inline and worker execution modes, unlike `ctx.services`-injected loggers, which are inline-only. `ctx.log` is _not_ a durable operation: it consumes no step index and is never checkpointed.
 
-> [!NOTE] Replay edge cases
-> A log placed _after_ the last committed step re-fires on recovery, because there is no cached step to suppress it (the same caveat Temporal's workflow logger carries). Likewise, a workflow with no committed durable step has no replay position to suppress against, so its logs may re-emit on recovery. Logs inside `ctx.all` / `ctx.runAll` branches follow that branch's re-execution semantics.
+> [!NOTE] Checkpoint edge cases
+> A log placed _after_ the last committed step re-fires on recovery, because there is no cached step to suppress it. Likewise, a workflow with no committed durable step has no checkpoint-restored position to suppress against, so its logs may re-emit on recovery. Logs inside `ctx.all` / `ctx.runAll` branches follow that branch's cached-step behavior.
 
 > [!NOTE] Log destination
 > Records go to the current process console. In worker-pool mode that is the worker process's console, not the engine host. Inline timestamps come from the engine clock; worker-mode timestamps come from the worker process wall clock. A pluggable host sink and worker-mode host log routing are tracked in [issue #491](https://github.com/stevekinney/weft/issues/491).
