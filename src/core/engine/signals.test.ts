@@ -404,6 +404,33 @@ describe('engine signals', () => {
     });
   });
 
+  it('does not consume a different signal whose name shares a prefix', async () => {
+    // The signal name is encoded in the storage key, so a name containing the key
+    // separator (`:`) cannot prefix-collide with another name. Without encoding,
+    // a waiter on `order` would scan `sig:<wf>:order:` and wrongly consume a signal
+    // buffered under `order:placed` (`sig:<wf>:order:placed:...`).
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    await signal(
+      internals as never,
+      'workflow-name-collision',
+      'order:placed',
+      'placed-payload',
+      createSignalCallbacks(),
+      { signalId: 'sig-placed' },
+    );
+
+    // A waiter on the shorter name must NOT see the longer-named signal.
+    expect(await consumeSignal(internals as never, 'workflow-name-collision', 'order')).toEqual({
+      found: false,
+    });
+
+    // The exact-name waiter consumes its own signal.
+    expect(
+      await consumeSignal(internals as never, 'workflow-name-collision', 'order:placed'),
+    ).toEqual({ found: true, payload: 'placed-payload' });
+  });
+
   it('releases only matching signal waiters', () => {
     const internals = createSignalInternals();
     const firstWaiter = mock(() => {});

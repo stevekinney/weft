@@ -316,7 +316,7 @@ export async function hasBufferedSignal(
   workflowId: string,
   signalName: string,
 ): Promise<boolean> {
-  const prefix = `sig:${encodeStorageKeyComponent(workflowId)}:${signalName}:`;
+  const prefix = `sig:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(signalName)}:`;
   for await (const _entry of internals.storage.scan(prefix, { limit: 1 })) {
     return true;
   }
@@ -329,7 +329,7 @@ export async function consumeSignal(
   workflowId: string,
   signalName: string,
 ): Promise<ConsumedSignalResult> {
-  const prefix = `sig:${encodeStorageKeyComponent(workflowId)}:${signalName}:`;
+  const prefix = `sig:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(signalName)}:`;
   for await (const [key, value] of internals.storage.scan(prefix, { limit: 1 })) {
     await internals.storage.delete(key);
     return { found: true, payload: decode(value) };
@@ -350,7 +350,7 @@ export async function peekSignal(
   workflowId: string,
   signalName: string,
 ): Promise<ConsumedSignalResult> {
-  const prefix = `sig:${encodeStorageKeyComponent(workflowId)}:${signalName}:`;
+  const prefix = `sig:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(signalName)}:`;
   for await (const [, value] of internals.storage.scan(prefix, { limit: 1 })) {
     return { found: true, payload: decode(value) };
   }

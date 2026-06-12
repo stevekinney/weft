@@ -392,13 +392,16 @@ const formatSortableTimestamp = (timestamp: number): string => String(timestamp)
 const SIGNAL_SORT_CLASS_START = '0';
 const SIGNAL_SORT_CLASS_NORMAL = '1';
 
+// `name` is encoded (like `id` and `workflowId`) so a name containing the `:`
+// separator cannot prefix-collide with another name on the `consumeSignal` scan
+// path; the consume/peek/has scan prefixes in `signals.ts` encode `name` to match.
 const signalStorageKey = (
   workflowId: string,
   name: string,
   id: string,
   sortClass: string,
 ): string =>
-  `sig:${encodeStorageKeyComponent(workflowId)}:${name}:${sortClass}:${encodeStorageKeyComponent(id)}`;
+  `sig:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(name)}:${sortClass}:${encodeStorageKeyComponent(id)}`;
 
 /**
  * Key layout constants for hierarchical key encoding. Timestamps are

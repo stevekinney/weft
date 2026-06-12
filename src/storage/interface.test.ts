@@ -673,6 +673,11 @@ describe('KEYS', () => {
     expect(KEYS.startSignal(workflowId, 'approve', 'signal:1')).toBe(
       `sig:${encodedWorkflowId}:approve:0:signal%3A1`,
     );
+    // The signal name is encoded too (consistent with signalAcceptedResponse), so a
+    // name containing `:` cannot prefix-collide with another name on the scan path.
+    expect(KEYS.signal(workflowId, 'order:placed', 'x')).toBe(
+      `sig:${encodedWorkflowId}:order%3Aplaced:1:x`,
+    );
     expect(KEYS.signalSequence(workflowId)).toBe(`sigseq:v1:${encodedWorkflowId}`);
     expect(KEYS.signalAcceptedResponsePrefix(workflowId)).toBe(`sigres:v1:${encodedWorkflowId}:`);
     expect(KEYS.signalAcceptedResponse(workflowId, 'approve', 'signal:1')).toBe(
