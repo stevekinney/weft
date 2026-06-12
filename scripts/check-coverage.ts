@@ -42,15 +42,12 @@ function writeCapturedOutput(output: Buffer | string | undefined): void {
 }
 
 function isGeneratedCoverageArtifact(filePath: string): boolean {
-  // The temp-dir prefix is depth- and root-agnostic: Bun records these fixture
-  // paths relative to the coverage-run CWD, so the number of leading `../` segments
-  // grows with worktree nesting (a worktree under `.claude/worktrees/<name>` adds
-  // more than a repo-root run), and the OS temp root is `var/folders/` (macOS
-  // repo-root form) OR `private/tmp/` / `tmp/` (deep-worktree form) — see #503. Match
-  // any `../` depth and either temp root; the fixture-NAME patterns below are what
-  // actually identify a generated artifact, so a non-fixture temp file is not caught.
+  // Bun records generated fixture paths relative to the coverage-run CWD, so worktree
+  // depth changes the number of `../` segments and the temp root may be `var/folders/`,
+  // `private/tmp/`, or `tmp/` (#503). The second matcher still gates this to known
+  // fixture names, so a non-fixture temp file is not caught.
   if (
-    /(?:\.\.\/)+(?:(?:private\/)?var\/folders\/|(?:private\/)?tmp\/)/.test(filePath) &&
+    /(?:\.\.\/)+(?:private\/)?(?:var\/folders\/|tmp\/)/.test(filePath) &&
     /(?:\/weft-(?:schedule(?:-lmdb)?-(?:workflows|input)|cli-edge-workflows)-[^/]+\.ts$|\/weft-validate-[^/]+\/[^/]+\.ts$|\/weft-validate-(?:json-invalid|mixed-(?:clean|invalid)|multi-[ab])-[^/]+\.ts$)/.test(
       filePath,
     )
