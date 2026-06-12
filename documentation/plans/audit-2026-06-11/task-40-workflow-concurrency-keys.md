@@ -9,11 +9,11 @@
 
 ### Evidence
 
-src/core/concurrency.ts provides DurableSemaphore/DurableMutex as primitives, but these are manual building blocks. There is no built-in throttle (max N executions per time window), debounce (delay execution until a signal stops arriving), batch-trigger (accumulate N events then start one workflow), or per-tenant concurrency key as first-class EngineOptions. src/core/types/options.ts has no maxConcurrency, throttlePolicy, or batchTrigger options. Inngest makes these first-class scheduling constraints declared on the function definition.
+src/core/concurrency.ts provides DurableSemaphore/DurableMutex as primitives, but these are manual building blocks. There is no built-in throttle (max N executions per time window), debounce (delay execution until a signal stops arriving), batch-trigger (accumulate N events then start one workflow), or partition-keyed concurrency limit as first-class EngineOptions. src/core/types/options.ts has no maxConcurrency, throttlePolicy, or batchTrigger options. Inngest makes these first-class scheduling constraints declared on the function definition.
 
 ### Required fix
 
-Add a concurrency field to workflow definition options (workflow({ name: 'x', concurrency: { max: 3, key: (input) => input.tenantId } })). The engine enforces this at start-time using the existing DurableSemaphore + AtomicState mechanism as the backing store, acquiring a lease before start and releasing it on terminal cleanup. Debounce and batch-trigger are harder: debounce requires a scheduled delay that restarts on each signal (achievable with schedule + cancel-running overlap policy). Batch-trigger requires a collector workflow pattern. Document these patterns rather than baking them in for v1.
+Add a concurrency field to workflow definition options (workflow({ name: 'x', concurrency: { max: 3, key: (input) => input.customerId } })). The engine enforces this at start-time using the existing DurableSemaphore + AtomicState mechanism as the backing store, acquiring a lease before start and releasing it on terminal cleanup. Debounce and batch-trigger are harder: debounce requires a scheduled delay that restarts on each signal (achievable with schedule + cancel-running overlap policy). Batch-trigger requires a collector workflow pattern. Document these patterns rather than baking them in for v1.
 
 ### Verifier note
 

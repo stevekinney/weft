@@ -13,7 +13,7 @@ src/core/types/checkpoint.ts:101 — `accumulatedResults: Array<[number, unknown
 
 ### Required fix
 
-Store accumulatedResults as a delta (only newly-completed steps since the last checkpoint) and reassemble on resume by replaying deltas from the chain of checkpoint history entries. Alternatively, adopt a write-once side-table per step result (keyed `result:{workflowId}:{step}`) so the hot checkpoint only records which steps are done, and resume reads individual results on demand. Either approach reduces per-step checkpoint size from O(steps) to O(1).
+Prune consumed entries from the serialized checkpoint: once the step frontier advances past an entry (its result has been consumed by resume/replay reconstruction), drop it, leaving only entries at or ahead of the frontier — typically the single pending step. This reduces per-step checkpoint size from O(steps) to O(pending). The full design contract is in the resolved required design section below. (The original finding proposed delta chains or a write-once side-table per step result — both were rejected by the committee; see below. Do not implement either.)
 
 ### Verifier note
 

@@ -13,7 +13,7 @@ src/core/scheduler/scheduler-class.ts:169–184 — `#scanExpiredTimers` opens 4
 
 ### Required fix
 
-Push timer-expiry responsibility into the storage layer: a single SQL query `SELECT value FROM kv WHERE key >= 'wf-deadline:' AND key < 'wf-deadline:{now_padded}' LIMIT 256` is more efficient than 4 separate scan cursors merged in JS. Batch-delete all fired timers in a single DELETE rather than one per timer. Add a `LIMIT` to each scan so one very late tick does not process unbounded timers.
+Two narrow changes only (the original finding's storage-layer SQL rewrite was based on a wrong mechanism claim — see the verifier note and resolved scope below; do not replace the scan cursors or push expiry into SQL): (1) add a per-tick LIMIT to each of the four expired-timer scans so a stalled tick cannot load unbounded rows; (2) batch fired-timer deletions into one storage batch per tick instead of per-timer batches.
 
 ### Verifier note
 

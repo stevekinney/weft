@@ -22,7 +22,8 @@ Use one explicit named constant, `MAX_BATCH_OPERATIONS = 10_000`, applied consis
 ## Acceptance criteria (all required — completion is binary)
 
 - [ ] One named, documented constant (`MAX_BATCH_OPERATIONS = 10_000`) caps operation counts for batch and conditionalBatch at both the API schema layer and the shared dispatch layer; exceeding it raises a typed error that names the cap.
-- [ ] Regression test proves the cap fires and that the largest legitimate engine batches (purge + create folds) stay well under it.
+- [ ] A named constant `MAX_SCAN_LIMIT = 10_000` caps the storageScanInput limit field, is documented in configuration.md, appears in the OpenRPC schema, and is pinned by a regression test.
+- [ ] Regression test proves the batch cap fires and that the largest legitimate engine batches (purge + create folds) stay well under it.
 
 ## Standard execution requirements
 

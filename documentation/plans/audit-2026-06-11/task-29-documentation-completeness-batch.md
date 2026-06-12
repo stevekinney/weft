@@ -123,6 +123,9 @@ Documentation-only. The long-poll item documents the EXISTING wire protocol (fix
 - [ ] All five findings are addressed; `bun run verify:documentation` passes.
 - [ ] The error-codes reference page covers every exported WeftErrorCode and FaultCode member (generate-or-verify against the source unions so it cannot drift silently).
 - [ ] The remote-workers guide long-poll endpoints match the implementation (verified against the routing source).
+- [ ] The TursoStorage section of `storage.md` carries a `[!WARNING]` callout stating it always fails `assertDurableStorageForRecovery`, naming the suitable use cases and the durable alternatives, and the `capabilities()` JSDoc in `turso.ts` explains the session-level read-after-write.
+- [ ] `cli.md`'s `version:check` section carries an `[!NOTE] Experimental` callout and `temporal-comparison.md` uses the softened "experimental `weft version:check`" wording.
+- [ ] `CHANGELOG.md` has a `## [0.2.1]` section with an accurate date that either documents breaking changes with migration paths or explicitly states none occurred.
 
 ## Standard execution requirements
 

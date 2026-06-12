@@ -2,6 +2,9 @@
 
 **Severity:** medium
 
+> [!IMPORTANT]
+> Depends on Task 19 (typed Engine event surface) merging first, so the new event lands in the typed event map rather than as an untyped emission.
+
 ## Context
 
 When the engine restarts after downtime, `planScheduleTimerWork` in `src/core/engine/schedule-timer.ts` silently discards any occurrences that fired more than 1 second in the past (`SCHEDULE_LATE_GRACE_MILLISECONDS = 1000`, line 7). There is no log, no event, no observable state change.
@@ -28,6 +31,7 @@ A schedule for financial reports or SLA-gated operations will silently miss occu
 ## Acceptance criteria (all required — completion is binary)
 
 - [ ] Skipped occurrences after downtime set lastMissedFireAt and missedFireCount and emit a ScheduleMissedFireEvent carrying schedule ID, skip count, and the missed window; lastFireAt semantics are unchanged (pinned by test).
+- [ ] ScheduleMissedFireEvent is registered in the typed engine event map established by task 19 and exported from the package root, consistent with the other engine events.
 - [ ] Schedule guide and ScheduleOptions.backfill JSDoc document the grace period and the new fields.
 
 ## Standard execution requirements

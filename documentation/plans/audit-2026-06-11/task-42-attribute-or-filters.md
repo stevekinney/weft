@@ -13,7 +13,7 @@ src/core/types/list-options.ts AttributeFilter (lines 119-145) supports equality
 
 ### Required fix
 
-Extend AttributeFilter to support OR within a single attribute (value: string[] for 'any of these values') as a low-cost immediate improvement. For a full expression language, add a FilterExpression type: { and: FilterExpression[] } | { or: FilterExpression[] } | { not: FilterExpression } | AttributeFilter. The index-based query helpers already return Set<string> that can be intersected/unioned; a recursive resolver over FilterExpression would compose these sets.
+Extend AttributeFilter to support OR within a single attribute: value: string[] with any-of semantics. The index-based query helpers already return Set<string> — union the per-value sets. Also fix the post-filter parity bug confirmed by the verifier (matchesListFilter ignores filter.attributes). A full boolean expression language (and/or/not nesting, the FilterExpression idea from the original finding) is explicitly OUT of scope — see the scope boundary below; do not implement it.
 
 ### Verifier note
 

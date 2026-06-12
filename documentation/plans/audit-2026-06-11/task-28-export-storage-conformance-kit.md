@@ -18,11 +18,12 @@
 1. Add a new `@lostgradient/weft/storage/testing` subpath that exports the three conformance helper functions. The existing `./testing` subpath is not modified — the new subpath sits alongside the `./storage/*` family. (The extend-`./testing` alternative was considered and rejected: TestEngine/chaos helpers and adapter conformance serve different audiences, and `./storage/testing` keeps the storage surface self-describing.)
 2. Since these functions import `bun:test`, ensure the subpath is excluded from the main bundle (already handled by the build-exclusion mechanism for test-support files).
 3. Add a 'Implementing a custom adapter' section to `documentation/guides/storage.md` that links to this suite and shows a minimal usage example.
-4. Extend `weft conformance` to optionally cover the storage adapter protocol (analogous to how it covers the RemoteWorker protocol).
+
+Extending the `weft conformance` CLI to cover the storage adapter protocol is explicitly deferred — it is a separate CLI feature, not part of exporting the test kit. Note the deliberate omission in the PR body.
 
 ## Ownership note
 
-This task is the single owner of conformance-surface expansion — the documentation-completeness task explicitly does NOT touch `weft conformance`; cross-reference it rather than duplicating.
+This task is the single owner of conformance-surface decisions in this backlog — the documentation-completeness task explicitly does NOT touch `weft conformance`; cross-reference this task rather than duplicating. Within this task, the `weft conformance` CLI extension itself is deferred (see above); only the exported test-kit subpath and its documentation ship here.
 
 ## Acceptance criteria (all required — completion is binary)
 

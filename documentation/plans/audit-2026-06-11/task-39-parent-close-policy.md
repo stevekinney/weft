@@ -27,12 +27,13 @@ The committee requires the exact API shape up front (type-level breaking changes
 - `'await'` (and omitted) preserves the CURRENT return type and yield semantics exactly — zero existing call sites change.
 - `'abandon'` and `'request-cancel'` return a `ChildWorkflowHandle` (id + status accessors) instead of the child result, modeled as overloads discriminated on the options literal type so inference is automatic. Pin all three shapes in .test-d.ts BEFORE implementing.
 - `'request-cancel'` registers via the existing cancel-handler mechanism: parent cancellation requests child cancellation; `'abandon'` fully detaches.
+- `'abandon'` must sever the child's execution ownership linkage, not merely skip the result await: the field linking the child to the parent's execution context (locate by the `executionStateOwnerId` symbol in the child-workflow start path) must not be set for abandoned children, so the parent's crash recovery, purge, and retention never affect the abandoned child's lifecycle. The verifier-note paragraph above is the specification for this requirement.
 - Composition operators (ctx.map/pipe/reduce) remain await-only by design — document that.
 
 ## Acceptance criteria (all required — completion is binary)
 
 - [ ] Overloads compile per the contract above; .test-d.ts pins all three policies' return types and that omitting the option is identical to 'await'.
-- [ ] Behavioral tests: abandoned child survives parent completion AND parent cancellation; request-cancel child receives cancellation when the parent cancels; await semantics byte-identical to today.
+- [ ] Behavioral tests: abandoned child survives parent completion AND parent cancellation; abandoned children carry no parent execution-ownership linkage (executionStateOwnerId or its current equivalent is unset, pinned by test covering parent purge/recovery); request-cancel child receives cancellation when the parent cancels; await semantics byte-identical to today.
 - [ ] Child-workflow guide documents the policies and the composition-operator boundary.
 
 ## Standard execution requirements

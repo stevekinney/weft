@@ -13,7 +13,7 @@ src/core/schedule/cron-occurrence.ts line 1-4 imports getDefaultTimeZone and get
 
 ### Required fix
 
-Add jitter?: Duration to ScheduleOptions and ScheduleDefinition. In the schedule timer firing path (src/core/engine/schedule-timer.ts), apply a deterministic jitter offset: use a seeded hash of schedule-id + fire-sequence to generate a stable pseudo-random offset in [0, jitter) milliseconds added to nextFireAt. Deterministic seeding ensures the same jitter per occurrence on replay without storing extra state.
+Add jitter?: Duration to ScheduleOptions and ScheduleDefinition. In the schedule timer firing path (src/core/engine/schedule-timer.ts), apply a deterministic jitter offset: use a seeded hash of `scheduleId + nominalFireTimestamp` (the pre-jitter nextFireAt, which is already persisted in ScheduleState) to generate a stable pseudo-random offset in [0, jitter) milliseconds added to nextFireAt. Deterministic seeding ensures the same jitter per occurrence on replay without storing extra state — see the seed correction below; ScheduleState has no fire-sequence counter, so the nominal fire timestamp is the seed.
 
 ### Verifier note
 

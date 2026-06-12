@@ -13,7 +13,7 @@ api-key.ts:120: if (apiKeySet?.has(presentedKey)). JavaScript Set.has() is not c
 
 ### Required fix
 
-Replace Set.has(presentedKey) with a constant-time comparison loop using node:crypto timingSafeEqual over the key bytes, iterating all known keys and XOR-accumulating the result so early-exit is impossible. Apply the same fix to the rotating-api-key-store.ts Map.get() path.
+Replace Set.has(presentedKey) with a constant-time comparison: hash both the presented key and every stored key to fixed-length digests (e.g. SHA-256), then iterate ALL stored digests comparing each with node:crypto timingSafeEqual and accumulating the match result without early exit. The digest step is mandatory — timingSafeEqual throws on differing input lengths, and a raw length check on key bytes reintroduces the timing leak the fix is meant to close. Apply the same digest-then-compare fix to the rotating-api-key-store.ts Map.get() path.
 
 ## Acceptance criteria (all required — completion is binary)
 
