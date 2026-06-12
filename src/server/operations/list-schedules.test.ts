@@ -66,6 +66,14 @@ describe('weft.schedules.list', () => {
     expect(typeof body.offset).toBe('number');
   });
 
+  it('registers an executable echo workflow in the test engine', async () => {
+    engine = createListSchedulesTestEngine();
+
+    const handle = await engine.start('echo', { ok: true });
+
+    await expect(handle.result()).resolves.toEqual({ ok: true });
+  });
+
   it('returns 400 when the status query param is not valid', async () => {
     engine = createListSchedulesTestEngine();
 

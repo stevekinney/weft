@@ -1639,7 +1639,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   ['src/connection.ts', { functions: 2, lines: new Set([211, 250, 251, 256, 257, 258, 259]) }],
   [
     'src/core/context/durable-operations.ts',
-    { functions: 1, lines: new Set([57, 58, 59, 60, 61, 62, 63, 137, 141, 142, 143]) },
+    { lines: new Set([57, 58, 59, 60, 61, 62, 63, 239, 243, 244, 245]) },
   ],
   [
     // The retry-state corruption guards and non-Error retryability path are now
@@ -1710,10 +1710,9 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
   [
     'src/core/engine/updates.ts',
     {
-      functions: 1,
       lines: new Set([
-        197, 313, 314, 315, 316, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327, 328, 329, 330,
-        331, 332, 333, 334, 335, 394, 401, 490, 491, 492, 493, 494, 495, 496,
+        171, 287, 288, 289, 290, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301, 302, 303, 304,
+        305, 306, 307, 308, 309, 368, 375, 464, 465, 466, 467, 468, 469, 470,
       ]),
     },
   ],

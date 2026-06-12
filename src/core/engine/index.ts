@@ -475,6 +475,7 @@ export class Engine<
     getInternals(this).resultResolvers = new Map();
     getInternals(this).signalWaiters = new Map();
     getInternals(this).signalWaitersByWorkflow = new Map();
+    getInternals(this).conditionWaiters = new Map();
     getInternals(this).updateWaiters = new Map();
     getInternals(this).updateWaitersByWorkflow = new Map();
     getInternals(this).sleepResolvers = new Map();
@@ -540,6 +541,7 @@ export class Engine<
     getInternals(this).workflowReviewIds = new Map();
     getInternals(this).parkedInlineWorkflows = new Set();
     getInternals(this).terminalizingWorkflows = new Set();
+    getInternals(this).deliveredPendingUpdateIds = new Map();
     getInternals(this).cancelHandlersByWorkflow = new Map();
     getInternals(this).reviewTimerIds = new Map();
     getInternals(this).pendingWebhooks = new Set();

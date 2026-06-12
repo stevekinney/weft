@@ -1,6 +1,7 @@
 import {
   createActivityOperationCallbacks,
   createChildWorkflowOperationCallbacks,
+  createConditionOperationCallbacks,
   createCoordinationOperationCallbacks,
   createDataOperationCallbacks,
   createStateOperationCallbacks,
@@ -34,6 +35,7 @@ import { processSpeculateOperation } from './operations-speculate.ts';
 import { processStateCommitOperation, processStateReadOperation } from './operations-state.ts';
 import { processStreamOperation } from './operations-stream.ts';
 import { processSleepOperation } from './operations-time.ts';
+import { processWaitConditionOperation } from './operations-wait-condition.ts';
 import { feedOperationResult } from './strategy-helpers.ts';
 import { processWaitReviewOperation } from './sub-operation.ts';
 import { finalizePendingTimelineEntry } from './termination.ts';
@@ -71,6 +73,13 @@ export function createOperationRouterCallbacks<
         workflowId,
         operation,
         createUpdateCallbacks(engine),
+      ),
+    processWaitConditionOperation: (workflowId, operation) =>
+      processWaitConditionOperation(
+        getInternals(engine),
+        workflowId,
+        operation,
+        createConditionOperationCallbacks(engine),
       ),
     processParallelOperation: (workflowId, operation) =>
       processParallelOperation(

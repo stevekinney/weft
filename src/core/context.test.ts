@@ -1289,6 +1289,34 @@ describe('Context', () => {
       expect(calls).toContain('approval');
     });
 
+    it('logs waitUntil details (indefinite) when explain mode is enabled', () => {
+      const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+      const context = createContext();
+      context.explain(true);
+
+      const generator = context.waitUntil(() => false);
+      generator.next();
+
+      expect(consoleSpy).toHaveBeenCalled();
+      const calls = consoleSpy.mock.calls.flat().join(' ');
+      expect(calls).toContain('ctx.waitUntil');
+      expect(calls).toContain('Waiting indefinitely');
+    });
+
+    it('logs waitUntil deadline when explain mode is enabled with a timeout', () => {
+      const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+      const context = createContext({ getNow: () => 1000 });
+      context.explain(true);
+
+      const generator = context.waitUntil(() => false, '5m');
+      generator.next();
+
+      expect(consoleSpy).toHaveBeenCalled();
+      const calls = consoleSpy.mock.calls.flat().join(' ');
+      expect(calls).toContain('ctx.waitUntil');
+      expect(calls).toContain('Deadline at');
+    });
+
     it('logs waitForUpdate details when explain mode is enabled', () => {
       const consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
       const context = createContext();

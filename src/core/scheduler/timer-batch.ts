@@ -11,7 +11,8 @@ function isTimerEntryKind(value: unknown): value is TimerEntry['kind'] {
     value === 'execution-deadline' ||
     value === 'delayed-start' ||
     value === 'schedule' ||
-    value === 'terminal-cleanup'
+    value === 'terminal-cleanup' ||
+    value === 'wait-condition'
   );
 }
 

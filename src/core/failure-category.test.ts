@@ -209,16 +209,16 @@ describe('failureCategory search attribute indexing', () => {
     expect(result.items[0]!.id).toBe('wf-fail');
   });
 
-  it('engine.list({ attributes: [{ key: "failureCategory", value: "application" }] }) matches previous indexed category names', async () => {
+  it('does not normalize previous indexed category names into current failure categories', async () => {
     const storage = new MemoryStorage();
     engine = new Engine({ storage });
-    const workflowId = 'wf-legacy-planning-index';
+    const workflowId = 'wf-old-planning-index';
 
     await storage.put(
       KEYS.workflow(workflowId),
       encode({
         id: workflowId,
-        type: 'legacy',
+        type: 'old-category-workflow',
         status: 'failed',
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -241,7 +241,10 @@ describe('failureCategory search attribute indexing', () => {
       { includeFailureCategory: true },
     );
 
-    expect(result.items.map((item) => item.id)).toEqual([workflowId]);
-    expect(result.items[0]?.failureCategory).toBe('application');
+    expect(result.items).toEqual([]);
+
+    const allResult = await engine.list({}, { includeFailureCategory: true });
+    expect(allResult.items.map((item) => item.id)).toEqual([workflowId]);
+    expect(allResult.items[0]?.failureCategory).toBeUndefined();
   });
 });

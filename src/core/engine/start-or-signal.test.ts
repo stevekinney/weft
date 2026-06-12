@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { CompressedStorage } from '../../storage/compressed-storage.ts';
-import type { Storage } from '../../storage/interface.ts';
+import type { BatchOperation, Storage } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
@@ -10,6 +10,7 @@ import type { WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
 import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from './errors.ts';
 import { getInternals } from './internals.ts';
+import { startWithIdempotency } from './lifecycle/start-or-signal.ts';
 
 const waitForRelease = workflow({ name: 'wait-for-release' }).execute(async function* (
   ctx: WorkflowContext,
@@ -115,6 +116,30 @@ function storageWithAbortingFirstConditionalBatch(
       return typeof value === 'function' ? value.bind(target) : value;
     },
   });
+}
+
+function storageWithInjectedBatchFailure(inner: Storage): Storage & { failNextBatch(): void } {
+  let shouldFailBatch = false;
+  return new Proxy(inner, {
+    get(target, property, receiver) {
+      if (property === 'batch') {
+        return async (operations: BatchOperation[]): Promise<void> => {
+          if (shouldFailBatch) {
+            shouldFailBatch = false;
+            throw new Error('injected plain create batch failure');
+          }
+          return target.batch(operations);
+        };
+      }
+      if (property === 'failNextBatch') {
+        return () => {
+          shouldFailBatch = true;
+        };
+      }
+      const value = Reflect.get(target, property, receiver);
+      return typeof value === 'function' ? value.bind(target) : value;
+    },
+  }) as Storage & { failNextBatch(): void };
 }
 
 /**
@@ -254,6 +279,23 @@ describe('engine.start idempotency', () => {
       await expect(engine.start('wait-for-release', null, { idempotencyKey: '' })).rejects.toThrow(
         /must not be empty/,
       );
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('throws when startWithIdempotency is invoked without an idempotency key (white-box)', async () => {
+    const engine = createEngine();
+    try {
+      await expect(
+        startWithIdempotency(
+          getInternals(engine),
+          'wait-for-release',
+          null,
+          {} as never,
+          {} as never,
+        ),
+      ).rejects.toThrow('startWithIdempotency requires options.idempotencyKey');
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -949,6 +991,75 @@ describe('engine.startOrSignal', () => {
       ).rejects.toThrow(/after 5 attempts/);
     } finally {
       getInternals(engine).pendingStarts.delete('sos-cap');
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('resolves the committed caller-id winner when buffered-signal plain create collides', async () => {
+    const engine = createEngine();
+    const pendingStarts = getInternals(engine).pendingStarts;
+    const originalHas = pendingStarts.has.bind(pendingStarts);
+    let competingStartPromise: Promise<ReturnType<Engine['getHandle']>> | undefined;
+    let isStartingCompetingWorkflow = false;
+
+    pendingStarts.has = ((workflowId: string) => {
+      const isPendingStart = originalHas(workflowId);
+      if (
+        workflowId === 'buffered-collision' &&
+        !isPendingStart &&
+        competingStartPromise === undefined &&
+        !isStartingCompetingWorkflow
+      ) {
+        isStartingCompetingWorkflow = true;
+        competingStartPromise = engine
+          .start('release-then-hold', null, { id: workflowId })
+          .finally(() => {
+            isStartingCompetingWorkflow = false;
+          });
+      }
+      return isPendingStart;
+    }) as typeof pendingStarts.has;
+
+    try {
+      await engine.signal('buffered-collision', 'release', 'winner', { signalId: 'sig-buffered' });
+
+      const handle = await engine.startOrSignal(
+        'release-then-hold',
+        null,
+        { name: 'release', payload: 'loser', signalId: 'sig-buffered' },
+        { id: 'buffered-collision' },
+      );
+
+      const competingHandle = await competingStartPromise;
+      expect(competingHandle).toBeDefined();
+      expect(handle.id).toBe('buffered-collision');
+      expect(competingHandle!.id).toBe(handle.id);
+
+      await engine.signal(handle.id, 'hold', 'done');
+      expect(await handle.result()).toBe('done');
+    } finally {
+      pendingStarts.has = originalHas;
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('rethrows non-collision errors from the buffered-signal plain create path', async () => {
+    const storage = storageWithInjectedBatchFailure(new MemoryStorage());
+    const engine = createEngine(storage);
+
+    try {
+      await engine.signal('buffered-batch-failure', 'release', 'winner', { signalId: 'sig-batch' });
+      storage.failNextBatch();
+
+      await expect(
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'loser', signalId: 'sig-batch' },
+          { id: 'buffered-batch-failure' },
+        ),
+      ).rejects.toThrow('injected plain create batch failure');
+    } finally {
       await engine[Symbol.asyncDispose]();
     }
   });

@@ -83,6 +83,23 @@ export interface EngineInternals {
   resultResolvers: Map<string, WorkflowResultWaiter>;
   signalWaiters: Map<string, () => void>;
   signalWaitersByWorkflow: Map<string, TrackedWaiterKeys>;
+  /**
+   * In-process resolvers for inline `ctx.waitUntil` waits, keyed by `workflowId`
+   * ALONE — a workflow has at most one active wait-condition because its inline
+   * generator is suspended at exactly one yield, and the top-level-only guard in
+   * `executeSubOperation` rejects `waitUntil` as a `race`/`all`/`speculate`
+   * branch. So unlike `signalWaiters` (which need a per-workflow string-or-Set
+   * index because they CAN be concurrent sub-operations), this is a flat map with
+   * no secondary index. Calling the resolver wakes `processWaitConditionOperation`
+   * to re-evaluate its predicate. Never checkpointed — engine-memory state cleared
+   * on terminal cleanup.
+   *
+   * Note: the deadline TIMER is still keyed `cond:${workflowId}:${step}` (step is
+   * stable across replay, so recovery does not double-arm). Only this waiter map
+   * keys by `workflowId`. If `waitUntil`-in-`race`/`all`/`speculate` is ever
+   * supported, this keying must revert to `${workflowId}:${step}` + a Set index.
+   */
+  conditionWaiters: Map<string, () => void>;
   updateWaiters: Map<string, (payload: unknown) => void>;
   updateWaitersByWorkflow: Map<string, TrackedWaiterKeys>;
   sleepResolvers: Map<string, () => void>;
@@ -191,6 +208,22 @@ export interface EngineInternals {
   workflowReviewIds: Map<string, Set<string>>;
   parkedInlineWorkflows: Set<string>;
   terminalizingWorkflows: Set<string>;
+  /**
+   * Coordinated update IDs already claimed for delivery by a pending-update
+   * drain, keyed by workflow. Several drain triggers (each `update()` schedules a
+   * `setTimeout(0)` drain; the post-advance path drains too) can fire
+   * near-simultaneously, and the durable consume-delete (`buildResponseOperations`
+   * deletes the pending key via async `storage.batch`) lags the in-memory
+   * `getPendingUpdates` scan — so overlapping drains would re-read and re-deliver
+   * the same buffered update. Each drain claims an update's id SYNCHRONOUSLY (no
+   * `await` between the membership check and the add) before delivering it, so a
+   * racing drain that scans the same id skips it. The claim persists across
+   * drains (unlike a per-drain guard), which is what makes delivery idempotent
+   * against the cross-drain race. Cleared per workflow on terminal cleanup; empty
+   * after a crash, which matches durable state (recovery re-delivers exactly the
+   * updates whose delete never committed).
+   */
+  deliveredPendingUpdateIds: Map<string, Set<string>>;
   cancelHandlersByWorkflow: Map<string, Array<() => Promise<void> | void>>;
   reviewTimerIds: Map<string, string[]>;
   pendingWebhooks: Set<AbortController>;

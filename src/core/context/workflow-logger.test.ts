@@ -1,42 +1,14 @@
-import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
+import { captureWorkflowLogConsoleWithMethods } from '../../testing/workflow-log-capture.test-support.ts';
 import { Context } from '../context.ts';
-import type { WorkflowLogLevel, WorkflowLogRecord } from '../types/workflow-context.ts';
 import { getInternals } from './internals.ts';
 import { createWorkflowLogger, type WorkflowLoggerBindings } from './workflow-logger.ts';
 
-/** Capture every console.{debug,info,warn,error} call as a structured record. */
-function captureConsole(): {
-  records: Array<{ method: WorkflowLogLevel; record: WorkflowLogRecord }>;
-  restore: () => void;
-} {
-  const records: Array<{ method: WorkflowLogLevel; record: WorkflowLogRecord }> = [];
-  const originals = {
-    debug: console.debug,
-    info: console.info,
-    warn: console.warn,
-    error: console.error,
-  };
-  for (const method of ['debug', 'info', 'warn', 'error'] as const) {
-    console[method] = mock((record: unknown) => {
-      records.push({ method, record: record as WorkflowLogRecord });
-    });
-  }
-  return {
-    records,
-    restore: () => {
-      console.debug = originals.debug;
-      console.info = originals.info;
-      console.warn = originals.warn;
-      console.error = originals.error;
-    },
-  };
-}
-
 describe('createWorkflowLogger (shared factory)', () => {
-  let captured: ReturnType<typeof captureConsole>;
+  let captured: ReturnType<typeof captureWorkflowLogConsoleWithMethods>;
   beforeEach(() => {
-    captured = captureConsole();
+    captured = captureWorkflowLogConsoleWithMethods();
   });
   afterEach(() => {
     captured.restore();
@@ -114,9 +86,9 @@ describe('createWorkflowLogger (shared factory)', () => {
 });
 
 describe('Context.log (inline replay-safety)', () => {
-  let captured: ReturnType<typeof captureConsole>;
+  let captured: ReturnType<typeof captureWorkflowLogConsoleWithMethods>;
   beforeEach(() => {
-    captured = captureConsole();
+    captured = captureWorkflowLogConsoleWithMethods();
   });
   afterEach(() => {
     captured.restore();
@@ -192,7 +164,7 @@ describe('Context.log (inline replay-safety)', () => {
 
     // Same shape, but step 4 is the live frontier (not cached) → emits.
     captured.restore();
-    captured = captureConsole();
+    captured = captureWorkflowLogConsoleWithMethods();
     const liveContext = createContext();
     liveContext.accumulatedResults.set(0, 'all-entry');
     getInternals(liveContext).stepIndex = 4;

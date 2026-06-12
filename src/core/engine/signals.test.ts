@@ -35,6 +35,8 @@ function createSignalInternals(storage = new MemoryStorage()) {
     parkedInlineWorkflows: new Set<string>(),
     signalWaiters: new Map<string, () => void>(),
     signalWaitersByWorkflow: new Map(),
+    conditionWaiters: new Map<string, () => void>(),
+    deliveredPendingUpdateIds: new Map<string, Set<string>>(),
     storage,
     workflowsNeedingTerminalCleanup: new Set<string>(),
   };

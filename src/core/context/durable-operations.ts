@@ -94,6 +94,108 @@ export function* waitForSignal<T = unknown>(
   return result as T;
 }
 
+const CONDITION_DEADLINE_LOCAL_PREFIX = '__weftConditionDeadline:';
+
+/**
+ * Read the absolute deadline anchor for a `ctx.waitUntil` step, writing it on the
+ * first evaluation. Read-first so a crash/replay never resets the window: the
+ * timeout is measured from the original first yield, and the anchor lands in the
+ * checkpoint committed at that yield — the same atomicity the activity
+ * schedule-to-close anchor (`readOrInitActivityDispatchedAt`) relies on.
+ *
+ * Returns `undefined` when no timeout was supplied (wait forever).
+ */
+export function readOrInitConditionDeadline(
+  internals: ContextInternals,
+  step: number,
+  timeout: Duration | undefined,
+): number | undefined {
+  if (timeout === undefined) return undefined;
+
+  const localKey = `${CONDITION_DEADLINE_LOCAL_PREFIX}${step}`;
+  const existing = internals.checkpointLocals[localKey];
+  // Honor any finite anchor, including 0 (a test clock can legitimately report a
+  // 0 reference time); an `existing > 0` guard would treat that as unset and
+  // re-anchor on every replay, resetting the wall-clock budget.
+  if (typeof existing === 'number' && Number.isFinite(existing)) {
+    return existing;
+  }
+  // A present-but-non-finite anchor is corrupt persisted data. Fail loudly rather
+  // than silently re-initializing, which would reset the timeout window the
+  // anchor exists to uphold. Only an ABSENT anchor is a legitimate first eval.
+  if (existing !== undefined) {
+    throw new Error(
+      `Invalid checkpointed wait-condition deadline ${JSON.stringify(existing)} for step ${step}`,
+    );
+  }
+
+  const milliseconds = parseDuration(timeout);
+  const referenceTime = internals.sleepReferenceTime ?? internals.getNow();
+  internals.sleepReferenceTime = undefined;
+  const deadline = referenceTime + milliseconds;
+  // Reassign rather than mutate in place: `checkpointLocals` is frozen between
+  // operations (the activity-retry-state precedent), so an in-place write throws.
+  internals.checkpointLocals = { ...internals.checkpointLocals, [localKey]: deadline };
+  return deadline;
+}
+
+/**
+ * Wait until `predicate` returns `true`, re-evaluated by the engine each time the
+ * workflow is driven forward (an `onUpdate` handler mutating state, or the
+ * optional timeout). The predicate is a non-serializable closure held in-process,
+ * never checkpointed. Once the wait outcome has been checkpointed, replay returns
+ * the cached outcome and does not re-invoke the predicate. A predicate that
+ * throws fails the workflow at the `yield*` call site (like a throwing activity).
+ * Inline execution only.
+ *
+ * With no `timeout` the generator yields `void` (waits forever). With a `timeout`
+ * it yields `true` when the predicate was met or `false` when the deadline
+ * elapsed first.
+ */
+export function* waitUntil(
+  context: Context,
+  internals: ContextInternals,
+  predicate: () => boolean,
+  timeout?: Duration,
+): Generator<ContextOperationRequest, boolean | void, unknown> {
+  const step = internals.stepIndex++;
+
+  if (internals.accumulatedResults?.has(step)) {
+    return internals.accumulatedResults.get(step) as boolean | void;
+  }
+
+  // Always yield the request on a fresh run — never short-circuit, even when the
+  // predicate is already true. The engine processor's first `predicate()` check
+  // completes an immediately-true wait on the spot (one checkpoint, the cost
+  // every durable op already pays). Yielding unconditionally is what lets the
+  // race/all guard (sub-operation.ts) reject a `waitUntil` branch consistently:
+  // a fast-path return would skip the yield, so `race([waitUntil(() => true)])`
+  // would silently complete the branch instead of throwing.
+  const deadline = readOrInitConditionDeadline(internals, step, timeout);
+
+  if (internals.explainMode) {
+    console.log('[weft] ctx.waitUntil(predicate)');
+    console.log(`  → Creating checkpoint at step ${step}`);
+    console.log(
+      deadline === undefined ? '  → Waiting indefinitely' : `  → Deadline at ${deadline}`,
+    );
+  }
+
+  const operationId = crypto.randomUUID();
+  const callerStack = captureCallerStack();
+  const result = yield {
+    type: 'wait-condition',
+    operationId,
+    step,
+    predicate,
+    ...(deadline !== undefined && { deadline }),
+    callerStack,
+  };
+
+  context.accumulatedResults.set(step, result);
+  return result as boolean | void;
+}
+
 export function* waitForUpdate<T = unknown>(
   context: Context,
   internals: ContextInternals,

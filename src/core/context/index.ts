@@ -288,6 +288,11 @@ export class Context implements WorkflowContext {
       messageName(nameOrDefinition),
     );
   }
+  waitUntil(predicate: () => boolean): Generator<ContextOperationRequest, void, unknown>;
+  waitUntil(p: () => boolean, t: Duration): Generator<ContextOperationRequest, boolean, unknown>;
+  *waitUntil(predicate: () => boolean, timeout?: Duration) {
+    return yield* durableOperations.waitUntil(this, getInternals(this), predicate, timeout);
+  }
   *review(
     options: HumanReviewOptions,
   ): Generator<ContextOperationRequest, HumanReviewResult, unknown> {

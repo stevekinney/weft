@@ -226,6 +226,26 @@ describe('recurring schedules', () => {
     }
   });
 
+  it('rejects resuming a cancelled schedule', async () => {
+    const engine = createEngine({ now: 1 });
+    registerWorkflow(engine, 'echo-schedule', async function* () {
+      return 'done';
+    });
+
+    try {
+      const scheduleHandle = await engine.schedule('echo-schedule', null, '* * * * *', {
+        id: 'cancelled-schedule',
+      });
+      await scheduleHandle.cancel();
+
+      await expect(engine.resumeSchedule('cancelled-schedule')).rejects.toThrow(
+        'has been cancelled and cannot be resumed',
+      );
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
   it('drops corrupt schedule-run identifiers before loading schedule state', async () => {
     const storage = new MemoryStorage();
     const engine = createEngine({ now: 1 }, storage);

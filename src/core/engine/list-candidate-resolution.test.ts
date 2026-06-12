@@ -125,7 +125,7 @@ describe('resolveListCandidateIds', () => {
     }
   });
 
-  it('uses previous failureCategory index names for top-level list filters', async () => {
+  it('does not use previous failureCategory index names for top-level list filters', async () => {
     const storage = new ScanCountingStorage();
     const engine = new Engine({ storage });
     try {
@@ -151,12 +151,10 @@ describe('resolveListCandidateIds', () => {
         { includeFailureCategory: true },
       );
 
-      expect(result.items).toEqual([
-        expect.objectContaining({ id: 'application-1', failureCategory: 'application' }),
-      ]);
+      expect(result.items).toEqual([]);
       expect(storage.countScans('wf:')).toBe(0);
       expect(storage.countScans('idx:failureCategory:s:application:')).toBe(1);
-      expect(storage.countScans('idx:failureCategory:s:planning:')).toBe(1);
+      expect(storage.countScans('idx:failureCategory:s:planning:')).toBe(0);
     } finally {
       engine[Symbol.dispose]();
     }

@@ -2,14 +2,11 @@ import type { ContextOperationRequest } from '../context.ts';
 import { UpdateCompletedEvent, UpdateReceivedEvent } from '../events.ts';
 import { isGeneratorResult } from '../step-context.ts';
 import type { CoordinatedUpdateResult } from '../types.ts';
-import {
-  UpdateTimeoutError,
-  UpdateValidationError,
-  type UpdateRequest,
-  type UpdateResponse,
-} from '../updates.ts';
+import { UpdateValidationError, type UpdateRequest, type UpdateResponse } from '../updates.ts';
+import { notifyConditionWaiters } from './condition-waiters.ts';
 import type { EngineInternals } from './internals.ts';
 import { trackWaiterKey, untrackWaiterKey } from './signals.ts';
+import { waitForUpdateResponse } from './waiting-update-response.ts';
 
 export type UpdateCallbacks = {
   dispatchEvent: (event: Event) => boolean;
@@ -106,6 +103,10 @@ async function tryInlineUpdateHandler(
     const result = await invokeUpdateHandler(internals, name, handler, payload);
     callbacks.dispatchEvent(new UpdateCompletedEvent(updateId, workflowId, name, result));
     callbacks.broadcast({ type: 'update:completed', workflowId, updateId });
+    // Re-drive live `ctx.waitUntil` waiters: the handler may have mutated
+    // workflow-local state a condition predicate reads (and on the catch path
+    // below, a handler that threw may have mutated state before throwing).
+    notifyConditionWaiters(internals, workflowId);
     return { handled: true, value: result };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
@@ -113,6 +114,7 @@ async function tryInlineUpdateHandler(
       new UpdateCompletedEvent(updateId, workflowId, name, undefined, errorMessage),
     );
     callbacks.broadcast({ type: 'update:completed', workflowId, updateId });
+    notifyConditionWaiters(internals, workflowId);
     throw error;
   }
 }
@@ -142,34 +144,6 @@ async function tryWaitingUpdateHandler(
   callbacks.dispatchEvent(new UpdateCompletedEvent(updateId, workflowId, name, result));
   callbacks.broadcast({ type: 'update:completed', workflowId, updateId });
   return { handled: true, value: result };
-}
-
-async function waitForUpdateResponse(
-  updateId: string,
-  payload: unknown,
-  timeout: number,
-  updateWaiter: (request: unknown) => void,
-): Promise<unknown> {
-  const { promise: respondPromise, resolve: resolveRespond } = Promise.withResolvers<unknown>();
-  let responded = false;
-  const respond = (value: unknown) => {
-    if (responded) return;
-    responded = true;
-    resolveRespond(value);
-  };
-
-  updateWaiter({ payload, respond });
-  let timeoutId: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      respondPromise,
-      new Promise<never>((_resolve, reject) => {
-        timeoutId = setTimeout(() => reject(new UpdateTimeoutError(updateId, timeout)), timeout);
-      }),
-    ]);
-  } finally {
-    clearTimeout(timeoutId);
-  }
 }
 
 async function runCoordinatedUpdate(

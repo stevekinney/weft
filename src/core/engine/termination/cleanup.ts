@@ -129,6 +129,36 @@ function evictSleepResolversWithoutResolving(internals: EngineInternals, workflo
   internals.sleepResolversByWorkflow.delete(workflowId);
 }
 
+/**
+ * Resolve and delete the in-process `ctx.waitUntil` condition waiter for a
+ * workflow (at most one — see EngineInternals.conditionWaiters). Like
+ * {@link cleanupSleepResolvers}, calling the resolver is safe on a terminal path:
+ * the woken `processWaitConditionOperation` loop re-checks the workflow status (or
+ * the engine abort) and exits without driving a gone generator. Leaving it
+ * unresolved would dangle the processor's `await promise` after the run is
+ * terminal.
+ */
+function cleanupConditionWaiters(internals: EngineInternals, workflowId: string): void {
+  const resolver = internals.conditionWaiters.get(workflowId);
+  if (!resolver) return;
+  resolver();
+  internals.conditionWaiters.delete(workflowId);
+}
+
+/**
+ * Delete the in-process condition waiter for a workflow WITHOUT resolving it.
+ * Suspend evicts the inline generator, so resolving here could drive a gone
+ * generator (the same reasoning as {@link evictSleepResolversWithoutResolving}).
+ * Delete-only leaves the `processWaitConditionOperation` loop dormant; the
+ * durable checkpoint replays the wait-condition when the workflow resumes.
+ */
+function evictConditionWaitersWithoutResolving(
+  internals: EngineInternals,
+  workflowId: string,
+): void {
+  internals.conditionWaiters.delete(workflowId);
+}
+
 function cleanupReviewEscalations(
   internals: EngineInternals,
   workflowId: string,
@@ -165,8 +195,12 @@ export function cleanupWaiters(
     cleanupTrackedWaiter(internals, workflowId, kind);
   }
   cleanupSleepResolvers(internals, workflowId);
+  cleanupConditionWaiters(internals, workflowId);
   cleanupReviewEscalations(internals, workflowId, callbacks);
 
+  // Release the per-workflow coordinated-update delivery-claim set so it cannot
+  // leak one entry per completed workflow on a long-lived engine.
+  internals.deliveredPendingUpdateIds.delete(workflowId);
   internals.workflowNestingDepths.delete(workflowId);
   internals.workflowHeaders.delete(workflowId);
   internals.workflowServices.delete(workflowId);
@@ -197,6 +231,7 @@ export function evictSuspendedWorkflowWaiters(
     cleanupTrackedWaiter(internals, workflowId, kind);
   }
   evictSleepResolversWithoutResolving(internals, workflowId);
+  evictConditionWaitersWithoutResolving(internals, workflowId);
   cleanupReviewEscalations(internals, workflowId, callbacks);
 }
 

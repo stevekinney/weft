@@ -34,21 +34,6 @@ const resourceErrorNames = new Set([
   'StorageQuotaExceededError',
 ]);
 
-const legacyFailureCategoryMapping: Readonly<Record<string, FailureCategory>> = {
-  action: 'application',
-  memory: 'resource',
-  planning: 'application',
-  reflection: 'application',
-  system: 'system',
-};
-const failureCategorySearchAliases: Readonly<Record<FailureCategory, readonly string[]>> = {
-  application: ['application', 'action', 'planning', 'reflection'],
-  timeout: ['timeout'],
-  cancellation: ['cancellation'],
-  resource: ['resource', 'memory'],
-  system: ['system'],
-};
-
 export interface FailureCategoryClassificationOptions {
   /**
    * Category to use for ordinary Error instances that do not match a known
@@ -64,12 +49,11 @@ export function isFailureCategory(value: unknown): value is FailureCategory {
 
 export function normalizeFailureCategory(value: unknown): FailureCategory | undefined {
   if (isFailureCategory(value)) return value;
-  if (typeof value !== 'string') return undefined;
-  return legacyFailureCategoryMapping[value];
+  return undefined;
 }
 
 export function failureCategorySearchValues(category: FailureCategory): readonly string[] {
-  return failureCategorySearchAliases[category];
+  return [category];
 }
 
 export function classifyErrorAsFailureCategory(

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, spyOn } from 'bun:test';
+import { waitForParityCondition as waitFor } from '../core/parity/real-timer-wait.test-support.ts';
 import { waitForRealTimersForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { decode, encode } from '../core/codec.ts';
@@ -56,35 +57,6 @@ async function flush(): Promise<void> {
   await waitForRealTimersForTesting(10);
 }
 
-/**
- * Poll an async condition until it returns true, or throw after `timeoutMs`.
- * Prefer this over raw `Bun.sleep` when waiting for a specific observable
- * state — it adapts to the actual time needed rather than guessing.
- */
-async function waitFor(
-  predicate: () => boolean | Promise<boolean>,
-  {
-    timeoutMs = 2000,
-    intervalMs = 5,
-    label = 'condition',
-  }: { timeoutMs?: number; intervalMs?: number; label?: string } = {},
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  let lastError: unknown;
-  while (Date.now() < deadline) {
-    try {
-      if (await predicate()) return;
-    } catch (error) {
-      lastError = error;
-    }
-    await waitForRealTimersForTesting(intervalMs);
-  }
-  const message = `Timed out after ${timeoutMs}ms waiting for ${label}`;
-  throw lastError instanceof Error
-    ? new Error(`${message}: ${lastError.message}`)
-    : new Error(message);
-}
-
 async function waitForSocketClose(ws: WebSocket, _label = 'WebSocket close'): Promise<void> {
   try {
     if (ws.readyState !== WebSocket.CLOSED) ws.close();
@@ -126,6 +98,56 @@ type WebSocketWorkerRegistrationOptions = {
   capabilities?: Record<string, unknown>;
 };
 
+type TaskMessage = {
+  type: string;
+  operationId?: string;
+  attempt?: number;
+};
+
+function collectTaskMessages(webSocket: WebSocket): TaskMessage[] {
+  const received: TaskMessage[] = [];
+  webSocket.addEventListener('message', (event) => {
+    received.push(JSON.parse(String(event.data)) as TaskMessage);
+  });
+  return received;
+}
+
+function collectAndCompleteTaskMessages(
+  webSocket: WebSocket,
+  {
+    resultValue = null,
+    completeWhen = (message: TaskMessage) => message.type === 'task',
+  }: {
+    resultValue?: unknown;
+    completeWhen?: (message: TaskMessage) => boolean;
+  } = {},
+): TaskMessage[] {
+  const received: TaskMessage[] = [];
+  webSocket.addEventListener('message', (event) => {
+    const message = JSON.parse(String(event.data)) as TaskMessage;
+    received.push(message);
+    if (completeWhen(message)) {
+      sendCompletedTaskResult(webSocket, message.operationId, resultValue);
+    }
+  });
+  return received;
+}
+
+function sendCompletedTaskResult(
+  webSocket: WebSocket,
+  operationId: string | undefined,
+  value: unknown,
+): void {
+  webSocket.send(
+    JSON.stringify({
+      type: 'taskResult',
+      operationId,
+      status: 'completed',
+      value,
+    }),
+  );
+}
+
 async function connectWebSocketWorker(
   server: WeftServer,
   path = '/v1/tasks/default/stream',
@@ -166,6 +188,21 @@ async function registerWebSocketWorker(
 
 const connectWorker = connectWebSocketWorker;
 const registerWorker = registerWebSocketWorker;
+
+async function connectRegisteredWorkerPair(server: WeftServer): Promise<{
+  primaryWorker: WebSocket;
+  secondaryWorker: WebSocket;
+  secondaryMessages: TaskMessage[];
+}> {
+  const primaryWorker = await connectWorker(server);
+  const secondaryWorker = await connectWorker(server);
+  const secondaryMessages = collectTaskMessages(secondaryWorker);
+
+  await registerWorker(primaryWorker, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
+  await registerWorker(secondaryWorker, { workerId: 'w2', activities: ['charge'], concurrency: 5 });
+
+  return { primaryWorker, secondaryWorker, secondaryMessages };
+}
 
 function workerStreamPath(queue: string): string {
   return `/v1/tasks/${encodeURIComponent(queue)}/stream`;
@@ -1767,21 +1804,7 @@ describe('worker WebSocket protocol', () => {
     server = serve({ engine, port: 0 });
 
     const ws = await connectWorker(server);
-
-    // Auto-respond to tasks with a completed result
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
-      if (msg.type === 'task') {
-        ws.send(
-          JSON.stringify({
-            type: 'taskResult',
-            operationId: msg.operationId,
-            status: 'completed',
-            value: 42,
-          }),
-        );
-      }
-    });
+    collectAndCompleteTaskMessages(ws, { resultValue: 42 });
 
     await registerWorker(ws, { workerId: 'w5', activities: ['compute'], concurrency: 5 });
 
@@ -2021,23 +2044,7 @@ describe('worker WebSocket protocol', () => {
     server = serve({ engine, port: 0 });
 
     const ws = await connectWorker(server);
-    const received: Array<{ type: string; operationId?: string }> = [];
-
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
-      received.push(msg);
-      // Complete tasks immediately
-      if (msg.type === 'task') {
-        ws.send(
-          JSON.stringify({
-            type: 'taskResult',
-            operationId: msg.operationId,
-            status: 'completed',
-            value: null,
-          }),
-        );
-      }
-    });
+    const received = collectAndCompleteTaskMessages(ws);
 
     await registerWorker(ws, { workerId: 'w-recover', activities: ['compute'], concurrency: 1 });
 
@@ -3748,21 +3755,7 @@ describe('task assignment deduplication', () => {
     server = serve({ engine, port: 0 });
 
     const ws = await connectWorker(server);
-
-    // Auto-respond with operationId in the result
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
-      if (msg.type === 'task') {
-        ws.send(
-          JSON.stringify({
-            type: 'taskResult',
-            operationId: msg.operationId,
-            status: 'completed',
-            value: 42,
-          }),
-        );
-      }
-    });
+    collectAndCompleteTaskMessages(ws, { resultValue: 42 });
 
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
 
@@ -3997,22 +3990,7 @@ describe('task assignment deduplication', () => {
     server = serve({ engine, port: 0 });
 
     const ws = await connectWorker(server);
-    const received: Array<{ type: string; operationId?: string }> = [];
-
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
-      received.push(msg);
-      if (msg.type === 'task') {
-        ws.send(
-          JSON.stringify({
-            type: 'taskResult',
-            operationId: msg.operationId,
-            status: 'completed',
-            value: null,
-          }),
-        );
-      }
-    });
+    const received = collectAndCompleteTaskMessages(ws);
 
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
 
@@ -4101,21 +4079,7 @@ describe('visibility timeout persistence', () => {
     server = serve({ engine, port: 0 });
 
     const ws = await connectWorker(server);
-
-    // Auto-respond to tasks with a completed result
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
-      if (msg.type === 'task') {
-        ws.send(
-          JSON.stringify({
-            type: 'taskResult',
-            operationId: msg.operationId,
-            status: 'completed',
-            value: 42,
-          }),
-        );
-      }
-    });
+    collectAndCompleteTaskMessages(ws, { resultValue: 42 });
 
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
 
@@ -4387,17 +4351,11 @@ describe('worker disconnection triggers task reassignment', () => {
     ({ engine, storage } = createEngineWithStorage());
     server = serve({ engine, port: 0 });
 
-    // Connect two workers
-    const ws1 = await connectWorker(server);
-    const ws2 = await connectWorker(server);
-
-    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
-    ws2.addEventListener('message', (event) => {
-      received.push(JSON.parse(String(event.data)));
-    });
-
-    await registerWorker(ws1, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
-    await registerWorker(ws2, { workerId: 'w2', activities: ['charge'], concurrency: 5 });
+    const {
+      primaryWorker: ws1,
+      secondaryWorker: ws2,
+      secondaryMessages: received,
+    } = await connectRegisteredWorkerPair(server);
 
     // Dispatch a task — goes to w1 (least-loaded, both at 0 but w1 registered first)
     await server.dispatchTask({
@@ -4429,16 +4387,11 @@ describe('worker disconnection triggers task reassignment', () => {
     ({ engine, storage } = createEngineWithStorage());
     server = serve({ engine, port: 0 });
 
-    const ws1 = await connectWorker(server);
-    const ws2 = await connectWorker(server);
-
-    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
-    ws2.addEventListener('message', (event) => {
-      received.push(JSON.parse(String(event.data)));
-    });
-
-    await registerWorker(ws1, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
-    await registerWorker(ws2, { workerId: 'w2', activities: ['charge'], concurrency: 5 });
+    const {
+      primaryWorker: ws1,
+      secondaryWorker: ws2,
+      secondaryMessages: received,
+    } = await connectRegisteredWorkerPair(server);
 
     await server.dispatchTask({
       operationId: 'attempt-op',
@@ -4866,27 +4819,8 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
-
-    // Collect all received messages (including re-dispatches)
-    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as {
-        type: string;
-        operationId?: string;
-        attempt?: number;
-      };
-      received.push(msg);
-      // Complete the task on second attempt to stop the reassignment cycle
-      if (msg.type === 'task' && (msg.attempt ?? 1) >= 2) {
-        ws.send(
-          JSON.stringify({
-            type: 'taskResult',
-            operationId: msg.operationId,
-            status: 'completed',
-            value: null,
-          }),
-        );
-      }
+    const received = collectAndCompleteTaskMessages(ws, {
+      completeWhen: (message) => message.type === 'task' && (message.attempt ?? 1) >= 2,
     });
 
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
@@ -4926,26 +4860,8 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
-
-    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as {
-        type: string;
-        operationId?: string;
-        attempt?: number;
-      };
-      received.push(msg);
-      // Complete the task on attempt 3 to stop the cycle
-      if (msg.type === 'task' && (msg.attempt ?? 1) >= 3) {
-        ws.send(
-          JSON.stringify({
-            type: 'taskResult',
-            operationId: msg.operationId,
-            status: 'completed',
-            value: null,
-          }),
-        );
-      }
+    const received = collectAndCompleteTaskMessages(ws, {
+      completeWhen: (message) => message.type === 'task' && (message.attempt ?? 1) >= 3,
     });
 
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
@@ -5724,26 +5640,8 @@ describe('concurrent scanner deduplication', () => {
     server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
-    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
-
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as {
-        type: string;
-        operationId?: string;
-        attempt?: number;
-      };
-      received.push(msg);
-      // Complete immediately on attempt 2 so the task does not keep cycling.
-      if (msg.type === 'task' && (msg.attempt ?? 1) >= 2) {
-        ws.send(
-          JSON.stringify({
-            type: 'taskResult',
-            operationId: msg.operationId,
-            status: 'completed',
-            value: null,
-          }),
-        );
-      }
+    const received = collectAndCompleteTaskMessages(ws, {
+      completeWhen: (message) => message.type === 'task' && (message.attempt ?? 1) >= 2,
     });
 
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
@@ -5787,27 +5685,7 @@ describe('concurrent scanner deduplication', () => {
     server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
-    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
-
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as {
-        type: string;
-        operationId?: string;
-        attempt?: number;
-      };
-      received.push(msg);
-      // Complete on first re-dispatch attempt to prevent further cycling.
-      if (msg.type === 'task') {
-        ws.send(
-          JSON.stringify({
-            type: 'taskResult',
-            operationId: msg.operationId,
-            status: 'completed',
-            value: null,
-          }),
-        );
-      }
-    });
+    const received = collectAndCompleteTaskMessages(ws);
 
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
 
@@ -6000,10 +5878,7 @@ describe('retry policy respected on reassignment', () => {
     server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
-    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
-    ws.addEventListener('message', (event) => {
-      received.push(JSON.parse(String(event.data)));
-    });
+    const received = collectTaskMessages(ws);
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
 
     // Dispatch a task already at maxAttempts with a short visibility timeout
@@ -6052,16 +5927,11 @@ describe('retry policy respected on reassignment', () => {
     ({ engine, storage } = createEngineWithStorage());
     server = serve({ engine, port: 0 });
 
-    const ws1 = await connectWorker(server);
-    const ws2 = await connectWorker(server);
-
-    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
-    ws2.addEventListener('message', (event) => {
-      received.push(JSON.parse(String(event.data)));
-    });
-
-    await registerWorker(ws1, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
-    await registerWorker(ws2, { workerId: 'w2', activities: ['charge'], concurrency: 5 });
+    const {
+      primaryWorker: ws1,
+      secondaryWorker: ws2,
+      secondaryMessages: received,
+    } = await connectRegisteredWorkerPair(server);
 
     // Dispatch a task already at maxAttempts
     await server.dispatchTask({
@@ -6099,25 +5969,8 @@ describe('retry policy respected on reassignment', () => {
     server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
-    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as {
-        type: string;
-        operationId?: string;
-        attempt?: number;
-      };
-      received.push(msg);
-      // Complete on attempt 2 to stop reassignment cycle
-      if (msg.type === 'task' && (msg.attempt ?? 1) >= 2) {
-        ws.send(
-          JSON.stringify({
-            type: 'taskResult',
-            operationId: msg.operationId,
-            status: 'completed',
-            value: null,
-          }),
-        );
-      }
+    const received = collectAndCompleteTaskMessages(ws, {
+      completeWhen: (message) => message.type === 'task' && (message.attempt ?? 1) >= 2,
     });
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
 
@@ -6345,25 +6198,8 @@ describe('retry policy respected on reassignment', () => {
     server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
-    const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as {
-        type: string;
-        operationId?: string;
-        attempt?: number;
-      };
-      received.push(msg);
-      // Complete on attempt 2 to stop the cycle
-      if (msg.type === 'task' && (msg.attempt ?? 1) >= 2) {
-        ws.send(
-          JSON.stringify({
-            type: 'taskResult',
-            operationId: msg.operationId,
-            status: 'completed',
-            value: null,
-          }),
-        );
-      }
+    const received = collectAndCompleteTaskMessages(ws, {
+      completeWhen: (message) => message.type === 'task' && (message.attempt ?? 1) >= 2,
     });
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
 

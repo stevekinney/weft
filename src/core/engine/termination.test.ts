@@ -59,6 +59,8 @@ describe('termination helpers', () => {
       updateWaitersByWorkflow: new Map<string, string>([['wf-cleanup', 'wf:update']]),
       reviewWaiters,
       reviewWaitersByWorkflow: new Map<string, string>([['wf-cleanup', 'wf:review']]),
+      conditionWaiters: new Map<string, () => void>(),
+      deliveredPendingUpdateIds: new Map<string, Set<string>>(),
       sleepResolvers: new Map<string, () => void>(),
       sleepResolversByWorkflow: new Map<string, Set<string>>(),
       workflowReviewIds: new Map<string, Set<string>>(),
@@ -116,6 +118,8 @@ describe('termination helpers', () => {
       reviewWaitersByWorkflow: new Map<string, Set<string>>([
         ['wf-cleanup-many', new Set(['wf:review-a', 'wf:review-b'])],
       ]),
+      conditionWaiters: new Map<string, () => void>(),
+      deliveredPendingUpdateIds: new Map<string, Set<string>>(),
       sleepResolvers: new Map<string, () => void>(),
       sleepResolversByWorkflow: new Map<string, Set<string>>(),
       workflowReviewIds: new Map<string, Set<string>>(),
