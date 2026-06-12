@@ -30,13 +30,21 @@ export function buildStartBatchOperations(
   workflowStartHeaders: Map<string, string> | undefined,
   additionalOperations: BatchOperation[] | undefined,
   callbacks: LifecycleCallbacks,
+  purgeDeleteOperations: BatchOperation[] | undefined,
 ): BatchOperation[] {
   const visibilityIndexOperations = buildWorkflowVisibilityIndexOperations(
     workflowId,
     null,
     state,
   ).batchOps;
+  // Purge deletes (an `onTerminalConflict: 'start-new'` restart removing the prior
+  // terminal run under this id) MUST come first: storage batches apply in array
+  // order with last-op-wins, so a delete that shares a key with a create put below
+  // (`wf:{id}`, checkpoint, attribute, headers, services marker, visibility index)
+  // would otherwise clobber the new run. Deletes-then-puts → the new run wins, and
+  // the whole purge+create commits as one atomic batch.
   const operations: BatchOperation[] = [
+    ...(purgeDeleteOperations ?? []),
     { type: 'put', key: KEYS.workflow(workflowId), value: encode(state) },
     {
       type: 'put',

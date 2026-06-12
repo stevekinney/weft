@@ -1,3 +1,4 @@
+import type { ActivityVerifier } from './activity-verification.ts';
 import type { DefinitionSchema, InferSchemaOutput } from './definition-schema.ts';
 import { validateWorkflowOrActivityName } from './name-grammar.ts';
 import type { Duration, RetryPolicy } from './retry-retention.ts';
@@ -61,6 +62,53 @@ export type ActivityFunction<TInput = unknown, TOutput = unknown> = (
 export interface ActivityContext {
   signal: AbortSignal;
   heartbeat(details?: unknown): void;
+  /**
+   * The heartbeat payload recorded by the PREVIOUS attempt of this activity, or
+   * `undefined` if there is none. This is the resumable-batch pattern: a
+   * long-running activity that calls `ctx.heartbeat({ done: n })` to record its
+   * progress can read `ctx.lastHeartbeatDetails` on a retry and skip the work it
+   * already finished, instead of re-running from the start and producing
+   * duplicate side effects.
+   *
+   * It is `undefined` on the first attempt, after an engine restart (the value is
+   * held in engine memory, never checkpointed), and for worker-executed
+   * activities (which run their function out of process and never observe this).
+   * Because it is non-durable, treat it as a best-effort optimization: a correct
+   * activity must still produce the right result when `lastHeartbeatDetails` is
+   * `undefined`. For a durability guarantee, persist progress in workflow state
+   * (e.g. one `ctx.run` per batch with an `idempotencyKey`) instead.
+   *
+   * Only top-level `ctx.run` activities retry, so this is only ever populated
+   * there. An activity called inside `ctx.all` / `ctx.race` does not retry, so its
+   * `lastHeartbeatDetails` is always `undefined`.
+   *
+   * @example
+   * ```ts
+   * import { activity, type ActivityContext } from '@lostgradient/weft';
+   *
+   * function resumeFrom(details: unknown): number {
+   *   return typeof details === 'object' && details !== null && 'done' in details &&
+   *     typeof (details as { done: unknown }).done === 'number'
+   *     ? (details as { done: number }).done
+   *     : 0;
+   * }
+   *
+   * const postBatches = activity({
+   *   name: 'postBatches',
+   *   execute: async (batches: string[][], ctx?: ActivityContext) => {
+   *     let done = resumeFrom(ctx?.lastHeartbeatDetails);
+   *     for (; done < batches.length; done += 1) {
+   *       await postBatch(batches[done]!);
+   *       ctx?.heartbeat({ done: done + 1 });
+   *     }
+   *     return { posted: done };
+   *   },
+   * });
+   * declare function postBatch(batch: string[]): Promise<void>;
+   * void postBatches;
+   * ```
+   */
+  lastHeartbeatDetails?: unknown;
   /**
    * Defer this activity to out-of-band completion. Calling `completeAsync()`
    * hands the work off to an external system — a webhook, a human callback, a
@@ -139,81 +187,30 @@ export interface ActivityCallOptions {
   sticky?: boolean;
   /** Override the default visibility timeout for this invocation. */
   visibilityTimeout?: Duration;
+  /**
+   * Total wall-clock budget for this activity across ALL retry attempts and the
+   * backoff waits between them — close to Temporal's `scheduleToCloseTimeout`.
+   * Unlike `timeout` (a per-attempt cap, reset on every attempt), this budget is
+   * measured from the first dispatch and is not reset between attempts. When the
+   * budget bars the next attempt, the activity fails with an
+   * {@link ActivityScheduleToCloseTimeoutError} (a `timeout` failure category).
+   *
+   * Enforcement is at the **retry decision point**, not by waiting out the clock:
+   * the activity fails when the next retry's backoff would start it at or after the
+   * deadline (or when an attempt has already overrun the budget), rather than
+   * parking for a backoff that is already doomed. So a retry whose backoff would
+   * overshoot the budget is skipped immediately even though the actual elapsed time
+   * is still under the budget — the error reports the actual elapsed time and the
+   * projected next-dispatch that triggered the decision.
+   *
+   * It has **no effect unless a retry policy is configured** — a non-retried
+   * activity fails on its first error before the budget is ever consulted. Use
+   * `timeout` to bound a single attempt. It also applies to top-level `ctx.run`
+   * activities only; an activity inside `ctx.all` / `ctx.race` does not retry, so
+   * this budget never engages there.
+   */
+  scheduleToCloseTimeout?: Duration;
 }
-
-/**
- * Identifies whether an activity verifier is checking a fresh result or
- * reconciling a prior keyed dispatch before redispatch.
- *
- * @example
- * ```ts
- * import type { ActivityVerificationPhase } from '@lostgradient/weft';
- *
- * const phase: ActivityVerificationPhase = 'pre-dispatch-reconciliation';
- * console.log(phase);
- * ```
- */
-export type ActivityVerificationPhase = 'post-execution-validation' | 'pre-dispatch-reconciliation';
-
-/**
- * Metadata passed to a Tier-0 activity verifier.
- *
- * @example
- * ```ts
- * import type { ActivityVerificationContext } from '@lostgradient/weft';
- *
- * function shouldQueryExternalSystem(context: ActivityVerificationContext): boolean {
- *   return context.phase === 'pre-dispatch-reconciliation';
- * }
- * ```
- */
-export interface ActivityVerificationContext<TInput = unknown> {
-  phase: ActivityVerificationPhase;
-  workflowId: string;
-  activityName: string;
-  operationId: string;
-  input: TInput;
-  idempotencyKey?: string;
-  attempt: number;
-}
-
-/**
- * Return value for activity verification. Post-execution validation uses a
- * boolean; pre-dispatch reconciliation can report whether a prior keyed side
- * effect completed, did not complete, or is indeterminate.
- *
- * @example
- * ```ts
- * import type { ActivityVerificationResult } from '@lostgradient/weft';
- *
- * const result: ActivityVerificationResult<string> = {
- *   status: 'completed-with-result',
- *   result: 'already-finished',
- * };
- * console.log(result.status);
- * ```
- */
-export type ActivityVerificationResult<TOutput = unknown> =
-  | boolean
-  | 'not-completed'
-  | 'completed-result-unavailable'
-  | 'indeterminate'
-  | { status: 'completed-with-result'; result: TOutput };
-
-export type ActivityPostExecutionVerifier<TOutput = unknown> = {
-  bivarianceHack(result: TOutput): Promise<boolean> | boolean;
-}['bivarianceHack'];
-
-export type ActivityTier0Verifier<TInput = unknown, TOutput = unknown> = {
-  bivarianceHack(
-    result: TOutput | undefined,
-    context: ActivityVerificationContext<TInput>,
-  ): Promise<ActivityVerificationResult<TOutput>> | ActivityVerificationResult<TOutput>;
-}['bivarianceHack'];
-
-export type ActivityVerifier<TInput = unknown, TOutput = unknown> =
-  | ActivityPostExecutionVerifier<TOutput>
-  | ActivityTier0Verifier<TInput, TOutput>;
 
 // ---------------------------------------------------------------------------
 // Activity metadata (from activity() helper)
@@ -276,6 +273,15 @@ export interface ActivityDefinition<
   idempotent?: boolean;
   /** Visibility timeout for this activity. Defaults to 30 seconds. */
   visibilityTimeout?: Duration;
+  /**
+   * Total wall-clock budget across all retry attempts and their backoff waits,
+   * measured from the first dispatch. The per-call {@link ActivityCallOptions.scheduleToCloseTimeout}
+   * overrides this default. Enforced at the retry decision point (the activity
+   * fails when the next retry would start at or after the deadline, not by waiting
+   * out the clock), so it only engages for a retried, top-level `ctx.run` activity.
+   * See the per-call option for the full contract.
+   */
+  scheduleToCloseTimeout?: Duration;
   /**
    * Optional compensation function. When defined and a saga step that ran this
    * activity needs to be rolled back, the engine calls `compensate(input, output)`

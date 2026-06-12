@@ -45,6 +45,35 @@ describe('WorkflowHandle.getLaunchMetadata', () => {
     expect(metadata?.launchOptions.tags).toEqual(['nightly', 'ops']);
   });
 
+  it('excludes onTerminalConflict — it is a start-time policy, not a recoverable launch option', async () => {
+    const storage = new MemoryStorage();
+    await using engine = new Engine({ storage });
+    engine.register(waiter);
+
+    // Seed a terminal run, then restart it under the same id with the policy.
+    const seedCompleter = workflow({ name: 'completes' }).execute(async function* () {
+      return 'done';
+    });
+    engine.register(seedCompleter);
+    const seed = await engine.start('completes', null, { id: 'policy-run' });
+    await seed.result();
+
+    const handle = await engine.start(
+      'waits',
+      { v: 1 },
+      {
+        id: 'policy-run',
+        onTerminalConflict: 'start-new',
+      },
+    );
+
+    const metadata = await handle.getLaunchMetadata();
+    expect(metadata?.launchOptions.id).toBe('policy-run');
+    // The policy is consumed at start time and never persisted, so it cannot
+    // (and must not) appear on the recovered launch options.
+    expect(metadata?.launchOptions).not.toHaveProperty('onTerminalConflict');
+  });
+
   it('returns null for a handle whose workflow does not exist', async () => {
     await using engine = new Engine();
     const handle = engine.getHandle('never-started');

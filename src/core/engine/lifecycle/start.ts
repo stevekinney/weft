@@ -1,16 +1,23 @@
 import type { BatchOperation } from '../../../storage/interface.ts';
-import { KEYS } from '../../../storage/interface.ts';
 import { createCheckpoint } from '../../checkpoint.ts';
 import { assertPayloadWithinLimit } from '../../payload-size.ts';
 import { normalizeStorageTimestamp } from '../../scheduler.ts';
 import {
   StartWorkflowValidationError,
   assertExclusiveStartWorkflowOptions,
+  assertValidOnTerminalConflict,
   coerceStartWorkflowId,
   coerceStartWorkflowTimestamp,
   parseStartWorkflowDuration,
 } from '../../start-workflow-validation.ts';
-import type { Checkpoint, Duration, StartOptions, TimerEntry, WorkflowState } from '../../types.ts';
+import type {
+  Checkpoint,
+  Duration,
+  StartOptions,
+  StartWorkflowOptions,
+  TimerEntry,
+  WorkflowState,
+} from '../../types.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { WorkflowAlreadyExistsError, WorkflowNotRegisteredError } from '../errors.ts';
@@ -31,12 +38,16 @@ import {
   beginExecutionAwaitingLiveness,
   runWorkflowStartInterceptor,
 } from './start-exec.ts';
+import {
+  prepareTerminalRunPurge,
+  resolveTerminalConflictForRestart,
+} from './start-terminal-conflict-purge.ts';
 
 export async function start(
   internals: EngineInternals,
   type: string,
   input: unknown,
-  options: StartOptions | undefined,
+  options: StartWorkflowOptions | undefined,
   callbacks: LifecycleCallbacks,
 ): Promise<WorkflowHandle> {
   return startWorkflow(internals, type, input, options, undefined, callbacks);
@@ -121,7 +132,7 @@ export async function startWorkflow(
   internals: EngineInternals,
   type: string,
   input: unknown,
-  options: StartOptions | undefined,
+  options: StartWorkflowOptions | undefined,
   additionalStartOperations: BatchOperation[] | undefined,
   callbacks: LifecycleCallbacks,
   buildIdempotentStartOperations?: BuildIdempotentStartOperations,
@@ -132,6 +143,7 @@ export async function startWorkflow(
   }
 
   assertServicesSupportedForMode(internals, options);
+  assertValidOnTerminalConflict(options);
 
   const preparation = prepareStartWorkflow(internals, options, callbacks);
   const { workflowId, callerProvidedId, parentHeaders, executionStateOwnerId, delayedStartTimer } =
@@ -148,21 +160,18 @@ export async function startWorkflow(
   let startSucceeded = false;
 
   try {
-    // Only hit storage to dedup when the caller supplied the id. A
-    // freshly-generated v4 UUID is (for all practical purposes) unique, so
-    // the extra round trip is wasted work on the hot start path. This is
-    // the dominant optimization behind the workflow-start benchmark — the
-    // get → batch sequence was two storage calls per start, now one.
-    if (callerProvidedId) {
-      const existingBytes = await internals.storage.get(KEYS.workflow(workflowId));
-      if (existingBytes !== null) {
-        throw new WorkflowAlreadyExistsError(workflowId);
-      }
-    }
+    // Only caller-supplied ids can collide; a generated UUID skips the read.
+    // Decide the duplicate-id outcome up front (throws for a non-terminal or
+    // default-policy collision), but DEFER any destructive purge until just
+    // before the create commit below — so a `'start-new'` restart rejected by
+    // later validation leaves the prior terminal run intact. The `pendingStarts`
+    // reservation is held across the whole decide → build → purge → create
+    // window, so a concurrent same-id start cannot race into the gap.
+    const terminalRunToPurge = callerProvidedId
+      ? await resolveTerminalConflictForRestart(internals, workflowId, options)
+      : null;
 
-    // Reject oversized input before any durable write, but after the
-    // duplicate-id checks above so a retried known id still reports
-    // WorkflowAlreadyExistsError rather than a payload-size error.
+    // Reject oversized input before any durable write (and before the purge).
     assertPayloadWithinLimit(input, internals.options.payloadSizePolicy.maxBytes, 'workflow input');
 
     const versionTuple = createWorkflowVersionTuple(internals, registration, callbacks);
@@ -195,6 +204,21 @@ export async function startWorkflow(
       callbacks,
     );
     const persistedWorkflowStartHeaders = selectPersistedWorkflowStartHeaders(workflowStartHeaders);
+
+    // Last possible moment before the create commit, and after every throwing
+    // build step above (version tuple, state/deadline, checkpoint, start
+    // interceptor). Preparing here means a `'start-new'` restart rejected by any of
+    // those leaves the prior terminal run intact. This clears the OLD run's
+    // in-memory caches BEFORE the new run's maps are written below (so the clear
+    // can't wipe fresh entries) but does NOT commit the destructive storage
+    // delete — that is folded into the atomic create batch below as
+    // `purgeDeleteOperations`, so purge-and-recreate either both happen or neither
+    // does. A create-batch failure can no longer strand the id with no record.
+    const purgeDeleteOperations =
+      terminalRunToPurge !== null
+        ? await prepareTerminalRunPurge(internals, terminalRunToPurge, callbacks)
+        : undefined;
+
     internals.checkpoints.set(workflowId, checkpoint);
     setWorkflowStartHeaders(internals, workflowId, workflowStartHeaders, callbacks);
 
@@ -202,9 +226,10 @@ export async function startWorkflow(
     internals.workflowVersionTuples.set(workflowId, versionTuple);
 
     // Build the create batch (folding in the id-dependent idempotency mapping /
-    // signal) and commit it, gated on any idempotency preconditions. Throws
-    // StartIdempotencyRaceLostError when a concurrent same-key caller won the CAS,
-    // which the `finally` rollback below unwinds for the wrapper to handle.
+    // signal, and prepending any restart purge deletes) and commit it, gated on
+    // any idempotency preconditions. Throws StartIdempotencyRaceLostError when a
+    // concurrent same-key caller won the CAS, which the `finally` rollback below
+    // unwinds for the wrapper to handle.
     await buildAndCommitStartBatch(
       {
         internals,
@@ -217,6 +242,7 @@ export async function startWorkflow(
         persistedWorkflowStartHeaders,
         additionalStartOperations,
         callbacks,
+        purgeDeleteOperations,
       },
       buildIdempotentStartOperations,
     );

@@ -77,6 +77,86 @@ export const assertValidIdempotencyKey = (value: string, fieldName: string): str
   return value;
 };
 
+/**
+ * Validate the `onTerminalConflict` start policy against the rest of the start
+ * options. `'error'` (the default) and `'start-new'` are the only accepted
+ * values. `'start-new'` (Temporal's `ALLOW_DUPLICATE` for terminal runs) requires
+ * an explicit, caller-chosen `id` and is mutually exclusive with `idempotencyKey`:
+ * idempotency is a permanent at-most-once mapping that survives terminal state, so
+ * restarting under it would contradict that contract. A generated UUID is never a
+ * meaningful restart target, hence the explicit-`id` requirement.
+ */
+export function assertValidOnTerminalConflict(
+  options: { onTerminalConflict?: unknown; id?: unknown; idempotencyKey?: unknown } | undefined,
+): void {
+  const onTerminalConflict = options?.onTerminalConflict;
+  if (onTerminalConflict === undefined || onTerminalConflict === 'error') {
+    return;
+  }
+  if (onTerminalConflict !== 'start-new') {
+    throw new StartWorkflowValidationError(
+      "options.onTerminalConflict must be 'error' or 'start-new'",
+    );
+  }
+  if (options?.idempotencyKey !== undefined) {
+    throw new StartWorkflowValidationError(
+      "options.onTerminalConflict: 'start-new' is mutually exclusive with options.idempotencyKey: " +
+        'idempotency is a permanent at-most-once mapping and cannot restart a terminal run',
+    );
+  }
+  if (options?.id === undefined) {
+    throw new StartWorkflowValidationError(
+      "options.onTerminalConflict: 'start-new' requires an explicit options.id; a generated id is " +
+        'never a meaningful restart target',
+    );
+  }
+}
+
+/**
+ * `options.id` and `options.idempotencyKey` are mutually exclusive: idempotency
+ * assigns its own generated workflow id and dedups through the key, so pinning a
+ * caller id alongside it conflates "id already taken" with "lost the idempotency
+ * race". Reject the combination so each concern stays separable. Shared by the
+ * plain idempotent-start path and `startOrSignal` convergence validation.
+ */
+export function assertIdAndIdempotencyKeyExclusive(options: {
+  id?: unknown;
+  idempotencyKey?: unknown;
+}): void {
+  if (options.id !== undefined && options.idempotencyKey !== undefined) {
+    throw new StartWorkflowValidationError(
+      'options.id and options.idempotencyKey are mutually exclusive: idempotency assigns its own ' +
+        'workflow id and dedups through the idempotency key. Provide one or the other.',
+    );
+  }
+}
+
+/**
+ * Reject `onTerminalConflict` on a start surface that does not support it
+ * (`engine.startOrSignal`). The option is type-absent from those surfaces, but a
+ * transport or untyped JS caller could still smuggle the field into the options
+ * object — this is the runtime backstop. `engine.startOrSignal`'s identity is the
+ * permanent at-most-once idempotency mapping, which `'start-new'` would violate,
+ * so the policy is `engine.start`-only (see follow-up issue #489).
+ */
+export function assertOnTerminalConflictUnsupported(
+  options: object | undefined,
+  surface: string,
+): void {
+  // The guarded surfaces' types do not declare `onTerminalConflict`, so read it
+  // defensively: this exists to catch a transport/JS caller that put the field on
+  // the object anyway, past the type boundary.
+  if (
+    options !== undefined &&
+    'onTerminalConflict' in options &&
+    (options as { onTerminalConflict?: unknown }).onTerminalConflict !== undefined
+  ) {
+    throw new StartWorkflowValidationError(
+      `${surface} does not support options.onTerminalConflict; it is available on engine.start only`,
+    );
+  }
+}
+
 export function coerceStartWorkflowTimestamp(value: unknown, fieldName: string): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new StartWorkflowValidationError(

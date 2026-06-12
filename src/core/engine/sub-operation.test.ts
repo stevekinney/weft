@@ -171,6 +171,7 @@ describe('engine sub-operations', () => {
       activityRegistriesByWorkflow: new Map(),
       activityWorkerDispatcher: null,
       heartbeatDetails: new Map(),
+      lastHeartbeatDetailsByStep: new Map(),
       inlineStrategy: null,
       options: { maxNestingDepth: 10, payloadSizePolicy: { maxBytes: null } },
       storage: new MemoryStorage(),

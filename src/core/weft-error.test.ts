@@ -5,6 +5,7 @@ import {
   ActivityReconciliationConflictError,
   ActivityReconciliationIndeterminateError,
   ActivityResolutionError,
+  ActivityScheduleToCloseTimeoutError,
   AsyncActivityTokenNotFoundError,
   AtomicStateConflictError,
   BulkDeleteRequiresTerminalWorkflowsError,
@@ -100,6 +101,8 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
       issues: [{ message: 'Expected a string.', path: '/email' }],
     }),
   AsyncActivityTokenNotFoundError: () => new AsyncActivityTokenNotFoundError('token-abc'),
+  ActivityScheduleToCloseTimeoutError: () =>
+    new ActivityScheduleToCloseTimeoutError('charge', 2_000, 1_000),
   StartOrSignalConflictError: () => new StartOrSignalConflictError('wf-1', 'completed'),
   IdempotencyKeyPurgedError: () => new IdempotencyKeyPurgedError('wf-1'),
 };

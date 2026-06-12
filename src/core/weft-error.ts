@@ -49,6 +49,7 @@ export type WeftErrorCode =
   | 'ActivityReconciliationConflictError'
   | 'ActivityReconciliationIndeterminateError'
   | 'AsyncActivityTokenNotFoundError'
+  | 'ActivityScheduleToCloseTimeoutError'
   | 'PayloadSizeExceededError'
   | 'StartOrSignalConflictError'
   | 'IdempotencyKeyPurgedError';
@@ -113,6 +114,7 @@ const publicWeftErrorCodeMap = {
   ActivityReconciliationConflictError: true,
   ActivityReconciliationIndeterminateError: true,
   AsyncActivityTokenNotFoundError: true,
+  ActivityScheduleToCloseTimeoutError: true,
   PayloadSizeExceededError: true,
   StartOrSignalConflictError: true,
   IdempotencyKeyPurgedError: true,

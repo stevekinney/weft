@@ -6,6 +6,10 @@ import {
 } from '../core/checkpoint.ts';
 import { WorkflowAtomicStateHandle } from '../core/context/state-namespace.ts';
 import {
+  createWorkerWorkflowLogger,
+  type WorkerLoggerReplayState,
+} from '../core/context/workflow-logger.ts';
+import {
   classifyErrorAsFailureCategory,
   errorFromFailedOperationOutcome,
 } from '../core/failure-categories.ts';
@@ -18,6 +22,7 @@ import type {
   WorkerReplayOperationFailure,
   WorkflowAtomicStateOptions,
   WorkflowContext,
+  WorkflowLogger,
   WorkflowSessionState,
   WorkflowStateNamespace,
 } from '../core/types.ts';
@@ -37,8 +42,14 @@ import {
  * in particular) are stub values because the worker has no clock authority —
  * any user code reading them will see static numbers, not live deadlines.
  */
-export type WorkerWorkflowContext = Pick<WorkflowContext, 'workflowId' | 'signal' | 'startedAt'> & {
+export type WorkerWorkflowContext = Pick<
+  WorkflowContext,
+  'workflowId' | 'workflowType' | 'signal' | 'startedAt'
+> & {
   readonly state: WorkflowStateNamespace;
+  // Non-optional here (always populated at runtime) even though the public
+  // WorkflowContext types it `log?` for structural implementors.
+  readonly log: WorkflowLogger;
 };
 
 interface RunMessageShape {
@@ -59,12 +70,19 @@ interface RunMessageShape {
 export function createWorkerWorkflowContext(
   message: RunMessageShape,
   controller: AbortController,
+  // The structural slice the logger reads, not the full private `WorkerReplayState`
+  // (a superset, so the real call site passes through unchanged).
+  getReplayState: () => WorkerLoggerReplayState | undefined,
 ): WorkerWorkflowContext {
   return {
     workflowId: message.workflowId,
+    workflowType: message.workflowType,
     signal: controller.signal,
     startedAt: Date.now(),
     state: createWorkerStateNamespace(message),
+    // The logger reads replay state through the closure (not by value) so it sees
+    // the live frontier at each emit as the runner advances `nextStepIndex`.
+    log: createWorkerWorkflowLogger(message.workflowId, message.workflowType, getReplayState),
   };
 }
 
@@ -157,9 +175,14 @@ export async function handleRunMessage(
   context.abortControllers.set(message.workflowId, controller);
 
   try {
-    const workerContext = createWorkerWorkflowContext(message, controller);
-    const generator = handler(workerContext, message.input);
+    // Register the replay state before building the context or invoking the
+    // handler, so `ctx.log`'s probe is replay-aware from the earliest point even
+    // if a handler runs synchronous code before yielding.
     context.replayStates.set(message.workflowId, createReplayState(message));
+    const workerContext = createWorkerWorkflowContext(message, controller, () =>
+      context.replayStates.get(message.workflowId),
+    );
+    const generator = handler(workerContext, message.input);
     const step = await generator.next();
     return await processGeneratorStep(context, message.workflowId, generator, step);
   } catch (error) {

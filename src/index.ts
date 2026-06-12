@@ -176,6 +176,7 @@ export type {
   WorkflowFunction,
   WorkflowGenerator,
   WorkflowId,
+  WorkflowLogger,
   WorkflowRegistry,
   WorkflowReplay,
   WorkflowServicesResolution,
@@ -359,6 +360,7 @@ export {
   searchAttribute,
 } from './core/search-attributes';
 
+export { ActivityScheduleToCloseTimeoutError } from './core/context/activity-schedule-to-close';
 export type { UpdateHandlerOptions } from './core/context/updates';
 export {
   UpdateCoordinator,

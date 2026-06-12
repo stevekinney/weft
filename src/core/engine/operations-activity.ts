@@ -2,6 +2,7 @@ import type { ContextOperationRequest } from '../context.ts';
 import type { ComposedActivityInterceptor, ComposedWorkflowInterceptor } from '../interceptor.ts';
 import { assertPayloadWithinLimit } from '../payload-size.ts';
 import type { ActivityContext, ActivityVerificationResult } from '../types.ts';
+import { buildActivityContext } from './activity-heartbeat-tracking.ts';
 import {
   buildActivityReconciliationReference,
   buildActivityVerificationContext,
@@ -244,16 +245,17 @@ export async function executeActivity(
   // stable across crash/replay. The step is always set when the operation is
   // created via ctx.run(); a missing step is a caller contract violation.
   const abortController = internals.inlineStrategy?.getAbortController(workflowId);
-  const asyncToken = deriveAsyncActivityToken(workflowId, operation.step ?? 0, attempt);
-  const activityContext: ActivityContext = {
-    signal: abortController?.signal ?? new AbortController().signal,
-    heartbeat: (details?: unknown) => {
-      internals.heartbeatDetails.set(workflowId, details);
-    },
-    completeAsync: () => {
+  const step = operation.step ?? 0;
+  const asyncToken = deriveAsyncActivityToken(workflowId, step, attempt);
+  const activityContext = buildActivityContext(
+    internals,
+    workflowId,
+    step,
+    abortController?.signal ?? new AbortController().signal,
+    () => {
       throw new AsyncActivityDeferral(asyncToken);
     },
-  };
+  );
 
   // Build the leaf executor: either dispatch to a worker or call inline.
   const invokeActivity: (activityName: string, input: unknown) => unknown =

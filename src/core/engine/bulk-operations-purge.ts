@@ -198,6 +198,28 @@ export async function purgeWorkflow(
   state: WorkflowState,
   cleanupWaiters: CleanupWaiters,
 ): Promise<void> {
+  const deleteOperations = await collectWorkflowPurgeDeleteOperations(internals, state);
+  await internals.storage.batch(deleteOperations);
+  clearPurgedWorkflowInMemoryState(internals, state.id, cleanupWaiters);
+}
+
+/**
+ * Collect every storage delete operation that removing a workflow id entails —
+ * index deletes (search attributes + tags), the explicit key set (state,
+ * checkpoint, headers, services marker, update requests/responses, and the
+ * `wf:`/`ev:`/`sig:`/... prefix sweeps), and the visibility-index transition to
+ * `null`. Pure: it reads storage to discover keys but writes nothing, so a caller
+ * can fold the returned ops into a larger atomic batch instead of committing them
+ * standalone. {@link purgeWorkflow} commits them on their own; the
+ * `onTerminalConflict: 'start-new'` restart path prepends them to the create batch
+ * so purge-and-recreate land as one atomic unit (no window where the prior run is
+ * gone but the new one has not committed). Keep this the single source of truth
+ * for "what a purge deletes" — do not fork the delete-set.
+ */
+export async function collectWorkflowPurgeDeleteOperations(
+  internals: EngineInternals,
+  state: WorkflowState,
+): Promise<BatchOperation[]> {
   const workflowId = state.id;
   const attributeBytes = await internals.storage.get(KEYS.attribute(workflowId));
   const deleteOperations = buildWorkflowIndexDeleteOperations(state, attributeBytes);
@@ -206,10 +228,28 @@ export async function purgeWorkflow(
   deleteOperations.push(
     ...buildWorkflowVisibilityIndexTransition(workflowId, state, null).batchOps,
   );
-  await internals.storage.batch(deleteOperations);
+  return deleteOperations;
+}
+
+/**
+ * Drop every in-memory cache entry a purged workflow id owns (checkpoints,
+ * heartbeat details, event-log heads, version tuples, handle cache, result
+ * resolvers, headers, nesting depths, type map, pending async activities) and run
+ * `cleanupWaiters` to settle any pending signal/update/sleep waiters. Split from
+ * the storage batch in {@link collectWorkflowPurgeDeleteOperations} so the restart
+ * path can clear the OLD run's in-memory state up front — before the new run's
+ * caches are written under the reused id — while the durable delete still commits
+ * atomically with the create.
+ */
+export function clearPurgedWorkflowInMemoryState(
+  internals: EngineInternals,
+  workflowId: string,
+  cleanupWaiters: CleanupWaiters,
+): void {
   forgetCommittedCheckpointBytes(internals, workflowId);
   internals.checkpoints.delete(workflowId);
   internals.heartbeatDetails.delete(workflowId);
+  internals.lastHeartbeatDetailsByStep.delete(workflowId);
   for (const [token, pending] of internals.pendingAsyncActivities) {
     if (pending.workflowId === workflowId) {
       internals.pendingAsyncActivities.delete(token);
@@ -343,6 +383,11 @@ function workflowPurgePrefixes(workflowId: string): string[] {
   const encodedWorkflowId = encodeStorageKeyComponent(workflowId);
   return [
     `wf:${encodedWorkflowId}:ckpt:`,
+    // Compacted-checkpoint timeline entries (`wf:{id}:timeline:{step}`). These
+    // are read back during checkpoint reconstruction (checkpoint-reads.ts), so a
+    // stale entry left behind after purge would let a reused id — e.g. an
+    // `onTerminalConflict: 'start-new'` restart — read the prior run's timeline.
+    `wf:${encodedWorkflowId}:timeline:`,
     `ev:${encodedWorkflowId}:`,
     `sig:${encodedWorkflowId}:`,
     `review:${encodedWorkflowId}:`,

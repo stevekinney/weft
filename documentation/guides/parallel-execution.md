@@ -63,8 +63,10 @@ async function* fetchWithFallback(ctx: Context, url: string) {
 
 This is useful for timeout patterns, redundant fetches, and any scenario where you want the fastest answer. The engine records whichever result arrives first as the checkpoint, so on recovery you get the same winner.
 
-> [!WARNING] Losers in `ctx.race` are abandoned
-> Losers are aborted immediately—results discarded, side effects abandoned. Design race branches to be idempotent or pair them with compensation, because Weft will not clean up after a losing branch.
+> [!WARNING] `ctx.race` selects a result; it does _not_ cancel a losing activity
+> When a branch wins, the race tears down the _coordination_ work of the losers: a losing `ctx.sleep` clears its timer, and a losing `ctx.waitForSignal` releases its waiter. But a losing **activity is not cancelled**—its `ActivityContext.signal` does not fire, and the activity function runs to completion in the background. The race only stops _awaiting_ it; the result is discarded, but the work, and any side effects, still happen.
+>
+> So `ctx.race([ctx.run('slowApiCall'), ctx.sleep('30s')])` does not stop `slowApiCall` when the sleep wins—it keeps running, consuming connections, compute, and external API budget, until it finishes on its own. Design race branches to be idempotent or pair them with compensation, because Weft will not clean up after a losing activity. To actually stop a losing activity, see [Cancelling a running activity](./activities.md#cancelling-a-running-activity).
 
 A common pattern pairs a real operation with a sleep to implement a deadline:
 

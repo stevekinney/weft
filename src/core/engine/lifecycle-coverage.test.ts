@@ -687,6 +687,7 @@ describe('engine lifecycle coverage helpers', () => {
       new Map([['traceparent', '00-batch']]),
       [{ key: 'extra-key', type: 'put', value: new Uint8Array([1]) }],
       createLifecycleCallbacks() as never,
+      undefined,
     );
 
     expect(operations.some((operation) => operation.key === KEYS.workflowHeaders(workflowId))).toBe(
@@ -694,6 +695,36 @@ describe('engine lifecycle coverage helpers', () => {
     );
     expect(operations.some((operation) => operation.key === 'extra-key')).toBe(true);
     expect(operations.filter((operation) => operation.key.startsWith('timer-idx:')).length).toBe(2);
+  });
+
+  it('prepends restart purge deletes ahead of the create puts', () => {
+    const workflowId = 'workflow-start-batch-purge';
+    const operations = buildStartBatchOperations(
+      {} as never,
+      workflowId,
+      createWorkflowState(workflowId),
+      createCheckpoint(workflowId),
+      { version: '1' } as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLifecycleCallbacks() as never,
+      // A delete for the SAME key the create writes a put for: the prepend means
+      // the put follows the delete, so last-op-wins keeps the new run's state.
+      [{ key: KEYS.workflow(workflowId), type: 'delete' }],
+    );
+
+    const stateKey = KEYS.workflow(workflowId);
+    const deleteIndex = operations.findIndex(
+      (operation) => operation.key === stateKey && operation.type === 'delete',
+    );
+    const putIndex = operations.findIndex(
+      (operation) => operation.key === stateKey && operation.type === 'put',
+    );
+    expect(deleteIndex).toBe(0);
+    expect(putIndex).toBeGreaterThan(deleteIndex);
   });
 
   it('begins worker workflow execution directly when inline execution is disabled', () => {

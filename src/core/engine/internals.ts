@@ -138,6 +138,20 @@ export interface EngineInternals {
   workflowStateWriteChains: Map<string, Promise<void>>;
   heartbeatDetails: Map<string, unknown>;
   /**
+   * Last heartbeat payload PER ACTIVITY STEP, so a retry of a step can read the
+   * heartbeat its previous attempt recorded (the resumable-batch pattern). Keyed
+   * `workflowId -> step -> details`. This is separate from {@link heartbeatDetails}
+   * (which is keyed by `workflowId` alone and powers the `activityProgress` query):
+   * concurrent activities inside one `ctx.all` would clobber a workflow-keyed map,
+   * so a retry could read a sibling's heartbeat. The step is stable across attempts
+   * (assigned once at `stepIndex++`), so a retry reads its OWN prior heartbeat.
+   * Never checkpointed — held only in engine memory and cleared (by workflowId, the
+   * outer key) on terminal cleanup and purge, the same lifecycle as
+   * {@link heartbeatDetails}. Inline-execution only; worker-executed activities run
+   * their function out of process and never observe this.
+   */
+  lastHeartbeatDetailsByStep: Map<string, Map<number, unknown>>;
+  /**
    * Per-run, non-serialized `services` value exposed to the workflow body as
    * `ctx.services`. Set at `engine.start({ services })` and re-provided on
    * recovery by `resolveWorkflowServices`. Never checkpointed — held only in

@@ -154,6 +154,11 @@ Pass `options.idempotencyKey` for at-most-once starts: the first call commits th
 
 The key→id mapping is permanent: it deliberately outlives terminal cleanup so repeat calls keep returning the same handle. When the workflow **record** is purged or swept by retention, the mapping itself **survives** (purge and retention do not touch the `start-idem:` keyspace) but now points at a run that no longer exists. The key is then **spent** — a subsequent call with the same key resolves the surviving mapping, finds no record, and throws `IdempotencyKeyPurgedError` (HTTP 409 over REST/JSON-RPC) rather than silently starting a new run (a fresh create would fail the still-present mapping CAS and strand the caller). Treat that error as "this key is consumed; start fresh with a different key," or keep retention longer than your deduplication window.
 
+Pass `options.onTerminalConflict: 'start-new'` to **reuse a stable id across runs** once the prior run has finished — Weft's equivalent of Temporal's `WorkflowIdReusePolicy.ALLOW_DUPLICATE`. The classic case is a periodic job keyed by a deterministic id (e.g. `reconcile:installation-42`): the previous tick has already reached a terminal state, so the next tick would otherwise hit `WorkflowAlreadyExistsError`. With `'start-new'`, if the prior run under that id is terminal (`completed` | `failed` | `cancelled` | `timed-out`) Weft purges it while holding the same in-process start reservation a normal start holds (the same teardown as `engine.purge`, sweeping every key the run owned) and then starts a fresh run in its place; if the prior run is still **non-terminal** (running/pending), it throws `WorkflowAlreadyExistsError` unchanged — `'start-new'` never displaces a live run. The default, `'error'`, preserves the strict at-most-once-per-id contract (a duplicate id always throws, terminal or not). `'start-new'` requires an explicit `id` and is mutually exclusive with `idempotencyKey` (the idempotency mapping is permanent and at-most-once, so restarting under it would contradict that contract). Because the prior run's record is gone after a restart, a `WorkflowHandle` held against the old id resolves to the fresh run for every method (`result()`, `snapshot()`, status) — handles are id-scoped, not run-attempt-scoped. The reservation is held across the purge and the create, so two concurrent `'start-new'` calls for one id cannot both win — the loser sees `WorkflowAlreadyExistsError`. The purge-then-create is serialized against same-engine concurrent starts but is not a single atomic storage operation: a non-start observer can momentarily see the id absent during the sub-millisecond gap (acceptable for the reconciler use case, where list-continuity across a restart is not required).
+
+> [!NOTE]
+> `onTerminalConflict` is an in-process `engine.start`-only policy. It is deliberately **not** exposed over the REST/JSON-RPC `weft.workflows.start` operation — a conditionally-destructive start would break that operation's `destructive: false` contract — and it is rejected on `engine.startOrSignal` (whose identity is the permanent at-most-once idempotency key) and absent from `ctx.startChild` (a child re-attaches to an existing run by id on parent replay, so purging a terminal child mid-replay would break determinism). Extending restart semantics to those surfaces — and a dedicated remote `weft.workflows.restart` operation — is tracked in issue #489.
+
 `options.services` is inline-only host data exposed as `ctx.services`. It is never checkpointed. When recovering a workflow that was launched with services in a fresh process, configure `EngineOptions.resolveWorkflowServices` to rebuild the value before the generator advances. Passing `services` in Worker execution mode throws at start because the value cannot cross to a Worker.
 
 | Parameter | Type           | Description                                 |
@@ -167,6 +172,16 @@ const handle = await engine.start('send-email', {
   to: 'user@example.com',
   body: 'Hello!',
 });
+```
+
+Reuse a stable id once the prior run is terminal (a periodic reconciler):
+
+```ts partial
+const handle = await engine.start(
+  'reconcile',
+  { installationId: 42 },
+  { id: 'reconcile:installation-42', onTerminalConflict: 'start-new' },
+);
 ```
 
 ### `startOrSignal()`

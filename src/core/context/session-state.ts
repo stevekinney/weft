@@ -26,6 +26,7 @@ const ACTIVITY_CALL_OPTION_KEYS = new Set<string>([
   'idempotencyKey',
   'sticky',
   'visibilityTimeout',
+  'scheduleToCloseTimeout',
 ]);
 
 const DISCRIMINATOR_KEYS = new Set<string>([
@@ -34,6 +35,7 @@ const DISCRIMINATOR_KEYS = new Set<string>([
   'idempotencyKey',
   'sticky',
   'visibilityTimeout',
+  'scheduleToCloseTimeout',
 ]);
 
 /** Detect whether a value is an {@link ActivityCallOptions} object. */

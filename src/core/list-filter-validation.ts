@@ -13,7 +13,7 @@ import { z, type ZodIssue } from 'zod';
 
 import { FAILURE_CATEGORIES, isFailureCategory } from './failure-categories.ts';
 import type { FailureCategory, WorkflowStatus } from './types/identity.ts';
-import type { ListFilter } from './types/options.ts';
+import type { ListFilter } from './types/list-options.ts';
 import { WeftError } from './weft-error.ts';
 
 const WORKFLOW_STATUSES = [

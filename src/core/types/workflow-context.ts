@@ -70,6 +70,82 @@ export type RunAllResult<TBranches extends Record<string, WorkflowRunAllBranch>>
     : RunAllBranchResult<TBranches[TKey]>;
 };
 
+/** Severity of a {@link WorkflowLogRecord}, ordered `debug < info < warn < error`. */
+export type WorkflowLogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+/**
+ * The structured record a {@link WorkflowLogger} emits for one log call. The
+ * envelope fields (`level`, `message`, `workflowId`, `workflowType`,
+ * `timestamp`) are owned by the engine and always present; caller-supplied
+ * `attributes` are nested under their own key so they can never shadow an
+ * envelope field. `timestamp` is wall-clock milliseconds at the emit call — it
+ * is observability metadata, never checkpointed and never part of replay.
+ */
+export interface WorkflowLogRecord {
+  readonly level: WorkflowLogLevel;
+  readonly message: string;
+  readonly workflowId: string;
+  readonly workflowType: string;
+  readonly timestamp: number;
+  readonly attributes?: Record<string, unknown>;
+}
+
+/**
+ * The structured logger exposed as {@link WorkflowContext.log}. Each method emits
+ * a {@link WorkflowLogRecord} to the current process console (`console.debug` /
+ * `console.info` / `console.warn` / `console.error`) with `workflowId`,
+ * `workflowType`, `level`, and `timestamp` auto-attached. Caller-supplied
+ * `attributes` are nested under their own key and cannot overwrite the envelope.
+ *
+ * Replay behavior: a workflow body re-executes from the start on recovery to
+ * rebuild state. Log calls in the already-committed replay window are suppressed,
+ * so a recovered run does not re-emit logs it already emitted. Suppression is
+ * per-position: a log call sitting at a step the engine has already cached is
+ * silenced; a log call at the live frontier emits. This holds in both inline and
+ * worker execution modes.
+ *
+ * Two replay caveats. A log placed *after* the last committed step re-fires on
+ * recovery, because there is no cached step to suppress it (the same caveat
+ * Temporal's workflow logger carries); likewise a workflow with no committed
+ * durable step has no replay position to suppress against, so its logs may
+ * re-emit on recovery. Logs inside `ctx.all` / `ctx.runAll` branches follow that
+ * branch's re-execution semantics.
+ *
+ * In worker-pool mode, "the current process console" is the worker process, not
+ * the engine host. Inline log timestamps come from the engine clock; worker-mode
+ * timestamps come from the worker process wall clock. Routing records into a host
+ * logging stack, and host-side collection of worker logs, is tracked in #491.
+ *
+ * Exported so a host can also type a logger it injects through `ctx.services`
+ * (the pre-`ctx.log` pattern).
+ *
+ * @example
+ * ```ts
+ * import { workflow, type WorkflowContext, type WorkflowLogger } from '@lostgradient/weft';
+ *
+ * const myWorkflow = workflow({ name: 'my-workflow' }).execute(async function* (
+ *   ctx: WorkflowContext,
+ * ) {
+ *   ctx.log?.info('workflow started', { attempt: 1 });
+ *   ctx.log?.warn('retrying activity', { reason: 'timeout' });
+ *   // A host logger injected through `ctx.services` can reuse this type:
+ *   const { log } = (ctx.services ?? {}) as { log?: WorkflowLogger };
+ *   log?.error('activity failed', { error: 'ECONNREFUSED' });
+ * });
+ * void myWorkflow;
+ * ```
+ */
+export interface WorkflowLogger {
+  /** Emit a `debug` record. Auto-carries `workflowId`/`workflowType`; suppressed during replay. */
+  debug(message: string, attributes?: Record<string, unknown>): void;
+  /** Emit an `info` record. Auto-carries `workflowId`/`workflowType`; suppressed during replay. */
+  info(message: string, attributes?: Record<string, unknown>): void;
+  /** Emit a `warn` record. Auto-carries `workflowId`/`workflowType`; suppressed during replay. */
+  warn(message: string, attributes?: Record<string, unknown>): void;
+  /** Emit an `error` record. Auto-carries `workflowId`/`workflowType`; suppressed during replay. */
+  error(message: string, attributes?: Record<string, unknown>): void;
+}
+
 /**
  * The durable workflow authoring surface passed to every
  * {@link WorkflowFunction}. Workflow handlers can call `ctx.run`,
@@ -142,6 +218,20 @@ export interface WorkflowContext<
    * across.
    */
   readonly services?: unknown;
+  /**
+   * Structured logger scoped to this run, auto-carrying `workflowId` and
+   * `workflowType`. Replay-safe in both inline and worker execution modes: log
+   * calls in the already-committed replay window are suppressed so a recovered
+   * run does not re-emit logs. See {@link WorkflowLogger} for the full contract
+   * (method set, the after-last-step caveat, and parallel-branch semantics).
+   *
+   * Optional on the interface so existing structural `WorkflowContext`
+   * implementors (test stubs and the like) are not source-broken — the same
+   * precedent as {@link WorkflowContext.services}. The engine always populates it
+   * at runtime, so within a real workflow body `ctx.log` is always present; the
+   * `?` only affects callers typed against the bare interface (use `ctx.log?.`).
+   */
+  readonly log?: WorkflowLogger;
   // ---------------------------------------------------------------------
   // Workflow-scoped typed-key overloads. These fire first when the workflow
   // was built with the chained builder (`.activities({...})`, `.signals({...})`

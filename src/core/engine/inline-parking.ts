@@ -1,4 +1,5 @@
 import type { ContextOperationRequest } from '../context.ts';
+import { hasExposedAccessors, hasUpdateHandlers } from '../context/context-presence.ts';
 import type { WorkerOutboundMessage, WorkflowState } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 import {
@@ -54,7 +55,7 @@ export async function parkInlineWorkflowAfterCheckpoint(
 
   const inlineStrategy = internals.inlineStrategy;
   const context = inlineStrategy.getContext(workflowId);
-  if (context?.hasUpdateHandlers || context?.hasExposedAccessors) {
+  if (context && (hasUpdateHandlers(context) || hasExposedAccessors(context))) {
     return false;
   }
 

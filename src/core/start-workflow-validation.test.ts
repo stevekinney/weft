@@ -2,6 +2,8 @@ import { describe, expect, it } from 'bun:test';
 
 import {
   assertExclusiveStartWorkflowOptions,
+  assertOnTerminalConflictUnsupported,
+  assertValidOnTerminalConflict,
   coerceStartWorkflowDuration,
   coerceStartWorkflowId,
   coerceStartWorkflowIdempotencyKey,
@@ -150,5 +152,75 @@ describe('start workflow validation', () => {
         `options.tags tags must be at most ${MAX_WORKFLOW_TAG_BYTES} UTF-8 bytes each`,
       ),
     );
+  });
+});
+
+describe('assertValidOnTerminalConflict', () => {
+  it('accepts undefined options, undefined policy, and the default error policy', () => {
+    expect(() => assertValidOnTerminalConflict(undefined)).not.toThrow();
+    expect(() => assertValidOnTerminalConflict({})).not.toThrow();
+    expect(() => assertValidOnTerminalConflict({ onTerminalConflict: 'error' })).not.toThrow();
+  });
+
+  it("accepts 'start-new' with an explicit id and no idempotency key", () => {
+    expect(() =>
+      assertValidOnTerminalConflict({ onTerminalConflict: 'start-new', id: 'wf-1' }),
+    ).not.toThrow();
+  });
+
+  it('rejects an unknown policy value', () => {
+    const error = captureValidationError(() =>
+      assertValidOnTerminalConflict({ onTerminalConflict: 'restart', id: 'wf-1' }),
+    );
+    expect(error.message).toContain("must be 'error' or 'start-new'");
+  });
+
+  it("rejects 'start-new' combined with an idempotency key", () => {
+    const error = captureValidationError(() =>
+      assertValidOnTerminalConflict({ onTerminalConflict: 'start-new', idempotencyKey: 'k' }),
+    );
+    expect(error.message).toContain('mutually exclusive with options.idempotencyKey');
+  });
+
+  it("rejects 'start-new' without an explicit id", () => {
+    const error = captureValidationError(() =>
+      assertValidOnTerminalConflict({ onTerminalConflict: 'start-new' }),
+    );
+    expect(error.message).toContain('requires an explicit options.id');
+  });
+
+  it('reports the idempotency-key conflict before the missing-id requirement', () => {
+    // Both invariants are violated (no id, has idempotencyKey); the
+    // idempotency-key message wins so the caller fixes the contradictory option
+    // rather than just adding an id.
+    const error = captureValidationError(() =>
+      assertValidOnTerminalConflict({ onTerminalConflict: 'start-new', idempotencyKey: 'k' }),
+    );
+    expect(error.message).toContain('mutually exclusive with options.idempotencyKey');
+  });
+});
+
+describe('assertOnTerminalConflictUnsupported', () => {
+  it('accepts undefined options and options without the policy', () => {
+    expect(() => assertOnTerminalConflictUnsupported(undefined, 'startOrSignal')).not.toThrow();
+    expect(() => assertOnTerminalConflictUnsupported({}, 'startOrSignal')).not.toThrow();
+  });
+
+  it('rejects any present onTerminalConflict, naming the surface', () => {
+    const error = captureValidationError(() =>
+      assertOnTerminalConflictUnsupported({ onTerminalConflict: 'start-new' }, 'startOrSignal'),
+    );
+    expect(error.message).toContain('startOrSignal does not support options.onTerminalConflict');
+  });
+
+  it("rejects even the 'error' policy value as smuggled-in on an unsupported surface", () => {
+    // The runtime backstop rejects any DEFINED value — even the harmless default
+    // `'error'` — because the surface does not negotiate the value, it simply does
+    // not accept the option at all. (A key present with an `undefined` value is
+    // indistinguishable from an absent key, so that case is allowed; see above.)
+    const error = captureValidationError(() =>
+      assertOnTerminalConflictUnsupported({ onTerminalConflict: 'error' }, 'startOrSignal'),
+    );
+    expect(error.message).toContain('available on engine.start only');
   });
 });

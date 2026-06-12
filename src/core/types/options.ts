@@ -4,10 +4,9 @@ import type { CompressionOptions } from '../compression.ts';
 import type { Interceptor } from '../interceptor.ts';
 import type { ArchiveAdapter } from './archive-adapter.ts';
 import type { HistoryPolicy } from './history-policy.ts';
-import type { FailureCategory, WorkflowStatus } from './identity.ts';
 import type { PayloadSizePolicy } from './payload-size-policy.ts';
 import type { Duration, RetentionPolicy } from './retry-retention.ts';
-import type { SearchAttributeHandle, SearchAttributeValue } from './search-attributes.ts';
+import type { SearchAttributeValue } from './search-attributes.ts';
 import type { Serializer } from './serializer.ts';
 import type {
   WorkflowServicesResolution,
@@ -28,6 +27,13 @@ import type {
  * execution; `tags` and `searchAttributes` make the workflow discoverable
  * via filters. `id` and `idempotencyKey` are mutually exclusive — idempotency
  * assigns its own generated id and dedups through the key.
+ *
+ * This is the shared base accepted by every start-like surface
+ * (`engine.start`, `engine.startOrSignal`, and the clients). `engine.start`
+ * specifically accepts the wider {@link StartWorkflowOptions}, which adds
+ * `onTerminalConflict`; that policy is intentionally absent here so it cannot be
+ * passed to `startOrSignal` (whose at-most-once identity is the permanent
+ * idempotency mapping).
  *
  * The `idempotencyKey` mapping is durable and permanent: it survives the run
  * reaching a terminal state, so repeat calls keep returning the same handle. When
@@ -94,6 +100,48 @@ export interface StartOptions {
    * delayed start (`startAt`/`startAfter`), neither of which has liveness to await.
    */
   defer?: boolean;
+}
+
+/**
+ * Options accepted by `engine.start(type, input, options?)` — the shared
+ * {@link StartOptions} plus the start-only `onTerminalConflict` policy.
+ *
+ * `onTerminalConflict` lives here, not on {@link StartOptions}, so it is
+ * structurally rejected on every other start-like surface: `engine.startOrSignal`
+ * (whose identity is the permanent at-most-once idempotency mapping),
+ * `ctx.startChild` (which re-attaches to an existing run by id on replay), and the
+ * REST/JSON-RPC transport (which keeps `weft.workflows.start` honestly
+ * `destructive: false`). It is therefore an in-process `engine.start`-only policy.
+ */
+export interface StartWorkflowOptions extends StartOptions {
+  /**
+   * What `engine.start()` does when the supplied `id` already belongs to a run
+   * that has reached a **terminal** state (`completed` | `failed` | `cancelled`
+   * | `timed-out`). This is Weft's equivalent of Temporal's
+   * `WorkflowIdReusePolicy.ALLOW_DUPLICATE`, for the common case of a periodic
+   * job keyed by a stable id (e.g. `reconcile:installation-42`) whose previous
+   * run has already finished.
+   *
+   * - `'error'` (default): preserve the existing contract — a duplicate id always
+   *   throws {@link WorkflowAlreadyExistsError}, terminal or not.
+   * - `'start-new'`: if the prior run under this id is terminal, purge it (while
+   *   holding the in-process start reservation, the same teardown as
+   *   `engine.purge`, sweeping every key the run owns) and start a fresh run in
+   *   its place; if the prior run is still **non-terminal** (running/pending),
+   *   throw {@link WorkflowAlreadyExistsError} unchanged — `'start-new'` never
+   *   displaces a live run.
+   *
+   * Requires an explicit `id` (the policy only makes sense for a caller-chosen,
+   * reusable id) and is mutually exclusive with `idempotencyKey` (whose mapping
+   * is permanent and at-most-once — restarting under it would violate that
+   * contract). The previous run's durable record is gone after a `'start-new'`
+   * restart, so a {@link WorkflowHandle} held against the old id resolves to the
+   * fresh run for every method (`result()`, `snapshot()`, status), because handles
+   * are id-scoped, not run-attempt-scoped. The restart holds the same in-process
+   * start reservation as a normal start, so two concurrent `'start-new'` calls for
+   * one id cannot both win — the loser sees {@link WorkflowAlreadyExistsError}.
+   */
+  onTerminalConflict?: 'error' | 'start-new';
 }
 
 /**
@@ -300,198 +348,4 @@ export interface EngineOptions {
   resolveWorkflowServices?: (
     info: WorkflowServicesResolverInfo,
   ) => WorkflowServicesResolution | Promise<WorkflowServicesResolution>;
-}
-
-// ---------------------------------------------------------------------------
-// List/filter options
-// ---------------------------------------------------------------------------
-
-/**
- * Filter criteria for {@link Engine.list}. All fields are optional and
- * combine with AND semantics. `status` accepts a single value or an array;
- * `attributes` is a list of attribute predicates evaluated on indexed search
- * attributes. Pairs with `limit`/`offset` for pagination.
- *
- * @example
- * ```ts
- * import { Engine, type ListFilter } from '@lostgradient/weft';
- *
- * const engine = new Engine();
- * const filter: ListFilter = {
- *   status: ['running', 'pending'],
- *   tags: ['nightly'],
- *   attributes: [{ key: 'customerId', value: 'acme' }],
- *   limit: 20,
- *   offset: 0,
- * };
- * const result = await engine.list(filter);
- * console.log(result.items.length);
- * ```
- */
-/**
- * Numeric half-open range bound, used by visibility filters that match a
- * stored numeric field (timestamps, deadlines). Provide at least one of the
- * four bounds. `gt`/`gte` are mutually exclusive on the lower side; `lt`/`lte`
- * are mutually exclusive on the upper side.
- */
-export interface TimeRange {
-  gte?: number;
-  lte?: number;
-  gt?: number;
-  lt?: number;
-}
-
-/**
- * Filter passed to {@link Engine.list} (and equivalent visibility transports)
- * to narrow which {@link WorkflowSummary} entries are returned. Every field
- * is optional; combining fields applies them as AND.
- *
- * @example
- * ```ts
- * import { Engine, type ListFilter } from '@lostgradient/weft';
- *
- * const engine = new Engine();
- * const filter: ListFilter = {
- *   status: ['running', 'failed'],
- *   createdAt: { gte: Date.now() - 60_000 },
- * };
- *
- * const page = await engine.list(filter);
- * ```
- */
-export interface ListFilter {
-  /** Match workflows whose {@link WorkflowState.status} is one of the listed values. */
-  status?: WorkflowStatus | WorkflowStatus[];
-  /**
-   * Match workflows by registered workflow type (e.g. `'order-fulfillment'`).
-   *
-   * @example
-   * ```ts
-   * import type { ListFilter } from '@lostgradient/weft';
-   * const filter: ListFilter = { type: 'order-fulfillment' };
-   * ```
-   */
-  type?: string;
-  /** Match workflows that carry every listed tag. */
-  tags?: string[];
-  /** Filter on indexed search attributes (equality or range). */
-  attributes?: readonly AttributeFilter[];
-  /** Maximum number of summaries to return. Server enforces an upper bound. */
-  limit?: number;
-  /** Number of summaries to skip before returning results. */
-  offset?: number;
-  /**
-   * Workflow id prefix. Restricted to `[A-Za-z0-9_-]+`; values containing
-   * other characters are rejected during validation. Matches by raw
-   * `state.id.startsWith(idPrefix)` after candidate enumeration.
-   */
-  idPrefix?: string;
-  /** Range filter on `WorkflowState.createdAt` (ms epoch). */
-  createdAt?: TimeRange;
-  /** Range filter on `WorkflowState.updatedAt` (ms epoch). */
-  updatedAt?: TimeRange;
-  /** Range filter on `WorkflowState.executionDeadline` (ms epoch). */
-  executionDeadline?: TimeRange;
-  /**
-   * Match by the workflow's `failureCategory`. The engine uses the
-   * `failureCategory` search-attribute index to narrow candidate workflow IDs,
-   * then still verifies the loaded `WorkflowState.failureCategory` so state
-   * remains authoritative when index entries are stale.
-   */
-  failureCategory?: FailureCategory | FailureCategory[];
-}
-
-/**
- * Projection options for {@link Engine.list}. These options do not change
- * which workflows match the list filter; they only control optional summary
- * fields that may require additional storage reads.
- *
- * @example Include failure categories projected from search attributes
- * ```ts
- * import { Engine, type ListOptions } from '@lostgradient/weft';
- *
- * const engine = new Engine();
- * const options: ListOptions = { includeFailureCategory: true };
- * const page = await engine.list({ status: 'failed' }, options);
- * void page;
- * ```
- */
-export interface ListOptions {
-  /**
-   * Populate `WorkflowSummary.failureCategory` for failed workflows from the
-   * stored `failureCategory` search attribute when the workflow state itself
-   * does not carry a category. Defaults to `false`.
-   */
-  includeFailureCategory?: boolean;
-}
-
-export type AttributeFilterKey = string | SearchAttributeHandle;
-
-export type AttributeFilterValue<TKey extends AttributeFilterKey> =
-  TKey extends SearchAttributeHandle<infer TValue>
-    ? TValue extends string[]
-      ? string
-      : TValue
-    : SearchAttributeValue;
-
-export type AttributeRangeValue<TKey extends AttributeFilterKey> =
-  TKey extends SearchAttributeHandle<infer TValue>
-    ? Extract<TValue, Date | number>
-    : SearchAttributeValue;
-
-export type AttributeFilter<TKey extends AttributeFilterKey = AttributeFilterKey> =
-  TKey extends SearchAttributeHandle
-    ?
-        | {
-            key: TKey;
-            value?: AttributeFilterValue<TKey>;
-            gt?: never;
-            lt?: never;
-            gte?: never;
-            lte?: never;
-          }
-        | {
-            key: TKey;
-            value?: never;
-            gt?: AttributeRangeValue<TKey>;
-            lt?: AttributeRangeValue<TKey>;
-            gte?: AttributeRangeValue<TKey>;
-            lte?: AttributeRangeValue<TKey>;
-          }
-    : {
-        key: TKey;
-        value?: SearchAttributeValue;
-        gt?: SearchAttributeValue;
-        lt?: SearchAttributeValue;
-        gte?: SearchAttributeValue;
-        lte?: SearchAttributeValue;
-      };
-
-export type AttributeFilterList<TAttributeKeys extends readonly AttributeFilterKey[]> = {
-  readonly [TIndex in keyof TAttributeKeys]: AttributeFilter<TAttributeKeys[TIndex]>;
-};
-
-export type TypedListFilter<TAttributeKeys extends readonly AttributeFilterKey[]> = Omit<
-  ListFilter,
-  'attributes'
-> & {
-  attributes?: AttributeFilterList<TAttributeKeys>;
-};
-
-// ---------------------------------------------------------------------------
-// Paginated result
-// ---------------------------------------------------------------------------
-
-/**
- * Generic paginated response envelope returned by list operations such as
- * {@link Engine.list} and `engine.listSchedules`. `total` is the full count
- * matching the filter; `items` is the current page slice. `items.length` is
- * bounded by `limit`; the consumer reaches the end of the result set when
- * `offset + items.length >= total`.
- */
-export interface PaginatedResult<T> {
-  items: T[];
-  total: number;
-  offset: number;
-  limit: number;
 }
