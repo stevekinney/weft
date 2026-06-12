@@ -13,7 +13,7 @@ websocket-worker.ts:242-265: completeTask() and deadlineTracker.remove() execute
 
 ### Required fix
 
-Retry transitionInflightToResolved with the existing withRetry helper (already used at line 293 for heartbeat storage updates). If all retries are exhausted, emit an application-level event or mark the operationId in a dead-letter set so the reconciliation scan does not re-dispatch it.
+Retry transitionInflightToResolved with the existing withRetry helper (already used at line 293 for heartbeat storage updates). If all retries are exhausted, record the operationId in a durable dead-letter set so the reconciliation scan does not re-dispatch it, AND emit an application-level engine event — both halves are required; see the Required behavior section below for the full contract.
 
 ## Required behavior (no weaker alternative)
 

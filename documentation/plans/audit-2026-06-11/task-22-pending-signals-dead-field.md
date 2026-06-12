@@ -13,7 +13,7 @@ checkpoint.ts:114: pendingSignals: string[] field. lifecycle.ts:28 initializes a
 
 ### Required fix
 
-Either remove the field (schema version bump) and add a comment explaining signals are stored as separate storage keys, or populate it with the signal names the workflow is currently waiting on for observability. If deferred, add a comment to the type definition explaining the field is reserved and never populated.
+Remove the field from fresh checkpoint writes and add a comment at the former definition site explaining that signals are stored as separate `sig:` storage keys, not in checkpoints. (Populating the field for observability and keeping it as a reserved-comment placeholder were both considered and rejected — see the resolved design below. Do not implement either.)
 
 ## Resolved design
 
