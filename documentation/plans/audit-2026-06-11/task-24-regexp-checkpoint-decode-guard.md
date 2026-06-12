@@ -17,21 +17,17 @@ The RegExp extension decoder in `src/core/codec/extension-codec.ts:52-57` calls 
 
 A checkpoint written by a newer Bun version that uses a newer RegExp flag can permanently prevent recovery on an older Bun version. Corrupt checkpoint bytes can also trigger this. The crash is isolated to the affected workflow's recovery, not engine-wide.
 
-## Proposed Design
+## Required fix
 
 1. Wrap `new RegExp(source, flags)` in try/catch and rethrow a descriptive error naming the source/flags values so the failure is actionable.
-2. Add a maximum-length check on `source` (e.g., 65535 bytes) before construction.
+2. Add a maximum-length check on `source` (65535 bytes) before construction.
 3. Document in the extension-codec JSDoc that `RegExp` values in checkpoints are version-sensitive and that upgrading Bun may produce checkpoints unreadable by older versions.
-
-## Acceptance Criteria
-
-- An invalid flags string in a checkpoint byte sequence produces a descriptive error naming the tag, source, and flags — not an uncaught exception.
-- A length-bounded source check prevents pathologically long source strings from being constructed.
 
 ## Acceptance criteria (all required — completion is binary)
 
-- [ ] RegExp extension decode validates flags/source (bounded length, try/catch) and surfaces a typed decode error identifying the workflow and field instead of crashing recovery wholesale.
-- [ ] Regression test feeds a checkpoint fixture with invalid RegExp flags and asserts recovery survives with the documented failure mode.
+- [ ] RegExp extension decode validates flags and bounds source length (try/catch around construction) and surfaces a typed decode error naming the extension tag, the source, and the flags — not an uncaught exception that crashes recovery wholesale.
+- [ ] Regression test feeds a checkpoint fixture with invalid RegExp flags and asserts recovery survives with the documented failure mode; a second test pins the source-length bound.
+- [ ] Extension-codec JSDoc documents the version-sensitivity of persisted RegExp values.
 
 ## Standard execution requirements
 

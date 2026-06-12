@@ -17,13 +17,13 @@ Retry transitionInflightToResolved with the existing withRetry helper (already u
 
 ## Required behavior (no weaker alternative)
 
-The committee resolved the either/or in the original fix: BOTH halves are required. (1) `transitionInflightToResolved` is retried with the existing `withRetry` helper. (2) If retries are exhausted, the operationId is recorded in a durable dead-letter set; the reconciliation scan checks that set and does NOT re-dispatch dead-lettered tasks; an operator-visible diagnostic (engine event and bounded diagnostics endpoint, consistent with existing low-cardinality metric policy) reports the entry. Define how the set is inspected and cleared (an explicit operator action), and document it.
+The committee resolved the either/or in the original fix: BOTH halves are required. (1) `transitionInflightToResolved` is retried with the existing `withRetry` helper. (2) If retries are exhausted, the operationId is recorded in a durable dead-letter set; the reconciliation scan checks that set and does NOT re-dispatch dead-lettered tasks; an operator-visible diagnostic (engine event and bounded diagnostics endpoint, consistent with existing low-cardinality metric policy) reports the entry. The operator surface is fixed by this plan (do not redesign it): dead-letter entries are listed via a bounded REST diagnostics endpoint (consistent with the existing bounded high-cardinality diagnostic endpoints) and cleared per-entry via an explicit REST action on the same diagnostics surface; an engine event fires when an entry is created. Both are documented in the operator-facing server documentation.
 
 ## Acceptance criteria (all required — completion is binary)
 
 - [ ] transitionInflightToResolved retries via withRetry with the same policy as the heartbeat path.
 - [ ] On retry exhaustion the operationId lands in a durable dead-letter record; the reconciliation scan skips dead-lettered records and never silently re-dispatches them.
-- [ ] Operators can list and clear dead-letter entries via a documented surface; an engine event fires when an entry is created.
+- [ ] Operators list dead-letter entries via a bounded REST diagnostics endpoint and clear individual entries via an explicit REST action on that surface; an engine event fires when an entry is created; both are documented.
 - [ ] Regression tests cover: transient storage failure (retry succeeds, no double-dispatch) and permanent failure (dead-letter, reconciliation skip, event emitted).
 
 ## Standard execution requirements

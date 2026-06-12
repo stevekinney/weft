@@ -45,7 +45,7 @@ Populate migration.md with a 'Migrating from 0.2.x/0.1.x to 0.3.0' section cover
 
 - [ ] README describes the actual contract: checkpoint-exactly-once for keyed/idempotent activities, at-least-once execution otherwise — consistent with the Tier-0 behavioral contract wording.
 - [ ] Every code example in temporal-comparison.md compiles against the current public surface (markdown doctests prove it).
-- [ ] migration.md accurately reflects BREAKING-CHANGES.md.
+- [ ] migration.md surfaces every breaking change recorded in CHANGELOG.md (and cross-checks BREAKING-CHANGES.md at the repository root) as actionable migration steps — at minimum the 0.3.0 multi-tenancy removal and the 0.1.0 agent-surface removal.
 
 ## Standard execution requirements
 

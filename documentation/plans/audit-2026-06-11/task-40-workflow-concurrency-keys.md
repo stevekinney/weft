@@ -2,7 +2,7 @@
 
 **Severity:** medium
 
-## Finding: No Inngest-style flow control: throttle, debounce, batch-events, concurrency keys per tenant
+## Finding: No Inngest-style flow control: throttle, debounce, batch-events, or partition-keyed concurrency limits
 
 - **Severity:** medium (feature-gap)
 - **Files (audit snapshot):** `src/core/concurrency.ts`, `src/core/types/options.ts`, `src/core/types/workflow-function.ts`
@@ -23,9 +23,13 @@ The finding is accurate as stated. One clarification: the `concurrency` field th
 
 Multi-tenancy was deliberately removed from the Weft core (see CLAUDE.md) — this feature must NOT reintroduce tenant vocabulary. The capability is a generic concurrency limit with an optional user-defined partition key. Use examples like `key: (input) => input.customerId` or a resource id. Naming: `concurrency: { max: number, key?: (input) => string }` on the workflow definition. Per the original verifier note: do not confuse this with the existing per-ctx.map `concurrency` option (child fan-out parallelism), and debounce/batch-trigger remain documented patterns, not primitives — add those pattern docs to the concurrency guide as part of this task.
 
+## Resolved excess-start policy (decided — do not re-litigate)
+
+Excess starts are REJECTED immediately with a typed error that names the concurrency limit and the offending key value. Queueing (admitting excess starts later as leases free up) is explicitly out of scope for this task — it is a larger scheduling feature and would need its own durability story for queued starts. Note the deliberate omission in the PR body.
+
 ## Acceptance criteria (all required — completion is binary)
 
-- [ ] A workflow type with concurrency.max=N admits at most N concurrently-running starts (per key value when key is provided); excess starts queue or reject per a documented, tested policy; leases release on every terminal path including crash recovery.
+- [ ] A workflow type with concurrency.max=N admits at most N concurrently-running starts (per key value when key is provided); excess starts are rejected immediately with a typed error naming the limit and key value (queueing is out of scope); leases release on every terminal path including crash recovery.
 - [ ] No tenant terminology anywhere in code, types, tests, or docs; debounce and batch-trigger documented as patterns in the concurrency guide.
 
 ## Standard execution requirements

@@ -52,7 +52,7 @@ README.md line 139 lists 'sagas via ctx.saga()' and 'forks' as features. ctx.sag
 
 ### Required fix
 
-Add a ctx.saga() section to documentation/guides/workflows.md documenting the step format, compensation model, and failure behavior. Add a fork section explaining engine.fork() semantics. Alternatively, remove the feature bullets from README until guides exist — option A strongly preferred.
+Implement option A: add a ctx.saga() section to documentation/guides/workflows.md documenting the step format, compensation model, and failure behavior, and add a fork section explaining engine.fork() semantics. Do NOT remove the feature bullets from the README — the features exist and are tested; the fix is to document them.
 
 ## Finding: No-replay pitch omits critical constraint: yield\* call order must be stable between deployments
 

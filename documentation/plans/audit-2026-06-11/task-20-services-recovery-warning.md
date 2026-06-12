@@ -1,4 +1,4 @@
-# Task 20: Warn when recovery yields ctx.services === undefined
+# Task 20: Fail recovery actionably when started-with-services workflows cannot be re-provided
 
 **Severity:** medium
 
@@ -13,7 +13,7 @@ recovered-services.ts:47-50: when resolver is null, the function returns false b
 
 ### Required fix
 
-In reprovideRecoveredServices, when !resolver and the workflowHasServices storage marker is present, emit a DevelopmentWarningEvent (or log warning) naming the workflow and explaining that ctx.services will be undefined. Add a warning callout to the services section of workflows.md.
+The repository's documented services contract already resolves the warn-versus-fail question: when services cannot be re-provided on recovery, the affected run FAILS — it must not proceed with `ctx.services === undefined`. The current silent-undefined behavior is the bug. In reprovideRecoveredServices, when !resolver and the workflowHasServices storage marker is present: fail only the affected run (consistent with the existing fail-only-the-affected-run services semantics) AND emit an actionable diagnostic (DevelopmentWarningEvent or equivalent engine event) naming the workflow id and the `resolveWorkflowServices` option to set. Add a warning callout to the services section of workflows.md documenting this failure mode.
 
 ## Acceptance criteria (all required — completion is binary)
 

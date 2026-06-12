@@ -13,17 +13,12 @@
 - `documentation/guides/storage.md`: no 'Implementing a custom adapter' section, no mention of the conformance helpers.
 - `documentation/roadmap-to-1.0.md`: notes that Turso needs a conformance proof, which underscores the need for a public-facing conformance suite.
 
-## Proposed Design
+## Required fix
 
-1. Add a `@lostgradient/weft/storage/testing` subpath (or extend the existing `./testing` subpath) that exports the three conformance helper functions.
+1. Add a new `@lostgradient/weft/storage/testing` subpath that exports the three conformance helper functions. The existing `./testing` subpath is not modified — the new subpath sits alongside the `./storage/*` family. (The extend-`./testing` alternative was considered and rejected: TestEngine/chaos helpers and adapter conformance serve different audiences, and `./storage/testing` keeps the storage surface self-describing.)
 2. Since these functions import `bun:test`, ensure the subpath is excluded from the main bundle (already handled by the build-exclusion mechanism for test-support files).
 3. Add a 'Implementing a custom adapter' section to `documentation/guides/storage.md` that links to this suite and shows a minimal usage example.
 4. Extend `weft conformance` to optionally cover the storage adapter protocol (analogous to how it covers the RemoteWorker protocol).
-
-## Acceptance Criteria
-
-- A third-party storage adapter author can run the conformance suite by importing from `@lostgradient/weft/storage/testing` without a deep internal import.
-- `storage.md` contains a 'Implementing a custom adapter' section that links to the conformance suite.
 
 ## Ownership note
 
@@ -31,7 +26,8 @@ This task is the single owner of conformance-surface expansion — the documenta
 
 ## Acceptance criteria (all required — completion is binary)
 
-- [ ] A documented package subpath exposes the storage conformance suite runnable against any StorageAdapter; the packed-consumer check covers the new subpath.
+- [ ] The new `@lostgradient/weft/storage/testing` subpath (and only that subpath — `./testing` unmodified) exposes the storage conformance suite runnable against any StorageAdapter without a deep internal import; the packed-consumer check covers the new subpath.
+- [ ] documentation/guides/storage.md contains an 'Implementing a custom adapter' section linking the suite with a minimal usage example.
 - [ ] documentation/reference/api-storage.md (or a dedicated page) documents how a third-party adapter author runs it; the package surface change passes `bun run prepack` checks.
 
 ## Standard execution requirements

@@ -12,7 +12,7 @@
 - `documentation/guides/workflows.md:183-186`: shows the recommended `isOrderServices(ctx.services)` type guard — 8-10 lines of boilerplate per workflow.
 - The JSDoc explicitly defers the generic parameter as a planned follow-on.
 
-## Proposed Design
+## Required fix
 
 Add a generic type parameter `TServices = unknown` to `WorkflowContext<TServices>` and thread it through:
 
@@ -22,19 +22,13 @@ Add a generic type parameter `TServices = unknown` to `WorkflowContext<TServices
 
 This eliminates the `as` cast, makes the opening workflows.md example typecheck correctly, and allows typed service injection without boilerplate type guards.
 
-## Acceptance Criteria
-
-- `ctx.services` is typed as `TServices` when a workflow is defined with a typed resolver.
-- No `as` cast is required to access known service properties.
-- Existing untyped workflows (no resolver or `resolveWorkflowServices: () => unknown`) continue to work unchanged.
-
 ## Design boundary
 
 Before implementing, enumerate every public type the generic touches (workflow builder options, WorkflowContext, Engine.create registration, ServeOptions inference, generated clients if any) and add .test-d.ts coverage FIRST; the generic must default to the current behavior (`unknown`) so every existing call site compiles unchanged. If threading the generic forces a breaking change to any candidate-stable surface, stop and report rather than shipping the break.
 
 ## Acceptance criteria (all required — completion is binary)
 
-- [ ] Workflows can declare a services type once and ctx.services is typed accordingly; default stays unknown; zero existing call sites break (type tests prove both).
+- [ ] Workflows can declare a services type once and ctx.services is typed accordingly with no `as` cast at access sites; default stays unknown; zero existing call sites break (type tests prove all three).
 - [ ] .test-d.ts covers inference at definition, context, and Engine.create boundaries before the implementation lands (TDD at the type level).
 
 ## Standard execution requirements

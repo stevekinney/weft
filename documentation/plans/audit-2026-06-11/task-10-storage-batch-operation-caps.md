@@ -13,15 +13,15 @@ storageBatchInput at line 72 and storageConditionalBatchInput at lines 74-77 hav
 
 ### Required fix
 
-Add .max(MAX_BATCH_OPERATIONS) (e.g. 1000) to both operations and conditions arrays. Also add .max(MAX_SCAN_LIMIT) (e.g. 10,000) to the limit field in storageScanInput. Document the caps in configuration.md and surface in the OpenRPC schema.
+Add .max(MAX_BATCH_OPERATIONS) to both operations and conditions arrays. Also add .max(MAX_SCAN_LIMIT) (10,000) to the limit field in storageScanInput. Document the caps in configuration.md and surface in the OpenRPC schema.
 
 ## Naming requirement
 
-Use an explicit named constant (e.g. `MAX_BATCH_OPERATIONS`) with a default of 10 000 operations, enforced centrally before dispatching to any adapter, raising a typed error naming the cap and the offending size. The cap is a guardrail against pathological internal callers and hostile API-side inputs that fan out into batches — it must be far above any legitimate engine batch (checkpoint commits batch tens of operations, purge batches hundreds).
+Use one explicit named constant, `MAX_BATCH_OPERATIONS = 10_000`, applied consistently in both the API-side Zod `.max()` validations and the central dispatch-layer enforcement before any adapter work, raising a typed error naming the cap and the offending size. The cap is a guardrail against pathological internal callers and hostile API-side inputs that fan out into batches — it must be far above any legitimate engine batch (checkpoint commits batch tens of operations, purge batches hundreds).
 
 ## Acceptance criteria (all required — completion is binary)
 
-- [ ] A named, documented constant caps operation counts for batch and conditionalBatch at the shared dispatch layer; exceeding it raises a typed error that names the cap.
+- [ ] One named, documented constant (`MAX_BATCH_OPERATIONS = 10_000`) caps operation counts for batch and conditionalBatch at both the API schema layer and the shared dispatch layer; exceeding it raises a typed error that names the cap.
 - [ ] Regression test proves the cap fires and that the largest legitimate engine batches (purge + create folds) stay well under it.
 
 ## Standard execution requirements

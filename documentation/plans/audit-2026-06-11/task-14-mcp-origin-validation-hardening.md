@@ -17,7 +17,8 @@ When neither publicOrigin nor trustedHosts is set, reject all cross-origin MCP r
 
 ## Acceptance criteria (all required — completion is binary)
 
-- [ ] MCP discovery surfaces (/.well-known/mcp.json, /openrpc.json metadata, /mcp) never emit absolute URLs derived from an unvalidated Host header; without publicOrigin/trustedHosts the server either binds to the listen address origin or fails loudly at startup for non-loopback binds — pick per existing publicOrigin docs and pin in tests.
+- [ ] Without publicOrigin/trustedHosts, cross-origin MCP requests to /mcp are rejected with 403 (no Host-derived origin comparison remains in validateOrigin), and a startup warning fires when MCP is enabled without either option — both pinned in tests.
+- [ ] MCP discovery surfaces (/.well-known/mcp.json, /openrpc.json metadata, /mcp) never emit absolute URLs derived from an unvalidated Host header — the existing resolveDiscoveryOrigin 503 guard applies uniformly.
 - [ ] Host-header-injection regression test covers all three discovery surfaces.
 
 ## Standard execution requirements

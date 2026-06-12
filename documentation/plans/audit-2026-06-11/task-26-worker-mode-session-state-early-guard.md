@@ -1,4 +1,4 @@
-# Task 26: Early, static guard for ctx.state.session() in worker execution mode
+# Task 26: Actionable worker-mode guard for ctx.state.session()
 
 **Severity:** medium
 
@@ -12,21 +12,17 @@
 - `documentation/reference/api-context.md:527-555`: documents `ctx.state.session()` with examples but no warning that it throws in worker mode.
 - `api-context.md` step-form section (line 594) does carry a worker-mode incompatibility warning — the pattern is established but not applied to `ctx.state.session()`.
 
-## Proposed Design
+## Required fix
 
-1. Add a worker-mode incompatibility callout to `api-context.md` in the `ctx.state.session()` section, matching the pattern already established for step-form and `ctx.services` worker-mode differences.
-2. Optionally add a registration-time or startup-time check that warns when a workflow registered in worker-execution mode uses `session` — this requires static analysis or a heuristic scan, which may not be feasible.
-3. At minimum, ensure the throw message (which is already clear) is tested and documented in the reference.
+A registration-time or startup-time static check is not feasible — whether a workflow generator calls `ctx.state.session()` cannot be known without executing it, and the review committee rejected heuristic source scanning. The single required bar is an actionable first-call failure plus the documentation callout:
 
-## Acceptance Criteria
-
-- `api-context.md` contains a `[!WARNING]` callout in the `ctx.state.session()` section stating it throws in worker execution mode.
-- The callout points to the list of workflow context features unavailable in worker mode.
+1. The worker-mode `ctx.state.session()` stub throws, on first call, an error naming the workflow type, the unsupported call, and both fix paths (switch the workflow to `workflowExecutionMode: 'inline'`, or use workflow-scoped `ctx.state` instead of session scope).
+2. Add a `[!WARNING]` callout to `api-context.md` in the `ctx.state.session()` section, matching the pattern already established for the step-form worker-mode warning, pointing to the list of context features unavailable in worker mode.
 
 ## Acceptance criteria (all required — completion is binary)
 
-- [ ] The incompatibility surfaces at engine/worker startup or registration time (or at minimum on first turn with an error naming the workflow, the call, and the two fix paths), not deep inside a run.
-- [ ] Docs for workflowExecutionMode list the unsupported context surfaces; regression test pins the early failure.
+- [ ] Calling ctx.state.session() in worker execution mode throws, on first call, an error naming the workflow type, the unsupported call, and both fix paths — pinned by a regression test.
+- [ ] api-context.md carries the [!WARNING] callout in the ctx.state.session() section, and the workflowExecutionMode reference lists the unsupported context surfaces.
 
 ## Standard execution requirements
 

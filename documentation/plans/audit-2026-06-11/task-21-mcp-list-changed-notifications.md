@@ -13,7 +13,7 @@ dispatcher.ts:151 hardcodes tools: { listChanged: false }. No notifications/tool
 
 ### Required fix
 
-Either hook engine.register() events to push notifications/tools/list_changed and flip capability to listChanged: true, or document the limitation explicitly in api-server.md so agents know to call tools/list on each session rather than caching.
+Hook engine.register() events to push notifications/tools/list_changed to connected MCP sessions and flip the advertised capability to listChanged: true. (The documentation-only alternative was considered and rejected by the review committee — the acceptance criteria below require the code path.)
 
 ## Acceptance criteria (all required — completion is binary)
 

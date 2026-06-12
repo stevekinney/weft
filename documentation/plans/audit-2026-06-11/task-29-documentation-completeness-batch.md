@@ -25,7 +25,7 @@ Create `documentation/reference/api-errors.md` with:
 
 Cross-link from `api-engine.md`, `api-server.md`, and JSDoc on the exported error helpers.
 
-### Acceptance Criteria
+### Acceptance criteria
 
 - A developer can find any WeftErrorCode value and its triggering scenario from a single reference page.
 - FaultCode values are fully documented with HTTP status mappings.
@@ -48,13 +48,13 @@ Cross-link from `api-engine.md`, `api-server.md`, and JSDoc on the exported erro
 
 1. Add an 'HTTP long-poll transport' section to `remote-worker-protocol.md` documenting: the poll endpoint (`GET /api/v1/tasks/:queue`), the result endpoint, `workerId`+`attemptToken` fields, claim expiry/visibility timeout semantics, at-least-once requeue on abort/timeout.
 2. Fix the incorrect endpoint documentation in `remote-workers.md`.
-3. Extend `weft conformance` to cover the HTTP long-poll path.
 
-### Acceptance Criteria
+`weft conformance` is deliberately NOT extended here — conformance-kit expansion belongs to the export-storage-conformance-kit task (task 28). This task documents the existing wire protocol only.
+
+### Acceptance criteria
 
 - A non-TypeScript developer can implement a correct HTTP long-poll worker using only the protocol documentation.
 - `remote-workers.md` shows the correct endpoint paths.
-- `weft conformance` can validate an HTTP-only worker implementation.
 
 ## Finding: TursoStorage capabilities() reports readAfterWrite: 'session' — silently fails assertDurableStorageForRecovery with no docs warning
 
@@ -89,13 +89,9 @@ Add a prominent `[!WARNING]` callout to the TursoStorage section in `storage.md`
 - `documentation/architecture/temporal-comparison.md:65`: 'Weft's CLI also provides weft version:check, which analyzes registered workflows against the existing database and reports compatibility before deployment' — stated as a solved, stable tool.
 - `documentation/reference/cli.md`: documents `version:check` without any stability caveat.
 
-### Proposed Resolution
+### Required resolution (decided — do not re-litigate)
 
-Option A: Add `version:check` to the candidate-stable CLI list in README.md and roadmap-to-1.0.md (appropriate if the command's contract is considered stable).
-
-Option B: Add an `[!NOTE] Experimental` callout to `cli.md`'s `version:check` section and soften the `temporal-comparison.md` language to 'Weft provides an experimental `weft version:check` command...'
-
-Option A is preferred if the output contract and flag interface are stable enough to commit to.
+Implement Option B, the conservative path: add an `[!NOTE] Experimental` callout to `cli.md`'s `version:check` section and soften the `temporal-comparison.md` language to 'Weft provides an experimental `weft version:check` command...'. This makes the documentation consistent with the README's own stated stability policy without expanding the stable surface. Option A — promoting `version:check` into the candidate-stable CLI list — is a separate stability-commitment decision to revisit later and is out of scope for this documentation-accuracy task.
 
 ## Finding: CHANGELOG.md is missing all 0.2.x release entries despite v0.2.1 tag existing
 
@@ -113,7 +109,7 @@ Option A is preferred if the output contract and flag interface are stable enoug
 
 Add a `## [0.2.1] - <date>` section to CHANGELOG.md capturing what changed between 0.1.0 and 0.2.1. If no breaking changes occurred (the commits appear to be DX improvements and pipeline hardening), the section can note 'No breaking changes' and list the notable improvements. This satisfies the project's own changelog policy and gives operators a complete release history.
 
-### Acceptance Criteria
+### Acceptance criteria
 
 - CHANGELOG.md has a `## [0.2.1]` section with an accurate date.
 - The section either documents breaking changes with migration paths, or explicitly states no breaking changes occurred in this release.

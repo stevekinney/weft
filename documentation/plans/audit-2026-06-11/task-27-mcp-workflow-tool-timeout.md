@@ -12,21 +12,16 @@
 - `dispatcher.ts:91-96`: handles `notifications/cancelled` but only checks cancellation before start (line 153) and after start (line 159) — not during the result await.
 - Suspended workflows (documented public API: `engine.suspend()`) have a `handle.result()` that is permanently pending until resumed.
 
-## Proposed Design
+## Required fix
 
 1. Add an optional `timeoutMs` parameter to per-workflow MCP tools (default: 30,000ms).
 2. If `handle.result()` does not resolve within the timeout, return a tool result with `isError: false` indicating the workflow is running but not yet complete, including the `workflowId` so the agent can call `get_workflow_state` to poll.
 3. Properly thread the `notifications/cancelled` signal into the `handle.result()` promise via `AbortSignal`, so MCP host cancellation also unblocks the await.
 
-## Acceptance Criteria
-
-- A suspended workflow does not cause its MCP tool call to hang past the configured timeout.
-- When the timeout fires, the tool returns a structured partial result with `workflowId` for subsequent polling.
-- MCP `notifications/cancelled` aborts the `handle.result()` await.
-
 ## Acceptance criteria (all required — completion is binary)
 
-- [ ] Per-workflow MCP tool calls have a configurable timeout (sensible default) that returns a structured timed-out-but-running result naming the workflow id and how to query it later — not a hung call and not a workflow cancellation.
+- [ ] Per-workflow MCP tool calls have a configurable timeoutMs (default 30,000ms) that returns a structured timed-out-but-running result naming the workflow id and how to query it later — not a hung call and not a workflow cancellation.
+- [ ] MCP notifications/cancelled aborts the handle.result() await (AbortSignal threaded through), pinned by test.
 - [ ] Regression test: a workflow parked on waitForSignal produces the timeout shape; the workflow keeps running.
 
 ## Standard execution requirements

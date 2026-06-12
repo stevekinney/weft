@@ -19,6 +19,7 @@ Write the final nextFireAt timer atomically with the last occurrence's state upd
 
 - [ ] Schedule state and its next-occurrence timer land in one storage batch on create, fire/re-arm, and update paths.
 - [ ] Regression test: failing the batch leaves the prior consistent pair intact; no path can persist one without the other.
+- [ ] A startup scan detects active schedules with nextFireAt in the past and no matching schedule-due: key, re-arms them, and is pinned by a test that simulates the orphaned-schedule crash scenario.
 
 ## Standard execution requirements
 

@@ -13,7 +13,7 @@ src/core/types/state.ts shows WorkflowState with status 'failed'. src/core/engin
 
 ### Required fix
 
-Implement the 'recover' BulkOperationAction already declared in BulkOperationAction type: engine.recoverAll(filter, options) that re-starts failed workflows from their last checkpoint or from scratch with the same input. Additionally add an onFailure hook to EngineOptions: { onFailure: (state: WorkflowState) => void | { recoveryWorkflow: string, input: unknown } } that fires after terminal failure and can route to a DLQ workflow. This leverages the existing engine event system (WorkflowFailedEvent).
+Implement the 'recover' BulkOperationAction already declared in the BulkOperationAction type as a bulk retry-failed operation: `engine.retryFailedAll(filter, options)` re-starts failed workflows. The retry-source decision rule is fixed: if a checkpoint exists for the failed run, resume from that checkpoint; if no checkpoint exists, restart from scratch with the same persisted input. See the resolved naming section below for the full contract. No onFailure hook and no DLQ routing are part of this task.
 
 ### Verifier note
 
@@ -27,7 +27,7 @@ The severity should be low rather than medium. Temporal's "reset workflow" featu
 
 ## Resolved naming
 
-The committee flagged the original fix's `engine.recoverAll(filter, options)` as a collision: `engine.recoverAll()` already exists for crash recovery (POST /v1/recover). REQUIRED: name the new bulk operation `engine.retryFailedAll(filter, options)` — restart failed workflows from their last checkpoint (or from scratch with the same input where no checkpoint exists), with the same dry-run preview + confirmation-token gate and durable audit events as the other bulk operations. Reconcile the `BulkOperationAction` type: map the `'recover'` literal to this operation or rename the literal to `'retry-failed'` (pick whichever keeps wire/audit compatibility; document the choice). The onFailure/DLQ-hook idea from the original finding is OUT of scope — note it in the PR body as deliberately not implemented.
+The committee flagged the original fix's `engine.recoverAll(filter, options)` as a collision: `engine.recoverAll()` already exists for crash recovery (POST /v1/recover). REQUIRED: name the new bulk operation `engine.retryFailedAll(filter, options)`. Decision rule for the retry source: if a checkpoint exists for the failed run, resume from it; if no checkpoint exists, restart from scratch with the same persisted input. The operation carries the same dry-run preview + confirmation-token gate and durable audit events as the other bulk operations. Reconcile the `BulkOperationAction` type: map the `'recover'` literal to this operation or rename the literal to `'retry-failed'` (pick whichever keeps wire/audit compatibility; document the choice). The onFailure/DLQ-hook idea from the original finding is OUT of scope — note it in the PR body as deliberately not implemented.
 
 ## Acceptance criteria (all required — completion is binary)
 

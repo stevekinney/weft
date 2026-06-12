@@ -17,27 +17,18 @@ When the engine restarts after downtime, `planScheduleTimerWork` in `src/core/en
 
 A schedule for financial reports or SLA-gated operations will silently miss occurrences after any downtime exceeding 1 second. Operators have no way to know how many occurrences were skipped or when the window was.
 
-## Proposed Design
+## Required fix
 
-1. When `skipMissedOccurrences` is true, update `lastFireAt` to the last missed occurrence timestamp (not the last fired timestamp).
-2. Persist a `missedOccurrences` counter or a structured miss-event on the schedule state so operators can observe skipped runs.
-3. Emit a `ScheduleMissedFireEvent` (or structured log warning) including: schedule ID, number of missed occurrences, window start (`nextFireAt` at skip time), window end (`now`).
-4. Document the 1-second grace period in `ScheduleOptions.backfill` JSDoc and make the grace period configurable via `ScheduleOptions`.
+`lastFireAt` is NOT repurposed — the review committee rejected that: it continues to mean "last occurrence that actually fired," everywhere, unchanged. Missed-fire observability gets its own dedicated fields and event:
 
-## Acceptance Criteria
-
-- After an engine restart with downtime > 1 second, at least one observable signal (event, log, or state field) tells operators how many occurrences were skipped and over what time window.
-- `lastFireAt` reflects the last missed occurrence, not the last fired occurrence, after a skip.
-- The 1-second grace constant is documented in `ScheduleOptions` and configuration.md.
-
-## Resolved field semantics
-
-The committee rejected repurposing `lastFireAt`: it continues to mean "last occurrence that actually fired." Missed-fire observability gets its own fields — `lastMissedFireAt` and `missedFireCount` on schedule state — plus an engine event when occurrences are skipped on recovery. Update the acceptance criteria of the original issue text accordingly; do not change `lastFireAt` semantics anywhere.
+1. When `skipMissedOccurrences` is true, set `lastMissedFireAt` (timestamp of the most recent skipped occurrence) and increment `missedFireCount` on schedule state. Do not touch `lastFireAt`.
+2. Emit a `ScheduleMissedFireEvent` engine event including: schedule ID, number of missed occurrences, window start (`nextFireAt` at skip time), window end (`now`).
+3. Document the 1-second grace period (`SCHEDULE_LATE_GRACE_MILLISECONDS`) in `ScheduleOptions.backfill` JSDoc and the schedule guide.
 
 ## Acceptance criteria (all required — completion is binary)
 
-- [ ] Skipped occurrences after downtime set lastMissedFireAt/missedFireCount and emit an operator-visible engine event; lastFireAt semantics are unchanged (pinned by test).
-- [ ] Schedule guide documents the missed-fire policy and the new fields.
+- [ ] Skipped occurrences after downtime set lastMissedFireAt and missedFireCount and emit a ScheduleMissedFireEvent carrying schedule ID, skip count, and the missed window; lastFireAt semantics are unchanged (pinned by test).
+- [ ] Schedule guide and ScheduleOptions.backfill JSDoc document the grace period and the new fields.
 
 ## Standard execution requirements
 

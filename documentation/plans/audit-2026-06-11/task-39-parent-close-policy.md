@@ -13,7 +13,7 @@ src/core/engine/child-workflow.ts:180-182: executeChildWorkflow always calls chi
 
 ### Required fix
 
-Add a parentClosePolicy field to ChildWorkflowOptions: 'await' (current default), 'abandon', 'request-cancel', 'terminate'. Implement 'abandon' by NOT awaiting childHandle.result() and returning a ChildWorkflowHandle reference instead (the child runs independently). Implement 'request-cancel' by registering a cancel handler (via the existing registerCancelHandler mechanism) that cancels the child when the parent cancels. 'terminate' forcibly terminates. The machinery to fire-and-not-await exists in the engine; this is a routing change in executeChildWorkflow and a new StartOptions flag.
+Add a parentClosePolicy field to ChildWorkflowOptions with exactly three policies: 'await' (current default), 'abandon', and 'request-cancel'. Implement 'abandon' by NOT awaiting childHandle.result() and returning a ChildWorkflowHandle reference instead (the child runs independently). Implement 'request-cancel' by registering a cancel handler (via the existing registerCancelHandler mechanism) that cancels the child when the parent cancels. A forcible 'terminate' policy is explicitly out of scope — do not add it; note the deliberate omission in the PR body. The machinery to fire-and-not-await exists in the engine; this is a routing change in executeChildWorkflow and a new StartOptions flag.
 
 ### Verifier note
 

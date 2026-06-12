@@ -13,7 +13,7 @@ src/core/engine/list-candidate-resolution.ts:132–145 — `getWorkflowVisibilit
 
 ### Required fix
 
-Cache the watermark in engine memory and invalidate it only on backfill completion (the backfill already writes to `wf-idx-meta:version`). Subscribe to that key change via the existing storage event feed, or poll once per minute. This eliminates one `storage.get` per query. More impactfully, set the default deployment posture to automatically run the backfill on `Engine.create()` for new databases so new deployments never enter the stale scan path.
+Cache the watermark in engine memory and invalidate it only on backfill completion (the backfill already writes to `wf-idx-meta:version`). Invalidation mechanism (decided): direct in-process invalidation — the code path that performs the backfill-completion write also clears the cached watermark on the same engine instance. No storage-event subscription and no polling: Weft's documented posture is one engine process per durable store, so there is no cross-process invalidation to solve. This eliminates one `storage.get` per query. (The original finding also proposed running the backfill automatically on `Engine.create()` for new databases — that is explicitly out of scope here; see the scope section below.)
 
 ### Verifier note
 
