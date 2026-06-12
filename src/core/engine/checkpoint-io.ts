@@ -221,10 +221,10 @@ function appendAttributeOperations(
   commit: CheckpointCommit,
   previousAttributes: Record<string, SearchAttributeValue>,
   pendingAttributeChanges: Record<string, SearchAttributeValue> | undefined,
-  hasPendingAttributeChanges: boolean,
+  hasPendingAttributeChangesValue: boolean,
   callbacks: PersistCheckpointCallbacks,
 ): void {
-  if (!hasPendingAttributeChanges) return;
+  if (!hasPendingAttributeChangesValue) return;
 
   callbacks.validateAttributeValueSizes(pendingAttributeChanges ?? {});
   commit.operations.push({

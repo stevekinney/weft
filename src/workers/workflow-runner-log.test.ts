@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, mock } from 'bun:test';
 
+import type { WorkerLoggerReplayState } from '../core/context/workflow-logger.ts';
 import type { OperationRequest, WorkflowLogRecord } from '../core/types.ts';
 import {
   createWorkerWorkflowContext,
@@ -61,7 +62,11 @@ describe('worker ctx.log', () => {
 
   it('exposes a structured logger that auto-carries the worker run identity', async () => {
     const context = createWorkflowRunnerContext();
+    let observedWorkflowType: string | undefined;
     async function* loggingWorkflow(ctx: WorkerWorkflowContext) {
+      // The logger's auto-attached workflowType must match ctx.workflowType —
+      // worker mode previously omitted workflowType from the context entirely.
+      observedWorkflowType = ctx.workflowType;
       ctx.log.info('worker started', { phase: 'init' });
       return 'done';
     }
@@ -73,6 +78,7 @@ describe('worker ctx.log', () => {
     );
 
     expect(result.type).toBe('completed');
+    expect(observedWorkflowType).toBe('worker-log-demo');
     expect(captured.records).toHaveLength(1);
     expect(captured.records[0]).toMatchObject({
       level: 'info',
@@ -81,6 +87,8 @@ describe('worker ctx.log', () => {
       workflowType: 'worker-log-demo',
       attributes: { phase: 'init' },
     });
+    // The logger's auto-attached workflowType matches the context's workflowType.
+    expect(captured.records[0]!.workflowType).toBe('worker-log-demo');
     expect(typeof captured.records[0]!.timestamp).toBe('number');
   });
 
@@ -101,12 +109,17 @@ describe('worker ctx.log', () => {
       return { first, second };
     }
 
-    // Fresh run: emits 'before-1' (live), parks on op1.
+    // Fresh run: emits 'before-1' (live), then parks requesting op1.
     const firstContext = createWorkflowRunnerContext();
-    await handleRunMessage(
+    const firstResult = await handleRunMessage(
       firstContext,
       { workflowId: 'wf-worker-replay', workflowType: 'replay', input: null },
       () => loggingWorkflow,
+    );
+    // Assert the operation boundary, not just the console: the run must park on op1.
+    expect(firstResult.type).toBe('checkpoint');
+    expect(firstResult.type === 'checkpoint' ? firstResult.operationRequest : undefined).toEqual(
+      op1,
     );
     expect(captured.records.map((r) => r.message)).toEqual(['before-1']);
     const checkpoint = await handleResumeMessage(firstContext, {
@@ -118,7 +131,8 @@ describe('worker ctx.log', () => {
 
     // Recovery: replays the body from a checkpoint that has step 0 cached.
     // 'before-1' is in the replayed prefix → suppressed. 'before-2' is the live
-    // frontier → emitted.
+    // frontier → emitted, and the recovered run must request op2 (proving the
+    // replay reached the right position, not just that the log sequence matched).
     captured.restore();
     captured = captureConsole();
     const recoveredContext = createWorkflowRunnerContext();
@@ -134,6 +148,7 @@ describe('worker ctx.log', () => {
     );
 
     expect(recovered.type).toBe('checkpoint');
+    expect(recovered.type === 'checkpoint' ? recovered.operationRequest : undefined).toEqual(op2);
     expect(captured.records.map((r) => r.message)).toEqual(['before-2']);
   });
 
@@ -161,15 +176,11 @@ describe('worker ctx.log', () => {
     // createWorkerWorkflowContext is called before replayStates.set in
     // handleRunMessage. The logger must read the replay state lazily through the
     // closure so the FIRST synchronous log call observes the live state.
-    let liveReplayState:
-      | { accumulatedResults: Map<number, unknown>; nextStepIndex: number }
-      | undefined;
+    let liveReplayState: WorkerLoggerReplayState | undefined;
     const ctx = createWorkerWorkflowContext(
       { workflowId: 'wf-closure', workflowType: 'closure', input: null },
       new AbortController(),
-      // Test-only: a minimal WorkerReplayState shape; only the two fields the
-      // logger reads (accumulatedResults, nextStepIndex) need to be present.
-      () => liveReplayState as never,
+      () => liveReplayState,
     );
 
     // Before the replay state is registered, the logger treats it as live.

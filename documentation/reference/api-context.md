@@ -498,20 +498,23 @@ Enable or disable explain mode. When enabled, durable operations log detailed ch
 readonly log: WorkflowLogger;
 ```
 
-A structured logger scoped to the run. Each method — `debug`, `info`, `warn`, `error` — emits a record to the host console (`console.debug` / `console.info` / `console.warn` / `console.error`) with `workflowId`, `workflowType`, `level`, and `timestamp` auto-attached:
+A structured logger scoped to the run. Each method (`debug`, `info`, `warn`, `error`) emits a record to the current process console (`console.debug` / `console.info` / `console.warn` / `console.error`) with `workflowId`, `workflowType`, `level`, and `timestamp` auto-attached:
 
 ```ts partial
 ctx.log.info('charge succeeded', { amount: 1999, currency: 'usd' });
 ```
 
-Caller-supplied attributes are nested under their own `attributes` key in the record, so they can never shadow an envelope field — `ctx.log.info('x', { workflowId: 'spoof' })` keeps the real `workflowId` on the envelope and quarantines `{ workflowId: 'spoof' }` inside `attributes`.
+Caller-supplied attributes are nested under their own `attributes` key in the record, so they can never shadow an envelope field. `ctx.log.info('x', { workflowId: 'spoof' })` keeps the real `workflowId` on the envelope and quarantines `{ workflowId: 'spoof' }` inside `attributes`.
 
-`ctx.log` is **replay-safe**. A workflow body re-executes from the start on recovery to rebuild state (replay); log calls in the already-committed replay window are suppressed, so a recovered run does not re-emit logs it already emitted. This holds in both inline and worker execution modes — unlike `ctx.services`-injected loggers, which are inline-only. `ctx.log` is **not** a durable operation: it consumes no step index and is never checkpointed.
+`ctx.log` is replay-safe. A workflow body re-executes from the start on recovery to rebuild state (replay); log calls in the already-committed replay window are suppressed, so a recovered run does not re-emit logs it already emitted. This holds in both inline and worker execution modes, unlike `ctx.services`-injected loggers, which are inline-only. `ctx.log` is _not_ a durable operation: it consumes no step index and is never checkpointed.
 
-> [!NOTE]
-> A log placed _after_ the last committed step re-fires on recovery, because there is no cached step to suppress it — the same caveat Temporal's workflow logger carries. Logs inside `ctx.all` / `ctx.runAll` branches follow that branch's re-execution semantics. Records are emitted to the host console; in worker-pool mode that is the worker process's console, not the engine host. A pluggable host sink and worker-mode host log routing are tracked in [issue #491](https://github.com/stevekinney/weft/issues/491).
+> [!NOTE] Replay edge cases
+> A log placed _after_ the last committed step re-fires on recovery, because there is no cached step to suppress it (the same caveat Temporal's workflow logger carries). Likewise, a workflow with no committed durable step has no replay position to suppress against, so its logs may re-emit on recovery. Logs inside `ctx.all` / `ctx.runAll` branches follow that branch's re-execution semantics.
 
-`log` is typed `readonly log?: WorkflowLogger` on the public `WorkflowContext` interface (optional, so existing structural implementors are not source-broken), but the engine always populates it at runtime — within a real workflow body it is always present. The `WorkflowLogger` type is exported so a host can also type a logger it injects through `ctx.services`.
+> [!NOTE] Log destination
+> Records go to the current process console. In worker-pool mode that is the worker process's console, not the engine host. Inline timestamps come from the engine clock; worker-mode timestamps come from the worker process wall clock. A pluggable host sink and worker-mode host log routing are tracked in [issue #491](https://github.com/stevekinney/weft/issues/491).
+
+`log` is typed `readonly log?: WorkflowLogger` on the public `WorkflowContext` interface (optional, so existing structural implementors are not source-broken), but the engine always populates it at runtime, so within a real workflow body it is always present. The `WorkflowLogger` type is exported so a host can also type a logger it injects through `ctx.services`.
 
 ### `state`
 

@@ -91,24 +91,33 @@ export interface WorkflowLogRecord {
 }
 
 /**
- * The structured logger exposed as {@link WorkflowContext.log}. Each method
- * emits a {@link WorkflowLogRecord} to the host console (`console.debug` /
+ * The structured logger exposed as {@link WorkflowContext.log}. Each method emits
+ * a {@link WorkflowLogRecord} to the current process console (`console.debug` /
  * `console.info` / `console.warn` / `console.error`) with `workflowId`,
  * `workflowType`, `level`, and `timestamp` auto-attached. Caller-supplied
  * `attributes` are nested under their own key and cannot overwrite the envelope.
  *
- * **Replay-safe.** A workflow body re-executes from the start on recovery to
- * rebuild state (replay); log calls in the already-committed replay window are
- * suppressed, so a recovered run does not re-emit logs it already emitted.
- * Suppression is per-position: a log call sitting at a step the engine has
- * already cached is silenced, a log call at the live frontier emits. This holds
- * in both inline and worker execution modes. (A log placed *after* the last
- * committed step re-fires on recovery, because there is no cached step to
- * suppress it — the same caveat Temporal's workflow logger carries.) Logs inside
- * `ctx.all` / `ctx.runAll` branches follow that branch's re-execution semantics.
+ * Replay behavior: a workflow body re-executes from the start on recovery to
+ * rebuild state. Log calls in the already-committed replay window are suppressed,
+ * so a recovered run does not re-emit logs it already emitted. Suppression is
+ * per-position: a log call sitting at a step the engine has already cached is
+ * silenced; a log call at the live frontier emits. This holds in both inline and
+ * worker execution modes.
+ *
+ * Two replay caveats. A log placed *after* the last committed step re-fires on
+ * recovery, because there is no cached step to suppress it (the same caveat
+ * Temporal's workflow logger carries); likewise a workflow with no committed
+ * durable step has no replay position to suppress against, so its logs may
+ * re-emit on recovery. Logs inside `ctx.all` / `ctx.runAll` branches follow that
+ * branch's re-execution semantics.
+ *
+ * In worker-pool mode, "the current process console" is the worker process, not
+ * the engine host. Inline log timestamps come from the engine clock; worker-mode
+ * timestamps come from the worker process wall clock. Routing records into a host
+ * logging stack, and host-side collection of worker logs, is tracked in #491.
  *
  * Exported so a host can also type a logger it injects through `ctx.services`
- * (the pre-`ctx.log` pattern): `const { log } = ctx.services as { log: WorkflowLogger }`.
+ * (the pre-`ctx.log` pattern).
  *
  * @example
  * ```ts
@@ -119,11 +128,11 @@ export interface WorkflowLogRecord {
  * ) {
  *   ctx.log?.info('workflow started', { attempt: 1 });
  *   ctx.log?.warn('retrying activity', { reason: 'timeout' });
- *   ctx.log?.error('activity failed', { error: 'ECONNREFUSED' });
+ *   // A host logger injected through `ctx.services` can reuse this type:
+ *   const { log } = (ctx.services ?? {}) as { log?: WorkflowLogger };
+ *   log?.error('activity failed', { error: 'ECONNREFUSED' });
  * });
- * const typedFromServices: WorkflowLogger | undefined = undefined;
  * void myWorkflow;
- * void typedFromServices;
  * ```
  */
 export interface WorkflowLogger {

@@ -85,6 +85,10 @@ export class Context implements WorkflowContext {
   readonly workflowType: string;
   readonly startedAt: number;
   readonly signal: AbortSignal;
+  // Lazily built on first `ctx.log` access and cached: the logger's replay probe
+  // is a closure that reads live internals at emit time, so the object itself is
+  // stable for the run's lifetime and need not be rebuilt per access.
+  #log: WorkflowLogger | undefined;
   constructor(options: ContextOptions) {
     this.workflowId = options.workflowId;
     this.workflowType = options.workflowType;
@@ -102,7 +106,9 @@ export class Context implements WorkflowContext {
     return getInternals(this).services;
   }
   get log(): WorkflowLogger {
-    return createInlineWorkflowLogger(this.workflowId, this.workflowType, () => getInternals(this));
+    return (this.#log ??= createInlineWorkflowLogger(this.workflowId, this.workflowType, () =>
+      getInternals(this),
+    ));
   }
   get stepIndex(): number {
     return getInternals(this).stepIndex;

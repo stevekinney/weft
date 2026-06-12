@@ -5,7 +5,10 @@ import {
   serializeCheckpoint,
 } from '../core/checkpoint.ts';
 import { WorkflowAtomicStateHandle } from '../core/context/state-namespace.ts';
-import { createWorkerWorkflowLogger } from '../core/context/workflow-logger.ts';
+import {
+  createWorkerWorkflowLogger,
+  type WorkerLoggerReplayState,
+} from '../core/context/workflow-logger.ts';
 import {
   classifyErrorAsFailureCategory,
   errorFromFailedOperationOutcome,
@@ -39,7 +42,10 @@ import {
  * in particular) are stub values because the worker has no clock authority —
  * any user code reading them will see static numbers, not live deadlines.
  */
-export type WorkerWorkflowContext = Pick<WorkflowContext, 'workflowId' | 'signal' | 'startedAt'> & {
+export type WorkerWorkflowContext = Pick<
+  WorkflowContext,
+  'workflowId' | 'workflowType' | 'signal' | 'startedAt'
+> & {
   readonly state: WorkflowStateNamespace;
   // Always present at runtime (the engine populates it), but the public
   // WorkflowContext types it `log?` for structural implementors, so this Pick
@@ -65,17 +71,20 @@ interface RunMessageShape {
 export function createWorkerWorkflowContext(
   message: RunMessageShape,
   controller: AbortController,
-  getReplayState: () => WorkerReplayState | undefined,
+  // Typed as the structural slice the logger reads, not the full private
+  // `WorkerReplayState`, so callers (and tests) model the contract without
+  // reaching for the whole replay-state type. `WorkerReplayState` is a superset,
+  // so the real call site passes through unchanged.
+  getReplayState: () => WorkerLoggerReplayState | undefined,
 ): WorkerWorkflowContext {
   return {
     workflowId: message.workflowId,
+    workflowType: message.workflowType,
     signal: controller.signal,
     startedAt: Date.now(),
     state: createWorkerStateNamespace(message),
-    // `WorkerReplayState` is a superset of the `WorkerLoggerReplayState` slice the
-    // logger reads (accumulatedResults + nextStepIndex), so the closure passes
-    // straight through. The replay state is registered after this context is
-    // built (see `handleRunMessage`), hence reading it through the closure.
+    // The replay state is registered after this context is built (see
+    // `handleRunMessage`), hence reading it through the closure.
     log: createWorkerWorkflowLogger(message.workflowId, message.workflowType, getReplayState),
   };
 }
