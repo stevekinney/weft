@@ -13,7 +13,7 @@ src/core/schedule/cron-occurrence.ts line 1-4 imports getDefaultTimeZone and get
 
 ### Required fix
 
-Add jitter?: Duration to ScheduleOptions and ScheduleDefinition. In the schedule timer firing path (src/core/engine/schedule-timer.ts), apply a deterministic jitter offset: use a seeded hash of `scheduleId + nominalFireTimestamp` (the pre-jitter nextFireAt, which is already persisted in ScheduleState) to generate a stable pseudo-random offset in [0, jitter) milliseconds added to nextFireAt. Deterministic seeding ensures the same jitter per occurrence on replay without storing extra state — see the seed correction below; ScheduleState has no fire-sequence counter, so the nominal fire timestamp is the seed.
+Add jitter?: Duration to ScheduleOptions and ScheduleDefinition. In the schedule timer firing path (src/core/engine/schedule-timer.ts), apply a deterministic jitter offset: use a seeded hash of `scheduleId + nominalFireTimestamp` (the pre-jitter nextFireAt, which is already persisted in ScheduleState) to generate a stable pseudo-random offset in [0, jitter) milliseconds applied to the effective dispatch time only. The persisted `ScheduleState.nextFireAt` always stays the nominal pre-jitter fire time — it is the seed input, so writing a jittered value back to it would change the seed across replays and break determinism. Deterministic seeding ensures the same jitter per occurrence on replay without storing extra state — see the seed correction below; ScheduleState has no fire-sequence counter, so the nominal fire timestamp is the seed.
 
 ### Verifier note
 
@@ -25,7 +25,7 @@ Per the verifier: ScheduleState has no fire-sequence counter — the determinist
 
 ## Acceptance criteria (all required — completion is binary)
 
-- [ ] ScheduleOptions.jitter applies a stable pseudo-random offset in [0, jitter) to each occurrence, deterministic for a given scheduleId + nominal fire time (test recomputes and matches); overlap policies and backfill interact correctly (jitter applies after occurrence selection).
+- [ ] ScheduleOptions.jitter applies a stable pseudo-random offset in [0, jitter) to each occurrence's effective dispatch time, deterministic for a given scheduleId + nominal fire time (test recomputes and matches); the persisted ScheduleState.nextFireAt remains the nominal pre-jitter time (pinned by test); overlap policies and backfill interact correctly (jitter applies after occurrence selection).
 - [ ] Schedule docs cover jitter and its determinism contract.
 
 ## Standard execution requirements

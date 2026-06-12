@@ -1,6 +1,6 @@
 # Task 41: retryFailedAll bulk operation (resolve the declared-but-unimplemented recover action)
 
-**Severity:** medium
+**Severity:** low
 
 ## Finding: No dead-letter queue / explicit failed workflow recovery routing
 
