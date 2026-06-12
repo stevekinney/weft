@@ -198,6 +198,9 @@ export function cleanupWaiters(
   cleanupConditionWaiters(internals, workflowId);
   cleanupReviewEscalations(internals, workflowId, callbacks);
 
+  // Release the per-workflow coordinated-update delivery-claim set so it cannot
+  // leak one entry per completed workflow on a long-lived engine.
+  internals.deliveredPendingUpdateIds.delete(workflowId);
   internals.workflowNestingDepths.delete(workflowId);
   internals.workflowHeaders.delete(workflowId);
   internals.workflowServices.delete(workflowId);

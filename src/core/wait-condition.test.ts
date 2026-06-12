@@ -376,6 +376,93 @@ describe('ctx.waitUntil', () => {
     expect(await engine.get(handle.id).then((s) => s?.status)).toBe('cancelled');
   });
 
+  it('re-evaluates the predicate when a buffered pending update is drained after the wait parks', async () => {
+    // Regression for the Cursor Bugbot finding: an update that arrives BEFORE
+    // `ctx.onUpdate` is registered is buffered as a coordinated pending update.
+    // It is delivered later by `deliverPendingUpdate` (the post-advance drain),
+    // which invokes the handler but — before the fix — did NOT call
+    // `notifyConditionWaiters`. So a `waitUntil` parked after registration never
+    // re-evaluated and hung until timeout.
+    using engine = new Engine();
+    engine.register(
+      workflow({ name: 'pending-drain-redrive' }).execute(async function* (ctx: WorkflowContext) {
+        // Park first with NO update handler, so the incoming update has nowhere
+        // to land and is buffered as a pending coordinated update.
+        yield* ctx.waitForSignal('begin');
+
+        let ready = false;
+        ctx.onUpdate('arm', () => {
+          ready = true;
+        });
+        // The buffered 'arm' update drains right after this turn registers the
+        // handler; its mutation must wake this parked wait.
+        yield* ctx.waitUntil(() => ready);
+        return 'unblocked';
+      }),
+    );
+
+    const handle = await engine.start('pending-drain-redrive', null);
+    await flush();
+
+    // Buffer the update while no handler exists yet (parked on the signal).
+    void engine.update(handle.id, 'arm', null).catch(() => {});
+    await flush();
+
+    // Release the signal: the body registers `onUpdate('arm')` and parks on the
+    // wait. The buffered update is then drained and sets `ready = true`.
+    await engine.signal(handle.id, 'begin', null);
+
+    // Without the pending-drain re-drive, this hangs (Bun per-test timeout).
+    await expect(handle.result()).resolves.toBe('unblocked');
+  });
+
+  it('handles a satisfying buffered update with a second pending update behind it (mid-drain re-entrancy)', async () => {
+    // The condition re-drive fires ONCE after the whole drain, not per update.
+    // That avoids re-entering the inline strategy mid-loop (which would advance
+    // the generator while remaining buffered updates are still iterating and
+    // re-deliver them). So both buffered updates apply exactly once — `[1, 11]`,
+    // NOT `[10, 20, 21, 22]` from a mid-loop re-entrant advance — and then the
+    // single post-drain poke wakes the satisfied wait.
+    using engine = new Engine();
+    const seen: number[] = [];
+    engine.register(
+      workflow({ name: 'pending-drain-reentrancy' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        yield* ctx.waitForSignal('begin');
+
+        let total = 0;
+        ctx.onUpdate('add', (amount) => {
+          total += amount as number;
+          seen.push(total);
+          return total;
+        });
+        // Satisfied once either buffered 'add' has landed (total >= 1).
+        yield* ctx.waitUntil(() => total >= 1);
+        return total;
+      }),
+    );
+
+    const handle = await engine.start('pending-drain-reentrancy', null);
+    await flush();
+
+    // Two updates buffered before the handler exists; both drain after the body
+    // registers the handler and parks on the wait.
+    void engine.update(handle.id, 'add', 1).catch(() => {});
+    void engine.update(handle.id, 'add', 10).catch(() => {});
+    await flush();
+
+    await engine.signal(handle.id, 'begin', null);
+
+    // Exactly-once delivery of both buffered updates, order-independent: the
+    // total reaches 11 (1 + 10) only if neither update is delivered twice (any
+    // duplicate would sum to >= 12), and the handler ran exactly twice. Delivery
+    // ORDER is intentionally not asserted — FIFO ties on `createdAt` break on the
+    // random UUID, so `[1, 11]` vs `[10, 11]` is legitimately nondeterministic.
+    await expect(handle.result()).resolves.toBe(11);
+    expect(seen.length).toBe(2);
+  });
+
   it('ignores an update poke when no waitUntil is active (notify no-op branch)', async () => {
     using engine = new Engine();
     engine.register(

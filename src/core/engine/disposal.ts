@@ -57,6 +57,7 @@ export function disposeEngine(internals: EngineInternals): void {
   internals.workflowReviewIds.clear();
   internals.parkedInlineWorkflows.clear();
   internals.terminalizingWorkflows.clear();
+  internals.deliveredPendingUpdateIds.clear();
   internals.reviewTimerIds.clear();
   for (const controller of internals.pendingWebhooks) controller.abort();
   internals.pendingWebhooks.clear();

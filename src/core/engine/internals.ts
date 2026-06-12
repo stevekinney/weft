@@ -208,6 +208,22 @@ export interface EngineInternals {
   workflowReviewIds: Map<string, Set<string>>;
   parkedInlineWorkflows: Set<string>;
   terminalizingWorkflows: Set<string>;
+  /**
+   * Coordinated update IDs already claimed for delivery by a pending-update
+   * drain, keyed by workflow. Several drain triggers (each `update()` schedules a
+   * `setTimeout(0)` drain; the post-advance path drains too) can fire
+   * near-simultaneously, and the durable consume-delete (`buildResponseOperations`
+   * deletes the pending key via async `storage.batch`) lags the in-memory
+   * `getPendingUpdates` scan — so overlapping drains would re-read and re-deliver
+   * the same buffered update. Each drain claims an update's id SYNCHRONOUSLY (no
+   * `await` between the membership check and the add) before delivering it, so a
+   * racing drain that scans the same id skips it. The claim persists across
+   * drains (unlike a per-drain guard), which is what makes delivery idempotent
+   * against the cross-drain race. Cleared per workflow on terminal cleanup; empty
+   * after a crash, which matches durable state (recovery re-delivers exactly the
+   * updates whose delete never committed).
+   */
+  deliveredPendingUpdateIds: Map<string, Set<string>>;
   cancelHandlersByWorkflow: Map<string, Array<() => Promise<void> | void>>;
   reviewTimerIds: Map<string, string[]>;
   pendingWebhooks: Set<AbortController>;

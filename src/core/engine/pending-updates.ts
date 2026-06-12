@@ -1,6 +1,7 @@
 import { UpdateCompletedEvent, UpdateReceivedEvent } from '../events.ts';
 import type { UpdateRequest } from '../updates.ts';
 import { UpdateValidationError } from '../updates.ts';
+import { notifyConditionWaiters } from './condition-waiters.ts';
 import type { EngineInternals } from './internals.ts';
 import {
   extractStandardSchemaIssues,
@@ -118,6 +119,23 @@ async function runPendingUpdateValidator(
   return null;
 }
 
+/**
+ * Drain a workflow's buffered coordinated updates and deliver each to its
+ * handler exactly once, even when several drains race.
+ *
+ * Several triggers can fire near-simultaneously: each `engine.update()` schedules
+ * a `setTimeout(0)` drain, and the post-advance path drains too. Their consume-
+ * deletes are durable (`storage.batch`) and lag the in-memory `getPendingUpdates`
+ * scan, so two overlapping drains both see the same pending set. Each update id
+ * is therefore CLAIMED synchronously in `deliveredPendingUpdateIds` before
+ * delivery (no `await` between the membership check and the add, so a concurrent
+ * drain cannot interleave): a racing drain that re-reads the same id skips it.
+ *
+ * After the drain, re-drive a parked `ctx.waitUntil` once. A coordinated update
+ * buffered before `ctx.onUpdate` was registered drains here (not on the inline
+ * `tryInlineUpdateHandler` path), and a handler may have mutated the workflow-
+ * local state a predicate reads, so the wait must be poked to re-evaluate.
+ */
 export async function processPendingUpdatesForHandlers(
   internals: EngineInternals,
   workflowId: string,
@@ -132,9 +150,14 @@ export async function processPendingUpdatesForHandlers(
   const pendingUpdates = await internals.updateCoordinator.getPendingUpdates(workflowId);
   if (pendingUpdates.length === 0) return;
 
+  let deliveredAny = false;
   for (const update of pendingUpdates) {
     const handler = handlers.get(update.name);
     if (!handler) continue;
+
+    // Claim the id synchronously before any `await`, so a racing drain that
+    // scanned the same id (before this drain's durable delete commits) skips it.
+    if (!claimPendingUpdateForDelivery(internals, workflowId, update.updateId)) continue;
 
     const validatorRejectionError = await runValidatorIfPresent(context, update);
     if (validatorRejectionError !== null) {
@@ -143,7 +166,33 @@ export async function processPendingUpdatesForHandlers(
     }
 
     await deliverPendingUpdate(internals, workflowId, update, handler, callbacks);
+    deliveredAny = true;
   }
+
+  if (deliveredAny) {
+    notifyConditionWaiters(internals, workflowId);
+  }
+}
+
+/**
+ * Atomically claim a coordinated update id for delivery. Returns `true` if this
+ * caller won the claim (first to see it), `false` if another drain already
+ * claimed it. The check-and-add is synchronous, so concurrent drains cannot both
+ * win the same id.
+ */
+function claimPendingUpdateForDelivery(
+  internals: EngineInternals,
+  workflowId: string,
+  updateId: string,
+): boolean {
+  let claimed = internals.deliveredPendingUpdateIds.get(workflowId);
+  if (claimed === undefined) {
+    claimed = new Set();
+    internals.deliveredPendingUpdateIds.set(workflowId, claimed);
+  }
+  if (claimed.has(updateId)) return false;
+  claimed.add(updateId);
+  return true;
 }
 
 async function runValidatorIfPresent(
