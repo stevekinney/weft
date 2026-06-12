@@ -188,13 +188,51 @@ describe('worker ctx.log', () => {
     expect(captured.records.map((r) => r.message)).toEqual(['pre-register']);
 
     // Register a replay state whose cached step matches the frontier → suppressed.
-    liveReplayState = { accumulatedResults: new Map([[0, 'cached']]), nextStepIndex: 0 };
+    liveReplayState = {
+      accumulatedResults: new Map([[0, 'cached']]),
+      failedOutcomes: new Map(),
+      nextStepIndex: 0,
+    };
     ctx.log.info('replaying');
     expect(captured.records.map((r) => r.message)).toEqual(['pre-register']);
 
     // Advance the frontier past the cached prefix → live again.
-    liveReplayState = { accumulatedResults: new Map([[0, 'cached']]), nextStepIndex: 1 };
+    liveReplayState = {
+      accumulatedResults: new Map([[0, 'cached']]),
+      failedOutcomes: new Map(),
+      nextStepIndex: 1,
+    };
     ctx.log.info('post-replay');
     expect(captured.records.map((r) => r.message)).toEqual(['pre-register', 'post-replay']);
+  });
+
+  it('suppresses a log at a replayed FAILED step position (not just succeeded steps)', () => {
+    // Worker checkpoints store failed steps in `failedOutcomes`, not
+    // `accumulatedResults`. The replay probe must check both, or a log before a
+    // step that failed-and-is-being-replayed would re-emit on recovery.
+    let liveReplayState: WorkerLoggerReplayState | undefined;
+    const ctx = createWorkerWorkflowContext(
+      { workflowId: 'wf-failed', workflowType: 'failed', input: null },
+      new AbortController(),
+      () => liveReplayState,
+    );
+
+    // Step 0 is a REPLAYED FAILURE (in failedOutcomes, absent from accumulatedResults).
+    liveReplayState = {
+      accumulatedResults: new Map(),
+      failedOutcomes: new Map([[0, { error: 'boom', failureCategory: 'application' }]]),
+      nextStepIndex: 0,
+    };
+    ctx.log.info('before failed step — replaying');
+    expect(captured.records).toHaveLength(0);
+
+    // Frontier past the replayed-failure prefix → live again.
+    liveReplayState = {
+      accumulatedResults: new Map(),
+      failedOutcomes: new Map([[0, { error: 'boom', failureCategory: 'application' }]]),
+      nextStepIndex: 1,
+    };
+    ctx.log.info('after failed step — live');
+    expect(captured.records.map((r) => r.message)).toEqual(['after failed step — live']);
   });
 });

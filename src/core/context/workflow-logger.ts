@@ -106,23 +106,31 @@ export function createInlineWorkflowLogger(
   });
 }
 
-/** The slice of worker replay state the worker logger's replay probe reads. */
+/**
+ * The slice of worker replay state the worker logger's replay probe reads. A step
+ * being replayed is cached in `accumulatedResults` (it succeeded) OR in
+ * `failedOutcomes` (it failed and the failure is replayed) — the logger must check
+ * both, mirroring the runner's own `hasCachedWorkerOutcome`, or a log at a
+ * replayed *failure* position would re-emit on recovery.
+ */
 export interface WorkerLoggerReplayState {
   readonly accumulatedResults: ReadonlyMap<number, unknown>;
+  readonly failedOutcomes: ReadonlyMap<number, unknown>;
   readonly nextStepIndex: number;
 }
 
 /**
  * Build the worker-side `ctx.log` logger. Mirrors {@link createInlineWorkflowLogger}
- * through the shared factory; only the replay probe differs. `nextStepIndex`
- * points at the step the worker generator is about to run, so
- * `accumulatedResults.has(nextStepIndex)` is true while that step replays a cached
- * outcome and false at the live frontier — the same per-position check the inline
- * path makes. The state is read through `getReplayState` (not captured by value)
- * because the worker registers its replay state *after* the context is built, so
- * the closure must observe the live state at emit time. Worker records use
- * wall-clock `Date.now()` (the worker has no engine clock); the timestamp is
- * observability metadata only, never checkpointed.
+ * through the shared factory; only the replay probe differs. `nextStepIndex` points
+ * at the step the worker generator is about to run, so a cached outcome at that
+ * index (success in `accumulatedResults` or failure in `failedOutcomes`) means the
+ * step is replaying and its preceding log is suppressed; an uncached index is the
+ * live frontier — the same per-position check the inline path makes (and the same
+ * union the runner's own replay short-circuit uses). The state is read through
+ * `getReplayState` (not captured by value) because the worker registers its replay
+ * state *after* the context is built, so the closure must observe the live state at
+ * emit time. Worker records use wall-clock `Date.now()` (the worker has no engine
+ * clock); the timestamp is observability metadata only, never checkpointed.
  */
 export function createWorkerWorkflowLogger(
   workflowId: string,
@@ -134,7 +142,9 @@ export function createWorkerWorkflowLogger(
     workflowType,
     isReplaying: () => {
       const replayState = getReplayState();
-      return replayState?.accumulatedResults.has(replayState.nextStepIndex) ?? false;
+      if (replayState === undefined) return false;
+      const step = replayState.nextStepIndex;
+      return replayState.accumulatedResults.has(step) || replayState.failedOutcomes.has(step);
     },
     now: () => Date.now(),
   });

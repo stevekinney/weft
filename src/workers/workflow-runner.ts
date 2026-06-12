@@ -47,9 +47,8 @@ export type WorkerWorkflowContext = Pick<
   'workflowId' | 'workflowType' | 'signal' | 'startedAt'
 > & {
   readonly state: WorkflowStateNamespace;
-  // Always present at runtime (the engine populates it), but the public
-  // WorkflowContext types it `log?` for structural implementors, so this Pick
-  // makes it non-optional to reflect the worker runtime guarantee.
+  // Non-optional here (always populated at runtime) even though the public
+  // WorkflowContext types it `log?` for structural implementors.
   readonly log: WorkflowLogger;
 };
 
@@ -71,10 +70,8 @@ interface RunMessageShape {
 export function createWorkerWorkflowContext(
   message: RunMessageShape,
   controller: AbortController,
-  // Typed as the structural slice the logger reads, not the full private
-  // `WorkerReplayState`, so callers (and tests) model the contract without
-  // reaching for the whole replay-state type. `WorkerReplayState` is a superset,
-  // so the real call site passes through unchanged.
+  // The structural slice the logger reads, not the full private `WorkerReplayState`
+  // (a superset, so the real call site passes through unchanged).
   getReplayState: () => WorkerLoggerReplayState | undefined,
 ): WorkerWorkflowContext {
   return {
@@ -83,8 +80,8 @@ export function createWorkerWorkflowContext(
     signal: controller.signal,
     startedAt: Date.now(),
     state: createWorkerStateNamespace(message),
-    // The replay state is registered after this context is built (see
-    // `handleRunMessage`), hence reading it through the closure.
+    // The logger reads replay state through the closure (not by value) so it sees
+    // the live frontier at each emit as the runner advances `nextStepIndex`.
     log: createWorkerWorkflowLogger(message.workflowId, message.workflowType, getReplayState),
   };
 }
@@ -178,11 +175,14 @@ export async function handleRunMessage(
   context.abortControllers.set(message.workflowId, controller);
 
   try {
+    // Register the replay state before building the context or invoking the
+    // handler, so `ctx.log`'s probe is replay-aware from the earliest point even
+    // if a handler runs synchronous code before yielding.
+    context.replayStates.set(message.workflowId, createReplayState(message));
     const workerContext = createWorkerWorkflowContext(message, controller, () =>
       context.replayStates.get(message.workflowId),
     );
     const generator = handler(workerContext, message.input);
-    context.replayStates.set(message.workflowId, createReplayState(message));
     const step = await generator.next();
     return await processGeneratorStep(context, message.workflowId, generator, step);
   } catch (error) {

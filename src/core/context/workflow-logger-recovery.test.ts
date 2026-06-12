@@ -78,20 +78,23 @@ describe('ctx.log engine-level replay safety', () => {
           }),
       );
 
-    const first = new Engine({ storage });
-    build(first);
-    await first.start('log-recover', null, { id: 'log-recover-id' });
-    await flush();
-    // Fresh run logged the pre-step marker once, ran the activity, then parked.
-    expect(loggedMessages(captured.records, 'log-recover')).toEqual(['marker:before-step']);
-    first[Symbol.dispose]();
+    // The first engine is scoped to a block so `using` disposes it at the block's
+    // end — the crash boundary — even if an assertion throws first.
+    {
+      using first = new Engine({ storage });
+      build(first);
+      await first.start('log-recover', null, { id: 'log-recover-id' });
+      await flush();
+      // Fresh run logged the pre-step marker once, ran the activity, then parked.
+      expect(loggedMessages(captured.records, 'log-recover')).toEqual(['marker:before-step']);
+    }
 
     // Recover: the engine replays the body to rebuild state. The pre-step log
     // sits before the cached `noop('x')` step → suppressed. Nothing new emits
     // until the signal resumes the run past the replayed prefix.
     captured.restore();
     captured = captureConsole();
-    const recovered = new Engine({ storage });
+    using recovered = new Engine({ storage });
     build(recovered);
     const [handle] = await recovered.recoverAll();
     await flush();
@@ -102,7 +105,6 @@ describe('ctx.log engine-level replay safety', () => {
     await recovered.signal('log-recover-id', 'go', 'done');
     await expect(handle!.result()).resolves.toBe('done');
     expect(loggedMessages(captured.records, 'log-recover')).toEqual(['marker:after-resume']);
-    recovered[Symbol.dispose]();
   });
 
   it('suppresses a log placed after a real ctx.all block once a later step commits', async () => {
@@ -130,16 +132,17 @@ describe('ctx.log engine-level replay safety', () => {
           }),
       );
 
-    const first = new Engine({ storage });
-    build(first);
-    await first.start('log-after-all', null, { id: 'log-after-all-id' });
-    await flush();
-    // Fresh run: ctx.all settled, both post-block logs emitted, then parked.
-    expect(loggedMessages(captured.records, 'log-after-all')).toEqual([
-      'marker:after-all',
-      'marker:tail',
-    ]);
-    first[Symbol.dispose]();
+    {
+      using first = new Engine({ storage });
+      build(first);
+      await first.start('log-after-all', null, { id: 'log-after-all-id' });
+      await flush();
+      // Fresh run: ctx.all settled, both post-block logs emitted, then parked.
+      expect(loggedMessages(captured.records, 'log-after-all')).toEqual([
+        'marker:after-all',
+        'marker:tail',
+      ]);
+    }
 
     // Recover: the body replays through the cached ctx.all AND the committed
     // `noop('c')` step. `marker:after-all` sits before that cached step →
@@ -149,7 +152,7 @@ describe('ctx.log engine-level replay safety', () => {
     // index could not distinguish these two positions).
     captured.restore();
     captured = captureConsole();
-    const recovered = new Engine({ storage });
+    using recovered = new Engine({ storage });
     build(recovered);
     const [handle] = await recovered.recoverAll();
     await flush();
@@ -157,7 +160,6 @@ describe('ctx.log engine-level replay safety', () => {
 
     await recovered.signal('log-after-all-id', 'go', 'go');
     await expect(handle!.result()).resolves.toBe('done');
-    recovered[Symbol.dispose]();
   });
 
   it('re-fires a log placed after the last committed step on recovery (documented caveat)', async () => {
@@ -178,16 +180,17 @@ describe('ctx.log engine-level replay safety', () => {
           }),
       );
 
-    const first = new Engine({ storage });
-    build(first);
-    await first.start('log-after-last', null, { id: 'log-after-last-id' });
-    await flush();
-    expect(loggedMessages(captured.records, 'log-after-last')).toEqual(['marker:after-last']);
-    first[Symbol.dispose]();
+    {
+      using first = new Engine({ storage });
+      build(first);
+      await first.start('log-after-last', null, { id: 'log-after-last-id' });
+      await flush();
+      expect(loggedMessages(captured.records, 'log-after-last')).toEqual(['marker:after-last']);
+    }
 
     captured.restore();
     captured = captureConsole();
-    const recovered = new Engine({ storage });
+    using recovered = new Engine({ storage });
     build(recovered);
     const [handle] = await recovered.recoverAll();
     await flush();
@@ -196,6 +199,5 @@ describe('ctx.log engine-level replay safety', () => {
 
     await recovered.signal('log-after-last-id', 'go', 'go');
     await expect(handle!.result()).resolves.toBe('done');
-    recovered[Symbol.dispose]();
   });
 });
