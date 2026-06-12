@@ -103,7 +103,7 @@ Implement Option B, the conservative path: add an `[!NOTE] Experimental` callout
 
 - `CHANGELOG.md`: no `## [0.2.1]` or `## [0.2.0]` section.
 - `documentation/contributing/breaking-changes.md:23`: 'Breaking changes to stable surfaces are always announced in CHANGELOG.md with a migration path.'
-- The `v0.2.1` tag corresponds to 'Weft DX improvements from the first integrator (agent-bureau) (#415)', followed by 'Release v0.2.1 (#416)'.
+- The `v0.2.1` tag corresponds to the integrator-feedback DX-improvements commit (#415), followed by 'Release v0.2.1 (#416)'.
 
 ### Proposed Resolution
 
