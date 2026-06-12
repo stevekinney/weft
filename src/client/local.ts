@@ -65,6 +65,7 @@ import { inProcessCatalogTransport } from './in-process-operations.ts';
 import type {
   ClientHandle,
   ClientScheduleHandle,
+  StartOrSignalOutcome,
   UpdateResult,
   WeftClient,
   WeftClientActivity,
@@ -79,8 +80,8 @@ import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow
 class LocalHandle extends WorkflowHandleDelegation<LocalClient> {
   readonly #handle: WorkflowHandle;
 
-  constructor(handle: WorkflowHandle, client: LocalClient) {
-    super(handle.id, client);
+  constructor(handle: WorkflowHandle, client: LocalClient, outcome?: StartOrSignalOutcome) {
+    super(handle.id, client, outcome);
     this.#handle = handle;
   }
 
@@ -235,8 +236,8 @@ export class LocalClient implements WeftClient {
     signal: StartOrSignalSignal,
     options?: StartOptions,
   ): Promise<ClientHandle> {
-    const handle = await this.#engine.startOrSignal(type, input, signal, options);
-    return new LocalHandle(handle, this);
+    const { handle, outcome } = await this.#engine.startOrSignal(type, input, signal, options);
+    return new LocalHandle(handle, this, outcome);
   }
   // jscpd:ignore-end
 

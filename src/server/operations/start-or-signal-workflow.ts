@@ -42,6 +42,9 @@ const startOrSignalWorkflowInput = z.object({
 
 const startOrSignalWorkflowOutput = z.object({
   id: z.string(),
+  // Which atomic path the call took (#466): `'started'` created the run,
+  // `'signalled'` delivered to a run that already existed.
+  outcome: z.enum(['started', 'signalled']),
 });
 
 export type StartOrSignalWorkflowInput = z.infer<typeof startOrSignalWorkflowInput>;
@@ -188,8 +191,13 @@ export const startOrSignalWorkflowOperation = defineOperation<
     });
 
     try {
-      const handle = await typedEngine.startOrSignal(type, input.input, signal, options);
-      return { id: handle.id };
+      const { handle, outcome } = await typedEngine.startOrSignal(
+        type,
+        input.input,
+        signal,
+        options,
+      );
+      return { id: handle.id, outcome };
     } catch (error) {
       resolveStartOrSignalWorkflowFault(error);
     }

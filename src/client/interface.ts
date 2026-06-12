@@ -57,6 +57,15 @@ import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow
 // ---------------------------------------------------------------------------
 
 /**
+ * Which atomic path a {@link WeftClient.startOrSignal} call took: `'started'`
+ * (the call created the run) or `'signalled'` (it signalled a run that already
+ * existed, including losing a concurrent same-key create race and converging
+ * onto the winner). Each call returns its OWN handle, so converged concurrent
+ * callers each observe their own per-call outcome.
+ */
+export type StartOrSignalOutcome = 'started' | 'signalled';
+
+/**
  * A reference to a workflow that provides convenience methods.
  *
  * Extends {@link TypedEventTarget} so callers can observe workflow lifecycle
@@ -98,6 +107,13 @@ export interface ClientHandle<TResult = unknown>
   extends TypedEventTarget<WeftEventMap>, Disposable {
   /** The workflow's unique identifier. */
   readonly id: string;
+
+  /**
+   * For a {@link WeftClient.startOrSignal} handle, which atomic path the call
+   * took (see {@link StartOrSignalOutcome}); `undefined` on handles from any
+   * other call (`start`, `getHandle`, `resume`, …).
+   */
+  readonly outcome: StartOrSignalOutcome | undefined;
 
   /** Resolves when the workflow completes (or rejects on failure). */
   result(): Promise<TResult>;
@@ -363,22 +379,12 @@ export interface WeftClient {
 
   /**
    * Re-attach a {@link ClientHandle} to an existing workflow by id, or `null`
-   * when no workflow with that id exists.
-   *
-   * Unlike {@link WeftClient.start} / {@link WeftClient.startOrSignal} —
-   * which mint a handle as a side effect of creating or reviving a run —
-   * `getHandle` hands back the full handle ergonomics (`result()`,
-   * `addEventListener`, `cancel()`, `signal()`, …) for a run you did not start
-   * yourself. `result()` on an already-terminal run resolves (or rejects) from
-   * persisted state, so a fire-and-forget producer's run can be observed later
-   * without re-implementing terminal-status polling by hand.
-   *
-   * Like {@link WeftClient.start}, the workflow name narrows the handle's
-   * `result()` to the registered workflow's output type when the
-   * {@link WorkflowRegistry} is augmented and the name is supplied as a type
-   * argument (`getHandle<'my-workflow'>(id)`); otherwise `result()` is
-   * `unknown`. The name is a type hint only — the `id` alone identifies the
-   * run, so no runtime workflow-type argument is required.
+   * when none exists — handle ergonomics for a run you did not start yourself.
+   * `result()` on an already-terminal run resolves (or rejects) from persisted
+   * state, so a fire-and-forget run can be observed later without hand-rolling
+   * terminal-status polling. Supplying the workflow name as a type argument
+   * (`getHandle<'my-workflow'>(id)`) narrows `result()` to that workflow's output
+   * when the {@link WorkflowRegistry} is augmented; the name is a type hint only.
    */
   getHandle<TName extends KnownWorkflowName>(
     id: string,

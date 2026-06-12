@@ -87,6 +87,7 @@ import { HttpScheduleHandle } from './http-schedule-handle.ts';
 import type {
   ClientHandle,
   ClientScheduleHandle,
+  StartOrSignalOutcome,
   UpdateResult,
   WeftClient,
   WeftClientActivity,
@@ -218,14 +219,16 @@ export class HttpClient implements WeftClient {
     options?: StartOptions,
   ): Promise<ClientHandle> {
     const body = buildStartOrSignalBody(type, input, signal, options);
-    const response = await request<{ id: string }>(
+    const response = await request<{ id: string; outcome: StartOrSignalOutcome }>(
       this.baseUrl,
       '/workflows/start-or-signal',
       this.headers,
       { method: 'POST', body: JSON.stringify(body) },
     );
 
-    return new HttpHandle(response.id, this);
+    // Each HTTP call gets its own response body, so converged concurrent callers
+    // each receive their own per-call outcome — no shared-handle clobbering (#466).
+    return new HttpHandle(response.id, this, response.outcome);
   }
   // jscpd:ignore-end
 

@@ -19,6 +19,13 @@ import { messageName } from '../types.ts';
 import type { WorkflowSnapshot } from '../types/workflow-snapshot.ts';
 import { createWorkflowHandleEventIterator } from './handle-iteration.ts';
 
+/**
+ * Which atomic path a `startOrSignal` call took, surfaced on
+ * {@link WorkflowHandle.outcome}: `'started'` when the call created the run,
+ * `'signalled'` when it delivered a signal to a run that already existed.
+ */
+export type StartOrSignalOutcome = 'started' | 'signalled';
+
 export function getWorkflowExecutionStartedAt(
   state: Pick<WorkflowState, 'createdAt' | 'startedAt'>,
 ): number {

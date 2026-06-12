@@ -438,6 +438,70 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       await expect(handleHandle.result()).resolves.toBe('handle:payload');
     });
 
+    it('startOrSignal reports outcome "started" then "signalled" across calls (#466)', async () => {
+      const client = getClient();
+      const id = `${idPrefix}-start-or-signal-outcome`;
+
+      // First call creates the run.
+      const first = await client.startOrSignal(
+        workflowTypes.waitingTwice,
+        'outcome',
+        { name: 'continue', signalId: 'sos-first' },
+        { id },
+      );
+      expect(first.outcome).toBe('started');
+
+      await waitForRunning?.(id);
+      await waitForQueryReadyForTesting(client, id);
+
+      // Second call signals the now-existing run.
+      const second = await client.startOrSignal(
+        workflowTypes.waitingTwice,
+        'outcome',
+        { name: 'continue', signalId: 'sos-second' },
+        { id },
+      );
+      expect(second.outcome).toBe('signalled');
+
+      const result = (await first.result()) as string;
+      expect(result).toBe('outcome:done');
+    });
+
+    it('startOrSignal gives converged concurrent callers their own per-call outcome (#466)', async () => {
+      const client = getClient();
+      // Concurrent same-key callers converge on ONE run, but each call returns its
+      // OWN handle, so exactly one observes 'started' and the rest 'signalled' —
+      // no shared-handle clobbering across the convergence.
+      const handles = await Promise.all([
+        client.startOrSignal(
+          workflowTypes.waitingTwice,
+          'converge',
+          { name: 'continue' },
+          { idempotencyKey: `${idPrefix}-sos-converge` },
+        ),
+        client.startOrSignal(
+          workflowTypes.waitingTwice,
+          'converge',
+          { name: 'continue' },
+          { idempotencyKey: `${idPrefix}-sos-converge` },
+        ),
+        client.startOrSignal(
+          workflowTypes.waitingTwice,
+          'converge',
+          { name: 'continue' },
+          { idempotencyKey: `${idPrefix}-sos-converge` },
+        ),
+      ]);
+
+      // All converge on one workflow id.
+      expect(new Set(handles.map((handle) => handle.id)).size).toBe(1);
+      // Exactly one 'started', the rest 'signalled'.
+      const outcomes = handles
+        .map((handle) => handle.outcome ?? '')
+        .toSorted((first, second) => (first < second ? -1 : first > second ? 1 : 0));
+      expect(outcomes).toEqual(['signalled', 'signalled', 'started']);
+    });
+
     it('creates, describes, updates, resumes, and cancels schedules', async () => {
       const client = getClient();
       const schedule = await client.schedule(

@@ -11,7 +11,7 @@ import type {
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
-import type { ClientHandle, ClientScheduleHandle } from './interface.ts';
+import type { ClientHandle, ClientScheduleHandle, StartOrSignalOutcome } from './interface.ts';
 
 export interface WorkflowHandleDelegationClient {
   cancel(id: string): Promise<void>;
@@ -42,10 +42,12 @@ export abstract class WorkflowHandleDelegation<
 > implements ClientHandle {
   readonly id: string;
   protected readonly client: TClient;
+  readonly outcome: StartOrSignalOutcome | undefined;
 
-  constructor(id: string, client: TClient) {
+  constructor(id: string, client: TClient, outcome?: StartOrSignalOutcome) {
     this.id = id;
     this.client = client;
+    this.outcome = outcome;
   }
 
   abstract result(): Promise<unknown>;

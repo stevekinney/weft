@@ -541,7 +541,7 @@ export type CatalogOperationTypes = {
       readonly tags?: unknown;
       readonly type: unknown;
     };
-    readonly output: { readonly id: string };
+    readonly output: { readonly id: string; readonly outcome: string };
     readonly faults: 'Conflict';
   };
   'weft.workflows.streams.chunks': {
