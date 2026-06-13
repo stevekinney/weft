@@ -44,6 +44,34 @@ describe('faultToHttpResponse', () => {
     });
   });
 
+  it('NotFound forwards a fine-grained weftCode in data (#465)', async () => {
+    const response = faultToHttpResponse({
+      code: 'NotFound',
+      message: 'workflow "wf-1" not found',
+      data: { resource: 'workflow', identifier: 'wf-1', weftCode: 'WorkflowNotFoundError' },
+    });
+    const body = (await readBody(response)) as { error: { data: Record<string, unknown> } };
+    expect(body.error.data).toEqual({
+      resource: 'workflow',
+      identifier: 'wf-1',
+      weftCode: 'WorkflowNotFoundError',
+    });
+  });
+
+  it('NotFound forwards a weftCode even without an identifier (#465)', async () => {
+    const response = faultToHttpResponse({
+      code: 'NotFound',
+      message: 'workflow not found',
+      data: { resource: 'workflow', weftCode: 'WorkflowNotFoundError' },
+    });
+    const body = (await readBody(response)) as { error: { data: Record<string, unknown> } };
+    expect(body.error.data).toEqual({
+      resource: 'workflow',
+      weftCode: 'WorkflowNotFoundError',
+    });
+    expect('identifier' in body.error.data).toBe(false);
+  });
+
   it('Unauthorized -> 401', async () => {
     const fault: OperationFault = {
       code: 'Unauthorized',

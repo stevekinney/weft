@@ -54,6 +54,58 @@ describe('REST fault shaper regressions', () => {
     await expectJsonErrorResponse(shapeRestFault(notFoundFault), 404, notFoundFault.message);
   });
 
+  it('emits a top-level weftCode sibling when the fault carries one (#465)', async () => {
+    const notFoundWithCode: OperationFault = {
+      code: 'NotFound',
+      message: 'Workflow "wf-1" not found',
+      data: { resource: 'workflow', identifier: 'wf-1', weftCode: 'WorkflowNotFoundError' },
+    };
+    const invalidParamsWithCode = invalidParamsFault(
+      'No workflow registered with name "x"',
+      'WorkflowNotRegisteredError',
+    );
+
+    const notFoundResponse = shapeRestFault(notFoundWithCode);
+    expect(notFoundResponse.status).toBe(404);
+    expect(await notFoundResponse.json()).toEqual({
+      error: 'Workflow "wf-1" not found',
+      weftCode: 'WorkflowNotFoundError',
+    });
+
+    const invalidParamsResponse = shapeRestFault(invalidParamsWithCode);
+    expect(invalidParamsResponse.status).toBe(400);
+    expect(await invalidParamsResponse.json()).toEqual({
+      error: 'No workflow registered with name "x"',
+      weftCode: 'WorkflowNotRegisteredError',
+    });
+  });
+
+  it('does not leak a weftCode for the masked EngineFailure path (#465)', async () => {
+    // EngineFailure carries no weftCode and must stay byte-identical to the
+    // masked body — the sibling must never expose internal detail.
+    const engineFailureFault: OperationFault = {
+      code: 'EngineFailure',
+      message: 'internal detail',
+      data: {},
+    };
+    expect(await shapeRestFault(engineFailureFault).json()).toEqual({
+      error: 'Internal server error',
+    });
+  });
+
+  it('omits weftCode entirely for invalidParamsFault without a code (#465)', () => {
+    expect(invalidParamsFault('Missing filter')).toEqual({
+      code: 'InvalidParams',
+      message: 'Missing filter',
+      data: { issues: [] },
+    });
+    expect(invalidParamsFault('Bad type', 'WorkflowNotRegisteredError')).toEqual({
+      code: 'InvalidParams',
+      message: 'Bad type',
+      data: { issues: [], weftCode: 'WorkflowNotRegisteredError' },
+    });
+  });
+
   it('constructs invalid-params faults in the shared operation helpers', () => {
     expect(invalidParamsFault('Missing filter')).toEqual({
       code: 'InvalidParams',

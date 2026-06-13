@@ -33,18 +33,24 @@ describe('HttpClientError', () => {
     expect(error).toBeInstanceOf(Error);
   });
 
-  it('leaves faultCode and category undefined when constructed without options', () => {
+  it('leaves faultCode, category, and weftCode undefined when constructed without options', () => {
     // Mirrors the direct-construct path in http-handle.ts.
     const error = new HttpClientError(404, 'Workflow "x" not found');
     expect(error.status).toBe(404);
     expect(error.faultCode).toBeUndefined();
     expect(error.category).toBeUndefined();
+    expect(error.weftCode).toBeUndefined();
   });
 
   it('derives category from a provided faultCode', () => {
     const error = new HttpClientError(503, 'overflow', { faultCode: 'SubscriptionOverflow' });
     expect(error.faultCode).toBe('SubscriptionOverflow');
     expect(error.category).toBe('resource');
+  });
+
+  it('carries a provided weftCode (#465)', () => {
+    const error = new HttpClientError(404, 'not found', { weftCode: 'WorkflowNotFoundError' });
+    expect(error.weftCode).toBe('WorkflowNotFoundError');
   });
 });
 
@@ -124,7 +130,7 @@ describe('request() error-body parsing', () => {
     expect(error.message).toBe('short and stout');
   });
 
-  it('ignores the structured data field', async () => {
+  it('ignores the structured data field but not its weftCode', async () => {
     const error = await captureError(
       new Response(
         JSON.stringify({ error: { code: 'NotFound', message: 'gone', data: { resource: 'wf' } } }),
@@ -134,6 +140,48 @@ describe('request() error-body parsing', () => {
     expect(error.faultCode).toBe('NotFound');
     expect(error.message).toBe('gone');
     expect('data' in error).toBe(false);
+    expect(error.weftCode).toBeUndefined();
+  });
+
+  it('surfaces a fine-grained weftCode from a structured body data field (#465)', async () => {
+    const error = await captureError(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'NotFound',
+            message: 'workflow not found',
+            data: { resource: 'workflow', weftCode: 'WorkflowNotFoundError' },
+          },
+        }),
+        { status: 404, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    expect(error.faultCode).toBe('NotFound');
+    expect(error.weftCode).toBe('WorkflowNotFoundError');
+  });
+
+  it('surfaces a top-level weftCode sibling from a flat string body (#465)', async () => {
+    // The `shapeRestFault` shape: flat `{ error }` plus a top-level `weftCode`.
+    const error = await captureError(
+      new Response(
+        JSON.stringify({ error: 'No workflow registered', weftCode: 'WorkflowNotRegisteredError' }),
+        { status: 400, headers: { 'Content-Type': 'application/json' } },
+      ),
+    );
+    expect(error.message).toBe('No workflow registered');
+    expect(error.faultCode).toBeUndefined();
+    expect(error.weftCode).toBe('WorkflowNotRegisteredError');
+  });
+
+  it('ignores an unrecognized weftCode sibling (#465)', async () => {
+    const error = await captureError(
+      new Response(JSON.stringify({ error: 'boom', weftCode: 'NotARealCode' }), {
+        status: 400,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    expect(error.message).toBe('boom');
+    expect(error.weftCode).toBeUndefined();
   });
 
   it('falls back to statusText when a structured body has a code but no message', async () => {

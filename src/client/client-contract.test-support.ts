@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import type { ActivityContext, WorkflowContext } from '../core/types.ts';
 import { activity, signal } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
+import { isWeftFault } from '../core/weft-error.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import type { WeftClient } from './interface.ts';
 
@@ -500,6 +501,44 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
         .map((handle) => handle.outcome ?? '')
         .toSorted((first, second) => (first < second ? -1 : first > second ? 1 : 0));
       expect(outcomes).toEqual(['signalled', 'signalled', 'started']);
+    });
+
+    // #465: a producer that branches on a specific typed error must be able to
+    // write that branch once and have it hold over BOTH transports — the exact
+    // "constructor change, not an API change" promise. The single `isWeftFault`
+    // predicate must classify the in-process typed error (LocalClient) and the
+    // HTTP-wrapped one (HttpClient) identically.
+    it('classifies WorkflowNotRegisteredError uniformly across transports (#465)', async () => {
+      const client = getClient();
+
+      let caught: unknown = null;
+      try {
+        await client.start('client-contract-unregistered-type', undefined, {
+          id: `${idPrefix}-unregistered`,
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).not.toBeNull();
+      expect(isWeftFault(caught, 'WorkflowNotRegisteredError')).toBe(true);
+      // The predicate must discriminate — a different code must NOT match.
+      expect(isWeftFault(caught, 'WorkflowNotFoundError')).toBe(false);
+    });
+
+    it('classifies WorkflowNotFoundError uniformly across transports (#465)', async () => {
+      const client = getClient();
+
+      let caught: unknown = null;
+      try {
+        await client.addTags(`${idPrefix}-tag-missing-workflow`, 'closed');
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).not.toBeNull();
+      expect(isWeftFault(caught, 'WorkflowNotFoundError')).toBe(true);
+      expect(isWeftFault(caught, 'WorkflowNotRegisteredError')).toBe(false);
     });
 
     it('creates, describes, updates, resumes, and cancels schedules', async () => {
