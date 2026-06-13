@@ -39,11 +39,13 @@ export function readLastHeartbeatForStep(
 
 /**
  * Drop the heartbeat tracked for a single step once that step has completed
- * successfully (after inline verify AND after the reconciliation write, so a
- * verify-rejection retry still reads its prior attempt's heartbeat). Removes the
- * inner-map entry and drops the outer workflow entry when its last step clears,
- * so a long-lived workflow doesn't accumulate stale per-step heartbeats. Clearing
- * late is harmless (bounded by terminal cleanup); clearing early would strip the
+ * successfully — after inline verify, and (on the idempotency path) after the
+ * reconciliation write, so a verify-rejection retry still reads its prior
+ * attempt's heartbeat. The plain path has no reconciliation write; both paths
+ * call this only at their successful return. Removes the inner-map entry and
+ * drops the outer workflow entry when its last step clears, so a long-lived
+ * workflow doesn't accumulate stale per-step heartbeats. Clearing late is
+ * harmless (bounded by terminal cleanup); clearing early would strip the
  * resumable-batch heartbeat a retry depends on, so this is only ever called from
  * the non-speculative success path.
  */
@@ -103,7 +105,8 @@ export function warnIfRetryMissingHeartbeat(
     new DevelopmentWarningEvent(
       workflowId,
       `Activity retry (attempt ${attempt}) at step ${step} has no lastHeartbeatDetails. ` +
-        'Either the previous attempt never called heartbeat(), or the engine process ' +
+        'Either the previous attempt never recorded heartbeat details (it never ' +
+        'called heartbeat(), or called it with no details), or the engine process ' +
         'restarted and discarded the in-memory heartbeat (it is not durable). The ' +
         'resumable-batch pattern only resumes across in-process retries; design the ' +
         'activity to restart cleanly when lastHeartbeatDetails is undefined.',

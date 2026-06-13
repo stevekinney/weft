@@ -289,7 +289,7 @@ describe('#493 development warning for a retry missing its heartbeat', () => {
     // The message names BOTH possibilities honestly and points at the step.
     expect(warnings[0]?.message).toContain('attempt 2');
     expect(warnings[0]?.message).toContain('restarted');
-    expect(warnings[0]?.message).toContain('never called heartbeat()');
+    expect(warnings[0]?.message).toContain('never recorded heartbeat details');
     expect(warnings[0]?.fieldPaths).toEqual(['step.0.lastHeartbeatDetails']);
   });
 
