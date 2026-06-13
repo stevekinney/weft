@@ -1,9 +1,12 @@
+import type { BatchOperation } from './interface.ts';
+
 /**
  * Pure value-mapping helpers shared by the Neon adapter: the minimal query-result
  * shape both the Neon serverless driver and the PGlite test backend satisfy, the
- * driver-tolerant affected-row count, and the BYTEA encode/decode pair. Split out
- * of `neon.ts` to keep that module focused on the `Storage` implementation; none
- * of these is exported from the package — `neon.ts` imports them back.
+ * driver-tolerant affected-row count, the BYTEA encode/decode pair, and the
+ * batch net-effect resolver. Split out of `neon.ts` to keep that module focused
+ * on the `Storage` implementation; none of these is exported from the package —
+ * `neon.ts` imports them back.
  *
  * @module storage/neon-value-mapping
  */
@@ -58,4 +61,46 @@ export function toStorageValue(raw: unknown): Uint8Array {
  */
 export function toBytea(value: Uint8Array): Buffer {
   return Buffer.from(value);
+}
+
+/**
+ * The net effect of a batch, resolved per key so each phase collapses to one
+ * statement. `puts` and `deletes` partition the affected keys with **no
+ * overlap**: a key appears in whichever its *last* operation was, never both.
+ */
+export type BatchNetEffect = {
+  /** Keys whose last operation is a put, mapped to that put's value. */
+  puts: Map<string, Uint8Array>;
+  /** Keys whose last operation is a delete. */
+  deletes: Set<string>;
+};
+
+/**
+ * Resolve a batch to its net effect per key, preserving last-write-wins —
+ * exactly the semantics of executing the operations sequentially. Iterating in
+ * order and keeping only the final operation per key means the resulting put-set
+ * keys and delete-set keys are **disjoint** (a key is whichever its last op was).
+ *
+ * That disjointness is the correctness guarantee for collapsing the batch into
+ * one multi-row upsert plus one bulk delete: the two statements touch
+ * non-overlapping key sets, so they commute and their emission order is
+ * irrelevant. Deduplicating to one entry per key also avoids the
+ * `ON CONFLICT DO UPDATE cannot affect row a second time` error a naive
+ * multi-row upsert would raise for a key written twice in one batch.
+ */
+export function resolveBatchNetEffect(operations: BatchOperation[]): BatchNetEffect {
+  const puts = new Map<string, Uint8Array>();
+  const deletes = new Set<string>();
+
+  for (const operation of operations) {
+    if (operation.type === 'put') {
+      deletes.delete(operation.key);
+      puts.set(operation.key, operation.value);
+    } else {
+      puts.delete(operation.key);
+      deletes.add(operation.key);
+    }
+  }
+
+  return { puts, deletes };
 }

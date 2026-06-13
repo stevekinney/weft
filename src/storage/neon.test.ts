@@ -2,7 +2,6 @@ import { PGlite } from '@electric-sql/pglite';
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
 
 import { NeonStorage, type NeonPool, type NeonPoolClient } from './neon.ts';
-import { PG_CREATE_KEY_VALUE_TABLE } from './postgres-key-value-queries.ts';
 import {
   collect,
   decodeText,
@@ -211,6 +210,85 @@ describe('NeonStorage', () => {
     expect(decodeText((await storage.get('idem:k'))!)).toBe('existing');
   });
 
+  // #469: the collapsed batch resolves to a net effect per key. A naive
+  // multi-row upsert would raise "ON CONFLICT DO UPDATE cannot affect row a
+  // second time" for a key written twice; net-effect resolution dedups it.
+  it('batch with a key written twice keeps the last value (#469)', async () => {
+    await using storage = await createPgliteBackedNeonStorage();
+    await storage.batch([
+      { type: 'put', key: 'dup', value: encode('first') },
+      { type: 'put', key: 'dup', value: encode('second') },
+    ]);
+    expect(decodeText((await storage.get('dup'))!)).toBe('second');
+  });
+
+  it('batch with a put then a delete on one key nets to absent (#469)', async () => {
+    await using storage = await createPgliteBackedNeonStorage();
+    await storage.put('existing', encode('was-here'));
+    await storage.batch([
+      { type: 'put', key: 'existing', value: encode('rewritten') },
+      { type: 'delete', key: 'existing' },
+    ]);
+    expect(await storage.get('existing')).toBeNull();
+  });
+
+  it('batch with a delete then a put on one key nets to the put (#469)', async () => {
+    await using storage = await createPgliteBackedNeonStorage();
+    await storage.put('k', encode('old'));
+    await storage.batch([
+      { type: 'delete', key: 'k' },
+      { type: 'put', key: 'k', value: encode('new') },
+    ]);
+    expect(decodeText((await storage.get('k'))!)).toBe('new');
+  });
+
+  it('batch applies many puts and deletes in one collapsed transaction (#469)', async () => {
+    await using storage = await createPgliteBackedNeonStorage();
+    await storage.put('del:1', encode('1'));
+    await storage.put('del:2', encode('2'));
+    await storage.batch([
+      { type: 'put', key: 'put:a', value: encode('a') },
+      { type: 'put', key: 'put:b', value: encode('b') },
+      { type: 'put', key: 'put:c', value: encode('c') },
+      { type: 'delete', key: 'del:1' },
+      { type: 'delete', key: 'del:2' },
+    ]);
+    expect(decodeText((await storage.get('put:a'))!)).toBe('a');
+    expect(decodeText((await storage.get('put:c'))!)).toBe('c');
+    expect(await storage.get('del:1')).toBeNull();
+    expect(await storage.get('del:2')).toBeNull();
+  });
+
+  it('conditionalBatch evaluates multiple conditions in one collapsed read (#469)', async () => {
+    await using storage = await createPgliteBackedNeonStorage();
+    await storage.put('cond:present', encode('here'));
+    // Two conditions, mixed present/absent, both must hold for the write.
+    const applied = await storage.conditionalBatch(
+      [
+        { key: 'cond:present', expectedValue: encode('here') },
+        { key: 'cond:absent', expectedValue: null },
+      ],
+      [{ type: 'put', key: 'cond:written', value: encode('ok') }],
+    );
+    expect(applied).toBe(true);
+    expect(decodeText((await storage.get('cond:written'))!)).toBe('ok');
+  });
+
+  it('conditionalBatch rejects when one of several conditions fails (#469)', async () => {
+    await using storage = await createPgliteBackedNeonStorage();
+    await storage.put('cond:a', encode('a'));
+    await storage.put('cond:b', encode('b'));
+    const applied = await storage.conditionalBatch(
+      [
+        { key: 'cond:a', expectedValue: encode('a') },
+        { key: 'cond:b', expectedValue: encode('WRONG') },
+      ],
+      [{ type: 'put', key: 'cond:written', value: encode('ok') }],
+    );
+    expect(applied).toBe(false);
+    expect(await storage.get('cond:written')).toBeNull();
+  });
+
   it('query rejects non-read-only SQL', async () => {
     await using storage = await createPgliteBackedNeonStorage();
     await expect(storage.query('DELETE FROM kv')).rejects.toThrow();
@@ -270,7 +348,7 @@ describe('NeonStorage', () => {
       end: async () => {},
     };
     await using storage = new NeonStorage({ url: 'stub://', pool });
-    await expect(storage.put('k', encode('v'))).rejects.toThrow('no kv table');
+    await expect(storage.put('k', encode('v'))).rejects.toThrow('no such table');
   });
 
   it('retries initialization after a transient failure rather than wedging on a cached rejection', async () => {
@@ -283,7 +361,7 @@ describe('NeonStorage', () => {
     try {
       const failingPool: NeonPool = {
         query: (sql, parameters) => {
-          if (sql === PG_CREATE_KEY_VALUE_TABLE) {
+          if (sql.includes('CREATE TABLE IF NOT EXISTS')) {
             createAttempts += 1;
             if (createAttempts === 1) {
               return Promise.reject(new Error('connection dropped mid-CREATE'));
@@ -460,5 +538,100 @@ describe('NeonStorage', () => {
     await expect(storage[Symbol.asyncDispose]()).rejects.toThrow('pool teardown failed');
     await expect(storage[Symbol.asyncDispose]()).rejects.toThrow('pool teardown failed');
     expect(endCalls).toBe(1);
+  });
+});
+
+describe('NeonStorage configurable schema/table (#468)', () => {
+  // Wrap a dedicated PGlite as a NeonPool. A dedicated instance (not the shared
+  // one) is used so the schema-qualified table is created in isolation.
+  function dedicatedPgliteAsNeonPool(database: PGlite): NeonPool {
+    const client: NeonPoolClient = {
+      query: (sql, parameters) => database.query(sql, parameters as unknown[]),
+      release: () => {},
+    };
+    return {
+      query: (sql, parameters) => database.query(sql, parameters as unknown[]),
+      connect: async () => client,
+      end: async () => {},
+    };
+  }
+
+  it('creates the schema, qualifies the table, and round-trips values', async () => {
+    const database = await new PGlite();
+    try {
+      await using storage = new NeonStorage({
+        url: 'pglite://memory',
+        pool: dedicatedPgliteAsNeonPool(database),
+        schema: 'weft',
+        table: 'state',
+      });
+      await storage.put('k', encode('v'));
+      expect(decodeText((await storage.get('k'))!)).toBe('v');
+
+      // The data lives in the qualified "weft"."state" table, not public.kv.
+      const inSchema = await database.query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM "weft"."state"`,
+      );
+      expect(Number(inSchema.rows[0]?.count)).toBe(1);
+      const publicTable = await database.query<{ exists: boolean }>(
+        `SELECT to_regclass('public.kv') IS NOT NULL AS exists`,
+      );
+      expect(publicTable.rows[0]?.exists).toBe(false);
+    } finally {
+      await database.close();
+    }
+  });
+
+  it('honors a custom table name in the default (public) schema', async () => {
+    const database = await new PGlite();
+    try {
+      await using storage = new NeonStorage({
+        url: 'pglite://memory',
+        pool: dedicatedPgliteAsNeonPool(database),
+        table: 'workflow_kv',
+      });
+      await storage.put('k', encode('v'));
+      const result = await database.query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM "workflow_kv"`,
+      );
+      expect(Number(result.rows[0]?.count)).toBe(1);
+    } finally {
+      await database.close();
+    }
+  });
+
+  it('collapsed batch writes target the configured table', async () => {
+    const database = await new PGlite();
+    try {
+      await using storage = new NeonStorage({
+        url: 'pglite://memory',
+        pool: dedicatedPgliteAsNeonPool(database),
+        schema: 'weft',
+      });
+      await storage.batch([
+        { type: 'put', key: 'a', value: encode('1') },
+        { type: 'put', key: 'b', value: encode('2') },
+      ]);
+      const result = await database.query<{ count: string }>(
+        `SELECT COUNT(*) AS count FROM "weft"."kv"`,
+      );
+      expect(Number(result.rows[0]?.count)).toBe(2);
+    } finally {
+      await database.close();
+    }
+  });
+
+  it('rejects an invalid schema or table identifier at construction', () => {
+    const stubPool: NeonPool = {
+      query: async () => ({ rows: [] }),
+      connect: async () => ({ query: async () => ({ rows: [] }), release: () => {} }),
+      end: async () => {},
+    };
+    expect(() => new NeonStorage({ url: 'stub://', pool: stubPool, table: 'bad name' })).toThrow(
+      /not a valid Postgres identifier/,
+    );
+    expect(
+      () => new NeonStorage({ url: 'stub://', pool: stubPool, schema: 'bad; DROP TABLE kv' }),
+    ).toThrow(/not a valid Postgres identifier/);
   });
 });
