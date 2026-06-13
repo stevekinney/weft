@@ -139,14 +139,38 @@ function operationToTypeEntry(
 }
 
 /**
+ * Return the members of an all-string `enum`, or `undefined` when the schema has
+ * no `enum` or any member is not a string. A single-quoted string-literal union
+ * is emitted for these; mixed or non-string enums fall through to the `unknown`
+ * fallback rather than guessing a representation.
+ */
+function stringEnumMembers(schema: Record<string, unknown>): readonly string[] | undefined {
+  const values = schema['enum'];
+  if (!Array.isArray(values) || values.length === 0) return undefined;
+  if (!values.every((value): value is string => typeof value === 'string')) return undefined;
+  return values;
+}
+
+/**
  * Parse a JSON Schema fragment into a normalized {@link TypeNode}. Reproduces
  * exactly the schema subset the emitter supports: primitives, arrays,
- * `type: []` string unions, objects (honoring `required`), no-`properties`
- * objects as `Record<string, unknown>`, and an `unknown` fallback for every
- * other schema feature (enum, const, anyOf/oneOf/allOf, additionalProperties,
- * nullable patterns).
+ * string `enum` literal unions, `type: []` string unions, objects (honoring
+ * `required`), no-`properties` objects as `Record<string, unknown>`, and an
+ * `unknown` fallback for every other schema feature (non-string `enum`, const,
+ * anyOf/oneOf/allOf, additionalProperties, nullable patterns).
  */
 function schemaToNode(schema: Record<string, unknown>): TypeNode {
+  // A string `enum` is tighter than its `type: 'string'`, so emit the literal
+  // union and preserve the operation's discriminant (e.g. startorsignal's
+  // `outcome: 'started' | 'signalled'`) instead of widening to `string`. Members
+  // stay in schema order for deterministic output. Non-string enums fall through.
+  const stringEnum = stringEnumMembers(schema);
+  if (stringEnum !== undefined) {
+    return {
+      kind: 'union',
+      members: stringEnum.map((value) => ({ kind: 'primitive', text: `'${value}'` })),
+    };
+  }
   const type = schema['type'];
   if (type === 'string') return { kind: 'primitive', text: 'string' };
   if (type === 'number' || type === 'integer') return { kind: 'primitive', text: 'number' };

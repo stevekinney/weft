@@ -20,9 +20,11 @@ import type { WorkflowSnapshot } from '../types/workflow-snapshot.ts';
 import { createWorkflowHandleEventIterator } from './handle-iteration.ts';
 
 /**
- * Which atomic path a `startOrSignal` call took, surfaced on
- * {@link WorkflowHandle.outcome}: `'started'` when the call created the run,
- * `'signalled'` when it delivered a signal to a run that already existed.
+ * Which atomic path a `startOrSignal` call took, returned alongside the
+ * {@link WorkflowHandle} in `StartOrSignalResult` (not a field on the handle —
+ * converged concurrent callers share one cached engine handle, so the outcome
+ * rides the per-call result instead). `'started'` when the call created the
+ * run, `'signalled'` when it delivered a signal to a run that already existed.
  */
 export type StartOrSignalOutcome = 'started' | 'signalled';
 
