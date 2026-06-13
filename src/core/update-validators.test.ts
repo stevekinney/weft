@@ -286,6 +286,104 @@ describe('update validators (pre-acceptance)', () => {
     engine[Symbol.dispose]();
   });
 
+  it('rejects via the pending-drain path when the late validator throws', async () => {
+    const approve = update<{ id: string }>('approve');
+    const engine = makeEngine();
+    const observed: unknown[] = [];
+
+    engine.register(
+      workflow({ name: 'late-register-reject' }).execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('register');
+        ctx.onUpdate(
+          approve,
+          (payload) => {
+            observed.push(payload);
+            return payload;
+          },
+          {
+            validator: (value) => {
+              if (typeof value !== 'object' || value === null || !('id' in value)) {
+                throw new Error('id is required');
+              }
+            },
+          },
+        );
+        await waitForever();
+      }),
+    );
+
+    const handle = await engine.start('late-register-reject', null);
+    await flush();
+
+    const pending = engine.submitCoordinatedUpdate(handle.id, 'approve', { wrong: true });
+    await engine.signal(handle.id, 'register');
+
+    const result = await pending;
+    expect(result.result).toBeUndefined();
+    expect(result.error).toContain('id is required');
+    expect(observed).toHaveLength(0);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('rejects via the pending-drain path when the late validator returns Standard Schema issues', async () => {
+    const rename = update<{ name: string }>('rename');
+    const engine = makeEngine();
+
+    engine.register(
+      workflow({ name: 'late-register-schema-reject' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        yield* ctx.waitForSignal('register');
+        ctx.onUpdate(rename, (payload) => payload, {
+          validator: (): unknown => ({ issues: [{ message: 'name rejected' }] }),
+        });
+        await waitForever();
+      }),
+    );
+
+    const handle = await engine.start('late-register-schema-reject', null);
+    await flush();
+
+    const pending = engine.submitCoordinatedUpdate(handle.id, 'rename', { name: 'queued' });
+    await engine.signal(handle.id, 'register');
+
+    const result = await pending;
+    expect(result.result).toBeUndefined();
+    expect(result.error).toContain('name rejected');
+
+    engine[Symbol.dispose]();
+  });
+
+  it('captures a late pending-handler failure after registration', async () => {
+    const explode = update<{ name: string }>('explode');
+    const engine = makeEngine();
+
+    engine.register(
+      workflow({ name: 'late-register-handler-failure' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        yield* ctx.waitForSignal('register');
+        ctx.onUpdate(explode, () => {
+          throw new Error('handler boom');
+        });
+        await waitForever();
+      }),
+    );
+
+    const handle = await engine.start('late-register-handler-failure', null);
+    await flush();
+
+    const pending = engine.submitCoordinatedUpdate(handle.id, 'explode', { name: 'queued' });
+    await engine.signal(handle.id, 'register');
+
+    const result = await pending;
+    expect(result.result).toBeUndefined();
+    expect(result.error).toBe('handler boom');
+
+    engine[Symbol.dispose]();
+  });
+
   it('UpdateValidationError carries updateName and issues', () => {
     const err = new UpdateValidationError('my-update', [
       { message: 'field x is required' },
