@@ -1652,15 +1652,6 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
     },
   ],
   [
-    'src/core/engine/pending-updates.ts',
-    {
-      // The pending-update drain paths are exercised by engine-level validator
-      // coverage. Bun still drops coverage on the multiline async signature
-      // and initial dispatch call inside `deliverPendingUpdate()`.
-      lines: new Set([239, 243, 244, 245]),
-    },
-  ],
-  [
     // The retry-state corruption guards and non-Error retryability path are now
     // covered by focused unit tests. Bun still reports the generator loop's
     // closing brace as uncovered after the retry back-edge executes.
