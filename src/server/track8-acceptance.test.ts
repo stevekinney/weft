@@ -88,6 +88,51 @@ const subscribeServeOptions = {
   },
 };
 
+/**
+ * Proves the single-projection invariant: the envelopes a WebSocket subscriber
+ * receives over the wire match, position-for-position, the envelopes the engine
+ * replays from its own event stream — same length, sequence, cursor, and kind.
+ * Runs a signal workflow to completion, replays its events, subscribes over the
+ * WebSocket transport, and compares.
+ *
+ * The engine is pushed onto `engines` and the server is handed to `assignServer`
+ * the instant it is created — before the failure-prone WebSocket collection and
+ * assertions — so a mid-test failure still leaves both registered for the
+ * suite's `afterEach` disposal (the original inline tests assigned the
+ * describe-scoped `server` at that same point).
+ */
+async function expectWebSocketProjectionMatchesReplay(
+  engines: Engine[],
+  assignServer: (createdServer: WeftServer) => void,
+): Promise<void> {
+  const engine = createSignalWorkflowEngine();
+  engines.push(engine);
+  const handle = await engine.start('hold', { hello: 'world' }, {});
+  await engine.signal(handle.id, 'release', 'go');
+  await handle.result();
+
+  const replayed = await collectReplayEvents(engine, handle.id);
+  expect(replayed.length).toBeGreaterThan(0);
+
+  const server = serve({ engine, ...subscribeServeOptions });
+  assignServer(server);
+  const wireEnvelopes = await collectWebSocketDeliveredEnvelopes(
+    server,
+    handle.id,
+    replayed.length,
+    SUBSCRIBE_TEST_API_KEY,
+  );
+
+  expect(wireEnvelopes).toHaveLength(replayed.length);
+  for (const [index, backendEnvelope] of replayed.entries()) {
+    const wireEnvelope = wireEnvelopes[index];
+    expect(wireEnvelope).toBeDefined();
+    expect(wireEnvelope?.sequence).toBe(backendEnvelope.sequence);
+    expect(wireEnvelope?.cursor).toBe(backendEnvelope.cursor);
+    expect(wireEnvelope?.kind).toBe(backendEnvelope.kind);
+  }
+}
+
 function isRelevantTraceabilityRow(cells: string[]): boolean {
   const category = cells[3] ?? '';
   const status = cells[4] ?? '';
@@ -214,30 +259,9 @@ describe('Track 8 acceptance coverage', () => {
   });
 
   it('One server-side event projection layer feeds every live transport. WebSocket watch and token messages, SSE responses, JSON-RPC subscription notifications, and cursor-based replay all project from the same event stream model.', async () => {
-    const engine = createSignalWorkflowEngine();
-    engines.push(engine);
-    const handle = await engine.start('hold', { hello: 'world' }, {});
-    await engine.signal(handle.id, 'release', 'go');
-    await handle.result();
-
-    const replayed = await collectReplayEvents(engine, handle.id);
-    expect(replayed.length).toBeGreaterThan(0);
-    server = serve({ engine, ...subscribeServeOptions });
-    const wireEnvelopes = await collectWebSocketDeliveredEnvelopes(
-      server,
-      handle.id,
-      replayed.length,
-      SUBSCRIBE_TEST_API_KEY,
-    );
-
-    expect(wireEnvelopes).toHaveLength(replayed.length);
-    for (const [index, backendEnvelope] of replayed.entries()) {
-      const wireEnvelope = wireEnvelopes[index];
-      expect(wireEnvelope).toBeDefined();
-      expect(wireEnvelope?.sequence).toBe(backendEnvelope.sequence);
-      expect(wireEnvelope?.cursor).toBe(backendEnvelope.cursor);
-      expect(wireEnvelope?.kind).toBe(backendEnvelope.kind);
-    }
+    await expectWebSocketProjectionMatchesReplay(engines, (createdServer) => {
+      server = createdServer;
+    });
   });
 
   it('Runtime JSON-RPC methods use stable namespaced names. Examples: weft.workflows.start, weft.workflows.get, weft.workflows.signal.', async () => {
@@ -349,31 +373,9 @@ describe('Track 8 acceptance coverage', () => {
   });
 
   it('Subscription notifications reuse the shared event projection layer. Watch and stream APIs are documented as projections of current engine events rather than bespoke server-side state machines.', async () => {
-    const engine = createSignalWorkflowEngine();
-    engines.push(engine);
-    const handle = await engine.start('hold', { hello: 'world' }, {});
-    await engine.signal(handle.id, 'release', 'go');
-    await handle.result();
-
-    const replayed = await collectReplayEvents(engine, handle.id);
-    expect(replayed.length).toBeGreaterThan(0);
-
-    server = serve({ engine, ...subscribeServeOptions });
-    const wireEnvelopes = await collectWebSocketDeliveredEnvelopes(
-      server,
-      handle.id,
-      replayed.length,
-      SUBSCRIBE_TEST_API_KEY,
-    );
-
-    expect(wireEnvelopes).toHaveLength(replayed.length);
-    for (const [index, backendEnvelope] of replayed.entries()) {
-      const wireEnvelope = wireEnvelopes[index];
-      expect(wireEnvelope).toBeDefined();
-      expect(wireEnvelope?.sequence).toBe(backendEnvelope.sequence);
-      expect(wireEnvelope?.cursor).toBe(backendEnvelope.cursor);
-      expect(wireEnvelope?.kind).toBe(backendEnvelope.kind);
-    }
+    await expectWebSocketProjectionMatchesReplay(engines, (createdServer) => {
+      server = createdServer;
+    });
   });
 
   it('REST and JSON-RPC share one engine-error mapping layer. The same engine failure produces equivalent transport-level semantics across both surfaces.', async () => {
