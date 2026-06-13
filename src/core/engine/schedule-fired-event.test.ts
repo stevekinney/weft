@@ -282,6 +282,13 @@ describe('schedule:fired event', () => {
       START + 2 * MINUTE,
       START + 3 * MINUTE,
     ]);
+    // firedAt is the catch-up launch time (the recovery tick), distinct from each
+    // occurrence's original grid slot — the precise reason both fields exist.
+    expect(fired.map((f) => f.firedAt)).toEqual([
+      START + 3 * MINUTE,
+      START + 3 * MINUTE,
+      START + 3 * MINUTE,
+    ]);
     expect(created.id).toBe('backfill');
   });
 

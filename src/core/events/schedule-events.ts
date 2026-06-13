@@ -6,10 +6,15 @@
  * policies (`skip`, and `queue` while a run is already active) intentionally do
  * **not** emit, since nothing started.
  *
- * Delivery is process-local — listen via `engine.addEventListener('schedule:fired', handler)`
- * on the live engine that owns the schedule. The durable part (the cadence) is
- * handled by the schedule itself; this event lets a consumer react to a firing
- * without polling `engine.list()` or `getSchedule()`.
+ * Delivery is process-local and best-effort — listen via
+ * `engine.addEventListener('schedule:fired', handler)` on the live engine that
+ * owns the schedule. The durable part (the cadence, and the launched run itself)
+ * is handled by the schedule; the event is dispatched synchronously right after
+ * the run's durable start commits, so a crash in that narrow window — start
+ * committed, dispatch not yet reached — can drop the notification without
+ * affecting the run. Treat it as a reaction signal, not a durable record. This
+ * lets a consumer react to a firing without polling `engine.list()` or
+ * `getSchedule()`.
  *
  * @example
  * ```ts
