@@ -169,6 +169,7 @@ import {
   type LifecycleCallbacks,
   type RecoverAllOptions,
   type StartOrSignalCallbacks,
+  type StartOrSignalResult,
 } from './lifecycle.ts';
 import {
   addTags as addWorkflowTags,
@@ -910,19 +911,19 @@ export class Engine<
     input: WorkflowInput<TWorkflows, TName>,
     signal: StartOrSignalSignal,
     options?: StartOptions,
-  ): Promise<WorkflowHandle<WorkflowOutput<TWorkflows, TName>>>;
+  ): Promise<StartOrSignalResult<WorkflowOutput<TWorkflows, TName>>>;
   async startOrSignal<TName extends string>(
     type: UnknownWorkflowNameWhenDefaultRegistryIsEmpty<TWorkflows, TName>,
     input: unknown,
     signal: StartOrSignalSignal,
     options?: StartOptions,
-  ): Promise<WorkflowHandle>;
+  ): Promise<StartOrSignalResult>;
   async startOrSignal(
     type: string,
     input: unknown,
     signal: StartOrSignalSignal,
     options?: StartOptions,
-  ): Promise<WorkflowHandle> {
+  ): Promise<StartOrSignalResult> {
     return startOrSignalFromLifecycle(
       getInternals(this),
       type,

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import type { Engine } from '../../core/engine.ts';
+import { WorkflowNotFoundError } from '../../core/engine/errors.ts';
 import {
   coerceStartWorkflowTags,
   StartWorkflowValidationError,
@@ -127,6 +128,17 @@ function shapeSingleWorkflowTagMutationFault(fault: OperationFault): Response {
 
 function mapTagMutationErrorToFault(error: unknown, workflowId: string): OperationFault {
   const message = faultMessage(error);
+
+  // Prefer the typed error so the fault carries `weftCode: 'WorkflowNotFoundError'`
+  // for transport-uniform `isWeftFault` branching; fall back to the string match
+  // for any non-typed "not found" surfaced by an adjacent path.
+  if (error instanceof WorkflowNotFoundError) {
+    return {
+      code: 'NotFound',
+      message,
+      data: { resource: 'workflow', identifier: workflowId, weftCode: error.code },
+    };
+  }
 
   if (message.includes('not found')) {
     return {

@@ -3775,9 +3775,13 @@
         "properties": {
           "id": {
             "type": "string"
+          },
+          "outcome": {
+            "enum": ["started", "signalled"],
+            "type": "string"
           }
         },
-        "required": ["id"],
+        "required": ["id", "outcome"],
         "type": "object"
       }
     },

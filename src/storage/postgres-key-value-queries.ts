@@ -15,70 +15,57 @@ import { resolvePrefixRangeEnd, type ScanOptions } from './interface.ts';
  *   to the `C` collation restores byte-wise (codepoint) ordering, matching
  *   SQLite's default `BINARY` collation and the engine's key-layout assumptions.
  *
+ * Every query is parameterized by a **table reference** so the adapter can point
+ * at a configured `"schema"."table"` instead of the default unqualified `kv`
+ * (see {@link buildPostgresKeyValueQueries}). The reference is interpolated once
+ * at construction, not per query.
+ *
  * @module storage/postgres-key-value-queries
  */
 
-export const PG_CREATE_KEY_VALUE_TABLE = `CREATE TABLE IF NOT EXISTS kv (
-  key TEXT COLLATE "C" PRIMARY KEY,
-  value BYTEA NOT NULL
-)`;
+/** The default unqualified table reference (resolves through `search_path`). */
+export const DEFAULT_POSTGRES_TABLE_REFERENCE = 'kv';
+
+const POSTGRES_IDENTIFIER_PATTERN = /^[a-z_][a-z0-9_]*$/i;
 
 /**
- * Introspect the collation of the `key` column on the `kv` table the adapter's
- * own unqualified queries resolve to. Returns one row with a `collation` field:
- * the named collation (`C` for a correctly-created table) or `default` when the
- * column inherits the database default collation. Returns zero rows when no `kv`
- * table is visible on the search path.
- *
- * `to_regclass('kv')` resolves the same search-path-visible relation that
- * unqualified DDL/DML hits, so a `kv` table in another schema cannot be inspected
- * by mistake (which would falsely pass a mis-collated active table or falsely
- * reject a valid one). Detects a pre-existing `kv` whose key collation would break
- * lexicographic prefix scans — a `CREATE TABLE IF NOT EXISTS` would otherwise
- * silently adopt it.
+ * Validate a Postgres identifier (schema or table name) against a strict
+ * `[a-z_][a-z0-9_]*` pattern. Identifiers cannot be bound as `$n` parameters, so
+ * they must be interpolated into the SQL text — this validation, run once at
+ * construction, is the injection guard that makes interpolation safe. The strict
+ * pattern excludes the `"` quote character, so no quote-doubling is required.
  */
-export const PG_SELECT_KEY_COLLATION = `
-  SELECT COALESCE(co.collname, 'default') AS collation
-  FROM pg_attribute a
-  LEFT JOIN pg_collation co ON co.oid = a.attcollation
-  WHERE a.attrelid = to_regclass('kv') AND a.attname = 'key' AND a.attnum > 0
-`;
-
-/** Begin a transaction at SERIALIZABLE isolation (conditionalBatch's CAS path). */
-export const PG_BEGIN_SERIALIZABLE = 'BEGIN ISOLATION LEVEL SERIALIZABLE';
-
-/** Begin a transaction at READ COMMITTED isolation (the atomic batch() path). */
-export const PG_BEGIN_READ_COMMITTED = 'BEGIN ISOLATION LEVEL READ COMMITTED';
+export function assertPostgresIdentifier(value: string, role: 'schema' | 'table'): void {
+  if (!POSTGRES_IDENTIFIER_PATTERN.test(value)) {
+    throw new Error(
+      `NeonStorage ${role} name "${value}" is not a valid Postgres identifier. Use only letters, digits, and underscores, starting with a letter or underscore (matching ${POSTGRES_IDENTIFIER_PATTERN.source}).`,
+    );
+  }
+}
 
 /**
- * Begin a READ ONLY transaction for the `query()` passthrough. Postgres enforces
- * this at the database level — a writing statement (including a data-modifying
- * CTE that a textual SELECT check would miss) errors instead of mutating.
+ * Resolve the SQL table reference from optional schema/table names. With neither
+ * set, returns the bare unqualified `kv` so existing deployments emit
+ * byte-identical SQL (the default search-path-resolved table). With either set,
+ * returns a fully quoted `"schema"."table"` reference; both names are validated
+ * as strict identifiers first so the interpolation is injection-safe.
  */
-export const PG_BEGIN_READ_ONLY = 'BEGIN READ ONLY';
-
-/** Commit the current transaction. */
-export const PG_COMMIT = 'COMMIT';
-
-/** Roll back the current transaction. */
-export const PG_ROLLBACK = 'ROLLBACK';
-
-export const PG_SELECT_VALUE_BY_KEY = 'SELECT value FROM kv WHERE key = $1';
-
-export const PG_UPSERT_VALUE_BY_KEY =
-  'INSERT INTO kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value';
-
-export const PG_DELETE_VALUE_BY_KEY = 'DELETE FROM kv WHERE key = $1';
-
-export const PG_SELECT_KEY_PRESENCE = 'SELECT 1 AS present FROM kv WHERE key = $1 LIMIT 1';
-
-export const PG_COUNT_KEYS_BY_PREFIX =
-  'SELECT COUNT(*) AS count FROM kv WHERE key >= $1 AND key < $2';
-
-// No `RETURNING` clause: the caller reads the affected-row count from the
-// driver's result metadata (`rowCount`/`affectedRows`), so a large prefix delete
-// never materializes every deleted key over the wire.
-export const PG_DELETE_KEYS_BY_PREFIX = 'DELETE FROM kv WHERE key >= $1 AND key < $2';
+export function resolvePostgresTableReference(options: {
+  schema?: string | undefined;
+  table?: string | undefined;
+}): string {
+  const { schema, table } = options;
+  if (schema === undefined && table === undefined) {
+    return DEFAULT_POSTGRES_TABLE_REFERENCE;
+  }
+  const tableName = table ?? DEFAULT_POSTGRES_TABLE_REFERENCE;
+  assertPostgresIdentifier(tableName, 'table');
+  if (schema === undefined) {
+    return `"${tableName}"`;
+  }
+  assertPostgresIdentifier(schema, 'schema');
+  return `"${schema}"."${tableName}"`;
+}
 
 export type PostgresKeyRangeQueryParameter = string | number;
 
@@ -159,54 +146,126 @@ function buildPostgresKeyRangeQuery(
   };
 }
 
-export function buildPostgresKeyValueRangeSelect(
-  prefix: string,
-  options: ScanOptions = {},
-): PostgresBuiltQuery {
-  const { parameters, whereOrderLimit } = buildPostgresKeyRangeQuery(prefix, options);
-  return { parameters, sql: `SELECT key, value FROM kv ${whereOrderLimit}` };
-}
-
-export function buildPostgresKeyRangeSelect(
-  prefix: string,
-  options: ScanOptions = {},
-): PostgresBuiltQuery {
-  const { parameters, whereOrderLimit } = buildPostgresKeyRangeQuery(prefix, options);
-  return { parameters, sql: `SELECT key FROM kv ${whereOrderLimit}` };
-}
+/**
+ * The complete set of SQL statements an adapter instance runs, all bound to one
+ * `tableReference`. Built once per {@link NeonStorage} via
+ * {@link buildPostgresKeyValueQueries}; the range builders close over the
+ * reference so callers never re-pass it.
+ */
+export type PostgresKeyValueQueries = {
+  readonly tableReference: string;
+  readonly createTable: string;
+  readonly selectKeyCollation: string;
+  readonly selectValueByKey: string;
+  readonly upsertValueByKey: string;
+  readonly deleteValueByKey: string;
+  readonly selectKeyPresence: string;
+  readonly countKeysByPrefix: string;
+  readonly deleteKeysByPrefix: string;
+  /** One-statement condition read for `conditionalBatch`: `key = ANY($1)`. */
+  readonly selectValuesByKeys: string;
+  /** One-statement multi-row upsert for `batch`: `unnest($1::text[], $2::bytea[])`. */
+  readonly upsertValuesByKeys: string;
+  /** One-statement delete for `batch`: `key = ANY($1)`. */
+  readonly deleteValuesByKeys: string;
+  keyValueRangeSelect(prefix: string, options?: ScanOptions): PostgresBuiltQuery;
+  keyRangeSelect(prefix: string, options?: ScanOptions): PostgresBuiltQuery;
+  keyRangeDelete(prefix: string, options: NormalizedDeleteRangeOptions): PostgresBuiltQuery;
+};
 
 /**
- * Build a bounded-range `DELETE` for the `kv` table from already-validated
- * delete options.
+ * Build the full query set for a `kv`-shaped table at `tableReference` (either
+ * the bare unqualified `kv` or a quoted `"schema"."table"`). The reference is
+ * already validated/quoted by {@link resolvePostgresTableReference}; this only
+ * interpolates it into statement text.
  *
- * Without `limit`, emits `DELETE FROM kv WHERE <conditions>` — no ordering, since
- * order is meaningless when deleting the whole matched range. With `limit`, emits
- * a subquery form so the lowest (ascending) keys are deleted first:
- * `DELETE FROM kv WHERE key IN (SELECT key FROM kv WHERE <conditions> ORDER BY key
- * ASC LIMIT $n)`. Postgres does not support `DELETE ... ORDER BY ... LIMIT`
- * directly, so the subquery is the portable form.
- *
- * Requires {@link NormalizedDeleteRangeOptions}: the type guarantees at least one
- * bound is present and the prefix range is always the leading condition, so this
- * builder can never produce a whole-table wipe.
+ * The collation check uses `to_regclass($1)` with the resolved reference so it
+ * is scoped to the configured table — a `kv` table elsewhere on the search path
+ * can never be inspected by mistake.
  */
-export function buildPostgresKeyRangeDelete(
-  prefix: string,
-  options: NormalizedDeleteRangeOptions,
-): PostgresBuiltQuery {
-  const { conditions, parameters } = buildPostgresKeyRangeConditions(prefix, options);
-  const whereClause = conditions.join(' AND ');
+export function buildPostgresKeyValueQueries(tableReference: string): PostgresKeyValueQueries {
+  const createTable = `CREATE TABLE IF NOT EXISTS ${tableReference} (
+  key TEXT COLLATE "C" PRIMARY KEY,
+  value BYTEA NOT NULL
+)`;
 
-  // No `RETURNING`: the caller reads the affected-row count from result metadata,
-  // so a bounded delete never materializes every deleted key — see the note on
-  // PG_DELETE_KEYS_BY_PREFIX.
-  if (options.limit === undefined) {
-    return { parameters, sql: `DELETE FROM kv WHERE ${whereClause}` };
-  }
+  // `to_regclass($1)` resolves the configured relation (the same one the
+  // adapter's own DML hits), so a `kv` table in another schema cannot be
+  // inspected by mistake — which would falsely pass a mis-collated active table
+  // or falsely reject a valid one. Detects a pre-existing table whose key
+  // collation would break lexicographic prefix scans.
+  const selectKeyCollation = `
+  SELECT COALESCE(co.collname, 'default') AS collation
+  FROM pg_attribute a
+  LEFT JOIN pg_collation co ON co.oid = a.attcollation
+  WHERE a.attrelid = to_regclass($1) AND a.attname = 'key' AND a.attnum > 0
+`;
 
-  parameters.push(options.limit);
   return {
-    parameters,
-    sql: `DELETE FROM kv WHERE key IN (SELECT key FROM kv WHERE ${whereClause} ORDER BY key ASC LIMIT $${parameters.length})`,
+    tableReference,
+    createTable,
+    selectKeyCollation,
+    selectValueByKey: `SELECT value FROM ${tableReference} WHERE key = $1`,
+    upsertValueByKey: `INSERT INTO ${tableReference} (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    deleteValueByKey: `DELETE FROM ${tableReference} WHERE key = $1`,
+    selectKeyPresence: `SELECT 1 AS present FROM ${tableReference} WHERE key = $1 LIMIT 1`,
+    countKeysByPrefix: `SELECT COUNT(*) AS count FROM ${tableReference} WHERE key >= $1 AND key < $2`,
+    // No `RETURNING`: the caller reads the affected-row count from the driver's
+    // result metadata, so a large prefix delete never materializes every key.
+    deleteKeysByPrefix: `DELETE FROM ${tableReference} WHERE key >= $1 AND key < $2`,
+    selectValuesByKeys: `SELECT key, value FROM ${tableReference} WHERE key = ANY($1)`,
+    upsertValuesByKeys: `INSERT INTO ${tableReference} (key, value) SELECT * FROM unnest($1::text[], $2::bytea[]) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+    deleteValuesByKeys: `DELETE FROM ${tableReference} WHERE key = ANY($1)`,
+    keyValueRangeSelect(prefix, options = {}) {
+      const { parameters, whereOrderLimit } = buildPostgresKeyRangeQuery(prefix, options);
+      return { parameters, sql: `SELECT key, value FROM ${tableReference} ${whereOrderLimit}` };
+    },
+    keyRangeSelect(prefix, options = {}) {
+      const { parameters, whereOrderLimit } = buildPostgresKeyRangeQuery(prefix, options);
+      return { parameters, sql: `SELECT key FROM ${tableReference} ${whereOrderLimit}` };
+    },
+    keyRangeDelete(prefix, options) {
+      const { conditions, parameters } = buildPostgresKeyRangeConditions(prefix, options);
+      const whereClause = conditions.join(' AND ');
+
+      // No `RETURNING`: the caller reads the affected-row count from result
+      // metadata, so a bounded delete never materializes every deleted key.
+      if (options.limit === undefined) {
+        return { parameters, sql: `DELETE FROM ${tableReference} WHERE ${whereClause}` };
+      }
+
+      // Postgres does not support `DELETE ... ORDER BY ... LIMIT` directly, so the
+      // subquery form deletes the lowest (ascending) keys first.
+      parameters.push(options.limit);
+      return {
+        parameters,
+        sql: `DELETE FROM ${tableReference} WHERE key IN (SELECT key FROM ${tableReference} WHERE ${whereClause} ORDER BY key ASC LIMIT $${parameters.length})`,
+      };
+    },
   };
+}
+
+/** Begin a transaction at SERIALIZABLE isolation (conditionalBatch's CAS path). */
+export const PG_BEGIN_SERIALIZABLE = 'BEGIN ISOLATION LEVEL SERIALIZABLE';
+
+/** Begin a transaction at READ COMMITTED isolation (the atomic batch() path). */
+export const PG_BEGIN_READ_COMMITTED = 'BEGIN ISOLATION LEVEL READ COMMITTED';
+
+/**
+ * Begin a READ ONLY transaction for the `query()` passthrough. Postgres enforces
+ * this at the database level — a writing statement (including a data-modifying
+ * CTE that a textual SELECT check would miss) errors instead of mutating.
+ */
+export const PG_BEGIN_READ_ONLY = 'BEGIN READ ONLY';
+
+/** Commit the current transaction. */
+export const PG_COMMIT = 'COMMIT';
+
+/** Roll back the current transaction. */
+export const PG_ROLLBACK = 'ROLLBACK';
+
+/** Create the configured schema if it is absent (only when a schema is set). */
+export function buildPostgresCreateSchema(schema: string): string {
+  assertPostgresIdentifier(schema, 'schema');
+  return `CREATE SCHEMA IF NOT EXISTS "${schema}"`;
 }

@@ -38,6 +38,7 @@
 // re-exported so existing server call sites importing it from here are
 // unaffected.
 import type { FaultCode } from '../core/fault-code.ts';
+import type { WeftErrorCode } from '../core/weft-error.ts';
 
 export type { FaultCode };
 
@@ -62,13 +63,22 @@ export type OperationFault =
   | {
       code: 'NotFound';
       message: string;
-      data: { resource: string; identifier?: string | undefined };
+      // `weftCode` carries the fine-grained originating public error (e.g.
+      // `WorkflowNotFoundError`) so REST clients can branch transport-uniformly
+      // via `isWeftFault`; the coarse `NotFound` code alone cannot distinguish a
+      // missing workflow from a missing schedule. Set only at sites holding the
+      // typed error, never defaulted, so existing faults stay byte-identical.
+      data: { resource: string; identifier?: string | undefined; weftCode?: WeftErrorCode };
     }
   | {
       code: 'Conflict';
       message: string;
       data: {
         reason: string;
+        // See the `NotFound.weftCode` note: `Conflict` collapses several typed
+        // errors (`WorkflowAlreadyExistsError`, `StartOrSignalConflictError`,
+        // `IdempotencyKeyPurgedError`), and `weftCode` recovers which one.
+        weftCode?: WeftErrorCode;
         missingTypes?: readonly string[] | undefined;
         missingWorkflowCount?: number | undefined;
         samplesTruncated?: boolean | undefined;
@@ -94,7 +104,10 @@ export type OperationFault =
   | {
       code: 'InvalidParams';
       message: string;
-      data: { issues: ReadonlyArray<FlattenedZodIssue> };
+      // See the `NotFound.weftCode` note: `WorkflowNotRegisteredError` maps to
+      // `InvalidParams`, and `weftCode` recovers that originating code for
+      // transport-uniform branching.
+      data: { issues: ReadonlyArray<FlattenedZodIssue>; weftCode?: WeftErrorCode };
     }
   | { code: 'MethodNotFound'; message: string; data: { method: string } }
   | { code: 'EngineFailure'; message: string; data: Record<string, never> };

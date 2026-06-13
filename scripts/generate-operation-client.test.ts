@@ -76,11 +76,46 @@ describe('schemaToNode + renderNode — emitted text contract', () => {
     ).toBe('{ readonly "range"?: { readonly "gt"?: number; }; }');
   });
 
+  it('renders a string enum as a literal union preserving member order', () => {
+    expect(renderInline({ type: 'string', enum: ['started', 'signalled'] })).toBe(
+      '"started" | "signalled"',
+    );
+    // A bare string enum (no explicit `type`) is still a literal union.
+    expect(renderInline({ enum: ['a', 'b'] })).toBe('"a" | "b"');
+  });
+
+  it('escapes string-enum members with literal-sensitive characters', () => {
+    // Raw interpolation would emit invalid or wrong TypeScript for these; the
+    // generator must produce a properly escaped string literal per member.
+    expect(renderInline({ enum: ["can't"] })).toBe('"can\'t"');
+    expect(renderInline({ enum: ['a\\b'] })).toBe('"a\\\\b"');
+    expect(renderInline({ enum: ['line\nbreak'] })).toBe('"line\\nbreak"');
+    expect(renderInline({ enum: ['quote"d'] })).toBe('"quote\\"d"');
+  });
+
   it('collapses unsupported schema features to unknown', () => {
-    expect(renderInline({ enum: ['a', 'b'] })).toBe('unknown');
+    // Non-string and mixed enums fall through rather than guessing a literal.
+    expect(renderInline({ enum: [1, 2] })).toBe('unknown');
+    expect(renderInline({ enum: ['a', 2] })).toBe('unknown');
+    expect(renderInline({ enum: [] })).toBe('unknown');
     expect(renderInline({ const: 'x' })).toBe('unknown');
     expect(renderInline({ anyOf: [{ type: 'string' }] })).toBe('unknown');
     expect(renderInline({})).toBe('unknown');
+  });
+});
+
+describe('generated catalog — string enums tighten to literal unions (#466)', () => {
+  // Pin the regression: the generated client must surface the startOrSignal
+  // discriminant as a literal union, not a widened `string`. Imported from the
+  // generated module so a generator regression is caught here, not re-derived.
+  it('types startorsignal output.outcome as the literal union', () => {
+    type Outcome = CatalogOperationTypes['weft.workflows.startorsignal']['output']['outcome'];
+    const started: Outcome = 'started';
+    const signalled: Outcome = 'signalled';
+    expect([started, signalled]).toEqual(['started', 'signalled']);
+    // @ts-expect-error 'string' is too wide; the generated type is the literal union.
+    const widened: Outcome = 'not-an-outcome' as string;
+    void widened;
   });
 });
 

@@ -2,37 +2,31 @@ import { Pool } from '@neondatabase/serverless';
 
 import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range.ts';
 import {
-  storageValuesEqual,
   type BatchOperation,
   type ConditionalBatchCondition,
   type ScanOptions,
   type Storage,
   type StorageCapabilities,
 } from './interface.ts';
+import { conditionsHold, writeBatchNetEffect } from './neon-batch.ts';
 import {
   affectedRowCount,
+  resolveBatchNetEffect,
   toBytea,
   toStorageValue,
   type NeonQueryResult,
 } from './neon-value-mapping.ts';
 import {
-  buildPostgresKeyRangeDelete,
-  buildPostgresKeyRangeSelect,
-  buildPostgresKeyValueRangeSelect,
+  buildPostgresCreateSchema,
+  buildPostgresKeyValueQueries,
   buildPostgresPrefixRangeParameters,
   PG_BEGIN_READ_COMMITTED,
   PG_BEGIN_READ_ONLY,
   PG_BEGIN_SERIALIZABLE,
   PG_COMMIT,
-  PG_COUNT_KEYS_BY_PREFIX,
-  PG_CREATE_KEY_VALUE_TABLE,
-  PG_DELETE_KEYS_BY_PREFIX,
-  PG_DELETE_VALUE_BY_KEY,
   PG_ROLLBACK,
-  PG_SELECT_KEY_COLLATION,
-  PG_SELECT_KEY_PRESENCE,
-  PG_SELECT_VALUE_BY_KEY,
-  PG_UPSERT_VALUE_BY_KEY,
+  resolvePostgresTableReference,
+  type PostgresKeyValueQueries,
 } from './postgres-key-value-queries.ts';
 import { assertReadOnlyQuery } from './read-only-query.ts';
 import { scopedStorage } from './scoped-storage.ts';
@@ -127,6 +121,22 @@ export type NeonStorageOptions = {
    * `url`) IS closed on disposal.
    */
   pool?: NeonPool;
+  /**
+   * Postgres schema to contain the kv table. Default: unqualified — the table
+   * resolves through `search_path` (in practice `public`). When set, the adapter
+   * creates the schema if absent (`CREATE SCHEMA IF NOT EXISTS`) and qualifies
+   * every statement as `"schema"."table"`. Lets Weft live in its own schema
+   * alongside the application's tables in one database — one PITR line, no Drizzle
+   * drift/drop risk. Validated as a strict Postgres identifier at construction.
+   */
+  schema?: string;
+  /**
+   * Table name. Default: `'kv'`. Validated as a strict Postgres identifier at
+   * construction. With neither `schema` nor `table` set, the adapter emits
+   * byte-identical SQL against the unqualified `kv` table (existing deployments
+   * are unaffected).
+   */
+  table?: string;
 };
 
 /**
@@ -158,6 +168,15 @@ export type NeonStorageOptions = {
  */
 export class NeonStorage implements Storage {
   #pool: NeonPool;
+  // All SQL statements for this instance, bound once to the resolved table
+  // reference (the unqualified `kv` by default, or a quoted `"schema"."table"`
+  // when configured). Interpolating the reference once here keeps it off every
+  // query's hot path.
+  #queries: PostgresKeyValueQueries;
+  // The configured schema, if any — its `CREATE SCHEMA IF NOT EXISTS` runs
+  // during initialization before the table is created. `undefined` for the
+  // default (unqualified) deployment, which skips schema creation entirely.
+  #schema: string | undefined;
   // Memoized table-initialization promise; see #ensureTable for the
   // share-on-concurrent, clear-on-reject semantics.
   #initializationPromise: Promise<void> | undefined;
@@ -185,6 +204,15 @@ export class NeonStorage implements Storage {
     // The driver's Pool is structurally assignable to NeonPool (NeonPool is a
     // strict subset of its surface), so the default factory needs no cast.
     this.#pool = options.pool ?? poolFactory(options.url);
+    this.#schema = options.schema;
+    // Resolve + validate the table reference once. With no schema/table set this
+    // is the bare `kv` (byte-identical default SQL); otherwise a quoted,
+    // identifier-validated `"schema"."table"`.
+    const tableReference = resolvePostgresTableReference({
+      schema: options.schema,
+      table: options.table,
+    });
+    this.#queries = buildPostgresKeyValueQueries(tableReference);
   }
 
   capabilities(): StorageCapabilities {
@@ -215,21 +243,32 @@ export class NeonStorage implements Storage {
   }
 
   async #initialize(): Promise<void> {
-    await this.#pool.query(PG_CREATE_KEY_VALUE_TABLE);
+    // Create the configured schema first so the schema-qualified CREATE TABLE
+    // resolves. Skipped entirely for the default (unqualified) deployment.
+    if (this.#schema !== undefined) {
+      await this.#pool.query(buildPostgresCreateSchema(this.#schema));
+    }
+    await this.#pool.query(this.#queries.createTable);
     await this.#assertKeyCollation();
   }
 
   /**
-   * Verify the `kv.key` column uses the `C` collation. `CREATE TABLE IF NOT
-   * EXISTS` is a no-op against a pre-existing `kv` table, so a table created
-   * elsewhere with the database's default (locale) collation would silently break
-   * the lexicographic prefix scans the engine depends on. A table this adapter
-   * just created always has `COLLATE "C"`, so this only ever fails for a foreign,
-   * mis-collated `kv` — fail loudly with an actionable message rather than corrupt
-   * scan results.
+   * Verify the configured table's `key` column uses the `C` collation. `CREATE
+   * TABLE IF NOT EXISTS` is a no-op against a pre-existing table, so a table
+   * created elsewhere with the database's default (locale) collation would
+   * silently break the lexicographic prefix scans the engine depends on. A table
+   * this adapter just created always has `COLLATE "C"`, so this only ever fails
+   * for a foreign, mis-collated table — fail loudly with an actionable message
+   * rather than corrupt scan results.
+   *
+   * The introspection is scoped to the configured table reference (passed as
+   * `to_regclass($1)`), so a `kv` table elsewhere on the search path cannot be
+   * inspected by mistake.
    */
   async #assertKeyCollation(): Promise<void> {
-    const result = await this.#pool.query(PG_SELECT_KEY_COLLATION);
+    const result = await this.#pool.query(this.#queries.selectKeyCollation, [
+      this.#queries.tableReference,
+    ]);
     const collation = result.rows[0]?.['collation'];
     if (collation === 'C') return;
     // No row means the table is absent (unexpected — it was just created — but
@@ -238,18 +277,18 @@ export class NeonStorage implements Storage {
     // is impossible in practice; describe it generically if it ever occurs.
     const found =
       collation === undefined
-        ? 'no kv table'
+        ? 'no such table'
         : typeof collation === 'string'
           ? `"${collation}"`
           : 'an unexpected collation value';
     throw new Error(
-      `NeonStorage requires the "kv" table's "key" column to use COLLATE "C" (found ${found}). A "kv" table created without COLLATE "C" sorts keys by the database locale, which breaks Weft's lexicographic prefix scans. Use a fresh database, or recreate the table as: CREATE TABLE kv (key TEXT COLLATE "C" PRIMARY KEY, value BYTEA NOT NULL).`,
+      `NeonStorage requires the ${this.#queries.tableReference} table's "key" column to use COLLATE "C" (found ${found}). A table created without COLLATE "C" sorts keys by the database locale, which breaks Weft's lexicographic prefix scans. Use a fresh table, or recreate it as: CREATE TABLE ${this.#queries.tableReference} (key TEXT COLLATE "C" PRIMARY KEY, value BYTEA NOT NULL).`,
     );
   }
 
   async get(key: string): Promise<Uint8Array | null> {
     await this.#ensureTable();
-    const result = await this.#pool.query(PG_SELECT_VALUE_BY_KEY, [key]);
+    const result = await this.#pool.query(this.#queries.selectValueByKey, [key]);
     const row = result.rows[0];
     if (row === undefined) return null;
     const raw = row['value'];
@@ -259,38 +298,38 @@ export class NeonStorage implements Storage {
 
   async put(key: string, value: Uint8Array): Promise<void> {
     await this.#ensureTable();
-    await this.#pool.query(PG_UPSERT_VALUE_BY_KEY, [key, toBytea(value)]);
+    await this.#pool.query(this.#queries.upsertValueByKey, [key, toBytea(value)]);
   }
 
   async delete(key: string): Promise<void> {
     await this.#ensureTable();
-    await this.#pool.query(PG_DELETE_VALUE_BY_KEY, [key]);
+    await this.#pool.query(this.#queries.deleteValueByKey, [key]);
   }
 
   async has(key: string): Promise<boolean> {
     await this.#ensureTable();
-    const result = await this.#pool.query(PG_SELECT_KEY_PRESENCE, [key]);
+    const result = await this.#pool.query(this.#queries.selectKeyPresence, [key]);
     return result.rows.length > 0;
   }
 
   async deletePrefix(prefix: string): Promise<number> {
     await this.#ensureTable();
     const [rangeStart, rangeEnd] = buildPostgresPrefixRangeParameters(prefix);
-    const result = await this.#pool.query(PG_DELETE_KEYS_BY_PREFIX, [rangeStart, rangeEnd]);
+    const result = await this.#pool.query(this.#queries.deleteKeysByPrefix, [rangeStart, rangeEnd]);
     return affectedRowCount(result);
   }
 
   async deleteRange(prefix: string, options: DeleteRangeOptions): Promise<number> {
     await this.#ensureTable();
     const normalized = normalizeDeleteRangeOptions(options);
-    const { parameters, sql } = buildPostgresKeyRangeDelete(prefix, normalized);
+    const { parameters, sql } = this.#queries.keyRangeDelete(prefix, normalized);
     const result = await this.#pool.query(sql, parameters);
     return affectedRowCount(result);
   }
 
   async *scan(prefix: string, options: ScanOptions = {}): AsyncIterable<[string, Uint8Array]> {
     await this.#ensureTable();
-    const { parameters, sql } = buildPostgresKeyValueRangeSelect(prefix, options);
+    const { parameters, sql } = this.#queries.keyValueRangeSelect(prefix, options);
     const result = await this.#pool.query(sql, parameters);
     for (const row of result.rows) {
       yield [row['key'] as string, toStorageValue(row['value'])];
@@ -299,7 +338,7 @@ export class NeonStorage implements Storage {
 
   async *keys(prefix: string, options: ScanOptions = {}): AsyncIterable<string> {
     await this.#ensureTable();
-    const { parameters, sql } = buildPostgresKeyRangeSelect(prefix, options);
+    const { parameters, sql } = this.#queries.keyRangeSelect(prefix, options);
     const result = await this.#pool.query(sql, parameters);
     for (const row of result.rows) {
       yield row['key'] as string;
@@ -309,7 +348,7 @@ export class NeonStorage implements Storage {
   async count(prefix: string): Promise<number> {
     await this.#ensureTable();
     const [rangeStart, rangeEnd] = buildPostgresPrefixRangeParameters(prefix);
-    const result = await this.#pool.query(PG_COUNT_KEYS_BY_PREFIX, [rangeStart, rangeEnd]);
+    const result = await this.#pool.query(this.#queries.countKeysByPrefix, [rangeStart, rangeEnd]);
     return Number(result.rows[0]?.['count'] ?? 0);
   }
 
@@ -361,7 +400,7 @@ export class NeonStorage implements Storage {
     if (operations.length === 0) return;
     await this.#ensureTable();
     await this.#withTransaction(PG_BEGIN_READ_COMMITTED, async (client) => {
-      await applyBatchOperations(client, operations);
+      await writeBatchNetEffect(client, this.#queries, resolveBatchNetEffect(operations));
     });
   }
 
@@ -370,6 +409,10 @@ export class NeonStorage implements Storage {
     operations: BatchOperation[],
   ): Promise<boolean> {
     await this.#ensureTable();
+
+    // Resolve the write net effect once, outside the retry loop — it is
+    // deterministic input, so recomputing per retry would be wasted work.
+    const netEffect = resolveBatchNetEffect(operations);
 
     // SERIALIZABLE is required, not SELECT...FOR UPDATE: a condition with
     // expectedValue null asserts a key is ABSENT, and a row lock cannot lock a
@@ -383,15 +426,10 @@ export class NeonStorage implements Storage {
         return await this.#withTransaction(
           PG_BEGIN_SERIALIZABLE,
           async (client) => {
-            for (const condition of conditions) {
-              const result = await client.query(PG_SELECT_VALUE_BY_KEY, [condition.key]);
-              const raw = result.rows[0]?.['value'];
-              const currentValue = raw === null || raw === undefined ? null : toStorageValue(raw);
-              if (!storageValuesEqual(currentValue, condition.expectedValue)) {
-                return false;
-              }
+            if (!(await conditionsHold(client, this.#queries, conditions))) {
+              return false;
             }
-            await applyBatchOperations(client, operations);
+            await writeBatchNetEffect(client, this.#queries, netEffect);
             return true;
           },
           // Only COMMIT when the CAS actually wrote (returned true). A precondition
@@ -453,22 +491,5 @@ export class NeonStorage implements Storage {
 
   async [Symbol.asyncDispose](): Promise<void> {
     await this.#endPoolOnce();
-  }
-}
-
-/**
- * Apply a batch of put/delete operations on an already-open transaction client.
- * Shared by `batch()` and the write phase of `conditionalBatch()`.
- */
-async function applyBatchOperations(
-  client: NeonPoolClient,
-  operations: BatchOperation[],
-): Promise<void> {
-  for (const operation of operations) {
-    if (operation.type === 'put') {
-      await client.query(PG_UPSERT_VALUE_BY_KEY, [operation.key, toBytea(operation.value)]);
-    } else {
-      await client.query(PG_DELETE_VALUE_BY_KEY, [operation.key]);
-    }
   }
 }

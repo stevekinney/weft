@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { CompressedStorage } from '../../storage/compressed-storage.ts';
 import type { BatchOperation, Storage } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import { encodeStorageKeyComponent, KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { Engine } from '../engine.ts';
@@ -35,11 +35,29 @@ const releaseThenHold = workflow({ name: 'release-then-hold' }).execute(async fu
   return yield* ctx.waitForSignal<string>('hold');
 });
 
+// Consumes `ev` signals in a loop, recording each payload's tag, and returns the
+// ordered list when a signal carries `stop: true`. Used to prove FIFO buffering:
+// the order of the returned tags is the order the engine consumed the signals.
+const collectEvents = workflow({ name: 'collect-events' }).execute(async function* (
+  ctx: WorkflowContext,
+) {
+  const events: string[] = [];
+  for (;;) {
+    const event = (yield* ctx.waitForSignal<{ t: string; stop?: boolean }>('ev')) as {
+      t: string;
+      stop?: boolean;
+    };
+    events.push(event.t);
+    if (event.stop) return { events };
+  }
+});
+
 function createEngine(storage: Storage = new MemoryStorage()): Engine {
   const engine = new Engine({ storage });
   engine.register(waitForRelease);
   engine.register(completesImmediately);
   engine.register(releaseThenHold);
+  engine.register(collectEvents);
   return engine;
 }
 
@@ -381,7 +399,7 @@ describe('engine.startOrSignal', () => {
   it('creates the workflow and delivers the signal when the target is absent', async () => {
     const engine = createEngine();
     try {
-      const handle = await engine.startOrSignal(
+      const { handle } = await engine.startOrSignal(
         'wait-for-release',
         null,
         { name: 'release', payload: 'go', signalId: 'sig-create' },
@@ -399,7 +417,7 @@ describe('engine.startOrSignal', () => {
     try {
       const started = await engine.start('wait-for-release', null, { id: 'sos-existing' });
 
-      const handle = await engine.startOrSignal(
+      const { handle } = await engine.startOrSignal(
         'wait-for-release',
         null,
         { name: 'release', payload: 'late', signalId: 'sig-existing' },
@@ -408,6 +426,80 @@ describe('engine.startOrSignal', () => {
       expect(handle.id).toBe(started.id);
       expect(await started.result()).toBe('late');
       expect(await countWorkflowRecords(engine)).toBe(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('reports outcome "started" when it creates the workflow (#466)', async () => {
+    const engine = createEngine();
+    try {
+      const { handle, outcome } = await engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'go', signalId: 'sig-outcome-started' },
+        { id: 'sos-outcome-started' },
+      );
+      expect(outcome).toBe('started');
+      await handle.signal('release', 'go');
+      await handle.result();
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('reports outcome "signalled" when it signals an existing run (#466)', async () => {
+    const engine = createEngine();
+    try {
+      await engine.start('wait-for-release', null, { id: 'sos-outcome-signalled' });
+
+      const { handle, outcome } = await engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'late', signalId: 'sig-outcome-signalled' },
+        { id: 'sos-outcome-signalled' },
+      );
+      expect(outcome).toBe('signalled');
+      expect(await handle.result()).toBe('late');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('reports outcome "signalled" for the keyed race loser, "started" for the winner (#466)', async () => {
+    const engine = createEngine();
+    try {
+      // Concurrent same-key callers converge on one run: exactly one creates it
+      // ('started'); the rest lose the create race and signal it ('signalled').
+      const results = await Promise.all([
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'a' },
+          { idempotencyKey: 'sos-outcome-race' },
+        ),
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'b' },
+          { idempotencyKey: 'sos-outcome-race' },
+        ),
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release', payload: 'c' },
+          { idempotencyKey: 'sos-outcome-race' },
+        ),
+      ]);
+      // All converge on one workflow id.
+      expect(new Set(results.map((result) => result.handle.id)).size).toBe(1);
+      expect(await countWorkflowRecords(engine)).toBe(1);
+      // Exactly one 'started', the rest 'signalled' — each call reports its OWN
+      // per-call outcome even though they converge on one run.
+      const outcomes = results
+        .map((result) => result.outcome)
+        .toSorted((first, second) => (first < second ? -1 : first > second ? 1 : 0));
+      expect(outcomes).toEqual(['signalled', 'signalled', 'started']);
     } finally {
       await engine[Symbol.asyncDispose]();
     }
@@ -490,7 +582,7 @@ describe('engine.startOrSignal', () => {
     // raced, each with its own payload.
     const engine = createEngine();
     try {
-      const [a, b] = await Promise.all([
+      const [{ handle: a }, { handle: b }] = await Promise.all([
         engine.startOrSignal(
           'wait-for-release',
           null,
@@ -525,7 +617,7 @@ describe('engine.startOrSignal', () => {
   it('converges concurrent absent-target callers to one workflow and one signal', async () => {
     const engine = createEngine();
     try {
-      const [a, b, c] = await Promise.all([
+      const [{ handle: a }, { handle: b }, { handle: c }] = await Promise.all([
         engine.startOrSignal(
           'wait-for-release',
           null,
@@ -573,7 +665,7 @@ describe('engine.startOrSignal', () => {
   it('persists a key→id mapping so startOrSignal can dedup by idempotency key', async () => {
     const engine = createEngine();
     try {
-      const created = await engine.startOrSignal(
+      const { handle: created } = await engine.startOrSignal(
         'wait-for-release',
         null,
         { name: 'release', payload: 'first' },
@@ -584,7 +676,7 @@ describe('engine.startOrSignal', () => {
 
       // A second startOrSignal with the same key resolves the mapping and
       // signals the existing run instead of creating a new one.
-      const again = await engine.startOrSignal(
+      const { handle: again } = await engine.startOrSignal(
         'wait-for-release',
         null,
         { name: 'release', payload: 'second' },
@@ -609,7 +701,7 @@ describe('engine.startOrSignal', () => {
     try {
       // `release-then-hold` consumes the create-batch `release` then parks on
       // `hold` (never sent), so the run stays non-terminal across both calls.
-      const created = await engine.startOrSignal(
+      const { handle: created } = await engine.startOrSignal(
         'release-then-hold',
         null,
         { name: 'release', payload: 'first' },
@@ -623,7 +715,7 @@ describe('engine.startOrSignal', () => {
       );
       expect(await engine.storage.get(acceptedResponseKey)).not.toBeNull();
 
-      const again = await engine.startOrSignal(
+      const { handle: again } = await engine.startOrSignal(
         'release-then-hold',
         null,
         { name: 'release', payload: 'second' },
@@ -694,7 +786,7 @@ describe('engine.startOrSignal', () => {
   it('throws IdempotencyKeyPurgedError when the key maps to a purged workflow', async () => {
     const engine = createEngine();
     try {
-      const created = await engine.startOrSignal(
+      const { handle: created } = await engine.startOrSignal(
         'completes-immediately',
         null,
         { name: 'release', payload: 'x' },
@@ -752,14 +844,14 @@ describe('engine.startOrSignal', () => {
     });
     engine.register(releaseThenHold);
     try {
-      const winner = await engine.startOrSignal(
+      const { handle: winner } = await engine.startOrSignal(
         'release-then-hold',
         null,
         { name: 'release', payload: 'from-a' },
         { idempotencyKey: 'race-recover' },
       );
 
-      const loser = await engine.startOrSignal(
+      const { handle: loser } = await engine.startOrSignal(
         'release-then-hold',
         null,
         { name: 'release', payload: 'from-b' },
@@ -789,7 +881,7 @@ describe('engine.startOrSignal', () => {
       // Pre-buffer a signal for an id whose workflow record does not exist yet.
       await engine.signal('sos-prebuffered', 'release', 'buffered', { signalId: 'shared-sig' });
 
-      const handle = await engine.startOrSignal(
+      const { handle } = await engine.startOrSignal(
         'wait-for-release',
         null,
         { name: 'release', payload: 'from-caller', signalId: 'shared-sig' },
@@ -826,7 +918,7 @@ describe('engine.startOrSignal', () => {
         signalId: 'shared-sig',
       });
 
-      const [a, b] = await Promise.all([
+      const [{ handle: a }, { handle: b }] = await Promise.all([
         engine.startOrSignal(
           'release-then-hold',
           null,
@@ -882,7 +974,7 @@ describe('engine.startOrSignal', () => {
     });
     engine.register(completesImmediately);
     try {
-      const created = await engine.startOrSignal(
+      const { handle: created } = await engine.startOrSignal(
         'completes-immediately',
         null,
         { name: 'release', payload: 'x' },
@@ -962,7 +1054,7 @@ describe('engine.startOrSignal', () => {
       // retrying its own create (the wrapper lets the second conditionalBatch
       // through) and resolves to a real run.
       await expect(winnerPromise).rejects.toThrow(/injected winner abort/);
-      const loser = await loserPromise;
+      const { handle: loser } = await loserPromise;
       expect(loser.id).toBe('sos-abort');
       expect(await countWorkflowRecords(engine)).toBe(1);
       expect(await loser.result()).toBe('loser');
@@ -1023,7 +1115,7 @@ describe('engine.startOrSignal', () => {
     try {
       await engine.signal('buffered-collision', 'release', 'winner', { signalId: 'sig-buffered' });
 
-      const handle = await engine.startOrSignal(
+      const { handle } = await engine.startOrSignal(
         'release-then-hold',
         null,
         { name: 'release', payload: 'loser', signalId: 'sig-buffered' },
@@ -1059,6 +1151,160 @@ describe('engine.startOrSignal', () => {
           { id: 'buffered-batch-failure' },
         ),
       ).rejects.toThrow('injected plain create batch failure');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+});
+
+describe('startOrSignal start-signal FIFO ordering (#458)', () => {
+  it('consumes the start-signal before later same-tick signals', async () => {
+    // Regression for #458: a startOrSignal start-signal must be consumed before
+    // signals delivered later in the same event-loop tick (before the workflow
+    // reaches its first park). Previously the start-signal's storage key sorted
+    // AFTER same-name anonymous keys, so a scan-first consume took the later
+    // signals first; if one carried `stop`, the workflow returned before ever
+    // consuming the start payload — silent data loss.
+    //
+    // The terminator is decoupled from the same-tick pair: `b` and `c` are both
+    // un-awaited anonymous signals whose relative order is best-effort, so the
+    // `stop` is sent separately afterward (anonymously, so it draws the highest
+    // sequence and is consumed last). The invariant under test is "start-signal
+    // first", not the b-vs-c order.
+    const engine = createEngine();
+    try {
+      const id = 'fifo-start';
+      const { handle } = await engine.startOrSignal(
+        'collect-events',
+        null,
+        { name: 'ev', payload: { t: 'a' }, signalId: 's-a' },
+        { id },
+      );
+      // Two more signals in the same tick (no awaits between sends).
+      await Promise.all([engine.signal(id, 'ev', { t: 'b' }), engine.signal(id, 'ev', { t: 'c' })]);
+      await engine.signal(id, 'ev', { t: 'stop', stop: true });
+
+      const result = (await handle.result()) as { events: string[] };
+      expect(result.events[0]).toBe('a');
+      expect(result.events.at(-1)).toBe('stop');
+      expect(result.events.slice(1, -1).toSorted()).toEqual(['b', 'c']);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('orders the start-signal first even when the explicit signalId sorts low', async () => {
+    // The start payload must win regardless of how its signalId sorts against the
+    // anonymous-id namespace. `0-...` sorts lexically before `anonymous%3A...`, so
+    // a fix that merely relied on explicit ids sorting after anonymous ones would
+    // regress here; the sort-class component guarantees the start-signal first.
+    const engine = createEngine();
+    try {
+      const id = 'fifo-start-low-id';
+      const { handle } = await engine.startOrSignal(
+        'collect-events',
+        null,
+        { name: 'ev', payload: { t: 'a' }, signalId: '0-start' },
+        { id },
+      );
+      await Promise.all([engine.signal(id, 'ev', { t: 'b' }), engine.signal(id, 'ev', { t: 'c' })]);
+      await engine.signal(id, 'ev', { t: 'stop', stop: true });
+
+      const result = (await handle.result()) as { events: string[] };
+      expect(result.events[0]).toBe('a');
+      expect(result.events.slice(1).toSorted()).toEqual(['b', 'c', 'stop']);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('dedups a pre-buffered signal against a startOrSignal create on the same signalId', async () => {
+    // The dedup identity is the `sigres:` accepted-response marker (keyed by
+    // signalId alone), NOT the `sig:` payload key. The FIFO sort-class makes the
+    // start-signal's `sig:` key (class `0`) differ from the live path's (class
+    // `1`), so a `sig:`-keyed create CAS would NOT collide with a pre-buffered
+    // signal and the create batch would write a SECOND copy — the exact double-
+    // delivery the marker exists to prevent. Both write paths gate on `sigres:`.
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    try {
+      const id = 'prebuffer-create-dedup';
+      // Buffer a signal for a not-yet-existent run (class `1`, plus its `sigres:`).
+      await engine.signal(id, 'ev', { t: 'x' }, { signalId: 'dup' });
+
+      // startOrSignal sees no record → create path. Its start-signal shares the
+      // signalId `dup`; the create-batch CAS must collide on the pre-buffered
+      // `sigres:` and create the run WITHOUT folding a second `ev` signal in.
+      await engine.startOrSignal(
+        'collect-events',
+        null,
+        { name: 'ev', payload: { t: 'y' }, signalId: 'dup' },
+        { id },
+      );
+
+      // Exactly one `ev` payload may be buffered for signalId `dup`.
+      const buffered: string[] = [];
+      for await (const [key] of storage.scan(`sig:${encodeStorageKeyComponent(id)}:ev:`)) {
+        buffered.push(key);
+      }
+      expect(buffered).toHaveLength(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('dedups a live signal whose accepted-response read races a startOrSignal commit (TOCTOU)', async () => {
+    // The live signal path reads `sigres:` once, then CASes. A startOrSignal that
+    // creates the run+start-signal can commit in that read→CAS gap. Because the
+    // start-signal's `sig:` key is class `0` and the live path's is class `1`, a
+    // `sig:`-keyed CAS would still pass (the keys differ) and buffer a second copy.
+    // Gating the live CAS on the class-independent `sigres:` marker closes the gap:
+    // the start batch's `sigres:` makes the live CAS fail, so it deduplicates.
+    const id = 'toctou-live-vs-create';
+    const inner = new MemoryStorage();
+    const acceptedResponseKey = KEYS.signalAcceptedResponse(id, 'ev', 'dup');
+
+    let injected = false;
+    let runCreateInGap: (() => Promise<unknown>) | undefined;
+
+    const storage = new Proxy(inner, {
+      get(target, property, receiver) {
+        if (property === 'get') {
+          return async (key: string): Promise<Uint8Array | null> => {
+            const value = await target.get(key);
+            // The live path's pre-CAS read of the accepted-response marker: commit
+            // the competing startOrSignal create here, in the read→CAS gap.
+            if (!injected && key === acceptedResponseKey && runCreateInGap !== undefined) {
+              injected = true;
+              await runCreateInGap();
+            }
+            return value;
+          };
+        }
+        const value = Reflect.get(target, property, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+    const engine = createEngine(storage);
+    runCreateInGap = () =>
+      engine.startOrSignal(
+        'collect-events',
+        null,
+        { name: 'ev', payload: { t: 'created' }, signalId: 'dup' },
+        { id },
+      );
+
+    try {
+      // The live signal sees no run yet (buffer-before-start); its accepted-response
+      // read fires the injected create, then its CAS must lose to the start batch.
+      await engine.signal(id, 'ev', { t: 'live' }, { signalId: 'dup' });
+
+      const buffered: string[] = [];
+      for await (const [key] of inner.scan(`sig:${encodeStorageKeyComponent(id)}:ev:`)) {
+        buffered.push(key);
+      }
+      expect(buffered).toHaveLength(1);
     } finally {
       await engine[Symbol.asyncDispose]();
     }

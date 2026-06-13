@@ -6,6 +6,7 @@ import type {
   ActivityStartedEvent,
 } from './activity-events.ts';
 import type { AttributesChangedEvent } from './attribute-events.ts';
+import type { ScheduleFiredEvent } from './schedule-events.ts';
 import type { SignalDeliveredEvent, SignalReceivedEvent } from './signal-events.ts';
 import type {
   AlertFiredEvent,
@@ -62,6 +63,7 @@ export type WeftEventMap = {
   'activity:async-pending': ActivityAsyncPendingEvent;
   'signal:received': SignalReceivedEvent;
   'signal:delivered': SignalDeliveredEvent;
+  'schedule:fired': ScheduleFiredEvent;
   'human-review:requested': ReviewRequestedEvent;
   'human-review:completed': ReviewCompletedEvent;
   'attributes:changed': AttributesChangedEvent;

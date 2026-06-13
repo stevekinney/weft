@@ -238,7 +238,7 @@ const key = KEYS.workflow('my-workflow-id');
 // => "wf:my-workflow-id"
 
 const signalKey = KEYS.signal('wf-123', 'approval', 'sig-456');
-// => "sig:wf-123:approval:sig-456"
+// => "sig:wf-123:approval:1:sig-456"
 
 const executionStateKey = KEYS.stateExecution('wf-123', 'counter');
 // => "state:execution:wf-123:counter"

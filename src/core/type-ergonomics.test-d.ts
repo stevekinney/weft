@@ -13,8 +13,10 @@ import {
   type AnyActivityDefinition,
   type AnyWorkflowDefinition,
   type ClientHandle,
+  type HttpClient,
   type InferActivityEntry,
   type KnownWorkflowName,
+  type LocalClient,
   type UnknownNameWhenRegistryEmpty,
   type WeftClient,
   type WorkflowContext,
@@ -193,6 +195,8 @@ void engine.start('runtime-discovered', { id: 'dynamic' });
 // output type — proving per-workflow typed client methods, not just engine
 // methods, flow from the generated `WorkflowRegistry` declaration.
 declare const typedClient: WeftClient;
+declare const typedLocalClient: LocalClient;
+declare const typedHttpClient: HttpClient;
 
 async function verifyModuleAugmentedClientStart(): Promise<void> {
   // @ts-expect-error client start input must match the module-augmented input type.
@@ -211,6 +215,46 @@ async function verifyModuleAugmentedClientStart(): Promise<void> {
   void outputCheck;
 }
 void verifyModuleAugmentedClientStart;
+
+async function verifyModuleAugmentedClientGetHandle(): Promise<void> {
+  // Supplying the augmented workflow name as a type argument narrows the
+  // re-attached handle's `result()` to that workflow's output type. The `id`
+  // alone identifies the run, so no runtime workflow-type argument is required.
+  const handle = await typedClient.getHandle<'moduleAugmentedWelcome'>('welcome-1');
+  if (handle === null) return;
+
+  const typedHandle: ClientHandle<WelcomeOutput> = handle;
+  void typedHandle;
+
+  const output = await handle.result();
+  output.greeting.toUpperCase();
+  const outputCheck: Equals<typeof output, WelcomeOutput> = true;
+  void outputCheck;
+
+  // Without a type argument, `result()` stays `unknown`.
+  const untyped = await typedClient.getHandle('welcome-2');
+  if (untyped === null) return;
+  const untypedCheck: Equals<Awaited<ReturnType<typeof untyped.result>>, unknown> = true;
+  void untypedCheck;
+}
+void verifyModuleAugmentedClientGetHandle;
+
+// The overload reorder must hold on the CONCRETE client classes too — a caller
+// typed directly as `LocalClient`/`HttpClient` (not the `WeftClient` interface)
+// would otherwise hit the generic overload first and infer a union of all
+// outputs instead of `unknown`. Pin both surfaces here.
+async function verifyConcreteClientGetHandleStaysUnknown(): Promise<void> {
+  const local = await typedLocalClient.getHandle('welcome-3');
+  if (local === null) return;
+  const localCheck: Equals<Awaited<ReturnType<typeof local.result>>, unknown> = true;
+  void localCheck;
+
+  const http = await typedHttpClient.getHandle('welcome-4');
+  if (http === null) return;
+  const httpCheck: Equals<Awaited<ReturnType<typeof http.result>>, unknown> = true;
+  void httpCheck;
+}
+void verifyConcreteClientGetHandleStaysUnknown;
 
 async function verifyModuleAugmentedClientSchedule(): Promise<void> {
   // @ts-expect-error client schedule input must match the module-augmented input type.

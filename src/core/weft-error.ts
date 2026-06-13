@@ -208,3 +208,49 @@ export function isWeftErrorLike(value: unknown): value is { code: WeftErrorCode;
     return false;
   }
 }
+
+/**
+ * Transport-uniform error classification: `true` when `error` represents the
+ * given public {@link WeftErrorCode}, whether it was thrown in process or
+ * arrived over HTTP. This is the canonical way to branch on a specific Weft
+ * error without caring which transport produced it — the predicate the
+ * `WeftClient` "constructor change, not an API change" promise rests on.
+ *
+ * It matches two shapes with one rule:
+ * - An in-process typed error (or any {@link isWeftErrorLike} value) whose
+ *   `code` equals `code` — what `LocalClient` throws.
+ * - An `HttpClientError` carrying `weftCode === code` — what `HttpClient`
+ *   throws when the REST fault rehydrated the originating public code. The
+ *   check is structural (`'weftCode' in error`) rather than `instanceof
+ *   HttpClientError`, both to stay reliable across realm/duplicate-module
+ *   boundaries and to keep this guard in the core layer without importing the
+ *   client.
+ *
+ * @example
+ * ```ts
+ * import { isWeftFault } from '@lostgradient/weft';
+ *
+ * // The same branch holds over LocalClient and HttpClient: a missing workflow
+ * // is a no-op success ("nothing to tell"), not a failure to re-raise.
+ * function rethrowUnlessMissing(error: unknown): void {
+ *   if (!isWeftFault(error, 'WorkflowNotFoundError')) {
+ *     throw error;
+ *   }
+ * }
+ * ```
+ */
+export function isWeftFault(error: unknown, code: WeftErrorCode): boolean {
+  if (isWeftErrorLike(error) && error.code === code) {
+    return true;
+  }
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+  // Structural `weftCode` match for the HTTP-wrapped error. Same side-effect
+  // guard as `isWeftErrorLike`: untrusted input may carry a throwing getter.
+  try {
+    return 'weftCode' in error && error.weftCode === code;
+  } catch {
+    return false;
+  }
+}

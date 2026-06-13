@@ -2,6 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import type { ActivityContext, WorkflowContext } from '../core/types.ts';
 import { activity, signal } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
+import { isWeftFault } from '../core/weft-error.ts';
 import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import type { WeftClient } from './interface.ts';
 
@@ -59,6 +60,7 @@ const sharedWeftClientMethodNames = [
   'update',
   'resume',
   'recoverAll',
+  'getHandle',
   'timeout',
   'getAttributes',
   'setAttributes',
@@ -329,6 +331,45 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       await expect(handle.result()).resolves.toBe('payload:done');
     });
 
+    it('getHandle re-attaches to a running workflow and awaits its result', async () => {
+      const client = getClient();
+      const started = await client.start(workflowTypes.waiting, 'reattach', {
+        id: `${idPrefix}-get-handle-running`,
+      });
+
+      await waitForRunning?.(started.id);
+      await waitForQueryReadyForTesting(client, started.id);
+
+      // Re-attach with only the id — no reference to the original handle.
+      const reattached = await client.getHandle(started.id);
+      if (reattached === null) throw new Error('getHandle returned null for a running workflow');
+      expect(reattached.id).toBe(started.id);
+
+      await reattached.signal('continue', 'done');
+      const reattachedResult = (await reattached.result()) as string;
+      expect(reattachedResult).toBe('reattach:done');
+    });
+
+    it('getHandle on an already-terminal workflow resolves result() from persisted state', async () => {
+      const client = getClient();
+      const started = await client.start(workflowTypes.echo, 'finished', {
+        id: `${idPrefix}-get-handle-terminal`,
+      });
+      // Let it run to completion before re-attaching, so result() must come from
+      // persisted state rather than a live in-flight subscription.
+      await expect(started.result()).resolves.toBe('finished');
+
+      const reattached = await client.getHandle(started.id);
+      if (reattached === null) throw new Error('getHandle returned null for a terminal workflow');
+      const reattachedResult = (await reattached.result()) as string;
+      expect(reattachedResult).toBe('finished');
+    });
+
+    it('getHandle returns null for an unknown workflow id', async () => {
+      const client = getClient();
+      await expect(client.getHandle(`${idPrefix}-get-handle-missing`)).resolves.toBeNull();
+    });
+
     it('round-trips workflow attributes and tag mutations through handle helpers', async () => {
       const client = getClient();
       const handle = await client.start(workflowTypes.waiting, 'tagged', {
@@ -396,6 +437,108 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
 
       await expect(clientHandle.result()).resolves.toBe('client:payload');
       await expect(handleHandle.result()).resolves.toBe('handle:payload');
+    });
+
+    it('startOrSignal reports outcome "started" then "signalled" across calls (#466)', async () => {
+      const client = getClient();
+      const id = `${idPrefix}-start-or-signal-outcome`;
+
+      // First call creates the run.
+      const first = await client.startOrSignal(
+        workflowTypes.waitingTwice,
+        'outcome',
+        { name: 'continue', signalId: 'sos-first' },
+        { id },
+      );
+      expect(first.outcome).toBe('started');
+
+      await waitForRunning?.(id);
+      await waitForQueryReadyForTesting(client, id);
+
+      // Second call signals the now-existing run.
+      const second = await client.startOrSignal(
+        workflowTypes.waitingTwice,
+        'outcome',
+        { name: 'continue', signalId: 'sos-second' },
+        { id },
+      );
+      expect(second.outcome).toBe('signalled');
+
+      const result = (await first.result()) as string;
+      expect(result).toBe('outcome:done');
+    });
+
+    it('startOrSignal gives converged concurrent callers their own per-call outcome (#466)', async () => {
+      const client = getClient();
+      // Concurrent same-key callers converge on ONE run, but each call returns its
+      // OWN handle, so exactly one observes 'started' and the rest 'signalled' —
+      // no shared-handle clobbering across the convergence.
+      const handles = await Promise.all([
+        client.startOrSignal(
+          workflowTypes.waitingTwice,
+          'converge',
+          { name: 'continue' },
+          { idempotencyKey: `${idPrefix}-sos-converge` },
+        ),
+        client.startOrSignal(
+          workflowTypes.waitingTwice,
+          'converge',
+          { name: 'continue' },
+          { idempotencyKey: `${idPrefix}-sos-converge` },
+        ),
+        client.startOrSignal(
+          workflowTypes.waitingTwice,
+          'converge',
+          { name: 'continue' },
+          { idempotencyKey: `${idPrefix}-sos-converge` },
+        ),
+      ]);
+
+      // All converge on one workflow id.
+      expect(new Set(handles.map((handle) => handle.id)).size).toBe(1);
+      // Exactly one 'started', the rest 'signalled'.
+      const outcomes = handles
+        .map((handle) => handle.outcome ?? '')
+        .toSorted((first, second) => (first < second ? -1 : first > second ? 1 : 0));
+      expect(outcomes).toEqual(['signalled', 'signalled', 'started']);
+    });
+
+    // #465: a producer that branches on a specific typed error must be able to
+    // write that branch once and have it hold over BOTH transports — the exact
+    // "constructor change, not an API change" promise. The single `isWeftFault`
+    // predicate must classify the in-process typed error (LocalClient) and the
+    // HTTP-wrapped one (HttpClient) identically.
+    it('classifies WorkflowNotRegisteredError uniformly across transports (#465)', async () => {
+      const client = getClient();
+
+      let caught: unknown = null;
+      try {
+        await client.start('client-contract-unregistered-type', undefined, {
+          id: `${idPrefix}-unregistered`,
+        });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).not.toBeNull();
+      expect(isWeftFault(caught, 'WorkflowNotRegisteredError')).toBe(true);
+      // The predicate must discriminate — a different code must NOT match.
+      expect(isWeftFault(caught, 'WorkflowNotFoundError')).toBe(false);
+    });
+
+    it('classifies WorkflowNotFoundError uniformly across transports (#465)', async () => {
+      const client = getClient();
+
+      let caught: unknown = null;
+      try {
+        await client.addTags(`${idPrefix}-tag-missing-workflow`, 'closed');
+      } catch (error) {
+        caught = error;
+      }
+
+      expect(caught).not.toBeNull();
+      expect(isWeftFault(caught, 'WorkflowNotFoundError')).toBe(true);
+      expect(isWeftFault(caught, 'WorkflowNotRegisteredError')).toBe(false);
     });
 
     it('creates, describes, updates, resumes, and cancels schedules', async () => {

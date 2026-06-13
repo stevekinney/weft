@@ -65,6 +65,7 @@ import { inProcessCatalogTransport } from './in-process-operations.ts';
 import type {
   ClientHandle,
   ClientScheduleHandle,
+  StartOrSignalOutcome,
   UpdateResult,
   WeftClient,
   WeftClientActivity,
@@ -79,8 +80,8 @@ import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow
 class LocalHandle extends WorkflowHandleDelegation<LocalClient> {
   readonly #handle: WorkflowHandle;
 
-  constructor(handle: WorkflowHandle, client: LocalClient) {
-    super(handle.id, client);
+  constructor(handle: WorkflowHandle, client: LocalClient, outcome?: StartOrSignalOutcome) {
+    super(handle.id, client, outcome);
     this.#handle = handle;
   }
 
@@ -235,8 +236,8 @@ export class LocalClient implements WeftClient {
     signal: StartOrSignalSignal,
     options?: StartOptions,
   ): Promise<ClientHandle> {
-    const handle = await this.#engine.startOrSignal(type, input, signal, options);
-    return new LocalHandle(handle, this);
+    const { handle, outcome } = await this.#engine.startOrSignal(type, input, signal, options);
+    return new LocalHandle(handle, this, outcome);
   }
   // jscpd:ignore-end
 
@@ -264,6 +265,19 @@ export class LocalClient implements WeftClient {
 
   async get(id: string): Promise<WorkflowState | null> {
     return this.#engine.get(id);
+  }
+
+  async getHandle(id: string): Promise<ClientHandle | null>;
+  async getHandle<TName extends KnownWorkflowName>(
+    id: string,
+  ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>> | null>;
+  async getHandle(id: string): Promise<ClientHandle | null> {
+    // Probe persisted existence first: the engine's getHandle is non-nullable
+    // (it mints a handle for any id), so the client must establish the run
+    // actually exists before handing back observable ergonomics.
+    const state = await this.#engine.get(id);
+    if (state === null) return null;
+    return new LocalHandle(this.#engine.getHandle(id), this);
   }
 
   async getSchedule(id: string): Promise<ScheduleSummary | null> {

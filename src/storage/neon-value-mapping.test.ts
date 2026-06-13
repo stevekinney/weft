@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 
-import { affectedRowCount, toBytea, toStorageValue } from './neon-value-mapping.ts';
+import type { BatchOperation } from './interface.ts';
+import {
+  affectedRowCount,
+  resolveBatchNetEffect,
+  toBytea,
+  toStorageValue,
+} from './neon-value-mapping.ts';
 
 describe('affectedRowCount', () => {
   it('prefers node-postgres rowCount', () => {
@@ -62,5 +68,64 @@ describe('toBytea', () => {
   it('round-trips through toStorageValue', () => {
     const value = new Uint8Array([0, 255, 128]);
     expect(toStorageValue(toBytea(value))).toEqual(value);
+  });
+});
+
+describe('resolveBatchNetEffect', () => {
+  const put = (key: string, byte: number): BatchOperation => ({
+    type: 'put',
+    key,
+    value: new Uint8Array([byte]),
+  });
+  const del = (key: string): BatchOperation => ({ type: 'delete', key });
+
+  it('partitions distinct keys into puts and deletes', () => {
+    const { puts, deletes } = resolveBatchNetEffect([put('a', 1), del('b'), put('c', 3)]);
+    expect([...puts.keys()].toSorted()).toEqual(['a', 'c']);
+    expect(puts.get('a')).toEqual(new Uint8Array([1]));
+    expect([...deletes]).toEqual(['b']);
+  });
+
+  it('keeps last-write-wins for a key written twice (no duplicate upsert row)', () => {
+    const { puts, deletes } = resolveBatchNetEffect([put('a', 1), put('a', 2)]);
+    expect(puts.size).toBe(1);
+    expect(puts.get('a')).toEqual(new Uint8Array([2]));
+    expect(deletes.size).toBe(0);
+  });
+
+  it('a put followed by a delete on one key nets to a delete only', () => {
+    const { puts, deletes } = resolveBatchNetEffect([put('a', 1), del('a')]);
+    expect(puts.has('a')).toBe(false);
+    expect([...deletes]).toEqual(['a']);
+  });
+
+  it('a delete followed by a put on one key nets to a put only', () => {
+    const { puts, deletes } = resolveBatchNetEffect([del('a'), put('a', 9)]);
+    expect(puts.get('a')).toEqual(new Uint8Array([9]));
+    expect(deletes.has('a')).toBe(false);
+  });
+
+  it('keeps the put-set and delete-set disjoint (the commute guarantee)', () => {
+    const { puts, deletes } = resolveBatchNetEffect([
+      put('a', 1),
+      del('a'),
+      put('b', 2),
+      del('c'),
+      put('c', 3),
+    ]);
+    // No key appears in both sets — the upsert and delete statements never touch
+    // the same row, so they commute regardless of emission order.
+    for (const key of puts.keys()) {
+      expect(deletes.has(key)).toBe(false);
+    }
+    expect(puts.get('b')).toEqual(new Uint8Array([2]));
+    expect(puts.get('c')).toEqual(new Uint8Array([3]));
+    expect([...deletes]).toEqual(['a']);
+  });
+
+  it('resolves an empty batch to empty sets', () => {
+    const { puts, deletes } = resolveBatchNetEffect([]);
+    expect(puts.size).toBe(0);
+    expect(deletes.size).toBe(0);
   });
 });

@@ -42,8 +42,12 @@ function writeCapturedOutput(output: Buffer | string | undefined): void {
 }
 
 function isGeneratedCoverageArtifact(filePath: string): boolean {
+  // Bun records generated fixture paths relative to the coverage-run CWD, so worktree
+  // depth changes the number of `../` segments and the temp root may be `var/folders/`,
+  // `private/tmp/`, or `tmp/` (#503). The second matcher still gates this to known
+  // fixture names, so a non-fixture temp file is not caught.
   if (
-    /(?:\.\.\/){5,6}(?:private\/)?var\/folders\//.test(filePath) &&
+    /(?:\.\.\/)+(?:private\/)?(?:var\/folders\/|tmp\/)/.test(filePath) &&
     /(?:\/weft-(?:schedule(?:-lmdb)?-(?:workflows|input)|cli-edge-workflows)-[^/]+\.ts$|\/weft-validate-[^/]+\/[^/]+\.ts$|\/weft-validate-(?:json-invalid|mixed-(?:clean|invalid)|multi-[ab])-[^/]+\.ts$)/.test(
       filePath,
     )
