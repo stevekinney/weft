@@ -19,21 +19,13 @@ describe('collectToolVersions', () => {
     expect(collectToolVersions(tools)).toEqual(['alpha@1.0.0', 'beta@2.0.0']);
   });
 
-  it('returns sorted name@version strings', () => {
-    const tools = [
-      { definition: { name: 'beta' }, version: '2.0.0' },
-      { definition: { name: 'alpha' }, version: '1.0.0' },
-    ];
-    expect(collectToolVersions(tools)).toEqual(['alpha@1.0.0', 'beta@2.0.0']);
-  });
-
   it('defaults missing version to 0.0.0', () => {
-    const tools = [{ definition: { name: 'my-tool' } }];
+    const tools = [{ name: 'my-tool' }];
     expect(collectToolVersions(tools)).toEqual(['my-tool@0.0.0']);
   });
 
   it('throws when a tool has an empty name', () => {
-    const tools = [{ definition: { name: '' }, version: '1.0.0' }];
+    const tools = [{ name: '', version: '1.0.0' }];
     expect(() => collectToolVersions(tools)).toThrow(
       'collectToolVersions: tool is missing a required name field',
     );

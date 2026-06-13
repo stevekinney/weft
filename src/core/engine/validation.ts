@@ -102,20 +102,20 @@ export function isValidDecodedTags(value: unknown): value is string[] | undefine
 
 export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
   const decoded = decode(bytes);
-  // Records written before the version tuple was unified carried the tuple as
-  // three flat fields (`version`, `agentVersion`, `toolVersions`) instead of a
-  // nested `versionTuple`. Lift them into the current shape on the raw decoded
+  // A persisted record may carry the version metadata as three flat fields
+  // (`version`, `agentVersion`, `toolVersions`) rather than a nested
+  // `versionTuple`. Normalize it into the current shape on the raw decoded
   // record (before the `WorkflowState` cast) and drop the flat keys so the rest
-  // of the engine sees one representation. Decode-only: we never write the flat
-  // shape back.
+  // of the engine sees one representation. Read-only normalization: the engine
+  // only ever writes the nested `versionTuple`.
   if (isRecord(decoded)) {
     liftFlatVersionTuple(decoded);
   }
   // bytes were written by encode(WorkflowState) — shape is guaranteed by our own storage
   const state = decoded as WorkflowState;
-  // Older records may carry a `tenant` field from before multi-tenancy was
-  // removed. It is no longer part of WorkflowState, so we tolerate-and-drop it
-  // here rather than hard-failing the decode of an older persisted record.
+  // A persisted record may carry a `tenant` field that is not part of
+  // WorkflowState. Tolerate-and-drop it on decode rather than hard-failing the
+  // read of such a record.
   if ('tenant' in state) {
     delete (state as Record<string, unknown>)['tenant'];
   }
@@ -150,10 +150,10 @@ export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
 }
 
 /**
- * Lift the pre-unification flat version fields (`version`, `agentVersion`,
- * `toolVersions`) into the current nested {@link WorkflowState.versionTuple}.
- * No-op when the record already carries a `versionTuple`. Decode-only — the
- * engine never writes the flat shape back.
+ * Normalize flat version fields (`version`, `agentVersion`, `toolVersions`)
+ * into the current nested {@link WorkflowState.versionTuple}. No-op when the
+ * record already carries a `versionTuple`. Read-only normalization — the engine
+ * only ever writes the nested shape back.
  */
 function liftFlatVersionTuple(record: Record<string, unknown>): void {
   const flatVersion = record['version'];
