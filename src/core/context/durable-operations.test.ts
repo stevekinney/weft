@@ -31,6 +31,7 @@ describe('durable sleep helper', () => {
 
     const completed = generator.next();
     expect(completed.done).toBe(true);
+    expect(context.accumulatedResults.has(0)).toBe(true);
     expect(context.accumulatedResults.get(0)).toBeUndefined();
   });
 
