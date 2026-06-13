@@ -582,7 +582,7 @@ describe('NeonStorage configurable schema/table (#468)', () => {
     }
   });
 
-  it('honors a custom table name in the default (public) schema', async () => {
+  it('honors a custom unqualified table name (resolved via search_path)', async () => {
     const database = await new PGlite();
     try {
       await using storage = new NeonStorage({
