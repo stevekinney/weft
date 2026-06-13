@@ -54,7 +54,14 @@ function shapeNotFoundBody(
 ): ErrorBody {
   // Forward only the fields that are present so a NotFound without an
   // identifier or weftCode keeps its minimal `{ resource }` wire shape.
-  const shaped: { resource: string; identifier?: string; weftCode?: string } = {
+  // `weftCode` keeps its `WeftErrorCode` type (derived from the fault payload)
+  // rather than widening to `string`, so a future edit can't serialize an
+  // invalid code.
+  const shaped: {
+    resource: string;
+    identifier?: string;
+    weftCode?: NonNullable<typeof data.weftCode>;
+  } = {
     resource: data.resource,
   };
   if (data.identifier !== undefined) shaped.identifier = data.identifier;
