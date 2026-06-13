@@ -267,10 +267,10 @@ export class LocalClient implements WeftClient {
     return this.#engine.get(id);
   }
 
+  async getHandle(id: string): Promise<ClientHandle | null>;
   async getHandle<TName extends KnownWorkflowName>(
     id: string,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>> | null>;
-  async getHandle(id: string): Promise<ClientHandle | null>;
   async getHandle(id: string): Promise<ClientHandle | null> {
     // Probe persisted existence first: the engine's getHandle is non-nullable
     // (it mints a handle for any id), so the client must establish the run

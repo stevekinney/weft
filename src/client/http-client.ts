@@ -271,10 +271,10 @@ export class HttpClient implements WeftClient {
     return getWorkflowRequest(this, id);
   }
 
+  async getHandle(id: string): Promise<ClientHandle | null>;
   async getHandle<TName extends KnownWorkflowName>(
     id: string,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>> | null>;
-  async getHandle(id: string): Promise<ClientHandle | null>;
   async getHandle(id: string): Promise<ClientHandle | null> {
     // Probe persisted existence over REST; a missing run yields `null` rather
     // than a handle that would fault on first use. An existing run gets the

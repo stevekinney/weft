@@ -78,10 +78,19 @@ describe('schemaToNode + renderNode — emitted text contract', () => {
 
   it('renders a string enum as a literal union preserving member order', () => {
     expect(renderInline({ type: 'string', enum: ['started', 'signalled'] })).toBe(
-      "'started' | 'signalled'",
+      '"started" | "signalled"',
     );
     // A bare string enum (no explicit `type`) is still a literal union.
-    expect(renderInline({ enum: ['a', 'b'] })).toBe("'a' | 'b'");
+    expect(renderInline({ enum: ['a', 'b'] })).toBe('"a" | "b"');
+  });
+
+  it('escapes string-enum members with literal-sensitive characters', () => {
+    // Raw interpolation would emit invalid or wrong TypeScript for these; the
+    // generator must produce a properly escaped string literal per member.
+    expect(renderInline({ enum: ["can't"] })).toBe('"can\'t"');
+    expect(renderInline({ enum: ['a\\b'] })).toBe('"a\\\\b"');
+    expect(renderInline({ enum: ['line\nbreak'] })).toBe('"line\\nbreak"');
+    expect(renderInline({ enum: ['quote"d'] })).toBe('"quote\\"d"');
   });
 
   it('collapses unsupported schema features to unknown', () => {

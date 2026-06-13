@@ -168,7 +168,10 @@ function schemaToNode(schema: Record<string, unknown>): TypeNode {
   if (stringEnum !== undefined) {
     return {
       kind: 'union',
-      members: stringEnum.map((value) => ({ kind: 'primitive', text: `'${value}'` })),
+      // `JSON.stringify` produces a TypeScript-valid double-quoted string literal
+      // with proper escaping, so enum values containing quotes, backslashes, or
+      // newlines emit a correct literal rather than via raw interpolation.
+      members: stringEnum.map((value) => ({ kind: 'primitive', text: JSON.stringify(value) })),
     };
   }
   const type = schema['type'];
