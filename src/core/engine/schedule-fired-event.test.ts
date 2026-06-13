@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { yieldToEventLoop } from '../../testing/fake-timers.test-support.ts';
 import { Engine } from '../engine.ts';
-import { ScheduleFiredEvent } from '../events/schedule-events.ts';
+import { ScheduleFiredEvent } from '../events.ts';
 import {
   workflow as defineWorkflow,
   type ScheduleSummary,

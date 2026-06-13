@@ -1,7 +1,7 @@
 import type { BatchOperation } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { encode } from '../codec.ts';
-import { ScheduleFiredEvent } from '../events/schedule-events.ts';
+import { ScheduleFiredEvent } from '../events.ts';
 import type { ScheduleState } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 import { unavailableServicesError } from './lifecycle/recovered-services.ts';
