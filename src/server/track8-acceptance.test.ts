@@ -97,9 +97,11 @@ const subscribeServeOptions = {
  *
  * The engine is pushed onto `engines` and the server is handed to `assignServer`
  * the instant it is created — before the failure-prone WebSocket collection and
- * assertions — so a mid-test failure still leaves both registered for the
- * suite's `afterEach` disposal (the original inline tests assigned the
- * describe-scoped `server` at that same point).
+ * the projection-comparison assertions that follow it — so a failure in that
+ * stretch still leaves both registered for the suite's `afterEach` disposal (the
+ * original inline tests assigned the describe-scoped `server` at that same
+ * point). The earlier `replayed.length` assertion runs before the server exists;
+ * a failure there has no server to leak.
  */
 async function expectWebSocketProjectionMatchesReplay(
   engines: Engine[],
