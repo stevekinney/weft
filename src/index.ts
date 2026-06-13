@@ -220,6 +220,7 @@ export {
   CheckpointSizeWarningEvent,
   ConstraintViolatedEvent,
   DevelopmentWarningEvent,
+  ScheduleFiredEvent,
   SignalDeliveredEvent,
   SignalReceivedEvent,
   StorageSizeReportedEvent,

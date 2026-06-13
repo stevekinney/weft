@@ -42,8 +42,9 @@ export function createScheduleCallbacks<TWorkflows extends object, TActivities e
     cancelWorkflow: (workflowId) => engine.cancel(workflowId),
     getWorkflowResult: (workflowId) => engine.getHandle(workflowId).result(),
     refreshScheduledWorkflowState: (state) => refreshScheduledWorkflowStateForEngine(engine, state),
-    startScheduledRun: (state) => startScheduledRunForEngine(engine, state),
-    applyScheduleOccurrence: (state) => applyScheduleOccurrenceForEngine(engine, state),
+    startScheduledRun: (state, occurrence) => startScheduledRunForEngine(engine, state, occurrence),
+    applyScheduleOccurrence: (state, occurrence) =>
+      applyScheduleOccurrenceForEngine(engine, state, occurrence),
     settleBackfillScheduleState: (state) => settleBackfillScheduleStateForEngine(engine, state),
     flushQueuedInlineWorkflowStartsDirectly: () =>
       flushQueuedInlineWorkflowStartsDirectly(
@@ -93,14 +94,32 @@ export async function refreshScheduledWorkflowStateForEngine<
 export async function startScheduledRunForEngine<
   TWorkflows extends object,
   TActivities extends object,
->(engine: Engine<TWorkflows, TActivities>, state: ScheduleState): Promise<string> {
-  return startScheduledRun(getInternals(engine), state, createScheduleCallbacks(engine));
+>(
+  engine: Engine<TWorkflows, TActivities>,
+  state: ScheduleState,
+  occurrence?: number,
+): Promise<string> {
+  return startScheduledRun(
+    getInternals(engine),
+    state,
+    createScheduleCallbacks(engine),
+    occurrence,
+  );
 }
 export async function applyScheduleOccurrenceForEngine<
   TWorkflows extends object,
   TActivities extends object,
->(engine: Engine<TWorkflows, TActivities>, state: ScheduleState): Promise<ScheduleState> {
-  return applyScheduleOccurrence(getInternals(engine), state, createScheduleCallbacks(engine));
+>(
+  engine: Engine<TWorkflows, TActivities>,
+  state: ScheduleState,
+  occurrence?: number,
+): Promise<ScheduleState> {
+  return applyScheduleOccurrence(
+    getInternals(engine),
+    state,
+    createScheduleCallbacks(engine),
+    occurrence,
+  );
 }
 export async function settleBackfillScheduleStateForEngine<
   TWorkflows extends object,

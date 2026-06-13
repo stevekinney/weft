@@ -114,7 +114,7 @@ async function processScheduleTimerOccurrences(
 
   for (const occurrence of occurrencesToProcess) {
     nextState = {
-      ...(await callbacks.applyScheduleOccurrence(nextState)),
+      ...(await callbacks.applyScheduleOccurrence(nextState, occurrence)),
       lastFireAt: occurrence,
       updatedAt: now,
     };
