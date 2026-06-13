@@ -205,7 +205,7 @@ const quorum = workflow({ name: 'quorum' })
 
 ### Live Workflow Events
 
-Workflow handles expose lifecycle events through `addEventListener`, and client handles can open a live tail for progress UIs or operators. `LocalClient` reads from the in-process engine stream; `HttpClient` uses the per-workflow `/v1/workflows/:id/watch` WebSocket channel with history catch-up on connect and reconnect, so `addEventListener`, `client.tail(id)`, and `handle.tail()` are push-based rather than a polling loop.
+Workflow handles expose lifecycle events through `addEventListener`, and client handles can open a live tail for progress UIs or operators. `LocalClient` reads from the in-process engine stream; `HttpClient` uses the per-workflow `/v1/workflows/:id/watch` WebSocket channel with history catch-up on connect and reconnect, so `addEventListener`, `client.tail(id)`, and `handle.tail()` are push-based rather than a polling loop. Client code that receives a workflow id from another process can call `client.getHandle(id)` to re-attach a `ClientHandle` or get `null` when the run does not exist.
 
 ```typescript
 const handle = await client.start('checkout', order);
@@ -222,15 +222,17 @@ The tail is single-consumer and stops on terminal workflow events or `tail.close
 
 ### Idempotent Starts and Signal-With-Start
 
-Retried webhooks and queue deliveries should not double-start workflows. Pass a stable `idempotencyKey` to `engine.start()` to make every retry return a handle for the same run. Use `engine.startOrSignal()` when the first event should create the workflow and later events should signal the existing non-terminal run.
+Retried webhooks and queue deliveries should not double-start workflows. Pass a stable `idempotencyKey` to `engine.start()` to make every retry return a handle for the same run. Use `engine.startOrSignal()` when the first event should create the workflow and later events should signal the existing non-terminal run. The call returns `{ handle, outcome }`, where `outcome` is `'started'` for the caller that created the run and `'signalled'` for callers that delivered to, or converged onto, an existing run.
 
 ```typescript
-const handle = await engine.startOrSignal(
+const { handle, outcome } = await engine.startOrSignal(
   'approval',
   { orderId: 'order-123' },
   { name: 'payment', payload: { status: 'succeeded' } },
   { idempotencyKey: 'payment-webhook-order-123' },
 );
+
+console.log(handle.id, outcome); // outcome is 'started' or 'signalled'
 ```
 
 The idempotency mapping intentionally outlives terminal cleanup. If retention removes the workflow record, the key is spent and future calls return a conflict instead of starting a replacement.
@@ -375,6 +377,8 @@ The core engine runs inside a Web Worker, with a Service Worker acting as the du
 
 Built-in event system (`EventTarget`-based, so it composes with everything), W3C `traceparent` propagation, and OpenTelemetry-compatible metrics. Composable interceptors layer cross-cutting concerns—tracing, validation, encryption—without any of them knowing about each other.
 
+Schedules also emit `schedule:fired` on the live engine each time a schedule actually launches a workflow run. The event carries `scheduleId`, `workflowId`, `firedAt`, and the scheduled `occurrence` when one is retained, so in-process dispatchers can react to cadence without polling schedule state.
+
 ```typescript
 import { createObservabilityInterceptors, createOpenTelemetryMetrics } from '@lostgradient/weft';
 
@@ -452,6 +456,16 @@ import { isWeftErrorLike } from '@lostgradient/weft';
 
 function isAlreadyRunning(error: unknown): boolean {
   return isWeftErrorLike(error) && error.code === 'WorkflowAlreadyExistsError';
+}
+```
+
+When the same producer might run through either `LocalClient` or `HttpClient`, use `isWeftFault(error, code)` for a specific branch. It matches same-process `WeftError` instances and HTTP-wrapped errors whose REST response carried the originating public `weftCode`.
+
+```typescript
+import { isWeftFault } from '@lostgradient/weft';
+
+function isMissingWorkflow(error: unknown): boolean {
+  return isWeftFault(error, 'WorkflowNotFoundError');
 }
 ```
 

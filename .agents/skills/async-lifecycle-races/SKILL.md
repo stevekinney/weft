@@ -23,6 +23,7 @@ description: >-
 - Changing `ctx.waitUntil(predicate, timeout?)`, condition waiters, wait-condition timers, update-driven re-evaluation, or predicate failure routing.
 - Changing `ctx.race()` / `ctx.all()` branch execution for sleeps or signal waits, especially deferred-consume envelopes, nested coordinator propagation, `ctx.speculate`, duplicate signal-name validation, abort ordering, or engine-disposal cleanup.
 - Changing workflow suspend/resume, recovered-handle observation, idempotent start reservation, `startOrSignal`, inline launch deferral, or engine disposal while queued inline launches can still flush.
+- Changing scheduled occurrence launch flow or `schedule:fired` event dispatch, including overlap-policy gating, queued-drain launches, unavailable-services ordering, and process-local notification behavior.
 - Changing RemoteWorker or long-poll task completion authorization, including per-dispatch `attemptToken` generation, echoing, registry restore, malformed-token rejection, and missing-token compatibility.
 
 ## Do not use
@@ -80,6 +81,7 @@ description: >-
 - For suspend/resume and recovered-handle observation, cover suspended workflows as non-terminal, explicit resume after recovery, terminal/nonexistent faults, `getLaunchMetadata()` null after purge, and `snapshot()` status/step reads without awaiting `result()`.
 - For start idempotency and `startOrSignal`, cover concurrent same-key callers, spent-key conflicts after retention or purge, terminal-target conflicts, bare-`signalId` non-convergence, and same-id pre-commit abort recovery.
 - For inline launch scheduling, cover queued launch draining on disposal, `defer: false` synchronous launch, and the timeout flush path when `MessageChannel` is unavailable.
+- For schedule firing events, cover interval and cron cadence, each overlap policy, recovery backfill without double-fire, queued drain with `occurrence: undefined`, and `schedule:fired` before `workflow:failed` when service resolution fails.
 - For attempt-token work, cover same-worker stale completion rejection over WebSocket, long-poll stale-token rejection, malformed echoed tokens, token-less records, absent echoes from older workers, and server-restart restoration of token-bearing in-flight records.
 - Prove no test depends on unbounded waits or real-time sleeps.
 - Run the focused lifecycle or worker tests plus `bun run verify:no-test-sleeps` when relevant.
