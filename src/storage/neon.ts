@@ -8,7 +8,7 @@ import {
   type Storage,
   type StorageCapabilities,
 } from './interface.ts';
-import { applyBatchNetEffect, conditionsHold, writeBatchNetEffect } from './neon-batch.ts';
+import { conditionsHold, writeBatchNetEffect } from './neon-batch.ts';
 import {
   affectedRowCount,
   resolveBatchNetEffect,
@@ -400,7 +400,7 @@ export class NeonStorage implements Storage {
     if (operations.length === 0) return;
     await this.#ensureTable();
     await this.#withTransaction(PG_BEGIN_READ_COMMITTED, async (client) => {
-      await applyBatchNetEffect(client, this.#queries, operations);
+      await writeBatchNetEffect(client, this.#queries, resolveBatchNetEffect(operations));
     });
   }
 

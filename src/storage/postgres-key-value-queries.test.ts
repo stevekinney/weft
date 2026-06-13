@@ -126,6 +126,17 @@ describe('assertPostgresIdentifier', () => {
     expect(() => assertPostgresIdentifier('has space', 'table')).toThrow(/not a valid/);
     expect(() => assertPostgresIdentifier('', 'schema')).toThrow(/not a valid/);
   });
+
+  it('rejects a trailing or embedded newline (JS `$` anchors at end-of-input, not before a line break)', () => {
+    // A reviewer worried that `$` in the validation pattern might match before a
+    // trailing newline (PCRE/Python behavior), letting `kv\n` resolve to a
+    // different quoted table than `kv`. In JavaScript, without the `m` flag, `$`
+    // anchors only at end-of-input, so these are rejected. Pin that so the guard's
+    // contract survives any future regex edit.
+    expect(() => assertPostgresIdentifier('kv\n', 'table')).toThrow(/not a valid/);
+    expect(() => assertPostgresIdentifier('k\nv', 'table')).toThrow(/not a valid/);
+    expect(() => assertPostgresIdentifier('kv"', 'table')).toThrow(/not a valid/);
+  });
 });
 
 describe('buildPostgresCreateSchema', () => {

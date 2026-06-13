@@ -1,14 +1,5 @@
-import {
-  storageValuesEqual,
-  type BatchOperation,
-  type ConditionalBatchCondition,
-} from './interface.ts';
-import {
-  resolveBatchNetEffect,
-  toBytea,
-  toStorageValue,
-  type BatchNetEffect,
-} from './neon-value-mapping.ts';
+import { storageValuesEqual, type ConditionalBatchCondition } from './interface.ts';
+import { toBytea, toStorageValue, type BatchNetEffect } from './neon-value-mapping.ts';
 import type { NeonPoolClient } from './neon.ts';
 import type { PostgresKeyValueQueries } from './postgres-key-value-queries.ts';
 
@@ -54,15 +45,6 @@ export async function conditionsHold(
     }
   }
   return true;
-}
-
-/** Resolve a batch to its net effect and apply it as collapsed statements. */
-export async function applyBatchNetEffect(
-  client: NeonPoolClient,
-  queries: PostgresKeyValueQueries,
-  operations: BatchOperation[],
-): Promise<void> {
-  await writeBatchNetEffect(client, queries, resolveBatchNetEffect(operations));
 }
 
 /**
