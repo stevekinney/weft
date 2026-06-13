@@ -11,12 +11,11 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { decode, encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import type { ActivityInterception } from '../interceptor.ts';
+import { getActivityFunctionWithMetadata, resolveActivityFunction } from './activity-resolution.ts';
 import {
   executeActivity,
   executeActivityOperationResult,
-  getActivityFunctionWithMetadata,
   invokeWorkerActivity,
-  resolveActivityFunction,
   type ActivityFunctionWithMetadata,
   type ActivityOperationCallbacks,
 } from './operations-activity.ts';
