@@ -145,15 +145,12 @@ function createMergedLineSet(...lineSets: Array<Set<number>>): Set<number> {
 }
 
 const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES', [
-  [
-    'scripts/check-coverage.ts',
-    {
-      // The parser itself is unit-tested. The remaining shell/CLI wrapper path is
-      // exercised by the automation entrypoint rather than Bun's in-process coverage run.
-      functions: 4,
-      lines: createLineSet(153, 265),
-    },
-  ],
+  // No self-allowance for scripts/check-coverage.ts: bunfig.toml excludes it via
+  // `coveragePathIgnorePatterns = ["scripts/check-coverage.ts"]` (since 501d14ef),
+  // so the file never appears as an `SF:` record in LCOV and any allowance for it
+  // is dead — COVERAGE_ALLOWANCES.get('scripts/check-coverage.ts') can never fire.
+  // The old entry's `createLineSet(153, 265)` range was also already stale after
+  // this PR shifted the file's lines (flagged by Cursor Bugbot on #538).
   [
     'scripts/generate-operation-client.ts',
     {
