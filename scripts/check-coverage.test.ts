@@ -325,7 +325,10 @@ describe('readCoveragePathIgnorePatterns', () => {
     const parsed = Bun.TOML.parse(bunfigText) as {
       test?: { coveragePathIgnorePatterns?: unknown };
     };
-    const expected = parsed.test?.coveragePathIgnorePatterns;
+    // The function normalizes an absent `[test].coveragePathIgnorePatterns` to `[]`, so
+    // mirror that here: a bunfig that drops the field entirely must still match (the
+    // function is still correct), not fail because raw parse yields `undefined`.
+    const expected = parsed.test?.coveragePathIgnorePatterns ?? [];
 
     expect(readCoveragePathIgnorePatterns()).toEqual(expected);
   });
