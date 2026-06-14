@@ -2,7 +2,12 @@ import type { ContextOperationRequest } from '../context.ts';
 import type { ComposedActivityInterceptor, ComposedWorkflowInterceptor } from '../interceptor.ts';
 import { assertPayloadWithinLimit } from '../payload-size.ts';
 import type { ActivityContext, ActivityVerificationResult } from '../types.ts';
-import { buildActivityContext } from './activity-heartbeat-tracking.ts';
+import {
+  buildActivityContext,
+  clearLastHeartbeatForStep,
+  warnIfRetryMissingHeartbeat,
+} from './activity-heartbeat-tracking.ts';
+import { resolvePerAttemptTimeout, withPerAttemptTimeout } from './activity-per-attempt-timeout.ts';
 import {
   buildActivityReconciliationReference,
   buildActivityVerificationContext,
@@ -13,13 +18,13 @@ import {
   writeActivityReconciliationTransition,
   type ActivityReconciliationMetadata,
 } from './activity-reconciliation.ts';
+import { getActivityFunctionWithMetadata, resolveActivityFunction } from './activity-resolution.ts';
 import {
   AsyncActivityDeferral,
   deriveAsyncActivityToken,
   driveWorkflowInterceptorGenerator,
   parkDeferredAsyncActivity,
 } from './async-activity-completion.ts';
-import { ActivityResolutionError } from './errors.ts';
 import type { EngineInternals } from './internals.ts';
 import type { SpeculativeExecutionState } from './speculative-execution-state.ts';
 import { callActivityFunction } from './state-utilities.ts';
@@ -44,98 +49,6 @@ export type ActivityOperationCallbacks = {
   getComposedActivityInterceptor: () => ComposedActivityInterceptor | null;
   getComposedWorkflowInterceptor: () => ComposedWorkflowInterceptor | null;
 };
-
-/**
- * Look up `activityName` for the workflow identified by `workflowId`.
- *
- * Resolution rules:
- *
- * - When a workflow declares activities inline through `.activities()`, it owns
- *   a per-workflow `ActivityRegistry`, which is consulted first.
- * - The global `ActivityRegistry` is the fallback, so a builder workflow can
- *   share an activity that lives in the global pool. A workflow with no
- *   per-workflow registry resolves entirely against the global registry.
- *
- * Both `getActivityFunctionWithMetadata` and `resolveActivityFunction` route
- * through this single resolver so metadata (compensation, verification) and
- * the actual executed function come from the same callable. Speculative
- * execution paths must not see one function for metadata and a different one
- * for execution.
- *
- * Returns `undefined` when no registry resolves the name. Callers decide
- * whether to throw `ActivityResolutionError` (the dispatch path) or treat the
- * miss as advisory (the metadata path).
- */
-function resolveActivityViaRegistries(
-  internals: EngineInternals,
-  workflowId: string,
-  activityName: string,
-): { fn: (...arguments_: unknown[]) => unknown; workflowType: string } | undefined {
-  const workflowType = internals.workflowTypeByWorkflowId.get(workflowId);
-  if (workflowType !== undefined) {
-    const perWorkflow = internals.activityRegistriesByWorkflow.get(workflowType);
-    if (perWorkflow !== undefined) {
-      // Per-workflow registry wins; fall back to global to support the
-      // mixed-registration pattern (builder workflow + shared global activity).
-      const perWorkflowFn = perWorkflow.resolve(activityName);
-      if (perWorkflowFn) {
-        return { fn: perWorkflowFn, workflowType };
-      }
-    }
-    const globalFn = internals.activityRegistry.resolve(activityName);
-    if (globalFn) {
-      return { fn: globalFn, workflowType };
-    }
-    return undefined;
-  }
-  // Unknown workflow type (lifecycle edge — e.g. activity dispatched outside
-  // an active workflow execution). Only the global registry can answer.
-  const globalFn = internals.activityRegistry.resolve(activityName);
-  if (globalFn) {
-    return { fn: globalFn, workflowType: '<unknown>' };
-  }
-  return undefined;
-}
-
-export function getActivityFunctionWithMetadata(
-  internals: EngineInternals,
-  workflowId: string,
-  operation: ActivityOperation,
-): ActivityFunctionWithMetadata | undefined {
-  // Use the same resolution order as resolveActivityFunction so metadata
-  // (compensation / verification) is taken from the same callable that
-  // actually runs. The per-workflow registry wins over `operation.fn`
-  // because the workflow's locally-scoped activity is the authoritative
-  // implementation when the workflow is builder-registered.
-  const resolved = resolveActivityViaRegistries(internals, workflowId, operation.activityName);
-  if (resolved) {
-    return resolved.fn as ActivityFunctionWithMetadata;
-  }
-  if (typeof operation.fn === 'function') {
-    return operation.fn as ActivityFunctionWithMetadata;
-  }
-  return undefined;
-}
-
-/**
- * Resolve the activity function for a given operation. Uses the same
- * per-workflow-first-then-global ordering as `getActivityFunctionWithMetadata`.
- * For inline-mode callers that pass an `operation.fn` directly, the registries
- * are still consulted first so a workflow's locally-scoped activity wins over
- * the bare callable. Throws `ActivityResolutionError` when neither path
- * resolves.
- */
-export function resolveActivityFunction(
-  internals: EngineInternals,
-  workflowId: string,
-  operation: ActivityOperation,
-): (...arguments_: unknown[]) => unknown {
-  const resolved = resolveActivityViaRegistries(internals, workflowId, operation.activityName);
-  if (resolved) return resolved.fn;
-  if (operation.fn) return operation.fn as (...arguments_: unknown[]) => unknown;
-  const workflowType = internals.workflowTypeByWorkflowId.get(workflowId) ?? '<unknown>';
-  throw new ActivityResolutionError(workflowType, operation.activityName);
-}
 
 export function buildActivityVerification(
   _internals: EngineInternals,
@@ -244,18 +157,20 @@ export async function executeActivity(
   // the deterministic workflow step (not the per-yield operationId), so it is
   // stable across crash/replay. The step is always set when the operation is
   // created via ctx.run(); a missing step is a caller contract violation.
-  const abortController = internals.inlineStrategy?.getAbortController(workflowId);
   const step = operation.step ?? 0;
+  // #493: surface the resumable-batch footgun in development — a retry that
+  // starts with no in-memory heartbeat (e.g. after a process restart).
+  warnIfRetryMissingHeartbeat(internals, workflowId, step, attempt);
   const asyncToken = deriveAsyncActivityToken(workflowId, step, attempt);
-  const activityContext = buildActivityContext(
+
+  const { perAttemptTimeoutMs, attemptAbortController, activitySignal } = resolvePerAttemptTimeout(
     internals,
     workflowId,
-    step,
-    abortController?.signal ?? new AbortController().signal,
-    () => {
-      throw new AsyncActivityDeferral(asyncToken);
-    },
+    operation,
   );
+  const activityContext = buildActivityContext(internals, workflowId, step, activitySignal, () => {
+    throw new AsyncActivityDeferral(asyncToken);
+  });
 
   // Build the leaf executor: either dispatch to a worker or call inline.
   const invokeActivity: (activityName: string, input: unknown) => unknown =
@@ -263,13 +178,19 @@ export async function executeActivity(
       ? (activityName, input) =>
           invokeWorkerActivity(internals, operation.operationId, activityName, input, attempt)
       : (activityName, input) =>
-          invokeInlineActivity(
-            internals,
-            workflowId,
-            operation,
-            activityContext,
+          withPerAttemptTimeout(
+            invokeInlineActivity(
+              internals,
+              workflowId,
+              operation,
+              activityContext,
+              activityName,
+              input,
+            ),
+            perAttemptTimeoutMs,
             activityName,
-            input,
+            attempt,
+            attemptAbortController,
           );
 
   const composedActivity = callbacks.getComposedActivityInterceptor();
@@ -394,6 +315,12 @@ export async function executeActivityOperationResult(
       started,
       completedRecord,
     );
+    // Step succeeded durably: drop its tracked heartbeat. Guarded on the
+    // non-speculative path only — a speculative step can still roll back and
+    // re-run, so it relies on terminal cleanup to clear instead.
+    if (!speculativeState) {
+      clearLastHeartbeatForStep(internals, workflowId, operation.step ?? 0);
+    }
     return result;
   }
 
@@ -417,6 +344,13 @@ export async function executeActivityOperationResult(
     operationAttempt,
     speculativeState,
   );
+
+  // Step succeeded durably: drop its tracked heartbeat. Guarded on the
+  // non-speculative path only — a speculative step can still roll back and
+  // re-run, so it relies on terminal cleanup to clear instead.
+  if (!speculativeState) {
+    clearLastHeartbeatForStep(internals, workflowId, operation.step ?? 0);
+  }
 
   return result;
 }

@@ -1,4 +1,5 @@
 import type { ActivityDefinition, SearchAttributeSchema, SearchAttributeValue } from '../types.ts';
+import type { WorkflowLogRecord } from '../types/workflow-log.ts';
 
 /**
  * A single step in a saga: an activity definition and the input to pass to it.
@@ -195,4 +196,10 @@ export interface ContextOptions {
    * engine's `resolveWorkflowServices` resolver.
    */
   services?: unknown;
+  /**
+   * Host sink for `ctx.log` records (`EngineOptions.onLog`). When set, non-replayed
+   * records route here instead of the console; when absent, the default console
+   * behavior is preserved. Never checkpointed.
+   */
+  logSink?: (record: WorkflowLogRecord) => void;
 }

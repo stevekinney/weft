@@ -11,6 +11,7 @@ export const FAILURE_CATEGORIES = [
 const currentFailureCategories = new Set<unknown>(FAILURE_CATEGORIES);
 const timeoutErrorNames = new Set([
   'ActivityScheduleToCloseTimeoutError',
+  'ActivityPerAttemptTimeoutError',
   'MCPToolTimeoutError',
   'ReviewTimeoutError',
   'UpdateTimeoutError',

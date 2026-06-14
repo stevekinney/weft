@@ -1,76 +1,25 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
-import { yieldToEventLoop } from '../../testing/fake-timers.test-support.ts';
 import { Engine } from '../engine.ts';
 import { getNextIntervalOccurrence } from '../schedule/interval-occurrence.ts';
 import {
   schedule as defineSchedule,
   workflow as defineWorkflow,
-  type ScheduleSummary,
   type WorkflowContext,
-  type WorkflowFunction,
 } from '../types.ts';
-
-type Clock = { now: number };
-
-const MINUTE = 60_000;
-const START = Date.UTC(2026, 0, 1, 0, 0, 0);
-
-function createEngine(clock: Clock, storage = new MemoryStorage()): Engine {
-  return new Engine({ storage, getNow: () => clock.now });
-}
-
-function registerWorkflow<TInput, TOutput>(
-  engine: Engine,
-  name: string,
-  handler: WorkflowFunction<TInput, TOutput>,
-): void {
-  const definition = defineWorkflow({ name }).execute(handler as WorkflowFunction);
-  (engine.register as (workflow: typeof definition) => unknown)(definition);
-}
-
-async function drainEngine(): Promise<void> {
-  await yieldToEventLoop();
-  await yieldToEventLoop();
-}
-
-function requireNextFireAt(summary: ScheduleSummary): number {
-  if (summary.nextFireAt === null) {
-    throw new Error(`Schedule "${summary.id}" does not have a next fire time`);
-  }
-  return summary.nextFireAt;
-}
-
-async function tickEngine(engine: Engine, clock: Clock, nextNow: number): Promise<void> {
-  clock.now = nextNow;
-  await engine.scheduler.tick(clock.now);
-  await drainEngine();
-}
-
-async function tickToNextFire(
-  engine: Engine,
-  clock: Clock,
-  handle: { describe(): Promise<ScheduleSummary | null> },
-): Promise<void> {
-  const summary = await handle.describe();
-  if (summary === null) {
-    throw new Error('Schedule no longer exists');
-  }
-  await tickEngine(engine, clock, requireNextFireAt(summary));
-}
-
-async function listRunningWorkflowIds(engine: Engine): Promise<string[]> {
-  const result = await engine.list({ status: 'running' });
-  return result.items.map((item) => item.id).toSorted();
-}
-
-async function releaseRunningWorkflows(engine: Engine): Promise<void> {
-  for (const workflowId of await listRunningWorkflowIds(engine)) {
-    await engine.signal(workflowId, 'release');
-  }
-  await drainEngine();
-}
+import {
+  MINUTE,
+  START,
+  createEngine,
+  drainEngine,
+  listRunningWorkflowIds,
+  registerWorkflow,
+  releaseRunningWorkflows,
+  requireNextFireAt,
+  tickEngine,
+  tickToNextFire,
+} from './schedule.test-support.ts';
 
 describe('interval schedules', () => {
   let engine: Engine;

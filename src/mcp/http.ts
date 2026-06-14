@@ -202,7 +202,9 @@ function resolvePostSession(
   const session = options.sessionManager.get(sessionHeader);
   if (session === undefined) return new Response('MCP session not found', { status: 404 });
   const principal = principalFromOptions(options);
-  if (!isSameSessionOwner(session.principal, principal)) {
+  if (
+    !isAuthorizedForSession(session, principal, sessionTokenFromHeaders(options.request.headers))
+  ) {
     return new Response('Forbidden', { status: 403, headers: noStoreHeaders() });
   }
   options.sessionManager.touch(session);
@@ -226,7 +228,9 @@ function handleMcpGet(options: McpHttpRequestOptions): Response {
   const session = options.sessionManager.get(sessionId);
   if (session === undefined) return new Response('MCP session not found', { status: 404 });
   const principal = principalFromOptions(options);
-  if (!isSameSessionOwner(session.principal, principal)) {
+  if (
+    !isAuthorizedForSession(session, principal, sessionTokenFromHeaders(options.request.headers))
+  ) {
     return new Response('Forbidden', { status: 403, headers: noStoreHeaders() });
   }
   options.sessionManager.touch(session);
@@ -269,7 +273,13 @@ function handleMcpDelete(options: McpHttpRequestOptions): Response {
   if (sessionId === null) return new Response('Missing Mcp-Session-Id', { status: 400 });
   const session = options.sessionManager.get(sessionId);
   if (session === undefined) return new Response('MCP session not found', { status: 404 });
-  if (!isSameSessionOwner(session.principal, principalFromOptions(options))) {
+  if (
+    !isAuthorizedForSession(
+      session,
+      principalFromOptions(options),
+      sessionTokenFromHeaders(options.request.headers),
+    )
+  ) {
     return new Response('Forbidden', { status: 403, headers: noStoreHeaders() });
   }
   options.sessionManager.delete(sessionId);
@@ -278,6 +288,10 @@ function handleMcpDelete(options: McpHttpRequestOptions): Response {
 
 function sessionIdFromHeaders(headers: Headers): string | null {
   return headers.get('Mcp-Session-Id') ?? headers.get('MCP-Session-Id');
+}
+
+function sessionTokenFromHeaders(headers: Headers): string | null {
+  return headers.get('Mcp-Session-Token') ?? headers.get('MCP-Session-Token');
 }
 
 function validateProtocolVersion(headers: Headers): Response | null {
@@ -289,7 +303,17 @@ function validateProtocolVersion(headers: Headers): Response | null {
 
 function maybeSessionHeaders(session: McpSession, includeSession: boolean): HeadersInit {
   const headers = noStoreHeaders();
-  if (includeSession) headers['Mcp-Session-Id'] = session.id;
+  if (includeSession) {
+    headers['Mcp-Session-Id'] = session.id;
+    // The continuation token is disclosed exactly once — on the `initialize`
+    // response that creates the session (`includeSession` is `createdSession`) — and
+    // is deliberately NOT echoed on any later response. That exposure asymmetry is
+    // the security gain: the client must send the session id on every continuation
+    // request (so it is routinely exposed to proxy/access logs), while the token is
+    // disclosed only here, so a leaked id alone cannot continue another caller's
+    // anonymous session.
+    headers['Mcp-Session-Token'] = session.token;
+  }
   return headers;
 }
 
@@ -303,6 +327,29 @@ function authRequiredFromOptions(options: McpHttpRequestOptions): boolean {
 
 function principalFromOptions(options: McpHttpRequestOptions): Principal {
   return options.principal ?? anonymousPrincipal();
+}
+
+/**
+ * Authorize a continuation request (POST/GET/DELETE) against an existing session.
+ * Returns `true` when the caller may drive, read, or terminate the session.
+ *
+ * Two layers: the caller's principal must own the session ({@link isSameSessionOwner}),
+ * AND — for sessions whose principal carries no distinguishing secret (anonymous
+ * sessions under `authRequired: false`) — the caller must echo the per-session
+ * continuation token. Anonymous principals are the shared singleton, so the owner
+ * check alone admits any anonymous caller; the token is the per-session secret that
+ * actually isolates them. Authenticated callers already re-present their credential
+ * each request (it is what rebuilds the principal), so they are isolated without a
+ * token and are not gated on one — keeping their session binding unchanged.
+ */
+function isAuthorizedForSession(
+  session: McpSession,
+  caller: Principal,
+  presentedToken: string | null,
+): boolean {
+  if (!isSameSessionOwner(session.principal, caller)) return false;
+  if (isAuthenticated(session.principal)) return true;
+  return presentedToken !== null && presentedToken === session.token;
 }
 
 function isSameSessionOwner(left: Principal, right: Principal): boolean {

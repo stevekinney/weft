@@ -597,6 +597,19 @@ interface StartOrSignalSignal {
 
 The signal half of `engine.startOrSignal` (signal-with-start). When `signalId` is omitted it derives from `StartOptions.idempotencyKey`; supply exactly one (not both) so concurrent callers converge on a single delivered signal.
 
+### `StartOrSignalOutcome` and `StartOrSignalResult`
+
+```ts partial
+type StartOrSignalOutcome = 'started' | 'signalled';
+
+type StartOrSignalResult<TResult = unknown> = {
+  handle: WorkflowHandle<TResult>;
+  outcome: StartOrSignalOutcome;
+};
+```
+
+`engine.startOrSignal()` returns this per-call result. `started` means the call created the workflow. `signalled` means it delivered to an existing run or converged onto a concurrently-created winner. Client handles returned from `WeftClient.startOrSignal()` expose the same outcome on `handle.outcome`; handles from `start()`, `getHandle()`, `resume()`, and other attachment paths leave it `undefined`.
+
 ### `WorkflowServicesResolver`
 
 ```ts partial

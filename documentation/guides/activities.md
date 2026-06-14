@@ -60,7 +60,7 @@ So out of the box, a failing activity retries up to 3 times with backoff delays 
 
 ## ActivityContext
 
-Every activity function can optionally receive an `ActivityContext` as its second argument. It exposes a standard `AbortSignal` for cancellation, a `heartbeat()` function for long-running work, the previous attempt's heartbeat via `lastHeartbeatDetails` (for resumable retries), and `completeAsync()` for out-of-band completion.
+Every activity function can optionally receive an `ActivityContext` as its second argument. It exposes a standard `AbortSignal` for cancellation, a `heartbeat()` function for long-running work, the previous attempt's heartbeat via `lastHeartbeatDetails` (a best-effort, in-process-only resume hint—see the warning below), and `completeAsync()` for out-of-band completion.
 
 ```typescript
 interface ActivityContext {
@@ -75,6 +75,9 @@ interface ActivityContext {
   completeAsync(): never;
 }
 ```
+
+> [!WARNING] `lastHeartbeatDetails` only survives in-process retries
+> `lastHeartbeatDetails` is held in engine memory, not in durable storage. It carries the previous attempt's heartbeat _only_ when the retry runs in the same engine process. It is `undefined` in three cases: the first attempt of a step, the first retry resumed after the engine process restarts (the prior process's heartbeat is gone—a later retry within that same new process can still read a heartbeat recorded after the restart), and _all_ worker-executed activities (the heartbeat lives on the host, not the worker). So the resumable-batch pattern below is a best-effort optimization, not a durability guarantee—write your activity so an `undefined` `lastHeartbeatDetails` simply restarts the batch from the beginning. If you need resume points that survive a restart, persist your own checkpoint (a cursor in your database, an offset in object storage) instead of relying on the heartbeat. In development mode, an inline retry (`attempt > 1`) that finds `lastHeartbeatDetails` undefined emits a coarse `DevelopmentWarningEvent`—it cannot tell whether the previous attempt never recorded heartbeat details (it never called `heartbeat()`, or called it with no details) or the process restarted, so it flags both.
 
 The `signal` is an `AbortSignal` that fires when the **workflow is cancelled** (`engine.cancel(id)` / `handle.cancel()`). Pass it to `fetch`, database clients, or anything else that accepts an abort signal. It does _not_ fire when a `ctx.race` branch loses—see [Cancelling a running activity](#cancelling-a-running-activity) below.
 
@@ -100,7 +103,7 @@ const processLargeFile = async (path: string, context?: ActivityContext) => {
 
 ### Cancelling a running activity
 
-Activity cancellation in Weft is **cooperative**, and it fires on exactly one event: **workflow cancellation**. When you call `engine.cancel(id)` (or `handle.cancel()`), Weft aborts the workflow's `AbortController`, and every in-flight activity sees its `ActivityContext.signal` flip to aborted. An activity that does nothing with the signal still runs to completion—the signal is an _offer_ to stop, not a forced interrupt. This is different from Temporal's `CancellationScope.cancel()`, which interrupts at `await` boundaries preemptively. To make an activity actually stop, it has to check the signal:
+Activity cancellation in Weft is **cooperative**, and the `ActivityContext.signal` fires on two events: **workflow cancellation** (`engine.cancel(id)` / `handle.cancel()`) and an **inline per-attempt `timeout` expiry**, configured through [Per-call options](#per-call-options). On workflow cancellation Weft aborts the workflow's `AbortController` and every in-flight activity sees its `ActivityContext.signal` flip to aborted; on an inline per-attempt timeout only that attempt's signal aborts. (Worker-pool mode bounds an attempt with `visibilityTimeout`, the claim/visibility expiry, which does not abort `ctx.signal` this way.) In both cases the signal is an _offer_ to stop, not a forced interrupt—an activity that does nothing with it still runs to completion. This is different from Temporal's `CancellationScope.cancel()`, which interrupts at `await` boundaries preemptively. To make an activity actually stop, it has to check the signal:
 
 ```typescript partial
 const pollUntilReady = async (jobId: string, context?: ActivityContext) => {
@@ -125,7 +128,7 @@ const streamReport = async (url: string, context?: ActivityContext) => {
 > [!WARNING] `ctx.race` does not cancel a losing activity
 > It is tempting to read `ctx.race([ctx.run('longJob'), ctx.sleep('5s')])` as "run the job, but cancel it after 5 seconds." It is not. `ctx.race` is a _result-selection_ primitive: when the sleep wins, the race stops _awaiting_ `longJob`, but `longJob` keeps running to completion—its `ActivityContext.signal` never fires. The losing activity's result is discarded; its work, and its side effects, are not.
 >
-> So `ctx.race` is **not** a `CancellationScope` replacement for activities. It is the right tool when the losing work is cheap enough to let finish (a sub-second call, an idempotent fetch). To genuinely stop a long-running activity, you need one of: workflow-level cancellation (`engine.cancel`, the only thing that fires the signal), an activity that imposes its own internal deadline, or a cancellation token you pass through the activity's _input_ and check cooperatively. Choose race-with-sleep only when running the loser to completion is acceptable.
+> So `ctx.race` is **not** a `CancellationScope` replacement for activities. It is the right tool when the losing work is cheap enough to let finish (a sub-second call, an idempotent fetch). To genuinely stop a long-running activity, you need one of: workflow-level cancellation (`engine.cancel`), an inline per-attempt `timeout` (both fire the activity's signal; in worker-pool mode `visibilityTimeout` bounds the attempt but does not fire the signal), an activity that imposes its own internal deadline, or a cancellation token you pass through the activity's _input_ and check cooperatively. Losing a `ctx.race` is none of those, so it does not fire the signal—the loser keeps running. Choose race-with-sleep only when running the loser to completion is acceptable.
 
 ### Out-of-band completion
 
@@ -163,7 +166,8 @@ You can override retry, timeout, queue, and idempotency settings on a per-invoca
 
 ```typescript partial
 interface ActivityCallOptions {
-  timeout?: Duration;
+  timeout?: Duration; // per-attempt wall-clock cap, inline only (reset each attempt)
+  scheduleToCloseTimeout?: Duration; // cumulative budget across all attempts + backoff
   queue?: string;
   retry?: Partial<RetryPolicy>;
   idempotencyKey?: string;
@@ -185,7 +189,11 @@ async function* example(ctx: Context) {
 }
 ```
 
-The `timeout` kills the activity after the specified duration. The `queue` routes the activity to a specific worker queue (useful for rate limiting or resource isolation). The `idempotencyKey` lets Weft replay a completed reconciliation marker without rerunning the activity. When recovery only finds an ambiguous prior start marker, Weft fails closed unless the activity definition provides a Tier-0 verifier that can prove the external result or safe redispatch. It is not an exactly-once guarantee for external systems.
+The `timeout` is a **per-attempt wall-clock cap** for **inline** execution. It is measured fresh on each attempt: when an attempt overruns it, the workflow stops awaiting that attempt and fails it with an `ActivityPerAttemptTimeoutError` (a `timeout` failure category), and the activity's `AbortSignal` is aborted so a cooperating activity can stop promptly. Just like workflow cancellation, this is _cooperative_: Weft cannot forcibly preempt a running activity function, so an activity that ignores its signal keeps executing in the background until it returns—only the workflow stops waiting on it. If a retry policy is configured, the timed-out attempt retries with a fresh cap. In worker-pool mode use `visibilityTimeout` instead—`timeout` is enforced inline only.
+
+The `scheduleToCloseTimeout` is the **cumulative budget across all attempts and the backoff waits between them** (close to Temporal's `scheduleToCloseTimeout`). It starts at the first dispatch and does _not_ reset between attempts: `timeout` bounds one attempt; `scheduleToCloseTimeout` bounds the whole retry sequence. It is enforced at the **retry-decision point**, not by waiting out the clock: when the next retry's backoff would start the attempt at or after the deadline (or an attempt has already overrun the budget), Weft skips that retry and fails the activity with an `ActivityScheduleToCloseTimeoutError` (also a `timeout` failure category). Unlike a per-attempt `timeout`, this does _not_ abort the in-flight attempt's `ActivityContext.signal`—it is only consulted when deciding whether another retry may begin. It has _no effect_ unless a retry policy is configured—a non-retried activity fails on its first error before the budget is consulted—and it applies to top-level `ctx.run` activities only, since an activity inside `ctx.all` / `ctx.race` does not retry.
+
+The `queue` routes the activity to a specific worker queue (useful for rate limiting or resource isolation). The `idempotencyKey` lets Weft replay a completed reconciliation marker without rerunning the activity. When recovery only finds an ambiguous prior start marker, Weft fails closed unless the activity definition provides a Tier-0 verifier that can prove the external result or safe redispatch. It is not an exactly-once guarantee for external systems.
 
 > [!WARNING]
 > Activities are at-least-once side effects. Payment providers, queues, email APIs, and databases still need their own idempotency keys. Weft can replay a completed result it durably recorded, or ask your verifier whether a prior keyed side effect completed, but it cannot undo an external side effect that finished before Weft recorded the outcome.

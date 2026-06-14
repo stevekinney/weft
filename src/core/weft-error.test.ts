@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import {
+  ActivityPerAttemptTimeoutError,
   ActivityReconciliationCapabilityError,
   ActivityReconciliationConflictError,
   ActivityReconciliationIndeterminateError,
@@ -104,6 +105,7 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   AsyncActivityTokenNotFoundError: () => new AsyncActivityTokenNotFoundError('token-abc'),
   ActivityScheduleToCloseTimeoutError: () =>
     new ActivityScheduleToCloseTimeoutError('charge', 2_000, 1_000),
+  ActivityPerAttemptTimeoutError: () => new ActivityPerAttemptTimeoutError('charge', 2, 1_000),
   StartOrSignalConflictError: () => new StartOrSignalConflictError('wf-1', 'completed'),
   IdempotencyKeyPurgedError: () => new IdempotencyKeyPurgedError('wf-1'),
 };

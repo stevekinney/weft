@@ -175,7 +175,8 @@ wf:{id}:ckpt:{step}                           -- checkpoint history
 op:{queue}:{scheduled}:{id}                   -- operation (sorted by queue + time)
 ev:{workflowId}:{seq}                         -- event (sorted by workflow + sequence)
 ev:{workflowId}:watermark                     -- compaction watermark for truncated events
-sig:{workflowId}:{name}:{id}                  -- signal
+sig:{workflowId}:{encodedName}:{class}:{id}   -- buffered signal payload
+sigres:{workflowId}:{encodedName}:{id}        -- accepted signal response
 wf-deadline:{deadline}:{workflowId}           -- timeout deadline
 attr:{workflowId}                             -- search attributes
 idx:{attrName}:{encodedValue}:{workflowId}    -- secondary index for search
@@ -183,7 +184,7 @@ upd:{workflowId}:{updateId}                   -- pending update request
 upr:{updateId}                                -- update response
 ```
 
-This listing covers the primary keys. The full canonical list—including `wf:{id}:timeline:`, `schedule:`, `op:inflight:`, `tag:`, `upk:` (idempotency), `budget:`, `archive:`, `state:execution:`, `state:workflow:`, `blob:`, and others—is in `KEYS` in `src/storage/interface.ts`.
+This listing covers the primary keys. Signal names are encoded before key construction so names such as `order` and `order:placed` cannot prefix-alias each other. Buffered signal payload keys include a sort-class component: `0` for the initial `startOrSignal` start-signal and `1` for normal signals, so a same-tick start-signal is consumed first; deduplication is keyed by the class-independent `sigres:` accepted-response record. The full canonical list—including `wf:{id}:timeline:`, `schedule:`, `op:inflight:`, `tag:`, `upk:` (idempotency), `budget:`, `archive:`, `state:execution:`, `state:workflow:`, `blob:`, and others—is in `KEYS` in `src/storage/interface.ts`.
 
 All timestamps are zero-padded to 16 digits for correct lexicographic ordering. So `scan("op:default:")` returns all operations on the "default" queue in scheduled order—the core hot path is a single range scan, regardless of backend.
 

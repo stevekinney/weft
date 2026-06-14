@@ -1138,8 +1138,8 @@ describe('Engine', () => {
     engine1[Symbol.dispose]();
     await flush();
 
-    // Simulate a pre-removal persisted record by re-writing the state blob with
-    // a `tenant` field grafted on, exactly as an older engine would have stored.
+    // Re-write the state blob with a `tenant` field grafted on — a persisted
+    // record carrying a field that is not part of the current WorkflowState.
     const persisted = decode((await storage.get(KEYS.workflow(workflowId)))!) as Record<
       string,
       unknown
@@ -1155,7 +1155,7 @@ describe('Engine', () => {
     await engine2.signal(workflowId, 'go', 'value');
     await expect(recoveredHandles[0]!.result()).resolves.toBe('resumed:value');
 
-    // The legacy field must not survive onto the resumed/persisted state.
+    // The unrecognized field must not survive onto the resumed/persisted state.
     const resumedState = decode((await storage.get(KEYS.workflow(workflowId)))!) as Record<
       string,
       unknown
@@ -1165,12 +1165,12 @@ describe('Engine', () => {
     engine2[Symbol.dispose]();
   });
 
-  // Acceptance-critical (version-tuple unification): a workflow persisted before
-  // the version tuple was unified carries the tuple as three flat fields
-  // (`version`, `agentVersion`, `toolVersions`) instead of a nested
-  // `versionTuple`. Such a record must fully RESUME and be rewritten in the
-  // current shape, with the flat keys lifted into `versionTuple`.
-  it('recovers and resumes a workflow whose persisted state carries a flat version tuple', async () => {
+  // Acceptance-critical (decode normalizes flat version fields into the nested
+  // versionTuple): a persisted record that carries the version metadata as three
+  // flat fields (`version`, `agentVersion`, `toolVersions`) instead of a nested
+  // `versionTuple` must fully RESUME and be rewritten in the current shape, with
+  // the flat keys normalized into `versionTuple`.
+  it('recovers and resumes a workflow whose persisted state carries flat version fields', async () => {
     const storage = new MemoryStorage();
     const workflowId = 'flat-version-tuple-resume';
 
@@ -1192,10 +1192,10 @@ describe('Engine', () => {
     engine1[Symbol.dispose]();
     await flush();
 
-    // Simulate a pre-unification persisted record: strip `versionTuple` and graft
-    // the flat fields back on, exactly as an older engine would have stored them.
-    // The flat tuple matches the registered definition (workflow version only),
-    // so recovery resumes without drift.
+    // Construct a persisted record that carries flat version fields instead of a
+    // nested `versionTuple`: strip `versionTuple` and graft the flat `version`
+    // field on. The flat tuple matches the registered definition (workflow
+    // version only), so recovery resumes without drift.
     const persisted = decode((await storage.get(KEYS.workflow(workflowId)))!) as Record<
       string,
       unknown
@@ -4293,14 +4293,14 @@ describe('Engine', () => {
     engine[Symbol.dispose]();
   });
 
-  it('legacy state without errorStack still loads correctly', async () => {
+  it('failed state without the optional errorStack field still loads correctly', async () => {
     const storage = new MemoryStorage();
     const { encode: encodeValue } = await import('./codec.ts');
 
-    // Write a legacy state that has no errorStack field
-    const legacyState: WorkflowState = {
-      id: 'legacy-id',
-      type: 'legacy-workflow',
+    // Write a failed state that omits the optional errorStack field.
+    const failedState: WorkflowState = {
+      id: 'no-error-stack-id',
+      type: 'no-error-stack-workflow',
       status: 'failed',
       input: null,
       error: 'old failure',
@@ -4308,16 +4308,16 @@ describe('Engine', () => {
       createdAt: 1000,
       updatedAt: 2000,
     };
-    await storage.put(KEYS.workflow('legacy-id'), encodeValue(legacyState));
+    await storage.put(KEYS.workflow('no-error-stack-id'), encodeValue(failedState));
 
     const engine = new Engine({ storage: storage as WeftStorage });
     engine.register(
-      workflow({ name: 'legacy-workflow' }).execute(async function* () {
+      workflow({ name: 'no-error-stack-workflow' }).execute(async function* () {
         return 'ok';
       }),
     );
 
-    const handle = engine.getHandle('legacy-id');
+    const handle = engine.getHandle('no-error-stack-id');
     try {
       await handle.result();
       expect.unreachable('should have thrown');

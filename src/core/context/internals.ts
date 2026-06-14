@@ -1,5 +1,6 @@
 import type { ComposedWorkflowInterceptor } from '../interceptor.ts';
 import type { SearchAttributeSchema, SearchAttributeValue } from '../types.ts';
+import type { WorkflowLogRecord } from '../types/workflow-log.ts';
 import type { Context, ContextOptions } from './index.ts';
 import { createCheckpointLocals } from './session-state.ts';
 
@@ -28,6 +29,13 @@ export interface ContextInternals {
   resolveWorkflowType: ((target: string | Function) => string) | undefined;
   registerCancelHandler: ((handler: () => Promise<void> | void) => () => void) | undefined;
   services: unknown;
+  /**
+   * Host sink for `ctx.log` records (`EngineOptions.onLog`), or `undefined` for the
+   * default console behavior. Captured by value when the `ctx.log` getter first
+   * builds its logger; `onLog` is fixed at engine construction, so there is nothing
+   * to re-read per emit.
+   */
+  logSink: ((record: WorkflowLogRecord) => void) | undefined;
 }
 
 const INTERNALS = new WeakMap<Context, ContextInternals>();
@@ -62,6 +70,7 @@ export function initializeInternals(
     resolveWorkflowType: options.resolveWorkflowType,
     registerCancelHandler: options.registerCancelHandler,
     services: options.services,
+    logSink: options.logSink,
   };
   INTERNALS.set(context, internals);
 }

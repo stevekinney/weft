@@ -309,7 +309,7 @@ The pieces:
 
 - **`IndexedDBStorage`.** Durable browser storage for checkpoints, workflow state, signals, and timers.
 - **`createLifecycleHandlers()`.** Returns `{ install, activate }` listeners. The `install` handler calls `self.skipWaiting()` and the `activate` handler calls `self.clients.claim()` when those APIs exist.
-- **`createFetchHandler({ engine, pathPrefix })`.** Strips the prefix from incoming requests and routes them through Weft's `/v1/*` handler.
+- **`createFetchHandler({ engine, pathPrefix })`.** Strips the prefix from incoming requests and routes them through Weft's `/v1/*` handler. `engine` is required; `pathPrefix` is a string that defaults to `'/weft/'`. For a non-matching request the handler simply returns without calling `event.respondWith`, leaving it to any other `fetch` listener or the browser's default handling.
 - **`createPeriodicSyncHandler(scheduler)`.** Returns a `periodicsync` listener for the `'weft-timers'` tag (configurable through the scheduler) that calls `scheduler.tick()` inside `event.waitUntil(...)`.
 - **`engine.recoverAll()`.** Lets a newly started Service Worker resume workflows already stored as running. Await it before serving steady-state fetch traffic so recovery failures are visible instead of silently leaving workflows parked.
 - **`engine.scheduler.tick()`.** Scans durable timer keys and advances expired sleeps.

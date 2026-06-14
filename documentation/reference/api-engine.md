@@ -192,10 +192,12 @@ async startOrSignal<TName extends keyof WorkflowRegistry & string>(
   input: WorkflowInput<WorkflowRegistry, TName>,
   signal: StartOrSignalSignal,
   options?: StartOptions,
-): Promise<WorkflowHandle<WorkflowOutput<WorkflowRegistry, TName>>>
+): Promise<StartOrSignalResult<WorkflowOutput<WorkflowRegistry, TName>>>
 ```
 
 Atomically start a workflow or signal it if it already exists (signal-with-start). When the target is absent, the workflow record and the first signal commit in one batch and the freshly-launched run consumes the signal on its first drive. When the target is **non-terminal** — running, pending, or suspended — the signal is delivered through the normal signal path. When the target is **terminal**, this throws `StartOrSignalConflictError`: a finished run cannot be signalled and is not silently replaced.
+
+The result carries both the `handle` and a per-call `outcome`. `outcome: 'started'` means this call created the workflow. `outcome: 'signalled'` means this call delivered a signal to an existing run or lost a concurrent same-key create race and converged onto the winner. The outcome is not stored on the shared engine `WorkflowHandle`, because converged callers can share that handle while each call still has its own outcome.
 
 Pass `options.idempotencyKey` to deduplicate independent callers such as retried webhooks. Convergence requires a **shared workflow identity**: a shared `options.idempotencyKey` (the signal id derives from the key, so callers that share only the key converge on one workflow and one signal) or a shared `options.id` plus `signal.signalId`. A bare `signal.signalId` with neither `options.id` nor `options.idempotencyKey` does **not** converge — each absent-target call generates its own workflow id, so concurrent callers create distinct runs. In that mode `startOrSignal` is an atomic start-with-one-initial-signal, not a convergence primitive. Supply exactly one of `signal.signalId` or `options.idempotencyKey` (not both); `options.idempotencyKey` and `options.id` are likewise mutually exclusive. Requires a storage backend with `conditionalBatch`.
 
@@ -213,12 +215,14 @@ Pass `options.idempotencyKey` to deduplicate independent callers such as retried
 | `options` | `StartOptions`        | Optional start configuration                          |
 
 ```ts partial
-const handle = await engine.startOrSignal(
+const { handle, outcome } = await engine.startOrSignal(
   'order',
   { orderId: 'order-42' },
   { name: 'payment', payload: { status: 'succeeded' } },
   { idempotencyKey: 'webhook-order-42' },
 );
+
+console.log(handle.id, outcome);
 ```
 
 ### `signal()`
