@@ -52,6 +52,8 @@ export const bulkRetryFailedWorkflowsOperation = defineOperation<
     const operationOptions = bulkOperationOptionsFromInput(input, principal);
 
     try {
+      // Preserve the Engine overload split: dry-run and commit options have
+      // distinct result types even though both delegate to the same operation.
       if (operationOptions.dryRun === true) {
         return await e.retryFailedAll(filter, operationOptions);
       }

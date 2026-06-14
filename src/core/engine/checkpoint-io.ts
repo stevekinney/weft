@@ -32,6 +32,7 @@ import {
 import {
   clearPendingAtomicWorkflowCommitSideEffects,
   takePendingAtomicWorkflowCommitSideEffects,
+  type AtomicWorkflowCommitSideEffects,
 } from './checkpoint-side-effects.ts';
 import {
   appendCompactionOperations,
@@ -314,7 +315,10 @@ async function commitCheckpoint(
   }
 
   const storageSupportsConditionalBatch = internals.storage.capabilities().conditionalBatch;
-  const sideEffectConditions = pendingSideEffects?.conditions ?? [];
+  const sideEffectConditions = checkpointSideEffectConditions(
+    pendingSideEffects,
+    storageSupportsConditionalBatch,
+  );
   const conditions = buildCheckpointCommitConditions(
     workflowId,
     commit,
@@ -374,6 +378,14 @@ async function writeCheckpointCommitBatch(
       `Checkpoint commit for workflow "${workflowId}" lost its CAS race against a newer checkpoint.`,
     );
   }
+}
+
+function checkpointSideEffectConditions(
+  pendingSideEffects: AtomicWorkflowCommitSideEffects | undefined,
+  storageSupportsConditionalBatch: boolean,
+): ConditionalBatchCondition[] {
+  if (!storageSupportsConditionalBatch) return [];
+  return pendingSideEffects?.conditions ?? [];
 }
 
 function buildCheckpointCommitConditions(

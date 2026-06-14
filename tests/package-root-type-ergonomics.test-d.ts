@@ -115,9 +115,16 @@ const packageRootWelcome = workflow({ name: 'packageRootWelcome' })
     yield* ctx.startChild('packageRootWelcome', input, { parentClosePolicy: 'terminate' });
     // @ts-expect-error child workflow options are closed to fields the engine reads.
     yield* ctx.startChild('packageRootWelcome', input, { unknownOption: true });
-    // @ts-expect-error composition operators are await-only and cannot abandon child workflows.
     yield* ctx.pipe(
-      [{ type: 'packageRootWelcome', options: { parentClosePolicy: 'request-cancel' } }],
+      [
+        {
+          type: 'packageRootWelcome',
+          options: {
+            // @ts-expect-error composition operators are await-only and cannot abandon child workflows.
+            parentClosePolicy: 'request-cancel',
+          },
+        },
+      ],
       input,
     );
     approval.approved.valueOf();

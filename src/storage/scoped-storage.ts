@@ -192,9 +192,6 @@ export class ScopedStorage implements Storage {
     conditions: ConditionalBatchCondition[],
     operations: BatchOperation[],
   ): Promise<boolean> {
-    assertStorageBatchOperationCount('conditionalBatch conditions', conditions.length);
-    assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
-
     return storageConditionalBatch(
       this.#storage,
       conditions.map((condition) => ({

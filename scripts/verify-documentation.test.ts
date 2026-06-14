@@ -214,6 +214,27 @@ describe('verifyDocumentation', () => {
     });
   });
 
+  it('skips error reference validation when the source union files are absent', async () => {
+    const repositoryRoot = await createFixtureRepository({});
+
+    expect(collectErrorReferenceFindings(repositoryRoot)).toEqual([]);
+  });
+
+  it('reports a missing error reference page after source union files are present', async () => {
+    const repositoryRoot = await createFixtureRepository({
+      'src/core/weft-error.ts': "export type WeftErrorCode = 'WorkflowNotFoundError';\n",
+      'src/core/fault-code.ts': "export type FaultCode = 'NotFound';\n",
+    });
+
+    expect(collectErrorReferenceFindings(repositoryRoot)).toEqual([
+      {
+        file: 'documentation/reference/api-errors.md',
+        line: 1,
+        message: 'Required error-code reference page missing.',
+      },
+    ]);
+  });
+
   it('rejects package.json files that do not define engines.bun as a string semver range', async () => {
     const missingEnginesRoot = await createFixtureRepository({
       'package.json': JSON.stringify({}, null, 2),

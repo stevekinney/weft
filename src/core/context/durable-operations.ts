@@ -217,6 +217,16 @@ export function* getVersion(
     return resolution.version;
   }
 
+  if (internals.accumulatedResults?.has(step)) {
+    const cachedVersion = internals.accumulatedResults.get(step);
+    if (cachedVersion !== resolution.version) {
+      throw new Error(
+        `ctx.getVersion("${changeId}") replay result ${String(cachedVersion)} does not match pinned version ${String(resolution.version)}`,
+      );
+    }
+    return resolution.version;
+  }
+
   if (internals.explainMode) {
     console.log(`[weft] ctx.getVersion("${changeId}", ${minSupported}, ${maxSupported})`);
     console.log(`  → Creating checkpoint at step ${step}`);

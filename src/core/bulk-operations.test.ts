@@ -111,6 +111,22 @@ async function readWorkflowState(
   return workflowStateBytes === null ? null : (decode(workflowStateBytes) as WorkflowState);
 }
 
+class FailOneWorkflowDeleteStorage extends MemoryStorage {
+  failedWorkflowId: string | null = null;
+
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    const failedWorkflowId = this.failedWorkflowId;
+    if (
+      failedWorkflowId !== null &&
+      operations.some((operation) => operation.key === KEYS.workflow(failedWorkflowId))
+    ) {
+      throw new Error(`refused to delete ${failedWorkflowId}`);
+    }
+
+    await super.batch(operations);
+  }
+}
+
 function createStorageBackedCancellationInternals(storage: MemoryStorage, timestamp: number) {
   return {
     engine: {
@@ -531,6 +547,28 @@ describe('bulk workflow operations', () => {
     expect(await storage.get(`timer-idx:deadline:${workflowId}`)).toBeNull();
 
     engine[Symbol.dispose]();
+  });
+
+  it('counts same-batch bulk delete successes before surfacing a delete failure', async () => {
+    const storage = new FailOneWorkflowDeleteStorage();
+    const engine = new Engine({ storage });
+    const echoWorkflow1 = workflow({ name: 'echo' }).execute(echoWorkflow);
+    engine.register(echoWorkflow1);
+
+    try {
+      await createCompletedWorkflow(engine, 'bulk-delete-success', ['bulk-delete-partial']);
+      await createCompletedWorkflow(engine, 'bulk-delete-failure', ['bulk-delete-partial']);
+      storage.failedWorkflowId = 'bulk-delete-failure';
+
+      await expect(
+        engine.deleteAll({ tags: ['bulk-delete-partial'] }, { bulkConcurrency: 2 }),
+      ).rejects.toThrow('Bulk delete failed for 1 workflow(s) after deleting 1 workflow(s)');
+
+      expect(await engine.get('bulk-delete-success')).toBeNull();
+      expect(await engine.get('bulk-delete-failure')).not.toBeNull();
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
   });
 
   it('acceptance criterion: engine.cancelAll(filter) cancels matching workflows and reports per-workflow failures', async () => {

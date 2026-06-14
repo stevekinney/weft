@@ -277,6 +277,7 @@ export async function cleanupWorkflowStorage(
   // effect volume across the engine's lifetime.
   const prefixes: string[] = [
     KEYS.activityReconciliationPrefix(workflowId),
+    KEYS.childCancellationPrefix(workflowId),
     asyncActivityWorkflowPrefix(workflowId),
     KEYS.signalAcceptedResponsePrefix(workflowId),
     `sig:${encodedWorkflowId}:`,
@@ -295,7 +296,6 @@ export async function cleanupWorkflowStorage(
   await internals.storage.delete(KEYS.workflowHeaders(workflowId));
   await internals.storage.delete(KEYS.signalSequence(workflowId));
   await releaseWorkflowConcurrencySlot(internals, workflowId);
-  await internals.storage.delete(KEYS.workflowConcurrencyHolder(workflowId));
   // The "expects services" marker is per-run bookkeeping, not an output artifact,
   // so drop it on every terminal cleanup regardless of `includeOutputArtifacts`.
   await internals.storage.delete(KEYS.workflowHasServices(workflowId));

@@ -9,12 +9,13 @@
 import { describe, expect, it } from 'bun:test';
 
 import { decode } from '../../core/codec.ts';
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS, type BatchOperation } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { principalFromApiKey } from '../principal.ts';
 import { markInflight, type InflightRecord, type ResolvedRecord } from '../task-state.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import { handleTaskPollRequest, handleTaskResultRequest } from './task-polling.ts';
+import { transitionTaskResultToResolvedWithRetry } from './task-result-resolution.ts';
 
 /** handleTaskResultRequest never consults the worker registry, so use a null one. */
 function createMinimalContext() {
@@ -55,6 +56,22 @@ function makeInflightRecord(operationId: string): InflightRecord {
     visibilityTimeout: 30_000,
     attemptToken: 'attempt-token',
   };
+}
+
+class FailingTaskResultResolutionStorage extends MemoryStorage {
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    if (operations.some((operation) => operation.key.startsWith('op:resolved:'))) {
+      throw new Error('resolved write failed');
+    }
+    await super.batch(operations);
+  }
+
+  override async put(key: string, value: Uint8Array): Promise<void> {
+    if (key.startsWith('op:dead-letter:')) {
+      throw new Error('dead-letter write failed');
+    }
+    await super.put(key, value);
+  }
 }
 
 async function readResolvedRecord(
@@ -238,6 +255,52 @@ describe('handleTaskResultRequest', () => {
     expect(resolved.status).toBe('failed');
     expect(resolved.error).toContain('activity result exceeds');
     expect(resolved.error).not.toContain('x'.repeat(100));
+  });
+
+  it('measures failed-result payload size against the persisted error string', async () => {
+    const storage = new MemoryStorage();
+    const context = createMinimalContext();
+    setPayloadSizeLimit(context, 10);
+    const options = createMinimalOptions(storage);
+    await markInflight(storage, makeInflightRecord('op-failure-size-boundary'));
+
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      makePostRequest({
+        operationId: 'op-failure-size-boundary',
+        workerId: 'longpoll-worker',
+        attemptToken: 'attempt-token',
+        status: 'failed',
+        error: '12345678',
+      }),
+      makeUrl('/v1/tasks/op-failure-size-boundary/result'),
+      WORKER_PRINCIPAL,
+    );
+
+    expect(response?.status).toBe(200);
+    const resolved = await readResolvedRecord(storage, 'op-failure-size-boundary');
+    expect(resolved.status).toBe('failed');
+    expect(resolved.error).toBe('12345678');
+  });
+
+  it('does not throw when dead-letter persistence fails after result-resolution retries', async () => {
+    const storage = new FailingTaskResultResolutionStorage();
+    const context = createMinimalContext();
+    const options = createMinimalOptions(storage);
+    await markInflight(storage, makeInflightRecord('op-dead-letter-write-fails'));
+
+    await expect(
+      transitionTaskResultToResolvedWithRetry(context, options, {
+        operationId: 'op-dead-letter-write-fails',
+        status: 'completed',
+        resolutionReason: 'completed',
+        value: 'done',
+      }),
+    ).resolves.toBeUndefined();
+
+    expect(await storage.get(KEYS.operationInflight('op-dead-letter-write-fails'))).not.toBeNull();
+    expect(await storage.get(KEYS.operationDeadLetter('op-dead-letter-write-fails'))).toBeNull();
   });
 
   it('removes the deadline tracker entry on success', async () => {

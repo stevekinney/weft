@@ -97,7 +97,15 @@ function resolveWorkflowConcurrencyPartitionKey(
   if (concurrency.key === undefined) {
     return workflowType;
   }
-  const partitionKey = concurrency.key(input);
+  let partitionKey: unknown;
+  try {
+    partitionKey = concurrency.key(input);
+  } catch (error) {
+    throw new Error(
+      `workflow("${workflowType}").concurrency.key threw while resolving the partition key: ${error instanceof Error ? error.message : String(error)}`,
+      { cause: error },
+    );
+  }
   if (typeof partitionKey !== 'string') {
     throw new TypeError(
       `workflow("${workflowType}").concurrency.key must return a string partition key`,

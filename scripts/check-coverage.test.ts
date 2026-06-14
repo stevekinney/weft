@@ -109,6 +109,25 @@ describe('parseLcov', () => {
     }
   });
 
+  it('unions audit-backlog top-off allowances with the assembled base allowances', () => {
+    const coverage = parseLcov(
+      [
+        'SF:src/workers/workflow-runner.ts',
+        'FNF:4',
+        'FNH:0',
+        'DA:101,0',
+        'DA:409,0',
+        'DA:999,1',
+        'end_of_record',
+      ].join('\n'),
+    );
+
+    expect(coverage.covered).toBe(true);
+    expect(coverage.lines).toEqual({ total: 1, hit: 1, missed: 0 });
+    expect(coverage.functions).toEqual({ total: 0, hit: 0, missed: 0 });
+    expect(coverage.uncoveredFiles).toEqual([]);
+  });
+
   it('returns false immediately when a coverage shard exits non-zero', async () => {
     mock.module('bun', () => ({
       $: () => ({

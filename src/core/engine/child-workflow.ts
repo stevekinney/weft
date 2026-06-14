@@ -7,7 +7,11 @@ import type {
   StartOptions,
   WorkflowState,
 } from '../types.ts';
-import { registerCancelHandler } from './cancel-handlers.ts';
+import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
+import {
+  buildChildCancellationOperations,
+  registerChildCancellationHandler,
+} from './child-workflow-cancellation.ts';
 import { WorkflowAlreadyExistsError } from './errors.ts';
 import type { WorkflowHandle } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
@@ -198,7 +202,11 @@ export async function executeChildWorkflow(
       return createChildWorkflowHandleReference(childHandle.id);
     }
     if (parentClosePolicy === 'request-cancel') {
-      registerCancelHandler(internals, workflowId, () => childHandle.cancel());
+      stageAtomicWorkflowCommitSideEffects(internals, workflowId, {
+        conditions: [],
+        operations: buildChildCancellationOperations(internals, workflowId, childHandle.id),
+      });
+      registerChildCancellationHandler(internals, workflowId, childHandle.id, callbacks);
       return createChildWorkflowHandleReference(childHandle.id);
     }
     return childHandle.result();

@@ -622,6 +622,10 @@ export const KEYS = {
   review: (workflowId: string, reviewId: string) =>
     `review:${encodeStorageKeyComponent(workflowId)}:${reviewId}`,
   workflowHeaders: (workflowId: string) => `wf-headers:${encodeStorageKeyComponent(workflowId)}`,
+  childCancellationPrefix: (workflowId: string) =>
+    `child-cancel:${encodeStorageKeyComponent(workflowId)}:`,
+  childCancellation: (workflowId: string, childWorkflowId: string) =>
+    `child-cancel:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(childWorkflowId)}`,
   terminalCleanupNeeded: (workflowId: string) =>
     `wf-cleanup-needed:${encodeStorageKeyComponent(workflowId)}`,
   workflowConcurrency: (workflowType: string, partitionKey: string) =>

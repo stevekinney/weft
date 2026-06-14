@@ -210,6 +210,7 @@ function withWorkflowToolTimeoutParameter(
   return {
     type: 'object',
     additionalProperties: false,
+    required: ['input'],
     properties: {
       input: schema,
       timeoutMs: {

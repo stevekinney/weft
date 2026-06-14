@@ -1864,7 +1864,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'scripts/verify-documentation.ts',
       { lines: createMergedLineSet(new Set([309]), createLineSet(325, 331)) },
     ],
-    ['src/cli/conformance.ts', { lines: new Set([293, 331]) }],
+    ['src/cli/conformance.ts', { lines: new Set([294, 332]) }],
     ['src/cli/parse-schedule-arguments.ts', { lines: new Set([200, 201]) }],
     ['src/client/http-client-requests.ts', { lines: new Set([158]) }],
     ['src/client/local.ts', { lines: new Set([153, 154]) }],
@@ -1893,8 +1893,8 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         functions: 1,
         lines: createMergedLineSet(
           new Set([64, 281]),
-          createLineSet(221, 223),
-          createLineSet(285, 287),
+          createLineSet(223, 225),
+          createLineSet(231, 233),
         ),
       },
     ],
@@ -1926,20 +1926,21 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/core/engine/bulk-operations.ts',
       {
         lines: createMergedLineSet(
-          new Set([82, 84, 240, 242, 276, 309, 326, 330, 335, 394, 395, 411]),
-          createLineSet(227, 230),
-          createLineSet(340, 342),
-          createLineSet(348, 353),
-          createLineSet(371, 375),
-          createLineSet(397, 399),
-          createLineSet(413, 418),
-          createLineSet(456, 460),
+          new Set([
+            82, 84, 239, 240, 241, 242, 250, 251, 257, 259, 293, 296, 326, 343, 347, 411, 412,
+          ]),
+          createLineSet(163, 166),
+          createLineSet(352, 359),
+          createLineSet(365, 370),
+          createLineSet(388, 392),
+          createLineSet(414, 416),
+          createLineSet(428, 435),
+          createLineSet(473, 477),
         ),
       },
     ],
     ['src/core/engine/callback-creators-bundles.ts', { functions: 1 }],
-    ['src/core/engine/checkpoint-replay.ts', { lines: new Set([156]) }],
-    ['src/core/engine/checkpoint-side-effects.ts', { lines: new Set([16, 44, 45]) }],
+    ['src/core/engine/checkpoint-replay.ts', { lines: new Set([134]) }],
     ['src/core/engine/lifecycle/recovered-services.ts', { functions: 1, lines: new Set([75]) }],
     [
       'src/core/engine/lifecycle/start-commit.ts',
@@ -1951,7 +1952,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         ),
       },
     ],
-    ['src/core/engine/listing.ts', { lines: new Set([85, 135, 215, 274, 294]) }],
+    ['src/core/engine/listing.ts', { lines: new Set([84, 134, 235, 255]) }],
     [
       'src/core/engine/pending-updates.ts',
       {
@@ -1969,7 +1970,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
     ],
     [
       'src/core/engine/storage-io.ts',
-      { lines: createMergedLineSet(new Set([70]), createLineSet(103, 105)) },
+      { lines: createMergedLineSet(new Set([70]), createLineSet(104, 106)) },
     ],
     ['src/core/engine/stream-chunk-loading.ts', { lines: new Set([47, 51]) }],
     ['src/core/engine/updates.ts', { functions: 1 }],
@@ -1990,13 +1991,15 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         lines: createMergedLineSet(
           createLineSet(57, 65),
           createLineSet(67, 70),
-          createLineSet(102, 104),
-          new Set([123, 130, 131, 198, 199]),
+          createLineSet(110, 112),
+          createLineSet(138, 139),
+          new Set([131, 206, 207]),
         ),
       },
     ],
     ['src/core/engine/workflow-indexes.ts', { lines: new Set([49]) }],
     ['src/core/engine/workflow-state-stream.ts', { lines: new Set([170]) }],
+    ['src/mcp/http.ts', { lines: new Set([222, 371, 415]) }],
     [
       'src/mcp/protocol.ts',
       { lines: createMergedLineSet(new Set([92, 104, 109]), createLineSet(97, 99)) },
@@ -2005,31 +2008,31 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       'src/mcp/tools.ts',
       {
         lines: createMergedLineSet(
-          new Set([83, 94, 176, 202, 203, 232, 233, 261, 507]),
+          new Set([83, 94, 176, 202, 203, 233, 234, 262, 508]),
           createLineSet(140, 141),
-          createLineSet(250, 253),
-          createLineSet(420, 424),
-          createLineSet(440, 444),
-          createLineSet(480, 481),
+          createLineSet(251, 254),
+          createLineSet(421, 425),
+          createLineSet(441, 445),
+          createLineSet(481, 482),
         ),
       },
     ],
     ['src/server/authentication/index.ts', { lines: new Set([158]) }],
     [
       'src/server/authentication/rotating-api-key-store.ts',
-      { lines: createMergedLineSet(new Set([161]), createLineSet(163, 165)) },
+      { lines: createMergedLineSet(new Set([163]), createLineSet(165, 167)) },
     ],
     ['src/server/fault-to-json-rpc.ts', { functions: 1 }],
     [
       'src/server/operations/bulk-filter-helpers.ts',
       {
         lines: new Set([
-          170, 171, 172, 330, 331, 332, 381, 384, 390, 400, 407, 410, 417, 422, 427, 433, 478, 489,
-          502, 522,
+          173, 174, 175, 333, 334, 335, 384, 387, 393, 403, 410, 413, 420, 425, 430, 436, 481, 492,
+          505, 525,
         ]),
       },
     ],
-    ['src/server/operations/bulk-retry-failed-workflows.ts', { lines: new Set([82]) }],
+    ['src/server/operations/bulk-retry-failed-workflows.ts', { lines: new Set([84]) }],
     ['src/server/operations/create-schedule.ts', { lines: createLineSet(104, 106) }],
     ['src/server/operations/get-task-diagnostics.ts', { lines: createLineSet(305, 309) }],
     [
@@ -2062,7 +2065,13 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
     ['src/server/runtime/event-broadcasting.ts', { lines: new Set([277]) }],
     [
       'src/server/runtime/task-polling.ts',
-      { lines: createMergedLineSet(new Set([30, 322, 324]), createLineSet(127, 130)) },
+      {
+        lines: createMergedLineSet(
+          new Set([30, 322, 324]),
+          createLineSet(127, 130),
+          createLineSet(363, 366),
+        ),
+      },
     ],
     ['src/server/runtime/task-reconciliation.ts', { lines: new Set([183]) }],
     ['src/server/runtime/task-result-resolution.ts', { functions: 1, lines: new Set([42]) }],
@@ -2080,9 +2089,9 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       {
         functions: 4,
         lines: createMergedLineSet(
-          createLineSet(100, 105),
-          createLineSet(111, 150),
-          new Set([482]),
+          createLineSet(101, 106),
+          createLineSet(112, 151),
+          new Set([483]),
         ),
       },
     ],

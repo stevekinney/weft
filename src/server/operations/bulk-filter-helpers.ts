@@ -41,13 +41,16 @@ const searchAttributeValueSchema = z.custom<SearchAttributeValue>((value) => {
     )
   );
 });
+const attributeFilterScalarValueSchema = z.custom<AttributeFilterScalarValue>(
+  (value) => typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean',
+);
 const attributeFilterSchema = z.object({
   key: z.string().min(1),
   value: searchAttributeValueSchema.optional(),
-  gt: searchAttributeValueSchema.optional(),
-  lt: searchAttributeValueSchema.optional(),
-  gte: searchAttributeValueSchema.optional(),
-  lte: searchAttributeValueSchema.optional(),
+  gt: attributeFilterScalarValueSchema.optional(),
+  lt: attributeFilterScalarValueSchema.optional(),
+  gte: attributeFilterScalarValueSchema.optional(),
+  lte: attributeFilterScalarValueSchema.optional(),
 });
 const failureCategorySchema = z.custom<FailureCategory>(isFailureCategory);
 const timeRangeSchema = z.object({

@@ -166,7 +166,7 @@ export function* startChild<TResult = unknown>(
         `[weft] ctx.startChild("${workflowType}") → Returning cached result from step ${step}`,
       );
     }
-    return internals.accumulatedResults.get(step) as TResult;
+    return resolveCachedStartChildResult<TResult>(internals.accumulatedResults.get(step), options);
   }
 
   if (internals.explainMode) {
@@ -188,7 +188,17 @@ export function* startChild<TResult = unknown>(
   const result = yield request;
 
   context.accumulatedResults.set(step, result);
-  return result as TResult;
+  return resolveCachedStartChildResult<TResult>(result, options);
+}
+
+function resolveCachedStartChildResult<TResult>(
+  result: unknown,
+  options: ChildWorkflowOptions | undefined,
+): TResult | ChildWorkflowHandle<TResult> {
+  const parentClosePolicy = options?.parentClosePolicy ?? 'await';
+  return parentClosePolicy === 'await'
+    ? (result as TResult)
+    : (result as ChildWorkflowHandle<TResult>);
 }
 
 export function* pipe<TResult = unknown>(

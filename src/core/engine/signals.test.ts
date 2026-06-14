@@ -480,6 +480,16 @@ describe('engine signals', () => {
       { signalId: 'sig-placed' },
     );
 
+    const signalKeys: string[] = [];
+    for await (const [key] of storage.scan('sig:')) {
+      signalKeys.push(key);
+    }
+    expect(signalKeys).toEqual([
+      KEYS.signal('workflow-name-collision', 'order:placed', 'sig-placed'),
+    ]);
+    expect(signalKeys[0]).toContain('order%3Aplaced');
+    expect(signalKeys[0]).not.toContain(':order:placed:');
+
     // A waiter on the shorter name must NOT see the longer-named signal.
     expect(await consumeSignal(internals as never, 'workflow-name-collision', 'order')).toEqual({
       found: false,

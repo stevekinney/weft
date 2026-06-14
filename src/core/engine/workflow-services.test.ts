@@ -32,7 +32,11 @@ async function flush(): Promise<void> {
 }
 
 /** Advance engine clock and scheduler then drain pending inline work. */
-async function tickEngine(engine: Engine, clock: { now: number }, nextNow: number): Promise<void> {
+async function tickEngine<TWorkflows extends object, TActivities extends object>(
+  engine: Engine<TWorkflows, TActivities>,
+  clock: { now: number },
+  nextNow: number,
+): Promise<void> {
   clock.now = nextNow;
   await engine.scheduler.tick(clock.now);
   await yieldToEventLoop();
@@ -243,6 +247,50 @@ describe('ctx.services — recovery re-provision', () => {
     await secondEngine[Symbol.asyncDispose]();
   });
 
+  it('fails a recovered running run that expected services when no resolver is configured', async () => {
+    const storage = new MemoryStorage();
+    const wf = workflow({ name: 'missing-resolver-running' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      const services = ctx.services as { v: number };
+      yield* ctx.waitForSignal('go');
+      return services.v;
+    });
+    const firstEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'missing-resolver-running': wf },
+    });
+    await firstEngine.start('missing-resolver-running', null, {
+      id: 'missing-resolver-running-run',
+      services: { v: 1 },
+    });
+    await flush();
+    await firstEngine[Symbol.asyncDispose]();
+
+    const secondEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'missing-resolver-running': wf },
+    });
+    const warnings: DevelopmentWarningEvent[] = [];
+    secondEngine.addEventListener(DevelopmentWarningEvent.type, (event) => {
+      warnings.push(event);
+    });
+
+    await secondEngine.recoverAll();
+    await flush();
+
+    const recoveredState = await secondEngine.get('missing-resolver-running-run');
+    expect(recoveredState?.status).toBe('failed');
+    expect(recoveredState?.error).toContain('resolveWorkflowServices');
+    expect(recoveredState?.failureCategory).toBe('system');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.workflowId).toBe('missing-resolver-running-run');
+    expect(warnings[0]!.message).toContain('resolveWorkflowServices');
+    await secondEngine[Symbol.asyncDispose]();
+  });
+
   it('fails a SUSPENDED run on cross-process resume when its services are unavailable (not stuck suspended)', async () => {
     // Regression: cross-process resume of a suspended run runs the unavailable-
     // services fail path BEFORE the suspended→running flip, while status is still
@@ -370,6 +418,57 @@ describe('ctx.services — recovery re-provision', () => {
     const good = secondEngine.getHandle('good-run');
     await good.signal('go');
     expect(await good.result()).toBe(99);
+    await secondEngine[Symbol.asyncDispose]();
+  });
+
+  it('fails a recovered delayed-start run that expected services when no resolver is configured', async () => {
+    const storage = new MemoryStorage();
+    const clock = { now: 1_000 };
+    const bodyRuns: string[] = [];
+    const wf = workflow({ name: 'missing-resolver-delayed' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      bodyRuns.push('ran');
+      return (ctx.services as { v: number }).v;
+    });
+    const firstEngine = await Engine.create({
+      storage,
+      recover: false,
+      getNow: () => clock.now,
+      workflows: { 'missing-resolver-delayed': wf },
+    });
+    await firstEngine.start('missing-resolver-delayed', null, {
+      id: 'missing-resolver-delayed-run',
+      services: { v: 1 },
+      startAt: 2_000,
+    });
+    const pendingState = await firstEngine.get('missing-resolver-delayed-run');
+    expect(pendingState?.status).toBe('pending');
+    await firstEngine[Symbol.asyncDispose]();
+
+    const secondEngine = await Engine.create({
+      storage,
+      recover: false,
+      getNow: () => clock.now,
+      workflows: { 'missing-resolver-delayed': wf },
+    });
+    const warnings: DevelopmentWarningEvent[] = [];
+    secondEngine.addEventListener(DevelopmentWarningEvent.type, (event) => {
+      warnings.push(event);
+    });
+
+    await secondEngine.recoverAll();
+    await tickEngine(secondEngine, clock, 2_000);
+    await flush();
+
+    const delayedState = await secondEngine.get('missing-resolver-delayed-run');
+    expect(delayedState?.status).toBe('failed');
+    expect(delayedState?.error).toContain('resolveWorkflowServices');
+    expect(delayedState?.failureCategory).toBe('system');
+    expect(bodyRuns).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.workflowId).toBe('missing-resolver-delayed-run');
+    expect(warnings[0]!.message).toContain('resolveWorkflowServices');
     await secondEngine[Symbol.asyncDispose]();
   });
 });

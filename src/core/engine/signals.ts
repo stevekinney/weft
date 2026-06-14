@@ -358,8 +358,8 @@ export async function consumeSignalWithAtomicWorkflowCommit(
  * must check for a buffered signal but might not end up consuming it — e.g. a
  * `ctx.race` / `ctx.all` wait-signal branch that could lose, where a destructive
  * {@link consumeSignal} on the losing path would silently drop the signal. The
- * winner still calls {@link consumeSignal} exactly once to perform the durable
- * delete.
+ * winner calls {@link consumeSignalWithAtomicWorkflowCommit} to stage the
+ * durable delete into the checkpoint batch.
  */
 export async function peekSignal(
   internals: EngineInternals,
@@ -393,7 +393,7 @@ async function findBufferedSignalRecordByPrefix(
   encodedWorkflowId: string,
   signalNameKeyComponent: string,
 ): Promise<BufferedSignalRecord | null> {
-  for await (const [key, value] of internals.storage.scan(prefix)) {
+  for await (const [key, value] of internals.storage.scan(prefix, { limit: 1 })) {
     if (isExactSignalKey(key, encodedWorkflowId, signalNameKeyComponent)) return { key, value };
   }
 

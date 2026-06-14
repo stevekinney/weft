@@ -389,19 +389,6 @@ export class Context implements WorkflowContext {
     input: unknown,
     options?: ChildWorkflowOptions,
   ): Generator<ContextOperationRequest, TResult | ChildWorkflowHandle<TResult>, unknown> {
-    if (
-      options?.parentClosePolicy === 'abandon' ||
-      options?.parentClosePolicy === 'request-cancel'
-    ) {
-      return yield* childWorkflowPipe.startChild<TResult>(
-        this,
-        getInternals(this),
-        workflowType,
-        input,
-        options,
-      );
-    }
-
     return yield* childWorkflowPipe.startChild<TResult>(
       this,
       getInternals(this),

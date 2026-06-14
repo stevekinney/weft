@@ -780,6 +780,10 @@ describe('KEYS', () => {
     );
     expect(KEYS.review(workflowId, 'review-1')).toBe(`review:${encodedWorkflowId}:review-1`);
     expect(KEYS.workflowHeaders(workflowId)).toBe(`wf-headers:${encodedWorkflowId}`);
+    expect(KEYS.childCancellationPrefix(workflowId)).toBe(`child-cancel:${encodedWorkflowId}:`);
+    expect(KEYS.childCancellation(workflowId, 'child:1')).toBe(
+      `child-cancel:${encodedWorkflowId}:child%3A1`,
+    );
     expect(KEYS.workflowConcurrency('invoice:review', 'customer:1')).toBe(
       'wf-concurrency:invoice%3Areview:customer%3A1',
     );

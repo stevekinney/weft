@@ -352,7 +352,20 @@ export async function handleTaskResultRequest(
     context.payloadSizeMaxBytes,
   );
   if (payloadError !== null) {
-    await applyPayloadRejectedTaskResult(context, options, validated, inflightRecord, payloadError);
+    try {
+      await applyPayloadRejectedTaskResult(
+        context,
+        options,
+        validated,
+        inflightRecord,
+        payloadError,
+      );
+    } catch (error) {
+      console.error(
+        `[weft] Failed to persist oversized task result rejection for task "${validated.operationId}":`,
+        error,
+      );
+    }
     return payloadSizeExceededResponse(payloadError);
   }
 

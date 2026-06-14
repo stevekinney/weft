@@ -889,16 +889,18 @@ describe('recurring schedules', () => {
       'orphaned-schedule-workflow',
       'recovered-run',
       '*/15 * * * * *',
-      { id: 'orphaned-schedule' },
+      { id: 'orphaned-schedule', jitter: '60s' },
     );
     const firstDescription = await schedule.describe();
     const firstFireAt = requireNextFireAt(firstDescription);
+    const effectiveFireAt =
+      firstFireAt + computeScheduleJitterOffset('orphaned-schedule', firstFireAt, 60_000);
 
-    await storage.delete(KEYS.scheduleTick(firstFireAt, 'orphaned-schedule'));
+    await storage.delete(KEYS.scheduleTick(effectiveFireAt, 'orphaned-schedule'));
     await storage.delete('timer-idx:schedule:orphaned-schedule');
     firstEngine[Symbol.dispose]();
 
-    clock.now = firstFireAt + 1;
+    clock.now = effectiveFireAt + 1;
     const recoveredEngine = await Engine.create({
       storage,
       getNow: () => clock.now,
@@ -906,7 +908,9 @@ describe('recurring schedules', () => {
     });
 
     try {
-      expect(await storage.get(KEYS.scheduleTick(firstFireAt, 'orphaned-schedule'))).not.toBeNull();
+      expect(
+        await storage.get(KEYS.scheduleTick(effectiveFireAt, 'orphaned-schedule')),
+      ).not.toBeNull();
       expect(await storage.get('timer-idx:schedule:orphaned-schedule')).not.toBeNull();
 
       await tickEngine(recoveredEngine, clock, clock.now);
@@ -1524,6 +1528,39 @@ describe('recurring schedules', () => {
     await drainEngine();
 
     expect(executions.length).toBeGreaterThan(firstPassExecutionCount);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('Caps non-backfill missed-fire counting per scheduler tick.', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock);
+    const missedFireEvents: ScheduleMissedFireEvent[] = [];
+
+    registerWorkflow(engine, 'bounded-missed-fire-workflow', async function* () {
+      return 'done';
+    });
+    engine.addEventListener(ScheduleMissedFireEvent.type, (event) => {
+      missedFireEvents.push(event);
+    });
+
+    const schedule = await engine.schedule('bounded-missed-fire-workflow', null, '* * * * * *', {
+      backfill: false,
+    });
+
+    await tickEngine(engine, clock, Date.UTC(2026, 0, 1, 0, 5, 0));
+
+    const afterFirstPass = await schedule.describe();
+    expect(afterFirstPass.missedFireCount).toBe(256);
+    expect(requireNextFireAt(afterFirstPass)).toBeLessThanOrEqual(clock.now);
+    expect(missedFireEvents.at(-1)?.missedCount).toBe(256);
+
+    await engine.scheduler.tick(clock.now);
+    await drainEngine();
+
+    const afterSecondPass = await schedule.describe();
+    expect(afterSecondPass.missedFireCount).toBeGreaterThan(256);
+    expect(missedFireEvents.length).toBeGreaterThan(1);
 
     engine[Symbol.dispose]();
   });

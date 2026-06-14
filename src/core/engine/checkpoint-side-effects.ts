@@ -16,7 +16,6 @@ export function stageAtomicWorkflowCommitSideEffects(
     return;
   }
 
-  internals.pendingAtomicWorkflowCommitSideEffects ??= new Map();
   const pending = internals.pendingAtomicWorkflowCommitSideEffects.get(workflowId);
   if (pending === undefined) {
     internals.pendingAtomicWorkflowCommitSideEffects.set(workflowId, {
@@ -34,14 +33,13 @@ export function takePendingAtomicWorkflowCommitSideEffects(
   internals: EngineInternals,
   workflowId: string,
 ): AtomicWorkflowCommitSideEffects | undefined {
-  internals.pendingAtomicWorkflowCommitSideEffects ??= new Map();
   const pending = internals.pendingAtomicWorkflowCommitSideEffects.get(workflowId);
   if (pending === undefined) {
     return undefined;
   }
 
+  internals.pendingAtomicWorkflowCommitSideEffects.delete(workflowId);
   if (pending.conditions.length === 0 && pending.operations.length === 0) {
-    internals.pendingAtomicWorkflowCommitSideEffects.delete(workflowId);
     return undefined;
   }
 
@@ -55,6 +53,5 @@ export function clearPendingAtomicWorkflowCommitSideEffects(
   internals: EngineInternals,
   workflowId: string,
 ): void {
-  internals.pendingAtomicWorkflowCommitSideEffects ??= new Map();
   internals.pendingAtomicWorkflowCommitSideEffects.delete(workflowId);
 }

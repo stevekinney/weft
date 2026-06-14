@@ -281,7 +281,9 @@ export function runStorageCapabilityConformance(
  * Register a shared `describe` block that exercises concurrent
  * compare-and-swap writes against one adapter instance. Use this in addition to
  * {@link runStorageCapabilityConformance} for storage backends that can stage
- * overlapping write transactions locally.
+ * overlapping write transactions locally. Synchronous in-memory adapters still
+ * run these calls in the same JavaScript turn, so pair this helper with an
+ * adapter-specific multi-connection test when true IO-level contention matters.
  *
  * @example
  * ```ts

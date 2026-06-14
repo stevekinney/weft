@@ -64,25 +64,30 @@ const ACTIVE_WORKFLOW_STATUSES: WorkflowStatus[] = ['pending', 'running', 'suspe
 const FAILED_WORKFLOW_STATUSES: WorkflowStatus[] = ['failed'];
 const CHECKPOINT_RETRY_CONCURRENCY_ADMISSION_MAX_ATTEMPTS = 5;
 
+type BulkWorkflowPoolResult<TItem, TResult> =
+  | { item: TItem; status: 'fulfilled'; value: TResult }
+  | { item: TItem; status: 'rejected'; reason: unknown };
+
 async function runBulkWorkflowPool<TItem, TResult>(
   items: readonly TItem[],
   concurrencyLimit: number,
   operation: (item: TItem) => Promise<TResult>,
-): Promise<TResult[]> {
-  const results: TResult[] = [];
+): Promise<BulkWorkflowPoolResult<TItem, TResult>[]> {
+  const results: BulkWorkflowPoolResult<TItem, TResult>[] = [];
 
   for (let batchStart = 0; batchStart < items.length; batchStart += concurrencyLimit) {
     const batchItems = items.slice(batchStart, batchStart + concurrencyLimit);
-    const settledResults = await Promise.allSettled(batchItems.map((item) => operation(item)));
-
-    for (const settledResult of settledResults) {
-      if (settledResult.status === 'fulfilled') {
-        results.push(settledResult.value);
-        continue;
-      }
-
-      throw settledResult.reason;
-    }
+    results.push(
+      ...(await Promise.all(
+        batchItems.map(async (item): Promise<BulkWorkflowPoolResult<TItem, TResult>> => {
+          try {
+            return { item, status: 'fulfilled', value: await operation(item) };
+          } catch (reason) {
+            return { item, status: 'rejected', reason };
+          }
+        }),
+      )),
+    );
   }
 
   return results;
@@ -154,12 +159,19 @@ async function runBulkCancellation(
   );
 
   for (const cancellationResult of cancellationResults) {
-    if (cancellationResult.status === 'cancelled') {
+    if (cancellationResult.status === 'rejected') {
+      errors.push(
+        toBulkOperationError(internals, cancellationResult.item, cancellationResult.reason),
+      );
+      continue;
+    }
+
+    if (cancellationResult.value.status === 'cancelled') {
       cancelled += 1;
       continue;
     }
 
-    errors.push(cancellationResult.error);
+    errors.push(cancellationResult.value.error);
   }
 
   const result: BulkCancelResult = { cancelled, failed: errors.length, errors };
@@ -234,12 +246,17 @@ async function runBulkFailedWorkflowRetry(
   );
 
   for (const retryResult of retryResults) {
-    if (retryResult.status === 'retried') {
+    if (retryResult.status === 'rejected') {
+      errors.push(toBulkOperationError(internals, retryResult.item, retryResult.reason));
+      continue;
+    }
+
+    if (retryResult.value.status === 'retried') {
       retried += 1;
       continue;
     }
 
-    errors.push(retryResult.error);
+    errors.push(retryResult.value.error);
   }
 
   const result: BulkRetryFailedResult = { retried, failed: errors.length, errors };
@@ -536,7 +553,7 @@ export async function signalAll(
   );
 
   for (const signalResult of signalResults) {
-    if (signalResult.status === 'signalled') {
+    if (signalResult.status === 'fulfilled' && signalResult.value.status === 'signalled') {
       signalled += 1;
     } else {
       failed += 1;
@@ -583,7 +600,7 @@ async function runBulkDeletion(
       batchWorkflowIds,
     );
 
-    const deletedWorkflowIds = await runBulkWorkflowPool(
+    const deletionResults = await runBulkWorkflowPool(
       workflowStatesToDelete,
       bulkConcurrency,
       async (workflowState) => {
@@ -591,7 +608,22 @@ async function runBulkDeletion(
         return workflowState.id;
       },
     );
-    deleted += deletedWorkflowIds.length;
+    const deletionErrors: unknown[] = [];
+
+    for (const deletionResult of deletionResults) {
+      if (deletionResult.status === 'fulfilled') {
+        deleted += 1;
+      } else {
+        deletionErrors.push(deletionResult.reason);
+      }
+    }
+
+    if (deletionErrors.length > 0) {
+      throw new AggregateError(
+        deletionErrors,
+        `Bulk delete failed for ${deletionErrors.length} workflow(s) after deleting ${deleted} workflow(s)`,
+      );
+    }
   }
 
   const result: BulkDeleteResult = { deleted };

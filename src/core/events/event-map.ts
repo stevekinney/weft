@@ -33,8 +33,7 @@ import type {
 
 /**
  * Record mapping each event-name string the {@link Engine} dispatches to its
- * corresponding typed `Event` subclass. The engine implements this map on its
- * `addEventListener` / `removeEventListener` overloads.
+ * corresponding typed `Event` subclass.
  *
  * @example
  * ```ts

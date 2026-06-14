@@ -18,10 +18,7 @@ import type {
   WorkflowReplay,
   WorkflowTimelineEntry,
 } from '../types.ts';
-import {
-  hydrateCheckpointReplayState,
-  hydrateCheckpointReplayStateFromEntries,
-} from './checkpoint-replay.ts';
+import { hydrateCheckpointReplayState } from './checkpoint-replay.ts';
 import { readEventLogWatermark } from './event-log-compaction.ts';
 import type { EngineInternals } from './internals.ts';
 import {
@@ -151,7 +148,11 @@ export async function replayTo(
 
   const eventLog = new EventLog(internals.storage, workflowId);
   const entries = await eventLog.replay(Math.max(step - 1, -1));
-  const checkpoint = hydrateCheckpointReplayStateFromEntries(deserializeCheckpoint(bytes), entries);
+  const checkpoint = await hydrateCheckpointReplayState(
+    internals.storage,
+    workflowId,
+    deserializeCheckpoint(bytes),
+  );
 
   // `replay` reconstructs from sequence 0, so whenever compaction has truncated
   // the early records the `[0, watermark.sequence)` prefix is missing from

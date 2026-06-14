@@ -30,12 +30,11 @@ import {
   processMemoOperation,
   processOffloadOperation,
 } from './operations-data.ts';
-import { type OperationRouterCallbacks } from './operations-router.ts';
+import { completeOperation, type OperationRouterCallbacks } from './operations-router.ts';
 import { processSpeculateOperation } from './operations-speculate.ts';
 import { processStateCommitOperation, processStateReadOperation } from './operations-state.ts';
 import { processStreamOperation } from './operations-stream.ts';
 import { processSleepOperation } from './operations-time.ts';
-import { processGetVersionOperation } from './operations-versioning.ts';
 import { processWaitConditionOperation } from './operations-wait-condition.ts';
 import { feedOperationResult } from './strategy-helpers.ts';
 import { processWaitReviewOperation } from './sub-operation.ts';
@@ -82,13 +81,14 @@ export function createOperationRouterCallbacks<
         operation,
         createConditionOperationCallbacks(engine),
       ),
-    processGetVersionOperation: (workflowId, operation) =>
-      processGetVersionOperation(getInternals(engine), workflowId, operation, {
+    processGetVersionOperation: async (workflowId, operation) => {
+      completeOperation(getInternals(engine), workflowId, operation.version, {
         finalizePendingTimelineEntry: (id, status, value) =>
           finalizePendingTimelineEntry(getInternals(engine), id, status, value),
         feedOperationResult: (id, result, error) =>
           feedOperationResult(getInternals(engine), id, result, error),
-      }),
+      });
+    },
     processParallelOperation: (workflowId, operation) =>
       processParallelOperation(
         getInternals(engine),

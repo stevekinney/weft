@@ -306,6 +306,7 @@ describe('MCP Streamable HTTP transport', () => {
     ).tools.find((tool) => tool.name === 'greet_customer');
     expect(greetTool?.inputSchema).toMatchObject({
       type: 'object',
+      required: ['input'],
       properties: expect.objectContaining({
         input: expect.objectContaining({
           properties: expect.objectContaining({ name: expect.any(Object) }),

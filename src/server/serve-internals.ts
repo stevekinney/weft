@@ -335,7 +335,7 @@ export function registerStackDisposers(
     shutdownAllWorkers(
       context,
       options.workerShutdownTimeoutMs === undefined
-        ? { stopWaitingWhenIdle: true }
+        ? undefined
         : { timeoutMs: options.workerShutdownTimeoutMs, stopWaitingWhenIdle: true },
     ),
   );

@@ -15,7 +15,6 @@
  * @module @lostgradient/weft/storage/text-value-store
  */
 import {
-  assertStorageBatchOperationCount,
   storageConditionalBatch,
   storageDeletePrefix,
   storageHas,
@@ -248,9 +247,6 @@ export function textValueStore(
       conditions: TextValueStoreCondition[],
       operations: TextValueStoreBatchOperation[],
     ): Promise<boolean> {
-      assertStorageBatchOperationCount('conditionalBatch conditions', conditions.length);
-      assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
-
       return storageConditionalBatch(
         storage,
         conditions.map(encodeCondition),

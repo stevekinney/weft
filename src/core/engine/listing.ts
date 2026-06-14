@@ -18,11 +18,10 @@ import { CONSTRAINED_ID_CHUNK_SIZE } from './candidate-read-batching.ts';
 import type { EngineInternals } from './internals.ts';
 import { resolveListCandidateIds } from './list-candidate-resolution.ts';
 import {
-  decodeSearchAttributeRecord,
-  listFilterHasAttributeFilters,
-  matchesListFilter,
-  paginateWorkflowSummaries,
-} from './state-utilities.ts';
+  readSearchAttributesForFilter,
+  readSearchAttributesForStates,
+} from './search-attribute-records.ts';
+import { matchesListFilter, paginateWorkflowSummaries } from './state-utilities.ts';
 import { decodeWorkflowState, normalizeBulkFilterNumber } from './validation.ts';
 import { MAX_LIST_SCAN_ROWS, WorkflowListScanCapExceededError } from './workflow-indexes.ts';
 import {
@@ -175,44 +174,6 @@ async function summariesFromStates(
       failureCategoryFromAttributeBytes(attributeBytesByWorkflowId.get(state.id) ?? null),
     ),
   );
-}
-
-async function readSearchAttributesForStates(
-  internals: EngineInternals,
-  stateBytesList: readonly (Uint8Array | null)[],
-  filter: ListFilter | undefined,
-): Promise<Map<string, Record<string, SearchAttributeValue> | null>> {
-  const searchAttributesByWorkflowId = new Map<
-    string,
-    Record<string, SearchAttributeValue> | null
-  >();
-  if (!listFilterHasAttributeFilters(filter)) return searchAttributesByWorkflowId;
-
-  const states: WorkflowState[] = [];
-  for (const stateBytes of stateBytesList) {
-    if (!stateBytes) continue;
-    states.push(decodeWorkflowState(stateBytes));
-  }
-
-  const attributeBytesList = await Promise.all(
-    states.map((state) => internals.storage.get(KEYS.attribute(state.id))),
-  );
-  for (let index = 0; index < states.length; index += 1) {
-    searchAttributesByWorkflowId.set(
-      states[index]!.id,
-      decodeSearchAttributeRecord(attributeBytesList[index] ?? null),
-    );
-  }
-  return searchAttributesByWorkflowId;
-}
-
-async function readSearchAttributesForFilter(
-  internals: EngineInternals,
-  workflowId: string,
-  filter: ListFilter | undefined,
-): Promise<Record<string, SearchAttributeValue> | null> {
-  if (!listFilterHasAttributeFilters(filter)) return null;
-  return decodeSearchAttributeRecord(await internals.storage.get(KEYS.attribute(workflowId)));
 }
 
 function shouldReadFailureCategoryAttribute(

@@ -136,7 +136,7 @@ type FilterableTaskRecord = {
   queue?: string | undefined;
 };
 
-const httpOnlyTaskDiagnosticsTransports = {
+const restOnlyTaskDiagnosticsTransports = {
   http: true,
   jsonRpcHttp: false,
   jsonRpcWebSocket: false,
@@ -192,7 +192,7 @@ export const clearTaskDeadLetterOperation = defineOperation<
   },
   producibleFaults: [],
   discoverable: true,
-  transports: httpOnlyTaskDiagnosticsTransports,
+  transports: restOnlyTaskDiagnosticsTransports,
   unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
   invoke: async ({ input, engine }): Promise<ClearTaskDeadLetterOutput> => {
     await clearDeadLetteredTaskRecord((engine as Engine).storage, input.operationId);
@@ -596,7 +596,7 @@ export const clearTaskDeadLetterRestBinding: UnknownRestBinding = {
     operationId: { kind: 'path', pathParam: 'operationId' },
   },
   extractInput: async (_request, pathParams) => ({
-    operationId: pathParams['operationId'],
+    operationId: pathParams['operationId'] ?? '',
   }),
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: ClearTaskDeadLetterOutput) =>

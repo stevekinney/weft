@@ -8,6 +8,7 @@ import { loadScheduleState, writeScheduleState } from './storage-io.ts';
 
 const SCHEDULE_LATE_GRACE_MILLISECONDS = 1000;
 const MAX_SCHEDULE_BACKFILL_OCCURRENCES_PER_TICK = 256;
+const MAX_MISSED_FIRE_COUNT_PER_TICK = MAX_SCHEDULE_BACKFILL_OCCURRENCES_PER_TICK;
 
 type ActiveScheduleTimerState = ScheduleState & { nextFireAt: number };
 
@@ -139,7 +140,7 @@ function countMissedScheduleOccurrences(
   let occurrence = firstDueAt;
   let lastMissedFireAt = firstDueAt;
 
-  while (occurrence <= throughTimestamp) {
+  while (occurrence <= throughTimestamp && count < MAX_MISSED_FIRE_COUNT_PER_TICK) {
     count += 1;
     lastMissedFireAt = occurrence;
     const nextOccurrence = getNextScheduleOccurrence(state, occurrence);
@@ -149,11 +150,12 @@ function countMissedScheduleOccurrences(
     occurrence = nextOccurrence;
   }
 
+  const cappedBeforeThroughTimestamp = occurrence <= throughTimestamp;
   return {
     count,
     lastMissedFireAt,
     windowStart: firstDueAt,
-    windowEnd: throughTimestamp,
+    windowEnd: cappedBeforeThroughTimestamp ? lastMissedFireAt : throughTimestamp,
   };
 }
 
@@ -163,7 +165,7 @@ function resolveNextScheduleFireAt(
   now: number,
 ): number {
   if (work.skipMissedOccurrences) {
-    return getNextScheduleOccurrence(state, now);
+    return getNextScheduleOccurrence(state, work.missedOccurrences?.lastMissedFireAt ?? now);
   }
 
   const anchorOccurrence = work.occurrencesToProcess.at(-1) ?? work.dueOccurrences.at(-1)!;

@@ -26,7 +26,7 @@ export type TaskResultResolutionInput = {
 };
 
 function taskResultPayloadForSizeCheck(input: TaskResultResolutionInput): unknown {
-  return input.status === 'completed' ? input.value : { message: input.error ?? '' };
+  return input.status === 'completed' ? input.value : (input.error ?? '');
 }
 
 export function taskResultPayloadSizeError(
@@ -59,21 +59,34 @@ export async function transitionTaskResultToResolvedWithRetry(
   let latestInflightRecord = input.inflightRecord;
 
   try {
-    await withRetry(async () => {
-      latestInflightRecord =
-        input.inflightRecord ?? (await readInflightRecord(storage, input.operationId));
-      await transitionInflightToResolved(storage, input.operationId, input.status, {
-        ...(latestInflightRecord === null ? {} : { record: latestInflightRecord }),
-        resolvedAt,
-        resolutionReason: input.resolutionReason,
-        ...(input.status === 'completed' ? { value: input.value } : { error: input.error }),
-      });
-    }, `transition task "${input.operationId}" to resolved`);
+    await withRetry(
+      async () => {
+        if (latestInflightRecord === undefined) {
+          latestInflightRecord = await readInflightRecord(storage, input.operationId);
+        }
+        await transitionInflightToResolved(storage, input.operationId, input.status, {
+          ...(latestInflightRecord === null ? {} : { record: latestInflightRecord }),
+          resolvedAt,
+          resolutionReason: input.resolutionReason,
+          ...(input.status === 'completed' ? { value: input.value } : { error: input.error }),
+        });
+      },
+      `transition task "${input.operationId}" to resolved`,
+      TASK_RESULT_RESOLUTION_RETRY_ATTEMPTS,
+    );
   } catch (error) {
     const fallbackInflightRecord =
       latestInflightRecord ??
       (await readInflightRecord(storage, input.operationId).catch(() => null));
-    await writeTaskResultDeadLetter(options, input, fallbackInflightRecord);
+    try {
+      await writeTaskResultDeadLetter(options, input, fallbackInflightRecord);
+    } catch (deadLetterError) {
+      console.error(
+        `[weft] Failed to dead-letter task "${input.operationId}" after resolution retries:`,
+        deadLetterError,
+      );
+      return;
+    }
     console.error(
       `[weft] Failed to transition task "${input.operationId}" to resolved after retries — dead-lettered:`,
       error,

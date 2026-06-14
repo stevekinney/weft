@@ -21,7 +21,7 @@
 
 import { describe, expect, it } from 'bun:test';
 
-import { parseBulkListFilterFromBody } from './bulk-filter-helpers.ts';
+import { bulkListFilterInputSchema, parseBulkListFilterFromBody } from './bulk-filter-helpers.ts';
 
 function wrap(filter: unknown): unknown {
   return { filter };
@@ -102,5 +102,21 @@ describe('parseBulkListFilterFromBody — validation precedence', () => {
         }),
       ),
     ).toThrow('Field "filter.status" must be a string or an array of strings');
+  });
+});
+
+describe('bulkListFilterInputSchema', () => {
+  it('accepts scalar arrays for exact attribute values but rejects arrays for range bounds', () => {
+    expect(
+      bulkListFilterInputSchema.safeParse({
+        attributes: [{ key: 'segment', value: ['enterprise', 'startup'] }],
+      }).success,
+    ).toBe(true);
+
+    expect(
+      bulkListFilterInputSchema.safeParse({
+        attributes: [{ key: 'score', gt: [1, 2] }],
+      }).success,
+    ).toBe(false);
   });
 });

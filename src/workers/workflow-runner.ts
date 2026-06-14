@@ -1,3 +1,4 @@
+import { copyBytesToArrayBuffer } from '../core/byte-arrays.ts';
 import {
   advanceCheckpoint,
   createCheckpoint,
@@ -476,7 +477,7 @@ async function processGeneratorStep(
     return {
       type: 'checkpoint',
       workflowId,
-      checkpoint: toArrayBuffer(serializeCheckpoint(replayState.checkpoint)),
+      checkpoint: copyBytesToArrayBuffer(serializeCheckpoint(replayState.checkpoint)),
       operationRequest,
     };
   }
@@ -570,12 +571,6 @@ function pruneWorkerCheckpoint(
   };
   const pruned = pruneCheckpointReplayState(workerCheckpoint, pendingOperationStep);
   return attachTransientCheckpointReplayPayload(pruned.checkpoint, pruned.replayPayload);
-}
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  return copy.buffer;
 }
 
 export function cleanupWorkflowRunnerState(

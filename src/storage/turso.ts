@@ -387,7 +387,7 @@ export class TursoStorage implements Storage {
     }
 
     throw new Error(
-      `conditionalBatch exhausted ${MAX_WRITE_RETRIES} retries after SQLite contention failures`,
+      `conditionalBatch exhausted ${MAX_WRITE_RETRIES} attempts after SQLite contention failures`,
       { cause: lastContentionError },
     );
   }

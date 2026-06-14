@@ -525,6 +525,18 @@ describe('Context', () => {
       expect(context.stepIndex).toBe(1);
     });
 
+    it('returns an accumulated version result without yielding on replay', () => {
+      const context = createContext({ accumulatedResults: new Map([[0, 2]]) });
+
+      const generator = context.getVersion('shipping-v2', 1, 2);
+      const result = generator.next();
+
+      expect(result.done).toBe(true);
+      expect(result.value).toBe(2);
+      expect(context.stepIndex).toBe(1);
+      expect(context.checkpointLocals['version:shipping-v2']).toBe(2);
+    });
+
     it('fails actionably when a pinned version is below minSupported', () => {
       const context = createContext({ locals: { 'version:shipping-v2': 1 } });
 

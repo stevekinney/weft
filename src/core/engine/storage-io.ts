@@ -89,7 +89,8 @@ export async function commitWorkflowStateOperations(
     pendingSideEffects === undefined
       ? operations
       : [...operations, ...pendingSideEffects.operations];
-  const conditions = pendingSideEffects?.conditions ?? [];
+  const storageSupportsConditionalBatch = internals.storage.capabilities().conditionalBatch;
+  const conditions = storageSupportsConditionalBatch ? (pendingSideEffects?.conditions ?? []) : [];
 
   if (conditions.length === 0) {
     await internals.storage.batch(operationsWithSideEffects);

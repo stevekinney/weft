@@ -47,6 +47,17 @@ function assertDeclaredContentLengthWithinLimit(request: Request, maxBytes: numb
   }
 }
 
+async function cancelReaderAfterPayloadOverflow(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+): Promise<void> {
+  try {
+    await reader.cancel();
+  } catch {
+    // The payload limit has already been crossed. Preserve the 413 fault even
+    // when an underlying runtime or client body rejects cancellation.
+  }
+}
+
 export async function readRestBodyBounded(
   request: Request,
   options?: RestBodyReadOptions,
@@ -66,7 +77,7 @@ export async function readRestBodyBounded(
       if (done) break;
       total += value.byteLength;
       if (total > maxBytes) {
-        await reader.cancel();
+        await cancelReaderAfterPayloadOverflow(reader);
         throw payloadTooLargeFault(maxBytes);
       }
       chunks.push(value);

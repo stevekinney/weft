@@ -81,6 +81,25 @@ describe('workflow definition concurrency', () => {
     await expect(secondAlpha.result()).resolves.toBe('alpha:done');
   });
 
+  it('wraps thrown workflow concurrency key errors with workflow context', async () => {
+    await using engine = new TestEngine({ startTime: 1_000 });
+    engine.register(
+      workflow({
+        name: 'limited-by-throwing-key',
+        concurrency: {
+          max: 1,
+          key: () => {
+            throw new Error('missing customer id');
+          },
+        },
+      }).execute(waitForRelease),
+    );
+
+    await expect(engine.start('limited-by-throwing-key', { value: 'first' })).rejects.toThrow(
+      'workflow("limited-by-throwing-key").concurrency.key threw while resolving the partition key: missing customer id',
+    );
+  });
+
   it('does not consume another slot for a duplicate idempotent start', async () => {
     await using engine = new TestEngine({ startTime: 1_000 });
     engine.register(

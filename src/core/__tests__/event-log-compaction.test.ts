@@ -590,6 +590,7 @@ describe('engine event-log compaction', () => {
     const above = await engine.replayTo(handle.id, boundary + 1);
     expect(below?.compactedBefore).toBe(boundary);
     expect(above?.compactedBefore).toBe(boundary);
+    expect(above?.accumulatedResults.map(([step]) => step)).toContain(0);
 
     engine[Symbol.dispose]();
   });

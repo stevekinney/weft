@@ -1,6 +1,6 @@
 import { KEYS, type Storage } from '../../storage/interface.ts';
 import { decode } from '../codec.ts';
-import { isWorkflowLogEntry, type WorkflowLogEntry } from '../event-log-shared.ts';
+import { isWorkflowLogEntry } from '../event-log-shared.ts';
 import type {
   Checkpoint,
   WorkerReplayOperationFailure,
@@ -54,7 +54,7 @@ export function pruneCheckpointReplayState(
   });
   const nextWatermark = resolveNextReplayWatermark(previousWatermark, replayPayload);
   const retainedWorkerReplaySignatures = entriesAtOrAfterStep(
-    checkpoint.workerReplaySignatures ?? [],
+    checkpointWithoutReplayPayload.workerReplaySignatures ?? [],
     pendingOperationStep,
   );
   const retainedWorkerReplayFailures = entriesAtOrAfterStep(
@@ -113,28 +113,6 @@ export async function hydrateCheckpointReplayState(
     const checkpointStep = getCheckpointEventStep(entry.payload);
     if (checkpointStep === undefined) continue;
     if (checkpointStep > checkpoint.step) break;
-    const replayPayload = readCheckpointReplayPayload(entry.payload);
-    if (replayPayload === undefined) continue;
-    replayPayloads.push(replayPayload);
-  }
-
-  return hydrateCheckpointReplayStateFromPayloads(
-    stripTransientCheckpointReplayPayload(checkpoint),
-    replayPayloads,
-  );
-}
-
-export function hydrateCheckpointReplayStateFromEntries(
-  checkpoint: Checkpoint,
-  entries: Iterable<WorkflowLogEntry>,
-): Checkpoint {
-  const replayPayloads: CheckpointReplayPayload[] = [];
-  const checkpointReplayPayload = readCheckpointReplayPayload(checkpoint);
-  if (checkpointReplayPayload !== undefined) {
-    replayPayloads.push(checkpointReplayPayload);
-  }
-
-  for (const entry of entries) {
     const replayPayload = readCheckpointReplayPayload(entry.payload);
     if (replayPayload === undefined) continue;
     replayPayloads.push(replayPayload);

@@ -235,6 +235,7 @@ async function runConformanceChecks(
     port: 0,
     hostname: '127.0.0.1',
     workerReconnectGracePeriodMs: 100,
+    workerShutdownTimeoutMs: timeoutMs,
   });
   const checks: ConformanceCheck[] = [];
   let worker: RunningWorker | undefined;

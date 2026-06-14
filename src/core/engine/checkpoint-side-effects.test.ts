@@ -17,6 +17,10 @@ import {
 } from './activity-reconciliation.ts';
 import { rememberCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts';
 import { persistCheckpoint } from './checkpoint-io.ts';
+import {
+  stageAtomicWorkflowCommitSideEffects,
+  takePendingAtomicWorkflowCommitSideEffects,
+} from './checkpoint-side-effects.ts';
 import type { EngineInternals } from './internals.ts';
 import { executeActivityOperationResult } from './operations-activity.ts';
 import {
@@ -158,6 +162,30 @@ function createSubOperationCallbacks() {
 }
 
 describe('atomic workflow commit side effects', () => {
+  it('does not create a pending bucket for an empty side-effect set', () => {
+    const internals = {
+      pendingAtomicWorkflowCommitSideEffects: new Map(),
+    } as unknown as EngineInternals;
+
+    stageAtomicWorkflowCommitSideEffects(internals, 'empty-workflow', {
+      conditions: [],
+      operations: [],
+    });
+
+    expect(internals.pendingAtomicWorkflowCommitSideEffects.size).toBe(0);
+  });
+
+  it('drops an empty pending side-effect bucket without returning work', () => {
+    const internals = {
+      pendingAtomicWorkflowCommitSideEffects: new Map([
+        ['empty-workflow', { conditions: [], operations: [] }],
+      ]),
+    } as unknown as EngineInternals;
+
+    expect(takePendingAtomicWorkflowCommitSideEffects(internals, 'empty-workflow')).toBeUndefined();
+    expect(internals.pendingAtomicWorkflowCommitSideEffects.has('empty-workflow')).toBe(false);
+  });
+
   it('keeps a top-level buffered signal when the checkpoint batch fails', async () => {
     const storage = new FailingConditionalBatchStorage(1);
     const checkpoint = createCheckpoint('atomic-top-level-signal', '1', 1_000);

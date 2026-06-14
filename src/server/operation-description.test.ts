@@ -19,6 +19,7 @@ import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
 import { createCatalogSnapshot } from '../cli/operation-catalog-snapshot.ts';
+import { MAX_BATCH_OPERATIONS } from '../storage/interface.ts';
 import { generateMcpDiscovery } from './mcp-discovery.ts';
 import { emitBindings, generateOpenApiDocument } from './openapi.ts';
 import { OpenRpcDocumentSchema } from './openrpc-document-schema.ts';
@@ -189,5 +190,31 @@ describe('operation catalog description — snapshot', () => {
     const storageGet = byName.get('weft.storage.get');
     expect(storageGet).toBeDefined();
     expect(storageGet?.description).toBeUndefined();
+  });
+
+  it('pins raw storage batch operation-count limits in the catalog schemas', () => {
+    const snapshot = createCatalogSnapshot();
+    const byName = new Map(snapshot.operations.map((operation) => [operation.name, operation]));
+
+    const batchInputSchema = byName.get('weft.storage.batch')?.inputSchema;
+    const batchProperties = batchInputSchema?.['properties'] as Record<string, unknown>;
+    const batchOperations = batchProperties['operations'] as Record<string, unknown>;
+    expect(batchOperations['maxItems']).toBe(MAX_BATCH_OPERATIONS);
+
+    const conditionalBatchInputSchema = byName.get('weft.storage.conditionalbatch')?.inputSchema;
+    const conditionalBatchProperties = conditionalBatchInputSchema?.['properties'] as Record<
+      string,
+      unknown
+    >;
+    const conditionalBatchConditions = conditionalBatchProperties['conditions'] as Record<
+      string,
+      unknown
+    >;
+    const conditionalBatchOperations = conditionalBatchProperties['operations'] as Record<
+      string,
+      unknown
+    >;
+    expect(conditionalBatchConditions['maxItems']).toBe(MAX_BATCH_OPERATIONS);
+    expect(conditionalBatchOperations['maxItems']).toBe(MAX_BATCH_OPERATIONS);
   });
 });

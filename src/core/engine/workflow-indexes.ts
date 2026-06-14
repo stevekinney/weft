@@ -241,8 +241,8 @@ export async function getWorkflowVisibilityWatermark(
 
 /**
  * Read the visibility-index watermark through the engine-local query cache.
- * The cache deliberately lives on `EngineInternals`, not storage, because the
- * supported runtime posture is one engine process per durable store.
+ * The cache avoids repeated metadata reads during list/aggregate queries and
+ * is invalidated by the engine when it runs the visibility backfill.
  */
 export async function getCachedWorkflowVisibilityWatermark(
   internals: EngineInternals,

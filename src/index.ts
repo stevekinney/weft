@@ -230,6 +230,7 @@ export {
   SignalDeliveredEvent,
   SignalReceivedEvent,
   StorageSizeReportedEvent,
+  TaskResultDeadLetteredEvent,
   UpdateCompletedEvent,
   UpdateReceivedEvent,
   WorkflowCancelledEvent,
