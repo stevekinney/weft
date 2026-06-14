@@ -78,15 +78,13 @@ export async function transitionTaskResultToResolvedWithRetry(
     const fallbackInflightRecord =
       latestInflightRecord ??
       (await readInflightRecord(storage, input.operationId).catch(() => null));
-    try {
-      await writeTaskResultDeadLetter(options, input, fallbackInflightRecord);
-    } catch (deadLetterError) {
-      console.error(
-        `[weft] Failed to dead-letter task "${input.operationId}" after resolution retries:`,
-        deadLetterError,
-      );
-      return;
-    }
+    await withRetry(
+      async () => {
+        await writeTaskResultDeadLetter(options, input, fallbackInflightRecord);
+      },
+      `dead-letter task "${input.operationId}" after result-resolution retries`,
+      TASK_RESULT_RESOLUTION_RETRY_ATTEMPTS,
+    );
     console.error(
       `[weft] Failed to transition task "${input.operationId}" to resolved after retries — dead-lettered:`,
       error,

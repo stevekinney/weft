@@ -63,13 +63,14 @@ export function minimalServerContext(
 }
 
 /**
- * Minimal serve options carrying just an engine storage backend and port. The
- * runtime handlers only read `options.engine.storage`, so the `engine` is a
- * partial stub rather than a real `Engine`; the cast is to the public
- * `ServeOptions` type (not `never`) so call sites see the correct option shape.
+ * Minimal serve options carrying just the engine members runtime handlers read.
+ * The engine is a partial stub rather than a real `Engine`; the cast is to the
+ * public `ServeOptions` type (not `never`) so call sites see the correct option
+ * shape.
  */
 export function minimalServeOptions(storage: MemoryStorage = new MemoryStorage()): ServeOptions {
-  // Test-only: the handlers under test only touch `engine.storage`, so a full
-  // Engine is unnecessary. The cast covers the deliberately partial `engine`.
-  return { engine: { storage }, port: 0 } as unknown as ServeOptions;
+  // Test-only: the handlers under test touch storage and may emit engine events,
+  // so a full Engine is unnecessary. The cast covers the deliberately partial
+  // `engine`.
+  return { engine: { storage, dispatchEvent: () => true }, port: 0 } as unknown as ServeOptions;
 }

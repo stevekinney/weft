@@ -311,7 +311,15 @@ export async function writeDeadLetteredTaskRecord(
   storage: Storage,
   record: DeadLetteredTaskRecord,
 ): Promise<void> {
-  await storage.put(KEYS.operationDeadLetter(record.operationId), encode(record));
+  // Use the same atomic batch path as other task-state transitions; this guard
+  // is what prevents reconciliation from re-dispatching a reported result.
+  await storage.batch([
+    {
+      type: 'put',
+      key: KEYS.operationDeadLetter(record.operationId),
+      value: encode(record),
+    },
+  ]);
 }
 
 /** Clear a task-result dead-letter guard so reconciliation may handle the inflight record again. */

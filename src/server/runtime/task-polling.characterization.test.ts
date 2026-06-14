@@ -284,7 +284,7 @@ describe('handleTaskResultRequest', () => {
     expect(resolved.error).toBe('12345678');
   });
 
-  it('does not throw when dead-letter persistence fails after result-resolution retries', async () => {
+  it('persists the dead-letter guard when primitive dead-letter put fails after result-resolution retries', async () => {
     const storage = new FailingTaskResultResolutionStorage();
     const context = createMinimalContext();
     const options = createMinimalOptions(storage);
@@ -300,7 +300,9 @@ describe('handleTaskResultRequest', () => {
     ).resolves.toBeUndefined();
 
     expect(await storage.get(KEYS.operationInflight('op-dead-letter-write-fails'))).not.toBeNull();
-    expect(await storage.get(KEYS.operationDeadLetter('op-dead-letter-write-fails'))).toBeNull();
+    expect(
+      await storage.get(KEYS.operationDeadLetter('op-dead-letter-write-fails')),
+    ).not.toBeNull();
   });
 
   it('removes the deadline tracker entry on success', async () => {
