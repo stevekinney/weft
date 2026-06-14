@@ -1,7 +1,7 @@
 import { describe, expect, it, mock, spyOn } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 
-import { parseLcov } from './check-coverage.ts';
+import { assembleAllowanceLayers, buildAllowanceLayer, parseLcov } from './check-coverage.ts';
 
 describe('parseLcov', () => {
   it('accepts DA lines with the optional checksum field', () => {
@@ -142,5 +142,107 @@ describe('parseLcov', () => {
     } finally {
       mock.restore();
     }
+  });
+});
+
+describe('buildAllowanceLayer', () => {
+  it('builds a map from unique entries, preserving each allowance value', () => {
+    const layer = buildAllowanceLayer('SYNTHETIC_LAYER', [
+      ['src/alpha.ts', { lines: new Set([1, 2, 3]) }],
+      ['src/beta.ts', { functions: 2 }],
+    ]);
+
+    expect(layer.size).toBe(2);
+    expect(layer.get('src/alpha.ts')).toEqual({ lines: new Set([1, 2, 3]) });
+    expect(layer.get('src/beta.ts')).toEqual({ functions: 2 });
+  });
+
+  it('throws on a duplicate key within a single layer, naming the layer and key', () => {
+    // A `new Map([...])` would silently keep only the last entry for a repeated
+    // key, dropping the first allowance with no signal. The builder must turn
+    // that copy-paste mistake into a build-time error.
+    expect(() =>
+      buildAllowanceLayer('DUPLICATED_LAYER', [
+        ['src/repeated.ts', { lines: new Set([10]) }],
+        ['src/other.ts', { lines: new Set([20]) }],
+        ['src/repeated.ts', { lines: new Set([30]) }],
+      ]),
+    ).toThrow(/Duplicate coverage-allowance key "src\/repeated\.ts" within DUPLICATED_LAYER/);
+  });
+
+  it('accepts an empty layer', () => {
+    expect(buildAllowanceLayer('EMPTY_LAYER', []).size).toBe(0);
+  });
+});
+
+describe('assembleAllowanceLayers', () => {
+  it('lets a later layer override an earlier layer for a shadowed key', () => {
+    // Base/override layering is the legitimate mechanic: the override layer wins
+    // for a shared key. Only refresh-layer-vs-refresh-layer collisions are barred.
+    const base = buildAllowanceLayer('BASE', [
+      ['src/shared.ts', { lines: new Set([1]) }],
+      ['src/base-only.ts', { lines: new Set([2]) }],
+    ]);
+    const override = buildAllowanceLayer('OVERRIDE', [
+      ['src/shared.ts', { lines: new Set([99]) }],
+      ['src/override-only.ts', { lines: new Set([3]) }],
+    ]);
+
+    const assembled = assembleAllowanceLayers(
+      [
+        ['BASE', base],
+        ['OVERRIDE', override],
+      ],
+      // No mutually-exclusive layers declared: base/override shadowing is allowed.
+      [],
+    );
+
+    expect(assembled.size).toBe(3);
+    expect(assembled.get('src/shared.ts')).toEqual({ lines: new Set([99]) });
+    expect(assembled.get('src/base-only.ts')).toEqual({ lines: new Set([2]) });
+    expect(assembled.get('src/override-only.ts')).toEqual({ lines: new Set([3]) });
+  });
+
+  it('throws when a key appears in both mutually-exclusive refresh layers', () => {
+    // The two refresh layers must partition their keys: a twin in both means
+    // removing one row silently reactivates the other (often stale) allowance.
+    const mainRefresh = buildAllowanceLayer('MAIN_REFRESH', [
+      ['src/twin.ts', { lines: new Set([1]) }],
+    ]);
+    const branchRefresh = buildAllowanceLayer('BRANCH_REFRESH', [
+      ['src/twin.ts', { lines: new Set([2]) }],
+    ]);
+
+    expect(() =>
+      assembleAllowanceLayers(
+        [
+          ['MAIN_REFRESH', mainRefresh],
+          ['BRANCH_REFRESH', branchRefresh],
+        ],
+        ['MAIN_REFRESH', 'BRANCH_REFRESH'],
+      ),
+    ).toThrow(
+      /Coverage-allowance key "src\/twin\.ts" appears in both MAIN_REFRESH and BRANCH_REFRESH/,
+    );
+  });
+
+  it('allows a key shared between a non-exclusive layer and a refresh layer', () => {
+    // Only the two refresh layers are mutually exclusive. A base/override layer
+    // may still legitimately shadow a refresh layer's key.
+    const base = buildAllowanceLayer('BASE', [['src/shared.ts', { lines: new Set([1]) }]]);
+    const branchRefresh = buildAllowanceLayer('BRANCH_REFRESH', [
+      ['src/shared.ts', { lines: new Set([2]) }],
+    ]);
+
+    const assembled = assembleAllowanceLayers(
+      [
+        ['BASE', base],
+        ['BRANCH_REFRESH', branchRefresh],
+      ],
+      ['MAIN_REFRESH', 'BRANCH_REFRESH'],
+    );
+
+    // BRANCH_REFRESH is the terminal layer, so its value wins.
+    expect(assembled.get('src/shared.ts')).toEqual({ lines: new Set([2]) });
   });
 });
