@@ -1,7 +1,13 @@
 import { describe, expect, it, mock, spyOn } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 
-import { assembleAllowanceLayers, buildAllowanceLayer, parseLcov } from './check-coverage.ts';
+import {
+  assembleAllowanceLayers,
+  assertNoAllowanceKeyIsCoverageIgnored,
+  buildAllowanceLayer,
+  parseLcov,
+  readCoveragePathIgnorePatterns,
+} from './check-coverage.ts';
 
 describe('parseLcov', () => {
   it('accepts DA lines with the optional checksum field', () => {
@@ -287,5 +293,78 @@ describe('assembleAllowanceLayers', () => {
 
     // BRANCH_REFRESH is the terminal layer, so its value wins over BASE.
     expect(assembled.get('src/shared.ts')).toEqual({ lines: new Set([2]) });
+  });
+});
+
+describe('readCoveragePathIgnorePatterns', () => {
+  it('reads the coveragePathIgnorePatterns array from bunfig.toml', () => {
+    // Single source of truth: the patterns come from bunfig.toml, not a hardcoded list.
+    // The repo currently ignores its own coverage script.
+    const patterns = readCoveragePathIgnorePatterns();
+    expect(Array.isArray(patterns)).toBe(true);
+    expect(patterns).toContain('scripts/check-coverage.ts');
+    expect(patterns.every((pattern) => typeof pattern === 'string')).toBe(true);
+  });
+});
+
+describe('assertNoAllowanceKeyIsCoverageIgnored', () => {
+  it('throws when an allowance key matches a coveragePathIgnorePatterns entry, naming both', () => {
+    // A file in coveragePathIgnorePatterns is never instrumented, so an allowance for
+    // it is dead — it ignores nothing and its line numbers drift silently (#539). This
+    // is exactly the dead self-allowance that lingered on scripts/check-coverage.ts.
+    expect(() =>
+      assertNoAllowanceKeyIsCoverageIgnored(
+        new Map([['scripts/check-coverage.ts', { functions: 1 }]]),
+        ['scripts/check-coverage.ts'],
+      ),
+    ).toThrow(
+      /^Coverage-allowance key "scripts\/check-coverage\.ts" matches coveragePathIgnorePatterns entry "scripts\/check-coverage\.ts"/,
+    );
+  });
+
+  it('matches a glob pattern against an allowance key', () => {
+    // coveragePathIgnorePatterns supports globs; a `**`/`*` pattern must be matched
+    // structurally, not just by substring, so a glob-ignored path is also caught.
+    expect(() =>
+      assertNoAllowanceKeyIsCoverageIgnored(new Map([['src/generated/client.ts', {}]]), [
+        'src/generated/**',
+      ]),
+    ).toThrow(/matches coveragePathIgnorePatterns entry "src\/generated\/\*\*"/);
+  });
+
+  it('matches a bare pattern as a contained path fragment (Bun substring semantics)', () => {
+    // Bun treats a plain (non-glob) entry as a substring of the LCOV path, so an entry
+    // excludes the file at any directory depth.
+    expect(() =>
+      assertNoAllowanceKeyIsCoverageIgnored(new Map([['nested/scripts/check-coverage.ts', {}]]), [
+        'scripts/check-coverage.ts',
+      ]),
+    ).toThrow(/matches coveragePathIgnorePatterns entry/);
+  });
+
+  it('does not throw when no allowance key matches an ignore pattern', () => {
+    expect(() =>
+      assertNoAllowanceKeyIsCoverageIgnored(
+        new Map([
+          ['src/core/engine/index.ts', { functions: 2 }],
+          ['src/workers/workflow-runner.ts', { lines: new Set([428]) }],
+        ]),
+        ['scripts/check-coverage.ts', 'src/generated/**'],
+      ),
+    ).not.toThrow();
+  });
+
+  it('is a no-op when there are no ignore patterns', () => {
+    expect(() =>
+      assertNoAllowanceKeyIsCoverageIgnored(new Map([['scripts/check-coverage.ts', {}]]), []),
+    ).not.toThrow();
+  });
+
+  it('passes the live repository allowance set against the live ignore patterns', () => {
+    // The real guard at module load already enforces this; pinning it as a test makes
+    // a future dead allowance fail here too (not only when check-coverage.ts is run).
+    expect(() =>
+      assertNoAllowanceKeyIsCoverageIgnored(new Map(), readCoveragePathIgnorePatterns()),
+    ).not.toThrow();
   });
 });

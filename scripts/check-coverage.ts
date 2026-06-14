@@ -1,5 +1,10 @@
-import { $ } from 'bun';
+import { $, Glob } from 'bun';
 import { execFileSync } from 'node:child_process';
+
+// Bun parses `bunfig.toml` natively when imported, so `coveragePathIgnorePatterns`
+// stays a single source of truth (no hand-rolled TOML parse that could drift). The
+// path resolves relative to THIS file, so it holds regardless of the invocation cwd.
+import bunfig from '../bunfig.toml';
 
 type ExecFileFailure = Error & {
   stderr?: Buffer | string;
@@ -99,6 +104,70 @@ export function assembleAllowanceLayers(
     }
   }
   return assembled;
+}
+
+/**
+ * Read `coveragePathIgnorePatterns` from `bunfig.toml`. A file matching one of these is
+ * excluded from LCOV instrumentation entirely — it never appears as an `SF:` record — so
+ * any allowance keyed to such a path is DEAD: it ignores nothing and its line numbers
+ * silently drift as the file is edited, looking live while being inert (this is what
+ * happened to the old `scripts/check-coverage.ts` self-allowance, dead since 501d14ef).
+ * Reading the patterns from `bunfig.toml` keeps it the single source of truth rather than
+ * hardcoding the list here.
+ */
+export function readCoveragePathIgnorePatterns(): string[] {
+  const patterns = bunfig.test?.coveragePathIgnorePatterns;
+  if (patterns === undefined) return [];
+  if (
+    !Array.isArray(patterns) ||
+    patterns.some((pattern: unknown) => typeof pattern !== 'string')
+  ) {
+    throw new Error(
+      'bunfig.toml [test].coveragePathIgnorePatterns must be an array of strings; ' +
+        `got ${JSON.stringify(patterns)}.`,
+    );
+  }
+  return patterns;
+}
+
+/**
+ * Whether an allowance key (a repo-relative file path) would be excluded by a
+ * `coveragePathIgnorePatterns` entry, mirroring how Bun matches the pattern against an
+ * LCOV file path: a glob pattern (containing `*`) matches via {@link Glob}, and a plain
+ * pattern matches as a substring of the path (Bun treats a bare string as a contained
+ * fragment, so `"scripts/check-coverage.ts"` excludes that file at any path depth).
+ */
+function allowanceKeyMatchesIgnorePattern(key: string, pattern: string): boolean {
+  if (pattern.includes('*')) {
+    return new Glob(pattern).match(key);
+  }
+  return key === pattern || key.includes(pattern);
+}
+
+/**
+ * Reject any allowance key that matches a `coveragePathIgnorePatterns` entry. Such a key
+ * is a dead allowance — the file it names is never instrumented, so the allowance can
+ * never fire — and worse, its line numbers drift silently as the file changes. This
+ * closes the dead-allowance class systematically, the same way {@link buildAllowanceLayer}
+ * (within-layer duplicates) and {@link assertRefreshLayersPartitionKeys} (cross-shadowed
+ * refresh keys) close the duplicate / cross-shadow classes (#539).
+ */
+export function assertNoAllowanceKeyIsCoverageIgnored(
+  allowances: ReadonlyMap<string, CoverageAllowance>,
+  ignorePatterns: readonly string[],
+): void {
+  for (const key of allowances.keys()) {
+    for (const pattern of ignorePatterns) {
+      if (allowanceKeyMatchesIgnorePattern(key, pattern)) {
+        throw new Error(
+          `Coverage-allowance key "${key}" matches coveragePathIgnorePatterns entry ` +
+            `"${pattern}" in bunfig.toml. That file is excluded from LCOV instrumentation, ` +
+            'so the allowance is dead (it ignores nothing and its line numbers drift ' +
+            'silently). Remove the allowance entry, or un-ignore the path in bunfig.toml.',
+        );
+      }
+    }
+  }
 }
 
 const COVERAGE_TEST_TIMEOUT_MS = 30_000;
@@ -1868,6 +1937,10 @@ const COVERAGE_ALLOWANCES = assembleAllowanceLayers(
   ],
   [MAIN_REFRESH_LAYER, BRANCH_REFRESH_LAYER],
 );
+
+// Reject any allowance keyed to a coveragePathIgnorePatterns path — such a file is never
+// instrumented, so the allowance is dead and its line numbers drift silently (#539).
+assertNoAllowanceKeyIsCoverageIgnored(COVERAGE_ALLOWANCES, readCoveragePathIgnorePatterns());
 
 function summarizeCoverageFiles(files: ReadonlyMap<string, FileCoverageResult>): CoverageResult {
   const lines = { total: 0, hit: 0, missed: 0 };
