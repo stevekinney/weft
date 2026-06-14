@@ -18,7 +18,7 @@ import {
 } from './worker-inbound-message.ts';
 import { WorkerListenerRegistry } from './worker-listener-registry.ts';
 import {
-  deliverWorkerLog,
+  deliverForwardedWorkerLog,
   emitWorkerMessageToEngine,
   isParkableWaitSignalCheckpoint,
 } from './worker-message-helpers.ts';
@@ -262,8 +262,17 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   async #handleWorkerMessage(worker: Worker, message: unknown): Promise<void> {
     // A `log` is non-terminal observability: handle it BEFORE the strict accept-or-discard
     // gate (an out-of-turn log must not discard the worker) and never touch the watchdog (#529).
+    // The ownership gate is the trust boundary in the hardened worker path: a worker may only
+    // forward logs for a workflow it owns (active or parked), so an untrusted worker cannot
+    // spoof a log as another workflow. Validity/identity/size/console-fallback live in the
+    // helper; a wrong-owner log is dropped here, never discards the worker.
     if (isWorkerLogMessage(message)) {
-      deliverWorkerLog(message, this.#onLog, this.#maxProtocolMessageBytes);
+      if (
+        typeof message.workflowId === 'string' &&
+        this.#ownership.getTargetWorker(message.workflowId) === worker
+      ) {
+        deliverForwardedWorkerLog(message, this.#onLog, this.#maxProtocolMessageBytes);
+      }
       return;
     }
 

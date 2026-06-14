@@ -1575,11 +1575,13 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     [
       'src/workers/workflow-runner.ts',
       {
-        // Was line 386; shifted to 409 when `ctx.log` wiring (the
-        // createWorkerWorkflowLogger call, the WorkerWorkflowContext `log` field,
-        // and the worker `workflowType` field) was added above it. Same unchanged
-        // line, only its number moved.
-        lines: new Set([409]),
+        // Was line 386; shifted to 409 when `ctx.log` wiring was added above it, to 424
+        // when the #529 worker-log forwarding removed the dead turnId plumbing, and to
+        // 428 when `buildLogForwarder` captured the size cap at construction (dropping a
+        // live `context.replayStates.get` read). Same unchanged line — the closing brace
+        // of `processGeneratorStep`'s `while (true)` loop, which Bun's lcov marks
+        // uncovered for an infinite loop with no fall-through — only its number moved.
+        lines: new Set([428]),
       },
     ],
   ],

@@ -102,30 +102,34 @@ export type WorkerLogPoster = (
 ) => void;
 
 /**
- * Build the `ctx.log` → host forwarder for one workflow (#529), reading the live turn
- * id and size cap from the run's replay state (cleaned on terminal, so no leak). The
- * record is wrapped in a `log` outbound message and handed to the entry's `postLog`.
- * Returns `undefined` when the host has no sink. A throw (oversize/non-cloneable record
- * makes `postMessage` throw) is caught by the shared logger factory and falls the
- * record back to the worker console.
+ * Build the `ctx.log` → host forwarder for one workflow (#529). The record is wrapped in
+ * a `log` outbound message and handed to the entry's `postLog`. Returns `undefined` when
+ * the host has no sink. A throw (oversize/non-cloneable record makes `postMessage` throw)
+ * is caught by the shared logger factory and falls the record back to the worker console.
+ * The host gates delivery by worker-ownership of `workflowId` and matches the record's
+ * identity, so the message carries no turn-protocol state.
+ *
+ * The size cap is CAPTURED here at construction, not read live from replay state: a
+ * fire-and-forget log can resolve AFTER terminal cleanup deleted the replay state, and a
+ * live read would then see `undefined` and let an oversized record reach the host. The
+ * cap is fixed per engine config (identical across run/resume), so capturing it keeps the
+ * "oversize log never reaches the host" contract even on the post-cleanup path.
  */
 function buildLogForwarder(
-  context: WorkflowRunnerContext,
   workflowId: string,
+  maxProtocolMessageBytes: number | undefined,
   postLog: WorkerLogPoster | undefined,
 ): ((record: WorkflowLogRecord) => void) | undefined {
   if (postLog === undefined) return undefined;
   return (record: WorkflowLogRecord): void => {
-    const replayState = context.replayStates.get(workflowId);
     postLog(
       {
         type: 'log',
         protocolVersion: WORKER_PROTOCOL_VERSION,
-        ...(replayState?.turnId === undefined ? {} : { turnId: replayState.turnId }),
         workflowId,
         record,
       },
-      replayState?.maxProtocolMessageBytes,
+      maxProtocolMessageBytes,
     );
   };
 }
@@ -163,7 +167,6 @@ export async function handleRunMessage(
     executionStateOwnerId?: string;
     deadline?: number;
     headers?: [string, string][];
-    turnId?: number;
   },
   getWorkflowHandler: (
     type: string,
@@ -196,7 +199,7 @@ export async function handleRunMessage(
       message,
       controller,
       () => context.replayStates.get(message.workflowId),
-      buildLogForwarder(context, message.workflowId, postLog),
+      buildLogForwarder(message.workflowId, message.maxProtocolMessageBytes, postLog),
     );
     const generator = handler(workerContext, message.input);
     const step = await generator.next();
@@ -225,7 +228,6 @@ export async function handleResumeMessage(
     result: unknown;
     operationResult?: OperationOutcome;
     maxProtocolMessageBytes?: number;
-    turnId?: number;
   },
 ): Promise<WorkerOutboundMessage> {
   const generator = context.generators.get(message.workflowId);
@@ -250,9 +252,6 @@ export async function handleResumeMessage(
     if (message.maxProtocolMessageBytes !== undefined) {
       replayState.maxProtocolMessageBytes = message.maxProtocolMessageBytes;
     }
-    // Refresh the current turn id so a forwarded `ctx.log` from the resumed turn
-    // stamps the new turnId rather than the stale run/prior-resume turn (#529).
-    replayState.turnId = message.turnId;
     const step = await resumeGeneratorWithOutcome(generator, outcome, message.result);
     return await processGeneratorStep(context, message.workflowId, generator, step);
   } catch (error) {

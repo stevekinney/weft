@@ -1753,7 +1753,10 @@ describe('WorkerExecutionStrategy', () => {
   // -------------------------------------------------------------------------
 
   describe('worker host log routing (#529)', () => {
-    function logRecord(message: string): {
+    function logRecord(
+      message: string,
+      workflowId = 'wf-log',
+    ): {
       level: 'info';
       message: string;
       workflowId: string;
@@ -1763,13 +1766,37 @@ describe('WorkerExecutionStrategy', () => {
       return {
         level: 'info',
         message,
-        workflowId: 'wf-log',
+        workflowId,
         workflowType: 'test',
         timestamp: 0,
       };
     }
 
-    async function startAndGetTurnId(workflowId: string): Promise<number> {
+    /** Dispatch a forwarded `ctx.log` message from the worker. */
+    function dispatchLog(worker: MockWorker, record: unknown, envelopeWorkflowId = 'wf-log'): void {
+      dispatchToMockWorker(
+        worker,
+        'message',
+        new MessageEvent('message', {
+          data: {
+            type: 'log',
+            protocolVersion: WORKER_PROTOCOL_VERSION,
+            workflowId: envelopeWorkflowId,
+            record,
+          } as unknown as WorkerOutboundMessage,
+        }),
+      );
+    }
+
+    /** Read the turnId the strategy stamped on a worker's run message (the first post). */
+    function runTurnIdOf(worker: MockWorker): number {
+      const runMessage = worker.postMessage.mock.calls[0]?.[0] as { turnId: number } | undefined;
+      expect(runMessage).toBeDefined();
+      return runMessage!.turnId;
+    }
+
+    /** Start a workflow and let its run message post so the worker owns it (active turn). */
+    async function startOwned(workflowId = 'wf-log'): Promise<void> {
       strategy.startWorkflow({
         workflowId,
         workflowType: 'test',
@@ -1778,21 +1805,13 @@ describe('WorkerExecutionStrategy', () => {
       });
       // startWorkflow acquires the worker asynchronously; let the run message post.
       await sleepForTesting(0);
-      const runMessage = firstWorker().postMessage.mock.calls[0]?.[0] as { turnId: number };
-      return runMessage.turnId;
     }
 
     it('tells the worker a host sink exists by stamping hostHasLogSink on run and resume', async () => {
       const sink = mock(() => {});
       setup(1, { maxProtocolMessageBytes: 4_096, requireProtocolVersion: true, onLog: sink });
 
-      strategy.startWorkflow({
-        workflowId: 'wf-log',
-        workflowType: 'test',
-        input: null,
-        checkpoint: new ArrayBuffer(0),
-      });
-      await sleepForTesting(0);
+      await startOwned();
 
       const runMessage = firstWorker().postMessage.mock.calls[0]?.[0];
       expect(runMessage).toMatchObject({ type: 'run', hostHasLogSink: true });
@@ -1811,13 +1830,7 @@ describe('WorkerExecutionStrategy', () => {
     it('omits hostHasLogSink when no host sink is installed', async () => {
       setup(1, { maxProtocolMessageBytes: 4_096, requireProtocolVersion: true });
 
-      strategy.startWorkflow({
-        workflowId: 'wf-log',
-        workflowType: 'test',
-        input: null,
-        checkpoint: new ArrayBuffer(0),
-      });
-      await sleepForTesting(0);
+      await startOwned();
 
       const runMessage = firstWorker().postMessage.mock.calls[0]?.[0] as {
         hostHasLogSink?: boolean;
@@ -1827,25 +1840,12 @@ describe('WorkerExecutionStrategy', () => {
 
     it('handles a log message without an onLog sink (no throw, no discard)', async () => {
       // A `log` can arrive even when the host installed no sink (e.g. a stale worker
-      // from a prior config). `#deliverWorkerLog` must no-op gracefully on the
+      // from a prior config). The delivery helper must no-op gracefully on the
       // undefined-sink branch — never throw, never discard.
       setup(1, { maxProtocolMessageBytes: 4_096, requireProtocolVersion: true });
 
-      const turnId = await startAndGetTurnId('wf-log');
-
-      dispatchToMockWorker(
-        firstWorker(),
-        'message',
-        new MessageEvent('message', {
-          data: {
-            type: 'log',
-            protocolVersion: WORKER_PROTOCOL_VERSION,
-            turnId,
-            workflowId: 'wf-log',
-            record: logRecord('no-sink'),
-          } satisfies WorkerOutboundMessage,
-        }),
-      );
+      await startOwned();
+      dispatchLog(firstWorker(), logRecord('no-sink'));
 
       expect(mockPool.discard).not.toHaveBeenCalled();
     });
@@ -1858,24 +1858,163 @@ describe('WorkerExecutionStrategy', () => {
         onLog: (record) => received.push(record),
       });
 
-      const turnId = await startAndGetTurnId('wf-log');
+      await startOwned();
+      dispatchLog(firstWorker(), logRecord('hello from worker'));
+
+      expect(received).toEqual([expect.objectContaining({ message: 'hello from worker' })]);
+    });
+
+    it('drops a log for a workflow the worker does not own (spoof) without delivering or discarding', async () => {
+      // The trust boundary in the hardened worker path: a worker may forward logs only
+      // for a workflow it owns. A worker that owns `wf-log` tries to forward a log for
+      // `wf-victim` (owned by no one here) — the ownership gate DROPS it: no sink call,
+      // no discard (a forged log is best-effort noise, not a protocol violation).
+      const sink = mock(() => {});
+      setup(1, { maxProtocolMessageBytes: 4_096, requireProtocolVersion: true, onLog: sink });
+
+      await startOwned('wf-log');
+      dispatchLog(firstWorker(), logRecord('spoofed', 'wf-victim'), 'wf-victim');
+
+      expect(sink).not.toHaveBeenCalled();
+      expect(mockPool.discard).not.toHaveBeenCalled();
+    });
+
+    it('drops a log forwarded by worker A for a workflow owned by worker B (cross-worker spoof)', async () => {
+      // The teeth for the ownership gate's EQUALITY, not just existence: worker A owns
+      // `wf-a`, worker B owns `wf-b`. Worker A forwards a log claiming `wf-b` (envelope
+      // AND record). A weaker gate that only checked "wf-b has SOME owner" would deliver;
+      // the real gate (`getTargetWorker(wf-b) === worker A`) is false, so it drops.
+      const sink = mock(() => {});
+      setup(2, { maxProtocolMessageBytes: 4_096, requireProtocolVersion: true, onLog: sink });
+
+      strategy.startWorkflow({
+        workflowId: 'wf-a',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      strategy.startWorkflow({
+        workflowId: 'wf-b',
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
       await sleepForTesting(0);
 
+      const workerA = firstWorker();
+      const workerB = mockWorkers[1]!;
+      // Precondition: the two workflows landed on distinct workers.
+      expect(workerA.postMessage.mock.calls[0]?.[0]).toMatchObject({ workflowId: 'wf-a' });
+      expect(workerB.postMessage.mock.calls[0]?.[0]).toMatchObject({ workflowId: 'wf-b' });
+
+      // Worker A forwards a log for wf-b (which it does NOT own).
+      dispatchLog(workerA, logRecord('cross-worker-spoof', 'wf-b'), 'wf-b');
+
+      expect(sink).not.toHaveBeenCalled();
+      expect(mockPool.discard).not.toHaveBeenCalled();
+    });
+
+    it('drops a log whose record workflowId does not match the envelope', async () => {
+      // The worker owns `wf-log` and the envelope targets `wf-log`, but the record
+      // claims a different `workflowId`. Identity must match the envelope, so the
+      // record is dropped — never delivered, never a discard.
+      const sink = mock(() => {});
+      setup(1, { maxProtocolMessageBytes: 4_096, requireProtocolVersion: true, onLog: sink });
+
+      await startOwned('wf-log');
+      dispatchLog(firstWorker(), logRecord('mismatched-identity', 'wf-other'), 'wf-log');
+
+      expect(sink).not.toHaveBeenCalled();
+      expect(mockPool.discard).not.toHaveBeenCalled();
+    });
+
+    it('delivers a log for a parked workflow the worker still owns', async () => {
+      // Park `wf-log` on a wait-signal checkpoint. The worker is released to the pool
+      // but still OWNS the parked workflow, so a fire-and-forget log resolving while
+      // parked passes the ownership gate and is delivered.
+      const sink = mock(() => {});
+      setup(1, {
+        workflowTurnTimeoutMs: 100,
+        maxProtocolMessageBytes: 4_096,
+        requireProtocolVersion: true,
+        onLog: sink,
+      });
+
+      await startOwned('wf-log');
+      const worker = firstWorker();
+      const runTurnId = runTurnIdOf(worker);
       dispatchToMockWorker(
-        firstWorker(),
+        worker,
         'message',
         new MessageEvent('message', {
           data: {
-            type: 'log',
+            type: 'checkpoint',
             protocolVersion: WORKER_PROTOCOL_VERSION,
-            turnId,
+            turnId: runTurnId,
             workflowId: 'wf-log',
-            record: logRecord('hello from worker'),
+            checkpoint: new ArrayBuffer(0),
+            operationRequest: { type: 'wait-signal', operationId: 'op-wait', signalName: 'go' },
+          } satisfies WorkerOutboundMessage,
+        }),
+      );
+      // Control: parking released the worker, proving the turn was cleared (the
+      // "between turns" window). A strict message now would be rejected as
+      // out-of-turn; the lenient log lane still delivers because ownership persists.
+      expect(mockPool.release).toHaveBeenCalledTimes(1);
+
+      dispatchLog(worker, logRecord('while-parked'));
+
+      expect(sink).toHaveBeenCalledWith(expect.objectContaining({ message: 'while-parked' }));
+      expect(mockPool.discard).not.toHaveBeenCalled();
+    });
+
+    it('rejects a STRICT out-of-turn message after parking (control for the lenient log lane)', async () => {
+      // The teeth for "between turns": prove the parked state is genuinely turn-cleared
+      // by showing a STRICT (non-log) message with the run turnId is now rejected as
+      // out-of-turn and discards the worker. This is the behavior the lenient log lane
+      // deliberately does NOT share — contrast with the parked-log delivery test above.
+      setup(1, {
+        workflowTurnTimeoutMs: 100,
+        maxProtocolMessageBytes: 4_096,
+        requireProtocolVersion: true,
+      });
+
+      await startOwned('wf-log');
+      const worker = firstWorker();
+      const runTurnId = runTurnIdOf(worker);
+      dispatchToMockWorker(
+        worker,
+        'message',
+        new MessageEvent('message', {
+          data: {
+            type: 'checkpoint',
+            protocolVersion: WORKER_PROTOCOL_VERSION,
+            turnId: runTurnId,
+            workflowId: 'wf-log',
+            checkpoint: new ArrayBuffer(0),
+            operationRequest: { type: 'wait-signal', operationId: 'op-wait', signalName: 'go' },
+          } satisfies WorkerOutboundMessage,
+        }),
+      );
+      expect(mockPool.release).toHaveBeenCalledTimes(1);
+
+      // A strict completed echoing the (now stale) run turnId arrives after the turn
+      // cleared: the strict gate rejects it and discards the worker.
+      dispatchToMockWorker(
+        worker,
+        'message',
+        new MessageEvent('message', {
+          data: {
+            type: 'completed',
+            protocolVersion: WORKER_PROTOCOL_VERSION,
+            turnId: runTurnId,
+            workflowId: 'wf-log',
+            result: 'stale',
           } satisfies WorkerOutboundMessage,
         }),
       );
 
-      expect(received).toEqual([expect.objectContaining({ message: 'hello from worker' })]);
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
     });
 
     it('does NOT clear the turn watchdog for a mid-turn log (subsequent checkpoint still accepted)', async () => {
@@ -1887,34 +2026,23 @@ describe('WorkerExecutionStrategy', () => {
         onLog: sink,
       });
 
-      const turnId = await startAndGetTurnId('wf-log');
-      await sleepForTesting(0);
+      await startOwned('wf-log');
+      const worker = firstWorker();
+      const runTurnId = runTurnIdOf(worker);
 
-      // A mid-turn log arrives.
-      dispatchToMockWorker(
-        firstWorker(),
-        'message',
-        new MessageEvent('message', {
-          data: {
-            type: 'log',
-            protocolVersion: WORKER_PROTOCOL_VERSION,
-            turnId,
-            workflowId: 'wf-log',
-            record: logRecord('mid-turn'),
-          } satisfies WorkerOutboundMessage,
-        }),
-      );
+      // A mid-turn log arrives; it must not touch the watchdog or the turn state.
+      dispatchLog(worker, logRecord('mid-turn'));
 
       // The turn is still active: a checkpoint echoing the SAME turnId is accepted,
       // not rejected as "outside an active turn" (which would discard the worker).
       dispatchToMockWorker(
-        firstWorker(),
+        worker,
         'message',
         new MessageEvent('message', {
           data: {
             type: 'checkpoint',
             protocolVersion: WORKER_PROTOCOL_VERSION,
-            turnId,
+            turnId: runTurnId,
             workflowId: 'wf-log',
             checkpoint: new ArrayBuffer(0),
             operationRequest: {
@@ -1931,7 +2059,7 @@ describe('WorkerExecutionStrategy', () => {
       expect(sink).toHaveBeenCalledTimes(1);
     });
 
-    it('a log-spamming worker still trips the turn watchdog (short-circuit, not re-arm)', async () => {
+    it('a log-spamming worker still trips the turn watchdog at the ORIGINAL deadline (short-circuit, not re-arm)', async () => {
       useFakeTimers();
       const sink = mock(() => {});
       setup(1, {
@@ -1941,32 +2069,20 @@ describe('WorkerExecutionStrategy', () => {
         onLog: sink,
       });
 
-      const turnId = await startAndGetTurnId('wf-log');
-      await sleepForTesting(0);
+      await startOwned('wf-log');
+      const worker = firstWorker();
 
-      // Spam logs just under the timeout repeatedly. A `reset`-style watchdog would
-      // re-arm on every log and never fire; a short-circuit keeps the original
-      // turn-begin deadline, so the watchdog still trips.
-      for (let tick = 0; tick < 3; tick++) {
-        await advanceTimersByTime(4);
-        dispatchToMockWorker(
-          firstWorker(),
-          'message',
-          new MessageEvent('message', {
-            data: {
-              type: 'log',
-              protocolVersion: WORKER_PROTOCOL_VERSION,
-              turnId,
-              workflowId: 'wf-log',
-              record: logRecord(`spam-${tick}`),
-            } satisfies WorkerOutboundMessage,
-          }),
-        );
-      }
+      // Advance to 4ms (1ms before the original turn-begin deadline) and spam a log.
+      // A `reset`-style watchdog would re-arm here, pushing the deadline to 9ms.
+      await advanceTimersByTime(4);
+      dispatchLog(worker, logRecord('spam-0'));
+      expect(mockPool.discard).not.toHaveBeenCalled();
 
-      // Original deadline (5ms from turn begin) has long passed: the watchdog fired.
-      await advanceTimersByTime(5);
-      expect(mockPool.discard).toHaveBeenCalledWith(firstWorker());
+      // Advancing the remaining 1ms reaches the ORIGINAL 5ms deadline. The watchdog
+      // fires now — proving the log did NOT re-arm it (a reset implementation would
+      // still be 4ms away from its pushed-out deadline and would not have discarded).
+      await advanceTimersByTime(1);
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
       expect(lastMessage()).toMatchObject({
         type: 'failed',
         workflowId: 'wf-log',
@@ -1974,92 +2090,13 @@ describe('WorkerExecutionStrategy', () => {
       });
     });
 
-    it('does NOT discard the worker when a log arrives between turns (parked, turn cleared)', async () => {
-      const sink = mock(() => {});
-      setup(1, {
-        workflowTurnTimeoutMs: 100,
-        maxProtocolMessageBytes: 4_096,
-        requireProtocolVersion: true,
-        onLog: sink,
-      });
-
-      const turnId = await startAndGetTurnId('wf-log');
-
-      // Park the run on a wait-signal checkpoint. This settles (clears) the turn but
-      // keeps the worker alive with its message listener attached — the realistic
-      // "between turns" window where a fire-and-forget log can resolve.
-      dispatchToMockWorker(
-        firstWorker(),
-        'message',
-        new MessageEvent('message', {
-          data: {
-            type: 'checkpoint',
-            protocolVersion: WORKER_PROTOCOL_VERSION,
-            turnId,
-            workflowId: 'wf-log',
-            checkpoint: new ArrayBuffer(0),
-            operationRequest: { type: 'wait-signal', operationId: 'op-wait', signalName: 'go' },
-          } satisfies WorkerOutboundMessage,
-        }),
-      );
-      expect(mockPool.discard).not.toHaveBeenCalled();
-
-      // A fire-and-forget log now resolves BETWEEN turns, stamping the (now cleared)
-      // turnId. This is ordinary user code (`void p.then(() => ctx.log(...))`) — with
-      // no active turn the strict gate would reject it as "outside an active turn" and
-      // discard the worker. The lenient log lane must deliver it without discarding.
-      dispatchToMockWorker(
-        firstWorker(),
-        'message',
-        new MessageEvent('message', {
-          data: {
-            type: 'log',
-            protocolVersion: WORKER_PROTOCOL_VERSION,
-            turnId,
-            workflowId: 'wf-log',
-            record: logRecord('between-turns'),
-          } satisfies WorkerOutboundMessage,
-        }),
-      );
-
-      expect(mockPool.discard).not.toHaveBeenCalled();
-      expect(sink).toHaveBeenCalledWith(expect.objectContaining({ message: 'between-turns' }));
-    });
-
-    it('a log with a mismatched turnId never discards the worker', async () => {
-      const sink = mock(() => {});
-      setup(1, {
-        workflowTurnTimeoutMs: 100,
-        maxProtocolMessageBytes: 4_096,
-        requireProtocolVersion: true,
-        onLog: sink,
-      });
-
-      await startAndGetTurnId('wf-log');
-      await sleepForTesting(0);
-
-      dispatchToMockWorker(
-        firstWorker(),
-        'message',
-        new MessageEvent('message', {
-          data: {
-            type: 'log',
-            protocolVersion: WORKER_PROTOCOL_VERSION,
-            turnId: 99_999,
-            workflowId: 'wf-log',
-            record: logRecord('wrong-turn'),
-          } satisfies WorkerOutboundMessage,
-        }),
-      );
-
-      expect(mockPool.discard).not.toHaveBeenCalled();
-      expect(sink).toHaveBeenCalledWith(expect.objectContaining({ message: 'wrong-turn' }));
-    });
-
-    it('a throwing host sink never discards the worker or fails the workflow', async () => {
+    it('a throwing host sink falls back to console and never discards the worker or fails the workflow', async () => {
       const sink = mock(() => {
         throw new Error('sink blew up');
       });
+      const consoleInfo = mock(() => {});
+      const originalConsoleInfo = console.info;
+      console.info = consoleInfo as unknown as typeof console.info;
       setup(1, {
         workflowTurnTimeoutMs: 100,
         maxProtocolMessageBytes: 4_096,
@@ -2067,45 +2104,41 @@ describe('WorkerExecutionStrategy', () => {
         onLog: sink,
       });
 
-      const turnId = await startAndGetTurnId('wf-log');
-      await sleepForTesting(0);
+      try {
+        await startOwned('wf-log');
+        const worker = firstWorker();
+        const runTurnId = runTurnIdOf(worker);
 
-      dispatchToMockWorker(
-        firstWorker(),
-        'message',
-        new MessageEvent('message', {
-          data: {
-            type: 'log',
-            protocolVersion: WORKER_PROTOCOL_VERSION,
-            turnId,
-            workflowId: 'wf-log',
-            record: logRecord('boom'),
-          } satisfies WorkerOutboundMessage,
-        }),
-      );
+        dispatchLog(worker, logRecord('boom'));
 
-      expect(sink).toHaveBeenCalledTimes(1);
-      expect(mockPool.discard).not.toHaveBeenCalled();
-      expect(messages).toHaveLength(0);
+        // The sink threw; the record fell back to the matching console method (`info`)
+        // rather than disappearing or failing the run.
+        expect(sink).toHaveBeenCalledTimes(1);
+        expect(consoleInfo).toHaveBeenCalledWith(expect.objectContaining({ message: 'boom' }));
+        expect(mockPool.discard).not.toHaveBeenCalled();
+        expect(messages).toHaveLength(0);
 
-      // The turn is still healthy: a terminal completed echoing the turnId settles cleanly.
-      dispatchToMockWorker(
-        firstWorker(),
-        'message',
-        new MessageEvent('message', {
-          data: {
-            type: 'completed',
-            protocolVersion: WORKER_PROTOCOL_VERSION,
-            turnId,
-            workflowId: 'wf-log',
-            result: 'done',
-          } satisfies WorkerOutboundMessage,
-        }),
-      );
-      expect(lastMessage()).toMatchObject({ type: 'completed', workflowId: 'wf-log' });
+        // The turn is still healthy: a terminal completed echoing the turnId settles cleanly.
+        dispatchToMockWorker(
+          worker,
+          'message',
+          new MessageEvent('message', {
+            data: {
+              type: 'completed',
+              protocolVersion: WORKER_PROTOCOL_VERSION,
+              turnId: runTurnId,
+              workflowId: 'wf-log',
+              result: 'done',
+            } satisfies WorkerOutboundMessage,
+          }),
+        );
+        expect(lastMessage()).toMatchObject({ type: 'completed', workflowId: 'wf-log' });
+      } finally {
+        console.info = originalConsoleInfo;
+      }
     });
 
-    it('drops a malformed log record without discarding the worker', async () => {
+    it('drops a malformed log record without delivering or discarding the worker', async () => {
       const sink = mock(() => {});
       setup(1, {
         workflowTurnTimeoutMs: 100,
@@ -2114,32 +2147,37 @@ describe('WorkerExecutionStrategy', () => {
         onLog: sink,
       });
 
-      const turnId = await startAndGetTurnId('wf-log');
-      await sleepForTesting(0);
+      await startOwned('wf-log');
 
       // A `log` message whose record is missing required fields. It routes into the
       // lenient log lane on `type: 'log'` alone, where a malformed record is DROPPED —
       // never delivered to the sink, and (the teeth) never a worker-discard. A log
       // carries no turn-protocol state, so a corrupt payload can't fail the workflows.
-      dispatchToMockWorker(
-        firstWorker(),
-        'message',
-        new MessageEvent('message', {
-          data: {
-            type: 'log',
-            protocolVersion: WORKER_PROTOCOL_VERSION,
-            turnId,
-            workflowId: 'wf-log',
-            record: { not: 'a-log' },
-          } as unknown as WorkerOutboundMessage,
-        }),
-      );
+      dispatchLog(firstWorker(), { not: 'a-log' });
 
       expect(sink).not.toHaveBeenCalled();
       expect(mockPool.discard).not.toHaveBeenCalled();
     });
 
-    it('drops an oversized log record without discarding the worker', async () => {
+    it('rejects a record missing required envelope fields (workflowType / timestamp)', async () => {
+      const sink = mock(() => {});
+      setup(1, { maxProtocolMessageBytes: 4_096, requireProtocolVersion: true, onLog: sink });
+
+      await startOwned('wf-log');
+
+      // Has level/message/workflowId but is missing workflowType and timestamp — the
+      // full-shape validator rejects it so a partial record never reaches a typed sink.
+      dispatchLog(firstWorker(), {
+        level: 'info',
+        message: 'partial',
+        workflowId: 'wf-log',
+      });
+
+      expect(sink).not.toHaveBeenCalled();
+      expect(mockPool.discard).not.toHaveBeenCalled();
+    });
+
+    it('drops an oversized log record without delivering or discarding the worker', async () => {
       const sink = mock(() => {});
       setup(1, {
         workflowTurnTimeoutMs: 100,
@@ -2148,26 +2186,13 @@ describe('WorkerExecutionStrategy', () => {
         onLog: sink,
       });
 
-      const turnId = await startAndGetTurnId('wf-log');
-      await sleepForTesting(0);
+      await startOwned('wf-log');
 
       const oversizeRecord = {
         ...logRecord('big'),
         attributes: { blob: 'x'.repeat(8_192) },
       };
-      dispatchToMockWorker(
-        firstWorker(),
-        'message',
-        new MessageEvent('message', {
-          data: {
-            type: 'log',
-            protocolVersion: WORKER_PROTOCOL_VERSION,
-            turnId,
-            workflowId: 'wf-log',
-            record: oversizeRecord,
-          } satisfies WorkerOutboundMessage,
-        }),
-      );
+      dispatchLog(firstWorker(), oversizeRecord);
 
       expect(sink).not.toHaveBeenCalled();
       expect(mockPool.discard).not.toHaveBeenCalled();

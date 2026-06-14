@@ -18,12 +18,16 @@ describe('worker inbound message builders (#529)', () => {
         maxProtocolMessageBytes: undefined,
         hasLogSink: false,
       });
-      expect(message).toMatchObject({
+      // Exact shape: optional fields (maxProtocolMessageBytes, deadline, headers,
+      // hostHasLogSink) must be ABSENT, not merely undefined, when not provided.
+      expect(message).toEqual({
         type: 'run',
         protocolVersion: WORKER_PROTOCOL_VERSION,
         turnId: 7,
         workflowId: 'wf-1',
         workflowType: 'demo',
+        checkpoint: base.checkpoint,
+        input: { value: 1 },
         executionStateOwnerId: 'wf-1',
       });
       expect(message.maxProtocolMessageBytes).toBeUndefined();

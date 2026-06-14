@@ -307,16 +307,20 @@ export type WorkerOutboundMessage =
       /**
        * A `ctx.log` record forwarded from a worker to the engine host's
        * `EngineOptions.onLog` sink (#529). Unlike the other variants, `log` is a
-       * NON-TERMINAL, best-effort observability message: it never settles or clears
-       * the worker turn, and the host delivers it leniently — a `log` arriving
-       * outside an active turn (a legitimate fire-and-forget log resolving between
-       * turns) is dropped, never treated as a protocol violation that discards the
-       * worker. The worker emits these only when the inbound message reported
+       * NON-TERMINAL, best-effort observability message: it carries no turn-protocol
+       * state, never settles or clears the worker turn, and never reaches the strict
+       * accept-or-discard gate. The host delivers a record to the sink IFF the sending
+       * worker owns `workflowId` (active or parked) AND `record.workflowId` matches the
+       * envelope AND the record is a structurally valid `WorkflowLogRecord` within the
+       * size cap; otherwise the record is dropped — a wrong-owner, malformed, oversize,
+       * or out-of-turn `log` is never a protocol violation and never discards the
+       * worker. A between-turns self-log (a fire-and-forget log resolving while the
+       * worker is parked) IS delivered, because the worker still owns its parked
+       * workflow. The worker emits these only when the inbound message reported
        * `hostHasLogSink: true`.
        */
       type: 'log';
       protocolVersion?: number;
-      turnId?: number;
       workflowId: WorkflowId;
       record: WorkflowLogRecord;
     };

@@ -91,8 +91,6 @@ export function initializeWorkerMessageLoop(getWorkflowHandler: WorkflowHandlerF
           workflowId: message.workflowId,
           result: resultValue,
           operationResult: message.operationResult,
-          // Thread the resume turn id so a forwarded log stamps the current turn (#529).
-          ...(message.turnId === undefined ? {} : { turnId: message.turnId }),
           ...(message.maxProtocolMessageBytes === undefined
             ? {}
             : { maxProtocolMessageBytes: message.maxProtocolMessageBytes }),

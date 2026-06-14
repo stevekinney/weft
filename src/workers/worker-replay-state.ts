@@ -21,10 +21,6 @@ export interface WorkerReplayState {
   nextStepIndex: number;
   pendingStepIndex: number | null;
   maxProtocolMessageBytes: number | undefined;
-  // The current turn's id, refreshed on run and each resume. A forwarded `ctx.log`
-  // (#529) stamps it so the host can match the log to the active turn. Lives here (not
-  // a separate map) so it is cleaned with the rest of the run state on terminal.
-  turnId: number | undefined;
 }
 
 /** Build a fresh replay state from a `run` message, seeding cached outcomes from the checkpoint. */
@@ -32,7 +28,6 @@ export function createReplayState(message: {
   workflowId: string;
   checkpoint?: ArrayBuffer;
   maxProtocolMessageBytes?: number;
-  turnId?: number;
 }): WorkerReplayState {
   const checkpoint =
     message.checkpoint && message.checkpoint.byteLength > 0
@@ -46,7 +41,6 @@ export function createReplayState(message: {
     nextStepIndex: 0,
     pendingStepIndex: null,
     maxProtocolMessageBytes: message.maxProtocolMessageBytes,
-    turnId: message.turnId,
   };
 }
 

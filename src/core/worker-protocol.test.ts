@@ -464,6 +464,34 @@ describe('Worker log message validation (#529)', () => {
     it('rejects a record with an invalid level', () => {
       expect(isValidWorkerLogRecord({ ...validRecord, level: 'trace' })).toBe(false);
     });
+
+    it('rejects a record missing required envelope fields', () => {
+      // The full-shape validator requires every engine-owned envelope field, because a
+      // host sink is typed to receive a complete WorkflowLogRecord.
+      expect(isValidWorkerLogRecord({ level: 'info', message: 'hi' })).toBe(false);
+      const { workflowId: _id, ...withoutId } = validRecord;
+      expect(isValidWorkerLogRecord(withoutId)).toBe(false);
+      const { workflowType: _type, ...withoutType } = validRecord;
+      expect(isValidWorkerLogRecord(withoutType)).toBe(false);
+      const { timestamp: _ts, ...withoutTimestamp } = validRecord;
+      expect(isValidWorkerLogRecord(withoutTimestamp)).toBe(false);
+    });
+
+    it('rejects non-string workflowId / workflowType and non-finite timestamp', () => {
+      expect(isValidWorkerLogRecord({ ...validRecord, workflowId: 1 })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, workflowType: 1 })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, timestamp: 'now' })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, timestamp: Number.NaN })).toBe(false);
+    });
+
+    it('accepts an optional plain-object attributes but rejects a non-plain one', () => {
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: { k: 'v' } })).toBe(true);
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: 'nope' })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: null })).toBe(false);
+      // An array is `typeof 'object'` but is NOT the keyed bag the contract requires.
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: [] })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: ['a', 'b'] })).toBe(false);
+    });
   });
 
   describe('isWorkerLogMessage', () => {
@@ -479,6 +507,24 @@ describe('Worker log message validation (#529)', () => {
       expect(isWorkerLogMessage({ type: 'checkpoint', workflowId: 'wf-1' })).toBe(false);
       expect(isWorkerLogMessage(null)).toBe(false);
       expect(isWorkerLogMessage('log')).toBe(false);
+    });
+
+    it('routes on type regardless of protocolVersion (version-tolerant observability lane)', () => {
+      // The log lane carries no turn-protocol state and intentionally bypasses version
+      // negotiation: a `log` from any protocol version routes in on `type` alone, and
+      // its record is validated structurally rather than rejected on version. This is
+      // the one place that compatibility decision lives.
+      expect(
+        isWorkerLogMessage({
+          type: 'log',
+          protocolVersion: 999,
+          workflowId: 'wf-1',
+          record: validRecord,
+        }),
+      ).toBe(true);
+      expect(isWorkerLogMessage({ type: 'log', workflowId: 'wf-1', record: validRecord })).toBe(
+        true,
+      );
     });
   });
 

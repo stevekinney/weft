@@ -78,7 +78,12 @@ export class WorkerProtocolGuard {
     if (!turn) {
       throw new WorkerProtocolError('Worker message arrived outside an active turn');
     }
-    if (message.turnId !== turn.turnId || message.workflowId !== turn.workflowId) {
+    // `log` is the only variant without a `turnId` (it is non-terminal observability
+    // routed through the lenient lane and never reaches this strict gate, #529); the
+    // turn-bearing variants all carry `turnId?`. Narrow before reading so the union
+    // stays honest after `log` dropped the field.
+    const messageTurnId = message.type === 'log' ? undefined : message.turnId;
+    if (messageTurnId !== turn.turnId || message.workflowId !== turn.workflowId) {
       throw new WorkerProtocolError('Worker message did not match the active turn');
     }
   }

@@ -21,6 +21,17 @@ const CONSOLE_METHOD: Record<WorkflowLogLevel, 'debug' | 'info' | 'warn' | 'erro
 };
 
 /**
+ * Dispatch one record to the matching `console` method (`debug`/`info`/`warn`/`error`).
+ * The single console-fallback primitive: the logger factory uses it when no sink is
+ * installed or a sink throws, and the worker-log host-delivery path (#529) uses it when
+ * the host `onLog` sink throws — so console-fallback behavior cannot drift between the
+ * inline and worker-forwarded paths.
+ */
+export function logRecordToConsole(record: WorkflowLogRecord): void {
+  console[CONSOLE_METHOD[record.level]](record);
+}
+
+/**
  * Inputs the logger needs at construction. The replay/clock probes (`isReplaying`,
  * `now`) are evaluated fresh per emit so they track the live frontier; the identity
  * fields (`workflowId`, `workflowType`) and the `sink` are fixed values.
@@ -93,11 +104,11 @@ export function createWorkflowLogger(bindings: WorkflowLoggerBindings): Workflow
       try {
         bindings.sink(record);
       } catch {
-        console[CONSOLE_METHOD[level]](record);
+        logRecordToConsole(record);
       }
       return;
     }
-    console[CONSOLE_METHOD[level]](record);
+    logRecordToConsole(record);
   };
   return {
     debug: (message, attributes) => emit('debug', message, attributes),
