@@ -220,6 +220,10 @@ async function* example(ctx: Context) {
 
 Calling `ActivityContext.heartbeat()` resets and extends the deadline each time it is called.
 
+### `timeout` vs Temporal's `startToCloseTimeout`
+
+Temporal's `startToCloseTimeout` is a per-attempt wall-clock cap enforced by the worker: when it elapses, the worker-level machinery interrupts the attempt and reports an `ActivityTaskTimedOut`. Weft's `timeout` is the analogous per-attempt cap, but enforcement is _cooperative_, not preemptive—and inline-only. When the cap elapses, the workflow stops awaiting the attempt and fails it with an `ActivityPerAttemptTimeoutError`, and the activity's `AbortSignal` is aborted. A well-behaved activity that threads `ctx.signal` into its `fetch`/database calls stops promptly. An activity that ignores its signal keeps running in the background until it returns—Weft, like the JavaScript runtime it sits on, cannot forcibly preempt a running async function. So `timeout` reliably bounds _how long the workflow waits_, not _how long the activity's side effects run_. For worker-pool execution, the per-attempt bound is `visibilityTimeout` (the claim window), not `timeout`.
+
 ## Payload size sensitivity
 
 **The Temporal problem.** The docs warn extensively about keeping workflow inputs, outputs, and activity results small because everything is serialized into the event history. Large payloads degrade replay performance and bloat storage. This is a tax on the developer experience—you constantly have to think about data size.

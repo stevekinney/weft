@@ -7,6 +7,7 @@ import {
   clearLastHeartbeatForStep,
   warnIfRetryMissingHeartbeat,
 } from './activity-heartbeat-tracking.ts';
+import { resolvePerAttemptTimeout, withPerAttemptTimeout } from './activity-per-attempt-timeout.ts';
 import {
   buildActivityReconciliationReference,
   buildActivityVerificationContext,
@@ -156,21 +157,20 @@ export async function executeActivity(
   // the deterministic workflow step (not the per-yield operationId), so it is
   // stable across crash/replay. The step is always set when the operation is
   // created via ctx.run(); a missing step is a caller contract violation.
-  const abortController = internals.inlineStrategy?.getAbortController(workflowId);
   const step = operation.step ?? 0;
   // #493: surface the resumable-batch footgun in development — a retry that
   // starts with no in-memory heartbeat (e.g. after a process restart).
   warnIfRetryMissingHeartbeat(internals, workflowId, step, attempt);
   const asyncToken = deriveAsyncActivityToken(workflowId, step, attempt);
-  const activityContext = buildActivityContext(
+
+  const { perAttemptTimeoutMs, attemptAbortController, activitySignal } = resolvePerAttemptTimeout(
     internals,
     workflowId,
-    step,
-    abortController?.signal ?? new AbortController().signal,
-    () => {
-      throw new AsyncActivityDeferral(asyncToken);
-    },
+    operation,
   );
+  const activityContext = buildActivityContext(internals, workflowId, step, activitySignal, () => {
+    throw new AsyncActivityDeferral(asyncToken);
+  });
 
   // Build the leaf executor: either dispatch to a worker or call inline.
   const invokeActivity: (activityName: string, input: unknown) => unknown =
@@ -178,13 +178,19 @@ export async function executeActivity(
       ? (activityName, input) =>
           invokeWorkerActivity(internals, operation.operationId, activityName, input, attempt)
       : (activityName, input) =>
-          invokeInlineActivity(
-            internals,
-            workflowId,
-            operation,
-            activityContext,
+          withPerAttemptTimeout(
+            invokeInlineActivity(
+              internals,
+              workflowId,
+              operation,
+              activityContext,
+              activityName,
+              input,
+            ),
+            perAttemptTimeoutMs,
             activityName,
-            input,
+            attempt,
+            attemptAbortController,
           );
 
   const composedActivity = callbacks.getComposedActivityInterceptor();
