@@ -605,7 +605,9 @@ describe('engine.startOrSignal', () => {
       expect(['from-a', 'from-b']).toContain(result);
 
       let remainingSignals = 0;
-      for await (const _entry of engine.storage.scan(`sig:${a.id}:release:`)) {
+      for await (const _entry of engine.storage.scan(
+        `sig:${encodeStorageKeyComponent(a.id)}:${encodeStorageKeyComponent('release')}:`,
+      )) {
         remainingSignals += 1;
       }
       expect(remainingSignals).toBe(0);

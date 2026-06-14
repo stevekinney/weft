@@ -22,9 +22,22 @@ import {
   rememberCommittedCheckpointBytes,
 } from './checkpoint-commit-snapshots.ts';
 import {
+  attachTransientCheckpointReplayPayload,
+  createCheckpointEventPayload,
+  mergeCheckpointReplayPayloads,
+  pruneCheckpointReplayState,
+  readCheckpointReplayPayload,
+  type CheckpointReplayPayload,
+} from './checkpoint-replay.ts';
+import {
+  clearPendingAtomicWorkflowCommitSideEffects,
+  takePendingAtomicWorkflowCommitSideEffects,
+  type AtomicWorkflowCommitSideEffects,
+} from './checkpoint-side-effects.ts';
+import {
   appendCompactionOperations,
-  type CompactionResult,
   serializeDeletedEntries,
+  type CompactionResult,
 } from './event-log-compaction.ts';
 import type { EngineInternals } from './internals.ts';
 import { getTimelineInputSummary, getTimelineOperationLabel } from './state-utilities.ts';
@@ -102,6 +115,7 @@ export function appendTimelineBatchOperations(
 type CheckpointCommit = {
   checkpoint: CheckpointStateForCommit;
   serialized: Uint8Array;
+  replayPayload?: CheckpointReplayPayload;
   expectedSerialized?: Uint8Array;
   step: number;
   timestamp: number;
@@ -151,11 +165,18 @@ async function persistInlineCheckpoint(
     now: internals.options.getNow(),
     ...(pendingAttributeChanges !== undefined ? { searchAttributes: pendingAttributeChanges } : {}),
   });
+  const pruned = pruneCheckpointReplayState(
+    advanced,
+    resolvePendingOperationStep(operation, context.stepIndex),
+  );
   const commit = createCheckpointCommit(
     internals,
     workflowId,
-    advanced,
-    serializeCheckpoint(advanced),
+    pruned.checkpoint,
+    serializeCheckpoint(
+      attachTransientCheckpointReplayPayload(pruned.checkpoint, pruned.replayPayload),
+    ),
+    pruned.replayPayload,
   );
   appendAttributeOperations(
     workflowId,
@@ -180,11 +201,26 @@ async function persistWorkerCheckpoint(
 ): Promise<void> {
   const serialized = new Uint8Array(workerCheckpointBytes);
   const checkpoint = deserializeCheckpoint(serialized);
+  const workerReplayPayload = readCheckpointReplayPayload(checkpoint);
+  const pruned = pruneCheckpointReplayState(
+    checkpoint,
+    resolvePendingOperationStep(operation, checkpoint.step),
+  );
+  const replayPayload = mergeCheckpointReplayPayloads(workerReplayPayload, pruned.replayPayload);
+  const prunedSerialized = serializeCheckpoint(
+    attachTransientCheckpointReplayPayload(pruned.checkpoint, replayPayload),
+  );
   await commitCheckpoint(
     internals,
     workflowId,
     operation,
-    createCheckpointCommit(internals, workflowId, checkpoint, serialized),
+    createCheckpointCommit(
+      internals,
+      workflowId,
+      pruned.checkpoint,
+      prunedSerialized,
+      replayPayload,
+    ),
     callbacks,
   );
 }
@@ -194,6 +230,7 @@ function createCheckpointCommit(
   workflowId: string,
   checkpoint: CheckpointStateForCommit,
   serialized: Uint8Array,
+  replayPayload: CheckpointReplayPayload | undefined,
 ): CheckpointCommit {
   const operations: BatchOperation[] = [
     { type: 'put', key: KEYS.checkpoint(workflowId), value: serialized },
@@ -209,6 +246,7 @@ function createCheckpointCommit(
   return {
     checkpoint,
     serialized,
+    ...(replayPayload === undefined ? {} : { replayPayload }),
     ...(expectedSerialized !== undefined ? { expectedSerialized } : {}),
     step: checkpoint.step,
     timestamp: checkpoint.createdAt,
@@ -271,14 +309,29 @@ async function commitCheckpoint(
           retentionWindow,
           commit.operations,
         );
+  const pendingSideEffects = takePendingAtomicWorkflowCommitSideEffects(internals, workflowId);
+  if (pendingSideEffects !== undefined) {
+    commit.operations.push(...pendingSideEffects.operations);
+  }
 
-  if (
-    commit.expectedSerialized === undefined ||
-    !internals.storage.capabilities().conditionalBatch
-  ) {
+  const storageSupportsConditionalBatch = internals.storage.capabilities().conditionalBatch;
+  const sideEffectConditions = checkpointSideEffectConditions(
+    pendingSideEffects,
+    storageSupportsConditionalBatch,
+  );
+  const conditions = buildCheckpointCommitConditions(
+    workflowId,
+    commit,
+    storageSupportsConditionalBatch,
+    sideEffectConditions,
+  );
+  if (conditions.length === 0) {
     await internals.storage.batch(commit.operations);
   } else {
-    await writeCheckpointCommitBatch(internals, workflowId, commit, commit.expectedSerialized);
+    await writeCheckpointCommitBatch(internals, workflowId, commit, conditions);
+  }
+  if (pendingSideEffects !== undefined) {
+    clearPendingAtomicWorkflowCommitSideEffects(internals, workflowId);
   }
   if (commit.expectedSerialized !== undefined) {
     rememberCommittedCheckpointBytes(internals, workflowId, commit.serialized);
@@ -317,20 +370,39 @@ async function writeCheckpointCommitBatch(
   internals: EngineInternals,
   workflowId: string,
   commit: CheckpointCommit,
-  expectedSerialized: Uint8Array,
+  conditions: ConditionalBatchCondition[],
 ): Promise<void> {
-  const conditions: ConditionalBatchCondition[] = [
-    {
-      key: KEYS.checkpoint(workflowId),
-      expectedValue: expectedSerialized,
-    },
-  ];
   const committed = await storageConditionalBatch(internals.storage, conditions, commit.operations);
   if (!committed) {
     throw new Error(
       `Checkpoint commit for workflow "${workflowId}" lost its CAS race against a newer checkpoint.`,
     );
   }
+}
+
+function checkpointSideEffectConditions(
+  pendingSideEffects: AtomicWorkflowCommitSideEffects | undefined,
+  storageSupportsConditionalBatch: boolean,
+): ConditionalBatchCondition[] {
+  if (!storageSupportsConditionalBatch) return [];
+  return pendingSideEffects?.conditions ?? [];
+}
+
+function buildCheckpointCommitConditions(
+  workflowId: string,
+  commit: CheckpointCommit,
+  includeCheckpointCondition: boolean,
+  sideEffectConditions: ConditionalBatchCondition[],
+): ConditionalBatchCondition[] {
+  const conditions: ConditionalBatchCondition[] = [];
+  if (includeCheckpointCondition && commit.expectedSerialized !== undefined) {
+    conditions.push({
+      key: KEYS.checkpoint(workflowId),
+      expectedValue: commit.expectedSerialized,
+    });
+  }
+  conditions.push(...sideEffectConditions);
+  return conditions;
 }
 
 /**
@@ -385,11 +457,29 @@ function appendCheckpointEventLog(
 ): ReturnType<EventLog['appendToBatch']> {
   const eventLog = new EventLog(internals.storage, workflowId);
   return eventLog.appendToBatch(
-    { type: 'workflow:checkpoint', payload: { step: commit.step } },
+    {
+      type: 'workflow:checkpoint',
+      payload: createCheckpointEventPayload(commit.step, commit.replayPayload),
+    },
     commit.operations,
     internals.eventLogHeads.get(workflowId) ?? EMPTY_EVENT_HEAD,
     internals.workflowVersionTuples.get(workflowId),
   );
+}
+
+function resolvePendingOperationStep(
+  operation: ContextOperationRequest,
+  fallbackStepIndex: number,
+): number {
+  const operationStep = 'step' in operation ? operation.step : undefined;
+  if (
+    typeof operationStep === 'number' &&
+    Number.isSafeInteger(operationStep) &&
+    operationStep >= 0
+  ) {
+    return operationStep;
+  }
+  return Math.max(0, fallbackStepIndex - 1);
 }
 
 /** Delete the single checkpoint history entry that overflows the retention limit. */
@@ -422,7 +512,11 @@ export function validateDevelopmentCheckpoint(
   const step = context.stepIndex;
   const current = internals.checkpoints.get(workflowId);
   if (!current) return;
-  const result = validateCheckpointRoundTrip(current);
+  const result = validateCheckpointRoundTrip({
+    ...current,
+    locals: context.checkpointLocals,
+    accumulatedResults: context.checkpointAccumulatedResults,
+  });
 
   if (!result.valid) {
     const fieldPaths = result.divergences.map((divergence) => divergence.path);

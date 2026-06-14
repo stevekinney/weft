@@ -89,7 +89,7 @@ describe('crash recovery', () => {
     );
     const resumedEvents: WorkflowResumedEvent[] = [];
     recoveredEngine.addEventListener(WorkflowResumedEvent.type, (event) => {
-      resumedEvents.push(event as WorkflowResumedEvent);
+      resumedEvents.push(event);
     });
 
     const checkpointKey = STORAGE_KEYS.checkpoint('preflight-known-id');
@@ -146,7 +146,7 @@ describe('crash recovery', () => {
     );
     const skippedEvents: WorkflowRecoverySkippedEvent[] = [];
     recoveredEngine.addEventListener(WorkflowRecoverySkippedEvent.type, (event) => {
-      skippedEvents.push(event as WorkflowRecoverySkippedEvent);
+      skippedEvents.push(event);
     });
 
     const handles = await recoveredEngine.recoverAll({ acknowledgeUnknownWorkflowTypes: true });
@@ -230,7 +230,7 @@ describe('crash recovery', () => {
     );
     const skippedEvents: WorkflowRecoverySkippedEvent[] = [];
     recoveredEngine.addEventListener(WorkflowRecoverySkippedEvent.type, (event) => {
-      skippedEvents.push(event as WorkflowRecoverySkippedEvent);
+      skippedEvents.push(event);
     });
 
     const handles = await recoveredEngine.recoverAll({ acknowledgeUnknownWorkflowTypes: true });
@@ -538,7 +538,7 @@ describe('crash recovery', () => {
     // Detect a buffered `ev` signal record directly in durable storage (the
     // `sig:<encoded-id>:ev:` keyspace), so the assertions below do not reach into
     // engine internals from outside the engine module.
-    const evSignalPrefix = `sig:${encodeStorageKeyComponent('wf-race-signal')}:ev:`;
+    const evSignalPrefix = `sig:${encodeStorageKeyComponent('wf-race-signal')}:${encodeStorageKeyComponent('ev')}:`;
     const hasBufferedEv = async () => {
       for await (const _entry of storage.scan(evSignalPrefix, { limit: 1 })) return true;
       return false;
@@ -786,7 +786,7 @@ describe('crash recovery', () => {
 
     const events: WorkflowResumedEvent[] = [];
     engine2.addEventListener(WorkflowResumedEvent.type, (event) => {
-      events.push(event as WorkflowResumedEvent);
+      events.push(event);
     });
 
     await engine2.recoverAll();
@@ -838,42 +838,216 @@ describe('crash recovery', () => {
     engine[Symbol.dispose]();
   });
 
-  it('persists accumulated results in checkpoint', async () => {
+  it('prunes consumed accumulated results from the checkpoint and recovers them from replay history', async () => {
     const storage = new MemoryStorage();
+    let activityCalls = 0;
+    const activityCount = 20;
 
     const engine = new Engine({ storage });
     engine.register(
       workflow({ name: 'accumulating' }).execute(async function* (ctx) {
-        const c = ctx;
-        yield* c.run(async () => 'first');
-        // Wait for signal to block the workflow mid-execution
-        yield* c.waitForSignal('go');
-        return 'done';
+        const results: string[] = [];
+        for (let index = 0; index < activityCount; index += 1) {
+          results.push(
+            yield* ctx.run(async () => {
+              activityCalls += 1;
+              return `value-${index}`;
+            }),
+          );
+        }
+        const signal = yield* ctx.waitForSignal<string>('go');
+        return { results, signal };
       }),
     );
 
     await engine.start('accumulating', null, { id: 'wf-accum' });
     await flush();
+    expect(activityCalls).toBe(activityCount);
 
-    // Check the checkpoint contains accumulated results
     const { deserializeCheckpoint } = await import('./checkpoint.ts');
     const { KEYS } = await import('../storage/interface.ts');
     const bytes = await storage.get(KEYS.checkpoint('wf-accum'));
     expect(bytes).not.toBeNull();
 
     const checkpoint = deserializeCheckpoint(bytes!);
-    // Should have at least the result from step 0 (the ctx.run)
-    expect(checkpoint.accumulatedResults.length).toBeGreaterThan(0);
+    expect(checkpoint.accumulatedResults).toEqual([]);
 
-    // The first accumulated result should be 'first'
-    const resultMap = new Map(checkpoint.accumulatedResults);
-    expect(resultMap.get(0)).toBe('first');
+    activityCalls = 0;
+    engine[Symbol.dispose]();
 
-    // Clean up
-    await engine.signal('wf-accum', 'go', null);
+    const recoveredEngine = new Engine({ storage });
+    recoveredEngine.register(
+      workflow({ name: 'accumulating' }).execute(async function* (ctx) {
+        const results: string[] = [];
+        for (let index = 0; index < activityCount; index += 1) {
+          results.push(
+            yield* ctx.run(async () => {
+              activityCalls += 1;
+              return `value-${index}`;
+            }),
+          );
+        }
+        const signal = yield* ctx.waitForSignal<string>('go');
+        return { results, signal };
+      }),
+    );
+
+    const handles = await recoveredEngine.recoverAll();
+    expect(handles.map((handle) => handle.id)).toEqual(['wf-accum']);
+    expect(activityCalls).toBe(0);
+
+    await recoveredEngine.signal('wf-accum', 'go', 'resumed');
+    await flush();
+    await expect(recoveredEngine.getHandle('wf-accum').result()).resolves.toEqual({
+      results: Array.from({ length: activityCount }, (_, index) => `value-${index}`),
+      signal: 'resumed',
+    });
+
+    recoveredEngine[Symbol.dispose]();
+  });
+
+  it('keeps inline serialized checkpoints bounded by pending results instead of all completed steps', async () => {
+    const storage = new MemoryStorage();
+    const activityCount = 25;
+    const activityResult = { value: 'x'.repeat(200) };
+
+    const engine = new Engine({ storage, checkpointHistory: activityCount + 2 });
+    engine.register(
+      workflow({ name: 'bounded-inline-checkpoint' }).execute(async function* (ctx) {
+        for (let index = 0; index < activityCount; index += 1) {
+          yield* ctx.run(async () => activityResult);
+        }
+        yield* ctx.waitForSignal('go');
+        return 'done';
+      }),
+    );
+
+    await engine.start('bounded-inline-checkpoint', null, { id: 'wf-bounded-inline' });
     await flush();
 
+    const { deserializeCheckpoint } = await import('./checkpoint.ts');
+    const { KEYS } = await import('../storage/interface.ts');
+    const historySizes: number[] = [];
+
+    for await (const [, checkpointBytes] of storage.scan(
+      `${KEYS.checkpoint('wf-bounded-inline')}:`,
+    )) {
+      const checkpoint = deserializeCheckpoint(checkpointBytes);
+      expect(checkpoint.accumulatedResults.length).toBeLessThanOrEqual(1);
+      historySizes.push(checkpointBytes.byteLength);
+    }
+
+    expect(historySizes.length).toBeGreaterThan(10);
+    expect(Math.max(...historySizes)).toBeLessThan(1_500);
+
+    await engine.signal('wf-bounded-inline', 'go', null);
+    await flush();
     engine[Symbol.dispose]();
+  });
+
+  it('recovers old unpruned checkpoints that have no replay-history payloads', async () => {
+    const storage = new MemoryStorage();
+    await seedStoredWorkflowState(storage, 'wf-old-accum', 'old-accumulating', 'running');
+
+    const { createCheckpoint, serializeCheckpoint } = await import('./checkpoint.ts');
+    const { KEYS } = await import('../storage/interface.ts');
+    await storage.put(
+      KEYS.checkpoint('wf-old-accum'),
+      serializeCheckpoint({
+        ...createCheckpoint('wf-old-accum', '1'),
+        step: 2,
+        accumulatedResults: [[0, 'old-result']],
+      }),
+    );
+
+    let activityCalls = 0;
+    const recoveredEngine = new Engine({ storage });
+    recoveredEngine.register(
+      workflow({ name: 'old-accumulating' }).execute(async function* (ctx) {
+        const result = yield* ctx.run(async () => {
+          activityCalls += 1;
+          return 'new-result';
+        });
+        const signal = yield* ctx.waitForSignal<string>('go');
+        return { result, signal };
+      }),
+    );
+
+    const handles = await recoveredEngine.recoverAll();
+    expect(handles.map((handle) => handle.id)).toEqual(['wf-old-accum']);
+    expect(activityCalls).toBe(0);
+
+    await recoveredEngine.signal('wf-old-accum', 'go', 'resumed');
+    await flush();
+    await expect(recoveredEngine.getHandle('wf-old-accum').result()).resolves.toEqual({
+      result: 'old-result',
+      signal: 'resumed',
+    });
+
+    recoveredEngine[Symbol.dispose]();
+  });
+
+  it('recovers pruned checkpoints after event-log compaction folds replay payloads into the watermark', async () => {
+    const storage = new MemoryStorage();
+    let activityCalls = 0;
+    const activityCount = 6;
+
+    const engine = new Engine({ storage, history: { retentionWindow: 1 } });
+    engine.register(
+      workflow({ name: 'compacted-accumulating' }).execute(async function* (ctx) {
+        const results: string[] = [];
+        for (let index = 0; index < activityCount; index += 1) {
+          results.push(
+            yield* ctx.run(async () => {
+              activityCalls += 1;
+              return `compacted-${index}`;
+            }),
+          );
+        }
+        const signal = yield* ctx.waitForSignal<string>('go');
+        return { results, signal };
+      }),
+    );
+
+    await engine.start('compacted-accumulating', null, { id: 'wf-compacted-accum' });
+    await flush();
+    expect(activityCalls).toBe(activityCount);
+
+    const { KEYS } = await import('../storage/interface.ts');
+    expect(await storage.get(KEYS.event('wf-compacted-accum', 0))).toBeNull();
+
+    activityCalls = 0;
+    engine[Symbol.dispose]();
+
+    const recoveredEngine = new Engine({ storage, history: { retentionWindow: 1 } });
+    recoveredEngine.register(
+      workflow({ name: 'compacted-accumulating' }).execute(async function* (ctx) {
+        const results: string[] = [];
+        for (let index = 0; index < activityCount; index += 1) {
+          results.push(
+            yield* ctx.run(async () => {
+              activityCalls += 1;
+              return `compacted-${index}`;
+            }),
+          );
+        }
+        const signal = yield* ctx.waitForSignal<string>('go');
+        return { results, signal };
+      }),
+    );
+
+    const handles = await recoveredEngine.recoverAll();
+    expect(handles.map((handle) => handle.id)).toEqual(['wf-compacted-accum']);
+    expect(activityCalls).toBe(0);
+
+    await recoveredEngine.signal('wf-compacted-accum', 'go', 'resumed');
+    await flush();
+    await expect(recoveredEngine.getHandle('wf-compacted-accum').result()).resolves.toEqual({
+      results: Array.from({ length: activityCount }, (_, index) => `compacted-${index}`),
+      signal: 'resumed',
+    });
+
+    recoveredEngine[Symbol.dispose]();
   });
 
   it('restores event log head on resume so the next checkpoint does not overwrite prior entries', async () => {
@@ -1050,7 +1224,7 @@ describe('crash recovery', () => {
       recover: false,
     });
     inspecting.addEventListener(WorkflowResumedEvent.type, (event) => {
-      resumedEvents.push(event as WorkflowResumedEvent);
+      resumedEvents.push(event);
     });
     await flush();
     const dormantState = await inspecting.get('wf-opt-out');

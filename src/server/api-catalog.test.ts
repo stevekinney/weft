@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../core/engine.ts';
+import { handleMcpHttpRequest } from '../mcp/http.ts';
+import { createMcpSessionManager } from '../mcp/session.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import {
   createPublicOriginWarner,
@@ -187,6 +189,37 @@ describe('API catalog linkset', () => {
   it('returns 503 for /.well-known/mcp.json by default without publicOrigin or trustedHosts', async () => {
     engine = createEngine();
     await expectUntrustedOriginRejected(engine, 'https://attacker.example/.well-known/mcp.json');
+  });
+
+  it('does not derive MCP discovery surfaces from Host-header-injected origins', async () => {
+    engine = createEngine();
+    const injectedOrigin = 'https://attacker.example';
+    await expectUntrustedOriginRejected(engine, `${injectedOrigin}/.well-known/mcp.json`);
+
+    const openRpcResponse = await handleRequest(
+      new Request(`${injectedOrigin}/openrpc.json`),
+      engine,
+    );
+    expect(openRpcResponse.status).toBe(200);
+    const openRpcText = await openRpcResponse.text();
+    expect(openRpcText).not.toContain(injectedOrigin);
+    expect(openRpcText).toContain('/.well-known/mcp.json');
+
+    const sessionManager = createMcpSessionManager(engine);
+    try {
+      const mcpResponse = await handleMcpHttpRequest({
+        request: new Request(`${injectedOrigin}/mcp`, {
+          method: 'PUT',
+          headers: { origin: injectedOrigin },
+        }),
+        engine,
+        sessionManager,
+        authRequired: false,
+      });
+      expect(mcpResponse.status).toBe(403);
+    } finally {
+      await sessionManager[Symbol.asyncDispose]();
+    }
   });
 
   it('serves /.well-known/mcp.json when the explicit untrusted-origin override is set', async () => {

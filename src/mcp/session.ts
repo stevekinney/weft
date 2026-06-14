@@ -1,16 +1,25 @@
 import type { Engine } from '../core/engine.ts';
-import type { WeftEventMap } from '../core/events.ts';
+import { WorkflowDefinitionRegisteredEvent, type WeftEventMap } from '../core/events.ts';
 import { WeftError } from '../core/weft-error.ts';
 import type { JsonRpcId } from '../server/json-rpc-protocol.ts';
 import type { Principal } from '../server/principal.ts';
-import { requestIdKey, type McpResponse } from './protocol.ts';
+import { MCP_TOOLS_LIST_CHANGED_NOTIFICATION, requestIdKey, type McpResponse } from './protocol.ts';
 import { isWorkflowSearchResourceUri, workflowResourceUri } from './resources.ts';
+import { listMcpTools } from './tools.ts';
 
 type NotificationTarget = (message: McpResponse | Record<string, unknown>) => void;
 
 type PendingRequest = {
   readonly workflowId: string;
+  readonly abortController: AbortController;
 };
+
+type ToolListSignatureEntry = readonly [
+  name: string,
+  title: string | undefined,
+  description: string,
+  inputSchemaJson: string,
+];
 
 /**
  * MCP lifecycle phase tracked for one session.
@@ -137,7 +146,7 @@ export class McpSession {
   trackRequest(requestId: unknown, workflowId: string): void {
     const key = requestIdKey(asJsonRpcId(requestId));
     if (key === undefined) return;
-    this.#pendingRequests.set(key, { workflowId });
+    this.#pendingRequests.set(key, { workflowId, abortController: new AbortController() });
   }
 
   /** Record cancellation for a tracked in-flight request and return its workflow id. */
@@ -147,6 +156,7 @@ export class McpSession {
     const request = this.#pendingRequests.get(key);
     if (request === undefined) return undefined;
     this.#cancelledRequestKeys.add(key);
+    request.abortController.abort();
     return request.workflowId;
   }
 
@@ -154,6 +164,13 @@ export class McpSession {
   isRequestCancelled(requestId: unknown): boolean {
     const key = requestIdKey(asJsonRpcId(requestId));
     return key !== undefined && this.#cancelledRequestKeys.has(key);
+  }
+
+  /** Abort signal for an in-flight MCP request, if it can be cancelled. */
+  requestSignal(requestId: unknown): AbortSignal | undefined {
+    const key = requestIdKey(asJsonRpcId(requestId));
+    if (key === undefined) return undefined;
+    return this.#pendingRequests.get(key)?.abortController.signal;
   }
 
   /** Stop tracking an in-flight request after it completes. */
@@ -222,24 +239,34 @@ function asJsonRpcId(value: unknown): JsonRpcId | undefined {
 export class McpSessionManager implements AsyncDisposable {
   readonly #engine: Engine;
   readonly #sessions = new Map<string, McpSession>();
-  readonly #listener: EventListener;
+  readonly #resourceListener: EventListener;
+  readonly #workflowDefinitionListener: EventListener;
   readonly #maximumSessions: number;
   readonly #sessionIdleTimeoutMilliseconds: number;
   readonly #currentTimeMilliseconds: () => number;
+  #toolListSignature: ReadonlyArray<ToolListSignatureEntry>;
 
   constructor(engine: Engine, options: McpSessionManagerOptions = {}) {
     this.#engine = engine;
     this.#maximumSessions = options.maximumSessions ?? 1_024;
     this.#sessionIdleTimeoutMilliseconds = options.sessionIdleTimeoutMilliseconds ?? 30 * 60 * 1000;
     this.#currentTimeMilliseconds = options.currentTimeMilliseconds ?? Date.now;
-    this.#listener = (event) => {
+    this.#toolListSignature = toolListSignature(engine);
+    this.#resourceListener = (event) => {
       const workflowId = (event as { workflowId?: unknown }).workflowId;
       if (typeof workflowId !== 'string') return;
       this.#notifyWorkflowResourceUpdated(workflowId);
     };
+    this.#workflowDefinitionListener = () => {
+      this.#notifyToolListChangedIfNeeded();
+    };
     for (const eventName of RESOURCE_EVENT_NAMES) {
-      this.#engine.addEventListener(eventName, this.#listener);
+      this.#engine.addEventListener(eventName, this.#resourceListener);
     }
+    this.#engine.addEventListener(
+      WorkflowDefinitionRegisteredEvent.type,
+      this.#workflowDefinitionListener,
+    );
   }
 
   /** Create and store a new session for a principal. */
@@ -315,6 +342,20 @@ export class McpSessionManager implements AsyncDisposable {
     this.#deleteExpiredSessions();
   }
 
+  #notifyToolListChangedIfNeeded(): void {
+    const nextSignature = toolListSignature(this.#engine);
+    if (toolListSignaturesEqual(this.#toolListSignature, nextSignature)) return;
+    this.#toolListSignature = nextSignature;
+
+    const now = this.#currentTimeMilliseconds();
+    for (const session of this.#sessions.values()) {
+      if (session.phase !== 'ready') continue;
+      session.touch(now);
+      session.notify(MCP_TOOLS_LIST_CHANGED_NOTIFICATION);
+    }
+    this.#deleteExpiredSessions();
+  }
+
   #deleteExpiredSessions(): void {
     const now = this.#currentTimeMilliseconds();
     for (const [sessionId, session] of this.#sessions) {
@@ -326,10 +367,44 @@ export class McpSessionManager implements AsyncDisposable {
 
   async [Symbol.asyncDispose](): Promise<void> {
     for (const eventName of RESOURCE_EVENT_NAMES) {
-      this.#engine.removeEventListener(eventName, this.#listener);
+      this.#engine.removeEventListener(eventName, this.#resourceListener);
     }
+    this.#engine.removeEventListener(
+      WorkflowDefinitionRegisteredEvent.type,
+      this.#workflowDefinitionListener,
+    );
     this.closeAll();
   }
+}
+
+function toolListSignature(engine: Engine): ToolListSignatureEntry[] {
+  return listMcpTools(engine).map((tool) => [
+    tool.name,
+    tool.title,
+    tool.description,
+    JSON.stringify(tool.inputSchema) ?? '',
+  ]);
+}
+
+function toolListSignaturesEqual(
+  left: ReadonlyArray<ToolListSignatureEntry>,
+  right: ReadonlyArray<ToolListSignatureEntry>,
+): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index++) {
+    const leftEntry = left[index];
+    const rightEntry = right[index];
+    if (leftEntry === undefined || rightEntry === undefined) return false;
+    if (
+      leftEntry[0] !== rightEntry[0] ||
+      leftEntry[1] !== rightEntry[1] ||
+      leftEntry[2] !== rightEntry[2] ||
+      leftEntry[3] !== rightEntry[3]
+    ) {
+      return false;
+    }
+  }
+  return true;
 }
 
 /**

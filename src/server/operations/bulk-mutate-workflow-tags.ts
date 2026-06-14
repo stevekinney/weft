@@ -113,8 +113,8 @@ export const bulkMutateWorkflowTagsRestBinding: UnknownRestBinding = {
     tags: { kind: 'body-field', bodyField: 'tags' },
     operation: { kind: 'body-field', bodyField: 'operation' },
   },
-  extractInput: async (request) => {
-    const raw = await readOptionalJsonBody(request);
+  extractInput: async (request, _pathParams, context) => {
+    const raw = await readOptionalJsonBody(request, context);
     if (raw === undefined || typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
       throw invalidParamsFault('Request body must be a JSON object');
     }

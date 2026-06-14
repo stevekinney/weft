@@ -67,6 +67,13 @@ export type LifecycleCallbacks = {
    * `error` is the canonical {@link unavailableServicesError}.
    */
   failWorkflowForUnavailableServices: (workflowId: string, error: Error) => Promise<void>;
+  /**
+   * Force a recovered workflow to a terminal `failed` state because its
+   * persisted checkpoint cannot be decoded on this runtime. The failure is
+   * isolated to the affected run so `recoverAll()` can continue recovering
+   * other workflows from the same storage backend.
+   */
+  failWorkflowForCheckpointDecodeError: (workflowId: string, error: Error) => Promise<void>;
 };
 
 /**

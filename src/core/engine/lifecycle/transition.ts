@@ -1,11 +1,13 @@
 import { KEYS } from '../../../storage/interface.ts';
 import { deserializeCheckpoint, serializeCheckpoint } from '../../checkpoint.ts';
+import { RegExpExtensionDecodeError } from '../../codec/extension-codec.ts';
 import { Context, setContextWorkflowInterceptor } from '../../context.ts';
 import { EMPTY_EVENT_HEAD } from '../../event-log.ts';
 import { WorkflowRecoverySkippedEvent, WorkflowStartedEvent } from '../../events.ts';
 import type { Checkpoint, ForkOptions, WorkflowState } from '../../types.ts';
 import { createCancelHandlerRegistration, resetCancelHandlers } from '../cancel-handlers.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
+import { hydrateCheckpointReplayState } from '../checkpoint-replay.ts';
 import { WorkflowTypeNotRegisteredForRecoveryError } from '../errors.ts';
 import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
@@ -149,7 +151,15 @@ export async function recoverAll(
       );
       continue;
     }
-    handles.push(await resume(internals, entry.workflowId, callbacks));
+    try {
+      handles.push(await resume(internals, entry.workflowId, callbacks));
+    } catch (error) {
+      if (error instanceof RegExpExtensionDecodeError) {
+        await callbacks.failWorkflowForCheckpointDecodeError(entry.workflowId, error);
+        continue;
+      }
+      throw error;
+    }
   }
 
   return handles;
@@ -216,7 +226,12 @@ export async function fork(
     throw new Error(`Checkpoint not found for workflow "${sourceWorkflowId}"`);
   }
 
-  const sourceCheckpoint = deserializeCheckpoint(checkpointBytes);
+  const storedSourceCheckpoint = deserializeCheckpoint(checkpointBytes);
+  const sourceCheckpoint = await hydrateCheckpointReplayState(
+    internals.storage,
+    sourceWorkflowId,
+    storedSourceCheckpoint,
+  );
   const preparedExecutionState = derivePreparedExecutionState(
     internals,
     sourceWorkflowId,
@@ -233,8 +248,10 @@ export async function fork(
   const workflowId = crypto.randomUUID();
   const forkedAt = internals.options.getNow();
   const lineage = createForkLineage(internals, sourceWorkflowId, sourceCheckpoint, callbacks);
+  const { accumulatedResultReplayWatermark: _sourceReplayWatermark, ...sourceCheckpointForFork } =
+    preparedExecutionState.checkpoint;
   const forkCheckpoint: Checkpoint = {
-    ...preparedExecutionState.checkpoint,
+    ...sourceCheckpointForFork,
     createdAt: forkedAt,
     workflowId,
     searchAttributes: buildForkSearchAttributes(

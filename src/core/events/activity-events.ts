@@ -8,9 +8,8 @@
  * import { Engine, ActivityStartedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('activity:started', (e: Event) => {
- *   const ev = e as ActivityStartedEvent;
- *   console.log('activity started:', ev.activityName, 'attempt', ev.attempt);
+ * engine.addEventListener(ActivityStartedEvent.type, (event) => {
+ *   console.log('activity started:', event.activityName, 'attempt', event.attempt);
  * });
  * ```
  */
@@ -40,9 +39,8 @@ export class ActivityStartedEvent extends Event {
  * import { Engine, ActivityCompletedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('activity:completed', (e: Event) => {
- *   const ev = e as ActivityCompletedEvent;
- *   console.log(ev.activityName, 'completed in', ev.duration, 'ms');
+ * engine.addEventListener(ActivityCompletedEvent.type, (event) => {
+ *   console.log(event.activityName, 'completed in', event.duration, 'ms');
  * });
  * ```
  */
@@ -77,9 +75,8 @@ export class ActivityCompletedEvent extends Event {
  * import { Engine, ActivityAsyncPendingEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('activity:async-pending', (e: Event) => {
- *   const ev = e as ActivityAsyncPendingEvent;
- *   console.log('awaiting external completion of', ev.activityName, 'token', ev.token);
+ * engine.addEventListener(ActivityAsyncPendingEvent.type, (event) => {
+ *   console.log('awaiting external completion of', event.activityName, 'token', event.token);
  * });
  * ```
  */
@@ -118,9 +115,8 @@ export class ActivityAsyncPendingEvent extends Event {
  * import { Engine, ActivityFailedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('activity:failed', (e: Event) => {
- *   const ev = e as ActivityFailedEvent;
- *   console.error(ev.activityName, 'attempt', ev.attempt, 'failed:', ev.error.message);
+ * engine.addEventListener(ActivityFailedEvent.type, (event) => {
+ *   console.error(event.activityName, 'attempt', event.attempt, 'failed:', event.error.message);
  * });
  * ```
  */
@@ -145,5 +141,58 @@ export class ActivityFailedEvent extends Event {
     this.activityName = activityName;
     this.error = error;
     this.attempt = attempt;
+  }
+}
+
+/**
+ * Fired on the {@link Engine} when a remote worker task result cannot be
+ * durably moved from in-flight to resolved after storage retries are exhausted.
+ * The durable dead-letter guard prevents reconciliation from silently
+ * re-dispatching the already-completed worker attempt until an operator clears
+ * the diagnostic entry.
+ *
+ * @example
+ * ```ts
+ * import { Engine, TaskResultDeadLetteredEvent } from '@lostgradient/weft';
+ *
+ * const engine = new Engine();
+ * engine.addEventListener(TaskResultDeadLetteredEvent.type, (event) => {
+ *   console.warn('task dead-lettered:', event.operationId, event.reason);
+ * });
+ * ```
+ */
+export class TaskResultDeadLetteredEvent extends Event {
+  static readonly type = 'task:dead-lettered' as const;
+  readonly operationId: string;
+  readonly workflowId: string | undefined;
+  readonly activityName: string | undefined;
+  readonly queue: string | undefined;
+  readonly workerId: string | undefined;
+  readonly reason: 'result-resolution-storage-exhausted';
+  readonly errorMessage: string;
+
+  constructor({
+    operationId,
+    workflowId,
+    activityName,
+    queue,
+    workerId,
+    errorMessage,
+  }: {
+    operationId: string;
+    workflowId?: string | undefined;
+    activityName?: string | undefined;
+    queue?: string | undefined;
+    workerId?: string | undefined;
+    errorMessage: string;
+  }) {
+    super(TaskResultDeadLetteredEvent.type);
+    this.operationId = operationId;
+    this.workflowId = workflowId;
+    this.activityName = activityName;
+    this.queue = queue;
+    this.workerId = workerId;
+    this.reason = 'result-resolution-storage-exhausted';
+    this.errorMessage = errorMessage;
   }
 }

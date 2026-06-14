@@ -601,7 +601,7 @@ describe('Engine', () => {
 
     const events: WorkflowStartedEvent[] = [];
     engine.addEventListener(WorkflowStartedEvent.type, (event) => {
-      events.push(event as WorkflowStartedEvent);
+      events.push(event);
     });
 
     const handle = await engine.start('noop', 'test-input');
@@ -695,7 +695,7 @@ describe('Engine', () => {
     const workflowId = 'queued-running-status';
     const storage = new MemoryStorage();
     const originalScan = storage.scan.bind(storage);
-    const signalPrefix = `sig:${encodeStorageKeyComponent(workflowId)}:go:`;
+    const signalPrefix = `sig:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent('go')}:`;
     const bufferedSignalScanStarted = Promise.withResolvers<void>();
     const bufferedSignalScanReleased = Promise.withResolvers<void>();
     let holdNextBufferedSignalScan = true;
@@ -865,7 +865,7 @@ describe('Engine', () => {
 
     const events: WorkflowCompletedEvent[] = [];
     engine.addEventListener(WorkflowCompletedEvent.type, (event) => {
-      events.push(event as WorkflowCompletedEvent);
+      events.push(event);
     });
 
     const handle = await engine.start('fast', null);
@@ -912,7 +912,7 @@ describe('Engine', () => {
     const consoleErrorSpy = spyOn(console, 'error').mockImplementation(() => {});
 
     engine.addEventListener(CleanupWarningEvent.type, (event) => {
-      cleanupWarnings.push(event as CleanupWarningEvent);
+      cleanupWarnings.push(event);
     });
 
     engine.register(
@@ -1037,7 +1037,7 @@ describe('Engine', () => {
 
     const events: WorkflowFailedEvent[] = [];
     engine.addEventListener(WorkflowFailedEvent.type, (event) => {
-      events.push(event as WorkflowFailedEvent);
+      events.push(event);
     });
 
     const handle = await engine.start('failing', null);
@@ -1312,7 +1312,7 @@ describe('Engine', () => {
     const workflowId = 'signal-waiter-cleanup';
     const storage = new MemoryStorage();
     const originalScan = storage.scan.bind(storage);
-    const targetPrefix = `sig:${encodeStorageKeyComponent(workflowId)}:approval:`;
+    const targetPrefix = `sig:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent('approval')}:`;
     let approvalScanCount = 0;
 
     storage.scan = function scan(
@@ -1369,7 +1369,7 @@ describe('Engine', () => {
 
     const events: WorkflowCancelledEvent[] = [];
     engine.addEventListener(WorkflowCancelledEvent.type, (event) => {
-      events.push(event as WorkflowCancelledEvent);
+      events.push(event);
     });
 
     const handle = await engine.start('cancellable', null);
@@ -1410,7 +1410,7 @@ describe('Engine', () => {
     const bufferedSignalScanStarted = Promise.withResolvers<void>();
     const bufferedSignalScanReleased = Promise.withResolvers<void>();
     const originalScan = storage.scan.bind(storage);
-    const signalPrefix = `sig:${workflowId}:go:`;
+    const signalPrefix = `sig:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent('go')}:`;
     let holdNextBufferedSignalScan = true;
 
     storage.scan = async function* (
@@ -2490,7 +2490,7 @@ describe('Engine', () => {
 
     const events: WorkflowTimedOutEvent[] = [];
     engine.addEventListener('workflow:timed-out', (event) => {
-      events.push(event as WorkflowTimedOutEvent);
+      events.push(event);
     });
 
     now = 7000;
@@ -3652,7 +3652,7 @@ describe('Engine', () => {
     const warnings: DevelopmentWarningEvent[] = [];
 
     engine.addEventListener(DevelopmentWarningEvent.type, (event) => {
-      warnings.push(event as DevelopmentWarningEvent);
+      warnings.push(event);
     });
 
     engine.register(
@@ -4041,7 +4041,7 @@ describe('Engine', () => {
     const warnings: CheckpointSizeWarningEvent[] = [];
 
     engine.addEventListener(CheckpointSizeWarningEvent.type, (event) => {
-      warnings.push(event as CheckpointSizeWarningEvent);
+      warnings.push(event);
     });
 
     const echoActivity = async (...args: unknown[]) => args[0];
@@ -4067,7 +4067,7 @@ describe('Engine', () => {
     const warnings: CheckpointSizeWarningEvent[] = [];
 
     engine.addEventListener(CheckpointSizeWarningEvent.type, (event) => {
-      warnings.push(event as CheckpointSizeWarningEvent);
+      warnings.push(event);
     });
 
     engine.register(
@@ -4088,7 +4088,7 @@ describe('Engine', () => {
     const warnings: CheckpointSizeWarningEvent[] = [];
 
     engine.addEventListener(CheckpointSizeWarningEvent.type, (event) => {
-      warnings.push(event as CheckpointSizeWarningEvent);
+      warnings.push(event);
     });
 
     const echoActivity = async (...args: unknown[]) => args[0];
@@ -4913,7 +4913,7 @@ describe('Engine', () => {
 
     const receivedEvents: InstanceType<typeof ReviewCompletedEvent>[] = [];
     engine.addEventListener(ReviewCompletedEvent.type, (event) => {
-      receivedEvents.push(event as InstanceType<typeof ReviewCompletedEvent>);
+      receivedEvents.push(event);
     });
 
     await engine.submitReview('rev-event-1', {
@@ -4951,7 +4951,7 @@ describe('Engine', () => {
 
     const receivedEvents: InstanceType<typeof ReviewCompletedEvent>[] = [];
     engine.addEventListener(ReviewCompletedEvent.type, (event) => {
-      receivedEvents.push(event as InstanceType<typeof ReviewCompletedEvent>);
+      receivedEvents.push(event);
     });
 
     // Submit without workflowId — triggers the scan path
@@ -5831,7 +5831,7 @@ describe('Engine', () => {
       });
 
       engine.addEventListener(CleanupWarningEvent.type, (event) => {
-        warnings.push(event as CleanupWarningEvent);
+        warnings.push(event);
       });
 
       engine.register(
@@ -6014,7 +6014,7 @@ describe('Engine', () => {
       const timerId = 'terminal-cleanup:malformed';
 
       engine.addEventListener(CleanupWarningEvent.type, (event) => {
-        warnings.push(event as CleanupWarningEvent);
+        warnings.push(event);
       });
 
       await engine.scheduler.schedule({

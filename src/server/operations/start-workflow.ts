@@ -174,8 +174,10 @@ export const startWorkflowRestBinding: UnknownRestBinding = {
     idempotencyKey: { kind: 'body-field', bodyField: 'idempotencyKey' },
     searchAttributes: { kind: 'body-field', bodyField: 'searchAttributes' },
   },
-  extractInput: async (request) => {
-    return extractSharedStartWorkflowRestFields(await parseStartWorkflowRequestRecord(request));
+  extractInput: async (request, _pathParams, context) => {
+    return extractSharedStartWorkflowRestFields(
+      await parseStartWorkflowRequestRecord(request, context),
+    );
   },
   success: { kind: 'json', status: 201 },
   shapeFault: shapeRestFault,

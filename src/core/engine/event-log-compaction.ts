@@ -23,6 +23,11 @@ import type { BatchOperation, Storage } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
 import { isWorkflowLogEntry } from '../event-log-shared.ts';
+import {
+  mergeCheckpointReplayPayloads,
+  readCheckpointReplayPayload,
+  type CheckpointReplayPayload,
+} from './checkpoint-replay.ts';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -67,6 +72,13 @@ export type EventLogWatermark = {
    * deleted prefix — unambiguous across incremental batches.
    */
   deletedThrough: number;
+  /**
+   * Internal replay deltas folded from compacted checkpoint events. Canonical
+   * checkpoints can prune consumed results only because recovery can seed replay
+   * from the event log; when old events are compacted, their replay deltas move
+   * here before deletion.
+   */
+  checkpointReplay?: CheckpointReplayPayload;
 };
 
 /**
@@ -180,6 +192,9 @@ export async function appendCompactionOperations(
     sequence: batchFirstSurviving,
     prevHash,
     deletedThrough: batchFirstSurviving - 1,
+    ...optionalCheckpointReplay(
+      mergeDeletedCheckpointReplayPayloads(existing?.checkpointReplay, collected.deletedEntries),
+    ),
   };
 
   for (let sequence = currentFloor; sequence < batchFirstSurviving; sequence += 1) {
@@ -196,6 +211,25 @@ export async function appendCompactionOperations(
     deletedEntries: collected.deletedEntries,
     deletedRange: { from: currentFloor, to: batchFirstSurviving - 1 },
   };
+}
+
+function optionalCheckpointReplay(
+  checkpointReplay: CheckpointReplayPayload | undefined,
+): { checkpointReplay: CheckpointReplayPayload } | {} {
+  return checkpointReplay === undefined ? {} : { checkpointReplay };
+}
+
+function mergeDeletedCheckpointReplayPayloads(
+  existing: CheckpointReplayPayload | undefined,
+  deletedEntries: Uint8Array[],
+): CheckpointReplayPayload | undefined {
+  let merged = existing;
+  for (const bytes of deletedEntries) {
+    const decoded = decode(bytes);
+    if (!isWorkflowLogEntry(decoded)) continue;
+    merged = mergeCheckpointReplayPayloads(merged, readCheckpointReplayPayload(decoded.payload));
+  }
+  return merged;
 }
 
 type CollectedDeleteRange = {

@@ -81,6 +81,9 @@ const packageRootAuth: AuthConfig = { apiKeys: ['secret'] };
 const fullyTypedPackageRootServeOptions: ServeOptions = {
   engine: packageRootEngine,
   auth: packageRootAuth,
+  maxRequestBodyBytes: 1_048_576,
+  maxStreamConnectionsPerWorkflow: 100,
+  workerShutdownTimeoutMs: 30_000,
   routingPolicy: packageRootRoutingPolicy,
   schedulingPolicy: packageRootSchedulingPolicy,
   discoveryInfo: packageRootDiscoveryInfo,

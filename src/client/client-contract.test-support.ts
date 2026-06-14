@@ -77,6 +77,7 @@ const sharedWeftClientMethodNames = [
   'getRetentionOverview',
   'purge',
   'cancelAll',
+  'retryFailedAll',
   'signalAll',
   'deleteAll',
   'tagAll',

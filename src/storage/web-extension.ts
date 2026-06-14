@@ -8,6 +8,7 @@ import {
   storageKeysCore,
 } from './derived-operations.ts';
 import {
+  assertStorageBatchOperationCount,
   matchesScanOptions,
   type BatchOperation,
   type ScanOptions,
@@ -277,7 +278,7 @@ export class WebExtensionStorage implements Storage {
       persistence: this.#persistence,
       readAfterWrite: 'session',
       scanConsistency: 'best-effort',
-      atomicBatch: true,
+      atomicBatch: false,
       conditionalBatch: false,
       boundedRangeDelete: false,
     };
@@ -444,6 +445,7 @@ export class WebExtensionStorage implements Storage {
   }
 
   async batch(operations: BatchOperation[]): Promise<void> {
+    assertStorageBatchOperationCount('batch operations', operations.length);
     this.#assertWritable();
     if (operations.length === 0) return;
     assertBatchUserStorageKeys(operations);

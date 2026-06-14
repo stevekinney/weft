@@ -14,8 +14,13 @@ import type {
 } from '../types.ts';
 import { normalizeWorkflowTags } from '../workflow-tags.ts';
 import { mutateWorkflowTags, validateAttributeValueSizes } from './attributes-tags.ts';
+import { CONSTRAINED_ID_CHUNK_SIZE } from './candidate-read-batching.ts';
 import type { EngineInternals } from './internals.ts';
 import { resolveListCandidateIds } from './list-candidate-resolution.ts';
+import {
+  readSearchAttributesForFilter,
+  readSearchAttributesForStates,
+} from './search-attribute-records.ts';
 import { matchesListFilter, paginateWorkflowSummaries } from './state-utilities.ts';
 import { decodeWorkflowState, normalizeBulkFilterNumber } from './validation.ts';
 import { MAX_LIST_SCAN_ROWS, WorkflowListScanCapExceededError } from './workflow-indexes.ts';
@@ -62,8 +67,6 @@ export async function list(
   return paginateWorkflowSummaries(sortSummariesByCreatedAtDescending(items), normalizedFilter);
 }
 
-const CONSTRAINED_ID_CHUNK_SIZE = 64;
-
 /**
  * Phase — drain a constrained candidate-id set into summaries. Bounded
  * concurrency keeps the indexed path from fanning out millions of parallel
@@ -87,11 +90,24 @@ async function collectSummariesFromConstrainedIds(
     const chunkBytes = await Promise.all(
       chunkIds.map((workflowId) => internals.storage.get(KEYS.workflow(workflowId))),
     );
+    const searchAttributesByWorkflowId = await readSearchAttributesForStates(
+      internals,
+      chunkBytes,
+      normalizedFilter,
+    );
     const matchingStates: WorkflowState[] = [];
     for (const stateBytes of chunkBytes) {
       if (!stateBytes) continue;
       const state = decodeWorkflowState(stateBytes);
-      if (!matchesListFilter(state, normalizedFilter, constrainedIds, normalizedTagFilters)) {
+      if (
+        !matchesListFilter(
+          state,
+          normalizedFilter,
+          constrainedIds,
+          normalizedTagFilters,
+          searchAttributesByWorkflowId.get(state.id) ?? null,
+        )
+      ) {
         continue;
       }
       matchingStates.push(state);
@@ -119,7 +135,14 @@ async function collectSummariesFromFullScan(
     }
 
     const state = decodeWorkflowState(value);
-    if (!matchesListFilter(state, normalizedFilter, null, normalizedTagFilters)) continue;
+    const searchAttributes = await readSearchAttributesForFilter(
+      internals,
+      state.id,
+      normalizedFilter,
+    );
+    if (!matchesListFilter(state, normalizedFilter, null, normalizedTagFilters, searchAttributes)) {
+      continue;
+    }
 
     const attributeBytes = shouldReadFailureCategoryAttribute(state, options)
       ? await internals.storage.get(KEYS.attribute(state.id))

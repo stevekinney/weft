@@ -131,7 +131,7 @@ import { METRICS } from '@lostgradient/weft/observability';
 
 Each metric has a `name`, `description`, `unit`, and `type` (counter, gauge, or histogram). The [server](./server.md) exposes these at `GET /v1/metrics` in Prometheus-compatible text format.
 
-Task and worker metrics are intentionally low-cardinality. They tell you that backlog, queue latency, execution latency, retries, stale heartbeats, or capacity saturation exist. When you need the concrete evidence behind those aggregates, use `GET /api/v1/tasks/diagnostics` to retrieve bounded diagnostic items for stuck queued tasks, stale in-flight tasks, retry storms, and all-workers-at-capacity conditions.
+Task and worker metrics are intentionally low-cardinality. They tell you that backlog, queue latency, execution latency, retries, stale heartbeats, or capacity saturation exist. When you need the concrete evidence behind those aggregates, use `GET /api/v1/tasks/diagnostics` to retrieve bounded diagnostic items for stuck queued tasks, stale in-flight tasks, retry storms, all-workers-at-capacity conditions, and task-result dead letters.
 
 ## Composing with other interceptors
 

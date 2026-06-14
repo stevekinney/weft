@@ -6,6 +6,7 @@ import { asyncActivityWorkflowPrefix } from '../async-activity-completion.ts';
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import type { EngineInternals } from '../internals.ts';
 import { parseTerminalCleanupTimerId, workflowFeedListenerKey } from '../state-utilities.ts';
+import { releaseWorkflowConcurrencySlot } from '../workflow-concurrency.ts';
 
 export type TerminationCallbacks = {
   dispatchEvent: (event: Event) => void;
@@ -22,6 +23,7 @@ export type TerminationCallbacks = {
   commitWorkflowStateOperations: (
     state: WorkflowState,
     operations: BatchOperation[],
+    options?: { includePendingAtomicSideEffects?: boolean },
   ) => Promise<void>;
   cleanupReviews: (workflowId: string) => Promise<void>;
 };
@@ -275,6 +277,7 @@ export async function cleanupWorkflowStorage(
   // effect volume across the engine's lifetime.
   const prefixes: string[] = [
     KEYS.activityReconciliationPrefix(workflowId),
+    KEYS.childCancellationPrefix(workflowId),
     asyncActivityWorkflowPrefix(workflowId),
     KEYS.signalAcceptedResponsePrefix(workflowId),
     `sig:${encodedWorkflowId}:`,
@@ -292,6 +295,7 @@ export async function cleanupWorkflowStorage(
 
   await internals.storage.delete(KEYS.workflowHeaders(workflowId));
   await internals.storage.delete(KEYS.signalSequence(workflowId));
+  await releaseWorkflowConcurrencySlot(internals, workflowId);
   // The "expects services" marker is per-run bookkeeping, not an output artifact,
   // so drop it on every terminal cleanup regardless of `includeOutputArtifacts`.
   await internals.storage.delete(KEYS.workflowHasServices(workflowId));
@@ -354,6 +358,10 @@ export function cleanupTerminalWorkflowMemory(
   }
   internals.eventLogHeads.delete(workflowId);
   internals.pendingTimelineEntries.delete(workflowId);
+  internals.pendingAsyncActivityResolutions ??= new Map();
+  internals.pendingAsyncActivityResolutions.delete(workflowId);
+  internals.pendingAtomicWorkflowCommitSideEffects ??= new Map();
+  internals.pendingAtomicWorkflowCommitSideEffects.delete(workflowId);
   internals.parkedInlineWorkflows.delete(workflowId);
   // Strategy-side twin of parkedInlineWorkflows above: a run that parked retains
   // its Context in the inline strategy so query handlers stay callable. Drop it

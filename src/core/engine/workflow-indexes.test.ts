@@ -33,7 +33,6 @@ function makeState(overrides: Partial<WorkflowState> = {}): WorkflowState {
     pendingUpdates: {},
     updates: {},
     operationLeases: {},
-    pendingSignals: [],
   } as unknown as WorkflowState;
   return { ...base, ...overrides };
 }

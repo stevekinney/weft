@@ -4,7 +4,7 @@ This is the single most important architectural decision in Weft—the one that 
 
 Temporal recovers workflows by _replaying_ them. When a workflow needs to resume after a crash, Temporal re-executes the entire function from the beginning, feeding in recorded results from an event history to fast-forward through completed steps. The more steps a workflow has completed, the longer recovery takes. This is O(n) recovery, and it brings with it a cascade of constraints that touch every part of your development experience.
 
-Weft takes a different path. Instead of replaying, Weft _checkpoints_. At each `yield*` boundary, the engine snapshots the workflow's current state—all local variables, the current position in the generator—and persists it. On crash, Weft loads that snapshot and resumes from exactly where it stopped. One read, one resume. O(1) recovery, regardless of whether the workflow has completed 10 steps or 10 million.
+Weft takes a different path. Instead of replaying side effects, Weft _checkpoints_. At each `yield*` boundary, the engine snapshots the workflow's current state, including local variables and the generator step frontier, and persists it. On crash, Weft loads that checkpoint plus its internal replay cache for completed durable operations, fast-forwards the generator through cached results, and resumes from the last committed boundary. Activities, timers, signals, and other durable operations do not re-execute just because the process restarted.
 
 ## How it works
 
@@ -18,7 +18,7 @@ export async function* orderWorkflow(ctx: Weft.Context, order: Order) {
 }
 ```
 
-If the process crashes after checkpoint 1, Weft loads the snapshot, sees that `payment` already has a value, and picks up at the `ship` call. The `charge` activity never re-executes. There's no event history to walk through, no replay logic, no determinism constraints.
+If the process crashes after checkpoint 1, Weft loads the checkpoint, restores `payment` from the replay cache, and picks up at the `ship` call. The `charge` activity never re-executes. Recovery may read Weft's internal checkpoint-event metadata, but it does not replay external side effects and it does not require deterministic workflow code.
 
 ## No determinism requirement
 
@@ -56,30 +56,38 @@ const engine = new Engine({
 });
 ```
 
-When `development` is `true`, the engine serializes and deserializes the checkpoint at each boundary and compares the result. If they diverge, it emits a `DevelopmentWarningEvent` with the exact field paths that diverged, the values on each side, and a suggestion for how to fix it.
+When `development` is `true`, the engine serializes and deserializes the checkpoint at each boundary and compares the result. If they diverge, it emits a `DevelopmentWarningEvent`; client code receives the event's `message` and `fieldPaths`.
 
+```typescript
+import { DevelopmentWarningEvent, Engine, MemoryStorage } from '@lostgradient/weft';
+
+const engine = new Engine({
+  storage: new MemoryStorage(),
+  development: true,
+});
+
+engine.addEventListener(DevelopmentWarningEvent.type, (event) => {
+  const warning = event as DevelopmentWarningEvent;
+  console.warn(warning.message);
+  console.warn(warning.fieldPaths);
+});
 ```
-CheckpointSerializationError: Cannot serialize workflow state at step 2
 
-  The value at path "locals.apiClient" is a class instance with methods.
-  structuredClone cannot serialize functions or class instances.
+An emitted warning looks like ordinary event data, not a thrown serialization error:
 
-  Value: ApiClient { baseUrl: "https://api.stripe.com", ... }
-
-  Fix: Move the ApiClient creation inside ctx.run() or store only the
-  configuration data (e.g., { baseUrl: "https://api.stripe.com" }) in
-  local variables and reconstruct the client when needed.
-
-  at orderWorkflow (./workflows/order.ts:15:3)
+```text
+event.type: "development:warning"
+message: "Checkpoint at step 2 has 1 non-serializable field(s)"
+fieldPaths: ["locals.apiClient"]
 ```
 
-That error message tells you _what_ went wrong, _where_ it went wrong, and _how_ to fix it. You see it the moment you run your workflow in development, not three weeks later when a production node restarts.
+That warning tells you _what_ went wrong and _where_ it happened. You see it the moment you run your workflow in development, not three weeks later when a production node restarts.
 
-## No history growth, no continueAsNew
+## Bounded checkpoints, no continueAsNew
 
 Temporal's event history grows linearly with every activity, timer, and signal. At roughly 50,000 events, you must call `continueAsNew()`—which restarts the workflow, destroying all local variable state and requiring manual serialization of everything you want to carry forward. Signal handlers must be re-registered. Child workflow references must be re-established. This isn't an edge case; any workflow that loops (subscriptions, monitoring, batch processing) hits this limit.
 
-Weft's checkpoint is a constant-size snapshot of the current state. It doesn't grow with workflow history length.
+Weft's canonical checkpoint is a snapshot of the current workflow state. It stores current locals plus replay entries at or ahead of the pending step; consumed operation results move into checkpoint-event replay metadata so they are not copied into every later checkpoint. When workflow locals stay bounded, the serialized checkpoint stays bounded as the number of completed durable operations grows.
 
 ```
 Temporal: history size grows linearly with activity count
@@ -87,19 +95,19 @@ Temporal: history size grows linearly with activity count
   1K activities  →  ~10K events →  ~1MB history
   50K activities →  ~50K events →  LIMIT HIT, must continueAsNew
 
-Weft: checkpoint size is constant regardless of history
-  10 activities  →  ~2KB checkpoint
-  1K activities  →  ~2KB checkpoint
-  1M activities  →  ~2KB checkpoint (same locals, same size)
+Weft: checkpoint size follows current locals, not completed step count
+  10 activities  →  bounded checkpoint when locals are bounded
+  1K activities  →  bounded checkpoint when locals are bounded
+  1M activities  →  bounded checkpoint when locals are bounded
 ```
 
-A workflow can run for years, execute millions of activities, and its checkpoint stays the same size as it was after the first `yield*`. There is no history limit, no `continueAsNew`, no manual state serialization. Long-running workflows just run.
+A workflow can run for years and execute millions of activities without copying every completed result into every checkpoint. There is no `continueAsNew` requirement for checkpoint size. If your own workflow locals grow, the checkpoint grows with them; use `ctx.offload()`, `ctx.archive()`, or storage-backed state for large data that should not live in the checkpoint.
 
 ## Payload efficiency
 
 Temporal stores every activity input and output in the event history. If your workflow calls 100 activities that each return 10KB of data, the history contains 1MB of payload data—even if the workflow only uses the final result. Large payloads bloat history, slow down replay, and accelerate hitting the 50K event limit.
 
-Weft checkpoints store only the current state—the values of local variables at the yield point. Activity inputs aren't stored (they're derived from the workflow code on re-execution). Previous activity results are only present if they're still in scope as local variables. A workflow that processed 100 large API responses but only keeps a summary has a checkpoint containing only that summary.
+Weft checkpoints store only the current state: the values of local variables at the yield point plus any still-pending replay entry. Completed operation results needed to fast-forward recovery are recorded once in checkpoint-event replay metadata instead of being copied into every later checkpoint. Previous activity results are present in checkpoint locals only if your workflow keeps them in scope. A workflow that processed 100 large API responses but only keeps a summary has a checkpoint containing that summary, not all 100 responses.
 
 The difference is architectural, not incremental. Replay _must_ store everything that happened. Checkpointing stores only what matters _right now_.
 

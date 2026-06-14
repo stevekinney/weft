@@ -32,9 +32,9 @@ engine.register(
 );
 ```
 
-Each `ctx.step()` call is a checkpoint boundary, just like `yield*` in the generator API. The result is persisted to the checkpoint, and a step that already completed is replayed from storage -- not re-run -- when the workflow recovers from a crash. `compileStepWorkflow(...)` compiles the step-based function into the generator shape the engine runs internally; the compilation step is explicit so the type system knows what `.execute(...)` is receiving.
+Each `ctx.step()` call is a checkpoint boundary, just like `yield*` in the generator API. The result is persisted with the checkpoint commit, and a step that already completed is restored from storage -- not re-run -- when the workflow recovers from a crash. `compileStepWorkflow(...)` compiles the step-based function into the generator shape the engine runs internally; the compilation step is explicit so the type system knows what `.execute(...)` is receiving.
 
-The step-based API is a subset of the full API. It supports sequential steps only -- and you must `await` each step before starting the next, because durability is positional: a step is matched on replay by the order it ran, not by its name. It also requires `workflowExecutionMode: 'inline'` (the default); worker execution mode has no step machinery. When you need durable timers (`sleep()`), external signals (`waitForSignal()`), parallel execution (`all()`, `race()`), or worker-mode isolation, graduate to the generator API described below.
+The step-based API is a subset of the full API. It supports sequential steps only -- and you must `await` each step before starting the next, because durability is positional: a step is matched during recovery by the order it ran, not by its name. It also requires `workflowExecutionMode: 'inline'` (the default); worker execution mode has no step machinery. When you need durable timers (`sleep()`), external signals (`waitForSignal()`), parallel execution (`all()`, `race()`), or worker-mode isolation, graduate to the generator API described below.
 
 ## Generator functions as workflows
 
@@ -140,6 +140,14 @@ not understand.
 
 The builder also accepts `retention` (how long to keep terminal workflow state) and `constraints` (resource-level execution limits) as options, and exposes a chained `.searchAttributes(schema)` method to declare indexed attributes for this workflow type. See the [search attributes guide](./search-attributes.md) for `searchAttributes` usage.
 
+### What you cannot change mid-flight
+
+Checkpointing removes replay determinism rules, but it does not make every handler edit safe for a running workflow. A recovered workflow must still understand the checkpoint it is resuming from.
+
+- Keep the order of durable `yield*` operations stable for workflows that may already be running. If you insert, remove, or reorder a durable boundary before an existing checkpoint position, bump the workflow `version` and run the new definition as a separate recovery boundary.
+- Keep workflow-local values structured-cloneable at every checkpoint. Values such as functions, sockets, clients, class instances with methods, symbols, `WeakMap`, and `WeakRef` cannot be serialized into durable state; keep them outside workflow locals or rebuild them from `ctx.services` or activities after recovery.
+- Treat activity names declared in `.activities({ ... })` as durable dispatch identity. Renaming a key changes the name Weft stores and dispatches; register a new activity name and update workflows deliberately instead of silently reusing the old slot for different work.
+
 ## Starting workflows and getting results
 
 Call `engine.start()` with the registered name and your input. You get back a `WorkflowHandle`—a lightweight reference you can use to await the result, send [signals](signals-and-queries.md), or cancel execution.
@@ -214,15 +222,17 @@ const engine = await Engine.create({
 
 Fresh-process recovery consults the resolver only for inline runs that were launched with `services`, using the durable presence marker written at start. Scheduled inline occurrences are different: when `resolveWorkflowServices` is configured, each occurrence consults it before the workflow body runs. Returning `unavailable` or throwing fails only that run or scheduled occurrence with a system failure category. Child workflows do not inherit the parent's `services`; start each child with its own durable input and host services if it needs them.
 
-## No history growth
+> Warning: if a recovered run has the durable services marker but the fresh engine was created without `resolveWorkflowServices`, Weft fails that run before the workflow body advances and emits a `DevelopmentWarningEvent` naming the workflow id and `EngineOptions.resolveWorkflowServices`. It never resumes the workflow with `ctx.services === undefined`.
 
-Unlike systems that replay an ever-growing event history, Weft's checkpoint is a constant-size snapshot of current state. It does not grow with the number of activities executed. A workflow can run for years, execute millions of activities, and its checkpoint stays the same size as it was after the first `yield*`. There is no history limit, no `continueAsNew`, no manual state serialization.
+## Bounded checkpoint growth
+
+Unlike systems that replay an ever-growing event history of side effects, Weft's canonical checkpoint stores current workflow state plus any still-pending replay entry. Completed operation results are moved into checkpoint-event replay metadata once they have been consumed, so they are not copied into every later checkpoint. If your workflow locals stay bounded, the serialized checkpoint stays bounded as the number of completed activities grows. There is no checkpoint-size-driven `continueAsNew` requirement or manual state serialization step.
 
 Long-running workflows just run.
 
 ## Managing large state
 
-While Weft's checkpoints stay constant-size by default, the data _inside_ your checkpoint can still grow if your workflow accumulates large intermediate results. Two context methods help you manage this. For small mutable state that should survive recovery—a counter, a flag, a conversation handle—reach for the lightweight [`ctx.state.session`](./session-state.md) primitive instead.
+While Weft no longer copies every completed operation result into each checkpoint, the data _inside_ your checkpoint can still grow if your workflow accumulates large intermediate results in local variables. Two context methods help you manage this. For small mutable state that should survive recovery—a counter, a flag, a conversation handle—reach for the lightweight [`ctx.state.session`](./session-state.md) primitive instead.
 
 ### Offloading large intermediate data
 
@@ -287,11 +297,74 @@ engine.register(
 - **`offload` / `load`**: large data you need again later in the same workflow. Keeps the checkpoint lean while preserving access.
 - **`archive`**: data you want to persist for external consumption (dashboards, compliance, debugging) but never read back in the workflow.
 
+## Sagas and Compensation
+
+Use `ctx.saga()` when a workflow needs a sequence of activities where completed work should be compensated if a later step fails. Each saga step contains an activity definition and the input for that activity:
+
+```typescript
+import { Engine, activity, workflow } from '@lostgradient/weft';
+
+type Order = { id: string; sku: string; total: number };
+
+async function releaseInventory(details: { sku: string; reservationId: string }): Promise<void> {
+  void details;
+}
+
+async function refundCharge(details: { amount: number; chargeId: string }): Promise<void> {
+  void details;
+}
+
+async function scheduleShipping(orderId: string): Promise<void> {
+  void orderId;
+}
+
+const engine = new Engine();
+
+const reserveInventory = activity({
+  name: 'reserveInventory',
+  execute: async (sku: string) => `reservation:${sku}`,
+  compensate: async (sku: string, reservationId: string) => {
+    await releaseInventory({ sku, reservationId });
+  },
+});
+
+const chargeCard = activity({
+  name: 'chargeCard',
+  execute: async (amount: number) => `charge:${amount}`,
+  compensate: async (amount: number, chargeId: string) => {
+    await refundCharge({ amount, chargeId });
+  },
+});
+
+const shipOrder = activity({
+  name: 'shipOrder',
+  execute: async (orderId: string) => {
+    await scheduleShipping(orderId);
+  },
+});
+
+engine.register(
+  workflow({ name: 'fulfill-order' }).execute(async function* (ctx, order: Order) {
+    return yield* ctx.saga([
+      { definition: reserveInventory, input: order.sku },
+      { definition: chargeCard, input: order.total },
+      { definition: shipOrder, input: order.id },
+    ]);
+  }),
+);
+
+void engine;
+```
+
+Saga steps run sequentially through the same durable activity pipeline as `ctx.run()`. If a step fails, Weft runs compensators for previously completed steps in reverse order, skips the failing step's own compensator, swallows compensator errors, and then rethrows the original step error into the workflow. The saga result is the last successful step output, or `undefined` for an empty saga.
+
+Cancellation has a narrower compensation path: in inline execution, cancelling an active saga runs completed compensators in reverse order through an in-memory best-effort path. That cancellation path is not recovered after engine restart, so use normal activity idempotency and external reconciliation for effects that must survive process failure.
+
 ## Child workflows
 
 Sometimes a workflow needs to kick off a sub-process that should be independently checkpointed—with its own workflow ID, its own state in storage, and its own lifecycle. That is what child workflows are for.
 
-Use `yield* ctx.startChild()` to start a child workflow from within a parent. The parent suspends at the `yield*` boundary until the child completes or fails.
+Use `yield* ctx.startChild()` to start a child workflow from within a parent. By default, the parent suspends at the `yield*` boundary until the child completes or fails.
 
 ```typescript partial
 engine.register(
@@ -312,6 +385,63 @@ engine.register(
   }),
 );
 ```
+
+### Parent-close policies
+
+`ctx.startChild()` accepts `parentClosePolicy` when the direct child workflow call should not wait for the child result.
+
+| Policy             | Return value                    | Behavior                                                                                                                       |
+| ------------------ | ------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `'await'`          | The child workflow result       | Default behavior. The parent waits for the child to finish.                                                                    |
+| `'abandon'`        | `ChildWorkflowHandle` reference | Starts the child and returns `{ id }` immediately. The child is not linked to the parent's execution-state owner.              |
+| `'request-cancel'` | `ChildWorkflowHandle` reference | Starts the child and returns `{ id }` immediately. Parent cancellation requests child cancellation in the same engine process. |
+
+The returned `ChildWorkflowHandle` is a serializable reference, not the live `WorkflowHandle` object. Use the `id` outside the workflow body with `engine.getHandle(id)` when host code needs to inspect status, signal the child, or await the child result.
+
+```typescript
+import { Engine, workflow } from '@lostgradient/weft';
+
+type PaymentReceipt = { receiptId: string; amount: number };
+
+const engine = new Engine();
+
+engine.register(
+  workflow({ name: 'process-payment' }).execute(async function* (
+    _ctx,
+    input: { amount: number },
+  ): AsyncGenerator<unknown, PaymentReceipt, unknown> {
+    return { receiptId: 'rcpt-123', amount: input.amount };
+  }),
+);
+
+engine.register(
+  workflow({ name: 'order' }).execute(async function* (
+    ctx,
+    input: { total: number; email: string },
+  ) {
+    const child = yield* ctx.startChild<PaymentReceipt>(
+      'process-payment',
+      { amount: input.total },
+      {
+        parentClosePolicy: 'abandon',
+      },
+    );
+
+    yield* ctx.run(async (record: { childWorkflowId: string; email: string }) => record, {
+      childWorkflowId: child.id,
+      email: input.email,
+    });
+
+    return { childWorkflowId: child.id };
+  }),
+);
+
+void engine;
+```
+
+There is no forcible `terminate` policy. Child workflows that need cooperative shutdown should listen for cancellation through their normal workflow logic.
+
+`ctx.pipe()`, `ctx.map()`, and `ctx.reduce()` are await-only by design: they collect child workflow results and therefore do not accept detached parent-close policies. Use direct `ctx.startChild()` calls when a workflow needs fire-and-forget child runs.
 
 ### Error handling
 
@@ -339,3 +469,33 @@ const engine = new Engine({ maxNestingDepth: 5 });
 ```
 
 When a child workflow would exceed the nesting limit, the engine throws an error into the parent workflow with a message indicating the depth exceeded the maximum.
+
+## Forking Workflows
+
+Use `engine.fork(sourceWorkflowId, options?)` to start a new workflow from an existing workflow checkpoint. The source workflow is unchanged. The fork receives a new workflow ID, copies the source checkpoint state and search attributes, records fork lineage, and launches with the same registered workflow type.
+
+```typescript
+import { Engine, workflow } from '@lostgradient/weft';
+
+const engine = new Engine();
+const registeredEngine = engine.register(
+  workflow({ name: 'order' }).execute(async function* (ctx, input: { id: string }) {
+    const saved = yield* ctx.run(async function saveOrder() {
+      return { id: input.id };
+    });
+    return saved;
+  }),
+);
+
+const original = await registeredEngine.start('order', { id: 'order-123' });
+await original.result();
+
+const forked = await registeredEngine.fork(original.id);
+const forkedFromStepTwo = await registeredEngine.fork(original.id, { fromStep: 2 });
+
+void forked;
+void forkedFromStepTwo;
+void engine;
+```
+
+By default, `fork()` uses the latest persisted checkpoint. Pass `fromStep` to fork from checkpoint history for a specific step. The engine must still have the source workflow type registered, and the requested checkpoint must still exist; otherwise `fork()` throws before creating the new workflow.

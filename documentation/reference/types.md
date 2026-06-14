@@ -63,6 +63,27 @@ type WorkflowFunction<TInput = unknown, TOutput = unknown> = (
 ) => AsyncGenerator<unknown, TOutput, unknown>;
 ```
 
+### `WorkflowConcurrencyOptions`
+
+Definition-level start admission policy for a workflow type.
+
+```ts
+import type { WorkflowConcurrencyOptions } from '@lostgradient/weft';
+
+type ImportInput = { customerId: string };
+
+const options: WorkflowConcurrencyOptions<ImportInput> = {
+  max: 2,
+  key: (input) => input.customerId,
+};
+void options;
+```
+
+`max` is a positive integer. When `key` is omitted, the limit applies to the
+workflow type as a whole. When `key` is provided, each returned string has its
+own independent limit. Excess starts are rejected immediately with
+`WorkflowConcurrencyLimitExceededError`; Weft does not queue them.
+
 ### `WorkflowContext`
 
 The context object passed as the first argument to every workflow function.
@@ -88,12 +109,22 @@ interface WorkflowContext {
   waitForUpdate<T = unknown>(
     name: string,
   ): WorkflowOperation<{ payload: T; respond: (result: unknown) => void }>;
+  getVersion(
+    changeId: string,
+    minSupported: number,
+    maxSupported: number,
+  ): WorkflowOperation<number>;
   review(options: HumanReviewOptions): WorkflowOperation<HumanReviewResult>;
   startChild<TResult = unknown>(
     workflowType: string,
     input: unknown,
-    options?: ChildWorkflowOptions,
+    options?: AwaitChildWorkflowOptions,
   ): WorkflowOperation<TResult>;
+  startChild<TResult = unknown>(
+    workflowType: string,
+    input: unknown,
+    options: DetachedChildWorkflowOptions,
+  ): WorkflowOperation<ChildWorkflowHandle<TResult>>;
   all(operations: WorkflowOperation<unknown>[]): WorkflowOperation<unknown[]>;
   race(operations: WorkflowOperation<unknown>[]): WorkflowOperation<unknown>;
   offload<T>(key: string, fn: () => Promise<T>): WorkflowOperation<OffloadReference>;
@@ -142,23 +173,41 @@ interface WorkflowMapOptions {
   concurrency?: number;
 }
 
-interface WorkflowReduceOptions extends Record<string, unknown> {
+interface WorkflowReduceOptions extends AwaitChildWorkflowOptions {
   idPrefix?: string;
 }
 
-type ChildWorkflowOptions = {
-  id?: string;
+type ChildWorkflowParentClosePolicy = 'await' | 'abandon' | 'request-cancel';
+
+type ChildWorkflowHandle<TResult = unknown> = {
+  readonly id: string;
 };
+
+type AwaitChildWorkflowOptions = {
+  id?: string;
+  parentClosePolicy?: 'await';
+};
+
+type DetachedChildWorkflowOptions = {
+  id?: string;
+  parentClosePolicy: Exclude<ChildWorkflowParentClosePolicy, 'await'>;
+};
+
+type ChildWorkflowOptions = AwaitChildWorkflowOptions | DetachedChildWorkflowOptions;
 
 interface WorkflowPipeStage<TInput = unknown, TOutput = unknown> {
   type: ChildWorkflowTarget<TInput, TOutput>;
-  options?: ChildWorkflowOptions;
+  options?: AwaitChildWorkflowOptions;
 }
 
 type WorkflowPipeStageDefinition<TInput = unknown, TOutput = unknown> =
   | WorkflowPipeStage<TInput, TOutput>
   | ChildWorkflowTarget<TInput, TOutput>;
 ```
+
+Direct `ctx.startChild()` calls can use all three parent-close policies. `ctx.pipe()`,
+`ctx.map()`, and `ctx.reduce()` are await-only and accept only await-policy child
+workflow options because they collect child workflow results.
 
 ### `WorkflowStateNamespace`
 
@@ -279,6 +328,7 @@ interface RegisteredWorkflowDefinition<TInput = unknown, TOutput = unknown> {
   description?: string;
   inputSchema?: DefinitionSchema<unknown, TInput>;
   outputSchema?: DefinitionSchema<unknown, TOutput>;
+  concurrency?: WorkflowConcurrencyOptions<TInput>;
 }
 ```
 
@@ -390,7 +440,6 @@ interface Checkpoint {
   accumulatedResults: Array<[number, unknown]>;
   workerReplaySignatures?: Array<[number, WorkerReplayOperationSignature]>;
   workerReplayFailures?: Array<[number, WorkerReplayOperationFailure]>;
-  pendingSignals: string[];
   searchAttributes: Record<string, SearchAttributeValue>;
   version: string;
   schemaVersion: number;
@@ -720,13 +769,15 @@ interface ListFilter {
   offset?: number;
 }
 
+type AttributeFilterScalarValue = Exclude<SearchAttributeValue, string[]>;
+
 interface AttributeFilter {
   key: string;
-  value?: SearchAttributeValue;
-  gt?: SearchAttributeValue;
-  lt?: SearchAttributeValue;
-  gte?: SearchAttributeValue;
-  lte?: SearchAttributeValue;
+  value?: AttributeFilterScalarValue | AttributeFilterScalarValue[];
+  gt?: AttributeFilterScalarValue;
+  lt?: AttributeFilterScalarValue;
+  gte?: AttributeFilterScalarValue;
+  lte?: AttributeFilterScalarValue;
 }
 ```
 
@@ -780,6 +831,7 @@ interface WeftEventMap {
   'signal:received': SignalReceivedEvent;
   'signal:delivered': SignalDeliveredEvent;
   'attributes:changed': AttributesChangedEvent;
+  'schedule:missed-fire': ScheduleMissedFireEvent;
   'update:received': UpdateReceivedEvent;
   'update:completed': UpdateCompletedEvent;
   'checkpoint:size-warning': CheckpointSizeWarningEvent;
@@ -832,6 +884,14 @@ type ContextOperationRequest =
   | { type: 'sleep'; operationId: string; duration: number; scheduledFireAt: number }
   | { type: 'wait-signal'; operationId: string; signalName: string }
   | { type: 'wait-update'; operationId: string; updateName: string }
+  | {
+      type: 'get-version';
+      operationId: string;
+      changeId: string;
+      minSupported: number;
+      maxSupported: number;
+      version: number;
+    }
   | { type: 'parallel'; operationId: string; operations: ContextOperationRequest[] }
   | { type: 'race'; operationId: string; operations: ContextOperationRequest[] }
   | { type: 'memo'; operationId: string; key: string; fn: () => unknown }

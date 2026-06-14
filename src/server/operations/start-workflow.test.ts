@@ -75,6 +75,25 @@ describe('weft.workflows.start', () => {
     expect(await response.json()).toEqual({ error: 'Invalid JSON body' });
   });
 
+  it('rejects an oversized declared body before reading a body', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      new Request('http://localhost/v1/workflows', {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          'content-length': '9',
+        },
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings, maxRequestBodyBytes: 8 },
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: 'Payload Too Large' });
+  });
+
   it('returns 400 when the request body is JSON null', async () => {
     // `null` is rejected (typeof 'object' && === null fails the guard) with
     // "Request body must be a JSON object". This pins that path; arrays are

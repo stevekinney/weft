@@ -2,12 +2,12 @@
 
 ## Supported Versions
 
-Weft is currently at `0.1.x` (pre-1.0). Security fixes are applied to the latest release only. Once 1.0 ships, this policy will be updated to cover the most recent minor release.
+Weft is currently at `0.3.x` (pre-1.0). Security fixes are applied to the latest release only. Once 1.0 ships, this policy will be updated to cover the most recent minor release.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.1.x   | ✅        |
-| < 0.1   | ❌        |
+| 0.3.x   | ✅        |
+| < 0.3   | ❌        |
 
 ## Scope
 
@@ -18,6 +18,14 @@ Weft ships several attack-surface components that security researchers should be
 - **Worker protocol** — `RemoteWorker` activity/workflow dispatch over HTTP and WebSocket.
 - **MCP server** — workflow management operations exposed over Model Context Protocol.
 - **CLI** — `weft-mcp` binary in the published package.
+
+## Deployment Security Posture
+
+The built-in server is designed to be explicit about its trust boundary. `serve()` binds to `0.0.0.0:7233` by default, so an open server can be reachable from other hosts on the network. When `auth` is omitted, the default `unauthenticatedAccess: 'warn'` starts the server and logs a warning for local development; it does not fail closed.
+
+Production deployments should configure `auth` and set `unauthenticatedAccess: 'reject'`, or set `WEFT_SERVER_AUTHENTICATION_REQUIRED=1`, so startup fails before binding when authentication is missing. Weft does not terminate TLS itself; run it behind a TLS-terminating reverse proxy, ingress, or platform load balancer when traffic leaves a trusted local boundary.
+
+An unauthenticated open server exposes every REST, JSON-RPC, WebSocket, and MCP operation that the process enables, including mutating workflow operations such as cancellation, termination, bulk deletion, storage administration routes, and MCP workflow-control tools. Treat an intentionally open server as an administrative local process boundary, not as an internet-facing endpoint.
 
 Out-of-scope:
 

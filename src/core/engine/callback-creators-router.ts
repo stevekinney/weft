@@ -30,7 +30,7 @@ import {
   processMemoOperation,
   processOffloadOperation,
 } from './operations-data.ts';
-import { type OperationRouterCallbacks } from './operations-router.ts';
+import { completeOperation, type OperationRouterCallbacks } from './operations-router.ts';
 import { processSpeculateOperation } from './operations-speculate.ts';
 import { processStateCommitOperation, processStateReadOperation } from './operations-state.ts';
 import { processStreamOperation } from './operations-stream.ts';
@@ -81,6 +81,14 @@ export function createOperationRouterCallbacks<
         operation,
         createConditionOperationCallbacks(engine),
       ),
+    processGetVersionOperation: async (workflowId, operation) => {
+      completeOperation(getInternals(engine), workflowId, operation.version, {
+        finalizePendingTimelineEntry: (id, status, value) =>
+          finalizePendingTimelineEntry(getInternals(engine), id, status, value),
+        feedOperationResult: (id, result, error) =>
+          feedOperationResult(getInternals(engine), id, result, error),
+      });
+    },
     processParallelOperation: (workflowId, operation) =>
       processParallelOperation(
         getInternals(engine),

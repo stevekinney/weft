@@ -14,7 +14,7 @@
 import type { FailureCategory, ListFilter } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 import { intersectIdentifierSets } from './state-utilities.ts';
-import { getWorkflowVisibilityWatermark } from './workflow-indexes.ts';
+import { getCachedWorkflowVisibilityWatermark } from './workflow-indexes.ts';
 import { queryAttributeIndex, resolveConstrainedIds } from './workflow-state-stream.ts';
 import {
   queryWorkflowIdPrefixCandidates,
@@ -130,7 +130,7 @@ export async function resolveListCandidateIds(
     resolveFailureCategoryCandidateIds(internals, filter?.failureCategory),
   ]);
 
-  const watermark = await getWorkflowVisibilityWatermark(internals.storage);
+  const watermark = await getCachedWorkflowVisibilityWatermark(internals);
 
   if (watermark === 'stale') {
     // idPrefix is independent of the watermark — primary-key scan is always available.

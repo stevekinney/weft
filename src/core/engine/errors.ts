@@ -260,6 +260,36 @@ export class WorkflowNotRegisteredError extends WeftError<'WorkflowNotRegistered
 }
 
 /**
+ * Thrown by {@link Engine.start} when a workflow definition's `concurrency`
+ * policy has no free slot for the requested workflow type or partition key.
+ * Starts are rejected immediately; Weft does not queue excess starts.
+ *
+ * @example
+ * ```ts
+ * import { WorkflowConcurrencyLimitExceededError } from '@lostgradient/weft';
+ *
+ * function isCapacityRejection(error: unknown): boolean {
+ *   return error instanceof WorkflowConcurrencyLimitExceededError;
+ * }
+ * ```
+ */
+export class WorkflowConcurrencyLimitExceededError extends WeftError<'WorkflowConcurrencyLimitExceededError'> {
+  readonly workflowType: string;
+  readonly limit: number;
+  readonly partitionKey: string;
+
+  constructor(parameters: { workflowType: string; limit: number; partitionKey: string }) {
+    super(
+      'WorkflowConcurrencyLimitExceededError',
+      `Workflow "${parameters.workflowType}" concurrency limit ${parameters.limit} reached for partition key "${parameters.partitionKey}"`,
+    );
+    this.workflowType = parameters.workflowType;
+    this.limit = parameters.limit;
+    this.partitionKey = parameters.partitionKey;
+  }
+}
+
+/**
  * Thrown by {@link Engine.suspend} when invoked on an engine running in worker
  * execution mode. Suspension parks the live run without aborting it, which the
  * inline strategy supports directly; a worker run cannot be paused without

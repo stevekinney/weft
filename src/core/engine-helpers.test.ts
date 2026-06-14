@@ -13,7 +13,7 @@ import {
 } from './engine-helpers.ts';
 
 describe('engine helpers', () => {
-  it('cleanupPartialStreamChunks deletes chunk keys and stream metadata', async () => {
+  it('cleanupPartialStreamChunks deletes chunk keys, stream tail, and stream metadata', async () => {
     const storage = new MemoryStorage();
     const workflowId = 'wf-stream';
     const key = 'stream-key';
@@ -22,6 +22,7 @@ describe('engine helpers', () => {
     for (const writtenKey of writtenKeys) {
       await storage.put(writtenKey, new Uint8Array([1, 2, 3]));
     }
+    await storage.put(KEYS.streamTail(workflowId, key), new Uint8Array([7, 8, 9]));
     await storage.put(KEYS.streamMetadata(workflowId, key), new Uint8Array([4, 5, 6]));
 
     await cleanupPartialStreamChunks(storage, workflowId, key, writtenKeys, () => {
@@ -30,6 +31,7 @@ describe('engine helpers', () => {
 
     expect(await storage.get('chunk-1')).toBeNull();
     expect(await storage.get('chunk-2')).toBeNull();
+    expect(await storage.get(KEYS.streamTail(workflowId, key))).toBeNull();
     expect(await storage.get(KEYS.streamMetadata(workflowId, key))).toBeNull();
   });
 

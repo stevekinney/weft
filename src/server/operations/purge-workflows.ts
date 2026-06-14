@@ -65,8 +65,8 @@ export const purgeWorkflowsRestBinding: UnknownRestBinding = {
   pathParamNames: [],
   operationName: 'weft.workflows.purge',
   inputSources: {},
-  extractInput: async (request) => {
-    const raw = await readOptionalJsonBody(request);
+  extractInput: async (request, _pathParams, context) => {
+    const raw = await readOptionalJsonBody(request, context);
 
     try {
       return { ...parseBulkListFilterFromBody(raw) };

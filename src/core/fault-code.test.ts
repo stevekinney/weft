@@ -14,6 +14,7 @@ const ALL_FAULT_CODES: readonly FaultCode[] = [
   'Conflict',
   'Unprocessable',
   'Timeout',
+  'PayloadTooLarge',
   'NotImplemented',
   'UnsupportedTransport',
   'SubscriptionOverflow',
@@ -54,6 +55,7 @@ describe('FAULT_CODE_TO_FAILURE_CATEGORY', () => {
       InvalidParams: 'application',
       MethodNotFound: 'application',
       Timeout: 'timeout',
+      PayloadTooLarge: 'resource',
       SubscriptionOverflow: 'resource',
       NotImplemented: 'system',
       UnsupportedTransport: 'system',
@@ -83,6 +85,7 @@ describe('failureCategoryForFaultCode', () => {
   it('returns the expected category across each taxonomy bucket', () => {
     expect(failureCategoryForFaultCode('NotFound')).toBe('application');
     expect(failureCategoryForFaultCode('Timeout')).toBe('timeout');
+    expect(failureCategoryForFaultCode('PayloadTooLarge')).toBe('resource');
     expect(failureCategoryForFaultCode('SubscriptionOverflow')).toBe('resource');
     expect(failureCategoryForFaultCode('EngineFailure')).toBe('system');
   });

@@ -34,7 +34,7 @@ interface ServeOptions {
   cors?: CorsOptions; // cross-origin policy for browser clients; omit for same-origin only
   unauthenticatedAccess?: 'warn' | 'allow' | 'reject'; // startup policy when auth is omitted
   visibilityPollIntervalMs?: number; // task visibility scanner interval; default: 5000
-  workerReconnectGracePeriodMs?: number; // reconnect grace before requeue; default: 100
+  workerReconnectGracePeriodMs?: number; // reconnect grace before requeue; default: 2000
   routingPolicy?: RoutingPolicy; // task dispatch policy for remote workers; default: 'least-loaded'
   schedulingPolicy?: SchedulingPolicy; // workflow scheduling policy
   prometheusExporter?: PrometheusExporter; // Prometheus metrics exporter
@@ -43,7 +43,7 @@ interface ServeOptions {
 
 When [`auth`](../reference/configuration.md#serveoptions) is omitted, [`serve()`](../reference/api-server.md#serve) starts in an open local-development mode and logs a loud startup warning because every non-public operation is reachable by anyone who can connect to the server. Production wrappers should pass `unauthenticatedAccess: 'reject'` or set [`WEFT_SERVER_AUTHENTICATION_REQUIRED=1`](../reference/configuration.md#environment-variables); either setting makes `serve()` fail before binding unless `auth` is configured. Use `unauthenticatedAccess: 'allow'` only when an intentionally open local process boundary should start without a warning.
 
-`workerReconnectGracePeriodMs` is clamped to `0..5000`. The default `100` ms gives a worker that drops and reconnects with the same `workerId` a short window to keep its in-flight task assignments; set it to `0` when tests or embedded servers need close handling to requeue immediately.
+`workerReconnectGracePeriodMs` is clamped to `0..5000`. The default `2000` ms gives a worker that drops and reconnects with the same `workerId` a short window to keep its in-flight task assignments while still detecting genuinely dead local workers quickly. Use `100` only for low-latency test or embedded scenarios, set `0` when close handling should requeue immediately, and set `5000` for cloud or load-balancer deployments where replacement workers commonly need several seconds to reconnect.
 
 ## Authentication
 
@@ -326,7 +326,14 @@ GET /api/v1/tasks/diagnostics?workflowId=<workflow-id>&queue=default&limit=25
 → { "items": [...], "summary": { ... }, "limit": 25 }
 ```
 
-The diagnostics endpoint requires `system:read` and returns bounded evidence for stuck queued tasks, stale in-flight tasks, retry storms, and all-workers-at-capacity conditions. Use it when low-cardinality task metrics show a problem and you need workflow, operation, queue, or worker-level context.
+The diagnostics endpoint requires `system:read` and returns bounded evidence for stuck queued tasks, stale in-flight tasks, retry storms, all-workers-at-capacity conditions, and task-result dead letters. Use it when low-cardinality task metrics show a problem and you need workflow, operation, queue, or worker-level context.
+
+```http
+DELETE /api/v1/tasks/diagnostics/dead-letter/<operation-id>
+→ { "ok": true }
+```
+
+The clear action requires `system:admin`. Clear a dead-letter entry only after the result-resolution storage failure is understood and reconciliation should be allowed to handle the guarded in-flight task again.
 
 ## WebSocket upgrade paths
 

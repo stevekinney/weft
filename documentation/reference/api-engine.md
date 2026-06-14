@@ -2,6 +2,8 @@
 
 The `Engine` class is the central orchestrator in Weft. It manages workflow registration, execution lifecycle, signal delivery, and storage coordination. `WorkflowHandle` is the per-workflow reference returned by `engine.start()`, giving you access to results, signals, updates, and event observation.
 
+For public error-code routing across engine operations, see the source-complete [Error Codes](./api-errors.md) reference.
+
 ## `Engine`
 
 ```ts partial
@@ -112,7 +114,7 @@ engine.register(
 getWorkflowDefinition(type: string): RegisteredWorkflowDefinition | undefined
 ```
 
-Return read-only metadata for one registered workflow type. Workflows registered without explicit version, tags, or schemas default to version `1`, empty tags, and no schemas.
+Return read-only metadata for one registered workflow type. Workflows registered without explicit version, tags, concurrency, or schemas default to version `1`, empty tags, no concurrency policy, and no schemas.
 
 ### `listWorkflowDefinitions()`
 
@@ -328,7 +330,11 @@ schedule(
 ): Promise<ScheduleHandle>;
 ```
 
-Register a recurring schedule that starts a workflow on a cron expression or fixed interval, returning a `ScheduleHandle` for pausing, resuming, updating, or cancelling it. Call it either with a `ScheduleDefinition` object (`{ workflow, cron | every, input, overlapPolicy? }`) or positionally with a workflow type, input, and a cron string or `ScheduleSpec`. The `ScheduleOptions.overlap` policy governs what happens when a tick fires while the previous run is still in flight. A _suspended_ previous run counts as in flight: it still holds the schedule slot, so under a non-`allow` policy (`skip`/`queue`/`cancel-running`) the next tick does not start a second run until the suspended run is resumed to completion or cancelled. The `ScheduleDefinition`, `ScheduleSpec`, and `ScheduleOptions` types carry JSDoc describing the spec formats (`{ cron }` vs `{ every }`) and the overlap values.
+Register a recurring schedule that starts a workflow on a cron expression or fixed interval, returning a `ScheduleHandle` for pausing, resuming, updating, or cancelling it. Call it either with a `ScheduleDefinition` object (`{ workflow, cron | every, input, overlapPolicy?, jitter? }`) or positionally with a workflow type, input, and a cron string or `ScheduleSpec`. The `ScheduleOptions.overlap` policy governs what happens when a tick fires while the previous run is still in flight. A _suspended_ previous run counts as in flight: it still holds the schedule slot, so under a non-`allow` policy (`skip`/`queue`/`cancel-running`) the next tick does not start a second run until the suspended run is resumed to completion or cancelled. The `ScheduleDefinition`, `ScheduleSpec`, and `ScheduleOptions` types carry JSDoc describing the spec formats (`{ cron }` vs `{ every }`) and the overlap values.
+
+By default, `ScheduleOptions.backfill` is `false`: when a schedule timer is more than one second late, Weft skips the missed occurrence window instead of starting catch-up workflows. The schedule state and summary keep `missedFireCount` and `lastMissedFireAt`, and the engine emits `ScheduleMissedFireEvent` with the schedule ID, missed count, window start, and window end. Set `backfill: true` when downtime should produce immediate catch-up runs instead.
+
+Set `ScheduleOptions.jitter` to a duration string or millisecond count when many schedules share the same cadence and should spread their effective dispatch times. Weft keeps `ScheduleState.nextFireAt` as the nominal pre-jitter occurrence timestamp, then derives a deterministic offset in `[0, jitter)` from the schedule ID and that nominal timestamp when writing the timer. The same schedule occurrence gets the same offset after recovery or replay without storing extra per-occurrence state.
 
 When inline `resolveWorkflowServices` is configured, each scheduled occurrence resolves services before its workflow body can run. An available result is installed as `ctx.services`; an unavailable result or resolver throw fails only that occurrence and does not pause the schedule.
 

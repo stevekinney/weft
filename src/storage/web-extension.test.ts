@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { BatchOperation } from './interface.ts';
+import { assertDurableStorageForRecovery, type BatchOperation } from './interface.ts';
 import { assertCapabilitiesShape } from './storage-adapter.test-support.ts';
 import { WebExtensionStorage } from './web-extension.ts';
 
@@ -146,7 +146,7 @@ function installStorageNamespace(
 }
 
 describe('WebExtensionStorage', () => {
-  it('reports its honest capability row (no conditionalBatch, scan-and-delete prefix)', async () => {
+  it('reports its honest capability row (same-context batch only, no conditionalBatch)', async () => {
     const area = new FakeStorageArea();
     const restore = installStorageNamespace('browser', area);
     try {
@@ -156,13 +156,30 @@ describe('WebExtensionStorage', () => {
         persistence: 'local',
         readAfterWrite: 'session',
         scanConsistency: 'best-effort',
-        atomicBatch: true,
+        atomicBatch: false,
         conditionalBatch: false,
         boundedRangeDelete: false,
       });
       // Read-after-write at the session level: the instance reads its own write.
       await storage.put('raw:key', encode('written'));
       expect(decode(await storage.get('raw:key'))).toBe('written');
+    } finally {
+      restore();
+    }
+  });
+
+  it('is rejected by the durable recovery assertion', () => {
+    const area = new FakeStorageArea();
+    const restore = installStorageNamespace('browser', area);
+    try {
+      const storage = new WebExtensionStorage();
+
+      expect(() => assertDurableStorageForRecovery(storage)).toThrow(
+        /readAfterWrite must be "linearizable".*scanConsistency must be "snapshot".*atomicBatch must be true.*conditionalBatch must be true/s,
+      );
+      expect(() => assertDurableStorageForRecovery(storage)).not.toThrow(
+        /persistence must be "local" or "remote"/,
+      );
     } finally {
       restore();
     }

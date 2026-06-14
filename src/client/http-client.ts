@@ -10,6 +10,7 @@ import type {
   AttributeFilterKey,
   BulkCancelResult,
   BulkDeleteResult,
+  BulkRetryFailedResult,
   BulkSignalResult,
   BulkTagResult,
   CoordinatedUpdateResult,
@@ -29,7 +30,6 @@ import type {
   SearchAttributeValue,
   SignalDefinition,
   SignalDeliveryOptions,
-  StartOptions,
   StartOrSignalSignal,
   SubmitReviewOptions,
   TypedListFilter,
@@ -69,6 +69,7 @@ import {
   removeTagsRequest,
   replayToRequest,
   resumeScheduleRequest,
+  retryFailedAllWorkflowRequests,
   setAttributesRequest,
   signalAllWorkflowRequests,
   signalWorkflowRequest,
@@ -87,6 +88,7 @@ import { HttpScheduleHandle } from './http-schedule-handle.ts';
 import type {
   ClientHandle,
   ClientScheduleHandle,
+  ClientStartOptions,
   StartOrSignalOutcome,
   UpdateResult,
   WeftClient,
@@ -183,14 +185,14 @@ export class HttpClient implements WeftClient {
   async start<TName extends KnownWorkflowName>(
     type: TName,
     input: WorkflowInput<WorkflowRegistry, TName>,
-    options?: StartOptions,
+    options?: ClientStartOptions,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
   async start<TName extends string>(
     type: UnknownNameWhenRegistryEmpty<TName>,
     input: unknown,
-    options?: StartOptions,
+    options?: ClientStartOptions,
   ): Promise<ClientHandle>;
-  async start(type: string, input: unknown, options?: StartOptions): Promise<ClientHandle> {
+  async start(type: string, input: unknown, options?: ClientStartOptions): Promise<ClientHandle> {
     const body = buildStartBody(type, input, options);
     const response = await request<{ id: string }>(this.baseUrl, '/workflows', this.headers, {
       method: 'POST',
@@ -204,19 +206,19 @@ export class HttpClient implements WeftClient {
     type: TName,
     input: WorkflowInput<WorkflowRegistry, TName>,
     signal: StartOrSignalSignal,
-    options?: StartOptions,
+    options?: ClientStartOptions,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
   async startOrSignal<TName extends string>(
     type: UnknownNameWhenRegistryEmpty<TName>,
     input: unknown,
     signal: StartOrSignalSignal,
-    options?: StartOptions,
+    options?: ClientStartOptions,
   ): Promise<ClientHandle>;
   async startOrSignal(
     type: string,
     input: unknown,
     signal: StartOrSignalSignal,
-    options?: StartOptions,
+    options?: ClientStartOptions,
   ): Promise<ClientHandle> {
     const body = buildStartOrSignalBody(type, input, signal, options);
     const response = await request<{ id: string; outcome: StartOrSignalOutcome }>(
@@ -518,6 +520,10 @@ export class HttpClient implements WeftClient {
 
   async cancelAll(filter: ListFilter): Promise<BulkCancelResult> {
     return cancelAllWorkflowRequests(this, filter);
+  }
+
+  async retryFailedAll(filter: ListFilter): Promise<BulkRetryFailedResult> {
+    return retryFailedAllWorkflowRequests(this, filter);
   }
 
   async signalAll(filter: ListFilter, name: string, payload?: unknown): Promise<BulkSignalResult> {

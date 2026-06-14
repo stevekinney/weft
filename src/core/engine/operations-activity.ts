@@ -1,7 +1,7 @@
 import type { ContextOperationRequest } from '../context.ts';
 import type { ComposedActivityInterceptor, ComposedWorkflowInterceptor } from '../interceptor.ts';
 import { assertPayloadWithinLimit } from '../payload-size.ts';
-import type { ActivityContext, ActivityVerificationResult } from '../types.ts';
+import type { ActivityContext, ActivityVerificationResult, OperationOutcome } from '../types.ts';
 import {
   buildActivityContext,
   clearLastHeartbeatForStep,
@@ -14,8 +14,8 @@ import {
   createCompletedActivityReconciliationRecord,
   resolveActivityIdempotencyKey,
   resolveStartedActivityReconciliationRecord,
+  stageActivityReconciliationTransitionWithAtomicWorkflowCommit,
   validateActivityResultForReconciliation,
-  writeActivityReconciliationTransition,
   type ActivityReconciliationMetadata,
 } from './activity-reconciliation.ts';
 import { getActivityFunctionWithMetadata, resolveActivityFunction } from './activity-resolution.ts';
@@ -28,6 +28,7 @@ import {
 import type { EngineInternals } from './internals.ts';
 import type { SpeculativeExecutionState } from './speculative-execution-state.ts';
 import { callActivityFunction } from './state-utilities.ts';
+import type { CapturedRejectionReason } from './strategy-helpers.ts';
 
 export type ActivityFunctionWithMetadata = ((...arguments_: unknown[]) => unknown) &
   ActivityReconciliationMetadata & {
@@ -46,6 +47,16 @@ export type ActivityOperationCallbacks = {
     operation: ActivityOperation,
     execute: () => Promise<unknown>,
   ) => Promise<void>;
+  finalizePendingTimelineEntry: (
+    workflowId: string,
+    status: 'completed' | 'failed',
+    value: unknown,
+  ) => void;
+  feedOperationResult: (
+    workflowId: string,
+    outcome: OperationOutcome,
+    originalReason?: CapturedRejectionReason,
+  ) => void;
   getComposedActivityInterceptor: () => ComposedActivityInterceptor | null;
   getComposedWorkflowInterceptor: () => ComposedWorkflowInterceptor | null;
 };
@@ -309,8 +320,9 @@ export async function executeActivityOperationResult(
       result,
       internals.options.getNow(),
     );
-    await writeActivityReconciliationTransition(
-      internals.storage,
+    stageActivityReconciliationTransitionWithAtomicWorkflowCommit(
+      internals,
+      workflowId,
       reference,
       started,
       completedRecord,
@@ -417,13 +429,21 @@ export async function processActivityOperation(
       return await executeActivityOperationResult(internals, workflowId, operation, callbacks);
     } catch (error) {
       if (error instanceof AsyncActivityDeferral) {
-        return parkDeferredAsyncActivity(internals, error, {
-          workflowId,
-          activityName: operation.activityName,
-          operationId: operation.operationId,
-          step: operation.step ?? 0,
-          attempt: getActivityAttempt(operation),
-        });
+        return parkDeferredAsyncActivity(
+          internals,
+          error,
+          {
+            workflowId,
+            activityName: operation.activityName,
+            operationId: operation.operationId,
+            step: operation.step ?? 0,
+            attempt: getActivityAttempt(operation),
+          },
+          {
+            feedOperationResult: callbacks.feedOperationResult,
+            finalizeTimeline: callbacks.finalizePendingTimelineEntry,
+          },
+        );
       }
       throw error;
     }

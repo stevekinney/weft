@@ -4,6 +4,7 @@ import type {
   DefaultWorkflowRegistry,
   InferWorkflowEntries,
   IsDefaultWorkflowRegistry,
+  WorkflowServicesUnion,
 } from '../types.ts';
 import type { UnknownNameWhenRegistryHasNoKnownNames } from '../types/registry-type-helpers.ts';
 import type { KnownWorkflowNames } from './construction.ts';
@@ -34,7 +35,9 @@ import type { EngineConstructorOptions } from './engine-internal-types.ts';
 export type EngineCreateOptions<
   TWorkflowDefinitions extends Record<string, AnyWorkflowDefinition> = {},
   TActivityDefinitions extends Record<string, AnyActivityDefinition> = {},
-> = EngineConstructorOptions & {
+> = EngineConstructorOptions<
+  WorkflowServicesUnion<EngineCreateWorkflowRegistry<TWorkflowDefinitions>>
+> & {
   /** Workflow definitions to register before recovery. */
   workflows?: TWorkflowDefinitions;
   /** Activity definitions to register before workflows. */

@@ -17,6 +17,7 @@ type SleepOperation = Extract<ContextOperationRequest, { type: 'sleep' }>;
 
 export type TimeOperationCallbacks = {
   completeOperation: (workflowId: string, value: unknown) => void;
+  dispatchEvent: (event: Event) => void;
   loadWorkflowState: (workflowId: string) => Promise<WorkflowState | null>;
   failWorkflow: (workflowId: string, error: Error) => Promise<void>;
   runSerializedWorkflowStateWrite: <Result>(
@@ -115,6 +116,7 @@ export async function startDelayedWorkflow(
   callbacks: Pick<
     TimeOperationCallbacks,
     | 'beginWorkflowExecution'
+    | 'dispatchEvent'
     | 'failWorkflow'
     | 'handleCleanupError'
     | 'loadWorkflowStartHeaders'
@@ -201,6 +203,7 @@ export async function startDelayedWorkflow(
     runningState,
     (workflowId, error) => callbacks.failWorkflow(workflowId, error),
     callbacks.handleCleanupError,
+    callbacks.dispatchEvent,
   );
   if (servicesUnavailable) {
     return;
@@ -303,6 +306,7 @@ export async function handleTimerFired(
     | 'setWorkflowStartHeaders'
     | 'timeout'
     | 'beginWorkflowExecution'
+    | 'dispatchEvent'
     | 'workflowVersionTupleFromState'
   >,
 ): Promise<void> {

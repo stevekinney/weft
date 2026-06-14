@@ -5,7 +5,8 @@ import type { ReviewDecision, SubmitReviewOptions } from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
+import { readRestJsonBody } from '../rest-body.ts';
+import { isOperationFault, shapeRestFault } from './operation-helpers.ts';
 
 const VALID_DECISIONS = [
   'approved',
@@ -167,11 +168,15 @@ export const submitReviewDecisionRestBinding: UnknownRestBinding = {
     feedback: { kind: 'body-field', bodyField: 'feedback' },
     workflowId: { kind: 'body-field', bodyField: 'workflowId' },
   },
-  extractInput: async (request, pathParams) => {
-    const body = await request.json().catch(() => {
+  extractInput: async (request, pathParams, context) => {
+    const body = await readRestJsonBody(request, context).catch((error) => {
+      if (isOperationFault(error)) throw error;
       throw new Error('Invalid JSON body');
     });
-    const record = typeof body === 'object' && body !== null && !Array.isArray(body) ? body : {};
+    const record: Record<string, unknown> =
+      typeof body === 'object' && body !== null && !Array.isArray(body)
+        ? (body as Record<string, unknown>)
+        : {};
 
     return {
       reviewId: pathParams['reviewId'] ?? '',

@@ -159,6 +159,11 @@ Not to be confused with [`version:check`](#versioncheck), which compares registe
 
 Analyze registered workflow versions against an existing database to check deployment compatibility.
 
+> [!NOTE] Experimental
+> `version:check` is experimental before 1.0. The candidate-stable CLI set is
+> `serve`, `doctor`, `version`, `--version`, and `-v`; treat this command's
+> flags and output as subject to change.
+
 ```bash
 weft version:check --database ./weft.db --workflows ./src/workflows.ts
 weft version:check --database ./weft.db --workflows ./src/workflows.ts --json
@@ -210,12 +215,15 @@ Manage durable schedules.
 weft schedule list --database ./weft.db
 weft schedule create my-workflow "0 * * * *" --database ./weft.db --workflows ./src/workflows.ts
 weft schedule create my-workflow --every 1h --database ./weft.db --workflows ./src/workflows.ts
+weft schedule create my-workflow "0 * * * *" --jitter 30s --database ./weft.db --workflows ./src/workflows.ts
 weft schedule pause <schedule-id> --database ./weft.db
 weft schedule resume <schedule-id> --database ./weft.db
 weft schedule cancel <schedule-id> --database ./weft.db
 ```
 
-A schedule fires either on a cron cadence (the positional cron expression) or at a fixed interval (`--every`), but not both. Interval schedules fire one period after creation, then every period after that, and reuse the same overlap and backfill machinery as cron schedules.
+A schedule fires either on a cron cadence (the positional cron expression) or at a fixed interval (`--every`), but not both. Interval schedules fire one period after creation, then every period after that, and reuse the same overlap and backfill machinery as cron schedules. Without `--backfill`, a timer that is more than one second late is skipped and recorded on the schedule as `missedFireCount` and `lastMissedFireAt`.
+
+Use `--jitter` to spread schedules that share the same cadence. Weft stores `nextFireAt` as the nominal pre-jitter occurrence and derives a deterministic offset in `[0, jitter)` from the schedule ID and nominal fire time when it writes the dispatch timer.
 
 **Options:**
 
@@ -228,7 +236,8 @@ A schedule fires either on a cron cadence (the positional cron expression) or at
 | `--input`     |       | `null`      | JSON input payload for create                                                                     |
 | `--id`        |       |             | Custom schedule ID for create                                                                     |
 | `--overlap`   |       |             | Overlap policy: `skip`, `queue`, `cancel-running`, or `allow`                                     |
-| `--backfill`  |       | `false`     | Run missed ticks on recovery                                                                      |
+| `--backfill`  |       | `false`     | Run missed ticks on recovery instead of skipping timers more than one second late                 |
+| `--jitter`    |       |             | Deterministic dispatch jitter for create (e.g. `30s`, `5m`)                                       |
 | `--json`      | `-j`  | `false`     | Output as JSON                                                                                    |
 | `--help`      | `-h`  |             | Show help message                                                                                 |
 

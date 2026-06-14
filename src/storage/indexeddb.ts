@@ -4,6 +4,7 @@ import {
   type DeleteRangeOptions,
 } from './delete-range';
 import {
+  assertStorageBatchOperationCount,
   matchesScanOptions,
   resolvePrefixRangeEnd,
   storageValuesEqual,
@@ -321,6 +322,7 @@ export class IndexedDBStorage implements Storage {
   }
 
   async batch(operations: BatchOperation[]): Promise<void> {
+    assertStorageBatchOperationCount('batch operations', operations.length);
     if (operations.length === 0) return;
 
     const database = await this.#databasePromise;
@@ -345,6 +347,9 @@ export class IndexedDBStorage implements Storage {
     conditions: ConditionalBatchCondition[],
     operations: BatchOperation[],
   ): Promise<boolean> {
+    assertStorageBatchOperationCount('conditionalBatch conditions', conditions.length);
+    assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
+
     const database = await this.#databasePromise;
 
     return new Promise<boolean>((resolve, reject) => {

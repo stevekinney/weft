@@ -6,6 +6,7 @@
  */
 
 import { decode } from '../core/codec.ts';
+import { getEnginePayloadSizeMaxBytes } from '../core/engine/payload-size-policy.ts';
 import { createMcpSessionManager } from '../mcp/session.ts';
 import { createMetricsCollectorExporter, MetricsCollector } from '../observability/metrics.ts';
 import { WorkerRegistry } from '../worker/registry.ts';
@@ -33,7 +34,9 @@ import {
   registerWorkflowEventLifecycle,
   type EventBroadcastingHandle,
 } from './runtime/event-broadcasting.ts';
+import { shutdownAllWorkers } from './runtime/shutdown.ts';
 import { reconcileOrphanedRecords, scanExpiredTasks } from './runtime/task-reconciliation.ts';
+import { DEFAULT_MAX_STREAM_CONNECTIONS_PER_WORKFLOW } from './runtime/websocket-stream.ts';
 import { isInflightRecord, withRetry } from './runtime/websocket-worker.ts';
 import { TaskQueue } from './task-queue.ts';
 import { createWorkflowEventFeed } from './workflow-event-feed.ts';
@@ -45,7 +48,7 @@ import { createWorkflowEventFeed } from './workflow-event-feed.ts';
 /** Reconciliation full-scan runs at this multiple of the visibility poll interval (~60s at default). */
 const RECONCILIATION_MULTIPLIER = 12;
 
-const DEFAULT_WORKER_RECONNECT_GRACE_PERIOD_MS = 100;
+const DEFAULT_WORKER_RECONNECT_GRACE_PERIOD_MS = 2_000;
 const MAX_WORKER_RECONNECT_GRACE_PERIOD_MS = 5_000;
 const AUTHENTICATION_REQUIRED_ENVIRONMENT_VARIABLE = 'WEFT_SERVER_AUTHENTICATION_REQUIRED';
 /**
@@ -57,6 +60,8 @@ const AUTHENTICATION_REQUIRED_ENVIRONMENT_VARIABLE = 'WEFT_SERVER_AUTHENTICATION
  */
 export const NO_AUTHENTICATION_WARNING =
   '[weft] WARNING: server started with NO authentication; all non-public operations are publicly accessible. Configure serve({ auth }) to lock down, or set unauthenticatedAccess: "reject" in production to fail closed.';
+export const MCP_ORIGIN_CONFIGURATION_WARNING =
+  '[weft] WARNING: MCP HTTP transport is enabled without publicOrigin or trustedHosts. Cross-origin /mcp requests are rejected, and discovery routes that emit absolute URLs return 503. Configure serve({ publicOrigin: "https://api.example.com" }) or serve({ trustedHosts: ["api.example.com"] }) before exposing the server through a browser or reverse proxy.';
 const NO_AUTHENTICATION_REJECT_ERROR =
   '[weft] Refusing to start server with no authentication. Configure serve({ auth }) or set unauthenticatedAccess: "allow" only for trusted local development.';
 const NO_AUTHENTICATION_ENVIRONMENT_ERROR =
@@ -66,7 +71,7 @@ const FALSY_AUTHENTICATION_REQUIREMENT_VALUES = new Set(['0', 'false', 'no', 'of
 
 /**
  * Clamp a user-supplied `workerReconnectGracePeriodMs` into `[0, 5_000]`.
- * Returns the default when undefined or non-finite.
+ * Returns the 2000ms default when undefined or non-finite.
  */
 export function clampWorkerReconnectGracePeriod(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) {
@@ -103,6 +108,11 @@ export function assertAuthenticationPosture(
   }
   if (options.unauthenticatedAccess === 'allow') return;
   console.warn(NO_AUTHENTICATION_WARNING);
+}
+
+export function warnIfMcpOriginConfigurationMissing(options: ServeOptions): void {
+  if (options.publicOrigin !== undefined || options.trustedHosts !== undefined) return;
+  console.warn(MCP_ORIGIN_CONFIGURATION_WARNING);
 }
 
 /**
@@ -157,6 +167,7 @@ export function resolveNetworkConfig(options: ServeOptions): ResolvedNetworkConf
     validateCorsOptions(options.cors, options.auth !== undefined);
   }
   assertAuthenticationPosture(options);
+  warnIfMcpOriginConfigurationMissing(options);
   const port = options.port ?? 7233;
   const hostname = options.hostname ?? '0.0.0.0';
   const development = options.development ?? false;
@@ -190,6 +201,9 @@ export function buildServerContext(
     taskQueue,
     workerSockets: new Map(),
     streamSockets: new Map(),
+    workflowStreamConnectionCounts: new Map(),
+    maxStreamConnectionsPerWorkflow:
+      options.maxStreamConnectionsPerWorkflow ?? DEFAULT_MAX_STREAM_CONNECTIONS_PER_WORKFLOW,
     workerAffinity: new Map(),
     workflowOperations: new Map(),
     operationToWorkflow: new Map(),
@@ -219,6 +233,7 @@ export function buildServerContext(
     workerReconnectGracePeriodMs: clampWorkerReconnectGracePeriod(
       options.workerReconnectGracePeriodMs,
     ),
+    payloadSizeMaxBytes: getEnginePayloadSizeMaxBytes(options.engine),
     pendingWorkerRequeues: new Map(),
     scanRunning: false,
     processingOperations: new Set(),
@@ -316,6 +331,14 @@ export function registerStackDisposers(
   stack.defer(() => context.mcpSessionManager[Symbol.asyncDispose]());
 
   stack.defer(registerWorkflowEventLifecycle(options.engine, context, broadcastingHandle));
+  stack.defer(() =>
+    shutdownAllWorkers(
+      context,
+      options.workerShutdownTimeoutMs === undefined
+        ? undefined
+        : { timeoutMs: options.workerShutdownTimeoutMs, stopWaitingWhenIdle: true },
+    ),
+  );
 
   const visibilityPollHandle = setInterval(() => {
     void scanExpiredTasks(context, options, onOperationCleanup);

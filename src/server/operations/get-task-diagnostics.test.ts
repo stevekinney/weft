@@ -11,7 +11,13 @@ import type { AuthorizationScope } from '../authorization-scope.ts';
 import { createOperationRegistry, executeOperation } from '../operation-catalog.ts';
 import { principalFromApiKey, principalFromJwtClaims } from '../principal.ts';
 import { TaskQueue } from '../task-queue.ts';
-import type { InflightRecord, QueuedRecord, ResolvedRecord } from '../task-state.ts';
+import {
+  type DeadLetteredTaskRecord,
+  type InflightRecord,
+  type QueuedRecord,
+  type ResolvedRecord,
+  writeDeadLetteredTaskRecord,
+} from '../task-state.ts';
 import {
   createGetTaskDiagnosticsOperation,
   type GetTaskDiagnosticsOutput,
@@ -180,6 +186,7 @@ describe('weft.tasks.diagnostics', () => {
       staleInflight: 1,
       retryStorms: 1,
       allWorkersAtCapacity: 1,
+      deadLettered: 0,
     });
     expect(diagnostics.items.map((item) => item.kind)).toEqual([
       'stuck-queued',
@@ -197,6 +204,85 @@ describe('weft.tasks.diagnostics', () => {
       operationId: 'inflight-stale',
       workerId: 'worker-stale',
       heartbeatAgeMs: 7_000,
+    });
+  });
+
+  it('lists task-result dead letters without also reporting the guarded inflight task', async () => {
+    const storage = new MemoryStorage();
+    const engine = createEngine(storage);
+    const registry = new WorkerRegistry();
+    const taskQueue = new TaskQueue();
+
+    const inflightRecord: InflightRecord = {
+      operationId: 'dead-lettered-operation',
+      workflowId: 'workflow-dead-letter',
+      activityName: 'charge',
+      input: null,
+      queue: 'payments',
+      workerId: 'worker-dead-letter',
+      deadline: 2_000,
+      attempt: 2,
+      visibilityTimeout: 30_000,
+      firstQueuedAt: 1_000,
+      lastQueuedAt: 1_500,
+      lastDispatchedAt: 2_000,
+      startedAt: 2_100,
+      lastHeartbeatAt: 3_000,
+      retryCount: 1,
+      requeueCount: 1,
+      lastRequeueReason: 'visibility-timeout',
+    };
+    const deadLetterRecord: DeadLetteredTaskRecord = {
+      operationId: inflightRecord.operationId,
+      workflowId: inflightRecord.workflowId,
+      activityName: inflightRecord.activityName,
+      queue: inflightRecord.queue,
+      workerId: inflightRecord.workerId,
+      attempt: inflightRecord.attempt,
+      visibilityTimeout: inflightRecord.visibilityTimeout,
+      retryCount: inflightRecord.retryCount,
+      requeueCount: inflightRecord.requeueCount,
+      lastRequeueReason: inflightRecord.lastRequeueReason,
+      reason: 'result-resolution-storage-exhausted',
+      deadLetteredAt: 9_000,
+      errorMessage: 'result-resolution-storage-exhausted',
+      retryAttempts: 2,
+      status: 'completed',
+    };
+
+    await storage.put(KEYS.operationInflight(inflightRecord.operationId), encode(inflightRecord));
+    await writeDeadLetteredTaskRecord(storage, deadLetterRecord);
+
+    const result = await runDiagnostics({
+      engine,
+      registry,
+      taskQueue,
+      input: {
+        operationId: inflightRecord.operationId,
+        staleHeartbeatAfterMs: 0,
+        limit: 10,
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) throw new Error('expected diagnostics result');
+    const diagnostics = result.value as GetTaskDiagnosticsOutput;
+
+    expect(diagnostics.summary.deadLettered).toBe(1);
+    expect(diagnostics.summary.staleInflight).toBe(0);
+    expect(diagnostics.items).toHaveLength(1);
+    expect(diagnostics.items[0]).toMatchObject({
+      kind: 'dead-lettered',
+      state: 'dead-lettered',
+      operationId: inflightRecord.operationId,
+      workflowId: inflightRecord.workflowId,
+      activityName: inflightRecord.activityName,
+      queue: inflightRecord.queue,
+      workerId: inflightRecord.workerId,
+      deadLetteredAt: 9_000,
+      deadLetterReason: 'result-resolution-storage-exhausted',
+      storageError: 'result-resolution-storage-exhausted',
+      retryAttempts: 2,
     });
   });
 

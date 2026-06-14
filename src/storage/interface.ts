@@ -24,6 +24,90 @@ export type BatchOperation =
   | { type: 'delete'; key: string };
 
 /**
+ * Maximum number of operations or conditions accepted by one storage batch call.
+ *
+ * @example
+ * ```ts
+ * import { MAX_BATCH_OPERATIONS } from '@lostgradient/weft/storage';
+ *
+ * console.log(MAX_BATCH_OPERATIONS); // 10000
+ * ```
+ */
+export const MAX_BATCH_OPERATIONS = 10_000;
+
+/**
+ * Maximum `limit` accepted by raw storage scan administration routes.
+ *
+ * @example
+ * ```ts
+ * import { MAX_SCAN_LIMIT } from '@lostgradient/weft/storage';
+ *
+ * console.log(MAX_SCAN_LIMIT); // 10000
+ * ```
+ */
+export const MAX_SCAN_LIMIT = 10_000;
+
+/**
+ * Batch input category named by {@link StorageBatchOperationLimitExceededError}.
+ *
+ * @example
+ * ```ts
+ * import type { StorageBatchOperationLimitTarget } from '@lostgradient/weft/storage';
+ *
+ * const target: StorageBatchOperationLimitTarget = 'batch operations';
+ * void target;
+ * ```
+ */
+export type StorageBatchOperationLimitTarget =
+  | 'batch operations'
+  | 'conditionalBatch conditions'
+  | 'conditionalBatch operations';
+
+/**
+ * Error thrown before a storage batch exceeds {@link MAX_BATCH_OPERATIONS}.
+ *
+ * @example
+ * ```ts
+ * import { StorageBatchOperationLimitExceededError } from '@lostgradient/weft/storage';
+ *
+ * const error = new StorageBatchOperationLimitExceededError('batch operations', 10001);
+ * console.log(error.cap); // 10000
+ * ```
+ */
+export class StorageBatchOperationLimitExceededError extends Error {
+  readonly code = 'StorageBatchOperationLimitExceededError' as const;
+  readonly cap = MAX_BATCH_OPERATIONS;
+  readonly count: number;
+  readonly target: StorageBatchOperationLimitTarget;
+
+  constructor(target: StorageBatchOperationLimitTarget, count: number) {
+    super(`${target} count ${count} exceeds MAX_BATCH_OPERATIONS (${MAX_BATCH_OPERATIONS}).`);
+    this.name = 'StorageBatchOperationLimitExceededError';
+    this.target = target;
+    this.count = count;
+  }
+}
+
+/**
+ * Throw when a storage batch target exceeds {@link MAX_BATCH_OPERATIONS}.
+ *
+ * @example
+ * ```ts
+ * import { assertStorageBatchOperationCount } from '@lostgradient/weft/storage';
+ *
+ * assertStorageBatchOperationCount('batch operations', 1);
+ * ```
+ */
+export function assertStorageBatchOperationCount(
+  target: StorageBatchOperationLimitTarget,
+  count: number,
+): void {
+  if (count > MAX_BATCH_OPERATIONS) {
+    throw new StorageBatchOperationLimitExceededError(target, count);
+  }
+}
+
+/**
  * A key/value precondition for {@link Storage.conditionalBatch}.
  *
  * The batch commits only when every listed key currently matches the expected
@@ -284,6 +368,22 @@ export async function storageDeletePrefix(storage: Storage, prefix: string): Pro
 }
 
 /**
+ * Run a storage batch after enforcing Weft's operation-count guardrail.
+ *
+ * @example
+ * ```ts
+ * import { MemoryStorage, storageBatch } from '@lostgradient/weft/storage';
+ *
+ * await using storage = new MemoryStorage();
+ * await storageBatch(storage, []);
+ * ```
+ */
+export async function storageBatch(storage: Storage, operations: BatchOperation[]): Promise<void> {
+  assertStorageBatchOperationCount('batch operations', operations.length);
+  await storage.batch(operations);
+}
+
+/**
  * Run a conditional batch or throw when the backend does not support it.
  *
  * Built-in Memory, BunSQLite, NodeSQLite, LMDB, Turso, and IndexedDB backends
@@ -312,6 +412,9 @@ export async function storageConditionalBatch(
   conditions: ConditionalBatchCondition[],
   operations: BatchOperation[],
 ): Promise<boolean> {
+  assertStorageBatchOperationCount('conditionalBatch conditions', conditions.length);
+  assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
+
   // Trust the declared capability, not method presence: an adapter that has the
   // method but honestly reports conditionalBatch: false (e.g. a remote HTTP
   // backend known to lack CAS) must not silently execute the swap.
@@ -436,6 +539,8 @@ export const KEYS = {
   operationInflight: (id: string) => `op:inflight:${id}`,
   operationQueued: (id: string) => `op:queued:${id}`,
   operationResolved: (id: string) => `op:resolved:${id}`,
+  operationDeadLetterPrefix: () => 'op:dead-letter:',
+  operationDeadLetter: (id: string) => `op:dead-letter:${id}`,
   bulkOperationAuditPrefix: () => 'audit:bulk:',
   bulkOperationAudit: (timestamp: number, requestId: string, confirmationToken: string) =>
     `audit:bulk:${formatSortableTimestamp(timestamp)}:${encodeStorageKeyComponent(requestId)}:${encodeStorageKeyComponent(confirmationToken)}`,
@@ -517,8 +622,16 @@ export const KEYS = {
   review: (workflowId: string, reviewId: string) =>
     `review:${encodeStorageKeyComponent(workflowId)}:${reviewId}`,
   workflowHeaders: (workflowId: string) => `wf-headers:${encodeStorageKeyComponent(workflowId)}`,
+  childCancellationPrefix: (workflowId: string) =>
+    `child-cancel:${encodeStorageKeyComponent(workflowId)}:`,
+  childCancellation: (workflowId: string, childWorkflowId: string) =>
+    `child-cancel:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(childWorkflowId)}`,
   terminalCleanupNeeded: (workflowId: string) =>
     `wf-cleanup-needed:${encodeStorageKeyComponent(workflowId)}`,
+  workflowConcurrency: (workflowType: string, partitionKey: string) =>
+    `wf-concurrency:${encodeStorageKeyComponent(workflowType)}:${encodeStorageKeyComponent(partitionKey)}`,
+  workflowConcurrencyHolder: (workflowId: string) =>
+    `wf-concurrency-holder:${encodeStorageKeyComponent(workflowId)}`,
   /**
    * Presence-only marker written at start only when a run is launched with a
    * non-serialized `services` value (see `start-batch.ts`). It lets a
@@ -540,6 +653,8 @@ export const KEYS = {
     `blob:${encodeStorageKeyComponent(workflowId)}:${key}:chunk:`,
   streamChunk: (workflowId: string, key: string, chunkIndex: number) =>
     `blob:${encodeStorageKeyComponent(workflowId)}:${key}:chunk:${String(chunkIndex).padStart(10, '0')}`,
+  streamTail: (workflowId: string, key: string) =>
+    `blob:${encodeStorageKeyComponent(workflowId)}:${key}:tail`,
   streamMetadata: (workflowId: string, key: string) =>
     `blob:${encodeStorageKeyComponent(workflowId)}:${key}:meta`,
   budgetCharged: (operationId: string) => `budget-charged:${operationId}`,

@@ -30,7 +30,6 @@ describe('inline launch queue', () => {
           step: 0,
           locals: {},
           accumulatedResults: [],
-          pendingSignals: [],
           searchAttributes: {},
           version: '1',
           schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,

@@ -294,6 +294,11 @@ async function exerciseBulkWorkflowClientRequests(httpClient: HttpClient): Promi
     failed: 1,
     errors: [{ id: 'wf-failed', error: 'boom' }],
   });
+  expect(await httpClient.retryFailedAll({ status: 'failed', tags: ['retry'] })).toEqual({
+    retried: 2,
+    failed: 1,
+    errors: [{ id: 'wf-still-failed', error: 'retry failed' }],
+  });
   expect(await httpClient.signalAll({ tags: ['nightly'] }, 'continue', { ok: true })).toEqual({
     signalled: 3,
     failed: 0,
@@ -318,6 +323,11 @@ function assertBulkWorkflowRequestCalls(fetchCalls: FetchCall[]): void {
       url: 'http://example.test/v1/workflows/bulk/cancel',
       method: 'POST',
       body: { filter: { status: 'running', tags: ['nightly'] } },
+    },
+    {
+      url: 'http://example.test/v1/workflows/bulk/retry-failed',
+      method: 'POST',
+      body: { filter: { status: 'failed', tags: ['retry'] } },
     },
     {
       url: 'http://example.test/v1/workflows/bulk/signal',
@@ -471,6 +481,9 @@ beforeAll(() => {
   server = serve({
     engine,
     port: 0, // random available port
+    // Keep the transport body guard above the engine payload cap so the shared
+    // async-activity contract exercises engine payload-size rejection.
+    maxRequestBodyBytes: CONTRACT_PAYLOAD_CAP_BYTES * 3,
     auth: {
       apiKeys: [CONTRACT_API_KEY],
       defaultApiKeyScopes: ['reviews:read', 'system:read', 'workflows:read'],
@@ -1197,6 +1210,11 @@ describe('HttpClient request surface', () => {
         cancelled: 2,
         failed: 1,
         errors: [{ id: 'wf-failed', error: 'boom' }],
+      }),
+      jsonResponse({
+        retried: 2,
+        failed: 1,
+        errors: [{ id: 'wf-still-failed', error: 'retry failed' }],
       }),
       jsonResponse({ signalled: 3, failed: 0 }),
       jsonResponse({ deleted: 4 }),

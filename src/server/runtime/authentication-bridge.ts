@@ -23,7 +23,13 @@ import { buildPreflightResponse, decorateResponseWithCors, isPreflightRequest } 
 import { gateRequest } from './request-gate.ts';
 import { handleTaskPollRequest, handleTaskResultRequest } from './task-polling.ts';
 import { reassignOrExpireTask } from './task-reconciliation.ts';
-import { addStreamSocket, removeStreamSocket, replayTokenStream } from './websocket-stream.ts';
+import {
+  addStreamSocket,
+  addWatchSocket,
+  removeStreamSocket,
+  removeWorkflowStreamConnection,
+  replayTokenStream,
+} from './websocket-stream.ts';
 import { handleWebSocketUpgrade } from './websocket-upgrade.ts';
 import { handleWorkerWebSocketMessage, isInflightRecord } from './websocket-worker.ts';
 
@@ -33,6 +39,7 @@ type ServerFetchOptions = {
   discoveryInfo?: import('../discovery-info.ts').DiscoveryInfo;
   publicOrigin?: string;
   trustedHosts?: ReadonlyArray<string>;
+  maxRequestBodyBytes?: number;
 };
 
 export function deriveSupportedOpenApiSecuritySchemes(
@@ -218,6 +225,9 @@ async function dispatchServerFetchRequest(
       registry: context.liveOperationRegistry,
       engine: options.engine,
       authContext: authentication.authContext,
+      ...(options.maxRequestBodyBytes !== undefined
+        ? { maxBodyBytes: options.maxRequestBodyBytes }
+        : {}),
     });
   }
 
@@ -249,6 +259,9 @@ function buildHandlerOptions(
     ...(options.discoveryInfo !== undefined ? { discoveryInfo: options.discoveryInfo } : {}),
     ...(options.publicOrigin !== undefined ? { publicOrigin: options.publicOrigin } : {}),
     ...(options.trustedHosts !== undefined ? { trustedHosts: options.trustedHosts } : {}),
+    ...(options.maxRequestBodyBytes !== undefined
+      ? { maxRequestBodyBytes: options.maxRequestBodyBytes }
+      : {}),
     operationRegistry: context.liveOperationRegistry,
     restBindings: context.liveRestBindings,
     supportedAuthenticationSchemes: context.supportedAuthenticationSchemes,
@@ -267,6 +280,10 @@ export function createServerWebSocketHandlers(
   return {
     open(ws) {
       const { pathname, connectionType, workflowId } = ws.data;
+      if (connectionType === 'watch' && workflowId && !addWatchSocket(context, workflowId, ws)) {
+        return;
+      }
+
       // Watch and worker sockets ride Bun pub/sub by pathname. Stream
       // sockets do not: `serve()` wires token delivery through
       // `publishTokenMessage()` and the `streamSockets` registry instead,
@@ -281,7 +298,9 @@ export function createServerWebSocketHandlers(
       if (connectionType === 'stream' && workflowId) {
         ws.data.replayInProgress = true;
         ws.data.pendingStreamMessages = [];
-        addStreamSocket(context, workflowId, ws);
+        if (!addStreamSocket(context, workflowId, ws)) {
+          return;
+        }
         void replayTokenStream(context, options.engine, ws, workflowId);
       }
 
@@ -327,6 +346,11 @@ export function createServerWebSocketHandlers(
 
       if (ws.data.connectionType === 'stream') {
         removeStreamSocket(context, ws);
+        removeWorkflowStreamConnection(context, ws);
+      }
+
+      if (ws.data.connectionType === 'watch') {
+        removeWorkflowStreamConnection(context, ws);
       }
 
       const workerId = ws.data.workerId;

@@ -1,8 +1,15 @@
+import { copyBytesToArrayBuffer } from '../core/byte-arrays.ts';
 import { advanceCheckpoint, serializeCheckpoint } from '../core/checkpoint.ts';
+import type { ContextOperationRequest } from '../core/context.ts';
+import { resolveWorkflowVersionPatch } from '../core/context/version-patching.ts';
 import {
   createWorkerWorkflowLogger,
   type WorkerLoggerReplayState,
 } from '../core/context/workflow-logger.ts';
+import {
+  attachTransientCheckpointReplayPayload,
+  pruneCheckpointReplayState,
+} from '../core/engine/checkpoint-replay.ts';
 import {
   classifyErrorAsFailureCategory,
   errorFromFailedOperationOutcome,
@@ -48,6 +55,11 @@ export type WorkerWorkflowContext = Pick<
   // Non-optional here (always populated at runtime) even though the public
   // WorkflowContext types it `log?` for structural implementors.
   readonly log: WorkflowLogger;
+  getVersion(
+    changeId: string,
+    minSupported: number,
+    maxSupported: number,
+  ): Generator<ContextOperationRequest, number, unknown>;
 };
 
 interface RunMessageShape {
@@ -73,6 +85,7 @@ export function createWorkerWorkflowContext(
   // (a superset, so the real call site passes through unchanged).
   getReplayState: () => WorkerLoggerReplayState | undefined,
   forwardLog?: (record: WorkflowLogRecord) => void,
+  getVersionReplayState: () => WorkerReplayState | undefined = () => undefined,
 ): WorkerWorkflowContext {
   return {
     workflowId: message.workflowId,
@@ -88,7 +101,58 @@ export function createWorkerWorkflowContext(
       getReplayState,
       forwardLog,
     ),
+    getVersion: (changeId, minSupported, maxSupported) =>
+      workerGetVersion(
+        message.workflowId,
+        getVersionReplayState,
+        changeId,
+        minSupported,
+        maxSupported,
+      ),
   };
+}
+
+function* workerGetVersion(
+  workflowId: string,
+  getReplayState: () => WorkerReplayState | undefined,
+  changeId: string,
+  minSupported: number,
+  maxSupported: number,
+): Generator<ContextOperationRequest, number, unknown> {
+  const replayState = getReplayState();
+  if (!replayState) {
+    throw new Error(`No active replay state for workflow: ${workflowId}`);
+  }
+
+  const stepIndex = replayState.nextStepIndex;
+  const resolution = resolveWorkflowVersionPatch(
+    replayState.checkpoint.locals,
+    changeId,
+    minSupported,
+    maxSupported,
+  );
+  replayState.checkpoint = {
+    ...replayState.checkpoint,
+    locals: resolution.checkpointLocals,
+  };
+
+  const operation: ContextOperationRequest = {
+    type: 'get-version',
+    operationId: crypto.randomUUID(),
+    changeId,
+    minSupported,
+    maxSupported,
+    version: resolution.version,
+  };
+
+  if (!resolution.newlyPinned && !replayState.signatures.has(stepIndex)) {
+    replayState.nextStepIndex = stepIndex + 1;
+    return resolution.version;
+  }
+
+  const result = yield operation;
+  replayState.accumulatedResults.delete(stepIndex);
+  return result as number;
 }
 
 /**
@@ -200,6 +264,7 @@ export async function handleRunMessage(
       controller,
       () => context.replayStates.get(message.workflowId),
       buildLogForwarder(message.workflowId, message.maxProtocolMessageBytes, postLog),
+      () => context.replayStates.get(message.workflowId),
     );
     const generator = handler(workerContext, message.input);
     const step = await generator.next();
@@ -369,7 +434,7 @@ async function processGeneratorStep(
       };
     }
 
-    const operationRequest = currentStep.value as OperationRequest;
+    const operationRequest = currentStep.value as OperationRequest | ContextOperationRequest;
     const stepIndex = replayState.nextStepIndex;
     const signature = await createWorkerReplayOperationSignature(
       operationRequest,
@@ -413,16 +478,21 @@ async function processGeneratorStep(
           failureCategory: 'system',
         };
       }
+      replayState.checkpoint = pruneWorkerCheckpoint(
+        replayState,
+        replayState.checkpoint,
+        stepIndex,
+      );
     } else {
       replayState.signatures.set(stepIndex, signature);
-      replayState.checkpoint = advanceWorkerCheckpoint(replayState);
+      replayState.checkpoint = advanceWorkerCheckpoint(replayState, stepIndex);
     }
     replayState.pendingStepIndex = stepIndex;
     context.generators.set(workflowId, generator);
     return {
       type: 'checkpoint',
       workflowId,
-      checkpoint: toArrayBuffer(serializeCheckpoint(replayState.checkpoint)),
+      checkpoint: copyBytesToArrayBuffer(serializeCheckpoint(replayState.checkpoint)),
       operationRequest,
     };
   }
@@ -444,24 +514,32 @@ async function replayGeneratorStep(
   return await generator.next(replayState.accumulatedResults.get(stepIndex));
 }
 
-function advanceWorkerCheckpoint(replayState: WorkerReplayState): Checkpoint {
+function advanceWorkerCheckpoint(
+  replayState: WorkerReplayState,
+  pendingOperationStep: number,
+): Checkpoint {
   const advanced = advanceCheckpoint(replayState.checkpoint, replayState.checkpoint.locals, {
     accumulatedResults: [...replayState.accumulatedResults],
   });
+  return pruneWorkerCheckpoint(replayState, advanced, pendingOperationStep);
+}
+
+function pruneWorkerCheckpoint(
+  replayState: WorkerReplayState,
+  checkpoint: Checkpoint,
+  pendingOperationStep: number,
+): Checkpoint {
   const workerReplayFailures = [...replayState.failedOutcomes];
-  const advancedCheckpoint = { ...advanced };
-  delete advancedCheckpoint.workerReplayFailures;
-  return {
-    ...advancedCheckpoint,
+  const { workerReplayFailures: _oldWorkerReplayFailures, ...checkpointWithoutFailures } =
+    checkpoint;
+  const workerCheckpoint: Checkpoint = {
+    ...checkpointWithoutFailures,
+    accumulatedResults: [...replayState.accumulatedResults],
     workerReplaySignatures: [...replayState.signatures],
     ...(workerReplayFailures.length === 0 ? {} : { workerReplayFailures }),
   };
-}
-
-function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  return copy.buffer;
+  const pruned = pruneCheckpointReplayState(workerCheckpoint, pendingOperationStep);
+  return attachTransientCheckpointReplayPayload(pruned.checkpoint, pruned.replayPayload);
 }
 
 export function cleanupWorkflowRunnerState(

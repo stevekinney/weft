@@ -19,14 +19,14 @@ import { transitionQueuedToInflight } from './task-state.ts';
 import type { EventBroadcastingHandle } from './index.ts';
 
 describe('clampWorkerReconnectGracePeriod', () => {
-  it('returns the 100ms default when undefined', () => {
-    expect(clampWorkerReconnectGracePeriod(undefined)).toBe(100);
+  it('returns the 2000ms default when undefined', () => {
+    expect(clampWorkerReconnectGracePeriod(undefined)).toBe(2_000);
   });
 
-  it('returns the 100ms default for non-finite values', () => {
-    expect(clampWorkerReconnectGracePeriod(Number.NaN)).toBe(100);
-    expect(clampWorkerReconnectGracePeriod(Number.POSITIVE_INFINITY)).toBe(100);
-    expect(clampWorkerReconnectGracePeriod(Number.NEGATIVE_INFINITY)).toBe(100);
+  it('returns the 2000ms default for non-finite values', () => {
+    expect(clampWorkerReconnectGracePeriod(Number.NaN)).toBe(2_000);
+    expect(clampWorkerReconnectGracePeriod(Number.POSITIVE_INFINITY)).toBe(2_000);
+    expect(clampWorkerReconnectGracePeriod(Number.NEGATIVE_INFINITY)).toBe(2_000);
   });
 
   it('honors 0 as the explicit no-grace bypass', () => {
@@ -35,6 +35,7 @@ describe('clampWorkerReconnectGracePeriod', () => {
 
   it('honors finite positive values inside the 1..5000 range', () => {
     expect(clampWorkerReconnectGracePeriod(1)).toBe(1);
+    expect(clampWorkerReconnectGracePeriod(100)).toBe(100);
     expect(clampWorkerReconnectGracePeriod(250)).toBe(250);
     expect(clampWorkerReconnectGracePeriod(5_000)).toBe(5_000);
   });
@@ -147,6 +148,61 @@ describe('assertAuthenticationPosture', () => {
     expect(() =>
       resolveNetworkConfig({ ...minimalServeOptions(), unauthenticatedAccess: 'reject' }),
     ).toThrow('Refusing to start server with no authentication');
+  });
+});
+
+describe('MCP origin configuration posture', () => {
+  it('warns at startup when MCP origin controls are omitted', () => {
+    const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      resolveNetworkConfig(minimalServeOptions());
+      expect(warningSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          'MCP HTTP transport is enabled without publicOrigin or trustedHosts',
+        ),
+      );
+    } finally {
+      warningSpy.mockRestore();
+    }
+  });
+
+  it('does not warn when publicOrigin is configured', () => {
+    const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      resolveNetworkConfig({
+        ...minimalServeOptions(),
+        auth: { apiKeys: ['test-key'] },
+        publicOrigin: 'https://api.example.com',
+      });
+      expect(warningSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining(
+          'MCP HTTP transport is enabled without publicOrigin or trustedHosts',
+        ),
+      );
+    } finally {
+      warningSpy.mockRestore();
+    }
+  });
+
+  it('does not warn when trustedHosts is configured', () => {
+    const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
+
+    try {
+      resolveNetworkConfig({
+        ...minimalServeOptions(),
+        auth: { apiKeys: ['test-key'] },
+        trustedHosts: ['api.example.com'],
+      });
+      expect(warningSpy).not.toHaveBeenCalledWith(
+        expect.stringContaining(
+          'MCP HTTP transport is enabled without publicOrigin or trustedHosts',
+        ),
+      );
+    } finally {
+      warningSpy.mockRestore();
+    }
   });
 });
 

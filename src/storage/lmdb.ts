@@ -2,6 +2,7 @@ import * as lmdb from 'lmdb';
 
 import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range';
 import {
+  assertStorageBatchOperationCount,
   matchesScanOptions,
   resolvePrefixRangeEnd,
   storageValuesEqual,
@@ -18,9 +19,10 @@ import { scopedStorage } from './scoped-storage';
  * path internally, but the Storage interface presents them as Promises and
  * copies the bytes into a fresh Uint8Array on each call. Writes use lmdb-js's
  * async batching: individual `put`/`remove` calls return promises that resolve
- * once the next batched transaction commits to disk. The adapter resets
- * lmdb-js's cached read transaction after every write so subsequent reads
- * observe just-written data.
+ * once the next batched transaction commits to disk. lmdb-js `^3.5.2`
+ * automatically resets its cached read transaction after each write commit;
+ * this adapter relies on that behavior rather than calling `resetReadTxn()`
+ * directly.
  *
  * @example
  * ```ts
@@ -222,6 +224,7 @@ export class LMDBStorage implements Storage {
 
   async batch(operations: BatchOperation[]): Promise<void> {
     this.#assertOpen();
+    assertStorageBatchOperationCount('batch operations', operations.length);
     if (operations.length === 0) return;
 
     await this.#database.batch(() => {
@@ -240,6 +243,9 @@ export class LMDBStorage implements Storage {
     operations: BatchOperation[],
   ): Promise<boolean> {
     this.#assertOpen();
+    assertStorageBatchOperationCount('conditionalBatch conditions', conditions.length);
+    assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
+
     const committed = this.#database.transactionSync(() => {
       for (const condition of conditions) {
         const currentValue = this.#database.get(condition.key);

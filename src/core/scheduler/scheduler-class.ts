@@ -29,6 +29,13 @@ type TimerScanIterators = {
 type TimerProcessingResult = 'processed' | 'retry';
 
 /**
+ * Maximum expired timers read per timer source on one scheduler tick.
+ * A larger backlog stays durable and is drained by later ticks, bounding
+ * per-tick memory and callback work while preserving retry semantics.
+ */
+const EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE = 1_000;
+
+/**
  * Scheduler manages durable timers and polls for expired deadlines.
  *
  * @example
@@ -139,6 +146,7 @@ export class Scheduler implements Disposable {
   ): Promise<void> {
     const currentTime = now ?? this.#getNow();
     const timerSources = this.#createTimerSources(this.#scanExpiredTimers(currentTime));
+    const cleanupOperations: BatchOperation[] = [];
 
     for (const timerSource of timerSources) {
       await advanceTimerSource(timerSource, this.#storage);
@@ -154,9 +162,9 @@ export class Scheduler implements Disposable {
       // Re-check #stopped before each callback so an interval-dispatched tick
       // terminates early when stop() or dispose is called concurrently. flush()
       // skips this check because its purpose is to drain remaining timers.
-      if (respectStopped && this.#stopped) return;
+      if (respectStopped && this.#stopped) break;
 
-      const processingResult = await this.#processSelectedTimer(nextEntry);
+      const processingResult = await this.#processSelectedTimer(nextEntry, cleanupOperations);
       if (processingResult === 'retry') {
         await advanceTimerSource(selectedSource, this.#storage);
         continue;
@@ -164,21 +172,27 @@ export class Scheduler implements Disposable {
 
       await advanceTimerSource(selectedSource, this.#storage);
     }
+
+    await this.#deleteProcessedTimerKeys(cleanupOperations);
   }
 
   #scanExpiredTimers(currentTime: number): TimerScanIterators {
     return {
       deadline: this.#storage.scan('wf-deadline:', {
         lt: resolvePrefixRangeEnd(KEYS.deadline(currentTime, '')),
+        limit: EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE,
       }),
       delayedStart: this.#storage.scan('wf-delayed:', {
         lt: resolvePrefixRangeEnd(KEYS.delayedStart(currentTime, '')),
+        limit: EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE,
       }),
       schedule: this.#storage.scan('schedule-due:', {
         lt: resolvePrefixRangeEnd(KEYS.scheduleTick(currentTime, '')),
+        limit: EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE,
       }),
       terminalCleanup: this.#storage.scan('wf-cleanup:', {
         lt: resolvePrefixRangeEnd(KEYS.terminalCleanup(currentTime, '')),
+        limit: EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE,
       }),
     };
   }
@@ -212,7 +226,10 @@ export class Scheduler implements Disposable {
     return timerSources.some((timerSource) => timerSource.next !== null);
   }
 
-  async #processSelectedTimer(nextEntry: ScannedTimerEntry): Promise<TimerProcessingResult> {
+  async #processSelectedTimer(
+    nextEntry: ScannedTimerEntry,
+    cleanupOperations: BatchOperation[],
+  ): Promise<TimerProcessingResult> {
     try {
       await this.#onTimerFired(nextEntry.entry);
     } catch (error) {
@@ -222,15 +239,28 @@ export class Scheduler implements Disposable {
       return 'retry';
     }
 
-    await this.#deleteTimerKeysAfterCallback(nextEntry);
+    await this.#appendTimerCleanupOperationsAfterCallback(nextEntry, cleanupOperations);
     return 'processed';
   }
 
-  async #deleteTimerKeysAfterCallback(nextEntry: ScannedTimerEntry): Promise<void> {
+  async #appendTimerCleanupOperationsAfterCallback(
+    nextEntry: ScannedTimerEntry,
+    cleanupOperations: BatchOperation[],
+  ): Promise<void> {
     try {
-      await this.#storage.batch(await this.#buildTimerCleanupOperations(nextEntry));
+      cleanupOperations.push(...(await this.#buildTimerCleanupOperations(nextEntry)));
     } catch (deleteError) {
       console.error(`Failed to delete timer keys for ${nextEntry.entry.id}:`, deleteError);
+    }
+  }
+
+  async #deleteProcessedTimerKeys(cleanupOperations: BatchOperation[]): Promise<void> {
+    if (cleanupOperations.length === 0) return;
+
+    try {
+      await this.#storage.batch(cleanupOperations);
+    } catch (deleteError) {
+      console.error('Failed to delete timer keys for processed scheduler tick:', deleteError);
     }
   }
 

@@ -67,6 +67,7 @@ const COVERAGE_SMOKE_BENCHMARK_PARAMETERS: ActivityCompletionBenchmarkParameters
   measurementRounds: 1,
   startBatchSize: 50,
 };
+const SMOKE_BENCHMARK_PARAMETERS = COVERAGE_SMOKE_BENCHMARK_PARAMETERS;
 
 function percentile(sorted: number[], fraction: number): number {
   if (sorted.length === 0) {
@@ -116,9 +117,7 @@ function getTargetCompletionsPerSecond(): number {
 }
 
 function getSmokeBenchmarkParameters(): ActivityCompletionBenchmarkParameters {
-  return isCoverageInstrumentationEnabled()
-    ? COVERAGE_SMOKE_BENCHMARK_PARAMETERS
-    : BASELINE_BENCHMARK_PARAMETERS;
+  return SMOKE_BENCHMARK_PARAMETERS;
 }
 
 function totalActivityCompletions(parameters: ActivityCompletionBenchmarkParameters): number {
@@ -172,6 +171,12 @@ function logActivityCompletionBenchmark(
 }
 
 describe('Activity completion throughput', () => {
+  it('keeps the default smoke workload bounded below the architecture benchmark', () => {
+    expect(totalActivityCompletions(getSmokeBenchmarkParameters())).toBeLessThan(
+      totalActivityCompletions(BASELINE_BENCHMARK_PARAMETERS),
+    );
+  });
+
   it('records completion throughput in a non-gating smoke benchmark', async () => {
     const parameters = getSmokeBenchmarkParameters();
     // Warm the subprocess runner once so the smoke sample measures the engine's

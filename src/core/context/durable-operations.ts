@@ -6,6 +6,7 @@ import type { ContextInternals } from './internals.ts';
 import type { ContextOperationRequest } from './operation-request.ts';
 import type { OffloadReference, StreamReference, StreamSink } from './types.ts';
 import { captureCallerStack } from './validation.ts';
+import { resolveWorkflowVersionPatch } from './version-patching.ts';
 
 export type PreparedSleepOperation =
   | { cached: true }
@@ -194,6 +195,57 @@ export function* waitUntil(
 
   context.accumulatedResults.set(step, result);
   return result as boolean | void;
+}
+
+export function* getVersion(
+  _context: Context,
+  internals: ContextInternals,
+  changeId: string,
+  minSupported: number,
+  maxSupported: number,
+): Generator<ContextOperationRequest, number, unknown> {
+  const step = internals.stepIndex++;
+  const resolution = resolveWorkflowVersionPatch(
+    internals.checkpointLocals,
+    changeId,
+    minSupported,
+    maxSupported,
+  );
+  internals.checkpointLocals = resolution.checkpointLocals;
+
+  if (!resolution.newlyPinned) {
+    return resolution.version;
+  }
+
+  if (internals.accumulatedResults?.has(step)) {
+    const cachedVersion = internals.accumulatedResults.get(step);
+    if (cachedVersion !== resolution.version) {
+      throw new Error(
+        `ctx.getVersion("${changeId}") replay result ${String(cachedVersion)} does not match pinned version ${String(resolution.version)}`,
+      );
+    }
+    return resolution.version;
+  }
+
+  if (internals.explainMode) {
+    console.log(`[weft] ctx.getVersion("${changeId}", ${minSupported}, ${maxSupported})`);
+    console.log(`  → Creating checkpoint at step ${step}`);
+    console.log(`  → Pinning workflow patch "${changeId}" to version ${resolution.version}`);
+  }
+
+  const operationId = crypto.randomUUID();
+  const callerStack = captureCallerStack();
+  const result = yield {
+    type: 'get-version' as const,
+    operationId,
+    changeId,
+    minSupported,
+    maxSupported,
+    version: resolution.version,
+    callerStack,
+  };
+
+  return result as number;
 }
 
 export function* waitForUpdate<T = unknown>(

@@ -3,7 +3,8 @@ import { z } from 'zod';
 import type { Engine } from '../../core/engine.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { readRestJsonBody } from '../rest-body.ts';
+import { invalidParamsFault, isOperationFault, shapeRestFault } from './operation-helpers.ts';
 import { mapScheduleErrorToFault, validateScheduleInputCadence } from './schedule-faults.ts';
 
 // `cronExpression`/`every` are intentionally permissive at the schema boundary
@@ -70,11 +71,12 @@ export const updateScheduleRestBinding: UnknownRestBinding = {
     cronExpression: { kind: 'body-field', bodyField: 'cronExpression' },
     every: { kind: 'body-field', bodyField: 'every' },
   },
-  extractInput: async (request, pathParams) => {
+  extractInput: async (request, pathParams, context) => {
     let body: unknown;
     try {
-      body = await request.json();
-    } catch {
+      body = await readRestJsonBody(request, context);
+    } catch (error) {
+      if (isOperationFault(error)) throw error;
       throw invalidParamsFault('Invalid JSON body');
     }
 

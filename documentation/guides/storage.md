@@ -103,6 +103,56 @@ type BatchOperation =
 
 Adapters can opt into optional methods for performance and feature parity: `conditionalBatch` (compare-and-swap), `has`, `deletePrefix`, `keys`, `count`, `scoped`, and `query` (SQL passthrough, adapter-specific). Adapters that omit optional methods receive generic fallbacks via wrapper functions (`storageHas`, `storageKeys`, etc.).
 
+## Implementing a custom adapter
+
+A custom adapter starts with the same five required methods: `get`, `put`, `delete`, `scan`, and `batch`, plus `[Symbol.dispose]()` and an honest `capabilities()` row. Keep values opaque `Uint8Array` bytes. Do not decode, inspect, compress, or compare them outside the storage contract unless you are writing a wrapper that documents that transformation.
+
+Use the public conformance suite from `@lostgradient/weft/storage/testing` in your adapter's Bun tests. The suite registers `bun:test` cases, so it belongs in test files rather than production code:
+
+```ts
+import {
+  runBasicStorageContract,
+  runBinaryAndLargeScanStorageConformance,
+  runConcurrentConditionalBatchConformance,
+  runStorageCapabilityConformance,
+} from '@lostgradient/weft/storage/testing';
+import { MemoryStorage, type StorageCapabilities } from '@lostgradient/weft/storage';
+
+class MyStorage extends MemoryStorage {}
+
+const expectedCapabilities = {
+  persistence: 'ephemeral',
+  readAfterWrite: 'linearizable',
+  scanConsistency: 'snapshot',
+  atomicBatch: true,
+  conditionalBatch: true,
+  boundedRangeDelete: true,
+} satisfies StorageCapabilities;
+
+runBasicStorageContract('MyStorage', {
+  create: () => new MyStorage(),
+});
+
+runStorageCapabilityConformance('MyStorage', {
+  create: () => new MyStorage(),
+  expected: expectedCapabilities,
+});
+
+runConcurrentConditionalBatchConformance('MyStorage', {
+  create: () => new MyStorage(),
+});
+
+runBinaryAndLargeScanStorageConformance('MyStorage', {
+  create: () => new MyStorage(),
+});
+```
+
+Replace the `MyStorage` class body and `expectedCapabilities` row with your adapter implementation and its actual guarantees.
+
+These helpers prove the adapter behavior that Weft can check from one process: basic key/value semantics, prefix-scan ordering and bounds, binary values, large scans, declared capability shape, read-after-write behavior, snapshot scan isolation, and compare-and-swap behavior when `conditionalBatch` is reported as available. Call `runConcurrentConditionalBatchConformance()` only for adapters that can stage two in-flight write transactions against shared state; omit it for single-connection backends that serialize writers locally.
+
+The package subpath is intentionally `@lostgradient/weft/storage/testing`, not `@lostgradient/weft/testing`, because adapter conformance and workflow test engines serve different audiences. The `weft conformance` CLI still covers remote worker protocol compatibility; storage-adapter conformance through the CLI is a separate feature.
+
 ## Consistency & capabilities
 
 Every adapter implements `capabilities(): StorageCapabilities` — an honest, self-reported profile of what the backend actually guarantees. The engine reads these to decide what is safe, and one capability (`conditionalBatch`) is enforced at runtime.
@@ -126,17 +176,17 @@ The Tier-0 failure-semantics contract relies on this capability split for activi
 
 The honest profile per built-in adapter:
 
-| Adapter               | persistence                       | readAfterWrite | scanConsistency | atomicBatch | conditionalBatch | boundedRangeDelete |
-| --------------------- | --------------------------------- | -------------- | --------------- | ----------- | ---------------- | ------------------ |
-| `MemoryStorage`       | `ephemeral`                       | `linearizable` | `snapshot`      | yes         | yes              | yes                |
-| `BunSQLiteStorage`    | `ephemeral` or `local`            | `linearizable` | `snapshot`      | yes         | yes              | yes                |
-| `NodeSQLiteStorage`   | `ephemeral` or `local`            | `linearizable` | `snapshot`      | yes         | yes              | no                 |
-| `LMDBStorage`         | `local`                           | `linearizable` | `snapshot`      | yes         | yes              | no                 |
-| `IndexedDBStorage`    | `local`                           | `linearizable` | `best-effort`   | yes         | yes              | yes                |
-| `TursoStorage`        | `ephemeral`, `local`, or `remote` | `session`      | `snapshot`      | yes         | yes              | yes                |
-| `NeonStorage`         | `remote`                          | `linearizable` | `snapshot`      | yes         | yes              | yes                |
-| `HTTPStorage`         | `remote`                          | `eventual`     | `best-effort`   | yes         | no (opt-in)      | no                 |
-| `WebExtensionStorage` | `ephemeral`, `local`, or `remote` | `session`      | `best-effort`   | yes         | no               | no                 |
+| Adapter               | persistence                       | readAfterWrite | scanConsistency | atomicBatch            | conditionalBatch | boundedRangeDelete |
+| --------------------- | --------------------------------- | -------------- | --------------- | ---------------------- | ---------------- | ------------------ |
+| `MemoryStorage`       | `ephemeral`                       | `linearizable` | `snapshot`      | yes                    | yes              | yes                |
+| `BunSQLiteStorage`    | `ephemeral` or `local`            | `linearizable` | `snapshot`      | yes                    | yes              | yes                |
+| `NodeSQLiteStorage`   | `ephemeral` or `local`            | `linearizable` | `snapshot`      | yes                    | yes              | no                 |
+| `LMDBStorage`         | `local`                           | `linearizable` | `snapshot`      | yes                    | yes              | no                 |
+| `IndexedDBStorage`    | `local`                           | `linearizable` | `best-effort`   | yes                    | yes              | yes                |
+| `TursoStorage`        | `ephemeral`, `local`, or `remote` | `session`      | `snapshot`      | yes                    | yes              | yes                |
+| `NeonStorage`         | `remote`                          | `linearizable` | `snapshot`      | yes                    | yes              | yes                |
+| `HTTPStorage`         | `remote`                          | `eventual`     | `best-effort`   | yes                    | no (opt-in)      | no                 |
+| `WebExtensionStorage` | `ephemeral`, `local`, or `remote` | `session`      | `best-effort`   | no (same context only) | no               | no                 |
 
 Three kinds of capability, treated differently:
 
@@ -146,6 +196,9 @@ Three kinds of capability, treated differently:
 
 > [!WARNING] Eventual read-after-write
 > `HTTPStorage` reports `readAfterWrite: eventual`: the client offers no read-your-writes guarantee, so a resume immediately after a checkpoint write may read stale state. There is no runtime gate for this. Operators choosing an eventual backend accept that visibility trade-off; the built-in `linearizable` single-process adapters do not have it.
+
+> [!WARNING] WebExtension batch scope
+> `WebExtensionStorage` serializes `batch()` calls only inside the same JavaScript context. Browser extension contexts that share `chrome.storage` or `browser.storage` do not get a cross-context transaction, so the adapter reports `atomicBatch: false`. `assertDurableStorageForRecovery()` rejects it even when the selected area is persistent.
 
 For applications that should fail boot when durable recovery is misconfigured, call [`assertDurableStorageForRecovery()`](../reference/api-storage.md#assertdurablestorageforrecovery). It accepts `persistence: 'local'` or `'remote'`, `readAfterWrite: 'linearizable'`, `scanConsistency: 'snapshot'`, `atomicBatch: true`, and `conditionalBatch: true`. A `remote` backend such as `NeonStorage` passes only because the other four axes still hold at full strength; `ephemeral` is the only persistence value it rejects.
 
@@ -302,6 +355,13 @@ await using storage = new TursoStorage({
 The `url` accepts `libsql://` (remote Turso), `file:` (local libSQL), or `file::memory:` (in-memory libSQL). `authToken` is required for remote databases and ignored for local files.
 
 Like SQLite, the underlying schema is a single `kv` table using `WITHOUT ROWID`. Batch operations run inside a transaction.
+
+> [!WARNING]
+> `TursoStorage` always reports `readAfterWrite: 'session'`, so it always fails
+> `assertDurableStorageForRecovery()`. Use it for development, testing, or
+> deployments that pin all reads and writes to one libSQL connection and accept
+> session-level read-after-write. For durable production recovery, use
+> `NeonStorage`, `SQLiteStorage`/`BunSQLiteStorage`, or `LMDBStorage`.
 
 ### `NeonStorage`
 

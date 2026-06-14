@@ -8,7 +8,7 @@ import type {
 } from '../context.ts';
 import { cleanupPartialStreamChunks, createCleanupErrorReporter } from '../engine-helpers.ts';
 import type { EngineInternals } from './internals.ts';
-import { loadStoredStreamChunks } from './stream-chunk-loading.ts';
+import { encodeStoredStreamTailSequence, loadStoredStreamChunks } from './stream-chunk-loading.ts';
 import { STREAM_CHUNK_KIND, TOKENS_STREAM_KEY, notifyWorkflowFeedCommit } from './workflow-feed.ts';
 
 type StreamOperation = Extract<ContextOperationRequest, { type: 'stream' }>;
@@ -97,7 +97,18 @@ export async function writeStreamChunksFromInternals(
     const encoded = encode(chunk);
     const sequence = chunkCount;
     const chunkKey = KEYS.streamChunk(workflowId, operation.key, sequence);
-    await internals.storage.put(chunkKey, encoded);
+    if (operation.key === TOKENS_STREAM_KEY) {
+      await internals.storage.batch([
+        { type: 'put', key: chunkKey, value: encoded },
+        {
+          type: 'put',
+          key: KEYS.streamTail(workflowId, operation.key),
+          value: encodeStoredStreamTailSequence(sequence),
+        },
+      ]);
+    } else {
+      await internals.storage.put(chunkKey, encoded);
+    }
     writtenKeys.push(chunkKey);
     totalSizeBytes += encoded.byteLength;
     chunkCount++;

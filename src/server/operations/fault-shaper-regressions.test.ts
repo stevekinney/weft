@@ -140,7 +140,7 @@ describe('REST fault shaper regressions', () => {
     const source = await Bun.file(new URL('bulk-filter-helpers.ts', operationsDirectory)).text();
 
     expect(source).toMatch(
-      /import\s+\{\s*invalidParamsFault\s*\}\s+from\s+['"]\.\/operation-helpers\.ts['"]/u,
+      /import\s+\{[^}]*\binvalidParamsFault\b[^}]*\}\s+from\s+['"]\.\/operation-helpers\.ts['"]/u,
     );
     expect(source).not.toContain('function invalidParamsFault');
     expect(source).not.toContain('export function invalidParamsFault');

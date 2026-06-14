@@ -32,6 +32,9 @@ export type TaskRequeueReason = 'visibility-timeout' | 'worker-disconnect';
 /** Final reason captured when a task reaches the resolved state. */
 export type TaskResolutionReason = 'completed' | 'failed' | 'cancelled' | 'max-attempts-exceeded';
 
+/** Why a task-result transition was moved to the operator dead-letter guard. */
+export type TaskDeadLetterReason = 'result-resolution-storage-exhausted';
+
 /** Lifecycle evidence persisted with task records for diagnostics. */
 export interface TaskLifecycleFields {
   /** First time this operation entered a task queue. */
@@ -121,6 +124,25 @@ export interface ResolvedRecord {
   resolutionReason?: TaskResolutionReason | undefined;
   queueLatencyMs?: number | undefined;
   executionLatencyMs?: number | undefined;
+}
+
+/** Durable operator guard for a task result whose resolved write exhausted retries. */
+export interface DeadLetteredTaskRecord {
+  operationId: string;
+  reason: TaskDeadLetterReason;
+  deadLetteredAt: number;
+  errorMessage: string;
+  retryAttempts: number;
+  status: 'completed' | 'failed';
+  activityName?: string | undefined;
+  queue?: string | undefined;
+  workerId?: string | undefined;
+  attempt?: number | undefined;
+  visibilityTimeout?: number | undefined;
+  workflowId?: string | undefined;
+  retryCount?: number | undefined;
+  requeueCount?: number | undefined;
+  lastRequeueReason?: TaskRequeueReason | undefined;
 }
 
 export interface TransitionInflightToResolvedOptions {
@@ -232,6 +254,20 @@ export function isResolvedRecord(value: unknown): value is ResolvedRecord {
   );
 }
 
+/** Type guard for decoded task-result dead-letter records. */
+export function isDeadLetteredTaskRecord(value: unknown): value is DeadLetteredTaskRecord {
+  if (value === null || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record['operationId'] === 'string' &&
+    record['reason'] === 'result-resolution-storage-exhausted' &&
+    typeof record['deadLetteredAt'] === 'number' &&
+    typeof record['errorMessage'] === 'string' &&
+    typeof record['retryAttempts'] === 'number' &&
+    (record['status'] === 'completed' || record['status'] === 'failed')
+  );
+}
+
 /** Decode the queued record for an operation, returning null when absent or malformed. */
 export async function readQueuedRecord(
   storage: Storage,
@@ -252,6 +288,46 @@ export async function readInflightRecord(
   if (value === null) return null;
   const decoded = decode(value);
   return isInflightRecord(decoded) ? decoded : null;
+}
+
+/** Decode the task-result dead-letter record for an operation. */
+export async function readDeadLetteredTaskRecord(
+  storage: Storage,
+  operationId: string,
+): Promise<DeadLetteredTaskRecord | null> {
+  const value = await storage.get(KEYS.operationDeadLetter(operationId));
+  if (value === null) return null;
+  const decoded = decode(value);
+  return isDeadLetteredTaskRecord(decoded) ? decoded : null;
+}
+
+/** True when reconciliation should not re-dispatch the operation. */
+export async function isTaskDeadLettered(storage: Storage, operationId: string): Promise<boolean> {
+  return (await readDeadLetteredTaskRecord(storage, operationId)) !== null;
+}
+
+/** Persist a task-result dead-letter guard. */
+export async function writeDeadLetteredTaskRecord(
+  storage: Storage,
+  record: DeadLetteredTaskRecord,
+): Promise<void> {
+  // Use the same atomic batch path as other task-state transitions; this guard
+  // is what prevents reconciliation from re-dispatching a reported result.
+  await storage.batch([
+    {
+      type: 'put',
+      key: KEYS.operationDeadLetter(record.operationId),
+      value: encode(record),
+    },
+  ]);
+}
+
+/** Clear a task-result dead-letter guard so reconciliation may handle the inflight record again. */
+export async function clearDeadLetteredTaskRecord(
+  storage: Storage,
+  operationId: string,
+): Promise<void> {
+  await storage.delete(KEYS.operationDeadLetter(operationId));
 }
 
 function normalizeQueuedRecordLifecycle(

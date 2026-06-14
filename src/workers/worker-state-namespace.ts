@@ -32,8 +32,8 @@ export function createWorkerStateNamespace(
   return {
     session: <T>(_key: string): WorkflowSessionState<T> => {
       throw new Error(
-        'ctx.state.session() is not supported in worker execution mode. ' +
-          'Construct the engine without `workerExecution` to use session state.',
+        `Workflow type "${message.workflowType}" called ctx.state.session(), which is not supported in worker execution mode. ` +
+          "Use workflowExecutionMode: 'inline' for checkpoint-local session state, or use ctx.state.workflow() or ctx.state.execution() instead.",
       );
     },
     execution: <T>(key: string, options?: WorkflowAtomicStateOptions<T>) =>

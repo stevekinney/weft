@@ -94,6 +94,13 @@ const AUDIT_CASES: ReadonlyArray<AuditCase> = [
     expectedBaselineStatuses: [200],
   },
   {
+    name: 'POST /v1/workflows/bulk/retry-failed (bulkRetryFailedWorkflows)',
+    method: 'POST',
+    path: '/v1/workflows/bulk/retry-failed',
+    baselineBody: { filter: { status: 'failed' }, dryRun: true },
+    expectedBaselineStatuses: [200],
+  },
+  {
     name: 'DELETE /v1/workflows/bulk (bulkDeleteWorkflows)',
     method: 'DELETE',
     path: '/v1/workflows/bulk',

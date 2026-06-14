@@ -18,7 +18,7 @@ import { encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
-import { KEYS } from '../storage/interface.ts';
+import { KEYS, type ScanOptions } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { createEngineEventFeedBackend } from './engine-event-feed-backend.ts';
 import {
@@ -26,6 +26,23 @@ import {
   encodeCursor,
   type EventEnvelope,
 } from './workflow-event-feed.ts';
+
+class ScanCountingMemoryStorage extends MemoryStorage {
+  readonly scanPrefixes: string[] = [];
+
+  override async *scan(prefix: string, options?: ScanOptions): AsyncIterable<[string, Uint8Array]> {
+    this.scanPrefixes.push(prefix);
+    yield* super.scan(prefix, options);
+  }
+
+  resetScanPrefixes(): void {
+    this.scanPrefixes.length = 0;
+  }
+
+  countScansForPrefix(prefix: string): number {
+    return this.scanPrefixes.filter((candidate) => candidate === prefix).length;
+  }
+}
 
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
   ctx: WorkflowContext,
@@ -526,6 +543,61 @@ describe('createEngineEventFeedBackend — tokens selector', () => {
     }
 
     unsubscribe();
+    await engine.signal(handle.id, 'finish', 'go');
+    await handle.result();
+  });
+
+  it('uses the token tail pointer for subscribe handoff without duplicating live chunks', async () => {
+    const storage = new ScanCountingMemoryStorage();
+    const engine = new Engine({ storage });
+    let releaseSecondChunk!: () => void;
+    const secondChunkGate = new Promise<void>((resolve) => {
+      releaseSecondChunk = resolve;
+    });
+
+    engine.register(
+      workflow({ name: 'tail-pointer-streamer' }).execute(async function* (
+        ctx: WorkflowContext,
+        _input: unknown,
+      ) {
+        const context = ctx;
+        yield* context.stream('tokens', async function* () {
+          yield 'first';
+          await secondChunkGate;
+          yield 'second';
+        });
+        yield* context.waitForSignal<string>('finish');
+        return 'done';
+      }),
+    );
+
+    const handle = await engine.start('tail-pointer-streamer', {}, {});
+    await waitForStreamChunks(engine, handle.id, 1);
+    storage.resetScanPrefixes();
+
+    const backend = createEngineEventFeedBackend(engine);
+    const feed = createWorkflowEventFeed(backend);
+    const receivedPromise = (async () => {
+      const received: EventEnvelope[] = [];
+      for await (const envelope of feed.subscribe({
+        workflowId: handle.id,
+        selector: 'tokens',
+      })) {
+        received.push(envelope);
+        if (received.length === 1) {
+          releaseSecondChunk();
+        }
+        if (received.length === 2) break;
+      }
+      return received;
+    })();
+
+    const received = await receivedPromise;
+    expect(received.map((envelope) => envelope.sequence)).toEqual([0, 1]);
+    expect(received.map((envelope) => envelope.payload)).toEqual(['first', 'second']);
+    expect(storage.countScansForPrefix(KEYS.streamChunkPrefix(handle.id, 'tokens'))).toBe(1);
+
+    feed.dispose();
     await engine.signal(handle.id, 'finish', 'go');
     await handle.result();
   });

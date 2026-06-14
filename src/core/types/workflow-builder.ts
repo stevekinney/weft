@@ -60,8 +60,16 @@ export type WorkflowGenerator<
   TUpdates extends UpdateMap,
   TQueries extends QueryMap,
   TSearchAttributes extends SearchAttributeSchema,
+  TServices = unknown,
 > = (
-  context: WorkflowContextOf<TActivities, TSignals, TUpdates, TQueries, TSearchAttributes>,
+  context: WorkflowContextOf<
+    TActivities,
+    TSignals,
+    TUpdates,
+    TQueries,
+    TSearchAttributes,
+    TServices
+  >,
   input: TInput,
 ) => AsyncGenerator<unknown, TOutput, unknown>;
 
@@ -84,7 +92,8 @@ export type WorkflowContextOf<
   TUpdates extends UpdateMap = UpdateMap,
   TQueries extends QueryMap = QueryMap,
   TSearchAttributes extends SearchAttributeSchema = SearchAttributeSchema,
-> = WorkflowContext<TActivities, TSignals, TUpdates, TQueries, TSearchAttributes>;
+  TServices = unknown,
+> = WorkflowContext<TActivities, TSignals, TUpdates, TQueries, TSearchAttributes, TServices>;
 
 // ---------------------------------------------------------------------------
 // Builder state — phantom flag set tracking which chain methods have run
@@ -118,6 +127,7 @@ export interface BuilderState {
   readonly updates: boolean;
   readonly queries: boolean;
   readonly searchAttributes: boolean;
+  readonly services?: boolean | undefined;
 }
 
 /**
@@ -139,6 +149,7 @@ export interface InitialBuilderState {
   readonly updates: false;
   readonly queries: false;
   readonly searchAttributes: false;
+  readonly services?: false | undefined;
 }
 
 /**
@@ -156,9 +167,14 @@ export interface InitialBuilderState {
  * void _check;
  * ```
  */
-export type MarkBuilderState<S extends BuilderState, K extends keyof BuilderState> = {
-  readonly [P in keyof S]: P extends K ? true : S[P];
-};
+export type MarkBuilderState<
+  S extends BuilderState,
+  K extends keyof BuilderState,
+> = K extends 'services'
+  ? Omit<S, 'services'> & { readonly services: true }
+  : {
+      readonly [P in keyof S]: P extends K ? true : S[P];
+    };
 
 // ---------------------------------------------------------------------------
 // Engine name-conflict guard (used by Engine.register's type signature)
@@ -233,6 +249,7 @@ export interface WorkflowBuilder<
   TQueries extends QueryMap,
   TSearchAttributes extends SearchAttributeSchema,
   TState extends BuilderState,
+  TServices = unknown,
 > {
   /**
    * Declare the activity table this workflow can dispatch with
@@ -264,7 +281,8 @@ export interface WorkflowBuilder<
         TUpdates,
         TQueries,
         TSearchAttributes,
-        MarkBuilderState<TState, 'activities'>
+        MarkBuilderState<TState, 'activities'>,
+        TServices
       >;
 
   /**
@@ -296,7 +314,8 @@ export interface WorkflowBuilder<
         TUpdates,
         TQueries,
         TSearchAttributes,
-        MarkBuilderState<TState, 'signals'>
+        MarkBuilderState<TState, 'signals'>,
+        TServices
       >;
 
   /**
@@ -325,7 +344,8 @@ export interface WorkflowBuilder<
         TInput,
         TQueries,
         TSearchAttributes,
-        MarkBuilderState<TState, 'updates'>
+        MarkBuilderState<TState, 'updates'>,
+        TServices
       >;
 
   /**
@@ -354,7 +374,8 @@ export interface WorkflowBuilder<
         TUpdates,
         TInput,
         TSearchAttributes,
-        MarkBuilderState<TState, 'queries'>
+        MarkBuilderState<TState, 'queries'>,
+        TServices
       >;
 
   /**
@@ -387,7 +408,45 @@ export interface WorkflowBuilder<
         TUpdates,
         TQueries,
         TInput,
-        MarkBuilderState<TState, 'searchAttributes'>
+        MarkBuilderState<TState, 'searchAttributes'>,
+        TServices
+      >;
+
+  /**
+   * Declare the per-run services type exposed at `ctx.services`. This is a
+   * type-only marker: services remain supplied at launch through
+   * `engine.start(type, input, { services })` and re-provided on recovery by
+   * `EngineOptions.resolveWorkflowServices`. Calling `.services` twice before
+   * `.execute()` is a type error and throws `WorkflowBuilderError` at runtime.
+   *
+   * @example
+   * ```ts
+   * import { workflow } from '@lostgradient/weft';
+   *
+   * interface Services {
+   *   repository: { load(id: string): Promise<string> };
+   * }
+   *
+   * const job = workflow({ name: 'job' })
+   *   .services<Services>()
+   *   .execute(async function* (ctx, id: string) {
+   *     const services = ctx.services;
+   *     return services === undefined ? id : yield* ctx.run(() => services.repository.load(id));
+   *   });
+   * void job;
+   * ```
+   */
+  services: TState['services'] extends true
+    ? never
+    : <TInput>() => WorkflowBuilder<
+        TName,
+        TActivities,
+        TSignals,
+        TUpdates,
+        TQueries,
+        TSearchAttributes,
+        MarkBuilderState<TState, 'services'>,
+        TInput
       >;
 
   /**
@@ -418,7 +477,8 @@ export interface WorkflowBuilder<
       TSignals,
       TUpdates,
       TQueries,
-      TSearchAttributes
+      TSearchAttributes,
+      TServices
     >,
   ): BuiltWorkflowDefinition<
     TInput,
@@ -428,7 +488,8 @@ export interface WorkflowBuilder<
     TSignals,
     TUpdates,
     TQueries,
-    TSearchAttributes
+    TSearchAttributes,
+    TServices
   >;
 }
 
@@ -470,7 +531,8 @@ export interface BuiltWorkflowDefinition<
   TUpdates extends UpdateMap,
   TQueries extends QueryMap,
   TSearchAttributes extends SearchAttributeSchema,
-> extends WorkflowDefinition<TInput, TOutput, TName> {
+  TServices = unknown,
+> extends WorkflowDefinition<TInput, TOutput, TName, TServices> {
   readonly activities: Readonly<Record<string, Readonly<ActivityDefinition>>>;
   readonly signals: Readonly<Record<string, Readonly<SignalDefinition<unknown>>>>;
   readonly updates: Readonly<Record<string, Readonly<UpdateDefinition>>>;
@@ -486,6 +548,8 @@ export interface BuiltWorkflowDefinition<
   readonly _queries?: TQueries;
   /** Phantom marker for the search-attribute schema. Not present at runtime. */
   readonly _searchAttributes?: TSearchAttributes;
+  /** Phantom marker for the per-run services type. Not present at runtime. */
+  readonly _services?: TServices;
 }
 
 // ---------------------------------------------------------------------------

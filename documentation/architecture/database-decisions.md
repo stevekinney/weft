@@ -69,7 +69,7 @@ wf:{id}                                       → workflow state blob
 wf:{id}:ckpt                                  → checkpoint blob
 op:{queue}:{scheduled}:{id}                   → operation blob (sorted by queue + time)
 ev:{workflow_id}:{seq}                         → event blob (sorted by workflow + sequence)
-sig:{workflow_id}:{name}:{id}                  → signal blob
+sig:{workflow_id}:{encoded_name}:{id}          → signal blob
 wf-deadline:{deadline}:{workflowId}            → timeout deadline entry
 attr:{workflow_id}                             → search attribute blob
 idx:{attr_name}:{encoded_value}:{workflow_id}  → secondary index for search attributes
@@ -77,7 +77,7 @@ upd:{workflow_id}:{update_id}                  → pending update request
 upr:{update_id}                                → update response
 ```
 
-This layout means `scan("op:default:")` returns all operations on the "default" queue in scheduled order. The core hot path—claiming the next task from a queue—is a single range scan, whether that's implemented as a SQLite `SELECT ... WHERE key >= ? AND key < ?` or an LMDB `cursor.getRange()`.
+Signal names are encoded as a single key component before writing `sig:` records. This keeps a signal named `order:placed` distinct from the `order` prefix scan. This layout means `scan("op:default:")` returns all operations on the "default" queue in scheduled order. The core hot path—claiming the next task from a queue—is a single range scan, whether that's implemented as a SQLite `SELECT ... WHERE key >= ? AND key < ?` or an LMDB `cursor.getRange()`.
 
 ## SQLite implementation details
 

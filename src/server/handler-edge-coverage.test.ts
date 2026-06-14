@@ -128,7 +128,7 @@ describe('handleRequest edge coverage', () => {
       ],
       [
         { filter: { attributes: [{ key: 'priority', value: { nested: true } }] } },
-        'Field "filter.attributes[0].value" must be a string, number, boolean, or string array',
+        'Field "filter.attributes[0].value" must be a string, number, boolean, or scalar array',
       ],
     ] as const;
 
@@ -159,6 +159,10 @@ describe('handleRequest edge coverage', () => {
       dispatchCount++;
       throw new Error('signal should not dispatch');
     };
+    engine.retryFailedAll = async () => {
+      dispatchCount++;
+      throw new Error('retry failed should not dispatch');
+    };
     engine.deleteAll = async () => {
       dispatchCount++;
       throw new Error('delete should not dispatch');
@@ -171,6 +175,7 @@ describe('handleRequest edge coverage', () => {
     const routes = [
       ['POST', '/v1/workflows/bulk/cancel'],
       ['POST', '/v1/workflows/bulk/signal'],
+      ['POST', '/v1/workflows/bulk/retry-failed'],
       ['DELETE', '/v1/workflows/bulk'],
       ['PATCH', '/v1/workflows/bulk/tags'],
     ] as const;
@@ -311,6 +316,20 @@ describe('handleRequest edge coverage', () => {
       request('POST', '/v1/workflows/bulk/signal', {
         filter: { tags: ['selected'] },
         name: 'continue',
+        confirmationToken: 'bulk:confirmed',
+      }),
+      engine,
+      apiKeyAuth(),
+    );
+    expect(response.status).toBe(500);
+    expect(typeof ((await json(response)) as { error?: unknown }).error).toBe('string');
+
+    engine.retryFailedAll = async () => {
+      throw new Error('retry failed failed');
+    };
+    response = await handleRequest(
+      request('POST', '/v1/workflows/bulk/retry-failed', {
+        filter: { tags: ['selected'] },
         confirmationToken: 'bulk:confirmed',
       }),
       engine,

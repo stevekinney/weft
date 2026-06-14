@@ -9,6 +9,7 @@ import type {
   BulkOperationDryRunOptions,
   BulkOperationDryRunResult,
   BulkOperationOptions,
+  BulkRetryFailedResult,
   BulkSignalResult,
   BulkTagResult,
   ListFilter,
@@ -699,6 +700,158 @@ async function invokeBulkCancelTransport(
       break;
   }
 
+  return { callCount, ...outcome };
+}
+
+function createRetryFailedEngine(): Engine {
+  const engine = new Engine({ storage: new MemoryStorage() });
+  const attemptsByInput = new Map<string, number>();
+  const retryOnceWorkflow = workflow({ name: 'retry-once-track8' }).execute(async function* (
+    _ctx: WorkflowContext,
+    input: { value: string },
+  ) {
+    const attempts = attemptsByInput.get(input.value) ?? 0;
+    attemptsByInput.set(input.value, attempts + 1);
+    if (attempts === 0) {
+      throw new Error(`failed:${input.value}`);
+    }
+    return `retried:${input.value}`;
+  });
+
+  engine.register(retryOnceWorkflow);
+  return engine;
+}
+
+async function invokeBulkRetryFailedTransport(
+  transport: TransportName,
+  servers: WeftServer[],
+  engines: Engine[],
+): Promise<BulkTransportOutcome> {
+  const engine = createRetryFailedEngine();
+  engines.push(engine);
+
+  let callCount = 0;
+  const originalRetryFailedAll = engine.retryFailedAll.bind(engine);
+
+  async function trackedRetryFailedAll(
+    filter: ListFilter,
+    options: BulkOperationDryRunOptions,
+  ): Promise<BulkOperationDryRunResult>;
+  async function trackedRetryFailedAll(
+    filter: ListFilter,
+    options?: BulkOperationCommitOptions,
+  ): Promise<BulkRetryFailedResult>;
+  async function trackedRetryFailedAll(
+    filter: ListFilter,
+    options?: BulkOperationOptions,
+  ): Promise<BulkRetryFailedResult | BulkOperationDryRunResult> {
+    callCount += 1;
+    if (options?.dryRun === true) {
+      return originalRetryFailedAll(filter, options);
+    }
+    return originalRetryFailedAll(filter, options);
+  }
+
+  engine.retryFailedAll = trackedRetryFailedAll;
+
+  await engine.start(
+    'retry-once-track8',
+    { value: 'selected-a' },
+    {
+      id: `track8-bulk-retry-selected-a-${transport}`,
+      tags: ['selected'],
+    },
+  );
+  await engine.start(
+    'retry-once-track8',
+    { value: 'selected-b' },
+    {
+      id: `track8-bulk-retry-selected-b-${transport}`,
+      tags: ['selected'],
+    },
+  );
+  await engine.start(
+    'retry-once-track8',
+    { value: 'other' },
+    {
+      id: `track8-bulk-retry-other-${transport}`,
+      tags: ['other'],
+    },
+  );
+
+  await Promise.all([
+    waitForStatus(engine, `track8-bulk-retry-selected-a-${transport}`, 'failed'),
+    waitForStatus(engine, `track8-bulk-retry-selected-b-${transport}`, 'failed'),
+    waitForStatus(engine, `track8-bulk-retry-other-${transport}`, 'failed'),
+  ]);
+
+  const server = serve({ engine, ...bulkServeOptions });
+  servers.push(server);
+
+  const requestId = `track8-bulk-retry-failed-${transport}`;
+  const previewParameters = { tags: ['selected'], dryRun: true, requestId };
+  const staleParameters = (confirmationToken: string) => ({
+    tags: ['other'],
+    confirmationToken,
+    requestId,
+  });
+  const commitParameters = (confirmationToken: string) => ({
+    tags: ['selected'],
+    confirmationToken,
+    requestId,
+  });
+
+  let outcome: BulkPreviewStaleCommitOutcome;
+  switch (transport) {
+    case 'rest':
+      outcome = await invokeBulkRestPreviewStaleCommit(
+        server,
+        { method: 'POST', path: '/v1/workflows/bulk/retry-failed' },
+        { filter: { tags: ['selected'] }, dryRun: true, requestId },
+        (confirmationToken) => ({ filter: { tags: ['other'] }, confirmationToken, requestId }),
+        (confirmationToken) => ({
+          filter: { tags: ['selected'] },
+          confirmationToken,
+          requestId,
+        }),
+      );
+      break;
+    case 'json-rpc-http':
+      outcome = await invokeBulkJsonRpcPreviewStaleCommit(
+        server,
+        'weft.workflows.bulk.retryfailed',
+        previewParameters,
+        staleParameters,
+        commitParameters,
+      );
+      break;
+    case 'json-rpc-websocket':
+      outcome = await invokeBulkWebSocketPreviewStaleCommit(
+        server,
+        'weft.workflows.bulk.retryfailed',
+        previewParameters,
+        staleParameters,
+        commitParameters,
+        `track8-bulk-retry-failed-${transport}`,
+      );
+      break;
+    case 'json-rpc-stdio':
+      outcome = await invokeBulkStdioPreviewStaleCommit(
+        engine,
+        'weft.workflows.bulk.retryfailed',
+        previewParameters,
+        staleParameters,
+        commitParameters,
+      );
+      break;
+  }
+
+  await Promise.all([
+    waitForStatus(engine, `track8-bulk-retry-selected-a-${transport}`, 'completed'),
+    waitForStatus(engine, `track8-bulk-retry-selected-b-${transport}`, 'completed'),
+  ]);
+  const otherState = await engine.get(`track8-bulk-retry-other-${transport}`);
+  expect(otherState?.status).toBe('failed');
   return { callCount, ...outcome };
 }
 
@@ -1482,6 +1635,43 @@ describe('cross-transport parity', () => {
 
     for (const outcome of Object.values(results)) {
       expect((outcome.result as BulkSignalResult).signalled).toBe(2);
+    }
+  });
+
+  it('keeps weft.workflows.bulk.retryfailed parity across REST, JSON-RPC HTTP, JSON-RPC WebSocket, and JSON-RPC stdio', async () => {
+    const invariants: ParityInvariants = {
+      successPayload: 'shape-equivalent',
+      errorMapping: 'one-to-one',
+      authBehavior: 'identical',
+      sideEffects: 'invoked-once-per-call',
+    };
+
+    const results = {
+      rest: await invokeBulkRetryFailedTransport('rest', servers, engines),
+      'json-rpc-http': await invokeBulkRetryFailedTransport('json-rpc-http', servers, engines),
+      'json-rpc-websocket': await invokeBulkRetryFailedTransport(
+        'json-rpc-websocket',
+        servers,
+        engines,
+      ),
+      'json-rpc-stdio': await invokeBulkRetryFailedTransport('json-rpc-stdio', servers, engines),
+    };
+
+    assertSuccessParity(
+      {
+        rest: normalizeBulkAuditParityPayload(results.rest.result),
+        'json-rpc-http': normalizeBulkAuditParityPayload(results['json-rpc-http'].result),
+        'json-rpc-websocket': normalizeBulkAuditParityPayload(results['json-rpc-websocket'].result),
+        'json-rpc-stdio': normalizeBulkAuditParityPayload(results['json-rpc-stdio'].result),
+      },
+      invariants,
+      'weft.workflows.bulk.retryfailed',
+    );
+
+    assertBulkOperationInvariants(results, invariants, 'weft.workflows.bulk.retryfailed', 3);
+
+    for (const outcome of Object.values(results)) {
+      expect((outcome.result as BulkRetryFailedResult).retried).toBe(2);
     }
   });
 

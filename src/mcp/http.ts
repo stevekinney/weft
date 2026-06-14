@@ -418,6 +418,5 @@ function validateOrigin(
 
   if (publicOrigin !== undefined && origin === publicOrigin) return null;
   if (trustedHosts?.includes(originUrl.host)) return null;
-  if (originUrl.host === new URL(request.url).host) return null;
   return new Response('Forbidden', { status: 403 });
 }

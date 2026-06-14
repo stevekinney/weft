@@ -5,7 +5,11 @@ import { KEYS } from '../../storage/interface.ts';
 import type { ServeOptions, TaskDispatch } from '../index.ts';
 import { restoreExtendedDeadlineIfStillActive } from '../runtime-helpers.ts';
 import type { InflightRecord, QueuedRecord, TaskRequeueReason } from '../task-state.ts';
-import { transitionInflightToQueued, transitionInflightToResolved } from '../task-state.ts';
+import {
+  isTaskDeadLettered,
+  transitionInflightToQueued,
+  transitionInflightToResolved,
+} from '../task-state.ts';
 import type { ServerContext } from './context.ts';
 import { dispatchTaskImpl, scheduleDelayedDispatch } from './task-dispatch.ts';
 import {
@@ -175,6 +179,10 @@ export async function scanExpiredTasks(
           continue;
         }
 
+        if (await isTaskDeadLettered(options.engine.storage, operationId)) {
+          continue;
+        }
+
         // Double-check the deadline in case a heartbeat extended it after
         // the entry was added to the heap.
         if (
@@ -226,6 +234,7 @@ export async function reconcileOrphanedRecords(
         const decoded = decode(value);
         if (!isInflightRecord(decoded)) continue;
         if (isTaskHeartbeatStaleForMetrics(decoded, now)) staleHeartbeatCount += 1;
+        if (await isTaskDeadLettered(options.engine.storage, decoded.operationId)) continue;
 
         if (decoded.deadline > now) {
           // Still valid — ensure it is tracked in the heap so the fast path

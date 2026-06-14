@@ -185,6 +185,7 @@ export function copyWorkflowDefinition(
     ...(registration.searchAttributes === undefined
       ? {}
       : { searchAttributes: registration.searchAttributes }),
+    ...(registration.concurrency === undefined ? {} : { concurrency: registration.concurrency }),
   };
 }
 

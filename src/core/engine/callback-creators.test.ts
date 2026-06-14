@@ -130,7 +130,7 @@ describe('engine callback creators', () => {
     const engine = new Engine();
     const warnings: CleanupWarningEvent[] = [];
     engine.addEventListener(CleanupWarningEvent.type, (event) => {
-      warnings.push(event as CleanupWarningEvent);
+      warnings.push(event);
     });
 
     createScheduleCallbacks(engine).handleCleanupError(
@@ -182,6 +182,7 @@ describe('engine callback creators', () => {
           cronExpression: '* * * * *',
           id: 'schedule-cleanup-error',
           input: null,
+          missedFireCount: 0,
           nextFireAt: 60_000,
           overlap: 'skip',
           queuedRuns: 0,

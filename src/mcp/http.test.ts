@@ -67,6 +67,26 @@ function createEngine(): Engine {
   });
   engine.register(holdForCancel);
 
+  const timeoutMsInput = workflow({
+    name: 'timeout-ms-input',
+    description: 'Echo a workflow input that includes a timeoutMs field.',
+    inputSchema: z.object({
+      label: z.string().optional(),
+      timeoutMs: z.number(),
+      wait: z.boolean().optional(),
+    }),
+  }).execute(async function* (
+    context: WorkflowContext,
+    input: { label?: string | undefined; timeoutMs: number; wait?: boolean | undefined },
+  ) {
+    context.onQuery('input', () => input);
+    if (input.wait === true) {
+      yield* context.waitForSignal('release');
+    }
+    return input;
+  });
+  engine.register(timeoutMsInput);
+
   const hiddenNoSchema = workflow({ name: 'hidden-no-schema' }).execute(async function* () {
     return 'hidden';
   });
@@ -203,6 +223,26 @@ function parseToolText(result: unknown): unknown {
   return JSON.parse(toolResult.content[0]!.text);
 }
 
+async function resolveWithin<T>(
+  promise: Promise<T>,
+  options: { timeoutMs: number; label: string },
+): Promise<T> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error(`${options.label} did not resolve within ${options.timeoutMs}ms`)),
+          options.timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+  }
+}
+
 function countingDefinitionSchema<TInput = unknown>(
   onInputConversion: () => void,
 ): DefinitionSchema<unknown, TInput> {
@@ -266,14 +306,19 @@ describe('MCP Streamable HTTP transport', () => {
     ).tools.find((tool) => tool.name === 'greet_customer');
     expect(greetTool?.inputSchema).toMatchObject({
       type: 'object',
-      properties: expect.objectContaining({ name: expect.any(Object) }),
+      required: ['input'],
+      properties: expect.objectContaining({
+        input: expect.objectContaining({
+          properties: expect.objectContaining({ name: expect.any(Object) }),
+        }),
+      }),
     });
 
     const called = await mcpJson(server, sessionId, {
       jsonrpc: '2.0',
       id: 'call',
       method: 'tools/call',
-      params: { name: 'greet_customer', arguments: { name: 'Ada' } },
+      params: { name: 'greet_customer', arguments: { input: { name: 'Ada' } } },
     });
 
     expect(parseToolText(called.result)).toMatchObject({
@@ -389,7 +434,7 @@ describe('MCP Streamable HTTP transport', () => {
       jsonrpc: '2.0',
       id: 'call-counted-tool',
       method: 'tools/call',
-      params: { name: 'counted_tool', arguments: { name: 'Ada' } },
+      params: { name: 'counted_tool', arguments: { input: { name: 'Ada' } } },
     });
     expect(parseToolText(called.result)).toMatchObject({
       result: { message: 'Hello, Ada!' },
@@ -684,6 +729,110 @@ describe('MCP Streamable HTTP transport', () => {
     });
   });
 
+  it('returns a running result when a per-workflow MCP tool call reaches timeoutMs', async () => {
+    const engine = createEngine();
+    server = serve({ engine, port: 0 });
+    const sessionId = await initialize(server);
+    let workflowId = '';
+    const pendingCall = mcpJson(server, sessionId, {
+      jsonrpc: '2.0',
+      id: 'timeout-tool-call',
+      method: 'tools/call',
+      params: {
+        name: 'hold_for_cancel',
+        arguments: { input: { label: 'timeout-me' }, timeoutMs: 5 },
+      },
+    });
+
+    try {
+      const response = await resolveWithin(pendingCall, {
+        timeoutMs: 500,
+        label: 'timed-out MCP workflow tool call',
+      });
+      const toolResult = response.result as ToolCallResult;
+      expect(toolResult.isError).toBe(false);
+      const payload = parseToolText(response.result) as {
+        workflowId: string;
+        status: string;
+        timedOut: boolean;
+        message: string;
+        followUp: { tool: string; arguments: { workflowId: string } };
+      };
+      workflowId = payload.workflowId;
+      expect(payload).toMatchObject({
+        workflowId: expect.any(String),
+        status: 'running',
+        timedOut: true,
+        message: expect.stringContaining('get_workflow_state'),
+        followUp: {
+          tool: 'get_workflow_state',
+          arguments: { workflowId },
+        },
+      });
+      await waitForStatus(engine, workflowId, 'running');
+    } finally {
+      if (workflowId.length === 0) {
+        const list = await engine.list({ type: 'hold-for-cancel' });
+        workflowId = list.items.find((item) => item.status === 'running')?.id ?? '';
+      }
+      if (workflowId.length > 0) {
+        await engine.cancel(workflowId).catch(() => {});
+      }
+      pendingCall.catch(() => {});
+    }
+  });
+
+  it('keeps workflow input timeoutMs separate from MCP tool timeoutMs', async () => {
+    const engine = createEngine();
+    server = serve({ engine, port: 0 });
+    const sessionId = await initialize(server);
+
+    const completed = await mcpJson(server, sessionId, {
+      jsonrpc: '2.0',
+      id: 'timeout-input-completed',
+      method: 'tools/call',
+      params: {
+        name: 'timeout_ms_input',
+        arguments: {
+          input: { timeoutMs: 123, label: 'workflow-input' },
+          timeoutMs: 10_000,
+        },
+      },
+    });
+
+    expect(parseToolText(completed.result)).toMatchObject({
+      result: { timeoutMs: 123, label: 'workflow-input' },
+      workflowId: expect.any(String),
+    });
+
+    const pendingCall = mcpJson(server, sessionId, {
+      jsonrpc: '2.0',
+      id: 'timeout-input-running',
+      method: 'tools/call',
+      params: {
+        name: 'timeout_ms_input',
+        arguments: {
+          input: { timeoutMs: 456, label: 'parked', wait: true },
+          timeoutMs: 5,
+        },
+      },
+    });
+
+    const response = await resolveWithin(pendingCall, {
+      timeoutMs: 500,
+      label: 'timed-out MCP workflow tool call with timeoutMs input',
+    });
+    const payload = parseToolText(response.result) as { workflowId: string; timedOut: boolean };
+    expect(payload.timedOut).toBe(true);
+    await waitForStatus(engine, payload.workflowId, 'running');
+    await expect(engine.query(payload.workflowId, 'input')).resolves.toEqual({
+      timeoutMs: 456,
+      label: 'parked',
+      wait: true,
+    });
+    await engine.signal(payload.workflowId, 'release', 'done');
+  });
+
   it('maps MCP cancellation notifications to engine.cancel for an in-flight workflow tool call', async () => {
     const engine = createEngine();
     server = serve({ engine, port: 0 });
@@ -693,7 +842,7 @@ describe('MCP Streamable HTTP transport', () => {
       jsonrpc: '2.0',
       id: 'pending-tool-call',
       method: 'tools/call',
-      params: { name: 'hold_for_cancel', arguments: { label: 'cancel-me' } },
+      params: { name: 'hold_for_cancel', arguments: { input: { label: 'cancel-me' } } },
     });
 
     let workflowId = '';
@@ -718,6 +867,62 @@ describe('MCP Streamable HTTP transport', () => {
     const toolResult = response.result as ToolCallResult;
     expect(toolResult.isError).toBe(true);
     expect(toolResult.content[0]?.text).toContain('cancelled');
+  });
+
+  it('aborts the pending workflow result await when a cancellation notification arrives', async () => {
+    const engine = createEngine();
+    server = serve({ engine, port: 0 });
+    const sessionId = await initialize(server);
+    const originalCancel = engine.cancel.bind(engine);
+    const cancelledWorkflowIds: string[] = [];
+    engine.cancel = async (workflowId: string) => {
+      cancelledWorkflowIds.push(workflowId);
+    };
+    let workflowId = '';
+
+    const pendingCall = mcpJson(server, sessionId, {
+      jsonrpc: '2.0',
+      id: 'abort-pending-tool-call',
+      method: 'tools/call',
+      params: {
+        name: 'hold_for_cancel',
+        arguments: { input: { label: 'abort-me' }, timeoutMs: 30_000 },
+      },
+    });
+
+    try {
+      await waitForCondition(
+        async () => {
+          const list = await engine.list({ type: 'hold-for-cancel' });
+          workflowId = list.items.find((item) => item.status === 'running')?.id ?? '';
+          return workflowId.length > 0;
+        },
+        { timeoutMs: 2_000, intervalMs: 10, label: 'running MCP workflow tool call' },
+      );
+
+      const cancellation = await mcpPost(server, sessionId, {
+        jsonrpc: '2.0',
+        method: 'notifications/cancelled',
+        params: { requestId: 'abort-pending-tool-call', reason: 'test cancellation' },
+      });
+      expect(cancellation.status).toBe(202);
+
+      const response = await resolveWithin(pendingCall, {
+        timeoutMs: 500,
+        label: 'cancelled MCP workflow tool call',
+      });
+      const toolResult = response.result as ToolCallResult;
+      expect(toolResult.isError).toBe(true);
+      expect(toolResult.content[0]?.text).toContain('cancelled');
+      expect(cancelledWorkflowIds).toEqual([workflowId]);
+      await waitForStatus(engine, workflowId, 'running');
+    } finally {
+      engine.cancel = originalCancel;
+      if (workflowId.length > 0) {
+        await originalCancel(workflowId).catch(() => {});
+      }
+      pendingCall.catch(() => {});
+    }
   });
 
   it('accepts invalid cancellation notifications without failing the session', async () => {
@@ -992,6 +1197,28 @@ describe('MCP Streamable HTTP transport', () => {
         authRequired: false,
       });
       expect(getAfterDelete.status).toBe(404);
+    } finally {
+      await sessionManager[Symbol.asyncDispose]();
+    }
+  });
+
+  it('rejects cross-origin /mcp requests without explicit origin configuration', async () => {
+    const engine = createEngine();
+    const sessionManager = createMcpSessionManager(engine);
+
+    try {
+      const rejected = await handleMcpHttpRequest({
+        request: new Request('https://attacker.example/mcp', {
+          method: 'PUT',
+          headers: { origin: 'https://attacker.example' },
+        }),
+        engine,
+        sessionManager,
+        authRequired: false,
+      });
+
+      expect(rejected.status).toBe(403);
+      expect(await rejected.text()).toBe('Forbidden');
     } finally {
       await sessionManager[Symbol.asyncDispose]();
     }

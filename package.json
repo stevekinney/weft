@@ -80,6 +80,10 @@
       "import": "./dist/storage/text-value-import.js",
       "default": "./dist/storage/text-value-import.js"
     },
+    "./storage/testing": {
+      "types": "./dist/storage/testing.d.ts",
+      "bun": "./dist/storage/testing.js"
+    },
     "./storage/sqlite": {
       "types": "./dist/storage/sqlite.d.ts",
       "bun": "./dist/storage/bun-sql.js",

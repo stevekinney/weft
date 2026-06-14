@@ -50,6 +50,7 @@ import { schedulePendingInlineUpdateDrain } from './pending-updates.ts';
 import { processReviewOperation } from './reviews.ts';
 import { loadWorkflowState, runSerializedWorkflowStateWrite } from './storage-io.ts';
 import {
+  feedOperationResult,
   getComposedActivityInterceptor,
   getComposedWorkflowInterceptor,
 } from './strategy-helpers.ts';
@@ -57,6 +58,7 @@ import { executeSubOperation } from './sub-operation.ts';
 import {
   ensureTerminalCleanupTracked,
   failWorkflow,
+  finalizePendingTimelineEntry,
   runDeferredTerminalCleanup,
 } from './termination.ts';
 import {
@@ -95,6 +97,10 @@ export function createActivityOperationCallbacks<
   return {
     runOperationWithResult: (workflowId, operation, execute) =>
       runOperationWithResultForEngine(engine, workflowId, operation, execute),
+    finalizePendingTimelineEntry: (workflowId, status, value) =>
+      finalizePendingTimelineEntry(getInternals(engine), workflowId, status, value),
+    feedOperationResult: (workflowId, result, error) =>
+      feedOperationResult(getInternals(engine), workflowId, result, error),
     getComposedActivityInterceptor: () => getComposedActivityInterceptor(getInternals(engine)),
     getComposedWorkflowInterceptor: () => getComposedWorkflowInterceptor(getInternals(engine)),
   };
@@ -176,6 +182,7 @@ export function createTimeOperationCallbacks<TWorkflows extends object, TActivit
 ): TimeOperationCallbacks {
   return {
     completeOperation: (workflowId, value) => completeOperationForEngine(engine, workflowId, value),
+    dispatchEvent: (event) => engine.dispatchEvent(event),
     loadWorkflowState: (workflowId) => loadWorkflowState(getInternals(engine), workflowId),
     failWorkflow: (workflowId, error) =>
       failWorkflow(getInternals(engine), workflowId, error, createTerminationCallbacks(engine)),

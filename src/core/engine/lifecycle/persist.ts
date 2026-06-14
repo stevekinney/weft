@@ -5,6 +5,7 @@ import {
   type WorkflowVersionDiff,
   type WorkflowVersionTuple,
 } from '../../workflow-version-tuple.ts';
+import { hydrateCheckpointReplayState } from '../checkpoint-replay.ts';
 import type { EngineInternals } from '../internals.ts';
 import { type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
 
@@ -99,9 +100,15 @@ export async function prepareResumeState(
     callbacks,
   );
 
+  const hydratedCheckpoint = await hydrateCheckpointReplayState(
+    internals.storage,
+    workflowId,
+    preparedExecutionState.checkpoint,
+  );
+
   return {
     state: preparedExecutionState.state,
-    checkpoint: preparedExecutionState.checkpoint,
+    checkpoint: hydratedCheckpoint,
     serializedCheckpoint: checkpointBytes,
     versionTuple: preparedExecutionState.versionTuple,
   };

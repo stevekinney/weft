@@ -8,6 +8,8 @@ import type { WorkflowState } from '../types.ts';
 import {
   bufferSignalPayloads,
   consumeSignal,
+  hasBufferedSignal,
+  peekSignal,
   releaseSignalWaiter,
   signal,
   trackWaiterKey,
@@ -194,6 +196,64 @@ describe('engine signals', () => {
     expect(callbacks.dispatchEvent).toHaveBeenCalledTimes(1);
     expect(await consumeSignal(internals as never, 'workflow-consumed', 'release')).toEqual({
       found: false,
+    });
+  });
+
+  it('does not match colon-containing signal names to shorter signal names', async () => {
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    const callbacks = createSignalCallbacks();
+
+    await signal(internals as never, 'workflow-colon-signal', 'a:b', 'colon', callbacks, {
+      signalId: 'signal-1',
+    });
+
+    expect(await hasBufferedSignal(internals as never, 'workflow-colon-signal', 'a')).toBe(false);
+    expect(await peekSignal(internals as never, 'workflow-colon-signal', 'a')).toEqual({
+      found: false,
+    });
+    expect(await consumeSignal(internals as never, 'workflow-colon-signal', 'a')).toEqual({
+      found: false,
+    });
+    expect(await consumeSignal(internals as never, 'workflow-colon-signal', 'a:b')).toEqual({
+      found: true,
+      payload: 'colon',
+    });
+  });
+
+  it('round-trips unicode and empty signal names through buffered scans', async () => {
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    const callbacks = createSignalCallbacks();
+
+    await bufferSignalPayloads(
+      internals as never,
+      'workflow-edge-signal-names',
+      [
+        { signalName: 'release ✅', payload: 'unicode' },
+        { signalName: '', payload: 'empty' },
+      ],
+      callbacks,
+    );
+
+    expect(await hasBufferedSignal(internals as never, 'workflow-edge-signal-names', '')).toBe(
+      true,
+    );
+    expect(
+      await peekSignal(internals as never, 'workflow-edge-signal-names', 'release ✅'),
+    ).toEqual({
+      found: true,
+      payload: 'unicode',
+    });
+    expect(await consumeSignal(internals as never, 'workflow-edge-signal-names', '')).toEqual({
+      found: true,
+      payload: 'empty',
+    });
+    expect(
+      await consumeSignal(internals as never, 'workflow-edge-signal-names', 'release ✅'),
+    ).toEqual({
+      found: true,
+      payload: 'unicode',
     });
   });
 
@@ -419,6 +479,16 @@ describe('engine signals', () => {
       createSignalCallbacks(),
       { signalId: 'sig-placed' },
     );
+
+    const signalKeys: string[] = [];
+    for await (const [key] of storage.scan('sig:')) {
+      signalKeys.push(key);
+    }
+    expect(signalKeys).toEqual([
+      KEYS.signal('workflow-name-collision', 'order:placed', 'sig-placed'),
+    ]);
+    expect(signalKeys[0]).toContain('order%3Aplaced');
+    expect(signalKeys[0]).not.toContain(':order:placed:');
 
     // A waiter on the shorter name must NOT see the longer-named signal.
     expect(await consumeSignal(internals as never, 'workflow-name-collision', 'order')).toEqual({

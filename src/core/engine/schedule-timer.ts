@@ -1,19 +1,39 @@
+import { ScheduleMissedFireEvent } from '../events/schedule-events.ts';
 import type { ScheduleState, TimerEntry } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
+import { resolveEffectiveScheduleFireAt } from './schedule-jitter.ts';
 import { collectDueScheduleOccurrences, getNextScheduleOccurrence } from './schedule-occurrence.ts';
 import type { ScheduleCallbacks } from './schedules.ts';
 import { loadScheduleState, writeScheduleState } from './storage-io.ts';
 
 const SCHEDULE_LATE_GRACE_MILLISECONDS = 1000;
 const MAX_SCHEDULE_BACKFILL_OCCURRENCES_PER_TICK = 256;
+const MAX_MISSED_FIRE_COUNT_PER_TICK = MAX_SCHEDULE_BACKFILL_OCCURRENCES_PER_TICK;
 
 type ActiveScheduleTimerState = ScheduleState & { nextFireAt: number };
 
+type MissedScheduleOccurrences = {
+  count: number;
+  lastMissedFireAt: number;
+  windowStart: number;
+  windowEnd: number;
+};
+
 type ScheduleTimerWork = {
   dueOccurrences: number[];
+  missedOccurrences?: MissedScheduleOccurrences;
   occurrencesToProcess: number[];
   skipMissedOccurrences: boolean;
 };
+
+class ScheduleStatePersistenceError extends Error {
+  constructor(
+    readonly scheduleId: string,
+    cause: unknown,
+  ) {
+    super(`Failed to persist schedule "${scheduleId}" while processing its timer`, { cause });
+  }
+}
 
 export async function handleScheduleTimer(
   internals: EngineInternals,
@@ -33,22 +53,39 @@ export async function handleScheduleTimer(
       return;
     }
 
-    nextState = await processScheduleTimerOccurrences(
-      internals,
-      state,
-      work.occurrencesToProcess,
-      now,
-      callbacks,
-      (processedState) => {
+    if (work.occurrencesToProcess.length === 0) {
+      nextState = {
+        ...nextState,
+        updatedAt: now,
+        nextFireAt: resolveNextScheduleFireAt(nextState, work, now),
+        ...(work.missedOccurrences && {
+          lastMissedFireAt: work.missedOccurrences.lastMissedFireAt,
+          missedFireCount: nextState.missedFireCount + work.missedOccurrences.count,
+        }),
+      };
+      await persistScheduleTimerState(internals, nextState);
+      if (work.missedOccurrences) {
+        internals.engine.dispatchEvent(
+          new ScheduleMissedFireEvent(
+            nextState.id,
+            work.missedOccurrences.count,
+            work.missedOccurrences.windowStart,
+            work.missedOccurrences.windowEnd,
+          ),
+        );
+      }
+      return;
+    }
+
+    nextState = await processScheduleTimerOccurrences(internals, state, work, now, callbacks, {
+      onProcessedState: (processedState) => {
         nextState = processedState;
       },
-    );
-    await writeScheduleState(internals, {
-      ...nextState,
-      updatedAt: now,
-      nextFireAt: resolveNextScheduleFireAt(nextState, work, now),
     });
   } catch (error) {
+    if (error instanceof ScheduleStatePersistenceError) {
+      throw error;
+    }
     await pauseScheduleAfterTimerFailure(internals, nextState, error);
   }
 }
@@ -57,7 +94,11 @@ function isCurrentActiveScheduleTimer(
   state: ScheduleState | null,
   entry: TimerEntry,
 ): state is ActiveScheduleTimerState {
-  return state?.status === 'active' && state.nextFireAt === entry.fireAt;
+  return (
+    state?.status === 'active' &&
+    state.nextFireAt !== null &&
+    resolveEffectiveScheduleFireAt(state, state.nextFireAt) === entry.fireAt
+  );
 }
 
 function planScheduleTimerWork(
@@ -73,9 +114,10 @@ function planScheduleTimerWork(
   );
   if (dueOccurrences.length === 0) return null;
 
-  if (!state.backfill && now - state.nextFireAt > SCHEDULE_LATE_GRACE_MILLISECONDS) {
+  if (!state.backfill && now - entry.fireAt > SCHEDULE_LATE_GRACE_MILLISECONDS) {
     return {
       dueOccurrences,
+      missedOccurrences: countMissedScheduleOccurrences(state, state.nextFireAt, now),
       occurrencesToProcess: [],
       skipMissedOccurrences: true,
     };
@@ -89,13 +131,41 @@ function planScheduleTimerWork(
   };
 }
 
+function countMissedScheduleOccurrences(
+  state: ActiveScheduleTimerState,
+  firstDueAt: number,
+  throughTimestamp: number,
+): MissedScheduleOccurrences {
+  let count = 0;
+  let occurrence = firstDueAt;
+  let lastMissedFireAt = firstDueAt;
+
+  while (occurrence <= throughTimestamp && count < MAX_MISSED_FIRE_COUNT_PER_TICK) {
+    count += 1;
+    lastMissedFireAt = occurrence;
+    const nextOccurrence = getNextScheduleOccurrence(state, occurrence);
+    if (nextOccurrence <= occurrence) {
+      throw new Error(`Schedule "${state.id}" produced a non-advancing occurrence`);
+    }
+    occurrence = nextOccurrence;
+  }
+
+  const cappedBeforeThroughTimestamp = occurrence <= throughTimestamp;
+  return {
+    count,
+    lastMissedFireAt,
+    windowStart: firstDueAt,
+    windowEnd: cappedBeforeThroughTimestamp ? lastMissedFireAt : throughTimestamp,
+  };
+}
+
 function resolveNextScheduleFireAt(
   state: ScheduleState,
   work: ScheduleTimerWork,
   now: number,
 ): number {
   if (work.skipMissedOccurrences) {
-    return getNextScheduleOccurrence(state, now);
+    return getNextScheduleOccurrence(state, work.missedOccurrences?.lastMissedFireAt ?? now);
   }
 
   const anchorOccurrence = work.occurrencesToProcess.at(-1) ?? work.dueOccurrences.at(-1)!;
@@ -105,28 +175,55 @@ function resolveNextScheduleFireAt(
 async function processScheduleTimerOccurrences(
   internals: EngineInternals,
   state: ScheduleState,
-  occurrencesToProcess: number[],
+  work: ScheduleTimerWork,
   now: number,
   callbacks: ScheduleCallbacks,
-  onProcessedState: (state: ScheduleState) => void,
+  options: { onProcessedState: (state: ScheduleState) => void },
 ): Promise<ScheduleState> {
   let nextState: ScheduleState = state;
 
-  for (const occurrence of occurrencesToProcess) {
+  for (const [index, occurrence] of work.occurrencesToProcess.entries()) {
+    const finalOccurrence = index === work.occurrencesToProcess.length - 1;
     nextState = {
       ...(await callbacks.applyScheduleOccurrence(nextState, occurrence)),
       lastFireAt: occurrence,
       updatedAt: now,
     };
-    onProcessedState(nextState);
-    await writeScheduleState(internals, nextState, { includeTimer: false });
+    if (finalOccurrence) {
+      nextState = {
+        ...nextState,
+        nextFireAt: resolveNextScheduleFireAt(nextState, work, now),
+      };
+    }
+    options.onProcessedState(nextState);
+    await persistScheduleTimerState(internals, nextState, { includeTimer: finalOccurrence });
     if (state.backfill && nextState.currentWorkflowId !== undefined) {
       nextState = await callbacks.settleBackfillScheduleState(nextState);
-      onProcessedState(nextState);
+      if (finalOccurrence) {
+        nextState = {
+          ...nextState,
+          updatedAt: now,
+          nextFireAt: resolveNextScheduleFireAt(nextState, work, now),
+        };
+        await persistScheduleTimerState(internals, nextState);
+      }
+      options.onProcessedState(nextState);
     }
   }
 
   return nextState;
+}
+
+async function persistScheduleTimerState(
+  internals: EngineInternals,
+  state: ScheduleState,
+  options?: { includeTimer?: boolean },
+): Promise<void> {
+  try {
+    await writeScheduleState(internals, state, options);
+  } catch (error) {
+    throw new ScheduleStatePersistenceError(state.id, error);
+  }
 }
 
 async function pauseScheduleAfterTimerFailure(

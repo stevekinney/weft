@@ -69,7 +69,7 @@ The activity task must include crash-and-resume tests for every `verify` state, 
 
 ### Current Behavior
 
-Signals are persisted under `sig:{workflowId}:{signalName}:{id}`. The current engine generates `id` with `crypto.randomUUID()` for every delivery. Public signal APIs do not accept `signalId`, and a retried caller without its own stable identifier can enqueue the same logical signal more than once.
+Signals are persisted under `sig:{workflowId}:{encodedSignalName}:{id}`. The current engine generates `id` with `crypto.randomUUID()` for every delivery. Public signal APIs do not accept `signalId`, and a retried caller without its own stable identifier can enqueue the same logical signal more than once.
 
 ### Tier-0 Required Behavior
 
@@ -172,7 +172,7 @@ The CAS task must prove that two owners cannot both commit over the same checkpo
 
 ### Current Behavior
 
-Weft stores hierarchical key-value records such as `wf:{id}`, `wf:{id}:ckpt`, `wf:{id}:ckpt:{step}`, `sig:{workflowId}:{signalName}:{id}`, `upd:{workflowId}:{updateId}`, and `upr:{updateId}`. Unknown key prefixes are generally ignored by scans that target specific prefixes, but older versions have not been tested against the Tier-0 activity and signal records because those records do not exist yet.
+Weft stores hierarchical key-value records such as `wf:{id}`, `wf:{id}:ckpt`, `wf:{id}:ckpt:{step}`, `sig:{workflowId}:{encodedSignalName}:{id}`, `upd:{workflowId}:{updateId}`, and `upr:{updateId}`. Unknown key prefixes are generally ignored by scans that target specific prefixes, but older versions have not been tested against the Tier-0 activity and signal records because those records do not exist yet.
 
 ### Tier-0 Required Behavior
 

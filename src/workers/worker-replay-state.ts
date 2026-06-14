@@ -9,6 +9,10 @@
  */
 
 import { createCheckpoint, deserializeCheckpoint } from '../core/checkpoint.ts';
+import {
+  hydrateCheckpointReplayStateFromPayload,
+  readCheckpointReplayPayload,
+} from '../core/engine/checkpoint-replay.ts';
 import type { Checkpoint, OperationOutcome, WorkerReplayOperationFailure } from '../core/types.ts';
 import type { WorkerReplayOperationSignature } from '../core/worker-protocol.ts';
 
@@ -24,6 +28,19 @@ export interface WorkerReplayState {
 }
 
 /** Build a fresh replay state from a `run` message, seeding cached outcomes from the checkpoint. */
+/**
+ * Deserialize a checkpoint from worker run-message bytes and re-hydrate its replay
+ * state from the embedded payload, so a resumed worker generator replays from the
+ * same cached operation results the engine recorded.
+ */
+function deserializeWorkerCheckpoint(checkpointBytes: ArrayBuffer): Checkpoint {
+  const checkpoint = deserializeCheckpoint(new Uint8Array(checkpointBytes));
+  return hydrateCheckpointReplayStateFromPayload(
+    checkpoint,
+    readCheckpointReplayPayload(checkpoint),
+  );
+}
+
 export function createReplayState(message: {
   workflowId: string;
   checkpoint?: ArrayBuffer;
@@ -31,7 +48,7 @@ export function createReplayState(message: {
 }): WorkerReplayState {
   const checkpoint =
     message.checkpoint && message.checkpoint.byteLength > 0
-      ? deserializeCheckpoint(new Uint8Array(message.checkpoint))
+      ? deserializeWorkerCheckpoint(message.checkpoint)
       : createCheckpoint(message.workflowId, 'worker');
   return {
     checkpoint,

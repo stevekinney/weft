@@ -1,3 +1,4 @@
+import { copyBytesToArrayBuffer } from './byte-arrays.ts';
 import { encode, validateCloneable } from './codec.ts';
 import type { ContextOperationRequest } from './context.ts';
 import type { FailureCategory, OperationRequest, WorkerOutboundMessage } from './types.ts';
@@ -39,6 +40,7 @@ const WORKER_SIGNATURE_OPERATION_TYPES = new Set<string>([
   'activity',
   'archive',
   'child-workflow',
+  'get-version',
   'load',
   'memo',
   'offload',
@@ -191,7 +193,10 @@ export async function createWorkerReplayOperationSignature(
     );
   }
 
-  const digestBytes = await crypto.subtle.digest('SHA-256', encodedStableFields);
+  const digestBytes = await crypto.subtle.digest(
+    'SHA-256',
+    copyBytesToArrayBuffer(encodedStableFields),
+  );
   return {
     format: WORKER_REPLAY_SIGNATURE_FORMAT,
     operationType,

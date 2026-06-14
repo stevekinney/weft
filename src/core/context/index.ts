@@ -4,8 +4,11 @@ import { normalizeSessionStateLocals } from '../session-state.ts';
 import type {
   ActivityCallable,
   ActivityCallOptions,
+  AwaitChildWorkflowOptions,
+  ChildWorkflowHandle,
   ChildWorkflowOptions,
   ChildWorkflowTarget,
+  DetachedChildWorkflowOptions,
   Duration,
   MessageName,
   QueryDefinition,
@@ -296,6 +299,19 @@ export class Context implements WorkflowContext {
   *waitUntil(predicate: () => boolean, timeout?: Duration) {
     return yield* durableOperations.waitUntil(this, getInternals(this), predicate, timeout);
   }
+  *getVersion(
+    changeId: string,
+    minSupported: number,
+    maxSupported: number,
+  ): Generator<ContextOperationRequest, number, unknown> {
+    return yield* durableOperations.getVersion(
+      this,
+      getInternals(this),
+      changeId,
+      minSupported,
+      maxSupported,
+    );
+  }
   *review(
     options: HumanReviewOptions,
   ): Generator<ContextOperationRequest, HumanReviewResult, unknown> {
@@ -358,11 +374,21 @@ export class Context implements WorkflowContext {
   ): Generator<ContextOperationRequest, TFinalOutput, unknown> {
     return yield* sagaHelpers.saga<TFinalOutput>(this, steps);
   }
+  startChild<TResult = unknown>(
+    workflowType: string,
+    input: unknown,
+    options: DetachedChildWorkflowOptions,
+  ): Generator<ContextOperationRequest, ChildWorkflowHandle<TResult>, unknown>;
+  startChild<TResult = unknown>(
+    workflowType: string,
+    input: unknown,
+    options?: AwaitChildWorkflowOptions,
+  ): Generator<ContextOperationRequest, TResult, unknown>;
   *startChild<TResult = unknown>(
     workflowType: string,
     input: unknown,
     options?: ChildWorkflowOptions,
-  ): Generator<ContextOperationRequest, TResult, unknown> {
+  ): Generator<ContextOperationRequest, TResult | ChildWorkflowHandle<TResult>, unknown> {
     return yield* childWorkflowPipe.startChild<TResult>(
       this,
       getInternals(this),

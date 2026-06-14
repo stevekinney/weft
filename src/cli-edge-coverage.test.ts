@@ -5,9 +5,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { executeSchedule, executeTimeline, parseCliArguments } from './cli/index.ts';
+import { advanceCheckpoint, createCheckpoint, serializeCheckpoint } from './core/checkpoint.ts';
 import { encode } from './core/codec.ts';
-import { Engine } from './core/engine.ts';
-import { workflow } from './core/types/workflow-function.ts';
 import { BunSQLiteStorage } from './storage/bun-sql.ts';
 import { KEYS } from './storage/interface.ts';
 
@@ -30,24 +29,34 @@ function createTimelineDatabasePath(): string {
 
 async function seedTimelineDatabase(databasePath: string): Promise<void> {
   const storage = new BunSQLiteStorage(databasePath);
-  const engine = new Engine({ storage });
-
-  async function firstStep(): Promise<{ stage: string; token: string }> {
-    return { stage: 'first', token: '[REDACTED]' };
-  }
+  const workflowId = 'wf-cli-edge';
+  const workflowVersion = '1.0.0';
 
   try {
-    engine.register(
-      workflow({ name: 'timeline-edge', version: '1.0.0' }).execute(async function* (ctx) {
-        yield* ctx.run(firstStep);
-        return 'done';
+    await storage.put(
+      KEYS.workflow(workflowId),
+      encode({
+        id: workflowId,
+        type: 'timeline-edge',
+        status: 'completed',
+        input: null,
+        result: 'done',
+        version: workflowVersion,
+        createdAt: 1,
+        updatedAt: 2,
+        step: 1,
+        locals: {},
+        searchAttributes: {},
       }),
     );
 
-    const handle = await engine.start('timeline-edge', null, { id: 'wf-cli-edge' });
-    await handle.result();
+    await storage.put(
+      KEYS.checkpointHistory(workflowId, 1),
+      serializeCheckpoint(
+        advanceCheckpoint(createCheckpoint(workflowId, workflowVersion, 1), {}, { now: 2 }),
+      ),
+    );
   } finally {
-    await engine[Symbol.asyncDispose]();
     storage[Symbol.dispose]();
   }
 }

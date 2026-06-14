@@ -27,12 +27,14 @@ export async function handleJsonRpcHttpRequestSafely(args: {
   registry: OperationRegistry;
   engine: Engine;
   authContext: AuthContext | undefined;
+  maxBodyBytes?: number;
 }): Promise<Response> {
   try {
     return await handleJsonRpcHttpRequest(args.request, {
       registry: args.registry,
       engine: args.engine,
       principal: authContextToPrincipal(args.authContext),
+      ...(args.maxBodyBytes !== undefined ? { maxBodyBytes: args.maxBodyBytes } : {}),
     });
   } catch (error) {
     console.error('Unhandled error in /jsonrpc', { error });

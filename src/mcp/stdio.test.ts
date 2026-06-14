@@ -6,6 +6,7 @@ import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types/workflow-function.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { waitForCondition } from '../testing/fake-timers.test-support.ts';
+import { MCP_TOOLS_LIST_CHANGED_NOTIFICATION } from './protocol.ts';
 import { runMcpStdioSession } from './stdio.ts';
 
 type ParsedLine = {
@@ -199,6 +200,63 @@ describe('runMcpStdioSession', () => {
     expect(await session).toEqual({ exitCode: 0 });
   });
 
+  it('emits tools/list_changed and lists dynamically registered workflow tools after session start', async () => {
+    const engine = createEngine();
+    const input = controllableInput();
+    const output = collectingOutput();
+
+    const session = runMcpStdioSession({
+      input: input.stream,
+      output: output.stream,
+      engine,
+      admission: { kind: 'allow-unauthenticated-local-admin' },
+    });
+
+    input.send({
+      jsonrpc: '2.0',
+      id: 'init',
+      method: 'initialize',
+      params: { protocolVersion: '2025-11-25', capabilities: {} },
+    });
+    const initializeLine = await waitForLine(
+      output,
+      (line) => line.id === 'init' && line.result !== undefined,
+    );
+    expect(initializeLine.result).toMatchObject({
+      capabilities: { tools: { listChanged: true } },
+    });
+
+    input.send({ jsonrpc: '2.0', method: 'notifications/initialized' });
+    input.send({ jsonrpc: '2.0', id: 'ready', method: 'ping', params: {} });
+    await waitForLine(output, (line) => line.id === 'ready' && line.result !== undefined);
+
+    const dynamicWorkflow = workflow({
+      name: 'dynamic-workflow',
+      description: 'Workflow registered after MCP session startup.',
+      inputSchema: z.object({ value: z.string() }),
+    }).execute(async function* (_context: WorkflowContext, workflowInput: { value: string }) {
+      return { echoed: workflowInput.value };
+    });
+
+    engine.register(dynamicWorkflow);
+
+    const notificationLine = await waitForLine(
+      output,
+      (line) => line.method === MCP_TOOLS_LIST_CHANGED_NOTIFICATION,
+    );
+    expect(notificationLine.params).toBeUndefined();
+
+    input.send({ jsonrpc: '2.0', id: 'tools-after-register', method: 'tools/list', params: {} });
+    const toolsLine = await waitForLine(output, (line) => line.id === 'tools-after-register');
+    const toolNames = (toolsLine.result as { tools: Array<{ name: string }> }).tools.map(
+      (tool) => tool.name,
+    );
+    expect(toolNames).toContain('dynamic_workflow');
+
+    input.close();
+    expect(await session).toEqual({ exitCode: 0 });
+  });
+
   it('rejects startup-token admission for mismatch, malformed JSON, missing token, and oversize frames', async () => {
     await expectRejectedStartupTokenAdmission({
       frame: {
@@ -359,7 +417,7 @@ describe('runMcpStdioSession', () => {
       jsonrpc: '2.0',
       id: 3,
       method: 'tools/call',
-      params: { name: 'echo_workflow', arguments: { value: 'stdio' } },
+      params: { name: 'echo_workflow', arguments: { input: { value: 'stdio' } } },
     });
     const callLine = await waitForLine(output, (line) => line.id === 3);
     expect(toolText(callLine.result)).toMatchObject({
@@ -464,7 +522,7 @@ describe('runMcpStdioSession', () => {
       jsonrpc: '2.0',
       id: 'pending',
       method: 'tools/call',
-      params: { name: 'hold_for_stdio_cancel', arguments: { value: 'cancel' } },
+      params: { name: 'hold_for_stdio_cancel', arguments: { input: { value: 'cancel' } } },
     });
 
     let workflowId = '';

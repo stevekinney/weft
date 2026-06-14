@@ -49,9 +49,12 @@ export function coerceScheduleId(scheduleId: string, fieldName: string): string 
   return coerceStartWorkflowId(scheduleId, fieldName);
 }
 
-export function normalizeScheduleOptions(
-  options: ScheduleOptions | undefined,
-): Required<Pick<ScheduleOptions, 'overlap' | 'backfill'>> & { id?: string } {
+export function normalizeScheduleOptions(options: ScheduleOptions | undefined): Required<
+  Pick<ScheduleOptions, 'overlap' | 'backfill'>
+> & {
+  id?: string;
+  jitterMs?: number;
+} {
   if (options === undefined) {
     return { overlap: 'skip', backfill: false };
   }
@@ -60,9 +63,10 @@ export function normalizeScheduleOptions(
     throw new Error('options must be an object when provided');
   }
 
-  const { id, overlap, backfill } = options;
+  const { id, overlap, backfill, jitter } = options;
   const normalizedOptions: Required<Pick<ScheduleOptions, 'overlap' | 'backfill'>> & {
     id?: string;
+    jitterMs?: number;
   } = {
     overlap: 'skip',
     backfill: false,
@@ -88,7 +92,31 @@ export function normalizeScheduleOptions(
     normalizedOptions.backfill = backfill;
   }
 
+  if (jitter !== undefined) {
+    normalizedOptions.jitterMs = normalizeScheduleJitter(jitter, 'options.jitter');
+  }
+
   return normalizedOptions;
+}
+
+function normalizeScheduleJitter(value: unknown, fieldName: string): number {
+  if (typeof value !== 'string' && typeof value !== 'number') {
+    throw new Error(`${fieldName} must be a duration string or a number of milliseconds`);
+  }
+
+  let milliseconds: number;
+  try {
+    milliseconds = parseDuration(value);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Invalid ${fieldName}: ${message}`, { cause: error });
+  }
+
+  const jitterMs = Math.ceil(milliseconds);
+  if (!Number.isSafeInteger(jitterMs) || jitterMs <= 0) {
+    throw new Error(`${fieldName} must resolve to a positive number of milliseconds`);
+  }
+  return jitterMs;
 }
 
 /**
@@ -281,11 +309,14 @@ export function decodeScheduleIdentityFields(decoded: Record<string, unknown>):
 type ScheduleRuntimeFields = Pick<
   ScheduleState,
   | 'backfill'
+  | 'jitterMs'
   | 'createdAt'
   | 'updatedAt'
   | 'lastFireAt'
+  | 'lastMissedFireAt'
   | 'nextFireAt'
   | 'currentWorkflowId'
+  | 'missedFireCount'
   | 'queuedRuns'
 >;
 
@@ -301,10 +332,25 @@ function decodeScheduleBackfill(
   return backfill;
 }
 
+function decodeScheduleJitterMs(
+  decoded: Record<string, unknown>,
+  scheduleId: string,
+): number | undefined | null {
+  const jitterMs = decoded['jitterMs'];
+  if (jitterMs === undefined) {
+    return undefined;
+  }
+  if (typeof jitterMs !== 'number' || !Number.isSafeInteger(jitterMs) || jitterMs <= 0) {
+    rejectInvalidScheduleRecord(scheduleId, 'with invalid jitterMs');
+    return null;
+  }
+  return jitterMs;
+}
+
 function decodeScheduleTimestamps(
   decoded: Record<string, unknown>,
   scheduleId: string,
-): { createdAt: number; updatedAt: number; lastFireAt?: number } | null {
+): { createdAt: number; updatedAt: number; lastFireAt?: number; lastMissedFireAt?: number } | null {
   const createdAt = decoded['createdAt'];
   const updatedAt = decoded['updatedAt'];
   if (!isValidScheduleTimestamp(createdAt) || !isValidScheduleTimestamp(updatedAt)) {
@@ -316,10 +362,16 @@ function decodeScheduleTimestamps(
     return rejectInvalidScheduleRecord(scheduleId, 'with invalid lastFireAt');
   }
 
+  const lastMissedFireAt = decoded['lastMissedFireAt'];
+  if (lastMissedFireAt !== undefined && !isValidScheduleTimestamp(lastMissedFireAt)) {
+    return rejectInvalidScheduleRecord(scheduleId, 'with invalid lastMissedFireAt');
+  }
+
   return {
     createdAt,
     updatedAt,
     ...(lastFireAt !== undefined && { lastFireAt }),
+    ...(lastMissedFireAt !== undefined && { lastMissedFireAt }),
   };
 }
 
@@ -366,12 +418,34 @@ function decodeScheduleQueuedRuns(
   return queuedRuns;
 }
 
+function decodeScheduleMissedFireCount(
+  decoded: Record<string, unknown>,
+  scheduleId: string,
+): number | null {
+  const missedFireCount = decoded['missedFireCount'];
+  if (missedFireCount === undefined) {
+    return 0;
+  }
+  if (
+    typeof missedFireCount !== 'number' ||
+    !Number.isSafeInteger(missedFireCount) ||
+    missedFireCount < 0
+  ) {
+    rejectInvalidScheduleRecord(scheduleId, 'with invalid missedFireCount');
+    return null;
+  }
+  return missedFireCount;
+}
+
 export function decodeScheduleRuntimeFields(
   decoded: Record<string, unknown>,
   scheduleId: string,
 ): ScheduleRuntimeFields | null {
   const backfill = decodeScheduleBackfill(decoded, scheduleId);
   if (backfill === null) return null;
+
+  const jitterMs = decodeScheduleJitterMs(decoded, scheduleId);
+  if (jitterMs === null) return null;
 
   const timestamps = decodeScheduleTimestamps(decoded, scheduleId);
   if (timestamps === null) return null;
@@ -385,13 +459,18 @@ export function decodeScheduleRuntimeFields(
   const queuedRuns = decodeScheduleQueuedRuns(decoded, scheduleId);
   if (queuedRuns === null) return null;
 
+  const missedFireCount = decodeScheduleMissedFireCount(decoded, scheduleId);
+  if (missedFireCount === null) return null;
+
   // Legacy schedule records may carry a `tenant` field; it is ignored
   // (tolerate-and-drop) so old persisted schedules still decode.
   return {
     backfill,
+    ...(jitterMs !== undefined && { jitterMs }),
     ...timestamps,
     nextFireAt: nextFireAt.value,
     ...(currentWorkflow.value !== undefined && { currentWorkflowId: currentWorkflow.value }),
+    missedFireCount,
     queuedRuns,
   };
 }

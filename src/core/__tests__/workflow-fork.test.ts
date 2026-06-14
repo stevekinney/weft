@@ -211,13 +211,13 @@ describe('workflow forking', () => {
     engine.addEventListener(WorkflowStartedEvent.type, (event) => {
       observedEvents.push({
         type: event.type,
-        workflowId: (event as WorkflowStartedEvent).workflowId,
+        workflowId: event.workflowId,
       });
     });
     engine.addEventListener(WorkflowCompletedEvent.type, (event) => {
       observedEvents.push({
         type: event.type,
-        workflowId: (event as WorkflowCompletedEvent).workflowId,
+        workflowId: event.workflowId,
       });
     });
 

@@ -163,6 +163,8 @@ describe('engine sub-operations', () => {
       createActivityOperationCallbacks: () => ({
         getComposedActivityInterceptor: () => null,
         getComposedWorkflowInterceptor: () => null,
+        finalizePendingTimelineEntry: () => {},
+        feedOperationResult: () => {},
         runOperationWithResult: mock(async () => {}),
       }),
     };

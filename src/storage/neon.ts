@@ -2,6 +2,7 @@ import { Pool } from '@neondatabase/serverless';
 
 import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range.ts';
 import {
+  assertStorageBatchOperationCount,
   type BatchOperation,
   type ConditionalBatchCondition,
   type ScanOptions,
@@ -52,7 +53,7 @@ import { scopedStorage } from './scoped-storage.ts';
 const RETRYABLE_TRANSACTION_FAILURES = new Set(['40001', '40P01']);
 
 /**
- * Cap on `SERIALIZABLE` retries for a single `conditionalBatch`. A conflict
+ * Cap on `SERIALIZABLE` attempts for a single `conditionalBatch`. A conflict
  * means a concurrent writer touched an overlapping row; under the singleton
  * deployment Weft targets, contention is bounded, so a small cap is enough.
  * On exhaustion the call throws rather than silently returning `false` — a
@@ -397,6 +398,7 @@ export class NeonStorage implements Storage {
   }
 
   async batch(operations: BatchOperation[]): Promise<void> {
+    assertStorageBatchOperationCount('batch operations', operations.length);
     if (operations.length === 0) return;
     await this.#ensureTable();
     await this.#withTransaction(PG_BEGIN_READ_COMMITTED, async (client) => {
@@ -408,6 +410,9 @@ export class NeonStorage implements Storage {
     conditions: ConditionalBatchCondition[],
     operations: BatchOperation[],
   ): Promise<boolean> {
+    assertStorageBatchOperationCount('conditionalBatch conditions', conditions.length);
+    assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
+
     await this.#ensureTable();
 
     // Resolve the write net effect once, outside the retry loop — it is
@@ -450,7 +455,7 @@ export class NeonStorage implements Storage {
     // precondition mismatch and would corrupt compare-and-swap callers. The cause
     // carries the last abort (40001 serialization failure or 40P01 deadlock).
     throw new Error(
-      `conditionalBatch exhausted ${MAX_SERIALIZATION_RETRIES} retries after retryable transaction failures`,
+      `conditionalBatch exhausted ${MAX_SERIALIZATION_RETRIES} attempts after retryable transaction failures`,
       { cause: lastError },
     );
   }

@@ -15,15 +15,22 @@
  * authenticate. Each key may also carry an absolute `expiresAt`, after which it
  * is rejected automatically without an explicit revoke.
  *
- * Lookups are constant-time map reads; the comparison is the map key itself,
- * not a per-byte string compare, so no early-exit timing channel is introduced
- * beyond what the JS engine's map hashing already does.
+ * Registration hashes stored keys to fixed-length digests once. Authentication
+ * lookups hash the presented key, then compare it with every stored digest via
+ * `timingSafeEqual` without early exit. The digest step avoids raw length
+ * checks, and scanning every digest avoids key-position leaks during the
+ * overlap window.
  *
  * @module server/authentication/rotating-api-key-store
  */
 
 import type { AuthorizationScope } from '../authorization-scope.ts';
 import { principalFromApiKey, type AuthenticatedPrincipal } from '../principal.ts';
+import {
+  createConstantTimeApiKeyEntry,
+  findConstantTimeApiKeyMatch,
+  type ConstantTimeApiKeyEntry,
+} from './constant-time-api-key.ts';
 
 /**
  * Registration options for a single key in a {@link RotatingApiKeyStore}.
@@ -92,6 +99,13 @@ type StoredKey = {
   expiresAt: number | undefined;
 };
 
+type StoredKeyMatch = {
+  key: string;
+  stored: StoredKey;
+};
+
+type StoredKeyEntry = ConstantTimeApiKeyEntry<StoredKeyMatch>;
+
 /** Whether a stored key has passed its absolute expiry as of `currentTime`. */
 function isExpired(stored: StoredKey, currentTime: number): boolean {
   return stored.expiresAt !== undefined && currentTime >= stored.expiresAt;
@@ -120,7 +134,11 @@ function isExpired(stored: StoredKey, currentTime: number): boolean {
  * ```
  */
 export function createRotatingApiKeyStore(now: () => number = Date.now): RotatingApiKeyStore {
-  const keys = new Map<string, StoredKey>();
+  const keys = new Map<string, StoredKeyEntry>();
+
+  function findStoredKey(presentedKey: string): StoredKeyMatch | null {
+    return findConstantTimeApiKeyMatch(presentedKey, [...keys.values()])?.value ?? null;
+  }
 
   // `resolve` closes over `keys` directly (not `this`), so it stays correct
   // when detached and passed as `AuthConfig.resolveApiKeyPrincipal`.
@@ -129,21 +147,22 @@ export function createRotatingApiKeyStore(now: () => number = Date.now): Rotatin
       if (key.length === 0) {
         throw new Error('Cannot register an empty API key');
       }
-      keys.set(key, {
+      const stored = {
         subject: registration.subject,
         scopes: registration.scopes ?? [],
         expiresAt: registration.expiresAt,
-      });
+      };
+      keys.set(key, createConstantTimeApiKeyEntry(key, { key, stored }));
     },
     revoke(key) {
       return keys.delete(key);
     },
     has(key) {
-      const stored = keys.get(key);
-      if (stored === undefined) return false;
-      if (isExpired(stored, now())) {
+      const match = findStoredKey(key);
+      if (match === null) return false;
+      if (isExpired(match.stored, now())) {
         // Lazily drop expired entries so the map does not accumulate them.
-        keys.delete(key);
+        keys.delete(match.key);
         return false;
       }
       return true;
@@ -152,13 +171,13 @@ export function createRotatingApiKeyStore(now: () => number = Date.now): Rotatin
       return keys.size;
     },
     resolve(presentedKey) {
-      const stored = keys.get(presentedKey);
-      if (stored === undefined || isExpired(stored, now())) {
-        if (stored !== undefined) keys.delete(presentedKey);
+      const match = findStoredKey(presentedKey);
+      if (match === null || isExpired(match.stored, now())) {
+        if (match !== null) keys.delete(match.key);
         return Promise.resolve(null);
       }
       return Promise.resolve(
-        principalFromApiKey({ subject: stored.subject, scopes: stored.scopes }),
+        principalFromApiKey({ subject: match.stored.subject, scopes: match.stored.scopes }),
       );
     },
   };

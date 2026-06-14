@@ -15,7 +15,12 @@ import {
   settleBackfillScheduleStateForEngine,
 } from './engine/callback-creators-schedule.ts';
 import {
+  computeScheduleJitterOffset,
+  resolveEffectiveScheduleFireAt,
+} from './engine/schedule-jitter.ts';
+import {
   CleanupWarningEvent,
+  ScheduleMissedFireEvent,
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
   WorkflowFailedEvent,
@@ -95,6 +100,24 @@ class ScheduleRunStartFailureStorage extends MemoryStorage {
   }
 }
 
+class FailingScheduleBatchStorage extends MemoryStorage {
+  #nextFailingKey: string | null = null;
+
+  failNextBatchContaining(key: string): void {
+    this.#nextFailingKey = key;
+  }
+
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    const failingKey = this.#nextFailingKey;
+    if (failingKey !== null && operations.some((operation) => operation.key === failingKey)) {
+      this.#nextFailingKey = null;
+      throw new Error(`simulated schedule batch failure for ${failingKey}`);
+    }
+
+    return super.batch(operations);
+  }
+}
+
 async function drainEngine(): Promise<void> {
   await yieldToEventLoop();
   await yieldToEventLoop();
@@ -119,7 +142,11 @@ function requireNextFireAt(summary: ScheduleSummary): number {
   return summary.nextFireAt;
 }
 
-async function tickEngine(engine: Engine, clock: Clock, nextNow: number): Promise<void> {
+async function tickEngine(
+  engine: { scheduler: Engine['scheduler'] },
+  clock: Clock,
+  nextNow: number,
+): Promise<void> {
   clock.now = nextNow;
   await engine.scheduler.tick(clock.now);
   await drainEngine();
@@ -194,6 +221,7 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
     status: 'active',
     overlap: 'skip',
     backfill: false,
+    missedFireCount: 0,
     queuedRuns: 0,
     updatedAt: 1,
     workflowType: 'workflow',
@@ -398,6 +426,116 @@ describe('recurring schedules', () => {
     engine[Symbol.dispose]();
   });
 
+  it('applies deterministic jitter to the effective schedule timer while preserving the nominal next fire time', async () => {
+    const storage = new MemoryStorage();
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock, storage);
+    const executions: number[] = [];
+
+    registerWorkflow(engine, 'jittered-workflow', async function* () {
+      executions.push(clock.now);
+      return 'done';
+    });
+
+    const schedule = await engine.schedule('jittered-workflow', null, '* * * * *', {
+      id: 'jittered-schedule',
+      jitter: '60s',
+    });
+    const description = await schedule.describe();
+    const nominalFireAt = Date.UTC(2026, 0, 1, 0, 1, 0);
+    const offset = computeScheduleJitterOffset('jittered-schedule', nominalFireAt, 60_000);
+    const effectiveFireAt = nominalFireAt + offset;
+
+    expect(offset).toBeGreaterThan(0);
+    expect(offset).toBeLessThan(60_000);
+    expect(description).toMatchObject({
+      id: 'jittered-schedule',
+      jitterMs: 60_000,
+      nextFireAt: nominalFireAt,
+    });
+    expect(await storage.get(KEYS.scheduleTick(nominalFireAt, 'jittered-schedule'))).toBeNull();
+    expect(
+      await storage.get(KEYS.scheduleTick(effectiveFireAt, 'jittered-schedule')),
+    ).not.toBeNull();
+
+    await tickEngine(engine, clock, nominalFireAt);
+    expect(executions).toEqual([]);
+
+    await tickEngine(engine, clock, effectiveFireAt);
+    expect(executions).toEqual([effectiveFireAt]);
+
+    const firedDescription = await schedule.describe();
+    const nextNominalFireAt = Date.UTC(2026, 0, 1, 0, 2, 0);
+    expect(firedDescription).toMatchObject({
+      lastFireAt: nominalFireAt,
+      nextFireAt: nextNominalFireAt,
+    });
+    expect(
+      await storage.get(
+        KEYS.scheduleTick(
+          resolveEffectiveScheduleFireAt(
+            { id: 'jittered-schedule', jitterMs: 60_000 },
+            nextNominalFireAt,
+          ),
+          'jittered-schedule',
+        ),
+      ),
+    ).not.toBeNull();
+
+    engine[Symbol.dispose]();
+  });
+
+  it('records and emits schedule missed-fire observability when a non-backfill timer is late', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock);
+    const executions: number[] = [];
+    const missedFireEvents: ScheduleMissedFireEvent[] = [];
+
+    registerWorkflow(engine, 'missed-fire-workflow', async function* () {
+      executions.push(clock.now);
+      return 'done';
+    });
+    engine.addEventListener(ScheduleMissedFireEvent.type, (event) => {
+      missedFireEvents.push(event);
+    });
+
+    const schedule = await engine.schedule('missed-fire-workflow', null, '* * * * *', {
+      id: 'missed-fire-schedule',
+    });
+    const firstDescription = await schedule.describe();
+    const firstFireAt = requireNextFireAt(firstDescription);
+    const lateTickAt = firstFireAt + 125_000;
+
+    await tickEngine(engine, clock, lateTickAt);
+
+    expect(executions).toEqual([]);
+    expect(missedFireEvents).toHaveLength(1);
+    expect(missedFireEvents[0]).toMatchObject({
+      scheduleId: 'missed-fire-schedule',
+      missedCount: 3,
+      windowStart: firstFireAt,
+      windowEnd: lateTickAt,
+    });
+
+    const skippedDescription = await schedule.describe();
+    expect(skippedDescription).toMatchObject({
+      lastMissedFireAt: firstFireAt + 120_000,
+      missedFireCount: 3,
+      nextFireAt: firstFireAt + 180_000,
+    });
+    expect(skippedDescription.lastFireAt).toBeUndefined();
+
+    await tickEngine(engine, clock, requireNextFireAt(skippedDescription));
+
+    expect(executions).toEqual([firstFireAt + 180_000]);
+    const firedDescription = await schedule.describe();
+    expect(firedDescription.lastFireAt).toBe(firstFireAt + 180_000);
+    expect(firedDescription.lastMissedFireAt).toBe(firstFireAt + 120_000);
+    expect(firedDescription.missedFireCount).toBe(3);
+
+    engine[Symbol.dispose]();
+  });
+
   it('engine.schedule(definition) accepts declarative schedule definitions', async () => {
     const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
     const engine = createEngine(clock);
@@ -587,6 +725,204 @@ describe('recurring schedules', () => {
     expect(await storage.get('timer-idx:schedule:duplicate-schedule-id')).not.toBeNull();
 
     engine[Symbol.dispose]();
+  });
+
+  it('writes a new schedule state and its first timer in one batch.', async () => {
+    const storage = new MemoryStorage();
+    const recordedBatchKeys: string[][] = [];
+    const originalBatch = storage.batch.bind(storage);
+    storage.batch = async (operations) => {
+      recordedBatchKeys.push(operations.map((operation) => operation.key));
+      return await originalBatch(operations);
+    };
+
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock, storage);
+
+    registerWorkflow(
+      engine,
+      'create-atomicity-schedule-workflow',
+      async function* (_ctx: WorkflowContext, input: string) {
+        return input;
+      },
+    );
+
+    const schedule = await engine.schedule(
+      'create-atomicity-schedule-workflow',
+      'created-run',
+      '*/15 * * * * *',
+      { id: 'create-atomicity-schedule' },
+    );
+    const firstFireAt = requireNextFireAt(await schedule.describe());
+
+    expect(recordedBatchKeys).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining([
+          KEYS.schedule('create-atomicity-schedule'),
+          KEYS.scheduleTick(firstFireAt, 'create-atomicity-schedule'),
+          'timer-idx:schedule:create-atomicity-schedule',
+        ]),
+      ]),
+    );
+
+    engine[Symbol.dispose]();
+  });
+
+  it('keeps the previous active schedule and timer when an update replacement batch fails.', async () => {
+    const storage = new FailingScheduleBatchStorage();
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock, storage);
+
+    registerWorkflow(
+      engine,
+      'update-atomicity-schedule-workflow',
+      async function* (_ctx: WorkflowContext, input: string) {
+        return input;
+      },
+    );
+
+    const schedule = await engine.schedule(
+      'update-atomicity-schedule-workflow',
+      'original-run',
+      '*/15 * * * * *',
+      { id: 'update-atomicity-schedule' },
+    );
+    const originalDescription = await schedule.describe();
+    const originalFireAt = requireNextFireAt(originalDescription);
+    const replacementFireAt = getNextCronOccurrence('*/30 * * * * *', clock.now);
+
+    storage.failNextBatchContaining(
+      KEYS.scheduleTick(replacementFireAt, 'update-atomicity-schedule'),
+    );
+
+    await expect(schedule.update('*/30 * * * * *')).rejects.toThrow(
+      'simulated schedule batch failure',
+    );
+
+    const storedScheduleBytes = await storage.get(KEYS.schedule('update-atomicity-schedule'));
+    expect(storedScheduleBytes).not.toBeNull();
+    expect(decode(storedScheduleBytes!)).toMatchObject({
+      id: 'update-atomicity-schedule',
+      cronExpression: '*/15 * * * * *',
+      nextFireAt: originalFireAt,
+    });
+    expect(
+      await storage.get(KEYS.scheduleTick(originalFireAt, 'update-atomicity-schedule')),
+    ).not.toBeNull();
+    expect(
+      await storage.get(KEYS.scheduleTick(replacementFireAt, 'update-atomicity-schedule')),
+    ).toBeNull();
+    expect(await storage.get('timer-idx:schedule:update-atomicity-schedule')).not.toBeNull();
+
+    engine[Symbol.dispose]();
+  });
+
+  it('keeps the fired schedule timer retryable when the rearm batch fails.', async () => {
+    const storage = new FailingScheduleBatchStorage();
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock, storage);
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+    registerWorkflow(
+      engine,
+      'rearm-atomicity-schedule-workflow',
+      async function* (_ctx: WorkflowContext, input: string) {
+        return input;
+      },
+    );
+
+    const schedule = await engine.schedule(
+      'rearm-atomicity-schedule-workflow',
+      'run-once',
+      '*/15 * * * * *',
+      { id: 'rearm-atomicity-schedule' },
+    );
+    const originalDescription = await schedule.describe();
+    const originalFireAt = requireNextFireAt(originalDescription);
+    const nextFireAt = getNextCronOccurrence('*/15 * * * * *', originalFireAt);
+
+    storage.failNextBatchContaining(KEYS.scheduleTick(nextFireAt, 'rearm-atomicity-schedule'));
+
+    try {
+      await tickEngine(engine, clock, originalFireAt);
+
+      const storedScheduleBytes = await storage.get(KEYS.schedule('rearm-atomicity-schedule'));
+      expect(storedScheduleBytes).not.toBeNull();
+      expect(decode(storedScheduleBytes!)).toMatchObject({
+        id: 'rearm-atomicity-schedule',
+        status: 'active',
+        nextFireAt: originalFireAt,
+      });
+      expect(decode(storedScheduleBytes!)).not.toHaveProperty('lastFireAt');
+      expect(
+        await storage.get(KEYS.scheduleTick(originalFireAt, 'rearm-atomicity-schedule')),
+      ).not.toBeNull();
+      expect(
+        await storage.get(KEYS.scheduleTick(nextFireAt, 'rearm-atomicity-schedule')),
+      ).toBeNull();
+      expect(await storage.get('timer-idx:schedule:rearm-atomicity-schedule')).not.toBeNull();
+    } finally {
+      errorSpy.mockRestore();
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('Engine.create re-arms an active schedule whose due timer is missing after a crash.', async () => {
+    const storage = new MemoryStorage();
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const executions: string[] = [];
+    const scheduledWorkflow = defineWorkflow({ name: 'orphaned-schedule-workflow' }).execute(
+      async function* (_ctx: WorkflowContext, input: string) {
+        executions.push(input);
+        return input;
+      },
+    );
+
+    const firstEngine = await Engine.create({
+      storage,
+      getNow: () => clock.now,
+      recover: false,
+      workflows: { 'orphaned-schedule-workflow': scheduledWorkflow },
+    });
+
+    const schedule = await firstEngine.schedule(
+      'orphaned-schedule-workflow',
+      'recovered-run',
+      '*/15 * * * * *',
+      { id: 'orphaned-schedule', jitter: '60s' },
+    );
+    const firstDescription = await schedule.describe();
+    const firstFireAt = requireNextFireAt(firstDescription);
+    const effectiveFireAt =
+      firstFireAt + computeScheduleJitterOffset('orphaned-schedule', firstFireAt, 60_000);
+
+    await storage.delete(KEYS.scheduleTick(effectiveFireAt, 'orphaned-schedule'));
+    await storage.delete('timer-idx:schedule:orphaned-schedule');
+    firstEngine[Symbol.dispose]();
+
+    clock.now = effectiveFireAt + 1;
+    const recoveredEngine = await Engine.create({
+      storage,
+      getNow: () => clock.now,
+      workflows: { 'orphaned-schedule-workflow': scheduledWorkflow },
+    });
+
+    try {
+      expect(
+        await storage.get(KEYS.scheduleTick(effectiveFireAt, 'orphaned-schedule')),
+      ).not.toBeNull();
+      expect(await storage.get('timer-idx:schedule:orphaned-schedule')).not.toBeNull();
+
+      await tickEngine(recoveredEngine, clock, clock.now);
+
+      expect(executions).toEqual(['recovered-run']);
+      const recoveredSchedule = await recoveredEngine.getSchedule('orphaned-schedule');
+      expect(recoveredSchedule?.nextFireAt).toBe(
+        getNextCronOccurrence('*/15 * * * * *', firstFireAt),
+      );
+    } finally {
+      recoveredEngine[Symbol.dispose]();
+    }
   });
 
   it('Pauses a schedule and clears the fired timer when the workflow registration is missing after restart.', async () => {
@@ -801,10 +1137,10 @@ describe('recurring schedules', () => {
     const terminalEvents: WorkflowCancelledEvent[] = [];
 
     engine.addEventListener(CleanupWarningEvent.type, (event) => {
-      warnings.push(event as CleanupWarningEvent);
+      warnings.push(event);
     });
     engine.addEventListener(WorkflowCancelledEvent.type, (event) => {
-      terminalEvents.push(event as WorkflowCancelledEvent);
+      terminalEvents.push(event);
     });
 
     try {
@@ -835,10 +1171,10 @@ describe('recurring schedules', () => {
     const terminalEvents: WorkflowCompletedEvent[] = [];
 
     engine.addEventListener(CleanupWarningEvent.type, (event) => {
-      warnings.push(event as CleanupWarningEvent);
+      warnings.push(event);
     });
     engine.addEventListener(WorkflowCompletedEvent.type, (event) => {
-      terminalEvents.push(event as WorkflowCompletedEvent);
+      terminalEvents.push(event);
     });
 
     try {
@@ -863,10 +1199,10 @@ describe('recurring schedules', () => {
     const terminalEvents: WorkflowFailedEvent[] = [];
 
     engine.addEventListener(CleanupWarningEvent.type, (event) => {
-      warnings.push(event as CleanupWarningEvent);
+      warnings.push(event);
     });
     engine.addEventListener(WorkflowFailedEvent.type, (event) => {
-      terminalEvents.push(event as WorkflowFailedEvent);
+      terminalEvents.push(event);
     });
 
     try {
@@ -943,6 +1279,53 @@ describe('recurring schedules', () => {
     expect(updatedSkip?.nextFireAt).toBe(Date.UTC(2026, 0, 1, 0, 4, 0));
 
     secondEngine[Symbol.dispose]();
+  });
+
+  it('applies jitter after selecting backfill occurrences', async () => {
+    const storage = new MemoryStorage();
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock, storage);
+    const executions: string[] = [];
+
+    registerWorkflow(engine, 'jitter-backfill-workflow', async function* () {
+      executions.push(new Date(clock.now).toISOString());
+      return 'done';
+    });
+
+    const schedule = await engine.schedule('jitter-backfill-workflow', null, '* * * * *', {
+      id: 'jitter-backfill-schedule',
+      backfill: true,
+      overlap: 'allow',
+      jitter: '60s',
+    });
+    const firstDescription = await schedule.describe();
+    const firstNominalFireAt = requireNextFireAt(firstDescription);
+    const lateTickAt =
+      resolveEffectiveScheduleFireAt(firstDescription, firstNominalFireAt) + 130_000;
+
+    await tickEngine(engine, clock, lateTickAt);
+
+    expect(executions).toHaveLength(3);
+    const firedDescription = await schedule.describe();
+    const thirdNominalFireAt = Date.UTC(2026, 0, 1, 0, 3, 0);
+    const nextNominalFireAt = Date.UTC(2026, 0, 1, 0, 4, 0);
+    expect(firedDescription).toMatchObject({
+      lastFireAt: thirdNominalFireAt,
+      nextFireAt: nextNominalFireAt,
+    });
+    expect(
+      await storage.get(
+        KEYS.scheduleTick(
+          resolveEffectiveScheduleFireAt(firedDescription, nextNominalFireAt),
+          'jitter-backfill-schedule',
+        ),
+      ),
+    ).not.toBeNull();
+    expect(
+      await storage.get(KEYS.scheduleTick(nextNominalFireAt, 'jitter-backfill-schedule')),
+    ).toBeNull();
+
+    engine[Symbol.dispose]();
   });
 
   it('Non-backfill schedules skip a single late missed tick and resume from the next future occurrence.', async () => {
@@ -1145,6 +1528,39 @@ describe('recurring schedules', () => {
     await drainEngine();
 
     expect(executions.length).toBeGreaterThan(firstPassExecutionCount);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('Caps non-backfill missed-fire counting per scheduler tick.', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const engine = createEngine(clock);
+    const missedFireEvents: ScheduleMissedFireEvent[] = [];
+
+    registerWorkflow(engine, 'bounded-missed-fire-workflow', async function* () {
+      return 'done';
+    });
+    engine.addEventListener(ScheduleMissedFireEvent.type, (event) => {
+      missedFireEvents.push(event);
+    });
+
+    const schedule = await engine.schedule('bounded-missed-fire-workflow', null, '* * * * * *', {
+      backfill: false,
+    });
+
+    await tickEngine(engine, clock, Date.UTC(2026, 0, 1, 0, 5, 0));
+
+    const afterFirstPass = await schedule.describe();
+    expect(afterFirstPass.missedFireCount).toBe(256);
+    expect(requireNextFireAt(afterFirstPass)).toBeLessThanOrEqual(clock.now);
+    expect(missedFireEvents.at(-1)?.missedCount).toBe(256);
+
+    await engine.scheduler.tick(clock.now);
+    await drainEngine();
+
+    const afterSecondPass = await schedule.describe();
+    expect(afterSecondPass.missedFireCount).toBeGreaterThan(256);
+    expect(missedFireEvents.length).toBeGreaterThan(1);
 
     engine[Symbol.dispose]();
   });

@@ -4,6 +4,7 @@ import {
   type DeleteRangeOptions,
 } from './delete-range.ts';
 import {
+  assertStorageBatchOperationCount,
   storageConditionalBatch,
   storageCount,
   storageDeletePrefix,
@@ -168,6 +169,7 @@ export class ScopedStorage implements Storage {
   }
 
   async batch(operations: BatchOperation[]): Promise<void> {
+    assertStorageBatchOperationCount('batch operations', operations.length);
     await this.#storage.batch(
       operations.map((operation) => {
         if (operation.type === 'put') {

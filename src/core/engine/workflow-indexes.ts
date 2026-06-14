@@ -16,6 +16,7 @@ import { KEYS, type BatchOperation, type Storage } from '../../storage/interface
 import { decode, encode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
 import { WeftError } from '../weft-error.ts';
+import type { EngineInternals } from './internals.ts';
 
 /**
  * Bumped whenever the index layout or population rules change. The engine
@@ -219,6 +220,8 @@ const EMPTY_INDEX_VALUE = new Uint8Array(0);
  */
 export type WorkflowVisibilityWatermark = 'current' | 'stale';
 
+export const WORKFLOW_VISIBILITY_WATERMARK_CACHE_TTL_MS = 1_000;
+
 /**
  * Read the visibility-index watermark. Returns `'current'` when the
  * persisted version is at or above {@link WORKFLOW_VISIBILITY_INDEX_VERSION}.
@@ -236,4 +239,26 @@ export async function getWorkflowVisibilityWatermark(
   }
   if (typeof payload !== 'number') return 'stale';
   return payload >= WORKFLOW_VISIBILITY_INDEX_VERSION ? 'current' : 'stale';
+}
+
+/**
+ * Read the visibility-index watermark through the engine-local query cache.
+ * The short freshness window avoids repeated metadata reads during bursts of
+ * list/aggregate queries without pinning an external backfill or drop decision
+ * until process restart.
+ */
+export async function getCachedWorkflowVisibilityWatermark(
+  internals: EngineInternals,
+): Promise<WorkflowVisibilityWatermark> {
+  const cachedWatermark = internals.workflowVisibilityWatermark;
+  const expiresAt = internals.workflowVisibilityWatermarkExpiresAt;
+  const now = Date.now();
+  if (cachedWatermark !== undefined && expiresAt !== undefined && now < expiresAt) {
+    return cachedWatermark;
+  }
+
+  const watermark = await getWorkflowVisibilityWatermark(internals.storage);
+  internals.workflowVisibilityWatermark = watermark;
+  internals.workflowVisibilityWatermarkExpiresAt = now + WORKFLOW_VISIBILITY_WATERMARK_CACHE_TTL_MS;
+  return watermark;
 }

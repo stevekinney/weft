@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { deserializeCheckpoint, serializeCheckpoint } from '../core/checkpoint.ts';
+import { readCheckpointReplayPayload } from '../core/engine/checkpoint-replay.ts';
 import type { OperationRequest, WorkerOutboundMessage } from '../core/types.ts';
 import {
   createWorkflowRunnerContext,
@@ -286,9 +287,11 @@ describe('handleRunMessage', () => {
     );
 
     expect(result.type).toBe('failed');
-    expect((result as { error: string }).error).toContain(
-      'ctx.state.session() is not supported in worker execution mode',
-    );
+    const error = (result as { error: string }).error;
+    expect(error).toContain('Workflow type "session-state-test"');
+    expect(error).toContain('ctx.state.session()');
+    expect(error).toContain("workflowExecutionMode: 'inline'");
+    expect(error).toContain('ctx.state.workflow() or ctx.state.execution()');
   });
 
   it('routes worker-side durable state through operation requests', async () => {
@@ -590,6 +593,55 @@ describe('handleResumeMessage', () => {
     } satisfies WorkerOutboundMessage);
   });
 
+  it('keeps Worker checkpoint messages bounded by pending replay deltas instead of all completed steps', async () => {
+    const context = createWorkflowRunnerContext();
+    const workflowId = 'wf-bounded-worker';
+    const activityCount = 25;
+    const operations = Array.from({ length: activityCount }, (_, index) =>
+      createActivityOperation(workflowId, `step-${index}`, { index }),
+    );
+    const activityResult = { value: 'x'.repeat(200) };
+    const checkpointSizes: number[] = [];
+
+    async function* boundedWorkflow() {
+      for (const operation of operations) {
+        yield operation;
+      }
+      return 'done';
+    }
+
+    let message = await handleRunMessage(
+      context,
+      { workflowId, workflowType: 'bounded-worker', input: null },
+      () => boundedWorkflow,
+    );
+
+    for (let index = 0; index < activityCount; index += 1) {
+      expect(message.type).toBe('checkpoint');
+      if (message.type !== 'checkpoint') return;
+
+      checkpointSizes.push(message.checkpoint.byteLength);
+      const checkpoint = deserializeCheckpoint(new Uint8Array(message.checkpoint));
+      const replayPayload = readCheckpointReplayPayload(checkpoint);
+      expect(
+        checkpoint.accumulatedResults.length + (replayPayload?.accumulatedResults?.length ?? 0),
+      ).toBeLessThanOrEqual(1);
+
+      message = await handleResumeMessage(context, {
+        workflowId,
+        result: { ...activityResult, index },
+      });
+    }
+
+    expect(message).toEqual({
+      type: 'completed',
+      workflowId,
+      result: 'done',
+    } satisfies WorkerOutboundMessage);
+    expect(checkpointSizes.length).toBe(activityCount);
+    expect(Math.max(...checkpointSizes)).toBeLessThan(1_500);
+  });
+
   it('replays failed operation outcomes from the Worker failure side table', async () => {
     const firstContext = createWorkflowRunnerContext();
     const firstOperation = createActivityOperation('wf-failed-outcome-replay', 'step1', 'one');
@@ -626,7 +678,8 @@ describe('handleResumeMessage', () => {
 
     const checkpoint = deserializeCheckpoint(new Uint8Array(checkpointBeforeRestart.checkpoint));
     expect(checkpoint.accumulatedResults).toEqual([]);
-    expect(checkpoint.workerReplayFailures).toEqual([
+    expect(checkpoint.workerReplayFailures).toBeUndefined();
+    expect(readCheckpointReplayPayload(checkpoint)?.workerReplayFailures).toEqual([
       [
         0,
         {
@@ -690,7 +743,6 @@ describe('handleResumeMessage', () => {
         step: 1,
         locals: {},
         accumulatedResults: [[0, 'persisted-result']],
-        pendingSignals: [],
         searchAttributes: {},
         version: 'worker',
         schemaVersion: 2,

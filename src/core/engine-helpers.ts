@@ -54,6 +54,7 @@ export async function cleanupPartialStreamChunks(
 
   const deleteOperations = [
     ...writtenKeys.map((writtenKey) => ({ type: 'delete' as const, key: writtenKey })),
+    { type: 'delete' as const, key: KEYS.streamTail(workflowId, key) },
     { type: 'delete' as const, key: KEYS.streamMetadata(workflowId, key) },
   ];
 

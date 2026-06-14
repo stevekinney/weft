@@ -27,6 +27,11 @@ export const DOCUMENTATION_ROOTS = [
 ];
 
 const IGNORED_PATH_SEGMENTS = new Set(['.git', 'coverage', 'dist', 'node_modules', 'tmp']);
+const ERROR_REFERENCE_PATH = 'documentation/reference/api-errors.md';
+const ERROR_UNION_SOURCES = [
+  { relativePath: 'src/core/weft-error.ts', unionName: 'WeftErrorCode' },
+  { relativePath: 'src/core/fault-code.ts', unionName: 'FaultCode' },
+] as const;
 
 type VerificationOptions = {
   repositoryRoot?: string;
@@ -296,6 +301,49 @@ export function collectWorkflowBunVersionFindings(
   return findings;
 }
 
+function extractStringUnionMembers(source: string, unionName: string): string[] {
+  const unionMatch = new RegExp(`export\\s+type\\s+${unionName}\\s*=([\\s\\S]*?);`, 'm').exec(
+    source,
+  );
+  if (!unionMatch?.[1]) {
+    throw new Error(`Could not find exported ${unionName} union.`);
+  }
+  return [...unionMatch[1].matchAll(/'([^']+)'/g)].map((match) => match[1]).toSorted();
+}
+
+export function collectErrorReferenceFindings(repositoryRoot = REPOSITORY_ROOT): Finding[] {
+  const sourceMembers: Array<{ unionName: string; member: string }> = [];
+  for (const source of ERROR_UNION_SOURCES) {
+    const absolutePath = resolve(repositoryRoot, source.relativePath);
+    if (!existsSync(absolutePath)) return [];
+    const members = extractStringUnionMembers(readFileSync(absolutePath, 'utf8'), source.unionName);
+    sourceMembers.push(...members.map((member) => ({ unionName: source.unionName, member })));
+  }
+
+  const referencePath = resolve(repositoryRoot, ERROR_REFERENCE_PATH);
+  if (!existsSync(referencePath)) {
+    return [
+      {
+        file: ERROR_REFERENCE_PATH,
+        line: 1,
+        message: 'Required error-code reference page missing.',
+      },
+    ];
+  }
+
+  const referenceText = readFileSync(referencePath, 'utf8');
+  const findings: Finding[] = [];
+  for (const { unionName, member } of sourceMembers) {
+    if (referenceText.includes(`\`${member}\``)) continue;
+    findings.push({
+      file: ERROR_REFERENCE_PATH,
+      line: 1,
+      message: `Missing ${unionName} member \`${member}\` from error-code reference.`,
+    });
+  }
+  return findings;
+}
+
 export function collectBunClaimFindings(
   files: DocumentationFile[],
   minimumBunVersion: string,
@@ -370,6 +418,7 @@ export function verifyDocumentation(options: VerificationOptions = {}): {
     ...collectLinkFindings(files, repositoryRoot),
     ...collectBunClaimFindings(files, minimumBunVersion),
     ...collectWorkflowBunVersionFindings(minimumBunVersion, repositoryRoot),
+    ...collectErrorReferenceFindings(repositoryRoot),
   ];
 
   return { filesChecked: files.length, findings };
@@ -391,7 +440,7 @@ export function runCli(repositoryRoot = REPOSITORY_ROOT, cliConsole: CliConsole 
   }
 
   cliConsole.log(
-    `verify-documentation: checked ${filesChecked} Markdown files, local links, anchors, Bun version claims, and workflow Bun pins.`,
+    `verify-documentation: checked ${filesChecked} Markdown files, local links, anchors, Bun version claims, workflow Bun pins, and error-code references.`,
   );
   return 0;
 }

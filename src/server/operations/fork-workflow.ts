@@ -4,6 +4,7 @@ import type { Engine } from '../../core/engine.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { readRestTextBody } from '../rest-body.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
 
 // `fromStep` is intentionally `unknown` at the schema boundary. The exact
@@ -116,8 +117,8 @@ export const forkWorkflowRestBinding: UnknownRestBinding = {
     workflowId: { kind: 'path', pathParam: 'id' },
     fromStep: { kind: 'body-field', bodyField: 'fromStep' },
   },
-  extractInput: async (request, pathParams) => {
-    const rawBody = await request.text();
+  extractInput: async (request, pathParams, context) => {
+    const rawBody = await readRestTextBody(request, context);
     if (rawBody.trim().length === 0) {
       return { workflowId: pathParams['id'] ?? '' };
     }

@@ -1,6 +1,31 @@
 import type { TerminationReason } from '../types/history-policy.ts';
 
 /**
+ * Fired on the {@link Engine} after a workflow definition is successfully
+ * registered. Same-reference idempotent registration does not emit this event.
+ *
+ * @example
+ * ```ts
+ * import { Engine, WorkflowDefinitionRegisteredEvent, workflow } from '@lostgradient/weft';
+ *
+ * const engine = new Engine();
+ * engine.addEventListener(WorkflowDefinitionRegisteredEvent.type, (event) => {
+ *   console.log('registered workflow:', event.workflowType);
+ * });
+ * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));
+ * ```
+ */
+export class WorkflowDefinitionRegisteredEvent extends Event {
+  static readonly type = 'workflow:definition-registered' as const;
+  readonly workflowType: string;
+
+  constructor(workflowType: string) {
+    super(WorkflowDefinitionRegisteredEvent.type);
+    this.workflowType = workflowType;
+  }
+}
+
+/**
  * Fired on the {@link Engine} when a new workflow execution begins. Listen via
  * `engine.addEventListener('workflow:started', handler)` and read
  * `e.workflowId`, `e.workflowType`, and `e.input` directly off the event.
@@ -10,9 +35,8 @@ import type { TerminationReason } from '../types/history-policy.ts';
  * import { workflow, Engine, WorkflowStartedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('workflow:started', (e: Event) => {
- *   const ev = e as WorkflowStartedEvent;
- *   console.log('started', ev.workflowId, ev.workflowType);
+ * engine.addEventListener(WorkflowStartedEvent.type, (event) => {
+ *   console.log('started', event.workflowId, event.workflowType);
  * });
  * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));
  * await engine.start('ping', null);
@@ -42,9 +66,8 @@ export class WorkflowStartedEvent extends Event {
  * import { workflow, Engine, WorkflowCompletedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('workflow:completed', (e: Event) => {
- *   const ev = e as WorkflowCompletedEvent;
- *   console.log('completed in', ev.duration, 'ms, result:', ev.result);
+ * engine.addEventListener(WorkflowCompletedEvent.type, (event) => {
+ *   console.log('completed in', event.duration, 'ms, result:', event.result);
  * });
  * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));
  * await (await engine.start('ping', null)).result();
@@ -74,9 +97,8 @@ export class WorkflowCompletedEvent extends Event {
  * import { workflow, Engine, WorkflowFailedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('workflow:failed', (e: Event) => {
- *   const ev = e as WorkflowFailedEvent;
- *   console.error('workflow', ev.workflowId, 'failed:', ev.error.message);
+ * engine.addEventListener(WorkflowFailedEvent.type, (event) => {
+ *   console.error('workflow', event.workflowId, 'failed:', event.error.message);
  * });
  * engine.register(workflow({ name: 'boom' }).execute(async function* () { throw new Error('oops'); }));
  * await engine.start('boom', null).then(h => h.result()).catch(() => undefined);
@@ -104,9 +126,8 @@ export class WorkflowFailedEvent extends Event {
  * import { Engine, workflow, WorkflowCancelledEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('workflow:cancelled', (e: Event) => {
- *   const ev = e as WorkflowCancelledEvent;
- *   console.log('cancelled', ev.workflowId);
+ * engine.addEventListener(WorkflowCancelledEvent.type, (event) => {
+ *   console.log('cancelled', event.workflowId);
  * });
  * engine.register(
  *   workflow({ name: 'slow' }).execute(async function* (
@@ -143,9 +164,8 @@ export class WorkflowCancelledEvent extends Event {
  * import { Engine, WorkflowTimedOutEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('workflow:timed-out', (e: Event) => {
- *   const ev = e as WorkflowTimedOutEvent;
- *   console.log(ev.workflowId, 'timed out after', ev.elapsed, 'ms (', ev.timeoutType, ')');
+ * engine.addEventListener(WorkflowTimedOutEvent.type, (event) => {
+ *   console.log(event.workflowId, 'timed out after', event.elapsed, 'ms (', event.timeoutType, ')');
  * });
  * ```
  */
@@ -195,9 +215,8 @@ export const WORKFLOW_TERMINAL_EVENT_TYPES: ReadonlySet<string> = new Set<string
  * import { Engine, WorkflowResumedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('workflow:resumed', (e: Event) => {
- *   const ev = e as WorkflowResumedEvent;
- *   console.log('resumed', ev.workflowId, 'from step', ev.fromStep);
+ * engine.addEventListener(WorkflowResumedEvent.type, (event) => {
+ *   console.log('resumed', event.workflowId, 'from step', event.fromStep);
  * });
  * ```
  */
@@ -225,9 +244,8 @@ export class WorkflowResumedEvent extends Event {
  * import { Engine, WorkflowSuspendedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('workflow:suspended', (e: Event) => {
- *   const ev = e as WorkflowSuspendedEvent;
- *   console.log('suspended', ev.workflowId);
+ * engine.addEventListener(WorkflowSuspendedEvent.type, (event) => {
+ *   console.log('suspended', event.workflowId);
  * });
  * ```
  */
@@ -266,8 +284,7 @@ export type WorkflowRecoverySkippedReason = 'type-not-registered';
  *
  * const engine = new Engine();
  * engine.addEventListener(WorkflowRecoverySkippedEvent.type, (event) => {
- *   const skipped = event as WorkflowRecoverySkippedEvent;
- *   console.warn('skipped recovery for', skipped.workflowType);
+ *   console.warn('skipped recovery for', event.workflowType);
  * });
  * ```
  */

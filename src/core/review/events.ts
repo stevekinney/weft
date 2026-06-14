@@ -6,12 +6,11 @@
  *
  * @example Route review notifications to a webhook
  * ```ts
- * import { ReviewRequestedEvent } from '@lostgradient/weft';
+ * import { ReviewRequestedEvent, type TypedEventTarget, type WeftReviewEventMap } from '@lostgradient/weft';
  *
- * const target = new EventTarget();
+ * declare const target: TypedEventTarget<WeftReviewEventMap>;
  *
- * target.addEventListener(ReviewRequestedEvent.type, (e) => {
- *   const event = e as ReviewRequestedEvent;
+ * target.addEventListener(ReviewRequestedEvent.type, (event) => {
  *   console.log(`Review ${event.reviewId} requested for workflow ${event.workflowId}`);
  *   console.log('Reviewers:', event.reviewers);
  * });
@@ -41,12 +40,11 @@ export class ReviewRequestedEvent extends Event {
  *
  * @example Record review decisions in an audit log
  * ```ts
- * import { ReviewCompletedEvent } from '@lostgradient/weft';
+ * import { ReviewCompletedEvent, type TypedEventTarget, type WeftReviewEventMap } from '@lostgradient/weft';
  *
- * const target = new EventTarget();
+ * declare const target: TypedEventTarget<WeftReviewEventMap>;
  *
- * target.addEventListener(ReviewCompletedEvent.type, (e) => {
- *   const event = e as ReviewCompletedEvent;
+ * target.addEventListener(ReviewCompletedEvent.type, (event) => {
  *   console.log(`Review ${event.reviewId}: '${event.decision}' by ${event.reviewer} in ${event.duration}ms`);
  * });
  * ```

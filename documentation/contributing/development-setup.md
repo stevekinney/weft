@@ -95,6 +95,26 @@ bun run format:check      # Check formatting without writing changes
 
 **Oxlint** is a Rust-based linter with built-in TypeScript, promise, unicorn, and import plugins. It runs type-aware rules via `--type-aware --tsconfig ./tsconfig.json`. Import sorting and unused import removal are handled by Prettier via `prettier-plugin-organize-imports`.
 
+`.oxlintrc.json` keeps the default cyclomatic complexity ceiling at 10. A small
+override block allows `max: 22` for files where the branch count is dominated by
+wire contracts, state-machine transitions, or catalog-shaped request parsing. Do
+not add a file to that override without adding a per-file rationale here:
+
+| File                                              | Rationale                                                                                                                                                      |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/core/checkpoint/lifecycle.ts`                | Checkpoint restoration validates serialized lifecycle variants in one boundary so malformed durable state fails before replay advances.                        |
+| `src/core/engine/checkpoint-replay.ts`            | Replay compaction keeps accumulated results, worker signatures, and worker failures aligned through one watermark algorithm.                                   |
+| `src/core/engine/bulk-operations.ts`              | Bulk mutators share confirmation, filtering, per-workflow outcome shaping, and audit persistence across the public bulk API surface.                           |
+| `src/core/engine/lifecycle/recovered-services.ts` | Service rehydration must distinguish available, unavailable, missing-resolver, and throwing-resolver recovery paths before generator execution resumes.        |
+| `src/core/engine/lifecycle/start-commit.ts`       | Start commits coordinate idempotency keys, delayed starts, scheduling timers, indexes, and execution ownership in one atomic write boundary.                   |
+| `src/core/engine/termination/complete.ts`         | Terminal transitions fan out to result resolution, timers, indexes, concurrency release, cleanup markers, and event emission from one status gate.             |
+| `src/server/operations/create-schedule.ts`        | Schedule creation normalizes REST and JSON-RPC input variants while preserving one operation contract for cron, jitter, overlap, and backfill options.         |
+| `src/server/operations/get-task-diagnostics.ts`   | Diagnostics intentionally classify queued, inflight, resolved, and dead-letter records into a bounded operator response without splitting the schema contract. |
+| `src/server/runtime/authentication-bridge.ts`     | Authentication bridge behavior is a transport boundary that must preserve request cloning, body forwarding, and principal shaping decisions together.          |
+| `src/server/runtime/task-polling.ts`              | Polling owns long-poll lifecycle, timeout disposal, task dispatch, payload rejection, and HTTP result submission from one request boundary.                    |
+| `src/server/runtime/task-reconciliation.ts`       | Reconciliation classifies queued and inflight task records against worker liveness and retry state in one bounded diagnostic pass.                             |
+| `src/server/runtime/task-result-resolution.ts`    | Result resolution coordinates payload-size checks, in-flight ownership, dead letters, retries, and resolved markers under one authorization boundary.          |
+
 To clean build artifacts, coverage output, and caches:
 
 ```bash

@@ -33,7 +33,7 @@ import type {
 } from '../interceptor.ts';
 import type { HumanReviewResult, ReviewCoordinator } from '../review/index.ts';
 import type { Scheduler } from '../scheduler.ts';
-import type { Checkpoint } from '../types.ts';
+import type { Checkpoint, StartWorkflowOptions } from '../types.ts';
 import type { UpdateCoordinator } from '../updates.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 
@@ -51,7 +51,10 @@ import type { WorkflowFeedListener } from './index.ts';
 import type { ScheduleHandleEngine } from './schedule-handle.ts';
 import type { SecondInstanceDetector } from './second-instance-detector.ts';
 
-type EngineRuntime = WorkflowHandleEngine & ScheduleHandleEngine;
+type EngineRuntime = WorkflowHandleEngine &
+  ScheduleHandleEngine & {
+    start(type: string, input: unknown, options?: StartWorkflowOptions): Promise<WorkflowHandle>;
+  };
 
 // ---------------------------------------------------------------------------
 // EngineInternals
@@ -149,7 +152,7 @@ export interface EngineInternals {
   broadcastChannel: BroadcastChannel | null;
   pendingNestingDepth: number | undefined;
   pendingParentHeaders: Map<string, string> | undefined;
-  pendingExecutionStateOwnerId: string | undefined;
+  pendingExecutionStateOwnerId: string | null | undefined;
   workflowNestingDepths: Map<string, number>;
   workflowHeaders: Map<string, Map<string, string>>;
   workflowStateWriteChains: Map<string, Promise<void>>;
@@ -185,6 +188,15 @@ export interface EngineInternals {
   pendingAsyncActivities: Map<
     string,
     import('./async-activity-completion.ts').PendingAsyncActivity
+  >;
+  /**
+   * Completed or failed async-activity tokens that were consumed before inline
+   * recovery adopted the workflow generator. Replay drains these by workflow id
+   * when it reaches the same deterministic async-activity token again.
+   */
+  pendingAsyncActivityResolutions: Map<
+    string,
+    import('./async-activity-completion.ts').PendingAsyncActivityResolution[]
   >;
   pendingStarts: Set<string>;
   pendingScheduleCreations: Set<string>;
@@ -231,7 +243,19 @@ export interface EngineInternals {
   eventLogHeads: Map<string, Readonly<EventHeadRecord>>;
   workflowFeedListeners: Map<string, Set<WorkflowFeedListener>>;
   workflowVersionTuples: Map<string, WorkflowVersionTuple>;
+  /**
+   * Cached visibility-index watermark for query planning. `undefined` means the
+   * watermark has not been read yet or an in-process caller invalidated it.
+   * `workflowVisibilityWatermarkExpiresAt` bounds how long external maintenance
+   * commands can leave this process planning against a stale watermark.
+   */
+  workflowVisibilityWatermark: 'current' | 'stale' | undefined;
+  workflowVisibilityWatermarkExpiresAt: number | undefined;
   pendingTimelineEntries: Map<string, PendingTimelineEntry>;
+  pendingAtomicWorkflowCommitSideEffects: Map<
+    string,
+    import('./checkpoint-side-effects.ts').AtomicWorkflowCommitSideEffects
+  >;
 }
 
 const INTERNALS = new WeakMap<object, EngineInternals>();

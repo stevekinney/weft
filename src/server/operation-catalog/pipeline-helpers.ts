@@ -264,6 +264,7 @@ const FAULT_CODES = {
   Conflict: true,
   Unprocessable: true,
   Timeout: true,
+  PayloadTooLarge: true,
   NotImplemented: true,
   UnsupportedTransport: true,
   SubscriptionOverflow: true,

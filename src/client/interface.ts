@@ -18,6 +18,7 @@ import type {
   AttributeFilterKey,
   BulkCancelResult,
   BulkDeleteResult,
+  BulkRetryFailedResult,
   BulkSignalResult,
   BulkTagResult,
   CoordinatedUpdateResult,
@@ -52,6 +53,27 @@ import type {
 } from '../core/types.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
 import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow-name-typing.ts';
+
+/**
+ * Start options accepted by remote-capable clients. These options intentionally
+ * exclude inline-only engine features such as `defer` and per-run `services`
+ * because they cannot be serialized over the HTTP transport.
+ *
+ * @example
+ * ```ts
+ * import type { ClientStartOptions } from '@lostgradient/weft/client';
+ *
+ * const options: ClientStartOptions = {
+ *   id: 'welcome-ada',
+ *   tags: ['onboarding'],
+ * };
+ * void options;
+ * ```
+ */
+export type ClientStartOptions = Omit<StartOptions, 'defer' | 'services'> & {
+  readonly defer?: never;
+  readonly services?: never;
+};
 
 // ---------------------------------------------------------------------------
 // Client handle — lightweight reference to a running workflow
@@ -311,12 +333,12 @@ export interface WeftClient {
   start<TName extends KnownWorkflowName>(
     type: TName,
     input: WorkflowInput<WorkflowRegistry, TName>,
-    options?: StartOptions,
+    options?: ClientStartOptions,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
   start<TName extends string>(
     type: UnknownNameWhenRegistryEmpty<TName>,
     input: unknown,
-    options?: StartOptions,
+    options?: ClientStartOptions,
   ): Promise<ClientHandle>;
 
   /**
@@ -345,13 +367,13 @@ export interface WeftClient {
     type: TName,
     input: WorkflowInput<WorkflowRegistry, TName>,
     signal: StartOrSignalSignal,
-    options?: StartOptions,
+    options?: ClientStartOptions,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
   startOrSignal<TName extends string>(
     type: UnknownNameWhenRegistryEmpty<TName>,
     input: unknown,
     signal: StartOrSignalSignal,
-    options?: StartOptions,
+    options?: ClientStartOptions,
   ): Promise<ClientHandle>;
 
   /**
@@ -542,6 +564,9 @@ export interface WeftClient {
 
   /** Cancel all running or pending workflows that match a filter. */
   cancelAll(filter: ListFilter): Promise<BulkCancelResult>;
+
+  /** Retry all failed workflows that match a filter. */
+  retryFailedAll(filter: ListFilter): Promise<BulkRetryFailedResult>;
 
   /** Signal all running or pending workflows that match a filter. */
   signalAll(filter: ListFilter, name: string, payload?: unknown): Promise<BulkSignalResult>;

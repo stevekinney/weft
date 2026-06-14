@@ -148,7 +148,7 @@ function initialize(params: unknown, session: McpSession): unknown {
   return {
     protocolVersion: session.protocolVersion,
     capabilities: {
-      tools: { listChanged: false },
+      tools: { listChanged: true },
       resources: { subscribe: true, listChanged: false },
       prompts: {},
       logging: {},

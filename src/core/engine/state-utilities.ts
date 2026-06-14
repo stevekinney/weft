@@ -1,17 +1,23 @@
 import { decode, encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import { isRecord, safeDebugStringify, sanitizeDebugValueForDisplay } from '../debug-output.ts';
+import { encodeAttributeValue } from '../search-attributes.ts';
 import type {
+  AttributeFilter,
+  AttributeFilterScalarValue,
   ListFilter,
   PaginatedResult,
   ScheduleFilter,
   ScheduleState,
   ScheduleSummary,
+  SearchAttributeValue,
   TimeRange,
   WorkflowState,
   WorkflowSummary,
 } from '../types.ts';
+import { searchAttributeName } from '../types.ts';
 import { matchesWorkflowTagFilter } from '../workflow-tags.ts';
+import { stripInternalCheckpointReplayPayload } from './checkpoint-replay.ts';
 import { isPlainObjectRecord, isSanitizedSearchAttributeValue } from './validation.ts';
 
 const PERSISTED_WORKFLOW_START_HEADER_NAMES = new Set(['traceparent', 'tracestate']);
@@ -73,6 +79,8 @@ export function getTimelineOperationLabel(operation: ContextOperationRequest): s
       return operation.signalName;
     case 'wait-update':
       return operation.updateName;
+    case 'get-version':
+      return operation.changeId;
     case 'child-workflow':
       return operation.workflowType;
     case 'load':
@@ -132,6 +140,13 @@ export function getTimelineBasicInputSummary(operation: ContextOperationRequest)
       return summarizeTimelineValue({ signalName: operation.signalName });
     case 'wait-update':
       return summarizeTimelineValue({ updateName: operation.updateName });
+    case 'get-version':
+      return summarizeTimelineValue({
+        changeId: operation.changeId,
+        minSupported: operation.minSupported,
+        maxSupported: operation.maxSupported,
+        version: operation.version,
+      });
     case 'parallel':
     case 'race':
       return summarizeTimelineValue({ operationCount: operation.operations.length });
@@ -200,7 +215,9 @@ export function sanitizeCheckpointState(
 
 export function sanitizeWorkflowEventPayload(payload: unknown): Record<string, unknown> {
   const sanitized = sanitizeDebugValueForDisplay(payload);
-  return isRecord(sanitized) ? sanitized : { value: sanitized };
+  return isRecord(sanitized)
+    ? stripInternalCheckpointReplayPayload(sanitized)
+    : { value: sanitized };
 }
 
 export function sanitizeTimelineSummary(summary: string | undefined): string | undefined {
@@ -310,11 +327,134 @@ function matchesListFilterFailureCategory(state: WorkflowState, filter: ListFilt
   );
 }
 
+export function listFilterHasAttributeFilters(filter: ListFilter | undefined): boolean {
+  return (filter?.attributes?.length ?? 0) > 0;
+}
+
+function isSearchAttributeFilterValue(value: unknown): value is SearchAttributeValue {
+  if (
+    typeof value === 'string' ||
+    typeof value === 'number' ||
+    typeof value === 'boolean' ||
+    value instanceof Date
+  ) {
+    return true;
+  }
+
+  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+}
+
+export function decodeSearchAttributeRecord(
+  attributeBytes: Uint8Array | null,
+): Record<string, SearchAttributeValue> | null {
+  if (attributeBytes === null) return null;
+
+  const decoded = decode(attributeBytes);
+  if (!isPlainObjectRecord(decoded)) return null;
+
+  const attributes: Record<string, SearchAttributeValue> = {};
+  for (const [key, value] of Object.entries(decoded)) {
+    if (isSearchAttributeFilterValue(value)) {
+      attributes[key] = value;
+    }
+  }
+  return attributes;
+}
+
+export function attributeFilterExactValues(
+  filter: AttributeFilter,
+): readonly AttributeFilterScalarValue[] | null {
+  if (filter.value === undefined) return null;
+  if (Array.isArray(filter.value)) return [...filter.value];
+  return [filter.value];
+}
+
+function storedAttributeScalarValues(
+  value: SearchAttributeValue,
+): readonly AttributeFilterScalarValue[] {
+  return Array.isArray(value) ? value : [value];
+}
+
+function attributeValuesEqual(
+  actual: AttributeFilterScalarValue,
+  expected: AttributeFilterScalarValue,
+): boolean {
+  if (actual instanceof Date || expected instanceof Date) {
+    return (
+      actual instanceof Date && expected instanceof Date && actual.getTime() === expected.getTime()
+    );
+  }
+
+  return actual === expected;
+}
+
+function attributeValueMatchesAnyOf(
+  actual: SearchAttributeValue,
+  expectedValues: readonly AttributeFilterScalarValue[],
+): boolean {
+  if (expectedValues.length === 0) return false;
+
+  for (const actualValue of storedAttributeScalarValues(actual)) {
+    if (expectedValues.some((expectedValue) => attributeValuesEqual(actualValue, expectedValue))) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function encodedAttributeValueSatisfiesRange(
+  encodedValue: string,
+  filter: AttributeFilter,
+): boolean {
+  if (filter.gte !== undefined && encodedValue < encodeAttributeValue(filter.gte)) return false;
+  if (filter.gt !== undefined && encodedValue <= encodeAttributeValue(filter.gt)) return false;
+  if (filter.lte !== undefined && encodedValue > encodeAttributeValue(filter.lte)) return false;
+  if (filter.lt !== undefined && encodedValue >= encodeAttributeValue(filter.lt)) return false;
+  return true;
+}
+
+function attributeValueMatchesRange(value: SearchAttributeValue, filter: AttributeFilter): boolean {
+  for (const scalarValue of storedAttributeScalarValues(value)) {
+    if (encodedAttributeValueSatisfiesRange(encodeAttributeValue(scalarValue), filter)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function matchesAttributeFilter(
+  searchAttributes: Readonly<Record<string, SearchAttributeValue>>,
+  filter: AttributeFilter,
+): boolean {
+  const attributeValue = searchAttributes[searchAttributeName(filter.key)];
+  if (attributeValue === undefined) return false;
+
+  const exactValues = attributeFilterExactValues(filter);
+  if (exactValues !== null) {
+    return attributeValueMatchesAnyOf(attributeValue, exactValues);
+  }
+
+  return attributeValueMatchesRange(attributeValue, filter);
+}
+
+function matchesListFilterAttributes(
+  searchAttributes: Readonly<Record<string, SearchAttributeValue>> | null | undefined,
+  filter: ListFilter,
+): boolean {
+  if (!listFilterHasAttributeFilters(filter)) return true;
+  if (searchAttributes === null || searchAttributes === undefined) return false;
+
+  return filter.attributes!.every((attributeFilter) =>
+    matchesAttributeFilter(searchAttributes, attributeFilter),
+  );
+}
+
 export function matchesListFilter(
   state: WorkflowState,
   filter: ListFilter | undefined,
   constrainedIds: Set<string> | null,
   normalizedTagFilters: readonly string[] | undefined,
+  searchAttributes?: Readonly<Record<string, SearchAttributeValue>> | null,
 ): boolean {
   if (constrainedIds !== null && !constrainedIds.has(state.id)) return false;
   if (!matchesWorkflowTagFilter(state.tags, normalizedTagFilters)) return false;
@@ -322,6 +462,7 @@ export function matchesListFilter(
   if (!matchesListFilterIdentity(state, filter)) return false;
   if (!matchesListFilterTimeRanges(state, filter)) return false;
   if (!matchesListFilterFailureCategory(state, filter)) return false;
+  if (!matchesListFilterAttributes(searchAttributes, filter)) return false;
   return true;
 }
 

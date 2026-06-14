@@ -38,7 +38,6 @@ function makeCheckpoint(overrides: Partial<Checkpoint> = {}): Checkpoint {
     step: 3,
     locals: {},
     accumulatedResults: [],
-    pendingSignals: [],
     searchAttributes: {},
     version: '1.0.0',
     schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,

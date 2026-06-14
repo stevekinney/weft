@@ -1,5 +1,5 @@
 import type { WorkflowId, WorkflowStatus } from './identity.ts';
-import type { SearchAttributeValue } from './search-attributes.ts';
+import type { AttributeFilterScalarValue } from './list-options.ts';
 
 export const MAX_BULK_OPERATION_REQUEST_ID_LENGTH = 200;
 export const MAX_BULK_CONFIRMATION_TOKEN_LENGTH = 256;
@@ -22,7 +22,7 @@ export type BulkOperationAction =
   | 'delete'
   | 'tag:add'
   | 'tag:remove'
-  | 'recover';
+  | 'retry-failed';
 
 /**
  * Credential-safe caller summary recorded on bulk audit events. Claims,
@@ -65,11 +65,11 @@ export type BulkOperationFilterSummary = {
   tags?: string[];
   attributes?: Array<{
     key: string;
-    value?: SearchAttributeValue;
-    gt?: SearchAttributeValue;
-    lt?: SearchAttributeValue;
-    gte?: SearchAttributeValue;
-    lte?: SearchAttributeValue;
+    value?: AttributeFilterScalarValue | AttributeFilterScalarValue[];
+    gt?: AttributeFilterScalarValue;
+    lt?: AttributeFilterScalarValue;
+    gte?: AttributeFilterScalarValue;
+    lte?: AttributeFilterScalarValue;
   }>;
   limit?: number;
   offset?: number;
@@ -158,6 +158,7 @@ export type BulkOperationDryRunOptions = {
   dryRun: true;
   requestId?: string;
   principal?: BulkOperationPrincipal;
+  bulkConcurrency?: number;
 };
 
 /**
@@ -179,6 +180,7 @@ export type BulkOperationCommitOptions = {
   confirmationToken?: string;
   requestId?: string;
   principal?: BulkOperationPrincipal;
+  bulkConcurrency?: number;
 };
 
 /**
@@ -188,7 +190,7 @@ export type BulkOperationCommitOptions = {
  * ```ts
  * import type { BulkOperationOptions } from '@lostgradient/weft';
  *
- * const options: BulkOperationOptions = { dryRun: true };
+ * const options: BulkOperationOptions = { dryRun: true, bulkConcurrency: 4 };
  * void options;
  * ```
  */
@@ -295,6 +297,30 @@ export type BulkOperationError = {
  */
 export type BulkCancelResult = {
   cancelled: number;
+  failed: number;
+  errors: BulkOperationError[];
+  auditEvent?: BulkOperationAuditEvent;
+};
+
+/**
+ * Result of a bulk failed-workflow retry operation (`engine.retryFailedAll`).
+ * Reports the number of workflows accepted for retry, the number that failed
+ * to restart or resume, and per-workflow error details in `errors`.
+ *
+ * @example
+ * ```ts
+ * import type { BulkRetryFailedResult } from '@lostgradient/weft';
+ *
+ * const result: BulkRetryFailedResult = {
+ *   retried: 2,
+ *   failed: 1,
+ *   errors: [{ id: 'wf-3', error: 'Checkpoint no longer exists' }],
+ * };
+ * void result;
+ * ```
+ */
+export type BulkRetryFailedResult = {
+  retried: number;
   failed: number;
   errors: BulkOperationError[];
   auditEvent?: BulkOperationAuditEvent;

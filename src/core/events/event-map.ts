@@ -4,9 +4,10 @@ import type {
   ActivityCompletedEvent,
   ActivityFailedEvent,
   ActivityStartedEvent,
+  TaskResultDeadLetteredEvent,
 } from './activity-events.ts';
 import type { AttributesChangedEvent } from './attribute-events.ts';
-import type { ScheduleFiredEvent } from './schedule-events.ts';
+import type { ScheduleFiredEvent, ScheduleMissedFireEvent } from './schedule-events.ts';
 import type { SignalDeliveredEvent, SignalReceivedEvent } from './signal-events.ts';
 import type {
   AlertFiredEvent,
@@ -21,6 +22,7 @@ import type { UpdateCompletedEvent, UpdateReceivedEvent } from './update-events.
 import type {
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
+  WorkflowDefinitionRegisteredEvent,
   WorkflowFailedEvent,
   WorkflowRecoverySkippedEvent,
   WorkflowResumedEvent,
@@ -31,24 +33,23 @@ import type {
 
 /**
  * Record mapping each event-name string the {@link Engine} dispatches to its
- * corresponding typed `Event` subclass. Use this as the type parameter for
- * {@link TypedEventTarget} to get type-safe `addEventListener` /
- * `removeEventListener` on the engine.
+ * corresponding typed `Event` subclass.
  *
  * @example
  * ```ts
- * import { Engine, type TypedEventTarget, type WeftEventMap } from '@lostgradient/weft';
+ * import { Engine, type WeftEventMap } from '@lostgradient/weft';
  *
  * function listenAll(engine: Engine) {
- *   (engine as TypedEventTarget<WeftEventMap>)
- *     .addEventListener('workflow:completed', (e) => {
- *       console.log('done', e.workflowId, e.result);
- *     });
+ *   engine.addEventListener('workflow:completed', (event) => {
+ *     const completed: WeftEventMap['workflow:completed'] = event;
+ *     console.log('done', completed.workflowId, completed.result);
+ *   });
  * }
  * void listenAll;
  * ```
  */
 export type WeftEventMap = {
+  'workflow:definition-registered': WorkflowDefinitionRegisteredEvent;
   'workflow:started': WorkflowStartedEvent;
   'workflow:completed': WorkflowCompletedEvent;
   'workflow:failed': WorkflowFailedEvent;
@@ -61,12 +62,14 @@ export type WeftEventMap = {
   'activity:completed': ActivityCompletedEvent;
   'activity:failed': ActivityFailedEvent;
   'activity:async-pending': ActivityAsyncPendingEvent;
+  'task:dead-lettered': TaskResultDeadLetteredEvent;
   'signal:received': SignalReceivedEvent;
   'signal:delivered': SignalDeliveredEvent;
   'schedule:fired': ScheduleFiredEvent;
   'human-review:requested': ReviewRequestedEvent;
   'human-review:completed': ReviewCompletedEvent;
   'attributes:changed': AttributesChangedEvent;
+  'schedule:missed-fire': ScheduleMissedFireEvent;
   'update:received': UpdateReceivedEvent;
   'update:completed': UpdateCompletedEvent;
   'checkpoint:size-warning': CheckpointSizeWarningEvent;
@@ -95,7 +98,7 @@ export type WeftEventMap = {
  *   });
  * }
  * const engine = new Engine();
- * addTypedListener(engine as TypedEventTarget<WeftEventMap>);
+ * addTypedListener(engine);
  * void engine;
  * ```
  */

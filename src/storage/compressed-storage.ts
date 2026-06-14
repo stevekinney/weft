@@ -15,6 +15,7 @@ import {
 } from '../core/compression.ts';
 
 import {
+  assertStorageBatchOperationCount,
   type BatchOperation,
   type ScanOptions,
   type Storage,
@@ -113,6 +114,7 @@ export class CompressedStorage implements Storage {
   }
 
   async batch(operations: BatchOperation[]): Promise<void> {
+    assertStorageBatchOperationCount('batch operations', operations.length);
     const compressed = await Promise.all(
       operations.map(async (op) => {
         if (op.type === 'put') {

@@ -8,9 +8,8 @@
  * import { Engine, SignalReceivedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('signal:received', (e: Event) => {
- *   const ev = e as SignalReceivedEvent;
- *   console.log(ev.workflowId, 'received signal', ev.signalName);
+ * engine.addEventListener(SignalReceivedEvent.type, (event) => {
+ *   console.log(event.workflowId, 'received signal', event.signalName);
  * });
  * ```
  */
@@ -38,9 +37,8 @@ export class SignalReceivedEvent extends Event {
  * import { Engine, SignalDeliveredEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('signal:delivered', (e: Event) => {
- *   const ev = e as SignalDeliveredEvent;
- *   console.log('signal', ev.signalName, 'delivered to', ev.workflowId);
+ * engine.addEventListener(SignalDeliveredEvent.type, (event) => {
+ *   console.log('signal', event.signalName, 'delivered to', event.workflowId);
  * });
  * ```
  */

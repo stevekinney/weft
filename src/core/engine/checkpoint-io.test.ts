@@ -102,6 +102,7 @@ function createCheckpointInternals(
       getNow: () => 1_000,
       historyPolicy: { maxEvents: null, retentionWindow: null },
     },
+    pendingAtomicWorkflowCommitSideEffects: new Map(),
     pendingTimelineEntries: new Map(),
     storage,
     workflowFeedListeners: new Map(),

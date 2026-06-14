@@ -3,13 +3,14 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { Engine } from '../engine.ts';
 import { ScheduleFiredEvent } from '../events.ts';
-import { type WorkflowContext } from '../types.ts';
+import type { ScheduleSummary, WorkflowContext } from '../types.ts';
 import {
   MINUTE,
   START,
   createEngine,
   registerWorkflow,
   releaseRunningWorkflows,
+  requireNextFireAt,
   tickEngine,
   tickToNextFire,
 } from './schedule.test-support.ts';
@@ -256,5 +257,27 @@ describe('schedule:fired event', () => {
     await tickToNextFire(engine, clock, handle);
 
     expect(order).toEqual(['fired', 'failed']);
+  });
+});
+
+describe('schedule test support', () => {
+  it('requires a next fire time before ticking', () => {
+    expect(() =>
+      requireNextFireAt({
+        id: 'no-next-fire',
+        nextFireAt: null,
+      } as ScheduleSummary),
+    ).toThrow('Schedule "no-next-fire" does not have a next fire time');
+  });
+
+  it('rejects tickToNextFire when the schedule handle no longer describes a schedule', async () => {
+    const clock = { now: START };
+    using engine = createEngine(clock);
+
+    await expect(
+      tickToNextFire(engine, clock, {
+        describe: async () => null,
+      }),
+    ).rejects.toThrow('Schedule no longer exists');
   });
 });

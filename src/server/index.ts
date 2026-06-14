@@ -218,17 +218,39 @@ export interface ServeOptions {
    * Set `'allow'` only for explicitly trusted local process boundaries.
    */
   unauthenticatedAccess?: UnauthenticatedAccessPolicy;
+  /**
+   * Maximum request body size in bytes for REST operation routes and JSON-RPC
+   * HTTP. Defaults to 1 MB. Oversized requests are rejected before the full body
+   * is buffered.
+   */
+  maxRequestBodyBytes?: number;
+  /**
+   * Maximum concurrent `/v1/workflows/:id/stream` and
+   * `/v1/workflows/:id/watch` WebSocket connections for a single workflow.
+   * Defaults to 100. Excess connections are closed with policy-violation code
+   * `1008` after the WebSocket upgrade opens.
+   */
+  maxStreamConnectionsPerWorkflow?: number;
   /** How often (in ms) the server scans `op:inflight:*` for expired visibility deadlines. Defaults to 5 000. */
   visibilityPollIntervalMs?: number;
   /**
    * Grace period (in ms) between a worker WebSocket close and the requeue of
    * its in-flight tasks. A re-`register` from the same `workerId` within this
    * window cancels the pending requeue so the reconnect keeps the work it
-   * already started. Defaults to 100 ms. Set to `0` to disable the grace
+   * already started. Defaults to `2_000`. Set to `0` to disable the grace
    * period entirely — close handler runs requeue inline as in earlier versions
-   * of the server. Values are clamped to `[0, 5_000]`.
+   * of the server. Use `100` only for low-latency test or embedded scenarios;
+   * use `5_000` for cloud or load-balancer deployments where replacement
+   * workers commonly need several seconds to reconnect. Values are clamped to
+   * `[0, 5_000]`.
    */
   workerReconnectGracePeriodMs?: number;
+  /**
+   * Maximum time (in ms) `server.stop()` waits for connected remote workers to
+   * drain in-flight task results after receiving a shutdown frame before the
+   * Bun server is stopped. Defaults to `30_000`.
+   */
+  workerShutdownTimeoutMs?: number;
   /**
    * Routing policy used by the {@link WorkerRegistry} when dispatching tasks.
    * Defaults to `'least-loaded'`. Set to `'round-robin'` for deterministic
@@ -364,6 +386,14 @@ export interface WeftServer extends AsyncDisposable {
   readonly url: string;
   readonly registry: WorkerRegistry;
   readonly taskQueue: TaskQueue;
+  /**
+   * Drain connected remote workers, then stop the underlying Bun server.
+   *
+   * During the drain, each connected worker receives a shutdown frame and may
+   * still deliver in-flight `taskResult` messages. The drain waits up to
+   * {@link ServeOptions.workerShutdownTimeoutMs}, defaulting to 30 seconds,
+   * before teardown continues.
+   */
   stop(): Promise<void>;
   /** Dispatch a task to the best available worker. Returns true if dispatched. */
   dispatchTask(task: TaskDispatch): Promise<boolean>;

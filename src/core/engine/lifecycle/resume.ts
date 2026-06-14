@@ -9,6 +9,7 @@ import type { Checkpoint, WorkflowState } from '../../types.ts';
 import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
 import { createCancelHandlerRegistration, resetCancelHandlers } from '../cancel-handlers.ts';
 import { rememberCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
+import { rehydrateChildCancellationHandlers } from '../child-workflow-cancellation.ts';
 import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { loadWorkflowState } from '../storage-io.ts';
@@ -53,6 +54,7 @@ async function prepareRecoveredServicesOrFail(
     state,
     callbacks.failWorkflowForUnavailableServices,
     callbacks.handleCleanupError,
+    callbacks.dispatchEvent,
   );
 }
 
@@ -91,14 +93,14 @@ function commitSerializedResumeState(
   internals.parkedInlineWorkflows.delete(workflowId);
 }
 
-function relaunchInlineWorkflowAfterResume(
+async function relaunchInlineWorkflowAfterResume(
   internals: EngineInternals,
   latestState: WorkflowState,
   args: Pick<
     SerializedResumeArgs,
     'workflowId' | 'resumeCheckpoint' | 'registration' | 'callbacks'
   >,
-): void {
+): Promise<void> {
   const { workflowId, resumeCheckpoint, registration, callbacks } = args;
   // Keep the final running-state check and the re-entry into user code
   // in the same serialized section so cancel/timeout cannot commit a
@@ -108,6 +110,7 @@ function relaunchInlineWorkflowAfterResume(
   const workflowAbort = new AbortController();
 
   resetCancelHandlers(internals, workflowId);
+  await rehydrateChildCancellationHandlers(internals, workflowId, callbacks);
   const context = new Context({
     workflowId,
     workflowType: latestState.type,
@@ -143,12 +146,17 @@ function relaunchInlineWorkflowAfterResume(
   inlineStrategy.continueWorkflow(workflowId, undefined);
 }
 
-function relaunchWorkerWorkflowAfterResume(
+async function relaunchWorkerWorkflowAfterResume(
   internals: EngineInternals,
   latestState: WorkflowState,
-  args: Pick<SerializedResumeArgs, 'workflowId' | 'resumeCheckpoint' | 'workflowStartHeaders'>,
-): void {
-  const { workflowId, resumeCheckpoint, workflowStartHeaders } = args;
+  args: Pick<
+    SerializedResumeArgs,
+    'workflowId' | 'resumeCheckpoint' | 'workflowStartHeaders' | 'callbacks'
+  >,
+): Promise<void> {
+  const { workflowId, resumeCheckpoint, workflowStartHeaders, callbacks } = args;
+  resetCancelHandlers(internals, workflowId);
+  await rehydrateChildCancellationHandlers(internals, workflowId, callbacks);
   const serialized = serializeCheckpoint(resumeCheckpoint);
   internals.strategy.startWorkflow({
     workflowId,
@@ -199,10 +207,10 @@ async function performSerializedResume(
   commitSerializedResumeState(internals, args);
 
   if (internals.inlineStrategy) {
-    relaunchInlineWorkflowAfterResume(internals, latestState, args);
+    await relaunchInlineWorkflowAfterResume(internals, latestState, args);
     return;
   }
-  relaunchWorkerWorkflowAfterResume(internals, latestState, args);
+  await relaunchWorkerWorkflowAfterResume(internals, latestState, args);
 }
 
 /**

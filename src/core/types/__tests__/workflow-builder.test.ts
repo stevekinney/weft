@@ -27,6 +27,7 @@ describe('workflow() builder — chain method invariants', () => {
       .updates({ check: update<{ id: string }, { ok: boolean }>('check') })
       .queries({ progress: query<void, number>('progress') })
       .searchAttributes({ customerId: { type: 'string' } })
+      .services<{ repository: { load(id: string): Promise<string> } }>()
       .execute(async function* () {
         return 0;
       });
@@ -52,6 +53,13 @@ describe('workflow() builder — chain method invariants', () => {
     expect(() =>
       (builder as unknown as { signals: (m: unknown) => unknown }).signals({ s2: signal('s2') }),
     ).toThrow(WorkflowBuilderError);
+  });
+
+  it('rejects duplicate .services() calls', () => {
+    const builder = workflow({ name: 'w' }).services<{ value: string }>();
+    expect(() => (builder as unknown as { services: () => unknown }).services()).toThrow(
+      WorkflowBuilderError,
+    );
   });
 
   it('rejects .execute() twice', () => {

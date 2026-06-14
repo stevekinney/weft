@@ -9,6 +9,7 @@ import {
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import { readRestJsonBody } from '../rest-body.ts';
 import { isOperationFault, shapeRestFault } from './operation-helpers.ts';
 
 const DEFAULT_UPDATE_TIMEOUT_MS = 30_000;
@@ -136,7 +137,7 @@ export const updateWorkflowRestBinding: UnknownRestBinding = {
     timeout: { kind: 'body-field', bodyField: 'timeout' },
     idempotencyKey: { kind: 'body-field', bodyField: 'idempotencyKey' },
   },
-  extractInput: async (request, pathParams) => {
+  extractInput: async (request, pathParams, context) => {
     // invalid or absent JSON body is ignored, defaults apply.
     // Field-level typeof checks live in `invoke()` (the single cross-transport
     // validator) — extractInput just reads through.
@@ -145,14 +146,15 @@ export const updateWorkflowRestBinding: UnknownRestBinding = {
     let idempotencyKey: unknown;
 
     try {
-      const body = await request.json();
+      const body = await readRestJsonBody(request, context);
       if (typeof body === 'object' && body !== null) {
         const record = body as Record<string, unknown>;
         payload = record['payload'];
         timeout = record['timeout'];
         idempotencyKey = record['idempotencyKey'];
       }
-    } catch {
+    } catch (error) {
+      if (isOperationFault(error)) throw error;
       // invalid or absent JSON body is ignored.
     }
 

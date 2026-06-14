@@ -2,7 +2,8 @@ import { z } from 'zod';
 
 import { isSignalIdWithinByteLimit } from '../../core/signal-id.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { shapeRestFault } from './operation-helpers.ts';
+import { readRestJsonBody } from '../rest-body.ts';
+import { isOperationFault, shapeRestFault } from './operation-helpers.ts';
 import {
   createSingleWorkflowControlOperation,
   extractWorkflowIdFromPath,
@@ -69,8 +70,11 @@ export const signalWorkflowRestBinding: UnknownRestBinding = {
     signalName: { kind: 'path', pathParam: 'name' },
     payload: { kind: 'body-field', bodyField: 'payload' },
   },
-  extractInput: async (request, pathParams) => {
-    const body = await request.json().catch(() => null);
+  extractInput: async (request, pathParams, context) => {
+    const body = await readRestJsonBody(request, context).catch((error) => {
+      if (isOperationFault(error)) throw error;
+      return null;
+    });
     const payload =
       typeof body === 'object' && body !== null
         ? (body as Record<string, unknown>)['payload']

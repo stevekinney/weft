@@ -3,7 +3,6 @@ import { describe, expect, it } from 'bun:test';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
-import { WorkflowResumedEvent, WorkflowSuspendedEvent } from '../events.ts';
 import { normalizeListFilter } from '../list-filter-validation.ts';
 import type { WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
@@ -477,10 +476,10 @@ describe('suspend/resume', () => {
     const suspendedIds: string[] = [];
     const resumedIds: string[] = [];
     engine.addEventListener('workflow:suspended', (event) => {
-      suspendedIds.push((event as WorkflowSuspendedEvent).workflowId);
+      suspendedIds.push(event.workflowId);
     });
     engine.addEventListener('workflow:resumed', (event) => {
-      resumedIds.push((event as WorkflowResumedEvent).workflowId);
+      resumedIds.push(event.workflowId);
     });
 
     const handle = await engine.start('waits', null, { id: 'sus-events' });

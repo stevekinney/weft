@@ -10,6 +10,7 @@ import { AtomicState, type AtomicStateOptions } from '../atomic-state.ts';
 import { deserializeCheckpoint } from '../checkpoint.ts';
 import type { StoredStreamChunk } from '../context.ts';
 import { createHandleCacheFinalizer } from '../engine-helpers.ts';
+import type { TypedEventTarget, WeftEventMap } from '../events.ts';
 import type { Interceptor } from '../interceptor.ts';
 import { ReviewCoordinator, type ReviewRequest } from '../review/index.ts';
 import { Scheduler } from '../scheduler.ts';
@@ -23,6 +24,7 @@ import {
   type BulkOperationCommitOptions,
   type BulkOperationDryRunOptions,
   type BulkOperationDryRunResult,
+  type BulkRetryFailedResult,
   type BulkSignalAllCommitOptions,
   type BulkSignalAllDryRunOptions,
   type BulkSignalResult,
@@ -66,6 +68,8 @@ import {
   type WorkflowInput,
   type WorkflowOutput,
   type WorkflowReplay,
+  type WorkflowServices,
+  type WorkflowServicesUnion,
   type WorkflowState,
   type WorkflowSummary,
   type WorkflowTimelineEntry,
@@ -88,6 +92,7 @@ import {
   cancelAll as cancelAllWorkflows,
   deleteAll as deleteAllWorkflows,
   purge as purgeWorkflows,
+  retryFailedAll as retryFailedAllWorkflows,
   signalAll as signalAllWorkflows,
   tagAll as tagAllWorkflows,
   untagAll as untagAllWorkflows,
@@ -209,6 +214,7 @@ import {
   cancelSchedule as cancelScheduleFromInternals,
   listSchedules as listSchedulesFromInternals,
   pauseSchedule as pauseScheduleFromInternals,
+  recoverOrphanedScheduleTimers,
   resumeSchedule as resumeScheduleFromInternals,
   schedule as scheduleFromInternals,
   toScheduleSummary,
@@ -273,6 +279,7 @@ export {
   PersistedDataIncompatibleError,
   StartOrSignalConflictError,
   WorkflowAlreadyExistsError,
+  WorkflowConcurrencyLimitExceededError,
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
   WorkflowSuspendNotSupportedError,
@@ -355,7 +362,7 @@ export class Engine<
   TActivities extends object = DefaultActivityTypes,
 >
   extends EventTarget
-  implements Disposable, AsyncDisposable
+  implements Disposable, AsyncDisposable, TypedEventTarget<WeftEventMap>
 {
   /**
    * Construct and register an engine in one step. Activities are registered
@@ -448,7 +455,7 @@ export class Engine<
     return engine;
   }
 
-  constructor(options?: EngineConstructorOptions) {
+  constructor(options?: EngineConstructorOptions<WorkflowServicesUnion<TWorkflows>>) {
     super();
     initializeInternals(this);
     getInternals(this).registrations = new Map();
@@ -537,6 +544,7 @@ export class Engine<
     getInternals(this).lastHeartbeatDetailsByStep = new Map();
     getInternals(this).workflowServices = new Map();
     getInternals(this).pendingAsyncActivities = new Map();
+    getInternals(this).pendingAsyncActivityResolutions = new Map();
     getInternals(this).pendingStarts = new Set();
     getInternals(this).pendingScheduleCreations = new Set();
     getInternals(this).workflowsNeedingTerminalCleanup = new Set();
@@ -552,6 +560,7 @@ export class Engine<
     getInternals(this).reviewTimerIds = new Map();
     getInternals(this).pendingWebhooks = new Set();
     getInternals(this).pendingTimelineEntries = new Map();
+    getInternals(this).pendingAtomicWorkflowCommitSideEffects = new Map();
     getInternals(this).cleanupIntervalDisposalTracker = null;
     const cleanupIntervalDisposalTracker: EngineCleanupIntervalDisposalTracker = {
       disposed: false,
@@ -579,6 +588,8 @@ export class Engine<
     getInternals(this).eventLogHeads = new Map();
     getInternals(this).workflowFeedListeners = new Map();
     getInternals(this).workflowVersionTuples = new Map();
+    getInternals(this).workflowVisibilityWatermark = undefined;
+    getInternals(this).workflowVisibilityWatermarkExpiresAt = undefined;
     getInternals(this).activityWorkerDispatcher = createActivityWorkerDispatcher(
       options?.activityExecution,
     );
@@ -586,6 +597,42 @@ export class Engine<
     getInternals(this).alertManager = createAlertManagerForEngine(this, options?.alerts, getNow);
     this.#ensureRetentionSweepInterval();
     this.#startSecondInstanceDetection();
+  }
+
+  override addEventListener<K extends Extract<keyof WeftEventMap, string>>(
+    type: K,
+    listener: (event: WeftEventMap[K]) => void,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  override addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void;
+  override addEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | AddEventListenerOptions,
+  ): void {
+    super.addEventListener(type, listener, options);
+  }
+
+  override removeEventListener<K extends Extract<keyof WeftEventMap, string>>(
+    type: K,
+    listener: (event: WeftEventMap[K]) => void,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  override removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | EventListenerOptions,
+  ): void;
+  override removeEventListener(
+    type: string,
+    listener: EventListenerOrEventListenerObject | null,
+    options?: boolean | EventListenerOptions,
+  ): void {
+    super.removeEventListener(type, listener, options);
   }
 
   /**
@@ -864,7 +911,7 @@ export class Engine<
   async start<TName extends KnownWorkflowNames<TWorkflows>>(
     type: TName,
     input: WorkflowInput<TWorkflows, TName>,
-    options?: StartWorkflowOptions,
+    options?: StartWorkflowOptions<WorkflowServices<TWorkflows, TName>>,
   ): Promise<WorkflowHandle<WorkflowOutput<TWorkflows, TName>>>;
   async start<TName extends string>(
     type: UnknownWorkflowNameWhenDefaultRegistryIsEmpty<TWorkflows, TName>,
@@ -915,7 +962,7 @@ export class Engine<
     type: TName,
     input: WorkflowInput<TWorkflows, TName>,
     signal: StartOrSignalSignal,
-    options?: StartOptions,
+    options?: StartOptions<WorkflowServices<TWorkflows, TName>>,
   ): Promise<StartOrSignalResult<WorkflowOutput<TWorkflows, TName>>>;
   async startOrSignal<TName extends string>(
     type: UnknownWorkflowNameWhenDefaultRegistryIsEmpty<TWorkflows, TName>,
@@ -994,6 +1041,20 @@ export class Engine<
     options?: BulkOperationDryRunOptions | BulkOperationCommitOptions,
   ): Promise<BulkCancelResult | BulkOperationDryRunResult> {
     return cancelAllWorkflows(getInternals(this), filter, options);
+  }
+  async retryFailedAll(
+    filter: ListFilter,
+    options: BulkOperationDryRunOptions,
+  ): Promise<BulkOperationDryRunResult>;
+  async retryFailedAll(
+    filter: ListFilter,
+    options?: BulkOperationCommitOptions,
+  ): Promise<BulkRetryFailedResult>;
+  async retryFailedAll(
+    filter: ListFilter,
+    options?: BulkOperationDryRunOptions | BulkOperationCommitOptions,
+  ): Promise<BulkRetryFailedResult | BulkOperationDryRunResult> {
+    return retryFailedAllWorkflows(getInternals(this), filter, options);
   }
   async signalAll(
     filter: ListFilter,
@@ -1090,7 +1151,7 @@ export class Engine<
    * Two call forms:
    * - A {@link ScheduleDefinition} object: `engine.schedule({ workflow, cron, input })`.
    *   Carries the workflow (definition or type name), the `cron`/`every` spec,
-   *   optional `input`, `id`, `overlapPolicy`, and `backfill`.
+   *   optional `input`, `id`, `overlapPolicy`, `backfill`, and `jitter`.
    * - Positional: `engine.schedule(type, input, spec, options?)` where `spec` is
    *   a cron string or a {@link ScheduleSpec} (`{ cron }` or `{ every }`).
    *
@@ -1143,6 +1204,7 @@ export class Engine<
           ...(definition.id !== undefined && { id: definition.id }),
           ...(definition.overlapPolicy !== undefined && { overlap: definition.overlapPolicy }),
           ...(definition.backfill !== undefined && { backfill: definition.backfill }),
+          ...(definition.jitter !== undefined && { jitter: definition.jitter }),
         },
       );
     }
@@ -1340,6 +1402,7 @@ export class Engine<
     // Reload durable async-activity tokens first so a callback that arrives
     // before (or during) workflow replay still resolves a parked activity.
     await recoverPendingAsyncActivities(getInternals(this));
+    await recoverOrphanedScheduleTimers(getInternals(this));
     return recoverAllFromLifecycle(getInternals(this), this.#createLifecycleCallbacks(), options);
   }
 
@@ -1348,41 +1411,44 @@ export class Engine<
    * have parked itself via `ActivityContext.completeAsync()`; pass the durable
    * task token announced through the `activity:async-pending` event (or
    * persisted by your callback dispatcher). The parked workflow resumes as
-   * though the activity had returned `result` inline.
+   * though the activity had returned `result` inline. During recovery, a
+   * completion that arrives after token recovery but before replay adopts the
+   * workflow generator is buffered and delivered when replay reaches the same
+   * async-activity token. Await `recoverAll()` before accepting callback traffic
+   * when your application needs startup ordering to be fully deterministic.
    *
    * @throws {AsyncActivityTokenNotFoundError} when no pending activity matches
    * the token (unknown, or already completed/failed — tokens are single-use).
    */
   async completeAsyncActivity(token: string, result: unknown): Promise<void> {
-    await completeAsyncActivityFromInternals(
-      getInternals(this),
-      token,
-      result,
-      (workflowId, outcome) => feedOperationResult(getInternals(this), workflowId, outcome),
-      (workflowId, status, output) =>
+    await completeAsyncActivityFromInternals(getInternals(this), token, result, {
+      feedOperationResult: (workflowId, outcome) =>
+        feedOperationResult(getInternals(this), workflowId, outcome),
+      finalizeTimeline: (workflowId, status, output) =>
         finalizePendingTimelineEntry(getInternals(this), workflowId, status, output),
-    );
+    });
   }
 
   /**
    * Fail a deferred activity out-of-band with `error`. The error is thrown into
    * the workflow generator at the parked step — identical to an inline activity
    * that threw — so the workflow's own try/catch and any configured retry
-   * policy apply unchanged.
+   * policy apply unchanged. During recovery, a failure that arrives after token
+   * recovery but before replay adopts the workflow generator is buffered and
+   * delivered when replay reaches the same async-activity token. Await
+   * `recoverAll()` before accepting callback traffic when your application needs
+   * startup ordering to be fully deterministic.
    *
    * @throws {AsyncActivityTokenNotFoundError} when no pending activity matches
    * the token (unknown, or already completed/failed — tokens are single-use).
    */
   async failAsyncActivity(token: string, error: unknown): Promise<void> {
-    await failAsyncActivityFromInternals(
-      getInternals(this),
-      token,
-      error,
-      (workflowId, outcome, originalReason) =>
+    await failAsyncActivityFromInternals(getInternals(this), token, error, {
+      feedOperationResult: (workflowId, outcome, originalReason) =>
         feedOperationResult(getInternals(this), workflowId, outcome, originalReason),
-      (workflowId, status, output) =>
+      finalizeTimeline: (workflowId, status, output) =>
         finalizePendingTimelineEntry(getInternals(this), workflowId, status, output),
-    );
+    });
   }
   async cancel(workflowId: string): Promise<void> {
     await cancelWorkflowFromTermination(

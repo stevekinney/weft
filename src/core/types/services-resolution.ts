@@ -18,8 +18,8 @@
  * void no;
  * ```
  */
-export type WorkflowServicesResolution =
-  | { status: 'available'; services: unknown }
+export type WorkflowServicesResolution<TServices = unknown> =
+  | { status: 'available'; services: TServices }
   | { status: 'unavailable'; reason: string };
 
 /**

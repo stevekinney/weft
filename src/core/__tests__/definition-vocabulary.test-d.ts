@@ -106,6 +106,8 @@ context.setAttribute(tags, 'new');
 searchAttribute<number>('customerId', 'string');
 
 engine.list({ attributes: [{ key: priority, value: 1 }] });
+engine.list({ attributes: [{ key: customerId, value: ['cust_123', 'cust_456'] }] });
+engine.list({ attributes: [{ key: tags, value: ['new', 'priority'] }] });
 engine.list({ attributes: [{ key: createdAt, gt: new Date('2026-05-05T00:00:00.000Z') }] });
 // @ts-expect-error typed attribute filters must match the handle value type.
 engine.list({ attributes: [{ key: priority, value: 'wrong' }] });

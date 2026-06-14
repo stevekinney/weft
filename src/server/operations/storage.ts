@@ -1,8 +1,12 @@
 import { z } from 'zod';
 
+import { copyBytesToArrayBuffer } from '../../core/byte-arrays.ts';
 import type { Engine } from '../../core/engine.ts';
 import { decodeBase64ToBytes, encodeBytesToBase64 } from '../../storage/byte-encoding.ts';
 import {
+  MAX_BATCH_OPERATIONS,
+  MAX_SCAN_LIMIT,
+  storageBatch,
   storageConditionalBatch,
   type BatchOperation,
   type ConditionalBatchCondition,
@@ -13,8 +17,10 @@ import type { AccessPolicy } from '../authorization.ts';
 import { raiseFault } from '../operation-catalog.ts';
 import { defineOperation } from '../operation-registry.ts';
 import { isAuthenticated, type Principal } from '../principal.ts';
+import type { RestInputContext } from '../rest-binding.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { readRestBodyBounded, readRestJsonBody } from '../rest-body.ts';
+import { invalidParamsFault, isOperationFault, shapeRestFault } from './operation-helpers.ts';
 
 const storageReadAccess: AccessPolicy = {
   kind: 'scoped',
@@ -51,7 +57,7 @@ const storageDeleteInput = z.object({ key: z.string().min(1) });
 
 const storageScanInput = z.object({
   prefix: z.string(),
-  limit: z.number().int().positive().optional(),
+  limit: z.number().int().positive().max(MAX_SCAN_LIMIT).optional(),
   reverse: z.boolean().optional(),
   gt: z.string().optional(),
   gte: z.string().optional(),
@@ -69,11 +75,13 @@ const storageConditionInput = z.object({
   expectedValue: z.string().nullable(),
 });
 
-const storageBatchInput = z.object({ operations: z.array(storageBatchOperationInput) });
+const storageBatchInput = z.object({
+  operations: z.array(storageBatchOperationInput).max(MAX_BATCH_OPERATIONS),
+});
 
 const storageConditionalBatchInput = z.object({
-  conditions: z.array(storageConditionInput),
-  operations: z.array(storageBatchOperationInput),
+  conditions: z.array(storageConditionInput).max(MAX_BATCH_OPERATIONS),
+  operations: z.array(storageBatchOperationInput).max(MAX_BATCH_OPERATIONS),
 });
 
 const emptyOutput = z.null();
@@ -167,10 +175,11 @@ function decodeCondition(
   };
 }
 
-async function readJsonRequestBody(request: Request): Promise<unknown> {
+async function readJsonRequestBody(request: Request, context: RestInputContext): Promise<unknown> {
   try {
-    return await request.json();
-  } catch {
+    return await readRestJsonBody(request, context);
+  } catch (error) {
+    if (isOperationFault(error)) throw error;
     throw invalidParamsFault('Request body must be valid JSON.');
   }
 }
@@ -222,7 +231,7 @@ function createBinaryResponse(value: Uint8Array | null): Response {
   if (value === null) {
     return new Response(null, { status: 404 });
   }
-  return new Response(value, {
+  return new Response(copyBytesToArrayBuffer(value), {
     status: 200,
     headers: { 'Content-Type': 'application/octet-stream' },
   });
@@ -357,7 +366,7 @@ export const storageBatchOperation = defineOperation<StorageBatchInput, null>({
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
   invoke: async ({ input, engine, principal }) => {
     const storage = resolveAuthorizedStorage(engine as Engine, principal, storageBatchOperation);
-    await storage.batch(input.operations.map(decodeBatchOperation));
+    await storageBatch(storage, input.operations.map(decodeBatchOperation));
     return null;
   },
 });
@@ -425,9 +434,9 @@ export const storagePutRestBinding: UnknownRestBinding = {
     key: { kind: 'path', pathParam: 'key' },
     value: { kind: 'body', mediaType: 'application/octet-stream' },
   },
-  extractInput: async (request, pathParams) => ({
+  extractInput: async (request, pathParams, context) => ({
     key: storageKeyFromPath(pathParams),
-    value: new Uint8Array(await request.arrayBuffer()),
+    value: await readRestBodyBounded(request, context),
   }),
   success: { kind: 'empty', status: 204 },
   shapeSuccess: createNoContentResponse,
@@ -476,7 +485,8 @@ export const storageBatchRestBinding: UnknownRestBinding = {
   inputSources: {
     operations: { kind: 'body-field', bodyField: 'operations' },
   },
-  extractInput: async (request) => readJsonRequestBody(request) as Promise<StorageBatchInput>,
+  extractInput: async (request, _pathParams, context) =>
+    readJsonRequestBody(request, context) as Promise<StorageBatchInput>,
   success: { kind: 'empty', status: 204 },
   shapeSuccess: createNoContentResponse,
   shapeFault: shapeRestFault,
@@ -491,8 +501,8 @@ export const storageConditionalBatchRestBinding: UnknownRestBinding = {
     conditions: { kind: 'body-field', bodyField: 'conditions' },
     operations: { kind: 'body-field', bodyField: 'operations' },
   },
-  extractInput: async (request) =>
-    readJsonRequestBody(request) as Promise<StorageConditionalBatchInput>,
+  extractInput: async (request, _pathParams, context) =>
+    readJsonRequestBody(request, context) as Promise<StorageConditionalBatchInput>,
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: StorageConditionalBatchOutput) => Response.json(output),
   shapeFault: shapeRestFault,

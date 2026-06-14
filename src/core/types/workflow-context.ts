@@ -30,8 +30,11 @@ import type {
   UpdatePayload,
 } from './workflow-builder-helpers.ts';
 import type {
+  AwaitChildWorkflowOptions,
+  ChildWorkflowHandle,
   ChildWorkflowOptions,
   ChildWorkflowTarget,
+  DetachedChildWorkflowOptions,
   WorkflowMapOptions,
   WorkflowOperation,
   WorkflowPipeStage,
@@ -106,6 +109,7 @@ export interface WorkflowContext<
   TUpdates extends UpdateMap = {},
   TQueries extends QueryMap = {},
   TSearchAttributes extends SearchAttributeSchema = {},
+  TServices = unknown,
 > {
   readonly workflowId: WorkflowId;
   /**
@@ -124,15 +128,16 @@ export interface WorkflowContext<
    * clients, tool registries). The value is **never checkpointed**: it is held
    * only in engine memory for this run, and on a fresh-process recovery it is
    * re-provided by the engine's `resolveWorkflowServices` resolver before the
-   * generator advances. `undefined` when no services were supplied (and not yet
-   * re-provided on recovery). Inline execution mode only — passing `services`
-   * under `workflowExecutionMode: 'worker'` throws at `engine.start()`, since a
+   * generator advances. `undefined` only when no services were supplied; a
+   * services-marked run fails before resume if the fresh engine cannot
+   * re-provide them. Inline execution mode only — passing `services` under
+   * `workflowExecutionMode: 'worker'` throws at `engine.start()`, since a
    * non-serializable value cannot cross to a Worker.
    *
-   * Typed `unknown`: narrow or cast at the call site
-   * (`const { db } = ctx.services as MyServices`). A threaded generic is a
-   * deliberate follow-on, not part of this surface yet. Optional so existing
-   * structural `WorkflowContext` implementors are not source-broken.
+   * Typed by the workflow definition when the builder declares
+   * `.services<MyServices>()`, and `unknown` otherwise. Optional so existing
+   * structural `WorkflowContext` implementors are not source-broken and so
+   * workflows still handle no-services launches explicitly.
    *
    * Separate child *workflows* started from within a workflow (`ctx.startChild()`)
    * do **not** inherit the parent's `services` — each run is its own workflow with
@@ -142,7 +147,7 @@ export interface WorkflowContext<
    * replay (same `workflowId`) and therefore does carry the run's `services`
    * across.
    */
-  readonly services?: unknown;
+  readonly services?: TServices;
   /**
    * Structured logger scoped to this run, auto-carrying `workflowId` and
    * `workflowType`. Replay-safe in both inline and worker execution modes: log
@@ -252,6 +257,19 @@ export interface WorkflowContext<
    */
   waitUntil(predicate: () => boolean): WorkflowOperation<void>;
   waitUntil(predicate: () => boolean, timeout: Duration): WorkflowOperation<boolean>;
+  /**
+   * Pin a named workflow patch to a deterministic numeric version. The first
+   * execution stores `maxSupported` under `version:${changeId}` in checkpoint
+   * locals; replay and recovery return that stored value so in-flight workflows
+   * can keep taking their original branch while new runs pin the newer version.
+   * Raise `minSupported` only after every in-flight run pinned below that version
+   * has completed.
+   */
+  getVersion(
+    changeId: string,
+    minSupported: number,
+    maxSupported: number,
+  ): WorkflowOperation<number>;
   review(options: HumanReviewOptions): WorkflowOperation<HumanReviewResult>;
   all<const TOperations extends readonly WorkflowOperation<unknown>[]>(
     operations: TOperations,
@@ -280,8 +298,18 @@ export interface WorkflowContext<
   startChild<TResult = unknown>(
     workflowType: string,
     input: unknown,
-    options?: ChildWorkflowOptions,
+    options: DetachedChildWorkflowOptions,
+  ): WorkflowOperation<ChildWorkflowHandle<TResult>>;
+  startChild<TResult = unknown>(
+    workflowType: string,
+    input: unknown,
+    options?: AwaitChildWorkflowOptions,
   ): WorkflowOperation<TResult>;
+  startChild<TResult = unknown>(
+    workflowType: string,
+    input: unknown,
+    options?: ChildWorkflowOptions,
+  ): WorkflowOperation<TResult | ChildWorkflowHandle<TResult>>;
   pipe<TInput, TOutput>(
     stages: [WorkflowPipeStageDefinition<TInput, TOutput>],
     input: TInput,

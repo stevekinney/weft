@@ -38,6 +38,20 @@ function request(path: string, body?: unknown): Request {
   return createJsonRequest({ method: 'POST', path, body });
 }
 
+function streamingJsonRequest(path: string, body: unknown): Request {
+  const bytes = new TextEncoder().encode(JSON.stringify(body));
+  return new Request(`http://localhost${path}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    }),
+  });
+}
+
 const registry = createOperationRegistry([bulkCancelWorkflowsOperation]);
 const bindings = [bulkCancelWorkflowsRestBinding];
 
@@ -136,6 +150,41 @@ describe('weft.workflows.bulk.cancel', () => {
     expect(untouchedState?.status).toBe('running');
 
     await engine.cancel('bulk-cancel-other');
+  });
+
+  it('returns 400 when bulkConcurrency is not a positive integer', async () => {
+    using engine = createEngine();
+
+    const response = await handleRequest(
+      request('/v1/workflows/bulk/cancel', {
+        filter: { status: 'running' },
+        dryRun: true,
+        bulkConcurrency: 0,
+      }),
+      engine,
+      bulkAdminHandlerOptions(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({
+      error: 'Field "bulkConcurrency" must be a positive integer',
+    });
+  });
+
+  it('rejects an oversized streaming bulk filter body', async () => {
+    using engine = createEngine();
+
+    const response = await handleRequest(
+      streamingJsonRequest('/v1/workflows/bulk/cancel', {
+        filter: { tags: ['selected'] },
+        dryRun: true,
+      }),
+      engine,
+      { ...bulkAdminHandlerOptions(), maxRequestBodyBytes: 8 },
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: 'Payload Too Large' });
   });
 
   it('returns 400 when the bulk filter is unscoped', async () => {

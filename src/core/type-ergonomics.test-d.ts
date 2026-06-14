@@ -1,24 +1,29 @@
 import { z } from 'zod';
 import type {
+  HttpClient,
   KnownWorkflowName as KnownWorkflowNameFromClientEntry,
   UnknownNameWhenRegistryEmpty as UnknownNameWhenRegistryEmptyFromClientEntry,
 } from '../client/index.ts';
 import {
   activity,
   Context,
+  DevelopmentWarningEvent,
   Engine,
+  ScheduleMissedFireEvent,
   signal,
   update,
   workflow,
+  WorkflowStartedEvent,
   type AnyActivityDefinition,
   type AnyWorkflowDefinition,
+  type ChildWorkflowHandle,
   type ClientHandle,
-  type HttpClient,
   type InferActivityEntry,
   type KnownWorkflowName,
   type LocalClient,
   type UnknownNameWhenRegistryEmpty,
   type WeftClient,
+  type WorkflowConcurrencyOptions,
   type WorkflowContext,
   type WorkflowDefinition,
   type WorkflowHandle,
@@ -34,6 +39,13 @@ interface WelcomeOutput {
 
 interface FormatGreetingInput {
   name: string;
+}
+
+interface WelcomeServices {
+  repository: {
+    loadGreeting(name: string): Promise<string>;
+  };
+  log(message: string): void;
 }
 
 declare module '../index.ts' {
@@ -98,7 +110,17 @@ const welcomeBuilder = workflow({ name: 'localWelcome' })
   .activities({
     formatGreeting: async (input: FormatGreetingInput) => `Hello, ${input.name}`,
   })
+  .services<WelcomeServices>()
   .execute(async function* (ctx, input: WelcomeInput) {
+    const services = ctx.services;
+    if (services !== undefined) {
+      const loadedGreeting = yield* ctx.run(async () =>
+        services.repository.loadGreeting(input.name),
+      );
+      services.log(loadedGreeting);
+      // @ts-expect-error declared workflow services expose only the declared members.
+      services.missingClient;
+    }
     const greeting = yield* ctx.run('formatGreeting', { name: input.name });
     // @ts-expect-error builder-typed activities must match their declared input type.
     yield* ctx.run('formatGreeting', { id: 'wrong' });
@@ -113,7 +135,29 @@ const welcomeBuilder = workflow({ name: 'localWelcome' })
     ctx.setAttribute('customer', input.name);
     const customer = ctx.getAttribute<string>('customer');
     const attributes = ctx.getAttributes();
-    const child = yield* ctx.startChild<WelcomeOutput>('registered', input);
+    const child: WelcomeOutput = yield* ctx.startChild<WelcomeOutput>('registered', input);
+    const awaitedChild: WelcomeOutput = yield* ctx.startChild<WelcomeOutput>('registered', input, {
+      parentClosePolicy: 'await',
+    });
+    const abandonedChild: ChildWorkflowHandle<WelcomeOutput> = yield* ctx.startChild<WelcomeOutput>(
+      'registered',
+      input,
+      {
+        parentClosePolicy: 'abandon',
+      },
+    );
+    const requestCancelChild: ChildWorkflowHandle<WelcomeOutput> =
+      yield* ctx.startChild<WelcomeOutput>('registered', input, {
+        parentClosePolicy: 'request-cancel',
+      });
+    const detachedChildId: string = abandonedChild.id;
+    const detachedResult = yield* ctx.startChild<WelcomeOutput>('registered', input, {
+      parentClosePolicy: 'abandon',
+    });
+    // @ts-expect-error detached child workflow policies return handles, not child results.
+    const invalidDetachedResult: WelcomeOutput = detachedResult;
+    // @ts-expect-error only await, abandon, and request-cancel are valid parent-close policies.
+    yield* ctx.startChild<WelcomeOutput>('registered', input, { parentClosePolicy: 'terminate' });
     // @ts-expect-error child workflow options are closed to fields the engine reads.
     yield* ctx.startChild<WelcomeOutput>('registered', input, { unknownOption: true });
     const parallel = yield* ctx.all([ctx.run('formatGreeting', input), ctx.sleep(1)]);
@@ -129,6 +173,8 @@ const welcomeBuilder = workflow({ name: 'localWelcome' })
     const streamReference = yield* ctx.stream('welcome-stream', async function* () {});
     const streamUrl = ctx.streamUrl(streamReference);
     const mapped = yield* ctx.map([input], 'registered');
+    // @ts-expect-error composition operators are await-only and cannot abandon child workflows.
+    yield* ctx.pipe([{ type: 'registered', options: { parentClosePolicy: 'abandon' } }], input);
     const reduced = yield* ctx.reduce([input], 'registered', { greeting: '' });
     const memoized = yield* ctx.memo('memo-key', () => input.name);
     const runAllResult = yield* ctx.runAll({
@@ -154,6 +200,10 @@ const welcomeBuilder = workflow({ name: 'localWelcome' })
     void typedRunAllResult;
     void sagaResult;
     void session;
+    void awaitedChild;
+    void requestCancelChild;
+    void detachedChildId;
+    void invalidDetachedResult;
 
     return { greeting };
   });
@@ -165,16 +215,114 @@ const registered = workflow({ name: 'registered' }).execute(async function* (
   return yield* ctx.run(async (value: WelcomeInput) => ({ greeting: value.name }), input);
 });
 
+declare const serviceContext: WorkflowContext<{}, {}, {}, {}, {}, WelcomeServices>;
+void (serviceContext.services satisfies WelcomeServices | undefined);
+if (serviceContext.services !== undefined) {
+  void (serviceContext.services.repository.loadGreeting satisfies (
+    name: string,
+  ) => Promise<string>);
+}
+
+declare const defaultServicesContext: WorkflowContext;
+void (defaultServicesContext.services satisfies unknown);
+// @ts-expect-error default workflow services stay unknown until explicitly typed.
+defaultServicesContext.services.repository;
+
+// @ts-expect-error builder services can only be declared once before execute().
+workflow({ name: 'duplicateServices' }).services<WelcomeServices>().services<WelcomeServices>();
+
 const engine = new Engine().register(welcomeBuilder).register(registered);
+declare const httpClient: HttpClient;
+declare const sharedClient: WeftClient;
+
+const typedConcurrency = {
+  max: 2,
+  key: (input) => input.name,
+} satisfies WorkflowConcurrencyOptions<WelcomeInput>;
+void workflow({ name: 'typedConcurrencyWelcome', concurrency: typedConcurrency });
 
 async function verifyHandleTyping(): Promise<void> {
-  const handle = await engine.start('localWelcome', { name: 'Steve' });
+  const services: WelcomeServices = {
+    repository: { loadGreeting: async (name) => `Hello, ${name}` },
+    log: (_message) => {},
+  };
+  const handle = await engine.start('localWelcome', { name: 'Steve' }, { services });
+  // @ts-expect-error start options must match the workflow's declared services shape.
+  void engine.start('localWelcome', { name: 'Steve' }, { services: { repository: {} } });
+  const serviceStartOptions = { services };
+  const deferStartOptions = { defer: false };
+  void httpClient.start('moduleAugmentedWelcome', { name: 'Steve' }, { id: 'remote-start' });
+  // @ts-expect-error HttpClient cannot serialize inline-only workflow services.
+  void httpClient.start('moduleAugmentedWelcome', { name: 'Steve' }, { services });
+  // @ts-expect-error HttpClient also rejects service-bearing option variables.
+  void httpClient.start('moduleAugmentedWelcome', { name: 'Steve' }, serviceStartOptions);
+  // @ts-expect-error HttpClient also rejects inline-only defer option variables.
+  void httpClient.start('moduleAugmentedWelcome', { name: 'Steve' }, deferStartOptions);
+  // @ts-expect-error the shared WeftClient surface excludes inline-only workflow services.
+  void sharedClient.start('moduleAugmentedWelcome', { name: 'Steve' }, { services });
+  // @ts-expect-error shared WeftClient also rejects service-bearing option variables.
+  void sharedClient.start('moduleAugmentedWelcome', { name: 'Steve' }, serviceStartOptions);
+  // @ts-expect-error shared WeftClient also rejects inline-only defer option variables.
+  void sharedClient.start('moduleAugmentedWelcome', { name: 'Steve' }, deferStartOptions);
   const typedHandle: WorkflowHandle<WelcomeOutput> = handle;
   const output = await handle.result();
   output.greeting.toUpperCase();
   void typedHandle;
 }
 void verifyHandleTyping;
+
+function verifyEngineEventListenerTyping(): void {
+  engine.addEventListener('workflow:completed', (event) => {
+    const workflowId: string = event.workflowId;
+    const duration: number = event.duration;
+    const result: unknown = event.result;
+    // @ts-expect-error completed workflow events do not carry an error.
+    event.error;
+    void workflowId;
+    void duration;
+    void result;
+  });
+
+  engine.addEventListener(WorkflowStartedEvent.type, (event) => {
+    const workflowType: string = event.workflowType;
+    const input: unknown = event.input;
+    // @ts-expect-error started workflow events do not carry a completion duration.
+    event.duration;
+    void workflowType;
+    void input;
+  });
+
+  engine.addEventListener(ScheduleMissedFireEvent.type, (event) => {
+    const scheduleId: string = event.scheduleId;
+    const missedCount: number = event.missedCount;
+    const windowStart: number = event.windowStart;
+    const windowEnd: number = event.windowEnd;
+    // @ts-expect-error missed-fire events describe schedules, not workflow executions.
+    event.workflowId;
+    void scheduleId;
+    void missedCount;
+    void windowStart;
+    void windowEnd;
+  });
+
+  const developmentWarningListener = (event: DevelopmentWarningEvent) => {
+    const workflowId: string = event.workflowId;
+    const fieldPaths: string[] = event.fieldPaths;
+    void workflowId;
+    void fieldPaths;
+  };
+
+  engine.addEventListener(DevelopmentWarningEvent.type, developmentWarningListener);
+  engine.removeEventListener(DevelopmentWarningEvent.type, developmentWarningListener);
+
+  engine.addEventListener('application:custom', (event) => {
+    const eventType: string = event.type;
+    // @ts-expect-error custom event strings fall back to the standard Event type.
+    event.workflowId;
+    void eventType;
+  });
+}
+void verifyEngineEventListenerTyping;
 
 // Module-augmented workflow names typecheck on `start` even when no
 // `register(...)` call was made — the augmentation is the source of truth.
@@ -436,6 +584,35 @@ async function verifyEngineCreateInference(): Promise<void> {
   const deferredRegistration = await Engine.create({ recover: false });
   const deferredRegistrationWithWorkflow = deferredRegistration.register(localGreet);
   void deferredRegistrationWithWorkflow.start('localGreet', 'Steve');
+
+  const serviceAwareEngine = await Engine.create({
+    workflows: { localWelcome: welcomeBuilder },
+    resolveWorkflowServices: () => ({
+      status: 'available',
+      services: {
+        repository: { loadGreeting: async (name) => `Hello, ${name}` },
+        log: (_message) => {},
+      },
+    }),
+    recover: false,
+  });
+  void serviceAwareEngine.start(
+    'localWelcome',
+    { name: 'Steve' },
+    {
+      services: {
+        repository: { loadGreeting: async (name) => `Hello, ${name}` },
+        log: (_message) => {},
+      },
+    },
+  );
+
+  await Engine.create({
+    workflows: { localWelcome: welcomeBuilder },
+    // @ts-expect-error recovered services must satisfy the workflow's declared services type.
+    resolveWorkflowServices: () => ({ status: 'available', services: { repository: {} } }),
+    recover: false,
+  });
 }
 void verifyEngineCreateInference;
 

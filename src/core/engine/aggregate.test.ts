@@ -5,6 +5,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { AggregateDistinctKeyCapExceededError } from '../aggregate-validation.ts';
 import { encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
+import { buildIndexOperations } from '../search-attributes.ts';
 import type { WorkflowContext, WorkflowState } from '../types.ts';
 import { workflow } from '../types.ts';
 import { aggregate as aggregateWorkflows } from './aggregate.ts';
@@ -34,6 +35,76 @@ async function writeDistinctTypeWorkflows(storage: MemoryStorage, count: number)
         updatedAt: now + index,
       };
       return { type: 'put', key: KEYS.workflow(workflowId), value: encode(state) };
+    }),
+  );
+}
+
+class ConcurrentAggregateReadCountingStorage extends MemoryStorage {
+  activeAttributeReadCount = 0;
+  activeWorkflowReadCount = 0;
+  attributeReadCount = 0;
+  maxConcurrentAttributeReadCount = 0;
+  maxConcurrentWorkflowReadCount = 0;
+  workflowReadCount = 0;
+
+  override async get(key: string): Promise<Uint8Array | null> {
+    if (key.startsWith('wf:aggregate-batched-')) {
+      this.workflowReadCount += 1;
+      this.activeWorkflowReadCount += 1;
+      this.maxConcurrentWorkflowReadCount = Math.max(
+        this.maxConcurrentWorkflowReadCount,
+        this.activeWorkflowReadCount,
+      );
+      try {
+        await Promise.resolve();
+        return await super.get(key);
+      } finally {
+        this.activeWorkflowReadCount -= 1;
+      }
+    }
+
+    if (key.startsWith('attr:aggregate-batched-')) {
+      this.attributeReadCount += 1;
+      this.activeAttributeReadCount += 1;
+      this.maxConcurrentAttributeReadCount = Math.max(
+        this.maxConcurrentAttributeReadCount,
+        this.activeAttributeReadCount,
+      );
+      try {
+        await Promise.resolve();
+        return await super.get(key);
+      } finally {
+        this.activeAttributeReadCount -= 1;
+      }
+    }
+
+    return super.get(key);
+  }
+}
+
+async function writeAttributeGroupedWorkflows(
+  storage: MemoryStorage,
+  count: number,
+): Promise<void> {
+  const now = Date.now();
+  await storage.batch(
+    Array.from({ length: count }).flatMap((_, index) => {
+      const workflowId = `aggregate-batched-${index}`;
+      const state: WorkflowState = {
+        id: workflowId,
+        type: 'attribute-grouped',
+        status: 'completed',
+        input: null,
+        versionTuple: { workflowVersion: 'test' },
+        createdAt: now + index,
+        updatedAt: now + index,
+      };
+      const segment = index % 2 === 0 ? 'even' : 'odd';
+      return [
+        { type: 'put' as const, key: KEYS.workflow(workflowId), value: encode(state) },
+        { type: 'put' as const, key: KEYS.attribute(workflowId), value: encode({ segment }) },
+        ...buildIndexOperations(workflowId, {}, { segment }),
+      ];
     }),
   );
 }
@@ -204,6 +275,29 @@ describe('engine.aggregate', () => {
     engine[Symbol.dispose]();
   });
 
+  it('groups corrupted attribute records under null instead of throwing', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+    const typedWorkflow = workflow({ name: 'corrupt-attribute-grouped' })
+      .searchAttributes({ segment: { type: 'string' } })
+      .execute(async function* () {
+        return 'ok';
+      });
+    engine.register(typedWorkflow);
+
+    await startAndComplete(engine, 'corrupt-attribute-grouped', 'corrupt-aggregate-1');
+    await storage.put(KEYS.attribute('corrupt-aggregate-1'), encode(null));
+
+    const result = await engine.aggregate(
+      { idPrefix: 'corrupt-aggregate' },
+      { groupBy: { attribute: 'segment' } },
+    );
+
+    expect(result.total).toBe(1);
+    expect(result.groups).toEqual([{ key: null, count: 1 }]);
+    engine[Symbol.dispose]();
+  });
+
   it('throws when an aggregate would materialize too many distinct group keys', async () => {
     const storage = new MemoryStorage();
     const engine = new Engine({ storage });
@@ -246,6 +340,62 @@ describe('engine.aggregate', () => {
     expect(result.total).toBe(3);
     expect(result.groups).toHaveLength(3);
     expect(result.truncated).toBe(false);
+    engine[Symbol.dispose]();
+  });
+
+  it('batches constrained state reads and attribute groupBy reads across chunk boundaries', async () => {
+    const storage = new ConcurrentAggregateReadCountingStorage();
+    const engine = new Engine({ storage });
+    const typedWorkflow = workflow({ name: 'attribute-grouped' })
+      .searchAttributes({ segment: { type: 'string' } })
+      .execute(async function* () {
+        return 'ok';
+      });
+    engine.register(typedWorkflow);
+    await writeAttributeGroupedWorkflows(storage, 130);
+
+    const result = await engine.aggregate(
+      { idPrefix: 'aggregate-batched-' },
+      { groupBy: { attribute: 'segment' } },
+    );
+
+    expect(result.total).toBe(130);
+    expect(result.groups).toEqual([
+      { key: 'even', count: 65 },
+      { key: 'odd', count: 65 },
+    ]);
+    expect(storage.workflowReadCount).toBe(130);
+    expect(storage.attributeReadCount).toBe(130);
+    expect(storage.maxConcurrentWorkflowReadCount).toBeGreaterThan(1);
+    expect(storage.maxConcurrentWorkflowReadCount).toBeLessThanOrEqual(64);
+    expect(storage.maxConcurrentAttributeReadCount).toBeGreaterThan(1);
+    expect(storage.maxConcurrentAttributeReadCount).toBeLessThanOrEqual(64);
+    engine[Symbol.dispose]();
+  });
+
+  it('reuses attribute records already read for attribute-filtered grouping', async () => {
+    const storage = new ConcurrentAggregateReadCountingStorage();
+    const engine = new Engine({ storage });
+    const typedWorkflow = workflow({ name: 'attribute-grouped' })
+      .searchAttributes({ segment: { type: 'string' } })
+      .execute(async function* () {
+        return 'ok';
+      });
+    engine.register(typedWorkflow);
+    await writeAttributeGroupedWorkflows(storage, 130);
+
+    const result = await engine.aggregate(
+      {
+        idPrefix: 'aggregate-batched-',
+        attributes: [{ key: 'segment', value: 'even' }],
+      },
+      { groupBy: { attribute: 'segment' } },
+    );
+
+    expect(result.total).toBe(65);
+    expect(result.groups).toEqual([{ key: 'even', count: 65 }]);
+    expect(storage.workflowReadCount).toBe(65);
+    expect(storage.attributeReadCount).toBe(65);
     engine[Symbol.dispose]();
   });
 

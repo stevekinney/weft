@@ -5,6 +5,7 @@ import { encodeStorageKeyComponent, KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { deserializeCheckpoint } from './checkpoint/serialization.ts';
 import { Engine, ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING, type WorkflowHandle } from './engine.ts';
+import { hydrateCheckpointReplayState } from './engine/checkpoint-replay.ts';
 import { WorkflowCompletedEvent } from './events.ts';
 import type { WorkflowContext } from './types.ts';
 import { activity } from './types/activity.ts';
@@ -52,7 +53,7 @@ async function countStoredSignals(
   workflowId: string,
   signalName: string,
 ): Promise<number> {
-  const prefix = `sig:${encodeStorageKeyComponent(workflowId)}:${signalName}:`;
+  const prefix = `sig:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(signalName)}:`;
   let count = 0;
   for await (const _entry of storage.scan(prefix)) {
     count++;
@@ -103,7 +104,7 @@ describe('worker execution signal suspension', () => {
     const workerEngine = createWorkerEngine();
     const completedWorkflowIds: string[] = [];
     workerEngine.addEventListener(WorkflowCompletedEvent.type, (event) => {
-      completedWorkflowIds.push((event as WorkflowCompletedEvent).workflowId);
+      completedWorkflowIds.push(event.workflowId);
     });
 
     const parkedHandle = await workerEngine.start(
@@ -265,7 +266,11 @@ describe('worker execution signal suspension', () => {
       async () => {
         const checkpointBytes = await storage.get(KEYS.checkpoint('worker-failed-activity-replay'));
         if (checkpointBytes === null) return false;
-        const checkpoint = deserializeCheckpoint(checkpointBytes);
+        const checkpoint = await hydrateCheckpointReplayState(
+          storage,
+          'worker-failed-activity-replay',
+          deserializeCheckpoint(checkpointBytes),
+        );
         return checkpoint.workerReplayFailures?.length === 1;
       },
       {

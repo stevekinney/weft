@@ -14,7 +14,9 @@ import {
   encodeStorageKeyComponent,
   KEYS,
   matchesScanOptions,
+  MAX_BATCH_OPERATIONS,
   resolvePrefixRangeEnd,
+  StorageBatchOperationLimitExceededError,
   storageConditionalBatch,
   storageCount,
   storageDeletePrefix,
@@ -48,6 +50,20 @@ function createCoreStorageAdapter(): Storage {
     batch: storage.batch.bind(storage),
     [Symbol.dispose]: storage[Symbol.dispose].bind(storage),
   };
+}
+
+function createDeleteOperations(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    type: 'delete' as const,
+    key: `key:${index}`,
+  }));
+}
+
+function createAbsentConditions(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    key: `key:${index}`,
+    expectedValue: null,
+  }));
 }
 
 describe('storageDeletePrefix', () => {
@@ -174,6 +190,8 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.review('workflow-id', 'review-id'),
       KEYS.workflowHeaders('workflow-id'),
       KEYS.terminalCleanupNeeded('workflow-id'),
+      KEYS.workflowConcurrency('workflow-type', 'partition:key'),
+      KEYS.workflowConcurrencyHolder('workflow-id'),
       KEYS.workflowHasServices('workflow-id'),
       KEYS.offload('workflow-id', 'key'),
       KEYS.archive('workflow-id', 'key'),
@@ -644,6 +662,58 @@ describe('storageConditionalBatch', () => {
       ),
     ).resolves.toBe(true);
   });
+
+  it('rejects too many conditionalBatch operations before calling the adapter', async () => {
+    let adapterCalled = false;
+    const storage: Storage = {
+      ...createCoreStorageAdapter(),
+      capabilities: () => ({
+        readAfterWrite: 'linearizable',
+        scanConsistency: 'snapshot',
+        persistence: 'local',
+        atomicBatch: true,
+        conditionalBatch: true,
+        boundedRangeDelete: false,
+      }),
+      conditionalBatch: async () => {
+        adapterCalled = true;
+        return true;
+      },
+    };
+
+    await expect(
+      storageConditionalBatch(storage, [], createDeleteOperations(MAX_BATCH_OPERATIONS + 1)),
+    ).rejects.toBeInstanceOf(StorageBatchOperationLimitExceededError);
+    expect(adapterCalled).toBe(false);
+  });
+
+  it('rejects too many conditionalBatch conditions before calling the adapter', async () => {
+    let adapterCalled = false;
+    const storage: Storage = {
+      ...createCoreStorageAdapter(),
+      capabilities: () => ({
+        readAfterWrite: 'linearizable',
+        scanConsistency: 'snapshot',
+        persistence: 'local',
+        atomicBatch: true,
+        conditionalBatch: true,
+        boundedRangeDelete: false,
+      }),
+      conditionalBatch: async () => {
+        adapterCalled = true;
+        return true;
+      },
+    };
+
+    await expect(
+      storageConditionalBatch(storage, createAbsentConditions(MAX_BATCH_OPERATIONS + 1), []),
+    ).rejects.toMatchObject({
+      cap: MAX_BATCH_OPERATIONS,
+      count: MAX_BATCH_OPERATIONS + 1,
+      target: 'conditionalBatch conditions',
+    });
+    expect(adapterCalled).toBe(false);
+  });
 });
 
 describe('KEYS', () => {
@@ -678,10 +748,16 @@ describe('KEYS', () => {
     expect(KEYS.signal(workflowId, 'order:placed', 'x')).toBe(
       `sig:${encodedWorkflowId}:order%3Aplaced:1:x`,
     );
+    expect(KEYS.signal(workflowId, 'approve:now', 'signal:1')).toBe(
+      `sig:${encodedWorkflowId}:approve%3Anow:1:signal%3A1`,
+    );
     expect(KEYS.signalSequence(workflowId)).toBe(`sigseq:v1:${encodedWorkflowId}`);
     expect(KEYS.signalAcceptedResponsePrefix(workflowId)).toBe(`sigres:v1:${encodedWorkflowId}:`);
     expect(KEYS.signalAcceptedResponse(workflowId, 'approve', 'signal:1')).toBe(
       `sigres:v1:${encodedWorkflowId}:approve:signal%3A1`,
+    );
+    expect(KEYS.signalAcceptedResponse(workflowId, 'approve:now', 'signal:1')).toBe(
+      `sigres:v1:${encodedWorkflowId}:approve%3Anow:signal%3A1`,
     );
     expect(KEYS.deadline(5_000, workflowId)).toBe(
       `wf-deadline:0000000000005000:${encodedWorkflowId}`,
@@ -704,6 +780,16 @@ describe('KEYS', () => {
     );
     expect(KEYS.review(workflowId, 'review-1')).toBe(`review:${encodedWorkflowId}:review-1`);
     expect(KEYS.workflowHeaders(workflowId)).toBe(`wf-headers:${encodedWorkflowId}`);
+    expect(KEYS.childCancellationPrefix(workflowId)).toBe(`child-cancel:${encodedWorkflowId}:`);
+    expect(KEYS.childCancellation(workflowId, 'child:1')).toBe(
+      `child-cancel:${encodedWorkflowId}:child%3A1`,
+    );
+    expect(KEYS.workflowConcurrency('invoice:review', 'customer:1')).toBe(
+      'wf-concurrency:invoice%3Areview:customer%3A1',
+    );
+    expect(KEYS.workflowConcurrencyHolder(workflowId)).toBe(
+      `wf-concurrency-holder:${encodedWorkflowId}`,
+    );
     expect(KEYS.offload(workflowId, 'payload')).toBe(`offload:${encodedWorkflowId}:payload`);
     expect(KEYS.archive(workflowId, 'payload')).toBe(`archive:${encodedWorkflowId}:payload`);
     expect(KEYS.stateExecution(workflowId, 'cursor:1')).toBe(
@@ -715,6 +801,7 @@ describe('KEYS', () => {
     expect(KEYS.streamChunk(workflowId, 'stream', 7)).toBe(
       `blob:${encodedWorkflowId}:stream:chunk:0000000007`,
     );
+    expect(KEYS.streamTail(workflowId, 'stream')).toBe(`blob:${encodedWorkflowId}:stream:tail`);
     expect(KEYS.streamMetadata(workflowId, 'stream')).toBe(`blob:${encodedWorkflowId}:stream:meta`);
     expect(KEYS.budgetCharged('operation-1')).toBe('budget-charged:operation-1');
     expect(KEYS.toolEffect(workflowId, 'agent-1', 'semantic-hash')).toBe(

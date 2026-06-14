@@ -27,6 +27,7 @@ export * from './types/state.ts';
 export * from './types/workflow-builder-helpers.ts';
 export * from './types/workflow-builder-runtime.ts';
 export * from './types/workflow-builder.ts';
+export * from './types/workflow-concurrency.ts';
 export * from './types/workflow-context.ts';
 export * from './types/workflow-function.ts';
 export * from './types/workflow-log.ts';

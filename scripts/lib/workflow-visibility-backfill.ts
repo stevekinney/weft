@@ -47,6 +47,12 @@ export type DropReport = {
  */
 export type BackfillLogger = (message: string) => void;
 
+export type WorkflowVisibilityBackfillOptions = {
+  logger?: BackfillLogger;
+  checkpointEvery?: number;
+  onWatermarkWritten?: () => void;
+};
+
 function isTopLevelWorkflowKey(key: string): boolean {
   const idPart = key.slice(3);
   return key.startsWith('wf:') && !idPart.includes(':');
@@ -76,7 +82,7 @@ async function loadCursor(storage: Storage): Promise<string | undefined> {
  */
 export async function runWorkflowVisibilityBackfill(
   storage: Storage,
-  options: { logger?: BackfillLogger; checkpointEvery?: number } = {},
+  options: WorkflowVisibilityBackfillOptions = {},
 ): Promise<BackfillReport> {
   const logger = options.logger ?? (() => undefined);
   const checkpointEvery = options.checkpointEvery ?? 500;
@@ -154,6 +160,7 @@ export async function runWorkflowVisibilityBackfill(
     },
     { type: 'delete', key: KEYS.workflowVisibilityMetaCursor() },
   ]);
+  options.onWatermarkWritten?.();
 
   return { processed, conflicts: 0, watermarkWritten: true };
 }

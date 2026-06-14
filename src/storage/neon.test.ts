@@ -80,10 +80,6 @@ runStorageCapabilityConformance('NeonStorage', {
     conditionalBatch: true,
     boundedRangeDelete: true,
   },
-  // PGlite serializes on a single connection, so the concurrent-CAS-contention
-  // case cannot be staged here. Real concurrency is covered in neon-live.test.ts
-  // against an actual Neon endpoint.
-  supportsConcurrentWrites: false,
 });
 
 runBasicStorageContract('NeonStorage', { create: createPgliteBackedNeonStorage });

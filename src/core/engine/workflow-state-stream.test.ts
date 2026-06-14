@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from '../../storage/memory.ts';
 import { flush } from '../../testing/storage-backends.test-support.ts';
 import type { ListFilter, WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
@@ -26,7 +27,72 @@ async function collectMatchingWorkflowIds(engine: Engine, filter: ListFilter): P
   return ids;
 }
 
+class ConcurrentWorkflowStateReadCountingStorage extends MemoryStorage {
+  workflowReadCount = 0;
+  activeWorkflowReadCount = 0;
+  maxConcurrentWorkflowReadCount = 0;
+
+  override async get(key: string): Promise<Uint8Array | null> {
+    if (!key.startsWith('wf:stream-batched-')) {
+      return super.get(key);
+    }
+
+    this.workflowReadCount += 1;
+    this.activeWorkflowReadCount += 1;
+    this.maxConcurrentWorkflowReadCount = Math.max(
+      this.maxConcurrentWorkflowReadCount,
+      this.activeWorkflowReadCount,
+    );
+    try {
+      await Promise.resolve();
+      return await super.get(key);
+    } finally {
+      this.activeWorkflowReadCount -= 1;
+    }
+  }
+
+  resetWorkflowReadCounts(): void {
+    this.workflowReadCount = 0;
+    this.activeWorkflowReadCount = 0;
+    this.maxConcurrentWorkflowReadCount = 0;
+  }
+}
+
 describe('streamMatchingWorkflowStates', () => {
+  it('batches constrained workflow-state reads across chunk boundaries', async () => {
+    const storage = new ConcurrentWorkflowStateReadCountingStorage();
+    const engine = new Engine({ storage });
+    const echoWorkflow2 = workflow({ name: 'echo' }).execute(echoWorkflow);
+    engine.register(echoWorkflow2);
+
+    try {
+      const handles = await Promise.all(
+        Array.from({ length: 130 }, (_, index) =>
+          engine.start('echo', `value-${index}`, {
+            id: `stream-batched-${String(index).padStart(3, '0')}`,
+            tags: ['selected'],
+          }),
+        ),
+      );
+      await Promise.all(handles.map((handle) => handle.result()));
+      storage.resetWorkflowReadCounts();
+
+      const ids = await collectMatchingWorkflowIds(engine, { tags: ['selected'] });
+
+      expect(ids.toSorted()).toEqual(
+        Array.from(
+          { length: 130 },
+          (_, index) => `stream-batched-${String(index).padStart(3, '0')}`,
+        ),
+      );
+      expect(storage.workflowReadCount).toBe(130);
+      expect(storage.maxConcurrentWorkflowReadCount).toBeGreaterThan(1);
+      expect(storage.maxConcurrentWorkflowReadCount).toBeLessThanOrEqual(64);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
   it('streams workflows from the shared constrained-id scan path', async () => {
     const engine = new Engine();
     const echoWorkflow2 = workflow({ name: 'echo' }).execute(echoWorkflow);

@@ -37,35 +37,49 @@ interface ServeOptions {
   development?: boolean;
   dashboard?: DashboardRouteTarget;
   auth?: AuthConfig;
+  rateLimit?: RateLimitConfig;
+  cors?: CorsOptions;
   unauthenticatedAccess?: 'warn' | 'allow' | 'reject';
+  maxRequestBodyBytes?: number;
+  maxStreamConnectionsPerWorkflow?: number;
   visibilityPollIntervalMs?: number;
   workerReconnectGracePeriodMs?: number;
+  workerShutdownTimeoutMs?: number;
   routingPolicy?: RoutingPolicy;
   schedulingPolicy?: SchedulingPolicy;
   prometheusExporter?: PrometheusExporter;
 }
 ```
 
-| Field                          | Type                            | Default          | Description                                                              |
-| ------------------------------ | ------------------------------- | ---------------- | ------------------------------------------------------------------------ |
-| `engine`                       | `Engine`                        | (required)       | The engine instance to expose over HTTP                                  |
-| `port`                         | `number`                        | `7233`           | TCP port to listen on                                                    |
-| `hostname`                     | `string`                        | `'0.0.0.0'`      | Hostname/IP to bind to                                                   |
-| `development`                  | `boolean`                       | `false`          | Enable development mode with verbose error responses                     |
-| `dashboard`                    | `DashboardRouteTarget`          | `undefined`      | External dashboard shell served at supported page routes when supplied   |
-| `auth`                         | `AuthConfig`                    | `undefined`      | Authentication configuration (JWT, mTLS, or custom)                      |
-| `unauthenticatedAccess`        | `'warn' \| 'allow' \| 'reject'` | `'warn'`         | Startup policy when `auth` is omitted                                    |
-| `visibilityPollIntervalMs`     | `number`                        | `5000`           | Polling interval for task visibility timeout checks                      |
-| `workerReconnectGracePeriodMs` | `number`                        | `100`            | Milliseconds before a disconnected worker's in-flight tasks are requeued |
-| `routingPolicy`                | `RoutingPolicy`                 | `'least-loaded'` | Worker routing policy                                                    |
-| `schedulingPolicy`             | `SchedulingPolicy`              | `'priority'`     | Scheduling policy for task dispatch                                      |
-| `prometheusExporter`           | `PrometheusExporter`            | `undefined`      | Exporter that produces the response body for `/v1/metrics`               |
+| Field                             | Type                            | Default          | Description                                                                 |
+| --------------------------------- | ------------------------------- | ---------------- | --------------------------------------------------------------------------- |
+| `engine`                          | `Engine`                        | (required)       | The engine instance to expose over HTTP                                     |
+| `port`                            | `number`                        | `7233`           | TCP port to listen on                                                       |
+| `hostname`                        | `string`                        | `'0.0.0.0'`      | Hostname/IP to bind to                                                      |
+| `development`                     | `boolean`                       | `false`          | Enable development mode with verbose error responses                        |
+| `dashboard`                       | `DashboardRouteTarget`          | `undefined`      | External dashboard shell served at supported page routes when supplied      |
+| `auth`                            | `AuthConfig`                    | `undefined`      | Authentication configuration (JWT, mTLS, or custom)                         |
+| `rateLimit`                       | `RateLimitConfig`               | `undefined`      | Optional single-process request throttling                                  |
+| `cors`                            | `CorsOptions`                   | `undefined`      | Optional browser cross-origin policy                                        |
+| `unauthenticatedAccess`           | `'warn' \| 'allow' \| 'reject'` | `'warn'`         | Startup policy when `auth` is omitted                                       |
+| `maxRequestBodyBytes`             | `number`                        | `1048576`        | Maximum body size for REST operation routes and JSON-RPC over HTTP          |
+| `maxStreamConnectionsPerWorkflow` | `number`                        | `100`            | Maximum concurrent workflow stream/watch WebSocket connections per workflow |
+| `visibilityPollIntervalMs`        | `number`                        | `5000`           | Polling interval for task visibility timeout checks                         |
+| `workerReconnectGracePeriodMs`    | `number`                        | `2000`           | Milliseconds before a disconnected worker's in-flight tasks are requeued    |
+| `workerShutdownTimeoutMs`         | `number`                        | `30000`          | Milliseconds `server.stop()` waits for connected workers to drain           |
+| `routingPolicy`                   | `RoutingPolicy`                 | `'least-loaded'` | Worker routing policy                                                       |
+| `schedulingPolicy`                | `SchedulingPolicy`              | `'priority'`     | Scheduling policy for task dispatch                                         |
+| `prometheusExporter`              | `PrometheusExporter`            | `undefined`      | Exporter that produces the response body for `/v1/metrics`                  |
 
-See [configuration.md](./configuration.md) for `AuthConfig`, `RoutingPolicy`, and `SchedulingPolicy` details.
+See [configuration.md](./configuration.md) for `AuthConfig`, `RateLimitConfig`, `CorsOptions`, `RoutingPolicy`, and `SchedulingPolicy` details. The [server guide](../guides/server.md#rate-limiting) covers rate limiting, and the [CORS section](../guides/server.md#cross-origin-resource-sharing-cors) covers browser cross-origin policy.
 
 When `auth` is omitted, [`serve()`](#serve) defaults to `unauthenticatedAccess: 'warn'`: it starts, logs a startup warning, and leaves non-public operations reachable to any network client. Set `unauthenticatedAccess: 'reject'` or [`WEFT_SERVER_AUTHENTICATION_REQUIRED=1`](./configuration.md#environment-variables) in production so startup fails before binding unless an `auth` configuration is present. Set `unauthenticatedAccess: 'allow'` only for intentionally open local process boundaries; it does not override `WEFT_SERVER_AUTHENTICATION_REQUIRED`.
 
-`workerReconnectGracePeriodMs` is clamped to `0..5000`. A same-`workerId` reconnect inside the window cancels the pending requeue and keeps the worker's in-flight assignments. `0` disables the grace period and requeues synchronously from the close handler.
+`workerReconnectGracePeriodMs` is clamped to `0..5000`. A same-`workerId` reconnect inside the window cancels the pending requeue and keeps the worker's in-flight assignments. The default is `2000` ms because Weft's common single-node and local-first deployments need a short buffer for transient socket churn without delaying genuine dead-worker detection for a full cloud drain window. Set `100` only for low-latency test or embedded scenarios. Set `5000` for cloud or load-balancer deployments where replacement workers commonly need several seconds to reconnect. `0` disables the grace period and requeues synchronously from the close handler.
+
+`maxRequestBodyBytes` applies to REST operation routes and JSON-RPC over HTTP; oversized bodies return `413 Payload Too Large` before the full body is buffered. `maxStreamConnectionsPerWorkflow` applies to `/v1/workflows/:id/stream` and `/v1/workflows/:id/watch`; connections over the per-workflow cap are closed with WebSocket policy-violation code `1008`.
+
+`server.stop()` drains connected remote workers before stopping the Bun server. It sends each worker a shutdown frame, accepts in-flight `taskResult` messages during the drain window, and waits up to `workerShutdownTimeoutMs` before teardown continues. The CLI `serve` signal handlers use the same stop path.
 
 ---
 
@@ -430,6 +444,20 @@ MCP resource discovery includes workflow state, event log, checkpoint history, a
 
 The `@lostgradient/weft/mcp` subpath exports the server helpers for embedding, and the `weft-mcp` binary runs a local MCP stdio session against memory or SQLite storage. Local stdio admission is explicit: use `--startup-token <token>` for a first-frame authentication gate, or `--allow-unauthenticated-local-admin` only for trusted local process boundaries.
 
+When `--startup-token` is set, the first newline-delimited stdio frame must be a JSON-RPC request using `weft.authenticate`:
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "method": "weft.authenticate", "params": { "token": "<value>" } }
+```
+
+A matching token receives:
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "result": {} }
+```
+
+Invalid JSON, a missing token, or a mismatched token returns JSON-RPC error code `-32010` and exits with code `2`. A clean stdio session exits `0`; an unexpected session error exits `1`.
+
 ### Storage Operations
 
 > [!NOTE]
@@ -605,9 +633,11 @@ WebSocket upgrade is supported on the following paths:
 | `/api/v1/tasks/:queue/stream` | Worker task stream                                                |
 | `/api/jsonrpc`                | JSON-RPC over WebSocket session for the unified operation catalog |
 
+Workflow stream and watch sockets share the `maxStreamConnectionsPerWorkflow` per-workflow cap. The default is `100`; excess connections are closed with WebSocket code `1008`.
+
 ### Error Responses
 
-All errors return JSON with an `error` field:
+Most REST operation faults return JSON with an `error` field:
 
 ```json
 { "error": "Workflow with id \"abc\" already exists" }
@@ -627,7 +657,9 @@ REST operation handlers mask unexpected `EngineFailure` faults to
 messages, storage details, stack traces, and file paths do not cross the HTTP
 boundary. Declared client faults keep their mapped status and public message.
 JSON-RPC transports receive the operation fault object instead of the REST
-body shape.
+body shape. The [Error Codes](./api-errors.md#faultcode) reference documents the
+source-complete `FaultCode` vocabulary, HTTP status mapping, and JSON-RPC error
+data shape.
 
 ---
 

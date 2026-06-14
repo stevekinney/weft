@@ -1,9 +1,26 @@
 import { describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../storage/memory';
+import { waitForCondition } from '../testing/fake-timers.test-support';
 import { Engine } from './engine';
 import type { WorkflowContext } from './types';
 import { workflow } from './types';
+
+async function waitForWorkflowStatus(
+  engine: Engine,
+  workflowId: string,
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'timed-out' | 'suspended',
+): Promise<void> {
+  await waitForCondition(
+    async () => {
+      const state = await engine.get(workflowId);
+      return state?.status === status;
+    },
+    {
+      label: `${workflowId} status ${status}`,
+    },
+  );
+}
 
 describe('child workflows', () => {
   it('parent starts child and gets result', async () => {
@@ -198,5 +215,192 @@ describe('child workflows', () => {
     const result = await handle.result();
     expect(result).toEqual(['result-0', 'result-1', 'result-2']);
     expect(childCallCount).toBe(3);
+  });
+
+  it('abandoned child survives parent completion without parent execution ownership', async () => {
+    const engine = new Engine();
+    const childWorkflowId = 'abandoned-completion-child';
+
+    engine.register(
+      workflow({ name: 'abandoned-completion-child-workflow' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        const signalPayload = yield* ctx.waitForSignal<string>('finish');
+        return `child:${signalPayload}`;
+      }),
+    );
+
+    engine.register(
+      workflow({ name: 'abandoned-completion-parent' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        return yield* ctx.startChild('abandoned-completion-child-workflow', null, {
+          id: childWorkflowId,
+          parentClosePolicy: 'abandon',
+        });
+      }),
+    );
+
+    const parentHandle = await engine.start('abandoned-completion-parent', null, {
+      id: 'abandoned-completion-parent',
+    });
+
+    await expect(parentHandle.result()).resolves.toEqual({ id: childWorkflowId });
+    await waitForWorkflowStatus(engine, childWorkflowId, 'running');
+
+    const childState = await engine.get(childWorkflowId);
+    expect(childState?.executionStateOwnerId).toBeUndefined();
+
+    await engine.signal(childWorkflowId, 'finish', 'completed');
+    await expect(engine.getHandle(childWorkflowId).result()).resolves.toBe('child:completed');
+  });
+
+  it('abandoned child survives parent cancellation without parent execution ownership', async () => {
+    const engine = new Engine();
+    const childWorkflowId = 'abandoned-cancel-child';
+
+    engine.register(
+      workflow({ name: 'abandoned-cancel-child-workflow' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        const signalPayload = yield* ctx.waitForSignal<string>('finish');
+        return `child:${signalPayload}`;
+      }),
+    );
+
+    engine.register(
+      workflow({ name: 'abandoned-cancel-parent' }).execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.startChild('abandoned-cancel-child-workflow', null, {
+          id: childWorkflowId,
+          parentClosePolicy: 'abandon',
+        });
+        return yield* ctx.waitForSignal('release-parent');
+      }),
+    );
+
+    const parentHandle = await engine.start('abandoned-cancel-parent', null, {
+      id: 'abandoned-cancel-parent',
+    });
+
+    await waitForWorkflowStatus(engine, childWorkflowId, 'running');
+    await parentHandle.cancel();
+    await expect(parentHandle.result()).rejects.toThrow('Workflow cancelled');
+
+    const childStateAfterParentCancel = await engine.get(childWorkflowId);
+    expect(childStateAfterParentCancel?.status).toBe('running');
+    expect(childStateAfterParentCancel?.executionStateOwnerId).toBeUndefined();
+
+    await engine.signal(childWorkflowId, 'finish', 'after-parent-cancel');
+    await expect(engine.getHandle(childWorkflowId).result()).resolves.toBe(
+      'child:after-parent-cancel',
+    );
+  });
+
+  it('request-cancel child receives cancellation when the parent cancels', async () => {
+    const engine = new Engine();
+    const childWorkflowId = 'request-cancel-child';
+
+    engine.register(
+      workflow({ name: 'request-cancel-child-workflow' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        return yield* ctx.waitForSignal('finish');
+      }),
+    );
+
+    engine.register(
+      workflow({ name: 'request-cancel-parent' }).execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.startChild('request-cancel-child-workflow', null, {
+          id: childWorkflowId,
+          parentClosePolicy: 'request-cancel',
+        });
+        return yield* ctx.waitForSignal('release-parent');
+      }),
+    );
+
+    const parentHandle = await engine.start('request-cancel-parent', null, {
+      id: 'request-cancel-parent',
+    });
+
+    await waitForWorkflowStatus(engine, childWorkflowId, 'running');
+    await parentHandle.cancel();
+    await expect(parentHandle.result()).rejects.toThrow('Workflow cancelled');
+    await waitForWorkflowStatus(engine, childWorkflowId, 'cancelled');
+    await expect(engine.getHandle(childWorkflowId).result()).rejects.toThrow('Workflow cancelled');
+  });
+
+  it('request-cancel child receives cancellation after parent recovery', async () => {
+    const storage = new MemoryStorage();
+    const childWorkflowId = 'recovered-request-cancel-child';
+    const parentWorkflowId = 'recovered-request-cancel-parent';
+
+    const childWorkflow = workflow({ name: 'recovered-request-cancel-child-workflow' }).execute(
+      async function* (ctx: WorkflowContext) {
+        return yield* ctx.waitForSignal('finish');
+      },
+    );
+    const parentWorkflow = workflow({ name: 'recovered-request-cancel-parent-workflow' }).execute(
+      async function* (ctx: WorkflowContext) {
+        yield* ctx.startChild('recovered-request-cancel-child-workflow', null, {
+          id: childWorkflowId,
+          parentClosePolicy: 'request-cancel',
+        });
+        return yield* ctx.waitForSignal('release-parent');
+      },
+    );
+
+    const engine = new Engine({ storage });
+    engine.register(childWorkflow);
+    engine.register(parentWorkflow);
+    const parentHandle = await engine.start('recovered-request-cancel-parent-workflow', null, {
+      id: parentWorkflowId,
+    });
+    void parentHandle.result().catch(() => {});
+    await waitForWorkflowStatus(engine, childWorkflowId, 'running');
+    await engine[Symbol.asyncDispose]();
+
+    const recoveredEngine = new Engine({ storage });
+    recoveredEngine.register(childWorkflow);
+    recoveredEngine.register(parentWorkflow);
+    await recoveredEngine.recoverAll();
+
+    await recoveredEngine.cancel(parentWorkflowId);
+    await waitForWorkflowStatus(recoveredEngine, parentWorkflowId, 'cancelled');
+    await waitForWorkflowStatus(recoveredEngine, childWorkflowId, 'cancelled');
+    await expect(recoveredEngine.getHandle(childWorkflowId).result()).rejects.toThrow(
+      'Workflow cancelled',
+    );
+    await recoveredEngine[Symbol.asyncDispose]();
+  });
+
+  it('await parent-close policy preserves child result and parent execution ownership', async () => {
+    const engine = new Engine();
+    const childWorkflowId = 'await-policy-child';
+    const parentWorkflowId = 'await-policy-parent';
+
+    engine.register(
+      workflow({ name: 'await-policy-child-workflow' }).execute(async function* () {
+        return 'child-result';
+      }),
+    );
+
+    engine.register(
+      workflow({ name: 'await-policy-parent-workflow' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        return yield* ctx.startChild<string>('await-policy-child-workflow', null, {
+          id: childWorkflowId,
+          parentClosePolicy: 'await',
+        });
+      }),
+    );
+
+    const parentHandle = await engine.start('await-policy-parent-workflow', null, {
+      id: parentWorkflowId,
+    });
+
+    await expect(parentHandle.result()).resolves.toBe('child-result');
+    const childState = await engine.get(childWorkflowId);
+    expect(childState?.executionStateOwnerId).toBe(parentWorkflowId);
   });
 });

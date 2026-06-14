@@ -26,6 +26,7 @@ export const NotFoundDataSchema = z.object({
 export const ConflictDataSchema = z.object({ reason: z.string() });
 export const UnprocessableDataSchema = z.object({ reason: z.string() });
 export const TimeoutDataSchema = z.object({ operationName: z.string().optional() });
+export const PayloadTooLargeDataSchema = z.object({ maxBytes: z.number() });
 export const NotImplementedDataSchema = z.object({});
 const TransportKindSchema = z.enum([
   'http-rest',
@@ -62,6 +63,7 @@ const FAULT_DATA_SCHEMAS: Record<FaultCode, z.ZodType> = {
   Conflict: ConflictDataSchema,
   Unprocessable: UnprocessableDataSchema,
   Timeout: TimeoutDataSchema,
+  PayloadTooLarge: PayloadTooLargeDataSchema,
   NotImplemented: NotImplementedDataSchema,
   UnsupportedTransport: UnsupportedTransportDataSchema,
   SubscriptionOverflow: SubscriptionOverflowDataSchema,

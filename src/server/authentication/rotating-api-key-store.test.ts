@@ -51,6 +51,17 @@ describe('createRotatingApiKeyStore', () => {
     expect(() => store.add('', { subject: 'svc' })).toThrow();
   });
 
+  it('replaces a registered key without retaining stale registration data', async () => {
+    const store = createRotatingApiKeyStore();
+    store.add('key-1', { subject: 'old-service', scopes: ['workflows:read'] });
+    store.add('key-1', { subject: 'new-service', scopes: ['workflows:write'] });
+
+    const principal = await store.resolve('key-1');
+    expect(principal?.subject).toBe('new-service');
+    expect(principal?.hasScope('workflows:read')).toBe(false);
+    expect(principal?.hasScope('workflows:write')).toBe(true);
+  });
+
   it('two overlapping valid keys both authenticate during a rotation window', async () => {
     const store = createRotatingApiKeyStore();
     // Introduce the new key while the old one is still valid.

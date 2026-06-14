@@ -216,7 +216,7 @@ describe('disposeEngine', () => {
         return 'finished';
       }),
     );
-    const started = await engine.start('quick-fresh', null);
+    const started = await engine.start('quick-fresh', null, { defer: false });
     await started.result();
 
     engine[Symbol.dispose]();

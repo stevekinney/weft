@@ -76,6 +76,7 @@ async function dispatchRestBinding(
       operationRegistry,
       principal,
       options?.pipelineTrace,
+      options?.maxRequestBodyBytes,
     );
   } catch (error) {
     console.error('Unhandled error in dispatchViaExecuteOperation', {

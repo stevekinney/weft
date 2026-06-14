@@ -1,4 +1,6 @@
-import { invalidParamsFault } from './operation-helpers.ts';
+import type { RestInputContext } from '../rest-binding.ts';
+import { readRestJsonBody } from '../rest-body.ts';
+import { invalidParamsFault, isOperationFault } from './operation-helpers.ts';
 
 export type SharedStartWorkflowRestFields = {
   readonly type: unknown;
@@ -18,11 +20,13 @@ function isJsonObjectLikeRecord(value: unknown): value is Record<string, unknown
 
 export async function parseStartWorkflowRequestRecord(
   request: Request,
+  context?: RestInputContext,
 ): Promise<Record<string, unknown>> {
   let body: unknown;
   try {
-    body = await request.json();
-  } catch {
+    body = await readRestJsonBody(request, context);
+  } catch (error) {
+    if (isOperationFault(error)) throw error;
     throw invalidParamsFault('Invalid JSON body');
   }
 

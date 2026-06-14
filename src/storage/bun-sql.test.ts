@@ -6,6 +6,7 @@ import {
   bytes as encode,
   runBasicStorageContract,
   runBinaryAndLargeScanStorageConformance,
+  runConcurrentConditionalBatchConformance,
   runStorageCapabilityConformance,
 } from './storage-adapter.test-support.ts';
 
@@ -22,6 +23,9 @@ runStorageCapabilityConformance('BunSQLiteStorage', {
 });
 
 runBasicStorageContract('BunSQLiteStorage', { create: () => new BunSQLiteStorage(':memory:') });
+runConcurrentConditionalBatchConformance('BunSQLiteStorage', {
+  create: () => new BunSQLiteStorage(':memory:'),
+});
 runBinaryAndLargeScanStorageConformance('BunSQLiteStorage', {
   create: () => new BunSQLiteStorage(':memory:'),
 });

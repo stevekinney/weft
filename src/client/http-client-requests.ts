@@ -3,6 +3,7 @@ import type { StoredStreamChunk } from '../core/context.ts';
 import type {
   BulkCancelResult,
   BulkDeleteResult,
+  BulkRetryFailedResult,
   BulkSignalResult,
   BulkTagResult,
   CoordinatedUpdateResult,
@@ -128,6 +129,22 @@ export function cancelAllWorkflowRequests(
     method: 'POST',
     body: JSON.stringify({ filter }),
   });
+}
+
+export function retryFailedAllWorkflowRequests(
+  context: HttpClientRequestContext,
+  filter: ListFilter,
+): Promise<BulkRetryFailedResult> {
+  assertScopedBulkWorkflowFilter(filter);
+  return request<BulkRetryFailedResult>(
+    context.baseUrl,
+    '/workflows/bulk/retry-failed',
+    context.headers,
+    {
+      method: 'POST',
+      body: JSON.stringify({ filter }),
+    },
+  );
 }
 
 export function signalAllWorkflowRequests(

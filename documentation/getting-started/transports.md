@@ -110,6 +110,20 @@ When the transport runs **without authentication** (`authRequired: false`), ever
 
 Local MCP is exposed through the `weft-mcp` binary. It runs an embedded Weft engine over newline-delimited stdio frames. Admission is mandatory: pass `--startup-token <token>` and send `weft.authenticate` as the first frame, or use `--allow-unauthenticated-local-admin` only for trusted local process boundaries.
 
+With `--startup-token`, the first stdio line must be this JSON-RPC request:
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "method": "weft.authenticate", "params": { "token": "<value>" } }
+```
+
+A matching token receives:
+
+```json
+{ "jsonrpc": "2.0", "id": 1, "result": {} }
+```
+
+Invalid JSON, a missing token, or a mismatched token returns JSON-RPC error code `-32010` and exits with code `2`. A clean stdio session exits `0`; an unexpected session error exits `1`.
+
 MCP exposes:
 
 - Registered workflows with an `inputSchema` as lowercase-underscore tools

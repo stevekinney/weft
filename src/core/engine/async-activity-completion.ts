@@ -22,7 +22,10 @@
  * across replay. After an engine restart, `recoverAll()` replays the workflow
  * from its checkpoint; the deferred activity re-runs, re-defers, and produces
  * the *same* token. A callback that arrives after the crash therefore still
- * resolves the correct activity.
+ * resolves the correct activity. If that callback races `recoverAll()` and
+ * arrives after token recovery but before replay has adopted the workflow
+ * generator, the engine buffers the completion or failure outcome and drains it
+ * when replay reaches the same deterministic token.
  *
  * Internal-only. Imported from `src/core/engine/**` and the `ActivityContext`
  * construction path.
@@ -37,6 +40,15 @@ import { WeftError } from '../weft-error.ts';
 import type { EngineInternals } from './internals.ts';
 
 const ASYNC_ACTIVITY_TOKEN_PREFIX = 'async-act:v1';
+
+type AsyncActivityResolutionCallbacks = {
+  feedOperationResult: (
+    workflowId: string,
+    outcome: OperationOutcome,
+    originalReason?: { value: unknown },
+  ) => void;
+  finalizeTimeline: (workflowId: string, status: 'completed' | 'failed', output: unknown) => void;
+};
 
 /**
  * Storage-key prefix for durable pending-async-activity records. Matches the
@@ -117,6 +129,14 @@ export type PendingAsyncActivity = {
   readonly step: number;
   readonly attempt: number;
   readonly createdAt: number;
+};
+
+export type PendingAsyncActivityResolution = {
+  readonly token: string;
+  readonly outcome: OperationOutcome;
+  readonly originalReason?: { value: unknown };
+  readonly timelineStatus: 'completed' | 'failed';
+  readonly timelineOutput: unknown;
 };
 
 /** Durable shape persisted under {@link KEYS.asyncActivity}. */
@@ -219,7 +239,18 @@ export async function parkDeferredAsyncActivity(
   internals: EngineInternals,
   deferral: AsyncActivityDeferral,
   details: Omit<PendingAsyncActivity, 'token' | 'createdAt'>,
+  callbacks: AsyncActivityResolutionCallbacks,
 ): Promise<never> {
+  const queuedResolution = takePendingAsyncActivityResolution(
+    internals,
+    details.workflowId,
+    deferral.token,
+  );
+  if (queuedResolution !== undefined) {
+    deliverPendingAsyncActivityResolution(details.workflowId, queuedResolution, callbacks);
+    return new Promise<never>(() => {});
+  }
+
   await registerPendingAsyncActivity(internals, {
     token: deferral.token,
     createdAt: internals.options.getNow(),
@@ -257,14 +288,9 @@ export async function recoverPendingAsyncActivities(internals: EngineInternals):
  * {@link AsyncActivityTokenNotFoundError} when the token is unknown or already
  * consumed (tokens are single-use).
  *
- * Note: there is a narrow window during `recoverAll()` between
- * `recoverPendingAsyncActivities` (which loads tokens into memory) and the
- * completion of workflow replay (which adopts the workflow generator). If
- * `completeAsyncActivity` is called in that window, `feedOperationResult` will
- * silently no-op because the generator isn't adopted yet. The token is then
- * permanently consumed, stranding the workflow. Callers should wait for
- * `recoverAll()` to settle before resuming async activities after a restart.
- * A proper deferred-resume queue is a follow-up concern.
+ * Recovery may consume a token before workflow replay has adopted the inline
+ * generator. The consumed result is buffered by workflow id and delivered when
+ * replay reaches the same deterministic async-activity token again.
  */
 async function consumePendingAsyncActivity(
   internals: EngineInternals,
@@ -292,6 +318,52 @@ async function consumePendingAsyncActivity(
   return pending;
 }
 
+function shouldBufferPendingAsyncActivityResolution(
+  internals: EngineInternals,
+  workflowId: string,
+): boolean {
+  return internals.inlineStrategy !== null && !internals.inlineStrategy.hasGenerator(workflowId);
+}
+
+function queuePendingAsyncActivityResolution(
+  internals: EngineInternals,
+  workflowId: string,
+  resolution: PendingAsyncActivityResolution,
+): void {
+  internals.pendingAsyncActivityResolutions ??= new Map();
+  const queued = internals.pendingAsyncActivityResolutions.get(workflowId) ?? [];
+  queued.push(resolution);
+  internals.pendingAsyncActivityResolutions.set(workflowId, queued);
+}
+
+function takePendingAsyncActivityResolution(
+  internals: EngineInternals,
+  workflowId: string,
+  token: string,
+): PendingAsyncActivityResolution | undefined {
+  internals.pendingAsyncActivityResolutions ??= new Map();
+  const queued = internals.pendingAsyncActivityResolutions.get(workflowId);
+  if (queued === undefined) return undefined;
+  const index = queued.findIndex((resolution) => resolution.token === token);
+  if (index === -1) return undefined;
+  const resolution = queued[index];
+  if (resolution === undefined) return undefined;
+  queued.splice(index, 1);
+  if (queued.length === 0) {
+    internals.pendingAsyncActivityResolutions.delete(workflowId);
+  }
+  return resolution;
+}
+
+function deliverPendingAsyncActivityResolution(
+  workflowId: string,
+  resolution: PendingAsyncActivityResolution,
+  callbacks: AsyncActivityResolutionCallbacks,
+): void {
+  callbacks.finalizeTimeline(workflowId, resolution.timelineStatus, resolution.timelineOutput);
+  callbacks.feedOperationResult(workflowId, resolution.outcome, resolution.originalReason);
+}
+
 /**
  * Resolve a pending async activity by feeding `outcome` back into the parked
  * workflow. Shared by the completion and failure entry points so both paths
@@ -306,13 +378,23 @@ async function resolvePendingAsyncActivity(
   internals: EngineInternals,
   token: string,
   outcome: OperationOutcome,
-  feedOperationResult: (workflowId: string, outcome: OperationOutcome) => void,
-  finalizeTimeline: (workflowId: string, status: 'completed' | 'failed', output: unknown) => void,
+  callbacks: AsyncActivityResolutionCallbacks,
+  originalReason?: { value: unknown },
 ): Promise<void> {
   const pending = await consumePendingAsyncActivity(internals, token);
   const timelineOutput = outcome.status === 'completed' ? outcome.value : outcome.error;
-  finalizeTimeline(pending.workflowId, outcome.status, timelineOutput);
-  feedOperationResult(pending.workflowId, outcome);
+  const resolution: PendingAsyncActivityResolution = {
+    token,
+    outcome,
+    timelineStatus: outcome.status,
+    timelineOutput,
+    ...(originalReason !== undefined ? { originalReason } : {}),
+  };
+  if (shouldBufferPendingAsyncActivityResolution(internals, pending.workflowId)) {
+    queuePendingAsyncActivityResolution(internals, pending.workflowId, resolution);
+    return;
+  }
+  deliverPendingAsyncActivityResolution(pending.workflowId, resolution, callbacks);
 }
 
 /**
@@ -323,8 +405,7 @@ export async function completeAsyncActivity(
   internals: EngineInternals,
   token: string,
   result: unknown,
-  feedOperationResult: (workflowId: string, outcome: OperationOutcome) => void,
-  finalizeTimeline: (workflowId: string, status: 'completed' | 'failed', output: unknown) => void,
+  callbacks: AsyncActivityResolutionCallbacks,
 ): Promise<void> {
   // An async completion produces the same logical object as an inline activity
   // return — an activity result — but reaches the workflow through
@@ -338,8 +419,7 @@ export async function completeAsyncActivity(
     internals,
     token,
     { status: 'completed', value: result },
-    feedOperationResult,
-    finalizeTimeline,
+    callbacks,
   );
 }
 
@@ -386,12 +466,7 @@ export async function failAsyncActivity(
   internals: EngineInternals,
   token: string,
   error: unknown,
-  feedOperationResult: (
-    workflowId: string,
-    outcome: OperationOutcome,
-    originalReason?: { value: unknown },
-  ) => void,
-  finalizeTimeline: (workflowId: string, status: 'completed' | 'failed', output: unknown) => void,
+  callbacks: AsyncActivityResolutionCallbacks,
 ): Promise<void> {
   const message = error instanceof Error ? error.message : String(error);
   const errorName = error instanceof Error ? error.name : undefined;
@@ -405,16 +480,16 @@ export async function failAsyncActivity(
     internals.options.payloadSizePolicy.maxBytes,
     'activity result',
   );
-  const pending = await consumePendingAsyncActivity(internals, token);
-  finalizeTimeline(pending.workflowId, 'failed', message);
-  feedOperationResult(
-    pending.workflowId,
+  await resolvePendingAsyncActivity(
+    internals,
+    token,
     {
       status: 'failed',
       error: message,
       ...(error instanceof Error ? { errorName: error.name } : {}),
       failureCategory: 'application',
     },
+    callbacks,
     { value: error },
   );
 }

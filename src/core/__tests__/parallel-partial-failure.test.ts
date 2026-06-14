@@ -15,6 +15,7 @@ import { decode, encode } from '../codec.ts';
 import { Context } from '../context.ts';
 import { BranchTopologyChangedError } from '../context/parallel-operations.ts';
 import { Engine } from '../engine.ts';
+import { hydrateCheckpointReplayState } from '../engine/checkpoint-replay.ts';
 import {
   CURRENT_CHECKPOINT_SCHEMA_VERSION,
   CheckpointSchemaVersionError,
@@ -297,7 +298,11 @@ describe('ctx.all partial-failure preservation', () => {
     const checkpointKey = KEYS.checkpoint('wf-partial');
     const bytes = await storage.get(checkpointKey);
     expect(bytes).toBeTruthy();
-    const checkpoint = deserializeCheckpoint(bytes!);
+    const checkpoint = await hydrateCheckpointReplayState(
+      storage,
+      'wf-partial',
+      deserializeCheckpoint(bytes!),
+    );
 
     // The partial cache entry should be at step 0 (the original ctx.all step).
     const stepZeroEntry = checkpoint.accumulatedResults.find(([step]) => step === 0);
@@ -499,7 +504,6 @@ describe('checkpoint schema version', () => {
       step: 0,
       locals: {},
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       createdAt: Date.now(),
@@ -516,7 +520,6 @@ describe('checkpoint schema version', () => {
       step: 0,
       locals: {},
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: 1,
@@ -532,7 +535,6 @@ describe('checkpoint schema version', () => {
       step: 0,
       locals: {},
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: 99,
@@ -548,7 +550,6 @@ describe('checkpoint schema version', () => {
       step: 0,
       locals: {},
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,

@@ -152,6 +152,14 @@ export function createLifecycleCallbacks<TWorkflows extends object, TActivities 
         createTerminationCallbacks(engine),
         'system',
       ),
+    failWorkflowForCheckpointDecodeError: (workflowId, error) =>
+      failWorkflow(
+        getInternals(engine),
+        workflowId,
+        error,
+        createTerminationCallbacks(engine),
+        'system',
+      ),
   };
 }
 
@@ -190,8 +198,8 @@ export function createTerminationCallbacksWith<
     loadWorkflowState: (workflowId) => loadWorkflowState(getInternals(engine), workflowId),
     runSerializedWorkflowStateWrite: (workflowId, writeOperation) =>
       runSerializedWorkflowStateWrite(getInternals(engine), workflowId, writeOperation),
-    commitWorkflowStateOperations: (state, operations) =>
-      commitWorkflowStateOperations(getInternals(engine), state, operations),
+    commitWorkflowStateOperations: (state, operations, options) =>
+      commitWorkflowStateOperations(getInternals(engine), state, operations, options),
     cleanupReviews: (workflowId) => cleanupReviews(getInternals(engine), workflowId),
   };
 }
@@ -230,6 +238,7 @@ export function createRegistrationCallbacks<TWorkflows extends object, TActiviti
 ): RegistrationCallbacks {
   return {
     ensureRetentionSweepInterval: () => ensureRetentionSweepIntervalCallable(engine),
+    dispatchEvent: (event) => engine.dispatchEvent(event),
   };
 }
 

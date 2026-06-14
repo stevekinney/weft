@@ -65,9 +65,10 @@ export function validateCheckpointShape(value: unknown): asserts value is Checkp
   assertRecordField(record, 'locals');
   validateSessionStateLocals(record['locals'] as Record<string, unknown>);
   normalizeAccumulatedResults(record);
+  validateAccumulatedResultReplayWatermark(record);
   validateWorkerReplaySignatures(record);
   validateWorkerReplayFailures(record);
-  assertArrayField(record, 'pendingSignals');
+  dropLegacyPendingSignals(record);
   assertRecordField(record, 'searchAttributes');
   assertStringField(record, 'version');
   assertNumberField(record, 'createdAt');
@@ -217,12 +218,6 @@ function assertRecordField(record: Record<string, unknown>, field: string): void
   }
 }
 
-function assertArrayField(record: Record<string, unknown>, field: string): void {
-  if (!Array.isArray(record[field])) {
-    throw new Error(`Invalid checkpoint: missing or invalid "${field}" (expected array)`);
-  }
-}
-
 function normalizeAccumulatedResults(record: Record<string, unknown>): void {
   if (!('accumulatedResults' in record)) {
     record['accumulatedResults'] = [];
@@ -232,6 +227,20 @@ function normalizeAccumulatedResults(record: Record<string, unknown>): void {
   if (!Array.isArray(record['accumulatedResults'])) {
     throw new Error('Invalid checkpoint: invalid "accumulatedResults" (expected array)');
   }
+}
+
+function validateAccumulatedResultReplayWatermark(record: Record<string, unknown>): void {
+  const watermark = record['accumulatedResultReplayWatermark'];
+  if (watermark === undefined) return;
+  if (typeof watermark !== 'number' || !Number.isSafeInteger(watermark) || watermark < 0) {
+    throw new Error(
+      'Invalid checkpoint: invalid "accumulatedResultReplayWatermark" (expected non-negative safe integer)',
+    );
+  }
+}
+
+function dropLegacyPendingSignals(record: Record<string, unknown>): void {
+  delete record['pendingSignals'];
 }
 
 function assertCurrentSchemaVersion(record: Record<string, unknown>): void {

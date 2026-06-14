@@ -68,7 +68,7 @@ import type { WorkflowLogRecord } from './workflow-log.ts';
  * void handle;
  * ```
  */
-export interface StartOptions {
+export interface StartOptions<TServices = unknown> {
   id?: string;
   idempotencyKey?: string;
   executionTimeout?: Duration;
@@ -87,7 +87,7 @@ export interface StartOptions {
    * `workflowExecutionMode: 'worker'` throws at `engine.start()`, because a
    * non-serializable value cannot cross to a Worker.
    */
-  services?: unknown;
+  services?: TServices;
   /**
    * When `false`, `engine.start()` resolves only after the workflow has begun
    * executing (its generator has been driven its first turn), not merely after
@@ -114,7 +114,7 @@ export interface StartOptions {
  * REST/JSON-RPC transport (which keeps `weft.workflows.start` honestly
  * `destructive: false`). It is therefore an in-process `engine.start`-only policy.
  */
-export interface StartWorkflowOptions extends StartOptions {
+export interface StartWorkflowOptions<TServices = unknown> extends StartOptions<TServices> {
   /**
    * What `engine.start()` does when the supplied `id` already belongs to a run
    * that has reached a **terminal** state (`completed` | `failed` | `cancelled`
@@ -193,7 +193,7 @@ export interface ForkOptions {
  * void engine;
  * ```
  */
-export interface EngineOptions {
+export interface EngineOptions<TServices = unknown> {
   storage?: WeftStorage;
   development?: boolean;
   serializer?: Serializer;
@@ -328,8 +328,9 @@ export interface EngineOptions {
    * Return `{ status: 'available', services }` to supply the rebuilt
    * capabilities, or `{ status: 'unavailable', reason }` to fail just that one
    * recovered run — the engine and every other recovered run are unaffected.
-   * Without a resolver, a recovered inline workflow that reads `ctx.services`
-   * sees `undefined`.
+   * Without a resolver, a recovered run that carries the durable "expects
+   * services" marker fails before the generator advances and emits a diagnostic
+   * warning naming this option.
    *
    * Contract a fresh integrator must know:
    * - Fires only for recovered inline runs that were launched WITH `services`
@@ -348,7 +349,7 @@ export interface EngineOptions {
    */
   resolveWorkflowServices?: (
     info: WorkflowServicesResolverInfo,
-  ) => WorkflowServicesResolution | Promise<WorkflowServicesResolution>;
+  ) => WorkflowServicesResolution<TServices> | Promise<WorkflowServicesResolution<TServices>>;
   /**
    * Optional host sink for `ctx.log` records. When provided, every non-replayed
    * record from inline workflow execution is routed here (into your pino / winston

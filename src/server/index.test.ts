@@ -6,6 +6,7 @@ import { decode, encode } from '../core/codec.ts';
 import { Engine } from '../core/engine.ts';
 import {
   ActivityFailedEvent,
+  TaskResultDeadLetteredEvent,
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
 } from '../core/events.ts';
@@ -19,7 +20,7 @@ import { MemoryStorage } from '../storage/memory.ts';
 import { resetPublicOriginWarningForTesting } from './api-catalog.ts';
 import { DeadlineTracker } from './deadline-tracker.ts';
 import * as handlerModule from './handler.ts';
-import type { WeftServer } from './index.ts';
+import type { ServeOptions, WeftServer } from './index.ts';
 import { DASHBOARD_PAGE_ROUTES, serve, wireEventBroadcasting } from './index.ts';
 import { createOperationRegistry, executeOperation } from './operation-catalog.ts';
 import {
@@ -52,9 +53,15 @@ class TokenEvent extends Event {
 // Helpers
 // ---------------------------------------------------------------------------
 
+const TEST_WORKER_SHUTDOWN_TIMEOUT_MS = 50;
+
 /** Drain microtasks so fire-and-forget work completes. */
 async function flush(): Promise<void> {
   await waitForRealTimersForTesting(10);
+}
+
+function serveTestServer(options: ServeOptions): WeftServer {
+  return serve({ workerShutdownTimeoutMs: TEST_WORKER_SHUTDOWN_TIMEOUT_MS, ...options });
 }
 
 async function waitForSocketClose(ws: WebSocket, _label = 'WebSocket close'): Promise<void> {
@@ -253,7 +260,7 @@ describe('serve', () => {
 
   it('starts a server on the specified port', () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     expect(server.port).toBeGreaterThan(0);
   });
@@ -263,7 +270,7 @@ describe('serve', () => {
     engine = createEngine();
 
     try {
-      server = serve({ engine, port: 0 });
+      server = serveTestServer({ engine, port: 0 });
 
       expect(warningSpy).toHaveBeenCalledWith(
         expect.stringContaining('server started with NO authentication'),
@@ -281,7 +288,7 @@ describe('serve', () => {
     engine = createEngine();
 
     try {
-      expect(() => serve({ engine, port: 0, unauthenticatedAccess: 'reject' })).toThrow(
+      expect(() => serveTestServer({ engine, port: 0, unauthenticatedAccess: 'reject' })).toThrow(
         'Refusing to start server with no authentication',
       );
       expect(warningSpy).not.toHaveBeenCalled();
@@ -295,7 +302,12 @@ describe('serve', () => {
     engine = createEngine();
 
     try {
-      server = serve({ engine, port: 0, unauthenticatedAccess: 'allow' });
+      server = serveTestServer({
+        engine,
+        port: 0,
+        unauthenticatedAccess: 'allow',
+        publicOrigin: 'http://localhost',
+      });
 
       expect(warningSpy).not.toHaveBeenCalled();
     } finally {
@@ -308,7 +320,12 @@ describe('serve', () => {
     engine = createEngine();
 
     try {
-      server = serve({ engine, port: 0, auth: { apiKeys: ['test-key'] } });
+      server = serveTestServer({
+        engine,
+        port: 0,
+        auth: { apiKeys: ['test-key'] },
+        publicOrigin: 'http://localhost',
+      });
 
       expect(warningSpy).not.toHaveBeenCalled();
     } finally {
@@ -324,7 +341,7 @@ describe('serve', () => {
     console.warn = () => {};
     const apiKey = 'mcp-discovery-live-key';
     engine = createEngine();
-    server = serve({ engine, port: 0, auth: { apiKeys: [apiKey] } });
+    server = serveTestServer({ engine, port: 0, auth: { apiKeys: [apiKey] } });
 
     try {
       const discoveryResponse = await fetch(`${server.url}/.well-known/mcp.json`);
@@ -422,7 +439,7 @@ describe('serve', () => {
 
   it('responds to health check (GET /v1/health)', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const response = await fetch(`${server.url}/v1/health`);
 
@@ -437,7 +454,7 @@ describe('serve', () => {
 
   it('serves a supplied dashboard shell at the origin root', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0, dashboard: makeDashboard() });
+    server = serveTestServer({ engine, port: 0, dashboard: makeDashboard() });
 
     const rootResponse = await fetch(`${server.url}/`);
     expect(rootResponse.status).toBe(200);
@@ -446,7 +463,7 @@ describe('serve', () => {
 
   it('serves a supplied dashboard shell at every supported page route', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0, dashboard: makeDashboard() });
+    server = serveTestServer({ engine, port: 0, dashboard: makeDashboard() });
 
     // Enumerating DASHBOARD_PAGE_ROUTES pins the server-owned mount list used by
     // external dashboard packages.
@@ -461,7 +478,7 @@ describe('serve', () => {
 
   it('is headless by default on every dashboard page route', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     for (const route of DASHBOARD_PAGE_ROUTES) {
       const path = route.endsWith('/*') ? `${route.slice(0, -2)}/abc123` : route;
@@ -481,7 +498,7 @@ describe('serve', () => {
     const javascriptOptions = { engine, port: 0, dashboard: null } as unknown as Parameters<
       typeof serve
     >[0];
-    server = serve(javascriptOptions);
+    server = serveTestServer(javascriptOptions);
 
     const rootResponse = await fetch(`${server.url}/`);
     expect(rootResponse.status).toBe(404);
@@ -492,7 +509,7 @@ describe('serve', () => {
 
   it('does not serve the dashboard for unknown root paths (no blanket catch-all)', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0, dashboard: makeDashboard() });
+    server = serveTestServer({ engine, port: 0, dashboard: makeDashboard() });
 
     const response = await fetch(`${server.url}/nonsense`);
     expect(response.status).toBe(404);
@@ -500,7 +517,7 @@ describe('serve', () => {
 
   it('handles workflow API routes (POST /v1/workflows)', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const response = await fetch(`${server.url}/v1/workflows`, {
       method: 'POST',
@@ -516,7 +533,7 @@ describe('serve', () => {
 
   it('routes /api/v1/workflows to the same handler as /v1/workflows (POST body preserved)', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // The front door strips `/api` before routing; the POST body must survive
     // the request rebuild.
@@ -534,7 +551,7 @@ describe('serve', () => {
 
   it('preserves the query string when stripping the /api prefix', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // List with a query param via the prefixed path; the strip rebuilds the
     // request URL, so the search string must survive to the handler.
@@ -546,7 +563,7 @@ describe('serve', () => {
 
   it('keeps health and metrics at the origin root and exposes them as /api aliases', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0, dashboard: makeDashboard() });
+    server = serveTestServer({ engine, port: 0, dashboard: makeDashboard() });
 
     // Canonical root-stable forms.
     const health = await fetch(`${server.url}/v1/health`);
@@ -564,7 +581,7 @@ describe('serve', () => {
   it('serves discovery documents at the origin root (not under /api)', async () => {
     engine = createEngine();
     // `/.well-known/mcp.json` emits absolute URLs, so it needs a public origin.
-    server = serve({ engine, port: 0, publicOrigin: 'http://discovery.test' });
+    server = serveTestServer({ engine, port: 0, publicOrigin: 'http://discovery.test' });
 
     for (const path of [
       '/openapi.json',
@@ -579,7 +596,7 @@ describe('serve', () => {
 
   it('returns 404 for bare /api and /api/ (no aliasing of the root)', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0, dashboard: makeDashboard() });
+    server = serveTestServer({ engine, port: 0, dashboard: makeDashboard() });
 
     const bareApi = await fetch(`${server.url}/api`);
     const bareApiSlash = await fetch(`${server.url}/api/`);
@@ -589,7 +606,7 @@ describe('serve', () => {
 
   it('does not strip a doubled slash after the /api prefix', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0, dashboard: makeDashboard() });
+    server = serveTestServer({ engine, port: 0, dashboard: makeDashboard() });
 
     // `/api//v1/health` must NOT canonicalize to `//v1/health` (which would
     // route surprisingly). Only a clean `/api/<segment>` is stripped, so this
@@ -600,7 +617,7 @@ describe('serve', () => {
 
   it('stops cleanly via stop()', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
     const { url } = server;
 
     // Verify it is running
@@ -622,7 +639,7 @@ describe('serve', () => {
 
   it('stop() returns a Promise', () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const result = server.stop();
     expect(result).toBeInstanceOf(Promise);
@@ -630,7 +647,7 @@ describe('serve', () => {
 
   it('stop() is idempotent', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     await server.stop();
     // Second call should not throw — AsyncDisposableStack handles double-dispose.
@@ -639,7 +656,7 @@ describe('serve', () => {
 
   it('stops via Symbol.asyncDispose', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
     const { url } = server;
 
     // Verify it is running
@@ -658,7 +675,7 @@ describe('serve', () => {
 
   it('url property returns correct URL', () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     expect(server.url).toBe(`http://${server.hostname}:${server.port}`);
   });
@@ -677,7 +694,7 @@ describe('serve', () => {
     }) as Engine['addEventListener']);
 
     try {
-      expect(() => serve({ engine, port: 0 })).toThrow('broadcast setup failed');
+      expect(() => serveTestServer({ engine, port: 0 })).toThrow('broadcast setup failed');
       await waitForRealTimersForTesting(50);
     } finally {
       restoreAddEventListener();
@@ -687,14 +704,14 @@ describe('serve', () => {
   it('defaults to port 7233', () => {
     engine = createEngine();
     // Use the default port; rely on it being available in test environments
-    server = serve({ engine, port: 7233 });
+    server = serveTestServer({ engine, port: 7233 });
 
     expect(server.port).toBe(7233);
   });
 
   it('lists workflows through the server', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // Start two workflows
     await fetch(`${server.url}/v1/workflows`, {
@@ -719,7 +736,7 @@ describe('serve', () => {
 
   it('returns a WebSocket upgrade failure for non-matching upgrade requests', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // Attempt a WebSocket-style request to a non-WebSocket route
     // Bun's fetch cannot do a real WebSocket upgrade, but we can
@@ -736,7 +753,7 @@ describe('serve', () => {
 
   it('returns 401 when principal resolution throws during a JSON-RPC WebSocket upgrade', async () => {
     engine = createEngine();
-    server = serve({
+    server = serveTestServer({
       engine,
       port: 0,
       auth: {
@@ -779,7 +796,7 @@ describe('serve', () => {
     // A resolver throw on this path proves the principal is wired through — if
     // it were skipped, the upgrade would not surface the 401.
     engine = createEngine();
-    server = serve({
+    server = serveTestServer({
       engine,
       port: 0,
       auth: {
@@ -818,7 +835,7 @@ describe('serve', () => {
 
   it('keeps JSON-RPC HTTP principal resolution inside the JSON-RPC error boundary', async () => {
     engine = createEngine();
-    server = serve({
+    server = serveTestServer({
       engine,
       port: 0,
       auth: {
@@ -858,7 +875,7 @@ describe('serve', () => {
 
   it('accepts a WebSocket connection and subscribes to pathname channel', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const wsUrl = server.url.replace('http://', 'ws://');
 
@@ -881,7 +898,7 @@ describe('serve', () => {
 
   it('handles WebSocket close event without error', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const wsUrl = server.url.replace('http://', 'ws://');
     const ws = new WebSocket(`${wsUrl}/v1/tasks/default/stream`);
@@ -910,7 +927,7 @@ describe('serve', () => {
     '/api/jsonrpc',
   ])('accepts a WebSocket upgrade on %s', async (path) => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
     const wsUrl = server.url.replace('http://', 'ws://');
     const ws = new WebSocket(`${wsUrl}${path}`);
 
@@ -938,7 +955,7 @@ describe('serve', () => {
   // -------------------------------------------------------------------------
   it('cleans up sequence bookkeeping on workflow termination without losing events', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const workflowId = 'terminal-cleanup-wf';
 
@@ -996,7 +1013,7 @@ describe('serve', () => {
 
   it('does not retain sequence state across many terminated workflows', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // Emit and terminate a batch of workflows. If the sequence maps are not
     // cleaned up on termination, each workflow leaks one entry per map; this
@@ -1079,7 +1096,7 @@ describe('serve', () => {
 
   it('waits for an extended post-terminal chain before dropping sequence bookkeeping', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const workflowId = 'terminal-recursion-wf';
 
@@ -1136,7 +1153,7 @@ describe('worker WebSocket protocol', () => {
 
   it('tracks a worker after register message', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, {
@@ -1157,7 +1174,7 @@ describe('worker WebSocket protocol', () => {
 
   it('records deployment identity and capabilities from worker registration', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, {
@@ -1188,7 +1205,7 @@ describe('worker WebSocket protocol', () => {
 
   it('sends registerAck after accepting a worker', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     const ackPromise = waitForWorkerMessage(
@@ -1218,7 +1235,7 @@ describe('worker WebSocket protocol', () => {
 
   it('rejects workers that omit protocolVersion', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     const errorPromise = waitForWorkerMessage(
@@ -1246,7 +1263,7 @@ describe('worker WebSocket protocol', () => {
 
   it('sends protocolError for invalid JSON, unknown messages, and pre-registration traffic', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const invalidJsonSocket = await connectWorker(server);
     const invalidJsonError = waitForWorkerMessage(
@@ -1290,7 +1307,7 @@ describe('worker WebSocket protocol', () => {
 
   it('clamps worker concurrency to at least 1 when 0 is sent', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w-clamp-min', activities: ['charge'], concurrency: 0 });
@@ -1304,7 +1321,7 @@ describe('worker WebSocket protocol', () => {
 
   it('clamps worker concurrency to MAX_WORKER_CONCURRENCY (1000) when a huge value is sent', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, {
@@ -1324,7 +1341,7 @@ describe('worker WebSocket protocol', () => {
     engine = createEngine();
     // Disable the reconnect grace period so the close handler unregisters
     // the worker synchronously, as this test asserts.
-    server = serve({ engine, port: 0, workerReconnectGracePeriodMs: 0 });
+    server = serveTestServer({ engine, port: 0, workerReconnectGracePeriodMs: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w2', activities: ['charge'] });
@@ -1339,7 +1356,7 @@ describe('worker WebSocket protocol', () => {
 
   it('updates heartbeat timestamp on heartbeat message', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w3', activities: ['charge'] });
@@ -1361,7 +1378,7 @@ describe('worker WebSocket protocol', () => {
 
   it('records task lifecycle metadata and low-cardinality metrics for WebSocket dispatches', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w-diagnostics', activities: ['charge'], concurrency: 1 });
@@ -1437,7 +1454,7 @@ describe('worker WebSocket protocol', () => {
   it('exposes WebSocket dispatch metrics through the server-owned system metrics endpoint', async () => {
     engine = createEngine();
     const apiKey = 'metrics-system-read-key';
-    server = serve({
+    server = serveTestServer({
       engine,
       port: 0,
       auth: {
@@ -1524,7 +1541,7 @@ describe('worker WebSocket protocol', () => {
       encode(staleInflightRecord),
     );
 
-    server = serve({
+    server = serveTestServer({
       engine,
       port: 0,
       visibilityPollIntervalMs: 10,
@@ -1542,7 +1559,7 @@ describe('worker WebSocket protocol', () => {
 
   it('extends persisted task visibility deadlines on heartbeat', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w-heartbeat-extend', activities: ['charge'] });
@@ -1587,7 +1604,7 @@ describe('worker WebSocket protocol', () => {
     engine = createEngine();
     const storage = engine.storage as MemoryStorage;
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     try {
       const ws = await connectWorker(server);
@@ -1628,7 +1645,7 @@ describe('worker WebSocket protocol', () => {
     const storage = engine.storage as MemoryStorage;
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
     const originalPut = storage.put.bind(storage);
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const restorePut = overrideProperty(storage, 'put', (async (key: string, value: Uint8Array) => {
       if (key === KEYS.operationInflight('heartbeat-write-fail-op')) {
@@ -1678,7 +1695,7 @@ describe('worker WebSocket protocol', () => {
 
   it('dispatches a task to the best available worker', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     const received: Array<{ type: string; operationId?: string; activityName?: string }> = [];
@@ -1715,7 +1732,7 @@ describe('worker WebSocket protocol', () => {
 
   it('routes new tasks away from draining workers while keeping in-flight tasks tracked', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const drainingSocket = await connectWorker(server);
     const activeSocket = await connectWorker(server);
@@ -1765,7 +1782,7 @@ describe('worker WebSocket protocol', () => {
 
   it('falls back to long-poll when every matching WebSocket worker is draining', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'drain-only-worker', activities: ['charge'] });
@@ -1786,7 +1803,7 @@ describe('worker WebSocket protocol', () => {
 
   it('queues task for long-poll workers when no WebSocket worker is available', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const dispatched = await server.dispatchTask({
       operationId: 'op-2',
@@ -1801,7 +1818,7 @@ describe('worker WebSocket protocol', () => {
 
   it('increments in-flight count on dispatch and decrements on task result', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     collectAndCompleteTaskMessages(ws, { resultValue: 42 });
@@ -1828,7 +1845,7 @@ describe('worker WebSocket protocol', () => {
 
   it('handles invalid JSON messages without crashing', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
 
@@ -1852,7 +1869,7 @@ describe('worker WebSocket protocol', () => {
 
   it('ignores worker protocol messages on non-worker paths', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // Connect to observation endpoint, not worker stream
     const ws = await connectWorker(server, '/v1/workflows/test-wf/watch');
@@ -1880,7 +1897,7 @@ describe('worker WebSocket protocol', () => {
 
   it('supports multiple workers and routes to least-loaded', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws1 = await connectWorker(server);
     const ws2 = await connectWorker(server);
@@ -1920,7 +1937,7 @@ describe('worker WebSocket protocol', () => {
 
   it('routes via fair-share when routingPolicy is fair-share and fairShareKey is dispatched', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0, routingPolicy: 'fair-share' });
+    server = serveTestServer({ engine, port: 0, routingPolicy: 'fair-share' });
 
     const sockets: WebSocket[] = [];
     const receivedByWorker = new Map<string, Array<{ operationId: string }>>();
@@ -2012,7 +2029,7 @@ describe('worker WebSocket protocol', () => {
 
   it('falls back to long-poll queue when WebSocket workers are at capacity', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w-cap', activities: ['compute'], concurrency: 1 });
@@ -2041,7 +2058,7 @@ describe('worker WebSocket protocol', () => {
 
   it('worker capacity recovers after task completion and accepts new tasks', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     const received = collectAndCompleteTaskMessages(ws);
@@ -2078,7 +2095,7 @@ describe('worker WebSocket protocol', () => {
 
   it('tracks available capacity as concurrency minus inFlight through dispatch cycle', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w-track', activities: ['compute'], concurrency: 3 });
@@ -2119,7 +2136,7 @@ describe('worker WebSocket protocol', () => {
     engine = createEngine();
     // Disable the reconnect grace period so the disconnect at the end of the
     // test unregisters the worker synchronously.
-    server = serve({ engine, port: 0, workerReconnectGracePeriodMs: 0 });
+    server = serveTestServer({ engine, port: 0, workerReconnectGracePeriodMs: 0 });
 
     const { RemoteWorker } = await import('../worker/index.ts');
 
@@ -2177,7 +2194,7 @@ describe('worker WebSocket protocol', () => {
 
   it('sticky dispatch prefers the worker that last handled a task for the same workflow', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws1 = await connectWorker(server);
     const ws2 = await connectWorker(server);
@@ -2253,7 +2270,7 @@ describe('worker WebSocket protocol', () => {
 
   it('sticky dispatch falls back to least-loaded when preferred worker is at capacity', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws1 = await connectWorker(server);
     const ws2 = await connectWorker(server);
@@ -2297,7 +2314,7 @@ describe('worker WebSocket protocol', () => {
 
   it('sticky dispatch without workflowId uses normal least-loaded routing', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws1 = await connectWorker(server);
     const ws2 = await connectWorker(server);
@@ -2335,7 +2352,7 @@ describe('queue-aware worker stream', () => {
 
   it('extracts queue name from the connection URL', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server, workerStreamPath('billing'));
     await registerWorker(ws, { workerId: 'billing-w1', activities: ['charge'] });
@@ -2349,7 +2366,7 @@ describe('queue-aware worker stream', () => {
 
   it('dispatches tasks only to workers on the matching queue', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const billingWs = await connectWorker(server, workerStreamPath('billing'));
     const shippingWs = await connectWorker(server, workerStreamPath('shipping'));
@@ -2393,7 +2410,7 @@ describe('queue-aware worker stream', () => {
 
   it('falls back to long-poll queue with the correct queue name', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // Dispatch to a specific queue with no WebSocket workers
     await server.dispatchTask({
@@ -2410,7 +2427,7 @@ describe('queue-aware worker stream', () => {
 
   it('defaults to the "default" queue when no queue is specified in dispatch', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server, workerStreamPath('default'));
     const received: Array<{ type: string; operationId?: string }> = [];
@@ -2440,7 +2457,7 @@ describe('queue-aware worker stream', () => {
 
   it('workers on different queues are isolated from each other', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const billingWs = await connectWorker(server, workerStreamPath('billing'));
     const defaultWs = await connectWorker(server, workerStreamPath('default'));
@@ -2481,7 +2498,7 @@ describe('queue-aware worker stream', () => {
 
   it('integrates with RemoteWorker on a custom queue', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const { RemoteWorker } = await import('../worker/index.ts');
 
@@ -2593,6 +2610,45 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     });
   }
 
+  async function expectWorkflowStreamPolicyClose(
+    wsServer: WeftServer,
+    workflowId: string,
+    connectionType: 'stream' | 'watch',
+  ): Promise<CloseEvent> {
+    const wsUrl = wsServer.url.replace('http://', 'ws://');
+    const ws = new WebSocket(
+      `${wsUrl}/v1/workflows/${encodeURIComponent(workflowId)}/${connectionType}`,
+    );
+
+    return await new Promise<CloseEvent>((resolve, reject) => {
+      let timedOut = false;
+      const timeout = setTimeout(() => {
+        timedOut = true;
+        ws.close();
+        reject(new Error(`Expected ${connectionType} WebSocket policy close`));
+      }, 1_000);
+
+      ws.addEventListener(
+        'close',
+        (event) => {
+          if (timedOut) return;
+          clearTimeout(timeout);
+          resolve(event);
+        },
+        { once: true },
+      );
+      ws.addEventListener(
+        'error',
+        () => {
+          if (timedOut) return;
+          clearTimeout(timeout);
+          reject(new Error(`${connectionType} WebSocket connection failed`));
+        },
+        { once: true },
+      );
+    });
+  }
+
   async function connectWatch(wsServer: WeftServer, workflowId: string): Promise<WebSocket> {
     const wsUrl = wsServer.url.replace('http://', 'ws://');
     const ws = new WebSocket(`${wsUrl}/v1/workflows/${encodeURIComponent(workflowId)}/watch`);
@@ -2616,7 +2672,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('accepts a WebSocket connection on /v1/workflows/:id/stream', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectStream(server, 'test-wf');
     expect(ws.readyState).toBe(WebSocket.OPEN);
@@ -2625,9 +2681,32 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     await waitForRealTimersForTesting(50);
   });
 
+  it('caps per-workflow stream and watch connections and frees slots on close', async () => {
+    engine = createEngine();
+    server = serveTestServer({ engine, port: 0, maxStreamConnectionsPerWorkflow: 2 });
+
+    const stream = await connectStream(server, 'test-wf');
+    const watch = await connectWatch(server, 'test-wf');
+
+    const close = await expectWorkflowStreamPolicyClose(server, 'test-wf', 'stream');
+    expect(close.code).toBe(1008);
+
+    watch.close();
+    await waitFor(() => watch.readyState === WebSocket.CLOSED, {
+      label: 'watch socket closed after client close',
+    });
+
+    const replacement = await connectStream(server, 'test-wf');
+    expect(replacement.readyState).toBe(WebSocket.OPEN);
+
+    stream.close();
+    replacement.close();
+    await waitForRealTimersForTesting(50);
+  });
+
   it('receives live token events through the stream connection', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // Start a workflow so events have a target
     const startResponse = await fetch(`${server.url}/v1/workflows`, {
@@ -2663,7 +2742,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('receives live token events through the stream connection for workflow ids that require encoding', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const workflowId = 'wf:stream/with spaces';
     const ws = await connectStream(server, workflowId);
@@ -2688,7 +2767,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('receives live watch events for workflow ids that require encoding', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const workflowId = 'wf:watch/with spaces';
     const ws = await connectWatch(server, workflowId);
@@ -2716,7 +2795,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('only receives token events for the subscribed workflow', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectStream(server, 'wf-a');
     const messages = collectMessages(ws);
@@ -2740,7 +2819,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('replays existing token events on connect', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // Dispatch token events before a client connects
     engine.dispatchEvent(new TokenEvent('wf-replay', 'first', 'gpt-4'));
@@ -2773,7 +2852,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('replays existing token events on connect for workflow ids that require encoding', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const workflowId = 'wf:replay/with spaces';
     engine.dispatchEvent(new TokenEvent(workflowId, 'encoded', 'gpt-4'));
@@ -2796,7 +2875,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('rejects malformed encoded workflow stream paths without crashing the server', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const wsUrl = server.url.replace('http://', 'ws://');
     const failed = await new Promise<boolean>((resolve, reject) => {
@@ -2824,7 +2903,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('rejects invalid resumeFrom query parameter values', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     for (const resumeFrom of ['', 'not-a-number', '1.5', '1abc', '0x10', '1e3']) {
       await expectStreamConnectionFailure(server, 'wf-invalid-resume', resumeFrom);
@@ -2845,7 +2924,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
         data: { workflowId: 'wf-sequence', token: 'old', model: 'gpt-4' },
       }),
     );
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     engine.dispatchEvent(new TokenEvent('wf-sequence', 'new', 'gpt-4'));
     await waitFor(async () => (await storage.get(KEYS.event('wf-sequence', 5))) !== null, {
@@ -2859,7 +2938,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
   it('persists streamed token chunks under the durable blob prefix', async () => {
     engine = createEngine();
     const storage = engine.storage as MemoryStorage;
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     engine.dispatchEvent(new TokenEvent('wf-token-blob', 'alpha', 'gpt-4'));
     await waitFor(
@@ -2876,6 +2955,9 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
       token: 'alpha',
       model: 'gpt-4',
     });
+    const storedTail = await storage.get(KEYS.streamTail('wf-token-blob', 'tokens'));
+    expect(storedTail).not.toBeNull();
+    expect(decode(storedTail!)).toEqual({ sequence: 0 });
   });
 
   it('retries event sequence initialization after a failed scan', async () => {
@@ -2894,7 +2976,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
       }
       yield* originalScan(prefix, options);
     } as MemoryStorage['scan']);
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     try {
       engine.dispatchEvent(new TokenEvent('wf-sequence-retry', 'first', 'gpt-4'));
@@ -2933,7 +3015,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
       }
       yield* originalScan(prefix, options);
     } as MemoryStorage['scan']);
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     try {
       engine.dispatchEvent(new TokenEvent('wf-token-sequence-retry', 'first', 'gpt-4'));
@@ -2961,7 +3043,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('replays only missing token chunks when resumeFrom is provided', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     engine.dispatchEvent(new TokenEvent('wf-resume', 'first', 'gpt-4'));
     engine.dispatchEvent(new TokenEvent('wf-resume', 'second', 'gpt-4'));
@@ -2987,7 +3069,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('clamps resumeFrom above the durable token range so live tokens still arrive', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     engine.dispatchEvent(new TokenEvent('wf-resume-clamped', 'first', 'gpt-4'));
     await waitForRealTimersForTesting(200);
@@ -3015,7 +3097,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('treats a resume cursor with no durable token chunks as an empty replay cursor', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectStream(server, 'wf-resume-empty', { resumeFrom: 999 });
     const messages = collectMessages(ws);
@@ -3045,7 +3127,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
       `${KEYS.streamChunkPrefix('wf-resume-malformed', 'tokens')}zzz`,
       encode({ workflowId: 'wf-resume-malformed', token: 'stale', model: 'gpt-4' }),
     );
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectStream(server, 'wf-resume-malformed', { resumeFrom: 999 });
     const messages = collectMessages(ws);
@@ -3070,7 +3152,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('buffers live token events that arrive while replay is still in progress', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     engine.dispatchEvent(new TokenEvent('wf-overlap', 'first', 'gpt-4'));
     engine.dispatchEvent(new TokenEvent('wf-overlap', 'second', 'gpt-4'));
@@ -3132,7 +3214,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
     engine = new Engine({ storage });
     engine.register(echoWorkflow);
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     engine.dispatchEvent(new TokenEvent('wf-restart', 'persisted', 'gpt-4'));
     await waitForRealTimersForTesting(200);
@@ -3142,7 +3224,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
     engine = new Engine({ storage });
     engine.register(echoWorkflow);
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectStream(server, 'wf-restart', { resumeFrom: -1 });
     const messages = collectMessages(ws);
@@ -3176,7 +3258,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
       }
       yield* originalScan(prefix, options);
     } as MemoryStorage['scan']);
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     try {
       const ws = await connectStream(server, 'wf-replay-failure');
@@ -3206,7 +3288,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('does not process worker protocol messages on stream connections', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectStream(server, 'test-wf');
 
@@ -3231,7 +3313,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
   it('supports multiple concurrent stream clients for the same workflow', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws1 = await connectStream(server, 'wf-multi');
     const ws2 = await connectStream(server, 'wf-multi');
@@ -3275,7 +3357,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
   it('returns 204 when no task is available within timeout', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const response = await fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=50`);
 
@@ -3284,7 +3366,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
   it('rejects task results with invalid status values', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const response = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
@@ -3300,7 +3382,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
   it('returns 400 when no activity query parameter is provided', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const response = await fetch(`${server.url}/v1/tasks/default?timeout=50`);
 
@@ -3311,7 +3393,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
   it('returns a queued task immediately', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // Dispatch a task with no WebSocket workers — goes to task queue
     await server.dispatchTask({
@@ -3330,7 +3412,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
   it('persists lifecycle metadata when a long-poll worker completes immediately after claim', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     await server.dispatchTask({
       operationId: 'long-poll-diagnostics-op',
@@ -3394,7 +3476,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     const storage = new MemoryStorage();
     engine = new Engine({ storage });
     engine.register(echoWorkflow);
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     await storage.put(
       KEYS.operationQueued('long-poll-requeue-timing-op'),
@@ -3439,7 +3521,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
   it('blocks until a task arrives within the timeout', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // Start a poll that will block
     const pollPromise = fetch(`${server.url}/v1/tasks/default?activity=charge&timeout=5000`);
@@ -3460,7 +3542,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
   it('filters tasks by activity name', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // Queue a 'ship' task
     await server.dispatchTask({
@@ -3480,7 +3562,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
   it('accepts task completion via POST', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const response = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
@@ -3502,24 +3584,23 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
     const storage = engine.storage as MemoryStorage;
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
     const originalBatch = storage.batch.bind(storage);
+    const operationId = 'op-complete-fail';
     const restoreBatch = overrideProperty(storage, 'batch', (async (
       operations: Parameters<MemoryStorage['batch']>[0],
     ) => {
-      if (
-        operations.some((operation) => operation.key === KEYS.operationResolved('op-complete-fail'))
-      ) {
+      if (operations.some((operation) => operation.key === KEYS.operationResolved(operationId))) {
         throw new Error('long-poll resolution failed');
       }
       await originalBatch(operations);
     }) as MemoryStorage['batch']);
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     try {
       const response = await fetch(`${server.url}/v1/tasks/default/result`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          operationId: 'op-complete-fail',
+          operationId,
           status: 'completed',
           value: { result: 42 },
         }),
@@ -3527,9 +3608,10 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
       expect(response.status).toBe(200);
       expect(errorSpy).toHaveBeenCalledWith(
-        '[weft] Failed to transition task "op-complete-fail" to resolved — inflight record may leak:',
+        `[weft] Failed to transition task "${operationId}" to resolved after retries — dead-lettered:`,
         expect.any(Error),
       );
+      expect(await storage.get(KEYS.operationDeadLetter(operationId))).not.toBeNull();
     } finally {
       restoreBatch();
       errorSpy.mockRestore();
@@ -3538,7 +3620,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
   it('returns 400 for invalid completion body', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const response = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
@@ -3551,7 +3633,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
   it('returns 400 for non-JSON completion body', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const response = await fetch(`${server.url}/v1/tasks/default/result`, {
       method: 'POST',
@@ -3564,7 +3646,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
   it('invokes the completion callback when task is completed', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const results: Array<{ operationId: string; status: string }> = [];
 
@@ -3593,7 +3675,7 @@ describe('long-poll endpoints (GET /v1/tasks/:queue, POST /v1/tasks/:queue/resul
 
   it('integrates with LongPollWorker end-to-end', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const { LongPollWorker } = await import('../worker/long-poll.ts');
 
@@ -3645,7 +3727,7 @@ describe('task assignment deduplication', () => {
 
   it('rejects duplicate dispatch of the same operationId to WebSocket workers', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     const received: Array<{ type: string; operationId?: string }> = [];
@@ -3682,7 +3764,7 @@ describe('task assignment deduplication', () => {
 
   it('rejects duplicate dispatch when the first went to the long-poll queue', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // No WebSocket workers — tasks go to long-poll queue
     const first = await server.dispatchTask({
@@ -3703,7 +3785,7 @@ describe('task assignment deduplication', () => {
 
   it('rejects duplicate across WebSocket and long-poll paths', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 1 });
@@ -3732,7 +3814,7 @@ describe('task assignment deduplication', () => {
 
   it('uses assignTask for WebSocket dispatch so in-flight tasks are tracked', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
@@ -3752,7 +3834,7 @@ describe('task assignment deduplication', () => {
 
   it('clears in-flight tracking when worker sends taskResult with operationId', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     collectAndCompleteTaskMessages(ws, { resultValue: 42 });
@@ -3783,7 +3865,7 @@ describe('task assignment deduplication', () => {
 
   it('rejects unexpected worker taskResult statuses as protocol errors', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0, workerReconnectGracePeriodMs: 0 });
 
     const ws = await connectWorker(server);
     const protocolError = waitForWorkerMessage(
@@ -3821,7 +3903,7 @@ describe('task assignment deduplication', () => {
 
   it('treats cancelled worker taskResult statuses as failed resolutions', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     ws.addEventListener('message', (event) => {
@@ -3858,61 +3940,160 @@ describe('task assignment deduplication', () => {
     await waitForRealTimersForTesting(50);
   });
 
-  it('logs task result persistence failures when inflight resolution cannot be stored', async () => {
+  it('retries transient WebSocket task-result storage failures without redispatching', async () => {
     engine = createEngine();
     const storage = engine.storage as MemoryStorage;
-    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
     const originalBatch = storage.batch.bind(storage);
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
-    ws.addEventListener('message', (event) => {
-      const msg = JSON.parse(String(event.data)) as { type: string; operationId?: string };
-      if (msg.type === 'task') {
-        ws.send(
-          JSON.stringify({
-            type: 'taskResult',
-            operationId: msg.operationId,
-            status: 'completed',
-            value: null,
-          }),
-        );
-      }
-    });
+    const messages = collectAndCompleteTaskMessages(ws);
 
+    let resolutionBatchAttempts = 0;
+    const operationId = 'task-result-transient-fail';
     const restoreBatch = overrideProperty(storage, 'batch', (async (
       operations: Parameters<MemoryStorage['batch']>[0],
     ) => {
-      if (
-        operations.some((operation) => operation.key === KEYS.operationResolved('task-result-fail'))
-      ) {
-        throw new Error('resolved batch failed');
+      if (operations.some((operation) => operation.key === KEYS.operationResolved(operationId))) {
+        resolutionBatchAttempts++;
+        if (resolutionBatchAttempts === 1) {
+          throw new Error('transient resolved batch failure');
+        }
       }
       await originalBatch(operations);
     }) as MemoryStorage['batch']);
 
     try {
-      await registerWorker(ws, { workerId: 'w-task-result-fail', activities: ['charge'] });
+      await registerWorker(ws, { workerId: 'w-task-result-transient', activities: ['charge'] });
       await server.dispatchTask({
-        operationId: 'task-result-fail',
+        operationId,
         activityName: 'charge',
         input: null,
+        visibilityTimeout: 20,
       });
 
       await waitFor(
-        () =>
-          errorSpy.mock.calls.some(
-            (call) =>
-              call[0] ===
-              '[weft] Failed to transition task "task-result-fail" to resolved — inflight record may leak:',
-          ),
-        { label: 'task result persistence failure to be logged' },
+        async () => (await engine.storage.get(KEYS.operationResolved(operationId))) !== null,
+        { label: 'transient task result to resolve after retry' },
+      );
+
+      expect(resolutionBatchAttempts).toBe(2);
+      expect(
+        messages.filter(
+          (message) => message.type === 'task' && message.operationId === operationId,
+        ),
+      ).toHaveLength(1);
+      expect(await engine.storage.get(KEYS.operationInflight(operationId))).toBeNull();
+      expect(await engine.storage.get(KEYS.operationDeadLetter(operationId))).toBeNull();
+
+      ws.close();
+      await waitForRealTimersForTesting(50);
+    } finally {
+      restoreBatch();
+    }
+  });
+
+  it('dead-letters permanent WebSocket task-result storage failures and reconciliation skips them', async () => {
+    engine = createEngine();
+    const storage = engine.storage as MemoryStorage;
+    const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+    const originalBatch = storage.batch.bind(storage);
+    const operationId = 'task-result-dead-letter';
+    const deadLetterEvents: TaskResultDeadLetteredEvent[] = [];
+    engine.addEventListener(TaskResultDeadLetteredEvent.type, (event) => {
+      deadLetterEvents.push(event);
+    });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 20 });
+
+    const ws = await connectWorker(server);
+    const messages = collectAndCompleteTaskMessages(ws);
+
+    const restoreBatch = overrideProperty(storage, 'batch', (async (
+      operations: Parameters<MemoryStorage['batch']>[0],
+    ) => {
+      if (operations.some((operation) => operation.key === KEYS.operationResolved(operationId))) {
+        throw new Error('permanent resolved batch failure');
+      }
+      await originalBatch(operations);
+    }) as MemoryStorage['batch']);
+
+    try {
+      await registerWorker(ws, { workerId: 'w-task-result-dead-letter', activities: ['charge'] });
+      await server.dispatchTask({
+        operationId,
+        activityName: 'charge',
+        input: null,
+        visibilityTimeout: 20,
+        workflowId: 'workflow-dead-letter',
+      });
+
+      await waitFor(
+        async () => (await engine.storage.get(KEYS.operationDeadLetter(operationId))) !== null,
+        { label: 'task result failure to be dead-lettered' },
       );
 
       expect(errorSpy).toHaveBeenCalledWith(
-        '[weft] Failed to transition task "task-result-fail" to resolved — inflight record may leak:',
+        `[weft] Failed to transition task "${operationId}" to resolved after retries — dead-lettered:`,
         expect.any(Error),
       );
+      expect(deadLetterEvents).toHaveLength(1);
+      expect(deadLetterEvents[0]).toMatchObject({
+        operationId,
+        workflowId: 'workflow-dead-letter',
+        activityName: 'charge',
+        reason: 'result-resolution-storage-exhausted',
+      });
+
+      // fixed delay: negative assertion waits through a reconciliation window to prove the dead-letter guard prevents redispatch.
+      await waitForRealTimersForTesting(350);
+      expect(
+        messages.filter(
+          (message) => message.type === 'task' && message.operationId === operationId,
+        ),
+      ).toHaveLength(1);
+      expect(await engine.storage.get(KEYS.operationInflight(operationId))).not.toBeNull();
+      expect(await engine.storage.get(KEYS.operationResolved(operationId))).toBeNull();
+
+      const diagnosticsResponse = await handlerModule.handleRequest(
+        new Request(
+          `http://localhost/v1/tasks/diagnostics?operationId=${encodeURIComponent(operationId)}&limit=10`,
+        ),
+        engine,
+        {
+          authContext: {
+            method: 'api-key',
+            principal: principalFromApiKey({ subject: 'operator', scopes: ['system:read'] }),
+          },
+        },
+      );
+      expect(diagnosticsResponse.status).toBe(200);
+      const diagnostics = (await diagnosticsResponse.json()) as GetTaskDiagnosticsOutput;
+      expect(diagnostics.items).toContainEqual(
+        expect.objectContaining({
+          kind: 'dead-lettered',
+          state: 'dead-lettered',
+          operationId,
+          workflowId: 'workflow-dead-letter',
+          activityName: 'charge',
+        }),
+      );
+
+      const clearResponse = await handlerModule.handleRequest(
+        new Request(
+          `http://localhost/v1/tasks/diagnostics/dead-letter/${encodeURIComponent(operationId)}`,
+          { method: 'DELETE' },
+        ),
+        engine,
+        {
+          authContext: {
+            method: 'api-key',
+            principal: principalFromApiKey({ subject: 'operator', scopes: ['system:admin'] }),
+          },
+        },
+      );
+      expect(clearResponse.status).toBe(200);
+      expect(await clearResponse.json()).toEqual({ ok: true });
+      expect(await engine.storage.get(KEYS.operationDeadLetter(operationId))).toBeNull();
 
       ws.close();
       await waitForRealTimersForTesting(50);
@@ -3924,7 +4105,7 @@ describe('task assignment deduplication', () => {
 
   it('rejects taskResult without operationId as a protocol error', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0, workerReconnectGracePeriodMs: 0 });
 
     const ws = await connectWorker(server);
     const protocolError = waitForWorkerMessage(
@@ -3960,7 +4141,7 @@ describe('task assignment deduplication', () => {
     // only path that could ignore the close event (the assertion this test
     // pins). With a non-zero grace period, the timer might fire after the
     // 100ms test wait and produce a different observable.
-    server = serve({ engine, port: 0, workerReconnectGracePeriodMs: 0 });
+    server = serveTestServer({ engine, port: 0, workerReconnectGracePeriodMs: 0 });
     const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
@@ -3987,7 +4168,7 @@ describe('task assignment deduplication', () => {
 
   it('allows re-dispatch of an operationId after completion', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     const received = collectAndCompleteTaskMessages(ws);
@@ -4047,7 +4228,7 @@ describe('visibility timeout persistence', () => {
 
   it('persists in-flight record to storage on dispatch', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
@@ -4076,7 +4257,7 @@ describe('visibility timeout persistence', () => {
 
   it('removes in-flight record from storage on task completion', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     collectAndCompleteTaskMessages(ws, { resultValue: 42 });
@@ -4099,7 +4280,7 @@ describe('visibility timeout persistence', () => {
 
   it('uses custom visibility timeout from TaskDispatch', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
@@ -4134,7 +4315,7 @@ describe('visibility timeout persistence', () => {
 
   it('defaults visibility timeout to 30 seconds when not specified', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
@@ -4173,7 +4354,7 @@ describe('visibility timeout persistence', () => {
     await storage.put(KEYS.operationInflight('restored-op'), encode(inflightRecord));
 
     // Start the server — it should restore the in-flight record
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
     await waitFor(() => server.registry.isAssigned('restored-op'), {
       label: 'restored-op to be assigned',
     });
@@ -4198,7 +4379,7 @@ describe('visibility timeout persistence', () => {
     };
     await storage.put(KEYS.operationInflight('restored-cancel-op'), encode(inflightRecord));
 
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
     await waitForRealTimersForTesting(100);
 
     const ws = await connectWorker(server);
@@ -4237,7 +4418,7 @@ describe('visibility timeout persistence', () => {
     await storage.put(KEYS.operationInflight('restore-corrupt-op'), encode({ invalid: true }));
 
     try {
-      server = serve({ engine, port: 0 });
+      server = serveTestServer({ engine, port: 0 });
       await waitFor(
         () =>
           errorSpy.mock.calls.some((call) => {
@@ -4275,7 +4456,7 @@ describe('visibility timeout persistence', () => {
     } as MemoryStorage['scan']);
 
     try {
-      server = serve({ engine, port: 0 });
+      server = serveTestServer({ engine, port: 0 });
       await waitFor(
         () =>
           errorSpy.mock.calls.some((call) => {
@@ -4312,7 +4493,7 @@ describe('visibility timeout persistence', () => {
     };
     await storage.put(KEYS.operationInflight('expired-op'), encode(expiredRecord));
 
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
     await waitFor(async () => (await storage.get(KEYS.operationInflight('expired-op'))) === null, {
       label: 'expired-op inflight record cleanup',
     });
@@ -4347,9 +4528,13 @@ describe('worker disconnection triggers task reassignment', () => {
     return { engine: e, storage: s };
   }
 
+  function serveFastReconnectTestServer(serverEngine: Engine): WeftServer {
+    return serveTestServer({ engine: serverEngine, port: 0, workerReconnectGracePeriodMs: 100 });
+  }
+
   it('requeues in-flight tasks to another worker on disconnect', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveFastReconnectTestServer(engine);
 
     const {
       primaryWorker: ws1,
@@ -4385,7 +4570,7 @@ describe('worker disconnection triggers task reassignment', () => {
 
   it('increments attempt count on reassigned tasks', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveFastReconnectTestServer(engine);
 
     const {
       primaryWorker: ws1,
@@ -4421,7 +4606,7 @@ describe('worker disconnection triggers task reassignment', () => {
 
   it('cleans up in-flight storage record on disconnect and reassignment', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveFastReconnectTestServer(engine);
 
     const ws1 = await connectWorker(server);
     const ws2 = await connectWorker(server);
@@ -4458,7 +4643,7 @@ describe('worker disconnection triggers task reassignment', () => {
 
   it('requeues to long-poll queue when no other WebSocket worker is available', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveFastReconnectTestServer(engine);
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
@@ -4486,7 +4671,7 @@ describe('worker disconnection triggers task reassignment', () => {
 
   it('records worker-disconnect requeue metadata and exposes it through diagnostics', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveFastReconnectTestServer(engine);
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w-disconnect-diagnostics', activities: ['charge'] });
@@ -4557,7 +4742,7 @@ describe('worker disconnection triggers task reassignment', () => {
 
   it('reassigns multiple in-flight tasks when a worker disconnects', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveFastReconnectTestServer(engine);
 
     const ws1 = await connectWorker(server);
     const ws2 = await connectWorker(server);
@@ -4600,7 +4785,7 @@ describe('worker disconnection triggers task reassignment', () => {
 
   it('logs corrupt inflight records when a disconnected worker task cannot be decoded', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveFastReconnectTestServer(engine);
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
 
     try {
@@ -4636,7 +4821,7 @@ describe('worker disconnection triggers task reassignment', () => {
 
   it('warns and clears missing inflight records when a worker disconnects before storage commit', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveFastReconnectTestServer(engine);
     const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
@@ -4675,7 +4860,7 @@ describe('worker disconnection triggers task reassignment', () => {
     ({ engine, storage } = createEngineWithStorage());
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
     const originalGet = storage.get.bind(storage);
-    server = serve({ engine, port: 0 });
+    server = serveFastReconnectTestServer(engine);
 
     const restoreGet = overrideProperty(storage, 'get', (async (key: string) => {
       if (key === KEYS.operationInflight('disconnect-get-fail-op')) {
@@ -4720,7 +4905,7 @@ describe('worker disconnection triggers task reassignment', () => {
     ({ engine, storage } = createEngineWithStorage());
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
     const originalPut = storage.put.bind(storage);
-    server = serve({ engine, port: 0 });
+    server = serveFastReconnectTestServer(engine);
 
     const restorePut = overrideProperty(storage, 'put', (async (key: string, value: Uint8Array) => {
       if (key === KEYS.operationQueued('disconnect-redispatch-fail-op')) {
@@ -4776,7 +4961,7 @@ describe('worker disconnection triggers task reassignment', () => {
     ({ engine, storage } = createEngineWithStorage());
     // Disable the reconnect grace period so the close handler unregisters
     // the worker synchronously, as this test asserts.
-    server = serve({ engine, port: 0, workerReconnectGracePeriodMs: 0 });
+    server = serveTestServer({ engine, port: 0, workerReconnectGracePeriodMs: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
@@ -4816,7 +5001,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
   it('reassigns tasks whose visibility timeout has expired via storage scan', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
     const received = collectAndCompleteTaskMessages(ws, {
@@ -4857,7 +5042,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
   it('increments attempt count on tasks reassigned due to timeout expiry', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
     const received = collectAndCompleteTaskMessages(ws, {
@@ -4894,7 +5079,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
   it('does not reassign tasks that have not expired', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
 
@@ -4933,7 +5118,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
   it('cleans up old storage record and creates new one on reassignment', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
     ws.addEventListener('message', (event) => {
@@ -4988,7 +5173,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
   it('falls back to long-poll queue when no WebSocket worker available for expired task', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
@@ -5019,7 +5204,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
   it('scanner cleans up orphaned storage records with no matching registry entry', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     // Connect a worker that can receive the reassigned task
     const ws = await connectWorker(server);
@@ -5075,7 +5260,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
   it('does not reassign a task when a heartbeat extended its deadline past a stale heap entry', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
     const received: Array<{ type: string; operationId?: string }> = [];
@@ -5187,7 +5372,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     );
 
     try {
-      server = serve({ engine, port: 0, visibilityPollIntervalMs: 25 });
+      server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 25 });
       await waitFor(
         () =>
           injectedStaleEntry &&
@@ -5213,7 +5398,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
   it('logs corrupt inflight records when the visibility scanner encounters invalid storage', async () => {
     ({ engine, storage } = createEngineWithStorage());
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     try {
       const ws = await connectWorker(server);
@@ -5291,7 +5476,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     const delayedStorage = new DelayedStorage();
     const localEngine = new Engine({ storage: delayedStorage });
     localEngine.register(echoWorkflow);
-    const localServer = serve({
+    const localServer = serveTestServer({
       engine: localEngine,
       port: 0,
       visibilityPollIntervalMs: 10,
@@ -5364,7 +5549,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     ({ engine, storage } = createEngineWithStorage());
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
     const originalGet = storage.get.bind(storage);
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const restoreGet = overrideProperty(storage, 'get', (async (key: string) => {
       if (key === KEYS.operationInflight('visibility-retry-op')) {
@@ -5410,7 +5595,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
     ({ engine, storage } = createEngineWithStorage());
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
     const originalDrainExpired = DeadlineTracker.prototype.drainExpired;
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 20 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 20 });
 
     try {
       DeadlineTracker.prototype.drainExpired = function drainExpiredFailure() {
@@ -5437,7 +5622,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
 
   it('reconciliation tracks non-expired orphaned records so the fast scanner can expire them later', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 20 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 20 });
 
     const ws = await connectWorker(server);
     const received: Array<{ type: string; operationId?: string; attempt?: number }> = [];
@@ -5504,7 +5689,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
   it('logs per-record reconciliation failures and skips the bad entry', async () => {
     ({ engine, storage } = createEngineWithStorage());
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 20 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 20 });
 
     try {
       await waitForRealTimersForTesting(50);
@@ -5544,7 +5729,7 @@ describe('visibility timeout expiry triggers task reassignment', () => {
       }
       yield* originalScan(prefix, options);
     } as MemoryStorage['scan']);
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 20 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 20 });
 
     try {
       await waitFor(
@@ -5637,7 +5822,7 @@ describe('concurrent scanner deduplication', () => {
     // reconciliation cycle, we verify that the same operationId is processed
     // exactly once per expiry event — not twice.
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
     const received = collectAndCompleteTaskMessages(ws, {
@@ -5682,7 +5867,7 @@ describe('concurrent scanner deduplication', () => {
     // deadline heap, so only reconcileOrphanedRecords will find it — and it
     // will only find it once even if multiple reconciliation cycles run.
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
     const received = collectAndCompleteTaskMessages(ws);
@@ -5802,7 +5987,7 @@ describe('concurrent scanner deduplication', () => {
     );
 
     try {
-      server = serve({ engine, port: 0, visibilityPollIntervalMs: 25 });
+      server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 25 });
       await waitForRealTimersForTesting(100);
 
       await innerStorage.put(
@@ -5866,6 +6051,10 @@ describe('retry policy respected on reassignment', () => {
     return { engine: e, storage: s };
   }
 
+  function serveFastReconnectTestServer(serverEngine: Engine): WeftServer {
+    return serveTestServer({ engine: serverEngine, port: 0, workerReconnectGracePeriodMs: 100 });
+  }
+
   const testRetryPolicy: RetryPolicy = {
     maxAttempts: 2,
     initialBackoff: 100,
@@ -5875,7 +6064,7 @@ describe('retry policy respected on reassignment', () => {
 
   it('does not re-dispatch when maxAttempts exceeded on visibility timeout expiry', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
     const received = collectTaskMessages(ws);
@@ -5925,7 +6114,7 @@ describe('retry policy respected on reassignment', () => {
 
   it('does not re-dispatch when maxAttempts exceeded on worker disconnect', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveFastReconnectTestServer(engine);
 
     const {
       primaryWorker: ws1,
@@ -5966,7 +6155,7 @@ describe('retry policy respected on reassignment', () => {
 
   it('re-dispatches when within maxAttempts on visibility timeout expiry', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
     const received = collectAndCompleteTaskMessages(ws, {
@@ -6010,7 +6199,7 @@ describe('retry policy respected on reassignment', () => {
 
   it('applies backoff delay before re-dispatch on visibility timeout expiry', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
     const timestamps: number[] = [];
@@ -6065,7 +6254,7 @@ describe('retry policy respected on reassignment', () => {
 
   it('applies backoff delay before re-dispatch on worker disconnect', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveFastReconnectTestServer(engine);
 
     const ws1 = await connectWorker(server);
     const ws2 = await connectWorker(server);
@@ -6116,7 +6305,7 @@ describe('retry policy respected on reassignment', () => {
     ({ engine, storage } = createEngineWithStorage());
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
     const originalPut = storage.put.bind(storage);
-    server = serve({ engine, port: 0 });
+    server = serveFastReconnectTestServer(engine);
 
     const restorePut = overrideProperty(storage, 'put', (async (key: string, value: Uint8Array) => {
       if (key === KEYS.operationQueued('delayed-redispatch-fail-op')) {
@@ -6166,7 +6355,7 @@ describe('retry policy respected on reassignment', () => {
 
   it('stores retryPolicy in the inflight record for use during reassignment', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'w1', activities: ['charge'], concurrency: 5 });
@@ -6195,7 +6384,7 @@ describe('retry policy respected on reassignment', () => {
 
   it('defaults to no maxAttempts limit when retryPolicy is not provided', async () => {
     ({ engine, storage } = createEngineWithStorage());
-    server = serve({ engine, port: 0, visibilityPollIntervalMs: 50 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
     const received = collectAndCompleteTaskMessages(ws, {
@@ -6248,7 +6437,7 @@ describe('worker shutdown and cancel propagation', () => {
 
   it('shutdownWorker sends shutdown message and waits for disconnect', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const received: Array<{ type: string; [key: string]: unknown }> = [];
     const ws = await connectWorker(server);
@@ -6281,7 +6470,7 @@ describe('worker shutdown and cancel propagation', () => {
 
   it('shutdownWorker returns after the timeout when the worker stays connected', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
     await registerWorker(ws, { workerId: 'shutdown-timeout-w1', activities: ['charge'] });
@@ -6297,7 +6486,7 @@ describe('worker shutdown and cancel propagation', () => {
 
   it('shutdownWorker returns false for unknown worker', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const result = await server.shutdownWorker('non-existent-worker');
     expect(result).toBe(false);
@@ -6305,7 +6494,7 @@ describe('worker shutdown and cancel propagation', () => {
 
   it('shutdownAllWorkers shuts down all connected workers', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const ws1 = await connectWorker(server);
     const ws2 = await connectWorker(server);
@@ -6333,9 +6522,54 @@ describe('worker shutdown and cancel propagation', () => {
     expect(server.registry.size).toBe(0);
   });
 
+  it('stop drains connected workers so in-flight task results can persist before teardown', async () => {
+    engine = createEngine();
+    const storage = engine.storage as MemoryStorage;
+    const operationId = 'stop-drains-inflight-result';
+    server = serveTestServer({ engine, port: 0, workerShutdownTimeoutMs: 500 });
+
+    const ws = await connectWorker(server);
+    let receivedShutdown = false;
+    ws.addEventListener('message', (event) => {
+      const parsed = JSON.parse(String(event.data)) as { type: string };
+      if (parsed.type !== 'shutdown') return;
+
+      receivedShutdown = true;
+      sendCompletedTaskResult(ws, operationId, 'drained-before-stop');
+      void waitFor(async () => (await storage.get(KEYS.operationResolved(operationId))) !== null, {
+        label: 'task result persisted during server stop drain',
+      })
+        .catch(() => {})
+        .finally(() => ws.close());
+    });
+
+    await registerWorker(ws, { workerId: 'stop-drain-w1', activities: ['charge'] });
+    await server.dispatchTask({
+      operationId,
+      activityName: 'charge',
+      input: null,
+      visibilityTimeout: 30_000,
+    });
+    await waitFor(async () => (await storage.get(KEYS.operationInflight(operationId))) !== null, {
+      label: 'inflight task persisted before server stop',
+    });
+
+    await server.stop();
+
+    expect(receivedShutdown).toBe(true);
+    const resolved = decode(
+      (await storage.get(KEYS.operationResolved(operationId)))!,
+    ) as ResolvedRecord | null;
+    expect(resolved).toMatchObject({
+      operationId,
+      status: 'completed',
+      value: 'drained-before-stop',
+    });
+  });
+
   it('falls back to the long-poll queue when a registry worker has no live socket', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     server.registry.register({
       id: 'ghost-worker',
@@ -6356,7 +6590,7 @@ describe('worker shutdown and cancel propagation', () => {
 
   it('cancelTask sends cancel to the correct worker', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const received: Array<{ type: string; operationId?: string }> = [];
     const ws = await connectWorker(server);
@@ -6393,7 +6627,7 @@ describe('worker shutdown and cancel propagation', () => {
 
   it('cancelTask returns false when no worker has the task', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const result = server.cancelTask('non-existent-op');
     expect(result).toBe(false);
@@ -6401,7 +6635,7 @@ describe('worker shutdown and cancel propagation', () => {
 
   it('workflow cancellation propagates cancel to workers', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const received: Array<{ type: string; operationId?: string }> = [];
     const ws = await connectWorker(server);
@@ -6468,7 +6702,7 @@ describe('header propagation in task dispatch', () => {
 
   it('includes headers when dispatching to WebSocket workers', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const received: Array<Record<string, unknown>> = [];
     const ws = await connectWorker(server);
@@ -6503,7 +6737,7 @@ describe('header propagation in task dispatch', () => {
 
   it('omits headers field when no headers are provided', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const received: Array<Record<string, unknown>> = [];
     const ws = await connectWorker(server);
@@ -6538,7 +6772,7 @@ describe('header propagation in task dispatch', () => {
 
   it('includes headers when dispatching to long-poll workers via task queue', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     // Dispatch task with headers — it will go into the task queue since no
     // WebSocket worker is connected for the target activity
@@ -6564,7 +6798,7 @@ describe('header propagation in task dispatch', () => {
 
   it('propagates headers end-to-end to a RemoteWorker activity interceptor', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const { RemoteWorker } = await import('../worker/index.ts');
 
@@ -6620,7 +6854,7 @@ describe('header propagation in task dispatch', () => {
 
   it('propagates empty headers map to interceptor when dispatch includes no headers', async () => {
     engine = createEngine();
-    server = serve({ engine, port: 0 });
+    server = serveTestServer({ engine, port: 0 });
 
     const { RemoteWorker } = await import('../worker/index.ts');
 

@@ -37,8 +37,8 @@ export type { WorkflowDefinition } from './workflow-definition.ts';
  * void engine;
  * ```
  */
-export type WorkflowFunction<TInput = unknown, TOutput = unknown> = (
-  context: WorkflowContext,
+export type WorkflowFunction<TInput = unknown, TOutput = unknown, TServices = unknown> = (
+  context: WorkflowContext<{}, {}, {}, {}, {}, TServices>,
   input: TInput,
 ) => AsyncGenerator<unknown, TOutput, unknown>;
 
@@ -185,18 +185,98 @@ export type ChildWorkflowTarget<TInput = unknown, TOutput = unknown> =
   | StepWorkflowFunction<TInput, TOutput>;
 
 /**
- * Options passed to child workflow invocations within `ctx.pipe`, `ctx.map`,
- * or `ctx.reduce`. Currently accepts an optional `id` to control the child
- * workflow ID.
+ * How a direct `ctx.startChild()` call relates the child workflow to the parent.
+ *
+ * - `'await'` is the default and preserves the original behavior: the parent
+ *   waits for the child result.
+ * - `'abandon'` starts the child and returns a serializable child handle
+ *   reference immediately. The child does not inherit the parent's execution
+ *   state owner.
+ * - `'request-cancel'` starts the child and returns a serializable child handle
+ *   reference immediately. If the parent is cancelled in the same engine
+ *   process, Weft requests cancellation of the child.
+ *
+ * @example
+ * ```ts
+ * import type { ChildWorkflowParentClosePolicy } from '@lostgradient/weft';
+ *
+ * const policy: ChildWorkflowParentClosePolicy = 'abandon';
+ * void policy;
+ * ```
  */
-export type ChildWorkflowOptions = {
-  id?: string;
+export type ChildWorkflowParentClosePolicy = 'await' | 'abandon' | 'request-cancel';
+
+declare const childWorkflowResultType: unique symbol;
+
+/**
+ * Serializable reference returned by detached `ctx.startChild()` policies.
+ * It intentionally contains only durable data that can be checkpointed. Use
+ * `engine.getHandle(reference.id)` outside the workflow body to observe status,
+ * signal the child, or await its result.
+ *
+ * @example
+ * ```ts
+ * import type { ChildWorkflowHandle } from '@lostgradient/weft';
+ *
+ * const child: ChildWorkflowHandle<{ receiptId: string }> = { id: 'payment-child' };
+ * const workflowId: string = child.id;
+ * void workflowId;
+ * ```
+ */
+export type ChildWorkflowHandle<TResult = unknown> = {
+  readonly id: string;
+  readonly [childWorkflowResultType]?: TResult;
 };
 
 /**
+ * Options for child workflow calls that wait for the child result.
+ *
+ * @example
+ * ```ts
+ * import type { AwaitChildWorkflowOptions } from '@lostgradient/weft';
+ *
+ * const options: AwaitChildWorkflowOptions = {
+ *   id: 'payment-child',
+ *   parentClosePolicy: 'await',
+ * };
+ * void options;
+ * ```
+ */
+export type AwaitChildWorkflowOptions = {
+  id?: string;
+  parentClosePolicy?: 'await';
+};
+
+/**
+ * Options for direct child workflow calls that return a child handle reference.
+ *
+ * @example
+ * ```ts
+ * import type { DetachedChildWorkflowOptions } from '@lostgradient/weft';
+ *
+ * const options: DetachedChildWorkflowOptions = {
+ *   id: 'background-payment',
+ *   parentClosePolicy: 'request-cancel',
+ * };
+ * void options;
+ * ```
+ */
+export type DetachedChildWorkflowOptions = {
+  id?: string;
+  parentClosePolicy: Exclude<ChildWorkflowParentClosePolicy, 'await'>;
+};
+
+/**
+ * Options passed to direct child workflow invocations via `ctx.startChild()`.
+ * Composition operators (`ctx.pipe`, `ctx.map`, and `ctx.reduce`) are await-only
+ * and accept only {@link AwaitChildWorkflowOptions}.
+ */
+export type ChildWorkflowOptions = AwaitChildWorkflowOptions | DetachedChildWorkflowOptions;
+
+/**
  * A single stage in a `ctx.pipe(stages, input)` composition chain. Pairs a
- * {@link ChildWorkflowTarget} with optional {@link ChildWorkflowOptions} such
- * as a custom child workflow ID. Use the object form when you need to pass
+ * {@link ChildWorkflowTarget} with optional {@link AwaitChildWorkflowOptions}
+ * such as a custom child workflow ID. Use the object form when you need to pass
  * per-stage options; otherwise a bare {@link ChildWorkflowTarget} also works.
  *
  * @example
@@ -221,7 +301,7 @@ export type ChildWorkflowOptions = {
  */
 export interface WorkflowPipeStage<TInput = unknown, TOutput = unknown> {
   type: ChildWorkflowTarget<TInput, TOutput>;
-  options?: ChildWorkflowOptions;
+  options?: AwaitChildWorkflowOptions;
 }
 
 /**
@@ -355,7 +435,7 @@ export interface WorkflowReduceInput<TAccumulator, TItem> {
  * void engine;
  * ```
  */
-export interface WorkflowReduceOptions extends Record<string, unknown> {
+export interface WorkflowReduceOptions extends AwaitChildWorkflowOptions {
   idPrefix?: string;
 }
 

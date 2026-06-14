@@ -93,6 +93,15 @@ export type ContextOperationRequest =
       callerStack?: string;
     }
   | {
+      type: 'get-version';
+      operationId: string;
+      changeId: string;
+      minSupported: number;
+      maxSupported: number;
+      version: number;
+      callerStack?: string;
+    }
+  | {
       type: 'parallel';
       operationId: string;
       operations: ContextOperationRequest[];

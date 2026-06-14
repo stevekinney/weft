@@ -83,6 +83,9 @@ const auth: AuthConfig = { apiKeys: ['secret'] };
 const fullyTypedServeOptions: ServeOptions = {
   engine,
   auth,
+  maxRequestBodyBytes: 1_048_576,
+  maxStreamConnectionsPerWorkflow: 100,
+  workerShutdownTimeoutMs: 30_000,
   routingPolicy,
   schedulingPolicy,
   discoveryInfo,

@@ -1,5 +1,6 @@
 import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range';
 import {
+  assertStorageBatchOperationCount,
   matchesScanOptions,
   resolvePrefixRangeEnd,
   storageValuesEqual,
@@ -106,6 +107,7 @@ export class MemoryStorage implements Storage {
   }
 
   async batch(operations: BatchOperation[]): Promise<void> {
+    assertStorageBatchOperationCount('batch operations', operations.length);
     this.#applyBatchOperations(operations);
   }
 
@@ -123,6 +125,9 @@ export class MemoryStorage implements Storage {
     conditions: ConditionalBatchCondition[],
     operations: BatchOperation[],
   ): Promise<boolean> {
+    assertStorageBatchOperationCount('conditionalBatch conditions', conditions.length);
+    assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
+
     for (const condition of conditions) {
       const currentValue = this.#data.get(condition.key) ?? null;
       if (!storageValuesEqual(currentValue, condition.expectedValue)) {
