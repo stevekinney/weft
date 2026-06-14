@@ -143,19 +143,19 @@ describe('check-lint-disables ceiling mode', () => {
   it('strips a leading ID:<token> before measuring rationale length', async () => {
     await writeFixtureFile(
       root,
-      'src/legacy-id-short.ts',
-      `// oxlint-disable-next-line complexity -- ID:a-very-long-legacy-identifier-token short\nexport function noop(): void {}\n`,
+      'src/id-token-short.ts',
+      `// oxlint-disable-next-line complexity -- ID:a-very-long-identifier-token short\nexport function noop(): void {}\n`,
     );
     const result = run(['--root', root, '--max', '5']);
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('src/legacy-id-short.ts:1');
+    expect(result.stderr).toContain('src/id-token-short.ts:1');
   });
 
   it('passes when an ID:<token> precedes a sufficient rationale', async () => {
     await writeFixtureFile(
       root,
-      'src/legacy-id-ok.ts',
-      `// oxlint-disable-next-line complexity -- ID:legacy ${RATIONALE_PASS}\nexport function noop(): void {}\n`,
+      'src/id-token-ok.ts',
+      `// oxlint-disable-next-line complexity -- ID:token ${RATIONALE_PASS}\nexport function noop(): void {}\n`,
     );
     const result = run(['--root', root, '--max', '5']);
     expect(result.exitCode).toBe(0);
@@ -267,7 +267,7 @@ describe('check-lint-disables --emit-snapshot', () => {
     await writeFixtureFile(
       root,
       'src/with-id.ts',
-      `// oxlint-disable-next-line complexity -- ID:legacy-token-name\nexport const a = 1;\n`,
+      `// oxlint-disable-next-line complexity -- ID:sample-token-name\nexport const a = 1;\n`,
     );
     await writeFixtureFile(
       root,
@@ -277,7 +277,7 @@ describe('check-lint-disables --emit-snapshot', () => {
     const result = run(['--root', root, '--emit-snapshot', snapshotPath]);
     expect(result.exitCode).toBe(0);
     const contents = await Bun.file(snapshotPath).text();
-    expect(contents).toContain('legacy-token-name\tsrc/with-id.ts\t1');
+    expect(contents).toContain('sample-token-name\tsrc/with-id.ts\t1');
     expect(contents).toContain('\tsrc/no-id.ts\t1');
   });
 });

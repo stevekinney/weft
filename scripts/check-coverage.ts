@@ -25,6 +25,82 @@ type CoverageAllowance = {
   lines?: Set<number>;
 };
 
+type CoverageAllowanceEntry = readonly [path: string, allowance: CoverageAllowance];
+
+/**
+ * Build one allowance layer from its raw entry array, failing loudly on a duplicate
+ * key WITHIN the layer. A `new Map([...])` silently keeps only the last entry for a
+ * repeated key, so a copy-paste duplicate inside a single literal would quietly drop
+ * an allowance with no signal (this exact bug shipped mid-PR in #516). Keeping the
+ * entries as a named array and asserting `length === unique keys` here turns that
+ * silent drop into a build-time error naming the layer and key.
+ */
+export function buildAllowanceLayer(
+  layerName: string,
+  entries: ReadonlyArray<CoverageAllowanceEntry>,
+): Map<string, CoverageAllowance> {
+  const seen = new Set<string>();
+  for (const [path] of entries) {
+    if (seen.has(path)) {
+      throw new Error(
+        `Duplicate coverage-allowance key "${path}" within ${layerName}. ` +
+          'A Map literal silently keeps only the last entry for a repeated key; ' +
+          'merge the two entries into one so no allowance is dropped.',
+      );
+    }
+    seen.add(path);
+  }
+  return new Map(entries);
+}
+
+type NamedAllowanceLayer = readonly [name: string, layer: ReadonlyMap<string, CoverageAllowance>];
+
+/**
+ * Assert that two refresh layers partition their keys: a key in BOTH means removing
+ * its row from one layer silently re-activates the other layer's (often
+ * stale-line-numbered) allowance — a silent gate flip. The two layers are passed by
+ * direct reference rather than matched by name against the ordered layer list, so a
+ * renamed or mistyped layer can never silently skip this check (which would defeat
+ * the whole point: a guard against silent allowance failures must not itself fail
+ * silently). Base/override layering against a refresh layer stays legal.
+ */
+function assertRefreshLayersPartitionKeys(
+  first: NamedAllowanceLayer,
+  second: NamedAllowanceLayer,
+): void {
+  const [firstName, firstLayer] = first;
+  const [secondName, secondLayer] = second;
+  for (const key of firstLayer.keys()) {
+    if (secondLayer.has(key)) {
+      throw new Error(
+        `Coverage-allowance key "${key}" appears in both ${firstName} and ${secondName}. ` +
+          'A key may live in at most one refresh layer, or removing one row silently ' +
+          'reactivates the other layer’s (possibly stale) allowance.',
+      );
+    }
+  }
+}
+
+/**
+ * Assemble the final allowance map from its ordered layers (last layer wins for a
+ * shadowed key — the intended base→override mechanic), after asserting the two
+ * mutually-exclusive refresh layers partition their keys (see
+ * {@link assertRefreshLayersPartitionKeys}).
+ */
+export function assembleAllowanceLayers(
+  layers: ReadonlyArray<NamedAllowanceLayer>,
+  refreshLayers: readonly [NamedAllowanceLayer, NamedAllowanceLayer],
+): Map<string, CoverageAllowance> {
+  assertRefreshLayersPartitionKeys(refreshLayers[0], refreshLayers[1]);
+  const assembled = new Map<string, CoverageAllowance>();
+  for (const [, layer] of layers) {
+    for (const [key, allowance] of layer) {
+      assembled.set(key, allowance);
+    }
+  }
+  return assembled;
+}
+
 const COVERAGE_TEST_TIMEOUT_MS = 30_000;
 const COVERAGE_TEST_FILE_GLOBS = ['*test.ts', '*spec.ts'] as const;
 
@@ -68,16 +144,13 @@ function createMergedLineSet(...lineSets: Array<Set<number>>): Set<number> {
   return new Set(lineSets.flatMap((lineSet) => [...lineSet]));
 }
 
-const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
-  [
-    'scripts/check-coverage.ts',
-    {
-      // The parser itself is unit-tested. The remaining shell/CLI wrapper path is
-      // exercised by the automation entrypoint rather than Bun's in-process coverage run.
-      functions: 4,
-      lines: createLineSet(153, 265),
-    },
-  ],
+const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES', [
+  // No self-allowance for scripts/check-coverage.ts: bunfig.toml excludes it via
+  // `coveragePathIgnorePatterns = ["scripts/check-coverage.ts"]` (since 501d14ef),
+  // so the file never appears as an `SF:` record in LCOV and any allowance for it
+  // is dead — COVERAGE_ALLOWANCES.get('scripts/check-coverage.ts') can never fire.
+  // The old entry's `createLineSet(153, 265)` range was also already stale after
+  // this PR shifted the file's lines (flagged by Cursor Bugbot on #538).
   [
     'scripts/generate-operation-client.ts',
     {
@@ -567,7 +640,7 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
   ],
 ]);
 
-const COVERAGE_ALLOWANCE_OVERRIDES = new Map<string, CoverageAllowance>([
+const COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer('COVERAGE_ALLOWANCE_OVERRIDES', [
   // Post-#182 line movement plus newer runtime-exclusive surfaces shifted a
   // substantial amount of Bun's coverage noise. Keep the allowances aligned
   // with the current source layout rather than pretending these are new test
@@ -941,832 +1014,836 @@ const COVERAGE_ALLOWANCE_OVERRIDES = new Map<string, CoverageAllowance>([
 // Keep the fresh mainline coverage refresh separate from the historical base
 // allowances so line-movement updates are mechanically reviewable and do not
 // create duplicate keys inside a single Map literal.
-const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = new Map<string, CoverageAllowance>([
+const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
+  'CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES',
   [
-    'scripts/lib/workflow-visibility-backfill.ts',
-    {
-      lines: new Set([
-        61, 130, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199,
-      ]),
-    },
+    [
+      'scripts/lib/workflow-visibility-backfill.ts',
+      {
+        lines: new Set([
+          61, 130, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199,
+        ]),
+      },
+    ],
+    ['src/cli/codegen-emit.ts', { lines: new Set([303, 313, 357, 358, 425, 427]) }],
+    [
+      'src/cli/codegen.ts',
+      {
+        functions: 1,
+        lines: new Set([91, 92, 153, 154, 203, 248, 249, 379, 410, 411, 412, 414, 415, 416, 417]),
+      },
+    ],
+    [
+      'src/cli/conformance.ts',
+      {
+        functions: 1,
+        lines: new Set([55, 106, 128, 146, 150, 151, 166, 167, 168, 221, 287, 325]),
+      },
+    ],
+    ['src/client/http-handle.ts', { functions: 1 }],
+    ['src/client/http-schedule-handle.ts', { functions: 1 }],
+    ['src/client/local.ts', { functions: 1, lines: new Set([124]) }],
+    [
+      'src/core/context/parallel-operations.ts',
+      {
+        functions: 1,
+        lines: new Set([
+          30, 31, 32, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 77, 78, 79, 86,
+          87, 88, 171, 172, 173, 191, 192, 193, 295, 296, 297, 310, 330, 331, 333, 334, 335, 336,
+          337, 338, 339, 340, 341, 342, 344,
+        ]),
+      },
+    ],
+    ['src/core/engine/aggregate.ts', { functions: 1, lines: new Set([47, 48, 49, 50, 51, 52]) }],
+    [
+      'src/core/engine/attributes-tags.ts',
+      {
+        functions: 2,
+        lines: new Set([
+          50, 51, 53, 191, 220, 253, 285, 291, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301,
+          302, 303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319,
+          320, 321,
+        ]),
+      },
+    ],
+    [
+      'src/core/engine/bulk-operations.ts',
+      {
+        functions: 1,
+        lines: new Set([572, 588, 714, 715, 716, 717, 723, 724, 725, 726, 879]),
+      },
+    ],
+    [
+      'src/core/engine/completed-review-storage.ts',
+      { lines: new Set([18, 30, 108, 113, 114, 115, 117, 118, 119, 120, 124]) },
+    ],
+    ['src/core/engine/index.ts', { functions: 1 }],
+    [
+      'src/core/engine/inline-parking.ts',
+      { functions: 1, lines: new Set([204, 205, 206, 207, 208, 209, 210, 211]) },
+    ],
+    [
+      'src/core/engine/list-candidate-resolution.ts',
+      {
+        lines: new Set([
+          42, 45, 47, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+          68, 69, 70, 71, 72, 73, 74, 75, 76, 78, 80, 81, 82, 83,
+        ]),
+      },
+    ],
+    ['src/core/engine/listing.ts', { lines: new Set([52, 83, 180, 202]) }],
+    ['src/core/engine/review-list-entries.ts', { lines: new Set([84, 145]) }],
+    ['src/core/engine/reviews.ts', { lines: new Set([148, 208, 209, 225, 235, 239, 240, 286]) }],
+    [
+      'src/core/engine/state-utilities.ts',
+      { lines: new Set([282, 286, 287, 288, 289, 297, 301, 302, 303, 304, 305, 306, 317, 318]) },
+    ],
+    ['src/core/engine/validation.ts', { lines: new Set([291]) }],
+    ['src/core/engine/workflow-indexes.ts', { functions: 1, lines: new Set([43, 44, 45, 46, 47]) }],
+    ['src/core/engine/workflow-state-stream.ts', { lines: new Set([114]) }],
+    ['src/core/types/definition-schema-to-json.ts', { lines: new Set([135, 136, 137, 140, 141]) }],
+    ['src/core/worker-checkpoint-resume-state.ts', { functions: 1 }],
+    ['src/core/worker-execution-strategy.ts', { functions: 2 }],
+    [
+      'src/mcp/access.ts',
+      { functions: 1, lines: new Set([36, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 117]) },
+    ],
+    ['src/mcp/dispatcher.ts', { functions: 7, lines: new Set([110, 111, 114, 210, 211, 212]) }],
+    [
+      'src/mcp/http.ts',
+      {
+        lines: new Set([
+          110, 111, 112, 113, 114, 115, 116, 117, 193, 194, 217, 227, 270, 349, 350, 351, 352, 353,
+          356, 357, 358, 359,
+        ]),
+      },
+    ],
+    [
+      'src/mcp/list-filter.ts',
+      {
+        lines: new Set([
+          64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 88, 89, 90, 91, 92, 93, 94, 95, 96,
+          102,
+        ]),
+      },
+    ],
+    ['src/mcp/protocol.ts', { functions: 3, lines: new Set([89, 94, 95, 96, 101]) }],
+    [
+      'src/mcp/resources.ts',
+      {
+        functions: 2,
+        lines: new Set([
+          39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60,
+          61, 62, 63, 64, 65, 66, 67, 68, 130, 163, 188, 203, 204,
+        ]),
+      },
+    ],
+    ['src/mcp/session.ts', { functions: 1, lines: new Set([152, 153, 154]) }],
+    [
+      'src/mcp/stdio.ts',
+      {
+        functions: 3,
+        lines: new Set([
+          98, 99, 100, 101, 102, 121, 122, 200, 201, 202, 203, 204, 205, 206, 207, 232, 233, 270,
+          271, 272, 273, 332, 333, 352, 353, 354, 355, 356, 357, 358, 359,
+        ]),
+      },
+    ],
+    [
+      'src/mcp/tools.ts',
+      {
+        functions: 1,
+        lines: new Set([67, 124, 125, 158, 178, 179, 292, 293, 294, 295, 296, 352, 353, 379]),
+      },
+    ],
+    [
+      'src/server/api-catalog.ts',
+      { lines: new Set([161, 162, 166, 167, 169, 170, 171, 172, 174, 176]) },
+    ],
+    ['src/server/handler/index.ts', { lines: new Set([38, 47]) }],
+    ['src/server/json-rpc-dispatch.ts', { lines: new Set([188, 189]) }],
+    ['src/server/openapi.ts', { lines: new Set([334]) }],
+    ['src/server/openrpc.ts', { lines: new Set([178, 179, 180, 199, 200, 201]) }],
+    [
+      'src/server/operation-catalog/workflow-adapter.ts',
+      { lines: new Set([179, 180, 181, 182, 183, 187, 188, 191, 192, 193, 194, 195, 199, 200]) },
+    ],
+    [
+      'src/server/operations/aggregate-workflows.ts',
+      {
+        functions: 2,
+        lines: new Set([
+          78, 79, 80, 81, 82, 83, 84, 103, 104, 105, 106, 107, 116, 117, 118, 135, 136, 137, 138,
+          148,
+        ]),
+      },
+    ],
+    [
+      'src/server/operations/bulk-filter-helpers.ts',
+      {
+        functions: 1,
+        lines: new Set([
+          262, 267, 272, 277, 282, 287, 295, 296, 297, 298, 306, 307, 308, 309, 310, 311, 312, 313,
+          314, 315, 316, 317, 318, 374, 377, 380, 387, 392, 397, 403, 444, 456, 469, 479,
+        ]),
+      },
+    ],
+    [
+      'src/server/operations/failure-category-filter.ts',
+      { functions: 1, lines: new Set([13, 14, 15, 16, 17, 18, 19]) },
+    ],
+    [
+      'src/server/operations/get-task-diagnostics.ts',
+      { lines: new Set([228, 229, 230, 231, 232]) },
+    ],
+    ['src/server/operations/list-workflows.ts', { functions: 1 }],
+    ['src/server/operations/query-workflow.ts', { lines: new Set([112, 113, 114, 115, 116]) }],
+    [
+      'src/server/operations/start-workflow.ts',
+      { functions: 1, lines: new Set([174, 199, 200, 201, 205, 210, 211, 212, 233]) },
+    ],
+    [
+      'src/server/operations/worker-drain.ts',
+      { functions: 2, lines: new Set([251, 258, 259, 260, 264, 265, 266, 267, 268]) },
+    ],
+    [
+      'src/storage/turso.ts',
+      {
+        // This is the defensive rollback-suppression helper used after a libSQL
+        // transaction already failed. Real libSQL rollback failures are not
+        // deterministic to trigger; the behavior preserves the original failure.
+        // The retry sleep is only reached on a transient libSQL busy response,
+        // which is covered structurally by the retry caller and hard to force
+        // deterministically through the public adapter without timing races.
+        functions: 1,
+        lines: new Set([48, 49, 50, 56, 57, 58]),
+      },
+    ],
+    ['src/testing/fake-timers.test-support.ts', { lines: new Set([232]) }],
+    ['src/testing/storage-backends.test-support.ts', { lines: new Set([71, 72, 73]) }],
+    [
+      'src/worker/protocol.ts',
+      { lines: new Set([774, 775, 776, 777, 782, 783, 784, 785, 790, 791, 792, 793]) },
+    ],
+    ['src/worker/registry.ts', { functions: 1, lines: new Set([736, 737, 738, 739, 740, 741]) }],
+    [
+      'src/workers/workflow-runner.ts',
+      { functions: 3, lines: new Set([82, 83, 84, 85, 86, 87, 90, 91, 97, 98, 99, 100, 101]) },
+    ],
   ],
-  ['src/cli/codegen-emit.ts', { lines: new Set([303, 313, 357, 358, 425, 427]) }],
-  [
-    'src/cli/codegen.ts',
-    {
-      functions: 1,
-      lines: new Set([91, 92, 153, 154, 203, 248, 249, 379, 410, 411, 412, 414, 415, 416, 417]),
-    },
-  ],
-  [
-    'src/cli/conformance.ts',
-    {
-      functions: 1,
-      lines: new Set([55, 106, 128, 146, 150, 151, 166, 167, 168, 221, 287, 325]),
-    },
-  ],
-  ['src/client/http-handle.ts', { functions: 1 }],
-  ['src/client/http-schedule-handle.ts', { functions: 1 }],
-  ['src/client/local.ts', { functions: 1, lines: new Set([124]) }],
-  [
-    'src/core/context/parallel-operations.ts',
-    {
-      functions: 1,
-      lines: new Set([
-        30, 31, 32, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 77, 78, 79, 86, 87,
-        88, 171, 172, 173, 191, 192, 193, 295, 296, 297, 310, 330, 331, 333, 334, 335, 336, 337,
-        338, 339, 340, 341, 342, 344,
-      ]),
-    },
-  ],
-  ['src/core/engine/aggregate.ts', { functions: 1, lines: new Set([47, 48, 49, 50, 51, 52]) }],
-  [
-    'src/core/engine/attributes-tags.ts',
-    {
-      functions: 2,
-      lines: new Set([
-        50, 51, 53, 191, 220, 253, 285, 291, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301, 302,
-        303, 304, 305, 306, 307, 308, 309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320,
-        321,
-      ]),
-    },
-  ],
-  [
-    'src/core/engine/bulk-operations.ts',
-    {
-      functions: 1,
-      lines: new Set([572, 588, 714, 715, 716, 717, 723, 724, 725, 726, 879]),
-    },
-  ],
-  [
-    'src/core/engine/completed-review-storage.ts',
-    { lines: new Set([18, 30, 108, 113, 114, 115, 117, 118, 119, 120, 124]) },
-  ],
-  ['src/core/engine/index.ts', { functions: 1 }],
-  [
-    'src/core/engine/inline-parking.ts',
-    { functions: 1, lines: new Set([204, 205, 206, 207, 208, 209, 210, 211]) },
-  ],
-  [
-    'src/core/engine/list-candidate-resolution.ts',
-    {
-      lines: new Set([
-        42, 45, 47, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68,
-        69, 70, 71, 72, 73, 74, 75, 76, 78, 80, 81, 82, 83,
-      ]),
-    },
-  ],
-  ['src/core/engine/listing.ts', { lines: new Set([52, 83, 180, 202]) }],
-  ['src/core/engine/review-list-entries.ts', { lines: new Set([84, 145]) }],
-  ['src/core/engine/reviews.ts', { lines: new Set([148, 208, 209, 225, 235, 239, 240, 286]) }],
-  [
-    'src/core/engine/state-utilities.ts',
-    { lines: new Set([282, 286, 287, 288, 289, 297, 301, 302, 303, 304, 305, 306, 317, 318]) },
-  ],
-  ['src/core/engine/validation.ts', { lines: new Set([291]) }],
-  ['src/core/engine/workflow-indexes.ts', { functions: 1, lines: new Set([43, 44, 45, 46, 47]) }],
-  ['src/core/engine/workflow-state-stream.ts', { lines: new Set([114]) }],
-  ['src/core/types/definition-schema-to-json.ts', { lines: new Set([135, 136, 137, 140, 141]) }],
-  ['src/core/worker-checkpoint-resume-state.ts', { functions: 1 }],
-  ['src/core/worker-execution-strategy.ts', { functions: 2 }],
-  [
-    'src/mcp/access.ts',
-    { functions: 1, lines: new Set([36, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 117]) },
-  ],
-  ['src/mcp/dispatcher.ts', { functions: 7, lines: new Set([110, 111, 114, 210, 211, 212]) }],
-  [
-    'src/mcp/http.ts',
-    {
-      lines: new Set([
-        110, 111, 112, 113, 114, 115, 116, 117, 193, 194, 217, 227, 270, 349, 350, 351, 352, 353,
-        356, 357, 358, 359,
-      ]),
-    },
-  ],
-  [
-    'src/mcp/list-filter.ts',
-    {
-      lines: new Set([
-        64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 88, 89, 90, 91, 92, 93, 94, 95, 96, 102,
-      ]),
-    },
-  ],
-  ['src/mcp/protocol.ts', { functions: 3, lines: new Set([89, 94, 95, 96, 101]) }],
-  [
-    'src/mcp/resources.ts',
-    {
-      functions: 2,
-      lines: new Set([
-        39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61,
-        62, 63, 64, 65, 66, 67, 68, 130, 163, 188, 203, 204,
-      ]),
-    },
-  ],
-  ['src/mcp/session.ts', { functions: 1, lines: new Set([152, 153, 154]) }],
-  [
-    'src/mcp/stdio.ts',
-    {
-      functions: 3,
-      lines: new Set([
-        98, 99, 100, 101, 102, 121, 122, 200, 201, 202, 203, 204, 205, 206, 207, 232, 233, 270, 271,
-        272, 273, 332, 333, 352, 353, 354, 355, 356, 357, 358, 359,
-      ]),
-    },
-  ],
-  [
-    'src/mcp/tools.ts',
-    {
-      functions: 1,
-      lines: new Set([67, 124, 125, 158, 178, 179, 292, 293, 294, 295, 296, 352, 353, 379]),
-    },
-  ],
-  [
-    'src/server/api-catalog.ts',
-    { lines: new Set([161, 162, 166, 167, 169, 170, 171, 172, 174, 176]) },
-  ],
-  ['src/server/handler/index.ts', { lines: new Set([38, 47]) }],
-  ['src/server/json-rpc-dispatch.ts', { lines: new Set([188, 189]) }],
-  ['src/server/openapi.ts', { lines: new Set([334]) }],
-  ['src/server/openrpc.ts', { lines: new Set([178, 179, 180, 199, 200, 201]) }],
-  [
-    'src/server/operation-catalog/workflow-adapter.ts',
-    { lines: new Set([179, 180, 181, 182, 183, 187, 188, 191, 192, 193, 194, 195, 199, 200]) },
-  ],
-  [
-    'src/server/operations/aggregate-workflows.ts',
-    {
-      functions: 2,
-      lines: new Set([
-        78, 79, 80, 81, 82, 83, 84, 103, 104, 105, 106, 107, 116, 117, 118, 135, 136, 137, 138, 148,
-      ]),
-    },
-  ],
-  [
-    'src/server/operations/bulk-filter-helpers.ts',
-    {
-      functions: 1,
-      lines: new Set([
-        262, 267, 272, 277, 282, 287, 295, 296, 297, 298, 306, 307, 308, 309, 310, 311, 312, 313,
-        314, 315, 316, 317, 318, 374, 377, 380, 387, 392, 397, 403, 444, 456, 469, 479,
-      ]),
-    },
-  ],
-  [
-    'src/server/operations/failure-category-filter.ts',
-    { functions: 1, lines: new Set([13, 14, 15, 16, 17, 18, 19]) },
-  ],
-  ['src/server/operations/get-task-diagnostics.ts', { lines: new Set([228, 229, 230, 231, 232]) }],
-  ['src/server/operations/list-workflows.ts', { functions: 1 }],
-  ['src/server/operations/query-workflow.ts', { lines: new Set([112, 113, 114, 115, 116]) }],
-  [
-    'src/server/operations/start-workflow.ts',
-    { functions: 1, lines: new Set([174, 199, 200, 201, 205, 210, 211, 212, 233]) },
-  ],
-  [
-    'src/server/operations/worker-drain.ts',
-    { functions: 2, lines: new Set([251, 258, 259, 260, 264, 265, 266, 267, 268]) },
-  ],
-  [
-    'src/storage/turso.ts',
-    {
-      // This is the defensive rollback-suppression helper used after a libSQL
-      // transaction already failed. Real libSQL rollback failures are not
-      // deterministic to trigger; the behavior preserves the original failure.
-      // The retry sleep is only reached on a transient libSQL busy response,
-      // which is covered structurally by the retry caller and hard to force
-      // deterministically through the public adapter without timing races.
-      functions: 1,
-      lines: new Set([48, 49, 50, 56, 57, 58]),
-    },
-  ],
-  ['src/testing/fake-timers.test-support.ts', { lines: new Set([232]) }],
-  ['src/testing/storage-backends.test-support.ts', { lines: new Set([71, 72, 73]) }],
-  [
-    'src/worker/protocol.ts',
-    { lines: new Set([774, 775, 776, 777, 782, 783, 784, 785, 790, 791, 792, 793]) },
-  ],
-  ['src/worker/registry.ts', { functions: 1, lines: new Set([736, 737, 738, 739, 740, 741]) }],
-  [
-    'src/workers/workflow-runner.ts',
-    { functions: 3, lines: new Set([82, 83, 84, 85, 86, 87, 90, 91, 97, 98, 99, 100, 101]) },
-  ],
-]);
+);
 
-const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowance>([
-  // Current main after the oxlint cleanup split several runtime modules and
-  // surfaced example and test-support helpers that Bun still instruments even
-  // though the repository does not execute them directly in the coverage run.
+const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
+  'CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH',
   [
-    'examples/order-processing/src/client.ts',
-    {
-      functions: 1,
-      lines: new Set([
-        13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36,
-        37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
-        60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 73, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86,
-        87, 88, 89, 90, 91, 92,
-      ]),
-    },
+    // Current main after the oxlint cleanup split several runtime modules and
+    // surfaced example and test-support helpers that Bun still instruments even
+    // though the repository does not execute them directly in the coverage run.
+    //
+    // Placement rule for the two refresh layers: put coverage drift that already
+    // exists on main here; put drift introduced or refreshed by the active branch
+    // in CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH below. A key belongs in exactly
+    // one of the two — the guard in assembleAllowanceLayers rejects any key that
+    // appears in both.
+    //
+    // Keys also present in CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH below were
+    // removed from this layer: BRANCH is the terminal layer, so its allowance
+    // already wins in assembleAllowanceLayers and the twin here was dead (often
+    // with stale line numbers from before the branch pass refreshed them).
+    [
+      'examples/order-processing/src/client.ts',
+      {
+        functions: 1,
+        lines: new Set([
+          13, 14, 15, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
+          36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57,
+          58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 73, 77, 78, 79, 80, 81, 82, 83,
+          84, 85, 86, 87, 88, 89, 90, 91, 92,
+        ]),
+      },
+    ],
+    [
+      'scripts/check-lint-disables.ts',
+      {
+        functions: 9,
+        lines: new Set([
+          66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87,
+          88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110,
+          111, 112, 113, 114, 115, 116, 120, 121, 122, 123, 124, 133, 134, 135, 136, 137, 138, 139,
+          143, 144, 145, 146, 147, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163,
+          164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 177, 178, 179, 180, 181, 182, 183, 184,
+          185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202,
+          203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 217, 218, 219, 220, 221, 222, 223,
+          227, 228, 229, 230, 231, 232, 233, 234, 239, 240,
+        ]),
+      },
+    ],
+    [
+      'src/benchmarks/workflow-starts-runner.ts',
+      {
+        functions: 1,
+        lines: new Set([
+          24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45,
+          46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67,
+          68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89,
+          90, 91, 92, 93, 95, 96,
+        ]),
+      },
+    ],
+    [
+      'scripts/husky/run-tests.ts',
+      {
+        functions: 3,
+      },
+    ],
+    [
+      'src/cli/conformance.ts',
+      {
+        functions: 1,
+        lines: new Set([
+          55, 106, 128, 141, 146, 150, 151, 152, 166, 167, 168, 169, 221, 222, 287, 288, 325, 326,
+        ]),
+      },
+    ],
+    ['src/cli/utilities.ts', { lines: new Set([127]) }],
+    [
+      'src/core/checkpoint/serialization.ts',
+      {
+        lines: new Set([115, 116, 117]),
+      },
+    ],
+    ['src/core/context/speculative-child.ts', { lines: new Set([25]) }],
+    ['src/core/context/validation.ts', { lines: new Set([9]) }],
+    ['src/core/engine/aggregate.ts', { functions: 1, lines: new Set([52, 53, 54, 55, 56, 57]) }],
+    [
+      'src/core/engine/attributes-tags.ts',
+      {
+        functions: 2,
+        lines: new Set([
+          49, 50, 52, 182, 196, 260, 292, 298, 299, 300, 301, 302, 303, 304, 305, 306, 307, 308,
+          309, 310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326,
+          327, 328,
+        ]),
+      },
+    ],
+    [
+      'src/core/engine/bulk-operations-shared.ts',
+      { functions: 1, lines: new Set([154, 170, 296, 297, 298, 299, 305, 306, 307, 308]) },
+    ],
+    [
+      'src/core/engine/bulk-operations.ts',
+      {
+        functions: 1,
+        lines: new Set([279, 572, 588, 714, 715, 716, 717, 723, 724, 725, 726, 879]),
+      },
+    ],
+    ['src/core/engine/callback-creators-bundles.ts', { functions: 1 }],
+    ['src/core/engine/callback-creators-core.ts', { functions: 3 }],
+    ['src/core/engine/callback-creators-router-registry.ts', { lines: new Set([26, 27, 29]) }],
+    ['src/core/engine/child-workflow.ts', { lines: new Set([96, 104, 128, 139]) }],
+    ['src/core/engine/constraints.ts', { lines: new Set([60, 65, 93, 94, 95]) }],
+    [
+      'src/core/engine/engine-runtime-helpers.ts',
+      { functions: 2, lines: new Set([29, 30, 31, 52, 53, 54, 55, 56, 60]) },
+    ],
+    ['src/core/engine/handle-result.ts', { lines: new Set([63, 84, 85, 98, 100, 101, 121]) }],
+    [
+      'src/core/engine/inline-launch-queue.ts',
+      { functions: 1, lines: new Set([29, 31, 32, 33, 42, 43, 75, 165]) },
+    ],
+    ['src/core/engine/lifecycle/resume.ts', { lines: new Set([67]) }],
+    [
+      'src/core/engine/list-candidate-resolution.ts',
+      {
+        functions: 5,
+        lines: new Set([
+          45, 46, 47, 48, 49, 53, 54, 55, 56, 60, 61, 62, 63, 67, 68, 69, 70, 74, 75, 76, 77, 145,
+          147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 158, 159, 160, 162, 163,
+        ]),
+      },
+    ],
+    ['src/core/engine/listing.ts', { lines: new Set([81, 118, 212, 232]) }],
+    [
+      'src/core/engine/reviews.ts',
+      {
+        lines: new Set([
+          148, 200, 208, 209, 225, 235, 237, 238, 239, 240, 254, 264, 268, 269, 286, 315,
+        ]),
+      },
+    ],
+    ['src/core/engine/schedule-timer.ts', { lines: new Set([25, 33]) }],
+    ['src/core/engine/storage-io.ts', { functions: 1, lines: new Set([65]) }],
+    ['src/core/engine/termination/complete.ts', { lines: new Set([416]) }],
+    ['src/core/engine/validation.ts', { lines: new Set([117]) }],
+    ['src/core/engine/workflow-indexes.ts', { functions: 1, lines: new Set([44, 45, 46, 47, 48]) }],
+    ['src/core/engine/workflow-state-stream.ts', { lines: new Set([114, 134]) }],
+    ['src/core/schedule/cron-occurrence.ts', { lines: new Set([183, 217]) }],
+    [
+      'src/core/search-attributes.ts',
+      {
+        functions: 1,
+        lines: new Set([162, 163, 175, 176, 177, 178, 179, 180, 202, 203, 204, 205, 206]),
+      },
+    ],
+    [
+      'src/core/tenant-quotas/quota-manager-operations.ts',
+      { lines: new Set([31, 33, 34, 35, 36]) },
+    ],
+    ['src/mcp/access.ts', { lines: new Set([28, 29, 30, 31, 32]) }],
+    [
+      'src/mcp/http.ts',
+      {
+        lines: new Set([
+          110, 111, 112, 113, 114, 115, 116, 117, 196, 197, 220, 230, 273, 324, 365, 366, 367, 368,
+          369, 372, 373, 374, 375,
+        ]),
+      },
+    ],
+    [
+      'src/mcp/list-filter.ts',
+      {
+        lines: new Set([
+          64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 88, 89, 90, 91, 92, 93, 94, 95, 96,
+          101, 102, 103, 104,
+        ]),
+      },
+    ],
+    ['src/mcp/protocol.ts', { functions: 4, lines: new Set([89, 94, 95, 96, 101, 106]) }],
+    [
+      'src/mcp/tools.ts',
+      {
+        functions: 2,
+        lines: new Set([
+          67, 124, 125, 160, 180, 181, 294, 295, 296, 297, 298, 314, 315, 316, 317, 318, 354, 355,
+          381,
+        ]),
+      },
+    ],
+    ['src/core/worker-execution-ownership.ts', { functions: 1 }],
+    ['src/core/worker-listener-registry.ts', { functions: 1 }],
+    [
+      'src/core/worker-protocol.ts',
+      {
+        functions: 2,
+      },
+    ],
+    [
+      'src/server/operations/bulk-filter-helpers.ts',
+      {
+        functions: 1,
+        lines: new Set([305, 306, 307, 363, 366, 373, 378, 383, 389, 430, 441, 454, 464]),
+      },
+    ],
+    ['src/server/operations/get-workflow-result.ts', { functions: 1 }],
+    ['src/server/workflow-event-feed.ts', { lines: new Set([405, 425]) }],
+    [
+      'src/storage/durability/adapter-spec.test-support.ts',
+      {
+        functions: 5,
+        lines: new Set([
+          35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191,
+          192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 220, 221, 222, 223, 224,
+          305,
+        ]),
+      },
+    ],
+    [
+      // The IndexedDB fault harness now has direct helper coverage for the
+      // upgrade and completion paths. Bun still reports two unnamed function
+      // misses in this support-only module even though every executable line is
+      // covered by the dedicated harness test plus indexeddb.test.ts.
+      'src/storage/indexeddb-fault-harness.test-support.ts',
+      {
+        functions: 2,
+      },
+    ],
+    [
+      'src/storage/turso.ts',
+      {
+        // These are the defensive rollback-suppression and transient busy retry
+        // sleep helpers. Both preserve or recover from libSQL failures that are
+        // hard to force deterministically through the public adapter without
+        // adding timing races to the coverage suite.
+        functions: 2,
+        lines: new Set([48, 49, 50, 56, 57, 58]),
+      },
+    ],
+    ['src/storage/indexeddb.ts', { functions: 1 }],
+    [
+      'src/worker/registry/fair-share.ts',
+      {
+        // The characterization suite now drives every fair-share method and line,
+        // but Bun still counts one synthetic class function as uncovered in the
+        // emitted LCOV totals. Keep this scoped to the function counter only.
+        functions: 1,
+      },
+    ],
+    [
+      'src/storage/scoped-storage.ts',
+      {
+        functions: 1,
+        lines: new Set([
+          159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176,
+          177, 178, 179, 180, 181, 182, 183, 184, 185,
+        ]),
+      },
+    ],
+    [
+      'src/storage/storage-adapter.test-support.ts',
+      { functions: 1, lines: new Set([42, 43, 44, 45, 46, 47, 48]) },
+    ],
+    [
+      'src/testing/replay-scenarios.test-support.ts',
+      {
+        functions: 2,
+        lines: new Set([51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 133, 134, 135, 136, 179]),
+      },
+    ],
+    [
+      // The shared scheduler contract defines its test cases inline in this
+      // support module so both scheduler suites reuse the same assertions. Bun
+      // counts several nested test callbacks as uncovered functions even though
+      // the consumer suites execute every assertion and line in the helper.
+      'src/testing/scheduler-contract.test-support.ts',
+      {
+        functions: 7,
+      },
+    ],
+    [
+      // The shared `collectWebSocketDeliveredEnvelopes` helper's consumers all
+      // drive the happy path; its defensive timeout/parse-guard/early-finish
+      // branches mirror the ones that were uncovered while this logic lived
+      // inline in `.test.ts` files (test files are not instrumented). Bun
+      // instruments the `.test-support.ts` module, so those branches surface here.
+      'src/server/json-rpc-websocket-client.test-support.ts',
+      {
+        functions: 2,
+        lines: new Set([96, 97, 111, 115, 126, 134, 139, 144, 149]),
+      },
+    ],
+    [
+      'src/testing/subprocess-engine.ts',
+      {
+        functions: 9,
+        lines: new Set([
+          125, 126, 127, 128, 129, 145, 146, 147, 252, 253, 254, 255, 256, 257, 258, 296, 302, 490,
+          491, 492, 493, 494, 495, 496, 497,
+        ]),
+      },
+    ],
+    [
+      'src/testing/worker-fault-injection-frames.test-support.ts',
+      {
+        functions: 2,
+        lines: new Set([
+          13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34,
+          35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56,
+          57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78,
+          79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100,
+          101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118,
+          119, 120, 121, 122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136,
+          137, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154,
+          155, 156, 157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172,
+          173, 174, 175, 176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190,
+          191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208,
+          209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
+        ]),
+      },
+    ],
+    [
+      'src/testing/worker-fault-injection.test-support.ts',
+      {
+        functions: 15,
+        lines: new Set([
+          90, 105, 106, 107, 108, 116, 117, 118, 149, 150, 151, 152, 153, 154, 155, 156, 161, 162,
+          163, 164, 207, 208, 209, 210, 240, 246, 247, 248, 249, 250, 255, 256, 257, 276, 289, 290,
+          306, 307, 308, 309, 310, 317, 318, 319, 355, 356, 363, 367, 381, 382, 388, 393, 394, 401,
+          402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 415, 424, 425, 431, 432, 437,
+          438, 451, 452, 453, 454, 455, 456, 460, 461, 462, 463, 464, 468, 469, 470, 471, 472,
+        ]),
+      },
+    ],
+    [
+      'src/worker/protocol.ts',
+      { lines: new Set([243, 774, 775, 776, 777, 782, 783, 784, 785, 790, 791, 792, 793]) },
+    ],
+    [
+      'src/worker/registry/summary.ts',
+      { functions: 1, lines: new Set([134, 135, 136, 137, 138, 139]) },
+    ],
+    [
+      'src/workers/workflow-runner.ts',
+      {
+        // Was line 386; shifted to 409 when `ctx.log` wiring (the
+        // createWorkerWorkflowLogger call, the WorkerWorkflowContext `log` field,
+        // and the worker `workflowType` field) was added above it. Same unchanged
+        // line, only its number moved.
+        lines: new Set([409]),
+      },
+    ],
   ],
-  [
-    'examples/order-processing/src/server.ts',
-    {
-      functions: 2,
-      lines: new Set([
-        11, 12, 13, 14, 15, 21, 22, 23, 24, 25, 26, 27, 28, 29, 31, 33, 34, 35, 36, 37, 38, 39, 41,
-        42, 43, 44, 46,
-      ]),
-    },
-  ],
-  [
-    'scripts/check-lint-disables.ts',
-    {
-      functions: 9,
-      lines: new Set([
-        66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88,
-        89, 90, 91, 92, 93, 94, 95, 96, 97, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111,
-        112, 113, 114, 115, 116, 120, 121, 122, 123, 124, 133, 134, 135, 136, 137, 138, 139, 143,
-        144, 145, 146, 147, 151, 152, 153, 154, 155, 156, 157, 158, 159, 160, 161, 162, 163, 164,
-        165, 166, 167, 168, 169, 170, 171, 172, 173, 177, 178, 179, 180, 181, 182, 183, 184, 185,
-        186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203,
-        204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 217, 218, 219, 220, 221, 222, 223, 227,
-        228, 229, 230, 231, 232, 233, 234, 239, 240,
-      ]),
-    },
-  ],
-  [
-    'src/benchmarks/workflow-starts-runner.ts',
-    {
-      functions: 1,
-      lines: new Set([
-        24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46,
-        47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69,
-        70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92,
-        93, 95, 96,
-      ]),
-    },
-  ],
-  [
-    'scripts/husky/run-tests.ts',
-    {
-      functions: 3,
-    },
-  ],
-  [
-    'src/cli/conformance.ts',
-    {
-      functions: 1,
-      lines: new Set([
-        55, 106, 128, 141, 146, 150, 151, 152, 166, 167, 168, 169, 221, 222, 287, 288, 325, 326,
-      ]),
-    },
-  ],
-  ['src/cli/utilities.ts', { lines: new Set([127]) }],
-  ['src/client/http-client-requests.ts', { lines: new Set([133]) }],
-  [
-    'src/client/local.ts',
-    {
-      // Bun still reports the LocalClient class declaration line as uncovered
-      // even though the constructor and every wrapper method are exercised.
-      // The June 6 coverage pass added explicit LocalClient.startOrSignal
-      // coverage and confirmed the remaining miss is line-mapping drift on the
-      // class declaration after nearby JSDoc moved the source line number.
-      functions: 1,
-      lines: new Set([154]),
-    },
-  ],
-  [
-    'src/core/checkpoint/serialization.ts',
-    {
-      lines: new Set([115, 116, 117]),
-    },
-  ],
-  ['src/core/context/speculative-child.ts', { lines: new Set([25]) }],
-  ['src/core/context/validation.ts', { lines: new Set([9]) }],
-  ['src/core/engine/aggregate.ts', { functions: 1, lines: new Set([52, 53, 54, 55, 56, 57]) }],
-  [
-    'src/core/engine/attributes-tags.ts',
-    {
-      functions: 2,
-      lines: new Set([
-        49, 50, 52, 182, 196, 260, 292, 298, 299, 300, 301, 302, 303, 304, 305, 306, 307, 308, 309,
-        310, 311, 312, 313, 314, 315, 316, 317, 318, 319, 320, 321, 322, 323, 324, 325, 326, 327,
-        328,
-      ]),
-    },
-  ],
-  ['src/core/engine/bulk-operations-purge.ts', { lines: new Set([164]) }],
-  [
-    'src/core/engine/bulk-operations-shared.ts',
-    { functions: 1, lines: new Set([154, 170, 296, 297, 298, 299, 305, 306, 307, 308]) },
-  ],
-  [
-    'src/core/engine/bulk-operations.ts',
-    { functions: 1, lines: new Set([279, 572, 588, 714, 715, 716, 717, 723, 724, 725, 726, 879]) },
-  ],
-  ['src/core/engine/callback-creators-bundles.ts', { functions: 1 }],
-  ['src/core/engine/callback-creators-core.ts', { functions: 3 }],
-  ['src/core/engine/callback-creators-router-registry.ts', { lines: new Set([26, 27, 29]) }],
-  ['src/core/engine/child-workflow.ts', { lines: new Set([96, 104, 128, 139]) }],
-  ['src/core/engine/constraints.ts', { lines: new Set([60, 65, 93, 94, 95]) }],
-  [
-    'src/core/engine/engine-runtime-helpers.ts',
-    { functions: 2, lines: new Set([29, 30, 31, 52, 53, 54, 55, 56, 60]) },
-  ],
-  ['src/core/engine/handle-result.ts', { lines: new Set([63, 84, 85, 98, 100, 101, 121]) }],
-  [
-    'src/core/engine/inline-launch-queue.ts',
-    { functions: 1, lines: new Set([29, 31, 32, 33, 42, 43, 75, 165]) },
-  ],
-  ['src/core/engine/lifecycle/resume.ts', { lines: new Set([67]) }],
-  [
-    'src/core/engine/list-candidate-resolution.ts',
-    {
-      functions: 5,
-      lines: new Set([
-        45, 46, 47, 48, 49, 53, 54, 55, 56, 60, 61, 62, 63, 67, 68, 69, 70, 74, 75, 76, 77, 145,
-        147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 158, 159, 160, 162, 163,
-      ]),
-    },
-  ],
-  ['src/core/engine/listing.ts', { lines: new Set([81, 118, 212, 232]) }],
-  [
-    'src/core/engine/reviews.ts',
-    {
-      lines: new Set([
-        148, 200, 208, 209, 225, 235, 237, 238, 239, 240, 254, 264, 268, 269, 286, 315,
-      ]),
-    },
-  ],
-  ['src/core/engine/schedule-timer.ts', { lines: new Set([25, 33]) }],
-  ['src/core/engine/schedules.ts', { lines: new Set([66, 149, 191, 306, 332, 337]) }],
-  ['src/core/engine/storage-io.ts', { functions: 1, lines: new Set([65]) }],
-  ['src/core/engine/termination/complete.ts', { lines: new Set([416]) }],
-  ['src/core/engine/updates.ts', { lines: new Set([146, 189, 341, 348, 383, 390]) }],
-  ['src/core/engine/validation.ts', { lines: new Set([117]) }],
-  ['src/core/engine/workflow-indexes.ts', { functions: 1, lines: new Set([44, 45, 46, 47, 48]) }],
-  ['src/core/engine/workflow-state-stream.ts', { lines: new Set([114, 134]) }],
-  ['src/core/schedule/cron-occurrence.ts', { lines: new Set([183, 217]) }],
-  [
-    'src/core/search-attributes.ts',
-    {
-      functions: 1,
-      lines: new Set([162, 163, 175, 176, 177, 178, 179, 180, 202, 203, 204, 205, 206]),
-    },
-  ],
-  ['src/core/tenant-quotas/quota-manager-operations.ts', { lines: new Set([31, 33, 34, 35, 36]) }],
-  ['src/mcp/access.ts', { lines: new Set([28, 29, 30, 31, 32]) }],
-  [
-    'src/mcp/dispatcher.ts',
-    { functions: 9, lines: new Set([111, 112, 115, 211, 212, 213, 260, 261, 265]) },
-  ],
-  [
-    'src/mcp/http.ts',
-    {
-      lines: new Set([
-        110, 111, 112, 113, 114, 115, 116, 117, 196, 197, 220, 230, 273, 324, 365, 366, 367, 368,
-        369, 372, 373, 374, 375,
-      ]),
-    },
-  ],
-  [
-    'src/mcp/list-filter.ts',
-    {
-      lines: new Set([
-        64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 88, 89, 90, 91, 92, 93, 94, 95, 96, 101,
-        102, 103, 104,
-      ]),
-    },
-  ],
-  ['src/mcp/protocol.ts', { functions: 4, lines: new Set([89, 94, 95, 96, 101, 106]) }],
-  [
-    'src/mcp/tools.ts',
-    {
-      functions: 2,
-      lines: new Set([
-        67, 124, 125, 160, 180, 181, 294, 295, 296, 297, 298, 314, 315, 316, 317, 318, 354, 355,
-        381,
-      ]),
-    },
-  ],
-  ['src/core/worker-execution-ownership.ts', { functions: 1 }],
-  ['src/core/worker-listener-registry.ts', { functions: 1 }],
-  [
-    'src/core/worker-protocol.ts',
-    {
-      functions: 2,
-    },
-  ],
-  ['src/server/openapi.ts', { lines: new Set([334, 356]) }],
-  [
-    'src/server/operation-catalog/workflow-adapter.ts',
-    { lines: new Set([169, 170, 171, 172, 173, 177, 178, 181, 182, 183, 184, 185, 189, 190]) },
-  ],
-  [
-    'src/server/operations/bulk-filter-helpers.ts',
-    {
-      functions: 1,
-      lines: new Set([305, 306, 307, 363, 366, 373, 378, 383, 389, 430, 441, 454, 464]),
-    },
-  ],
-  ['src/server/operations/get-workflow-result.ts', { functions: 1 }],
-  [
-    'src/server/operations/start-workflow.ts',
-    {
-      functions: 1,
-      lines: new Set([200, 225, 226, 227, 231, 236, 237, 238, 259]),
-    },
-  ],
-  [
-    'src/server/operations/storage.ts',
-    {
-      functions: 2,
-      lines: new Set([107, 108, 109, 110, 111, 173, 174, 181, 182, 189, 245, 318, 319, 320]),
-    },
-  ],
-  ['src/server/runtime/websocket-worker.ts', { lines: new Set([361, 362, 365, 366]) }],
-  ['src/server/serve-internals.ts', { lines: new Set([173, 216, 271]) }],
-  ['src/server/workflow-event-feed.ts', { lines: new Set([405, 425]) }],
-  [
-    'src/storage/durability/adapter-spec.test-support.ts',
-    {
-      functions: 5,
-      lines: new Set([
-        35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191,
-        192, 193, 194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 220, 221, 222, 223, 224,
-        305,
-      ]),
-    },
-  ],
-  [
-    // The IndexedDB fault harness now has direct helper coverage for the
-    // upgrade and completion paths. Bun still reports two unnamed function
-    // misses in this support-only module even though every executable line is
-    // covered by the dedicated harness test plus indexeddb.test.ts.
-    'src/storage/indexeddb-fault-harness.test-support.ts',
-    {
-      functions: 2,
-    },
-  ],
-  [
-    'src/storage/turso.ts',
-    {
-      // These are the defensive rollback-suppression and transient busy retry
-      // sleep helpers. Both preserve or recover from libSQL failures that are
-      // hard to force deterministically through the public adapter without
-      // adding timing races to the coverage suite.
-      functions: 2,
-      lines: new Set([48, 49, 50, 56, 57, 58]),
-    },
-  ],
-  ['src/storage/indexeddb.ts', { functions: 1 }],
-  [
-    'src/worker/registry/fair-share.ts',
-    {
-      // The characterization suite now drives every fair-share method and line,
-      // but Bun still counts one synthetic class function as uncovered in the
-      // emitted LCOV totals. Keep this scoped to the function counter only.
-      functions: 1,
-    },
-  ],
-  [
-    'src/storage/scoped-storage.ts',
-    {
-      functions: 1,
-      lines: new Set([
-        159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176,
-        177, 178, 179, 180, 181, 182, 183, 184, 185,
-      ]),
-    },
-  ],
-  [
-    'src/storage/storage-adapter.test-support.ts',
-    { functions: 1, lines: new Set([42, 43, 44, 45, 46, 47, 48]) },
-  ],
-  [
-    'src/testing/replay-scenarios.test-support.ts',
-    {
-      functions: 2,
-      lines: new Set([51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 133, 134, 135, 136, 179]),
-    },
-  ],
-  [
-    // The shared scheduler contract defines its test cases inline in this
-    // support module so both scheduler suites reuse the same assertions. Bun
-    // counts several nested test callbacks as uncovered functions even though
-    // the consumer suites execute every assertion and line in the helper.
-    'src/testing/scheduler-contract.test-support.ts',
-    {
-      functions: 7,
-    },
-  ],
-  [
-    // The shared `collectWebSocketDeliveredEnvelopes` helper's consumers all
-    // drive the happy path; its defensive timeout/parse-guard/early-finish
-    // branches mirror the ones that were uncovered while this logic lived
-    // inline in `.test.ts` files (test files are not instrumented). Bun
-    // instruments the `.test-support.ts` module, so those branches surface here.
-    'src/server/json-rpc-websocket-client.test-support.ts',
-    {
-      functions: 2,
-      lines: new Set([96, 97, 111, 115, 126, 134, 139, 144, 149]),
-    },
-  ],
-  [
-    'src/testing/subprocess-engine.ts',
-    {
-      functions: 9,
-      lines: new Set([
-        125, 126, 127, 128, 129, 145, 146, 147, 252, 253, 254, 255, 256, 257, 258, 296, 302, 490,
-        491, 492, 493, 494, 495, 496, 497,
-      ]),
-    },
-  ],
-  [
-    'src/testing/worker-fault-injection-frames.test-support.ts',
-    {
-      functions: 2,
-      lines: new Set([
-        13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35,
-        36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58,
-        59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81,
-        82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103,
-        104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121,
-        122, 123, 124, 125, 126, 127, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139,
-        140, 141, 142, 143, 144, 145, 146, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156, 157,
-        158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175,
-        176, 177, 178, 179, 180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193,
-        194, 195, 196, 197, 198, 199, 200, 201, 202, 203, 204, 205, 206, 207, 208, 209, 210, 211,
-        212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225,
-      ]),
-    },
-  ],
-  [
-    'src/testing/worker-fault-injection.test-support.ts',
-    {
-      functions: 15,
-      lines: new Set([
-        90, 105, 106, 107, 108, 116, 117, 118, 149, 150, 151, 152, 153, 154, 155, 156, 161, 162,
-        163, 164, 207, 208, 209, 210, 240, 246, 247, 248, 249, 250, 255, 256, 257, 276, 289, 290,
-        306, 307, 308, 309, 310, 317, 318, 319, 355, 356, 363, 367, 381, 382, 388, 393, 394, 401,
-        402, 403, 404, 405, 406, 407, 408, 409, 410, 411, 412, 413, 415, 424, 425, 431, 432, 437,
-        438, 451, 452, 453, 454, 455, 456, 460, 461, 462, 463, 464, 468, 469, 470, 471, 472,
-      ]),
-    },
-  ],
-  [
-    'src/worker/protocol.ts',
-    { lines: new Set([243, 774, 775, 776, 777, 782, 783, 784, 785, 790, 791, 792, 793]) },
-  ],
-  [
-    'src/worker/registry/summary.ts',
-    { functions: 1, lines: new Set([134, 135, 136, 137, 138, 139]) },
-  ],
-  [
-    'src/workers/workflow-runner.ts',
-    {
-      // Was line 386; shifted to 409 when `ctx.log` wiring (the
-      // createWorkerWorkflowLogger call, the WorkerWorkflowContext `log` field,
-      // and the worker `workflowType` field) was added above it. Same unchanged
-      // line, only its number moved.
-      lines: new Set([409]),
-    },
-  ],
-]);
+);
 
-const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowance>([
-  // Current branch coverage mode instruments newly split CLI, MCP, server, and
-  // support-helper surfaces that are covered through subprocess, browser, or
-  // generated-harness entrypoints outside Bun's in-process LCOV accounting.
+const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
+  'CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH',
   [
-    'examples/hello-world/src/index.ts',
-    {
-      lines: new Set([68, 69, 71, 72]),
-    },
+    // Current branch coverage mode instruments newly split CLI, MCP, server, and
+    // support-helper surfaces that are covered through subprocess, browser, or
+    // generated-harness entrypoints outside Bun's in-process LCOV accounting.
+    //
+    // This is the terminal refresh layer: entries here hold coverage drift
+    // introduced or refreshed by the active branch, and win over a same-key entry
+    // in CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH. A key must not appear in both
+    // (the assembleAllowanceLayers guard rejects it).
+    [
+      'examples/hello-world/src/index.ts',
+      {
+        lines: new Set([68, 69, 71, 72]),
+      },
+    ],
+    [
+      'examples/order-processing/src/server.ts',
+      {
+        // The executable example server is covered through smoke tests around
+        // `serve()`, but its `import.meta.main` entrypoint parks forever by design
+        // and only contributes coverage from a child process.
+        functions: 1,
+        lines: createLineSet(12, 32),
+      },
+    ],
+    ['src/cli/api-arguments.ts', { lines: new Set([55, 58]) }],
+    [
+      'src/cli/api.ts',
+      {
+        functions: 1,
+        lines: new Set([
+          34, 35, 36, 37, 51, 52, 53, 54, 55, 56, 89, 91, 92, 93, 94, 95, 96, 97, 98, 100, 101, 102,
+          103, 104, 105, 106, 107, 108, 142, 143, 144, 145, 146, 147, 148, 149, 150, 158, 159, 160,
+          183, 196, 197, 198, 199, 200, 201, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216,
+        ]),
+      },
+    ],
+    [
+      'src/cli/codegen.ts',
+      {
+        functions: 1,
+        lines: new Set([94, 95, 184, 185, 234, 279, 280, 410, 441, 442, 443, 445, 446, 447, 448]),
+      },
+    ],
+    ['src/cli/noun-verb-arguments.ts', { lines: new Set([172]) }],
+    [
+      'src/cli/operation-catalog-snapshot.ts',
+      { functions: 1, lines: new Set([56, 89, 90, 91, 92]) },
+    ],
+    [
+      'src/cli/output.ts',
+      {
+        functions: 6,
+        lines: new Set([
+          18, 19, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
+        ]),
+      },
+    ],
+    ['src/cli/parse-schedule-arguments.ts', { lines: new Set([194, 195, 196, 197, 198, 199]) }],
+    ['src/cli/schedule.ts', { lines: new Set([16, 79]) }],
+    [
+      'src/cli/serve-registrations.ts',
+      {
+        functions: 1,
+        lines: new Set([32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46]),
+      },
+    ],
+    ['src/cli/server-client.ts', { lines: new Set([65, 66, 76]) }],
+    [
+      'src/cli/server-commands.ts',
+      {
+        lines: new Set([
+          30, 31, 32, 33, 34, 80, 81, 82, 83, 84, 168, 169, 216, 217, 218, 219, 220, 221, 222, 223,
+          224, 225, 226,
+        ]),
+      },
+    ],
+    ['src/cli/subcommand-detection.ts', { lines: new Set([36, 38]) }],
+    [
+      'src/cli/tail.ts',
+      {
+        functions: 4,
+        lines: new Set([101, 166, 168, 170, 171, 172, 173, 212, 213, 214, 215, 216, 228]),
+      },
+    ],
+    [
+      'src/cli/workflow-commands.ts',
+      {
+        functions: 3,
+        lines: new Set([
+          68, 81, 101, 102, 103, 104, 105, 158, 159, 160, 161, 163, 164, 173, 174, 175, 176, 184,
+          185, 195, 236, 257,
+        ]),
+      },
+    ],
+    [
+      'src/client/client-contract.test-support.ts',
+      {
+        // The shared client-contract helpers now have direct unit coverage for the
+        // query/update/signal workflows, async-activity handoff, and both success
+        // and timeout event-wait paths. Bun still reports unnamed function
+        // misses in this callback-heavy test-support module despite those direct
+        // behavioral assertions, and line 92 remains intentionally uncovered
+        // because the `completeAsync()` activity body never returns in-process.
+        functions: 3,
+        lines: new Set([92]),
+      },
+    ],
+    ['src/client/event-stream-transport.ts', { lines: new Set([153]) }],
+    ['src/client/event-stream.test-support.ts', { functions: 1 }],
+    ['src/client/event-stream.ts', { functions: 1 }],
+    ['src/client/http-client-requests.ts', { lines: new Set([141]) }],
+    ['src/client/http-operations.ts', { lines: new Set([84, 85, 86, 87]) }],
+    ['src/client/local-event-tail.ts', { functions: 2, lines: new Set([157, 158]) }],
+    ['src/client/local.ts', { functions: 1, lines: new Set([152]) }],
+    ['src/client/open-event-subscription.ts', { lines: new Set([51]) }],
+    ['src/client/start-body.ts', { lines: new Set([15, 16, 17, 18]) }],
+    ['src/connection.ts', { functions: 2, lines: new Set([211, 250, 251, 256, 257, 258, 259]) }],
+    [
+      'src/core/context/durable-operations.ts',
+      { lines: new Set([57, 58, 59, 60, 61, 62, 63, 239, 243, 244, 245]) },
+    ],
+    [
+      // The retry-state corruption guards and non-Error retryability path are now
+      // covered by focused unit tests. Bun still reports the generator loop's
+      // closing brace as uncovered after the retry back-edge executes.
+      'src/core/context/run-operation.ts',
+      { lines: new Set([366]) },
+    ],
+    [
+      'src/core/engine/activity-reconciliation.ts',
+      {
+        lines: new Set([319, 320, 321, 322, 374, 375, 376]),
+      },
+    ],
+    [
+      'src/core/engine/anonymous-signal-sequence.ts',
+      {
+        functions: 2,
+        lines: new Set([73, 74, 76, 77, 78, 166, 178, 180, 181, 182, 183, 184, 186, 187, 192, 197]),
+      },
+    ],
+    // Lines 214-216 (the `pendingAsyncActivities` purge loop) moved to 254-256 when
+    // `purgeWorkflow`'s in-memory clears were extracted into the shared
+    // `clearPurgedWorkflowInMemoryState` helper for the atomic restart path; the code
+    // and its subprocess-only coverage are unchanged, only the line numbers shifted.
+    ['src/core/engine/bulk-operations-purge.ts', { lines: new Set([166, 254, 255, 256]) }],
+    ['src/core/engine/construction.ts', { lines: new Set([97, 98, 99, 100, 101]) }],
+    [
+      // start-or-signal edges. Line 132 (startWithIdempotency rejecting an undefined
+      // key) is unreachable by construction — the engine only routes here when a key
+      // is set. Lines 423-433 are `plainCreateBufferedSignalOrResolve`'s
+      // WorkflowAlreadyExistsError recovery (catch + resolveCallerIdWinnerOrRetry):
+      // the convergence OUTCOME (one record, no leaked WorkflowAlreadyExistsError,
+      // both callers converge) is covered by the concurrent pre-buffered regression
+      // test, but this specific recovery LINE fires only on a rare mid-sequence
+      // interleaving in-process storage produces by chance, not on command (the loser
+      // usually resolves via the top-level lookup). Contriving a mock to hit it would
+      // test the mock, not the engine.
+      'src/core/engine/lifecycle/start-or-signal.ts',
+      { lines: new Set([132, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433]) },
+    ],
+    [
+      // start-or-signal-resolution's two invariant-violation throws. Lines 205-208
+      // are the resolveWinnerWithSignal exhaustion throw reached when a keyed winning
+      // record never becomes readable within five delayed reads AND the re-read mapping
+      // cannot prove a purge — it resolves to a DIFFERENT id or vanished (line 205
+      // being the fall-through past the matched-winner purged-key throw), reachable
+      // only by external `start-idem:` keyspace mutation. Lines 223-226 are
+      // requireWinnerId finding the mapping vanished after a lost CAS — reachable only
+      // by the same external mutation. The reachable success branches of both helpers,
+      // and the keyed-exhaustion purged-key throw (line 204, matched winner), are
+      // covered by the white-box race-recovery and purged-key tests; contriving a mock
+      // to hit these invariant throws would test the mock.
+      'src/core/engine/lifecycle/start-or-signal-resolution.ts',
+      { lines: new Set([205, 206, 207, 208, 223, 224, 226]) },
+    ],
+    [
+      'src/core/engine/pending-updates.ts',
+      {
+        functions: 2,
+        lines: new Set([
+          80, 105, 106, 115, 141, 142, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169,
+          170, 171, 172, 191,
+        ]),
+      },
+    ],
+    ['src/core/engine/schedules.ts', { lines: new Set([152, 330, 356, 361]) }],
+    [
+      'src/core/engine/updates.ts',
+      {
+        lines: new Set([
+          171, 287, 288, 289, 290, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301, 302, 303, 304,
+          305, 306, 307, 308, 309, 368, 375, 464, 465, 466, 467, 468, 469, 470,
+        ]),
+      },
+    ],
+    [
+      'src/core/engine/validation/schedule.ts',
+      { lines: new Set([104, 105, 106, 124, 140, 146, 217, 218, 219, 220, 225]) },
+    ],
+    ['src/core/signal-id.ts', { lines: new Set([10]) }],
+    [
+      'src/mcp/dispatcher.ts',
+      { functions: 9, lines: new Set([112, 113, 116, 212, 213, 214, 261, 262, 266]) },
+    ],
+    ['src/server/authentication/index.ts', { lines: new Set([154]) }],
+    [
+      'src/server/authentication/rotating-api-key-store.ts',
+      { lines: new Set([144, 146, 147, 148]) },
+    ],
+    ['src/server/openapi.ts', { lines: new Set([361]) }],
+    ['src/server/openrpc.ts', { lines: new Set([179, 180, 181, 200, 201, 202]) }],
+    [
+      'src/server/operation-catalog/workflow-adapter.ts',
+      { lines: new Set([172, 173, 174, 175, 176, 180, 181, 184, 185, 186, 187, 188, 192, 193]) },
+    ],
+    [
+      'src/server/operations/aggregate-workflows.ts',
+      { functions: 2, lines: new Set([85, 107, 108, 117, 118, 119, 136, 137, 138, 139, 149]) },
+    ],
+    [
+      'src/server/operations/get-task-diagnostics.ts',
+      { lines: new Set([229, 230, 231, 232, 233]) },
+    ],
+    ['src/server/operations/schedule-faults.ts', { lines: new Set([65, 70, 71, 72]) }],
+    [
+      'src/server/operations/start-workflow.ts',
+      { functions: 1, lines: new Set([208, 233, 234, 235, 239, 244, 245, 246, 267]) },
+    ],
+    [
+      'src/server/operations/storage.ts',
+      {
+        functions: 2,
+        lines: new Set([107, 108, 109, 110, 111, 173, 174, 181, 182, 189, 245, 321, 322, 323]),
+      },
+    ],
+    ['src/server/operations/update-workflow.ts', { lines: new Set([92, 93, 94, 95, 96, 97]) }],
+    [
+      'src/server/operations/worker-drain.ts',
+      { functions: 2, lines: new Set([260, 267, 268, 269, 273, 274, 275, 276, 277]) },
+    ],
+    ['src/server/runtime/cors.ts', { lines: new Set([304]) }],
+    ['src/server/runtime/request-gate.ts', { lines: new Set([118, 119]) }],
+    ['src/server/runtime/websocket-upgrade.ts', { lines: new Set([123, 124]) }],
+    ['src/server/runtime/websocket-worker.ts', { lines: new Set([405, 406, 409, 410]) }],
+    ['src/server/serve-internals.ts', { lines: new Set([236, 279, 334]) }],
   ],
-  [
-    'examples/order-processing/src/server.ts',
-    {
-      // The executable example server is covered through smoke tests around
-      // `serve()`, but its `import.meta.main` entrypoint parks forever by design
-      // and only contributes coverage from a child process.
-      functions: 1,
-      lines: createLineSet(12, 32),
-    },
-  ],
-  ['src/cli/api-arguments.ts', { lines: new Set([55, 58]) }],
-  [
-    'src/cli/api.ts',
-    {
-      functions: 1,
-      lines: new Set([
-        34, 35, 36, 37, 51, 52, 53, 54, 55, 56, 89, 91, 92, 93, 94, 95, 96, 97, 98, 100, 101, 102,
-        103, 104, 105, 106, 107, 108, 142, 143, 144, 145, 146, 147, 148, 149, 150, 158, 159, 160,
-        183, 196, 197, 198, 199, 200, 201, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216,
-      ]),
-    },
-  ],
-  [
-    'src/cli/codegen.ts',
-    {
-      functions: 1,
-      lines: new Set([94, 95, 184, 185, 234, 279, 280, 410, 441, 442, 443, 445, 446, 447, 448]),
-    },
-  ],
-  ['src/cli/noun-verb-arguments.ts', { lines: new Set([172]) }],
-  ['src/cli/operation-catalog-snapshot.ts', { functions: 1, lines: new Set([56, 89, 90, 91, 92]) }],
-  [
-    'src/cli/output.ts',
-    {
-      functions: 6,
-      lines: new Set([
-        18, 19, 128, 129, 130, 131, 132, 133, 134, 135, 136, 137, 138, 139, 140, 141, 142,
-      ]),
-    },
-  ],
-  ['src/cli/parse-schedule-arguments.ts', { lines: new Set([194, 195, 196, 197, 198, 199]) }],
-  ['src/cli/schedule.ts', { lines: new Set([16, 79]) }],
-  [
-    'src/cli/serve-registrations.ts',
-    { functions: 1, lines: new Set([32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46]) },
-  ],
-  ['src/cli/server-client.ts', { lines: new Set([65, 66, 76]) }],
-  [
-    'src/cli/server-commands.ts',
-    {
-      lines: new Set([
-        30, 31, 32, 33, 34, 80, 81, 82, 83, 84, 168, 169, 216, 217, 218, 219, 220, 221, 222, 223,
-        224, 225, 226,
-      ]),
-    },
-  ],
-  ['src/cli/subcommand-detection.ts', { lines: new Set([36, 38]) }],
-  [
-    'src/cli/tail.ts',
-    {
-      functions: 4,
-      lines: new Set([101, 166, 168, 170, 171, 172, 173, 212, 213, 214, 215, 216, 228]),
-    },
-  ],
-  [
-    'src/cli/workflow-commands.ts',
-    {
-      functions: 3,
-      lines: new Set([
-        68, 81, 101, 102, 103, 104, 105, 158, 159, 160, 161, 163, 164, 173, 174, 175, 176, 184, 185,
-        195, 236, 257,
-      ]),
-    },
-  ],
-  [
-    'src/client/client-contract.test-support.ts',
-    {
-      // The shared client-contract helpers now have direct unit coverage for the
-      // query/update/signal workflows, async-activity handoff, and both success
-      // and timeout event-wait paths. Bun still reports unnamed function
-      // misses in this callback-heavy test-support module despite those direct
-      // behavioral assertions, and line 92 remains intentionally uncovered
-      // because the `completeAsync()` activity body never returns in-process.
-      functions: 3,
-      lines: new Set([92]),
-    },
-  ],
-  ['src/client/event-stream-transport.ts', { lines: new Set([153]) }],
-  ['src/client/event-stream.test-support.ts', { functions: 1 }],
-  ['src/client/event-stream.ts', { functions: 1 }],
-  ['src/client/http-client-requests.ts', { lines: new Set([141]) }],
-  ['src/client/http-operations.ts', { lines: new Set([84, 85, 86, 87]) }],
-  ['src/client/local-event-tail.ts', { functions: 2, lines: new Set([157, 158]) }],
-  ['src/client/local.ts', { functions: 1, lines: new Set([152]) }],
-  ['src/client/open-event-subscription.ts', { lines: new Set([51]) }],
-  ['src/client/start-body.ts', { lines: new Set([15, 16, 17, 18]) }],
-  ['src/connection.ts', { functions: 2, lines: new Set([211, 250, 251, 256, 257, 258, 259]) }],
-  [
-    'src/core/context/durable-operations.ts',
-    { lines: new Set([57, 58, 59, 60, 61, 62, 63, 239, 243, 244, 245]) },
-  ],
-  [
-    // The retry-state corruption guards and non-Error retryability path are now
-    // covered by focused unit tests. Bun still reports the generator loop's
-    // closing brace as uncovered after the retry back-edge executes.
-    'src/core/context/run-operation.ts',
-    { lines: new Set([366]) },
-  ],
-  [
-    'src/core/engine/activity-reconciliation.ts',
-    {
-      lines: new Set([319, 320, 321, 322, 374, 375, 376]),
-    },
-  ],
-  [
-    'src/core/engine/anonymous-signal-sequence.ts',
-    {
-      functions: 2,
-      lines: new Set([73, 74, 76, 77, 78, 166, 178, 180, 181, 182, 183, 184, 186, 187, 192, 197]),
-    },
-  ],
-  // Lines 214-216 (the `pendingAsyncActivities` purge loop) moved to 254-256 when
-  // `purgeWorkflow`'s in-memory clears were extracted into the shared
-  // `clearPurgedWorkflowInMemoryState` helper for the atomic restart path; the code
-  // and its subprocess-only coverage are unchanged, only the line numbers shifted.
-  ['src/core/engine/bulk-operations-purge.ts', { lines: new Set([166, 254, 255, 256]) }],
-  ['src/core/engine/construction.ts', { lines: new Set([97, 98, 99, 100, 101]) }],
-  [
-    // start-or-signal edges. Line 132 (startWithIdempotency rejecting an undefined
-    // key) is unreachable by construction — the engine only routes here when a key
-    // is set. Lines 423-433 are `plainCreateBufferedSignalOrResolve`'s
-    // WorkflowAlreadyExistsError recovery (catch + resolveCallerIdWinnerOrRetry):
-    // the convergence OUTCOME (one record, no leaked WorkflowAlreadyExistsError,
-    // both callers converge) is covered by the concurrent pre-buffered regression
-    // test, but this specific recovery LINE fires only on a rare mid-sequence
-    // interleaving in-process storage produces by chance, not on command (the loser
-    // usually resolves via the top-level lookup). Contriving a mock to hit it would
-    // test the mock, not the engine.
-    'src/core/engine/lifecycle/start-or-signal.ts',
-    { lines: new Set([132, 423, 424, 425, 426, 427, 428, 429, 430, 431, 432, 433]) },
-  ],
-  [
-    // start-or-signal-resolution's two invariant-violation throws. Lines 205-208
-    // are the resolveWinnerWithSignal exhaustion throw reached when a keyed winning
-    // record never becomes readable within five delayed reads AND the re-read mapping
-    // cannot prove a purge — it resolves to a DIFFERENT id or vanished (line 205
-    // being the fall-through past the matched-winner purged-key throw), reachable
-    // only by external `start-idem:` keyspace mutation. Lines 223-226 are
-    // requireWinnerId finding the mapping vanished after a lost CAS — reachable only
-    // by the same external mutation. The reachable success branches of both helpers,
-    // and the keyed-exhaustion purged-key throw (line 204, matched winner), are
-    // covered by the white-box race-recovery and purged-key tests; contriving a mock
-    // to hit these invariant throws would test the mock.
-    'src/core/engine/lifecycle/start-or-signal-resolution.ts',
-    { lines: new Set([205, 206, 207, 208, 223, 224, 226]) },
-  ],
-  [
-    'src/core/engine/pending-updates.ts',
-    {
-      functions: 2,
-      lines: new Set([
-        80, 105, 106, 115, 141, 142, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169,
-        170, 171, 172, 191,
-      ]),
-    },
-  ],
-  ['src/core/engine/schedules.ts', { lines: new Set([152, 330, 356, 361]) }],
-  [
-    'src/core/engine/updates.ts',
-    {
-      lines: new Set([
-        171, 287, 288, 289, 290, 292, 293, 294, 295, 296, 297, 298, 299, 300, 301, 302, 303, 304,
-        305, 306, 307, 308, 309, 368, 375, 464, 465, 466, 467, 468, 469, 470,
-      ]),
-    },
-  ],
-  [
-    'src/core/engine/validation/schedule.ts',
-    { lines: new Set([104, 105, 106, 124, 140, 146, 217, 218, 219, 220, 225]) },
-  ],
-  ['src/core/signal-id.ts', { lines: new Set([10]) }],
-  [
-    'src/mcp/dispatcher.ts',
-    { functions: 9, lines: new Set([112, 113, 116, 212, 213, 214, 261, 262, 266]) },
-  ],
-  ['src/server/authentication/index.ts', { lines: new Set([154]) }],
-  ['src/server/authentication/rotating-api-key-store.ts', { lines: new Set([144, 146, 147, 148]) }],
-  ['src/server/openapi.ts', { lines: new Set([361]) }],
-  ['src/server/openrpc.ts', { lines: new Set([179, 180, 181, 200, 201, 202]) }],
-  [
-    'src/server/operation-catalog/workflow-adapter.ts',
-    { lines: new Set([172, 173, 174, 175, 176, 180, 181, 184, 185, 186, 187, 188, 192, 193]) },
-  ],
-  [
-    'src/server/operations/aggregate-workflows.ts',
-    { functions: 2, lines: new Set([85, 107, 108, 117, 118, 119, 136, 137, 138, 139, 149]) },
-  ],
-  ['src/server/operations/get-task-diagnostics.ts', { lines: new Set([229, 230, 231, 232, 233]) }],
-  ['src/server/operations/schedule-faults.ts', { lines: new Set([65, 70, 71, 72]) }],
-  [
-    'src/server/operations/start-workflow.ts',
-    { functions: 1, lines: new Set([208, 233, 234, 235, 239, 244, 245, 246, 267]) },
-  ],
-  [
-    'src/server/operations/storage.ts',
-    {
-      functions: 2,
-      lines: new Set([107, 108, 109, 110, 111, 173, 174, 181, 182, 189, 245, 321, 322, 323]),
-    },
-  ],
-  ['src/server/operations/update-workflow.ts', { lines: new Set([92, 93, 94, 95, 96, 97]) }],
-  [
-    'src/server/operations/worker-drain.ts',
-    { functions: 2, lines: new Set([260, 267, 268, 269, 273, 274, 275, 276, 277]) },
-  ],
-  ['src/server/runtime/cors.ts', { lines: new Set([304]) }],
-  ['src/server/runtime/request-gate.ts', { lines: new Set([118, 119]) }],
-  ['src/server/runtime/websocket-upgrade.ts', { lines: new Set([123, 124]) }],
-  ['src/server/runtime/websocket-worker.ts', { lines: new Set([405, 406, 409, 410]) }],
-  ['src/server/serve-internals.ts', { lines: new Set([236, 279, 334]) }],
-]);
+);
 
-const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = new Map<string, CoverageAllowance>([
+// The two refresh layers are mutually exclusive: a key may live in at most one,
+// otherwise removing its row silently reactivates the other's (possibly stale)
+// allowance. Bind them once and pass the SAME references both into the ordered
+// merge list and into the exclusivity check, so the guarded pair can never drift
+// from the layers actually assembled.
+const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
+  'AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS',
+  [
   // The audit-backlog implementation split several runtime, MCP, worker, and
   // bulk-operation helpers after the current-branch refresh above was recorded.
   // These entries are the fresh LCOV line movements and residual branch-only
@@ -1999,7 +2076,8 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = new Map<string, CoverageAllowa
       lines: createMergedLineSet(createLineSet(100, 105), createLineSet(111, 150), new Set([482])),
     },
   ],
-]);
+  ],
+);
 
 function withCoverageAllowanceTopOffs(
   baseAllowances: Map<string, CoverageAllowance>,
@@ -2024,14 +2102,32 @@ function withCoverageAllowanceTopOffs(
   return merged;
 }
 
+const MAIN_REFRESH_LAYER: NamedAllowanceLayer = [
+  'CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH',
+  CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH,
+];
+const BRANCH_REFRESH_LAYER: NamedAllowanceLayer = [
+  'CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH',
+  CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH,
+];
+
+// The five historical layers assemble with last-wins replacement and the
+// MAIN/BRANCH refresh partition guard (#538). The audit-backlog top-offs are
+// then UNIONED on top (#524): for a file in both, line sets combine and function
+// counts sum — so a top-off augments, never replaces, an existing allowance.
+const COVERAGE_ALLOWANCE_BASE = assembleAllowanceLayers(
+  [
+    ['BASE_COVERAGE_ALLOWANCES', BASE_COVERAGE_ALLOWANCES],
+    ['COVERAGE_ALLOWANCE_OVERRIDES', COVERAGE_ALLOWANCE_OVERRIDES],
+    ['CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES', CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES],
+    MAIN_REFRESH_LAYER,
+    BRANCH_REFRESH_LAYER,
+  ],
+  [MAIN_REFRESH_LAYER, BRANCH_REFRESH_LAYER],
+);
+
 const COVERAGE_ALLOWANCES = withCoverageAllowanceTopOffs(
-  new Map<string, CoverageAllowance>([
-    ...BASE_COVERAGE_ALLOWANCES,
-    ...COVERAGE_ALLOWANCE_OVERRIDES,
-    ...CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES,
-    ...CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH,
-    ...CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH,
-  ]),
+  COVERAGE_ALLOWANCE_BASE,
   AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS,
 );
 

@@ -14,6 +14,7 @@ import {
   type EngineOptions,
   type RegisteredWorkflowDefinition,
 } from '../types.ts';
+import type { WorkflowLogRecord } from '../types/workflow-log.ts';
 import { WorkerExecutionStrategy } from '../worker-execution-strategy.ts';
 import {
   DEFAULT_WORKER_PROTOCOL_MESSAGE_BYTES,
@@ -279,6 +280,7 @@ export function resolveEngineOptions(
     storage,
     getNow,
     resolveWorkflowServices: options?.resolveWorkflowServices ?? null,
+    onLog: options?.onLog ?? null,
     ...resolveBooleanDefaults(options),
     ...resolveNumericDefaults(options),
     ...resolveRetentionFields(options),
@@ -395,6 +397,7 @@ export function createExecutionStrategyBundle(parameters: {
   resolveWorkflowType: (target: string | Function) => string;
   registerCancelHandler?: (workflowId: string, handler: () => Promise<void> | void) => () => void;
   getWorkflowServices?: (workflowId: string) => unknown;
+  getLogSink?: () => ((record: WorkflowLogRecord) => void) | undefined;
 }): ExecutionStrategyBundle {
   const {
     options,
@@ -407,6 +410,7 @@ export function createExecutionStrategyBundle(parameters: {
     resolveWorkflowType,
     registerCancelHandler,
     getWorkflowServices,
+    getLogSink,
   } = parameters;
   const workerExecutionConfiguration = normalizeWorkerExecutionConfiguration(options);
   if (workerExecutionConfiguration.mode === 'worker') {
@@ -436,6 +440,7 @@ export function createExecutionStrategyBundle(parameters: {
     resolveWorkflowType,
     ...(registerCancelHandler !== undefined && { registerCancelHandler }),
     ...(getWorkflowServices !== undefined && { getWorkflowServices }),
+    ...(getLogSink !== undefined && { getLogSink }),
   });
   return { strategy: inlineStrategy, inlineStrategy };
 }

@@ -2,8 +2,17 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import type { ChildWorkflowInterception } from '../interceptor/interception-contexts.ts';
 import type { WorkflowState } from '../types.ts';
+import type { ChildWorkflowOptions } from '../types/workflow-function.ts';
 import { executeChildWorkflow } from './child-workflow.ts';
 import { WorkflowAlreadyExistsError } from './errors.ts';
+
+// The public defense: `onTerminalConflict` must stay absent from `ChildWorkflowOptions`.
+// If a future edit adds it, this fails to compile and forces a deliberate decision rather
+// than silently turning the engine.start-only restart policy into a child-start option.
+type OnTerminalConflictAbsentFromChildOptions =
+  'onTerminalConflict' extends keyof ChildWorkflowOptions ? false : true;
+const _onTerminalConflictAbsent: OnTerminalConflictAbsentFromChildOptions = true;
+void _onTerminalConflictAbsent;
 
 function createWorkflowState(
   workflowId: string,
@@ -195,5 +204,47 @@ describe('engine child workflow helpers', () => {
       headers: [['traceparent', '00-parent']],
       result: 'child-result',
     });
+  });
+
+  it('rejects onTerminalConflict smuggled onto a child-start (it is engine.start-only; #489)', async () => {
+    const internals = createInternals();
+    const start = mock(async () => ({ result: async () => 'never' }) as never);
+
+    // The real threat is a structurally valid `ChildWorkflowOptions` carrying one extra
+    // runtime property (an untyped JS caller or a widened cast), not an impossible value.
+    // Model exactly that: a genuine ChildWorkflowOptions intersected with the smuggled key.
+    const smuggledOptions = {
+      id: 'child-id',
+      onTerminalConflict: 'start-new',
+    } satisfies ChildWorkflowOptions & { onTerminalConflict: 'start-new' };
+
+    await expect(
+      executeChildWorkflow(
+        internals as never,
+        'parent',
+        {
+          input: { value: 1 },
+          operationId: 'child:terminal-conflict',
+          options: smuggledOptions,
+          type: 'child-workflow',
+          workflowType: 'child',
+        },
+        0,
+        {
+          getComposedWorkflowInterceptor: () => null,
+          getHandle: () => ({ result: async () => 'never' }) as never,
+          loadWorkflowState: async (workflowId) =>
+            workflowId === 'parent' ? createWorkflowState('parent') : null,
+          start,
+        },
+      ),
+    ).rejects.toThrow('ctx.startChild does not support options.onTerminalConflict');
+
+    // The guard fires before the start is dispatched — no replacement run is created.
+    expect(start).not.toHaveBeenCalled();
+    // Pending child-execution context is still cleared on the rejection path.
+    expect(internals.pendingNestingDepth).toBeUndefined();
+    expect(internals.pendingParentHeaders).toBeUndefined();
+    expect(internals.pendingExecutionStateOwnerId).toBeUndefined();
   });
 });

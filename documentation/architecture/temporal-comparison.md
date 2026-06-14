@@ -28,7 +28,7 @@ Now let's walk through each of the ten design failures in detail.
 
 Weft actually _uses_ `WeakRef` and `FinalizationRegistry` internally for memory management. The primitives Temporal bans are the ones Weft depends on.
 
-In development mode, Weft validates checkpoint serialization at each boundary. If you accidentally put a non-cloneable value (a closure, a class instance with methods) into your state, the engine emits a `DevelopmentWarningEvent` with a message and the divergent field paths.
+In development mode, Weft validates checkpoint serialization at each boundary. If you accidentally put a non-cloneable value (a closure, a class instance with methods) into your state, the engine emits a `DevelopmentWarningEvent` with a message and the divergent field paths—see [Development mode catches mistakes early](./checkpoint-versus-replay.md#development-mode-catches-mistakes-early) for the full walkthrough.
 
 ```typescript
 import { DevelopmentWarningEvent, Engine, MemoryStorage } from '@lostgradient/weft';
@@ -45,7 +45,7 @@ engine.addEventListener(DevelopmentWarningEvent.type, (event) => {
 });
 ```
 
-In Temporal, you discover serialization problems at replay time in production. In Weft, you discover them the moment you run your workflow in development.
+The contrast is _when_ you find out: in Temporal you discover serialization problems at replay time in production; in Weft you discover them the moment you run your workflow in development.
 
 ## Versioning complexity
 
@@ -164,19 +164,7 @@ const result = yield * ctx.run('charge', order); // autocompletes from the regis
 
 **The Temporal problem.** Temporal has a ~50K event history limit per workflow execution. Long-running workflows—subscription loops, monitoring workflows, order lifecycle management—must periodically call `continueAsNew()` to reset their history. This requires manually serializing all state, re-registering all signal handlers, and reconstructing all local variables. Getting this wrong causes data loss.
 
-**The Weft answer.** Checkpoints are fixed-size snapshots of the current state, not a growing event log. A workflow that has executed 1 million activities has the same checkpoint size as one that has executed 10.
-
-```
-Temporal: history size grows linearly with activity count
-  10 activities  →  ~1K events  →  ~100KB history
-  1K activities  →  ~10K events →  ~1MB history
-  50K activities →  ~50K events →  LIMIT HIT, must continueAsNew
-
-Weft: checkpoint size is constant regardless of history
-  10 activities  →  ~2KB checkpoint
-  1K activities  →  ~2KB checkpoint
-  1M activities  →  ~2KB checkpoint (same locals, same size)
-```
+**The Weft answer.** Checkpoints are fixed-size snapshots of the current state, not a growing event log. Where Temporal's history grows linearly with activity count until it hits the ~50K-event limit, a Weft checkpoint stays the same size whether the workflow has executed 10 activities or a million—it holds only the current locals. The [No history growth, no continueAsNew](./checkpoint-versus-replay.md#no-history-growth-no-continueasnew) section lays out the size comparison side by side.
 
 There is no `continueAsNew`, no history limit, no manual state serialization. A workflow can run for years without any special handling.
 
