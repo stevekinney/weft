@@ -104,9 +104,10 @@ describe('normalizeListFilter', () => {
       );
     });
 
-    it('rejects retired AI-ontology enum values', () => {
-      // `planning` was an AI-ontology failure category that is not part of the
-      // current taxonomy; the filter rejects it like any other non-taxonomy value.
+    it('rejects a retired failureCategory value not in the current enum', () => {
+      // `planning` is a previously-used failureCategory value that is no longer
+      // part of the current FailureCategory enum; the filter rejects it like any
+      // other value outside the enum.
       expect(() => normalizeListFilter({ failureCategory: 'planning' })).toThrow(
         ListFilterValidationError,
       );
