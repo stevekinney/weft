@@ -104,7 +104,9 @@ describe('normalizeListFilter', () => {
       );
     });
 
-    it('rejects legacy AI-ontology enum values', () => {
+    it('rejects retired AI-ontology enum values', () => {
+      // `planning` was an AI-ontology failure category that is not part of the
+      // current taxonomy; the filter rejects it like any other non-taxonomy value.
       expect(() => normalizeListFilter({ failureCategory: 'planning' })).toThrow(
         ListFilterValidationError,
       );

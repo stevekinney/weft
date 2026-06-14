@@ -135,8 +135,9 @@ export const CURRENT_CHECKPOINT_SCHEMA_VERSION = 2;
 
 /**
  * Thrown by `validateCheckpointShape` when a checkpoint's
- * `schemaVersion` does not match the engine's current version. Pre-1.0
- * we refuse to load mismatched checkpoints rather than migrating.
+ * `schemaVersion` does not match the engine's current version. A mismatched
+ * checkpoint is rejected, never upgraded in place: the engine loads only
+ * checkpoints stamped with the exact current schema version.
  */
 export class CheckpointSchemaVersionError extends WeftError<'CheckpointSchemaVersionError'> {
   constructor(

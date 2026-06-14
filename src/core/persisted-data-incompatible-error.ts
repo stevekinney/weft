@@ -3,14 +3,15 @@ import { WeftError } from './weft-error.ts';
 /**
  * Thrown by {@link Engine.create} (and other storage-opening entry points) when
  * a persisted Weft database carries a schema version older than the engine
- * understands. Pre-MVP Weft does not migrate persisted data — bumping
+ * understands. Weft loads persisted data only at the exact current schema
+ * version — it never upgrades an older database in place. Bumping
  * {@link CURRENT_PERSISTED_DATA_SCHEMA_VERSION} intentionally invalidates older
  * databases so the failure surfaces deterministically at boot, before any
  * workflow attempts replay.
  *
  * Inspect `foundVersion` to see what the storage advertised and `expectedVersion`
- * to see what this engine requires. Resolve by deleting the database (acceptable
- * pre-MVP) or by starting from fresh storage.
+ * to see what this engine requires. Resolve by deleting the database or by
+ * starting from fresh storage.
  *
  * @example
  * ```ts
