@@ -24,8 +24,13 @@
 import { storageDeleteRange } from './delete-range';
 import {
   assertDurableStorageForRecovery,
+  assertStorageBatchOperationCount,
   KEYS,
+  MAX_BATCH_OPERATIONS,
+  MAX_SCAN_LIMIT,
   requireStorageCapability,
+  storageBatch,
+  StorageBatchOperationLimitExceededError,
   storageConditionalBatch,
   storageValuesEqual,
   WEFT_RESERVED_KEY_PREFIXES,
@@ -102,6 +107,28 @@ const exportedCopyTextKeyValueRowsToStorage = copyTextKeyValueRowsToStorage;
 const exportedKeys = KEYS;
 
 /**
+ * Re-exported {@link MAX_BATCH_OPERATIONS}. See the original declaration for full docs.
+ *
+ * @example
+ * ```ts
+ * import { MAX_BATCH_OPERATIONS } from '@lostgradient/weft/storage';
+ * console.log(MAX_BATCH_OPERATIONS);
+ * ```
+ */
+const exportedMaxBatchOperations = MAX_BATCH_OPERATIONS;
+
+/**
+ * Re-exported {@link MAX_SCAN_LIMIT}. See the original declaration for full docs.
+ *
+ * @example
+ * ```ts
+ * import { MAX_SCAN_LIMIT } from '@lostgradient/weft/storage';
+ * console.log(MAX_SCAN_LIMIT);
+ * ```
+ */
+const exportedMaxScanLimit = MAX_SCAN_LIMIT;
+
+/**
  * Re-exported {@link MemoryStorage}. See the original declaration for full docs.
  *
  * @example
@@ -164,6 +191,29 @@ const exportedScopedStorage = ScopedStorage;
 const exportedScopedStorageFactory = scopedStorage;
 
 /**
+ * Re-exported {@link assertStorageBatchOperationCount}. See the original declaration for full docs.
+ *
+ * @example
+ * ```ts
+ * import { assertStorageBatchOperationCount } from '@lostgradient/weft/storage';
+ * assertStorageBatchOperationCount('batch operations', 1);
+ * ```
+ */
+const exportedAssertStorageBatchOperationCount = assertStorageBatchOperationCount;
+
+/**
+ * Re-exported {@link storageBatch}. See the original declaration for full docs.
+ *
+ * @example
+ * ```ts
+ * import { MemoryStorage, storageBatch } from '@lostgradient/weft/storage';
+ * await using storage = new MemoryStorage();
+ * await storageBatch(storage, []);
+ * ```
+ */
+const exportedStorageBatch = storageBatch;
+
+/**
  * Re-exported {@link storageConditionalBatch}. See the original declaration for full docs.
  *
  * @example
@@ -214,6 +264,18 @@ const exportedRequireStorageCapability = requireStorageCapability;
 const exportedStorageValuesEqual = storageValuesEqual;
 
 /**
+ * Re-exported {@link StorageBatchOperationLimitExceededError}. See the original declaration for full docs.
+ *
+ * @example
+ * ```ts
+ * import { StorageBatchOperationLimitExceededError } from '@lostgradient/weft/storage';
+ * const error = new StorageBatchOperationLimitExceededError('batch operations', 10001);
+ * console.log(error.count);
+ * ```
+ */
+const exportedStorageBatchOperationLimitExceededError = StorageBatchOperationLimitExceededError;
+
+/**
  * Re-exported {@link textValueStore}. See the original declaration for full docs.
  *
  * @example
@@ -261,6 +323,7 @@ export type {
   GatedStorageCapabilityKey,
   ScanOptions,
   Storage,
+  StorageBatchOperationLimitTarget,
   StorageCapabilities,
 } from './interface';
 export type { StorageConfiguration } from './resolve';
@@ -286,15 +349,20 @@ export type {
 } from './typed-storage';
 export {
   exportedAssertDurableStorageForRecovery as assertDurableStorageForRecovery,
+  exportedAssertStorageBatchOperationCount as assertStorageBatchOperationCount,
   exportedCopyTextKeyValueRowsToStorage as copyTextKeyValueRowsToStorage,
   exportedJsonCodec as jsonCodec,
   exportedKeys as KEYS,
+  exportedMaxBatchOperations as MAX_BATCH_OPERATIONS,
+  exportedMaxScanLimit as MAX_SCAN_LIMIT,
   exportedMemoryStorage as MemoryStorage,
   exportedMsgpackCodec as msgpackCodec,
   exportedRequireStorageCapability as requireStorageCapability,
   exportedResolveStorage as resolveStorage,
   exportedScopedStorage as ScopedStorage,
   exportedScopedStorageFactory as scopedStorage,
+  exportedStorageBatch as storageBatch,
+  exportedStorageBatchOperationLimitExceededError as StorageBatchOperationLimitExceededError,
   exportedStorageConditionalBatch as storageConditionalBatch,
   exportedStorageDeleteRange as storageDeleteRange,
   exportedStorageValuesEqual as storageValuesEqual,

@@ -69,8 +69,8 @@ export const bulkCancelWorkflowsRestBinding: UnknownRestBinding = {
   pathParamNames: [],
   operationName: 'weft.workflows.bulk.cancel',
   inputSources: {},
-  extractInput: async (request) => {
-    const raw = await readOptionalJsonBody(request);
+  extractInput: async (request, _pathParams, context) => {
+    const raw = await readOptionalJsonBody(request, context);
 
     try {
       return {

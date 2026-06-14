@@ -40,7 +40,6 @@ function writeCheckpointHistory(
     step,
     locals: overrides?.locals ?? { counter: step },
     accumulatedResults: overrides?.accumulatedResults ?? [],
-    pendingSignals: overrides?.pendingSignals ?? [],
     searchAttributes: overrides?.searchAttributes ?? {},
     version: overrides?.version ?? '1.0.0',
     schemaVersion: overrides?.schemaVersion ?? CURRENT_CHECKPOINT_SCHEMA_VERSION,

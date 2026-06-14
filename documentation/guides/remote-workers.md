@@ -202,7 +202,7 @@ interface RoutingOptions {
 
 If a `sticky` preference is provided (useful for cache locality), the registry checks that worker first. If it has capacity, it gets the task. Otherwise, least-loaded routing kicks in.
 
-Workers inside the server's reconnect grace window are temporarily excluded from routing by `serve()` so new tasks prefer eligible peers instead of landing on a socket that just closed. The grace window is configured with `serve({ workerReconnectGracePeriodMs })`; it defaults to `100` ms, is clamped to `0..5000`, and `0` disables the grace path for immediate requeue behavior.
+Workers inside the server's reconnect grace window are temporarily excluded from routing by `serve()` so new tasks prefer eligible peers instead of landing on a socket that just closed. The grace window is configured with `serve({ workerReconnectGracePeriodMs })`; it defaults to `2000` ms, is clamped to `0..5000`, and `0` disables the grace path for immediate requeue behavior. Use `100` only for low-latency test or embedded scenarios. Use `5000` for cloud or load-balancer deployments where replacement workers commonly need several seconds to reconnect.
 
 ## The WorkerRegistry
 
@@ -256,7 +256,17 @@ const worker = new LongPollWorker({
 worker.start();
 ```
 
-The long-poll worker runs a loop: it `POST`s to `/poll` with its activity list and queue, blocks for up to `pollTimeout` milliseconds waiting for a task, executes it, and `POST`s the result to `/complete`. It respects the concurrency limit by pausing the poll loop when all slots are in use.
+The long-poll worker runs a loop: it `GET`s
+`/api/v1/tasks/:queue?activity=<name>&timeout=<milliseconds>` with one repeated
+`activity` query parameter per registered activity, blocks for up to
+`pollTimeout` milliseconds waiting for a task, executes it, and `POST`s the
+result to `/api/v1/tasks/:queue/result`. It respects the concurrency limit by
+pausing the poll loop when all slots are in use.
+
+The poll response includes a synthetic `workerId` and per-claim `attemptToken`.
+The result body echoes both fields so the server can reject stale completions
+after a visibility timeout or re-claim. The protocol details live in the
+[HTTP long-poll transport reference](../reference/remote-worker-protocol.md#http-long-poll-transport).
 
 Error handling is built in—network failures trigger a 1-second backoff, abort errors during shutdown are suppressed.
 

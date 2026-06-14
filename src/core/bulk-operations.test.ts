@@ -137,6 +137,58 @@ function createStorageBackedCancellationInternals(storage: MemoryStorage, timest
   } as never;
 }
 
+function createObservedCancellationInternals(
+  storage: MemoryStorage,
+  timestamp: number,
+  workflowIdToFail?: string,
+) {
+  const observation = {
+    activeCancellations: 0,
+    maximumActiveCancellations: 0,
+  };
+
+  const internals = {
+    engine: {
+      cancel: async (workflowId: string) => {
+        observation.activeCancellations += 1;
+        observation.maximumActiveCancellations = Math.max(
+          observation.maximumActiveCancellations,
+          observation.activeCancellations,
+        );
+
+        try {
+          await Promise.resolve();
+          if (workflowId === workflowIdToFail) {
+            throw new Error(`simulated cancellation failure for ${workflowId}`);
+          }
+
+          const workflowState = await readWorkflowState(storage, workflowId);
+          if (workflowState === null) {
+            throw new Error(`Workflow ${workflowId} not found`);
+          }
+
+          await storage.batch([
+            {
+              type: 'put',
+              key: KEYS.workflow(workflowId),
+              value: encode({
+                ...workflowState,
+                status: 'cancelled',
+                updatedAt: timestamp,
+              } satisfies WorkflowState),
+            },
+          ]);
+        } finally {
+          observation.activeCancellations -= 1;
+        }
+      },
+    },
+    storage,
+  } as never;
+
+  return { internals, observation };
+}
+
 function isTopLevelWorkflowStateKey(key: string): boolean {
   return key.startsWith('wf:') && !key.slice('wf:'.length).includes(':');
 }
@@ -531,6 +583,67 @@ describe('bulk workflow operations', () => {
     } finally {
       await engine[Symbol.asyncDispose]();
     }
+  });
+
+  it('defaults bulk cancellation to serial workflow processing', async () => {
+    const now = 1_000;
+    const storage = new MemoryStorage();
+    for (const workflowId of ['bulk-serial-a', 'bulk-serial-b', 'bulk-serial-c']) {
+      await writePendingWorkflowState(storage, workflowId, now);
+    }
+    const { internals, observation } = createObservedCancellationInternals(storage, now);
+
+    const result = await cancelAll(internals, { status: 'pending' });
+
+    expect(result.cancelled).toBe(3);
+    expect(result.failed).toBe(0);
+    expect(result.errors).toEqual([]);
+    expect(observation.maximumActiveCancellations).toBe(1);
+  });
+
+  it('honors bulkConcurrency for cancellation while preserving per-workflow failures', async () => {
+    const now = 1_000;
+    const storage = new MemoryStorage();
+    const workflowIds = [
+      'bulk-concurrent-a',
+      'bulk-concurrent-b',
+      'bulk-concurrent-failure',
+      'bulk-concurrent-c',
+    ];
+    for (const workflowId of workflowIds) {
+      await writePendingWorkflowState(storage, workflowId, now);
+    }
+    const { internals, observation } = createObservedCancellationInternals(
+      storage,
+      now,
+      'bulk-concurrent-failure',
+    );
+
+    const result = await cancelAll(internals, { status: 'pending' }, { bulkConcurrency: 2 });
+
+    expect(result).toEqual({
+      cancelled: 3,
+      failed: 1,
+      errors: [
+        {
+          id: 'bulk-concurrent-failure',
+          error: 'simulated cancellation failure for bulk-concurrent-failure',
+        },
+      ],
+    });
+    expect(observation.maximumActiveCancellations).toBe(2);
+    expect(await readWorkflowState(storage, 'bulk-concurrent-a')).toEqual(
+      expect.objectContaining({ status: 'cancelled' }),
+    );
+    expect(await readWorkflowState(storage, 'bulk-concurrent-b')).toEqual(
+      expect.objectContaining({ status: 'cancelled' }),
+    );
+    expect(await readWorkflowState(storage, 'bulk-concurrent-c')).toEqual(
+      expect.objectContaining({ status: 'cancelled' }),
+    );
+    expect(await readWorkflowState(storage, 'bulk-concurrent-failure')).toEqual(
+      expect.objectContaining({ status: 'pending' }),
+    );
   });
 
   it('default cancelAll (no status filter) reaches a suspended workflow', async () => {
@@ -1217,6 +1330,48 @@ describe('bulk workflow operations', () => {
 
       await engine.cancel('bulk-preview-selected-a');
       await engine.cancel('bulk-preview-selected-b');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('previews bulk cancellation with attribute any-of filters', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const regionWorkflow = workflow({ name: 'bulk-attribute-preview' })
+      .searchAttributes({ region: { type: 'string' } })
+      .execute(waitForSignalWorkflow);
+    engine.register(regionWorkflow);
+
+    try {
+      await engine.start('bulk-attribute-preview', 'east', {
+        id: 'bulk-attribute-preview-east',
+        searchAttributes: { region: 'us-east' },
+      });
+      await engine.start('bulk-attribute-preview', 'west', {
+        id: 'bulk-attribute-preview-west',
+        searchAttributes: { region: 'eu-west' },
+      });
+      await engine.start('bulk-attribute-preview', 'south', {
+        id: 'bulk-attribute-preview-south',
+        searchAttributes: { region: 'ap-south' },
+      });
+      await waitForWorkflowStatusCount(engine, 'running', 3, 10_000);
+
+      const preview = await engine.cancelAll(
+        { attributes: [{ key: 'region', value: ['us-east', 'eu-west'] }] },
+        { dryRun: true, requestId: 'bulk-attribute-preview-request' },
+      );
+
+      expect(preview).toEqual(
+        expect.objectContaining({
+          dryRun: true,
+          action: 'cancel',
+          matched: 2,
+          requestId: 'bulk-attribute-preview-request',
+          sampleWorkflowIds: ['bulk-attribute-preview-east', 'bulk-attribute-preview-west'],
+          confirmationToken: expect.stringMatching(/^bulk:/),
+        }),
+      );
     } finally {
       await engine[Symbol.asyncDispose]();
     }

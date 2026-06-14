@@ -1,5 +1,6 @@
 import { describe, expect, it, mock } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
@@ -278,7 +279,7 @@ describe('partial-failure preservation worker-mode boundary', () => {
         [
           /* first scan empty */
         ],
-        [['sig:key', encode(payload)]],
+        [[KEYS.signal('workflow-id', 'release', 'signal-1'), encode(payload)]],
       ]) as never,
     );
     const completed = mock(() => {});

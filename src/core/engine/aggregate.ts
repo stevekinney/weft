@@ -20,9 +20,14 @@ import { normalizeListFilter } from '../list-filter-validation.ts';
 import type { ListFilter, SearchAttributeValue, WorkflowState } from '../types.ts';
 import { WeftError } from '../weft-error.ts';
 import { normalizeWorkflowTags } from '../workflow-tags.ts';
+import { CONSTRAINED_ID_CHUNK_SIZE } from './candidate-read-batching.ts';
 import type { EngineInternals } from './internals.ts';
 import { resolveListCandidateIds } from './list-candidate-resolution.ts';
-import { matchesListFilter } from './state-utilities.ts';
+import {
+  decodeSearchAttributeRecord,
+  listFilterHasAttributeFilters,
+  matchesListFilter,
+} from './state-utilities.ts';
 import { decodeWorkflowState } from './validation.ts';
 import { MAX_LIST_SCAN_ROWS, WorkflowListScanCapExceededError } from './workflow-indexes.ts';
 import { isTopLevelWorkflowStateKey } from './workflow-state-stream.ts';
@@ -57,31 +62,6 @@ const ATTRIBUTE_VALUE_TO_KEY = (value: SearchAttributeValue | undefined): string
   if (Array.isArray(value)) return value.join(',');
   return String(value);
 };
-
-/**
- * Resolve the dimension key for one workflow. For attribute-backed
- * dimensions (failureCategory, `{ attribute }`), reads the attribute
- * record; missing entries bucket as `null`. For structural dimensions,
- * reads directly off the loaded state.
- */
-async function resolveDimensionKey(
-  internals: EngineInternals,
-  state: WorkflowState,
-  groupBy: AggregateGroupBy,
-): Promise<string | null> {
-  if (groupBy === 'status') return state.status;
-  if (groupBy === 'type') return state.type;
-  // Read `failureCategory` from the loaded state so the aggregate buckets
-  // every workflow under the same key the list-filter post-filter used.
-  // The search-attribute store may be stale or absent for engine-managed
-  // categories; `state.failureCategory` is the authoritative source.
-  if (groupBy === 'failureCategory') return state.failureCategory ?? null;
-
-  const attributeBytes = await internals.storage.get(KEYS.attribute(state.id));
-  if (!attributeBytes) return null;
-  const attributes = decode(attributeBytes) as Record<string, SearchAttributeValue>;
-  return ATTRIBUTE_VALUE_TO_KEY(attributes[groupBy.attribute]);
-}
 
 /**
  * Thrown when an aggregate `groupBy: { attribute }` references a search
@@ -166,14 +146,11 @@ type AggregateAccumulator = {
  * Phase — record one workflow under its dimension key, enforcing the
  * distinct-key cap before allocating a new bucket.
  */
-async function accumulateAggregateState(
-  internals: EngineInternals,
-  state: WorkflowState,
-  groupBy: AggregateGroupBy,
+function accumulateAggregateKey(
+  key: string | null,
   distinctKeyCap: number,
   accumulator: AggregateAccumulator,
-): Promise<void> {
-  const key = await resolveDimensionKey(internals, state, groupBy);
+): void {
   const current = accumulator.counts.get(key);
   if (current === undefined) {
     if (accumulator.counts.size >= distinctKeyCap) {
@@ -186,6 +163,94 @@ async function accumulateAggregateState(
   accumulator.total += 1;
 }
 
+/**
+ * Resolve dimension keys for a chunk of workflows. Structural groupings use
+ * the already loaded state. Attribute groupings fan storage reads out in
+ * bounded batches, matching the constrained-id list path.
+ */
+async function resolveDimensionKeys(
+  internals: EngineInternals,
+  states: readonly WorkflowState[],
+  groupBy: AggregateGroupBy,
+): Promise<Array<string | null>> {
+  if (groupBy === 'status') return states.map((state) => state.status);
+  if (groupBy === 'type') return states.map((state) => state.type);
+  // Read `failureCategory` from the loaded state so the aggregate buckets
+  // every workflow under the same key the list-filter post-filter used.
+  // The search-attribute store may be stale or absent for engine-managed
+  // categories; `state.failureCategory` is the authoritative source.
+  if (groupBy === 'failureCategory') return states.map((state) => state.failureCategory ?? null);
+
+  const keys: Array<string | null> = [];
+  for (let start = 0; start < states.length; start += CONSTRAINED_ID_CHUNK_SIZE) {
+    const stateChunk = states.slice(start, start + CONSTRAINED_ID_CHUNK_SIZE);
+    const attributeBytes = await Promise.all(
+      stateChunk.map((state) => internals.storage.get(KEYS.attribute(state.id))),
+    );
+    for (const bytes of attributeBytes) {
+      if (!bytes) {
+        keys.push(null);
+        continue;
+      }
+      const attributes = decode(bytes) as Record<string, SearchAttributeValue>;
+      keys.push(ATTRIBUTE_VALUE_TO_KEY(attributes[groupBy.attribute]));
+    }
+  }
+  return keys;
+}
+
+/** Phase — record a batch of workflows under their dimension keys. */
+async function accumulateAggregateStates(
+  internals: EngineInternals,
+  states: readonly WorkflowState[],
+  groupBy: AggregateGroupBy,
+  distinctKeyCap: number,
+  accumulator: AggregateAccumulator,
+): Promise<void> {
+  const dimensionKeys = await resolveDimensionKeys(internals, states, groupBy);
+  for (const key of dimensionKeys) {
+    accumulateAggregateKey(key, distinctKeyCap, accumulator);
+  }
+}
+
+async function readSearchAttributesForStates(
+  internals: EngineInternals,
+  stateBytesList: readonly (Uint8Array | null)[],
+  filter: ListFilter,
+): Promise<Map<string, Record<string, SearchAttributeValue> | null>> {
+  const searchAttributesByWorkflowId = new Map<
+    string,
+    Record<string, SearchAttributeValue> | null
+  >();
+  if (!listFilterHasAttributeFilters(filter)) return searchAttributesByWorkflowId;
+
+  const states: WorkflowState[] = [];
+  for (const stateBytes of stateBytesList) {
+    if (!stateBytes) continue;
+    states.push(decodeWorkflowState(stateBytes));
+  }
+
+  const attributeBytesList = await Promise.all(
+    states.map((state) => internals.storage.get(KEYS.attribute(state.id))),
+  );
+  for (let index = 0; index < states.length; index += 1) {
+    searchAttributesByWorkflowId.set(
+      states[index]!.id,
+      decodeSearchAttributeRecord(attributeBytesList[index] ?? null),
+    );
+  }
+  return searchAttributesByWorkflowId;
+}
+
+async function readSearchAttributesForFilter(
+  internals: EngineInternals,
+  workflowId: string,
+  filter: ListFilter,
+): Promise<Record<string, SearchAttributeValue> | null> {
+  if (!listFilterHasAttributeFilters(filter)) return null;
+  return decodeSearchAttributeRecord(await internals.storage.get(KEYS.attribute(workflowId)));
+}
+
 /** Phase — drain a constrained candidate-id set through the accumulator. */
 async function accumulateFromConstrainedIds(
   internals: EngineInternals,
@@ -196,17 +261,45 @@ async function accumulateFromConstrainedIds(
   distinctKeyCap: number,
   accumulator: AggregateAccumulator,
 ): Promise<void> {
-  if (constrainedIds.size > MAX_LIST_SCAN_ROWS) {
+  const orderedIds = [...constrainedIds];
+  if (orderedIds.length > MAX_LIST_SCAN_ROWS) {
     throw new WorkflowListScanCapExceededError(MAX_LIST_SCAN_ROWS);
   }
-  for (const workflowId of constrainedIds) {
-    const stateBytes = await internals.storage.get(KEYS.workflow(workflowId));
-    if (!stateBytes) continue;
-    const state = decodeWorkflowState(stateBytes);
-    if (!matchesListFilter(state, normalizedFilter, constrainedIds, normalizedTagFilters)) {
-      continue;
+
+  for (let start = 0; start < orderedIds.length; start += CONSTRAINED_ID_CHUNK_SIZE) {
+    const idChunk = orderedIds.slice(start, start + CONSTRAINED_ID_CHUNK_SIZE);
+    const stateBytesChunk = await Promise.all(
+      idChunk.map((workflowId) => internals.storage.get(KEYS.workflow(workflowId))),
+    );
+    const searchAttributesByWorkflowId = await readSearchAttributesForStates(
+      internals,
+      stateBytesChunk,
+      normalizedFilter,
+    );
+    const matchingStates: WorkflowState[] = [];
+    for (const stateBytes of stateBytesChunk) {
+      if (!stateBytes) continue;
+      const state = decodeWorkflowState(stateBytes);
+      if (
+        !matchesListFilter(
+          state,
+          normalizedFilter,
+          constrainedIds,
+          normalizedTagFilters,
+          searchAttributesByWorkflowId.get(state.id) ?? null,
+        )
+      ) {
+        continue;
+      }
+      matchingStates.push(state);
     }
-    await accumulateAggregateState(internals, state, groupBy, distinctKeyCap, accumulator);
+    await accumulateAggregateStates(
+      internals,
+      matchingStates,
+      groupBy,
+      distinctKeyCap,
+      accumulator,
+    );
   }
 }
 
@@ -220,6 +313,7 @@ async function accumulateFromFullScan(
   accumulator: AggregateAccumulator,
 ): Promise<void> {
   let scanned = 0;
+  let matchingStates: WorkflowState[] = [];
   for await (const [storageKey, value] of internals.storage.scan('wf:')) {
     if (!isTopLevelWorkflowStateKey(storageKey)) continue;
     scanned += 1;
@@ -227,8 +321,34 @@ async function accumulateFromFullScan(
       throw new WorkflowListScanCapExceededError(MAX_LIST_SCAN_ROWS);
     }
     const state = decodeWorkflowState(value);
-    if (!matchesListFilter(state, normalizedFilter, null, normalizedTagFilters)) continue;
-    await accumulateAggregateState(internals, state, groupBy, distinctKeyCap, accumulator);
+    const searchAttributes = await readSearchAttributesForFilter(
+      internals,
+      state.id,
+      normalizedFilter,
+    );
+    if (!matchesListFilter(state, normalizedFilter, null, normalizedTagFilters, searchAttributes)) {
+      continue;
+    }
+    matchingStates.push(state);
+    if (matchingStates.length === CONSTRAINED_ID_CHUNK_SIZE) {
+      await accumulateAggregateStates(
+        internals,
+        matchingStates,
+        groupBy,
+        distinctKeyCap,
+        accumulator,
+      );
+      matchingStates = [];
+    }
+  }
+  if (matchingStates.length > 0) {
+    await accumulateAggregateStates(
+      internals,
+      matchingStates,
+      groupBy,
+      distinctKeyCap,
+      accumulator,
+    );
   }
 }
 

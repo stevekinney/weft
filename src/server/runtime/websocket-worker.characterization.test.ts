@@ -8,8 +8,13 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { decode } from '../../core/codec.ts';
+import { KEYS } from '../../storage/interface.ts';
+import { MemoryStorage } from '../../storage/memory.ts';
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { REMOTE_WORKER_PROTOCOL_VERSION } from '../../worker/protocol.ts';
 import { principalFromApiKey } from '../principal.ts';
+import { markInflight, type InflightRecord, type ResolvedRecord } from '../task-state.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import { handleWorkerWebSocketMessage } from './websocket-worker.ts';
 
@@ -51,6 +56,32 @@ const NOOP_CLEANUP = (_operationId: string) => {};
 
 function workerPrincipal() {
   return principalFromApiKey({ subject: 'worker-key', scopes: ['workers:write'] });
+}
+
+function setPayloadSizeLimit(context: unknown, maxBytes: number): void {
+  (context as { payloadSizeMaxBytes: number | null }).payloadSizeMaxBytes = maxBytes;
+}
+
+async function readResolvedRecord(
+  storage: MemoryStorage,
+  operationId: string,
+): Promise<ResolvedRecord> {
+  const bytes = await storage.get(KEYS.operationResolved(operationId));
+  expect(bytes).not.toBeNull();
+  return decode(bytes!) as ResolvedRecord;
+}
+
+function makeInflightRecord(operationId: string, workerId: string): InflightRecord {
+  return {
+    operationId,
+    workerId,
+    deadline: Date.now() + 30_000,
+    activityName: 'doWork',
+    queue: 'default',
+    input: null,
+    attempt: 1,
+    visibilityTimeout: 30_000,
+  };
 }
 
 describe('handleWorkerWebSocketMessage', () => {
@@ -321,6 +352,125 @@ describe('handleWorkerWebSocketMessage', () => {
       );
 
       expect(cleaned).toEqual(['op-cleanup']);
+    });
+
+    it('rejects oversized completed results and resolves the task as failed', async () => {
+      const storage = new MemoryStorage();
+      const context = minimalServerContext();
+      setPayloadSizeLimit(context, 64);
+      const options = minimalServeOptions(storage);
+      const ws = createFakeWs();
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'register',
+          protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+          workerId: 'w-oversize',
+          activities: ['doWork'],
+          concurrency: 5,
+        }),
+        NOOP_CLEANUP,
+      );
+
+      context.registry.assignTask('w-oversize', 'op-oversize', 30_000, undefined);
+      context.deadlineTracker.add({ operationId: 'op-oversize', deadline: Date.now() + 30_000 });
+      await markInflight(storage, makeInflightRecord('op-oversize', 'w-oversize'));
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'taskResult',
+          operationId: 'op-oversize',
+          status: 'completed',
+          value: { blob: 'x'.repeat(200) },
+        }),
+        NOOP_CLEANUP,
+      );
+
+      await waitForCondition(
+        async () => (await storage.get(KEYS.operationResolved('op-oversize'))) !== null,
+        { timeoutMs: 1000, intervalMs: 10, label: 'oversized WebSocket task to resolve failed' },
+      );
+
+      const protocolError = ws.sentMessages
+        .map((message) => JSON.parse(message))
+        .find((message: { type?: string }) => message.type === 'protocolError');
+      expect(protocolError).toMatchObject({
+        type: 'protocolError',
+        code: 'invalid_message',
+      });
+      expect(String(protocolError.message)).toContain('activity result exceeds');
+      expect(context.registry.isAssigned('op-oversize')).toBe(false);
+      expect(context.deadlineTracker.size).toBe(0);
+      expect(await storage.get(KEYS.operationInflight('op-oversize'))).toBeNull();
+
+      const resolved = await readResolvedRecord(storage, 'op-oversize');
+      expect(resolved.status).toBe('failed');
+      expect(resolved.error).toContain('activity result exceeds');
+      expect(resolved.value).toBeUndefined();
+    });
+
+    it('rejects oversized cancelled errors and resolves the task as failed', async () => {
+      const storage = new MemoryStorage();
+      const context = minimalServerContext();
+      setPayloadSizeLimit(context, 64);
+      const options = minimalServeOptions(storage);
+      const ws = createFakeWs();
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'register',
+          protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+          workerId: 'w-cancel-oversize',
+          activities: ['doWork'],
+          concurrency: 5,
+        }),
+        NOOP_CLEANUP,
+      );
+
+      context.registry.assignTask('w-cancel-oversize', 'op-cancel-oversize', 30_000, undefined);
+      await markInflight(storage, makeInflightRecord('op-cancel-oversize', 'w-cancel-oversize'));
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'taskResult',
+          operationId: 'op-cancel-oversize',
+          status: 'cancelled',
+          cancelled: true,
+          error: 'x'.repeat(200),
+        }),
+        NOOP_CLEANUP,
+      );
+
+      await waitForCondition(
+        async () => (await storage.get(KEYS.operationResolved('op-cancel-oversize'))) !== null,
+        {
+          timeoutMs: 1000,
+          intervalMs: 10,
+          label: 'oversized WebSocket cancellation to resolve failed',
+        },
+      );
+
+      const protocolError = ws.sentMessages
+        .map((message) => JSON.parse(message))
+        .find((message: { type?: string }) => message.type === 'protocolError');
+      expect(String(protocolError.message)).toContain('activity result exceeds');
+
+      const resolved = await readResolvedRecord(storage, 'op-cancel-oversize');
+      expect(resolved.status).toBe('failed');
+      expect(resolved.error).toContain('activity result exceeds');
+      expect(resolved.error).not.toContain('x'.repeat(100));
     });
   });
 

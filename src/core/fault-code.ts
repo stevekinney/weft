@@ -4,8 +4,10 @@
  * onto the wire so clients can branch on the failure programmatically rather
  * than string-matching a human message:
  *
- *   - REST: `{ error: { code, message, data? } }` (see `fault-to-http.ts`).
- *   - JSON-RPC: `data.weftCode` (see `fault-to-json-rpc.ts`).
+ *   - REST operation routes: HTTP status plus `{ error: string }` for declared
+ *     faults, with `EngineFailure` masked to `"Internal server error"`.
+ *   - JSON-RPC: `error.data.weftCode` plus `error.data.httpStatus` (see
+ *     `fault-to-json-rpc.ts`).
  *
  * The type lives in `core` — not `server` — because both the server (which
  * produces faults) and the client (which consumes them off the wire) need it,
@@ -25,6 +27,9 @@ import type { FailureCategory } from './types/identity.ts';
  * be added additively, and the `satisfies` map below forces every new code to
  * declare its failure category at compile time.
  *
+ * See `documentation/reference/api-errors.md#faultcode` for the REST HTTP
+ * status and JSON-RPC error-data mappings for every public fault code.
+ *
  * @example
  * ```ts
  * import { HttpClientError, type FaultCode } from '@lostgradient/weft';
@@ -43,6 +48,7 @@ export type FaultCode =
   | 'Conflict'
   | 'Unprocessable'
   | 'Timeout'
+  | 'PayloadTooLarge'
   | 'NotImplemented'
   | 'UnsupportedTransport'
   | 'SubscriptionOverflow'
@@ -80,6 +86,7 @@ export const FAULT_CODE_TO_FAILURE_CATEGORY = Object.freeze({
   // Deadline exceeded.
   Timeout: 'timeout',
   // Capacity limits.
+  PayloadTooLarge: 'resource',
   SubscriptionOverflow: 'resource',
   // Server cannot fulfill — infrastructure or unimplemented surface.
   NotImplemented: 'system',

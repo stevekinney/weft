@@ -1,6 +1,10 @@
 # RemoteWorker Wire Protocol
 
-This document describes the versioned WebSocket protocol Weft uses to dispatch activity tasks to remote workers. The built-in TypeScript `RemoteWorker` speaks this protocol, and non-TypeScript SDKs can validate against the exported JSON Schemas instead of reverse-engineering the source.
+This document describes the versioned worker transports Weft uses to dispatch
+activity tasks to remote workers. The built-in TypeScript `RemoteWorker` speaks
+the WebSocket protocol, and `LongPollWorker` speaks the HTTP long-poll fallback.
+Non-TypeScript SDKs can validate the WebSocket protocol against the exported
+JSON Schemas instead of reverse-engineering the source.
 
 ## At a glance
 
@@ -98,7 +102,7 @@ Worker                              Server
   |   <-------- close 1002 --------   |
 ```
 
-The server tracks the worker by `workerId` in an in-memory registry. If a registered worker disconnects with tasks in flight, the server waits for the configured `ServeOptions.workerReconnectGracePeriodMs` before requeueing those tasks. A same-`workerId` `register` inside that grace window cancels the pending requeue and preserves the worker's in-flight assignments. If the window expires, the server reassigns the tasks to another available worker on the same queue or moves them through the fallback queue path according to the dispatch machinery.
+The server tracks the worker by `workerId` in an in-memory registry. If a registered worker disconnects with tasks in flight, the server waits for the configured `ServeOptions.workerReconnectGracePeriodMs` before requeueing those tasks. A same-`workerId` `register` inside that grace window cancels the pending requeue and preserves the worker's in-flight assignments. If the window expires, the server reassigns the tasks to another available worker on the same queue or moves them through the fallback queue path according to the dispatch machinery. The grace window defaults to `2000` ms. Use `100` only for low-latency test or embedded scenarios, and use `5000` for cloud or load-balancer deployments where replacement workers commonly need several seconds to reconnect.
 
 ## Message catalog
 
@@ -374,3 +378,113 @@ The command starts a localhost Weft server and launches the worker command with 
 | `WEFT_WORKER_PROTOCOL_VERSION` | Current protocol version, `1`.                   |
 
 The conformance runner verifies registration acknowledgement, echo task completion, heartbeat-preserved work, cancellation, in-flight reassignment after disconnect, graceful shutdown, and failure of a deliberately broken worker fixture. `--json` returns a stable machine-readable report. Without `--json`, each check prints as `PASS` or `FAIL`.
+
+## HTTP long-poll transport
+
+`LongPollWorker` uses the same task queue and activity execution model over
+plain HTTP. It does not use the WebSocket `register` frame. Each poll request
+advertises the activities it can execute, the server claims one matching task if
+available, and the worker posts the result to a queue-scoped result endpoint.
+
+### Poll request
+
+```text
+GET /api/v1/tasks/:queue?activity=<activity-name>&timeout=<milliseconds>
+```
+
+`:queue` must consist only of word characters and hyphens (`[\w-]+`). Repeat the
+`activity` query parameter once per activity name the worker can execute. At
+least one `activity` value is required. `timeout` is optional; it defaults to
+`30000` milliseconds and is clamped to a maximum of `60000` milliseconds.
+
+With authentication configured, the caller must authenticate with a principal
+that has the `workers:write` scope.
+
+| Response | Meaning                                                                                          |
+| -------- | ------------------------------------------------------------------------------------------------ |
+| `200`    | A task was claimed and the response body is the task JSON.                                       |
+| `204`    | No matching task became available before the timeout, or the client disconnected before a claim. |
+| `400`    | No `activity` query parameter was supplied.                                                      |
+| `403`    | Authentication was present but did not include `workers:write`.                                  |
+
+Task response body:
+
+```json
+{
+  "operationId": "activity-operation-id",
+  "activityName": "order.chargeCard",
+  "input": { "orderId": "order-42" },
+  "attempt": 1,
+  "headers": { "traceparent": "00-..." },
+  "workerId": "longpoll-a1b2c3d4",
+  "attemptToken": "per-claim-token"
+}
+```
+
+| Field          | Type                     | Description                                                                 |
+| -------------- | ------------------------ | --------------------------------------------------------------------------- |
+| `operationId`  | string                   | Opaque task identifier to echo in the result request.                       |
+| `activityName` | string                   | Activity name selected from the advertised `activity` values.               |
+| `input`        | JSON value               | Activity input.                                                             |
+| `attempt`      | number                   | Retry attempt number. Present on retried dispatches.                        |
+| `headers`      | `Record<string, string>` | Interceptor-propagated headers when present.                                |
+| `workerId`     | string                   | Synthetic worker id for this HTTP claim. Echo it in the result request.     |
+| `attemptToken` | string                   | Per-claim token for stale-attempt rejection. Echo it in the result request. |
+
+### Result request
+
+```text
+POST /api/v1/tasks/:queue/result
+Content-Type: application/json
+```
+
+Success body:
+
+```json
+{
+  "operationId": "activity-operation-id",
+  "workerId": "longpoll-a1b2c3d4",
+  "attemptToken": "per-claim-token",
+  "status": "completed",
+  "value": null
+}
+```
+
+Failure body:
+
+```json
+{
+  "operationId": "activity-operation-id",
+  "workerId": "longpoll-a1b2c3d4",
+  "attemptToken": "per-claim-token",
+  "status": "failed",
+  "error": "Activity failed"
+}
+```
+
+| Field          | Type                      | Required                                  | Description                                                 |
+| -------------- | ------------------------- | ----------------------------------------- | ----------------------------------------------------------- |
+| `operationId`  | string                    | Yes                                       | Opaque task identifier from the poll response.              |
+| `workerId`     | string                    | Yes for claimed tasks                     | Synthetic worker id from the poll response.                 |
+| `attemptToken` | non-empty string          | Yes when the in-flight record carries one | Per-claim token from the poll response.                     |
+| `status`       | `"completed" \| "failed"` | Yes                                       | Terminal activity result status.                            |
+| `value`        | JSON value                | Yes if `completed`                        | Activity result. Use `null` when the activity has no value. |
+| `error`        | string                    | Yes if `failed`                           | Human-readable failure message.                             |
+
+| Response | Meaning                                                                                                |
+| -------- | ------------------------------------------------------------------------------------------------------ |
+| `200`    | Result accepted. Body is `{ "ok": true }`.                                                             |
+| `400`    | Invalid JSON, missing required fields, unsupported status, or malformed `attemptToken`.                |
+| `403`    | The echoed `workerId` or `attemptToken` does not match the current in-flight record.                   |
+| `413`    | The result body or serialized activity result exceeds `maxRequestBodyBytes` or `payloadSize.maxBytes`. |
+
+Long-poll authorization is strict. A claimed task records the synthetic
+`workerId` and a fresh `attemptToken`; the completion must echo both while that
+record is still current. If the worker misses the visibility window and the task
+is reclaimed, a late result from the old claim is rejected instead of mutating
+the workflow.
+
+Aborting a poll before a task is claimed returns `204` and leaves queued work
+available for another poller. After a `200` response, the task is in flight until
+the worker posts a result or the visibility timeout/reconciliation path makes it
+available for another attempt.

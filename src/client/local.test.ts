@@ -225,6 +225,11 @@ describe('LocalClient', () => {
           failed: 1,
           errors: [{ id: 'wf-failed', error: 'boom' }],
         })),
+        retryFailedAll: mock(async () => ({
+          retried: 3,
+          failed: 1,
+          errors: [{ id: 'wf-still-failed', error: 'retry failed' }],
+        })),
         signalAll: mock(async () => ({ signalled: 3, failed: 0 })),
         deleteAll: mock(async () => ({ deleted: 4 })),
         tagAll: mock(async () => ({ modified: 5 })),
@@ -237,6 +242,11 @@ describe('LocalClient', () => {
         cancelled: 2,
         failed: 1,
         errors: [{ id: 'wf-failed', error: 'boom' }],
+      });
+      expect(await delegatedClient.retryFailedAll({ status: 'failed' })).toEqual({
+        retried: 3,
+        failed: 1,
+        errors: [{ id: 'wf-still-failed', error: 'retry failed' }],
       });
       expect(await delegatedClient.signalAll({ tags: ['nightly'] }, 'continue', 'go')).toEqual({
         signalled: 3,
@@ -251,6 +261,7 @@ describe('LocalClient', () => {
       });
 
       expect(delegatedEngine.cancelAll).toHaveBeenCalledWith({ status: 'running' });
+      expect(delegatedEngine.retryFailedAll).toHaveBeenCalledWith({ status: 'failed' });
       expect(delegatedEngine.signalAll).toHaveBeenCalledWith(
         { tags: ['nightly'] },
         'continue',
@@ -621,6 +632,7 @@ describe('LocalClient delegation surface', () => {
       createdAt: 1,
       updatedAt: 1,
       nextFireAt: 2,
+      missedFireCount: 0,
       queuedRuns: 0,
     };
 
@@ -774,6 +786,7 @@ describe('LocalClient delegation surface', () => {
       ]),
       fork: mock(async () => resumedHandle),
       cancelAll: mock(async () => ({ cancelled: 2, failed: 0, errors: [] })),
+      retryFailedAll: mock(async () => ({ retried: 2, failed: 0, errors: [] })),
       signalAll: mock(async () => ({ signalled: 2, failed: 0 })),
       deleteAll: mock(async () => ({ deleted: 1 })),
       tagAll: mock(async () => ({ modified: 2 })),
@@ -876,6 +889,11 @@ describe('LocalClient delegation surface', () => {
       failed: 0,
       errors: [],
     });
+    expect(await client.retryFailedAll({ status: 'failed' })).toEqual({
+      retried: 2,
+      failed: 0,
+      errors: [],
+    });
     expect(await client.signalAll({ tags: ['nightly'] }, 'continue', 'done')).toEqual({
       signalled: 2,
       failed: 0,
@@ -911,6 +929,7 @@ describe('LocalClient delegation surface', () => {
     expect(engine.cancelSchedule).toHaveBeenCalledWith('delegated-schedule');
     expect(engine.fork).toHaveBeenCalledWith('delegated-workflow', { fromStep: 2 });
     expect(engine.cancelAll).toHaveBeenCalledWith({ status: 'running' });
+    expect(engine.retryFailedAll).toHaveBeenCalledWith({ status: 'failed' });
     expect(engine.signalAll).toHaveBeenCalledWith({ tags: ['nightly'] }, 'continue', 'done');
     expect(engine.deleteAll).toHaveBeenCalledWith({ status: 'completed' });
     expect(engine.tagAll).toHaveBeenCalledWith({ tags: ['nightly'] }, ['bulk']);

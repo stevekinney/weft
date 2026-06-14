@@ -4,7 +4,8 @@ import type { Engine } from '../../core/engine.ts';
 import type { ScheduleOptions, ScheduleSpec } from '../../core/types.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { readRestJsonBody } from '../rest-body.ts';
+import { invalidParamsFault, isOperationFault, shapeRestFault } from './operation-helpers.ts';
 import { mapScheduleErrorToFault, validateScheduleInputCadence } from './schedule-faults.ts';
 
 const VALID_SCHEDULE_OVERLAP_POLICIES = new Set<NonNullable<ScheduleOptions['overlap']>>([
@@ -36,6 +37,7 @@ const createScheduleInput = z.object({
   id: z.unknown().optional(),
   overlap: z.unknown().optional(),
   backfill: z.unknown().optional(),
+  jitter: z.unknown().optional(),
 });
 
 const createScheduleOutput = z.object({
@@ -51,6 +53,7 @@ type ValidatedCreateScheduleInput = {
   id: string | undefined;
   overlap: NonNullable<ScheduleOptions['overlap']> | undefined;
   backfill: boolean | undefined;
+  jitter: ScheduleOptions['jitter'] | undefined;
 };
 
 /** Validate the required `type` field and the mutually exclusive cadence (cronExpression or every). */
@@ -64,11 +67,12 @@ function validateRequiredScheduleFields(input: CreateScheduleInput): {
   return { type: input.type, spec: validateScheduleInputCadence(input) };
 }
 
-/** Validate optional schedule fields id, overlap, and backfill. */
+/** Validate optional schedule fields id, overlap, backfill, and jitter. */
 function validateOptionalScheduleFields(input: CreateScheduleInput): {
   id: string | undefined;
   overlap: NonNullable<ScheduleOptions['overlap']> | undefined;
   backfill: boolean | undefined;
+  jitter: ScheduleOptions['jitter'] | undefined;
 } {
   let validatedId: string | undefined;
   if (input.id !== undefined) {
@@ -94,20 +98,35 @@ function validateOptionalScheduleFields(input: CreateScheduleInput): {
     validatedBackfill = input.backfill;
   }
 
-  return { id: validatedId, overlap: validatedOverlap, backfill: validatedBackfill };
+  let validatedJitter: ScheduleOptions['jitter'] | undefined;
+  if (input.jitter !== undefined) {
+    if (typeof input.jitter !== 'string' && typeof input.jitter !== 'number') {
+      throw invalidParamsFault(
+        'Field "jitter" must be a duration string or a number of milliseconds',
+      );
+    }
+    validatedJitter = input.jitter;
+  }
+
+  return {
+    id: validatedId,
+    overlap: validatedOverlap,
+    backfill: validatedBackfill,
+    jitter: validatedJitter,
+  };
 }
 
 /**
  * Validate `CreateScheduleInput` fields in order:
- * type → cadence (cronExpression or every) → id → overlap → backfill.
+ * type → cadence (cronExpression or every) → id → overlap → backfill → jitter.
  *
  * Throws an `InvalidParams` fault on the first invalid field so both REST and
  * JSON-RPC callers receive the same error messages.
  */
 function validateCreateScheduleInput(input: CreateScheduleInput): ValidatedCreateScheduleInput {
   const { type, spec } = validateRequiredScheduleFields(input);
-  const { id, overlap, backfill } = validateOptionalScheduleFields(input);
-  return { type, spec, id, overlap, backfill };
+  const { id, overlap, backfill, jitter } = validateOptionalScheduleFields(input);
+  return { type, spec, id, overlap, backfill, jitter };
 }
 
 export const createScheduleOperation = defineOperation<CreateScheduleInput, CreateScheduleOutput>({
@@ -133,13 +152,14 @@ export const createScheduleOperation = defineOperation<CreateScheduleInput, Crea
 
     // All field validation lives here so REST and JSON-RPC clients both
     // receive the same error messages verbatim. Validation order:
-    // type → cadence (cronExpression or every) → id → overlap → backfill.
+    // type → cadence (cronExpression or every) → id → overlap → backfill → jitter.
     const validated = validateCreateScheduleInput(input);
 
     const options: ScheduleOptions = {
       ...(validated.id !== undefined ? { id: validated.id } : {}),
       ...(validated.overlap !== undefined ? { overlap: validated.overlap } : {}),
       ...(validated.backfill !== undefined ? { backfill: validated.backfill } : {}),
+      ...(validated.jitter !== undefined ? { jitter: validated.jitter } : {}),
     };
 
     try {
@@ -175,12 +195,14 @@ export const createScheduleRestBinding: UnknownRestBinding = {
     id: { kind: 'body-field', bodyField: 'id' },
     overlap: { kind: 'body-field', bodyField: 'overlap' },
     backfill: { kind: 'body-field', bodyField: 'backfill' },
+    jitter: { kind: 'body-field', bodyField: 'jitter' },
   },
-  extractInput: async (request) => {
+  extractInput: async (request, _pathParams, context) => {
     let body: unknown;
     try {
-      body = await request.json();
-    } catch {
+      body = await readRestJsonBody(request, context);
+    } catch (error) {
+      if (isOperationFault(error)) throw error;
       throw invalidParamsFault('Invalid JSON body');
     }
 
@@ -204,6 +226,7 @@ export const createScheduleRestBinding: UnknownRestBinding = {
       id: record['id'],
       overlap: record['overlap'],
       backfill: record['backfill'],
+      jitter: record['jitter'],
     };
   },
   success: { kind: 'json', status: 201 },

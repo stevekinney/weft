@@ -393,6 +393,22 @@ const welcome = workflow({ name: 'welcome' })
 engine.register(welcome);
 ```
 
+## [0.2.1] - 2026-06-03
+
+### Changed
+
+- Tightened the release-version verification path so `package.json`, the
+  exported `VERSION`, and discovery-document defaults stay aligned before
+  publishing.
+- Folded first real integrator feedback into the package and documentation
+  surface.
+- Restored deterministic coverage and package validation gates for the release
+  line.
+
+### Breaking Changes
+
+No breaking changes were introduced in `0.2.1`.
+
 ## [0.1.0] - 2026-05-11
 
 ### Removed (breaking)

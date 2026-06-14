@@ -7,6 +7,7 @@ import { resolveWorkflowTypeTarget, type RegistrationCallbacks } from './registr
 
 const callbacks: RegistrationCallbacks = {
   ensureRetentionSweepInterval: () => undefined,
+  dispatchEvent: () => undefined,
 };
 
 describe('resolveWorkflowTypeTarget', () => {

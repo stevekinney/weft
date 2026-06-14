@@ -23,7 +23,11 @@ import {
   dispatchBranchesAllSettled,
   valuesFromSlots,
 } from './parallel-dispatch.ts';
-import { consumeSignal, trackWaiterKey, untrackWaiterKey } from './signals.ts';
+import {
+  consumeSignalWithAtomicWorkflowCommit,
+  trackWaiterKey,
+  untrackWaiterKey,
+} from './signals.ts';
 import type { SpeculativeExecutionState } from './speculative-execution-state.ts';
 import { callActivityFunction } from './state-utilities.ts';
 
@@ -94,7 +98,11 @@ export async function processWaitSignalOperation(
       return;
     }
 
-    const existingPayload = await consumeSignal(internals, workflowId, operation.signalName);
+    const existingPayload = await consumeSignalWithAtomicWorkflowCommit(
+      internals,
+      workflowId,
+      operation.signalName,
+    );
     if (existingPayload.found) {
       callbacks.completeOperation(workflowId, existingPayload.payload);
       return;
@@ -110,7 +118,11 @@ export async function processWaitSignalOperation(
       return;
     }
 
-    const bufferedPayload = await consumeSignal(internals, workflowId, operation.signalName);
+    const bufferedPayload = await consumeSignalWithAtomicWorkflowCommit(
+      internals,
+      workflowId,
+      operation.signalName,
+    );
     if (bufferedPayload.found) {
       if (internals.signalWaiters.get(waiterKey) === resolve) {
         internals.signalWaiters.delete(waiterKey);

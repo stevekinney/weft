@@ -1,3 +1,4 @@
+import { ExtData, encode as msgpackEncode } from '@msgpack/msgpack';
 import { describe, expect, it } from 'bun:test';
 
 import {
@@ -8,6 +9,7 @@ import {
   serializeCheckpoint,
   validateCheckpointRoundTrip,
 } from './checkpoint.ts';
+import { RegExpExtensionDecodeError } from './codec/extension-codec.ts';
 import {
   CURRENT_CHECKPOINT_SCHEMA_VERSION,
   WORKER_REPLAY_SIGNATURE_FORMAT,
@@ -15,14 +17,34 @@ import {
   type Serializer,
 } from './types.ts';
 
+const REGEXP_EXTENSION_TYPE = 2;
+
+function encodeCheckpointWithRegExpExtension(
+  source: string,
+  flags: string,
+  workflowId = 'wf-regexp-decode',
+): Uint8Array {
+  return msgpackEncode({
+    workflowId,
+    step: 1,
+    locals: {
+      pattern: new ExtData(REGEXP_EXTENSION_TYPE, msgpackEncode({ source, flags })),
+    },
+    accumulatedResults: [],
+    searchAttributes: {},
+    version: '1.0.0',
+    schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
+    createdAt: 1_778_716_800_000,
+  });
+}
+
 describe('createCheckpoint', () => {
-  it('produces step 0, empty locals, empty signals, empty searchAttributes', () => {
+  it('produces step 0, empty locals, empty accumulated results, empty searchAttributes', () => {
     const checkpoint = createCheckpoint('wf-1', '1.0.0');
 
     expect(checkpoint.step).toBe(0);
     expect(checkpoint.locals).toEqual({});
     expect(checkpoint.accumulatedResults).toEqual([]);
-    expect(checkpoint.pendingSignals).toEqual([]);
     expect(checkpoint.searchAttributes).toEqual({});
   });
 
@@ -35,7 +57,7 @@ describe('createCheckpoint', () => {
     expect(typeof checkpoint.createdAt).toBe('number');
     expect(checkpoint.createdAt).toBeGreaterThan(0);
     expect(typeof checkpoint.locals).toBe('object');
-    expect(Array.isArray(checkpoint.pendingSignals)).toBe(true);
+    expect(checkpoint).not.toHaveProperty('pendingSignals');
     expect(typeof checkpoint.searchAttributes).toBe('object');
   });
 });
@@ -162,6 +184,34 @@ describe('serializeCheckpoint / deserializeCheckpoint', () => {
     expect(restored).toEqual(original);
   });
 
+  it('omits pendingSignals from fresh serialized checkpoints', () => {
+    const restored = deserializeCheckpoint(serializeCheckpoint(createCheckpoint('wf-1', '1.0.0')));
+
+    expect(restored).not.toHaveProperty('pendingSignals');
+  });
+
+  it('normalizes old checkpoints that still contain pendingSignals', () => {
+    const { encode } = require('./codec.ts');
+    const bytes = encode({
+      workflowId: 'wf-old-signals',
+      step: 2,
+      locals: { waiting: true },
+      accumulatedResults: [[1, 'done']],
+      pendingSignals: ['legacy-signal'],
+      searchAttributes: {},
+      version: '1.0.0',
+      schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
+      createdAt: 1_778_716_800_000,
+    });
+
+    const restored = deserializeCheckpoint(bytes);
+
+    expect(restored.workflowId).toBe('wf-old-signals');
+    expect(restored.step).toBe(2);
+    expect(restored.accumulatedResults).toEqual([[1, 'done']]);
+    expect(restored).not.toHaveProperty('pendingSignals');
+  });
+
   it('round-trips with Date in locals', () => {
     const now = new Date();
     let checkpoint = createCheckpoint('wf-1', '1.0.0');
@@ -208,6 +258,50 @@ describe('serializeCheckpoint / deserializeCheckpoint', () => {
     expect(restored.locals).toEqual(checkpoint.locals);
   });
 
+  it('throws a typed RegExp extension decode error for invalid persisted flags', () => {
+    const bytes = encodeCheckpointWithRegExpExtension('hello', 'z');
+
+    expect(() => deserializeCheckpoint(bytes)).toThrow(RegExpExtensionDecodeError);
+
+    try {
+      deserializeCheckpoint(bytes);
+    } catch (error) {
+      expect(error).toBeInstanceOf(RegExpExtensionDecodeError);
+      const decodeError = error as RegExpExtensionDecodeError;
+      expect(decodeError.extensionType).toBe(REGEXP_EXTENSION_TYPE);
+      expect(decodeError.source).toBe('hello');
+      expect(decodeError.flags).toBe('z');
+      expect(decodeError.message).toContain('RegExp extension type 2');
+      expect(decodeError.message).toContain('source="hello"');
+      expect(decodeError.message).toContain('flags="z"');
+      return;
+    }
+
+    throw new Error('Expected deserializeCheckpoint to throw');
+  });
+
+  it('rejects RegExp checkpoint sources above the persisted source byte limit', () => {
+    const oversizedSource = 'a'.repeat(65_536);
+    const bytes = encodeCheckpointWithRegExpExtension(oversizedSource, '');
+
+    expect(() => deserializeCheckpoint(bytes)).toThrow(RegExpExtensionDecodeError);
+
+    try {
+      deserializeCheckpoint(bytes);
+    } catch (error) {
+      expect(error).toBeInstanceOf(RegExpExtensionDecodeError);
+      const decodeError = error as RegExpExtensionDecodeError;
+      expect(decodeError.extensionType).toBe(REGEXP_EXTENSION_TYPE);
+      expect(decodeError.source).toBe(oversizedSource);
+      expect(decodeError.flags).toBe('');
+      expect(decodeError.sourceByteLength).toBe(65_536);
+      expect(decodeError.message).toContain('exceeds the 65535-byte limit');
+      return;
+    }
+
+    throw new Error('Expected deserializeCheckpoint to throw');
+  });
+
   it('round-trips Worker replay signatures without changing the schema version', () => {
     const checkpoint: Checkpoint = {
       ...createCheckpoint('wf-worker-replay', '1.0.0'),
@@ -248,18 +342,17 @@ describe('serializeCheckpoint / deserializeCheckpoint', () => {
     };
 
     expect(Array.from(serializeCheckpoint(checkpoint))).toEqual([
-      137, 170, 119, 111, 114, 107, 102, 108, 111, 119, 73, 100, 175, 119, 102, 45, 98, 121, 116,
+      136, 170, 119, 111, 114, 107, 102, 108, 111, 119, 73, 100, 175, 119, 102, 45, 98, 121, 116,
       101, 45, 102, 105, 120, 116, 117, 114, 101, 164, 115, 116, 101, 112, 1, 166, 108, 111, 99, 97,
       108, 115, 133, 165, 99, 111, 117, 110, 116, 42, 169, 99, 114, 101, 97, 116, 101, 100, 65, 116,
       214, 255, 106, 5, 16, 128, 164, 116, 97, 103, 115, 199, 12, 4, 146, 164, 99, 111, 114, 101,
       165, 99, 111, 100, 101, 99, 166, 108, 111, 111, 107, 117, 112, 199, 22, 3, 146, 146, 165, 97,
       108, 112, 104, 97, 129, 162, 111, 107, 195, 146, 164, 98, 101, 116, 97, 199, 0, 5, 165, 98,
       121, 116, 101, 115, 196, 4, 1, 2, 3, 255, 178, 97, 99, 99, 117, 109, 117, 108, 97, 116, 101,
-      100, 82, 101, 115, 117, 108, 116, 115, 144, 174, 112, 101, 110, 100, 105, 110, 103, 83, 105,
-      103, 110, 97, 108, 115, 144, 176, 115, 101, 97, 114, 99, 104, 65, 116, 116, 114, 105, 98, 117,
-      116, 101, 115, 128, 167, 118, 101, 114, 115, 105, 111, 110, 165, 49, 46, 50, 46, 51, 173, 115,
-      99, 104, 101, 109, 97, 86, 101, 114, 115, 105, 111, 110, 2, 169, 99, 114, 101, 97, 116, 101,
-      100, 65, 116, 207, 0, 0, 1, 158, 35, 200, 116, 0,
+      100, 82, 101, 115, 117, 108, 116, 115, 144, 176, 115, 101, 97, 114, 99, 104, 65, 116, 116,
+      114, 105, 98, 117, 116, 101, 115, 128, 167, 118, 101, 114, 115, 105, 111, 110, 165, 49, 46,
+      50, 46, 51, 173, 115, 99, 104, 101, 109, 97, 86, 101, 114, 115, 105, 111, 110, 2, 169, 99,
+      114, 101, 97, 116, 101, 100, 65, 116, 207, 0, 0, 1, 158, 35, 200, 116, 0,
     ]);
   });
 
@@ -293,7 +386,6 @@ describe('validateCheckpointRoundTrip', () => {
       step: 1,
       locals: { handler: () => 'not serializable' },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -312,7 +404,6 @@ describe('validateCheckpointRoundTrip', () => {
       step: 1,
       locals: { nested: { callback: () => {} } },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -386,7 +477,6 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
       step: 0,
       locals: {},
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -401,7 +491,6 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
       workflowId: 'wf-1',
       locals: {},
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -417,7 +506,6 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
       step: 0,
       locals: null,
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -426,7 +514,7 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
     expect(() => deserializeCheckpoint(bytes)).toThrow('locals');
   });
 
-  it('throws when pendingSignals is not an array', () => {
+  it('ignores legacy pendingSignals when old bytes contain it', () => {
     const { encode } = require('./codec.ts');
     const bytes = encode({
       workflowId: 'wf-1',
@@ -438,7 +526,10 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
       createdAt: Date.now(),
     });
-    expect(() => deserializeCheckpoint(bytes)).toThrow('pendingSignals');
+
+    const restored = deserializeCheckpoint(bytes);
+
+    expect(restored).not.toHaveProperty('pendingSignals');
   });
 
   it('throws when accumulatedResults is not an array', () => {
@@ -448,7 +539,6 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
       step: 0,
       locals: {},
       accumulatedResults: 'not-an-array',
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -464,7 +554,6 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
       step: 0,
       locals: {},
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: null,
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -480,7 +569,6 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
       step: 0,
       locals: {},
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       createdAt: Date.now(),
     });
@@ -494,7 +582,6 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
       step: 0,
       locals: {},
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
     });
@@ -519,7 +606,6 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
           },
         ],
       ],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -601,7 +687,6 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
         step: 0,
         locals: {},
         accumulatedResults: [],
-        pendingSignals: [],
         searchAttributes: {},
         version: '1.0.0',
         schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -630,7 +715,6 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
           },
         ],
       ],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -664,7 +748,6 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
         step: 0,
         locals: {},
         accumulatedResults: [],
-        pendingSignals: [],
         searchAttributes: {},
         version: '1.0.0',
         schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -683,7 +766,6 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
       step: 0,
       locals: {},
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: '2',
@@ -719,7 +801,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
       step: 1,
       locals: { value: 'hello' },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -742,7 +823,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
       step: 1,
       locals: { count: 42 },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -767,7 +847,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
       step: 1,
       locals: { name: 'original' },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -792,7 +871,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
       step: 1,
       locals: { important: 'data', other: 'stuff' },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -817,7 +895,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
       step: 1,
       locals: { existing: 'data' },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -840,7 +917,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
       step: 1,
       locals: { items: ['a', 'b'] },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -863,7 +939,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
       step: 1,
       locals: { items: ['a', 'b', 'c'] },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -888,7 +963,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
       step: 1,
       locals: { nested: { deep: { value: 42 } } },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -908,7 +982,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
       step: 1,
       locals: { timestamp: new Date('2025-01-15T10:30:00Z') },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -942,7 +1015,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
       step: 1,
       locals: { timestamp: new Date('2025-01-15T10:30:00Z') },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -976,7 +1048,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
       step: 1,
       locals: { pattern: new RegExp('test', 'g') },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -1017,7 +1088,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
         ]),
       },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -1052,7 +1122,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
         myMap: new Map([['alpha', 1]]),
       },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -1087,7 +1156,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
         mySet: new Set([1, 2, 3]),
       },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -1123,7 +1191,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
         mySet: new Set(['a', 'b', 'c']),
       },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -1158,7 +1225,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
         myMap: new Map([['key1', 'original']]),
       },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -1182,7 +1248,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
       step: 1,
       locals: { field: 'present' },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -1206,7 +1271,6 @@ describe('compareValues (via validateCheckpointRoundTrip with custom serializer)
         items: [{ nested: 'original' }, { nested: 'original' }],
       },
       accumulatedResults: [],
-      pendingSignals: [],
       searchAttributes: {},
       version: '1.0.0',
       schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,

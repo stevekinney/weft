@@ -1,7 +1,12 @@
 import type { ContextOperationRequest } from '../context.ts';
 import { createDeferredConsumeEnvelope } from './deferred-consume-envelope.ts';
 import type { EngineInternals } from './internals.ts';
-import { consumeSignal, peekSignal, releaseSignalWaiter, trackWaiterKey } from './signals.ts';
+import {
+  consumeSignalWithAtomicWorkflowCommit,
+  peekSignal,
+  releaseSignalWaiter,
+  trackWaiterKey,
+} from './signals.ts';
 
 /**
  * The largest delay a host `setTimeout` can hold without overflow. Node and Bun
@@ -117,7 +122,7 @@ export function executeSleepSubOperation(
  * A wait-signal branch must never consume its durable signal record itself —
  * when it is woken it does not yet know whether it WON its race. So on delivery
  * it resolves with a {@link createDeferredConsumeEnvelope | deferred-consume
- * envelope}: the single destructive {@link consumeSignal} is wrapped in
+ * envelope}: the single atomic {@link consumeSignalWithAtomicWorkflowCommit} is wrapped in
  * `finalize` and performed ONLY by the coordinator, on the winner, strictly
  * after `Promise.race` / `Promise.all` settles. A losing branch (race settled by
  * a sibling → `signal` aborts) drops its envelope unfinalized and releases its
@@ -158,7 +163,11 @@ export function executeWaitSignalSubOperation(
     // an envelope so a losing branch (which never reaches finalize) cannot delete
     // the durable record.
     const finalize = async (): Promise<unknown> => {
-      const consumed = await consumeSignal(internals, workflowId, signalName);
+      const consumed = await consumeSignalWithAtomicWorkflowCommit(
+        internals,
+        workflowId,
+        signalName,
+      );
       return consumed.found ? consumed.payload : undefined;
     };
 

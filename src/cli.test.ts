@@ -638,6 +638,8 @@ describe('CLI argument parsing', () => {
         '--overlap',
         'queue',
         '--backfill',
+        '--jitter',
+        '45s',
       ]) as ScheduleCreateCommand;
 
       expect(result.command).toBe('schedule');
@@ -649,6 +651,7 @@ describe('CLI argument parsing', () => {
       expect(result.id).toBe('nightly-maintenance');
       expect(result.overlap).toBe('queue');
       expect(result.backfill).toBe(true);
+      expect(result.jitter).toBe('45s');
     });
 
     it('rejects invalid schedule overlap policies', () => {
@@ -872,6 +875,7 @@ describe('help text', () => {
     expect(SCHEDULE_HELP_TEXT).toContain('sqlite, lmdb');
     expect(SCHEDULE_HELP_TEXT).not.toContain('sqlite, lmdb, memory');
     expect(SCHEDULE_HELP_TEXT).toContain('--workflows');
+    expect(SCHEDULE_HELP_TEXT).toContain('--jitter');
   });
 
   it('HELP_TEXT documents --storage flag', () => {
@@ -2255,6 +2259,7 @@ describe('executeSchedule', () => {
         id: 'created-schedule',
         overlap: 'queue',
         backfill: true,
+        jitter: '30s',
       });
       expect(createResult.exitCode).toBe(0);
       expect(createResult.stdout).toContain('created-schedule');
@@ -2304,6 +2309,7 @@ describe('executeSchedule', () => {
             status: 'cancelled',
             overlap: 'queue',
             backfill: true,
+            jitterMs: 30_000,
           }),
         );
       } finally {

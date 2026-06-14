@@ -6,7 +6,8 @@ import type { AccessPolicy } from '../authorization.ts';
 import { raiseFault } from '../operation-catalog.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
+import { readRestJsonBody } from '../rest-body.ts';
+import { invalidParamsFault, isOperationFault, shapeRestFault } from './operation-helpers.ts';
 
 /**
  * Async ("out-of-band") activity completion, exposed across every transport.
@@ -193,8 +194,14 @@ function shapeAsyncActivitySuccess(output: AsyncActivityOutput): Response {
   });
 }
 
-async function readJsonObjectBody(request: Request): Promise<Record<string, unknown>> {
-  const body = await request.json().catch(() => null);
+async function readJsonObjectBody(
+  request: Request,
+  context: Parameters<UnknownRestBinding['extractInput']>[2],
+): Promise<Record<string, unknown>> {
+  const body = await readRestJsonBody(request, context).catch((error) => {
+    if (isOperationFault(error)) throw error;
+    return null;
+  });
   if (typeof body !== 'object' || body === null || Array.isArray(body)) {
     throw invalidParamsFault('Request body must be a JSON object.');
   }
@@ -210,11 +217,11 @@ export const completeAsyncActivityRestBinding: UnknownRestBinding = {
     token: { kind: 'body-field', bodyField: 'token' },
     result: { kind: 'body-field', bodyField: 'result' },
   },
-  extractInput: async (request) => {
+  extractInput: async (request, _pathParams, context) => {
     // Pass raw body fields through; the operation's Zod schema is the single
     // validator and rejects a missing/non-string token as InvalidParams. (No
     // empty-string coercion — that would invent a value for a required field.)
-    const body = await readJsonObjectBody(request);
+    const body = await readJsonObjectBody(request, context);
     return {
       token: body['token'],
       ...('result' in body ? { result: body['result'] } : {}),
@@ -234,9 +241,9 @@ export const failAsyncActivityRestBinding: UnknownRestBinding = {
     token: { kind: 'body-field', bodyField: 'token' },
     error: { kind: 'body-field', bodyField: 'error' },
   },
-  extractInput: async (request) => {
+  extractInput: async (request, _pathParams, context) => {
     // Raw pass-through; the Zod schema validates both token and the error shape.
-    const body = await readJsonObjectBody(request);
+    const body = await readJsonObjectBody(request, context);
     return {
       token: body['token'],
       error: body['error'],

@@ -13,6 +13,7 @@
 
 import { WeftError } from '../core/weft-error.ts';
 import type { OperationFault } from './operation-fault.ts';
+import type { RestBodyReadOptions } from './rest-body.ts';
 import type { HttpMethod } from './route-model.ts';
 
 /**
@@ -55,6 +56,8 @@ export type ResponseShape =
       readonly mediaType: 'text/event-stream' | 'application/octet-stream' | 'application/x-ndjson';
     };
 
+export type RestInputContext = RestBodyReadOptions;
+
 /**
  * Binds a REST mount point to an `OperationDefinition`. Generic over
  * `Input` / `Output` so `extractInput` returns a value the operation's
@@ -87,7 +90,11 @@ export type RestBinding<Input, Output> = {
    * Called before `executeOperation`; the returned value is what the
    * pipeline's schema parse step sees.
    */
-  readonly extractInput: (request: Request, pathParams: Record<string, string>) => Promise<Input>;
+  readonly extractInput: (
+    request: Request,
+    pathParams: Record<string, string>,
+    context: RestInputContext,
+  ) => Promise<Input>;
   /** Canonical response shape — OpenAPI reads this, handler may override via `shapeSuccess`. */
   readonly success: ResponseShape;
   /**

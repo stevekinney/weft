@@ -119,6 +119,13 @@ When `workflowExecutionMode` is omitted, Weft defaults to inline execution. Work
 
 Worker mode executes workflow generator turns outside the engine isolate. It protects engine liveness and engine heap access by driving the workflow through bounded `postMessage` turns, but it is not an operating-system sandbox. Workflow code still runs inside the Worker global realm and may access APIs exposed by that runtime, including Worker globals, imports, network APIs, filesystem APIs in Bun, and environment APIs when the runtime exposes them.
 
+Worker mode intentionally omits or rejects inline-only context surfaces:
+
+- `ctx.services`: rejected at `engine.start()` because live host capabilities cannot be serialized to a Worker.
+- `ctx.state.session()`: throws on first call because checkpoint-local session handles live inside the inline workflow context. Use `ctx.state.workflow()` or `ctx.state.execution()` for storage-backed state in worker mode.
+- `ctx.waitUntil()`: omitted from the worker context because the predicate closure cannot cross to a Worker process.
+- Step-based workflows (`compileStepWorkflow` / `ctx.step()`): require inline durable step machinery and throw when driven by the worker execution strategy.
+
 #### `WorkerExecutionOptions`
 
 ```ts
@@ -155,31 +162,49 @@ interface ServeOptions {
   development?: boolean;
   dashboard?: DashboardRouteTarget;
   auth?: AuthConfig;
+  rateLimit?: RateLimitConfig;
+  cors?: CorsOptions;
   unauthenticatedAccess?: 'warn' | 'allow' | 'reject';
+  maxRequestBodyBytes?: number;
+  maxStreamConnectionsPerWorkflow?: number;
   visibilityPollIntervalMs?: number;
+  workerReconnectGracePeriodMs?: number;
+  workerShutdownTimeoutMs?: number;
   routingPolicy?: RoutingPolicy;
   schedulingPolicy?: SchedulingPolicy;
   prometheusExporter?: PrometheusExporter;
 }
 ```
 
-| Field                      | Type                            | Default          | Description                                                |
-| -------------------------- | ------------------------------- | ---------------- | ---------------------------------------------------------- |
-| `engine`                   | `Engine`                        | (required)       | The engine instance to expose over HTTP                    |
-| `port`                     | `number`                        | `7233`           | TCP port to listen on                                      |
-| `hostname`                 | `string`                        | `'0.0.0.0'`      | Hostname/IP to bind to                                     |
-| `development`              | `boolean`                       | `false`          | Enable development mode with verbose error responses       |
-| `dashboard`                | `DashboardRouteTarget`          | `undefined`      | External dashboard shell served at supported page routes   |
-| `auth`                     | `AuthConfig`                    | `undefined`      | Authentication configuration (JWT, mTLS, or custom)        |
-| `unauthenticatedAccess`    | `'warn' \| 'allow' \| 'reject'` | `'warn'`         | Startup policy when `auth` is omitted                      |
-| `visibilityPollIntervalMs` | `number`                        | `5000`           | Polling interval for task visibility timeout checks        |
-| `routingPolicy`            | `RoutingPolicy`                 | `'least-loaded'` | Worker routing policy                                      |
-| `schedulingPolicy`         | `SchedulingPolicy`              | `'priority'`     | Scheduling policy for task dispatch                        |
-| `prometheusExporter`       | `PrometheusExporter`            | `undefined`      | Exporter that produces the response body for `/v1/metrics` |
+| Field                             | Type                            | Default          | Description                                                                                              |
+| --------------------------------- | ------------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------- |
+| `engine`                          | `Engine`                        | (required)       | The engine instance to expose over HTTP                                                                  |
+| `port`                            | `number`                        | `7233`           | TCP port to listen on                                                                                    |
+| `hostname`                        | `string`                        | `'0.0.0.0'`      | Hostname/IP to bind to                                                                                   |
+| `development`                     | `boolean`                       | `false`          | Enable development mode with verbose error responses                                                     |
+| `dashboard`                       | `DashboardRouteTarget`          | `undefined`      | External dashboard shell served at supported page routes                                                 |
+| `auth`                            | `AuthConfig`                    | `undefined`      | Authentication configuration (JWT, mTLS, or custom)                                                      |
+| `rateLimit`                       | `RateLimitConfig`               | `undefined`      | Optional single-process request throttling; see [rate limiting](../guides/server.md#rate-limiting)       |
+| `cors`                            | `CorsOptions`                   | `undefined`      | Optional browser cross-origin policy; see [CORS](../guides/server.md#cross-origin-resource-sharing-cors) |
+| `unauthenticatedAccess`           | `'warn' \| 'allow' \| 'reject'` | `'warn'`         | Startup policy when `auth` is omitted                                                                    |
+| `maxRequestBodyBytes`             | `number`                        | `1048576`        | Maximum body size for REST operation routes and JSON-RPC over HTTP                                       |
+| `maxStreamConnectionsPerWorkflow` | `number`                        | `100`            | Maximum workflow stream/watch WebSocket connections per workflow                                         |
+| `visibilityPollIntervalMs`        | `number`                        | `5000`           | Polling interval for task visibility timeout checks                                                      |
+| `workerReconnectGracePeriodMs`    | `number`                        | `2000`           | Reconnect grace before worker-disconnect task requeue                                                    |
+| `workerShutdownTimeoutMs`         | `number`                        | `30000`          | Shutdown drain window for connected remote workers                                                       |
+| `routingPolicy`                   | `RoutingPolicy`                 | `'least-loaded'` | Worker routing policy                                                                                    |
+| `schedulingPolicy`                | `SchedulingPolicy`              | `'priority'`     | Scheduling policy for task dispatch                                                                      |
+| `prometheusExporter`              | `PrometheusExporter`            | `undefined`      | Exporter that produces the response body for `/v1/metrics`                                               |
 
 The returned `WeftServer` exposes the resolved `port`, `hostname`, and `url`, along with a `stop()` method and `AsyncDisposable` support.
 
 When `auth` is omitted, [`serve()`](./api-server.md#serve) defaults to `unauthenticatedAccess: 'warn'`: it logs a startup warning and runs open for local development. Set `unauthenticatedAccess: 'reject'` or [`WEFT_SERVER_AUTHENTICATION_REQUIRED=1`](#environment-variables) for production deployments so startup fails before binding unless `auth` is configured. `auth` satisfies the requirement; `unauthenticatedAccess: 'allow'` suppresses the local warning but does not override `WEFT_SERVER_AUTHENTICATION_REQUIRED`.
+
+`maxRequestBodyBytes` rejects oversized REST operation and JSON-RPC HTTP request bodies with `413 Payload Too Large`. `maxStreamConnectionsPerWorkflow` limits concurrent `/v1/workflows/:id/stream` and `/v1/workflows/:id/watch` sockets for one workflow; excess connections close with WebSocket code `1008`.
+
+`workerReconnectGracePeriodMs` is clamped to `0..5000`. A same-`workerId` reconnect inside the window cancels the pending worker-disconnect requeue and keeps the worker's in-flight task assignments. The default is `2000` ms because Weft's common single-node and local-first deployments need a short buffer for transient socket churn without delaying genuine dead-worker detection for a full cloud drain window. Use `100` only for low-latency test or embedded scenarios, set `0` to requeue synchronously from the close handler, and set `5000` for cloud or load-balancer deployments where replacement workers commonly need several seconds to reconnect.
+
+Raw storage administration routes also have fixed operation guardrails: `/v1/storage` scans accept `limit` values up to `MAX_SCAN_LIMIT` (`10_000`), and `/v1/storage/-/batch` plus `/v1/storage/-/conditional-batch` accept at most `MAX_BATCH_OPERATIONS` (`10_000`) operations or conditions per request. The same batch cap is enforced by storage adapters before local or remote adapter work so internal callers cannot accidentally create pathological batch fan-out.
 
 **Example:**
 
@@ -204,7 +229,11 @@ Weft's library API does not require environment variables. These variables are r
 | `WEFT_SERVER_AUTHENTICATION_REQUIRED`     | `src/server/serve-internals.ts`               | Set to `1`, `true`, `yes`, or `on` to make `serve()` fail closed when no `auth` configuration is supplied. Set to `0`, `false`, `no`, or `off` to leave the `unauthenticatedAccess` option in control. Invalid values fail startup. |
 | `WEFT_STRICT_FAULTS`                      | `src/server/operation-catalog/raise-fault.ts` | Set to `1` to use strict server fault details even when `NODE_ENV` is `production`.                                                                                                                                                 |
 | `WEFT_ALLOW_UNTRUSTED_API_CATALOG_ORIGIN` | `src/server/handler/route-dispatch.ts`        | Local development or CI escape hatch for serving browser-facing API catalog routes without a trusted same-origin request; do not use as production configuration.                                                                   |
-| `WEFT_TOKEN`                              | `src/cli/codegen.ts`                          | Bearer token fallback for `weft codegen --server` when `--token` is omitted.                                                                                                                                                        |
+| `WEFT_ADDR`                               | `src/connection.ts`                           | Server URL fallback for shared client/CLI connection resolution when no explicit `server` option is supplied.                                                                                                                       |
+| `WEFT_TOKEN`                              | `src/connection.ts`                           | Bearer token fallback for shared client/CLI connection resolution when no explicit token is supplied. `env:NAME` indirection resolves the token from another environment variable.                                                  |
+| `WEFT_PROFILE`                            | `src/connection.ts`                           | Profile name selected from `WEFT_HOME/config`; overrides the configuration file's `defaultProfile` for shared client/CLI connection resolution.                                                                                     |
+| `WEFT_HOME`                               | `src/connection.ts`                           | Directory for the local Weft connection configuration and run lockfile. Defaults to `$HOME/.weft`.                                                                                                                                  |
+| `WEFT_DEV_WARNINGS`                       | `src/core/engine/construction.ts`             | Set to `1` to enable engine development warnings such as the one-shot MemoryStorage fallback warning. `NODE_ENV=development` enables the same warning path.                                                                         |
 | `WEFT_WORKER_URL`                         | `src/cli/conformance.ts`                      | Temporary WebSocket task-stream URL injected into worker commands launched by `weft conformance`.                                                                                                                                   |
 | `WEFT_WORKER_QUEUE`                       | `src/cli/conformance.ts`                      | Queue name injected into worker commands launched by `weft conformance`.                                                                                                                                                            |
 | `WEFT_WORKER_ACTIVITIES`                  | `src/cli/conformance.ts`                      | Comma-separated activity names the conformance worker must expose.                                                                                                                                                                  |

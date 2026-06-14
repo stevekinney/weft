@@ -22,6 +22,9 @@ export const MCP_PROTOCOL_VERSION = '2025-11-25';
 /** MCP method used for live tool introspection. */
 export const MCP_TOOLS_LIST_METHOD = 'tools/list';
 
+/** MCP notification emitted when the live tools/list output changes. */
+export const MCP_TOOLS_LIST_CHANGED_NOTIFICATION = 'notifications/tools/list_changed';
+
 /** MCP method used for live resource introspection. */
 export const MCP_RESOURCES_LIST_METHOD = 'resources/list';
 

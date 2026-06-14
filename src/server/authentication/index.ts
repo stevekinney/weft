@@ -12,6 +12,10 @@
 import type { AuthorizationScope } from '../authorization-scope.ts';
 import { tryAdmitApiKey } from './api-key.ts';
 import { defaultAuthAuditSink, emitAuthAuditEvent, type AuthAuditSink } from './audit.ts';
+import {
+  createConstantTimeApiKeyMatcher,
+  type ConstantTimeApiKeyEntry,
+} from './constant-time-api-key.ts';
 import { importJWTKey, verifyJWT } from './crypto.ts';
 import {
   DEFAULT_PUBLIC_PATHS,
@@ -109,7 +113,7 @@ function assertNoConflictingMethods(config: AuthConfig): void {
 
 type ApiKeyAdmissionOptions = {
   resolver: AuthConfig['resolveApiKeyPrincipal'];
-  apiKeySet: Set<string> | null;
+  apiKeyEntries: ReadonlyArray<ConstantTimeApiKeyEntry<undefined>> | null;
   defaultApiKeyScopes: ReadonlyArray<AuthorizationScope>;
 };
 
@@ -123,7 +127,7 @@ async function authenticateViaApiKey(
   options: ApiKeyAdmissionOptions,
 ): Promise<AuthAttempt> {
   const presentedKey = extractApiKey(request);
-  const hasApiKeyPath = options.resolver !== undefined || options.apiKeySet !== null;
+  const hasApiKeyPath = options.resolver !== undefined || options.apiKeyEntries !== null;
   if (!presentedKey || !hasApiKeyPath) {
     return { explicitAuthAttempted: false, result: null };
   }
@@ -131,7 +135,7 @@ async function authenticateViaApiKey(
   const result = await tryAdmitApiKey(
     presentedKey,
     options.resolver,
-    options.apiKeySet,
+    options.apiKeyEntries,
     options.defaultApiKeyScopes,
   );
   return {
@@ -193,7 +197,7 @@ export function validateAuthConfig(config: AuthConfig): void {
  *
  * The returned function checks each configured method in order:
  * 1. Public path bypass
- * 2. API key (O(1) set lookup)
+ * 2. API key (constant-time digest scan)
  * 3. JWT (signature + claims verification)
  * 4. mTLS (transport-level — any request that reaches the handler is authenticated)
  *
@@ -214,7 +218,9 @@ export function validateAuthConfig(config: AuthConfig): void {
 export async function createAuthenticator(config: AuthConfig): Promise<Authenticator> {
   validateAuthConfig(config);
 
-  const apiKeySet = config.apiKeys?.length ? new Set(config.apiKeys) : null;
+  const apiKeyEntries = config.apiKeys?.length
+    ? createConstantTimeApiKeyMatcher(config.apiKeys).entries
+    : null;
   const resolver = config.resolveApiKeyPrincipal;
   const defaultApiKeyScopes = config.defaultApiKeyScopes ?? [];
   const jwtKey = config.jwt ? await importJWTKey(config.jwt) : null;
@@ -230,7 +236,7 @@ export async function createAuthenticator(config: AuthConfig): Promise<Authentic
 
     const apiKeyAttempt = await authenticateViaApiKey(request, {
       resolver,
-      apiKeySet,
+      apiKeyEntries,
       defaultApiKeyScopes,
     });
     if (apiKeyAttempt.result !== null) {

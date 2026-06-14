@@ -215,8 +215,8 @@ export const startOrSignalWorkflowRestBinding: UnknownRestBinding = {
     idempotencyKey: { kind: 'body-field', bodyField: 'idempotencyKey' },
     searchAttributes: { kind: 'body-field', bodyField: 'searchAttributes' },
   },
-  extractInput: async (request) => {
-    const record = await parseStartWorkflowRequestRecord(request);
+  extractInput: async (request, _pathParams, context) => {
+    const record = await parseStartWorkflowRequestRecord(request, context);
     return {
       ...extractSharedStartWorkflowRestFields(record),
       signalName: record['signalName'],

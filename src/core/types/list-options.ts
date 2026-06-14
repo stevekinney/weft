@@ -51,7 +51,7 @@ export interface ListFilter {
   type?: string;
   /** Match workflows that carry every listed tag. */
   tags?: string[];
-  /** Filter on indexed search attributes (equality or range). */
+  /** Filter on indexed search attributes (equality, string any-of, or range). */
   attributes?: readonly AttributeFilter[];
   /** Maximum number of summaries to return. Server enforces an upper bound. */
   limit?: number;
@@ -104,24 +104,35 @@ export interface ListOptions {
 
 export type AttributeFilterKey = string | SearchAttributeHandle;
 
+export type AttributeFilterScalarValue = Exclude<SearchAttributeValue, string[]>;
+
 export type AttributeFilterValue<TKey extends AttributeFilterKey> =
   TKey extends SearchAttributeHandle<infer TValue>
     ? TValue extends string[]
       ? string
       : TValue
-    : SearchAttributeValue;
+    : AttributeFilterScalarValue;
+
+export type AttributeFilterAnyOfValue<TKey extends AttributeFilterKey> =
+  TKey extends SearchAttributeHandle<infer TValue>
+    ? TValue extends string[]
+      ? string[]
+      : TValue extends AttributeFilterScalarValue
+        ? TValue[]
+        : never
+    : AttributeFilterScalarValue[];
 
 export type AttributeRangeValue<TKey extends AttributeFilterKey> =
   TKey extends SearchAttributeHandle<infer TValue>
     ? Extract<TValue, Date | number>
-    : SearchAttributeValue;
+    : AttributeFilterScalarValue;
 
 export type AttributeFilter<TKey extends AttributeFilterKey = AttributeFilterKey> =
   TKey extends SearchAttributeHandle
     ?
         | {
             key: TKey;
-            value?: AttributeFilterValue<TKey>;
+            value?: AttributeFilterValue<TKey> | AttributeFilterAnyOfValue<TKey>;
             gt?: never;
             lt?: never;
             gte?: never;
@@ -137,11 +148,15 @@ export type AttributeFilter<TKey extends AttributeFilterKey = AttributeFilterKey
           }
     : {
         key: TKey;
-        value?: SearchAttributeValue;
-        gt?: SearchAttributeValue;
-        lt?: SearchAttributeValue;
-        gte?: SearchAttributeValue;
-        lte?: SearchAttributeValue;
+        /**
+         * Match a single indexed scalar value, or provide a scalar array to match
+         * any listed value for the same attribute.
+         */
+        value?: AttributeFilterScalarValue | AttributeFilterScalarValue[];
+        gt?: AttributeRangeValue<TKey>;
+        lt?: AttributeRangeValue<TKey>;
+        gte?: AttributeRangeValue<TKey>;
+        lte?: AttributeRangeValue<TKey>;
       };
 
 export type AttributeFilterList<TAttributeKeys extends readonly AttributeFilterKey[]> = {

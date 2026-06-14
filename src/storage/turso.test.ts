@@ -1,9 +1,11 @@
+import { createClient } from '@libsql/client';
 import { describe, expect, it } from 'bun:test';
 
 import {
   createDiskBackedTestFixture,
   sqliteDatabaseSidecarSuffixes,
 } from '../testing/storage-backends.test-support.ts';
+import { SQLITE_UPSERT_VALUE_BY_KEY } from './sqlite-key-value-queries.ts';
 import {
   runBinaryAndLargeScanStorageConformance,
   runStorageCapabilityConformance,
@@ -27,9 +29,6 @@ runStorageCapabilityConformance('TursoStorage', {
     conditionalBatch: true,
     boundedRangeDelete: true,
   },
-  // Single libSQL connection serializes write transactions; concurrent CAS
-  // contention is covered sequentially in conditional-batch.test.ts.
-  supportsConcurrentWrites: false,
 });
 
 runBinaryAndLargeScanStorageConformance('TursoStorage', {
@@ -107,6 +106,42 @@ describe('TursoStorage', () => {
     } finally {
       second[Symbol.dispose]();
       first.cleanup();
+    }
+  });
+
+  it('throws on SQLITE_BUSY contention instead of returning the precondition-mismatch false result', async () => {
+    const fixture = createFileBackedTursoStorage('turso-busy-vs-cas');
+    const locker = createClient({ url: fixture.url });
+
+    try {
+      await fixture.storage.put('cas:key', encode('current'));
+      const preconditionMismatch = await fixture.storage.conditionalBatch(
+        [{ key: 'cas:key', expectedValue: encode('stale') }],
+        [{ type: 'put', key: 'cas:key', value: encode('incorrect') }],
+      );
+      expect(preconditionMismatch).toBe(false);
+
+      const transaction = await locker.transaction('write');
+      try {
+        await transaction.execute({
+          sql: SQLITE_UPSERT_VALUE_BY_KEY,
+          args: ['lock:holder', encode('held')],
+        });
+
+        await expect(
+          fixture.storage.conditionalBatch(
+            [{ key: 'busy:key', expectedValue: null }],
+            [{ type: 'put', key: 'busy:key', value: encode('committed') }],
+          ),
+        ).rejects.toThrow(/SQLITE_BUSY|busy|exhausted/i);
+      } finally {
+        await transaction.rollback().catch(() => {});
+      }
+
+      expect(await fixture.storage.get('busy:key')).toBeNull();
+    } finally {
+      locker.close();
+      fixture.cleanup();
     }
   });
 

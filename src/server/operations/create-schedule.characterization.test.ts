@@ -8,6 +8,7 @@
  *   3. id            — must be a non-empty string when provided
  *   4. overlap       — must be one of the valid overlap policies
  *   5. backfill      — must be a boolean when provided
+ *   6. jitter        — must be a duration string or number when provided
  *
  * Adjacent-pair tests assert that when two consecutive fields are invalid the
  * error for the earlier-listed field surfaces first.  The all-bad test passes
@@ -111,6 +112,23 @@ describe('create-schedule — validation precedence', () => {
     });
   });
 
+  // --- adjacent pair: backfill before jitter ---
+  it('reports backfill error before jitter error when both are invalid', async () => {
+    engine = createEngine();
+    const response = await handleRequest(
+      jsonRequest('POST', '/v1/schedules', {
+        type: 'echo',
+        cronExpression: '0 * * * *',
+        backfill: 'yes',
+        jitter: false,
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'Field "backfill" must be a boolean' });
+  });
+
   // --- engine-level interval validation reaches the REST boundary as 400 ---
   it('returns 400 when the interval expression is syntactically invalid', async () => {
     engine = createEngine();
@@ -138,6 +156,7 @@ describe('create-schedule — validation precedence', () => {
         id: '',
         overlap: 'bad-policy',
         backfill: 'yes',
+        jitter: false,
       }),
       engine,
       { operationRegistry: registry, restBindings: bindings },

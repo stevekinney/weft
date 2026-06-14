@@ -24,6 +24,7 @@ import type {
   UpdateMap,
 } from './workflow-builder-helpers.ts';
 import type { BuiltWorkflowDefinition } from './workflow-builder.ts';
+import type { WorkflowConcurrencyOptions } from './workflow-concurrency.ts';
 import type { WorkflowFunction } from './workflow-function.ts';
 
 // ---------------------------------------------------------------------------
@@ -65,7 +66,7 @@ export class WorkflowBuilderError extends WeftError<'WorkflowBuilderError'> {
 /**
  * Initial options accepted by the builder-form `workflow({ name, ... })` call.
  * Extra metadata fields (`version`, `description`, `tags`, `retention`,
- * `inputSchema`, `outputSchema`, `constraints`) are passed through
+ * `concurrency`, `inputSchema`, `outputSchema`, `constraints`) are passed through
  * onto the returned {@link BuiltWorkflowDefinition} when `.execute(fn)` runs.
  * Only `name` is required.
  *
@@ -81,12 +82,16 @@ export class WorkflowBuilderError extends WeftError<'WorkflowBuilderError'> {
  * void welcome;
  * ```
  */
-export interface WorkflowBuilderOptions<TName extends string = string> {
+export interface WorkflowBuilderOptions<
+  TName extends string = string,
+  TConcurrencyInput = unknown,
+> {
   name: TName;
   version?: string;
   description?: string;
   tags?: ReadonlyArray<string>;
   retention?: RetentionPolicy;
+  concurrency?: WorkflowConcurrencyOptions<TConcurrencyInput>;
   constraints?: ConstraintDefinition[];
   inputSchema?: DefinitionSchema<unknown, unknown>;
   outputSchema?: DefinitionSchema<unknown, unknown>;
@@ -102,7 +107,13 @@ export interface WorkflowBuilderOptions<TName extends string = string> {
 // Builder implementation
 // ---------------------------------------------------------------------------
 
-type ChainMethodName = 'activities' | 'signals' | 'updates' | 'queries' | 'searchAttributes';
+type ChainMethodName =
+  | 'activities'
+  | 'signals'
+  | 'updates'
+  | 'queries'
+  | 'searchAttributes'
+  | 'services';
 
 /**
  * Runtime implementation backing the {@link WorkflowBuilder} type. The class
@@ -120,6 +131,7 @@ export class WorkflowBuilderImpl<TName extends string> {
     updates: false,
     queries: false,
     searchAttributes: false,
+    services: false,
   };
   #executed = false;
   #activities: Record<string, ActivityDefinition> = {};
@@ -184,6 +196,12 @@ export class WorkflowBuilderImpl<TName extends string> {
     return this;
   };
 
+  services = (): this => {
+    this.#assertOpen('services');
+    this.#markCalled('services');
+    return this;
+  };
+
   execute = (
     fn: WorkflowFunction,
   ): BuiltWorkflowDefinition<
@@ -234,6 +252,11 @@ export class WorkflowBuilderImpl<TName extends string> {
         : {}),
       ...(this.#options.tags !== undefined ? { tags: this.#options.tags } : {}),
       ...(this.#options.retention !== undefined ? { retention: this.#options.retention } : {}),
+      ...(this.#options.concurrency !== undefined
+        ? {
+            concurrency: deepFreeze(clonePlain(this.#options.concurrency)),
+          }
+        : {}),
       ...(this.#options.constraints !== undefined
         ? { constraints: this.#options.constraints }
         : {}),

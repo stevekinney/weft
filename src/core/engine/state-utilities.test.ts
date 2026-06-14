@@ -41,6 +41,7 @@ function createScheduleState(overrides: Partial<ScheduleState> = {}): ScheduleSt
     cronExpression: '* * * * *',
     id: 'schedule-state',
     input: null,
+    missedFireCount: 0,
     nextFireAt: 60_000,
     status: 'active',
     updatedAt: 1,

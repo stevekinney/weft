@@ -1,6 +1,9 @@
 import { KEYS } from '../../../storage/interface.ts';
+import { DevelopmentWarningEvent } from '../../events.ts';
 import type { WorkflowState } from '../../types.ts';
 import type { EngineInternals } from '../internals.ts';
+
+const RESOLVE_WORKFLOW_SERVICES_OPTION_PATH = 'EngineOptions.resolveWorkflowServices';
 
 /**
  * Re-provide a recovered inline workflow's non-serialized `services` before its
@@ -18,8 +21,8 @@ import type { EngineInternals } from '../internals.ts';
  * has no marker and proceeds without touching the resolver — so a fail-closed
  * resolver does not fail healthy no-services runs.
  *
- * Returns `false` to proceed (services available, none expected, or no resolver
- * is configured). Returns `true` to STOP — the run was terminally
+ * Returns `false` to proceed (services available or none expected). Returns
+ * `true` to STOP — the run was terminally
  * failed (services unavailable), or the terminal commit faulted and the run was
  * left for a later boot to retry. Either way the generator must not advance:
  * driving it without services would crash the body and that throw would escape
@@ -43,9 +46,10 @@ export async function reprovideRecoveredServices(
   state: WorkflowState,
   failRun: (workflowId: string, error: Error) => Promise<void>,
   onCommitError: (source: string, error: unknown, workflowId: string) => void,
+  dispatchDiagnostic: (event: Event) => void = () => {},
 ): Promise<boolean> {
   const resolver = internals.options.resolveWorkflowServices;
-  if (internals.inlineStrategy === null || !resolver) {
+  if (internals.inlineStrategy === null) {
     return false;
   }
   // Same-process case: services are still live in the map (the run was launched
@@ -59,6 +63,19 @@ export async function reprovideRecoveredServices(
   // no-services run whenever the engine has a fail-closed resolver configured.
   if ((await internals.storage.get(KEYS.workflowHasServices(state.id))) === null) {
     return false;
+  }
+
+  if (!resolver) {
+    const reason = missingServicesResolverReason(state.id);
+    dispatchDiagnostic(
+      new DevelopmentWarningEvent(state.id, reason, [RESOLVE_WORKFLOW_SERVICES_OPTION_PATH]),
+    );
+    try {
+      await failRun(state.id, unavailableServicesError(state.id, reason));
+    } catch (error) {
+      onCommitError('reprovideRecoveredServices', error, state.id);
+    }
+    return true;
   }
 
   let reason: string;
@@ -99,4 +116,12 @@ export async function reprovideRecoveredServices(
  */
 export function unavailableServicesError(workflowId: string, reason: string): Error {
   return new Error(`Workflow "${workflowId}" services unavailable: ${reason}`);
+}
+
+function missingServicesResolverReason(workflowId: string): string {
+  return (
+    `Workflow "${workflowId}" was started with services, but this engine has no ` +
+    'resolveWorkflowServices option. Configure EngineOptions.resolveWorkflowServices before ' +
+    'recovery so ctx.services can be re-provided.'
+  );
 }

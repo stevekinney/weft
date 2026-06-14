@@ -2,6 +2,7 @@ import { createClient, type Client, type InValue } from '@libsql/client';
 
 import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range';
 import {
+  assertStorageBatchOperationCount,
   storageValuesEqual,
   type BatchOperation,
   type ConditionalBatchCondition,
@@ -26,23 +27,24 @@ import {
 } from './sqlite-key-value-queries';
 
 const LIBSQL_CREATE_KEY_VALUE_TABLE_STATEMENT = `${SQLITE_CREATE_KEY_VALUE_TABLE};`;
+const MAX_WRITE_RETRIES = 10;
+const SQLITE_CONTENTION_CODES = new Set(['SQLITE_BUSY', 'SQLITE_LOCKED']);
 
 type TursoStoragePersistence = NonNullable<StorageCapabilities['persistence']>;
 type TursoTransaction = Awaited<ReturnType<Client['transaction']>>;
 
 function isSqliteBusyError(error: unknown): boolean {
   return (
-    typeof error === 'object' && error !== null && 'code' in error && error.code === 'SQLITE_BUSY'
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    typeof error.code === 'string' &&
+    SQLITE_CONTENTION_CODES.has(error.code)
   );
 }
 
-async function beginWriteTransaction(client: Client): Promise<TursoTransaction | null> {
-  return client.transaction('write').catch((error: unknown) => {
-    if (isSqliteBusyError(error)) {
-      return null;
-    }
-    throw error;
-  });
+async function beginWriteTransaction(client: Client): Promise<TursoTransaction> {
+  return client.transaction('write');
 }
 
 async function rollbackBestEffort(transaction: TursoTransaction): Promise<void> {
@@ -63,14 +65,12 @@ async function executeWriteBatchWithBusyRetry(
   client: Client,
   statements: Array<{ sql: string; args: InValue[] }>,
 ): Promise<void> {
-  const maximumAttempts = 10;
-
-  for (let attempt = 1; attempt <= maximumAttempts; attempt++) {
+  for (let attempt = 1; attempt <= MAX_WRITE_RETRIES; attempt++) {
     try {
       await client.batch(statements, 'write');
       return;
     } catch (error) {
-      if (!isSqliteBusyError(error) || attempt === maximumAttempts) {
+      if (!isSqliteBusyError(error) || attempt === MAX_WRITE_RETRIES) {
         throw error;
       }
       await waitForWriteRetry(attempt);
@@ -182,11 +182,16 @@ export class TursoStorage implements Storage {
     );
   }
 
+  /**
+   * Reports the honest floor for every Turso/libSQL URL form.
+   *
+   * `readAfterWrite` is always `session`: one client observes its own writes,
+   * but another engine instance or replica-routed client may lag. That is why
+   * `assertDurableStorageForRecovery()` rejects `TursoStorage` for durable
+   * recovery even when `persistence` is `local` or `remote`.
+   */
   capabilities(): StorageCapabilities {
-    // libSQL over a single client connection. Honest floor across supported
-    // configs (local `file:` and remote primary) is read-your-writes per
-    // connection — `session`, since a separate instance/replica may lag. Scans
-    // run inside a libSQL transaction (snapshot); batch() and the range
+    // Scans run inside a libSQL transaction (snapshot); batch() and the range
     // deletePrefix and deleteRange are single transactional statements.
     return {
       persistence: this.#persistence,
@@ -322,6 +327,7 @@ export class TursoStorage implements Storage {
   }
 
   async batch(operations: BatchOperation[]): Promise<void> {
+    assertStorageBatchOperationCount('batch operations', operations.length);
     if (operations.length === 0) return;
 
     await this.#ensureTable();
@@ -346,31 +352,44 @@ export class TursoStorage implements Storage {
     conditions: ConditionalBatchCondition[],
     operations: BatchOperation[],
   ): Promise<boolean> {
+    assertStorageBatchOperationCount('conditionalBatch conditions', conditions.length);
+    assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
+
     await this.#ensureTable();
 
-    const transaction = await beginWriteTransaction(this.#client);
-    if (transaction === null) {
-      return false;
+    let lastContentionError: unknown;
+    for (let attempt = 1; attempt <= MAX_WRITE_RETRIES; attempt++) {
+      let transaction: TursoTransaction | undefined;
+      try {
+        transaction = await beginWriteTransaction(this.#client);
+        await transaction.executeMultiple(LIBSQL_CREATE_KEY_VALUE_TABLE_STATEMENT);
+
+        if (!(await conditionsMatch(transaction, conditions))) {
+          await transaction.rollback();
+          return false;
+        }
+
+        await applyBatchOperations(transaction, operations);
+        await transaction.commit();
+        return true;
+      } catch (error) {
+        if (transaction !== undefined) {
+          await rollbackBestEffort(transaction);
+        }
+        if (!isSqliteBusyError(error)) {
+          throw error;
+        }
+        lastContentionError = error;
+        if (attempt < MAX_WRITE_RETRIES) {
+          await waitForWriteRetry(attempt);
+        }
+      }
     }
 
-    try {
-      await transaction.executeMultiple(LIBSQL_CREATE_KEY_VALUE_TABLE_STATEMENT);
-
-      if (!(await conditionsMatch(transaction, conditions))) {
-        await transaction.rollback();
-        return false;
-      }
-
-      await applyBatchOperations(transaction, operations);
-      await transaction.commit();
-      return true;
-    } catch (error) {
-      await rollbackBestEffort(transaction);
-      if (isSqliteBusyError(error)) {
-        return false;
-      }
-      throw error;
-    }
+    throw new Error(
+      `conditionalBatch exhausted ${MAX_WRITE_RETRIES} retries after SQLite contention failures`,
+      { cause: lastContentionError },
+    );
   }
 
   async query<T>(sql: string, parameters?: unknown[]): Promise<T[]> {

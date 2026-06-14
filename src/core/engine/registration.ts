@@ -1,8 +1,10 @@
 import { ActivityRegistry } from '../activity-registry.ts';
+import { WorkflowDefinitionRegisteredEvent } from '../events.ts';
 import {
   activity,
   validateDefinitionSchemaMetadata,
   type ActivityDefinition,
+  type WorkflowConcurrencyOptions,
   type WorkflowDefinition,
 } from '../types.ts';
 import { clonePlain } from '../types/clone-plain.ts';
@@ -15,6 +17,7 @@ type RegistrationEntry =
 
 export type RegistrationCallbacks = {
   ensureRetentionSweepInterval: () => void;
+  dispatchEvent: (event: Event) => void;
 };
 
 function copiedTags(tags: ReadonlyArray<string> | undefined): string[] | undefined {
@@ -80,7 +83,31 @@ function buildBaseRegistrationEntry(
           ),
         }),
     ...(normalizedRetention !== null && { retention: normalizedRetention }),
+    ...(registration.concurrency !== undefined
+      ? {
+          concurrency: normalizeWorkflowConcurrencyOptions(
+            registration.concurrency,
+            `registration("${name}").concurrency`,
+          ),
+        }
+      : {}),
   };
+}
+
+function normalizeWorkflowConcurrencyOptions(
+  concurrency: WorkflowConcurrencyOptions,
+  fieldName: string,
+): WorkflowConcurrencyOptions {
+  if (!Number.isInteger(concurrency.max) || concurrency.max < 1) {
+    throw new RangeError(`${fieldName}.max must be a positive integer`);
+  }
+  if (concurrency.key !== undefined && typeof concurrency.key !== 'function') {
+    throw new TypeError(`${fieldName}.key must be a function when provided`);
+  }
+  return Object.freeze({
+    max: concurrency.max,
+    ...(concurrency.key === undefined ? {} : { key: concurrency.key }),
+  });
 }
 
 function applyOptionalRegistrationFields(
@@ -113,6 +140,7 @@ function commitWorkflowDefinition(
   internals.registrations.set(name, entry);
   callbacks.ensureRetentionSweepInterval();
   internals.workflowTypesByHandler.set(definition.handler, name);
+  callbacks.dispatchEvent(new WorkflowDefinitionRegisteredEvent(name));
 }
 
 /**

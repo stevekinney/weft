@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
+import { MAX_BATCH_OPERATIONS, MAX_SCAN_LIMIT } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { handleRequest } from '../handler.ts';
 import { principalFromApiKey } from '../principal.ts';
@@ -137,6 +138,24 @@ describe('storage REST operations', () => {
     }
   });
 
+  it('rejects an oversized binary PUT body before writing the key', async () => {
+    const storage = new MemoryStorage();
+    using engine = new Engine({ storage });
+
+    const response = await handleRequest(
+      request('/v1/storage/oversized-value', {
+        method: 'PUT',
+        body: new Uint8Array([1, 2]),
+      }),
+      engine,
+      { ...adminStorageOptions(), maxRequestBodyBytes: 1 },
+    );
+
+    expect(response.status).toBe(413);
+    expect(await response.json()).toEqual({ error: 'Payload Too Large' });
+    expect(await storage.get('oversized-value')).toBeNull();
+  });
+
   it('declares conditional batch access as storage admin or read plus write', () => {
     const registry = createLiveOperationRegistry();
     expect(registry.get('weft.storage.conditionalbatch')?.access).toEqual({
@@ -227,6 +246,20 @@ describe('storage REST operations', () => {
       { key: 'wf:a', value: btoa('a') },
       { key: 'wf:b', value: btoa('b') },
     ]);
+  });
+
+  it('rejects raw storage scans above MAX_SCAN_LIMIT', async () => {
+    const rawStorage = new MemoryStorage();
+    const engine = new Engine({ storage: rawStorage });
+
+    const response = await handleRequest(
+      request(`/v1/storage?prefix=wf:&limit=${MAX_SCAN_LIMIT + 1}`, { method: 'GET' }),
+      engine,
+      adminStorageOptions(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'invalid params' });
   });
 
   it('does not pull scan entries until the NDJSON response body is read', async () => {
@@ -326,6 +359,29 @@ describe('storage REST operations', () => {
     expect(await rawStorage.get('wf:delete')).toBeNull();
   });
 
+  it('rejects raw storage batches above MAX_BATCH_OPERATIONS before applying writes', async () => {
+    const rawStorage = new MemoryStorage();
+    const engine = new Engine({ storage: rawStorage });
+    const operations = Array.from({ length: MAX_BATCH_OPERATIONS + 1 }, (_, index) => ({
+      type: 'delete' as const,
+      key: `oversized:${index}`,
+    }));
+
+    const response = await handleRequest(
+      request('/v1/storage/-/batch', {
+        method: 'POST',
+        body: JSON.stringify({ operations }),
+        headers: { 'content-type': 'application/json' },
+      }),
+      engine,
+      adminStorageOptions(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'invalid params' });
+    expect(await rawStorage.get('oversized:0')).toBeNull();
+  });
+
   it('evaluates conditional batch conditions against stored keys', async () => {
     const rawStorage = new MemoryStorage();
     const engine = new Engine({ storage: rawStorage });
@@ -394,6 +450,32 @@ describe('storage REST operations', () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ applied: true });
     expect(decode(await rawStorage.get('key'))).toBe('new');
+  });
+
+  it('rejects raw conditional batches above MAX_BATCH_OPERATIONS before adapter work', async () => {
+    const rawStorage = new MemoryStorage();
+    const engine = new Engine({ storage: rawStorage });
+    const conditions = Array.from({ length: MAX_BATCH_OPERATIONS + 1 }, (_, index) => ({
+      key: `oversized:${index}`,
+      expectedValue: null,
+    }));
+
+    const response = await handleRequest(
+      request('/v1/storage/-/conditional-batch', {
+        method: 'POST',
+        body: JSON.stringify({
+          conditions,
+          operations: [{ type: 'put', key: 'should-not-write', value: btoa('value') }],
+        }),
+        headers: { 'content-type': 'application/json' },
+      }),
+      engine,
+      adminStorageOptions(),
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toEqual({ error: 'invalid params' });
+    expect(await rawStorage.get('should-not-write')).toBeNull();
   });
 
   it('allows empty byte values in batch conditions and operations', async () => {

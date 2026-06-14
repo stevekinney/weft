@@ -230,7 +230,12 @@ async function runConformanceChecks(
 ): Promise<ConformanceCheck[]> {
   const storage = new MemoryStorage();
   const engine = new Engine({ storage });
-  const server = serve({ engine, port: 0, hostname: '127.0.0.1' });
+  const server = serve({
+    engine,
+    port: 0,
+    hostname: '127.0.0.1',
+    workerReconnectGracePeriodMs: 100,
+  });
   const checks: ConformanceCheck[] = [];
   let worker: RunningWorker | undefined;
 

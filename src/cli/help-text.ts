@@ -135,6 +135,7 @@ Options:
       --id <id>             Custom schedule id for create
       --overlap <policy>    Overlap policy: skip, queue, cancel-running, allow
       --backfill            Run missed ticks on recovery
+      --jitter <duration>   Deterministic dispatch jitter for create (e.g. 30s, 5m)
   -j, --json                Output results as JSON
   -h, --help                Show this help message
 `;

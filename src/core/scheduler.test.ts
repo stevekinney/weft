@@ -11,10 +11,12 @@ import {
   type SchedulerContractContext,
 } from '../testing/scheduler-contract.test-support.ts';
 
-import { KEYS } from '../storage/interface';
+import { KEYS, type BatchOperation, type ScanOptions } from '../storage/interface';
 import { decode, encode } from './codec';
-import { calculateBackoff, parseDuration, Scheduler } from './scheduler';
+import { buildTimerBatchOperations, calculateBackoff, parseDuration, Scheduler } from './scheduler';
 import type { TimerEntry } from './types';
+
+const EXPECTED_EXPIRED_TIMER_SCAN_LIMIT = 1_000;
 
 // ---------------------------------------------------------------------------
 // parseDuration
@@ -222,6 +224,62 @@ describe('Scheduler — implementation-specific', () => {
   const makeTimer = (overrides: Partial<TimerEntry> = {}): TimerEntry =>
     context.makeTimer(overrides);
   const collectStorageKeys = () => context.collectStorageKeys();
+
+  it('limits each expired timer source scan and drains a larger backlog across ticks with one cleanup batch per tick', async () => {
+    const timerCount = EXPECTED_EXPIRED_TIMER_SCAN_LIMIT + 2;
+    await storage.batch(
+      Array.from({ length: timerCount }, (_, index) =>
+        buildTimerBatchOperations(
+          makeTimer({
+            id: `limited-timer-${String(index).padStart(4, '0')}`,
+            workflowId: `limited-workflow-${String(index).padStart(4, '0')}`,
+            fireAt: now() - 1000,
+          }),
+        ),
+      ).flat(),
+    );
+
+    const originalScan = storage.scan.bind(storage);
+    const scanOptionsByPrefix = new Map<string, ScanOptions | undefined>();
+    storage.scan = (prefix, options) => {
+      scanOptionsByPrefix.set(prefix, options);
+      return originalScan(prefix, options);
+    };
+
+    const originalBatch = storage.batch.bind(storage);
+    let cleanupBatches: BatchOperation[][] = [];
+    storage.batch = async (operations) => {
+      cleanupBatches.push(operations);
+      return originalBatch(operations);
+    };
+
+    await scheduler.tick(now());
+
+    expect(scanOptionsByPrefix.get('wf-deadline:')?.limit).toBe(EXPECTED_EXPIRED_TIMER_SCAN_LIMIT);
+    expect(scanOptionsByPrefix.get('wf-delayed:')?.limit).toBe(EXPECTED_EXPIRED_TIMER_SCAN_LIMIT);
+    expect(scanOptionsByPrefix.get('schedule-due:')?.limit).toBe(EXPECTED_EXPIRED_TIMER_SCAN_LIMIT);
+    expect(scanOptionsByPrefix.get('wf-cleanup:')?.limit).toBe(EXPECTED_EXPIRED_TIMER_SCAN_LIMIT);
+    expect(firedEntries).toHaveLength(EXPECTED_EXPIRED_TIMER_SCAN_LIMIT);
+    expect(cleanupBatches).toHaveLength(1);
+    expect(cleanupBatches[0]).toHaveLength(EXPECTED_EXPIRED_TIMER_SCAN_LIMIT * 2);
+
+    let remainingKeys = await collectStorageKeys();
+    expect(remainingKeys.filter((key) => key.startsWith('wf-deadline:'))).toHaveLength(2);
+    expect(remainingKeys.filter((key) => key.startsWith('timer-idx:'))).toHaveLength(2);
+
+    firedEntries.length = 0;
+    cleanupBatches = [];
+    scanOptionsByPrefix.clear();
+
+    await scheduler.tick(now());
+
+    expect(firedEntries).toHaveLength(2);
+    expect(cleanupBatches).toHaveLength(1);
+    expect(cleanupBatches[0]).toHaveLength(4);
+    remainingKeys = await collectStorageKeys();
+    expect(remainingKeys.filter((key) => key.startsWith('wf-deadline:'))).toHaveLength(0);
+    expect(remainingKeys.filter((key) => key.startsWith('timer-idx:'))).toHaveLength(0);
+  });
 
   it('rounds fractional timer fireAt values up before persisting them', async () => {
     const entry = makeTimer({ fireAt: 1_000_000.1 });

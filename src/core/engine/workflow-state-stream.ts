@@ -6,10 +6,23 @@ import {
 } from '../../storage/interface.ts';
 import { failureCategorySearchValues, isFailureCategory } from '../failure-categories.ts';
 import { encodeAttributeValue, searchAttributeName } from '../search-attributes.ts';
-import type { AttributeFilter, ListFilter, WorkflowState } from '../types.ts';
+import type {
+  AttributeFilter,
+  AttributeFilterScalarValue,
+  ListFilter,
+  SearchAttributeValue,
+  WorkflowState,
+} from '../types.ts';
 import { normalizeWorkflowTags } from '../workflow-tags.ts';
+import { CONSTRAINED_ID_CHUNK_SIZE } from './candidate-read-batching.ts';
 import type { EngineInternals } from './internals.ts';
-import { intersectIdentifierSets, matchesListFilter } from './state-utilities.ts';
+import {
+  attributeFilterExactValues,
+  decodeSearchAttributeRecord,
+  intersectIdentifierSets,
+  listFilterHasAttributeFilters,
+  matchesListFilter,
+} from './state-utilities.ts';
 import { decodeWorkflowState } from './validation.ts';
 
 const ATTRIBUTE_SCAN_CONCURRENCY = 8;
@@ -23,16 +36,24 @@ export async function* streamMatchingWorkflowStates(
   const constrainedIds = await resolveConstrainedIds(internals, filter, normalizedTagFilters);
 
   if (constrainedIds !== null) {
-    for (const workflowId of constrainedIds) {
-      const state = await loadMatchingWorkflowState(
-        internals,
-        workflowId,
-        filter,
-        constrainedIds,
-        normalizedTagFilters,
+    const orderedIds = [...constrainedIds];
+    for (let start = 0; start < orderedIds.length; start += CONSTRAINED_ID_CHUNK_SIZE) {
+      const chunkIds = orderedIds.slice(start, start + CONSTRAINED_ID_CHUNK_SIZE);
+      const chunkStates = await Promise.all(
+        chunkIds.map((workflowId) =>
+          loadMatchingWorkflowState(
+            internals,
+            workflowId,
+            filter,
+            constrainedIds,
+            normalizedTagFilters,
+          ),
+        ),
       );
-      if (state === null) continue;
-      yield state;
+      for (const state of chunkStates) {
+        if (state === null) continue;
+        yield state;
+      }
     }
 
     return;
@@ -42,7 +63,10 @@ export async function* streamMatchingWorkflowStates(
     if (!isTopLevelWorkflowStateKey(key)) continue;
 
     const state = decodeWorkflowState(value);
-    if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters)) continue;
+    const searchAttributes = await readSearchAttributesForFilter(internals, state.id, filter);
+    if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters, searchAttributes)) {
+      continue;
+    }
     yield state;
   }
 }
@@ -58,8 +82,20 @@ async function loadMatchingWorkflowState(
   if (!stateBytes) return null;
 
   const state = decodeWorkflowState(stateBytes);
-  if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters)) return null;
+  const searchAttributes = await readSearchAttributesForFilter(internals, workflowId, filter);
+  if (!matchesListFilter(state, filter, constrainedIds, normalizedTagFilters, searchAttributes)) {
+    return null;
+  }
   return state;
+}
+
+async function readSearchAttributesForFilter(
+  internals: EngineInternals,
+  workflowId: string,
+  filter: ListFilter | undefined,
+): Promise<Record<string, SearchAttributeValue> | null> {
+  if (!listFilterHasAttributeFilters(filter)) return null;
+  return decodeSearchAttributeRecord(await internals.storage.get(KEYS.attribute(workflowId)));
 }
 
 /** Resolve the indexed workflow IDs implied by tag and search-attribute filters. */
@@ -143,13 +179,17 @@ async function collectExactAttributeMatches(
   attributeName: string,
   ids: Set<string>,
 ): Promise<void> {
-  const exactValue = filter.value;
-  if (exactValue === undefined) return;
+  const exactValues = attributeFilterExactValues(filter);
+  if (exactValues === null) return;
 
-  const values =
-    filter.key === 'failureCategory' && isFailureCategory(exactValue)
-      ? failureCategorySearchValues(exactValue)
-      : [exactValue];
+  const values: AttributeFilterScalarValue[] = [];
+  for (const exactValue of exactValues) {
+    if (filter.key === 'failureCategory' && isFailureCategory(exactValue)) {
+      values.push(...failureCategorySearchValues(exactValue));
+    } else {
+      values.push(exactValue);
+    }
+  }
 
   for (const value of values) {
     const exactPrefix = `idx:${attributeName}:${encodeAttributeValue(value)}:`;

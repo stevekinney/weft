@@ -16,7 +16,7 @@ The CLI binaries remain unscoped: package installs place `weft` and `weft-mcp` o
 
 Imagine you're building an e-commerce checkout: charge the customer's credit card, reserve inventory, send a confirmation email, schedule shipping. What happens if your server crashes between step one and step two? The customer has been charged, but the inventory was never reserved. You can't just re-run the whole flow—you'd double-charge them.
 
-**Durable execution** solves this. You write a normal-looking function and the runtime guarantees it will complete—even if the process crashes and restarts a hundred times along the way. Each step is checkpointed so recovery picks up exactly where it stopped.
+**Durable execution** solves this. You write a normal-looking function around durable boundaries; with durable storage, Weft checkpoints those boundaries and automatically resumes persisted work after a process restart. The exact guarantee, including the current activity crash-window limit, is spelled out in [Durability Guarantee](documentation/architecture/durability-guarantee.md).
 
 Temporal is the most prominent durable execution engine, built in 2019 with Go, gRPC, and Cassandra. It works. But we can do better with modern tools.
 
@@ -55,6 +55,17 @@ If a surface is not named here, treat it as experimental. Stability is about com
 The public path to 1.0 is tracked in the [roadmap to 1.0](documentation/roadmap-to-1.0.md). The 1.0 compatibility promise will apply to the stable tier only; experimental surfaces may continue changing until they graduate.
 
 The browser surfaces graduate on a specific, mechanical criterion: the IndexedDB and WebExtension adapters and the Service Worker runtime stay experimental until their real-browser smoke tests are green in a **required** CI gate. The [browser-surface promotion gate](documentation/roadmap-to-1.0.md#browser-surface-promotion-gate) documents how the `browser-smoke` CI job flips from non-blocking to required, and why real-browser coverage — not fake-IndexedDB or stubbed-`chrome.storage` unit tests — is the evidence that moves them to stable.
+
+## Durability Guarantee
+
+Weft's durability promise is checkpoint-level and explicit:
+
+- Every `yield*` boundary is persisted before the workflow advances to the next durable step.
+- `Engine.create()` recovers by default after registering workflow definitions, so fresh processes resume persisted running workflows without a separate boot hook.
+- Recovery resumes from the last checkpoint position instead of replaying the workflow from the beginning.
+- External activity side effects still need idempotency keys, provider lookup, or verifier logic. Without that, a crash after the external side effect but before Weft commits the activity result can dispatch the activity again.
+
+The full [Durability Guarantee](documentation/architecture/durability-guarantee.md) separates what is guaranteed today from the Tier-0 activity-reconciliation work that narrows the remaining crash window.
 
 ## Hello, World
 
@@ -247,6 +258,8 @@ Workflow visibility extends the same list surface with operator filters for `idP
 
 Weft can pause a workflow at any checkpoint and surface a decision payload to a human reviewer. The workflow resumes with the reviewer's decision—no polling, no special infrastructure.
 
+As of June 12, 2026, [Temporal's public human-approval example](https://docs.temporal.io/ai-cookbook/human-in-the-loop-python) models approval with Signals, and [Inngest's TypeScript docs](https://www.inngest.com/docs/reference/typescript/v4/functions/step-wait-for-event) model approval waits with `step.waitForEvent()`. Weft makes the review itself a durable workflow operation: [`ctx.review()`](src/core/context/durable-operations.ts) creates a stored review request, exposes review list/get/decision APIs, emits review events, and resumes the workflow with the submitted decision.
+
 ```typescript
 import { Engine, workflow } from '@lostgradient/weft';
 import { SQLiteStorage } from '@lostgradient/weft/storage/sqlite';
@@ -284,7 +297,7 @@ const paymentWorkflow = workflow({ name: 'payment' })
   });
 ```
 
-If the process crashes between the approval decision arriving and `chargeCard` executing, the engine resumes from the last checkpoint—the charge runs exactly once. The reviewer's decision is persisted as part of the checkpoint; there is no resubmission.
+If the process crashes after the approval decision is checkpointed, the reviewer is not asked again. The `chargeCard` activity is still an at-least-once side effect: if the payment provider accepts the charge and the process crashes before Weft commits the activity result, recovery can run `chargeCard` again. Pass an idempotency key, provider transaction lookup, or equivalent verifier to the payment provider; the [activities guide](documentation/guides/activities.md#per-call-options) explains that boundary in more detail.
 
 ### Pluggable Storage
 
@@ -474,17 +487,18 @@ Each `ctx.step()` is a checkpoint boundary. Completed steps replay from storage 
 
 ## Weft vs. Temporal
 
-| Concept                | Temporal                                      | Weft                                                                       |
-| ---------------------- | --------------------------------------------- | -------------------------------------------------------------------------- |
-| Core mental model      | Replay determinism                            | Generators pause and resume                                                |
-| Workflow language      | Go, Java, TypeScript, Python, .NET, Ruby, PHP | TypeScript only (activities can be any language via `RemoteWorker`)        |
-| Activity invocation    | `proxyActivities()` + type import             | `yield* ctx.run('activityName', input)` (declared in `.activities({...})`) |
-| Timer                  | Deterministic `workflow.sleep()`              | `yield* ctx.sleep("1 hour")`                                               |
-| Signal                 | `setHandler` + `condition`                    | `yield* ctx.waitForSignal(name)`                                           |
-| Versioning             | `patched()` / `deprecatePatch()`              | Stored and registered versions are strict recovery guards                  |
-| Long-running workflows | `continueAsNew()`                             | None needed (checkpoint size is bounded by live state, not history length) |
-| Dev environment        | Docker Compose + Temporal server              | `bun add @lostgradient/weft`                                               |
-| Bundling               | Webpack for workflow sandbox                  | None                                                                       |
+| Concept                | Temporal                                                                                                                       | Weft                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------- |
+| Core mental model      | Replay determinism                                                                                                             | Generators pause and resume                                                                        |
+| Workflow language      | Go, Java, TypeScript, Python, .NET, Ruby, PHP                                                                                  | TypeScript only (activities can be any language via `RemoteWorker`)                                |
+| Activity invocation    | `proxyActivities()` + type import                                                                                              | `yield* ctx.run('activityName', input)` (declared in `.activities({...})`)                         |
+| Timer                  | Deterministic `workflow.sleep()`                                                                                               | `yield* ctx.sleep("1 hour")`                                                                       |
+| Signal                 | `setHandler` + `condition`                                                                                                     | `yield* ctx.waitForSignal(name)`                                                                   |
+| Human review           | Signals/queries/updates as [message-passing primitives](https://docs.temporal.io/develop/typescript/workflows/message-passing) | `yield* ctx.review(...)` with [durable review request](src/core/review/index.ts) and decision APIs |
+| Versioning             | `patched()` / `deprecatePatch()`                                                                                               | Stored and registered versions are strict recovery guards                                          |
+| Long-running workflows | `continueAsNew()`                                                                                                              | None needed (checkpoint size is bounded by live state, not history length)                         |
+| Dev environment        | Docker Compose + Temporal server                                                                                               | `bun add @lostgradient/weft`                                                                       |
+| Bundling               | Webpack for workflow sandbox                                                                                                   | None                                                                                               |
 
 > Weft is for teams whose primary backend language is TypeScript. If you need workflows in multiple languages, [Temporal](https://temporal.io) is the right answer. For the design rationale, see [ADR 0001 — Workflows Are TypeScript-Only by Design](documentation/contributing/architecture-decisions/0001-workflows-typescript-only.md).
 >
@@ -509,9 +523,9 @@ Guides:
 
 Architecture and reference:
 
-- [Design Philosophy](documentation/architecture/design-philosophy.md), [Checkpoint vs. Replay](documentation/architecture/checkpoint-versus-replay.md), [Web Standards](documentation/architecture/web-standards.md)
-- [Browser Runtime](documentation/architecture/browser-runtime.md), [Web Workers](documentation/architecture/web-workers.md), [Single Binary](documentation/architecture/single-binary.md)
-- [API Reference](documentation/reference/) (Engine, Context, Storage, Server, Workers, Testing, Events, Interceptors, Observability, CLI, Configuration, Types)
+- [Design Philosophy](documentation/architecture/design-philosophy.md), [Durability Guarantee](documentation/architecture/durability-guarantee.md), [Checkpoint vs. Replay](documentation/architecture/checkpoint-versus-replay.md), [Web Standards](documentation/architecture/web-standards.md)
+- [Temporal Comparison](documentation/architecture/temporal-comparison.md), [Inngest Comparison](documentation/architecture/inngest-comparison.md), [Browser Runtime](documentation/architecture/browser-runtime.md), [Web Workers](documentation/architecture/web-workers.md), [Single Binary](documentation/architecture/single-binary.md)
+- [API Reference](documentation/reference/) (Engine, Context, Storage, Server, Workers, Testing, Events, Errors, Interceptors, Observability, CLI, Configuration, Types)
 
 Contributing:
 

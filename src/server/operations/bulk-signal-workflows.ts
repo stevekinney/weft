@@ -75,8 +75,8 @@ export const bulkSignalWorkflowsRestBinding: UnknownRestBinding = {
     name: { kind: 'body-field', bodyField: 'name' },
     payload: { kind: 'body-field', bodyField: 'payload' },
   },
-  extractInput: async (request) => {
-    const raw = await readOptionalJsonBody(request);
+  extractInput: async (request, _pathParams, context) => {
+    const raw = await readOptionalJsonBody(request, context);
     if (raw === undefined || typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
       throw invalidParamsFault('Request body must be a JSON object');
     }

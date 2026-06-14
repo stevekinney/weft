@@ -9,7 +9,8 @@ import type { OperationDefinition } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { RestBinding } from '../rest-binding.ts';
-import { jsonErrorResponse, shapeRestFault } from './operation-helpers.ts';
+import { readRestJsonBody } from '../rest-body.ts';
+import { isOperationFault, jsonErrorResponse, shapeRestFault } from './operation-helpers.ts';
 
 const singleWorkflowTagMutationInput = z.object({
   workflowId: z.string().min(1),
@@ -86,8 +87,9 @@ export function createSingleWorkflowTagMutationRestBinding(
       workflowId: { kind: 'path', pathParam: 'id' },
       tags: { kind: 'body-field', bodyField: 'tags' },
     },
-    extractInput: async (request, pathParams) => {
-      const body: unknown = await request.json().catch(() => {
+    extractInput: async (request, pathParams, context) => {
+      const body: unknown = await readRestJsonBody(request, context).catch((error) => {
+        if (isOperationFault(error)) throw error;
         throw new Error('Invalid JSON body');
       });
 

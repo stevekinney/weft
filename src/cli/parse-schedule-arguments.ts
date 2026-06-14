@@ -32,6 +32,7 @@ function parseScheduleCliValues(args: string[]) {
       id: { type: 'string' },
       overlap: { type: 'string' },
       backfill: { type: 'boolean', default: false },
+      jitter: { type: 'string' },
       help: { type: 'boolean', short: 'h', default: false },
       json: { type: 'boolean', short: 'j', default: false },
     },
@@ -131,12 +132,13 @@ function requireScheduleAction(positionals: string[]): ScheduleAction {
 
 function buildScheduleCreateOptionalFields(
   values: ReturnType<typeof parseScheduleCliValues>['values'],
-): Partial<Pick<ScheduleCreateCommand, 'id' | 'overlap'>> {
+): Partial<Pick<ScheduleCreateCommand, 'id' | 'overlap' | 'jitter'>> {
   const overlap = parseScheduleOverlapPolicy(values.overlap);
 
   return {
     ...(values.id !== undefined ? { id: values.id } : {}),
     ...(overlap !== undefined ? { overlap } : {}),
+    ...(values.jitter !== undefined ? { jitter: values.jitter } : {}),
   };
 }
 

@@ -5,6 +5,7 @@ import { isFailureCategory } from '../../core/failure-categories.ts';
 import { coerceStartWorkflowTags } from '../../core/start-workflow-validation.ts';
 import type {
   AttributeFilter,
+  AttributeFilterScalarValue,
   BulkOperationCommitOptions,
   BulkOperationDryRunOptions,
   BulkOperationPrincipal,
@@ -21,8 +22,10 @@ import {
 import type { AccessPolicy } from '../authorization.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import type { Principal } from '../principal.ts';
+import type { RestInputContext } from '../rest-binding.ts';
+import { readRestTextBody } from '../rest-body.ts';
 import { parseOptionalFailureCategoryFilter } from './failure-category-filter.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
+import { invalidParamsFault, isOperationFault } from './operation-helpers.ts';
 
 const workflowStatusSchema = z.custom<WorkflowStatus>((value) => typeof value === 'string');
 const searchAttributeValueSchema = z.custom<SearchAttributeValue>((value) => {
@@ -30,7 +33,13 @@ const searchAttributeValueSchema = z.custom<SearchAttributeValue>((value) => {
     return true;
   }
 
-  return Array.isArray(value) && value.every((entry) => typeof entry === 'string');
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (entry) =>
+        typeof entry === 'string' || typeof entry === 'number' || typeof entry === 'boolean',
+    )
+  );
 });
 const attributeFilterSchema = z.object({
   key: z.string().min(1),
@@ -68,6 +77,7 @@ export const bulkOperationControlInputSchema = z.object({
   dryRun: z.boolean().optional(),
   confirmationToken: z.string().min(1).max(MAX_BULK_CONFIRMATION_TOKEN_LENGTH).optional(),
   requestId: z.string().min(1).max(MAX_BULK_OPERATION_REQUEST_ID_LENGTH).optional(),
+  bulkConcurrency: z.number().int().min(1).optional(),
 });
 
 export type BulkOperationControlInput = z.infer<typeof bulkOperationControlInputSchema>;
@@ -97,11 +107,15 @@ export function engineFailureFault(message: string): OperationFault {
   };
 }
 
-export async function readOptionalJsonBody(request: Request): Promise<unknown> {
+export async function readOptionalJsonBody(
+  request: Request,
+  context?: RestInputContext,
+): Promise<unknown> {
   try {
-    const text = await request.text();
+    const text = await readRestTextBody(request, context);
     return text.trim() === '' ? undefined : (JSON.parse(text) as unknown);
-  } catch {
+  } catch (error) {
+    if (isOperationFault(error)) throw error;
     throw invalidParamsFault('Invalid JSON body');
   }
 }
@@ -143,11 +157,22 @@ function parseAttributeFiltersFromBody(value: unknown): AttributeFilter[] {
 
       if (!isJsonSearchAttributeValue(attributeValue)) {
         throw new Error(
-          `Field "filter.attributes[${index}].${property}" must be a string, number, boolean, or string array`,
+          `Field "filter.attributes[${index}].${property}" must be a string, number, boolean, or scalar array`,
         );
       }
 
-      filter[property] = attributeValue;
+      if (property === 'value') {
+        filter.value = attributeValue;
+        continue;
+      }
+
+      if (Array.isArray(attributeValue)) {
+        throw new Error(
+          `Field "filter.attributes[${index}].${property}" must be a string, number, or boolean`,
+        );
+      }
+
+      filter[property] = attributeValue as AttributeFilterScalarValue;
     }
 
     return filter;
@@ -348,14 +373,33 @@ function applyBasicBulkFilterFields(filter: ListFilter, input: BulkListFilterInp
 function copyAttributeFilter(
   attribute: NonNullable<BulkListFilterInput['attributes']>[number],
 ): AttributeFilter {
-  return {
-    key: attribute.key,
-    ...(attribute.value === undefined ? {} : { value: attribute.value }),
-    ...(attribute.gt === undefined ? {} : { gt: attribute.gt }),
-    ...(attribute.lt === undefined ? {} : { lt: attribute.lt }),
-    ...(attribute.gte === undefined ? {} : { gte: attribute.gte }),
-    ...(attribute.lte === undefined ? {} : { lte: attribute.lte }),
-  };
+  const filter: AttributeFilter = { key: attribute.key };
+  if (attribute.value !== undefined) {
+    filter.value = attribute.value;
+  }
+  if (attribute.gt !== undefined) {
+    filter.gt = copyAttributeRangeBound(attribute.gt, 'gt');
+  }
+  if (attribute.lt !== undefined) {
+    filter.lt = copyAttributeRangeBound(attribute.lt, 'lt');
+  }
+  if (attribute.gte !== undefined) {
+    filter.gte = copyAttributeRangeBound(attribute.gte, 'gte');
+  }
+  if (attribute.lte !== undefined) {
+    filter.lte = copyAttributeRangeBound(attribute.lte, 'lte');
+  }
+  return filter;
+}
+
+function copyAttributeRangeBound(
+  value: SearchAttributeValue,
+  property: 'gt' | 'lt' | 'gte' | 'lte',
+): AttributeFilterScalarValue {
+  if (Array.isArray(value)) {
+    throw new Error(`Field "filter.attributes[].${property}" must be a string, number, or boolean`);
+  }
+  return value as AttributeFilterScalarValue;
 }
 
 function applyExtendedBulkFilterFields(filter: ListFilter, input: BulkListFilterInput): void {
@@ -393,11 +437,13 @@ export function parseBulkOperationControlFromBody(body: unknown): BulkOperationC
   const dryRun = parseOptionalBooleanControl(record, 'dryRun');
   const confirmationToken = parseOptionalNonEmptyStringControl(record, 'confirmationToken');
   const requestId = parseOptionalBulkRequestId(record);
+  const bulkConcurrency = parseOptionalPositiveIntegerControl(record, 'bulkConcurrency');
 
   return {
     ...(dryRun === undefined ? {} : { dryRun }),
     ...(confirmationToken === undefined ? {} : { confirmationToken }),
     ...(requestId === undefined ? {} : { requestId }),
+    ...(bulkConcurrency === undefined ? {} : { bulkConcurrency }),
   };
 }
 
@@ -411,6 +457,7 @@ export function bulkOperationOptionsFromInput(
       dryRun: true,
       principal: auditPrincipal,
       ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+      ...(input.bulkConcurrency === undefined ? {} : { bulkConcurrency: input.bulkConcurrency }),
     };
   }
 
@@ -422,6 +469,7 @@ export function bulkOperationOptionsFromInput(
     confirmationToken: input.confirmationToken,
     principal: auditPrincipal,
     ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+    ...(input.bulkConcurrency === undefined ? {} : { bulkConcurrency: input.bulkConcurrency }),
   };
 }
 
@@ -452,6 +500,16 @@ function parseOptionalBooleanControl(
   if (value === undefined) return undefined;
   if (typeof value === 'boolean') return value;
   throw new Error(`Field "${fieldName}" must be a boolean`);
+}
+
+function parseOptionalPositiveIntegerControl(
+  record: Record<string, unknown>,
+  fieldName: 'bulkConcurrency',
+): number | undefined {
+  const value = record[fieldName];
+  if (value === undefined) return undefined;
+  if (typeof value === 'number' && Number.isSafeInteger(value) && value >= 1) return value;
+  throw new Error(`Field "${fieldName}" must be a positive integer`);
 }
 
 function parseOptionalNonEmptyStringControl(

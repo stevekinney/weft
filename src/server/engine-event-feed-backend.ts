@@ -9,11 +9,10 @@
  * share the same source of truth — the unified
  * `replayWorkflowFeed` / `snapshotWorkflowFeedTail` /
  * `subscribeWorkflowFeedCommits` triple on `Engine`. The subscription
- * fires only AFTER `storage.batch()` (events) or `storage.put()`
- * (tokens) resolves, so an event in the live buffer is already
- * durable and scannable by `replayWorkflowFeed`. This is the
- * invariant the feed's atomic-handoff (buffer-then-snapshot-then-
- * replay-then-drain) relies on.
+ * fires only AFTER the storage commit resolves, so an event in the live buffer
+ * is already durable and scannable by `replayWorkflowFeed`. This is the
+ * invariant the feed's atomic-handoff (buffer-then-snapshot-then-replay-then-
+ * drain) relies on.
  *
  * The backend is intentionally stateless — it holds only the `Engine`
  * reference. Listener state lives on the engine and is cleaned up by

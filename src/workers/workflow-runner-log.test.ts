@@ -159,6 +159,7 @@ describe('worker ctx.log', () => {
       { workflowId: 'wf-closure', workflowType: 'closure', input: null },
       new AbortController(),
       () => liveReplayState,
+      () => undefined,
     );
 
     // Before the replay state is registered, the logger treats it as live.
@@ -193,6 +194,7 @@ describe('worker ctx.log', () => {
       { workflowId: 'wf-failed', workflowType: 'failed', input: null },
       new AbortController(),
       () => liveReplayState,
+      () => undefined,
     );
 
     // Step 0 is a REPLAYED FAILURE (in failedOutcomes, absent from accumulatedResults).

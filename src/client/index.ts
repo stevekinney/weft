@@ -15,6 +15,7 @@ export type { HttpClientOptions } from './http-request.ts';
 export type {
   ClientHandle,
   ClientScheduleHandle,
+  ClientStartOptions,
   UpdateResult,
   WeftClient,
   WeftClientActivity,

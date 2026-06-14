@@ -65,6 +65,27 @@ describe('extractListFilterFromQuery', () => {
     const result = extractListFilterFromQuery(url);
     expect(result.attributes).toEqual([{ key: 'customerTier', value: 'gold' }]);
   });
+
+  it('extracts repeated exact attribute query parameters as any-of filters', () => {
+    const url = urlWith({
+      'attr.region': ['us-east', 'eu-west'],
+    });
+    const result = extractListFilterFromQuery(url);
+    expect(result.attributes).toEqual([{ key: 'region', value: ['us-east', 'eu-west'] }]);
+  });
+
+  it('preserves repeated exact attribute value types in any-of filters', () => {
+    const url = urlWith({
+      'attr.score': ['1', '2'],
+      'attr.active': ['true', 'false'],
+    });
+    const result = extractListFilterFromQuery(url);
+    const attributes = result.attributes as unknown;
+    expect(attributes).toEqual([
+      { key: 'score', value: [1, 2] },
+      { key: 'active', value: [true, false] },
+    ]);
+  });
 });
 
 describe('extractTimeRangeFromQuery', () => {

@@ -4,6 +4,7 @@ import type {
   BulkCancelResult,
   BulkDeleteResult,
   BulkOperationDryRunResult,
+  BulkRetryFailedResult,
   BulkSignalResult,
   BulkTagResult,
   ListFilter,
@@ -56,6 +57,7 @@ export function validatedListFilterFromBulkInput(input: BulkListFilterInput): Li
 export type BulkOperationSuccessResult =
   | BulkCancelResult
   | BulkDeleteResult
+  | BulkRetryFailedResult
   | BulkSignalResult
   | BulkTagResult
   | BulkOperationDryRunResult

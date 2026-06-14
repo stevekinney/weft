@@ -140,12 +140,24 @@ describe('engine validation helpers', () => {
     expect(() => normalizeScheduleOptions({ backfill: 'yes' } as never)).toThrow(
       'options.backfill must be a boolean when provided',
     );
+    expect(() => normalizeScheduleOptions({ jitter: false } as never)).toThrow(
+      'options.jitter must be a duration string or a number of milliseconds',
+    );
+    expect(() => normalizeScheduleOptions({ jitter: 0 })).toThrow(
+      'options.jitter must resolve to a positive number of milliseconds',
+    );
     expect(
-      normalizeScheduleOptions({ id: 'schedule-id', overlap: 'queue', backfill: true }),
+      normalizeScheduleOptions({
+        id: 'schedule-id',
+        overlap: 'queue',
+        backfill: true,
+        jitter: '30s',
+      }),
     ).toEqual({
       id: 'schedule-id',
       overlap: 'queue',
       backfill: true,
+      jitterMs: 30_000,
     });
   });
 
@@ -373,10 +385,22 @@ describe('engine validation helpers', () => {
         decodeScheduleRuntimeFields(createScheduleRecord({ queuedRuns: -1 }), 'schedule-id'),
       ).toBeNull();
       expect(
+        decodeScheduleRuntimeFields(createScheduleRecord({ lastMissedFireAt: -1 }), 'schedule-id'),
+      ).toBeNull();
+      expect(
+        decodeScheduleRuntimeFields(createScheduleRecord({ missedFireCount: -1 }), 'schedule-id'),
+      ).toBeNull();
+      expect(
+        decodeScheduleRuntimeFields(createScheduleRecord({ jitterMs: 0 }), 'schedule-id'),
+      ).toBeNull();
+      expect(
         decodeScheduleRuntimeFields(
           createScheduleRecord({
             lastFireAt: 2,
+            lastMissedFireAt: 1,
             currentWorkflowId: 'child-workflow',
+            missedFireCount: 4,
+            jitterMs: 30_000,
           }),
           'schedule-id',
         ),
@@ -385,19 +409,28 @@ describe('engine validation helpers', () => {
         createdAt: 1,
         updatedAt: 2,
         lastFireAt: 2,
+        lastMissedFireAt: 1,
         nextFireAt: 3,
         currentWorkflowId: 'child-workflow',
+        missedFireCount: 4,
         queuedRuns: 0,
+        jitterMs: 30_000,
       } satisfies Pick<
         ScheduleState,
         | 'backfill'
         | 'createdAt'
         | 'updatedAt'
         | 'lastFireAt'
+        | 'lastMissedFireAt'
         | 'nextFireAt'
         | 'currentWorkflowId'
+        | 'missedFireCount'
         | 'queuedRuns'
+        | 'jitterMs'
       >);
+      expect(decodeScheduleRuntimeFields(createScheduleRecord(), 'schedule-id')).toMatchObject({
+        missedFireCount: 0,
+      });
       expect(warning).toHaveBeenCalled();
     } finally {
       console.warn = originalWarn;

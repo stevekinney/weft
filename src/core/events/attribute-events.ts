@@ -8,9 +8,8 @@
  * import { Engine, AttributesChangedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('attributes:changed', (e: Event) => {
- *   const ev = e as AttributesChangedEvent;
- *   console.log('attributes changed for', ev.workflowId, ev.changes);
+ * engine.addEventListener(AttributesChangedEvent.type, (event) => {
+ *   console.log('attributes changed for', event.workflowId, event.changes);
  * });
  * ```
  */

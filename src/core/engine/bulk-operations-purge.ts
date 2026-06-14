@@ -255,6 +255,7 @@ export function clearPurgedWorkflowInMemoryState(
       internals.pendingAsyncActivities.delete(token);
     }
   }
+  internals.pendingAsyncActivityResolutions.delete(workflowId);
   internals.eventLogHeads.delete(workflowId);
   internals.workflowVersionTuples.delete(workflowId);
   internals.handleCache.delete(workflowId);
@@ -315,6 +316,7 @@ function buildBaseWorkflowDeleteKeys(state: WorkflowState): Set<string> {
     KEYS.checkpoint(state.id),
     KEYS.workflowHeaders(state.id),
     KEYS.terminalCleanupNeeded(state.id),
+    KEYS.workflowConcurrencyHolder(state.id),
     // The "expects services" marker lives under its own `wf-has-services:`
     // prefix (not `wf:{id}:`), so the prefix sweep below misses it. Delete it
     // explicitly, else a purge + id reuse leaves a stale marker that would make

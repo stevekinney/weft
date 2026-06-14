@@ -6,10 +6,16 @@ You want to know when a workflow starts, when an activity fails, when a signal a
 
 Both `Engine` and `WorkflowHandle` extend `EventTarget`—the same interface that DOM elements, `WebSocket`, `AbortSignal`, and `BroadcastChannel` use. No custom event emitter. No `.on()` / `.off()` / `.emit()`. Just `addEventListener`, `removeEventListener`, and `dispatchEvent`.
 
-```typescript partial
+```typescript
+import { Engine } from '@lostgradient/weft';
+
+const engine = new Engine();
+
 engine.addEventListener('workflow:completed', (event) => {
   console.log(`Workflow ${event.workflowId} completed in ${event.duration}ms`);
 });
+
+void engine;
 ```
 
 This is a deliberate choice. `EventTarget` is a web standard with built-in support for `AbortSignal`-based cleanup, `once` listeners, and capture/bubble phases. Every JavaScript developer already knows the API.
@@ -18,12 +24,21 @@ This is a deliberate choice. `EventTarget` is a web standard with built-in suppo
 
 Weft defines proper `Event` subclasses rather than wrapping data in `CustomEvent` with a `.detail` bag. This means you get named properties directly on the event object and full TypeScript inference without casts.
 
-```typescript partial
+```typescript
+import { Engine, WorkflowCompletedEvent } from '@lostgradient/weft';
+
+const engine = new Engine();
+
 engine.addEventListener(WorkflowCompletedEvent.type, (event) => {
-  // event.workflowId: string
-  // event.result: unknown
-  // event.duration: number
+  const workflowId: string = event.workflowId;
+  const result: unknown = event.result;
+  const duration: number = event.duration;
+  void workflowId;
+  void result;
+  void duration;
 });
+
+void engine;
 ```
 
 Each event class has a static `type` property that matches its event string. Use the class reference instead of raw strings—it keeps things type-safe and refactor-friendly.
@@ -56,6 +71,7 @@ _Signal and update events:_
 _Operational events:_
 
 - `AttributesChangedEvent` (`'attributes:changed'`) -- carries `workflowId` and `changes`
+- `ScheduleMissedFireEvent` (`'schedule:missed-fire'`) -- carries `scheduleId`, `missedCount`, `windowStart`, and `windowEnd` when a non-backfill schedule skips timers more than one second late
 - `CheckpointSizeWarningEvent` (`'checkpoint:size-warning'`) -- carries `workflowId`, `sizeBytes`, and `step`
 - `DevelopmentWarningEvent` (`'development:warning'`) -- carries `workflowId`, `message`, and `fieldPaths`
 
@@ -68,25 +84,37 @@ When a workflow pauses for human review, review events track the request and the
 
 ## The WeftEventMap
 
-All event types are collected into `WeftEventMap`, a TypeScript interface that maps event type strings to their concrete event classes. Review-specific events are also available through `WeftReviewEventMap`. You can use either map with the `TypedEventTarget` interface for full type safety.
+All event types are collected into `WeftEventMap`, a TypeScript interface that maps event type strings to their concrete event classes. Review-specific events are also available through `WeftReviewEventMap`. `Engine` implements the `WeftEventMap` listener surface directly, and `TypedEventTarget` is available for other event targets that expose the same shape.
 
-```typescript partial
-import type { WeftEventMap, TypedEventTarget } from '@lostgradient/weft';
+```typescript
+import { Engine, type WeftEventMap } from '@lostgradient/weft';
 
-const typedEngine = engine as unknown as TypedEventTarget<WeftEventMap>;
+const engine = new Engine();
 
-typedEngine.addEventListener('workflow:completed', (event) => {
-  // event is WorkflowCompletedEvent -- fully typed
+engine.addEventListener('workflow:completed', (event) => {
+  const completed: WeftEventMap['workflow:completed'] = event;
   console.log(event.duration);
+  void completed;
 });
+
+void engine;
 ```
 
-## Three consumption patterns
+## Four consumption patterns
 
 _Pattern 1: addEventListener._ The classic approach. Best for persistent listeners that run for the lifetime of the engine.
 
-```typescript partial
+```typescript
+import { Engine, WorkflowCompletedEvent } from '@lostgradient/weft';
+
+const engine = new Engine();
 const controller = new AbortController();
+const metrics = {
+  recordCompletion(workflowId: string, duration: number): void {
+    void workflowId;
+    void duration;
+  },
+};
 
 engine.addEventListener(
   WorkflowCompletedEvent.type,
@@ -98,47 +126,65 @@ engine.addEventListener(
 
 // Later, clean up all listeners at once:
 controller.abort();
+
+void engine;
 ```
 
 Using `AbortSignal` for cleanup is the modern best practice. One `abort()` call removes every listener you attached with that signal—no need to track individual references.
 
 _Pattern 2: Async iteration._ In-process `WorkflowHandle` implements `Symbol.asyncIterator`, so you can `for await...of` over events from a specific workflow.
 
-```typescript partial
-const handle = await engine.start('order', orderData);
+```typescript
+import type { WorkflowHandle } from '@lostgradient/weft';
 
-for await (const event of handle) {
-  if (event.type === 'activity:completed') {
-    console.log('Activity done');
-  }
-  if (event.type === 'workflow:completed') {
-    console.log('Workflow finished');
-    break; // terminal events end the iteration automatically
+declare const handle: WorkflowHandle<unknown>;
+
+async function observeWorkflow(): Promise<void> {
+  for await (const event of handle) {
+    if (event.type === 'activity:completed') {
+      console.log('Activity done');
+    }
+    if (event.type === 'workflow:completed') {
+      console.log('Workflow finished');
+      break; // terminal events end the iteration automatically
+    }
   }
 }
+
+void observeWorkflow;
 ```
 
 This is useful for streaming progress to code that already has an in-process engine handle. The iterator yields events as they happen and terminates when the workflow reaches a terminal state (completed, failed, cancelled, or timed out).
 
 _Pattern 3: Client tails._ `LocalClient` and `HttpClient` expose `client.tail(id)` and `handle.tail()` for code that uses the client abstraction. The returned `WorkflowEventTail` is an `AsyncIterable` with `whenConnected()` and `close()`.
 
-```typescript partial
-const handle = await client.start('order', orderData);
+```typescript
+import type { ClientHandle } from '@lostgradient/weft';
+
+declare const handle: ClientHandle;
+
 const tail = handle.tail();
 
-await tail.whenConnected();
+async function observeTail(): Promise<void> {
+  await tail.whenConnected();
 
-for await (const event of tail) {
-  console.log(event.type);
+  for await (const event of tail) {
+    console.log(event.type);
+  }
 }
+
+void observeTail;
 ```
 
 `HttpClient` tails ride the `/v1/workflows/:id/watch` WebSocket channel and catch up from `getEvents()` on connect and reconnect. `LocalClient` tails bridge the engine event stream and perform the same history catch-up. A tail is single-consumer: open a fresh `client.tail(id)` or `handle.tail()` for each independent reader.
 
 _Pattern 4: Observable._ `WorkflowHandle` also implements `Symbol.observable`, making it compatible with RxJS and other reactive libraries.
 
-```typescript partial
-const handle = await engine.start('order', orderData);
+```typescript
+import type { WorkflowHandle } from '@lostgradient/weft';
+
+declare const handle: WorkflowHandle<unknown>;
+
 const observable = handle[Symbol.observable]();
 
 const subscription = observable.subscribe({

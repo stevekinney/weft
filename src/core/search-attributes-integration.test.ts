@@ -147,6 +147,43 @@ for (const backend of storageBackends) {
       expect(ids).toEqual(['wf-active-1', 'wf-active-2']);
     });
 
+    it('engine.list() treats attribute value arrays as any-of exact filters', async () => {
+      const result = backend.factory();
+      cleanup = result.cleanup;
+      engine = new Engine({ storage: result.storage });
+
+      const stayRunningWorkflow = workflow({ name: 'stay-running' }).execute(async function* (
+        ctx: WorkflowContext,
+      ) {
+        yield* ctx.waitForSignal('stop');
+        return 'done';
+      });
+      engine.register(stayRunningWorkflow);
+
+      await engine.start('stay-running', null, {
+        id: 'wf-region-east',
+        searchAttributes: { region: 'us-east' },
+      });
+      await engine.start('stay-running', null, {
+        id: 'wf-region-west',
+        searchAttributes: { region: 'eu-west' },
+      });
+      await engine.start('stay-running', null, {
+        id: 'wf-region-south',
+        searchAttributes: { region: 'ap-south' },
+      });
+      await flush();
+
+      const listResult = await engine.list({
+        attributes: [{ key: 'region', value: ['us-east', 'eu-west'] }],
+      });
+
+      expect(listResult.items.map((item) => item.id).toSorted()).toEqual([
+        'wf-region-east',
+        'wf-region-west',
+      ]);
+    });
+
     it('engine.list() with range attribute filter works', async () => {
       const result = backend.factory();
       cleanup = result.cleanup;
@@ -257,6 +294,14 @@ for (const backend of storageBackends) {
         attributes: [{ key: labels, value: 'priority' }],
       });
       expect(arrayContainmentMatch.items.map((item) => item.id)).toEqual(['wf-indexed-a']);
+
+      const arrayAnyOfMatch = await engine.list({
+        attributes: [{ key: labels, value: ['priority', 'standard'] }],
+      });
+      expect(arrayAnyOfMatch.items.map((item) => item.id).toSorted()).toEqual([
+        'wf-indexed-a',
+        'wf-indexed-b',
+      ]);
     });
 
     it('index entries are cleaned up on workflow completion', async () => {

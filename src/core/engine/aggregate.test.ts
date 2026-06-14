@@ -38,6 +38,75 @@ async function writeDistinctTypeWorkflows(storage: MemoryStorage, count: number)
   );
 }
 
+class ConcurrentAggregateReadCountingStorage extends MemoryStorage {
+  activeAttributeReadCount = 0;
+  activeWorkflowReadCount = 0;
+  attributeReadCount = 0;
+  maxConcurrentAttributeReadCount = 0;
+  maxConcurrentWorkflowReadCount = 0;
+  workflowReadCount = 0;
+
+  override async get(key: string): Promise<Uint8Array | null> {
+    if (key.startsWith('wf:aggregate-batched-')) {
+      this.workflowReadCount += 1;
+      this.activeWorkflowReadCount += 1;
+      this.maxConcurrentWorkflowReadCount = Math.max(
+        this.maxConcurrentWorkflowReadCount,
+        this.activeWorkflowReadCount,
+      );
+      try {
+        await Promise.resolve();
+        return await super.get(key);
+      } finally {
+        this.activeWorkflowReadCount -= 1;
+      }
+    }
+
+    if (key.startsWith('attr:aggregate-batched-')) {
+      this.attributeReadCount += 1;
+      this.activeAttributeReadCount += 1;
+      this.maxConcurrentAttributeReadCount = Math.max(
+        this.maxConcurrentAttributeReadCount,
+        this.activeAttributeReadCount,
+      );
+      try {
+        await Promise.resolve();
+        return await super.get(key);
+      } finally {
+        this.activeAttributeReadCount -= 1;
+      }
+    }
+
+    return super.get(key);
+  }
+}
+
+async function writeAttributeGroupedWorkflows(
+  storage: MemoryStorage,
+  count: number,
+): Promise<void> {
+  const now = Date.now();
+  await storage.batch(
+    Array.from({ length: count }).flatMap((_, index) => {
+      const workflowId = `aggregate-batched-${index}`;
+      const state: WorkflowState = {
+        id: workflowId,
+        type: 'attribute-grouped',
+        status: 'completed',
+        input: null,
+        versionTuple: { workflowVersion: 'test' },
+        createdAt: now + index,
+        updatedAt: now + index,
+      };
+      const segment = index % 2 === 0 ? 'even' : 'odd';
+      return [
+        { type: 'put' as const, key: KEYS.workflow(workflowId), value: encode(state) },
+        { type: 'put' as const, key: KEYS.attribute(workflowId), value: encode({ segment }) },
+      ];
+    }),
+  );
+}
+
 describe('engine.aggregate', () => {
   it('groups by status and counts each bucket', async () => {
     const engine = new Engine();
@@ -246,6 +315,36 @@ describe('engine.aggregate', () => {
     expect(result.total).toBe(3);
     expect(result.groups).toHaveLength(3);
     expect(result.truncated).toBe(false);
+    engine[Symbol.dispose]();
+  });
+
+  it('batches constrained state reads and attribute groupBy reads across chunk boundaries', async () => {
+    const storage = new ConcurrentAggregateReadCountingStorage();
+    const engine = new Engine({ storage });
+    const typedWorkflow = workflow({ name: 'attribute-grouped' })
+      .searchAttributes({ segment: { type: 'string' } })
+      .execute(async function* () {
+        return 'ok';
+      });
+    engine.register(typedWorkflow);
+    await writeAttributeGroupedWorkflows(storage, 130);
+
+    const result = await engine.aggregate(
+      { idPrefix: 'aggregate-batched-' },
+      { groupBy: { attribute: 'segment' } },
+    );
+
+    expect(result.total).toBe(130);
+    expect(result.groups).toEqual([
+      { key: 'even', count: 65 },
+      { key: 'odd', count: 65 },
+    ]);
+    expect(storage.workflowReadCount).toBe(130);
+    expect(storage.attributeReadCount).toBe(130);
+    expect(storage.maxConcurrentWorkflowReadCount).toBeGreaterThan(1);
+    expect(storage.maxConcurrentWorkflowReadCount).toBeLessThanOrEqual(64);
+    expect(storage.maxConcurrentAttributeReadCount).toBeGreaterThan(1);
+    expect(storage.maxConcurrentAttributeReadCount).toBeLessThanOrEqual(64);
     engine[Symbol.dispose]();
   });
 

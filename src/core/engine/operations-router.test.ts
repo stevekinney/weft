@@ -16,6 +16,7 @@ function createRouterCallbacks(): OperationRouterCallbacks {
     processWaitSignalOperation: mock(async () => {}),
     processWaitUpdateOperation: mock(async () => {}),
     processWaitConditionOperation: mock(async () => {}),
+    processGetVersionOperation: mock(async () => {}),
     processParallelOperation: mock(async () => {}),
     processRaceOperation: mock(async () => {}),
     processMemoOperation: mock(async () => {}),

@@ -1,18 +1,15 @@
 import type { ServeOptions } from '../index.ts';
 import { isAuthenticated, type Principal } from '../principal.ts';
+import { readRestJsonBody, type RestBodyReadOptions } from '../rest-body.ts';
 import type { PendingTask } from '../task-queue-types.ts';
 import type { InflightRecord } from '../task-state.ts';
-import {
-  readInflightRecord,
-  transitionInflightToResolved,
-  transitionQueuedToInflight,
-} from '../task-state.ts';
+import { readInflightRecord, transitionQueuedToInflight } from '../task-state.ts';
 import type { ServerContext } from './context.ts';
+import { recordTaskBacklogMetric, recordTaskQueueLatencyMetric } from './task-metrics.ts';
 import {
-  recordTaskBacklogMetric,
-  recordTaskExecutionLatencyMetric,
-  recordTaskQueueLatencyMetric,
-} from './task-metrics.ts';
+  taskResultPayloadSizeError,
+  transitionTaskResultToResolvedWithRetry,
+} from './task-result-resolution.ts';
 
 const TASK_POLL_RE = /^\/v1\/tasks\/([\w-]+)$/;
 const TASK_RESULT_RE = /^\/v1\/tasks\/([\w-]+)\/result$/;
@@ -22,12 +19,27 @@ const MAX_POLL_TIMEOUT = 60_000;
 const DEFAULT_POLL_TIMEOUT = 30_000;
 const DEFAULT_VISIBILITY_TIMEOUT = 30_000;
 
-async function parseTaskResultBody(request: Request): Promise<Record<string, unknown> | null> {
+async function parseTaskResultBody(
+  request: Request,
+  options?: RestBodyReadOptions,
+): Promise<Record<string, unknown> | null | Response> {
   try {
-    return (await request.json()) as Record<string, unknown>;
-  } catch {
+    return (await readRestJsonBody(request, options)) as Record<string, unknown>;
+  } catch (error) {
+    if (isPayloadTooLargeFault(error)) {
+      return Response.json({ error: error.message }, { status: 413 });
+    }
     return null;
   }
+}
+
+function isPayloadTooLargeFault(value: unknown): value is { message: string } {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as Record<string, unknown>)['code'] === 'PayloadTooLarge' &&
+    typeof (value as Record<string, unknown>)['message'] === 'string'
+  );
 }
 
 type ValidatedTaskResult = {
@@ -105,22 +117,62 @@ async function applyTaskResult(
     context.taskQueue.complete({ operationId, status, value, error });
     context.deadlineTracker.remove(operationId);
 
-    const resolvedAt = Date.now();
-    await transitionInflightToResolved(options.engine.storage, operationId, resolvedStatus, {
-      ...(inflightRecord === null ? {} : { record: inflightRecord }),
-      resolvedAt,
+    await transitionTaskResultToResolvedWithRetry(context, options, {
+      operationId,
+      status: resolvedStatus,
       resolutionReason: resolvedStatus,
+      inflightRecord,
       ...(status === 'completed' ? { value } : { error }),
     });
-    if (inflightRecord !== null) {
-      recordTaskExecutionLatencyMetric(context.metricsCollector, inflightRecord, resolvedAt);
-    }
   } catch (storageError) {
     console.error(
       `[weft] Failed to transition task "${operationId}" to resolved — inflight record may leak:`,
       storageError,
     );
   }
+}
+
+async function applyPayloadRejectedTaskResult(
+  context: ServerContext,
+  options: ServeOptions,
+  result: ValidatedTaskResult,
+  inflightRecord: InflightRecord | null,
+  error: Error,
+): Promise<void> {
+  context.taskQueue.complete({
+    operationId: result.operationId,
+    status: 'failed',
+    error: error.message,
+  });
+  context.deadlineTracker.remove(result.operationId);
+
+  await transitionTaskResultToResolvedWithRetry(context, options, {
+    operationId: result.operationId,
+    status: 'failed',
+    resolutionReason: 'failed',
+    inflightRecord,
+    error: error.message,
+    skipPayloadSizeCheck: true,
+  });
+}
+
+function payloadSizeExceededResponse(error: {
+  code: string;
+  message: string;
+  maxBytes: number;
+  serializedBytes: number;
+  payloadKind: string;
+}): Response {
+  return Response.json(
+    {
+      error: error.message,
+      code: error.code,
+      maxBytes: error.maxBytes,
+      serializedBytes: error.serializedBytes,
+      payloadKind: error.payloadKind,
+    },
+    { status: 413 },
+  );
 }
 
 /**
@@ -263,7 +315,13 @@ export async function handleTaskResultRequest(
   const authorizationResponse = authorizeWorkerPrincipal(principal);
   if (authorizationResponse !== null) return authorizationResponse;
 
-  const body = await parseTaskResultBody(request);
+  const body = await parseTaskResultBody(
+    request,
+    options.maxRequestBodyBytes !== undefined ? { maxBodyBytes: options.maxRequestBodyBytes } : {},
+  );
+  if (body instanceof Response) {
+    return body;
+  }
   if (body === null) {
     return Response.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
@@ -280,6 +338,22 @@ export async function handleTaskResultRequest(
   const inflightRecord = await readInflightRecord(options.engine.storage, validated.operationId);
   if (inflightRecord !== null && !isLongPollCompletionAuthorized(inflightRecord, validated)) {
     return Response.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  const payloadError = taskResultPayloadSizeError(
+    {
+      operationId: validated.operationId,
+      status: validated.status,
+      resolutionReason: validated.status,
+      ...(validated.status === 'completed'
+        ? { value: validated.value }
+        : { error: validated.error }),
+    },
+    context.payloadSizeMaxBytes,
+  );
+  if (payloadError !== null) {
+    await applyPayloadRejectedTaskResult(context, options, validated, inflightRecord, payloadError);
+    return payloadSizeExceededResponse(payloadError);
   }
 
   await applyTaskResult(context, options, validated, inflightRecord);

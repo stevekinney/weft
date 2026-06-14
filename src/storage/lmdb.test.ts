@@ -18,9 +18,6 @@ runStorageCapabilityConformance('LMDBStorage', {
     conditionalBatch: true,
     boundedRangeDelete: false,
   },
-  // LMDB serializes writers (single write transaction); concurrent CAS contention
-  // is not a supported access pattern, so skip that case. The mismatch case still runs.
-  supportsConcurrentWrites: false,
 });
 
 /** Helper to encode a string as Uint8Array. */

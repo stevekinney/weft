@@ -1,10 +1,15 @@
-import { KEYS, type BatchOperation } from '../../storage/interface.ts';
+import { KEYS, storageConditionalBatch, type BatchOperation } from '../../storage/interface.ts';
 import { encode } from '../codec.ts';
 import { buildTimerBatchOperations } from '../scheduler.ts';
 import { WorkflowTimeoutError } from '../timeouts.ts';
 import type { ScheduleState, WorkflowState } from '../types.ts';
+import {
+  clearPendingAtomicWorkflowCommitSideEffects,
+  takePendingAtomicWorkflowCommitSideEffects,
+} from './checkpoint-side-effects.ts';
 import { getWorkflowExecutionStartedAt } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
+import { resolveEffectiveScheduleFireAt } from './schedule-jitter.ts';
 import { createScheduleTimerId, decodeWorkflowStartHeaders } from './state-utilities.ts';
 import { decodeWorkflowState } from './validation.ts';
 import { decodeScheduleState } from './validation/schedule.ts';
@@ -66,13 +71,44 @@ export async function loadWorkflowResult(
   throw new Error(`Workflow "${workflowId}" is still ${state.status}`);
 }
 
+type WorkflowStateCommitOptions = {
+  includePendingAtomicSideEffects?: boolean;
+};
+
 /** Commit workflow state operations. */
 export async function commitWorkflowStateOperations(
   internals: EngineInternals,
-  _state: WorkflowState,
+  state: WorkflowState,
   operations: BatchOperation[],
+  options: WorkflowStateCommitOptions = {},
 ): Promise<void> {
-  await internals.storage.batch(operations);
+  const pendingSideEffects = options.includePendingAtomicSideEffects
+    ? takePendingAtomicWorkflowCommitSideEffects(internals, state.id)
+    : undefined;
+  const operationsWithSideEffects =
+    pendingSideEffects === undefined
+      ? operations
+      : [...operations, ...pendingSideEffects.operations];
+  const conditions = pendingSideEffects?.conditions ?? [];
+
+  if (conditions.length === 0) {
+    await internals.storage.batch(operationsWithSideEffects);
+  } else {
+    const committed = await storageConditionalBatch(
+      internals.storage,
+      conditions,
+      operationsWithSideEffects,
+    );
+    if (!committed) {
+      throw new Error(
+        `Workflow state commit for workflow "${state.id}" lost its atomic side-effect precondition.`,
+      );
+    }
+  }
+
+  if (pendingSideEffects !== undefined) {
+    clearPendingAtomicWorkflowCommitSideEffects(internals, state.id);
+  }
 }
 
 /** Load and decode persisted schedule state by schedule ID. */
@@ -108,11 +144,12 @@ export async function writeScheduleState(
 
   const includeTimer = options?.includeTimer ?? state.status === 'active';
   if (includeTimer && state.status === 'active' && state.nextFireAt !== null) {
+    const effectiveFireAt = resolveEffectiveScheduleFireAt(state, state.nextFireAt);
     operations.push(
       ...buildTimerBatchOperations({
         id: createScheduleTimerId(state.id),
         workflowId: state.id,
-        fireAt: state.nextFireAt,
+        fireAt: effectiveFireAt,
         kind: 'schedule',
       }),
     );

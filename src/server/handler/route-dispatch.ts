@@ -113,6 +113,8 @@ export interface HandlerOptions {
    * can otherwise poison the discovery URLs.
    */
   trustedHosts?: ReadonlyArray<string>;
+  /** Maximum REST operation request body size in bytes. Defaults to 1 MB. */
+  maxRequestBodyBytes?: number;
   /**
    * Optional pipeline-trace observer. **Internal test seam** used by the
    * dispatch-audit suite to prove every transport drives the full
@@ -280,10 +282,15 @@ export async function dispatchViaExecuteOperation(
   registry: OperationRegistry,
   principal: Principal,
   pipelineTrace?: PipelineTrace,
+  maxRequestBodyBytes?: number,
 ): Promise<Response> {
   let input: unknown;
   try {
-    input = await binding.extractInput(request, pathParams);
+    input = await binding.extractInput(
+      request,
+      pathParams,
+      maxRequestBodyBytes !== undefined ? { maxBodyBytes: maxRequestBodyBytes } : {},
+    );
   } catch (error) {
     if (isOperationFaultLike(error)) {
       return binding.shapeFault ? binding.shapeFault(error) : faultToHttpResponse(error);

@@ -7,6 +7,7 @@ import type { JSONValue } from '../core/json.ts';
 
 import { storageDeleteRange, type DeleteRangeOptions } from './delete-range.ts';
 import {
+  assertStorageBatchOperationCount,
   storageConditionalBatch,
   storageCount,
   storageDeletePrefix,
@@ -244,6 +245,7 @@ class CodecStorage<Value> implements ConditionalTypedStorage<Value> {
   }
 
   async batch(operations: TypedBatchOperation<Value>[]): Promise<void> {
+    assertStorageBatchOperationCount('batch operations', operations.length);
     await this.#storage.batch(this.#encodeOperations(operations));
   }
 
@@ -277,6 +279,9 @@ class CodecStorage<Value> implements ConditionalTypedStorage<Value> {
     conditions: TypedConditionalBatchCondition<Value>[],
     operations: TypedBatchOperation<Value>[],
   ): Promise<boolean> {
+    assertStorageBatchOperationCount('conditionalBatch conditions', conditions.length);
+    assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
+
     return storageConditionalBatch(
       this.#storage,
       this.#encodeConditions(conditions),

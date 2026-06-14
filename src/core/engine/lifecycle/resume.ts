@@ -53,6 +53,7 @@ async function prepareRecoveredServicesOrFail(
     state,
     callbacks.failWorkflowForUnavailableServices,
     callbacks.handleCleanupError,
+    callbacks.dispatchEvent,
   );
 }
 

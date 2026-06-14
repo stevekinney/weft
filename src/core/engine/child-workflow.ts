@@ -1,6 +1,12 @@
 import type { ContextOperationRequest } from '../context.ts';
 import type { ComposedWorkflowInterceptor } from '../interceptor.ts';
-import type { StartOptions, WorkflowState } from '../types.ts';
+import type {
+  ChildWorkflowHandle,
+  ChildWorkflowParentClosePolicy,
+  StartOptions,
+  WorkflowState,
+} from '../types.ts';
+import { registerCancelHandler } from './cancel-handlers.ts';
 import { WorkflowAlreadyExistsError } from './errors.ts';
 import type { WorkflowHandle } from './handles.ts';
 import type { EngineInternals } from './internals.ts';
@@ -60,7 +66,7 @@ export function getWorkflowNestingDepth(internals: EngineInternals, workflowId: 
 type PendingChildExecutionContext = {
   pendingNestingDepth: number;
   pendingParentHeaders: Map<string, string> | undefined;
-  pendingExecutionStateOwnerId: string;
+  pendingExecutionStateOwnerId: string | null;
 };
 
 function applyPendingChildExecutionContext(
@@ -90,7 +96,7 @@ function clearPendingChildExecutionContext(
 function existingChildMatchesRequest(
   existingState: WorkflowState,
   operation: ChildWorkflowOperation,
-  executionStateOwnerId: string,
+  executionStateOwnerId: string | undefined,
 ): boolean {
   return (
     existingState.type === operation.workflowType &&
@@ -102,7 +108,7 @@ function existingChildMatchesRequest(
 async function resolveCollisionChildHandle(
   childWorkflowId: string,
   operation: ChildWorkflowOperation,
-  executionStateOwnerId: string,
+  executionStateOwnerId: string | undefined,
   collisionError: WorkflowAlreadyExistsError,
   callbacks: Pick<ChildWorkflowOperationCallbacks, 'getHandle' | 'loadWorkflowState'>,
 ): Promise<WorkflowHandle> {
@@ -141,7 +147,7 @@ async function dispatchChildWorkflowStart(
     return resolveCollisionChildHandle(
       childWorkflowId,
       operation,
-      context.pendingExecutionStateOwnerId,
+      context.pendingExecutionStateOwnerId ?? undefined,
       error,
       callbacks,
     );
@@ -164,7 +170,9 @@ export async function executeChildWorkflow(
   const childWorkflowId = typeof rawId === 'string' ? rawId : crypto.randomUUID();
   const parentHeaders = internals.workflowHeaders.get(workflowId) ?? new Map<string, string>();
   const parentState = await callbacks.loadWorkflowState(workflowId);
-  const executionStateOwnerId = parentState?.executionStateOwnerId ?? workflowId;
+  const parentClosePolicy = resolveChildWorkflowParentClosePolicy(operation);
+  const executionStateOwnerId =
+    parentClosePolicy === 'abandon' ? null : (parentState?.executionStateOwnerId ?? workflowId);
   const executeChild = async (): Promise<unknown> => {
     const context: PendingChildExecutionContext = {
       pendingNestingDepth: currentDepth + 1,
@@ -178,6 +186,13 @@ export async function executeChildWorkflow(
       context,
       callbacks,
     );
+    if (parentClosePolicy === 'abandon') {
+      return createChildWorkflowHandleReference(childHandle.id);
+    }
+    if (parentClosePolicy === 'request-cancel') {
+      registerCancelHandler(internals, workflowId, () => childHandle.cancel());
+      return createChildWorkflowHandleReference(childHandle.id);
+    }
     return childHandle.result();
   };
 
@@ -197,4 +212,16 @@ export async function executeChildWorkflow(
     },
     executeChild,
   );
+}
+
+function resolveChildWorkflowParentClosePolicy(
+  operation: ChildWorkflowOperation,
+): ChildWorkflowParentClosePolicy {
+  return operation.options?.parentClosePolicy ?? 'await';
+}
+
+function createChildWorkflowHandleReference<TResult = unknown>(
+  workflowId: string,
+): ChildWorkflowHandle<TResult> {
+  return { id: workflowId };
 }

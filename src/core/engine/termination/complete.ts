@@ -31,6 +31,7 @@ import { dropQueuedInlineWorkflowStart } from '../inline-launch-queue.ts';
 import type { EngineInternals } from '../internals.ts';
 import { EMPTY_STORAGE_VALUE } from '../lifecycle.ts';
 import { createTerminalCleanupTimerId, summarizeTimelineValue } from '../state-utilities.ts';
+import { releaseWorkflowConcurrencySlot } from '../workflow-concurrency.ts';
 import { buildWorkflowVisibilityIndexTransition } from '../workflow-indexes.ts';
 import {
   cleanupTerminalWorkflowImmediately,
@@ -93,6 +94,9 @@ export async function terminateWorkflow(
   internals.strategy.cancelWorkflow(workflowId);
 
   try {
+    const terminalCleanupToken = internals.workflowsNeedingTerminalCleanup.has(workflowId)
+      ? crypto.randomUUID()
+      : undefined;
     const attributeBytes = await internals.storage.get(KEYS.attribute(workflowId));
     const attributes = attributeBytes
       ? (decode(attributeBytes) as Record<string, SearchAttributeValue>)
@@ -102,7 +106,11 @@ export async function terminateWorkflow(
     const terminationResult = await updateWorkflowState(
       internals,
       workflowId,
-      { status, ...(reason !== undefined ? { terminationReason: reason } : {}) },
+      {
+        status,
+        ...(reason !== undefined ? { terminationReason: reason } : {}),
+        ...(terminalCleanupToken !== undefined ? { terminalCleanupToken } : {}),
+      },
       {
         // Total over non-terminal states (see FORCIBLY_TERMINABLE_STATUSES):
         // cancelling a suspended workflow terminates it and rejects its pending
@@ -119,7 +127,18 @@ export async function terminateWorkflow(
             updatedAt,
           );
           const pendingTimelineOperation = buildPendingTimelineOperation(internals, workflowId);
-          return pendingTimelineOperation ? [pendingTimelineOperation] : [];
+          return [
+            ...(pendingTimelineOperation ? [pendingTimelineOperation] : []),
+            ...(terminalCleanupToken !== undefined
+              ? buildTerminalCleanupTimerOperations(
+                  internals,
+                  workflowId,
+                  true,
+                  updatedAt,
+                  terminalCleanupToken,
+                )
+              : []),
+          ];
         },
       },
     );
@@ -129,6 +148,7 @@ export async function terminateWorkflow(
     // Run teardown handlers only after the state transition succeeds — this
     // prevents handlers from firing when the workflow was already terminal.
     await runCancellationHandlersForStatus(internals, workflowId, status, callbacks);
+    await releaseWorkflowConcurrencySlot(internals, workflowId);
 
     const { previousState, updatedAt } = terminationResult;
     const elapsed = updatedAt - getWorkflowExecutionStartedAt(previousState);
@@ -344,12 +364,15 @@ export async function completeWorkflow(
         );
       }
 
-      await callbacks.commitWorkflowStateOperations(state, completionOperations);
+      await callbacks.commitWorkflowStateOperations(state, completionOperations, {
+        includePendingAtomicSideEffects: true,
+      });
       return { duration };
     },
   );
   if (!completionMetadata) return;
 
+  await releaseWorkflowConcurrencySlot(internals, workflowId);
   notifyCompletionWaiters(internals, workflowId, result, completionMetadata.duration, callbacks);
 }
 
@@ -373,8 +396,14 @@ export async function failWorkflow(
     error: error.message,
     failureCategory,
   };
+  const terminalCleanupToken = internals.workflowsNeedingTerminalCleanup.has(workflowId)
+    ? crypto.randomUUID()
+    : undefined;
   if (error.stack !== undefined) {
     stateUpdate.errorStack = error.stack;
+  }
+  if (terminalCleanupToken !== undefined) {
+    stateUpdate.terminalCleanupToken = terminalCleanupToken;
   }
   const failureResult = await updateWorkflowState(internals, workflowId, stateUpdate, {
     // See FORCIBLY_TERMINABLE_STATUSES — 'suspended' included so a cross-process
@@ -384,12 +413,25 @@ export async function failWorkflow(
     buildAdditionalOperations: (_previousState, updatedAt) => {
       finalizePendingTimelineEntry(internals, workflowId, 'failed', error.message, updatedAt);
       const pendingTimelineOperation = buildPendingTimelineOperation(internals, workflowId);
-      return pendingTimelineOperation ? [pendingTimelineOperation] : [];
+      return [
+        ...(pendingTimelineOperation ? [pendingTimelineOperation] : []),
+        ...(terminalCleanupToken !== undefined
+          ? buildTerminalCleanupTimerOperations(
+              internals,
+              workflowId,
+              false,
+              updatedAt,
+              terminalCleanupToken,
+            )
+          : []),
+      ];
     },
   });
   if (!failureResult) {
     return;
   }
+
+  await releaseWorkflowConcurrencySlot(internals, workflowId);
 
   // Clean up user-set attribute indexes; fire-and-forget the deadline
   // timer cancel since the workflow is terminal.

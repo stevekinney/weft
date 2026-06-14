@@ -7,6 +7,83 @@ A plain in-memory lock does not survive a crash, and a database row lock does no
 > [!NOTE] When you do _not_ need this
 > If the work is already inside a single workflow, you do not need a lock — a workflow is single-threaded by construction. Reach for these primitives only when _separate_ workflow executions contend for a shared resource.
 
+## Workflow Definition Limits
+
+Use a workflow definition `concurrency` policy when the limit is about how many
+runs of a workflow type may be non-terminal at once. The engine enforces this at
+`engine.start()` time. Excess starts are rejected immediately with
+`WorkflowConcurrencyLimitExceededError`; they are not queued for later admission.
+
+```typescript
+import { Engine, workflow, WorkflowConcurrencyLimitExceededError } from '@lostgradient/weft';
+
+type ImportInput = { customerId: string; importId: string };
+
+const importCustomerData = workflow({
+  name: 'import-customer-data',
+  concurrency: {
+    max: 2,
+    key: (input: ImportInput) => input.customerId,
+  },
+}).execute(async function* (_ctx, input: ImportInput) {
+  return { imported: input.importId };
+});
+
+const engine = await Engine.create({
+  workflows: { 'import-customer-data': importCustomerData },
+});
+
+try {
+  await engine.start('import-customer-data', {
+    customerId: 'customer-123',
+    importId: 'import-456',
+  });
+} catch (error) {
+  if (error instanceof WorkflowConcurrencyLimitExceededError) {
+    console.error(error.workflowType, error.partitionKey, error.limit);
+  }
+}
+
+void importCustomerData;
+```
+
+When `key` is omitted, the limit applies to the workflow type as a whole:
+
+```typescript
+import { workflow } from '@lostgradient/weft';
+
+const nightlyReconciliation = workflow({
+  name: 'nightly-reconciliation',
+  concurrency: { max: 1 },
+}).execute(async function* () {
+  return 'done';
+});
+
+void nightlyReconciliation;
+```
+
+Definition-level concurrency is for start admission only. A started workflow
+holds its slot until it reaches a terminal state (`completed`, `failed`,
+`cancelled`, or `timed-out`), including after a process crash and recovery. If
+you need a critical section inside a workflow body, use `DurableMutex` or
+`DurableSemaphore` directly.
+
+## Debounce and Batch Patterns
+
+Debounce and batch-trigger behavior are workflow patterns rather than
+definition-level primitives in v1.
+
+For debounce, create or update a schedule with overlap policy
+`cancel-running`, or model the debounce window inside one workflow with
+`ctx.sleep()` and restart that run when a new event should supersede the old
+one. The important property is that each new event cancels the current pending
+run before it performs the expensive work.
+
+For batching, use a collector workflow: accept signals or updates into one
+workflow, accumulate events in workflow or execution state, and flush when the
+batch reaches a size or time threshold. That keeps batch membership durable and
+auditable without adding a separate queued-start scheduler.
+
 ## The Mental Model
 
 A `DurableSemaphore` stores one `LockRecord` in a single CAS state slot:

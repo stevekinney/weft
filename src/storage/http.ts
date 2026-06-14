@@ -8,6 +8,7 @@ import {
   storageKeysCore,
 } from './derived-operations.ts';
 import {
+  assertStorageBatchOperationCount,
   type BatchOperation,
   type ConditionalBatchCondition,
   type ScanOptions,
@@ -289,6 +290,7 @@ export class HTTPStorage implements Storage {
   }
 
   async batch(operations: BatchOperation[]): Promise<void> {
+    assertStorageBatchOperationCount('batch operations', operations.length);
     await this.#request(this.#url('/v1/storage/-/batch'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -300,6 +302,9 @@ export class HTTPStorage implements Storage {
     conditions: ConditionalBatchCondition[],
     operations: BatchOperation[],
   ): Promise<boolean> {
+    assertStorageBatchOperationCount('conditionalBatch conditions', conditions.length);
+    assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
+
     const response = await this.#request(this.#url('/v1/storage/-/conditional-batch'), {
       method: 'POST',
       headers: { 'content-type': 'application/json' },

@@ -66,6 +66,7 @@ const FAULT_DATA_EXTRACTORS: FaultExtractors = {
   Conflict: dataForConflict,
   NotFound: dataForNotFound,
   Timeout: dataForTimeout,
+  PayloadTooLarge: (data) => ({ maxBytes: data.maxBytes }),
   UnsupportedTransport: dataForUnsupportedTransport,
   SubscriptionOverflow: dataForSubscriptionOverflow,
   InvalidParams: dataForInvalidParams,

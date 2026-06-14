@@ -480,6 +480,13 @@ const storageAdapterSubpathsScript = [
   "if (typeof NeonStorage !== 'function') throw new Error('NeonStorage subpath failed');",
 ].join('\n');
 
+const storageTestingSubpathScript = [
+  "import { runBasicStorageContract, runBinaryAndLargeScanStorageConformance, runStorageCapabilityConformance } from '@lostgradient/weft/storage/testing';",
+  'for (const value of [runBasicStorageContract, runBinaryAndLargeScanStorageConformance, runStorageCapabilityConformance]) {',
+  "  if (typeof value !== 'function') throw new Error('storage testing subpath failed');",
+  '}',
+].join('\n');
+
 const bunSqliteOverrideScript = [
   "import { BunSQLiteStorage, SQLiteStorage } from '@lostgradient/weft/storage/sqlite/bun';",
   "if (BunSQLiteStorage.name !== 'BunSQLiteStorage') throw new Error('BunSQLiteStorage export failed');",
@@ -503,6 +510,12 @@ runSmokeScript(
   'Bun',
   'new storage adapter subpaths import',
   storageAdapterSubpathsScript,
+);
+runSmokeScript(
+  [process.execPath, '--eval'],
+  'Bun',
+  '@lostgradient/weft/storage/testing imports',
+  storageTestingSubpathScript,
 );
 runSmokeScript(
   [process.execPath, '--eval'],

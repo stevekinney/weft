@@ -92,6 +92,54 @@
     },
     {
       "files": [
+        "src/client/http-client-requests.ts",
+        "src/core/engine/checkpoint-io.ts",
+        "src/core/engine/bulk-operations.ts",
+        "src/core/engine/operations-activity.ts",
+        "src/core/engine/operations-coordination.ts",
+        "src/core/engine/schedules.ts",
+        "src/core/engine/signals.ts",
+        "src/core/engine/state-utilities.ts",
+        "src/core/engine/termination/complete.ts",
+        "src/core/types/workflow-builder.ts",
+        "src/core/types/workflow-context.ts",
+        "src/mcp/tools.ts",
+        "src/server/index.ts",
+        "src/server/operations/bulk-filter-helpers.ts",
+        "src/server/operations/get-task-diagnostics.ts",
+        "src/server/operations/storage.ts",
+        "src/server/task-state.ts",
+        "src/storage/indexeddb.ts",
+        "src/storage/interface.ts",
+        "src/storage/web-extension.ts",
+        "src/workers/workflow-runner.ts"
+      ],
+      "rules": {
+        "max-lines": ["error", { "max": 800, "skipBlankLines": false, "skipComments": false }]
+      }
+    },
+    {
+      "files": [
+        "src/core/checkpoint/lifecycle.ts",
+        "src/core/engine/checkpoint-replay.ts",
+        "src/core/engine/bulk-operations.ts",
+        "src/core/engine/lifecycle/recovered-services.ts",
+        "src/core/engine/lifecycle/start-commit.ts",
+        "src/core/engine/termination/complete.ts",
+        "src/server/operations/create-schedule.ts",
+        "src/server/operations/get-task-diagnostics.ts",
+        "src/server/runtime/authentication-bridge.ts",
+        "src/server/runtime/task-polling.ts",
+        "src/server/runtime/task-reconciliation.ts",
+        "src/server/runtime/task-result-resolution.ts"
+      ],
+      "rules": {
+        "complexity": ["error", { "max": 22 }]
+      }
+    },
+    {
+      "files": [
+        "**/*.test-d.ts",
         "**/*.test.ts",
         "**/*.spec.ts",
         "**/*.test-support.ts",
@@ -119,6 +167,7 @@
         "typescript/no-unused-expressions": "off",
         "typescript/no-unused-vars": "off",
         "no-unused-vars": "off",
+        "no-unused-expressions": "off",
         "unicorn/consistent-function-scoping": "off",
         "promise/always-return": "off"
       }

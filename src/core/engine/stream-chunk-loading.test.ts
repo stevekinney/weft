@@ -3,7 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { encode } from '../codec.ts';
-import { loadStoredStreamChunks } from './stream-chunk-loading.ts';
+import { loadStoredStreamChunks, loadStoredStreamTailSequence } from './stream-chunk-loading.ts';
 
 describe('loadStoredStreamChunks', () => {
   it('loads decoded stream chunks in storage order', async () => {
@@ -49,5 +49,24 @@ describe('loadStoredStreamChunks', () => {
     await expect(loadStoredStreamChunks(storage, 'workflow-1', 'tokens')).rejects.toThrow(
       'Unrecognized type byte: 0xc1',
     );
+  });
+
+  it('loads a stored stream tail sequence', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(KEYS.streamTail('workflow-1', 'tokens'), encode({ sequence: 7 }));
+
+    await expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBe(7);
+  });
+
+  it('treats missing or malformed stream tail records as absent', async () => {
+    const storage = new MemoryStorage();
+
+    await expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBeNull();
+
+    await storage.put(KEYS.streamTail('workflow-1', 'tokens'), encode({ sequence: 'bad' }));
+    await expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBeNull();
+
+    await storage.put(KEYS.streamTail('workflow-1', 'tokens'), new Uint8Array([0xc1]));
+    await expect(loadStoredStreamTailSequence(storage, 'workflow-1', 'tokens')).resolves.toBeNull();
   });
 });

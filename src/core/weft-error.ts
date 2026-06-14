@@ -9,6 +9,9 @@
  * when an error may have crossed a realm or duplicate-module boundary, where
  * `instanceof` is unreliable.
  *
+ * See `documentation/reference/api-errors.md` for the source-complete error
+ * code table and usage guidance for the exported guards.
+ *
  * @example
  * ```ts
  * import { isWeftErrorLike, type WeftErrorCode } from '@lostgradient/weft';
@@ -31,7 +34,10 @@ export type WeftErrorCode =
   | 'EngineDisposedError'
   | 'WorkflowNotFoundError'
   | 'WorkflowNotRegisteredError'
+  | 'WorkflowConcurrencyLimitExceededError'
+  | 'WorkflowSuspendNotSupportedError'
   | 'ActivityResolutionError'
+  | 'BranchTopologyChangedError'
   | 'PersistedDataIncompatibleError'
   | 'WorkflowTimeoutError'
   | 'HttpClientError'
@@ -96,7 +102,10 @@ const publicWeftErrorCodeMap = {
   EngineDisposedError: true,
   WorkflowNotFoundError: true,
   WorkflowNotRegisteredError: true,
+  WorkflowConcurrencyLimitExceededError: true,
+  WorkflowSuspendNotSupportedError: true,
   ActivityResolutionError: true,
+  BranchTopologyChangedError: true,
   PersistedDataIncompatibleError: true,
   WorkflowTimeoutError: true,
   HttpClientError: true,
@@ -130,6 +139,9 @@ const PUBLIC_WEFT_ERROR_CODES = new Set<string>(Object.keys(publicWeftErrorCodeM
  * object structurally. {@link isWeftErrorCode} narrows a bare `code` *string*,
  * not a caught `unknown`.
  *
+ * See `documentation/reference/api-errors.md#error-helpers` for guard selection
+ * examples across same-realm and cross-boundary errors.
+ *
  * @example
  * ```ts
  * import { isWeftError } from '@lostgradient/weft';
@@ -148,6 +160,9 @@ export function isWeftError(value: unknown): value is WeftError {
  * {@link WeftErrorCode} string values. This narrows a `code` *string*; to test
  * a caught `unknown` (the common `catch` case), reach for {@link isWeftErrorLike},
  * which checks the whole error object structurally.
+ *
+ * See `documentation/reference/api-errors.md#error-helpers` for guard selection
+ * examples across same-realm and cross-boundary errors.
  *
  * @example
  * ```ts
@@ -176,6 +191,9 @@ export function isWeftErrorCode(value: unknown): value is WeftErrorCode {
  * and `isWeftErrorLike` whenever the error may have crossed a module boundary.
  * To match a *specific* code, narrow with this guard then compare `error.code`
  * — TypeScript narrows it to the matched literal in the branch.
+ *
+ * See `documentation/reference/api-errors.md#error-helpers` for guard selection
+ * examples across same-realm and cross-boundary errors.
  *
  * @example
  * ```ts

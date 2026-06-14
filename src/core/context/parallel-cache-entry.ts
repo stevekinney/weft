@@ -61,6 +61,15 @@ export type ParallelOperationCacheEntry = {
  * key list for `ctx.runAll`) differs from the cached entry on retry.
  * Indicates non-deterministic workflow code — branches must be stable
  * across retries.
+ *
+ * @example
+ * ```ts
+ * import { BranchTopologyChangedError } from '@lostgradient/weft';
+ *
+ * function isBranchTopologyChange(error: unknown): boolean {
+ *   return error instanceof BranchTopologyChangedError;
+ * }
+ * ```
  */
 export class BranchTopologyChangedError extends WeftError<'BranchTopologyChangedError'> {
   constructor(message: string) {

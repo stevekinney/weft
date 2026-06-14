@@ -2,6 +2,7 @@ import { Database, Statement, type SQLQueryBindings } from 'bun:sqlite';
 
 import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range';
 import {
+  assertStorageBatchOperationCount,
   storageValuesEqual,
   type BatchOperation,
   type ConditionalBatchCondition,
@@ -239,6 +240,7 @@ export class BunSQLiteStorage implements Storage {
   }
 
   async batch(operations: BatchOperation[]): Promise<void> {
+    assertStorageBatchOperationCount('batch operations', operations.length);
     if (operations.length === 0) return;
     this.#batchTransaction(operations);
   }
@@ -247,6 +249,9 @@ export class BunSQLiteStorage implements Storage {
     conditions: ConditionalBatchCondition[],
     operations: BatchOperation[],
   ): Promise<boolean> {
+    assertStorageBatchOperationCount('conditionalBatch conditions', conditions.length);
+    assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
+
     const conditionalTransaction = this.#database.transaction(
       (
         pendingConditions: ConditionalBatchCondition[],

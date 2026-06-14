@@ -1,6 +1,10 @@
 import { encode } from '../../core/codec.ts';
 import type { Engine } from '../../core/engine.ts';
 import {
+  encodeStoredStreamTailSequence,
+  loadStoredStreamTailSequence,
+} from '../../core/engine/stream-chunk-loading.ts';
+import {
   ActivityCompletedEvent,
   ActivityFailedEvent,
   ActivityStartedEvent,
@@ -253,6 +257,16 @@ export function wireEventBroadcasting(
     if (existing) return existing;
 
     const promise = (async () => {
+      const storedTailSequence = await loadStoredStreamTailSequence(
+        engine.storage,
+        workflowId,
+        'tokens',
+      );
+      if (storedTailSequence !== null) {
+        tokenSequenceCounters.set(workflowId, storedTailSequence + 1);
+        return;
+      }
+
       const prefix = KEYS.streamChunkPrefix(workflowId, 'tokens');
       let highestSequence = -1;
 
@@ -315,10 +329,18 @@ export function wireEventBroadcasting(
       const tokenSequence = claimNextSequence(tokenSequenceCounters, workflowId);
       await withRetry(
         async () =>
-          engine.storage.put(
-            KEYS.streamChunk(workflowId, 'tokens', tokenSequence),
-            encode(tokenPayload),
-          ),
+          engine.storage.batch([
+            {
+              type: 'put',
+              key: KEYS.streamChunk(workflowId, 'tokens', tokenSequence),
+              value: encode(tokenPayload),
+            },
+            {
+              type: 'put',
+              key: KEYS.streamTail(workflowId, 'tokens'),
+              value: encodeStoredStreamTailSequence(tokenSequence),
+            },
+          ]),
         `persist token stream chunk for workflow "${workflowId}"`,
       );
 

@@ -11,6 +11,7 @@ import type {
   NormalizedPayloadSizePolicy,
   NormalizedRetentionPolicy,
   SearchAttributeSchema,
+  WorkflowConcurrencyOptions,
   WorkflowFunction,
   WorkflowTimelineEntry,
 } from '../types.ts';
@@ -24,6 +25,7 @@ export interface RegistrationEntry {
   outputSchema?: DefinitionSchema;
   searchAttributes?: SearchAttributeSchema;
   retention?: NormalizedRetentionPolicy;
+  concurrency?: WorkflowConcurrencyOptions;
   constraints?: ConstraintDefinition[];
 }
 
@@ -59,7 +61,9 @@ export interface WorkflowResultWaiter {
   reject: (reason: unknown) => void;
 }
 
-export type EngineConstructorOptions = Partial<EngineOptions> & { getNow?: () => number };
+export type EngineConstructorOptions<TServices = unknown> = Partial<EngineOptions<TServices>> & {
+  getNow?: () => number;
+};
 
 export type ExecutionStrategyBundle = {
   strategy: ExecutionStrategy;

@@ -1,3 +1,4 @@
+import { copyBytesToArrayBuffer } from '../../core/byte-arrays.ts';
 import { encode } from '../../core/codec.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 
@@ -9,7 +10,7 @@ export function jsonResponse(body: unknown, status: number = 200): Response {
 }
 
 function msgpackResponse(body: unknown, status: number = 200): Response {
-  return new Response(encode(body), {
+  return new Response(copyBytesToArrayBuffer(encode(body)), {
     status,
     headers: { 'Content-Type': 'application/msgpack' },
   });

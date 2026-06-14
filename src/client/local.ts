@@ -25,6 +25,7 @@ import type {
   AttributeFilterKey,
   BulkCancelResult,
   BulkDeleteResult,
+  BulkRetryFailedResult,
   BulkSignalResult,
   BulkTagResult,
   CoordinatedUpdateResult,
@@ -444,6 +445,10 @@ export class LocalClient implements WeftClient {
 
   async cancelAll(filter: ListFilter): Promise<BulkCancelResult> {
     return this.#engine.cancelAll(filter);
+  }
+
+  async retryFailedAll(filter: ListFilter): Promise<BulkRetryFailedResult> {
+    return this.#engine.retryFailedAll(filter);
   }
 
   async signalAll(filter: ListFilter, name: string, payload?: unknown): Promise<BulkSignalResult> {

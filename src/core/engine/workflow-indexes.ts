@@ -16,6 +16,7 @@ import { KEYS, type BatchOperation, type Storage } from '../../storage/interface
 import { decode, encode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
 import { WeftError } from '../weft-error.ts';
+import type { EngineInternals } from './internals.ts';
 
 /**
  * Bumped whenever the index layout or population rules change. The engine
@@ -236,4 +237,21 @@ export async function getWorkflowVisibilityWatermark(
   }
   if (typeof payload !== 'number') return 'stale';
   return payload >= WORKFLOW_VISIBILITY_INDEX_VERSION ? 'current' : 'stale';
+}
+
+/**
+ * Read the visibility-index watermark through the engine-local query cache.
+ * The cache deliberately lives on `EngineInternals`, not storage, because the
+ * supported runtime posture is one engine process per durable store.
+ */
+export async function getCachedWorkflowVisibilityWatermark(
+  internals: EngineInternals,
+): Promise<WorkflowVisibilityWatermark> {
+  if (internals.workflowVisibilityWatermark !== undefined) {
+    return internals.workflowVisibilityWatermark;
+  }
+
+  const watermark = await getWorkflowVisibilityWatermark(internals.storage);
+  internals.workflowVisibilityWatermark = watermark;
+  return watermark;
 }

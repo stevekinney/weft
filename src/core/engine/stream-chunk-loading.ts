@@ -1,5 +1,5 @@
 import { KEYS, type Storage } from '../../storage/interface.ts';
-import { decode } from '../codec.ts';
+import { decode, encode } from '../codec.ts';
 import type { StoredStreamChunk } from '../context.ts';
 
 const STREAM_CHUNK_SEQUENCE_PATTERN = /^\d+$/;
@@ -36,4 +36,40 @@ export async function loadStoredStreamChunks(
   }
 
   return chunks;
+}
+
+export function encodeStoredStreamTailSequence(sequence: number): Uint8Array {
+  return encode({ sequence });
+}
+
+function parseStoredStreamTailSequence(value: unknown): number | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null;
+  }
+
+  if (!('sequence' in value)) {
+    return null;
+  }
+
+  const sequence = value.sequence;
+  if (typeof sequence !== 'number' || !Number.isSafeInteger(sequence) || sequence < -1) {
+    return null;
+  }
+
+  return sequence;
+}
+
+export async function loadStoredStreamTailSequence(
+  storage: Storage,
+  workflowId: string,
+  key: string,
+): Promise<number | null> {
+  const bytes = await storage.get(KEYS.streamTail(workflowId, key));
+  if (bytes === null) return null;
+
+  try {
+    return parseStoredStreamTailSequence(decode(bytes));
+  } catch {
+    return null;
+  }
 }

@@ -5,6 +5,7 @@ import { NeonStorage } from './neon.ts';
 import {
   bytes as encode,
   runBasicStorageContract,
+  runConcurrentConditionalBatchConformance,
   runStorageCapabilityConformance,
 } from './storage-adapter.test-support.ts';
 
@@ -51,9 +52,9 @@ if (NEON_DATABASE_URL) {
       conditionalBatch: true,
       boundedRangeDelete: true,
     },
-    // A real Neon pool can stage two concurrent write transactions, so the
-    // contention case in the conformance suite runs here (unlike the PGlite suite).
-    supportsConcurrentWrites: true,
+  });
+  runConcurrentConditionalBatchConformance('NeonStorage (live)', {
+    create: createLiveNeonStorage,
   });
 
   runBasicStorageContract('NeonStorage (live)', { create: createLiveNeonStorage });

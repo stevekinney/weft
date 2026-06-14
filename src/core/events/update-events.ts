@@ -8,9 +8,8 @@
  * import { Engine, UpdateReceivedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('update:received', (e: Event) => {
- *   const ev = e as UpdateReceivedEvent;
- *   console.log('update', ev.name, 'received for', ev.workflowId, '(id:', ev.updateId, ')');
+ * engine.addEventListener(UpdateReceivedEvent.type, (event) => {
+ *   console.log('update', event.name, 'received for', event.workflowId, '(id:', event.updateId, ')');
  * });
  * ```
  */
@@ -40,12 +39,11 @@ export class UpdateReceivedEvent extends Event {
  * import { Engine, UpdateCompletedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('update:completed', (e: Event) => {
- *   const ev = e as UpdateCompletedEvent;
- *   if (ev.error) {
- *     console.error('update', ev.name, 'failed:', ev.error);
+ * engine.addEventListener(UpdateCompletedEvent.type, (event) => {
+ *   if (event.error) {
+ *     console.error('update', event.name, 'failed:', event.error);
  *   } else {
- *     console.log('update', ev.name, 'result:', ev.result);
+ *     console.log('update', event.name, 'result:', event.result);
  *   }
  * });
  * ```

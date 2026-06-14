@@ -11,9 +11,16 @@
  * @module server/attribute-filters
  */
 
-import type { AttributeFilter, SearchAttributeValue } from '../core/types.ts';
+import type { AttributeFilterScalarValue } from '../core/types.ts';
 
-type ParsedAttributeFilter = Omit<AttributeFilter, 'key'> & { key: string };
+type ParsedAttributeFilter = {
+  key: string;
+  value?: AttributeFilterScalarValue | AttributeFilterScalarValue[] | undefined;
+  gt?: AttributeFilterScalarValue | undefined;
+  lt?: AttributeFilterScalarValue | undefined;
+  gte?: AttributeFilterScalarValue | undefined;
+  lte?: AttributeFilterScalarValue | undefined;
+};
 
 /**
  * Parse `attr.{name}={value}`, `attr.{name}.gt={value}`,
@@ -40,7 +47,7 @@ export function parseAttributeFilters(params: URLSearchParams): ParsedAttributeF
       // Exact match: attr.{name}={value}
       const name = rest;
       const existing = filterMap.get(name) ?? { key: name };
-      existing.value = inferAttributeValue(value);
+      existing.value = appendExactAttributeValue(existing.value, inferAttributeValue(value));
       filterMap.set(name, existing);
     } else {
       // Range: attr.{name}.{op}={value}
@@ -68,13 +75,23 @@ export function parseAttributeFilters(params: URLSearchParams): ParsedAttributeF
   return [...filterMap.values()];
 }
 
+function appendExactAttributeValue(
+  current: AttributeFilterScalarValue | AttributeFilterScalarValue[] | undefined,
+  next: AttributeFilterScalarValue,
+): AttributeFilterScalarValue | AttributeFilterScalarValue[] {
+  if (current === undefined) return next;
+
+  const currentValues = Array.isArray(current) ? current : [current];
+  return [...currentValues, next];
+}
+
 /**
  * Infer a typed `SearchAttributeValue` from its URL-decoded string.
  * Booleans and numbers parse first, otherwise the raw string is
  * preserved. The empty string stays a string (it would otherwise
  * coerce to `0` via `Number('')`).
  */
-export function inferAttributeValue(raw: string): SearchAttributeValue {
+export function inferAttributeValue(raw: string): AttributeFilterScalarValue {
   if (raw === 'true') return true;
   if (raw === 'false') return false;
 

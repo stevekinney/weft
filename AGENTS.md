@@ -1,6 +1,6 @@
 # AGENTS.md
 
-This file provides guidance to Codex (Codex.ai/code) when working with code in this repository.
+This file provides guidance to coding agents working with code in this repository.
 
 ## Ground Rules
 
@@ -103,7 +103,7 @@ Use `weft conformance` when a change touches the `RemoteWorker` protocol or work
 
 1. **Options-First Configuration**: The library API is options-first. Environment variables (`WEFT_*`) are limited to explicit runtime, CLI, and test toggles, and each read stays close to the code path that consumes it. Document user-facing runtime, CLI, and conformance variables in [`documentation/reference/configuration.md`](documentation/reference/configuration.md#environment-variables); internal benchmark, coverage, and smoke-test toggles stay documented beside the tests and scripts that consume them.
 
-2. **Lean Surface Area**: This template intentionally avoids framework-specific scaffolding (custom error classes, logger wrappers, etc.). Add only what you need for your project.
+2. **Lean Surface Area**: Keep Weft's public surface deliberate. Add framework-specific scaffolding only when the runtime needs it or the surrounding package already owns that abstraction.
 
 ### Key Notes
 
@@ -122,7 +122,7 @@ They use `chalk` for color, `change-case` for headings, and Bun’s `$` and `Bun
 
 ### Types
 
-There is no shared `src/types.ts` in this template. Add shared or domain-specific types near their modules as needed.
+Shared public type surfaces live under `src/core/types/`. Add domain-specific types near their owning modules unless they are part of that shared core surface.
 
 ## TypeScript Conventions
 
@@ -161,7 +161,7 @@ If an `as` cast is genuinely necessary (e.g., deserializing from storage where t
 ### Adding New Features
 
 1. **Environment variables**: Place the read close to the code path that consumes it. Document a new user-facing runtime, CLI, or conformance `WEFT_*` variable in [`documentation/reference/configuration.md`](documentation/reference/configuration.md#environment-variables); document internal benchmark, coverage, and smoke-test toggles beside the tests or scripts that consume them.
-2. **Types**: Shared/reusable types go in `src/types.ts`; domain-specific types live near their modules.
+2. **Types**: Shared core types go under `src/core/types/`; domain-specific types live near their owning modules.
 
 ### Server and API Surfaces
 

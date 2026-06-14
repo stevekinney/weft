@@ -1,13 +1,15 @@
 import { describe, expect, it, mock } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS, MAX_BATCH_OPERATIONS, type BatchOperation } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { serializeCheckpoint } from '../checkpoint/serialization.ts';
 import { encode } from '../codec.ts';
 import type { WorkflowStartInterception } from '../interceptor/interception-contexts.ts';
+import { MAX_WORKFLOW_TAGS } from '../start-workflow-validation.ts';
 import type { Checkpoint, WorkflowState } from '../types.ts';
 import { workflow } from '../types.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
+import { collectWorkflowPurgeDeleteOperations } from './bulk-operations-purge.ts';
 import { createLifecycleCallbacks as createEngineLifecycleCallbacks } from './callback-creators.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
@@ -73,7 +75,6 @@ function createCheckpoint(workflowId: string, overrides: Partial<Checkpoint> = {
     step: overrides.step ?? 0,
     locals: overrides.locals ?? {},
     accumulatedResults: overrides.accumulatedResults ?? [],
-    pendingSignals: overrides.pendingSignals ?? [],
     searchAttributes: overrides.searchAttributes ?? {},
     version: overrides.version ?? '1',
     schemaVersion: overrides.schemaVersion ?? 2,
@@ -725,6 +726,58 @@ describe('engine lifecycle coverage helpers', () => {
     );
     expect(deleteIndex).toBe(0);
     expect(putIndex).toBeGreaterThan(deleteIndex);
+  });
+
+  it('keeps representative purge and restart-create batches below MAX_BATCH_OPERATIONS', async () => {
+    const workflowId = 'workflow-start-batch-cap';
+    const storage = new MemoryStorage();
+    const attributes = Object.fromEntries(
+      Array.from({ length: 128 }, (_, index) => [`attribute-${index}`, `value-${index}`]),
+    );
+    const storageValue = new Uint8Array([1]);
+    const seedOperations: BatchOperation[] = Array.from({ length: 200 }, (_, index) => [
+      { type: 'put' as const, key: KEYS.checkpointHistory(workflowId, index), value: storageValue },
+      { type: 'put' as const, key: KEYS.event(workflowId, index), value: storageValue },
+      {
+        type: 'put' as const,
+        key: KEYS.signal(workflowId, 'release', `signal-${index}`),
+        value: storageValue,
+      },
+    ]).flat();
+    seedOperations.push({
+      type: 'put',
+      key: KEYS.attribute(workflowId),
+      value: encode(attributes),
+    });
+    await storage.batch(seedOperations);
+
+    const priorState = createWorkflowState(workflowId, {
+      status: 'completed',
+      tags: Array.from({ length: MAX_WORKFLOW_TAGS }, (_, index) => `tag-${index}`),
+      updatedAt: 20_000,
+    });
+    const purgeDeleteOperations = await collectWorkflowPurgeDeleteOperations(
+      { storage } as never,
+      priorState,
+    );
+    const restartOperations = buildStartBatchOperations(
+      {} as never,
+      workflowId,
+      createWorkflowState(workflowId),
+      createCheckpoint(workflowId),
+      { version: '1' } as never,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      createLifecycleCallbacks() as never,
+      purgeDeleteOperations,
+    );
+
+    expect(purgeDeleteOperations.length).toBeGreaterThan(seedOperations.length);
+    expect(purgeDeleteOperations.length).toBeLessThan(MAX_BATCH_OPERATIONS / 2);
+    expect(restartOperations.length).toBeLessThan(MAX_BATCH_OPERATIONS / 2);
   });
 
   it('begins worker workflow execution directly when inline execution is disabled', () => {

@@ -27,7 +27,7 @@ Typically constructed by the engine -- you will not create `Context` instances d
 | `startedAt`              | `number`         | Epoch timestamp when the workflow started                                               |
 | `signal`                 | `AbortSignal`    | Abort signal -- fires when the workflow is cancelled                                    |
 | `executionTimeRemaining` | `number`         | Milliseconds until execution deadline. `Infinity` if no deadline is set.                |
-| `log`                    | `WorkflowLogger` | Replay-safe structured logger scoped to this run. See [`log`](#log).                    |
+| `log`                    | `WorkflowLogger` | Checkpoint-aware structured logger scoped to this run. See [`log`](#log).               |
 | `stepIndex`              | `number`         | Current step counter (incremented by each durable operation)                            |
 | `nestingDepth`           | `number`         | How many levels deep this workflow is as a child workflow. `0` for top-level workflows. |
 
@@ -62,7 +62,7 @@ async function* example(context: Context) {
 ): WorkflowOperation<ActivityResultFor<TActivities[TName]>>
 ```
 
-Execute a registered activity durably by name. The engine checkpoints before the call and records the result. On replay, cached results are returned without re-executing the activity. The `name` is the activity's registered name—the durable dispatch key Weft uses for local dispatch and for remote dispatch alike. When the workflow is typed through its `.activities({ ... })` registry, `TActivities` carries the declared names, so `name` autocompletes and the input and result types are inferred (the exported `ActivityArgsFor` and `ActivityResultFor` helpers let you spell those types out by hand). An optional `ActivityCallOptions` argument may follow the input to override retry, timeout, queue, or idempotency for a single call.
+Execute a registered activity durably by name. The engine checkpoints before the call and records the result. On checkpoint cache hits, stored results are returned without re-executing the activity. The `name` is the activity's registered name—the durable dispatch key Weft uses for local dispatch and for remote dispatch alike. When the workflow is typed through its `.activities({ ... })` registry, `TActivities` carries the declared names, so `name` autocompletes and the input and result types are inferred (the exported `ActivityArgsFor` and `ActivityResultFor` helpers let you spell those types out by hand). An optional `ActivityCallOptions` argument may follow the input to override retry, timeout, queue, or idempotency for a single call.
 
 | Parameter | Type                  | Description                            |
 | --------- | --------------------- | -------------------------------------- |
@@ -150,7 +150,7 @@ waitUntil(predicate: () => boolean, timeout: Duration): WorkflowOperation<boolea
 
 Wait until `predicate` returns `true`. The engine re-evaluates the predicate whenever the workflow is driven forward—each time an `onUpdate` handler mutates workflow-local state, or when the optional `timeout` elapses. This is the condition-variable primitive (Temporal's `condition()`): a `waitUntil` whose predicate reads state mutated by `onUpdate` handlers re-checks in-process without polling.
 
-The predicate must be **pure**. It may read only checkpoint-restored workflow-local state and must not perform I/O, generate randomness, or read wall-clock time. It is a non-serializable closure (like `ctx.memo`'s function), held in-process and never checkpointed. Once the wait outcome has been checkpointed, replay returns the cached outcome and does not re-invoke the predicate. A predicate that throws fails the workflow at the `yield* context.waitUntil` call site (like a throwing activity), so the workflow body can `try`/`catch` it.
+The predicate must be **pure**. It may read only checkpoint-restored workflow-local state and must not perform I/O, generate randomness, or read wall-clock time. It is a non-serializable closure (like `ctx.memo`'s function), held in-process and never checkpointed. Once the wait outcome has been checkpointed, recovery returns the cached outcome and does not re-invoke the predicate. A predicate that throws fails the workflow at the `yield* context.waitUntil` call site (like a throwing activity), so the workflow body can `try`/`catch` it.
 
 > [!NOTE]
 > Weft signals are pull-only (`ctx.waitForSignal`) and run no state-mutating handler, so signal delivery does **not** re-drive a `waitUntil`. Use `onUpdate` to push the state a predicate observes.
@@ -176,6 +176,44 @@ async function* example(context: Context) {
 }
 ```
 
+### `getVersion()`
+
+```text
+*getVersion(
+  changeId: string,
+  minSupported: number,
+  maxSupported: number,
+): Generator<ContextOperationRequest, number, unknown>
+```
+
+Pin a named workflow patch to a deterministic numeric version. The first execution stores `maxSupported` in checkpoint locals under `version:{changeId}`. Replay and recovery return that stored value, so in-flight workflows keep taking their original branch while new starts pin the newer version.
+
+| Parameter      | Type     | Description                                     |
+| -------------- | -------- | ----------------------------------------------- |
+| `changeId`     | `string` | Stable name for the patch point                 |
+| `minSupported` | `number` | Lowest version this code still knows how to run |
+| `maxSupported` | `number` | Version to pin for workflows reaching it first  |
+
+**Returns:** The pinned version for this workflow run.
+
+```ts
+import { type Context } from '@lostgradient/weft';
+
+type Order = { id: string };
+
+async function* example(context: Context, order: Order) {
+  const version = yield* context.getVersion('shipping-v2', 1, 2);
+
+  if (version === 1) {
+    return yield* context.run('shipWithLegacyCarrier', order);
+  }
+
+  return yield* context.run('shipWithCarrierPool', order);
+}
+
+void example;
+```
+
 ### `all()`
 
 ```ts partial
@@ -192,7 +230,7 @@ Run multiple durable operations in parallel. All operations must complete before
 
 **Returns:** An array of results in the same order as the input operations.
 
-**Failure semantics.** When any branch rejects, every fulfilled branch's value is written to the parent's in-memory cache entry before the error is thrown into the workflow generator. The entry becomes durable on the next checkpoint write (the workflow's next yield). If the workflow catches the rejection and yields again, that next yield persists the partial entry; a resumed run replays at the same step and reuses fulfilled slots without re-dispatch. If the workflow fails terminally without yielding again, the partial entry is **not** persisted—no resumed run can reuse it. This partial-preservation guarantee requires the default inline execution strategy; `workerExecution` cannot persist fulfilled branch slots after a sibling branch fails and reports that unsupported boundary explicitly.
+**Failure semantics.** When any branch rejects, every fulfilled branch's value is written to the parent's in-memory cache entry before the error is thrown into the workflow generator. The entry becomes durable on the next checkpoint write (the workflow's next yield). If the workflow catches the rejection and yields again, that next yield persists the partial entry; a recovered run reaches the same step and reuses fulfilled slots without re-dispatch. If the workflow fails terminally without yielding again, the partial entry is **not** persisted—no recovered run can reuse it. This partial-preservation guarantee requires the default inline execution strategy; `workerExecution` cannot persist fulfilled branch slots after a sibling branch fails and reports that unsupported boundary explicitly.
 
 See the [parallel execution guide](../guides/parallel-execution.md) for the full contract, including the deterministic-branch-order requirement and the explicit catch-and-yield boundary.
 
@@ -242,7 +280,7 @@ async function* example(context: Context) {
 *memo<T>(key: string, fn: () => T | Promise<T>): Generator<ContextOperationRequest, T, unknown>
 ```
 
-Execute a function and cache its result by key. On replay or repeated calls with the same key, the cached value is returned without re-executing. Useful for non-deterministic computations that must produce the same value across replays (e.g., generating an ID).
+Execute a function and cache its result by key. On checkpoint cache hits or repeated calls with the same key, the cached value is returned without re-executing. Useful for non-deterministic computations that must keep a stable value across recovery (e.g., generating an ID).
 
 | Parameter | Type                    | Description                            |
 | --------- | ----------------------- | -------------------------------------- |
@@ -398,19 +436,25 @@ async function* paymentWorkflow(ctx: WorkflowContext, payment: PaymentRequest) {
 *startChild<TResult = unknown>(
   workflowType: string,
   input: unknown,
-  options?: Record<string, unknown>,
+  options?: AwaitChildWorkflowOptions,
 ): Generator<ContextOperationRequest, TResult, unknown>
+
+*startChild<TResult = unknown>(
+  workflowType: string,
+  input: unknown,
+  options: DetachedChildWorkflowOptions,
+): Generator<ContextOperationRequest, ChildWorkflowHandle<TResult>, unknown>
 ```
 
-Start a child workflow and wait for its result. The child workflow is independently checkpointed -- it has its own workflow ID, its own state in storage, and its own lifecycle. The parent workflow suspends at the `yield*` boundary until the child completes or fails.
+Start a child workflow. The child workflow is independently checkpointed -- it has its own workflow ID, its own state in storage, and its own lifecycle. With the default `parentClosePolicy: 'await'`, the parent workflow suspends at the `yield*` boundary until the child completes or fails.
 
-| Parameter      | Type                      | Description                               |
-| -------------- | ------------------------- | ----------------------------------------- |
-| `workflowType` | `string`                  | The registered name of the child workflow |
-| `input`        | `unknown`                 | Input to pass to the child workflow       |
-| `options`      | `Record<string, unknown>` | Optional configuration for the child      |
+| Parameter      | Type                   | Description                               |
+| -------------- | ---------------------- | ----------------------------------------- |
+| `workflowType` | `string`               | The registered name of the child workflow |
+| `input`        | `unknown`              | Input to pass to the child workflow       |
+| `options`      | `ChildWorkflowOptions` | Optional configuration for the child      |
 
-**Returns:** The child workflow's return value, typed as `TResult`.
+**Returns:** The child workflow's return value, typed as `TResult`, for omitted or `'await'` policy. Returns `ChildWorkflowHandle<TResult>` for `'abandon'` and `'request-cancel'`.
 
 If the child workflow throws, the error propagates into the parent and can be caught with `try/catch`.
 
@@ -433,6 +477,48 @@ async function* parentWorkflow(ctx: WorkflowContext, order: Order) {
   return { receipt, status: 'completed' };
 }
 ```
+
+`parentClosePolicy` controls whether the parent waits for the child result:
+
+| Policy             | Return value                   | Behavior                                                                                                                        |
+| ------------------ | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `'await'`          | `TResult`                      | Default behavior. The parent waits for the child result or failure.                                                             |
+| `'abandon'`        | `ChildWorkflowHandle<TResult>` | Returns `{ id }` immediately and does not link the child to the parent's execution-state owner.                                 |
+| `'request-cancel'` | `ChildWorkflowHandle<TResult>` | Returns `{ id }` immediately and registers parent cancellation to request cancellation of the child in the same engine process. |
+
+`ChildWorkflowHandle` is a checkpointable reference. It intentionally contains durable data only; use `engine.getHandle(handle.id).snapshot()` or `engine.getHandle(handle.id).result()` from host code for live observation.
+
+```ts
+import type { WorkflowContext } from '@lostgradient/weft';
+
+type Order = {
+  cardToken: string;
+  total: number;
+};
+
+type Receipt = {
+  receiptId: string;
+};
+
+async function* parentWorkflow(ctx: WorkflowContext, order: Order) {
+  const child = yield* ctx.startChild<Receipt>(
+    'process-payment',
+    {
+      amount: order.total,
+      cardToken: order.cardToken,
+    },
+    {
+      parentClosePolicy: 'abandon',
+    },
+  );
+
+  return { paymentWorkflowId: child.id };
+}
+
+void parentWorkflow;
+```
+
+`ctx.pipe()`, `ctx.map()`, and `ctx.reduce()` remain await-only because their contract is to collect child workflow results. Use direct `ctx.startChild()` calls for detached children. A forcible `terminate` policy is intentionally absent.
 
 > **Nesting depth limit:** By default, child workflows can nest up to 10 levels deep. Configure `maxNestingDepth` in engine options to adjust this limit. Exceeding the limit throws an error into the parent workflow.
 
@@ -529,7 +615,7 @@ Expose named read-only accessors for external introspection.
 explain(enabled?: boolean): void
 ```
 
-Enable or disable explain mode. When enabled, durable operations log detailed checkpoint and dispatch information to the console. Useful for debugging workflow replay behavior.
+Enable or disable explain mode. When enabled, durable operations log detailed checkpoint and dispatch information to the console. Useful for debugging checkpoint recovery behavior.
 
 ### `log`
 
@@ -545,10 +631,10 @@ ctx.log.info('charge succeeded', { amount: 1999, currency: 'usd' });
 
 Caller-supplied attributes are nested under their own `attributes` key in the record, so they can never shadow an envelope field. `ctx.log.info('x', { workflowId: 'spoof' })` keeps the real `workflowId` on the envelope and quarantines `{ workflowId: 'spoof' }` inside `attributes`.
 
-`ctx.log` is replay-safe. A workflow body re-executes from the start on recovery to rebuild state (replay); log calls in the already-committed replay window are suppressed, so a recovered run does not re-emit logs it already emitted. This holds in both inline and worker execution modes, unlike `ctx.services`-injected loggers, which are inline-only. `ctx.log` is _not_ a durable operation: it consumes no step index and is never checkpointed.
+`ctx.log` is checkpoint-aware. During recovery, Weft suppresses a log call when the current step has a cached result restored from the checkpoint, so a recovered run does not re-emit logs from already-committed steps. This holds in both inline and worker execution modes, unlike `ctx.services`-injected loggers, which are inline-only. `ctx.log` is _not_ a durable operation: it consumes no step index and is never checkpointed.
 
-> [!NOTE] Replay edge cases
-> A log placed _after_ the last committed step re-fires on recovery, because there is no cached step to suppress it (the same caveat Temporal's workflow logger carries). Likewise, a workflow with no committed durable step has no replay position to suppress against, so its logs may re-emit on recovery. Logs inside `ctx.all` / `ctx.runAll` branches follow that branch's re-execution semantics.
+> [!NOTE] Recovery edge cases
+> A log placed _after_ the last committed step re-fires on recovery, because there is no cached step to suppress it. Likewise, a workflow with no committed durable step has no checkpoint position to suppress against, so its logs may re-emit on recovery. Logs inside `ctx.all` / `ctx.runAll` branches follow that branch's checkpoint-cache semantics.
 
 > [!NOTE] Log destination
 > Records go to the current process console. In worker-pool mode that is the worker process's console, not the engine host. Inline timestamps come from the engine clock; worker-mode timestamps come from the worker process wall clock. A pluggable host sink and worker-mode host log routing are tracked in [issue #491](https://github.com/stevekinney/weft/issues/491).
@@ -593,6 +679,9 @@ engine.register(
 `ctx.state.session()` is synchronous -- no `yield*` needed. Durable state methods
 must be yielded because they read and commit through storage.
 
+> [!WARNING] Inline execution mode only
+> `ctx.state.session()` throws on first call under `workflowExecutionMode: 'worker'` because checkpoint-local session handles live inside the inline workflow context. Use `workflowExecutionMode: 'inline'` when you need session state, or use storage-backed `ctx.state.workflow()` / `ctx.state.execution()` state in worker mode. See [Workflow Execution Mode](./configuration.md#workflow-execution-mode) for the context surfaces that are unavailable in worker mode.
+
 ---
 
 ## Step-Based Workflows
@@ -617,7 +706,7 @@ The step context is a subset of the full `Context`. It exposes `workflowId`, `si
 step<T>(name: string, fn: () => Promise<T> | T): Promise<T>
 ```
 
-Execute a named step as a durable operation. Each `step()` call routes through the same durable activity machinery as `ctx.run(...)`: the engine assigns it a positional replay slot, persists the result to the checkpoint, and -- on crash recovery -- returns the stored result without re-running `fn`. Completed steps are not re-executed when a workflow resumes. Steps execute sequentially -- one at a time.
+Execute a named step as a durable operation. Each `step()` call routes through the same durable activity machinery as `ctx.run(...)`: the engine assigns it a positional checkpoint slot, persists the result to the checkpoint, and -- on crash recovery -- returns the stored result without re-running `fn`. Completed steps are not re-executed when a workflow resumes. Steps execute sequentially -- one at a time.
 
 | Parameter | Type                    | Description                                                    |
 | --------- | ----------------------- | -------------------------------------------------------------- |
@@ -627,7 +716,7 @@ Execute a named step as a durable operation. Each `step()` call routes through t
 **Returns:** A promise that resolves with the step function's return value.
 
 > [!WARNING] Await steps in order
-> Step durability is **positional**: a step is identified on replay by the order in which it ran, not by its `name`. You must `await` each `ctx.step(...)` before starting the next one. Firing steps concurrently -- e.g. `await Promise.all([ctx.step('a', ...), ctx.step('b', ...)])` where a `.then(...)` continuation enqueues further steps -- can change the order steps are queued between the original run and a recovered run, which silently returns the wrong cached value after a crash. When you need parallelism, durable timers, or signals, graduate to the generator API.
+> Step durability is **positional**: a step is matched during recovery by the order in which it ran, not by its `name`. You must `await` each `ctx.step(...)` before starting the next one. Firing steps concurrently -- e.g. `await Promise.all([ctx.step('a', ...), ctx.step('b', ...)])` where a `.then(...)` continuation enqueues further steps -- can change the order steps are queued between the original run and a recovered run, which silently returns the wrong cached value after a crash. When you need parallelism, durable timers, or signals, graduate to the generator API.
 
 > [!NOTE] Inline execution mode only
 > Step-based workflows require `workflowExecutionMode: 'inline'` (the default). Worker execution mode drives workflows with a different context that has no step machinery, so a `compileStepWorkflow` workflow throws there -- use the generator API for worker mode.

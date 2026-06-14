@@ -1,5 +1,6 @@
 import type { DefinitionSchema } from './definition-schema.ts';
 import type { SearchAttributeSchema } from './search-attributes.ts';
+import type { WorkflowConcurrencyOptions } from './workflow-concurrency.ts';
 
 /**
  * Read-only metadata exposed by the engine for a registered workflow type.
@@ -29,4 +30,6 @@ export interface RegisteredWorkflowDefinition<TInput = unknown, TOutput = unknow
   outputSchema?: DefinitionSchema<unknown, TOutput>;
   /** Optional search attribute schema used for indexing and runtime validation. */
   searchAttributes?: SearchAttributeSchema;
+  /** Optional start admission policy for this workflow type. */
+  concurrency?: WorkflowConcurrencyOptions<TInput>;
 }

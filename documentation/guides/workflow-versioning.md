@@ -77,3 +77,56 @@ try {
 Use `weft version:check` before deployment to see active workflow types whose
 stored versions do not match the code you are about to run. Resolve those runs
 explicitly before deploying the new workflow version.
+
+## In-flight Patches
+
+Use `ctx.getVersion(changeId, minSupported, maxSupported)` when a code change
+affects logic that already-running workflows may not have reached yet. Keep the
+registered workflow version stable, add a named patch, and branch on the pinned
+number:
+
+```typescript
+import { workflow, type WorkflowContext } from '@lostgradient/weft';
+
+type Order = { id: string };
+
+const orderWorkflow = workflow({ name: 'order' }).execute(async function* (
+  ctx: WorkflowContext,
+  order: Order,
+) {
+  const shippingVersion = yield* ctx.getVersion('shipping-v2', 1, 2);
+
+  if (shippingVersion === 1) {
+    return yield* ctx.run('shipWithLegacyCarrier', order);
+  }
+
+  return yield* ctx.run('shipWithCarrierPool', order);
+});
+
+void orderWorkflow;
+```
+
+The first execution stores `maxSupported` in checkpoint locals under
+`version:{changeId}`. Recovery returns the stored value, so workflows that pinned
+version `1` keep taking the old branch while new starts pin version `2` and take
+the new branch.
+
+The deploy sequence is:
+
+1. Add `ctx.getVersion('change-id', oldVersion, newVersion)` and keep both
+   branches.
+2. Deploy with the registered workflow version unchanged.
+3. Wait until every in-flight run that could have pinned the old version has
+   completed.
+4. Remove the old branch and raise `minSupported` to the retained version.
+
+If a recovered workflow is pinned below `minSupported`, Weft fails that run with
+an actionable error naming the change id, pinned version, and minimum supported
+version. That turns accidental early branch removal into an explicit recovery
+failure instead of silently running the wrong code.
+
+`ctx.getVersion` is not a checkpoint migration hook. It is for deterministic
+branching inside one registered workflow version. When you intentionally change
+the registered workflow version, the drain-first guidance above still applies:
+resolve active runs or keep compatible code registered until recovery no longer
+needs the old version.

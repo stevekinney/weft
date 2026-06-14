@@ -22,9 +22,12 @@ import {
   calculateExecutionLatencyMs,
   calculateHeartbeatAgeMs,
   calculateQueueLatencyMs,
+  clearDeadLetteredTaskRecord,
+  isDeadLetteredTaskRecord,
   isInflightRecord,
   isQueuedRecord,
   isResolvedRecord,
+  type DeadLetteredTaskRecord,
   type InflightRecord,
   type QueuedRecord,
   type ResolvedRecord,
@@ -44,12 +47,13 @@ const taskDiagnosticKindSchema = z.enum([
   'stale-inflight',
   'retry-storm',
   'all-workers-at-capacity',
+  'dead-lettered',
 ]);
 
 const taskDiagnosticItemSchema = z
   .object({
     kind: taskDiagnosticKindSchema,
-    state: z.enum(['queued', 'inflight', 'resolved', 'capacity']),
+    state: z.enum(['queued', 'inflight', 'resolved', 'capacity', 'dead-lettered']),
     operationId: z.string().optional(),
     workflowId: z.string().optional(),
     activityName: z.string().optional(),
@@ -62,6 +66,10 @@ const taskDiagnosticItemSchema = z
     heartbeatAgeMs: z.number().nonnegative().optional(),
     lastRequeueReason: z.enum(['visibility-timeout', 'worker-disconnect']).optional(),
     resolutionReason: z.string().optional(),
+    deadLetteredAt: z.number().nonnegative().optional(),
+    deadLetterReason: z.literal('result-resolution-storage-exhausted').optional(),
+    storageError: z.string().optional(),
+    retryAttempts: z.number().int().nonnegative().optional(),
     evidence: z.array(z.string()),
   })
   .strict();
@@ -72,6 +80,7 @@ const taskDiagnosticsSummarySchema = z
     staleInflight: z.number().int().nonnegative(),
     retryStorms: z.number().int().nonnegative(),
     allWorkersAtCapacity: z.number().int().nonnegative(),
+    deadLettered: z.number().int().nonnegative(),
   })
   .strict();
 
@@ -93,6 +102,12 @@ const getTaskDiagnosticsInput = z.object({
   limit: z.number().int().min(1).max(MAX_LIMIT).default(DEFAULT_LIMIT),
 });
 
+const clearTaskDeadLetterInput = z.object({
+  operationId: z.string().min(1),
+});
+
+const okOutput = z.object({ ok: z.literal(true) }).strict();
+
 export type GetTaskDiagnosticsInput = z.infer<typeof getTaskDiagnosticsInput>;
 
 export type TaskDiagnosticKind = z.infer<typeof taskDiagnosticKindSchema>;
@@ -103,6 +118,10 @@ export type TaskDiagnosticsSummary = z.infer<typeof taskDiagnosticsSummarySchema
 
 export type GetTaskDiagnosticsOutput = z.infer<typeof getTaskDiagnosticsOutput>;
 
+export type ClearTaskDeadLetterInput = z.infer<typeof clearTaskDeadLetterInput>;
+
+export type ClearTaskDeadLetterOutput = z.infer<typeof okOutput>;
+
 interface GetTaskDiagnosticsOptions {
   registry?: WorkerRegistry | undefined;
   taskQueue?: TaskQueue | undefined;
@@ -110,6 +129,19 @@ interface GetTaskDiagnosticsOptions {
 }
 
 type TaskRecord = QueuedRecord | InflightRecord | ResolvedRecord;
+
+type FilterableTaskRecord = {
+  operationId: string;
+  workflowId?: string | undefined;
+  queue?: string | undefined;
+};
+
+const httpOnlyTaskDiagnosticsTransports = {
+  http: true,
+  jsonRpcHttp: false,
+  jsonRpcWebSocket: false,
+  jsonRpcStdio: false,
+} as const;
 
 export function createGetTaskDiagnosticsOperation(options: GetTaskDiagnosticsOptions = {}) {
   return defineOperation<GetTaskDiagnosticsInput, GetTaskDiagnosticsOutput>({
@@ -143,6 +175,31 @@ export function createGetTaskDiagnosticsOperation(options: GetTaskDiagnosticsOpt
 
 export const getTaskDiagnosticsOperation = createGetTaskDiagnosticsOperation();
 
+export const clearTaskDeadLetterOperation = defineOperation<
+  ClearTaskDeadLetterInput,
+  ClearTaskDeadLetterOutput
+>({
+  name: 'weft.tasks.diagnostics.deadletters.clear',
+  mcpExposable: false,
+  summary: 'Clear a task-result dead-letter diagnostic entry',
+  destructive: true,
+  tags: ['Observability'],
+  inputSchema: clearTaskDeadLetterInput,
+  outputSchema: okOutput,
+  access: {
+    kind: 'scoped',
+    scopes: { kind: 'anyOf', scopes: ['system:admin'] },
+  },
+  producibleFaults: [],
+  discoverable: true,
+  transports: httpOnlyTaskDiagnosticsTransports,
+  unknownKeyPolicy: { http: 'reject', jsonRpc: 'reject' },
+  invoke: async ({ input, engine }): Promise<ClearTaskDeadLetterOutput> => {
+    await clearDeadLetteredTaskRecord((engine as Engine).storage, input.operationId);
+    return { ok: true };
+  },
+});
+
 async function collectTaskDiagnostics({
   engine,
   input,
@@ -162,8 +219,10 @@ async function collectTaskDiagnostics({
     staleInflight: 0,
     retryStorms: 0,
     allWorkersAtCapacity: 0,
+    deadLettered: 0,
   };
   const relevantQueues = new Set<string>();
+  const deadLetteredOperationIds = new Set<string>();
 
   const addItem = (item: TaskDiagnosticItem): void => {
     incrementSummary(summary, item.kind);
@@ -171,6 +230,13 @@ async function collectTaskDiagnostics({
       items.push(item);
     }
   };
+
+  for await (const record of scanDeadLetterRecords(engine)) {
+    if (!matchesTaskRecordFilter(record, input)) continue;
+    deadLetteredOperationIds.add(record.operationId);
+    if (record.queue !== undefined) relevantQueues.add(record.queue);
+    addDeadLetterDiagnostics(record, addItem);
+  }
 
   for await (const record of scanQueuedRecords(engine)) {
     if (!matchesTaskRecordFilter(record, input)) continue;
@@ -180,6 +246,7 @@ async function collectTaskDiagnostics({
 
   for await (const record of scanInflightRecords(engine)) {
     if (!matchesTaskRecordFilter(record, input)) continue;
+    if (deadLetteredOperationIds.has(record.operationId)) continue;
     relevantQueues.add(record.queue);
     addInflightDiagnostics(record, input, currentTime, addItem);
   }
@@ -199,6 +266,15 @@ async function collectTaskDiagnostics({
   });
 
   return { items, summary, limit: input.limit };
+}
+
+async function* scanDeadLetterRecords(engine: Engine): AsyncIterable<DeadLetteredTaskRecord> {
+  for await (const [, value] of engine.storage.scan(KEYS.operationDeadLetterPrefix())) {
+    const decoded = decode(value);
+    if (isDeadLetteredTaskRecord(decoded)) {
+      yield decoded;
+    }
+  }
 }
 
 async function* scanQueuedRecords(engine: Engine): AsyncIterable<QueuedRecord> {
@@ -304,6 +380,31 @@ function addInflightDiagnostics(
   }
 
   addRetryStormDiagnostic(record, 'inflight', input, addItem);
+}
+
+function addDeadLetterDiagnostics(
+  record: DeadLetteredTaskRecord,
+  addItem: (item: TaskDiagnosticItem) => void,
+): void {
+  addItem({
+    kind: 'dead-lettered',
+    state: 'dead-lettered',
+    operationId: record.operationId,
+    workflowId: record.workflowId,
+    activityName: record.activityName,
+    queue: record.queue,
+    workerId: record.workerId,
+    retryCount: record.retryCount ?? Math.max(0, (record.attempt ?? 1) - 1),
+    requeueCount: record.requeueCount ?? 0,
+    lastRequeueReason: record.lastRequeueReason,
+    deadLetteredAt: record.deadLetteredAt,
+    deadLetterReason: record.reason,
+    storageError: record.errorMessage,
+    retryAttempts: record.retryAttempts,
+    evidence: [
+      `Task result transition exhausted ${record.retryAttempts} storage attempts; reconciliation will not re-dispatch operation "${record.operationId}" until the dead-letter entry is cleared`,
+    ],
+  });
 }
 
 function addRetryStormDiagnostic(
@@ -415,7 +516,10 @@ function buildCapacityDiagnostic(
   };
 }
 
-function matchesTaskRecordFilter(record: TaskRecord, input: GetTaskDiagnosticsInput): boolean {
+function matchesTaskRecordFilter(
+  record: FilterableTaskRecord,
+  input: GetTaskDiagnosticsInput,
+): boolean {
   if (input.operationId !== undefined && record.operationId !== input.operationId) return false;
   if (input.workflowId !== undefined && record.workflowId !== input.workflowId) return false;
   if (input.queue !== undefined && record.queue !== input.queue) return false;
@@ -435,6 +539,9 @@ function incrementSummary(summary: TaskDiagnosticsSummary, kind: TaskDiagnosticK
       return;
     case 'all-workers-at-capacity':
       summary.allWorkersAtCapacity += 1;
+      return;
+    case 'dead-lettered':
+      summary.deadLettered += 1;
       return;
   }
 }
@@ -473,6 +580,26 @@ export const getTaskDiagnosticsRestBinding: UnknownRestBinding = {
   },
   success: { kind: 'json', status: 200 },
   shapeSuccess: (output: GetTaskDiagnosticsOutput) =>
+    new Response(JSON.stringify(output), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  shapeFault: shapeRestFault,
+};
+
+export const clearTaskDeadLetterRestBinding: UnknownRestBinding = {
+  method: 'DELETE',
+  path: '/v1/tasks/diagnostics/dead-letter/:operationId',
+  pathParamNames: ['operationId'],
+  operationName: 'weft.tasks.diagnostics.deadletters.clear',
+  inputSources: {
+    operationId: { kind: 'path', pathParam: 'operationId' },
+  },
+  extractInput: async (_request, pathParams) => ({
+    operationId: pathParams['operationId'],
+  }),
+  success: { kind: 'json', status: 200 },
+  shapeSuccess: (output: ClearTaskDeadLetterOutput) =>
     new Response(JSON.stringify(output), {
       status: 200,
       headers: { 'Content-Type': 'application/json' },

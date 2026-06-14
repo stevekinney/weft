@@ -22,6 +22,7 @@ export interface WebSocketData {
   lastDeliveredSequence?: number;
   replayInProgress?: boolean;
   pendingStreamMessages?: Array<{ sequence: number; message: string }>;
+  workflowStreamConnectionAccepted?: boolean;
   principal?: Principal;
   jsonRpcSession?: JsonRpcWebSocketSession;
 }

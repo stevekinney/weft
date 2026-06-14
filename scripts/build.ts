@@ -46,6 +46,10 @@ function stripComments(source: string): string {
   return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '');
 }
 
+function allowsForbiddenSpecifier(distPath: string, specifier: string): boolean {
+  return specifier === 'bun:test' && distPath === 'dist/storage/testing.js';
+}
+
 /** Reduce a module specifier to its package root (`@scope/name` or `name`). */
 function packageRootOf(specifier: string): string {
   if (specifier.startsWith('@')) {
@@ -95,6 +99,7 @@ await Bun.build({
     './src/storage/compressed-storage.ts',
     './src/storage/scoped-storage.ts',
     './src/storage/typed-storage.ts',
+    './src/storage/testing.ts',
     './src/storage/resolve.ts',
     './src/storage/lmdb.ts',
     './src/storage/turso.ts',
@@ -313,6 +318,7 @@ async function assertNoTestOnlyDependenciesInDist(): Promise<void> {
   for await (const distPath of distGlob.scan('.')) {
     const contents = stripComments(await Bun.file(distPath).text());
     for (const [, , specifier] of contents.matchAll(specifierPattern)) {
+      if (allowsForbiddenSpecifier(distPath, specifier)) continue;
       if (forbiddenPackageRoots.includes(packageRootOf(specifier))) {
         offenders.push({ file: distPath, specifier });
       }

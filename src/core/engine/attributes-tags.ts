@@ -148,12 +148,19 @@ export async function updateWorkflowState(
     };
     const additionalOperations = options.buildAdditionalOperations?.(state, updatedAt) ?? [];
 
-    await commitWorkflowStateOperations(internals, state, [
-      ...buildTerminalWorkflowIndexOperations(state, updated),
-      { type: 'put', key: KEYS.workflow(workflowId), value: encode(updated) },
-      ...buildWorkflowVisibilityIndexTransition(workflowId, state, updated).batchOps,
-      ...additionalOperations,
-    ]);
+    await commitWorkflowStateOperations(
+      internals,
+      state,
+      [
+        ...buildTerminalWorkflowIndexOperations(state, updated),
+        { type: 'put', key: KEYS.workflow(workflowId), value: encode(updated) },
+        ...buildWorkflowVisibilityIndexTransition(workflowId, state, updated).batchOps,
+        ...additionalOperations,
+      ],
+      {
+        includePendingAtomicSideEffects: isTerminalWorkflowStatus(updated.status),
+      },
+    );
 
     return {
       previousState: state,

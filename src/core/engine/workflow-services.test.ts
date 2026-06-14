@@ -19,6 +19,7 @@ import {
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { DevelopmentWarningEvent } from '../events.ts';
 import type { WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
 import { Engine } from './index.ts';
@@ -634,6 +635,67 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
     const scheduleAfterThrow = await schedule.describe();
     expect(scheduleAfterThrow.status).toBe('active');
     await engine[Symbol.asyncDispose]();
+  });
+
+  it('fails a recovered scheduled occurrence that expected services when no resolver is configured', async () => {
+    const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
+    const storage = new MemoryStorage();
+    const results: string[] = [];
+
+    const wf = workflow({ name: 'scheduled-recovery-services' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      const services = ctx.services as { generate: () => string };
+      results.push(services.generate());
+      yield* ctx.waitForSignal('continue');
+      return 'done';
+    });
+
+    const firstEngine = new Engine({
+      storage,
+      getNow: () => clock.now,
+      resolveWorkflowServices: () => ({
+        status: 'available' as const,
+        services: { generate: () => 'from-first-engine' },
+      }),
+    });
+    firstEngine.register(wf);
+
+    const schedule = await firstEngine.schedule('scheduled-recovery-services', null, '* * * * *');
+    const firstDescription = await schedule.describe();
+    await tickEngine(firstEngine, clock, firstDescription.nextFireAt!);
+    await waitForCondition(() => results.length === 1, {
+      label: 'scheduled occurrence waiting on signal',
+    });
+
+    const runningDescription = await schedule.describe();
+    const runningOccurrenceId = runningDescription.currentWorkflowId;
+    if (runningOccurrenceId === undefined) {
+      throw new Error('Expected scheduled occurrence to be running before recovery');
+    }
+    await firstEngine[Symbol.asyncDispose]();
+
+    const secondEngine = new Engine({
+      storage,
+      getNow: () => clock.now,
+    });
+    secondEngine.register(wf);
+    const warnings: DevelopmentWarningEvent[] = [];
+    secondEngine.addEventListener(DevelopmentWarningEvent.type, (event) => {
+      warnings.push(event);
+    });
+
+    await secondEngine.recoverAll();
+    await flush();
+
+    const recoveredState = await secondEngine.get(runningOccurrenceId);
+    expect(recoveredState?.status).toBe('failed');
+    expect(recoveredState?.error).toContain('resolveWorkflowServices');
+    expect(recoveredState?.failureCategory).toBe('system');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.workflowId).toBe(runningOccurrenceId);
+    expect(warnings[0]!.message).toContain('resolveWorkflowServices');
+    await secondEngine[Symbol.asyncDispose]();
   });
 
   it('a scheduled workflow that does not use services still works when a resolver is configured', async () => {

@@ -1,6 +1,53 @@
 import { describe, expect, it } from 'bun:test';
 
+import { encode as msgpackEncode } from '@msgpack/msgpack';
+
 import { decode, encode, validateCloneable } from './codec';
+import { extensionCodec, replaceUndefined } from './codec/extension-codec.ts';
+
+function legacyReplaceUndefined(value: unknown, visited: Set<object>): unknown {
+  if (value === null || typeof value !== 'object') return value;
+  if (visited.has(value)) return value;
+
+  visited.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return value.map((item) => legacyReplaceUndefined(item, visited));
+    }
+
+    if (value instanceof Map) {
+      return new Map(
+        [...value.entries()].map(([key, mapValue]) => [
+          legacyReplaceUndefined(key, visited),
+          legacyReplaceUndefined(mapValue, visited),
+        ]),
+      );
+    }
+
+    if (value instanceof Set) {
+      return new Set([...value.values()].map((item) => legacyReplaceUndefined(item, visited)));
+    }
+
+    if (
+      value instanceof Date ||
+      value instanceof RegExp ||
+      value instanceof Error ||
+      value instanceof Uint8Array ||
+      value instanceof ArrayBuffer
+    ) {
+      return value;
+    }
+
+    const record = value as Record<string, unknown>;
+    const result: Record<string, unknown> = {};
+    for (const key of Object.keys(record)) {
+      result[key] = legacyReplaceUndefined(record[key], visited);
+    }
+    return result;
+  } finally {
+    visited.delete(value);
+  }
+}
 
 describe('codec', () => {
   describe('round-trip primitives', () => {
@@ -231,6 +278,89 @@ describe('codec', () => {
 
     it('round-trips an empty array', () => {
       expect(decode(encode([]))).toEqual([]);
+    });
+  });
+
+  describe('replaceUndefined fast path', () => {
+    it('returns the original value tree when no undefined is present', () => {
+      const value = {
+        id: 'wf-1',
+        locals: {
+          customer: { id: 'cus-1', tier: 'enterprise' },
+          amounts: [10, 20, 30],
+          metadata: new Map<unknown, unknown>([
+            ['region', 'us-west'],
+            ['flags', new Set(['priority', 'manual-review'])],
+          ]),
+        },
+      };
+
+      expect(replaceUndefined(value, new Set())).toBe(value);
+      expect(replaceUndefined(value.locals.amounts, new Set())).toBe(value.locals.amounts);
+      expect(replaceUndefined(value.locals.metadata, new Set())).toBe(value.locals.metadata);
+      expect(replaceUndefined(value.locals.metadata.get('flags'), new Set())).toBe(
+        value.locals.metadata.get('flags'),
+      );
+    });
+
+    it('matches the previous preprocessing bytes for representative storage fixtures', () => {
+      const fixtures = [
+        {
+          workflowId: 'wf-checkpoint',
+          step: 4,
+          locals: {
+            accountId: 'acct-1',
+            totals: [12, 19, 31],
+            checkpoints: new Map<unknown, unknown>([
+              ['charged', true],
+              ['tags', new Set(['paid', 'ready'])],
+            ]),
+          },
+          accumulatedResults: [
+            [1, { ok: true }],
+            [2, { status: 'completed' }],
+          ],
+        },
+        {
+          workflowId: 'wf-event',
+          sequence: 12,
+          type: 'activity:completed',
+          timestamp: 1_700_000_000_000,
+          payload: {
+            operationId: 'op-1',
+            output: { shipmentId: 'ship-1', notes: ['boxed', 'labelled'] },
+          },
+        },
+      ];
+
+      for (const fixture of fixtures) {
+        const previousBytes = msgpackEncode(legacyReplaceUndefined(fixture, new Set()), {
+          extensionCodec,
+        });
+        expect(encode(fixture)).toEqual(previousBytes);
+      }
+    });
+
+    it('keeps undefined replacement semantics unchanged when undefined is present', () => {
+      const value = {
+        optional: undefined,
+        nested: [{ present: true }, { missing: undefined }],
+        map: new Map<unknown, unknown>([['missing', undefined]]),
+        set: new Set<unknown>([undefined, 'present']),
+      };
+
+      const decoded = decode(encode(value)) as {
+        optional: unknown;
+        nested: Array<Record<string, unknown>>;
+        map: Map<unknown, unknown>;
+        set: Set<unknown>;
+      };
+
+      expect(decoded.optional).toBeUndefined();
+      expect('optional' in decoded).toBe(true);
+      expect(decoded.nested[1]!['missing']).toBeUndefined();
+      expect(decoded.map.get('missing')).toBeUndefined();
+      expect(decoded.set.has(undefined)).toBe(true);
     });
   });
 

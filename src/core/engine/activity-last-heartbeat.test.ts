@@ -10,25 +10,27 @@
  */
 import { describe, expect, it } from 'bun:test';
 
+import { createDeferred } from '../../testing/fake-timers.test-support.ts';
+import { TestEngine } from '../../testing/test-engine.ts';
 import type { ActivityContext, WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
 import { Engine } from './index.ts';
 
 describe('#450 ActivityContext.lastHeartbeatDetails', () => {
   it('is undefined on the first attempt and equals the prior heartbeat on retry', async () => {
-    await using engine = new Engine();
+    using engine = new TestEngine({ startTime: 0 });
+    const firstAttemptObserved = createDeferred();
     const seen: Array<unknown> = [];
 
     const resumable = activity({
       name: 'resumable',
-      // Zero backoff so the durable retry sleep is past-due and fires immediately,
-      // keeping the test deterministic under parallel-suite load.
-      retry: { maxAttempts: 3, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0 },
+      retry: { maxAttempts: 3, initialBackoff: 1, backoffMultiplier: 1, maxBackoff: 1 },
       execute: async (_input?: unknown, ctx?: ActivityContext) => {
         seen.push(ctx?.lastHeartbeatDetails);
         if (seen.length === 1) {
           // First attempt: record progress, then fail so a retry happens.
           ctx?.heartbeat({ done: 2 });
+          firstAttemptObserved.resolve();
           throw new Error('transient');
         }
         // Second attempt: resume from where the prior attempt left off.
@@ -46,6 +48,12 @@ describe('#450 ActivityContext.lastHeartbeatDetails', () => {
     );
 
     const handle = await engine.start('resume-wf', null, { id: 'resume-1' });
+    await firstAttemptObserved.promise;
+
+    // The retry is parked on a durable backoff timer until virtual time advances.
+    expect(seen).toEqual([undefined]);
+    await engine.advanceTime(1);
+
     const result = (await handle.result()) as { resumedFrom: unknown };
 
     // First attempt saw no prior heartbeat; second attempt saw the {done:2} the

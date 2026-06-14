@@ -48,6 +48,7 @@ void fromPositional;
 const spec: ScheduleSpec = { every: '5m' };
 const fromSpec: Promise<ScheduleHandle> = engine.schedule('sweep', null, spec, {
   overlap: 'skip',
+  jitter: '30s',
 });
 void fromSpec;
 
@@ -64,6 +65,7 @@ const definition: ScheduleDefinition = schedule({
   workflow: sweep,
   cron: '0 9 * * *',
   input: undefined,
+  jitter: 1_000,
 });
 const fromHelper: Promise<ScheduleHandle> = engine.schedule(definition);
 void fromHelper;

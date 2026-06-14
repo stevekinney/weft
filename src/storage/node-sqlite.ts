@@ -18,7 +18,7 @@ import type {
   Storage,
   StorageCapabilities,
 } from './interface.ts';
-import { storageValuesEqual } from './interface.ts';
+import { assertStorageBatchOperationCount, storageValuesEqual } from './interface.ts';
 import {
   createMissingBetterSqlite3Error,
   isBetterSqlite3LoadFailure,
@@ -178,6 +178,7 @@ export class NodeSQLiteStorage implements Storage {
   }
 
   async batch(operations: BatchOperation[]): Promise<void> {
+    assertStorageBatchOperationCount('batch operations', operations.length);
     if (operations.length === 0) return;
     this.#batchTransaction(operations);
   }
@@ -186,6 +187,9 @@ export class NodeSQLiteStorage implements Storage {
     conditions: ConditionalBatchCondition[],
     operations: BatchOperation[],
   ): Promise<boolean> {
+    assertStorageBatchOperationCount('conditionalBatch conditions', conditions.length);
+    assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
+
     const conditionalTransaction = this.#database.transaction(
       (...arguments_: unknown[]): boolean => {
         const pendingConditions = arguments_[0] as ConditionalBatchCondition[];

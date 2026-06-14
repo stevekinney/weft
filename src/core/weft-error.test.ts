@@ -8,6 +8,7 @@ import {
   ActivityScheduleToCloseTimeoutError,
   AsyncActivityTokenNotFoundError,
   AtomicStateConflictError,
+  BranchTopologyChangedError,
   BulkDeleteRequiresTerminalWorkflowsError,
   BulkOperationConfirmationError,
   EffectReplayConflictError,
@@ -25,8 +26,10 @@ import {
   WorkerProtocolIncompatibleError,
   WorkflowAlreadyExistsError,
   WorkflowBuilderError,
+  WorkflowConcurrencyLimitExceededError,
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
+  WorkflowSuspendNotSupportedError,
   WorkflowTerminalError,
   WorkflowTimeoutError,
   WorkflowTypeNotRegisteredForRecoveryError,
@@ -62,6 +65,12 @@ function foreignWeftError(code: WeftErrorCode, message = 'from another module co
  */
 const cases: Record<WeftErrorCode, () => WeftError> = {
   WorkflowAlreadyExistsError: () => new WorkflowAlreadyExistsError('wf-1'),
+  WorkflowConcurrencyLimitExceededError: () =>
+    new WorkflowConcurrencyLimitExceededError({
+      workflowType: 'checkout',
+      limit: 1,
+      partitionKey: 'checkout',
+    }),
   BulkDeleteRequiresTerminalWorkflowsError: () => new BulkDeleteRequiresTerminalWorkflowsError(),
   BulkOperationConfirmationError: () => new BulkOperationConfirmationError(),
   WorkflowTypeNotRegisteredForRecoveryError: () =>
@@ -74,7 +83,11 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   EngineDisposedError: () => new EngineDisposedError(),
   WorkflowNotFoundError: () => new WorkflowNotFoundError('wf-404'),
   WorkflowNotRegisteredError: () => new WorkflowNotRegisteredError('checkout'),
+  WorkflowSuspendNotSupportedError: () =>
+    new WorkflowSuspendNotSupportedError('suspend is only supported in inline execution mode'),
   ActivityResolutionError: () => new ActivityResolutionError('checkout', 'charge'),
+  BranchTopologyChangedError: () =>
+    new BranchTopologyChangedError('branch topology changed across retry'),
   PersistedDataIncompatibleError: () => new PersistedDataIncompatibleError(0, 1),
   WorkflowTimeoutError: () => new WorkflowTimeoutError('wf-1', 'execution', 1_000),
   HttpClientError: () => new HttpClientError(500, 'boom'),

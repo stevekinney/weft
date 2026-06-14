@@ -204,6 +204,85 @@ const deleted = await storageDeleteRange(storage, 'ev:wf-1:', {
 
 ---
 
+## Storage conformance testing
+
+`@lostgradient/weft/storage/testing` exports Bun test helpers for adapter authors:
+
+```ts
+import {
+  runBasicStorageContract,
+  runBinaryAndLargeScanStorageConformance,
+  runStorageCapabilityConformance,
+} from '@lostgradient/weft/storage/testing';
+
+void runBasicStorageContract;
+void runBinaryAndLargeScanStorageConformance;
+void runStorageCapabilityConformance;
+```
+
+The subpath intentionally imports `bun:test`, so use it from Bun test files. It is separate from `@lostgradient/weft/testing`, which stays focused on workflow test engines and chaos helpers.
+
+### `runBasicStorageContract()`
+
+```ts
+import type { Storage } from '@lostgradient/weft/storage';
+
+declare function runBasicStorageContract(
+  name: string,
+  options: { create: () => Storage | Promise<Storage> },
+): void;
+```
+
+Registers tests for the required storage contract: empty reads, put/get, overwrite, delete, prefix scans, `limit`, `reverse`, range bounds, and empty-prefix scans. The `create` callback must return a fresh empty adapter for each test case.
+
+### `runStorageCapabilityConformance()`
+
+```ts
+import type { Storage, StorageCapabilities } from '@lostgradient/weft/storage';
+
+declare function runStorageCapabilityConformance(
+  name: string,
+  options: {
+    create: () => Storage | Promise<Storage>;
+    expected: StorageCapabilities;
+  },
+): void;
+```
+
+Registers tests for the adapter's `capabilities()` row. The suite checks the shape and exact row, verifies same-instance read-after-write for non-eventual adapters, verifies snapshot scan isolation when `scanConsistency` is `'snapshot'`, and verifies compare-and-swap behavior when `conditionalBatch` is `true`.
+
+### `runConcurrentConditionalBatchConformance()`
+
+```ts
+import type { Storage } from '@lostgradient/weft/storage';
+
+declare function runConcurrentConditionalBatchConformance(
+  name: string,
+  options: {
+    create: () => Storage | Promise<Storage>;
+  },
+): void;
+```
+
+Registers the concurrent compare-and-swap contention case for adapters that can stage two in-flight write transactions against shared state. Do not call this helper for single-connection backends that serialize writers locally; keep their sequential `conditionalBatch` behavior covered by `runStorageCapabilityConformance()`.
+
+### `runBinaryAndLargeScanStorageConformance()`
+
+```ts
+import type { Storage } from '@lostgradient/weft/storage';
+
+declare function runBinaryAndLargeScanStorageConformance(
+  name: string,
+  options: { create: () => Storage | Promise<Storage> },
+): void;
+```
+
+Registers tests for opaque binary value round-trips and a 1000-key sorted prefix scan. Use it when the adapter's local test environment can handle larger result sets without an external service quota.
+
+The `weft conformance` CLI does not run these storage-adapter tests yet; today it remains the remote worker protocol conformance tool.
+
+---
+
 ## `KEYS`
 
 ```ts partial
@@ -229,7 +308,7 @@ const KEYS: {
 };
 ```
 
-Key layout constants for hierarchical key encoding. All timestamps are zero-padded to 16 digits for correct lexicographic ordering. The `KEYS` object is the canonical source for key construction -- never hand-build keys.
+Key layout constants for hierarchical key encoding. All timestamps are zero-padded to 16 digits for correct lexicographic ordering. The `KEYS` object is the canonical source for key construction -- never hand-build keys. Signal workflow ids, signal names, and signal ids are encoded as individual key components so names such as `approval:manager` cannot alias `approval`.
 
 ```ts
 import { KEYS } from '@lostgradient/weft';
@@ -237,8 +316,8 @@ import { KEYS } from '@lostgradient/weft';
 const key = KEYS.workflow('my-workflow-id');
 // => "wf:my-workflow-id"
 
-const signalKey = KEYS.signal('wf-123', 'approval', 'sig-456');
-// => "sig:wf-123:approval:sig-456"
+const signalKey = KEYS.signal('wf-123', 'approval:manager', 'sig-456');
+// => "sig:wf-123:approval%3Amanager:sig-456"
 
 const executionStateKey = KEYS.stateExecution('wf-123', 'counter');
 // => "state:execution:wf-123:counter"
@@ -586,6 +665,9 @@ The extension manifest must include the `storage` permission:
 ```json
 { "permissions": ["storage"] }
 ```
+
+> [!WARNING]
+> `WebExtensionStorage.batch()` is serialized only inside the same JavaScript context. Separate extension contexts sharing `chrome.storage` or `browser.storage` can still race, so the adapter reports `atomicBatch: false` and is rejected by `assertDurableStorageForRecovery()`.
 
 ### Methods
 

@@ -39,6 +39,8 @@ function createCallbacks(
   return {
     getComposedActivityInterceptor: () => null,
     getComposedWorkflowInterceptor: () => null,
+    finalizePendingTimelineEntry: () => {},
+    feedOperationResult: () => {},
     runOperationWithResult: async (_workflowId, _operation, execute) => {
       await execute();
     },
@@ -53,6 +55,10 @@ function createInternals(overrides: Record<string, unknown> = {}) {
     heartbeatDetails: new Map(),
     lastHeartbeatDetailsByStep: new Map(),
     options: { getNow: () => 1_700_000_000_000, payloadSizePolicy: { maxBytes: null } },
+    pendingAtomicWorkflowCommitSideEffects: new Map<
+      string,
+      { conditions: ConditionalBatchCondition[]; operations: BatchOperation[] }
+    >(),
     storage: new MemoryStorage(),
     workflowTypeByWorkflowId: new Map(),
     ...overrides,
@@ -113,38 +119,6 @@ class InitialClaimLosingStorage extends MemoryStorage {
   }
 }
 
-class CrashAfterActivityReturnStorage extends MemoryStorage {
-  #remainingCompletionCrashes: number;
-
-  constructor(remainingCompletionCrashes: number) {
-    super();
-    this.#remainingCompletionCrashes = remainingCompletionCrashes;
-  }
-
-  override async conditionalBatch(
-    conditions: ConditionalBatchCondition[],
-    operations: BatchOperation[],
-  ): Promise<boolean> {
-    const isCompletionTransition =
-      conditions.length === 1 &&
-      conditions[0]?.expectedValue !== null &&
-      operations.some((operation) => {
-        if (operation.type !== 'put') return false;
-        const decoded = decode(operation.value);
-        return (
-          typeof decoded === 'object' &&
-          decoded !== null &&
-          (decoded as Record<string, unknown>)['status'] === 'completed'
-        );
-      });
-    if (isCompletionTransition && this.#remainingCompletionCrashes > 0) {
-      this.#remainingCompletionCrashes--;
-      throw new Error('simulated crash before completion marker');
-    }
-    return super.conditionalBatch(conditions, operations);
-  }
-}
-
 async function digestIdempotencyKey(idempotencyKey: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(idempotencyKey));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -176,6 +150,29 @@ async function seedStartedRecord(
     }),
   );
   return key;
+}
+
+async function commitPendingAtomicSideEffects(
+  storage: MemoryStorage,
+  internals: ReturnType<typeof createInternals>,
+  workflowId: string,
+): Promise<void> {
+  const pending = internals.pendingAtomicWorkflowCommitSideEffects.get(workflowId);
+  expect(pending).toBeDefined();
+  expect(await storage.conditionalBatch(pending!.conditions, pending!.operations)).toBe(true);
+  internals.pendingAtomicWorkflowCommitSideEffects.delete(workflowId);
+}
+
+async function readSingleActivityReconciliationRecord(
+  storage: MemoryStorage,
+  workflowId: string,
+): Promise<unknown> {
+  const keys: string[] = [];
+  for await (const [key] of storage.scan(KEYS.activityReconciliationPrefix(workflowId))) {
+    keys.push(key);
+  }
+  expect(keys).toHaveLength(1);
+  return decode((await storage.get(keys[0]!))!);
 }
 
 async function createReconciliationRecordValue(
@@ -432,7 +429,7 @@ describe('activity operation helpers', () => {
     ).rejects.toThrow('Verification failed for activity "test-activity"');
   });
 
-  it('records and replays keyed activity results before checkpoint commit', async () => {
+  it('records and replays keyed activity results through the checkpoint commit', async () => {
     const storage = new MemoryStorage();
     const operation = createActivityOperation({
       fn: () => 'first-result',
@@ -456,8 +453,12 @@ describe('activity operation helpers', () => {
     expect(keys).toHaveLength(1);
     expect(keys[0]).toStartWith('actrec:v1:workflow%3Aid:test-activity:');
     expect(keys[0]).not.toContain('order:123');
-    const record = decode((await storage.get(keys[0]!))!);
-    expect(record).toMatchObject({ status: 'completed', result: 'first-result' });
+    const startedRecord = decode((await storage.get(keys[0]!))!);
+    expect(startedRecord).toMatchObject({ status: 'started' });
+
+    await commitPendingAtomicSideEffects(storage, internals, 'workflow:id');
+    const completedRecord = decode((await storage.get(keys[0]!))!);
+    expect(completedRecord).toMatchObject({ status: 'completed', result: 'first-result' });
 
     const replayOperation = createActivityOperation({
       fn: () => {
@@ -567,22 +568,26 @@ describe('activity operation helpers', () => {
   });
 
   it('reconciles after activity returns but completion marker write crashes', async () => {
-    const storage = new CrashAfterActivityReturnStorage(1);
+    const storage = new MemoryStorage();
     const firstExecute = mock(() => 'external-result');
     const operation = createActivityOperation({
       fn: firstExecute,
       options: { idempotencyKey: 'crash-window' },
     });
+    const firstInternals = createInternals({ storage });
 
     await expect(
       executeActivityOperationResult(
-        createInternals({ storage }) as never,
+        firstInternals as never,
         'workflow-id',
         operation,
         createCallbacks(),
       ),
-    ).rejects.toThrow('simulated crash before completion marker');
+    ).resolves.toBe('external-result');
     expect(firstExecute).toHaveBeenCalledTimes(1);
+    expect(await readSingleActivityReconciliationRecord(storage, 'workflow-id')).toMatchObject({
+      status: 'started',
+    });
 
     const verify = mock(async () => ({
       status: 'completed-with-result' as const,
@@ -615,22 +620,26 @@ describe('activity operation helpers', () => {
   });
 
   it('redispatches exactly once after crash-window verifier reports not completed', async () => {
-    const storage = new CrashAfterActivityReturnStorage(1);
+    const storage = new MemoryStorage();
     const firstExecute = mock(() => 'lost-result');
     const operation = createActivityOperation({
       fn: firstExecute,
       options: { idempotencyKey: 'crash-redo' },
     });
+    const firstInternals = createInternals({ storage });
 
     await expect(
       executeActivityOperationResult(
-        createInternals({ storage }) as never,
+        firstInternals as never,
         'workflow-id',
         operation,
         createCallbacks(),
       ),
-    ).rejects.toThrow('simulated crash before completion marker');
+    ).resolves.toBe('lost-result');
     expect(firstExecute).toHaveBeenCalledTimes(1);
+    expect(await readSingleActivityReconciliationRecord(storage, 'workflow-id')).toMatchObject({
+      status: 'started',
+    });
 
     const verify = mock(async (_result: unknown, context?: { phase?: string }) =>
       context?.phase === 'pre-dispatch-reconciliation' ? 'not-completed' : true,

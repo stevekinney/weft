@@ -411,10 +411,10 @@ describe('task state invariant (server integration)', () => {
     engine?.[Symbol.dispose]();
   });
 
-  function setup(): void {
+  function setup(options: { workerReconnectGracePeriodMs?: number } = {}): void {
     storage = new MemoryStorage();
     engine = createEngine(storage);
-    server = serve({ engine, port: 0 });
+    server = serve({ engine, port: 0, workerShutdownTimeoutMs: 50, ...options });
   }
 
   it('task dispatched to a WebSocket worker is in inflight state', async () => {
@@ -568,7 +568,7 @@ describe('task state invariant (server integration)', () => {
   });
 
   it('worker disconnect requeues inflight task back to queued state', async () => {
-    setup();
+    setup({ workerReconnectGracePeriodMs: 100 });
     const ws = await connectAndRegisterWorker(server, {
       workerId: 'w-disconnect',
       activities: ['charge'],

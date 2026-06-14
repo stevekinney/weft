@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { CompressedStorage } from '../../storage/compressed-storage.ts';
 import type { BatchOperation, Storage } from '../../storage/interface.ts';
-import { KEYS } from '../../storage/interface.ts';
+import { encodeStorageKeyComponent, KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
 import { Engine } from '../engine.ts';
@@ -513,7 +513,9 @@ describe('engine.startOrSignal', () => {
       expect(['from-a', 'from-b']).toContain(result);
 
       let remainingSignals = 0;
-      for await (const _entry of engine.storage.scan(`sig:${a.id}:release:`)) {
+      for await (const _entry of engine.storage.scan(
+        `sig:${encodeStorageKeyComponent(a.id)}:${encodeStorageKeyComponent('release')}:`,
+      )) {
         remainingSignals += 1;
       }
       expect(remainingSignals).toBe(0);

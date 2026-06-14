@@ -5,6 +5,7 @@ import { join } from 'node:path';
 
 import type { CatalogOperationTypes } from '../src/cli/generated/operation-client.generated.ts';
 import { createCatalogSnapshot } from '../src/cli/operation-catalog-snapshot.ts';
+import { MAX_BATCH_OPERATIONS, MAX_SCAN_LIMIT } from '../src/storage/interface.ts';
 import {
   aliasNameFor,
   assignAliasNames,
@@ -19,6 +20,14 @@ import {
 } from './generate-operation-client.ts';
 
 const NO_ALIASES = new Map<string, string>();
+
+function snapshotOperation(name: string) {
+  const operation = createCatalogSnapshot().operations.find((candidate) => candidate.name === name);
+  if (operation === undefined) {
+    throw new Error(`Missing operation snapshot ${name}`);
+  }
+  return operation;
+}
 
 /** Render a JSON Schema with no alias substitution — the pre-hoist baseline. */
 function renderInline(schema: Record<string, unknown>): string {
@@ -85,6 +94,23 @@ describe('schemaToNode + renderNode — emitted text contract', () => {
 });
 
 describe('createOperationClientSource — generated output', () => {
+  it('carries raw storage operation caps in the catalog schemas', () => {
+    const scanProperties = snapshotOperation('weft.storage.scan').inputSchema[
+      'properties'
+    ] as Record<string, Record<string, unknown>>;
+    expect(scanProperties['limit']['maximum']).toBe(MAX_SCAN_LIMIT);
+
+    const batchProperties = snapshotOperation('weft.storage.batch').inputSchema[
+      'properties'
+    ] as Record<string, Record<string, unknown>>;
+    expect(batchProperties['operations']['maxItems']).toBe(MAX_BATCH_OPERATIONS);
+
+    const conditionalBatchProperties = snapshotOperation('weft.storage.conditionalbatch')
+      .inputSchema['properties'] as Record<string, Record<string, unknown>>;
+    expect(conditionalBatchProperties['conditions']['maxItems']).toBe(MAX_BATCH_OPERATIONS);
+    expect(conditionalBatchProperties['operations']['maxItems']).toBe(MAX_BATCH_OPERATIONS);
+  });
+
   it('is deterministic across runs', async () => {
     const snapshot = createCatalogSnapshot();
     const first = await createOperationClientSource(snapshot);
@@ -142,7 +168,7 @@ describe('createOperationClientSource — generated output', () => {
     expect(rangeDeclarations).toHaveLength(1);
   });
 
-  it('routes bulk.cancel and bulk.delete inputs through the same alias', async () => {
+  it('routes bulk.cancel, bulk.delete, and bulk.retryfailed inputs through the same alias', async () => {
     const source = await createOperationClientSource(createCatalogSnapshot());
     const cancel = source.match(
       /'weft\.workflows\.bulk\.cancel': \{\s*readonly input: (Shared\w+);/,
@@ -150,9 +176,14 @@ describe('createOperationClientSource — generated output', () => {
     const remove = source.match(
       /'weft\.workflows\.bulk\.delete': \{\s*readonly input: (Shared\w+);/,
     );
+    const retryFailed = source.match(
+      /'weft\.workflows\.bulk\.retryfailed': \{\s*readonly input: (Shared\w+);/,
+    );
     expect(cancel?.[1]).toBeDefined();
     expect(remove?.[1]).toBeDefined();
+    expect(retryFailed?.[1]).toBeDefined();
     expect(cancel?.[1]).toBe(remove?.[1]);
+    expect(cancel?.[1]).toBe(retryFailed?.[1]);
   });
 
   it('leaves bulk.signal input inline but substitutes its nested aliases', async () => {
@@ -432,10 +463,11 @@ describe('type equivalence — aliases are transparent at call sites', () => {
     expect(input.limit).toBe(10);
   });
 
-  it('keeps bulk.cancel and bulk.delete inputs mutually assignable', () => {
+  it('keeps bulk.cancel, bulk.delete, and bulk.retryfailed inputs mutually assignable', () => {
     const cancel: CatalogOperationTypes['weft.workflows.bulk.cancel']['input'] = { limit: 1 };
     const remove: CatalogOperationTypes['weft.workflows.bulk.delete']['input'] = cancel;
-    const back: CatalogOperationTypes['weft.workflows.bulk.cancel']['input'] = remove;
+    const retryFailed: CatalogOperationTypes['weft.workflows.bulk.retryfailed']['input'] = remove;
+    const back: CatalogOperationTypes['weft.workflows.bulk.cancel']['input'] = retryFailed;
     expect(back.limit).toBe(1);
   });
 

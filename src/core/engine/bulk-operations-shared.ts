@@ -30,6 +30,7 @@ import { streamWorkflowStateBatches } from './listing.ts';
 import { isTerminalWorkflowStatus } from './validation.ts';
 
 export const BULK_OPERATION_SAMPLE_LIMIT = 20;
+export const DEFAULT_BULK_OPERATION_CONCURRENCY = 1;
 const DEFAULT_BULK_OPERATION_PRINCIPAL: BulkOperationPrincipal = { method: 'in-process' };
 
 export type BulkWorkflowSnapshot = {
@@ -161,7 +162,9 @@ function summarizeBulkFilter(filter: ListFilter): BulkOperationFilterSummary {
     summary.attributes = filter.attributes
       .map((attribute) => ({
         key: searchAttributeName(attribute.key),
-        ...(attribute.value === undefined ? {} : { value: attribute.value }),
+        ...(attribute.value === undefined
+          ? {}
+          : { value: Array.isArray(attribute.value) ? [...attribute.value] : attribute.value }),
         ...(attribute.gt === undefined ? {} : { gt: attribute.gt }),
         ...(attribute.lt === undefined ? {} : { lt: attribute.lt }),
         ...(attribute.gte === undefined ? {} : { gte: attribute.gte }),
@@ -289,6 +292,14 @@ async function persistBulkOperationAuditEvent(
 export function normalizeBulkOperationOptions<TOptions extends BulkOperationOptions>(
   options: TOptions,
 ): TOptions {
+  const bulkConcurrency = options.bulkConcurrency;
+  if (
+    bulkConcurrency !== undefined &&
+    (!Number.isSafeInteger(bulkConcurrency) || bulkConcurrency < 1)
+  ) {
+    throw new Error('Field "bulkConcurrency" must be a positive integer');
+  }
+
   const confirmationToken = 'confirmationToken' in options ? options.confirmationToken : undefined;
   if (
     confirmationToken !== undefined &&
@@ -309,6 +320,10 @@ export function normalizeBulkOperationOptions<TOptions extends BulkOperationOpti
   }
 
   return options;
+}
+
+export function resolveBulkOperationConcurrency(options: BulkOperationOptions): number {
+  return options.bulkConcurrency ?? DEFAULT_BULK_OPERATION_CONCURRENCY;
 }
 
 export function toBulkOperationError(

@@ -34,7 +34,7 @@ import type {
  */
 export interface WorkflowRegistry {}
 
-export type WorkflowRegistryEntry = { input: unknown; output: unknown };
+export type WorkflowRegistryEntry = { input: unknown; output: unknown; services?: unknown };
 
 declare const defaultWorkflowRegistry: unique symbol;
 declare const defaultActivityTypes: unique symbol;
@@ -81,7 +81,7 @@ export type IsDefaultWorkflowRegistry<TRegistry extends object> =
  */
 export type AnyWorkflowDefinition = {
   readonly name: string;
-  readonly handler: WorkflowFunction<never> | StepWorkflowFunction<never>;
+  readonly handler: WorkflowFunction<never, unknown, never> | StepWorkflowFunction<never>;
 };
 
 /**
@@ -121,6 +121,23 @@ export type WorkflowOutput<
     ? TOutput
     : unknown
   : unknown;
+
+export type WorkflowServices<
+  TRegistry extends object,
+  TName extends string,
+> = TName extends keyof TRegistry
+  ? TRegistry[TName] extends { services: infer TServices }
+    ? TServices
+    : unknown
+  : unknown;
+
+export type WorkflowServicesUnion<TRegistry extends object> = [keyof TRegistry & string] extends [
+  never,
+]
+  ? unknown
+  : {
+      [Name in keyof TRegistry & string]: WorkflowServices<TRegistry, Name>;
+    }[keyof TRegistry & string];
 
 export type ActivityArguments<
   TActivities extends object,
@@ -185,13 +202,18 @@ type MergeDefinitionEntries<TUnion> = [TUnion] extends [never]
  * ```
  */
 export type InferWorkflowEntry<TDefinition extends AnyWorkflowDefinition> =
-  TDefinition extends WorkflowDefinition<infer TInput, infer TOutput, infer TName extends string>
-    ? { [Name in TName]: { input: TInput; output: TOutput } }
+  TDefinition extends WorkflowDefinition<
+    infer TInput,
+    infer TOutput,
+    infer TName extends string,
+    infer TServices
+  >
+    ? { [Name in TName]: { input: TInput; output: TOutput; services: TServices } }
     : never;
 
 type InferWorkflowEntryForKey<TName extends string, TDefinition extends AnyWorkflowDefinition> =
-  TDefinition extends WorkflowDefinition<infer TInput, infer TOutput>
-    ? { [Name in TName]: { input: TInput; output: TOutput } }
+  TDefinition extends WorkflowDefinition<infer TInput, infer TOutput, string, infer TServices>
+    ? { [Name in TName]: { input: TInput; output: TOutput; services: TServices } }
     : never;
 
 /**

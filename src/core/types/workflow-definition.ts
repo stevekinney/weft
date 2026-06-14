@@ -10,13 +10,14 @@ import type { ConstraintDefinition } from '../constraint.ts';
 import type { DefinitionSchema } from './definition-schema.ts';
 import type { RetentionPolicy } from './retry-retention.ts';
 import type { SearchAttributeSchema } from './search-attributes.ts';
+import type { WorkflowConcurrencyOptions } from './workflow-concurrency.ts';
 import type { WorkflowFunction } from './workflow-function.ts';
 
 /**
  * Named workflow definition returned by {@link workflow}. The runtime object
  * carries the workflow name, the generator handler, and optional metadata
- * (version, schemas, retention policy, search-attribute schema, and domain
- * constraints) that the engine reads at registration time.
+ * (version, schemas, retention policy, workflow concurrency, search-attribute
+ * schema, and domain constraints) that the engine reads at registration time.
  *
  * @example
  * ```ts
@@ -32,11 +33,12 @@ export interface WorkflowDefinition<
   TInput = unknown,
   TOutput = unknown,
   TName extends string = string,
+  TServices = unknown,
 > {
   /** Wire-safe workflow name; the registry key. */
   name: TName;
   /** Workflow generator function executed by the engine. */
-  handler: WorkflowFunction<TInput, TOutput>;
+  handler: WorkflowFunction<TInput, TOutput, TServices>;
   /** Version recorded with workflow state and checked during recovery. */
   version?: string;
   /** User-facing description for catalog, code generation, and tool surfaces. */
@@ -51,6 +53,8 @@ export interface WorkflowDefinition<
   searchAttributes?: SearchAttributeSchema;
   /** Retention policy for terminal workflow records. */
   retention?: RetentionPolicy;
+  /** Start admission policy for this workflow type. */
+  concurrency?: WorkflowConcurrencyOptions<TInput>;
   /**
    * Domain constraints evaluated at every checkpoint commit. When a constraint's
    * `check` returns false, the engine dispatches a `ConstraintViolatedEvent`

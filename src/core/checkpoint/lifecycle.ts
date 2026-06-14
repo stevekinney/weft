@@ -25,7 +25,6 @@ export function createCheckpoint(
     step: 0,
     locals: {},
     accumulatedResults: [],
-    pendingSignals: [],
     searchAttributes: {},
     version,
     schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -52,6 +51,9 @@ export function advanceCheckpoint(
   options?: {
     searchAttributes?: Record<string, SearchAttributeValue>;
     accumulatedResults?: Array<[number, unknown]>;
+    accumulatedResultReplayWatermark?: number;
+    workerReplaySignatures?: Checkpoint['workerReplaySignatures'];
+    workerReplayFailures?: Checkpoint['workerReplayFailures'];
     now?: number;
   },
 ): Checkpoint {
@@ -60,13 +62,25 @@ export function advanceCheckpoint(
     step: checkpoint.step + 1,
     locals,
     accumulatedResults: options?.accumulatedResults ?? checkpoint.accumulatedResults,
-    ...(checkpoint.workerReplaySignatures === undefined
+    ...((options?.accumulatedResultReplayWatermark ??
+      checkpoint.accumulatedResultReplayWatermark) === undefined
       ? {}
-      : { workerReplaySignatures: checkpoint.workerReplaySignatures }),
-    ...(checkpoint.workerReplayFailures === undefined
+      : {
+          accumulatedResultReplayWatermark:
+            options?.accumulatedResultReplayWatermark ??
+            checkpoint.accumulatedResultReplayWatermark,
+        }),
+    ...((options?.workerReplaySignatures ?? checkpoint.workerReplaySignatures) === undefined
       ? {}
-      : { workerReplayFailures: checkpoint.workerReplayFailures }),
-    pendingSignals: checkpoint.pendingSignals,
+      : {
+          workerReplaySignatures:
+            options?.workerReplaySignatures ?? checkpoint.workerReplaySignatures,
+        }),
+    ...((options?.workerReplayFailures ?? checkpoint.workerReplayFailures) === undefined
+      ? {}
+      : {
+          workerReplayFailures: options?.workerReplayFailures ?? checkpoint.workerReplayFailures,
+        }),
     searchAttributes: {
       ...checkpoint.searchAttributes,
       ...options?.searchAttributes,

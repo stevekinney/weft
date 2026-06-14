@@ -16,7 +16,8 @@ import type { AccessPolicy } from '../authorization.ts';
 import { shapeOperationFaultAsJson, type OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
-import { invalidParamsFault } from './operation-helpers.ts';
+import { readRestTextBody } from '../rest-body.ts';
+import { invalidParamsFault, isOperationFault } from './operation-helpers.ts';
 
 const drainReasonSchema = z.string().min(1).max(256).optional();
 
@@ -209,9 +210,9 @@ function createWorkerDrainRestBinding(method: 'POST' | 'DELETE', operationName: 
       workerId: { kind: 'path', pathParam: 'workerId' },
       ...(method === 'POST' ? { reason: { kind: 'body-field', bodyField: 'reason' } } : {}),
     },
-    extractInput: async (request: Request, pathParams: Record<string, string>) => ({
+    extractInput: async (request: Request, pathParams: Record<string, string>, context) => ({
       workerId: pathParams['workerId'] ?? '',
-      ...(method === 'POST' ? await readDrainBody(request) : {}),
+      ...(method === 'POST' ? await readDrainBody(request, context) : {}),
     }),
     success: { kind: 'json', status: 200 },
     shapeSuccess: shapeDrainSuccess,
@@ -229,9 +230,9 @@ function createDeploymentDrainRestBinding(method: 'POST' | 'DELETE', operationNa
       deploymentName: { kind: 'path', pathParam: 'deploymentName' },
       ...(method === 'POST' ? { reason: { kind: 'body-field', bodyField: 'reason' } } : {}),
     },
-    extractInput: async (request: Request, pathParams: Record<string, string>) => ({
+    extractInput: async (request: Request, pathParams: Record<string, string>, context) => ({
       deploymentName: pathParams['deploymentName'] ?? '',
-      ...(method === 'POST' ? await readDrainBody(request) : {}),
+      ...(method === 'POST' ? await readDrainBody(request, context) : {}),
     }),
     success: { kind: 'json', status: 200 },
     shapeSuccess: shapeDrainSuccess,
@@ -246,14 +247,18 @@ function shapeDrainSuccess(output: WorkerDrainOutput): Response {
   });
 }
 
-async function readDrainBody(request: Request): Promise<{ reason?: unknown }> {
-  const text = await request.text();
+async function readDrainBody(
+  request: Request,
+  context: Parameters<UnknownRestBinding['extractInput']>[2],
+): Promise<{ reason?: unknown }> {
+  const text = await readRestTextBody(request, context);
   if (text.trim().length === 0) return {};
 
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
-  } catch {
+  } catch (error) {
+    if (isOperationFault(error)) throw error;
     throw invalidParamsFault('Drain request body must be valid JSON');
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {

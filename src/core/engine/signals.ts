@@ -12,6 +12,7 @@ import { encodePayloadWithinLimit } from '../payload-size.ts';
 import { validateSignalId } from '../signal-id.ts';
 import type { SignalDeliveryOptions, WorkflowState } from '../types.ts';
 import { commitAnonymousSignalOperations } from './anonymous-signal-sequence.ts';
+import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import type { EngineInternals } from './internals.ts';
 import { isTerminalWorkflowStatus } from './validation.ts';
 
@@ -45,6 +46,12 @@ export type ConsumedSignalResult =
 
 const EMPTY_STORAGE_VALUE = new Uint8Array(0);
 const SIGNAL_ACCEPTED_RESPONSE = { ok: true } as const;
+const SIGNAL_KEY_COMPONENT_COUNT = 4;
+
+type BufferedSignalRecord = {
+  key: string;
+  value: Uint8Array;
+};
 
 export async function signal(
   internals: EngineInternals,
@@ -300,12 +307,7 @@ export async function hasBufferedSignal(
   workflowId: string,
   signalName: string,
 ): Promise<boolean> {
-  const prefix = `sig:${encodeStorageKeyComponent(workflowId)}:${signalName}:`;
-  for await (const _entry of internals.storage.scan(prefix, { limit: 1 })) {
-    return true;
-  }
-
-  return false;
+  return (await findBufferedSignalRecord(internals, workflowId, signalName)) !== null;
 }
 
 export async function consumeSignal(
@@ -313,12 +315,26 @@ export async function consumeSignal(
   workflowId: string,
   signalName: string,
 ): Promise<ConsumedSignalResult> {
-  const prefix = `sig:${encodeStorageKeyComponent(workflowId)}:${signalName}:`;
-  for await (const [key, value] of internals.storage.scan(prefix, { limit: 1 })) {
-    await internals.storage.delete(key);
-    return { found: true, payload: decode(value) };
-  }
-  return { found: false };
+  const record = await findBufferedSignalRecord(internals, workflowId, signalName);
+  if (record === null) return { found: false };
+
+  await internals.storage.delete(record.key);
+  return { found: true, payload: decode(record.value) };
+}
+
+export async function consumeSignalWithAtomicWorkflowCommit(
+  internals: EngineInternals,
+  workflowId: string,
+  signalName: string,
+): Promise<ConsumedSignalResult> {
+  const record = await findBufferedSignalRecord(internals, workflowId, signalName);
+  if (record === null) return { found: false };
+
+  stageAtomicWorkflowCommitSideEffects(internals, workflowId, {
+    conditions: [{ key: record.key, expectedValue: new Uint8Array(record.value) }],
+    operations: [{ type: 'delete', key: record.key }],
+  });
+  return { found: true, payload: decode(record.value) };
 }
 
 /**
@@ -334,11 +350,72 @@ export async function peekSignal(
   workflowId: string,
   signalName: string,
 ): Promise<ConsumedSignalResult> {
-  const prefix = `sig:${encodeStorageKeyComponent(workflowId)}:${signalName}:`;
-  for await (const [, value] of internals.storage.scan(prefix, { limit: 1 })) {
-    return { found: true, payload: decode(value) };
+  const record = await findBufferedSignalRecord(internals, workflowId, signalName);
+  return record === null ? { found: false } : { found: true, payload: decode(record.value) };
+}
+
+async function findBufferedSignalRecord(
+  internals: EngineInternals,
+  workflowId: string,
+  signalName: string,
+): Promise<BufferedSignalRecord | null> {
+  const encodedWorkflowId = encodeStorageKeyComponent(workflowId);
+  const encodedSignalName = encodeStorageKeyComponent(signalName);
+  const encodedPrefix = signalKeyPrefix(encodedWorkflowId, encodedSignalName);
+  const encodedRecord = await findBufferedSignalRecordByPrefix(
+    internals,
+    encodedPrefix,
+    encodedWorkflowId,
+    encodedSignalName,
+  );
+  if (encodedRecord !== null) {
+    return encodedRecord;
   }
-  return { found: false };
+
+  if (signalName.includes(':') || signalName === encodedSignalName) {
+    return null;
+  }
+
+  return findBufferedSignalRecordByPrefix(
+    internals,
+    signalKeyPrefix(encodedWorkflowId, signalName),
+    encodedWorkflowId,
+    signalName,
+  );
+}
+
+async function findBufferedSignalRecordByPrefix(
+  internals: EngineInternals,
+  prefix: string,
+  encodedWorkflowId: string,
+  signalNameKeyComponent: string,
+): Promise<BufferedSignalRecord | null> {
+  for await (const [key, value] of internals.storage.scan(prefix)) {
+    if (isExactSignalKey(key, encodedWorkflowId, signalNameKeyComponent)) {
+      return { key, value };
+    }
+  }
+
+  return null;
+}
+
+function signalKeyPrefix(encodedWorkflowId: string, signalNameKeyComponent: string): string {
+  return `sig:${encodedWorkflowId}:${signalNameKeyComponent}:`;
+}
+
+function isExactSignalKey(
+  key: string,
+  encodedWorkflowId: string,
+  signalNameKeyComponent: string,
+): boolean {
+  const components = key.split(':');
+  return (
+    components.length === SIGNAL_KEY_COMPONENT_COUNT &&
+    components[0] === 'sig' &&
+    components[1] === encodedWorkflowId &&
+    components[2] === signalNameKeyComponent &&
+    components[3] !== ''
+  );
 }
 
 function getSingleSignalId(

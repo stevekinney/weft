@@ -36,6 +36,19 @@ describe('storage package exports', () => {
     expect(Object.hasOwn(packageJson.exports, './storage/resolve')).toBe(true);
   });
 
+  it('exposes storage conformance helpers through storage/testing only', () => {
+    expect(packageJson.exports['./storage/testing']).toEqual({
+      types: './dist/storage/testing.d.ts',
+      bun: './dist/storage/testing.js',
+    });
+    expect(packageJson.exports['./testing']).toEqual({
+      types: './dist/testing/index.d.ts',
+      bun: './dist/testing/index.js',
+      import: './dist/testing/index.js',
+      default: './dist/testing/index.js',
+    });
+  });
+
   it('exposes the text-value-store string key/value facade as a subpath', () => {
     expect(packageJson.exports['./storage/text-value-store']).toEqual({
       types: './dist/storage/text-value-store.d.ts',

@@ -39,6 +39,10 @@ import {
   bulkMutateWorkflowTagsRestBinding,
 } from './operations/bulk-mutate-workflow-tags.ts';
 import {
+  bulkRetryFailedWorkflowsOperation,
+  bulkRetryFailedWorkflowsRestBinding,
+} from './operations/bulk-retry-failed-workflows.ts';
+import {
   bulkSignalWorkflowsOperation,
   bulkSignalWorkflowsRestBinding,
 } from './operations/bulk-signal-workflows.ts';
@@ -75,6 +79,8 @@ import {
   createGetSystemMetricsRestBinding,
 } from './operations/get-system-metrics.ts';
 import {
+  clearTaskDeadLetterOperation,
+  clearTaskDeadLetterRestBinding,
   createGetTaskDiagnosticsOperation,
   getTaskDiagnosticsOperation,
   getTaskDiagnosticsRestBinding,
@@ -244,6 +250,7 @@ export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   purgeWorkflowsRestBinding,
   bulkCancelWorkflowsRestBinding,
   bulkSignalWorkflowsRestBinding,
+  bulkRetryFailedWorkflowsRestBinding,
   bulkDeleteWorkflowsRestBinding,
   bulkMutateWorkflowTagsRestBinding,
   getWorkflowRestBinding,
@@ -281,6 +288,7 @@ export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   getStreamChunksRestBinding,
   streamWorkflowSseRestBinding,
   getTaskDiagnosticsRestBinding,
+  clearTaskDeadLetterRestBinding,
   // Track 8 operation-backed routes
   listSchedulesRestBinding,
   getScheduleRestBinding,
@@ -416,6 +424,7 @@ export function createLiveOperationRegistry(
     purgeWorkflowsOperation,
     bulkCancelWorkflowsOperation,
     bulkSignalWorkflowsOperation,
+    bulkRetryFailedWorkflowsOperation,
     bulkDeleteWorkflowsOperation,
     bulkMutateWorkflowTagsOperation,
     getWorkflowOperation,
@@ -453,6 +462,7 @@ export function createLiveOperationRegistry(
     streamWorkflowSseOperation,
     workflowEventsSubscriptionOperation,
     buildTaskDiagnosticsOperationForRegistry(resolved),
+    clearTaskDeadLetterOperation,
     // Track 8 operation-backed routes
     listSchedulesOperation,
     getScheduleOperation,

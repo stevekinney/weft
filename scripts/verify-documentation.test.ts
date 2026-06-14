@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import {
+  collectErrorReferenceFindings,
   parseMinimumBunVersion,
   runCli,
   runMain,
@@ -188,6 +189,28 @@ describe('verifyDocumentation', () => {
       file: '.github/workflows/ci.yaml',
       line: 7,
       message: 'Unsupported bun-version format: latest. Use a concrete semver pin.',
+    });
+  });
+
+  it('requires the error reference to cover every public error and fault code', async () => {
+    const repositoryRoot = await createFixtureRepository({
+      'src/core/weft-error.ts': "export type WeftErrorCode = 'WorkflowNotFoundError';\n",
+      'src/core/fault-code.ts': "export type FaultCode = 'NotFound' | 'Conflict';\n",
+      'documentation/reference/api-errors.md': [
+        '# Error Codes',
+        '',
+        '| Code | Description |',
+        '| ---- | ----------- |',
+        '| `WorkflowNotFoundError` | Missing workflow record. |',
+        '| `NotFound` | Missing resource. |',
+        '',
+      ].join('\n'),
+    });
+
+    expect(collectErrorReferenceFindings(repositoryRoot)).toContainEqual({
+      file: 'documentation/reference/api-errors.md',
+      line: 1,
+      message: 'Missing FaultCode member `Conflict` from error-code reference.',
     });
   });
 

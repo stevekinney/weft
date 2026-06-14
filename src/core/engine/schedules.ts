@@ -15,6 +15,7 @@ import type { EngineInternals } from './internals.ts';
 import { unavailableServicesError } from './lifecycle/recovered-services.ts';
 import { EMPTY_STORAGE_VALUE } from './lifecycle/shared.ts';
 import { ScheduleHandle } from './schedule-handle.ts';
+import { resolveEffectiveScheduleFireAt } from './schedule-jitter.ts';
 import { getNextScheduleOccurrence } from './schedule-occurrence.ts';
 import {
   clearScheduleCurrentWorkflow,
@@ -92,9 +93,11 @@ export async function schedule(
       status: 'active',
       overlap: normalizedOptions.overlap,
       backfill: normalizedOptions.backfill,
+      ...(normalizedOptions.jitterMs !== undefined && { jitterMs: normalizedOptions.jitterMs }),
       createdAt: now,
       updatedAt: now,
       nextFireAt: getNextScheduleOccurrence({ ...cadenceFields, createdAt: now }, now),
+      missedFireCount: 0,
       queuedRuns: 0,
     };
     await writeScheduleState(internals, state);
@@ -120,6 +123,45 @@ export async function listSchedules(
   }
 
   return paginateScheduleSummaries(items, normalizedFilter);
+}
+
+export async function recoverOrphanedScheduleTimers(internals: EngineInternals): Promise<void> {
+  for await (const [key, value] of internals.storage.scan('schedule:')) {
+    const scheduleKeySuffix = key.slice('schedule:'.length);
+    if (scheduleKeySuffix.includes(':')) continue;
+
+    const state = decodeScheduleState(value);
+    if (!isActiveScheduleWithTimer(state)) continue;
+
+    if (await hasCurrentScheduleTimer(internals, state)) continue;
+
+    await writeScheduleState(internals, state);
+  }
+}
+
+function isActiveScheduleWithTimer(
+  state: ScheduleState | null,
+): state is ScheduleState & { nextFireAt: number } {
+  return state?.status === 'active' && state.nextFireAt !== null;
+}
+
+async function hasCurrentScheduleTimer(
+  internals: EngineInternals,
+  state: ScheduleState & { nextFireAt: number },
+): Promise<boolean> {
+  const timerKey = KEYS.scheduleTick(
+    resolveEffectiveScheduleFireAt(state, state.nextFireAt),
+    state.id,
+  );
+  const timerBytes = await internals.storage.get(timerKey);
+  if (timerBytes === null) {
+    return false;
+  }
+
+  const timerIndexBytes = await internals.storage.get(
+    `timer-idx:${createScheduleTimerId(state.id)}`,
+  );
+  return timerIndexBytes !== null && decode(timerIndexBytes) === timerKey;
 }
 
 export function toScheduleSummary(state: ScheduleState): ScheduleSummary {
@@ -196,12 +238,6 @@ export async function updateSchedule(
   const normalizedScheduleId = coerceScheduleId(scheduleId, 'scheduleId');
   const normalizedSpec = normalizeScheduleSpec(newSpec);
   const state = await requireScheduleState(internals, normalizedScheduleId);
-  if (state.status === 'active') {
-    await internals.scheduler.cancel(
-      createScheduleTimerId(normalizedScheduleId),
-      normalizedScheduleId,
-    );
-  }
   const now = internals.options.getNow();
   // Replace the cadence wholesale so switching kinds (cron <-> interval) never
   // leaves a stale field behind. Interval cadence re-anchors at the update time.

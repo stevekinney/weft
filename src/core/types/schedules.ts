@@ -53,8 +53,8 @@ export type ScheduleSpec = { cron: string; every?: never } | { every: Duration; 
 /**
  * Options accepted by {@link Engine.schedule}. `id` assigns a deterministic
  * schedule identifier; `overlap` controls what happens when a tick fires while a
- * previous run is still active; `backfill` triggers immediate runs for any ticks
- * that were missed since the schedule was created.
+ * previous run is still active; `backfill` controls missed ticks after downtime;
+ * `jitter` deterministically spreads each occurrence's effective dispatch time.
  *
  * @example
  * ```ts
@@ -62,7 +62,12 @@ export type ScheduleSpec = { cron: string; every?: never } | { every: Duration; 
  *
  * const engine = new Engine();
  * engine.register(workflow({ name: 'report' }).execute(async function* () { return 'ok'; }));
- * const options: ScheduleOptions = { id: 'daily-report', overlap: 'skip', backfill: false };
+ * const options: ScheduleOptions = {
+ *   id: 'daily-report',
+ *   overlap: 'skip',
+ *   backfill: false,
+ *   jitter: '30s',
+ * };
  * const handle = await engine.schedule('report', null, '0 9 * * *', options);
  * void handle;
  * ```
@@ -70,7 +75,23 @@ export type ScheduleSpec = { cron: string; every?: never } | { every: Duration; 
 export interface ScheduleOptions {
   id?: string;
   overlap?: ScheduleOverlapPolicy;
+  /**
+   * When `false` (the default), a tick that is more than one second late is
+   * skipped instead of backfilled. Skipped ticks increment
+   * {@link ScheduleState.missedFireCount}, update
+   * {@link ScheduleState.lastMissedFireAt}, and emit a
+   * `ScheduleMissedFireEvent`.
+   *
+   * When `true`, missed ticks are processed immediately, up to the engine's
+   * per-tick backfill cap.
+   */
   backfill?: boolean;
+  /**
+   * Deterministic per-occurrence delay applied to the effective dispatch timer.
+   * The persisted {@link ScheduleState.nextFireAt} remains the nominal
+   * pre-jitter occurrence timestamp.
+   */
+  jitter?: Duration;
 }
 
 /**
@@ -102,6 +123,7 @@ export type ScheduleDefinition<TInput = unknown> = ScheduleSpec & {
   id?: string;
   overlapPolicy?: ScheduleOverlapPolicy;
   backfill?: boolean;
+  jitter?: Duration;
 };
 
 /**
@@ -143,9 +165,16 @@ export interface ScheduleState {
   status: ScheduleStatus;
   overlap: ScheduleOverlapPolicy;
   backfill: boolean;
+  /** Normalized deterministic jitter window in milliseconds. */
+  jitterMs?: number;
   createdAt: number;
   updatedAt: number;
+  /** Most recent occurrence that started a scheduled workflow. */
   lastFireAt?: number;
+  /** Most recent occurrence skipped because a non-backfill timer was late. */
+  lastMissedFireAt?: number;
+  /** Lifetime count of occurrences skipped because a non-backfill timer was late. */
+  missedFireCount: number;
   nextFireAt: number | null;
   currentWorkflowId?: string;
   queuedRuns: number;
@@ -167,9 +196,16 @@ export interface ScheduleSummary {
   status: ScheduleStatus;
   overlap: ScheduleOverlapPolicy;
   backfill: boolean;
+  /** Normalized deterministic jitter window in milliseconds. */
+  jitterMs?: number;
   createdAt: number;
   updatedAt: number;
+  /** Most recent occurrence that started a scheduled workflow. */
   lastFireAt?: number;
+  /** Most recent occurrence skipped because a non-backfill timer was late. */
+  lastMissedFireAt?: number;
+  /** Lifetime count of occurrences skipped because a non-backfill timer was late. */
+  missedFireCount: number;
   nextFireAt: number | null;
   currentWorkflowId?: string;
   queuedRuns: number;

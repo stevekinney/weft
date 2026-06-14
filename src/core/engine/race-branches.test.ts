@@ -54,13 +54,13 @@ function createSignalInternals(storage: unknown): EngineInternals {
 
 /** The real durable scan prefix `peekSignal` / `consumeSignal` build for a signal. */
 function signalScanPrefix(workflowId: string, signalName: string): string {
-  return `sig:${encodeStorageKeyComponent(workflowId)}:${signalName}:`;
+  return `sig:${encodeStorageKeyComponent(workflowId)}:${encodeStorageKeyComponent(signalName)}:`;
 }
 
 /**
  * A storage fake whose scans return a different result per call. It VALIDATES the
- * scan prefix and `limit` against `expectedPrefix` so a bug in the production
- * prefix construction (wrong workflow-id encoding or signal name) fails the test
+ * scan prefix against `expectedPrefix` so a bug in the production prefix
+ * construction (wrong workflow-id encoding or signal name) fails the test
  * rather than silently passing on a loose match.
  */
 function createSequencedStorage(
@@ -70,9 +70,8 @@ function createSequencedStorage(
   let scanIndex = 0;
   return {
     async delete() {},
-    scan(prefix: string, options?: { limit?: number }) {
+    scan(prefix: string) {
       expect(prefix).toBe(expectedPrefix);
-      expect(options?.limit).toBe(1);
       const entries = entriesByScan[scanIndex++] ?? [];
       if (typeof entries === 'function') entries();
       const concrete = entries as Array<[string, Uint8Array]>;
@@ -99,9 +98,8 @@ function createDeferredVisibleStorage(expectedPrefix: string, value: Uint8Array)
     async delete(deleteKey: string) {
       if (deleteKey === key) present = false;
     },
-    scan(prefix: string, options?: { limit?: number }) {
+    scan(prefix: string) {
       expect(prefix).toBe(expectedPrefix);
-      expect(options?.limit).toBe(1);
       const visible = firstScanDone && present;
       firstScanDone = true;
       return (async function* () {

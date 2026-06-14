@@ -2,6 +2,7 @@ import { Pool } from '@neondatabase/serverless';
 
 import { normalizeDeleteRangeOptions, type DeleteRangeOptions } from './delete-range.ts';
 import {
+  assertStorageBatchOperationCount,
   storageValuesEqual,
   type BatchOperation,
   type ConditionalBatchCondition,
@@ -358,6 +359,7 @@ export class NeonStorage implements Storage {
   }
 
   async batch(operations: BatchOperation[]): Promise<void> {
+    assertStorageBatchOperationCount('batch operations', operations.length);
     if (operations.length === 0) return;
     await this.#ensureTable();
     await this.#withTransaction(PG_BEGIN_READ_COMMITTED, async (client) => {
@@ -369,6 +371,9 @@ export class NeonStorage implements Storage {
     conditions: ConditionalBatchCondition[],
     operations: BatchOperation[],
   ): Promise<boolean> {
+    assertStorageBatchOperationCount('conditionalBatch conditions', conditions.length);
+    assertStorageBatchOperationCount('conditionalBatch operations', operations.length);
+
     await this.#ensureTable();
 
     // SERIALIZABLE is required, not SELECT...FOR UPDATE: a condition with

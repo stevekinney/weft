@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'bun:test';
 
+import { MAX_BATCH_OPERATIONS, StorageBatchOperationLimitExceededError } from './interface';
 import { MemoryStorage } from './memory';
 import {
   collect,
   decodeText as decode,
   bytes as encode,
   runBasicStorageContract,
+  runConcurrentConditionalBatchConformance,
   runStorageCapabilityConformance,
 } from './storage-adapter.test-support.ts';
 
@@ -22,6 +24,7 @@ runStorageCapabilityConformance('MemoryStorage', {
 });
 
 runBasicStorageContract('MemoryStorage', { create: () => new MemoryStorage() });
+runConcurrentConditionalBatchConformance('MemoryStorage', { create: () => new MemoryStorage() });
 
 describe('MemoryStorage', () => {
   it('delete on nonexistent key is a no-op', async () => {
@@ -83,6 +86,21 @@ describe('MemoryStorage', () => {
     await storage.batch([]);
     expect(await storage.get('key')).toEqual(encode('value'));
     expect(storage.size).toBe(1);
+  });
+
+  it('rejects a batch above MAX_BATCH_OPERATIONS before applying writes', async () => {
+    const storage = new MemoryStorage();
+    const operations = Array.from({ length: MAX_BATCH_OPERATIONS + 1 }, (_, index) => ({
+      type: 'put' as const,
+      key: `oversized:${index}`,
+      value: encode(String(index)),
+    }));
+
+    await expect(storage.batch(operations)).rejects.toBeInstanceOf(
+      StorageBatchOperationLimitExceededError,
+    );
+    expect(await storage.get('oversized:0')).toBeNull();
+    expect(await storage.get(`oversized:${MAX_BATCH_OPERATIONS}`)).toBeNull();
   });
 
   it('[Symbol.dispose] clears all data', () => {

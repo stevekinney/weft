@@ -38,6 +38,7 @@ export const CATALOG_OPERATION_NAMES = [
   'weft.workflows.attributes.set',
   'weft.workflows.bulk.cancel',
   'weft.workflows.bulk.delete',
+  'weft.workflows.bulk.retryfailed',
   'weft.workflows.bulk.signal',
   'weft.workflows.bulk.tags',
   'weft.workflows.cancel',
@@ -66,8 +67,9 @@ export const CATALOG_OPERATION_NAMES = [
 
 export type CatalogOperationName = (typeof CATALOG_OPERATION_NAMES)[number];
 
-type SharedAttributesConfirmationTo_f933f774 = {
+type SharedAttributesBulkConcurrenc_73ecbca6 = {
   readonly attributes?: ReadonlyArray<SharedGtGteKey_896a0c41>;
+  readonly bulkConcurrency?: number;
   readonly confirmationToken?: string;
   readonly createdAt?: SharedGtGteLt_d9a61361;
   readonly dryRun?: boolean;
@@ -171,6 +173,7 @@ export type CatalogOperationTypes = {
       readonly every?: unknown;
       readonly id?: unknown;
       readonly input?: unknown;
+      readonly jitter?: unknown;
       readonly overlap?: unknown;
       readonly type: unknown;
     };
@@ -254,6 +257,8 @@ export type CatalogOperationTypes = {
     readonly output: {
       readonly items: ReadonlyArray<{
         readonly activityName?: string;
+        readonly deadLetterReason?: string;
+        readonly deadLetteredAt?: number;
         readonly evidence: ReadonlyArray<string>;
         readonly executionLatencyMs?: number;
         readonly heartbeatAgeMs?: number;
@@ -264,14 +269,17 @@ export type CatalogOperationTypes = {
         readonly queueLatencyMs?: number;
         readonly requeueCount: number;
         readonly resolutionReason?: string;
+        readonly retryAttempts?: number;
         readonly retryCount: number;
         readonly state: string;
+        readonly storageError?: string;
         readonly workerId?: string;
         readonly workflowId?: string;
       }>;
       readonly limit: number;
       readonly summary: {
         readonly allWorkersAtCapacity: number;
+        readonly deadLettered: number;
         readonly retryStorms: number;
         readonly staleInflight: number;
         readonly stuckQueued: number;
@@ -381,18 +389,24 @@ export type CatalogOperationTypes = {
     readonly faults: never;
   };
   'weft.workflows.bulk.cancel': {
-    readonly input: SharedAttributesConfirmationTo_f933f774;
+    readonly input: SharedAttributesBulkConcurrenc_73ecbca6;
     readonly output: unknown;
     readonly faults: never;
   };
   'weft.workflows.bulk.delete': {
-    readonly input: SharedAttributesConfirmationTo_f933f774;
+    readonly input: SharedAttributesBulkConcurrenc_73ecbca6;
     readonly output: unknown;
     readonly faults: 'Unprocessable';
+  };
+  'weft.workflows.bulk.retryfailed': {
+    readonly input: SharedAttributesBulkConcurrenc_73ecbca6;
+    readonly output: unknown;
+    readonly faults: never;
   };
   'weft.workflows.bulk.signal': {
     readonly input: {
       readonly attributes?: ReadonlyArray<SharedGtGteKey_896a0c41>;
+      readonly bulkConcurrency?: number;
       readonly confirmationToken?: string;
       readonly createdAt?: SharedGtGteLt_d9a61361;
       readonly dryRun?: boolean;
@@ -414,6 +428,7 @@ export type CatalogOperationTypes = {
   };
   'weft.workflows.bulk.tags': {
     readonly input: {
+      readonly bulkConcurrency?: number;
       readonly confirmationToken?: string;
       readonly dryRun?: boolean;
       readonly filter?: SharedAttributesCreatedAtExecu_c9ba5dc6;

@@ -76,6 +76,8 @@ export function disposeEngine(internals: EngineInternals): void {
   internals.pendingScheduleCreations.clear();
   internals.eventLogHeads.clear();
   internals.pendingTimelineEntries.clear();
+  internals.pendingAtomicWorkflowCommitSideEffects.clear();
+  internals.pendingAsyncActivityResolutions.clear();
   internals.workflowVersionTuples.clear();
   internals.workflowFeedListeners.clear();
   internals.activityRegistriesByWorkflow.clear();

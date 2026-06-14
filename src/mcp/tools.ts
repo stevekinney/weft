@@ -49,7 +49,23 @@ type ToolRegistry = {
   readonly toolsByName: ReadonlyMap<string, ToolImplementation>;
 };
 
+type WorkflowToolArguments = {
+  readonly input: unknown;
+  readonly timeoutMs: number;
+};
+
+type WorkflowToolResultWaitOutcome =
+  | { readonly status: 'completed'; readonly result: unknown }
+  | { readonly status: 'timed-out' };
+
+type ResultHandle = {
+  readonly id: string;
+  result(): Promise<unknown>;
+};
+
 const toolRegistryCache = new WeakMap<Engine, ToolRegistry>();
+const DEFAULT_WORKFLOW_TOOL_TIMEOUT_MS = 30_000;
+const MAX_WORKFLOW_TOOL_TIMEOUT_MS = 2_147_483_647;
 
 /** Build deterministic MCP tool definitions for the current engine registry. */
 export function listMcpTools(engine: Engine): McpToolDefinition[] {
@@ -146,7 +162,7 @@ function buildToolImplementations(engine: Engine): ToolImplementation[] {
       },
       call: async (argumentsValue, context) => {
         assertScope(context, 'workflows:write', 'Calling workflow tools');
-        const input = argumentsValue;
+        const { input, timeoutMs } = parseWorkflowToolArguments(argumentsValue);
         const workflowId = crypto.randomUUID();
         context.session.trackRequest(context.requestId, workflowId);
         try {
@@ -159,8 +175,14 @@ function buildToolImplementations(engine: Engine): ToolImplementation[] {
           if (context.session.isRequestCancelled(context.requestId)) {
             await context.engine.cancel(handle.id);
           }
-          const result = await handle.result();
-          return { workflowId: handle.id, result };
+          const outcome = await waitForWorkflowToolResult(handle, {
+            timeoutMs,
+            signal: context.session.requestSignal(context.requestId),
+          });
+          if (outcome.status === 'timed-out') {
+            return workflowToolStillRunningResult(handle.id, timeoutMs);
+          }
+          return { workflowId: handle.id, result: outcome.result };
         } finally {
           context.session.untrackRequest(context.requestId);
         }
@@ -176,10 +198,114 @@ function convertWorkflowInputSchema(
   schema: DefinitionSchema,
 ): Record<string, unknown> {
   try {
-    return definitionSchemaToJsonSchema(schema, 'input');
+    return withWorkflowToolTimeoutParameter(definitionSchemaToJsonSchema(schema, 'input'));
   } catch (cause) {
     throw new RegistrySchemaConversionError('workflow', workflowType, 'inputSchema', cause);
   }
+}
+
+function withWorkflowToolTimeoutParameter(
+  schema: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      input: schema,
+      timeoutMs: {
+        type: 'integer',
+        minimum: 1,
+        maximum: MAX_WORKFLOW_TOOL_TIMEOUT_MS,
+        default: DEFAULT_WORKFLOW_TOOL_TIMEOUT_MS,
+        description:
+          'Maximum milliseconds to wait for the workflow result before returning a running status.',
+      },
+    },
+  };
+}
+
+function parseWorkflowToolArguments(argumentsValue: unknown): WorkflowToolArguments {
+  if (
+    argumentsValue === null ||
+    typeof argumentsValue !== 'object' ||
+    Array.isArray(argumentsValue)
+  ) {
+    return { input: argumentsValue, timeoutMs: DEFAULT_WORKFLOW_TOOL_TIMEOUT_MS };
+  }
+
+  const record = argumentsValue as Record<string, unknown>;
+  const timeoutMs = parseWorkflowToolTimeoutMs(record['timeoutMs']);
+  return { input: record['input'], timeoutMs };
+}
+
+function parseWorkflowToolTimeoutMs(value: unknown): number {
+  if (value === undefined) return DEFAULT_WORKFLOW_TOOL_TIMEOUT_MS;
+  if (
+    typeof value === 'number' &&
+    Number.isSafeInteger(value) &&
+    value >= 1 &&
+    value <= MAX_WORKFLOW_TOOL_TIMEOUT_MS
+  ) {
+    return value;
+  }
+  throw new McpToolExecutionError(
+    `Tool argument "timeoutMs" must be an integer from 1 to ${MAX_WORKFLOW_TOOL_TIMEOUT_MS}`,
+  );
+}
+
+async function waitForWorkflowToolResult(
+  handle: ResultHandle,
+  options: { timeoutMs: number; signal?: AbortSignal | undefined },
+): Promise<WorkflowToolResultWaitOutcome> {
+  if (options.signal?.aborted) {
+    throw new McpToolExecutionError('Workflow cancelled');
+  }
+
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  let cleanupAbortListener: (() => void) | undefined;
+  const resultPromise = handle
+    .result()
+    .then((result) => ({ status: 'completed', result }) as const);
+  const timeoutPromise = new Promise<WorkflowToolResultWaitOutcome>((resolve) => {
+    timeout = setTimeout(() => resolve({ status: 'timed-out' }), options.timeoutMs);
+  });
+  const cancellationPromise =
+    options.signal === undefined
+      ? undefined
+      : new Promise<never>((_resolve, reject) => {
+          const abort = () => reject(new McpToolExecutionError('Workflow cancelled'));
+          options.signal?.addEventListener('abort', abort, { once: true });
+          cleanupAbortListener = () => options.signal?.removeEventListener('abort', abort);
+        });
+
+  try {
+    return await Promise.race(
+      cancellationPromise === undefined
+        ? [resultPromise, timeoutPromise]
+        : [resultPromise, timeoutPromise, cancellationPromise],
+    );
+  } finally {
+    if (timeout !== undefined) clearTimeout(timeout);
+    cleanupAbortListener?.();
+  }
+}
+
+function workflowToolStillRunningResult(
+  workflowId: string,
+  timeoutMs: number,
+): Record<string, unknown> {
+  return {
+    workflowId,
+    status: 'running',
+    timedOut: true,
+    timeoutMs,
+    message:
+      'Workflow is still running and was not cancelled. Call get_workflow_state with this workflowId to poll for completion.',
+    followUp: {
+      tool: 'get_workflow_state',
+      arguments: { workflowId },
+    },
+  };
 }
 
 function builtInTools(): ToolImplementation[] {
@@ -341,7 +467,7 @@ async function requireVisibleWorkflow(context: McpAccessContext, workflowId: str
 }
 
 function toolSuccess(value: unknown): McpToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(value) }] };
+  return { isError: false, content: [{ type: 'text', text: JSON.stringify(value) }] };
 }
 
 function toolError(message: string): McpToolResult {

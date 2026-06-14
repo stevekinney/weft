@@ -155,6 +155,8 @@ curl -X POST http://localhost:7233/api/v1/activities/complete \
 
 Tokens are single-use. A replayed or unknown token returns `NotFound`; oversized completion and failure payloads return `InvalidParams` before the parked token is consumed, so the workflow remains waiting.
 
+After a restart, register workflows and activities, then await `engine.recoverAll()` before accepting callback traffic if your application needs deterministic startup ordering. If a completion or failure races recovery after the token has been recovered but before replay has adopted the workflow generator, Weft buffers that outcome and delivers it when replay reaches the same async-activity token.
+
 The token is a deterministic identifier, not a secret. Treat completion payloads as hostile external input, validate them the same way you validate signal payloads, and enable `serve({ auth })` before exposing completion endpoints outside a trusted boundary.
 
 ## Per-call options
@@ -188,7 +190,7 @@ async function* example(ctx: Context) {
 The `timeout` kills the activity after the specified duration. The `queue` routes the activity to a specific worker queue (useful for rate limiting or resource isolation). The `idempotencyKey` lets Weft replay a completed reconciliation marker without rerunning the activity. When recovery only finds an ambiguous prior start marker, Weft fails closed unless the activity definition provides a Tier-0 verifier that can prove the external result or safe redispatch. It is not an exactly-once guarantee for external systems.
 
 > [!WARNING]
-> Activities are at-least-once side effects. Payment providers, queues, email APIs, and databases still need their own idempotency keys. Weft can replay a completed result it durably recorded, or ask your verifier whether a prior keyed side effect completed, but it cannot undo an external side effect that finished before Weft recorded the outcome.
+> Activities are at-least-once side effects. Payment providers, queues, email APIs, and databases still need their own idempotency keys. Weft can replay a completed result it durably recorded, or ask your verifier whether a prior keyed side effect completed, but it cannot undo an external side effect that finished before Weft recorded the outcome. A keyed activity without a Tier-0 verifier can fail closed after a crash in that execution window because recovery sees only the prior start marker and cannot prove whether redispatch is safe.
 
 ## Activity definitions
 

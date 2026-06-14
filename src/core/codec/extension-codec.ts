@@ -6,6 +6,7 @@ import {
   decodeCodecDate,
   encodeCodecDate,
 } from '../codec-helpers.ts';
+import { WeftError } from '../weft-error.ts';
 import { bindSerializerRegistryToCodec, hasRegisteredSerializer } from './serializer-registry.ts';
 
 // ---------------------------------------------------------------------------
@@ -18,6 +19,65 @@ const EXTENSION_TYPE_MAP = 3;
 const EXTENSION_TYPE_SET = 4;
 const EXTENSION_TYPE_UNDEFINED = 5;
 const EXTENSION_TYPE_ERROR = 6;
+const REGEXP_SOURCE_MAX_BYTES = 65_535;
+const regexpSourceTextEncoder = new TextEncoder();
+
+export class RegExpExtensionDecodeError extends WeftError<'RegExpExtensionDecodeError'> {
+  readonly extensionType: typeof EXTENSION_TYPE_REGEXP;
+  readonly source: string;
+  readonly flags: string;
+  readonly sourceByteLength: number;
+
+  constructor(parameters: {
+    source: string;
+    flags: string;
+    sourceByteLength: number;
+    reason: string;
+    cause?: unknown;
+  }) {
+    super(
+      'RegExpExtensionDecodeError',
+      `RegExp extension type ${EXTENSION_TYPE_REGEXP} could not be decoded: source=${formatRegExpSourceForMessage(parameters.source, parameters.sourceByteLength)} flags=${JSON.stringify(parameters.flags)} ${parameters.reason}`,
+      parameters.cause === undefined ? undefined : { cause: parameters.cause },
+    );
+    this.extensionType = EXTENSION_TYPE_REGEXP;
+    this.source = parameters.source;
+    this.flags = parameters.flags;
+    this.sourceByteLength = parameters.sourceByteLength;
+  }
+}
+
+function formatRegExpSourceForMessage(source: string, sourceByteLength: number): string {
+  if (sourceByteLength <= 200) {
+    return JSON.stringify(source);
+  }
+  return `${sourceByteLength}-byte string starting ${JSON.stringify(source.slice(0, 120))}`;
+}
+
+function decodeRegExpExtension(source: string, flags: string): RegExp {
+  const sourceByteLength = regexpSourceTextEncoder.encode(source).byteLength;
+  if (sourceByteLength > REGEXP_SOURCE_MAX_BYTES) {
+    throw new RegExpExtensionDecodeError({
+      source,
+      flags,
+      sourceByteLength,
+      reason: `because source exceeds the ${REGEXP_SOURCE_MAX_BYTES}-byte limit.`,
+    });
+  }
+
+  try {
+    return new RegExp(source, flags);
+  } catch (cause) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    throw new RegExpExtensionDecodeError({
+      source,
+      flags,
+      sourceByteLength,
+      reason: `because ${reason}`,
+      cause,
+    });
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Helpers for safe type narrowing from msgpack decode results
@@ -40,7 +100,15 @@ extensionCodec.register({
   decode: decodeCodecDate,
 });
 
-// RegExp (ext type 2): encoded as { source, flags } object
+/**
+ * RegExp (ext type 2): encoded as `{ source, flags }`.
+ *
+ * Persisted RegExp flags are JavaScript-engine-version-sensitive. A checkpoint
+ * written by a newer Bun/JavaScriptCore runtime can contain a flag that an
+ * older runtime cannot construct. Decode therefore validates the stored source
+ * size and wraps RegExp construction failures in a typed decode error so
+ * recovery can fail only the affected workflow with an actionable message.
+ */
 extensionCodec.register({
   type: EXTENSION_TYPE_REGEXP,
   encode(value: unknown): Uint8Array | null {
@@ -53,7 +121,7 @@ extensionCodec.register({
     const decoded = coerceCodecRecord(msgpackDecode(data));
     const source = typeof decoded['source'] === 'string' ? decoded['source'] : '';
     const flags = typeof decoded['flags'] === 'string' ? decoded['flags'] : '';
-    return new RegExp(source, flags);
+    return decodeRegExpExtension(source, flags);
   },
 });
 
@@ -179,6 +247,11 @@ extensionCodec.register({
  * routes it through the extension codec instead of encoding it as null.
  */
 export function replaceUndefined(value: unknown, visited: Set<object>): unknown {
+  if (!containsUndefined(value, visited)) return value;
+  return replaceUndefinedDeep(value, new Set());
+}
+
+function replaceUndefinedDeep(value: unknown, visited: Set<object>): unknown {
   if (value === undefined) return undefinedSentinel;
   if (value === null || typeof value !== 'object') return value;
   if (visited.has(value)) return value;
@@ -214,7 +287,7 @@ function replaceObjectUndefined(value: object, visited: Set<object>): unknown {
 function replaceArrayUndefined(value: unknown[], visited: Set<object>): unknown[] {
   const result: unknown[] = Array.from({ length: value.length });
   for (let index = 0; index < value.length; index++) {
-    result[index] = replaceUndefined(value[index], visited);
+    result[index] = replaceUndefinedDeep(value[index], visited);
   }
   return result;
 }
@@ -225,7 +298,7 @@ function replaceMapUndefined(
 ): Map<unknown, unknown> {
   const result = new Map<unknown, unknown>();
   for (const [key, mapValue] of value) {
-    result.set(replaceUndefined(key, visited), replaceUndefined(mapValue, visited));
+    result.set(replaceUndefinedDeep(key, visited), replaceUndefinedDeep(mapValue, visited));
   }
   return result;
 }
@@ -233,7 +306,7 @@ function replaceMapUndefined(
 function replaceSetUndefined(value: Set<unknown>, visited: Set<object>): Set<unknown> {
   const result = new Set<unknown>();
   for (const setValue of value) {
-    result.add(replaceUndefined(setValue, visited));
+    result.add(replaceUndefinedDeep(setValue, visited));
   }
   return result;
 }
@@ -256,7 +329,62 @@ function replaceRecordUndefined(value: object, visited: Set<object>): Record<str
   const record = value as Record<string, unknown>;
   const result: Record<string, unknown> = {};
   for (const key of Object.keys(record)) {
-    result[key] = replaceUndefined(record[key], visited);
+    result[key] = replaceUndefinedDeep(record[key], visited);
   }
   return result;
+}
+
+function containsUndefined(value: unknown, visited: Set<object>): boolean {
+  if (value === undefined) return true;
+  if (value === null || typeof value !== 'object') return false;
+  if (visited.has(value)) return false;
+  if (isNestedValueFree(value)) return false;
+
+  visited.add(value);
+  try {
+    if (Array.isArray(value)) {
+      return arrayContainsUndefined(value, visited);
+    }
+
+    if (value instanceof Map) {
+      return mapContainsUndefined(value, visited);
+    }
+
+    if (value instanceof Set) {
+      return setContainsUndefined(value, visited);
+    }
+
+    return recordContainsUndefined(value, visited);
+  } finally {
+    visited.delete(value);
+  }
+}
+
+function arrayContainsUndefined(value: unknown[], visited: Set<object>): boolean {
+  for (let index = 0; index < value.length; index++) {
+    if (containsUndefined(value[index], visited)) return true;
+  }
+  return false;
+}
+
+function mapContainsUndefined(value: Map<unknown, unknown>, visited: Set<object>): boolean {
+  for (const [key, mapValue] of value) {
+    if (containsUndefined(key, visited) || containsUndefined(mapValue, visited)) return true;
+  }
+  return false;
+}
+
+function setContainsUndefined(value: Set<unknown>, visited: Set<object>): boolean {
+  for (const setValue of value) {
+    if (containsUndefined(setValue, visited)) return true;
+  }
+  return false;
+}
+
+function recordContainsUndefined(value: object, visited: Set<object>): boolean {
+  const record = value as Record<string, unknown>;
+  for (const key of Object.keys(record)) {
+    if (containsUndefined(record[key], visited)) return true;
+  }
+  return false;
 }

@@ -1,7 +1,13 @@
 import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
-import { requireStorageCapability, storageConditionalBatch } from '../../../storage/interface.ts';
+import {
+  requireStorageCapability,
+  storageConditionalBatch,
+  storageValuesEqual,
+} from '../../../storage/interface.ts';
+import { AtomicStateConflictError } from '../../atomic-state.ts';
 import type { Checkpoint, StartOptions, TimerEntry, WorkflowState } from '../../types.ts';
 import type { EngineInternals } from '../internals.ts';
+import type { WorkflowConcurrencyStartOperations } from '../workflow-concurrency.ts';
 import { type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
 import { buildStartBatchOperations } from './start-batch.ts';
 
@@ -31,6 +37,13 @@ export class StartIdempotencyRaceLostError extends Error {
   }
 }
 
+const WORKFLOW_CONCURRENCY_ADMISSION_MAX_ATTEMPTS = 5;
+
+type TaggedStartCondition = {
+  source: 'workflow-concurrency' | 'start-precondition';
+  condition: ConditionalBatchCondition;
+};
+
 /**
  * Commit the start batch. With no preconditions this is a plain `storage.batch()`
  * (the hot path). With preconditions — used by idempotent start and
@@ -45,14 +58,50 @@ export class StartIdempotencyRaceLostError extends Error {
 async function persistStartBatch(
   internals: EngineInternals,
   startOperations: BatchOperation[],
-  conditions: ConditionalBatchCondition[] | undefined,
+  conditions: TaggedStartCondition[],
 ): Promise<boolean> {
-  if (conditions === undefined) {
+  if (conditions.length === 0) {
     await internals.storage.batch(startOperations);
     return true;
   }
-  requireStorageCapability(internals.storage, 'conditionalBatch', 'start idempotency');
-  return storageConditionalBatch(internals.storage, conditions, startOperations);
+  requireStorageCapability(internals.storage, 'conditionalBatch', 'start preconditions');
+  return storageConditionalBatch(
+    internals.storage,
+    conditions.map((entry) => entry.condition),
+    startOperations,
+  );
+}
+
+async function hasStartPreconditionConflict(
+  internals: EngineInternals,
+  conditions: TaggedStartCondition[],
+): Promise<boolean> {
+  for (const entry of conditions) {
+    if (entry.source !== 'start-precondition') continue;
+    const currentValue = await internals.storage.get(entry.condition.key);
+    if (!storageValuesEqual(currentValue, entry.condition.expectedValue)) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function tagStartPreconditions(
+  conditions: ConditionalBatchCondition[] | undefined,
+): TaggedStartCondition[] {
+  return (conditions ?? []).map((condition) => ({
+    source: 'start-precondition' as const,
+    condition,
+  }));
+}
+
+function tagWorkflowConcurrencyConditions(
+  conditions: ConditionalBatchCondition[],
+): TaggedStartCondition[] {
+  return conditions.map((condition) => ({
+    source: 'workflow-concurrency' as const,
+    condition,
+  }));
 }
 
 /** Concatenate caller-supplied and idempotency-derived create-batch operations. */
@@ -77,6 +126,9 @@ export type StartBatchContext = {
   delayedStartTimer: TimerEntry | undefined;
   persistedWorkflowStartHeaders: Map<string, string> | undefined;
   additionalStartOperations: BatchOperation[] | undefined;
+  buildWorkflowConcurrencyStartOperations:
+    | (() => Promise<WorkflowConcurrencyStartOperations | undefined>)
+    | undefined;
   callbacks: LifecycleCallbacks;
   /**
    * Storage deletes for a prior terminal run being displaced by an
@@ -100,25 +152,54 @@ export async function buildAndCommitStartBatch(
   buildIdempotentStartOperations: BuildIdempotentStartOperations | undefined,
 ): Promise<void> {
   const { internals, workflowId, state, checkpoint, registration, options } = context;
-  const idempotent = buildIdempotentStartOperations?.(workflowId);
+  const maxAttempts =
+    context.buildWorkflowConcurrencyStartOperations === undefined
+      ? 1
+      : WORKFLOW_CONCURRENCY_ADMISSION_MAX_ATTEMPTS;
+  let lastWorkflowConcurrencyStateKey: string | undefined;
 
-  const startOperations = buildStartBatchOperations(
-    internals,
-    workflowId,
-    state,
-    checkpoint,
-    registration,
-    options,
-    state.executionDeadline,
-    context.delayedStartTimer,
-    context.persistedWorkflowStartHeaders,
-    mergeAdditionalStartOperations(context.additionalStartOperations, idempotent?.operations),
-    context.callbacks,
-    context.purgeDeleteOperations,
-  );
+  for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+    const idempotent = buildIdempotentStartOperations?.(workflowId);
+    const workflowConcurrency = await context.buildWorkflowConcurrencyStartOperations?.();
+    lastWorkflowConcurrencyStateKey =
+      workflowConcurrency?.stateKey ?? lastWorkflowConcurrencyStateKey;
 
-  const committed = await persistStartBatch(internals, startOperations, idempotent?.conditions);
-  if (!committed) {
-    throw new StartIdempotencyRaceLostError();
+    const startOperations = buildStartBatchOperations(
+      internals,
+      workflowId,
+      state,
+      checkpoint,
+      registration,
+      options,
+      state.executionDeadline,
+      context.delayedStartTimer,
+      context.persistedWorkflowStartHeaders,
+      mergeAdditionalStartOperations(
+        context.additionalStartOperations,
+        mergeAdditionalStartOperations(idempotent?.operations, workflowConcurrency?.operations),
+      ),
+      context.callbacks,
+      context.purgeDeleteOperations,
+    );
+    const conditions = [
+      ...tagStartPreconditions(idempotent?.conditions),
+      ...tagWorkflowConcurrencyConditions(workflowConcurrency?.conditions ?? []),
+    ];
+
+    const committed = await persistStartBatch(internals, startOperations, conditions);
+    if (committed) {
+      return;
+    }
+    if (await hasStartPreconditionConflict(internals, conditions)) {
+      throw new StartIdempotencyRaceLostError();
+    }
+    if (workflowConcurrency === undefined) {
+      throw new StartIdempotencyRaceLostError();
+    }
   }
+
+  throw new AtomicStateConflictError(
+    lastWorkflowConcurrencyStateKey ?? 'workflow concurrency admission',
+    WORKFLOW_CONCURRENCY_ADMISSION_MAX_ATTEMPTS,
+  );
 }

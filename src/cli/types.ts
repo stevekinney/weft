@@ -86,6 +86,7 @@ export type CliCommand =
       id?: string;
       overlap?: ScheduleOverlapPolicy;
       backfill: boolean;
+      jitter?: string;
       help: boolean;
       json: boolean;
     }

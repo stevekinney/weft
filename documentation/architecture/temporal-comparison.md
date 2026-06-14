@@ -4,17 +4,19 @@ Temporal's replay-based architecture creates a cascade of constraints—determin
 
 Here's the mental model comparison for someone writing their first workflow.
 
-| Concept                               | Temporal                                  | Weft                                                                               |
-| ------------------------------------- | ----------------------------------------- | ---------------------------------------------------------------------------------- |
-| Core mental model                     | Replay determinism                        | Generators pause and resume                                                        |
-| Activity invocation                   | `proxyActivities()` + type import         | `yield* ctx.run('activityName', input)`                                            |
-| Timer                                 | Deterministic `workflow.sleep()`          | `yield* ctx.sleep("1 hour")`                                                       |
-| Signal                                | `setHandler` + `condition`                | `yield* ctx.waitForSignal(name)`                                                   |
-| Versioning                            | `patched()` / `deprecatePatch()`          | Stored and registered versions must match during recovery                          |
-| Long-running workflows                | `continueAsNew()`                         | Nothing (checkpoints are fixed-size)                                               |
-| Dev environment                       | Docker Compose + Temporal server          | `bun add @lostgradient/weft`                                                       |
-| Bundling                              | Webpack for workflow sandbox              | None                                                                               |
-| Activity liveness / heartbeat timeout | `heartbeatTimeout` in `proxyActivities()` | `visibilityTimeout` on the activity definition or per-call override (default 30 s) |
+| Concept                               | Temporal                                                | Weft                                                                               |
+| ------------------------------------- | ------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Core mental model                     | Replay determinism                                      | Generators pause and resume                                                        |
+| Activity invocation                   | `proxyActivities()` + type import                       | `yield* ctx.run('activityName', input)`                                            |
+| Timer                                 | Deterministic `workflow.sleep()`                        | `yield* ctx.sleep("1 hour")`                                                       |
+| Signal                                | `setHandler` + `condition`                              | `yield* ctx.waitForSignal(name)`                                                   |
+| Human review                          | Signals, queries, and updates as application primitives | `yield* ctx.review(...)` with durable review records and decision APIs             |
+| Multi-worker horizontal scale         | Task Queues load-balance across Worker Processes        | Single engine per durable store today; `MultiEngine` is pre-1.0 roadmap work       |
+| Versioning                            | `patched()` / `deprecatePatch()`                        | Stored and registered versions must match during recovery                          |
+| Long-running workflows                | `continueAsNew()`                                       | Nothing (checkpoints are fixed-size)                                               |
+| Dev environment                       | Docker Compose + Temporal server                        | `bun add @lostgradient/weft`                                                       |
+| Bundling                              | Webpack for workflow sandbox                            | None                                                                               |
+| Activity liveness / heartbeat timeout | `heartbeatTimeout` in `proxyActivities()`               | `visibilityTimeout` on the activity definition or per-call override (default 30 s) |
 
 Now let's walk through each of the ten design failures in detail.
 
@@ -26,19 +28,21 @@ Now let's walk through each of the ten design failures in detail.
 
 Weft actually _uses_ `WeakRef` and `FinalizationRegistry` internally for memory management. The primitives Temporal bans are the ones Weft depends on.
 
-In development mode, Weft validates checkpoint serialization at each boundary. If you accidentally put a non-cloneable value (a closure, a class instance with methods) into your state, you get an immediate, actionable error.
+In development mode, Weft validates checkpoint serialization at each boundary. If you accidentally put a non-cloneable value (a closure, a class instance with methods) into your state, the engine emits a `DevelopmentWarningEvent` with a message and the divergent field paths.
 
-```
-CheckpointSerializationError: Cannot serialize workflow state at step 2
+```typescript
+import { DevelopmentWarningEvent, Engine, MemoryStorage } from '@lostgradient/weft';
 
-  The value at path "locals.apiClient" is a class instance with methods.
-  structuredClone cannot serialize functions or class instances.
+const engine = new Engine({
+  storage: new MemoryStorage(),
+  development: true,
+});
 
-  Fix: Move the ApiClient creation inside ctx.run() or store only the
-  configuration data (e.g., { baseUrl: "https://api.stripe.com" }) in
-  local variables and reconstruct the client when needed.
-
-  at orderWorkflow (./workflows/order.ts:15:3)
+engine.addEventListener(DevelopmentWarningEvent.type, (event) => {
+  const warning = event as DevelopmentWarningEvent;
+  console.warn(warning.message);
+  console.warn('checkpoint fields:', warning.fieldPaths);
+});
 ```
 
 In Temporal, you discover serialization problems at replay time in production. In Weft, you discover them the moment you run your workflow in development.
@@ -62,7 +66,7 @@ if (workflow.patched('v2-shipping')) {
 engine.register(workflow({ name: 'order', version: '2.0.0' }).execute(orderWorkflow));
 ```
 
-Weft's CLI also provides `weft version:check`, which analyzes registered workflows against the existing database and reports compatibility _before_ deployment. Installing `@lostgradient/weft` provides both `weft` and `weft-mcp`.
+Weft also provides an experimental `weft version:check` command, which analyzes registered workflows against the existing database and reports compatibility _before_ deployment. Installing `@lostgradient/weft` provides both `weft` and `weft-mcp`.
 
 ## Steep learning curve
 
@@ -70,18 +74,40 @@ Weft's CLI also provides `weft version:check`, which analyzes registered workflo
 
 **The Weft answer.** The mental model is one concept: generators pause (`yield*`), checkpoints save, recovery resumes. If you know `async function*` and `yield*`, you know Weft. There is no event history to understand, no replay semantics, no command/event distinction.
 
-For developers who don't know generators, a `ctx.step()` sugar API wraps checkpoint boundaries in a familiar async function pattern.
+For developers who don't know generators, a `ctx.step()` sugar API wraps checkpoint boundaries in a familiar async function pattern. Registration is still explicit: compile the step function into a workflow definition, register it, then start by workflow type and input.
 
-```typescript partial
-const handle = await engine.start(
-  'onboard',
-  async (ctx) => {
+```typescript
+import {
+  Engine,
+  compileStepWorkflow,
+  workflow,
+  type StepWorkflowContext,
+} from '@lostgradient/weft';
+
+type OnboardInput = { name: string };
+type User = { id: string; name: string };
+
+async function createUser(input: OnboardInput): Promise<User> {
+  return { id: `user-${input.name.toLowerCase()}`, name: input.name };
+}
+
+async function sendWelcome(_user: User): Promise<void> {}
+
+const engine = new Engine();
+const onboardWorkflow = workflow({ name: 'onboard' }).execute(
+  compileStepWorkflow(async (ctx: StepWorkflowContext, input: OnboardInput) => {
     const user = await ctx.step('create-user', () => createUser(input));
     await ctx.step('send-email', () => sendWelcome(user));
     return user;
-  },
-  { name: 'Alice' },
+  }),
 );
+const registeredEngine = engine.register(onboardWorkflow);
+
+async function startOnboarding() {
+  return registeredEngine.start('onboard', { name: 'Alice' });
+}
+
+void startOnboarding;
 ```
 
 Under the hood, `ctx.step()` compiles to the generator form. Developers who need the full power of generators, parallel branches, signals, and reviews graduate to the `async function*` form. The simple API is a subset of the full API—not a separate abstraction.
@@ -102,6 +128,9 @@ temporal server start-dev     # ... or the dev shortcut that still needs Docker
 ```
 
 Weft's CLI also includes `weft doctor`, a diagnostic command that reports database health, workflow statistics, queue depths, performance metrics, and actionable recommendations—all without any external monitoring infrastructure.
+
+> [!NOTE]
+> **Scaling boundary:** Temporal's [Task Queue documentation](https://docs.temporal.io/task-queue) says Task Queues enable load balancing across many Worker Processes, and its [worker deployment guidance](https://docs.temporal.io/best-practices/worker) recommends at least two Workers per Task Queue. Weft's current production topology is intentionally narrower: one engine process per durable store, with future fenced ownership tracked as `MultiEngine`. See [Running Weft as a Singleton Service](../guides/singleton-service-deployment.md).
 
 ## Performance out of the box
 
@@ -241,6 +270,9 @@ async function* imageWorkflow(ctx: Weft.Context, urls: string[]) {
 ```
 
 A workflow that processed 1,000 large API responses but only keeps the final summary in a local variable has a checkpoint containing only that summary. The difference is architectural: replay _must_ store everything that happened; checkpointing stores only what matters right now.
+
+> [!NOTE]
+> **Human review:** Temporal's TypeScript [message-passing docs](https://docs.temporal.io/develop/typescript/workflows/message-passing) expose Queries, Signals, and Updates as the workflow interaction primitives, and Temporal's January 20, 2026 [human-in-the-loop AI example](https://docs.temporal.io/ai-cookbook/human-in-the-loop-python) uses Signals to carry approval input into the workflow. Weft makes that pattern a first-class durable operation: `ctx.review()` persists a review request through [`ReviewCoordinator`](../../src/core/review/index.ts), emits review events, and accepts decisions through the `weft.reviews.decision.submit` operation.
 
 ## The common thread
 

@@ -25,6 +25,7 @@ import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { createDelayedStartTimerEntry } from '../operations-time.ts';
 import { selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
+import { buildWorkflowConcurrencyStartOperations } from '../workflow-concurrency.ts';
 import { createWorkflowVersionTuple } from './persist.ts';
 import {
   createWorkflowHandle,
@@ -57,7 +58,7 @@ type StartWorkflowPreparation = {
   workflowId: string;
   callerProvidedId: boolean;
   parentHeaders: Map<string, string> | undefined;
-  executionStateOwnerId: string;
+  executionStateOwnerId: string | undefined;
   submissionTime: number;
   delayedStartTimer: TimerEntry | undefined;
   normalizedTags: string[] | undefined;
@@ -78,7 +79,11 @@ function prepareStartWorkflow(
   // work, to prevent a concurrent child-workflow start from overwriting them.
   const parentHeaders = internals.pendingParentHeaders;
   internals.pendingParentHeaders = undefined;
-  const executionStateOwnerId = internals.pendingExecutionStateOwnerId ?? workflowId;
+  const pendingExecutionStateOwnerId = internals.pendingExecutionStateOwnerId;
+  const executionStateOwnerId =
+    pendingExecutionStateOwnerId === null
+      ? undefined
+      : (pendingExecutionStateOwnerId ?? workflowId);
   internals.pendingExecutionStateOwnerId = undefined;
   const submissionTime = internals.options.getNow();
   const scheduledStartAt = resolveScheduledStartAt(internals, options, submissionTime, callbacks);
@@ -141,6 +146,7 @@ export async function startWorkflow(
   if (!registration) {
     throw new WorkflowNotRegisteredError(type);
   }
+  const workflowConcurrency = registration.concurrency;
 
   assertServicesSupportedForMode(internals, options);
   assertValidOnTerminalConflict(options);
@@ -241,6 +247,17 @@ export async function startWorkflow(
         delayedStartTimer,
         persistedWorkflowStartHeaders,
         additionalStartOperations,
+        buildWorkflowConcurrencyStartOperations:
+          workflowConcurrency === undefined
+            ? undefined
+            : () =>
+                buildWorkflowConcurrencyStartOperations(
+                  internals,
+                  type,
+                  workflowId,
+                  input,
+                  workflowConcurrency,
+                ),
         callbacks,
         purgeDeleteOperations,
       },
@@ -260,6 +277,9 @@ export async function startWorkflow(
     // `terminalCleanupNeeded` key so recovery re-derives this membership.
     if (options?.services !== undefined) {
       internals.workflowServices.set(workflowId, options.services);
+      internals.workflowsNeedingTerminalCleanup.add(workflowId);
+    }
+    if (workflowConcurrency !== undefined) {
       internals.workflowsNeedingTerminalCleanup.add(workflowId);
     }
 
@@ -336,7 +356,7 @@ function buildInitialIdentitySlice(
   type: string,
   input: unknown,
   versionTuple: WorkflowVersionTuple,
-  executionStateOwnerId: string,
+  executionStateOwnerId: string | undefined,
   delayedStartTimer: TimerEntry | undefined,
   now: number,
   tags: string[] | undefined,
@@ -347,7 +367,7 @@ function buildInitialIdentitySlice(
     status: delayedStartTimer ? 'pending' : 'running',
     input,
     versionTuple,
-    executionStateOwnerId,
+    ...(executionStateOwnerId !== undefined && { executionStateOwnerId }),
     createdAt: now,
     ...(!delayedStartTimer && { startedAt: now }),
     updatedAt: now,
@@ -391,7 +411,7 @@ export function createInitialWorkflowState(
   versionTuple: WorkflowVersionTuple,
   options: StartOptions | undefined,
   tags: string[] | undefined,
-  executionStateOwnerId: string,
+  executionStateOwnerId: string | undefined,
   delayedStartTimer: TimerEntry | undefined,
   callbacks: LifecycleCallbacks,
 ): WorkflowState {

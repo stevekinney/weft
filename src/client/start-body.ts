@@ -1,4 +1,5 @@
-import type { ScheduleSpec, StartOptions, StartOrSignalSignal } from '../core/types.ts';
+import type { ScheduleSpec, StartOrSignalSignal } from '../core/types.ts';
+import type { ClientStartOptions } from './interface.ts';
 
 export function setIfDefined(body: Record<string, unknown>, key: string, value: unknown): void {
   if (value !== undefined) body[key] = value;
@@ -19,8 +20,11 @@ export function scheduleSpecToWireFields(spec: string | ScheduleSpec): Record<st
   return { cronExpression: spec.cron };
 }
 
-/** Copy the shared `StartOptions` wire fields onto a request body, omitting undefined. */
-function applyStartOptionsToBody(body: Record<string, unknown>, options?: StartOptions): void {
+/** Copy the shared client start-option wire fields onto a request body, omitting undefined. */
+function applyStartOptionsToBody(
+  body: Record<string, unknown>,
+  options?: ClientStartOptions,
+): void {
   setIfDefined(body, 'id', options?.id);
   setIfDefined(body, 'executionTimeout', options?.executionTimeout);
   setIfDefined(body, 'startAt', options?.startAt);
@@ -33,7 +37,7 @@ function applyStartOptionsToBody(body: Record<string, unknown>, options?: StartO
 export function buildStartBody(
   type: string,
   input: unknown,
-  options?: StartOptions,
+  options?: ClientStartOptions,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = { type, input };
   applyStartOptionsToBody(body, options);
@@ -49,7 +53,7 @@ export function buildStartOrSignalBody(
   type: string,
   input: unknown,
   signal: StartOrSignalSignal,
-  options?: StartOptions,
+  options?: ClientStartOptions,
 ): Record<string, unknown> {
   const body: Record<string, unknown> = { type, input, signalName: signal.name };
   setIfDefined(body, 'signalPayload', signal.payload);

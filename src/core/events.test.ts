@@ -7,6 +7,7 @@ import {
   AttributesChangedEvent,
   CheckpointSizeWarningEvent,
   DevelopmentWarningEvent,
+  ScheduleMissedFireEvent,
   SignalDeliveredEvent,
   SignalReceivedEvent,
   UpdateCompletedEvent,
@@ -255,6 +256,28 @@ describe('AttributesChangedEvent', () => {
 
   it('is an instance of Event but not CustomEvent', () => {
     const event = new AttributesChangedEvent('wf-12', {});
+    expect(event).toBeInstanceOf(Event);
+    expect(event).not.toBeInstanceOf(CustomEvent);
+  });
+});
+
+describe('ScheduleMissedFireEvent', () => {
+  it('sets all properties from constructor arguments', () => {
+    const event = new ScheduleMissedFireEvent('schedule-1', 3, 1_000, 4_000);
+    expect(event.scheduleId).toBe('schedule-1');
+    expect(event.missedCount).toBe(3);
+    expect(event.windowStart).toBe(1_000);
+    expect(event.windowEnd).toBe(4_000);
+  });
+
+  it('has a matching static type and instance type', () => {
+    const event = new ScheduleMissedFireEvent('schedule-1', 1, 1_000, 2_000);
+    expect(event.type).toBe(ScheduleMissedFireEvent.type);
+    expect(event.type).toBe('schedule:missed-fire');
+  });
+
+  it('is an instance of Event but not CustomEvent', () => {
+    const event = new ScheduleMissedFireEvent('schedule-1', 1, 1_000, 2_000);
     expect(event).toBeInstanceOf(Event);
     expect(event).not.toBeInstanceOf(CustomEvent);
   });

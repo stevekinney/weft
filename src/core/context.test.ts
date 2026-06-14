@@ -500,6 +500,40 @@ describe('Context', () => {
     });
   });
 
+  describe('ctx.getVersion', () => {
+    it('pins maxSupported in checkpoint locals and yields a get-version request', () => {
+      const context = createContext();
+
+      const generator = context.getVersion('shipping-v2', 1, 2);
+      const request = expectRequest(generator.next(), 'get-version');
+
+      expect(request.changeId).toBe('shipping-v2');
+      expect(request.minSupported).toBe(1);
+      expect(request.maxSupported).toBe(2);
+      expect(request.version).toBe(2);
+      expect(context.checkpointLocals['version:shipping-v2']).toBe(2);
+    });
+
+    it('returns a pinned version from checkpoint locals without yielding on replay', () => {
+      const context = createContext({ locals: { 'version:shipping-v2': 1 } });
+
+      const generator = context.getVersion('shipping-v2', 1, 2);
+      const result = generator.next();
+
+      expect(result.done).toBe(true);
+      expect(result.value).toBe(1);
+      expect(context.stepIndex).toBe(1);
+    });
+
+    it('fails actionably when a pinned version is below minSupported', () => {
+      const context = createContext({ locals: { 'version:shipping-v2': 1 } });
+
+      expect(() => context.getVersion('shipping-v2', 2, 3).next()).toThrow(
+        'Workflow version patch "shipping-v2" is pinned to version 1, below the minimum supported version 2',
+      );
+    });
+  });
+
   describe('ctx.all', () => {
     it('yields a parallel request containing sub-operations', () => {
       const context = createContext();
@@ -1491,6 +1525,24 @@ describe('Context', () => {
 
       expect(request.options).toEqual({
         id: 'child-123',
+      });
+    });
+
+    it('ctx.startChild passes through the parent close policy option', () => {
+      const context = createContext();
+      const generator = context.startChild(
+        'child-type',
+        { key: 'value' },
+        {
+          id: 'child-123',
+          parentClosePolicy: 'abandon',
+        },
+      );
+      const request = expectRequest(generator.next(), 'child-workflow');
+
+      expect(request.options).toEqual({
+        id: 'child-123',
+        parentClosePolicy: 'abandon',
       });
     });
 

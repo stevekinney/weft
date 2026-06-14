@@ -18,16 +18,14 @@ import { workerProtocolIncompatibleMessage } from '../../worker/worker-protocol-
 import type { ServeOptions } from '../index.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
 import { isAuthenticated } from '../principal.ts';
-import {
-  isInflightRecord,
-  readInflightRecord,
-  transitionInflightToResolved,
-} from '../task-state.ts';
+import { isInflightRecord, readInflightRecord } from '../task-state.ts';
 import type { ServerContext } from './context.ts';
+import { withRetry } from './retry.ts';
+import { recordWorkerCapacitySaturationMetric } from './task-metrics.ts';
 import {
-  recordTaskExecutionLatencyMetric,
-  recordWorkerCapacitySaturationMetric,
-} from './task-metrics.ts';
+  taskResultPayloadSizeError,
+  transitionTaskResultToResolvedWithRetry,
+} from './task-result-resolution.ts';
 import { WORKER_STREAM_RE } from './websocket-upgrade.ts';
 
 const MAX_WORKER_CONCURRENCY = 1_000;
@@ -41,26 +39,7 @@ function isWorkerConnection(pathname: string): boolean {
 
 export { isInflightRecord } from '../task-state.ts';
 
-export async function withRetry<T>(
-  operation: () => Promise<T>,
-  label: string,
-  maxAttempts = 2,
-): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await operation();
-    } catch (error) {
-      lastError = error;
-      if (attempt < maxAttempts) {
-        console.warn(`[weft] Retrying "${label}" (attempt ${attempt + 1}/${maxAttempts})`);
-        await Bun.sleep(100 * attempt);
-      }
-    }
-  }
-
-  throw lastError;
-}
+export { withRetry } from './retry.ts';
 
 function sendWorkerProtocolMessage(
   ws: ServerWebSocket<WebSocketData>,
@@ -239,6 +218,17 @@ function onTaskResultMessage(
     return;
   }
 
+  const resolvedStatus = resolveTaskResultStatus(message);
+  const payloadError = taskResultPayloadSizeError(
+    {
+      operationId,
+      status: resolvedStatus,
+      resolutionReason: resolvedStatus,
+      ...(message.status === 'completed' ? { value: message.value } : { error: message.error }),
+    },
+    context.payloadSizeMaxBytes,
+  );
+
   context.registry.completeTask(operationId);
   context.deadlineTracker.remove(operationId);
   cleanupWorkflowIndex(operationId);
@@ -246,17 +236,30 @@ function onTaskResultMessage(
 
   void (async () => {
     const inflightRecord = await readInflightRecord(options.engine.storage, operationId);
-    const resolvedAt = Date.now();
-    const resolvedStatus = resolveTaskResultStatus(message);
-    await transitionInflightToResolved(options.engine.storage, operationId, resolvedStatus, {
-      ...(inflightRecord === null ? {} : { record: inflightRecord }),
-      resolvedAt,
+    if (payloadError !== null) {
+      sendWorkerProtocolMessage(ws, {
+        type: 'protocolError',
+        code: 'invalid_message',
+        message: payloadError.message,
+      });
+      await transitionTaskResultToResolvedWithRetry(context, options, {
+        operationId,
+        status: 'failed',
+        resolutionReason: 'failed',
+        inflightRecord,
+        error: payloadError.message,
+        skipPayloadSizeCheck: true,
+      });
+      return;
+    }
+
+    await transitionTaskResultToResolvedWithRetry(context, options, {
+      operationId,
+      status: resolvedStatus,
       resolutionReason: resolvedStatus,
+      inflightRecord,
       ...(message.status === 'completed' ? { value: message.value } : { error: message.error }),
     });
-    if (inflightRecord !== null) {
-      recordTaskExecutionLatencyMetric(context.metricsCollector, inflightRecord, resolvedAt);
-    }
   })().catch((error) => {
     console.error(
       `[weft] Failed to transition task "${operationId}" to resolved — inflight record may leak:`,

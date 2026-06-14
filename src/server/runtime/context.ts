@@ -25,6 +25,8 @@ export interface ServerContext {
   readonly taskQueue: TaskQueue;
   readonly workerSockets: Map<string, ServerWebSocket<WebSocketData>>;
   readonly streamSockets: Map<string, Set<ServerWebSocket<WebSocketData>>>;
+  readonly workflowStreamConnectionCounts: Map<string, number>;
+  readonly maxStreamConnectionsPerWorkflow: number;
   /** Tracks per-workflow worker affinity for sticky routing. Maps workflowId to workerId. */
   readonly workerAffinity: Map<string, string>;
   /** Reverse index: workflowId to set of operationIds currently in-flight for that workflow. */
@@ -61,6 +63,8 @@ export interface ServerContext {
    * this window cancels the pending requeue. `0` means inline requeue.
    */
   readonly workerReconnectGracePeriodMs: number;
+  /** Engine-level cap for activity results delivered by remote workers. */
+  readonly payloadSizeMaxBytes: number | null;
   /**
    * Pending requeue timers keyed by `workerId`. A successful re-register clears
    * the timer for that worker, suppressing the deferred requeue.

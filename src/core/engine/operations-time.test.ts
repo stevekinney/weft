@@ -4,6 +4,7 @@ import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { serializeCheckpoint } from '../checkpoint/serialization.ts';
 import { encode } from '../codec.ts';
+import { DevelopmentWarningEvent } from '../events.ts';
 import type { Checkpoint, TimerEntry, WorkflowState } from '../types.ts';
 import { startDelayedWorkflow, type TimeOperationCallbacks } from './operations-time.ts';
 
@@ -28,7 +29,6 @@ function createCheckpoint(workflowId: string): Checkpoint {
     accumulatedResults: [],
     createdAt: 1_000,
     locals: {},
-    pendingSignals: [],
     schemaVersion: 2,
     searchAttributes: {},
     step: 0,
@@ -55,6 +55,7 @@ function createCallbacks(
 ): Pick<
   TimeOperationCallbacks,
   | 'beginWorkflowExecution'
+  | 'dispatchEvent'
   | 'failWorkflow'
   | 'handleCleanupError'
   | 'loadWorkflowStartHeaders'
@@ -65,6 +66,7 @@ function createCallbacks(
 > {
   return {
     beginWorkflowExecution: mock(() => {}),
+    dispatchEvent: mock(() => {}),
     failWorkflow: mock(async () => {}),
     handleCleanupError: mock(() => {}),
     loadWorkflowStartHeaders: mock(async () => undefined),
@@ -196,6 +198,8 @@ describe('engine time operation helpers', () => {
     await startDelayedWorkflow(
       {
         checkpoints: new Map<string, Checkpoint>(),
+        inlineStrategy: {},
+        workflowServices: new Map<string, unknown>(),
         options: { getNow: () => 2_000 },
         registrations: new Map([[state.type, registration]]),
         storage,
@@ -229,6 +233,8 @@ describe('engine time operation helpers', () => {
     await startDelayedWorkflow(
       {
         checkpoints: new Map<string, Checkpoint>(),
+        inlineStrategy: {},
+        workflowServices: new Map<string, unknown>(),
         options: { getNow: () => 3_000 },
         registrations: new Map([[state.type, registration]]),
         storage,
@@ -299,6 +305,55 @@ describe('engine time operation helpers', () => {
     // generator is never started.
     expect(failed).toHaveLength(1);
     expect(failed[0]![1].message).toContain('services unavailable');
+    expect(beginWorkflowExecution).not.toHaveBeenCalled();
+  });
+
+  it('fails a recovered delayed-start run and warns when it expected services but no resolver is configured', async () => {
+    const storage = new MemoryStorage();
+    const workflowId = 'workflow-delayed-missing-resolver';
+    const state = createWorkflowState(workflowId);
+    const checkpoint = createCheckpoint(workflowId);
+    const registration = { handler: async function* () {}, version: '1' };
+    const beginWorkflowExecution = mock(() => {});
+    const failed: Array<[string, Error]> = [];
+    const warnings: DevelopmentWarningEvent[] = [];
+    const failWorkflow = async (id: string, error: Error): Promise<void> => {
+      failed.push([id, error]);
+    };
+
+    await storage.put(KEYS.workflow(workflowId), encode(state));
+    await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
+    await storage.put(KEYS.workflowHasServices(workflowId), new Uint8Array(0));
+
+    await startDelayedWorkflow(
+      {
+        checkpoints: new Map<string, Checkpoint>(),
+        inlineStrategy: {},
+        workflowServices: new Map<string, unknown>(),
+        options: { getNow: () => 2_000 },
+        registrations: new Map([[state.type, registration]]),
+        storage,
+        workflowVersionTuples: new Map(),
+      } as never,
+      createDelayedStartEntry(workflowId, { executionTimeoutMs: 500 }),
+      createCallbacks({
+        beginWorkflowExecution,
+        dispatchEvent: (event) => {
+          if (event instanceof DevelopmentWarningEvent) {
+            warnings.push(event);
+          }
+        },
+        failWorkflow,
+        loadWorkflowState: async () => state,
+        runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
+      }),
+    );
+
+    expect(failed).toHaveLength(1);
+    expect(failed[0]![1].message).toContain('resolveWorkflowServices');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.workflowId).toBe(workflowId);
+    expect(warnings[0]!.message).toContain('resolveWorkflowServices');
     expect(beginWorkflowExecution).not.toHaveBeenCalled();
   });
 

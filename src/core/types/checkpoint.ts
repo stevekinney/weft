@@ -77,7 +77,7 @@ export interface WorkerReplayOperationFailure {
 /**
  * Durable snapshot of a workflow's execution state persisted at each
  * `yield` boundary. Contains the accumulated operation results, local
- * variables, pending signals, search attributes, and the step counter.
+ * variables, search attributes, and the step counter.
  * Users don't construct checkpoints directly; the engine manages them.
  * Available via time-travel APIs and {@link WorkflowReplay}.
  *
@@ -100,6 +100,12 @@ export interface Checkpoint {
   locals: Record<string, unknown>;
   accumulatedResults: Array<[number, unknown]>;
   /**
+   * Highest accumulated-result step whose replay data has been emitted to the
+   * workflow event log. Missing means no consumed results have been emitted yet,
+   * which is how old unpruned checkpoints are read.
+   */
+  accumulatedResultReplayWatermark?: number;
+  /**
    * Worker-mode replay guards for cached operation results. Inline execution
    * ignores this optional field; Worker recovery uses it to prove a cached
    * result still belongs to the yielded operation before reusing it.
@@ -111,7 +117,8 @@ export interface Checkpoint {
    * can throw them back into the generator without trusting user result shape.
    */
   workerReplayFailures?: Array<[number, WorkerReplayOperationFailure]>;
-  pendingSignals: string[];
+  // Signals are not checkpoint fields. Buffered signal payloads are persisted
+  // separately under `sig:` storage keys and consumed atomically with commits.
   searchAttributes: Record<string, SearchAttributeValue>;
   /** User-defined workflow code version. Checked during recovery. */
   version: string;

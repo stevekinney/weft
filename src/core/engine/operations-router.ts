@@ -29,6 +29,10 @@ export type OperationRouterCallbacks = {
     workflowId: string,
     operation: Extract<ContextOperationRequest, { type: 'wait-condition' }>,
   ) => Promise<void>;
+  processGetVersionOperation: (
+    workflowId: string,
+    operation: Extract<ContextOperationRequest, { type: 'get-version' }>,
+  ) => Promise<void>;
   processParallelOperation: (
     workflowId: string,
     operation: Extract<ContextOperationRequest, { type: 'parallel' }>,
@@ -178,6 +182,7 @@ function operationProcessors(callbacks: OperationRouterCallbacks): OperationProc
     'wait-signal': callbacks.processWaitSignalOperation,
     'wait-update': callbacks.processWaitUpdateOperation,
     'wait-condition': callbacks.processWaitConditionOperation,
+    'get-version': callbacks.processGetVersionOperation,
     parallel: callbacks.processParallelOperation,
     race: callbacks.processRaceOperation,
     memo: callbacks.processMemoOperation,

@@ -8,7 +8,11 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { decode } from '../../core/codec.ts';
+import { KEYS } from '../../storage/interface.ts';
+import { MemoryStorage } from '../../storage/memory.ts';
 import { principalFromApiKey } from '../principal.ts';
+import { markInflight, type InflightRecord, type ResolvedRecord } from '../task-state.ts';
 import { minimalServeOptions, minimalServerContext } from './server-context.test-support.ts';
 import { handleTaskPollRequest, handleTaskResultRequest } from './task-polling.ts';
 
@@ -33,6 +37,33 @@ function makePostRequest(body: unknown): Request {
 
 function makeUrl(path = '/v1/tasks/op-123/result'): URL {
   return new URL(`http://localhost${path}`);
+}
+
+function setPayloadSizeLimit(context: unknown, maxBytes: number): void {
+  (context as { payloadSizeMaxBytes: number | null }).payloadSizeMaxBytes = maxBytes;
+}
+
+function makeInflightRecord(operationId: string): InflightRecord {
+  return {
+    operationId,
+    workerId: 'longpoll-worker',
+    deadline: Date.now() + 30_000,
+    activityName: 'charge',
+    queue: 'default',
+    input: null,
+    attempt: 1,
+    visibilityTimeout: 30_000,
+    attemptToken: 'attempt-token',
+  };
+}
+
+async function readResolvedRecord(
+  storage: MemoryStorage,
+  operationId: string,
+): Promise<ResolvedRecord> {
+  const bytes = await storage.get(KEYS.operationResolved(operationId));
+  expect(bytes).not.toBeNull();
+  return decode(bytes!) as ResolvedRecord;
 }
 
 describe('handleTaskResultRequest', () => {
@@ -69,6 +100,24 @@ describe('handleTaskResultRequest', () => {
     expect(response?.status).toBe(400);
     const body = await response?.json();
     expect(body).toMatchObject({ error: 'Invalid JSON body' });
+  });
+
+  it('returns 413 when the raw task result body exceeds the configured request limit', async () => {
+    const context = createMinimalContext();
+    const options = {
+      ...createMinimalOptions(),
+      maxRequestBodyBytes: 32,
+    };
+    const request = makePostRequest({
+      operationId: 'op-1',
+      status: 'completed',
+      value: 'x'.repeat(64),
+    });
+
+    const response = await handleTaskResultRequest(context, options, request, makeUrl());
+
+    expect(response?.status).toBe(413);
+    await expect(response?.json()).resolves.toEqual({ error: 'Payload Too Large' });
   });
 
   it('returns 400 when operationId is missing', async () => {
@@ -121,6 +170,74 @@ describe('handleTaskResultRequest', () => {
     expect(response?.status).toBe(200);
     const body = await response?.json();
     expect(body).toEqual({ ok: true });
+  });
+
+  it('rejects oversized completed results and resolves the long-poll task as failed', async () => {
+    const storage = new MemoryStorage();
+    const context = createMinimalContext();
+    setPayloadSizeLimit(context, 64);
+    const options = createMinimalOptions(storage);
+    await markInflight(storage, makeInflightRecord('op-oversize-http'));
+
+    const request = makePostRequest({
+      operationId: 'op-oversize-http',
+      workerId: 'longpoll-worker',
+      attemptToken: 'attempt-token',
+      status: 'completed',
+      value: { blob: 'x'.repeat(200) },
+    });
+
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      request,
+      makeUrl('/v1/tasks/op-oversize-http/result'),
+      WORKER_PRINCIPAL,
+    );
+
+    expect(response?.status).toBe(413);
+    const body = await response?.json();
+    expect(body).toMatchObject({ code: 'PayloadSizeExceededError' });
+    expect(body.error).toContain('activity result exceeds');
+    expect(await storage.get(KEYS.operationInflight('op-oversize-http'))).toBeNull();
+
+    const resolved = await readResolvedRecord(storage, 'op-oversize-http');
+    expect(resolved.status).toBe('failed');
+    expect(resolved.error).toContain('activity result exceeds');
+    expect(resolved.value).toBeUndefined();
+  });
+
+  it('rejects oversized failure errors and resolves the long-poll task as failed', async () => {
+    const storage = new MemoryStorage();
+    const context = createMinimalContext();
+    setPayloadSizeLimit(context, 64);
+    const options = createMinimalOptions(storage);
+    await markInflight(storage, makeInflightRecord('op-oversize-http-failure'));
+
+    const request = makePostRequest({
+      operationId: 'op-oversize-http-failure',
+      workerId: 'longpoll-worker',
+      attemptToken: 'attempt-token',
+      status: 'failed',
+      error: 'x'.repeat(200),
+    });
+
+    const response = await handleTaskResultRequest(
+      context,
+      options,
+      request,
+      makeUrl('/v1/tasks/op-oversize-http-failure/result'),
+      WORKER_PRINCIPAL,
+    );
+
+    expect(response?.status).toBe(413);
+    const body = await response?.json();
+    expect(body.error).toContain('activity result exceeds');
+
+    const resolved = await readResolvedRecord(storage, 'op-oversize-http-failure');
+    expect(resolved.status).toBe('failed');
+    expect(resolved.error).toContain('activity result exceeds');
+    expect(resolved.error).not.toContain('x'.repeat(100));
   });
 
   it('removes the deadline tracker entry on success', async () => {

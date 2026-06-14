@@ -44,6 +44,7 @@ export {
   ScheduleHandle,
   StartOrSignalConflictError,
   WorkflowAlreadyExistsError,
+  WorkflowConcurrencyLimitExceededError,
   WorkflowHandle,
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
@@ -96,6 +97,7 @@ export type {
   BulkOperationOptions,
   BulkOperationPrincipal,
   BulkOperationScopeSummary,
+  BulkRetryFailedResult,
   BulkSignalAllCommitOptions,
   BulkSignalAllDryRunOptions,
   BulkSignalAllOptions,
@@ -170,6 +172,7 @@ export type {
   WorkflowAtomicStateOptions,
   WorkflowBuilder,
   WorkflowBuilderOptions,
+  WorkflowConcurrencyOptions,
   WorkflowContext,
   WorkflowDefinition,
   WorkflowEvent,
@@ -214,6 +217,7 @@ export {
   CheckpointSizeWarningEvent,
   ConstraintViolatedEvent,
   DevelopmentWarningEvent,
+  ScheduleMissedFireEvent,
   SignalDeliveredEvent,
   SignalReceivedEvent,
   StorageSizeReportedEvent,
@@ -221,6 +225,7 @@ export {
   UpdateReceivedEvent,
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
+  WorkflowDefinitionRegisteredEvent,
   WorkflowFailedEvent,
   WorkflowRecoverySkippedEvent,
   WorkflowResumedEvent,
@@ -243,9 +248,14 @@ export { storageDeleteRange } from './storage/delete-range';
 export type { DeleteRangeOptions } from './storage/delete-range';
 export {
   KEYS,
+  MAX_BATCH_OPERATIONS,
+  MAX_SCAN_LIMIT,
+  StorageBatchOperationLimitExceededError,
   WEFT_RESERVED_KEY_PREFIXES,
   assertDurableStorageForRecovery,
+  assertStorageBatchOperationCount,
   requireStorageCapability,
+  storageBatch,
   storageConditionalBatch,
   storageValuesEqual,
 } from './storage/interface';
@@ -255,6 +265,7 @@ export type {
   GatedStorageCapabilityKey,
   ScanOptions,
   Storage,
+  StorageBatchOperationLimitTarget,
   StorageCapabilities,
 } from './storage/interface';
 export { MemoryStorage } from './storage/memory';
@@ -318,9 +329,14 @@ export type {
   StreamReference,
   StreamSink,
 } from './core/context';
+export { BranchTopologyChangedError } from './core/context/parallel-cache-entry.ts';
 export type {
+  AwaitChildWorkflowOptions,
+  ChildWorkflowHandle,
   ChildWorkflowOptions,
+  ChildWorkflowParentClosePolicy,
   ChildWorkflowTarget,
+  DetachedChildWorkflowOptions,
   WorkflowMapOptions,
   WorkflowOperation,
   WorkflowPipeStage,
@@ -501,6 +517,7 @@ export { HttpClient, HttpClientError } from './client/index';
 export type { HttpClientOptions } from './client/index';
 export type {
   ClientHandle,
+  ClientStartOptions,
   UpdateResult,
   WeftClient,
   WeftClientActivity,

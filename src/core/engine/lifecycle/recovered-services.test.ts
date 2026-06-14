@@ -10,6 +10,7 @@ import { describe, expect, it, mock } from 'bun:test';
 
 import { KEYS } from '../../../storage/interface.ts';
 import { MemoryStorage } from '../../../storage/memory.ts';
+import { DevelopmentWarningEvent } from '../../events.ts';
 import type { WorkflowState } from '../../types.ts';
 import { reprovideRecoveredServices } from './recovered-services.ts';
 
@@ -94,12 +95,50 @@ describe('reprovideRecoveredServices', () => {
     expect(seenInput).toEqual({ tenant: 'acme' });
   });
 
-  it('proceeds (false) with no resolver configured', async () => {
+  it('stops, fails the run, and emits an actionable warning when the marker exists but no resolver is configured', async () => {
     const { internals } = makeInternals({});
+    const failed: Array<[string, Error]> = [];
+    const warnings: DevelopmentWarningEvent[] = [];
+    const failRun = async (id: string, error: Error): Promise<void> => {
+      failed.push([id, error]);
+    };
+
+    const stop = await reprovideRecoveredServices(
+      internals,
+      makeState(),
+      failRun,
+      noopCommitError,
+      (event) => {
+        if (event instanceof DevelopmentWarningEvent) {
+          warnings.push(event);
+        }
+      },
+    );
+
+    expect(stop).toBe(true);
+    expect(failed).toHaveLength(1);
+    expect(failed[0]![0]).toBe('run-1');
+    expect(failed[0]![1].message).toContain('resolveWorkflowServices');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]!.workflowId).toBe('run-1');
+    expect(warnings[0]!.message).toContain('resolveWorkflowServices');
+    expect(warnings[0]!.fieldPaths).toContain('EngineOptions.resolveWorkflowServices');
+  });
+
+  it('proceeds with no resolver configured when the run never expected services', async () => {
+    const { internals } = makeInternals({ expectsServices: false });
     const failRun = mock(async () => {});
-    const stop = await reprovideRecoveredServices(internals, makeState(), failRun, noopCommitError);
+    const warnings: Event[] = [];
+    const stop = await reprovideRecoveredServices(
+      internals,
+      makeState(),
+      failRun,
+      noopCommitError,
+      (event) => warnings.push(event),
+    );
     expect(stop).toBe(false);
     expect(failRun).not.toHaveBeenCalled();
+    expect(warnings).toHaveLength(0);
   });
 
   it('proceeds (false) in worker mode without invoking the resolver', async () => {

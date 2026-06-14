@@ -1,4 +1,6 @@
 import type {
+  AwaitChildWorkflowOptions,
+  ChildWorkflowHandle,
   ChildWorkflowOptions,
   ChildWorkflowTarget,
   WorkflowMapOptions,
@@ -16,7 +18,7 @@ export function normalizePipeStage(
   stage: WorkflowPipeStage | ChildWorkflowTarget,
 ): {
   workflowType: string;
-  options: ChildWorkflowOptions | undefined;
+  options: AwaitChildWorkflowOptions | undefined;
 } {
   if (typeof stage === 'object' && stage !== null && 'type' in stage) {
     return {
@@ -79,8 +81,10 @@ export function createCompositionChildWorkflowOptions(
   internals: ContextInternals,
   token: string,
   index: number,
-  options: ChildWorkflowOptions | undefined = undefined,
-): ChildWorkflowOptions {
+  options: AwaitChildWorkflowOptions | undefined = undefined,
+): AwaitChildWorkflowOptions {
+  assertCompositionAwaitsChildWorkflow(options);
+
   if (options?.id !== undefined) {
     return options;
   }
@@ -96,12 +100,13 @@ export function createReduceChildWorkflowOptions(
   token: string,
   index: number,
   options: WorkflowReduceOptions | undefined,
-): ChildWorkflowOptions {
+): AwaitChildWorkflowOptions {
   if (options === undefined) {
     return createCompositionChildWorkflowOptions(internals, token, index);
   }
 
   const { idPrefix, ...childWorkflowOptions } = options;
+  assertCompositionAwaitsChildWorkflow(childWorkflowOptions);
   return createCompositionChildWorkflowOptions(
     internals,
     token,
@@ -112,6 +117,22 @@ export function createReduceChildWorkflowOptions(
           id: `${idPrefix}:${index}`,
         }
       : childWorkflowOptions,
+  );
+}
+
+function assertCompositionAwaitsChildWorkflow(options: unknown): void {
+  if (typeof options !== 'object' || options === null || !('parentClosePolicy' in options)) {
+    return;
+  }
+
+  const parentClosePolicy = options.parentClosePolicy;
+  if (parentClosePolicy === undefined || parentClosePolicy === 'await') {
+    return;
+  }
+
+  throw new Error(
+    'ctx.pipe, ctx.map, and ctx.reduce always await child workflow results. ' +
+      'Use ctx.startChild() directly for parentClosePolicy: "abandon" or "request-cancel".',
   );
 }
 
@@ -136,7 +157,7 @@ export function* startChild<TResult = unknown>(
   workflowType: string,
   input: unknown,
   options?: ChildWorkflowOptions,
-): Generator<ContextOperationRequest, TResult, unknown> {
+): Generator<ContextOperationRequest, TResult | ChildWorkflowHandle<TResult>, unknown> {
   const step = internals.stepIndex++;
 
   if (internals.accumulatedResults?.has(step)) {

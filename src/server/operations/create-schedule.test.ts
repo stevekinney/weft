@@ -44,6 +44,7 @@ describe('weft.schedules.create', () => {
         id: 'nightly-maintenance',
         overlap: 'queue',
         backfill: true,
+        jitter: '30s',
       }),
       engine,
       { operationRegistry: registry, restBindings: bindings },
@@ -58,6 +59,7 @@ describe('weft.schedules.create', () => {
         cronExpression: '0 * * * *',
         overlap: 'queue',
         backfill: true,
+        jitterMs: 30_000,
       }),
     );
   });

@@ -10,9 +10,8 @@ import type { ConstraintViolation } from '../constraint.ts';
  * import { Engine, CheckpointSizeWarningEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine({ checkpointSizeWarningThreshold: 32_000 });
- * engine.addEventListener('checkpoint:size-warning', (e: Event) => {
- *   const ev = e as CheckpointSizeWarningEvent;
- *   console.warn(ev.workflowId, 'checkpoint at step', ev.step, 'is', ev.sizeBytes, 'bytes');
+ * engine.addEventListener(CheckpointSizeWarningEvent.type, (event) => {
+ *   console.warn(event.workflowId, 'checkpoint at step', event.step, 'is', event.sizeBytes, 'bytes');
  * });
  * ```
  */
@@ -41,9 +40,8 @@ export class CheckpointSizeWarningEvent extends Event {
  * import { Engine, DevelopmentWarningEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine({ development: true });
- * engine.addEventListener('development:warning', (e: Event) => {
- *   const ev = e as DevelopmentWarningEvent;
- *   console.warn('[dev]', ev.message, 'paths:', ev.fieldPaths);
+ * engine.addEventListener(DevelopmentWarningEvent.type, (event) => {
+ *   console.warn('[dev]', event.message, 'paths:', event.fieldPaths);
  * });
  * ```
  */
@@ -85,9 +83,8 @@ export class CleanupWarningEvent extends Event {
  * import { Engine, StorageSizeReportedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('storage:size-reported', (e: Event) => {
- *   const ev = e as StorageSizeReportedEvent;
- *   console.log('total storage:', ev.sizeBytes, 'bytes');
+ * engine.addEventListener(StorageSizeReportedEvent.type, (event) => {
+ *   console.log('total storage:', event.sizeBytes, 'bytes');
  * });
  * ```
  */
@@ -111,9 +108,8 @@ export class StorageSizeReportedEvent extends Event {
  * import { Engine, AlertFiredEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('alert:fired', (e: Event) => {
- *   const ev = e as AlertFiredEvent;
- *   console.warn('alert fired:', ev.metric, 'current:', ev.currentValue, 'threshold:', ev.threshold);
+ * engine.addEventListener(AlertFiredEvent.type, (event) => {
+ *   console.warn('alert fired:', event.metric, 'current:', event.currentValue, 'threshold:', event.threshold);
  * });
  * ```
  */
@@ -143,9 +139,8 @@ export class AlertFiredEvent extends Event {
  * import { Engine, AlertResolvedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('alert:resolved', (e: Event) => {
- *   const ev = e as AlertResolvedEvent;
- *   console.log('alert resolved:', ev.metric, 'value back to', ev.currentValue);
+ * engine.addEventListener(AlertResolvedEvent.type, (event) => {
+ *   console.log('alert resolved:', event.metric, 'value back to', event.currentValue);
  * });
  * ```
  */
@@ -175,10 +170,9 @@ export class AlertResolvedEvent extends Event {
  * import { Engine, ConstraintViolatedEvent } from '@lostgradient/weft';
  *
  * const engine = new Engine();
- * engine.addEventListener('constraint:violated', (e: Event) => {
- *   const ev = e as ConstraintViolatedEvent;
- *   console.warn('constraint', ev.constraintName, 'violated in', ev.workflowId,
- *     'action:', ev.onViolation);
+ * engine.addEventListener(ConstraintViolatedEvent.type, (event) => {
+ *   console.warn('constraint', event.constraintName, 'violated in', event.workflowId,
+ *     'action:', event.onViolation);
  * });
  * ```
  */

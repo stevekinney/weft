@@ -3686,7 +3686,6 @@ describe('handleRequest', () => {
         step,
         locals: {},
         accumulatedResults: [] as Array<[number, unknown]>,
-        pendingSignals: [] as string[],
         searchAttributes: {},
         version: '1.0.0',
         schemaVersion: CURRENT_CHECKPOINT_SCHEMA_VERSION,
@@ -3732,7 +3731,6 @@ describe('handleRequest', () => {
       step: 5,
       locals: { greeting: 'hello' },
       accumulatedResults: [] as Array<[number, unknown]>,
-      pendingSignals: [] as string[],
       searchAttributes: {
         tag: 'test' as unknown as import('../core/types.ts').SearchAttributeValue,
       },

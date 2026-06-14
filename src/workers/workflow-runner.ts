@@ -4,11 +4,19 @@ import {
   deserializeCheckpoint,
   serializeCheckpoint,
 } from '../core/checkpoint.ts';
+import type { ContextOperationRequest } from '../core/context.ts';
 import { WorkflowAtomicStateHandle } from '../core/context/state-namespace.ts';
+import { resolveWorkflowVersionPatch } from '../core/context/version-patching.ts';
 import {
   createWorkerWorkflowLogger,
   type WorkerLoggerReplayState,
 } from '../core/context/workflow-logger.ts';
+import {
+  attachTransientCheckpointReplayPayload,
+  hydrateCheckpointReplayStateFromPayload,
+  pruneCheckpointReplayState,
+  readCheckpointReplayPayload,
+} from '../core/engine/checkpoint-replay.ts';
 import {
   classifyErrorAsFailureCategory,
   errorFromFailedOperationOutcome,
@@ -50,6 +58,11 @@ export type WorkerWorkflowContext = Pick<
   // Non-optional here (always populated at runtime) even though the public
   // WorkflowContext types it `log?` for structural implementors.
   readonly log: WorkflowLogger;
+  getVersion(
+    changeId: string,
+    minSupported: number,
+    maxSupported: number,
+  ): Generator<ContextOperationRequest, number, unknown>;
 };
 
 interface RunMessageShape {
@@ -73,6 +86,7 @@ export function createWorkerWorkflowContext(
   // The structural slice the logger reads, not the full private `WorkerReplayState`
   // (a superset, so the real call site passes through unchanged).
   getReplayState: () => WorkerLoggerReplayState | undefined,
+  getVersionReplayState: () => WorkerReplayState | undefined = () => undefined,
 ): WorkerWorkflowContext {
   return {
     workflowId: message.workflowId,
@@ -83,15 +97,66 @@ export function createWorkerWorkflowContext(
     // The logger reads replay state through the closure (not by value) so it sees
     // the live frontier at each emit as the runner advances `nextStepIndex`.
     log: createWorkerWorkflowLogger(message.workflowId, message.workflowType, getReplayState),
+    getVersion: (changeId, minSupported, maxSupported) =>
+      workerGetVersion(
+        message.workflowId,
+        getVersionReplayState,
+        changeId,
+        minSupported,
+        maxSupported,
+      ),
   };
+}
+
+function* workerGetVersion(
+  workflowId: string,
+  getReplayState: () => WorkerReplayState | undefined,
+  changeId: string,
+  minSupported: number,
+  maxSupported: number,
+): Generator<ContextOperationRequest, number, unknown> {
+  const replayState = getReplayState();
+  if (!replayState) {
+    throw new Error(`No active replay state for workflow: ${workflowId}`);
+  }
+
+  const stepIndex = replayState.nextStepIndex;
+  const resolution = resolveWorkflowVersionPatch(
+    replayState.checkpoint.locals,
+    changeId,
+    minSupported,
+    maxSupported,
+  );
+  replayState.checkpoint = {
+    ...replayState.checkpoint,
+    locals: resolution.checkpointLocals,
+  };
+
+  const operation: ContextOperationRequest = {
+    type: 'get-version',
+    operationId: crypto.randomUUID(),
+    changeId,
+    minSupported,
+    maxSupported,
+    version: resolution.version,
+  };
+
+  if (!resolution.newlyPinned && !replayState.signatures.has(stepIndex)) {
+    replayState.nextStepIndex = stepIndex + 1;
+    return resolution.version;
+  }
+
+  const result = yield operation;
+  replayState.accumulatedResults.delete(stepIndex);
+  return result as number;
 }
 
 function createWorkerStateNamespace(message: RunMessageShape): WorkflowStateNamespace {
   return {
     session: <T>(_key: string): WorkflowSessionState<T> => {
       throw new Error(
-        'ctx.state.session() is not supported in worker execution mode. ' +
-          'Construct the engine without `workerExecution` to use session state.',
+        `Workflow type "${message.workflowType}" called ctx.state.session(), which is not supported in worker execution mode. ` +
+          "Use workflowExecutionMode: 'inline' for checkpoint-local session state, or use ctx.state.workflow() or ctx.state.execution() instead.",
       );
     },
     execution: <T>(key: string, options?: WorkflowAtomicStateOptions<T>) =>
@@ -179,8 +244,11 @@ export async function handleRunMessage(
     // handler, so `ctx.log`'s probe is replay-aware from the earliest point even
     // if a handler runs synchronous code before yielding.
     context.replayStates.set(message.workflowId, createReplayState(message));
-    const workerContext = createWorkerWorkflowContext(message, controller, () =>
-      context.replayStates.get(message.workflowId),
+    const workerContext = createWorkerWorkflowContext(
+      message,
+      controller,
+      () => context.replayStates.get(message.workflowId),
+      () => context.replayStates.get(message.workflowId),
     );
     const generator = handler(workerContext, message.input);
     const step = await generator.next();
@@ -350,7 +418,7 @@ async function processGeneratorStep(
       };
     }
 
-    const operationRequest = currentStep.value as OperationRequest;
+    const operationRequest = currentStep.value as OperationRequest | ContextOperationRequest;
     const stepIndex = replayState.nextStepIndex;
     const signature = await createWorkerReplayOperationSignature(
       operationRequest,
@@ -394,9 +462,14 @@ async function processGeneratorStep(
           failureCategory: 'system',
         };
       }
+      replayState.checkpoint = pruneWorkerCheckpoint(
+        replayState,
+        replayState.checkpoint,
+        stepIndex,
+      );
     } else {
       replayState.signatures.set(stepIndex, signature);
-      replayState.checkpoint = advanceWorkerCheckpoint(replayState);
+      replayState.checkpoint = advanceWorkerCheckpoint(replayState, stepIndex);
     }
     replayState.pendingStepIndex = stepIndex;
     context.generators.set(workflowId, generator);
@@ -416,7 +489,7 @@ function createReplayState(message: {
 }): WorkerReplayState {
   const checkpoint =
     message.checkpoint && message.checkpoint.byteLength > 0
-      ? deserializeCheckpoint(new Uint8Array(message.checkpoint))
+      ? deserializeWorkerCheckpoint(message.checkpoint)
       : createCheckpoint(message.workflowId, 'worker');
   return {
     checkpoint,
@@ -427,6 +500,14 @@ function createReplayState(message: {
     pendingStepIndex: null,
     maxProtocolMessageBytes: message.maxProtocolMessageBytes,
   };
+}
+
+function deserializeWorkerCheckpoint(checkpointBytes: ArrayBuffer): Checkpoint {
+  const checkpoint = deserializeCheckpoint(new Uint8Array(checkpointBytes));
+  return hydrateCheckpointReplayStateFromPayload(
+    checkpoint,
+    readCheckpointReplayPayload(checkpoint),
+  );
 }
 
 function recordOperationOutcome(
@@ -463,18 +544,32 @@ async function replayGeneratorStep(
   return await generator.next(replayState.accumulatedResults.get(stepIndex));
 }
 
-function advanceWorkerCheckpoint(replayState: WorkerReplayState): Checkpoint {
+function advanceWorkerCheckpoint(
+  replayState: WorkerReplayState,
+  pendingOperationStep: number,
+): Checkpoint {
   const advanced = advanceCheckpoint(replayState.checkpoint, replayState.checkpoint.locals, {
     accumulatedResults: [...replayState.accumulatedResults],
   });
+  return pruneWorkerCheckpoint(replayState, advanced, pendingOperationStep);
+}
+
+function pruneWorkerCheckpoint(
+  replayState: WorkerReplayState,
+  checkpoint: Checkpoint,
+  pendingOperationStep: number,
+): Checkpoint {
   const workerReplayFailures = [...replayState.failedOutcomes];
-  const advancedCheckpoint = { ...advanced };
-  delete advancedCheckpoint.workerReplayFailures;
-  return {
-    ...advancedCheckpoint,
+  const { workerReplayFailures: _oldWorkerReplayFailures, ...checkpointWithoutFailures } =
+    checkpoint;
+  const workerCheckpoint: Checkpoint = {
+    ...checkpointWithoutFailures,
+    accumulatedResults: [...replayState.accumulatedResults],
     workerReplaySignatures: [...replayState.signatures],
     ...(workerReplayFailures.length === 0 ? {} : { workerReplayFailures }),
   };
+  const pruned = pruneCheckpointReplayState(workerCheckpoint, pendingOperationStep);
+  return attachTransientCheckpointReplayPayload(pruned.checkpoint, pruned.replayPayload);
 }
 
 function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {

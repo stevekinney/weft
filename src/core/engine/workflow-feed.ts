@@ -2,7 +2,7 @@ import { EventLog } from '../event-log.ts';
 import { readEventLogWatermark } from './event-log-compaction.ts';
 import type { EngineInternals } from './internals.ts';
 import { workflowFeedListenerKey } from './state-utilities.ts';
-import { loadStoredStreamChunks } from './stream-chunk-loading.ts';
+import { loadStoredStreamChunks, loadStoredStreamTailSequence } from './stream-chunk-loading.ts';
 
 /**
  * Discriminator for `replayWorkflowFeed` / `snapshotWorkflowFeedTail`
@@ -35,11 +35,10 @@ export const COMPACTION_BOUNDARY_KIND = 'workflow:compaction-boundary';
 
 /**
  * A committed workflow-feed record surfaced to subscribers of
- * `subscribeWorkflowFeedCommits()`. Fires after `storage.batch()`
- * (events) or `storage.put()` (tokens) resolves, so replay and live
- * delivery share the same committed sequence authority. The same
- * shape covers both selectors — consumers filter on `selector`
- * before interpreting `payload`.
+ * `subscribeWorkflowFeedCommits()`. Fires after the storage commit resolves, so
+ * replay and live delivery share the same committed sequence authority. The
+ * same shape covers both selectors — consumers filter on `selector` before
+ * interpreting `payload`.
  *
  *   - `events` selector: `kind` is the durable log entry type
  *     (e.g. `'workflow:checkpoint'`). `sequence` / `timestamp` come
@@ -100,12 +99,11 @@ export async function snapshotWorkflowFeedTail(
     const loaded = await eventLog.loadHead();
     return loaded.sequence;
   }
-  // `tokens` — scan is O(n) in stored chunks. The token feed persists each
-  // chunk under the `tokens` prefix and keeps no separate tail record, so the
-  // tail sequence is the max over a full prefix iteration. This is a deliberate
-  // tradeoff: the typical token stream is short-lived and reconnect frequency is
-  // low, so the simpler per-chunk layout is preferred over maintaining a tail
-  // pointer that every chunk write would have to update.
+  const tail = await loadStoredStreamTailSequence(internals.storage, workflowId, TOKENS_STREAM_KEY);
+  if (tail !== null) return tail;
+
+  // Old token streams have no durable tail record. Normalize those records by
+  // scanning their stored chunks once, then use the max sequence as the tail.
   const chunks = await loadStoredStreamChunks(internals.storage, workflowId, TOKENS_STREAM_KEY);
   if (chunks.length === 0) return -1;
   let max = -1;

@@ -1,5 +1,9 @@
 import type { AuthorizationScope } from '../authorization-scope.ts';
 import { principalFromApiKey, type AuthenticatedPrincipal } from '../principal.ts';
+import {
+  findConstantTimeApiKeyMatch,
+  type ConstantTimeApiKeyEntry,
+} from './constant-time-api-key.ts';
 import type { AuthConfig, AuthResult, JWTPayload } from './types.ts';
 
 /**
@@ -97,7 +101,7 @@ function deepFreezeApiKeyPrincipal(principal: AuthenticatedPrincipal): Authentic
 export async function tryAdmitApiKey(
   presentedKey: string,
   resolver: AuthConfig['resolveApiKeyPrincipal'],
-  apiKeySet: Set<string> | null,
+  apiKeyEntries: ReadonlyArray<ConstantTimeApiKeyEntry<undefined>> | null,
   defaultApiKeyScopes: ReadonlyArray<AuthorizationScope>,
 ): Promise<AuthResult | 'continue'> {
   if (resolver !== undefined) {
@@ -117,7 +121,7 @@ export async function tryAdmitApiKey(
     }
     return { authenticated: false, error: 'No valid credentials provided' };
   }
-  if (apiKeySet?.has(presentedKey)) {
+  if (apiKeyEntries !== null && findConstantTimeApiKeyMatch(presentedKey, apiKeyEntries) !== null) {
     const principal = principalFromApiKey({
       subject: 'api-key-caller',
       scopes: defaultApiKeyScopes,

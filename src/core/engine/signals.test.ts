@@ -9,6 +9,8 @@ import type { WorkflowState } from '../types.ts';
 import {
   bufferSignalPayloads,
   consumeSignal,
+  hasBufferedSignal,
+  peekSignal,
   releaseSignalWaiter,
   signal,
   trackWaiterKey,
@@ -196,6 +198,86 @@ describe('engine signals', () => {
     expect(await consumeSignal(internals as never, 'workflow-consumed', 'release')).toEqual({
       found: false,
     });
+  });
+
+  it('does not match colon-containing signal names to shorter signal names', async () => {
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    const callbacks = createSignalCallbacks();
+
+    await signal(internals as never, 'workflow-colon-signal', 'a:b', 'colon', callbacks, {
+      signalId: 'signal-1',
+    });
+
+    expect(await hasBufferedSignal(internals as never, 'workflow-colon-signal', 'a')).toBe(false);
+    expect(await peekSignal(internals as never, 'workflow-colon-signal', 'a')).toEqual({
+      found: false,
+    });
+    expect(await consumeSignal(internals as never, 'workflow-colon-signal', 'a')).toEqual({
+      found: false,
+    });
+    expect(await consumeSignal(internals as never, 'workflow-colon-signal', 'a:b')).toEqual({
+      found: true,
+      payload: 'colon',
+    });
+  });
+
+  it('round-trips unicode and empty signal names through buffered scans', async () => {
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    const callbacks = createSignalCallbacks();
+
+    await bufferSignalPayloads(
+      internals as never,
+      'workflow-edge-signal-names',
+      [
+        { signalName: 'release ✅', payload: 'unicode' },
+        { signalName: '', payload: 'empty' },
+      ],
+      callbacks,
+    );
+
+    expect(await hasBufferedSignal(internals as never, 'workflow-edge-signal-names', '')).toBe(
+      true,
+    );
+    expect(
+      await peekSignal(internals as never, 'workflow-edge-signal-names', 'release ✅'),
+    ).toEqual({
+      found: true,
+      payload: 'unicode',
+    });
+    expect(await consumeSignal(internals as never, 'workflow-edge-signal-names', '')).toEqual({
+      found: true,
+      payload: 'empty',
+    });
+    expect(
+      await consumeSignal(internals as never, 'workflow-edge-signal-names', 'release ✅'),
+    ).toEqual({
+      found: true,
+      payload: 'unicode',
+    });
+  });
+
+  it('normalizes separator-free raw signal keys without accepting unsafe raw colon keys', async () => {
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    const safeLegacyKey = 'sig:workflow-legacy-signal:needs approval:signal-1';
+    const unsafeLegacyKey = 'sig:workflow-legacy-signal:a:b:signal-2';
+
+    await storage.put(safeLegacyKey, encode('legacy'));
+    await storage.put(unsafeLegacyKey, encode('unsafe'));
+
+    expect(
+      await consumeSignal(internals as never, 'workflow-legacy-signal', 'needs approval'),
+    ).toEqual({
+      found: true,
+      payload: 'legacy',
+    });
+    expect(await hasBufferedSignal(internals as never, 'workflow-legacy-signal', 'a')).toBe(false);
+    expect(await consumeSignal(internals as never, 'workflow-legacy-signal', 'a')).toEqual({
+      found: false,
+    });
+    expect(await storage.get(unsafeLegacyKey)).not.toBeNull();
   });
 
   it('rejects signalId delivery before tracking cleanup when conditionalBatch is unavailable', async () => {

@@ -143,11 +143,11 @@ interface MetricDefinition {
 type MetricType = 'counter' | 'gauge' | 'histogram';
 ```
 
-Task metrics stay deliberately low-cardinality. Use `GET /api/v1/tasks/diagnostics` when you need workflow IDs, operation IDs, worker IDs, or queue-specific evidence for stuck work; keep metric labels suitable for aggregation.
+Task metrics stay deliberately low-cardinality. Use `GET /api/v1/tasks/diagnostics` when you need workflow IDs, operation IDs, worker IDs, or queue-specific evidence for stuck work or dead-lettered task results; keep metric labels suitable for aggregation.
 
 ### `GET /api/v1/tasks/diagnostics`
 
-Returns bounded task diagnostics for queued, in-flight, and recently resolved activity records. The REST endpoint is backed by the `weft.tasks.diagnostics` operation and requires `system:read`.
+Returns bounded task diagnostics for queued, in-flight, recently resolved, and task-result dead-letter activity records. The REST endpoint is backed by the `weft.tasks.diagnostics` operation and requires `system:read`.
 
 ```http
 GET /api/v1/tasks/diagnostics?workflowId=checkout-123&queue=payments&limit=25
@@ -165,7 +165,15 @@ Query parameters:
 | `retryStormMinimumAttempts` | `number` | `3`     | Minimum retry count for `retry-storm` diagnostics.        |
 | `limit`                     | `number` | `50`    | Maximum returned items. The server caps this at `200`.    |
 
-Each item has a `kind` of `stuck-queued`, `stale-inflight`, `retry-storm`, or `all-workers-at-capacity`, plus bounded evidence strings. The response also includes summary counts so callers can tell when more matching diagnostics exist than the requested item limit.
+Each item has a `kind` of `stuck-queued`, `stale-inflight`, `retry-storm`, `all-workers-at-capacity`, or `dead-lettered`, plus bounded evidence strings. Dead-lettered task results are durable operator guards created after result-resolution storage retries are exhausted; reconciliation will not re-dispatch the guarded in-flight task until the entry is cleared.
+
+Use the clear action after the storage problem is understood and the operator is ready for reconciliation to handle the guarded operation again:
+
+```http
+DELETE /api/v1/tasks/diagnostics/dead-letter/:operationId
+```
+
+The clear action is backed by `weft.tasks.diagnostics.deadletters.clear`, requires `system:admin`, and returns `{ "ok": true }`. The diagnostics response also includes summary counts so callers can tell when more matching diagnostics exist than the requested item limit.
 
 ---
 

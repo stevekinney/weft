@@ -14,9 +14,34 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 
 import { describe, expect, it } from 'bun:test';
 
+import { type BatchOperation, KEYS, type ScanOptions } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { decode, encode } from './codec.ts';
 import { Engine, type WorkflowFeedRecord } from './engine.ts';
 import { workflow } from './types/workflow-function.ts';
+
+class ObservedMemoryStorage extends MemoryStorage {
+  readonly batches: BatchOperation[][] = [];
+  readonly scanPrefixes: string[] = [];
+
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    this.batches.push(operations);
+    await super.batch(operations);
+  }
+
+  override async *scan(prefix: string, options?: ScanOptions): AsyncIterable<[string, Uint8Array]> {
+    this.scanPrefixes.push(prefix);
+    yield* super.scan(prefix, options);
+  }
+
+  resetScanPrefixes(): void {
+    this.scanPrefixes.length = 0;
+  }
+
+  countScansForPrefix(prefix: string): number {
+    return this.scanPrefixes.filter((candidate) => candidate === prefix).length;
+  }
+}
 
 const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (ctx, _input: unknown) {
   const context = ctx;
@@ -47,6 +72,31 @@ async function waitForEventCount(
   throw new Error(
     `Engine did not accumulate ${expected} events for ${workflowId} within ${timeoutMilliseconds}ms`,
   );
+}
+
+async function waitForTokenChunkCount(
+  engine: Engine,
+  workflowId: string,
+  expected: number,
+  timeoutMilliseconds = 500,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMilliseconds;
+  while (Date.now() < deadline) {
+    const chunks = await engine.getStreamChunks(workflowId, 'tokens');
+    if (chunks.length >= expected) return;
+    await sleepForTesting(5);
+  }
+  throw new Error(
+    `Engine did not accumulate ${expected} token chunks for ${workflowId} within ${timeoutMilliseconds}ms`,
+  );
+}
+
+function findPutOperationValue(
+  batch: ReadonlyArray<BatchOperation>,
+  key: string,
+): Uint8Array | undefined {
+  const operation = batch.find((candidate) => candidate.type === 'put' && candidate.key === key);
+  return operation?.type === 'put' ? operation.value : undefined;
 }
 
 describe('Engine[Symbol.dispose] — feed listener cleanup', () => {
@@ -93,6 +143,85 @@ describe('Engine.snapshotWorkflowFeedTail — loadHead fallback', () => {
     const tail = await secondEngine.snapshotWorkflowFeedTail(handle.id, 'events');
     expect(tail).toBeGreaterThanOrEqual(0);
     secondEngine[Symbol.dispose]();
+  });
+
+  it('reads the token stream tail record without scanning stored chunks', async () => {
+    const storage = new ObservedMemoryStorage();
+    const workflowId = 'wf-token-tail';
+    await storage.put(KEYS.streamChunk(workflowId, 'tokens', 0), encode('zero'));
+    await storage.put(KEYS.streamChunk(workflowId, 'tokens', 1), encode('one'));
+    await storage.put(KEYS.streamTail(workflowId, 'tokens'), encode({ sequence: 1 }));
+    storage.resetScanPrefixes();
+
+    const engine = new Engine({ storage });
+    const tail = await engine.snapshotWorkflowFeedTail(workflowId, 'tokens');
+
+    expect(tail).toBe(1);
+    expect(storage.countScansForPrefix(KEYS.streamChunkPrefix(workflowId, 'tokens'))).toBe(0);
+    engine[Symbol.dispose]();
+  });
+
+  it('falls back to scanning token chunks when old data has no tail record', async () => {
+    const storage = new ObservedMemoryStorage();
+    const workflowId = 'wf-token-tail-old-data';
+    await storage.put(KEYS.streamChunk(workflowId, 'tokens', 0), encode('zero'));
+    await storage.put(KEYS.streamChunk(workflowId, 'tokens', 1), encode('one'));
+    storage.resetScanPrefixes();
+
+    const engine = new Engine({ storage });
+    const tail = await engine.snapshotWorkflowFeedTail(workflowId, 'tokens');
+
+    expect(tail).toBe(1);
+    expect(storage.countScansForPrefix(KEYS.streamChunkPrefix(workflowId, 'tokens'))).toBe(1);
+    engine[Symbol.dispose]();
+  });
+});
+
+describe('Engine ctx.stream(tokens) — durable tail pointer', () => {
+  it('writes each token chunk and its tail pointer in the same storage batch', async () => {
+    const storage = new ObservedMemoryStorage();
+    const engine = new Engine({ storage });
+    engine.register(
+      workflow({ name: 'token-export' }).execute(async function* (ctx, _input: unknown) {
+        const context = ctx;
+        yield* context.stream('tokens', async function* () {
+          yield 'first';
+          yield 'second';
+        });
+        yield* context.waitForSignal('finish');
+        return 'done';
+      }),
+    );
+
+    const handle = await engine.start('token-export', {});
+    await waitForTokenChunkCount(engine, handle.id, 2);
+
+    const streamTailKey = KEYS.streamTail(handle.id, 'tokens');
+    const persistedTail = await storage.get(streamTailKey);
+    expect(persistedTail).not.toBeNull();
+    expect(decode(persistedTail!)).toEqual({ sequence: 1 });
+
+    for (let sequence = 0; sequence < 2; sequence += 1) {
+      const chunkKey = KEYS.streamChunk(handle.id, 'tokens', sequence);
+      const chunkBatch = storage.batches.find((batch) =>
+        batch.some((operation) => operation.type === 'put' && operation.key === chunkKey),
+      );
+      expect(chunkBatch).toBeDefined();
+      if (!chunkBatch) {
+        throw new Error(`Missing batch for token chunk sequence ${sequence}`);
+      }
+
+      const tailValue = findPutOperationValue(chunkBatch, streamTailKey);
+      expect(tailValue).toBeDefined();
+      if (!tailValue) {
+        throw new Error(`Missing tail pointer update for token chunk sequence ${sequence}`);
+      }
+      expect(decode(tailValue)).toEqual({ sequence });
+    }
+
+    await engine.signal(handle.id, 'finish', 'go');
+    await handle.result();
+    engine[Symbol.dispose]();
   });
 });
 
