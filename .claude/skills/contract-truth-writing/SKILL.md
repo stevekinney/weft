@@ -37,6 +37,8 @@ description: >-
 11. For storage operations, distinguish correctness gates from operational hints: `conditionalBatch` is runtime-gated, `boundedRangeDelete` is not, and `deleteRange` must be described as bounded-only with `deletePrefix` reserved for whole-prefix deletion.
 12. For async activity completion, state that `completeAsync()` tokens are deterministic identifiers, not secrets; the token belongs in the request body; completion payloads are hostile input; and oversized payloads fail before the token is consumed.
 13. For MCP built-in workflow-control tools, keep tool names and input field names distinct: `signal_workflow`, `update_workflow`, and `query_workflow` keep their tool names, but their arguments are `signalName`, `updateName`, and `queryName`.
+14. For `ctx.log` and `EngineOptions.onLog`, say that inline sinks replace console routing for non-replayed records, throwing sinks fall back to console without failing the workflow, `ctx.speculate()` uses the same sink path, and worker-mode records still stay in the worker console until issue #529 changes that.
+15. For MCP Streamable HTTP sessions, distinguish the public session id from the anonymous continuation token: `initialize` returns both headers, later anonymous POST/GET/DELETE requests require both, and authenticated sessions rely on the re-presented credential plus bound principal.
 
 ## Verification
 

@@ -429,9 +429,9 @@ Discovery starts at `GET /.well-known/mcp.json`. The document advertises the liv
 | `GET`    | `/api/mcp` | Server-to-client event stream for session notifications |
 | `DELETE` | `/api/mcp` | Close an MCP session identified by `Mcp-Session-Id`     |
 
-`POST /api/mcp` accepts `initialize` without an existing session and returns `Mcp-Session-Id`. Every subsequent POST, GET, or DELETE request sends that session id. Requests may also send `Mcp-Protocol-Version`; unsupported versions return `400`.
+`POST /api/mcp` accepts `initialize` without an existing session and returns `Mcp-Session-Id`. It also returns `Mcp-Session-Token` on that initialize response. Every subsequent POST, GET, or DELETE request sends the session id; anonymous sessions created while server authentication is disabled must also send the continuation token, so a leaked session id alone cannot drive, read, or close another caller's MCP session. Requests may also send `Mcp-Protocol-Version`; unsupported versions return `400`.
 
-When server authentication is enabled, MCP requests pass through the same authentication bridge as REST and JSON-RPC before they reach the MCP dispatcher. The authenticated principal is bound to the MCP session created by `initialize`, and every subsequent request is authorized against that principal's scopes.
+When server authentication is enabled, MCP requests pass through the same authentication bridge as REST and JSON-RPC before they reach the MCP dispatcher. The authenticated principal is bound to the MCP session created by `initialize`, and every subsequent request is authorized against that principal's scopes. Authenticated sessions re-present their credential on continuation requests, so the continuation token is only an extra gate for anonymous sessions.
 
 MCP tool discovery includes:
 

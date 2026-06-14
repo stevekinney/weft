@@ -51,6 +51,7 @@ Async activity completion (`POST /api/v1/activities/complete` and `/fail`) also 
 - [ ] Bearer tokens, startup tokens, API keys, and authenticated principals are never logged, serialized to checkpoints, or included in error messages
 - [ ] `initialize` binds the authenticated principal to the MCP session, and subsequent POST/GET/DELETE requests cannot switch principals by changing headers
 - [ ] MCP sessions keep authenticated principals bound for the session lifetime; route authorization is scope-based, not tenant-claim-based
+- [ ] Anonymous MCP sessions disclose `Mcp-Session-Token` only on `initialize`; every later POST/GET/DELETE request must present that token with `Mcp-Session-Id`, while authenticated sessions re-present their credential per request
 - [ ] Local stdio admission requires `--startup-token` or an explicit trusted-boundary flag
 - [ ] Workflow tool failures return MCP tool results with `isError: true` without leaking server internals
 

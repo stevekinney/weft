@@ -21,7 +21,7 @@ Checklist for reviewing security-sensitive changes in the weft durable execution
 - Modifying workflow execution, checkpoint replay, or activity dispatch (`src/core/`)
 - Changing storage backends or serialization (`src/storage/`, `src/core/codec.ts`)
 - Adding new public API surface (`src/index.ts`)
-- Handling environment variables or secrets (`src/environment.ts`)
+- Handling environment variables or secrets (`WEFT_*` reads via `Bun.env`)
 
 ## Checklist
 
@@ -51,6 +51,7 @@ Async activity completion (`POST /api/v1/activities/complete` and `/fail`) also 
 - [ ] Bearer tokens, startup tokens, API keys, and authenticated principals are never logged, serialized to checkpoints, or included in error messages
 - [ ] `initialize` binds the authenticated principal to the MCP session, and subsequent POST/GET/DELETE requests cannot switch principals by changing headers
 - [ ] MCP sessions keep authenticated principals bound for the session lifetime; route authorization is scope-based, not tenant-claim-based
+- [ ] Anonymous MCP sessions disclose `Mcp-Session-Token` only on `initialize`; every later POST/GET/DELETE request must present that token with `Mcp-Session-Id`, while authenticated sessions re-present their credential per request
 - [ ] Local stdio admission requires `--startup-token` or an explicit trusted-boundary flag
 - [ ] Workflow tool failures return MCP tool results with `isError: true` without leaking server internals
 
@@ -89,16 +90,16 @@ User-defined workflow functions run inside the engine. They should not be able t
 
 ### 6. Input Validation at API Boundaries
 
-- [ ] Public-facing functions validate inputs with Zod or explicit type guards (following the `src/environment.ts` pattern)
+- [ ] Public-facing functions validate inputs with Zod or explicit type guards
 - [ ] No `any` types at trust boundaries: server routes, storage interface methods, public API exports
 - [ ] Duration strings passed to `parseDuration()` are validated (reject nonsensical values like negative durations)
 - [ ] Workflow IDs and signal/update names are validated for length and character set
 
 ### 7. Credential and Secret Handling
 
-**File**: `src/environment.ts`
+**Pattern**: `WEFT_*` variables read directly via `Bun.env`, validated at the point of use
 
-- [ ] Environment variables accessed via `Bun.env` and validated through Zod schemas
+- [ ] Environment variables accessed via `Bun.env` and validated where they are consumed
 - [ ] Secrets are not included in: log output, error messages, checkpoint data, HTTP responses, metrics
 - [ ] `.env` files are in `.gitignore`
 - [ ] No hardcoded credentials, tokens, or API keys in source code

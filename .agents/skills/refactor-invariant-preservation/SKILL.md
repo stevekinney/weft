@@ -34,7 +34,7 @@ description: >-
 1. Write characterization tests for current public behavior before changing the implementation.
 2. Pin observable ordering directly; do not hide ordering changes with sorting unless order is explicitly irrelevant.
 3. Add type-level tests for overloads, deferred registration, dynamic names, and inference behavior when TypeScript ergonomics are part of the contract.
-4. For REST operation cleanup, preserve the exact legacy status codes, raw or masked error messages, validation envelopes, and route matching behavior unless the task explicitly changes the contract.
+4. For REST operation cleanup, preserve the exact current status codes, raw or masked error messages, validation envelopes, and route matching behavior unless the task explicitly changes the contract.
 5. For worker or operation dispatch cleanup, preserve ownership checks, in-flight persistence-before-send ordering, deadline tracking, and task-result rejection behavior.
 6. For compression cleanup, preserve framed payload reads across gzip, brotli, and uncompressed values; never reintroduce headerless compressed payload acceptance unless a task explicitly requires a migration layer.
 7. For workflow visibility cleanup, preserve `createdAt desc, id asc` ordering, aggregate truncation/cap behavior, and failure-category projection defaults.
