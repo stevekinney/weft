@@ -324,6 +324,14 @@ function launchInlineWorkflowFromCheckpoint(
     }),
     sleepReferenceTime: checkpoint.createdAt,
     ...(state.executionDeadline !== undefined && { deadline: state.executionDeadline }),
+    // Carry the host `ctx.log` sink onto the checkpoint-launched context, mirroring the
+    // fresh-start and resume paths. This path runs for forked / launch-from-checkpoint
+    // runs; without the sink, a log at the forked run's live frontier (and any
+    // speculative child it parents) reaches the console but never `EngineOptions.onLog`.
+    // Construction normalizes a missing `onLog` to `null`; use loose `!= null` so the
+    // narrowed type drops both `null` and the option's declared `undefined`, keeping
+    // `logSink` assignable under `exactOptionalPropertyTypes` (build's stricter tsc) (#549).
+    ...(internals.options.onLog != null && { logSink: internals.options.onLog }),
   });
   setContextWorkflowInterceptor(context, getComposedWorkflowInterceptor(internals));
 

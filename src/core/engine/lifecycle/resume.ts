@@ -130,6 +130,14 @@ function relaunchInlineWorkflowAfterResume(
     // Non-serialized services re-provided by resolveServicesForRecovery (or set
     // at start when resuming in the same process); undefined when none.
     services: internals.workflowServices.get(workflowId),
+    // Carry the host `ctx.log` sink onto the recovered context, mirroring the
+    // fresh-start path (resolveLogSinkOption). Without it, a log at the live frontier
+    // of a recovered run — and any speculative child it parents — reaches the console
+    // but never `EngineOptions.onLog`. Construction normalizes a missing `onLog` to
+    // `null`; use loose `!= null` so the narrowed type drops both `null` and the option's
+    // declared `undefined`, keeping `logSink` assignable under `exactOptionalPropertyTypes`
+    // (the build's stricter tsc enforces this) (#549).
+    ...(internals.options.onLog != null && { logSink: internals.options.onLog }),
   });
   setContextWorkflowInterceptor(context, getComposedWorkflowInterceptor(internals));
 

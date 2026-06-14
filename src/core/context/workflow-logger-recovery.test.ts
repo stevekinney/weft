@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { MemoryStorage } from '../../storage/memory.ts';
-import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
+import { sleepForTesting, waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { captureWorkflowLogConsole } from '../../testing/workflow-log-capture.test-support.ts';
 import { Engine } from '../engine.ts';
 import { activity } from '../types.ts';
@@ -177,5 +177,110 @@ describe('ctx.log engine-level replay safety', () => {
 
     await recovered.signal('log-after-last-id', 'go', 'go');
     await expect(handle!.result()).resolves.toBe('done');
+  });
+
+  it('delivers a recovered-run live-frontier log to the host sink at parity with the console (#549)', async () => {
+    // A plain `ctx.log` after the last committed step is at the live frontier on
+    // recovery, so it re-fires (the documented caveat above). The host
+    // `EngineOptions.onLog` sink must receive it exactly as many times as the console
+    // path does across the cycle — the recovery-path Context must carry the sink, or
+    // the record reaches console but never the sink (#549). The criterion is PARITY,
+    // not a reduced count: the re-fire on recovery is the existing caveat, and the fix
+    // makes the sink match it rather than changing how often it fires.
+    const noop = activity({ name: 'noop', execute: async (input: string) => input });
+    const build = (engine: Engine) =>
+      engine.register(
+        workflow({ name: 'log-sink-frontier' })
+          .activities({ noop })
+          .execute(async function* (ctx) {
+            yield* ctx.run('noop', 'x');
+            ctx.log?.info('marker:frontier');
+            yield* ctx.waitForSignal<string>('go');
+            return 'done';
+          }),
+      );
+
+    // No-sink run: count console markers across the recovered phase. Re-capture after
+    // the fresh block so the count covers only the recovered span.
+    const consoleStorage = new MemoryStorage();
+    {
+      using first = new Engine({ storage: consoleStorage });
+      build(first);
+      await first.start('log-sink-frontier', null, { id: 'log-sink-frontier-id' });
+      await flush();
+    }
+    captured.restore();
+    captured = captureWorkflowLogConsole();
+    using consoleRecovered = new Engine({ storage: consoleStorage });
+    build(consoleRecovered);
+    const [consoleHandle] = await consoleRecovered.recoverAll();
+    await flush();
+    await consoleRecovered.signal('log-sink-frontier-id', 'go', 'go');
+    await expect(consoleHandle!.result()).resolves.toBe('done');
+    const consoleMarkers = loggedMessages(captured.records, 'log-sink-frontier');
+
+    // With-sink run: count sink markers across the recovered phase of an identical cycle.
+    // Only the recovered engine has a sink; the fresh-start engine has none, so every
+    // record in `sink` came from the recovered phase (no slice needed).
+    const sinkStorage = new MemoryStorage();
+    const sink: WorkflowLogRecord[] = [];
+    {
+      using first = new Engine({ storage: sinkStorage });
+      build(first);
+      await first.start('log-sink-frontier', null, { id: 'log-sink-frontier-id' });
+      await flush();
+    }
+    using sinkRecovered = new Engine({ storage: sinkStorage, onLog: (record) => sink.push(record) });
+    build(sinkRecovered);
+    const [sinkHandle] = await sinkRecovered.recoverAll();
+    await flush();
+    await sinkRecovered.signal('log-sink-frontier-id', 'go', 'go');
+    await expect(sinkHandle!.result()).resolves.toBe('done');
+    const sinkMarkers = loggedMessages(sink, 'log-sink-frontier');
+
+    // Parity: the sink saw the recovered-run live-frontier log exactly as often as the
+    // console path did. (Concretely the caveat re-fires it on both recovery replays, so
+    // the current count is 2; the assertion pins parity, not that specific number, so it
+    // stays correct if the replay count ever changes.) The `> 0` guard keeps parity from
+    // passing vacuously when both paths are empty.
+    expect(sinkMarkers).toEqual(consoleMarkers);
+    expect(consoleMarkers.length).toBeGreaterThan(0);
+  });
+
+  it('delivers a forked-run live-frontier log to the host sink (#549, checkpoint-launch path)', async () => {
+    // The sibling recovery path: `engine.fork()` launches the forked run from the source
+    // checkpoint through `launchInlineWorkflowFromCheckpoint` (transition.ts), a different
+    // Context constructor than the resume path above. It had the same missing-`logSink`
+    // omission, so a log at the forked run's live frontier reached the console but never
+    // the host sink. Fork drives the generator forward on its own (no signal needed), so
+    // the frontier log itself is the observable — we do not signal or await the fork.
+    const noop = activity({ name: 'noop', execute: async (input: string) => input });
+    const sink: WorkflowLogRecord[] = [];
+    using engine = new Engine({ onLog: (record) => sink.push(record) });
+    engine.register(
+      workflow({ name: 'fork-sink-frontier' })
+        .activities({ noop })
+        .execute(async function* (ctx) {
+          yield* ctx.run('noop', 'x');
+          ctx.log?.info('marker:frontier');
+          yield* ctx.waitForSignal<string>('go');
+          return 'done';
+        }),
+    );
+
+    await engine.start('fork-sink-frontier', null, { id: 'fork-sink-parent' });
+    await flush();
+    const sinkBeforeFork = loggedMessages(sink, 'fork-sink-frontier').length;
+
+    // Forking replays the cached `run` step and re-emits the live-frontier log on the
+    // forked run; it must reach the sink. (No signal / no result await — those hang on a
+    // just-forked run, and the frontier emission alone is what this guards.)
+    await engine.fork('fork-sink-parent');
+    await waitForCondition(
+      () => loggedMessages(sink, 'fork-sink-frontier').length > sinkBeforeFork,
+      { label: 'forked run logged its live-frontier marker to the host sink' },
+    );
+
+    expect(loggedMessages(sink, 'fork-sink-frontier').length).toBeGreaterThan(sinkBeforeFork);
   });
 });
