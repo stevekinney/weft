@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import type { ContextOperationRequest } from './context.ts';
+import { isValidWorkerLogRecord, isWorkerLogMessage } from './worker-protocol-log.ts';
 import {
   MIN_WORKER_PROTOCOL_MESSAGE_BYTES,
   WORKER_REPLAY_SIGNATURE_FORMAT,
@@ -427,5 +428,82 @@ describe('Worker replay operation signatures', () => {
         128,
       ),
     ).rejects.toThrow(WorkerProtocolError);
+  });
+});
+
+describe('Worker log message validation (#529)', () => {
+  const validRecord = {
+    level: 'info',
+    message: 'hello',
+    workflowId: 'wf-1',
+    workflowType: 'test',
+    timestamp: 0,
+  };
+
+  describe('isValidWorkerLogRecord', () => {
+    it('accepts a well-formed log record', () => {
+      expect(isValidWorkerLogRecord(validRecord)).toBe(true);
+    });
+
+    it('accepts every valid level', () => {
+      for (const level of ['debug', 'info', 'warn', 'error']) {
+        expect(isValidWorkerLogRecord({ ...validRecord, level })).toBe(true);
+      }
+    });
+
+    it('rejects a non-object record', () => {
+      expect(isValidWorkerLogRecord(null)).toBe(false);
+      expect(isValidWorkerLogRecord('nope')).toBe(false);
+      expect(isValidWorkerLogRecord(42)).toBe(false);
+    });
+
+    it('rejects a record without a string message', () => {
+      expect(isValidWorkerLogRecord({ ...validRecord, message: 123 })).toBe(false);
+    });
+
+    it('rejects a record with an invalid level', () => {
+      expect(isValidWorkerLogRecord({ ...validRecord, level: 'trace' })).toBe(false);
+    });
+  });
+
+  describe('isWorkerLogMessage', () => {
+    it('matches any message with type log (payload validity decided separately)', () => {
+      expect(isWorkerLogMessage({ type: 'log', workflowId: 'wf-1', record: validRecord })).toBe(
+        true,
+      );
+      // Routes on type alone — even a malformed record routes into the lenient lane.
+      expect(isWorkerLogMessage({ type: 'log', record: { bad: true } })).toBe(true);
+    });
+
+    it('does not match non-log messages or non-objects', () => {
+      expect(isWorkerLogMessage({ type: 'checkpoint', workflowId: 'wf-1' })).toBe(false);
+      expect(isWorkerLogMessage(null)).toBe(false);
+      expect(isWorkerLogMessage('log')).toBe(false);
+    });
+  });
+
+  describe('assertWorkerOutboundMessageShape accepts the log variant', () => {
+    it('accepts a well-formed log message', () => {
+      expect(() =>
+        assertWorkerOutboundMessageShape({
+          type: 'log',
+          workflowId: 'wf-1',
+          record: validRecord,
+        }),
+      ).not.toThrow();
+    });
+
+    it('rejects a log message with a missing or malformed record (strict path)', () => {
+      expect(() => assertWorkerOutboundMessageShape({ type: 'log', workflowId: 'wf-1' })).toThrow(
+        WorkerProtocolError,
+      );
+      expect(() =>
+        assertWorkerOutboundMessageShape({
+          type: 'log',
+          workflowId: 'wf-1',
+          record: { level: 'info' },
+        }),
+      ).toThrow(WorkerProtocolError);
+    });
   });
 });

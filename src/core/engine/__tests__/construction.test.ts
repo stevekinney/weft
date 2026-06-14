@@ -296,4 +296,26 @@ describe('normalizeWorkerExecutionConfiguration', () => {
 
     expect(bundle.inlineStrategy).toBeNull();
   });
+
+  it('resolves the host log sink for worker mode without throwing (#529)', () => {
+    // The worker branch resolves `getLogSink?.()` eagerly during bundle construction.
+    // A getLogSink that returns a sink must not throw — it is forwarded to the worker
+    // strategy as `onLog` so workers route `ctx.log` records back to the host.
+    const sink = () => {};
+    expect(() =>
+      createExecutionStrategyBundle({
+        options: {
+          workflowExecutionMode: 'worker',
+          workerExecution: { workerUrl },
+        },
+        getNow,
+        maxNestingDepth: 10,
+        development: false,
+        broadcastEvents: false,
+        getRegistration: () => undefined,
+        resolveWorkflowType: (target) => String(target),
+        getLogSink: () => sink,
+      }),
+    ).not.toThrow();
+  });
 });

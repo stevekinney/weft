@@ -3,6 +3,7 @@ import { WeftError } from '../weft-error.ts';
 import type { FailureCategory, OperationId, WorkflowId } from './identity.ts';
 import type { Duration, RetryPolicy } from './retry-retention.ts';
 import type { SearchAttributeValue } from './search-attributes.ts';
+import type { WorkflowLogRecord } from './workflow-log.ts';
 
 /** Version tag for Worker-mode operation replay signatures stored in checkpoints. */
 export const WORKER_REPLAY_SIGNATURE_FORMAT = 'weft-worker-operation-signature-v1';
@@ -254,6 +255,14 @@ export type WorkerInboundMessage =
       executionStateOwnerId?: string;
       deadline?: number;
       headers?: [string, string][];
+      /**
+       * Whether the engine host has an `EngineOptions.onLog` sink installed. The
+       * worker routes `ctx.log` records back to the host (as a `log` outbound
+       * message) only when this is `true`; otherwise it logs to the worker's own
+       * console, preserving the default. Omitted (treated as `false`) when no host
+       * sink exists, so a worker can never lose logs to a no-op host callback.
+       */
+      hostHasLogSink?: boolean;
     }
   | {
       type: 'resume';
@@ -263,6 +272,8 @@ export type WorkerInboundMessage =
       workflowId: WorkflowId;
       checkpoint: ArrayBuffer;
       operationResult: OperationOutcome;
+      /** See {@link WorkerInboundMessage} `run.hostHasLogSink`; carried on every turn so a rebuilt or resumed worker keeps the capability. */
+      hostHasLogSink?: boolean;
     }
   | { type: 'cancel'; protocolVersion?: number; turnId?: number; workflowId: WorkflowId };
 
@@ -291,4 +302,21 @@ export type WorkerOutboundMessage =
       errorStack?: string;
       /** Populated when the execution strategy can classify the failure cause. */
       failureCategory?: FailureCategory;
+    }
+  | {
+      /**
+       * A `ctx.log` record forwarded from a worker to the engine host's
+       * `EngineOptions.onLog` sink (#529). Unlike the other variants, `log` is a
+       * NON-TERMINAL, best-effort observability message: it never settles or clears
+       * the worker turn, and the host delivers it leniently — a `log` arriving
+       * outside an active turn (a legitimate fire-and-forget log resolving between
+       * turns) is dropped, never treated as a protocol violation that discards the
+       * worker. The worker emits these only when the inbound message reported
+       * `hostHasLogSink: true`.
+       */
+      type: 'log';
+      protocolVersion?: number;
+      turnId?: number;
+      workflowId: WorkflowId;
+      record: WorkflowLogRecord;
     };

@@ -160,11 +160,23 @@ export interface WorkerLoggerReplayState {
  * state *after* the context is built, so the closure must observe the live state at
  * emit time. Worker records use wall-clock `Date.now()` (the worker has no engine
  * clock); the timestamp is observability metadata only, never checkpointed.
+ *
+ * When the engine host installs an `EngineOptions.onLog` sink, the run/resume message
+ * reports `hostHasLogSink: true` and the worker supplies a `forwardToHost` callback
+ * here (#529): each non-replayed record is posted back to the host as a `log`
+ * protocol message INSTEAD of the worker console, mirroring the inline sink. The
+ * callback runs through the shared factory's `sink` slot, so its existing
+ * throw-then-console fallback applies — if forwarding is impossible (an oversized or
+ * non-cloneable record makes `postMessage` throw), the record falls back to the
+ * worker console rather than failing the run. When no host sink exists, `forwardToHost`
+ * is omitted and the worker logs to its own console, preserving the default and never
+ * losing a log to a no-op host callback.
  */
 export function createWorkerWorkflowLogger(
   workflowId: string,
   workflowType: string,
   getReplayState: () => WorkerLoggerReplayState | undefined,
+  forwardToHost?: (record: WorkflowLogRecord) => void,
 ): WorkflowLogger {
   return createWorkflowLogger({
     workflowId,
@@ -176,5 +188,6 @@ export function createWorkerWorkflowLogger(
       return replayState.accumulatedResults.has(step) || replayState.failedOutcomes.has(step);
     },
     now: () => Date.now(),
+    ...(forwardToHost !== undefined && { sink: forwardToHost }),
   });
 }

@@ -213,4 +213,136 @@ describe('worker ctx.log', () => {
     ctx.log.info('after failed step — live');
     expect(captured.records.map((r) => r.message)).toEqual(['after failed step — live']);
   });
+
+  describe('host log forwarding (#529)', () => {
+    it('routes a record to the host forwarder INSTEAD of the worker console', () => {
+      const forwarded: Array<{ message: string }> = [];
+      const ctx = createWorkerWorkflowContext(
+        { workflowId: 'wf-fwd', workflowType: 'fwd', input: null },
+        new AbortController(),
+        () => undefined,
+        (record) => forwarded.push({ message: record.message }),
+      );
+
+      ctx.log.info('to-host', { phase: 'init' });
+
+      expect(forwarded).toEqual([{ message: 'to-host' }]);
+      // The shared factory routes to the sink instead of console.
+      expect(captured.records).toHaveLength(0);
+    });
+
+    it('does NOT forward a replay-suppressed record', () => {
+      const forwarded: string[] = [];
+      let liveReplayState: WorkerLoggerReplayState | undefined;
+      const ctx = createWorkerWorkflowContext(
+        { workflowId: 'wf-fwd-replay', workflowType: 'fwd', input: null },
+        new AbortController(),
+        () => liveReplayState,
+        (record) => forwarded.push(record.message),
+      );
+
+      liveReplayState = {
+        accumulatedResults: new Map([[0, 'cached']]),
+        failedOutcomes: new Map(),
+        nextStepIndex: 0,
+      };
+      ctx.log.info('replaying — suppressed');
+      expect(forwarded).toEqual([]);
+
+      liveReplayState = {
+        accumulatedResults: new Map([[0, 'cached']]),
+        failedOutcomes: new Map(),
+        nextStepIndex: 1,
+      };
+      ctx.log.info('live — forwarded');
+      expect(forwarded).toEqual(['live — forwarded']);
+    });
+
+    it('falls back to the worker console when the host forwarder throws', () => {
+      const ctx = createWorkerWorkflowContext(
+        { workflowId: 'wf-fwd-throw', workflowType: 'fwd', input: null },
+        new AbortController(),
+        () => undefined,
+        () => {
+          throw new Error('postMessage failed (oversize)');
+        },
+      );
+
+      // A throwing forwarder (e.g. oversize record makes postMessage throw) must not
+      // crash the run; the shared factory's try/catch falls the record back to console.
+      ctx.log.warn('forward-failed');
+
+      expect(captured.records.map((r) => r.message)).toEqual(['forward-failed']);
+    });
+
+    it('stamps the run turn id on a forwarded log via handleRunMessage + postLog', async () => {
+      const context = createWorkflowRunnerContext();
+      const posted: Array<{ turnId: number | undefined; record: { message: string } }> = [];
+      async function* loggingWorkflow(ctx: WorkerWorkflowContext) {
+        ctx.log.info('turn-run');
+        return 'done';
+      }
+
+      await handleRunMessage(
+        context,
+        { workflowId: 'wf-turn', workflowType: 'turn', input: null, turnId: 11 },
+        () => loggingWorkflow,
+        (message) => posted.push({ turnId: message.turnId, record: message.record }),
+      );
+
+      expect(posted).toEqual([
+        { turnId: 11, record: expect.objectContaining({ message: 'turn-run' }) },
+      ]);
+    });
+
+    it('refreshes the turn id across a resume so a resumed-turn log stamps the new turn', async () => {
+      const context = createWorkflowRunnerContext();
+      const posted: Array<number | undefined> = [];
+      const op = activityOperation('wf-turn-resume', 'step1', 'one');
+      async function* loggingWorkflow(ctx: WorkerWorkflowContext) {
+        const result: unknown = yield op;
+        ctx.log.info('after-resume');
+        return result;
+      }
+
+      // Run turn (turnId 1): parks on the activity, no log yet.
+      await handleRunMessage(
+        context,
+        { workflowId: 'wf-turn-resume', workflowType: 'turn', input: null, turnId: 1 },
+        () => loggingWorkflow,
+        (message) => posted.push(message.turnId),
+      );
+      expect(posted).toEqual([]);
+
+      // Resume turn (turnId 2): the log after resume must stamp turnId 2, not 1.
+      await handleResumeMessage(context, {
+        workflowId: 'wf-turn-resume',
+        result: 'one-result',
+        turnId: 2,
+      });
+      expect(posted).toEqual([2]);
+    });
+
+    it('clears the turn state on terminal cleanup (no per-workflow leak)', async () => {
+      const context = createWorkflowRunnerContext();
+      async function* completingWorkflow() {
+        return 'done';
+      }
+
+      const result = await handleRunMessage(
+        context,
+        { workflowId: 'wf-leak', workflowType: 'leak', input: null, turnId: 1 },
+        () => completingWorkflow,
+        () => {},
+      );
+
+      // A completed run is cleaned through cleanupWorkflowRunnerState — the replay
+      // state (which now holds the turn id) must not linger, so the host-log routing
+      // adds no per-workflow leak in a long-lived pooled worker (#529).
+      expect(result.type).toBe('completed');
+      expect(context.replayStates.has('wf-leak')).toBe(false);
+      expect(context.generators.has('wf-leak')).toBe(false);
+      expect(context.abortControllers.has('wf-leak')).toBe(false);
+    });
+  });
 });

@@ -468,7 +468,11 @@ export class Engine<
       registerCancelHandler: (workflowId, handler) =>
         registerCancelHandler(getInternals(this), workflowId, handler),
       getWorkflowServices: (workflowId) => getInternals(this).workflowServices.get(workflowId),
-      getLogSink: () => getInternals(this).options.onLog ?? undefined,
+      // Capture the resolved-options local, not `getInternals(this).options` (assigned
+      // later in this constructor): the worker path resolves the sink eagerly during
+      // bundle construction, before that field is set. `onLog` has no setter, so the
+      // captured value never goes stale; it is the same object stored on internals. (#529)
+      getLogSink: () => resolvedOptions.onLog ?? undefined,
     });
     getInternals(this).storage = storage;
     getInternals(this).abortController = new AbortController();
