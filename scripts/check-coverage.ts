@@ -1650,7 +1650,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowa
     // covered by focused unit tests. Bun still reports the generator loop's
     // closing brace as uncovered after the retry back-edge executes.
     'src/core/context/run-operation.ts',
-    { lines: new Set([356]) },
+    { lines: new Set([366]) },
   ],
   [
     'src/core/engine/activity-reconciliation.ts',
