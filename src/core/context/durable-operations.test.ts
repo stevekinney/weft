@@ -14,7 +14,7 @@ function createContext(overrides: Partial<ConstructorParameters<typeof Context>[
   });
 }
 
-describe('durable sleep helper', () => {
+describe('durable operation helpers', () => {
   it('yields the prepared sleep request and caches the completion step', () => {
     const context = createContext({ getNow: () => 5_000 });
     const internals = getInternals(context);

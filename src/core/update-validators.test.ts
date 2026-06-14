@@ -288,7 +288,7 @@ describe('update validators (pre-acceptance)', () => {
 
   it('rejects via the pending-drain path when the late validator throws', async () => {
     const approve = update<{ id: string }>('approve');
-    const engine = makeEngine();
+    await using engine = makeEngine();
     const observed: unknown[] = [];
 
     engine.register(
@@ -322,13 +322,11 @@ describe('update validators (pre-acceptance)', () => {
     expect(result.result).toBeUndefined();
     expect(result.error).toContain('id is required');
     expect(observed).toHaveLength(0);
-
-    engine[Symbol.dispose]();
   });
 
   it('rejects via the pending-drain path when the late validator returns Standard Schema issues', async () => {
     const rename = update<{ name: string }>('rename');
-    const engine = makeEngine();
+    await using engine = makeEngine();
 
     engine.register(
       workflow({ name: 'late-register-schema-reject' }).execute(async function* (
@@ -351,13 +349,11 @@ describe('update validators (pre-acceptance)', () => {
     const result = await pending;
     expect(result.result).toBeUndefined();
     expect(result.error).toContain('name rejected');
-
-    engine[Symbol.dispose]();
   });
 
   it('captures a late pending-handler failure after registration', async () => {
     const explode = update<{ name: string }>('explode');
-    const engine = makeEngine();
+    await using engine = makeEngine();
 
     engine.register(
       workflow({ name: 'late-register-handler-failure' }).execute(async function* (
@@ -380,8 +376,6 @@ describe('update validators (pre-acceptance)', () => {
     const result = await pending;
     expect(result.result).toBeUndefined();
     expect(result.error).toBe('handler boom');
-
-    engine[Symbol.dispose]();
   });
 
   it('UpdateValidationError carries updateName and issues', () => {
