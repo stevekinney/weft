@@ -132,16 +132,18 @@ export function readCoveragePathIgnorePatterns(): string[] {
 
 /**
  * Whether an allowance key (a repo-relative file path) would be excluded by a
- * `coveragePathIgnorePatterns` entry, mirroring how Bun matches the pattern against an
- * LCOV file path: a glob pattern (containing `*`) matches via {@link Glob}, and a plain
- * pattern matches as a substring of the path (Bun treats a bare string as a contained
- * fragment, so `"scripts/check-coverage.ts"` excludes that file at any path depth).
+ * `coveragePathIgnorePatterns` entry. Bun matches these patterns against LCOV file paths
+ * as GLOBS — NOT substrings — so this uses {@link Glob} for every pattern. Verified
+ * empirically (see the characterization test in `check-coverage.test.ts`): a bare
+ * `nested` does NOT exclude `sub/nested-file.ts` (a substring matcher would wrongly flag
+ * it — a false positive), while `*`, `?`, `[…]`, and `**` all behave as glob
+ * metacharacters (a `*`-only matcher would miss `?`/`[…]` — a false negative). An exact
+ * filename like `scripts/check-coverage.ts` is a glob with no metacharacters and matches
+ * the literal path. Matching Bun exactly is the whole point: a mismatch produces either a
+ * dead allowance that slips through or a live allowance wrongly rejected.
  */
 function allowanceKeyMatchesIgnorePattern(key: string, pattern: string): boolean {
-  if (pattern.includes('*')) {
-    return new Glob(pattern).match(key);
-  }
-  return key === pattern || key.includes(pattern);
+  return new Glob(pattern).match(key);
 }
 
 /**

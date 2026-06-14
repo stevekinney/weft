@@ -332,14 +332,31 @@ describe('assertNoAllowanceKeyIsCoverageIgnored', () => {
     ).toThrow(/matches coveragePathIgnorePatterns entry "src\/generated\/\*\*"/);
   });
 
-  it('matches a bare pattern as a contained path fragment (Bun substring semantics)', () => {
-    // Bun treats a plain (non-glob) entry as a substring of the LCOV path, so an entry
-    // excludes the file at any directory depth.
+  it('matches `?` and `[…]` glob metacharacters, not just `*`', () => {
+    // Bun matches coveragePathIgnorePatterns as globs, so `?` and character classes are
+    // metacharacters too — a `*`-only matcher would miss these (a false negative).
     expect(() =>
-      assertNoAllowanceKeyIsCoverageIgnored(new Map([['nested/scripts/check-coverage.ts', {}]]), [
-        'scripts/check-coverage.ts',
+      assertNoAllowanceKeyIsCoverageIgnored(new Map([['src/question.ts', {}]]), [
+        'src/qu?stion.ts',
       ]),
     ).toThrow(/matches coveragePathIgnorePatterns entry/);
+    expect(() =>
+      assertNoAllowanceKeyIsCoverageIgnored(new Map([['src/bracket-x.ts', {}]]), [
+        'src/bracket-[xy].ts',
+      ]),
+    ).toThrow(/matches coveragePathIgnorePatterns entry/);
+  });
+
+  it('does NOT treat a bare pattern as a substring (Bun uses glob, not substring, matching)', () => {
+    // The crux: Bun does NOT substring-match. A bare `nested` does not exclude
+    // `sub/nested-file.ts` (verified empirically — see the characterization test below),
+    // so a substring matcher would WRONGLY reject a live allowance here.
+    expect(() =>
+      assertNoAllowanceKeyIsCoverageIgnored(new Map([['src/sub/nested-file.ts', {}]]), ['nested']),
+    ).not.toThrow();
+    expect(() =>
+      assertNoAllowanceKeyIsCoverageIgnored(new Map([['src/exact-match.ts', {}]]), ['match']),
+    ).not.toThrow();
   });
 
   it('does not throw when no allowance key matches an ignore pattern', () => {
@@ -360,11 +377,91 @@ describe('assertNoAllowanceKeyIsCoverageIgnored', () => {
     ).not.toThrow();
   });
 
-  it('passes the live repository allowance set against the live ignore patterns', () => {
-    // The real guard at module load already enforces this; pinning it as a test makes
-    // a future dead allowance fail here too (not only when check-coverage.ts is run).
-    expect(() =>
-      assertNoAllowanceKeyIsCoverageIgnored(new Map(), readCoveragePathIgnorePatterns()),
-    ).not.toThrow();
+  it('the live module loads — its load-time guard accepts the real allowance set', async () => {
+    // The guard runs at module load against the REAL assembled COVERAGE_ALLOWANCES. A
+    // fresh dynamic import re-executes that top-level guard; a future dead allowance
+    // (a real allowance key matching a real ignore pattern) makes this import throw, so
+    // the regression is caught here, not only when `check-coverage.ts` is run directly.
+    await expect(import('./check-coverage.ts?live-guard')).resolves.toBeDefined();
   });
+});
+
+describe('allowanceKeyMatchesIgnorePattern agrees with Bun coverage-ignore semantics', () => {
+  // Characterization test: the guard's correctness depends ENTIRELY on matching how Bun
+  // actually applies coveragePathIgnorePatterns. Rather than trust a hand-modeled matcher,
+  // run real `bun test --coverage` against temp fixtures with representative patterns,
+  // observe which files Bun excludes from LCOV, and assert assertNoAllowanceKeyIsCoverageIgnored
+  // throws for exactly the excluded files (and not the kept ones).
+  it('matches Bun for exact, *, ?, [], **, and bare-substring patterns', async () => {
+    const { mkdtemp, writeFile, mkdir, rm } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+
+    const root = await mkdtemp(join(tmpdir(), 'weft-cov-char-'));
+    try {
+      await mkdir(join(root, 'sub'), { recursive: true });
+      const files = [
+        'exact-match.ts',
+        'sub/nested-file.ts',
+        'question.ts',
+        'bracket-x.ts',
+        'plain-substr.ts',
+      ];
+      for (const [index, file] of files.entries()) {
+        await writeFile(
+          join(root, file),
+          `export const v${String(index)} = () => ${String(index)};\n`,
+        );
+      }
+      const imports = files
+        .map((file, index) => `import { v${String(index)} } from './${file}';`)
+        .join('\n');
+      await writeFile(
+        join(root, 'all.test.ts'),
+        `import { test, expect } from 'bun:test';\n${imports}\n` +
+          `test('t', () => { expect([${files.map((_f, i) => `v${String(i)}`).join(',')}].length).toBe(${String(files.length)}); });\n`,
+      );
+
+      // Representative patterns spanning every matcher class Bun supports.
+      const patterns = [
+        'exact-match.ts',
+        '*.ts',
+        'qu?stion.ts',
+        'bracket-[xy].ts',
+        'sub/**',
+        'nested', // bare substring — Bun does NOT exclude on this
+      ];
+
+      for (const pattern of patterns) {
+        await writeFile(
+          join(root, 'bunfig.toml'),
+          `[test]\ncoveragePathIgnorePatterns = ["${pattern}"]\n`,
+        );
+        await rm(join(root, 'coverage'), { recursive: true, force: true });
+        await Bun.$`bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage`
+          .cwd(root)
+          .quiet()
+          .nothrow();
+        const lcov = await Bun.file(join(root, 'coverage', 'lcov.info')).text();
+        const bunExcluded = new Set(
+          files.filter((file) => !lcov.split('\n').some((line) => line === `SF:${file}`)),
+        );
+
+        // The guard must throw for exactly the files Bun excluded, and not for the kept.
+        for (const file of files) {
+          const run = () => assertNoAllowanceKeyIsCoverageIgnored(new Map([[file, {}]]), [pattern]);
+          if (bunExcluded.has(file)) {
+            expect(run, `guard should flag "${file}" excluded by Bun for "${pattern}"`).toThrow();
+          } else {
+            expect(
+              run,
+              `guard should NOT flag "${file}" kept by Bun for "${pattern}"`,
+            ).not.toThrow();
+          }
+        }
+      }
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
 });
