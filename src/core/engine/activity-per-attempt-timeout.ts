@@ -55,8 +55,9 @@ function composeActivitySignal(
   const signals = [workflowSignal, attemptSignal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
-  if (signals.length === 0) return new AbortController().signal;
-  if (signals.length === 1) return signals[0]!;
+  const [first] = signals;
+  if (first === undefined) return new AbortController().signal;
+  if (signals.length === 1) return first;
   return AbortSignal.any(signals);
 }
 
@@ -93,11 +94,14 @@ export async function withPerAttemptTimeout(
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       const error = new ActivityPerAttemptTimeoutError(activityName, attempt, timeoutMs);
-      // Abort the PER-ATTEMPT controller only — never the workflow-wide one — so a
-      // cooperating activity sees its signal flip without the workflow being
-      // cancelled and without poisoning the next retry's signal.
-      attemptAbortController?.abort(error);
+      // Reject the deadline BEFORE aborting the controller. Aborting can
+      // synchronously settle the activity promise from its own abort listener; if
+      // that settlement reached `Promise.race` first, a timed-out attempt could
+      // resolve to the activity's value or to an activity-specific abort error
+      // instead of the timeout error. Rejecting first locks the timeout error in as
+      // the race winner; the abort is then a best-effort cooperative stop signal.
       reject(error);
+      attemptAbortController?.abort(error);
     }, timeoutMs);
   });
   try {

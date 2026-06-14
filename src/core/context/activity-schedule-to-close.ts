@@ -109,13 +109,22 @@ export class ActivityPerAttemptTimeoutError extends WeftError<'ActivityPerAttemp
 }
 
 /**
+ * The largest delay a single `setTimeout` can represent without 32-bit overflow.
+ * A delay above this silently wraps and fires almost immediately, so a per-attempt
+ * `timeout` larger than this is rejected rather than misbehaving. (~24.8 days.)
+ */
+export const MAX_PER_ATTEMPT_TIMEOUT_MS = 2_147_483_647;
+
+/**
  * Parse a per-attempt `timeout` duration to milliseconds, or `undefined` when
  * unset. The value is read off the serialized activity operation, so it is typed
  * `unknown` and validated here as hostile input: only a `number`/`string`
  * {@link Duration} is accepted, and `parseDuration` enforces finite/non-negative
  * so the cap can never silently become `NaN`/`Infinity`/negative. A `0`ms cap is
  * rejected as meaningless (it would expire an attempt before it could run) —
- * callers must omit `timeout` to disable the cap rather than passing `0`.
+ * callers must omit `timeout` to disable the cap rather than passing `0` — and a
+ * value above {@link MAX_PER_ATTEMPT_TIMEOUT_MS} is rejected because it would
+ * overflow the underlying `setTimeout` and fire almost immediately.
  */
 export function parsePerAttemptTimeoutMs(timeout: unknown): number | undefined {
   if (timeout === undefined) return undefined;
@@ -128,6 +137,11 @@ export function parsePerAttemptTimeoutMs(timeout: unknown): number | undefined {
   if (ms <= 0) {
     throw new Error(
       `Activity timeout must be greater than 0ms when set (got ${ms}ms); omit it to disable the per-attempt cap.`,
+    );
+  }
+  if (ms > MAX_PER_ATTEMPT_TIMEOUT_MS) {
+    throw new Error(
+      `Activity timeout of ${ms}ms exceeds the maximum supported per-attempt cap of ${MAX_PER_ATTEMPT_TIMEOUT_MS}ms (~24.8 days).`,
     );
   }
   return ms;
