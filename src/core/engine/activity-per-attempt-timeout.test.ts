@@ -340,10 +340,12 @@ describe('#494 per-attempt timeout', () => {
     // per-attempt cap remains a tiny REAL timer: it just has to fire to end each
     // attempt, and it never gates the budget decision (which reads `getNow` only).
     //
-    // Each attempt advances the virtual clock by 400ms against the 1000ms budget:
-    //   attempt 1 fails at now=400  -> next dispatch projects 400 < 1000 -> retry
-    //   attempt 2 fails at now=800  -> next dispatch projects 800 < 1000 -> retry
-    //   attempt 3 fails at now=1200 -> next dispatch projects 1200 >= 1000 -> close
+    // Each attempt advances the virtual clock by 400ms; the budget is measured as
+    // ELAPSED time from the first dispatch (clock starts at an arbitrary 1_000_000
+    // baseline), checked against the 1000ms budget at the retry boundary:
+    //   attempt 1 fails at +400ms  -> next dispatch projects +400 < 1000 -> retry
+    //   attempt 2 fails at +800ms  -> next dispatch projects +800 < 1000 -> retry
+    //   attempt 3 fails at +1200ms -> next dispatch projects +1200 >= 1000 -> close
     // So exactly 3 attempts run before the budget bars the next retry (well short of
     // maxAttempts: 5), and the terminal error is the budget error, not per-attempt.
     let now = 1_000_000;
