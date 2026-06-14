@@ -18,7 +18,7 @@
  * `--emit-snapshot <path>` writes a tab-separated audit artifact of every
  * directive in enforcement scope. The flag is scan-only: it never enforces a
  * ceiling or rationale length, regardless of `--max`. Use it to capture
- * pre-/post-refactor inventories without blocking the audit on legacy state.
+ * pre-/post-refactor inventories without blocking the audit on the current state.
  *
  * `--root <path>` sets the directory the scanner walks. Defaults to the
  * repository root. Used by the script's own tests to point at fixture trees

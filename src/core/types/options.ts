@@ -12,6 +12,7 @@ import type {
   WorkflowServicesResolution,
   WorkflowServicesResolverInfo,
 } from './services-resolution.ts';
+import type { WorkflowLogRecord } from './workflow-log.ts';
 
 // ---------------------------------------------------------------------------
 // Start options for engine.start()
@@ -349,4 +350,16 @@ export interface EngineOptions<TServices = unknown> {
   resolveWorkflowServices?: (
     info: WorkflowServicesResolverInfo,
   ) => WorkflowServicesResolution<TServices> | Promise<WorkflowServicesResolution<TServices>>;
+  /**
+   * Optional host sink for `ctx.log` records. When provided, every non-replayed
+   * record from inline workflow execution is routed here (into your pino / winston
+   * / OpenTelemetry stack, etc.) **instead of** the console; when omitted, records
+   * fall back to the matching `console` method, preserving the default behavior.
+   *
+   * Engine-scoped infrastructure: set once at construction, never per run. The sink
+   * is not invoked for records suppressed during replay, so a recovered run does
+   * not re-emit its replayed prefix. Worker-mode records still log to the worker
+   * process's console — routing them back to the host is tracked separately.
+   */
+  onLog?: (record: WorkflowLogRecord) => void;
 }

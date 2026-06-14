@@ -12,6 +12,7 @@
  */
 import { describe, expect, it } from 'bun:test';
 
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import {
   ActivityPerAttemptTimeoutError,
   MAX_PER_ATTEMPT_TIMEOUT_MS,
@@ -222,21 +223,143 @@ describe('#494 per-attempt timeout', () => {
     expect(attempts).toBe(2);
   });
 
+  it('aborts ctx.signal and fails with cancellation (not timeout) when the workflow is cancelled mid-attempt', async () => {
+    // #528: the workflow-cancel × per-attempt-timeout composite-signal path. The
+    // activity's `ctx.signal` is `AbortSignal.any([workflowSignal, attemptSignal])`,
+    // so workflow cancellation must propagate through the composite to abort it —
+    // and the run must fail with a CANCELLATION error, not a per-attempt timeout.
+    // The per-attempt cap is generous (10s) so the cancel deterministically wins:
+    // the timer never fires in-test, so there is no timeout-error contamination.
+    await using engine = new Engine();
+    let activityStarted = false;
+    let signalAborted = false;
+
+    const watchesCancel = activity({
+      name: 'watchesCancel',
+      timeout: 10_000,
+      execute: async (_input?: unknown, ctx?: ActivityContext) => {
+        activityStarted = true;
+        ctx?.signal.addEventListener('abort', () => {
+          signalAborted = true;
+        });
+        // Reject when the composite signal aborts, modeling a cooperating activity
+        // that bails on cancellation (so the run tears down rather than hanging).
+        await new Promise<void>((_resolve, reject) => {
+          ctx?.signal.addEventListener('abort', () =>
+            reject(ctx.signal.reason ?? new Error('aborted')),
+          );
+        });
+        return 'never-reached';
+      },
+    });
+
+    engine.register(
+      workflow({ name: 'cancel-mid-attempt-wf' })
+        .activities({ watchesCancel })
+        .execute(async function* (ctx: WorkflowContext) {
+          return yield* ctx.run(watchesCancel);
+        }),
+    );
+
+    const handle = await engine.start('cancel-mid-attempt-wf', null, { id: 'cancel-mid-1' });
+    await waitForCondition(() => activityStarted, {
+      timeoutMs: 2000,
+      label: 'activity started before cancel',
+    });
+    // Subscribe to the result BEFORE cancelling so the rejection is observed, not an
+    // unhandled rejection. Cancel deterministically while the activity runs, well
+    // before the 10s per-attempt cap could fire.
+    const settled = handle.result().then(
+      () => 'resolved',
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    await engine.cancel('cancel-mid-1');
+
+    // Workflow cancellation propagated through the composite signal to the activity.
+    await waitForCondition(() => signalAborted, {
+      timeoutMs: 2000,
+      label: 'activity signal aborted on workflow cancel',
+    });
+    expect(signalAborted).toBe(true);
+    // The run fails with the cancellation error, NOT the per-attempt timeout error.
+    expect(await settled).toBe('Workflow cancelled');
+    const cancelled = await engine.get('cancel-mid-1');
+    expect(cancelled?.status).toBe('cancelled');
+  });
+
+  it('a per-attempt timeout abort does not poison the workflow controller (next retry signal is live)', async () => {
+    // #528: `AbortSignal.any` is uni-directional. Aborting the per-attempt
+    // controller must NOT reach back to the workflow's `AbortController`, so the
+    // NEXT retry gets a fresh, un-aborted `ctx.signal`. Capture `ctx.signal.aborted`
+    // synchronously at attempt-2 entry: `false` proves both that the fresh
+    // per-attempt controller is not pre-aborted AND that attempt 1's timeout abort
+    // did not poison the workflow-wide signal.
+    await using engine = new Engine();
+    let attempts = 0;
+    let secondAttemptSignalAbortedAtEntry: boolean | undefined;
+
+    const timesOutThenInspects = activity({
+      name: 'timesOutThenInspects',
+      timeout: 50,
+      retry: { maxAttempts: 3, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0 },
+      execute: async (_input?: unknown, ctx?: ActivityContext) => {
+        attempts += 1;
+        if (attempts === 1) return hangForever(ctx?.signal); // first attempt overruns the cap
+        // Second attempt: record whether the fresh signal is already aborted.
+        secondAttemptSignalAbortedAtEntry = ctx?.signal.aborted;
+        return 'recovered';
+      },
+    });
+
+    engine.register(
+      workflow({ name: 'no-poison-wf' })
+        .activities({ timesOutThenInspects })
+        .execute(async function* (ctx: WorkflowContext) {
+          return yield* ctx.run(timesOutThenInspects);
+        }),
+    );
+
+    const handle = await engine.start('no-poison-wf', null, { id: 'no-poison-1' });
+    await expect(handle.result()).resolves.toBe('recovered');
+    expect(attempts).toBe(2);
+    // The retry's fresh signal was NOT aborted — the timeout abort stayed contained
+    // to attempt 1's per-attempt controller.
+    expect(secondAttemptSignalAbortedAtEntry).toBe(false);
+  });
+
   it('composes with scheduleToCloseTimeout: per-attempt cap fires, retry runs, then the cross-attempt budget closes it', async () => {
     // `timeout` (per-attempt) and `scheduleToCloseTimeout` (cross-attempt budget)
-    // are orthogonal. Here every attempt overruns the 50ms per-attempt cap; the
-    // 120ms cross-attempt budget then bars a further retry at the retry boundary,
-    // so the run fails on the budget after more than one attempt has run.
-    await using engine = new Engine();
+    // are orthogonal. Every attempt overruns the tiny per-attempt cap; the
+    // cross-attempt budget then bars a further retry at the retry boundary, so the
+    // run fails on the budget after more than one attempt has run.
+    //
+    // The budget is driven by a CONTROLLED clock (`getNow`), not real wall time, so
+    // the close happens at a PRECISE attempt count regardless of CPU contention —
+    // the previous real-timer ratio (50ms cap vs 120ms budget) was flake-prone
+    // because a single attempt could overrun the budget under load (#528). Only the
+    // per-attempt cap remains a tiny REAL timer: it just has to fire to end each
+    // attempt, and it never gates the budget decision (which reads `getNow` only).
+    //
+    // Each attempt advances the virtual clock by 400ms; the budget is measured as
+    // ELAPSED time from the first dispatch (clock starts at an arbitrary 1_000_000
+    // baseline), checked against the 1000ms budget at the retry boundary:
+    //   attempt 1 fails at +400ms  -> next dispatch projects +400 < 1000 -> retry
+    //   attempt 2 fails at +800ms  -> next dispatch projects +800 < 1000 -> retry
+    //   attempt 3 fails at +1200ms -> next dispatch projects +1200 >= 1000 -> close
+    // So exactly 3 attempts run before the budget bars the next retry (well short of
+    // maxAttempts: 5), and the terminal error is the budget error, not per-attempt.
+    let now = 1_000_000;
+    await using engine = new Engine({ getNow: () => now });
     let attempts = 0;
 
     const alwaysHangs = activity({
       name: 'alwaysHangs',
-      timeout: 50,
-      scheduleToCloseTimeout: 120,
+      timeout: 20,
+      scheduleToCloseTimeout: 1000,
       retry: { maxAttempts: 5, initialBackoff: 0, backoffMultiplier: 1, maxBackoff: 0 },
       execute: async (_input?: unknown, ctx?: ActivityContext) => {
         attempts += 1;
+        now += 400;
         return hangForever(ctx?.signal);
       },
     });
@@ -251,11 +374,12 @@ describe('#494 per-attempt timeout', () => {
 
     const handle = await engine.start('compose-wf', null, { id: 'compose-1' });
     // The terminal failure is the cross-attempt budget (scheduleToCloseTimeout),
-    // reached after several per-attempt timeouts consumed the budget.
+    // reached after the per-attempt timeouts consumed the budget.
     await expect(handle.result()).rejects.toThrow('scheduleToCloseTimeout budget');
-    // More than one attempt ran — the per-attempt cap did not collapse the run on
-    // attempt 1; retries happened until the budget barred the next one.
-    expect(attempts).toBeGreaterThan(1);
+    // Exactly three attempts ran: the per-attempt cap did not collapse the run on
+    // attempt 1, and the budget barred the fourth at the retry boundary. Pinning the
+    // exact count (not just > 1) locks in the deterministic virtual-clock timeline.
+    expect(attempts).toBe(3);
   });
 
   it('classifies the per-attempt timeout error as a timeout failure category', () => {

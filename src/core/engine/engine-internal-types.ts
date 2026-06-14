@@ -53,6 +53,11 @@ export interface ResolvedOptions {
    * when the engine was created without `resolveWorkflowServices`.
    */
   resolveWorkflowServices: EngineOptions['resolveWorkflowServices'] | null;
+  /**
+   * Host sink for `ctx.log` records (`EngineOptions.onLog`); `null` when the engine
+   * was created without one (the default console behavior).
+   */
+  onLog: EngineOptions['onLog'] | null;
 }
 
 export interface WorkflowResultWaiter {

@@ -279,9 +279,9 @@ describe('persisted data schema gate', () => {
     expect((caught as PersistedDataIncompatibleError).foundVersion).toBeNull();
   });
 
-  it('Engine.create rejects legacy user data when no schema version sentinel exists', async () => {
+  it('Engine.create rejects unstamped user data when no schema version sentinel exists', async () => {
     const storage = new MemoryStorage();
-    await storage.put(KEYS.workflow('legacy-workflow'), new Uint8Array());
+    await storage.put(KEYS.workflow('unstamped-workflow'), new Uint8Array());
 
     let caught: unknown;
     try {

@@ -71,9 +71,9 @@ const CURSOR_PATTERN = /^(?:-1|\d+)$/;
  * current encoding is the decimal string form of the sequence, matching
  * the existing `sequence-cursor.ts` public representation so REST
  * `Last-Event-ID` / `?after=` clients continue to work unchanged. The
- * encoding is intentionally not part of the public API — a future
- * migration to base64 / hex / compact binary can happen without
- * breaking anything that goes through this module.
+ * encoding is intentionally not part of the public API — a future change
+ * to base64 / hex / compact binary can happen without breaking anything
+ * that goes through this module.
  */
 export function encodeCursor(sequence: number): Cursor {
   if (!Number.isInteger(sequence) || sequence < 0) {

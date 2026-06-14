@@ -116,6 +116,19 @@ async function waitForStatus(
   );
 }
 
+// Continuation tokens minted at `initialize` (#525). Anonymous sessions require the
+// token on every follow-up request; `mcpPost` / `jsonRequest` attach the one captured
+// for a session id so the existing helpers keep threading a bare `sessionId` string.
+const sessionTokens = new Map<string, string>();
+
+// Record the continuation token a raw `initialize` response disclosed, so later
+// direct-handler requests for that session id pick it up via `jsonRequest`.
+function rememberSessionToken(response: Response, sessionId: string | null): void {
+  if (sessionId === null) return;
+  const token = response.headers.get('Mcp-Session-Token');
+  if (token !== null) sessionTokens.set(sessionId, token);
+}
+
 async function initialize(server: WeftServer, headers?: HeadersInit): Promise<string> {
   const requestHeaders = new Headers(headers);
   requestHeaders.set('accept', 'application/json, text/event-stream');
@@ -138,6 +151,10 @@ async function initialize(server: WeftServer, headers?: HeadersInit): Promise<st
   expect(response.status).toBe(200);
   const sessionId = response.headers.get('Mcp-Session-Id');
   expect(sessionId).toBeTruthy();
+  // The continuation token is disclosed on the initialize response (and nowhere else).
+  const sessionToken = response.headers.get('Mcp-Session-Token');
+  expect(sessionToken).toBeTruthy();
+  sessionTokens.set(sessionId!, sessionToken!);
 
   const body = (await response.json()) as JsonRpcEnvelope;
   expect(body.error).toBeUndefined();
@@ -177,6 +194,10 @@ async function mcpPost(
   requestHeaders.set('content-type', 'application/json');
   requestHeaders.set('Mcp-Session-Id', sessionId);
   requestHeaders.set('Mcp-Protocol-Version', MCP_PROTOCOL_VERSION);
+  const token = sessionTokens.get(sessionId);
+  if (token !== undefined && !requestHeaders.has('Mcp-Session-Token')) {
+    requestHeaders.set('Mcp-Session-Token', token);
+  }
   return fetch(`${server.url}/mcp`, {
     method: 'POST',
     headers: requestHeaders,
@@ -586,6 +607,7 @@ describe('MCP Streamable HTTP transport', () => {
       headers: {
         accept: 'text/event-stream',
         'Mcp-Session-Id': sessionId,
+        'Mcp-Session-Token': sessionTokens.get(sessionId) ?? '',
         'Mcp-Protocol-Version': MCP_PROTOCOL_VERSION,
       },
       signal: controller.signal,
@@ -624,6 +646,7 @@ describe('MCP Streamable HTTP transport', () => {
       headers: {
         accept: 'text/event-stream',
         'Mcp-Session-Id': sessionId,
+        'Mcp-Session-Token': sessionTokens.get(sessionId) ?? '',
         'Mcp-Protocol-Version': MCP_PROTOCOL_VERSION,
       },
       signal: controller.signal,
@@ -941,6 +964,7 @@ describe('MCP Streamable HTTP transport', () => {
       expect(initialized.status).toBe(200);
       const sessionId = initialized.headers.get('Mcp-Session-Id');
       expect(sessionId).toBeTruthy();
+      rememberSessionToken(initialized, sessionId);
 
       const ready = await sendDirectInitializedNotification(engine, sessionManager, sessionId!);
       expect(ready.status).toBe(202);
@@ -975,6 +999,7 @@ describe('MCP Streamable HTTP transport', () => {
       expect(initialized.status).toBe(200);
       const sessionId = initialized.headers.get('Mcp-Session-Id');
       expect(sessionId).toBeTruthy();
+      rememberSessionToken(initialized, sessionId);
 
       const beforeReady = await handleMcpHttpRequest({
         request: jsonRequest(
@@ -1123,6 +1148,7 @@ describe('MCP Streamable HTTP transport', () => {
       const initialized = await initializeDirectHandlerSession(engine, sessionManager);
       const sessionId = initialized.headers.get('Mcp-Session-Id');
       expect(sessionId).toBeTruthy();
+      rememberSessionToken(initialized, sessionId);
 
       const wrongVersion = await handleMcpHttpRequest({
         request: jsonRequest(
@@ -1139,7 +1165,10 @@ describe('MCP Streamable HTTP transport', () => {
       const deleted = await handleMcpHttpRequest({
         request: new Request('http://localhost/mcp', {
           method: 'DELETE',
-          headers: { 'Mcp-Session-Id': sessionId! },
+          headers: {
+            'Mcp-Session-Id': sessionId!,
+            'Mcp-Session-Token': sessionTokens.get(sessionId!) ?? '',
+          },
         }),
         engine,
         sessionManager,
@@ -1216,6 +1245,7 @@ describe('MCP Streamable HTTP transport', () => {
       expect(initialized.status).toBe(200);
       const sessionId = initialized.headers.get('Mcp-Session-Id');
       expect(sessionId).toBeTruthy();
+      rememberSessionToken(initialized, sessionId);
 
       const ready = await handleMcpHttpRequest({
         request: jsonRequest({ jsonrpc: '2.0', method: 'notifications/initialized' }, sessionId!),
@@ -1286,6 +1316,207 @@ describe('MCP Streamable HTTP transport', () => {
   });
 });
 
+describe('MCP anonymous session continuation token (#525)', () => {
+  // Initialize an anonymous session via the direct handler and return its id + token.
+  async function initAnonymous(
+    engine: Engine,
+    sessionManager: McpSessionManager,
+  ): Promise<{ sessionId: string; token: string }> {
+    const initialized = await handleMcpHttpRequest({
+      request: jsonRequest({
+        jsonrpc: '2.0',
+        id: 'init',
+        method: 'initialize',
+        params: { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {} },
+      }),
+      engine,
+      sessionManager,
+      authRequired: false,
+    });
+    expect(initialized.status).toBe(200);
+    const sessionId = initialized.headers.get('Mcp-Session-Id');
+    const token = initialized.headers.get('Mcp-Session-Token');
+    expect(sessionId).toBeTruthy();
+    expect(token).toBeTruthy();
+    return { sessionId: sessionId!, token: token! };
+  }
+
+  function postWith(
+    engine: Engine,
+    sessionManager: McpSessionManager,
+    sessionId: string,
+    token: string | null,
+  ): Promise<Response> {
+    const headers = new Headers({
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+      'Mcp-Session-Id': sessionId,
+      'Mcp-Protocol-Version': MCP_PROTOCOL_VERSION,
+    });
+    if (token !== null) headers.set('Mcp-Session-Token', token);
+    return handleMcpHttpRequest({
+      request: new Request('http://localhost/mcp', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ jsonrpc: '2.0', id: 'list', method: 'tools/list', params: {} }),
+      }),
+      engine,
+      sessionManager,
+      authRequired: false,
+    });
+  }
+
+  function getWith(
+    engine: Engine,
+    sessionManager: McpSessionManager,
+    sessionId: string,
+    token: string | null,
+  ): Response | Promise<Response> {
+    const headers = new Headers({
+      accept: 'text/event-stream',
+      'Mcp-Session-Id': sessionId,
+      'Mcp-Protocol-Version': MCP_PROTOCOL_VERSION,
+    });
+    if (token !== null) headers.set('Mcp-Session-Token', token);
+    return handleMcpHttpRequest({
+      request: new Request('http://localhost/mcp', {
+        method: 'GET',
+        headers,
+        signal: AbortSignal.abort(),
+      }),
+      engine,
+      sessionManager,
+      authRequired: false,
+    });
+  }
+
+  function deleteWith(
+    engine: Engine,
+    sessionManager: McpSessionManager,
+    sessionId: string,
+    token: string | null,
+  ): Promise<Response> {
+    const headers = new Headers({ 'Mcp-Session-Id': sessionId });
+    if (token !== null) headers.set('Mcp-Session-Token', token);
+    return handleMcpHttpRequest({
+      request: new Request('http://localhost/mcp', { method: 'DELETE', headers }),
+      engine,
+      sessionManager,
+      authRequired: false,
+    });
+  }
+
+  it('discloses the continuation token only on the initialize response, never on continuation', async () => {
+    const engine = createEngine();
+    const sessionManager = createMcpSessionManager(engine);
+    try {
+      const { sessionId, token } = await initAnonymous(engine, sessionManager);
+      // A legitimate continuation POST succeeds but does NOT re-disclose the token —
+      // that exposure asymmetry (id leaks on every response, token does not) is the
+      // whole security gain.
+      const continuation = await postWith(engine, sessionManager, sessionId, token);
+      expect(continuation.status).toBe(200);
+      expect(continuation.headers.get('Mcp-Session-Token')).toBeNull();
+    } finally {
+      await sessionManager[Symbol.asyncDispose]();
+    }
+  });
+
+  it('rejects a second anonymous caller that knows the session id but lacks the token (POST/GET/DELETE)', async () => {
+    const engine = createEngine();
+    const sessionManager = createMcpSessionManager(engine);
+    try {
+      const { sessionId } = await initAnonymous(engine, sessionManager);
+
+      // No token at all.
+      const postNoToken = await postWith(engine, sessionManager, sessionId, null);
+      const getNoToken = await getWith(engine, sessionManager, sessionId, null);
+      const deleteNoToken = await deleteWith(engine, sessionManager, sessionId, null);
+      expect(postNoToken.status).toBe(403);
+      expect(getNoToken.status).toBe(403);
+      expect(deleteNoToken.status).toBe(403);
+
+      // A wrong token.
+      const postWrong = await postWith(engine, sessionManager, sessionId, 'not-the-token');
+      const getWrong = await getWith(engine, sessionManager, sessionId, 'not-the-token');
+      const deleteWrong = await deleteWith(engine, sessionManager, sessionId, 'not-the-token');
+      expect(postWrong.status).toBe(403);
+      expect(getWrong.status).toBe(403);
+      expect(deleteWrong.status).toBe(403);
+
+      // The session was never terminated by the unauthorized DELETEs.
+      expect(sessionManager.get(sessionId)).toBeDefined();
+    } finally {
+      await sessionManager[Symbol.asyncDispose]();
+    }
+  });
+
+  it('admits the legitimate anonymous caller with the token on POST, GET, and DELETE', async () => {
+    const engine = createEngine();
+    const sessionManager = createMcpSessionManager(engine);
+    try {
+      const { sessionId, token } = await initAnonymous(engine, sessionManager);
+      const posted = await postWith(engine, sessionManager, sessionId, token);
+      const got = await getWith(engine, sessionManager, sessionId, token);
+      expect(posted.status).toBe(200);
+      expect(got.status).toBe(200);
+      // DELETE is last — it terminates the session.
+      const deleted = await deleteWith(engine, sessionManager, sessionId, token);
+      expect(deleted.status).toBe(204);
+      expect(sessionManager.get(sessionId)).toBeUndefined();
+    } finally {
+      await sessionManager[Symbol.asyncDispose]();
+    }
+  });
+
+  it('continues an authenticated session without requiring the continuation token', async () => {
+    const engine = createEngine();
+    const sessionManager = createMcpSessionManager(engine);
+    const principal = principalFromJwtClaims({ sub: 'alice', scope: 'workflows:read' });
+    try {
+      const initialized = await handleMcpHttpRequest({
+        request: jsonRequest({
+          jsonrpc: '2.0',
+          id: 'init',
+          method: 'initialize',
+          params: { protocolVersion: MCP_PROTOCOL_VERSION, capabilities: {} },
+        }),
+        engine,
+        sessionManager,
+        principal,
+        authRequired: true,
+      });
+      expect(initialized.status).toBe(200);
+      const sessionId = initialized.headers.get('Mcp-Session-Id')!;
+
+      const ready = await handleMcpHttpRequest({
+        request: jsonRequest({ jsonrpc: '2.0', method: 'notifications/initialized' }, sessionId),
+        engine,
+        sessionManager,
+        principal,
+        authRequired: true,
+      });
+      expect(ready.status).toBe(202);
+
+      // Same authenticated principal, NO Mcp-Session-Token header — still admitted,
+      // because the credential that rebuilds the principal already isolates the session.
+      const continuation = await handleMcpHttpRequest({
+        request: jsonRequest(
+          { jsonrpc: '2.0', id: 'list', method: 'tools/list', params: {} },
+          sessionId,
+        ),
+        engine,
+        sessionManager,
+        principal,
+        authRequired: true,
+      });
+      expect(continuation.status).toBe(200);
+    } finally {
+      await sessionManager[Symbol.asyncDispose]();
+    }
+  });
+});
+
 async function readUntil(response: Response, expectedText: string): Promise<string> {
   const body = response.body;
   if (body === null) throw new Error('SSE response had no body');
@@ -1320,7 +1551,13 @@ function jsonRequest(
   for (const [key, value] of new Headers(headers ?? {})) {
     requestHeaders.set(key, value);
   }
-  if (sessionId !== undefined) requestHeaders.set('Mcp-Session-Id', sessionId);
+  if (sessionId !== undefined) {
+    requestHeaders.set('Mcp-Session-Id', sessionId);
+    const token = sessionTokens.get(sessionId);
+    if (token !== undefined && !requestHeaders.has('Mcp-Session-Token')) {
+      requestHeaders.set('Mcp-Session-Token', token);
+    }
+  }
   return new Request('http://localhost/mcp', {
     method: 'POST',
     headers: requestHeaders,
