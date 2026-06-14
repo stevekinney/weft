@@ -92,11 +92,13 @@ export class McpSession {
   readonly id: string;
   readonly principal: Principal;
   /**
-   * Per-session continuation secret minted at creation. Unlike {@link id} — which
-   * is returned on every response and so leaks through logs/proxies — this token is
-   * disclosed to the creating client exactly once (in the `initialize` response) and
-   * never echoed afterward. The HTTP transport requires it alongside the session id
-   * on every continuation request for sessions whose principal carries no other
+   * Per-session continuation secret minted at creation. The session {@link id} is
+   * sent by the client on *every* continuation request (POST/GET/DELETE), so it is
+   * routinely exposed to proxy and access logs and is not, by itself, a credential.
+   * This token is the credential: it is disclosed to the creating client exactly
+   * once — in the `initialize` response — and never echoed on a continuation
+   * response. The HTTP transport requires it alongside the session id on every
+   * continuation request for sessions whose principal carries no other
    * distinguishing secret (anonymous sessions under `authRequired: false`), so a
    * leaked session id alone cannot drive, read, or terminate another caller's
    * session. Authenticated sessions already re-present their credential per request

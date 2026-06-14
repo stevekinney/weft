@@ -308,8 +308,10 @@ function maybeSessionHeaders(session: McpSession, includeSession: boolean): Head
     // The continuation token is disclosed exactly once — on the `initialize`
     // response that creates the session (`includeSession` is `createdSession`) — and
     // is deliberately NOT echoed on any later response. That exposure asymmetry is
-    // the security gain: the session id leaks on every response, the token does not,
-    // so a leaked id alone cannot continue another caller's anonymous session.
+    // the security gain: the client must send the session id on every continuation
+    // request (so it is routinely exposed to proxy/access logs), while the token is
+    // disclosed only here, so a leaked id alone cannot continue another caller's
+    // anonymous session.
     headers['Mcp-Session-Token'] = session.token;
   }
   return headers;
