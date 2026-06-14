@@ -20,7 +20,11 @@ const CONSOLE_METHOD: Record<WorkflowLogLevel, 'debug' | 'info' | 'warn' | 'erro
   error: 'error',
 };
 
-/** Inputs the logger needs at construction; all sourced fresh per emit call. */
+/**
+ * Inputs the logger needs at construction. The replay/clock probes (`isReplaying`,
+ * `now`) are evaluated fresh per emit so they track the live frontier; the identity
+ * fields (`workflowId`, `workflowType`) and the `sink` are fixed values.
+ */
 export interface WorkflowLoggerBindings {
   readonly workflowId: string;
   readonly workflowType: string;

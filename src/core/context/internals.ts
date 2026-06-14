@@ -31,7 +31,9 @@ export interface ContextInternals {
   services: unknown;
   /**
    * Host sink for `ctx.log` records (`EngineOptions.onLog`), or `undefined` for the
-   * default console behavior. Read fresh by the `ctx.log` factory at emit time.
+   * default console behavior. Captured by value when the `ctx.log` getter first
+   * builds its logger; `onLog` is fixed at engine construction, so there is nothing
+   * to re-read per emit.
    */
   logSink: ((record: WorkflowLogRecord) => void) | undefined;
 }
