@@ -23,15 +23,18 @@ import type { WorkflowLogLevel, WorkflowLogRecord } from './types/workflow-log.t
 const WORKFLOW_LOG_LEVELS = new Set<WorkflowLogLevel>(['debug', 'info', 'warn', 'error']);
 
 /**
- * Whether `attributes` is absent or a plain object, per the `WorkflowLogRecord` contract:
- * `Record<string, unknown>`. Arrays are rejected (`typeof [] === 'object'` would otherwise
- * let an untrusted worker deliver an array where the typed host sink expects a keyed bag).
+ * Whether `attributes` is absent or a PLAIN object, per the `WorkflowLogRecord` contract:
+ * `Record<string, unknown>`. An untrusted worker can `postMessage` any structured-cloneable
+ * value (arrays, `Date`, `Map`, class instances), so a bare `typeof === 'object'` would let
+ * a non-plain object reach a host sink typed as a keyed bag. A plain object is one whose
+ * prototype is `Object.prototype` or `null` (the literal `{}` / `Object.create(null)` cases);
+ * everything else — arrays, `Date`, `Map`, custom classes — is rejected.
  */
 function isValidLogAttributes(attributes: unknown): boolean {
-  return (
-    attributes === undefined ||
-    (typeof attributes === 'object' && attributes !== null && !Array.isArray(attributes))
-  );
+  if (attributes === undefined) return true;
+  if (typeof attributes !== 'object' || attributes === null) return false;
+  const prototype = Object.getPrototypeOf(attributes);
+  return prototype === Object.prototype || prototype === null;
 }
 
 /**

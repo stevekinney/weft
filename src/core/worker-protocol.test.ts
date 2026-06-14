@@ -484,13 +484,20 @@ describe('Worker log message validation (#529)', () => {
       expect(isValidWorkerLogRecord({ ...validRecord, timestamp: Number.NaN })).toBe(false);
     });
 
-    it('accepts an optional plain-object attributes but rejects a non-plain one', () => {
+    it('accepts only a PLAIN-object attributes, rejecting arrays and non-plain objects', () => {
       expect(isValidWorkerLogRecord({ ...validRecord, attributes: { k: 'v' } })).toBe(true);
+      // A null-prototype object is still a plain keyed bag.
+      const nullProto = Object.assign(Object.create(null), { k: 'v' });
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: nullProto })).toBe(true);
       expect(isValidWorkerLogRecord({ ...validRecord, attributes: 'nope' })).toBe(false);
       expect(isValidWorkerLogRecord({ ...validRecord, attributes: null })).toBe(false);
-      // An array is `typeof 'object'` but is NOT the keyed bag the contract requires.
+      // Arrays and non-plain cloneable objects are `typeof 'object'` but NOT the keyed bag
+      // the `Record<string, unknown>` contract requires — an untrusted worker can postMessage
+      // any structured-cloneable value, so they must be rejected.
       expect(isValidWorkerLogRecord({ ...validRecord, attributes: [] })).toBe(false);
       expect(isValidWorkerLogRecord({ ...validRecord, attributes: ['a', 'b'] })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: new Date() })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: new Map() })).toBe(false);
     });
   });
 
