@@ -156,7 +156,8 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
     {
       // The type-generation logic is exercised in-process by the generator test
       // suite. The remaining lines are the `import.meta.main` child-process
-      // entrypoint plus a Bun line-mapping miss on the object-render return.
+      // entrypoint plus a Bun line-mapping miss on the object-render close
+      // brace after the function's returned string has already been asserted.
       lines: new Set([117, 118, 119, 120, 121, 122, 262]),
     },
   ],
@@ -1700,13 +1701,18 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     ['src/client/http-client-requests.ts', { lines: new Set([141]) }],
     ['src/client/http-operations.ts', { lines: new Set([84, 85, 86, 87]) }],
     ['src/client/local-event-tail.ts', { functions: 2, lines: new Set([157, 158]) }],
-    ['src/client/local.ts', { functions: 1, lines: new Set([152]) }],
+    ['src/client/local.ts', { functions: 1, lines: new Set([153]) }],
     ['src/client/open-event-subscription.ts', { lines: new Set([51]) }],
     ['src/client/start-body.ts', { lines: new Set([15, 16, 17, 18]) }],
     ['src/connection.ts', { functions: 2, lines: new Set([211, 250, 251, 256, 257, 258, 259]) }],
     [
       'src/core/context/durable-operations.ts',
-      { lines: new Set([57, 58, 59, 60, 61, 62, 63, 239, 243, 244, 245]) },
+      {
+        // `ctx.sleep()` is exercised broadly through Context and engine tests.
+        // Bun still reports the exported wrapper generator signature as missed
+        // even when the yielded sleep request and cached-return path both run.
+        lines: new Set([57, 58, 59, 60, 61, 62, 63]),
+      },
     ],
     [
       // The retry-state corruption guards and non-Error retryability path are now
