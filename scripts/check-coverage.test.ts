@@ -167,7 +167,7 @@ describe('buildAllowanceLayer', () => {
         ['src/other.ts', { lines: new Set([20]) }],
         ['src/repeated.ts', { lines: new Set([30]) }],
       ]),
-    ).toThrow(/Duplicate coverage-allowance key "src\/repeated\.ts" within DUPLICATED_LAYER/);
+    ).toThrow(/^Duplicate coverage-allowance key "src\/repeated\.ts" within DUPLICATED_LAYER\./);
   });
 
   it('accepts an empty layer', () => {
@@ -176,6 +176,13 @@ describe('buildAllowanceLayer', () => {
 });
 
 describe('assembleAllowanceLayers', () => {
+  // An empty pair of refresh layers, used when a test exercises only the
+  // ordered-merge behavior and not the refresh-layer exclusivity check.
+  const noRefreshCollision = [
+    ['MAIN_REFRESH', buildAllowanceLayer('MAIN_REFRESH', [])],
+    ['BRANCH_REFRESH', buildAllowanceLayer('BRANCH_REFRESH', [])],
+  ] as const;
+
   it('lets a later layer override an earlier layer for a shadowed key', () => {
     // Base/override layering is the legitimate mechanic: the override layer wins
     // for a shared key. Only refresh-layer-vs-refresh-layer collisions are barred.
@@ -193,14 +200,42 @@ describe('assembleAllowanceLayers', () => {
         ['BASE', base],
         ['OVERRIDE', override],
       ],
-      // No mutually-exclusive layers declared: base/override shadowing is allowed.
-      [],
+      noRefreshCollision,
     );
 
     expect(assembled.size).toBe(3);
     expect(assembled.get('src/shared.ts')).toEqual({ lines: new Set([99]) });
     expect(assembled.get('src/base-only.ts')).toEqual({ lines: new Set([2]) });
     expect(assembled.get('src/override-only.ts')).toEqual({ lines: new Set([3]) });
+  });
+
+  it('applies last-layer-wins across three or more layers, identical to a Map spread', () => {
+    // Pin the behavior-preservation contract: the helper must collapse N ordered
+    // layers exactly as `new Map([...layerA, ...layerB, ...layerC])` would, so the
+    // refactor away from the old spread assembly cannot silently change ordering.
+    const layerA = buildAllowanceLayer('A', [
+      ['src/shared.ts', { lines: new Set([1]) }],
+      ['src/a-only.ts', { lines: new Set([10]) }],
+    ]);
+    const layerB = buildAllowanceLayer('B', [
+      ['src/shared.ts', { lines: new Set([2]) }],
+      ['src/b-only.ts', { lines: new Set([20]) }],
+    ]);
+    const layerC = buildAllowanceLayer('C', [['src/shared.ts', { lines: new Set([3]) }]]);
+
+    const assembled = assembleAllowanceLayers(
+      [
+        ['A', layerA],
+        ['B', layerB],
+        ['C', layerC],
+      ],
+      noRefreshCollision,
+    );
+    const spread = new Map([...layerA, ...layerB, ...layerC]);
+
+    // The last layer (C) wins for the thrice-shared key.
+    expect(assembled.get('src/shared.ts')).toEqual({ lines: new Set([3]) });
+    expect(assembled).toEqual(spread);
   });
 
   it('throws when a key appears in both mutually-exclusive refresh layers', () => {
@@ -219,10 +254,13 @@ describe('assembleAllowanceLayers', () => {
           ['MAIN_REFRESH', mainRefresh],
           ['BRANCH_REFRESH', branchRefresh],
         ],
-        ['MAIN_REFRESH', 'BRANCH_REFRESH'],
+        [
+          ['MAIN_REFRESH', mainRefresh],
+          ['BRANCH_REFRESH', branchRefresh],
+        ],
       ),
     ).toThrow(
-      /Coverage-allowance key "src\/twin\.ts" appears in both MAIN_REFRESH and BRANCH_REFRESH/,
+      /^Coverage-allowance key "src\/twin\.ts" appears in both MAIN_REFRESH and BRANCH_REFRESH\./,
     );
   });
 
@@ -233,16 +271,21 @@ describe('assembleAllowanceLayers', () => {
     const branchRefresh = buildAllowanceLayer('BRANCH_REFRESH', [
       ['src/shared.ts', { lines: new Set([2]) }],
     ]);
+    const mainRefresh = buildAllowanceLayer('MAIN_REFRESH', []);
 
     const assembled = assembleAllowanceLayers(
       [
         ['BASE', base],
+        ['MAIN_REFRESH', mainRefresh],
         ['BRANCH_REFRESH', branchRefresh],
       ],
-      ['MAIN_REFRESH', 'BRANCH_REFRESH'],
+      [
+        ['MAIN_REFRESH', mainRefresh],
+        ['BRANCH_REFRESH', branchRefresh],
+      ],
     );
 
-    // BRANCH_REFRESH is the terminal layer, so its value wins.
+    // BRANCH_REFRESH is the terminal layer, so its value wins over BASE.
     expect(assembled.get('src/shared.ts')).toEqual({ lines: new Set([2]) });
   });
 });

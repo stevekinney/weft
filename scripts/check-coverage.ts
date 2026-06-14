@@ -53,34 +53,45 @@ export function buildAllowanceLayer(
   return new Map(entries);
 }
 
+type NamedAllowanceLayer = readonly [name: string, layer: ReadonlyMap<string, CoverageAllowance>];
+
 /**
- * Assemble the final allowance map from its ordered layers (last layer wins for a
- * shadowed key — the intended base→override mechanic), but fail loudly if the same
- * key appears in BOTH refresh layers. A key in `MAIN_REFRESH` and `BRANCH_REFRESH`
- * means removing the branch-refresh row silently re-activates the main-refresh
- * allowance (often with stale line numbers) — a silent gate flip. Base/override
- * layering against a refresh layer is the legitimate override pattern and is allowed.
+ * Assert that two refresh layers partition their keys: a key in BOTH means removing
+ * its row from one layer silently re-activates the other layer's (often
+ * stale-line-numbered) allowance — a silent gate flip. The two layers are passed by
+ * direct reference rather than matched by name against the ordered layer list, so a
+ * renamed or mistyped layer can never silently skip this check (which would defeat
+ * the whole point: a guard against silent allowance failures must not itself fail
+ * silently). Base/override layering against a refresh layer stays legal.
  */
-export function assembleAllowanceLayers(
-  layers: ReadonlyArray<readonly [name: string, layer: ReadonlyMap<string, CoverageAllowance>]>,
-  mutuallyExclusiveLayerNames: ReadonlyArray<string>,
-): Map<string, CoverageAllowance> {
-  const exclusive = new Set(mutuallyExclusiveLayerNames);
-  const keyToExclusiveLayer = new Map<string, string>();
-  for (const [name, layer] of layers) {
-    if (!exclusive.has(name)) continue;
-    for (const key of layer.keys()) {
-      const priorLayer = keyToExclusiveLayer.get(key);
-      if (priorLayer !== undefined) {
-        throw new Error(
-          `Coverage-allowance key "${key}" appears in both ${priorLayer} and ${name}. ` +
-            'A key may live in at most one refresh layer, or removing one row silently ' +
-            'reactivates the other layer’s (possibly stale) allowance.',
-        );
-      }
-      keyToExclusiveLayer.set(key, name);
+function assertRefreshLayersPartitionKeys(
+  first: NamedAllowanceLayer,
+  second: NamedAllowanceLayer,
+): void {
+  const [firstName, firstLayer] = first;
+  const [secondName, secondLayer] = second;
+  for (const key of firstLayer.keys()) {
+    if (secondLayer.has(key)) {
+      throw new Error(
+        `Coverage-allowance key "${key}" appears in both ${firstName} and ${secondName}. ` +
+          'A key may live in at most one refresh layer, or removing one row silently ' +
+          'reactivates the other layer’s (possibly stale) allowance.',
+      );
     }
   }
+}
+
+/**
+ * Assemble the final allowance map from its ordered layers (last layer wins for a
+ * shadowed key — the intended base→override mechanic), after asserting the two
+ * mutually-exclusive refresh layers partition their keys (see
+ * {@link assertRefreshLayersPartitionKeys}).
+ */
+export function assembleAllowanceLayers(
+  layers: ReadonlyArray<NamedAllowanceLayer>,
+  refreshLayers: readonly [NamedAllowanceLayer, NamedAllowanceLayer],
+): Map<string, CoverageAllowance> {
+  assertRefreshLayersPartitionKeys(refreshLayers[0], refreshLayers[1]);
   const assembled = new Map<string, CoverageAllowance>();
   for (const [, layer] of layers) {
     for (const [key, allowance] of layer) {
@@ -1232,12 +1243,16 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     // surfaced example and test-support helpers that Bun still instruments even
     // though the repository does not execute them directly in the coverage run.
     //
+    // Placement rule for the two refresh layers: put coverage drift that already
+    // exists on main here; put drift introduced or refreshed by the active branch
+    // in CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH below. A key belongs in exactly
+    // one of the two — the guard in assembleAllowanceLayers rejects any key that
+    // appears in both.
+    //
     // Keys also present in CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH below were
     // removed from this layer: BRANCH is the terminal layer, so its allowance
     // already wins in assembleAllowanceLayers and the twin here was dead (often
-    // with stale line numbers from before the branch pass refreshed them). The
-    // new cross-refresh-layer guard in assembleAllowanceLayers now rejects any
-    // such duplicate, so a key belongs in exactly one refresh layer.
+    // with stale line numbers from before the branch pass refreshed them).
     [
       'examples/order-processing/src/client.ts',
       {
@@ -1578,6 +1593,11 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     // Current branch coverage mode instruments newly split CLI, MCP, server, and
     // support-helper surfaces that are covered through subprocess, browser, or
     // generated-harness entrypoints outside Bun's in-process LCOV accounting.
+    //
+    // This is the terminal refresh layer: entries here hold coverage drift
+    // introduced or refreshed by the active branch, and win over a same-key entry
+    // in CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH. A key must not appear in both
+    // (the assembleAllowanceLayers guard rejects it).
     [
       'examples/hello-world/src/index.ts',
       {
@@ -1819,17 +1839,29 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
   ],
 );
 
+// The two refresh layers are mutually exclusive: a key may live in at most one,
+// otherwise removing its row silently reactivates the other's (possibly stale)
+// allowance. Bind them once and pass the SAME references both into the ordered
+// merge list and into the exclusivity check, so the guarded pair can never drift
+// from the layers actually assembled.
+const MAIN_REFRESH_LAYER: NamedAllowanceLayer = [
+  'CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH',
+  CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH,
+];
+const BRANCH_REFRESH_LAYER: NamedAllowanceLayer = [
+  'CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH',
+  CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH,
+];
+
 const COVERAGE_ALLOWANCES = assembleAllowanceLayers(
   [
     ['BASE_COVERAGE_ALLOWANCES', BASE_COVERAGE_ALLOWANCES],
     ['COVERAGE_ALLOWANCE_OVERRIDES', COVERAGE_ALLOWANCE_OVERRIDES],
     ['CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES', CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES],
-    ['CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH', CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH],
-    ['CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH', CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH],
+    MAIN_REFRESH_LAYER,
+    BRANCH_REFRESH_LAYER,
   ],
-  // A key may live in at most one refresh layer; otherwise removing one row silently
-  // reactivates the other's (possibly stale) allowance.
-  ['CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH', 'CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH'],
+  [MAIN_REFRESH_LAYER, BRANCH_REFRESH_LAYER],
 );
 
 function summarizeCoverageFiles(files: ReadonlyMap<string, FileCoverageResult>): CoverageResult {
