@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import type { WorkerLoggerReplayState } from '../core/context/workflow-logger.ts';
-import type { OperationRequest } from '../core/types.ts';
+import type { OperationRequest, WorkerOutboundMessage } from '../core/types.ts';
+import { WORKER_PROTOCOL_VERSION } from '../core/worker-protocol.ts';
 import { captureWorkflowLogConsole } from '../testing/workflow-log-capture.test-support.ts';
 import {
   createWorkerWorkflowContext,
@@ -159,7 +160,6 @@ describe('worker ctx.log', () => {
       { workflowId: 'wf-closure', workflowType: 'closure', input: null },
       new AbortController(),
       () => liveReplayState,
-      () => undefined,
     );
 
     // Before the replay state is registered, the logger treats it as live.
@@ -194,7 +194,6 @@ describe('worker ctx.log', () => {
       { workflowId: 'wf-failed', workflowType: 'failed', input: null },
       new AbortController(),
       () => liveReplayState,
-      () => undefined,
     );
 
     // Step 0 is a REPLAYED FAILURE (in failedOutcomes, absent from accumulatedResults).
@@ -214,5 +213,162 @@ describe('worker ctx.log', () => {
     };
     ctx.log.info('after failed step — live');
     expect(captured.records.map((r) => r.message)).toEqual(['after failed step — live']);
+  });
+
+  describe('host log forwarding (#529)', () => {
+    it('routes a record to the host forwarder INSTEAD of the worker console', () => {
+      const forwarded: Array<{ message: string }> = [];
+      const ctx = createWorkerWorkflowContext(
+        { workflowId: 'wf-fwd', workflowType: 'fwd', input: null },
+        new AbortController(),
+        () => undefined,
+        (record) => forwarded.push({ message: record.message }),
+      );
+
+      ctx.log.info('to-host', { phase: 'init' });
+
+      expect(forwarded).toEqual([{ message: 'to-host' }]);
+      // The shared factory routes to the sink instead of console.
+      expect(captured.records).toHaveLength(0);
+    });
+
+    it('does NOT forward a replay-suppressed record', () => {
+      const forwarded: string[] = [];
+      let liveReplayState: WorkerLoggerReplayState | undefined;
+      const ctx = createWorkerWorkflowContext(
+        { workflowId: 'wf-fwd-replay', workflowType: 'fwd', input: null },
+        new AbortController(),
+        () => liveReplayState,
+        (record) => forwarded.push(record.message),
+      );
+
+      liveReplayState = {
+        accumulatedResults: new Map([[0, 'cached']]),
+        failedOutcomes: new Map(),
+        nextStepIndex: 0,
+      };
+      ctx.log.info('replaying — suppressed');
+      expect(forwarded).toEqual([]);
+
+      liveReplayState = {
+        accumulatedResults: new Map([[0, 'cached']]),
+        failedOutcomes: new Map(),
+        nextStepIndex: 1,
+      };
+      ctx.log.info('live — forwarded');
+      expect(forwarded).toEqual(['live — forwarded']);
+    });
+
+    it('falls back to the worker console when the host forwarder throws', () => {
+      const ctx = createWorkerWorkflowContext(
+        { workflowId: 'wf-fwd-throw', workflowType: 'fwd', input: null },
+        new AbortController(),
+        () => undefined,
+        () => {
+          throw new Error('postMessage failed (oversize)');
+        },
+      );
+
+      // A throwing forwarder (e.g. oversize record makes postMessage throw) must not
+      // crash the run; the shared factory's try/catch falls the record back to console.
+      ctx.log.warn('forward-failed');
+
+      expect(captured.records.map((r) => r.message)).toEqual(['forward-failed']);
+    });
+
+    it('posts a forwarded log carrying the workflow identity and protocol version (no turn state)', async () => {
+      const context = createWorkflowRunnerContext();
+      const posted: Array<Extract<WorkerOutboundMessage, { type: 'log' }>> = [];
+      async function* loggingWorkflow(ctx: WorkerWorkflowContext) {
+        ctx.log.info('forwarded-run');
+        return 'done';
+      }
+
+      await handleRunMessage(
+        context,
+        { workflowId: 'wf-fwd-run', workflowType: 'fwd', input: null },
+        () => loggingWorkflow,
+        (message) => posted.push(message),
+      );
+
+      // The host gates delivery by ownership and identity, so the message carries no
+      // turn-protocol state — only the workflowId envelope, the protocol version, and
+      // the record. The host re-validates `record.workflowId === message.workflowId`.
+      expect(posted).toHaveLength(1);
+      expect(posted[0]).toMatchObject({
+        type: 'log',
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        workflowId: 'wf-fwd-run',
+        record: expect.objectContaining({ message: 'forwarded-run', workflowId: 'wf-fwd-run' }),
+      });
+      expect('turnId' in posted[0]!).toBe(false);
+    });
+
+    it('keeps forwarding logs emitted AFTER a resume (forwarding survives park → resume)', async () => {
+      // The forwarder is built once in handleRunMessage and captured by the generator's
+      // closure; the same generator continues on resume. A log emitted in the resumed
+      // turn must still reach the host forwarder — forwarding must not die after a park.
+      const context = createWorkflowRunnerContext();
+      const posted: Array<{ message: string }> = [];
+      const op = activityOperation('wf-fwd-resume', 'step1', 'one');
+      async function* loggingWorkflow(ctx: WorkerWorkflowContext) {
+        const result: unknown = yield op;
+        ctx.log.info('after-resume');
+        return result;
+      }
+
+      // Run turn: parks on the activity, no log yet.
+      await handleRunMessage(
+        context,
+        { workflowId: 'wf-fwd-resume', workflowType: 'fwd', input: null },
+        () => loggingWorkflow,
+        (message) => posted.push({ message: message.record.message }),
+      );
+      expect(posted).toEqual([]);
+
+      // Resume turn: the log after resume is still forwarded by the original closure.
+      await handleResumeMessage(context, {
+        workflowId: 'wf-fwd-resume',
+        result: 'one-result',
+      });
+      expect(posted).toEqual([{ message: 'after-resume' }]);
+    });
+
+    it('a forwarder retained after terminal cleanup posts a record but leaks no run state', async () => {
+      const context = createWorkflowRunnerContext();
+      const posted: Array<Extract<WorkerOutboundMessage, { type: 'log' }>> = [];
+      let retainedLogger: WorkerWorkflowContext['log'] | undefined;
+      async function* completingWorkflow(ctx: WorkerWorkflowContext) {
+        // Capture the logger so the test can invoke it AFTER terminal cleanup, the
+        // realistic "fire-and-forget log resolves after the run completed" window.
+        retainedLogger = ctx.log;
+        return 'done';
+      }
+
+      const result = await handleRunMessage(
+        context,
+        { workflowId: 'wf-leak', workflowType: 'leak', input: null },
+        () => completingWorkflow,
+        (message) => posted.push(message),
+      );
+
+      // A completed run is cleaned through cleanupWorkflowRunnerState — no per-workflow
+      // state lingers in a long-lived pooled worker (#529).
+      expect(result.type).toBe('completed');
+      expect(context.replayStates.has('wf-leak')).toBe(false);
+      expect(context.generators.has('wf-leak')).toBe(false);
+      expect(context.abortControllers.has('wf-leak')).toBe(false);
+
+      // Behavioral teeth: a log emitted after cleanup still posts (best-effort) and does
+      // NOT re-create any run state — the forwarder reads the (now absent) replay state
+      // through the live closure rather than a retained per-workflow entry.
+      retainedLogger!.info('after-terminal');
+      expect(posted.at(-1)).toMatchObject({
+        type: 'log',
+        workflowId: 'wf-leak',
+        record: expect.objectContaining({ message: 'after-terminal' }),
+      });
+      expect(context.replayStates.has('wf-leak')).toBe(false);
+    });
   });
 });

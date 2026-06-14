@@ -1,12 +1,6 @@
 import { copyBytesToArrayBuffer } from '../core/byte-arrays.ts';
-import {
-  advanceCheckpoint,
-  createCheckpoint,
-  deserializeCheckpoint,
-  serializeCheckpoint,
-} from '../core/checkpoint.ts';
+import { advanceCheckpoint, serializeCheckpoint } from '../core/checkpoint.ts';
 import type { ContextOperationRequest } from '../core/context.ts';
-import { WorkflowAtomicStateHandle } from '../core/context/state-namespace.ts';
 import { resolveWorkflowVersionPatch } from '../core/context/version-patching.ts';
 import {
   createWorkerWorkflowLogger,
@@ -14,9 +8,7 @@ import {
 } from '../core/context/workflow-logger.ts';
 import {
   attachTransientCheckpointReplayPayload,
-  hydrateCheckpointReplayStateFromPayload,
   pruneCheckpointReplayState,
-  readCheckpointReplayPayload,
 } from '../core/engine/checkpoint-replay.ts';
 import {
   classifyErrorAsFailureCategory,
@@ -28,18 +20,22 @@ import type {
   OperationOutcome,
   OperationRequest,
   WorkerOutboundMessage,
-  WorkerReplayOperationFailure,
-  WorkflowAtomicStateOptions,
   WorkflowContext,
   WorkflowLogger,
-  WorkflowSessionState,
+  WorkflowLogRecord,
   WorkflowStateNamespace,
 } from '../core/types.ts';
 import {
   createWorkerReplayOperationSignature,
-  type WorkerReplayOperationSignature,
+  WORKER_PROTOCOL_VERSION,
   workerReplayOperationSignaturesEqual,
 } from '../core/worker-protocol.ts';
+import {
+  createReplayState,
+  recordOperationOutcome,
+  type WorkerReplayState,
+} from './worker-replay-state.ts';
+import { createWorkerStateNamespace } from './worker-state-namespace.ts';
 
 // ---------------------------------------------------------------------------
 // Worker-side workflow context
@@ -79,7 +75,8 @@ interface RunMessageShape {
  * Construct the worker-side `ctx` argument that gets passed as the first
  * positional parameter to a registered workflow handler. Engine-side fields
  * not represented in the `run` message are intentionally omitted — only the
- * `Pick`-ed subset above is populated.
+ * `Pick`-ed subset above is populated. `forwardLog`, when provided by the worker
+ * entry (host has an `onLog` sink), routes `ctx.log` records to the host (#529).
  */
 export function createWorkerWorkflowContext(
   message: RunMessageShape,
@@ -87,6 +84,7 @@ export function createWorkerWorkflowContext(
   // The structural slice the logger reads, not the full private `WorkerReplayState`
   // (a superset, so the real call site passes through unchanged).
   getReplayState: () => WorkerLoggerReplayState | undefined,
+  forwardLog?: (record: WorkflowLogRecord) => void,
   getVersionReplayState: () => WorkerReplayState | undefined = () => undefined,
 ): WorkerWorkflowContext {
   return {
@@ -97,7 +95,12 @@ export function createWorkerWorkflowContext(
     state: createWorkerStateNamespace(message),
     // The logger reads replay state through the closure (not by value) so it sees
     // the live frontier at each emit as the runner advances `nextStepIndex`.
-    log: createWorkerWorkflowLogger(message.workflowId, message.workflowType, getReplayState),
+    log: createWorkerWorkflowLogger(
+      message.workflowId,
+      message.workflowType,
+      getReplayState,
+      forwardLog,
+    ),
     getVersion: (changeId, minSupported, maxSupported) =>
       workerGetVersion(
         message.workflowId,
@@ -152,29 +155,46 @@ function* workerGetVersion(
   return result as number;
 }
 
-function createWorkerStateNamespace(message: RunMessageShape): WorkflowStateNamespace {
-  return {
-    session: <T>(_key: string): WorkflowSessionState<T> => {
-      throw new Error(
-        `Workflow type "${message.workflowType}" called ctx.state.session(), which is not supported in worker execution mode. ` +
-          "Use workflowExecutionMode: 'inline' for checkpoint-local session state, or use ctx.state.workflow() or ctx.state.execution() instead.",
-      );
-    },
-    execution: <T>(key: string, options?: WorkflowAtomicStateOptions<T>) =>
-      new WorkflowAtomicStateHandle<T>(
-        {
-          type: 'execution',
-          ownerWorkflowId: message.executionStateOwnerId ?? message.workflowId,
-        },
-        key,
-        options,
-      ),
-    workflow: <T>(key: string, options?: WorkflowAtomicStateOptions<T>) =>
-      new WorkflowAtomicStateHandle<T>(
-        { type: 'workflow', workflowType: message.workflowType },
-        key,
-        options,
-      ),
+/**
+ * Posts a forwarded `ctx.log` message to the host, size-checking against the current
+ * `maxProtocolMessageBytes`. Throwing on oversize is intentional — the shared logger
+ * factory catches it and falls the record back to the worker console (#529).
+ */
+export type WorkerLogPoster = (
+  message: Extract<WorkerOutboundMessage, { type: 'log' }>,
+  maxProtocolMessageBytes: number | undefined,
+) => void;
+
+/**
+ * Build the `ctx.log` → host forwarder for one workflow (#529). The record is wrapped in
+ * a `log` outbound message and handed to the entry's `postLog`. Returns `undefined` when
+ * the host has no sink. A throw (oversize/non-cloneable record makes `postMessage` throw)
+ * is caught by the shared logger factory and falls the record back to the worker console.
+ * The host gates delivery by worker-ownership of `workflowId` and matches the record's
+ * identity, so the message carries no turn-protocol state.
+ *
+ * The size cap is CAPTURED here at construction, not read live from replay state: a
+ * fire-and-forget log can resolve AFTER terminal cleanup deleted the replay state, and a
+ * live read would then see `undefined` and let an oversized record reach the host. The
+ * cap is fixed per engine config (identical across run/resume), so capturing it keeps the
+ * "oversize log never reaches the host" contract even on the post-cleanup path.
+ */
+function buildLogForwarder(
+  workflowId: string,
+  maxProtocolMessageBytes: number | undefined,
+  postLog: WorkerLogPoster | undefined,
+): ((record: WorkflowLogRecord) => void) | undefined {
+  if (postLog === undefined) return undefined;
+  return (record: WorkflowLogRecord): void => {
+    postLog(
+      {
+        type: 'log',
+        protocolVersion: WORKER_PROTOCOL_VERSION,
+        workflowId,
+        record,
+      },
+      maxProtocolMessageBytes,
+    );
   };
 }
 
@@ -186,16 +206,6 @@ export interface WorkflowRunnerContext {
   generators: Map<string, AsyncGenerator>;
   abortControllers: Map<string, AbortController>;
   replayStates: Map<string, WorkerReplayState>;
-}
-
-interface WorkerReplayState {
-  checkpoint: Checkpoint;
-  accumulatedResults: Map<number, unknown>;
-  signatures: Map<number, WorkerReplayOperationSignature>;
-  failedOutcomes: Map<number, WorkerReplayOperationFailure>;
-  nextStepIndex: number;
-  pendingStepIndex: number | null;
-  maxProtocolMessageBytes: number | undefined;
 }
 
 export function createWorkflowRunnerContext(): WorkflowRunnerContext {
@@ -225,6 +235,10 @@ export async function handleRunMessage(
   getWorkflowHandler: (
     type: string,
   ) => ((ctx: WorkerWorkflowContext, input: unknown) => AsyncGenerator) | undefined,
+  // Posts a forwarded `ctx.log` message to the host (#529); supplied by the worker
+  // entry (which owns `postMessage`) only when the host installed an `onLog` sink. The
+  // entry size-checks against `maxProtocolMessageBytes` and posts (or throws on oversize).
+  postLog?: WorkerLogPoster,
 ): Promise<WorkerOutboundMessage> {
   const handler = getWorkflowHandler(message.workflowType);
 
@@ -249,6 +263,7 @@ export async function handleRunMessage(
       message,
       controller,
       () => context.replayStates.get(message.workflowId),
+      buildLogForwarder(message.workflowId, message.maxProtocolMessageBytes, postLog),
       () => context.replayStates.get(message.workflowId),
     );
     const generator = handler(workerContext, message.input);
@@ -481,52 +496,6 @@ async function processGeneratorStep(
       operationRequest,
     };
   }
-}
-
-function createReplayState(message: {
-  workflowId: string;
-  checkpoint?: ArrayBuffer;
-  maxProtocolMessageBytes?: number;
-}): WorkerReplayState {
-  const checkpoint =
-    message.checkpoint && message.checkpoint.byteLength > 0
-      ? deserializeWorkerCheckpoint(message.checkpoint)
-      : createCheckpoint(message.workflowId, 'worker');
-  return {
-    checkpoint,
-    accumulatedResults: new Map(checkpoint.accumulatedResults),
-    signatures: new Map(checkpoint.workerReplaySignatures ?? []),
-    failedOutcomes: new Map(checkpoint.workerReplayFailures ?? []),
-    nextStepIndex: 0,
-    pendingStepIndex: null,
-    maxProtocolMessageBytes: message.maxProtocolMessageBytes,
-  };
-}
-
-function deserializeWorkerCheckpoint(checkpointBytes: ArrayBuffer): Checkpoint {
-  const checkpoint = deserializeCheckpoint(new Uint8Array(checkpointBytes));
-  return hydrateCheckpointReplayStateFromPayload(
-    checkpoint,
-    readCheckpointReplayPayload(checkpoint),
-  );
-}
-
-function recordOperationOutcome(
-  replayState: WorkerReplayState,
-  outcome: OperationOutcome | undefined,
-): void {
-  const pendingStepIndex = replayState.pendingStepIndex;
-  if (pendingStepIndex === null || !outcome) return;
-
-  if (outcome.status === 'failed') {
-    replayState.failedOutcomes.set(pendingStepIndex, outcome);
-    replayState.accumulatedResults.delete(pendingStepIndex);
-  } else {
-    replayState.accumulatedResults.set(pendingStepIndex, outcome.value);
-    replayState.failedOutcomes.delete(pendingStepIndex);
-  }
-  replayState.nextStepIndex = pendingStepIndex + 1;
-  replayState.pendingStepIndex = null;
 }
 
 function hasCachedWorkerOutcome(replayState: WorkerReplayState, stepIndex: number): boolean {

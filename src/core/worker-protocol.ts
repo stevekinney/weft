@@ -6,6 +6,7 @@ import {
   WORKER_REPLAY_SIGNATURE_FORMAT,
   type WorkerReplayOperationSignature,
 } from './types/checkpoint.ts';
+import { isValidWorkerLogRecord } from './worker-protocol-log.ts';
 
 export {
   WORKER_REPLAY_SIGNATURE_FORMAT,
@@ -150,6 +151,9 @@ function assertWorkerOutboundVariant(record: Record<string, unknown>): void {
     case 'failed':
       assertWorkerFailedOutbound(record);
       return;
+    case 'log':
+      assertWorkerLogOutbound(record);
+      return;
     default:
       throw new WorkerProtocolError('Worker outbound message has an unsupported type');
   }
@@ -167,6 +171,12 @@ function assertWorkerCheckpointOutbound(record: Record<string, unknown>): void {
 function assertWorkerFailedOutbound(record: Record<string, unknown>): void {
   if (typeof record['error'] !== 'string') {
     throw new WorkerProtocolError('Worker failed message must include an error string');
+  }
+}
+
+function assertWorkerLogOutbound(record: Record<string, unknown>): void {
+  if (!isValidWorkerLogRecord(record['record'])) {
+    throw new WorkerProtocolError('Worker log message must include a valid log record');
   }
 }
 

@@ -43,7 +43,7 @@ describe('constraint primitive', () => {
 
     // Track violation events.
     engine.addEventListener('constraint:violated', (event) => {
-      violationEvents.push(event as ConstraintViolatedEvent);
+      violationEvents.push(event);
     });
 
     // A flag flipped by step-one's execute. The constraint fails exactly once,
@@ -122,7 +122,7 @@ describe('constraint primitive', () => {
     let compensatorCalled = false;
 
     engine.addEventListener('constraint:violated', (event) => {
-      violationEvents.push(event as ConstraintViolatedEvent);
+      violationEvents.push(event);
     });
 
     let firstStepComplete = false;
@@ -250,7 +250,7 @@ describe('constraint primitive', () => {
     const violationEvents: ConstraintViolatedEvent[] = [];
 
     engine.addEventListener('constraint:violated', (event) => {
-      violationEvents.push(event as ConstraintViolatedEvent);
+      violationEvents.push(event);
     });
 
     let checkpointCount = 0;

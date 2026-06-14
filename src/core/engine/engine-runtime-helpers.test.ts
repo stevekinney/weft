@@ -42,7 +42,7 @@ describe('engine runtime helpers', () => {
     });
     const warnings: CleanupWarningEvent[] = [];
     engine.addEventListener(CleanupWarningEvent.type, (event) => {
-      warnings.push(event as CleanupWarningEvent);
+      warnings.push(event);
     });
     getInternals(engine).updateCoordinator.cleanupExpiredResponses = cleanupExpiredResponses;
 

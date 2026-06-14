@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import type { ContextOperationRequest } from './context.ts';
+import { isValidWorkerLogRecord, isWorkerLogMessage } from './worker-protocol-log.ts';
 import {
   MIN_WORKER_PROTOCOL_MESSAGE_BYTES,
   WORKER_REPLAY_SIGNATURE_FORMAT,
@@ -427,5 +428,135 @@ describe('Worker replay operation signatures', () => {
         128,
       ),
     ).rejects.toThrow(WorkerProtocolError);
+  });
+});
+
+describe('Worker log message validation (#529)', () => {
+  const validRecord = {
+    level: 'info',
+    message: 'hello',
+    workflowId: 'wf-1',
+    workflowType: 'test',
+    timestamp: 0,
+  };
+
+  describe('isValidWorkerLogRecord', () => {
+    it('accepts a well-formed log record', () => {
+      expect(isValidWorkerLogRecord(validRecord)).toBe(true);
+    });
+
+    it('accepts every valid level', () => {
+      for (const level of ['debug', 'info', 'warn', 'error']) {
+        expect(isValidWorkerLogRecord({ ...validRecord, level })).toBe(true);
+      }
+    });
+
+    it('rejects a non-object record', () => {
+      expect(isValidWorkerLogRecord(null)).toBe(false);
+      expect(isValidWorkerLogRecord('nope')).toBe(false);
+      expect(isValidWorkerLogRecord(42)).toBe(false);
+    });
+
+    it('rejects a record without a string message', () => {
+      expect(isValidWorkerLogRecord({ ...validRecord, message: 123 })).toBe(false);
+    });
+
+    it('rejects a record with an invalid level', () => {
+      expect(isValidWorkerLogRecord({ ...validRecord, level: 'trace' })).toBe(false);
+    });
+
+    it('rejects a record missing required envelope fields', () => {
+      // The full-shape validator requires every engine-owned envelope field, because a
+      // host sink is typed to receive a complete WorkflowLogRecord.
+      expect(isValidWorkerLogRecord({ level: 'info', message: 'hi' })).toBe(false);
+      const { workflowId: _id, ...withoutId } = validRecord;
+      expect(isValidWorkerLogRecord(withoutId)).toBe(false);
+      const { workflowType: _type, ...withoutType } = validRecord;
+      expect(isValidWorkerLogRecord(withoutType)).toBe(false);
+      const { timestamp: _ts, ...withoutTimestamp } = validRecord;
+      expect(isValidWorkerLogRecord(withoutTimestamp)).toBe(false);
+    });
+
+    it('rejects non-string workflowId / workflowType and non-finite timestamp', () => {
+      expect(isValidWorkerLogRecord({ ...validRecord, workflowId: 1 })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, workflowType: 1 })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, timestamp: 'now' })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, timestamp: Number.NaN })).toBe(false);
+    });
+
+    it('accepts only a PLAIN-object attributes, rejecting arrays and non-plain objects', () => {
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: { k: 'v' } })).toBe(true);
+      // A null-prototype object is still a plain keyed bag.
+      const nullProto = Object.assign(Object.create(null), { k: 'v' });
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: nullProto })).toBe(true);
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: 'nope' })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: null })).toBe(false);
+      // Arrays and non-plain cloneable objects are `typeof 'object'` but NOT the keyed bag
+      // the `Record<string, unknown>` contract requires — an untrusted worker can postMessage
+      // any structured-cloneable value, so they must be rejected.
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: [] })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: ['a', 'b'] })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: new Date() })).toBe(false);
+      expect(isValidWorkerLogRecord({ ...validRecord, attributes: new Map() })).toBe(false);
+    });
+  });
+
+  describe('isWorkerLogMessage', () => {
+    it('matches any message with type log (payload validity decided separately)', () => {
+      expect(isWorkerLogMessage({ type: 'log', workflowId: 'wf-1', record: validRecord })).toBe(
+        true,
+      );
+      // Routes on type alone — even a malformed record routes into the lenient lane.
+      expect(isWorkerLogMessage({ type: 'log', record: { bad: true } })).toBe(true);
+    });
+
+    it('does not match non-log messages or non-objects', () => {
+      expect(isWorkerLogMessage({ type: 'checkpoint', workflowId: 'wf-1' })).toBe(false);
+      expect(isWorkerLogMessage(null)).toBe(false);
+      expect(isWorkerLogMessage('log')).toBe(false);
+    });
+
+    it('routes on type regardless of protocolVersion (version-tolerant observability lane)', () => {
+      // The log lane carries no turn-protocol state and intentionally bypasses version
+      // negotiation: a `log` from any protocol version routes in on `type` alone, and
+      // its record is validated structurally rather than rejected on version. This is
+      // the one place that compatibility decision lives.
+      expect(
+        isWorkerLogMessage({
+          type: 'log',
+          protocolVersion: 999,
+          workflowId: 'wf-1',
+          record: validRecord,
+        }),
+      ).toBe(true);
+      expect(isWorkerLogMessage({ type: 'log', workflowId: 'wf-1', record: validRecord })).toBe(
+        true,
+      );
+    });
+  });
+
+  describe('assertWorkerOutboundMessageShape accepts the log variant', () => {
+    it('accepts a well-formed log message', () => {
+      expect(() =>
+        assertWorkerOutboundMessageShape({
+          type: 'log',
+          workflowId: 'wf-1',
+          record: validRecord,
+        }),
+      ).not.toThrow();
+    });
+
+    it('rejects a log message with a missing or malformed record (strict path)', () => {
+      expect(() => assertWorkerOutboundMessageShape({ type: 'log', workflowId: 'wf-1' })).toThrow(
+        WorkerProtocolError,
+      );
+      expect(() =>
+        assertWorkerOutboundMessageShape({
+          type: 'log',
+          workflowId: 'wf-1',
+          record: { level: 'info' },
+        }),
+      ).toThrow(WorkerProtocolError);
+    });
   });
 });

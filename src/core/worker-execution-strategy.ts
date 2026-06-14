@@ -6,19 +6,24 @@ import type {
   WorkerInboundMessage,
   WorkerOutboundMessage,
 } from './types.ts';
+import type { WorkflowLogRecord } from './types/workflow-log.ts';
 import { WorkerCheckpointResumeState } from './worker-checkpoint-resume-state.ts';
-import {
-  WorkerExecutionDispatcher,
-  type WorkerResumeParameters,
-} from './worker-execution-dispatcher.ts';
+import { WorkerExecutionDispatcher } from './worker-execution-dispatcher.ts';
 import { WorkerExecutionOwnership } from './worker-execution-ownership.ts';
 import type { WorkerExecutionStrategyOptions } from './worker-execution-strategy-options.ts';
+import {
+  buildResumeMessage,
+  buildRunMessage,
+  type WorkerInboundMessageContext,
+} from './worker-inbound-message.ts';
 import { WorkerListenerRegistry } from './worker-listener-registry.ts';
 import {
+  deliverForwardedWorkerLog,
   emitWorkerMessageToEngine,
   isParkableWaitSignalCheckpoint,
 } from './worker-message-helpers.ts';
 import { WorkerProtocolGuard } from './worker-protocol-guard.ts';
+import { isWorkerLogMessage } from './worker-protocol-log.ts';
 import { WORKER_PROTOCOL_VERSION } from './worker-protocol.ts';
 import { WorkerTurnWatchdog, type WorkerTurnState } from './worker-turn-watchdog.ts';
 
@@ -33,6 +38,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   readonly #maxProtocolMessageBytes: number | undefined;
   readonly #requireProtocolVersion: boolean;
   readonly #discardOnCancel: boolean;
+  readonly #onLog: ((record: WorkflowLogRecord) => void) | undefined;
   readonly #turnWatchdog: WorkerTurnWatchdog;
   readonly #protocolGuard: WorkerProtocolGuard;
   readonly #dispatcher: WorkerExecutionDispatcher;
@@ -41,14 +47,24 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   #nextTurnId: number;
 
   constructor(pool: WorkerPool, options?: WorkerExecutionStrategyOptions) {
+    // Destructure-with-defaults once so constructor reads are plain (low complexity).
+    const {
+      workflowTurnTimeoutMs,
+      maxProtocolMessageBytes,
+      onLog,
+      requireProtocolVersion = false,
+      discardOnCancel = false,
+      broadcastEvents = false,
+    } = options ?? {};
     this.#pool = pool;
     this.#ownership = new WorkerExecutionOwnership();
     this.#workerListeners = new WorkerListenerRegistry();
     this.#checkpointResumeState = new WorkerCheckpointResumeState();
-    this.#workflowTurnTimeoutMs = options?.workflowTurnTimeoutMs;
-    this.#maxProtocolMessageBytes = options?.maxProtocolMessageBytes;
-    this.#requireProtocolVersion = options?.requireProtocolVersion ?? false;
-    this.#discardOnCancel = options?.discardOnCancel ?? false;
+    this.#workflowTurnTimeoutMs = workflowTurnTimeoutMs;
+    this.#maxProtocolMessageBytes = maxProtocolMessageBytes;
+    this.#requireProtocolVersion = requireProtocolVersion;
+    this.#discardOnCancel = discardOnCancel;
+    this.#onLog = onLog;
     this.#turnWatchdog = new WorkerTurnWatchdog(this.#workflowTurnTimeoutMs, (turn) => {
       this.#handleTurnTimeout(turn);
     });
@@ -89,7 +105,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     this.#disposed = false;
     this.#nextTurnId = 1;
 
-    if (options?.broadcastEvents) {
+    if (broadcastEvents) {
       try {
         this.#broadcastChannel = new BroadcastChannel('weft:events');
         this.#broadcastListener = (event: MessageEvent) => {
@@ -119,25 +135,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     this.#ownership.resetWorkflow(parameters.workflowId);
     this.#checkpointResumeState.resetWorkflow(parameters.workflowId);
 
-    const message: WorkerInboundMessage & { type: 'run' } = {
-      type: 'run',
-      protocolVersion: WORKER_PROTOCOL_VERSION,
-      turnId: this.#nextTurnId++,
-      workflowId: parameters.workflowId,
-      workflowType: parameters.workflowType,
-      checkpoint: parameters.checkpoint,
-      input: parameters.input,
-      executionStateOwnerId: parameters.executionStateOwnerId ?? parameters.workflowId,
-    };
-    if (this.#maxProtocolMessageBytes !== undefined) {
-      message.maxProtocolMessageBytes = this.#maxProtocolMessageBytes;
-    }
-    if (parameters.deadline !== undefined) {
-      message.deadline = parameters.deadline;
-    }
-    if (parameters.headers) {
-      message.headers = parameters.headers;
-    }
+    const message = buildRunMessage(parameters, this.#inboundMessageContext());
     if (!this.#assertHostToWorkerMessageWithinLimit(parameters.workflowId, message)) {
       return;
     }
@@ -152,17 +150,15 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     const worker = this.#ownership.getActiveWorker(parameters.workflowId);
     if (worker) {
       this.#checkpointResumeState.recordResume(parameters.workflowId);
-      this.#dispatcher.postResumeMessage(worker, parameters, this.#createResumeMessage(parameters));
+      const resumeMessage = buildResumeMessage(parameters, this.#inboundMessageContext());
+      this.#dispatcher.postResumeMessage(worker, parameters, resumeMessage);
       return;
     }
 
     const parkedWorker = this.#ownership.getParkedWorker(parameters.workflowId);
     if (parkedWorker) {
-      void this.#dispatcher.resumeParkedWorkflow(
-        parameters,
-        parkedWorker,
-        this.#createResumeMessage(parameters),
-      );
+      const resumeMessage = buildResumeMessage(parameters, this.#inboundMessageContext());
+      void this.#dispatcher.resumeParkedWorkflow(parameters, parkedWorker, resumeMessage);
       return;
     }
 
@@ -179,21 +175,12 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     }
   }
 
-  #createResumeMessage(
-    parameters: WorkerResumeParameters,
-  ): WorkerInboundMessage & { type: 'resume' } {
-    const message: WorkerInboundMessage & { type: 'resume' } = {
-      type: 'resume',
-      protocolVersion: WORKER_PROTOCOL_VERSION,
+  #inboundMessageContext(): WorkerInboundMessageContext {
+    return {
       turnId: this.#nextTurnId++,
-      workflowId: parameters.workflowId,
-      checkpoint: parameters.checkpoint,
-      operationResult: parameters.operationResult,
+      maxProtocolMessageBytes: this.#maxProtocolMessageBytes,
+      hasLogSink: this.#onLog !== undefined,
     };
-    if (this.#maxProtocolMessageBytes !== undefined) {
-      message.maxProtocolMessageBytes = this.#maxProtocolMessageBytes;
-    }
-    return message;
   }
 
   cancelWorkflow(workflowId: string): void {
@@ -273,6 +260,22 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   }
 
   async #handleWorkerMessage(worker: Worker, message: unknown): Promise<void> {
+    // A `log` is non-terminal observability: handle it BEFORE the strict accept-or-discard
+    // gate (an out-of-turn log must not discard the worker) and never touch the watchdog (#529).
+    // The ownership gate is the trust boundary in the hardened worker path: a worker may only
+    // forward logs for a workflow it owns (active or parked), so an untrusted worker cannot
+    // spoof a log as another workflow. Validity/identity/size/console-fallback live in the
+    // helper; a wrong-owner log is dropped here, never discards the worker.
+    if (isWorkerLogMessage(message)) {
+      if (
+        typeof message.workflowId === 'string' &&
+        this.#ownership.getTargetWorker(message.workflowId) === worker
+      ) {
+        deliverForwardedWorkerLog(message, this.#onLog, this.#maxProtocolMessageBytes);
+      }
+      return;
+    }
+
     if (!this.#acceptWorkerMessage(worker, message)) {
       return;
     }

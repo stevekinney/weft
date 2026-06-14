@@ -14,7 +14,7 @@ import {
   createBoundedWorkerFailureMessage,
   WORKER_PROTOCOL_VERSION,
 } from '../core/worker-protocol.ts';
-import type { WorkerWorkflowContext } from './workflow-runner.ts';
+import type { WorkerLogPoster, WorkerWorkflowContext } from './workflow-runner.ts';
 import {
   cleanupWorkflowRunnerState,
   createWorkflowRunnerContext,
@@ -26,6 +26,19 @@ import {
 const workerPostMessage = self.postMessage.bind(self);
 const workerClose =
   'close' in self && typeof self.close === 'function' ? self.close.bind(self) : undefined;
+
+/**
+ * Post a forwarded `ctx.log` message to the host, size-checked first (#529). The runner
+ * builds the `log` message (it carries the record and the workflow identity, no turn
+ * state) and passes the size cap it captured at run construction; this primitive owns the
+ * actual `postMessage`. A throw on oversize is intentional — the shared logger factory
+ * catches it and falls the record back to the worker console, so a log never fails the run
+ * and an oversize log never reaches the host.
+ */
+const postLogMessage: WorkerLogPoster = (message, maxProtocolMessageBytes) => {
+  assertWorkerProtocolMessageWithinLimit(message, maxProtocolMessageBytes);
+  workerPostMessage(message);
+};
 
 // ---------------------------------------------------------------------------
 // Types
@@ -59,7 +72,12 @@ export function initializeWorkerMessageLoop(getWorkflowHandler: WorkflowHandlerF
 
     switch (message.type) {
       case 'run': {
-        const response = await handleRunMessage(runnerContext, message, getWorkflowHandler);
+        const response = await handleRunMessage(
+          runnerContext,
+          message,
+          getWorkflowHandler,
+          message.hostHasLogSink ? postLogMessage : undefined,
+        );
         postOutboundMessage(runnerContext, response, message);
         break;
       }

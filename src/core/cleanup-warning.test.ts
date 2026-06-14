@@ -88,7 +88,7 @@ describe('Engine dispatches CleanupWarningEvent on cleanup errors', () => {
 
     const warnings: CleanupWarningEvent[] = [];
     engine.addEventListener(CleanupWarningEvent.type, (event) => {
-      warnings.push(event as CleanupWarningEvent);
+      warnings.push(event);
     });
 
     engine.register(resumableWorkflow);
@@ -146,7 +146,7 @@ describe('Engine dispatches CleanupWarningEvent on cleanup errors', () => {
 
     const warnings: CleanupWarningEvent[] = [];
     engine.addEventListener(CleanupWarningEvent.type, (event) => {
-      warnings.push(event as CleanupWarningEvent);
+      warnings.push(event);
     });
 
     engine.register(updaterWorkflow);

@@ -108,6 +108,7 @@
         "src/core/engine/state-utilities.ts",
         "src/core/engine/termination/complete.ts",
         "src/core/types/workflow-builder.ts",
+        "src/core/worker-protocol.ts",
         "src/core/types/workflow-context.ts",
         "src/mcp/tools.ts",
         "src/server/index.ts",

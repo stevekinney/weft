@@ -419,12 +419,17 @@ export function createExecutionStrategyBundle(parameters: {
       concurrency: workerExecutionConfiguration.workerExecution.poolSize ?? 4,
       smol: workerExecutionConfiguration.workerExecution.smol ?? false,
     });
+    // Resolve the host `onLog` sink once at construction — like the inline path, the
+    // sink is fixed for the engine's life (`EngineOptions.onLog` has no setter). When
+    // present, workers forward `ctx.log` records to the host instead of their console (#529).
+    const logSink = getLogSink?.();
     const strategyOptions = {
       broadcastEvents,
       requireProtocolVersion: workerExecutionConfiguration.requireProtocolVersion,
       discardOnCancel: workerExecutionConfiguration.discardOnCancel,
       workflowTurnTimeoutMs: workerExecutionConfiguration.workflowTurnTimeoutMs,
       maxProtocolMessageBytes: workerExecutionConfiguration.maxProtocolMessageBytes,
+      ...(logSink !== undefined && { onLog: logSink }),
     };
     return {
       strategy: new WorkerExecutionStrategy(pool, strategyOptions),

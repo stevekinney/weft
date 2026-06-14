@@ -63,11 +63,12 @@ export interface WorkflowLogRecord {
  * re-emit on recovery. Logs inside `ctx.all` / `ctx.runAll` branches follow that
  * branch's re-execution semantics.
  *
- * In worker-pool mode, "the current process console" is the worker process, not
- * the engine host. Inline log timestamps come from the engine clock; worker-mode
- * timestamps come from the worker process wall clock. A host sink installed via
- * `EngineOptions.onLog` receives inline records; host-side collection of
- * worker-mode logs is tracked in #529.
+ * A host sink installed via `EngineOptions.onLog` receives records from BOTH execution
+ * modes: inline records directly, and worker-mode records forwarded from the worker
+ * back to the host. When no sink is installed, worker-mode records go to the worker
+ * process console (and inline records to the engine-host console). Inline log
+ * timestamps come from the engine clock; worker-mode timestamps come from the worker
+ * process wall clock.
  *
  * Exported so a host can also type a logger it injects through `ctx.services`
  * (the pre-`ctx.log` pattern).

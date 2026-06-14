@@ -11,7 +11,6 @@
  */
 
 import type { Engine } from '../core/engine.ts';
-import { ActivityAsyncPendingEvent } from '../core/events.ts';
 
 /**
  * A generous payload cap (1 MiB) for contract-test engines. Large enough that
@@ -23,10 +22,8 @@ export const CONTRACT_PAYLOAD_CAP_BYTES = 1_048_576;
 /** Resolve with the task token the next time `engine` parks an async activity. */
 export function nextAsyncPendingToken(engine: Engine): Promise<string> {
   return new Promise<string>((resolve) => {
-    engine.addEventListener(
-      'activity:async-pending',
-      (event) => resolve((event as ActivityAsyncPendingEvent).token),
-      { once: true },
-    );
+    engine.addEventListener('activity:async-pending', (event) => resolve(event.token), {
+      once: true,
+    });
   });
 }
