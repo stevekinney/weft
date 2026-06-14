@@ -156,8 +156,9 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
     {
       // The type-generation logic is exercised in-process by the generator test
       // suite. The remaining lines are the `import.meta.main` child-process
-      // entrypoint plus a Bun line-mapping miss on the object-render return.
-      lines: new Set([117, 118, 119, 120, 121, 122, 235]),
+      // entrypoint plus a Bun line-mapping miss on the object-render close
+      // brace after the function's returned string has already been asserted.
+      lines: new Set([117, 118, 119, 120, 121, 122, 262]),
     },
   ],
   [
@@ -1700,20 +1701,25 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     ['src/client/http-client-requests.ts', { lines: new Set([141]) }],
     ['src/client/http-operations.ts', { lines: new Set([84, 85, 86, 87]) }],
     ['src/client/local-event-tail.ts', { functions: 2, lines: new Set([157, 158]) }],
-    ['src/client/local.ts', { functions: 1, lines: new Set([152]) }],
+    ['src/client/local.ts', { functions: 1, lines: new Set([153]) }],
     ['src/client/open-event-subscription.ts', { lines: new Set([51]) }],
     ['src/client/start-body.ts', { lines: new Set([15, 16, 17, 18]) }],
     ['src/connection.ts', { functions: 2, lines: new Set([211, 250, 251, 256, 257, 258, 259]) }],
     [
       'src/core/context/durable-operations.ts',
-      { lines: new Set([57, 58, 59, 60, 61, 62, 63, 239, 243, 244, 245]) },
+      {
+        // `ctx.sleep()` is exercised broadly through Context and engine tests.
+        // Bun still reports the exported wrapper generator signature as missed
+        // even when the yielded sleep request and cached-return path both run.
+        lines: new Set([57, 58, 59, 60, 61, 62, 63]),
+      },
     ],
     [
       // The retry-state corruption guards and non-Error retryability path are now
       // covered by focused unit tests. Bun still reports the generator loop's
       // closing brace as uncovered after the retry back-edge executes.
       'src/core/context/run-operation.ts',
-      { lines: new Set([356]) },
+      { lines: new Set([366]) },
     ],
     [
       'src/core/engine/activity-reconciliation.ts',
@@ -1836,6 +1842,11 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
   ],
 );
 
+// The two refresh layers are mutually exclusive: a key may live in at most one,
+// otherwise removing its row silently reactivates the other's (possibly stale)
+// allowance. Bind them once and pass the SAME references both into the ordered
+// merge list and into the exclusivity check, so the guarded pair can never drift
+// from the layers actually assembled.
 const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
   'AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS',
   [
@@ -2078,33 +2089,8 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
   ],
 );
 
-// The two refresh layers are mutually exclusive: a key may live in at most one,
-// otherwise removing its row silently reactivates the other's (possibly stale)
-// allowance. Bind them once and pass the SAME references both into the ordered
-// merge list and into the exclusivity check, so the guarded pair can never drift
-// from the layers actually assembled.
-const MAIN_REFRESH_LAYER: NamedAllowanceLayer = [
-  'CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH',
-  CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH,
-];
-const BRANCH_REFRESH_LAYER: NamedAllowanceLayer = [
-  'CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH',
-  CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH,
-];
-
-const ASSEMBLED_COVERAGE_ALLOWANCES = assembleAllowanceLayers(
-  [
-    ['BASE_COVERAGE_ALLOWANCES', BASE_COVERAGE_ALLOWANCES],
-    ['COVERAGE_ALLOWANCE_OVERRIDES', COVERAGE_ALLOWANCE_OVERRIDES],
-    ['CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES', CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES],
-    MAIN_REFRESH_LAYER,
-    BRANCH_REFRESH_LAYER,
-  ],
-  [MAIN_REFRESH_LAYER, BRANCH_REFRESH_LAYER],
-);
-
 function withCoverageAllowanceTopOffs(
-  baseAllowances: ReadonlyMap<string, CoverageAllowance>,
+  baseAllowances: Map<string, CoverageAllowance>,
   topOffs: ReadonlyMap<string, CoverageAllowance>,
 ): Map<string, CoverageAllowance> {
   const merged = new Map(baseAllowances);
@@ -2126,8 +2112,32 @@ function withCoverageAllowanceTopOffs(
   return merged;
 }
 
+const MAIN_REFRESH_LAYER: NamedAllowanceLayer = [
+  'CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH',
+  CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH,
+];
+const BRANCH_REFRESH_LAYER: NamedAllowanceLayer = [
+  'CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH',
+  CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH,
+];
+
+// The five historical layers assemble with last-wins replacement and the
+// MAIN/BRANCH refresh partition guard (#538). The audit-backlog top-offs are
+// then UNIONED on top (#524): for a file in both, line sets combine and function
+// counts sum — so a top-off augments, never replaces, an existing allowance.
+const COVERAGE_ALLOWANCE_BASE = assembleAllowanceLayers(
+  [
+    ['BASE_COVERAGE_ALLOWANCES', BASE_COVERAGE_ALLOWANCES],
+    ['COVERAGE_ALLOWANCE_OVERRIDES', COVERAGE_ALLOWANCE_OVERRIDES],
+    ['CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES', CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES],
+    MAIN_REFRESH_LAYER,
+    BRANCH_REFRESH_LAYER,
+  ],
+  [MAIN_REFRESH_LAYER, BRANCH_REFRESH_LAYER],
+);
+
 const COVERAGE_ALLOWANCES = withCoverageAllowanceTopOffs(
-  ASSEMBLED_COVERAGE_ALLOWANCES,
+  COVERAGE_ALLOWANCE_BASE,
   AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS,
 );
 

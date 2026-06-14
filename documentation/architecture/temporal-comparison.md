@@ -28,7 +28,7 @@ Now let's walk through each of the ten design failures in detail.
 
 Weft actually _uses_ `WeakRef` and `FinalizationRegistry` internally for memory management. The primitives Temporal bans are the ones Weft depends on.
 
-In development mode, Weft validates checkpoint serialization at each boundary. If you accidentally put a non-cloneable value (a closure, a class instance with methods) into your state, the engine emits a `DevelopmentWarningEvent` with a message and the divergent field paths.
+In development mode, Weft validates checkpoint serialization at each boundary. If you accidentally put a non-cloneable value (a closure, a class instance with methods) into your state, the engine emits a `DevelopmentWarningEvent` with a message and the divergent field paths—see [Development mode catches mistakes early](./checkpoint-versus-replay.md#development-mode-catches-mistakes-early) for the full walkthrough.
 
 ```typescript
 import { DevelopmentWarningEvent, Engine, MemoryStorage } from '@lostgradient/weft';
@@ -45,7 +45,7 @@ engine.addEventListener(DevelopmentWarningEvent.type, (event) => {
 });
 ```
 
-In Temporal, you discover serialization problems at replay time in production. In Weft, you discover them the moment you run your workflow in development.
+The contrast is _when_ you find out: in Temporal you discover serialization problems at replay time in production; in Weft you discover them the moment you run your workflow in development.
 
 ## Versioning complexity
 
