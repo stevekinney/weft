@@ -91,6 +91,18 @@ const RESOURCE_EVENT_NAMES = [
 export class McpSession {
   readonly id: string;
   readonly principal: Principal;
+  /**
+   * Per-session continuation secret minted at creation. Unlike {@link id} — which
+   * is returned on every response and so leaks through logs/proxies — this token is
+   * disclosed to the creating client exactly once (in the `initialize` response) and
+   * never echoed afterward. The HTTP transport requires it alongside the session id
+   * on every continuation request for sessions whose principal carries no other
+   * distinguishing secret (anonymous sessions under `authRequired: false`), so a
+   * leaked session id alone cannot drive, read, or terminate another caller's
+   * session. Authenticated sessions already re-present their credential per request
+   * and do not gate on this token.
+   */
+  readonly token: string;
   phase: McpSessionPhase = 'new';
   protocolVersion = '2025-11-25';
   readonly subscriptions = new Set<string>();
@@ -104,6 +116,7 @@ export class McpSession {
   constructor(id: string, principal: Principal, currentTimeMilliseconds = Date.now()) {
     this.id = id;
     this.principal = principal;
+    this.token = crypto.randomUUID();
     this.createdAtMilliseconds = currentTimeMilliseconds;
     this.lastActivityMilliseconds = currentTimeMilliseconds;
   }
