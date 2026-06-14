@@ -164,7 +164,7 @@ const result = yield * ctx.run('charge', order); // autocompletes from the regis
 
 **The Temporal problem.** Temporal has a ~50K event history limit per workflow execution. Long-running workflows—subscription loops, monitoring workflows, order lifecycle management—must periodically call `continueAsNew()` to reset their history. This requires manually serializing all state, re-registering all signal handlers, and reconstructing all local variables. Getting this wrong causes data loss.
 
-**The Weft answer.** Checkpoints are fixed-size snapshots of the current state, not a growing event log. Where Temporal's history grows linearly with activity count until it hits the ~50K-event limit, a Weft checkpoint stays the same size whether the workflow has executed 10 activities or a million—it holds only the current locals. The [No history growth, no continueAsNew](./checkpoint-versus-replay.md#no-history-growth-no-continueasnew) section lays out the size comparison side by side.
+**The Weft answer.** Checkpoints are fixed-size snapshots of the current state, not a growing event log. Where Temporal's history grows linearly with activity count until it hits the ~50K-event limit, a Weft checkpoint stays the same size whether the workflow has executed 10 activities or a million—it holds only the current locals. The [Bounded checkpoints, no continueAsNew](./checkpoint-versus-replay.md#bounded-checkpoints-no-continueasnew) section lays out the size comparison side by side.
 
 There is no `continueAsNew`, no history limit, no manual state serialization. A workflow can run for years without any special handling.
 
