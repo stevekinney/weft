@@ -182,6 +182,8 @@ export type {
   WorkflowFunction,
   WorkflowGenerator,
   WorkflowId,
+  WorkflowLogLevel,
+  WorkflowLogRecord,
   WorkflowLogger,
   WorkflowRegistry,
   WorkflowReplay,

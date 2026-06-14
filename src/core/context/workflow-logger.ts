@@ -1,8 +1,4 @@
-import type {
-  WorkflowLogger,
-  WorkflowLogLevel,
-  WorkflowLogRecord,
-} from '../types/workflow-context.ts';
+import type { WorkflowLogger, WorkflowLogLevel, WorkflowLogRecord } from '../types/workflow-log.ts';
 import type { ContextInternals } from './internals.ts';
 
 /**
@@ -35,6 +31,15 @@ export interface WorkflowLoggerBindings {
   isReplaying(): boolean;
   /** Wall-clock millisecond timestamp for the record (never checkpointed). */
   now(): number;
+  /**
+   * Optional host sink (`EngineOptions.onLog`). When provided, each non-replayed
+   * record is routed here INSTEAD of the console — the host owns where logs go
+   * (pino / winston / OpenTelemetry / etc.). When absent, records fall back to the
+   * matching `console` method, preserving the default behavior. `onLog` is fixed at
+   * engine construction (it has no public setter), so this is a captured value, not
+   * a per-emit resolver.
+   */
+  readonly sink?: (record: WorkflowLogRecord) => void;
 }
 
 /**
@@ -61,8 +66,10 @@ function buildLogRecord(
 /**
  * Create a {@link WorkflowLogger} from the given bindings. Each method suppresses
  * emission when `bindings.isReplaying()` is true (so a recovered run does not
- * re-emit logs from the replayed prefix) and otherwise dispatches the structured
- * record to the matching `console` method.
+ * re-emit logs from the replayed prefix). A non-replayed record is routed to the
+ * host sink (`bindings.sink`) when one is installed, and otherwise to the matching
+ * `console` method — so a host that wires `EngineOptions.onLog` takes full control
+ * of log routing without duplicate console noise, while the default stays console.
  */
 export function createWorkflowLogger(bindings: WorkflowLoggerBindings): WorkflowLogger {
   const emit = (
@@ -72,6 +79,10 @@ export function createWorkflowLogger(bindings: WorkflowLoggerBindings): Workflow
   ): void => {
     if (bindings.isReplaying()) return;
     const record = buildLogRecord(bindings, level, message, attributes);
+    if (bindings.sink !== undefined) {
+      bindings.sink(record);
+      return;
+    }
     console[CONSOLE_METHOD[level]](record);
   };
   return {
@@ -88,12 +99,15 @@ export function createWorkflowLogger(bindings: WorkflowLoggerBindings): Workflow
  * `ctx.accumulatedResults` getter) and the live `internals.stepIndex` without
  * incrementing it — `ctx.log` consumes no durable position, the same step-neutral
  * peek `waitForSignal` makes. `getInternals` is read per emit so the probe tracks
- * the frontier as durable ops advance `stepIndex`.
+ * the frontier as durable ops advance `stepIndex`. The `sink` is captured by value:
+ * `EngineOptions.onLog` is fixed at engine construction, so it never changes for the
+ * life of the context.
  */
 export function createInlineWorkflowLogger(
   workflowId: string,
   workflowType: string,
   getInternals: () => Pick<ContextInternals, 'accumulatedResults' | 'stepIndex' | 'getNow'>,
+  sink?: (record: WorkflowLogRecord) => void,
 ): WorkflowLogger {
   return createWorkflowLogger({
     workflowId,
@@ -103,6 +117,7 @@ export function createInlineWorkflowLogger(
       return internals.accumulatedResults?.has(internals.stepIndex) ?? false;
     },
     now: () => getInternals().getNow(),
+    ...(sink !== undefined && { sink }),
   });
 }
 

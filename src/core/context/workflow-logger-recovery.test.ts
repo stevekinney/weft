@@ -5,8 +5,8 @@ import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 import { captureWorkflowLogConsole } from '../../testing/workflow-log-capture.test-support.ts';
 import { Engine } from '../engine.ts';
 import { activity } from '../types.ts';
-import type { WorkflowLogRecord } from '../types/workflow-context.ts';
 import { workflow } from '../types/workflow-function.ts';
+import type { WorkflowLogRecord } from '../types/workflow-log.ts';
 
 /**
  * Engine-level replay-safety tests for `ctx.log`. Unlike the unit tests in

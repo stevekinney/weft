@@ -9,6 +9,7 @@
 import type { ContextOptions } from './context.ts';
 import type { ComposedWorkflowInterceptor } from './interceptor.ts';
 import type { SearchAttributeSchema, WorkflowFunction } from './types.ts';
+import type { WorkflowLogRecord } from './types/workflow-log.ts';
 
 /** Capabilities the engine injects into the inline strategy at construction. */
 export interface InlineExecutionDependencies {
@@ -30,6 +31,12 @@ export interface InlineExecutionDependencies {
    * to the body as `ctx.services`. Returns `undefined` when none was supplied.
    */
   getWorkflowServices?: (workflowId: string) => unknown;
+  /**
+   * The host log sink (`EngineOptions.onLog`) for `ctx.log` records, or
+   * `undefined` for the default console behavior. Engine-scoped, so it takes no
+   * workflow id.
+   */
+  getLogSink?: () => ((record: WorkflowLogRecord) => void) | undefined;
 }
 
 /** A registration resolved through {@link InlineExecutionDependencies.getRegistration}, narrowed to the present case. */
@@ -81,5 +88,21 @@ export function createInlineContextOptions(
       registerCancelHandler: (handler) => registerCancelHandler(parameters.workflowId, handler),
     }),
     services: dependencies.getWorkflowServices?.(parameters.workflowId),
+    ...resolveLogSinkOption(dependencies),
   };
+}
+
+/**
+ * Resolve the optional `logSink` context option from the engine's `getLogSink`
+ * accessor. `EngineOptions.onLog` is fixed at engine construction, so this returns
+ * the captured value (or an empty object that omits the key when no sink is
+ * installed, keeping `ContextOptions` valid under `exactOptionalPropertyTypes`).
+ * Kept as a one-branch helper because inlining the conditional spread tips
+ * `createInlineContextOptions` over the cyclomatic-complexity cap.
+ */
+function resolveLogSinkOption(dependencies: InlineExecutionDependencies): {
+  logSink?: (record: WorkflowLogRecord) => void;
+} {
+  const logSink = dependencies.getLogSink?.();
+  return logSink === undefined ? {} : { logSink };
 }

@@ -106,8 +106,11 @@ export class Context implements WorkflowContext {
     return getInternals(this).services;
   }
   get log(): WorkflowLogger {
-    return (this.#log ??= createInlineWorkflowLogger(this.workflowId, this.workflowType, () =>
-      getInternals(this),
+    return (this.#log ??= createInlineWorkflowLogger(
+      this.workflowId,
+      this.workflowType,
+      () => getInternals(this),
+      getInternals(this).logSink,
     ));
   }
   get stepIndex(): number {

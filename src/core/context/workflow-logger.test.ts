@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { captureWorkflowLogConsoleWithMethods } from '../../testing/workflow-log-capture.test-support.ts';
 import { Context } from '../context.ts';
+import type { WorkflowLogRecord } from '../types/workflow-log.ts';
 import { getInternals } from './internals.ts';
 import { createWorkflowLogger, type WorkflowLoggerBindings } from './workflow-logger.ts';
 
@@ -82,6 +83,42 @@ describe('createWorkflowLogger (shared factory)', () => {
     logger.info('b'); // live → emitted
     logger.info('c'); // replaying → suppressed
     expect(captured.records.map((r) => r.record.message)).toEqual(['b']);
+  });
+
+  describe('host sink (EngineOptions.onLog)', () => {
+    it('routes records to the sink INSTEAD of the console when a sink is installed', () => {
+      const sunk: WorkflowLogRecord[] = [];
+      const logger = createWorkflowLogger(bindings({ sink: (r) => sunk.push(r) }));
+      logger.info('to-sink', { k: 1 });
+
+      // The host sink received the full structured record...
+      expect(sunk).toHaveLength(1);
+      expect(sunk[0]).toMatchObject({
+        level: 'info',
+        message: 'to-sink',
+        workflowId: 'wf-1',
+        workflowType: 'demo',
+        attributes: { k: 1 },
+      });
+      // ...and the console was NOT also called (opt-out, no duplicate noise).
+      expect(captured.records).toHaveLength(0);
+    });
+
+    it('falls back to the console when no sink is installed (default behavior preserved)', () => {
+      const logger = createWorkflowLogger(bindings());
+      logger.warn('to-console');
+      expect(captured.records.map((r) => r.record.message)).toEqual(['to-console']);
+    });
+
+    it('does not call the sink for records suppressed during replay', () => {
+      const sunk: WorkflowLogRecord[] = [];
+      const logger = createWorkflowLogger(
+        bindings({ isReplaying: () => true, sink: (r) => sunk.push(r) }),
+      );
+      logger.error('replayed');
+      expect(sunk).toHaveLength(0);
+      expect(captured.records).toHaveLength(0);
+    });
   });
 });
 

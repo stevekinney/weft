@@ -1,6 +1,6 @@
 import { mock } from 'bun:test';
 
-import type { WorkflowLogLevel, WorkflowLogRecord } from '../core/types/workflow-context.ts';
+import type { WorkflowLogLevel, WorkflowLogRecord } from '../core/types/workflow-log.ts';
 
 export type CapturedWorkflowLogRecord = {
   method: WorkflowLogLevel;

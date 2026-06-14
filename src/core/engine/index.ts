@@ -468,6 +468,7 @@ export class Engine<
       registerCancelHandler: (workflowId, handler) =>
         registerCancelHandler(getInternals(this), workflowId, handler),
       getWorkflowServices: (workflowId) => getInternals(this).workflowServices.get(workflowId),
+      getLogSink: () => getInternals(this).options.onLog ?? undefined,
     });
     getInternals(this).storage = storage;
     getInternals(this).abortController = new AbortController();

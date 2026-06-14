@@ -31,6 +31,7 @@ interface EngineOptions {
   activityExecution?: ActivityExecutionOptions;
   alerts?: AlertOptions[];
   interceptors?: readonly Interceptor[];
+  onLog?: (record: WorkflowLogRecord) => void;
 }
 ```
 
@@ -57,6 +58,7 @@ interface EngineOptions {
 | `activityExecution`               | `ActivityExecutionOptions` | `undefined`           | Configuration for activity execution behavior                                                                                                                                                                                                           |
 | `alerts`                          | `AlertOptions[]`           | `undefined`           | Metric alert thresholds that fire `AlertFiredEvent` / `AlertResolvedEvent`                                                                                                                                                                              |
 | `interceptors`                    | `readonly Interceptor[]`   | `undefined`           | Unified workflow/activity interceptors registered at construction.                                                                                                                                                                                      |
+| `onLog`                           | `(record) => void`         | `undefined`           | Host sink for `ctx.log` records. When set, non-replayed inline records route here (pino / winston / OpenTelemetry, etc.) instead of the console; when omitted, the default console behavior is preserved. Worker-mode routing is tracked in issue #529. |
 
 **Example:**
 

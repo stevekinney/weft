@@ -29,6 +29,7 @@ export * from './types/workflow-builder-runtime.ts';
 export * from './types/workflow-builder.ts';
 export * from './types/workflow-context.ts';
 export * from './types/workflow-function.ts';
+export * from './types/workflow-log.ts';
 export * from './types/workflow-registries.ts';
 export * from './types/workflow-registry.ts';
 export * from './types/workflow-snapshot.ts';
