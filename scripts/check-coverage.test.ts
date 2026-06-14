@@ -297,13 +297,18 @@ describe('assembleAllowanceLayers', () => {
 });
 
 describe('readCoveragePathIgnorePatterns', () => {
-  it('reads the coveragePathIgnorePatterns array from bunfig.toml', () => {
+  it('returns exactly the coveragePathIgnorePatterns array parsed from bunfig.toml', async () => {
     // Single source of truth: the patterns come from bunfig.toml, not a hardcoded list.
-    // The repo currently ignores its own coverage script.
-    const patterns = readCoveragePathIgnorePatterns();
-    expect(Array.isArray(patterns)).toBe(true);
-    expect(patterns).toContain('scripts/check-coverage.ts');
-    expect(patterns.every((pattern) => typeof pattern === 'string')).toBe(true);
+    // Assert against the file's actual contents (parsed independently here) rather than a
+    // pinned member, so the test does not break when the ignore list legitimately changes
+    // — it only fails if the function stops reflecting bunfig.toml.
+    const bunfigText = await Bun.file(new URL('../bunfig.toml', import.meta.url)).text();
+    const parsed = Bun.TOML.parse(bunfigText) as {
+      test?: { coveragePathIgnorePatterns?: unknown };
+    };
+    const expected = parsed.test?.coveragePathIgnorePatterns;
+
+    expect(readCoveragePathIgnorePatterns()).toEqual(expected);
   });
 });
 
@@ -438,10 +443,18 @@ describe('allowanceKeyMatchesIgnorePattern agrees with Bun coverage-ignore seman
           `[test]\ncoveragePathIgnorePatterns = ["${pattern}"]\n`,
         );
         await rm(join(root, 'coverage'), { recursive: true, force: true });
-        await Bun.$`bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage`
-          .cwd(root)
-          .quiet()
-          .nothrow();
+        const coverageRun =
+          await Bun.$`bun test --coverage --coverage-reporter=lcov --coverage-dir=coverage`
+            .cwd(root)
+            .quiet()
+            .nothrow();
+        // Assert the coverage run itself succeeded. A non-zero exit can still leave a
+        // partial or empty lcov, which would silently skew the exclusion set below — so
+        // fail here, at the real cause, rather than later on an opaque file read.
+        expect(
+          coverageRun.exitCode,
+          `bun test --coverage failed for pattern "${pattern}": ${coverageRun.stderr.toString()}`,
+        ).toBe(0);
         const lcov = await Bun.file(join(root, 'coverage', 'lcov.info')).text();
         const bunExcluded = new Set(
           files.filter((file) => !lcov.split('\n').some((line) => line === `SF:${file}`)),
