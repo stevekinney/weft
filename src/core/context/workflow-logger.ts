@@ -74,6 +74,12 @@ function buildLogRecord(
  * host sink (`bindings.sink`) when one is installed, and otherwise to the matching
  * `console` method — so a host that wires `EngineOptions.onLog` takes full control
  * of log routing without duplicate console noise, while the default stays console.
+ *
+ * A logger must never be able to crash the thing it is logging: if the host sink
+ * throws (a serialization error, a transport failure, a bug in the callback — all
+ * realistic for the pino / winston / OpenTelemetry integrations this targets), the
+ * throw is swallowed and the record falls back to `console` so the workflow run is
+ * not marked failed by a logging error.
  */
 export function createWorkflowLogger(bindings: WorkflowLoggerBindings): WorkflowLogger {
   const emit = (
@@ -84,7 +90,11 @@ export function createWorkflowLogger(bindings: WorkflowLoggerBindings): Workflow
     if (bindings.isReplaying()) return;
     const record = buildLogRecord(bindings, level, message, attributes);
     if (bindings.sink !== undefined) {
-      bindings.sink(record);
+      try {
+        bindings.sink(record);
+      } catch {
+        console[CONSOLE_METHOD[level]](record);
+      }
       return;
     }
     console[CONSOLE_METHOD[level]](record);

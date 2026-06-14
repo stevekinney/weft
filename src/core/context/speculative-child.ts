@@ -33,6 +33,12 @@ function assignOptionalContextOptions(options: ContextOptions, internals: Contex
   if (internals.services !== undefined) {
     options.services = internals.services;
   }
+  // The host log sink (`EngineOptions.onLog`) must reach speculative children too, or
+  // `ctx.log` inside a `ctx.speculate` branch silently routes to console while the rest
+  // of the run honors the sink.
+  if (internals.logSink !== undefined) {
+    options.logSink = internals.logSink;
+  }
 }
 
 function createSpeculativeChildOptions(
