@@ -61,6 +61,7 @@ description: >-
 22. For race/all branch coverage, drive real workflows through top-level and nested coordinators before adding helper-level assertions. Prove losing signal branches do not consume `sig:` records, winning branches checkpoint encoded values, and `ctx.all` waits for all finalizers before throwing.
 23. For schedule and `startOrSignal` coverage, prove real lifecycle edges: cancelled schedules cannot resume, cleanup-error callbacks report failures, buffered-signal races converge on one winner, and plain storage batch failures do not masquerade as idempotent success.
 24. For coverage artifact filters, require both a generalized temporary-root prefix and the known generated-fixture filename pattern; add negative tests proving unrelated files under `tmp/` still count as uncovered.
+25. For coverage allowance edits, test duplicate allowance keys and cross-layer-shadowed keys explicitly so one broad production allowance cannot hide a narrower source/test allowance.
 
 ## Verification
 

@@ -58,6 +58,7 @@ description: >-
 20. For task attempt tokens, preserve additive wire compatibility: missing tokens keep worker-id fallback for older workers and token-less records, while present-but-wrong or malformed tokens reject without completing the task.
 21. For persisted workflow version metadata, write only `versionTuple` on fresh state, lift old flat `version` / `agentVersion` / `toolVersions` records through `decodeWorkflowState()`, route diagnostics through the decoder, and regenerate replay/checkpoint fixtures only after verifying the diff is shape-only.
 22. For versioning changes, keep `checkVersionCompatibility()` to compatible/incompatible outcomes, keep `weft version:check` to safe/unsafe reporting, and do not reintroduce `migrate`, `migrateCheckpoint`, or `needs-migration` surfaces unless the task explicitly restores them with storage fixtures.
+23. When persisted data or checkpoint wording is touched, frame exact-schema rejection as the current contract: Weft does not upgrade older database records in place unless the task explicitly adds and tests that upgrade path.
 
 ## Verification
 
