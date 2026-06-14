@@ -40,22 +40,17 @@ export type WorkflowVersionDiff = {
 /**
  * Collect sorted `"${name}@${version}"` version strings from a tool array.
  *
- * Each element must expose a flat `name` or the old internal
- * `definition.name` compatibility shape, plus an optional `version`. Missing
- * versions default to `"0.0.0"`. The returned array is sorted alphabetically
- * so comparisons are order-independent.
+ * Each element exposes a `name` plus an optional `version`. Missing versions
+ * default to `"0.0.0"`. The returned array is sorted alphabetically so
+ * comparisons are order-independent.
  */
 export function collectToolVersions(
-  tools: Array<
-    | { name: string; version?: string | undefined }
-    | { definition: { name: string }; version?: string | undefined }
-  >,
+  tools: Array<{ name: string; version?: string | undefined }>,
 ): string[] {
   return tools
     .map((tool) => {
-      const name = 'name' in tool ? tool.name : tool.definition.name;
-      if (!name) throw new Error(`collectToolVersions: tool is missing a required name field`);
-      return `${name}@${tool.version ?? '0.0.0'}`;
+      if (!tool.name) throw new Error(`collectToolVersions: tool is missing a required name field`);
+      return `${tool.name}@${tool.version ?? '0.0.0'}`;
     })
     .toSorted();
 }

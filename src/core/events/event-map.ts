@@ -7,7 +7,7 @@ import type {
   TaskResultDeadLetteredEvent,
 } from './activity-events.ts';
 import type { AttributesChangedEvent } from './attribute-events.ts';
-import type { ScheduleMissedFireEvent } from './schedule-events.ts';
+import type { ScheduleFiredEvent, ScheduleMissedFireEvent } from './schedule-events.ts';
 import type { SignalDeliveredEvent, SignalReceivedEvent } from './signal-events.ts';
 import type {
   AlertFiredEvent,
@@ -66,6 +66,7 @@ export type WeftEventMap = {
   'task:dead-lettered': TaskResultDeadLetteredEvent;
   'signal:received': SignalReceivedEvent;
   'signal:delivered': SignalDeliveredEvent;
+  'schedule:fired': ScheduleFiredEvent;
   'human-review:requested': ReviewRequestedEvent;
   'human-review:completed': ReviewCompletedEvent;
   'attributes:changed': AttributesChangedEvent;

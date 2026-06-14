@@ -12,6 +12,7 @@ import type {
   WeftClient as CatalogOperations,
 } from '../cli/generated/operation-client.generated.ts';
 import type { StoredStreamChunk } from '../core/context.ts';
+import type { StartOrSignalOutcome as EngineStartOrSignalOutcome } from '../core/engine/handles.ts';
 import type { TypedEventTarget, WeftEventMap } from '../core/events.ts';
 import type {
   AttributeFilterKey,
@@ -78,6 +79,15 @@ export type ClientStartOptions = Omit<StartOptions, 'defer' | 'services'> & {
 // Client handle — lightweight reference to a running workflow
 // ---------------------------------------------------------------------------
 
+// `StartOrSignalOutcome` is defined once in the engine layer (the engine
+// produces the value) and re-exported here so client consumers import it
+// alongside `ClientHandle` without reaching into `core/engine`. `'started'`
+// when the call created the run; `'signalled'` when it signalled a run that
+// already existed, including losing a concurrent same-key create race and
+// converging onto the winner. Each call returns its OWN handle, so converged
+// concurrent callers each observe their own per-call outcome.
+export type StartOrSignalOutcome = EngineStartOrSignalOutcome;
+
 /**
  * A reference to a workflow that provides convenience methods.
  *
@@ -120,6 +130,13 @@ export interface ClientHandle<TResult = unknown>
   extends TypedEventTarget<WeftEventMap>, Disposable {
   /** The workflow's unique identifier. */
   readonly id: string;
+
+  /**
+   * For a {@link WeftClient.startOrSignal} handle, which atomic path the call
+   * took (see {@link StartOrSignalOutcome}); `undefined` on handles from any
+   * other call (`start`, `getHandle`, `resume`, …).
+   */
+  readonly outcome: StartOrSignalOutcome | undefined;
 
   /** Resolves when the workflow completes (or rejects on failure). */
   result(): Promise<TResult>;
@@ -382,6 +399,20 @@ export interface WeftClient {
 
   /** Get the full persisted state of a workflow, or `null` if not found. */
   get(id: string): Promise<WorkflowState | null>;
+
+  /**
+   * Re-attach a {@link ClientHandle} to an existing workflow by id, or `null`
+   * when none exists — handle ergonomics for a run you did not start yourself.
+   * `result()` on an already-terminal run resolves (or rejects) from persisted
+   * state, so a fire-and-forget run can be observed later without hand-rolling
+   * terminal-status polling. Supplying the workflow name as a type argument
+   * (`getHandle<'my-workflow'>(id)`) narrows `result()` to that workflow's output
+   * when the {@link WorkflowRegistry} is augmented; the name is a type hint only.
+   */
+  getHandle(id: string): Promise<ClientHandle | null>;
+  getHandle<TName extends KnownWorkflowName>(
+    id: string,
+  ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>> | null>;
 
   /** Get the current summary of a recurring schedule, or `null` if not found. */
   getSchedule(id: string): Promise<ScheduleSummary | null>;

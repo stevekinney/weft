@@ -155,7 +155,7 @@ export type CatalogOperationTypes = {
   'weft.reviews.list': {
     readonly input: {
       readonly reviewType?: string;
-      readonly status?: string;
+      readonly status?: 'pending' | 'completed';
       readonly workflowId?: string;
     };
     readonly output: { readonly items: ReadonlyArray<unknown> };
@@ -238,7 +238,7 @@ export type CatalogOperationTypes = {
         readonly oldestEnqueuedAt: unknown;
         readonly oldestQueuedAgeMs: unknown;
         readonly queue: string;
-        readonly schedulingPolicy: string;
+        readonly schedulingPolicy: 'priority' | 'fifo' | 'lifo';
         readonly waitingPollers: number;
       }>;
     };
@@ -262,8 +262,13 @@ export type CatalogOperationTypes = {
         readonly evidence: ReadonlyArray<string>;
         readonly executionLatencyMs?: number;
         readonly heartbeatAgeMs?: number;
-        readonly kind: string;
-        readonly lastRequeueReason?: string;
+        readonly kind:
+          | 'stuck-queued'
+          | 'stale-inflight'
+          | 'retry-storm'
+          | 'all-workers-at-capacity'
+          | 'dead-lettered';
+        readonly lastRequeueReason?: 'visibility-timeout' | 'worker-disconnect';
         readonly operationId?: string;
         readonly queue?: string;
         readonly queueLatencyMs?: number;
@@ -271,7 +276,7 @@ export type CatalogOperationTypes = {
         readonly resolutionReason?: string;
         readonly retryAttempts?: number;
         readonly retryCount: number;
-        readonly state: string;
+        readonly state: 'queued' | 'inflight' | 'resolved' | 'capacity' | 'dead-lettered';
         readonly storageError?: string;
         readonly workerId?: string;
         readonly workflowId?: string;
@@ -317,7 +322,7 @@ export type CatalogOperationTypes = {
         readonly drainedWorkers: number;
         readonly drainingWorkers: number;
         readonly gitSha: unknown;
-        readonly health: string;
+        readonly health: 'active' | 'draining' | 'drained';
         readonly inFlight: number;
         readonly oldestStartedAt: unknown;
         readonly runtimeVersion: unknown;
@@ -332,7 +337,7 @@ export type CatalogOperationTypes = {
         readonly connectedAt: number;
         readonly deploymentName?: string;
         readonly gitSha?: string;
-        readonly health: string;
+        readonly health: 'active' | 'draining' | 'drained';
         readonly heartbeatAgeMs: number;
         readonly id: string;
         readonly inFlight: number;
@@ -341,7 +346,7 @@ export type CatalogOperationTypes = {
         readonly runtimeVersion?: string;
         readonly startedAt: number;
       }>;
-      readonly routingPolicy: string;
+      readonly routingPolicy: 'least-loaded' | 'round-robin' | 'fair-share';
     };
     readonly faults: never;
   };
@@ -432,7 +437,7 @@ export type CatalogOperationTypes = {
       readonly confirmationToken?: string;
       readonly dryRun?: boolean;
       readonly filter?: SharedAttributesCreatedAtExecu_c9ba5dc6;
-      readonly operation: string;
+      readonly operation: 'add' | 'remove';
       readonly requestId?: string;
       readonly tags: ReadonlyArray<string>;
     };
@@ -556,7 +561,7 @@ export type CatalogOperationTypes = {
       readonly tags?: unknown;
       readonly type: unknown;
     };
-    readonly output: { readonly id: string };
+    readonly output: { readonly id: string; readonly outcome: 'started' | 'signalled' };
     readonly faults: 'Conflict';
   };
   'weft.workflows.streams.chunks': {

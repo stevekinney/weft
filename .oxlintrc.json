@@ -91,6 +91,12 @@
       }
     },
     {
+      "files": ["src/client/interface.ts"],
+      "rules": {
+        "max-lines": ["error", { "max": 650, "skipBlankLines": false, "skipComments": false }]
+      }
+    },
+    {
       "files": [
         "src/client/http-client-requests.ts",
         "src/core/engine/checkpoint-io.ts",

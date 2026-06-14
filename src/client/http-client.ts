@@ -89,6 +89,7 @@ import type {
   ClientHandle,
   ClientScheduleHandle,
   ClientStartOptions,
+  StartOrSignalOutcome,
   UpdateResult,
   WeftClient,
   WeftClientActivity,
@@ -220,14 +221,16 @@ export class HttpClient implements WeftClient {
     options?: ClientStartOptions,
   ): Promise<ClientHandle> {
     const body = buildStartOrSignalBody(type, input, signal, options);
-    const response = await request<{ id: string }>(
+    const response = await request<{ id: string; outcome: StartOrSignalOutcome }>(
       this.baseUrl,
       '/workflows/start-or-signal',
       this.headers,
       { method: 'POST', body: JSON.stringify(body) },
     );
 
-    return new HttpHandle(response.id, this);
+    // Each HTTP call gets its own response body, so converged concurrent callers
+    // each receive their own per-call outcome — no shared-handle clobbering (#466).
+    return new HttpHandle(response.id, this, response.outcome);
   }
   // jscpd:ignore-end
 
@@ -268,6 +271,19 @@ export class HttpClient implements WeftClient {
 
   async get(id: string): Promise<WorkflowState | null> {
     return getWorkflowRequest(this, id);
+  }
+
+  async getHandle(id: string): Promise<ClientHandle | null>;
+  async getHandle<TName extends KnownWorkflowName>(
+    id: string,
+  ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>> | null>;
+  async getHandle(id: string): Promise<ClientHandle | null> {
+    // Probe persisted existence over REST; a missing run yields `null` rather
+    // than a handle that would fault on first use. An existing run gets the
+    // same `HttpHandle` ergonomics `start`/`resume` return.
+    const state = await getWorkflowRequest(this, id);
+    if (state === null) return null;
+    return new HttpHandle(id, this);
   }
 
   async getSchedule(id: string): Promise<ScheduleSummary | null> {

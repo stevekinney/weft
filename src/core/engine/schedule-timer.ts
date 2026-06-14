@@ -183,7 +183,7 @@ async function processScheduleTimerOccurrences(
   for (const [index, occurrence] of work.occurrencesToProcess.entries()) {
     const finalOccurrence = index === work.occurrencesToProcess.length - 1;
     nextState = {
-      ...(await callbacks.applyScheduleOccurrence(nextState)),
+      ...(await callbacks.applyScheduleOccurrence(nextState, occurrence)),
       lastFireAt: occurrence,
       updatedAt: now,
     };

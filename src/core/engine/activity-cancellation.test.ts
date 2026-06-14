@@ -126,4 +126,91 @@ describe('#453 cooperative activity cancellation', () => {
     expect(observedThrow).toBe(true);
     expect(await settled).toBe('rejected');
   });
+
+  it('lets a polling activity bail out synchronously via signal.throwIfAborted()', async () => {
+    // The canonical cooperative-cancellation pattern in the docs: a polling loop
+    // calls `ctx.signal.throwIfAborted()` at the top of each iteration so the
+    // activity stops the moment the workflow is cancelled — no iteration runs after
+    // the abort. The throw stops the activity, but the workflow handle still rejects
+    // with the engine's terminal cancellation error ("Workflow cancelled"), not the
+    // activity's own thrown error, since `engine.cancel()` tears the run down. The
+    // loop is gated on a test-controlled promise per iteration (a deterministic
+    // stand-in for "wait for the next poll tick") so cancellation can interleave
+    // between polls without relying on wall-clock timing.
+    await using engine = new Engine();
+    let iterations = 0;
+    let started = false;
+    let bailedOut = false;
+
+    let releaseNextPoll: () => void = () => {};
+    const nextPollGate = (): Promise<void> =>
+      new Promise<void>((resolve) => {
+        releaseNextPoll = resolve;
+      });
+    let pollGate = nextPollGate();
+
+    const pollingActivity = activity({
+      name: 'poll',
+      execute: async (_input: unknown, ctx?: ActivityContext) => {
+        started = true;
+        // Bounded loop so a missed abort fails as a wrong iteration count, never hangs.
+        for (let index = 0; index < 1000; index += 1) {
+          try {
+            ctx?.signal.throwIfAborted();
+          } catch (error) {
+            bailedOut = true;
+            throw error;
+          }
+          iterations += 1;
+          await pollGate;
+          pollGate = nextPollGate();
+        }
+        return 'poll-done';
+      },
+    });
+
+    engine.register(
+      workflow({ name: 'poll-wf' })
+        .activities({ poll: pollingActivity })
+        .execute(async function* (ctx: WorkflowContext) {
+          return yield* ctx.run('poll');
+        }),
+    );
+
+    const handle = await engine.start('poll-wf', null, { id: 'poll-1' });
+    await waitForCondition(() => started, { timeoutMs: 2000, label: 'polling activity started' });
+    const settled = handle.result().then(
+      () => ({ outcome: 'resolved' as const, message: '' }),
+      (error: unknown) => ({
+        outcome: 'rejected' as const,
+        message: error instanceof Error ? error.message : String(error),
+      }),
+    );
+
+    // Let a couple of polls run, then cancel while the activity is parked on the gate.
+    releaseNextPoll();
+    await flushMicrotasks();
+    releaseNextPoll();
+    await flushMicrotasks();
+    const iterationsBeforeCancel = iterations;
+    expect(iterationsBeforeCancel).toBeGreaterThanOrEqual(2);
+
+    await engine.cancel('poll-1');
+    // Release the gate so the loop resumes — its next `throwIfAborted()` must bail.
+    releaseNextPoll();
+
+    await waitForCondition(() => bailedOut, {
+      timeoutMs: 2000,
+      label: 'polling activity bailed out via throwIfAborted',
+    });
+    expect(bailedOut).toBe(true);
+    // The workflow rejects with the engine's stable terminal cancellation error,
+    // not the activity's own thrown error.
+    const result = await settled;
+    expect(result.outcome).toBe('rejected');
+    expect(result.message).toContain('Workflow cancelled');
+
+    // The bail-out happened at the top of the resumed iteration: no further poll ran.
+    expect(iterations).toBe(iterationsBeforeCancel);
+  });
 });

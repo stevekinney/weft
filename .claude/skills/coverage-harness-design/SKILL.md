@@ -20,6 +20,8 @@ description: >-
 - Covering callback creator bundles whose wrappers delegate to cleanup handlers, including time-operation and stream cleanup-error paths that coverage may miss until invoked directly.
 - Covering `.test-support.ts` harness modules whose consumers execute the behavior but Bun reports nested callback or unnamed-function misses.
 - Restoring coverage after feature work by adding focused regressions for real edge paths before touching allowances, such as `LocalClient.startOrSignal`, start-body helpers, fair-share counters, pre-ready health, TLS server config, cleanup timers, workflow handle cache replacement, corrupt serializer payloads, MCP list filters, and bulk-delete terminal revalidation.
+- Restoring coverage for session state, `startOrSignal`, schedules, and parity wait helpers by driving real helper behavior first, then deleting stale production branches or allowance entries only when tests prove they are dead.
+- Fixing `scripts/check-coverage.ts` path filtering for Bun-generated temporary workflow fixtures, especially when coverage runs from deep git worktrees that record `private/tmp/` or `tmp/` paths with more `../` segments.
 - Restoring retry/checkpoint coverage around `run-operation` by proving corrupt persisted retry attempts or sleep counts fail, missing retry policies on replay fail, non-`Error` failures still honor `nonRetryableErrors`, and retry-to-sleep-to-success paths checkpoint correctly.
 - Covering inline parking regressions where a workflow waiting on `waitForSignal()` replays, resumes, or serves `ctx.onQuery()` from a retained context.
 - Covering `ctx.race()` / `ctx.all()` sleep and wait-signal branches, including nested deferred-consume envelopes, `ctx.speculate` finalization, duplicate signal-name rejection, and long sleep disposal.
@@ -57,6 +59,8 @@ description: >-
 20. For retry-state coverage, drive the persisted-state edge rather than asserting the helper directly when possible; only expose `ForTesting` helpers when the branch is otherwise unreachable through a real workflow drive.
 21. For inline parking coverage, prefer a real workflow that parks on `waitForSignal()`, queries while parked, resumes to a second park, and proves replay failure handling instead of only inspecting parked-context maps.
 22. For race/all branch coverage, drive real workflows through top-level and nested coordinators before adding helper-level assertions. Prove losing signal branches do not consume `sig:` records, winning branches checkpoint encoded values, and `ctx.all` waits for all finalizers before throwing.
+23. For schedule and `startOrSignal` coverage, prove real lifecycle edges: cancelled schedules cannot resume, cleanup-error callbacks report failures, buffered-signal races converge on one winner, and plain storage batch failures do not masquerade as idempotent success.
+24. For coverage artifact filters, require both a generalized temporary-root prefix and the known generated-fixture filename pattern; add negative tests proving unrelated files under `tmp/` still count as uncovered.
 
 ## Verification
 
@@ -66,5 +70,6 @@ description: >-
 - For retry-state coverage, run `bun test src/core/context/run-operation.test.ts` before the coverage gate.
 - For inline parking coverage, run `bun test src/core/engine/inline-parking.test.ts src/core/engine.test.ts src/core/engine/suspend-resume.test.ts` before the coverage gate.
 - For race/all branch coverage, run `bun test src/core/engine/race-branches.test.ts src/core/engine/operations-coordination.test.ts src/core/crash-recovery.test.ts` before the coverage gate.
+- For session-state, schedule, and `startOrSignal` coverage, run `bun test src/core/session-state-helpers.test.ts src/core/schedule.test.ts src/core/engine/start-or-signal.test.ts src/core/engine/callback-creators.test.ts src/core/parity/real-timer-wait.test-support.test.ts` before the coverage gate.
 - When editing the test-sleep verifier or load-sensitive list, run `bun test scripts/verify-no-test-sleeps.test.ts scripts/husky/run-tests.test.ts` and `bun run scripts/verify-no-test-sleeps.ts`.
 - Run broader validation only when the coverage fix also changes production code, public APIs, or documentation.

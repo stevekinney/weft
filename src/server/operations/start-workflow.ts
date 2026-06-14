@@ -88,16 +88,17 @@ function resolveStartWorkflowAccess(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
 
   if (error instanceof WorkflowNotRegisteredError) {
-    throw invalidParamsFault(message);
+    throw invalidParamsFault(message, error.code);
   }
   if (error instanceof WorkflowAlreadyExistsError || error instanceof IdempotencyKeyPurgedError) {
     // An id collision or a spent idempotency key (its run purged) are both
     // client-actionable conflicts: pick a different id / key. Surface as Conflict
     // (409) rather than letting the purged-key case mask to an opaque 500.
+    // `weftCode` recovers which of the two collapsed typed errors this was.
     const fault: OperationFault = {
       code: 'Conflict',
       message,
-      data: { reason: message },
+      data: { reason: message, weftCode: error.code },
     };
     throw fault;
   }

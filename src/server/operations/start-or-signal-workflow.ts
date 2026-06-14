@@ -42,6 +42,9 @@ const startOrSignalWorkflowInput = z.object({
 
 const startOrSignalWorkflowOutput = z.object({
   id: z.string(),
+  // Which atomic path the call took (#466): `'started'` created the run,
+  // `'signalled'` delivered to a run that already existed.
+  outcome: z.enum(['started', 'signalled']),
 });
 
 export type StartOrSignalWorkflowInput = z.infer<typeof startOrSignalWorkflowInput>;
@@ -128,16 +131,17 @@ function resolveStartOrSignalWorkflowFault(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
 
   if (error instanceof WorkflowNotRegisteredError) {
-    throw invalidParamsFault(message);
+    throw invalidParamsFault(message, error.code);
   }
   if (error instanceof StartOrSignalConflictError || error instanceof IdempotencyKeyPurgedError) {
     // Both are client-actionable convergence conflicts: a terminal target, or a
     // spent key whose run was purged. Surface as Conflict (409) so the caller can
     // choose a different id / idempotency key — not an opaque masked 500.
+    // `weftCode` recovers which of the two collapsed typed errors this was.
     const fault: OperationFault = {
       code: 'Conflict',
       message,
-      data: { reason: message },
+      data: { reason: message, weftCode: error.code },
     };
     throw fault;
   }
@@ -188,8 +192,13 @@ export const startOrSignalWorkflowOperation = defineOperation<
     });
 
     try {
-      const handle = await typedEngine.startOrSignal(type, input.input, signal, options);
-      return { id: handle.id };
+      const { handle, outcome } = await typedEngine.startOrSignal(
+        type,
+        input.input,
+        signal,
+        options,
+      );
+      return { id: handle.id, outcome };
     } catch (error) {
       resolveStartOrSignalWorkflowFault(error);
     }

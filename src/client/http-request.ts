@@ -1,7 +1,7 @@
 import { resolveConnection } from '../connection.ts';
 import { failureCategoryForFaultCode, isFaultCode, type FaultCode } from '../core/fault-code.ts';
 import type { FailureCategory } from '../core/types/identity.ts';
-import { WeftError } from '../core/weft-error.ts';
+import { isWeftErrorCode, WeftError, type WeftErrorCode } from '../core/weft-error.ts';
 import type { WebSocketFactory } from './event-stream-transport.ts';
 
 /**
@@ -112,13 +112,27 @@ export class HttpClientError extends WeftError<'HttpClientError'> {
    * carried on the wire; `undefined` when `faultCode` is `undefined`.
    */
   readonly category?: FailureCategory | undefined;
+  /**
+   * The fine-grained originating public {@link WeftErrorCode} the server
+   * attached (e.g. `WorkflowNotFoundError`), when the structured fault carried
+   * one. This is what makes cross-transport branching work: a producer can call
+   * `isWeftFault(error, 'WorkflowNotFoundError')` and have it match over HTTP
+   * exactly as it matches the in-process typed error. `undefined` when the fault
+   * carried only the coarse {@link faultCode} (most faults) or no structured body.
+   */
+  readonly weftCode?: WeftErrorCode | undefined;
 
-  constructor(status: number, message: string, options?: { faultCode?: FaultCode | undefined }) {
+  constructor(
+    status: number,
+    message: string,
+    options?: { faultCode?: FaultCode | undefined; weftCode?: WeftErrorCode | undefined },
+  ) {
     super('HttpClientError', message);
     this.status = status;
     this.faultCode = options?.faultCode;
     this.category =
       options?.faultCode === undefined ? undefined : failureCategoryForFaultCode(options.faultCode);
+    this.weftCode = options?.weftCode;
   }
 }
 
@@ -139,8 +153,12 @@ function buildRequestHeaders(
   return headers;
 }
 
-/** Flat error body shape from `shapeOperationFaultAsJson`: `{ error: string }`. */
-function isFlatErrorBody(value: unknown): value is { error: string } {
+/**
+ * Flat error body shape from `shapeRestFault`: `{ error: string }`, optionally
+ * with a top-level `weftCode` sibling when the fault carried a fine-grained
+ * public code. `error` is always a string, so `weftCode` sits beside it.
+ */
+function isFlatErrorBody(value: unknown): value is { error: string; weftCode?: unknown } {
   return (
     value !== null &&
     typeof value === 'object' &&
@@ -151,12 +169,13 @@ function isFlatErrorBody(value: unknown): value is { error: string } {
 /**
  * Structured error body from `faultToHttpResponse`:
  * `{ error: { code, message, data? } }`. The human `message` is required; the
- * `code` is validated separately so an unrecognized (e.g. future) fault code
- * still surfaces its message — only the typed {@link FaultCode} is withheld.
+ * `code` and `data` are validated separately so an unrecognized (e.g. future)
+ * fault code still surfaces its message — only the typed {@link FaultCode} is
+ * withheld.
  */
 function isStructuredErrorBody(
   value: unknown,
-): value is { error: { code?: unknown; message: string } } {
+): value is { error: { code?: unknown; message: string; data?: unknown } } {
   if (value === null || typeof value !== 'object') return false;
   const error = (value as { error?: unknown }).error;
   if (error === null || typeof error !== 'object') return false;
@@ -164,23 +183,38 @@ function isStructuredErrorBody(
 }
 
 /**
+ * Pull the fine-grained `weftCode` out of a structured fault's `data`, when the
+ * server attached a recognized public code. Returns `undefined` for faults that
+ * carry only the coarse code or no `data.weftCode`.
+ */
+function weftCodeFromData(data: unknown): WeftErrorCode | undefined {
+  if (data === null || typeof data !== 'object') return undefined;
+  const candidate = (data as { weftCode?: unknown }).weftCode;
+  return isWeftErrorCode(candidate) ? candidate : undefined;
+}
+
+/**
  * Parse a non-2xx response body into the human message and, when the server
- * sent a structured fault with a recognized code, its wire {@link FaultCode}.
- * A structured body with an unknown code still yields its message. Falls back
- * to `response.statusText` when the body is missing, non-JSON, or carries no
- * usable message.
+ * sent a structured fault, its coarse wire {@link FaultCode} and any
+ * fine-grained {@link WeftErrorCode} (`data.weftCode`). A structured body with
+ * an unknown code still yields its message. Falls back to `response.statusText`
+ * when the body is missing, non-JSON, or carries no usable message.
  */
 async function parseErrorBody(
   response: Response,
-): Promise<{ message: string; faultCode?: FaultCode | undefined }> {
+): Promise<{ message: string; faultCode?: FaultCode | undefined; weftCode?: WeftErrorCode }> {
   try {
     const body: unknown = await response.json();
     if (isStructuredErrorBody(body)) {
-      const { code, message } = body.error;
-      return isFaultCode(code) ? { message, faultCode: code } : { message };
+      const { code, message, data } = body.error;
+      const weftCode = weftCodeFromData(data);
+      const base = weftCode === undefined ? { message } : { message, weftCode };
+      return isFaultCode(code) ? { ...base, faultCode: code } : base;
     }
     if (isFlatErrorBody(body) && body.error) {
-      return { message: body.error };
+      // `shapeRestFault` flat body, optionally with a top-level `weftCode`.
+      const weftCode = isWeftErrorCode(body.weftCode) ? body.weftCode : undefined;
+      return weftCode === undefined ? { message: body.error } : { message: body.error, weftCode };
     }
     return { message: response.statusText };
   } catch {
@@ -201,8 +235,8 @@ export async function request<T>(
     return null as T;
   }
   if (!response.ok) {
-    const { message, faultCode } = await parseErrorBody(response);
-    throw new HttpClientError(response.status, message, { faultCode });
+    const { message, faultCode, weftCode } = await parseErrorBody(response);
+    throw new HttpClientError(response.status, message, { faultCode, weftCode });
   }
   if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;

@@ -91,7 +91,7 @@ function createSequencedStorage(
  * is caught.
  */
 function createDeferredVisibleStorage(expectedPrefix: string, value: Uint8Array) {
-  const key = `${expectedPrefix}0`;
+  const key = `${expectedPrefix}1:0`;
   let firstScanDone = false;
   let present = true;
   return {

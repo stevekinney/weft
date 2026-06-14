@@ -3,7 +3,6 @@ import { describe, expect, it, mock } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
-import { encode } from '../codec.ts';
 import type { SignalReceivedInterception } from '../interceptor/interception-contexts.ts';
 import type { WorkflowState } from '../types.ts';
 import {
@@ -258,28 +257,6 @@ describe('engine signals', () => {
     });
   });
 
-  it('normalizes separator-free raw signal keys without accepting unsafe raw colon keys', async () => {
-    const storage = new MemoryStorage();
-    const internals = createSignalInternals(storage);
-    const safeLegacyKey = 'sig:workflow-legacy-signal:needs approval:signal-1';
-    const unsafeLegacyKey = 'sig:workflow-legacy-signal:a:b:signal-2';
-
-    await storage.put(safeLegacyKey, encode('legacy'));
-    await storage.put(unsafeLegacyKey, encode('unsafe'));
-
-    expect(
-      await consumeSignal(internals as never, 'workflow-legacy-signal', 'needs approval'),
-    ).toEqual({
-      found: true,
-      payload: 'legacy',
-    });
-    expect(await hasBufferedSignal(internals as never, 'workflow-legacy-signal', 'a')).toBe(false);
-    expect(await consumeSignal(internals as never, 'workflow-legacy-signal', 'a')).toEqual({
-      found: false,
-    });
-    expect(await storage.get(unsafeLegacyKey)).not.toBeNull();
-  });
-
   it('rejects signalId delivery before tracking cleanup when conditionalBatch is unavailable', async () => {
     const storage = new NoConditionalBatchMemoryStorage();
     const internals = createSignalInternals(storage);
@@ -456,24 +433,62 @@ describe('engine signals', () => {
     });
   });
 
-  it('does not redeliver when the signal exists but the accepted response must be repaired', async () => {
+  it('delivers a keyed signal exactly once and keeps the first payload on a duplicate', async () => {
+    // Dedup is by signalId via the `sigres:` accepted-response marker: a second
+    // delivery with the same signalId is a no-op (no redelivery, the first payload
+    // is preserved), regardless of the signal's sort-class storage key (#458).
     const storage = new MemoryStorage();
     const internals = createSignalInternals(storage);
-    const callbacks = createSignalCallbacks();
-    await storage.put(KEYS.signal('workflow-repair', 'release', 'signal-1'), encode('first'));
+    const first = createSignalCallbacks();
+    await signal(internals as never, 'workflow-dedup', 'release', 'first', first, {
+      signalId: 'signal-1',
+    });
+    expect(first.dispatchEvent).toHaveBeenCalledTimes(1);
 
-    await signal(internals as never, 'workflow-repair', 'release', 'second', callbacks, {
+    const second = createSignalCallbacks();
+    await signal(internals as never, 'workflow-dedup', 'release', 'second', second, {
       signalId: 'signal-1',
     });
 
-    expect(callbacks.dispatchEvent).not.toHaveBeenCalled();
+    expect(second.dispatchEvent).not.toHaveBeenCalled();
     expect(
-      await storage.get(KEYS.signalAcceptedResponse('workflow-repair', 'release', 'signal-1')),
+      await storage.get(KEYS.signalAcceptedResponse('workflow-dedup', 'release', 'signal-1')),
     ).not.toBeNull();
-    expect(await consumeSignal(internals as never, 'workflow-repair', 'release')).toEqual({
+    // Exactly one payload buffered, and it is the FIRST.
+    expect(await consumeSignal(internals as never, 'workflow-dedup', 'release')).toEqual({
       found: true,
       payload: 'first',
     });
+    expect(await consumeSignal(internals as never, 'workflow-dedup', 'release')).toEqual({
+      found: false,
+    });
+  });
+
+  it('does not consume a different signal whose name shares a prefix', async () => {
+    // The signal name is encoded in the storage key, so a name containing the key
+    // separator (`:`) cannot prefix-collide with another name. Without encoding,
+    // a waiter on `order` would scan `sig:<wf>:order:` and wrongly consume a signal
+    // buffered under `order:placed` (`sig:<wf>:order:placed:...`).
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    await signal(
+      internals as never,
+      'workflow-name-collision',
+      'order:placed',
+      'placed-payload',
+      createSignalCallbacks(),
+      { signalId: 'sig-placed' },
+    );
+
+    // A waiter on the shorter name must NOT see the longer-named signal.
+    expect(await consumeSignal(internals as never, 'workflow-name-collision', 'order')).toEqual({
+      found: false,
+    });
+
+    // The exact-name waiter consumes its own signal.
+    expect(
+      await consumeSignal(internals as never, 'workflow-name-collision', 'order:placed'),
+    ).toEqual({ found: true, payload: 'placed-payload' });
   });
 
   it('releases only matching signal waiters', () => {

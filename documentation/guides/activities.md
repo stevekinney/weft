@@ -60,7 +60,7 @@ So out of the box, a failing activity retries up to 3 times with backoff delays 
 
 ## ActivityContext
 
-Every activity function can optionally receive an `ActivityContext` as its second argument. It exposes a standard `AbortSignal` for cancellation, a `heartbeat()` function for long-running work, the previous attempt's heartbeat via `lastHeartbeatDetails` (for resumable retries), and `completeAsync()` for out-of-band completion.
+Every activity function can optionally receive an `ActivityContext` as its second argument. It exposes a standard `AbortSignal` for cancellation, a `heartbeat()` function for long-running work, the previous attempt's heartbeat via `lastHeartbeatDetails` (a best-effort, in-process-only resume hint—see the warning below), and `completeAsync()` for out-of-band completion.
 
 ```typescript
 interface ActivityContext {
@@ -75,6 +75,9 @@ interface ActivityContext {
   completeAsync(): never;
 }
 ```
+
+> [!WARNING] `lastHeartbeatDetails` only survives in-process retries
+> `lastHeartbeatDetails` is held in engine memory, not in durable storage. It carries the previous attempt's heartbeat _only_ when the retry runs in the same engine process. It is `undefined` in three cases: the first attempt of a step, the first retry resumed after the engine process restarts (the prior process's heartbeat is gone—a later retry within that same new process can still read a heartbeat recorded after the restart), and _all_ worker-executed activities (the heartbeat lives on the host, not the worker). So the resumable-batch pattern below is a best-effort optimization, not a durability guarantee—write your activity so an `undefined` `lastHeartbeatDetails` simply restarts the batch from the beginning. If you need resume points that survive a restart, persist your own checkpoint (a cursor in your database, an offset in object storage) instead of relying on the heartbeat. In development mode, an inline retry (`attempt > 1`) that finds `lastHeartbeatDetails` undefined emits a coarse `DevelopmentWarningEvent`—it cannot tell whether the previous attempt never recorded heartbeat details (it never called `heartbeat()`, or called it with no details) or the process restarted, so it flags both.
 
 The `signal` is an `AbortSignal` that fires when the **workflow is cancelled** (`engine.cancel(id)` / `handle.cancel()`). Pass it to `fetch`, database clients, or anything else that accepts an abort signal. It does _not_ fire when a `ctx.race` branch loses—see [Cancelling a running activity](#cancelling-a-running-activity) below.
 

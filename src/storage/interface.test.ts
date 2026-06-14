@@ -738,10 +738,18 @@ describe('KEYS', () => {
     expect(KEYS.event(workflowId, 9)).toBe(`ev:${encodedWorkflowId}:0000000009`);
     expect(KEYS.eventHead(workflowId)).toBe(`ev:${encodedWorkflowId}:head`);
     expect(KEYS.signal(workflowId, 'approve', 'signal:1')).toBe(
-      `sig:${encodedWorkflowId}:approve:signal%3A1`,
+      `sig:${encodedWorkflowId}:approve:1:signal%3A1`,
+    );
+    expect(KEYS.startSignal(workflowId, 'approve', 'signal:1')).toBe(
+      `sig:${encodedWorkflowId}:approve:0:signal%3A1`,
+    );
+    // The signal name is encoded too (consistent with signalAcceptedResponse), so a
+    // name containing `:` cannot prefix-collide with another name on the scan path.
+    expect(KEYS.signal(workflowId, 'order:placed', 'x')).toBe(
+      `sig:${encodedWorkflowId}:order%3Aplaced:1:x`,
     );
     expect(KEYS.signal(workflowId, 'approve:now', 'signal:1')).toBe(
-      `sig:${encodedWorkflowId}:approve%3Anow:signal%3A1`,
+      `sig:${encodedWorkflowId}:approve%3Anow:1:signal%3A1`,
     );
     expect(KEYS.signalSequence(workflowId)).toBe(`sigseq:v1:${encodedWorkflowId}`);
     expect(KEYS.signalAcceptedResponsePrefix(workflowId)).toBe(`sigres:v1:${encodedWorkflowId}:`);

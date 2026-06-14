@@ -18,7 +18,13 @@
 
 export { VERSION } from './version.ts';
 // Error base + discriminant
-export { WeftError, isWeftError, isWeftErrorCode, isWeftErrorLike } from './core/weft-error.ts';
+export {
+  WeftError,
+  isWeftError,
+  isWeftErrorCode,
+  isWeftErrorLike,
+  isWeftFault,
+} from './core/weft-error.ts';
 export type { WeftErrorCode } from './core/weft-error.ts';
 // Wire fault code + failure-category mapping
 export {
@@ -217,6 +223,7 @@ export {
   CheckpointSizeWarningEvent,
   ConstraintViolatedEvent,
   DevelopmentWarningEvent,
+  ScheduleFiredEvent,
   ScheduleMissedFireEvent,
   SignalDeliveredEvent,
   SignalReceivedEvent,

@@ -73,7 +73,7 @@ describe('weft.workflows.startorsignal', () => {
     );
 
     expect(response.status).toBe(201);
-    expect(await response.json()).toEqual({ id: 'sos-rest-create' });
+    expect(await response.json()).toEqual({ id: 'sos-rest-create', outcome: 'started' });
     expect(await engine.getHandle('sos-rest-create').result()).toBe('go');
   });
 
@@ -94,7 +94,7 @@ describe('weft.workflows.startorsignal', () => {
     );
 
     expect(response.status).toBe(201);
-    expect(await response.json()).toEqual({ id: 'sos-rest-existing' });
+    expect(await response.json()).toEqual({ id: 'sos-rest-existing', outcome: 'signalled' });
     expect(await started.result()).toBe('late');
   });
 
@@ -137,7 +137,7 @@ describe('weft.workflows.startorsignal', () => {
     );
 
     expect(response.status).toBe(201);
-    expect(await response.json()).toEqual({ id: 'sos-rest-options' });
+    expect(await response.json()).toEqual({ id: 'sos-rest-options', outcome: 'started' });
   });
 
   it('forwards startAt as an absolute scheduling timestamp', async () => {
@@ -159,7 +159,7 @@ describe('weft.workflows.startorsignal', () => {
     );
 
     expect(response.status).toBe(201);
-    expect(await response.json()).toEqual({ id: 'sos-rest-start-at' });
+    expect(await response.json()).toEqual({ id: 'sos-rest-start-at', outcome: 'started' });
   });
 
   it('returns 400 when a start option is malformed (e.g. a non-string id)', async () => {
@@ -391,7 +391,9 @@ describe('weft.workflows.startorsignal', () => {
       { operationRegistry: registry, restBindings: bindings },
     );
     expect(first.status).toBe(201);
-    const firstBody = (await first.json()) as { id: string };
+    const firstBody = (await first.json()) as { id: string; outcome: string };
+    // The first call created the run.
+    expect(firstBody.outcome).toBe('started');
 
     const second = await handleRequest(
       startOrSignalRequest({
@@ -404,7 +406,10 @@ describe('weft.workflows.startorsignal', () => {
       { operationRegistry: registry, restBindings: bindings },
     );
     expect(second.status).toBe(201);
-    expect((await second.json()) as { id: string }).toEqual(firstBody);
+    const secondBody = (await second.json()) as { id: string; outcome: string };
+    // Same run (the duplicate key converges), but the second call signalled it.
+    expect(secondBody.id).toBe(firstBody.id);
+    expect(secondBody.outcome).toBe('signalled');
   });
 
   it('returns 409 when an idempotency key maps to a purged run (not a masked 500)', async () => {

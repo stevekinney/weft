@@ -52,9 +52,21 @@ function shapeNotFoundBody(
   base: ErrorBody,
   data: Extract<OperationFault, { code: 'NotFound' }>['data'],
 ): ErrorBody {
-  return data.identifier === undefined
-    ? { ...base, data: { resource: data.resource } }
-    : { ...base, data };
+  // Forward only the fields that are present so a NotFound without an
+  // identifier or weftCode keeps its minimal `{ resource }` wire shape.
+  // `weftCode` keeps its `WeftErrorCode` type (derived from the fault payload)
+  // rather than widening to `string`, so a future edit can't serialize an
+  // invalid code.
+  const shaped: {
+    resource: string;
+    identifier?: string;
+    weftCode?: NonNullable<typeof data.weftCode>;
+  } = {
+    resource: data.resource,
+  };
+  if (data.identifier !== undefined) shaped.identifier = data.identifier;
+  if (data.weftCode !== undefined) shaped.weftCode = data.weftCode;
+  return { ...base, data: shaped };
 }
 
 function filterDefined(input: Record<string, unknown>): Record<string, unknown> {

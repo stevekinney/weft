@@ -85,11 +85,46 @@ describe('schemaToNode + renderNode — emitted text contract', () => {
     ).toBe('{ readonly "range"?: { readonly "gt"?: number; }; }');
   });
 
+  it('renders a string enum as a literal union preserving member order', () => {
+    expect(renderInline({ type: 'string', enum: ['started', 'signalled'] })).toBe(
+      '"started" | "signalled"',
+    );
+    // A bare string enum (no explicit `type`) is still a literal union.
+    expect(renderInline({ enum: ['a', 'b'] })).toBe('"a" | "b"');
+  });
+
+  it('escapes string-enum members with literal-sensitive characters', () => {
+    // Raw interpolation would emit invalid or wrong TypeScript for these; the
+    // generator must produce a properly escaped string literal per member.
+    expect(renderInline({ enum: ["can't"] })).toBe('"can\'t"');
+    expect(renderInline({ enum: ['a\\b'] })).toBe('"a\\\\b"');
+    expect(renderInline({ enum: ['line\nbreak'] })).toBe('"line\\nbreak"');
+    expect(renderInline({ enum: ['quote"d'] })).toBe('"quote\\"d"');
+  });
+
   it('collapses unsupported schema features to unknown', () => {
-    expect(renderInline({ enum: ['a', 'b'] })).toBe('unknown');
+    // Non-string and mixed enums fall through rather than guessing a literal.
+    expect(renderInline({ enum: [1, 2] })).toBe('unknown');
+    expect(renderInline({ enum: ['a', 2] })).toBe('unknown');
+    expect(renderInline({ enum: [] })).toBe('unknown');
     expect(renderInline({ const: 'x' })).toBe('unknown');
     expect(renderInline({ anyOf: [{ type: 'string' }] })).toBe('unknown');
     expect(renderInline({})).toBe('unknown');
+  });
+});
+
+describe('generated catalog — string enums tighten to literal unions (#466)', () => {
+  // Pin the regression: the generated client must surface the startOrSignal
+  // discriminant as a literal union, not a widened `string`. Imported from the
+  // generated module so a generator regression is caught here, not re-derived.
+  it('types startorsignal output.outcome as the literal union', () => {
+    type Outcome = CatalogOperationTypes['weft.workflows.startorsignal']['output']['outcome'];
+    const started: Outcome = 'started';
+    const signalled: Outcome = 'signalled';
+    expect([started, signalled]).toEqual(['started', 'signalled']);
+    // @ts-expect-error 'string' is too wide; the generated type is the literal union.
+    const widened: Outcome = 'not-an-outcome' as string;
+    void widened;
   });
 });
 
@@ -288,11 +323,10 @@ describe('alias selection thresholds', () => {
 });
 
 describe('selectAliases — prune to fixed point', () => {
-  it('prunes a child whose references collapse into a single alias body', () => {
-    // `inner` occurs once inside `outer`; `outer` occurs twice across the roots.
-    // By occurrence count both qualify (inner=2 via the two outers, outer=2).
-    // But once `outer` is hoisted, `inner` is referenced only from `outer`'s one
-    // body — a single reference — so the prune pass drops `inner`, keeping `outer`.
+  // Both fixed-point tests below share the same nested shape: a 3-field `inner`
+  // object embedded as the first field of a 3-field `outer` object. The factory
+  // returns a fresh pair so neither test can mutate the other's nodes.
+  const nestedPair = (): { inner: TypeNode; outer: TypeNode } => {
     const inner: TypeNode = {
       kind: 'object',
       fields: [
@@ -309,28 +343,22 @@ describe('selectAliases — prune to fixed point', () => {
         { name: 'c', optional: false, value: { kind: 'primitive', text: 'string' } },
       ],
     };
+    return { inner, outer };
+  };
+
+  it('prunes a child whose references collapse into a single alias body', () => {
+    // `inner` occurs once inside `outer`; `outer` occurs twice across the roots.
+    // By occurrence count both qualify (inner=2 via the two outers, outer=2).
+    // But once `outer` is hoisted, `inner` is referenced only from `outer`'s one
+    // body — a single reference — so the prune pass drops `inner`, keeping `outer`.
+    const { outer } = nestedPair();
     const { aliasNameByKey, nodeByKey } = selectAliases([outer, outer]);
     expect(aliasNameByKey.size).toBe(1);
     expect([...nodeByKey.values()]).toEqual([outer]);
   });
 
   it('keeps a child alias referenced by a surviving parent and an entry', () => {
-    const inner: TypeNode = {
-      kind: 'object',
-      fields: [
-        { name: 'p', optional: false, value: { kind: 'primitive', text: 'string' } },
-        { name: 'q', optional: false, value: { kind: 'primitive', text: 'string' } },
-        { name: 'r', optional: false, value: { kind: 'primitive', text: 'string' } },
-      ],
-    };
-    const outer: TypeNode = {
-      kind: 'object',
-      fields: [
-        { name: 'a', optional: false, value: inner },
-        { name: 'b', optional: false, value: { kind: 'primitive', text: 'string' } },
-        { name: 'c', optional: false, value: { kind: 'primitive', text: 'string' } },
-      ],
-    };
+    const { inner, outer } = nestedPair();
     // `outer` appears twice (two roots) -> survives -> references `inner` once;
     // `inner` also appears directly as a root -> 2 references total -> survives.
     const { aliasNameByKey } = selectAliases([outer, outer, inner]);

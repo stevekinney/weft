@@ -62,7 +62,7 @@ async function* example(context: Context) {
 ): WorkflowOperation<ActivityResultFor<TActivities[TName]>>
 ```
 
-Execute a registered activity durably by name. The engine checkpoints before the call and records the result. On checkpoint cache hits, stored results are returned without re-executing the activity. The `name` is the activity's registered name—the durable dispatch key Weft uses for local dispatch and for remote dispatch alike. When the workflow is typed through its `.activities({ ... })` registry, `TActivities` carries the declared names, so `name` autocompletes and the input and result types are inferred (the exported `ActivityArgsFor` and `ActivityResultFor` helpers let you spell those types out by hand). An optional `ActivityCallOptions` argument may follow the input to override retry, timeout, queue, or idempotency for a single call.
+Execute a registered activity durably by name. The engine checkpoints before the call and records the result. When recovery reaches a checkpoint-restored step, cached results are returned without re-executing the activity. The `name` is the activity's registered name—the durable dispatch key Weft uses for local dispatch and for remote dispatch alike. When the workflow is typed through its `.activities({ ... })` registry, `TActivities` carries the declared names, so `name` autocompletes and the input and result types are inferred (the exported `ActivityArgsFor` and `ActivityResultFor` helpers let you spell those types out by hand). An optional `ActivityCallOptions` argument may follow the input to override retry, timeout, queue, or idempotency for a single call.
 
 | Parameter | Type                  | Description                            |
 | --------- | --------------------- | -------------------------------------- |
@@ -615,7 +615,7 @@ Expose named read-only accessors for external introspection.
 explain(enabled?: boolean): void
 ```
 
-Enable or disable explain mode. When enabled, durable operations log detailed checkpoint and dispatch information to the console. Useful for debugging checkpoint recovery behavior.
+Enable or disable explain mode. When enabled, durable operations log detailed checkpoint and dispatch information to the console. Useful for debugging checkpoint cache-hit and dispatch behavior.
 
 ### `log`
 
@@ -631,10 +631,10 @@ ctx.log.info('charge succeeded', { amount: 1999, currency: 'usd' });
 
 Caller-supplied attributes are nested under their own `attributes` key in the record, so they can never shadow an envelope field. `ctx.log.info('x', { workflowId: 'spoof' })` keeps the real `workflowId` on the envelope and quarantines `{ workflowId: 'spoof' }` inside `attributes`.
 
-`ctx.log` is checkpoint-aware. During recovery, Weft suppresses a log call when the current step has a cached result restored from the checkpoint, so a recovered run does not re-emit logs from already-committed steps. This holds in both inline and worker execution modes, unlike `ctx.services`-injected loggers, which are inline-only. `ctx.log` is _not_ a durable operation: it consumes no step index and is never checkpointed.
+`ctx.log` is checkpoint-aware. When the engine reaches a step position whose result was restored from the checkpoint, the logger suppresses the call so a recovered run does not re-emit logs it already emitted. At an uncached live frontier, the log emits normally. This holds in both inline and worker execution modes, unlike `ctx.services`-injected loggers, which are inline-only. `ctx.log` is _not_ a durable operation: it consumes no step index and is never checkpointed.
 
-> [!NOTE] Recovery edge cases
-> A log placed _after_ the last committed step re-fires on recovery, because there is no cached step to suppress it. Likewise, a workflow with no committed durable step has no checkpoint position to suppress against, so its logs may re-emit on recovery. Logs inside `ctx.all` / `ctx.runAll` branches follow that branch's checkpoint-cache semantics.
+> [!NOTE] Checkpoint edge cases
+> A log placed _after_ the last committed step re-fires on recovery, because there is no cached step to suppress it. Likewise, a workflow with no committed durable step has no checkpoint-restored position to suppress against, so its logs may re-emit on recovery. Logs inside `ctx.all` / `ctx.runAll` branches follow that branch's cached-step behavior.
 
 > [!NOTE] Log destination
 > Records go to the current process console. In worker-pool mode that is the worker process's console, not the engine host. Inline timestamps come from the engine clock; worker-mode timestamps come from the worker process wall clock. A pluggable host sink and worker-mode host log routing are tracked in [issue #491](https://github.com/stevekinney/weft/issues/491).

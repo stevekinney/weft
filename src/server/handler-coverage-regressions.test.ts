@@ -156,7 +156,7 @@ describe('handleRequest coverage regressions', () => {
     });
   });
 
-  it('maps schedule error messages to their legacy HTTP statuses', async () => {
+  it('maps schedule error messages to their canonical HTTP fault statuses', async () => {
     const engine = createEngine();
 
     engine.getSchedule = async () => {

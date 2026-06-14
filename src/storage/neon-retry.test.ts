@@ -58,10 +58,14 @@ class FaultInjectingPool implements NeonPool {
         if (sql === 'ROLLBACK') {
           return { rows: [] };
         }
-        if (sql.startsWith('SELECT value')) {
-          const key = String(parameters?.[0]);
-          this.selectCounts.set(key, (this.selectCounts.get(key) ?? 0) + 1);
-          // Report the key as absent so the null precondition holds.
+        if (sql.startsWith('SELECT key, value')) {
+          // The collapsed condition read binds one array of keys (`key = ANY($1)`);
+          // count each so a test can prove every condition is re-read per attempt.
+          const keys = Array.isArray(parameters?.[0]) ? (parameters[0] as string[]) : [];
+          for (const key of keys) {
+            this.selectCounts.set(key, (this.selectCounts.get(key) ?? 0) + 1);
+          }
+          // Report every key as absent so a null precondition holds.
           return { rows: [] };
         }
         // INSERT/UPSERT/DELETE within the transaction — succeed silently.
@@ -161,7 +165,7 @@ describe('NeonStorage conditionalBatch serialization retry', () => {
       query: async (sql?: string) =>
         sql?.includes('pg_collation') ? { rows: [{ collation: 'C' }] } : { rows: [] },
       connect: async () => ({
-        query: async (sql: string) => {
+        query: async (sql: string, parameters?: unknown[]) => {
           if (sql.startsWith('BEGIN')) {
             beginCount += 1;
             return { rows: [] };
@@ -176,10 +180,12 @@ describe('NeonStorage conditionalBatch serialization retry', () => {
             rollbackCount += 1;
             return { rows: [] };
           }
-          if (sql.startsWith('SELECT value')) {
-            // Report an EXISTING value so the `expectedValue: null` precondition
-            // mismatches and the runner returns false (the no-op path).
-            return { rows: [{ value: encode('already-here') }] };
+          if (sql.startsWith('SELECT key, value')) {
+            // Report an EXISTING value (key,value row shape) for every queried key so
+            // the `expectedValue: null` precondition mismatches and the runner
+            // returns false (the no-op path).
+            const keys = Array.isArray(parameters?.[0]) ? (parameters[0] as string[]) : [];
+            return { rows: keys.map((key) => ({ key, value: encode('already-here') })) };
           }
           return { rows: [] };
         },

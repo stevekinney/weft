@@ -36,6 +36,11 @@ describe('parseLcov', () => {
       '../../../../../../var/folders/x_/tmp',
       '../../../../../private/var/folders/x_/T',
       '../../../../../var/folders/x_/T',
+      // Deep git-worktree forms (#503): a worktree nested under .claude/worktrees/<name>
+      // records temp-fixture paths with more `../` segments and a `private/tmp/` or
+      // bare `tmp/` root instead of `var/folders/`. These must be filtered too.
+      '../../../../../../../private/tmp/claude-501',
+      '../../../../../../../tmp/claude-501',
     ];
 
     for (const generatedPrefix of generatedPrefixes) {
@@ -80,6 +85,28 @@ describe('parseLcov', () => {
     expect(coverage.uncoveredFiles).toEqual([
       '../../../../../../private/var/folders/x_/tmp/weft-schedule-output-example.ts',
     ]);
+  });
+
+  // The widened temp-root prefix now also matches `private/tmp/` and bare `tmp/` at
+  // any `../` depth (#503). Prove that widening alone does NOT suppress coverage: a
+  // non-fixture-named source file under those newly-accepted roots and deep worktree
+  // depth must still count as uncovered, because the fixture-NAME matcher gates it.
+  it('does not ignore non-generated temporary files under the widened tmp roots', () => {
+    const nonFixturePaths = [
+      '../../../../../../../private/tmp/claude-501/weft-schedule-output-example.ts',
+      '../../../../../../../tmp/claude-501/weft-schedule-output-example.ts',
+    ];
+
+    for (const nonFixturePath of nonFixturePaths) {
+      const coverage = parseLcov(
+        [`SF:${nonFixturePath}`, 'FNF:1', 'FNH:0', 'DA:1,0', 'end_of_record'].join('\n'),
+      );
+
+      expect(coverage.covered).toBe(false);
+      expect(coverage.lines).toEqual({ total: 1, hit: 0, missed: 1 });
+      expect(coverage.functions).toEqual({ total: 1, hit: 0, missed: 1 });
+      expect(coverage.uncoveredFiles).toEqual([nonFixturePath]);
+    }
   });
 
   it('returns false immediately when a coverage shard exits non-zero', async () => {

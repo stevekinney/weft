@@ -46,7 +46,7 @@ export type ConsumedSignalResult =
 
 const EMPTY_STORAGE_VALUE = new Uint8Array(0);
 const SIGNAL_ACCEPTED_RESPONSE = { ok: true } as const;
-const SIGNAL_KEY_COMPONENT_COUNT = 4;
+const SIGNAL_KEY_COMPONENT_COUNT = 5;
 
 type BufferedSignalRecord = {
   key: string;
@@ -168,13 +168,20 @@ export async function bufferSignalPayloads(
     if ((await internals.storage.get(acceptedResponseKey)) !== null) {
       return;
     }
+    // Gate on the `sigres:` accepted-response marker, not the `sig:` payload key:
+    // it is the class-independent dedup identity (keyed by signalId alone), so a
+    // concurrent start-batch signal of the same signalId — whose `sig:` key is
+    // class `0`, not the class `1` this path writes — still collides here and is
+    // deduped rather than buffered a second time (#458).
     const committed = await storageConditionalBatch(
       internals.storage,
-      [{ key: KEYS.signal(workflowId, delivery.signalName, signalId), expectedValue: null }],
+      [{ key: acceptedResponseKey, expectedValue: null }],
       [...operations, { type: 'put', key: acceptedResponseKey, value: acceptedResponse }],
     );
     if (!committed) {
-      await ensureDuplicateSignalAcceptedResponse(internals, acceptedResponseKey, acceptedResponse);
+      // CAS loss means a concurrent caller already committed the `sigres:` marker
+      // for this signalId (the early read above raced it). The signal is already
+      // delivered exactly once; this duplicate is a no-op.
       return;
     }
     markTerminalCleanupTracked(internals, workflowId);
@@ -220,8 +227,14 @@ function createExplicitSignalOperations(
  * `sigres:` key and short-circuits instead of re-delivering, which is what
  * guarantees "one signal per signalId" across the create and signal paths.
  *
- * Returns both the put operations and the CAS condition (the `sig:` key must be
- * absent) so the caller can gate the create batch on it.
+ * Returns both the put operations and the CAS condition. The condition gates on
+ * the `sigres:` accepted-response marker (the dedup identity, keyed by signalId
+ * alone), NOT the `sig:` payload key: the FIFO sort-class (#458) makes the
+ * start-signal's `sig:` key (class `0`) differ from the live signal path's (class
+ * `1`), so a `sig:`-keyed CAS would no longer collide with a pre-buffered signal
+ * of the same signalId and would buffer a second copy. The class-independent
+ * `sigres:` marker is what both paths share, so gating on it preserves "one
+ * signal per signalId" across the create and signal paths.
  */
 export function buildCreateBatchSignalOperations(
   internals: EngineInternals,
@@ -231,7 +244,10 @@ export function buildCreateBatchSignalOperations(
   signalId: string,
 ): { operations: BatchOperation[]; condition: { key: string; expectedValue: null } } {
   validateSignalId(signalId);
-  const signalKey = KEYS.signal(workflowId, signalName, signalId);
+  // `KEYS.startSignal` sorts the start-signal before any signal delivered later
+  // in the same tick (before the workflow's first park); see `KEYS.startSignal`
+  // and issue #458.
+  const signalKey = KEYS.startSignal(workflowId, signalName, signalId);
   const acceptedResponseKey = KEYS.signalAcceptedResponse(workflowId, signalName, signalId);
   return {
     operations: [
@@ -246,7 +262,7 @@ export function buildCreateBatchSignalOperations(
       },
       { type: 'put', key: acceptedResponseKey, value: encode(SIGNAL_ACCEPTED_RESPONSE) },
     ],
-    condition: { key: signalKey, expectedValue: null },
+    condition: { key: acceptedResponseKey, expectedValue: null },
   };
 }
 
@@ -368,20 +384,7 @@ async function findBufferedSignalRecord(
     encodedWorkflowId,
     encodedSignalName,
   );
-  if (encodedRecord !== null) {
-    return encodedRecord;
-  }
-
-  if (signalName.includes(':') || signalName === encodedSignalName) {
-    return null;
-  }
-
-  return findBufferedSignalRecordByPrefix(
-    internals,
-    signalKeyPrefix(encodedWorkflowId, signalName),
-    encodedWorkflowId,
-    signalName,
-  );
+  return encodedRecord;
 }
 
 async function findBufferedSignalRecordByPrefix(
@@ -391,9 +394,7 @@ async function findBufferedSignalRecordByPrefix(
   signalNameKeyComponent: string,
 ): Promise<BufferedSignalRecord | null> {
   for await (const [key, value] of internals.storage.scan(prefix)) {
-    if (isExactSignalKey(key, encodedWorkflowId, signalNameKeyComponent)) {
-      return { key, value };
-    }
+    if (isExactSignalKey(key, encodedWorkflowId, signalNameKeyComponent)) return { key, value };
   }
 
   return null;
@@ -414,7 +415,8 @@ function isExactSignalKey(
     components[0] === 'sig' &&
     components[1] === encodedWorkflowId &&
     components[2] === signalNameKeyComponent &&
-    components[3] !== ''
+    (components[3] === '0' || components[3] === '1') &&
+    components[4] !== ''
   );
 }
 
@@ -442,19 +444,6 @@ function validateSignalIdsBeforeKeyConstruction(
       validateSignalId(deliverySignalId);
     }
   }
-}
-
-async function ensureDuplicateSignalAcceptedResponse(
-  internals: EngineInternals,
-  acceptedResponseKey: string,
-  acceptedResponse: Uint8Array,
-): Promise<void> {
-  if ((await internals.storage.get(acceptedResponseKey)) !== null) return;
-  await storageConditionalBatch(
-    internals.storage,
-    [{ key: acceptedResponseKey, expectedValue: null }],
-    [{ type: 'put', key: acceptedResponseKey, value: acceptedResponse }],
-  );
 }
 
 /** Register a waiter key in a workflow-keyed reverse index. */

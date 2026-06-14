@@ -562,7 +562,7 @@ describe('Context', () => {
       expect(op1.options).toEqual({ queue: 'cpu' });
     });
 
-    it('preserves legacy recovery step ordering for cached parallel results', () => {
+    it('returns a non-marker cached all value directly without advancing past sub-operations', () => {
       const context = createContext({
         accumulatedResults: new Map<number, unknown>([
           [0, ['cached-a', 'cached-b']],
@@ -644,7 +644,7 @@ describe('Context', () => {
       expect(request.operations).toHaveLength(2);
     });
 
-    it('preserves legacy recovery step ordering for cached race results', () => {
+    it('returns a non-marker cached race value directly without advancing past sub-operations', () => {
       const context = createContext({
         accumulatedResults: new Map<number, unknown>([
           [0, 'winner'],

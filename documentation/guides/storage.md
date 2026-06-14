@@ -228,7 +228,8 @@ wf:{id}:ckpt:{step}                           -- checkpoint history
 op:{queue}:{scheduled}:{id}                   -- operation (sorted by queue + time)
 ev:{workflowId}:{seq}                         -- event (sorted by workflow + sequence)
 ev:{workflowId}:watermark                     -- compaction watermark for truncated events
-sig:{workflowId}:{name}:{id}                  -- signal
+sig:{workflowId}:{encodedName}:{class}:{id}   -- buffered signal payload
+sigres:{workflowId}:{encodedName}:{id}        -- accepted signal response
 wf-deadline:{deadline}:{workflowId}           -- timeout deadline
 attr:{workflowId}                             -- search attributes
 idx:{attrName}:{encodedValue}:{workflowId}    -- secondary index for search
@@ -236,7 +237,7 @@ upd:{workflowId}:{updateId}                   -- pending update request
 upr:{updateId}                                -- update response
 ```
 
-This listing covers the primary keys. The full canonical list—including `wf:{id}:timeline:`, `schedule:`, `op:inflight:`, `tag:`, `upk:` (idempotency), `budget:`, `archive:`, `state:execution:`, `state:workflow:`, `blob:`, and others—is in `KEYS` in `src/storage/interface.ts`.
+This listing covers the primary keys. Signal names are encoded before key construction so names such as `order` and `order:placed` cannot prefix-alias each other. Buffered signal payload keys include a sort-class component: `0` for the initial `startOrSignal` start-signal and `1` for normal signals, so a same-tick start-signal is consumed first; deduplication is keyed by the class-independent `sigres:` accepted-response record. The full canonical list—including `wf:{id}:timeline:`, `schedule:`, `op:inflight:`, `tag:`, `upk:` (idempotency), `budget:`, `archive:`, `state:execution:`, `state:workflow:`, `blob:`, and others—is in `KEYS` in `src/storage/interface.ts`.
 
 All timestamps are zero-padded to 16 digits for correct lexicographic ordering. So `scan("op:default:")` returns all operations on the "default" queue in scheduled order—the core hot path is a single range scan, regardless of backend.
 
@@ -376,9 +377,21 @@ await using storage = new NeonStorage({
 
 The underlying schema is a single `kv (key TEXT COLLATE "C", value BYTEA)` table. The `COLLATE "C"` is load-bearing: Postgres `TEXT` otherwise sorts by the database locale, which reorders punctuation and would break the lexicographic prefix scans the engine relies on—`COLLATE "C"` restores byte-wise ordering. The adapter creates the table on first use and verifies the collation; if a `kv` table already exists with a different collation, it refuses to operate with an actionable error rather than silently corrupting scan order. Point the adapter at an empty database or one whose `kv` table it owns.
 
-`batch()` and `conditionalBatch()` each run on a single pinned pool connection inside one transaction, so a multi-statement batch is atomic. `conditionalBatch()` uses `SERIALIZABLE` isolation (not `SELECT ... FOR UPDATE`, which cannot lock an absent row) and retries the whole transaction on a serialization failure (`40001`) or a deadlock (`40P01`), so concurrent compare-and-swap—the start-idempotency path—converges on exactly one winner.
+`batch()` and `conditionalBatch()` each run on a single pinned pool connection inside one transaction, so a multi-statement batch is atomic. `conditionalBatch()` uses `SERIALIZABLE` isolation (not `SELECT ... FOR UPDATE`, which cannot lock an absent row) and retries the whole transaction on a serialization failure (`40001`) or a deadlock (`40P01`), so concurrent compare-and-swap—the start-idempotency path—converges on exactly one winner. Each phase of a batch collapses to one statement regardless of operation count: the batch resolves to its net effect per key (last write wins, matching sequential execution), then writes the put-set as one `unnest`-driven multi-row upsert and the delete-set as one bulk delete; `conditionalBatch` reads every precondition with one `key = ANY(...)` query. A checkpoint commit—the checkpoint record plus event-log, visibility-index, and signal-bookkeeping keys—therefore pays a fixed handful of round trips instead of one per key, which over the Neon serverless WebSocket driver (a round trip per query) keeps per-step storage latency flat as the operation count grows.
 
 The `pool` option lets you reuse a pool you manage instead of one built from `url`. An injected pool stays **caller-owned**: disposing the `NeonStorage` will not close it, so it can be shared safely. A pool the adapter builds from `url` is closed on disposal.
+
+The `schema` and `table` options point the adapter at a configured `"schema"."table"` instead of the default unqualified `kv`. Set `schema` to keep Weft in its own Postgres schema alongside the application's tables in **one** database: Drizzle (or similar) drift/push tooling scoped to the schemas it manages coexists safely with an unmanaged sibling schema—no CI drift noise, no accidental-drop risk—and one point-in-time-restore line covers both the application data and Weft's checkpoints. When `schema` is set, the adapter runs `CREATE SCHEMA IF NOT EXISTS` before creating the qualified table, and the collation check is scoped to that table. Both names are validated as strict Postgres identifiers at construction. With neither option set, the emitted SQL is byte-identical to prior versions—existing deployments are unaffected.
+
+```ts partial
+import { NeonStorage } from '@lostgradient/weft/storage/neon';
+
+// Weft's kv table lives in a dedicated "weft" schema; app tables stay in public.
+await using scopedStorage = new NeonStorage({
+  url: process.env.NEON_DATABASE_URL,
+  schema: 'weft',
+});
+```
 
 Both the direct and the connection-pooler (PgBouncer) Neon endpoints work, including the `SERIALIZABLE` compare-and-swap path through transaction-pooling. Use the **primary** endpoint either way—`capabilities()` reports `readAfterWrite: 'linearizable'`, which a read-replica would violate.
 

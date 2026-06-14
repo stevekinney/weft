@@ -1,6 +1,6 @@
 import type { BatchOperation } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
-import { decode, encode } from '../codec.ts';
+import { decode } from '../codec.ts';
 import type {
   PaginatedResult,
   ScheduleFilter,
@@ -12,8 +12,6 @@ import type {
 } from '../types.ts';
 import { WorkflowNotRegisteredError } from './errors.ts';
 import type { EngineInternals } from './internals.ts';
-import { unavailableServicesError } from './lifecycle/recovered-services.ts';
-import { EMPTY_STORAGE_VALUE } from './lifecycle/shared.ts';
 import { ScheduleHandle } from './schedule-handle.ts';
 import { resolveEffectiveScheduleFireAt } from './schedule-jitter.ts';
 import { getNextScheduleOccurrence } from './schedule-occurrence.ts';
@@ -33,6 +31,7 @@ import {
   normalizeScheduleSpec,
 } from './validation/schedule.ts';
 
+export { startScheduledRun } from './schedule-run.ts';
 export { handleScheduleTimer } from './schedule-timer.ts';
 
 export type RefreshedScheduleState = {
@@ -51,8 +50,8 @@ export type ScheduleCallbacks = {
   cancelWorkflow: (workflowId: string) => Promise<void>;
   getWorkflowResult: (workflowId: string) => Promise<unknown>;
   refreshScheduledWorkflowState: (state: ScheduleState) => Promise<RefreshedScheduleState>;
-  startScheduledRun: (state: ScheduleState) => Promise<string>;
-  applyScheduleOccurrence: (state: ScheduleState) => Promise<ScheduleState>;
+  startScheduledRun: (state: ScheduleState, occurrence?: number) => Promise<string>;
+  applyScheduleOccurrence: (state: ScheduleState, occurrence?: number) => Promise<ScheduleState>;
   settleBackfillScheduleState: (state: ScheduleState) => Promise<ScheduleState>;
   flushQueuedInlineWorkflowStartsDirectly: () => Promise<void>;
   failWorkflow: (workflowId: string, error: Error) => Promise<void>;
@@ -308,106 +307,6 @@ export async function refreshScheduledWorkflowState(
   };
 }
 
-export async function startScheduledRun(
-  internals: EngineInternals,
-  state: ScheduleState,
-  callbacks: Pick<ScheduleCallbacks, 'startWorkflow' | 'failWorkflow' | 'handleCleanupError'>,
-): Promise<string> {
-  const workflowId = crypto.randomUUID();
-  const scheduleRunOperations: BatchOperation[] =
-    state.overlap === 'allow'
-      ? []
-      : [{ type: 'put', key: KEYS.scheduleRun(workflowId), value: encode(state.id) }];
-
-  const resolution = await resolveScheduledRunServices(internals, workflowId, state);
-
-  if (resolution !== null) {
-    // Write the "expects services" marker and terminal-cleanup flag atomically
-    // with the workflow record. This mirrors startWorkflow's buildPerRunScratchOperations
-    // path and is required for both the available and unavailable cases so a
-    // fresh-process recovery can tell "never had services" from "had services".
-    scheduleRunOperations.push(
-      { type: 'put', key: KEYS.workflowHasServices(workflowId), value: EMPTY_STORAGE_VALUE },
-      { type: 'put', key: KEYS.terminalCleanupNeeded(workflowId), value: EMPTY_STORAGE_VALUE },
-    );
-
-    // Register the terminal-cleanup obligation and, for the available case,
-    // store the services in engine memory BEFORE startWorkflow is called.
-    //
-    // Critically, `startWorkflow` internally calls `queueInlineWorkflowExecutionStart`
-    // which posts a MessageChannel message. In Bun/Node.js the handler for that
-    // message can fire before our code after `await startWorkflow(...)` runs —
-    // making a post-startWorkflow set arrive too late for the completion check
-    // in `completeWorkflow` (which reads `workflowsNeedingTerminalCleanup` to
-    // decide whether to schedule the deferred terminal cleanup timer). Setting
-    // both values synchronously before the call guarantees the completion path
-    // always sees them regardless of MessageChannel scheduling.
-    //
-    // If `startWorkflow` throws, `rollbackTransientStartState` inside it clears
-    // both maps for the workflowId, so no leak occurs on the failure path.
-    internals.workflowsNeedingTerminalCleanup.add(workflowId);
-    if (resolution.status === 'available') {
-      internals.workflowServices.set(workflowId, resolution.services);
-    }
-  }
-
-  // An empty array and `undefined` are equivalent at the receiving end
-  // (buildStartBatchOperations spreads `?? []`), so pass the array directly.
-  await callbacks.startWorkflow(
-    state.workflowType,
-    state.input,
-    { id: workflowId },
-    scheduleRunOperations,
-  );
-
-  if (resolution !== null && resolution.status === 'unavailable') {
-    // Services unavailable — fail only this occurrence. The schedule timer handler
-    // wraps applyScheduleOccurrence in a try/catch that pauses the whole schedule on
-    // error; an individual occurrence's resolver failure must not escape there.
-    // The run was just started (status 'running') and is in the inline launch queue;
-    // failing it here sets status to 'failed' so the queue's status check skips the body.
-    const unavailableError = unavailableServicesError(workflowId, resolution.reason);
-    try {
-      await callbacks.failWorkflow(workflowId, unavailableError);
-    } catch (error) {
-      callbacks.handleCleanupError('startScheduledRun', error, workflowId);
-    }
-  }
-
-  return workflowId;
-}
-
-/**
- * Resolve workflow services for a scheduled occurrence when the engine has a
- * `resolveWorkflowServices` resolver and is in inline execution mode.
- *
- * Returns `null` when no resolution is needed (no resolver, or worker mode).
- * Returns the resolution result — available or unavailable — otherwise, with
- * resolver throws coerced to unavailable to prevent a single occurrence fault
- * from escaping into the schedule timer handler's error boundary.
- */
-async function resolveScheduledRunServices(
-  internals: EngineInternals,
-  workflowId: string,
-  state: ScheduleState,
-): Promise<
-  { status: 'available'; services: unknown } | { status: 'unavailable'; reason: string } | null
-> {
-  const resolver = internals.options.resolveWorkflowServices;
-  if (internals.inlineStrategy === null || !resolver) {
-    return null;
-  }
-
-  try {
-    return await resolver({ workflowId, workflowType: state.workflowType, input: state.input });
-  } catch (error) {
-    return {
-      status: 'unavailable',
-      reason: error instanceof Error ? error.message : String(error),
-    };
-  }
-}
-
 function hasActiveScheduledWorkflow(
   currentWorkflowState: WorkflowState | null | undefined,
 ): boolean {
@@ -418,9 +317,10 @@ async function applyBlockedScheduleOccurrence(
   state: ScheduleState,
   hasActiveWorkflow: boolean,
   callbacks: Pick<ScheduleCallbacks, 'cancelWorkflow' | 'getWorkflowResult' | 'startScheduledRun'>,
+  occurrence?: number,
 ): Promise<ScheduleState> {
   if (!hasActiveWorkflow) {
-    return { ...state, currentWorkflowId: await callbacks.startScheduledRun(state) };
+    return { ...state, currentWorkflowId: await callbacks.startScheduledRun(state, occurrence) };
   }
 
   if (state.overlap === 'cancel-running') {
@@ -429,7 +329,10 @@ async function applyBlockedScheduleOccurrence(
       await callbacks.cancelWorkflow(state.currentWorkflowId);
     }
     const stateForStart = clearScheduleCurrentWorkflow(state);
-    return { ...state, currentWorkflowId: await callbacks.startScheduledRun(stateForStart) };
+    return {
+      ...state,
+      currentWorkflowId: await callbacks.startScheduledRun(stateForStart, occurrence),
+    };
   }
 
   if (state.overlap === 'queue') {
@@ -443,17 +346,18 @@ export async function applyScheduleOccurrence(
   _internals: EngineInternals,
   state: ScheduleState,
   callbacks: ScheduleCallbacks,
+  occurrence?: number,
 ): Promise<ScheduleState> {
   const { state: refreshedState, currentWorkflowState } =
     await callbacks.refreshScheduledWorkflowState(state);
   const hasActiveWorkflow = hasActiveScheduledWorkflow(currentWorkflowState);
 
   if (refreshedState.overlap === 'allow') {
-    await callbacks.startScheduledRun(refreshedState);
+    await callbacks.startScheduledRun(refreshedState, occurrence);
     return refreshedState;
   }
 
-  return applyBlockedScheduleOccurrence(refreshedState, hasActiveWorkflow, callbacks);
+  return applyBlockedScheduleOccurrence(refreshedState, hasActiveWorkflow, callbacks, occurrence);
 }
 
 export async function settleBackfillScheduleState(

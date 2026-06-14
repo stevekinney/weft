@@ -42,6 +42,7 @@ import {
   isWeftError,
   isWeftErrorCode,
   isWeftErrorLike,
+  isWeftFault,
   type WeftErrorCode,
 } from './weft-error.ts';
 
@@ -284,5 +285,53 @@ describe('isWeftErrorLike', () => {
     // A Weft error of a different code does not match the specific comparison.
     const other: unknown = new WorkflowNotFoundError('wf-404');
     expect(isWeftErrorLike(other) && other.code === 'EngineDisposedError').toBe(false);
+  });
+});
+
+describe('isWeftFault', () => {
+  it('matches an in-process typed Weft error by code', () => {
+    expect(isWeftFault(new WorkflowNotFoundError('wf-404'), 'WorkflowNotFoundError')).toBe(true);
+  });
+
+  it('matches a foreign (cross-realm) Weft error by code via the structural path', () => {
+    const foreign = foreignWeftError('WorkflowNotFoundError');
+    expect(isWeftFault(foreign, 'WorkflowNotFoundError')).toBe(true);
+  });
+
+  it('matches an HTTP-wrapped error carrying weftCode, without instanceof', () => {
+    // Shape of an `HttpClientError` after the REST fault rehydrated the code:
+    // `code` is 'HttpClientError', the fine-grained code rides on `weftCode`.
+    const httpError = {
+      code: 'HttpClientError',
+      message: 'not found',
+      weftCode: 'WorkflowNotFoundError',
+    };
+    expect(isWeftFault(httpError, 'WorkflowNotFoundError')).toBe(true);
+  });
+
+  it('does not match when the code differs (discriminates)', () => {
+    expect(isWeftFault(new WorkflowNotFoundError('wf-404'), 'WorkflowNotRegisteredError')).toBe(
+      false,
+    );
+    const httpError = { code: 'HttpClientError', message: 'x', weftCode: 'WorkflowNotFoundError' };
+    expect(isWeftFault(httpError, 'WorkflowNotRegisteredError')).toBe(false);
+  });
+
+  it('returns false for non-errors and unrelated objects', () => {
+    expect(isWeftFault(null, 'WorkflowNotFoundError')).toBe(false);
+    expect(isWeftFault(undefined, 'WorkflowNotFoundError')).toBe(false);
+    expect(isWeftFault('WorkflowNotFoundError', 'WorkflowNotFoundError')).toBe(false);
+    expect(isWeftFault({ weftCode: 42 }, 'WorkflowNotFoundError')).toBe(false);
+    expect(isWeftFault({ message: 'no codes' }, 'WorkflowNotFoundError')).toBe(false);
+  });
+
+  it('returns false (does not throw) for an object with a throwing weftCode getter', () => {
+    const hostile = {
+      get weftCode(): string {
+        throw new Error('boom');
+      },
+    };
+    expect(() => isWeftFault(hostile, 'WorkflowNotFoundError')).not.toThrow();
+    expect(isWeftFault(hostile, 'WorkflowNotFoundError')).toBe(false);
   });
 });

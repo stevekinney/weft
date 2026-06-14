@@ -147,7 +147,7 @@ Because recovery never re-executes the workflow from the beginning, your workflo
 
 ### Durable Workflows
 
-Generator functions with automatic checkpointing at every `yield*` boundary. Activities, sleeps, signals, queries, updates, parallel execution via `ctx.all()`, race semantics via `ctx.race()`, memoization via `ctx.memo()`, sagas via `ctx.saga()`, child workflows, and forks. `ctx.all()` and `ctx.race()` can branch over activities, sleeps, and signal waits; use `ctx.race([ctx.waitForSignal(name), ctx.sleep(timeout)])` for signal timeouts instead of placing an unbounded signal wait directly in `ctx.all()`.
+Generator functions with automatic checkpointing at every `yield*` boundary. Activities, sleeps, signals, condition gates with `ctx.waitUntil()`, queries, updates, structured logs with `ctx.log`, parallel execution via `ctx.all()`, race semantics via `ctx.race()`, memoization via `ctx.memo()`, sagas via `ctx.saga()`, child workflows, and forks. `ctx.all()` and `ctx.race()` can branch over activities, sleeps, and signal waits; use `ctx.race([ctx.waitForSignal(name), ctx.sleep(timeout)])` for signal timeouts instead of placing an unbounded signal wait directly in `ctx.all()`.
 
 Every workflow context exposes `ctx.workflowId` and `ctx.workflowType`. `workflowType` is the registered name from `workflow({ name })`, so shared workflow code can log, tag, or branch on the current workflow type without closing over definition-site state.
 
@@ -195,9 +195,28 @@ const handle = await engine.start('approval', { orderId: 'order-123' });
 await engine.signal(handle.id, approvalSignal, { approved: true });
 ```
 
+For state that changes through synchronous updates, use `ctx.waitUntil(predicate, timeout?)` as a durable condition gate. It re-checks a pure predicate when `ctx.onUpdate()` handlers mutate workflow-local state, or when the optional timeout fires. It is inline-only because the predicate closure stays in the engine process; signals do not re-drive it because signals are pull-based messages consumed by `ctx.waitForSignal()`.
+
+```typescript partial
+const quorum = workflow({ name: 'quorum' })
+  .updates({
+    vote: update<void, number>('vote'),
+  })
+  .execute(async function* (ctx) {
+    let votes = 0;
+    ctx.onUpdate('vote', () => {
+      votes += 1;
+      return votes;
+    });
+
+    const reached = yield* ctx.waitUntil(() => votes >= 3, '1h');
+    return reached ? 'accepted' : 'expired';
+  });
+```
+
 ### Live Workflow Events
 
-Workflow handles expose lifecycle events through `addEventListener`, and client handles can open a live tail for progress UIs or operators. `LocalClient` reads from the in-process engine stream; `HttpClient` uses the per-workflow `/v1/workflows/:id/watch` WebSocket channel with history catch-up on connect and reconnect, so `addEventListener`, `client.tail(id)`, and `handle.tail()` are push-based rather than a polling loop.
+Workflow handles expose lifecycle events through `addEventListener`, and client handles can open a live tail for progress UIs or operators. `LocalClient` reads from the in-process engine stream; `HttpClient` uses the per-workflow `/v1/workflows/:id/watch` WebSocket channel with history catch-up on connect and reconnect, so `addEventListener`, `client.tail(id)`, and `handle.tail()` are push-based rather than a polling loop. Client code that receives a workflow id from another process can call `client.getHandle(id)` to re-attach a `ClientHandle` or get `null` when the run does not exist.
 
 ```typescript
 const handle = await client.start('checkout', order);
@@ -214,15 +233,17 @@ The tail is single-consumer and stops on terminal workflow events or `tail.close
 
 ### Idempotent Starts and Signal-With-Start
 
-Retried webhooks and queue deliveries should not double-start workflows. Pass a stable `idempotencyKey` to `engine.start()` to make every retry return a handle for the same run. Use `engine.startOrSignal()` when the first event should create the workflow and later events should signal the existing non-terminal run.
+Retried webhooks and queue deliveries should not double-start workflows. Pass a stable `idempotencyKey` to `engine.start()` to make every retry return a handle for the same run. Use `engine.startOrSignal()` when the first event should create the workflow and later events should signal the existing non-terminal run. The call returns `{ handle, outcome }`, where `outcome` is `'started'` for the caller that created the run and `'signalled'` for callers that delivered to, or converged onto, an existing run.
 
 ```typescript
-const handle = await engine.startOrSignal(
+const { handle, outcome } = await engine.startOrSignal(
   'approval',
   { orderId: 'order-123' },
   { name: 'payment', payload: { status: 'succeeded' } },
   { idempotencyKey: 'payment-webhook-order-123' },
 );
+
+console.log(handle.id, outcome); // outcome is 'started' or 'signalled'
 ```
 
 The idempotency mapping intentionally outlives terminal cleanup. If retention removes the workflow record, the key is spent and future calls return a conflict instead of starting a replacement.
@@ -253,6 +274,8 @@ const orders = await engine.list({
 ```
 
 Workflow visibility extends the same list surface with operator filters for `idPrefix`, failure categories, created/updated/deadline ranges, and status arrays. Use `engine.aggregate()` or `GET /api/v1/workflows/aggregate` for grouped counts by status, type, failure category, or a search attribute. Existing Bun SQLite deployments should run the [workflow visibility backfill](documentation/guides/workflow-visibility-backfill.md) before relying on the indexed fast path for older workflows.
+
+Failure-category filters use the current execution taxonomy only: `application`, `timeout`, `cancellation`, `resource`, and `system`. Older category names from pre-1.0 experiments are dropped during decode and are not expanded in list or aggregate filters.
 
 ### Human-in-the-Loop Review
 
@@ -367,6 +390,8 @@ The core engine runs inside a Web Worker, with a Service Worker acting as the du
 
 Built-in event system (`EventTarget`-based, so it composes with everything), W3C `traceparent` propagation, and OpenTelemetry-compatible metrics. Composable interceptors layer cross-cutting concerns—tracing, validation, encryption—without any of them knowing about each other.
 
+Schedules also emit `schedule:fired` on the live engine each time a schedule actually launches a workflow run. The event carries `scheduleId`, `workflowId`, `firedAt`, and the scheduled `occurrence` when one is retained, so in-process dispatchers can react to cadence without polling schedule state.
+
 ```typescript
 import { createObservabilityInterceptors, createOpenTelemetryMetrics } from '@lostgradient/weft';
 
@@ -380,6 +405,8 @@ const engine = new Engine({
   interceptors: [interceptors.interceptor],
 });
 ```
+
+Inside workflow code, `ctx.log` emits structured console records with `workflowId`, `workflowType`, `level`, and `timestamp` attached. Caller attributes are nested under `attributes`, so they cannot overwrite the envelope. Logs at already-restored checkpoint positions are suppressed on recovery; logs at the live frontier still emit, and in worker mode the destination is the worker process console.
 
 ### Testing
 
@@ -442,6 +469,16 @@ import { isWeftErrorLike } from '@lostgradient/weft';
 
 function isAlreadyRunning(error: unknown): boolean {
   return isWeftErrorLike(error) && error.code === 'WorkflowAlreadyExistsError';
+}
+```
+
+When the same producer might run through either `LocalClient` or `HttpClient`, use `isWeftFault(error, code)` for a specific branch. It matches same-process `WeftError` instances and HTTP-wrapped errors whose REST response carried the originating public `weftCode`.
+
+```typescript
+import { isWeftFault } from '@lostgradient/weft';
+
+function isMissingWorkflow(error: unknown): boolean {
+  return isWeftFault(error, 'WorkflowNotFoundError');
 }
 ```
 

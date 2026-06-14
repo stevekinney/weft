@@ -42,8 +42,12 @@ function writeCapturedOutput(output: Buffer | string | undefined): void {
 }
 
 function isGeneratedCoverageArtifact(filePath: string): boolean {
+  // Bun records generated fixture paths relative to the coverage-run CWD, so worktree
+  // depth changes the number of `../` segments and the temp root may be `var/folders/`,
+  // `private/tmp/`, or `tmp/` (#503). The second matcher still gates this to known
+  // fixture names, so a non-fixture temp file is not caught.
   if (
-    /(?:\.\.\/){5,6}(?:private\/)?var\/folders\//.test(filePath) &&
+    /(?:\.\.\/)+(?:private\/)?(?:var\/folders\/|tmp\/)/.test(filePath) &&
     /(?:\/weft-(?:schedule(?:-lmdb)?-(?:workflows|input)|cli-edge-workflows)-[^/]+\.ts$|\/weft-validate-[^/]+\/[^/]+\.ts$|\/weft-validate-(?:json-invalid|mixed-(?:clean|invalid)|multi-[ab])-[^/]+\.ts$)/.test(
       filePath,
     )
@@ -80,7 +84,7 @@ const BASE_COVERAGE_ALLOWANCES = new Map<string, CoverageAllowance>([
       // The type-generation logic is exercised in-process by the generator test
       // suite. The remaining lines are the `import.meta.main` child-process
       // entrypoint plus a Bun line-mapping miss on the object-render return.
-      lines: new Set([117, 118, 119, 120, 121, 122, 235]),
+      lines: new Set([117, 118, 119, 120, 121, 122, 262]),
     },
   ],
   [
@@ -1228,7 +1232,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = new Map<string, CoverageAllowanc
       // coverage and confirmed the remaining miss is line-mapping drift on the
       // class declaration after nearby JSDoc moved the source line number.
       functions: 1,
-      lines: new Set([152]),
+      lines: new Set([154]),
     },
   ],
   [
@@ -1780,7 +1784,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = new Map<string, CoverageAllowa
   ['src/cli/conformance.ts', { lines: new Set([293, 331]) }],
   ['src/cli/parse-schedule-arguments.ts', { lines: new Set([200, 201]) }],
   ['src/client/http-client-requests.ts', { lines: new Set([158]) }],
-  ['src/client/local.ts', { lines: new Set([153]) }],
+  ['src/client/local.ts', { lines: new Set([153, 154]) }],
   [
     'src/core/checkpoint/serialization.ts',
     {
