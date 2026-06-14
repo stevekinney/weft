@@ -116,7 +116,7 @@ describe('parseLcov', () => {
         'FNF:4',
         'FNH:0',
         'DA:101,0',
-        'DA:409,0',
+        'DA:428,0',
         'DA:999,1',
         'end_of_record',
       ].join('\n'),
