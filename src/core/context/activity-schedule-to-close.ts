@@ -65,6 +65,89 @@ export class ActivityScheduleToCloseTimeoutError extends WeftError<'ActivitySche
 }
 
 /**
+ * Thrown when an inline activity attempt overruns its per-attempt
+ * {@link ActivityCallOptions.timeout} wall-clock cap. The cap is measured fresh
+ * on every attempt (unlike {@link ActivityScheduleToCloseTimeoutError}, which is a
+ * single budget across all attempts), so the {@link attempt} number is reported.
+ *
+ * When this fires, the workflow stops awaiting the attempt and the activity's
+ * `AbortSignal` is aborted so a cooperating activity can stop promptly — but Weft
+ * cannot forcibly preempt a running activity function, so a non-cooperating
+ * activity keeps executing in the background until it returns. The timed-out
+ * attempt is retried (with a fresh cap) when a retry policy permits.
+ *
+ * The name is registered as a `timeout` failure category, so it classifies and is
+ * searchable the same way the other timeout errors are. `timeout` is enforced for
+ * **inline** execution only; worker-mode per-attempt bounds are governed by
+ * `visibilityTimeout`.
+ *
+ * @example
+ * ```ts
+ * import { ActivityPerAttemptTimeoutError } from '@lostgradient/weft';
+ *
+ * function overranAttempt(error: unknown): boolean {
+ *   return error instanceof ActivityPerAttemptTimeoutError;
+ * }
+ * ```
+ */
+export class ActivityPerAttemptTimeoutError extends WeftError<'ActivityPerAttemptTimeoutError'> {
+  readonly activityName: string;
+  /** The 1-based attempt number that overran its per-attempt cap. */
+  readonly attempt: number;
+  /** The per-attempt wall-clock cap, in milliseconds. */
+  readonly timeoutMs: number;
+
+  constructor(activityName: string, attempt: number, timeoutMs: number) {
+    super(
+      'ActivityPerAttemptTimeoutError',
+      `Activity "${activityName}" attempt ${attempt} exceeded its per-attempt timeout of ${timeoutMs}ms`,
+    );
+    this.activityName = activityName;
+    this.attempt = attempt;
+    this.timeoutMs = timeoutMs;
+  }
+}
+
+/**
+ * The largest delay a single `setTimeout` can represent without 32-bit overflow.
+ * A delay above this silently wraps and fires almost immediately, so a per-attempt
+ * `timeout` larger than this is rejected rather than misbehaving. (~24.8 days.)
+ */
+export const MAX_PER_ATTEMPT_TIMEOUT_MS = 2_147_483_647;
+
+/**
+ * Parse a per-attempt `timeout` duration to milliseconds, or `undefined` when
+ * unset. The value is read off the serialized activity operation, so it is typed
+ * `unknown` and validated here as hostile input: only a `number`/`string`
+ * {@link Duration} is accepted, and `parseDuration` enforces finite/non-negative
+ * so the cap can never silently become `NaN`/`Infinity`/negative. A `0`ms cap is
+ * rejected as meaningless (it would expire an attempt before it could run) —
+ * callers must omit `timeout` to disable the cap rather than passing `0` — and a
+ * value above {@link MAX_PER_ATTEMPT_TIMEOUT_MS} is rejected because it would
+ * overflow the underlying `setTimeout` and fire almost immediately.
+ */
+export function parsePerAttemptTimeoutMs(timeout: unknown): number | undefined {
+  if (timeout === undefined) return undefined;
+  if (typeof timeout !== 'number' && typeof timeout !== 'string') {
+    throw new Error(
+      `Activity timeout must be a number or duration string when set (got ${typeof timeout}).`,
+    );
+  }
+  const ms = parseDuration(timeout);
+  if (ms <= 0) {
+    throw new Error(
+      `Activity timeout must be greater than 0ms when set (got ${ms}ms); omit it to disable the per-attempt cap.`,
+    );
+  }
+  if (ms > MAX_PER_ATTEMPT_TIMEOUT_MS) {
+    throw new Error(
+      `Activity timeout of ${ms}ms exceeds the maximum supported per-attempt cap of ${MAX_PER_ATTEMPT_TIMEOUT_MS}ms (~24.8 days).`,
+    );
+  }
+  return ms;
+}
+
+/**
  * The first-dispatch anchor and parsed budget for a `ctx.run` call's
  * `scheduleToCloseTimeout`, or `undefined` when no budget is configured.
  */
@@ -102,6 +185,22 @@ export function resolveActivityScheduleToCloseTimeout(
   if (options?.scheduleToCloseTimeout !== undefined) return options.scheduleToCloseTimeout;
   if (typeof activity === 'string') return undefined;
   return activity.scheduleToCloseTimeout;
+}
+
+/**
+ * Resolve the per-attempt `timeout` for a `ctx.run` call: a per-call `timeout`
+ * overrides the activity definition's default. String activities have no
+ * definition fields, so only the per-call option applies. Mirrors
+ * {@link resolveActivityScheduleToCloseTimeout} so the per-attempt cap honors a
+ * `timeout` declared on the activity definition, not just at the call site.
+ */
+export function resolveActivityTimeout(
+  activity: string | (Function & { timeout?: Duration }),
+  options: ActivityCallOptions | undefined,
+): Duration | undefined {
+  if (options?.timeout !== undefined) return options.timeout;
+  if (typeof activity === 'string') return undefined;
+  return activity.timeout;
 }
 
 /**

@@ -17,6 +17,7 @@ import {
   assertScheduleToCloseBudgetNotExhausted,
   parseScheduleToCloseBudgetMs,
   resolveActivityScheduleToCloseTimeout,
+  resolveActivityTimeout,
   type ScheduleToCloseBudget,
 } from './activity-schedule-to-close.ts';
 import type { Context } from './index.ts';
@@ -260,6 +261,12 @@ export function createRunActivityRequest<TResult>(
   if (cachedRequest.hasCachedResult) return cachedRequest;
   const retryPolicy = resolveActivityRetryPolicy(activity, options);
   const scheduleToCloseTimeout = resolveActivityScheduleToCloseTimeout(activity, options);
+  // Resolve the per-attempt `timeout` from the call option or the activity
+  // definition (call wins) and pin it onto the dispatched options, so the engine
+  // sees one effective value regardless of where it was declared (#494).
+  const effectiveTimeout = resolveActivityTimeout(activity, options);
+  const dispatchedOptions =
+    effectiveTimeout === undefined ? options : { ...options, timeout: effectiveTimeout };
   return {
     request: createFreshRunActivityRequest(
       internals,
@@ -267,7 +274,7 @@ export function createRunActivityRequest<TResult>(
       activityName,
       activityFunction,
       input,
-      options,
+      dispatchedOptions,
     ),
     step,
     hasCachedResult: false,
@@ -317,7 +324,10 @@ export function* runActivityWithRetry<TResult>(
     // the loop (not the catch branch) so it also fires on a recovered frontier
     // attempt — where the backoff sleep replays from cache and the catch branch is
     // never reached — and when a long backoff pushes wall time past the deadline.
-    // Attempt 1 is exempt: an activity always gets one try.
+    // Attempt 1 is exempt: an activity always gets one try. (Per-attempt wall-clock
+    // bounds are the job of `timeout`, the #494 inline cap; scheduleToCloseTimeout
+    // stays the documented cross-attempt retry budget, so a `0`ms budget still
+    // permits exactly one attempt.)
     if (attempt > 1) {
       assertScheduleToCloseBudgetNotExhausted(budget, request.activityName, internals.getNow());
     }
