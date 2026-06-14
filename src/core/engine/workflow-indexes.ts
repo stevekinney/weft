@@ -220,6 +220,8 @@ const EMPTY_INDEX_VALUE = new Uint8Array(0);
  */
 export type WorkflowVisibilityWatermark = 'current' | 'stale';
 
+export const WORKFLOW_VISIBILITY_WATERMARK_CACHE_TTL_MS = 1_000;
+
 /**
  * Read the visibility-index watermark. Returns `'current'` when the
  * persisted version is at or above {@link WORKFLOW_VISIBILITY_INDEX_VERSION}.
@@ -241,17 +243,22 @@ export async function getWorkflowVisibilityWatermark(
 
 /**
  * Read the visibility-index watermark through the engine-local query cache.
- * The cache avoids repeated metadata reads during list/aggregate queries and
- * is invalidated by the engine when it runs the visibility backfill.
+ * The short freshness window avoids repeated metadata reads during bursts of
+ * list/aggregate queries without pinning an external backfill or drop decision
+ * until process restart.
  */
 export async function getCachedWorkflowVisibilityWatermark(
   internals: EngineInternals,
 ): Promise<WorkflowVisibilityWatermark> {
-  if (internals.workflowVisibilityWatermark !== undefined) {
-    return internals.workflowVisibilityWatermark;
+  const cachedWatermark = internals.workflowVisibilityWatermark;
+  const expiresAt = internals.workflowVisibilityWatermarkExpiresAt;
+  const now = Date.now();
+  if (cachedWatermark !== undefined && expiresAt !== undefined && now < expiresAt) {
+    return cachedWatermark;
   }
 
   const watermark = await getWorkflowVisibilityWatermark(internals.storage);
   internals.workflowVisibilityWatermark = watermark;
+  internals.workflowVisibilityWatermarkExpiresAt = now + WORKFLOW_VISIBILITY_WATERMARK_CACHE_TTL_MS;
   return watermark;
 }

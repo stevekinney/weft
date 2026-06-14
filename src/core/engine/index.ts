@@ -585,6 +585,7 @@ export class Engine<
     getInternals(this).workflowFeedListeners = new Map();
     getInternals(this).workflowVersionTuples = new Map();
     getInternals(this).workflowVisibilityWatermark = undefined;
+    getInternals(this).workflowVisibilityWatermarkExpiresAt = undefined;
     getInternals(this).activityWorkerDispatcher = createActivityWorkerDispatcher(
       options?.activityExecution,
     );

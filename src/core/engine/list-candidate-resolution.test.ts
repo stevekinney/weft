@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'bun:test';
 
-import { runWorkflowVisibilityBackfill } from '../../../scripts/lib/workflow-visibility-backfill.ts';
+import {
+  runWorkflowVisibilityBackfill,
+  runWorkflowVisibilityDrop,
+} from '../../../scripts/lib/workflow-visibility-backfill.ts';
 import { KEYS, type ScanOptions } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { decode, encode } from '../codec.ts';
@@ -9,7 +12,10 @@ import { buildIndexOperations } from '../search-attributes.ts';
 import type { WorkflowState } from '../types.ts';
 import { workflow } from '../types/workflow-function.ts';
 import { getInternals } from './internals.ts';
-import { WORKFLOW_VISIBILITY_INDEX_VERSION } from './workflow-indexes.ts';
+import {
+  WORKFLOW_VISIBILITY_INDEX_VERSION,
+  WORKFLOW_VISIBILITY_WATERMARK_CACHE_TTL_MS,
+} from './workflow-indexes.ts';
 
 const applicationFailureWorkflow = workflow({ name: 'application-failure' }).execute(
   async function* () {
@@ -121,6 +127,54 @@ describe('resolveListCandidateIds', () => {
 
       expect(storage.countGets(KEYS.workflowVisibilityMetaVersion())).toBe(2);
       expect(storage.countScans('wf:')).toBe(workflowScansAfterBackfill);
+      expect(storage.countScans('wf-idx-status:completed:')).toBe(1);
+    } finally {
+      engine[Symbol.dispose]();
+    }
+  });
+
+  it('refreshes external visibility watermark backfill and drop changes after cache expiry', async () => {
+    const storage = new ScanCountingStorage();
+    const engine = new Engine({ storage });
+    try {
+      engine.register(visibilityCacheWorkflow);
+      const handle = await engine.start('visibility-cache', 'first', {
+        id: 'visibility-cache-external-refresh',
+      });
+      await handle.result();
+
+      storage.resetObservations();
+
+      await engine.list({ status: 'completed' });
+
+      expect(getInternals(engine).workflowVisibilityWatermark).toBe('stale');
+      expect(storage.countGets(KEYS.workflowVisibilityMetaVersion())).toBe(1);
+      expect(storage.countScans('wf:')).toBe(1);
+
+      const backfillReport = await runWorkflowVisibilityBackfill(storage);
+      expect(backfillReport.watermarkWritten).toBe(true);
+
+      const workflowScansAfterBackfill = storage.countScans('wf:');
+      getInternals(engine).workflowVisibilityWatermarkExpiresAt =
+        Date.now() - WORKFLOW_VISIBILITY_WATERMARK_CACHE_TTL_MS;
+      await engine.list({ status: 'completed' });
+
+      expect(getInternals(engine).workflowVisibilityWatermark).toBe('current');
+      expect(storage.countGets(KEYS.workflowVisibilityMetaVersion())).toBe(2);
+      expect(storage.countScans('wf:')).toBe(workflowScansAfterBackfill);
+      expect(storage.countScans('wf-idx-status:completed:')).toBe(1);
+
+      const dropReport = await runWorkflowVisibilityDrop(storage);
+      expect(dropReport.rowsDeleted).toBeGreaterThan(0);
+
+      const workflowScansAfterDrop = storage.countScans('wf:');
+      getInternals(engine).workflowVisibilityWatermarkExpiresAt =
+        Date.now() - WORKFLOW_VISIBILITY_WATERMARK_CACHE_TTL_MS;
+      await engine.aggregate({ status: 'completed' }, { groupBy: 'status' });
+
+      expect(getInternals(engine).workflowVisibilityWatermark).toBe('stale');
+      expect(storage.countGets(KEYS.workflowVisibilityMetaVersion())).toBe(3);
+      expect(storage.countScans('wf:')).toBe(workflowScansAfterDrop + 1);
       expect(storage.countScans('wf-idx-status:completed:')).toBe(1);
     } finally {
       engine[Symbol.dispose]();

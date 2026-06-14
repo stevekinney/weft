@@ -244,10 +244,13 @@ export interface EngineInternals {
   workflowFeedListeners: Map<string, Set<WorkflowFeedListener>>;
   workflowVersionTuples: Map<string, WorkflowVersionTuple>;
   /**
-   * Cached visibility-index watermark for query planning. `undefined` means
-   * "not read yet" or "explicitly invalidated after a local backfill write."
+   * Cached visibility-index watermark for query planning. `undefined` means the
+   * watermark has not been read yet or an in-process caller invalidated it.
+   * `workflowVisibilityWatermarkExpiresAt` bounds how long external maintenance
+   * commands can leave this process planning against a stale watermark.
    */
   workflowVisibilityWatermark: 'current' | 'stale' | undefined;
+  workflowVisibilityWatermarkExpiresAt: number | undefined;
   pendingTimelineEntries: Map<string, PendingTimelineEntry>;
   pendingAtomicWorkflowCommitSideEffects: Map<
     string,
