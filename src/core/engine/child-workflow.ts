@@ -1,5 +1,6 @@
 import type { ContextOperationRequest } from '../context.ts';
 import type { ComposedWorkflowInterceptor } from '../interceptor.ts';
+import { assertOnTerminalConflictUnsupported } from '../start-workflow-validation.ts';
 import type { StartOptions, WorkflowState } from '../types.ts';
 import { WorkflowAlreadyExistsError } from './errors.ts';
 import type { WorkflowHandle } from './handles.ts';
@@ -129,6 +130,13 @@ async function dispatchChildWorkflowStart(
   context: PendingChildExecutionContext,
   callbacks: Pick<ChildWorkflowOperationCallbacks, 'getHandle' | 'loadWorkflowState' | 'start'>,
 ): Promise<WorkflowHandle> {
+  // Child-start re-attaches to an existing child run by id during replay (including a
+  // terminal one), so the engine.start-only `onTerminalConflict: 'start-new'` would make
+  // replay nondeterministic; it stays unsupported here (a replay-safe child restart is a
+  // separate deferred feature, #489). The primary defense is its absence from
+  // `ChildWorkflowOptions`; this is the runtime backstop for an untyped/`as`-cast caller,
+  // run before pending child context is applied so a rejection leaves no stale state.
+  assertOnTerminalConflictUnsupported(operation.options, 'ctx.startChild');
   applyPendingChildExecutionContext(internals, context);
   try {
     return await callbacks.start(operation.workflowType, operation.input, {
