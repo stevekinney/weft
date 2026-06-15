@@ -39,15 +39,41 @@ export function resolveOwnershipFields(
       leaseWaitTimeoutMs: DEFAULT_LEASE_WAIT_TIMEOUT_MS,
     };
   }
-  return {
-    ownershipMode,
-    leaseTtlMs:
-      normalizeRetentionDuration(options?.leaseTtl, 'options.leaseTtl') ?? DEFAULT_LEASE_TTL_MS,
-    leaseRenewIntervalMs:
-      normalizeRetentionDuration(options?.leaseRenewInterval, 'options.leaseRenewInterval') ??
-      DEFAULT_LEASE_RENEW_INTERVAL_MS,
-    leaseWaitTimeoutMs:
-      normalizeRetentionDuration(options?.leaseWaitTimeout, 'options.leaseWaitTimeout') ??
-      DEFAULT_LEASE_WAIT_TIMEOUT_MS,
-  };
+  const leaseTtlMs =
+    normalizeRetentionDuration(options?.leaseTtl, 'options.leaseTtl') ?? DEFAULT_LEASE_TTL_MS;
+  const leaseRenewIntervalMs =
+    normalizeRetentionDuration(options?.leaseRenewInterval, 'options.leaseRenewInterval') ??
+    DEFAULT_LEASE_RENEW_INTERVAL_MS;
+  const leaseWaitTimeoutMs =
+    normalizeRetentionDuration(options?.leaseWaitTimeout, 'options.leaseWaitTimeout') ??
+    DEFAULT_LEASE_WAIT_TIMEOUT_MS;
+  assertLeaseTimingCoherent(leaseTtlMs, leaseRenewIntervalMs, leaseWaitTimeoutMs);
+  return { ownershipMode, leaseTtlMs, leaseRenewIntervalMs, leaseWaitTimeoutMs };
+}
+
+/**
+ * Reject lease timing that cannot hold the lease: a renewal interval at or above
+ * the TTL lets the lease lapse before (or exactly as) the first renewal fires, so
+ * a second instance could acquire while the first still believes it owns the
+ * lease — defeating the handoff the option exists to provide. Non-positive values
+ * are equally nonsensical. `normalizeRetentionDuration` already rejects malformed
+ * durations; this checks the cross-field relationship the lease protocol requires.
+ */
+function assertLeaseTimingCoherent(
+  leaseTtlMs: number,
+  leaseRenewIntervalMs: number,
+  leaseWaitTimeoutMs: number,
+): void {
+  if (leaseTtlMs <= 0 || leaseRenewIntervalMs <= 0 || leaseWaitTimeoutMs <= 0) {
+    throw new Error(
+      `ownership: 'lease' requires positive leaseTtl, leaseRenewInterval, and leaseWaitTimeout ` +
+        `(got leaseTtl=${leaseTtlMs}ms, leaseRenewInterval=${leaseRenewIntervalMs}ms, leaseWaitTimeout=${leaseWaitTimeoutMs}ms).`,
+    );
+  }
+  if (leaseRenewIntervalMs >= leaseTtlMs) {
+    throw new Error(
+      `ownership: 'lease' requires leaseRenewInterval (${leaseRenewIntervalMs}ms) to be strictly less than ` +
+        `leaseTtl (${leaseTtlMs}ms), so a renewal fires before the lease can lapse.`,
+    );
+  }
 }

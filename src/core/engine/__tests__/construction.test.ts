@@ -192,6 +192,42 @@ describe('resolveEngineOptions', () => {
       ),
     ).toThrow();
   });
+
+  it("throws when leaseRenewInterval >= leaseTtl under ownership 'lease'", () => {
+    // A renewal interval at or above the TTL lets the lease lapse before the first
+    // renewal — a second instance could acquire while the first still owns it.
+    expect(() =>
+      resolveEngineOptions(
+        new MemoryStorage(),
+        { ownership: 'lease', leaseTtl: '10s', leaseRenewInterval: '10s' },
+        getNow,
+      ),
+    ).toThrow(/leaseRenewInterval/);
+    expect(() =>
+      resolveEngineOptions(
+        new MemoryStorage(),
+        { ownership: 'lease', leaseTtl: '10s', leaseRenewInterval: '20s' },
+        getNow,
+      ),
+    ).toThrow(/leaseRenewInterval/);
+  });
+
+  it("accepts leaseRenewInterval strictly less than leaseTtl under ownership 'lease'", () => {
+    const resolved = resolveEngineOptions(
+      new MemoryStorage(),
+      { ownership: 'lease', leaseTtl: '10s', leaseRenewInterval: '9999ms' },
+      getNow,
+    );
+    expect(resolved.leaseRenewIntervalMs).toBe(9_999);
+    expect(resolved.leaseTtlMs).toBe(10_000);
+  });
+
+  it("throws on a non-positive lease duration under ownership 'lease'", () => {
+    // '0s' normalizes to 0ms — nonsensical for a lease; must be rejected.
+    expect(() =>
+      resolveEngineOptions(new MemoryStorage(), { ownership: 'lease', leaseTtl: '0s' }, getNow),
+    ).toThrow(/positive leaseTtl/);
+  });
 });
 
 describe('normalizeWorkerExecutionConfiguration', () => {

@@ -2,8 +2,11 @@
  * Lease-fenced single-writer ownership over a shared durable store. This is the
  * opt-in `Engine.create({ ownership: 'lease' })` mechanism — a CORRECTNESS-PATH
  * coordinator, NOT a best-effort smoke alarm like the second-instance detector.
- * Its errors are real: a failed acquire throws and blocks recovery; a failed
- * renewal means this instance has been deposed and must stop writing.
+ * Its acquire/renew errors are real, not swallowed: a failed acquire throws and
+ * blocks recovery, and a CAS-failed renewal signals that this instance has been
+ * deposed. In Step 1 deposition is surfaced through `onLeaseLost` (the engine
+ * warns); Step 2 will make it enforceable by fencing every durable write on the
+ * lease epoch, so a deposed instance loses the write rather than corrupting state.
  *
  * **Why a lease.** Weft's supported model is one engine process per durable
  * store. Without a lease, a rolling deploy briefly runs two engines (old draining
@@ -39,7 +42,7 @@
  */
 
 import { KEYS, storageConditionalBatch, type Storage } from '../../storage/interface.ts';
-import { EngineLeaseAcquisitionTimeoutError } from './errors.ts';
+import { EngineLeaseAcquisitionTimeoutError, EngineLeaseCorruptedError } from './errors.ts';
 
 /** The decoded {@link KEYS.leaseHolder} record. */
 type LeaseHolderRecord = {
@@ -65,19 +68,27 @@ function encodeEpoch(epoch: number): Uint8Array {
 
 /**
  * Decode an 8-byte big-endian uint64 epoch, or `null` when the stored value is
- * not exactly 8 bytes (a foreign or corrupt value). Epochs always fit in a JS
- * safe integer in practice (one increment per deploy), so the `Number()` cast is
- * safe; a pathologically huge persisted value decodes to a finite number and is
- * still strictly comparable.
+ * not a usable epoch — not exactly 8 bytes, or beyond the JS safe-integer range.
+ * The epoch is the monotonic fencing high-water mark, so it must stay exactly
+ * comparable and exactly incrementable: a value above `Number.MAX_SAFE_INTEGER`
+ * would lose precision and could collapse distinct generations or fail to advance
+ * under `epoch + 1`. Returning `null` routes such a value to the corruption path
+ * (fail-closed at boot) rather than silently re-minting an imprecise generation.
  */
 function decodeEpoch(raw: Uint8Array): number | null {
   if (raw.byteLength !== 8) return null;
   const value = new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getBigUint64(0, false);
-  return Number(value);
+  const numberValue = Number(value);
+  return Number.isSafeInteger(numberValue) && numberValue >= 1 ? numberValue : null;
 }
 
 function encodeHolder(record: LeaseHolderRecord): Uint8Array {
   return textEncoder.encode(JSON.stringify(record));
+}
+
+/** Narrow an unknown JSON value to a plain object for field-by-field validation. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
 }
 
 /** Decode a stored holder record, tolerating any malformed/foreign value as `null`. */
@@ -88,19 +99,19 @@ function decodeHolder(raw: Uint8Array): LeaseHolderRecord | null {
   } catch {
     return null;
   }
-  if (typeof parsed !== 'object' || parsed === null) return null;
-  const candidate = parsed as { holderId: unknown; expiresAt: unknown; epoch: unknown };
+  if (!isRecord(parsed)) return null;
+  const { holderId, expiresAt, epoch } = parsed;
   if (
-    typeof candidate.holderId !== 'string' ||
-    typeof candidate.expiresAt !== 'number' ||
-    !Number.isFinite(candidate.expiresAt) ||
-    typeof candidate.epoch !== 'number' ||
-    !Number.isInteger(candidate.epoch) ||
-    candidate.epoch < 1
+    typeof holderId !== 'string' ||
+    typeof expiresAt !== 'number' ||
+    !Number.isFinite(expiresAt) ||
+    typeof epoch !== 'number' ||
+    !Number.isSafeInteger(epoch) ||
+    epoch < 1
   ) {
     return null;
   }
-  return { holderId: candidate.holderId, expiresAt: candidate.expiresAt, epoch: candidate.epoch };
+  return { holderId, expiresAt, epoch };
 }
 
 /** Why a holder lost its lease — surfaced to {@link LeaseManagerOptions.onLeaseLost}. */
@@ -261,25 +272,48 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
     return committed;
   }
 
-  /** One acquisition attempt against freshly-read state. Returns true on success. */
+  /**
+   * One acquisition attempt against freshly-read state. Returns true on success,
+   * false when the lease is still live (keep waiting), and THROWS
+   * {@link EngineLeaseCorruptedError} on corrupt lease state.
+   *
+   * `lease:epoch` is the SOLE source of truth for the monotonic high-water mark —
+   * the next epoch is ALWAYS `epoch + 1`, never derived from the holder's
+   * self-reported `epoch` (which a stale or hostile record could understate,
+   * letting us re-mint at or below the true watermark). So:
+   * - epoch present but undecodable → corruption (fail closed; waiting can't heal it).
+   * - epoch absent but holder present → corruption: the protocol never deletes the
+   *   epoch (release deletes only the holder), so this state is impossible unless
+   *   the epoch key was externally removed/damaged.
+   * - epoch absent and holder absent → cold store, mint epoch 1.
+   * - epoch present and decodable → re-acquire/steal at epoch+1 once not live.
+   */
   async function tryAcquireOnce(): Promise<boolean> {
     const { epochRaw, holderRaw, epoch, holder } = await readState();
-    // A holder value that is present but does not decode (`holder === null` while
-    // `holderRaw !== null`) is garbage in a Weft-owned key — no valid engine ever
-    // writes a malformed holder. It is NOT a live owner, so it can be stolen; we
-    // condition the steal on its exact raw bytes so a concurrent VALID writer
-    // (whose write would change those bytes) makes our CAS lose and we re-loop.
-    const holderLive = holder !== null && getNow() < holder.expiresAt;
 
-    // Holder present and still live: cannot take it; keep waiting.
+    if (epochRaw !== null && epoch === null) {
+      throw new EngineLeaseCorruptedError(
+        'the "lease:epoch" high-water mark is present but does not decode to a valid epoch',
+      );
+    }
+    if (epochRaw === null && holderRaw !== null) {
+      throw new EngineLeaseCorruptedError(
+        'a "lease:holder" record exists with no "lease:epoch" key (the lease protocol never deletes the epoch)',
+      );
+    }
+
+    // A holder present but undecodable (`holder === null` while `holderRaw !== null`)
+    // is garbage in a Weft-owned key — no valid engine writes a malformed holder. It
+    // is NOT a live owner, so it can be stolen; the steal conditions on its exact raw
+    // bytes so a concurrent VALID writer (whose write changes those bytes) makes our
+    // CAS lose and we re-loop. The epoch key, validated above, is intact.
+    const holderLive = holder !== null && getNow() < holder.expiresAt;
     if (holderLive) return false;
 
-    // Holder absent (or undecodable): re-acquire. Condition on the EXACT epoch and
-    // holder bytes we read — null require-absent when the key is genuinely empty,
-    // the raw bytes otherwise. Cold store (both absent) mints epoch 1; a surviving
-    // epoch (clean release, or a stolen/garbage holder) advances to baseEpoch+1.
-    const decodedEpoch = epoch ?? holder?.epoch ?? 0;
-    const nextEpoch = decodedEpoch + 1;
+    // Cold store (epoch + holder both absent) mints epoch 1; otherwise the surviving
+    // epoch advances to epoch+1. Condition on the EXACT bytes observed (null =
+    // require-absent when genuinely empty, the raw bytes otherwise).
+    const nextEpoch = (epoch ?? 0) + 1;
     return takeOwnership(epochRaw, holderRaw, nextEpoch);
   }
 
@@ -290,13 +324,16 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
     // "cap retries at 5" rule does not apply — it polls until another instance
     // releases (or its lease expires), then throws a typed error on timeout. The
     // iteration count is waitTimeoutMs / acquirePollIntervalMs (e.g. 60 at the
-    // defaults); the bound is the timeout, not an attempt count.
+    // defaults); the bound is the timeout, not an attempt count. A corrupt lease
+    // throws out of tryAcquireOnce immediately — waiting cannot heal corruption.
     for (;;) {
       if (stopped) return;
       if (await tryAcquireOnce()) return;
       // Record who we're waiting on for the timeout diagnostic.
       const holderRaw = await storage.get(KEYS.leaseHolder());
       lastHolderId = holderRaw === null ? null : (decodeHolder(holderRaw)?.holderId ?? null);
+      // Check the deadline BEFORE sleeping again so a zero/small wait window cannot
+      // overshoot into one more poll-and-acquire after the window has elapsed.
       if (getNow() >= deadline) {
         throw new EngineLeaseAcquisitionTimeoutError(waitTimeoutMs, lastHolderId);
       }
@@ -349,7 +386,10 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
   }
 
   function currentEpochBytes(): Uint8Array | null {
-    return heldEpochBytes;
+    // Return a defensive copy: the held epoch bytes are the Step-2 fencing token,
+    // and a caller mutating the shared buffer would corrupt every future fence
+    // condition. Cheap (8 bytes) relative to the integrity it protects.
+    return heldEpochBytes === null ? null : heldEpochBytes.slice();
   }
 
   function clearRenewal(): void {

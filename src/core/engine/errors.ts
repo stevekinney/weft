@@ -458,4 +458,36 @@ export class EngineLeaseAcquisitionTimeoutError extends WeftError<'EngineLeaseAc
   }
 }
 
+/**
+ * Thrown by {@link Engine.create} when `ownership: 'lease'` is configured but the
+ * lease keys in storage are corrupt — the `lease:epoch` high-water mark is present
+ * but does not decode to a valid epoch, or a holder record exists with no epoch
+ * key (which the lease protocol never produces, since `release()` deletes only the
+ * holder and never the epoch). The lease epoch is the sole source of truth for the
+ * monotonic fencing generation, so a booting instance fails closed rather than
+ * re-minting a generation at or below the true high-water mark and risking a
+ * split-brain. Resolve by operator repair: delete both `lease:` keys only if you
+ * are certain no other instance is running, or reset `lease:epoch` above its last
+ * known value.
+ *
+ * @example
+ * ```ts
+ * import { EngineLeaseCorruptedError } from '@lostgradient/weft';
+ *
+ * function isLeaseCorrupted(error: unknown): boolean {
+ *   return error instanceof EngineLeaseCorruptedError;
+ * }
+ * ```
+ */
+export class EngineLeaseCorruptedError extends WeftError<'EngineLeaseCorruptedError'> {
+  constructor(detail: string) {
+    super(
+      'EngineLeaseCorruptedError',
+      `The ownership lease state in storage is corrupt and cannot be used safely: ${detail}. ` +
+        'Resolve by operator repair (delete both "lease:" keys only if no other instance is ' +
+        'running, or reset "lease:epoch" above its last known value).',
+    );
+  }
+}
+
 export { PersistedDataIncompatibleError } from '../persisted-data-incompatible-error.ts';

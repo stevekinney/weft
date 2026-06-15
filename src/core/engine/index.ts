@@ -281,6 +281,7 @@ export {
   EngineCreateNameMismatchError,
   EngineDisposedError,
   EngineLeaseAcquisitionTimeoutError,
+  EngineLeaseCorruptedError,
   IdempotencyKeyPurgedError,
   PersistedDataIncompatibleError,
   StartOrSignalConflictError,
@@ -1675,17 +1676,25 @@ export class Engine<
     // even if the drain rejects: a half-disposed engine (abort un-fired,
     // awaiters hung, channels open) is worse than the footgun this fixes.
     if (!getInternals(this).disposed) {
-      // Clean deploy handoff: await the ownership-lease release here, in the
-      // async path, so the holder key is durably deleted BEFORE this resolves and
-      // the incoming instance can acquire. The synchronous dispose() below only
-      // fires release best-effort (it cannot await), so awaiting it first is what
-      // makes `await using engine` a zero-overlap handoff. release() stops
-      // renewals and is idempotent, so the later sync disposeLeaseManager no-ops.
-      await getInternals(this).leaseManager?.release();
+      // Capture the lease manager before synchronous disposal nulls the field;
+      // release it LAST (see below).
+      const leaseManager = getInternals(this).leaseManager;
       try {
         await drainQueuedInlineWorkflowStartsForEngine(this);
       } finally {
+        // Synchronous teardown first: it aborts the engine and tears down every
+        // workflow/activity/storage-writing path in memory. The caller owns the
+        // storage lifecycle (`await using storage`), so storage stays open here and
+        // the awaited release below can still issue its delete.
         this[Symbol.dispose]();
+        // Clean deploy handoff: release the ownership lease as the LAST durable
+        // action, AFTER queued starts have drained and all write paths are down —
+        // so the incoming instance cannot acquire and recover while this one is
+        // still writing. Awaiting makes `await using engine` a zero-overlap
+        // handoff. The sync dispose above already fired a best-effort release, but
+        // release() is idempotent (CAS finds the holder gone and no-ops), so this
+        // awaited release is the authoritative one.
+        await leaseManager?.release();
       }
       return;
     }

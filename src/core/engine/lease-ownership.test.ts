@@ -117,28 +117,53 @@ describe("Engine.create({ ownership: 'lease' })", () => {
   });
 
   it('blocks the second engine until the first releases (zero-overlap handoff)', async () => {
-    const storage = new BunSQLiteStorage(':memory:');
+    const base = new BunSQLiteStorage(':memory:');
+    // Instrument get() so the test learns, deterministically, when the challenger
+    // has actually reached the lease-wait poll (it reads lease:holder there). After
+    // two such reads the challenger is provably parked — no fixed sleep needed.
+    let holderReads = 0;
+    let signalParked!: () => void;
+    const parked = new Promise<void>((resolve) => {
+      signalParked = resolve;
+    });
+    const storage: Storage = {
+      capabilities: () => base.capabilities(),
+      get: (key) => {
+        if (key === KEYS.leaseHolder()) {
+          holderReads += 1;
+          if (holderReads >= 2) signalParked();
+        }
+        return base.get(key);
+      },
+      put: (key, value) => base.put(key, value),
+      delete: (key) => base.delete(key),
+      scan: (prefix, options) => base.scan(prefix, options),
+      batch: (operations) => base.batch(operations),
+      conditionalBatch: (conditions, operations) => base.conditionalBatch(conditions, operations),
+      [Symbol.dispose]: () => base[Symbol.dispose](),
+    };
+
     const first = await Engine.create({
       storage,
       workflows: { ping: pingWorkflow },
       ownership: 'lease',
     });
 
-    // The challenger boots while the first still holds the lease; its create() must
-    // not resolve until the first releases.
     let secondReady = false;
     const secondBoot = Engine.create({
       storage,
       workflows: { ping: pingWorkflow },
       ownership: 'lease',
       leaseWaitTimeout: '10s',
+      leaseRenewInterval: '1s',
     }).then((engine) => {
       secondReady = true;
       return engine;
     });
 
-    // Give the challenger a couple of real poll cycles; it must still be parked.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    // Wait until the challenger has genuinely polled the lease (deterministic
+    // barrier, not a timer), then assert it is still parked behind the live lease.
+    await parked;
     expect(secondReady).toBe(false);
 
     await first[Symbol.asyncDispose]();
@@ -147,7 +172,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     expect(await holderEpoch(storage)).toBe(2);
 
     await second[Symbol.asyncDispose]();
-    storage[Symbol.dispose]?.();
+    base[Symbol.dispose]();
   });
 
   it('fails fast when the storage backend lacks conditionalBatch', async () => {
@@ -190,8 +215,6 @@ describe("Engine.create({ ownership: 'lease' })", () => {
       storage,
       workflows: { ping: pingWorkflow },
       ownership: 'lease',
-      leaseTtl: '50ms',
-      leaseRenewInterval: '10ms',
     });
 
     const warnings: { name: string; message: string }[] = [];
@@ -200,10 +223,9 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     };
     process.on('warning', listener);
     try {
-      // Forcibly overwrite the holder + epoch (a successor stealing the lease),
-      // then wait for the incumbent's next renewal to observe the CAS failure.
+      // Forcibly overwrite the holder + epoch (a successor stealing the lease).
       const stolenHolder = new TextEncoder().encode(
-        JSON.stringify({ holderId: 'successor', expiresAt: Date.now() + 60_000, epoch: 2 }),
+        JSON.stringify({ holderId: 'successor', expiresAt: 1e15, epoch: 2 }),
       );
       const stolenEpoch = new Uint8Array(8);
       new DataView(stolenEpoch.buffer).setBigUint64(0, 2n, false);
@@ -212,14 +234,14 @@ describe("Engine.create({ ownership: 'lease' })", () => {
         { type: 'put', key: KEYS.leaseHolder(), value: stolenHolder },
       ]);
 
-      // Wait for a renewal tick to fire and report the loss (renew interval = 10ms).
-      const deadline = Date.now() + 2_000;
-      while (
-        !warnings.some((w) => w.name === ENGINE_LEASE_LOST_WARNING_NAME) &&
-        Date.now() < deadline
-      ) {
-        await new Promise((resolve) => setTimeout(resolve, 10));
-      }
+      // Drive the renewal deterministically through internals rather than waiting on
+      // the real renewal interval — the CAS fails against the stolen holder bytes and
+      // the loss is reported synchronously. `process.emitWarning` is asynchronous, so
+      // flush one macrotask before asserting.
+      const manager = getInternals(engine).leaseManager;
+      expect(manager).not.toBeNull();
+      await manager!.renewOnce();
+      await new Promise((resolve) => setImmediate(resolve));
     } finally {
       process.off('warning', listener);
     }
@@ -230,7 +252,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
-  it('synchronous dispose stops renewals and best-effort releases the lease', async () => {
+  it('synchronous dispose clears the lease manager and stops renewals', async () => {
     const storage = new BunSQLiteStorage(':memory:');
     const engine = await Engine.create({
       storage,
@@ -238,12 +260,28 @@ describe("Engine.create({ ownership: 'lease' })", () => {
       ownership: 'lease',
     });
 
+    // The synchronous contract: the manager reference is cleared (renewals stopped).
+    // The durable holder-key delete is fire-and-forget on the sync path, so the
+    // "holder is gone" guarantee is asserted on the async-dispose path (below),
+    // where the await makes it deterministic — not via a fixed sleep here.
     engine[Symbol.dispose]();
-    // The manager reference is cleared synchronously; the release delete is
-    // fire-and-forget, so allow a microtask turn for it to land.
     expect(getInternals(engine).leaseManager).toBeNull();
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    storage[Symbol.dispose]?.();
+  });
+
+  it('async dispose durably releases the holder key', async () => {
+    const storage = new BunSQLiteStorage(':memory:');
+    const engine = await Engine.create({
+      storage,
+      workflows: { ping: pingWorkflow },
+      ownership: 'lease',
+    });
+
+    // asyncDispose awaits the lease release, so the holder key is deterministically
+    // gone once it resolves — no polling needed.
+    await engine[Symbol.asyncDispose]();
     expect(await readHolder(storage)).toBeNull();
+    expect(await readEpoch(storage)).toBe(1);
     storage[Symbol.dispose]?.();
   });
 });

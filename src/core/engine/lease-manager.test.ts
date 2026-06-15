@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { EngineLeaseAcquisitionTimeoutError } from './errors.ts';
+import { EngineLeaseAcquisitionTimeoutError, EngineLeaseCorruptedError } from './errors.ts';
 import {
   createLeaseManager,
   type LeaseLostReason,
@@ -405,11 +405,11 @@ describe('createLeaseManager', () => {
     expect(await holderExpiry(storage)).toBe(expiryBefore);
   });
 
-  it('tolerates a corrupt epoch value by treating the store as needing a fresh transfer', async () => {
+  it('throws EngineLeaseCorruptedError on a non-8-byte epoch (fails closed, never lowers the watermark)', async () => {
     const storage = new MemoryStorage();
     const clock = makeClock();
-    // Seed a non-8-byte epoch and a valid live holder so the challenger must wait,
-    // then steal once expired — proving decodeEpoch's null path is reachable.
+    // A present-but-undecodable epoch must NOT re-mint below the true high-water
+    // mark (the prior bug fell back to holder.epoch). Fail closed instead.
     await storage.put(KEYS.leaseEpoch(), new Uint8Array([1, 2, 3]));
     await storage.put(
       KEYS.leaseHolder(),
@@ -421,11 +421,41 @@ describe('createLeaseManager', () => {
     const manager = createLeaseManager(
       managerOptions({ storage, getNow: clock.now, holderId: 'engine-b' }),
     );
-    await manager.acquire();
+    await expect(manager.acquire()).rejects.toBeInstanceOf(EngineLeaseCorruptedError);
+    // Corrupt state untouched — no acquisition happened.
+    expect(await holderId(storage)).toBe('ghost');
+  });
 
-    // baseEpoch falls back to the holder's epoch (7) when the epoch key is corrupt.
-    expect(await readEpoch(storage)).toBe(8);
-    expect(await holderId(storage)).toBe('engine-b');
+  it('throws EngineLeaseCorruptedError on an epoch beyond the safe-integer range', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    // 2^64 - 1 decodes to an unsafe integer → decodeEpoch returns null → corruption.
+    const unsafeEpoch = new Uint8Array(8);
+    new DataView(unsafeEpoch.buffer).setBigUint64(0, 0xffffffffffffffffn, false);
+    await storage.put(KEYS.leaseEpoch(), unsafeEpoch);
+
+    const manager = createLeaseManager(
+      managerOptions({ storage, getNow: clock.now, holderId: 'engine-b' }),
+    );
+    await expect(manager.acquire()).rejects.toBeInstanceOf(EngineLeaseCorruptedError);
+  });
+
+  it('throws EngineLeaseCorruptedError when a holder exists with no epoch key', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    // The protocol never deletes the epoch (release deletes only the holder), so a
+    // holder with no epoch key means the epoch was externally removed — corruption.
+    await storage.put(
+      KEYS.leaseHolder(),
+      new TextEncoder().encode(
+        JSON.stringify({ holderId: 'ghost', expiresAt: clock.now() + 1000, epoch: 3 }),
+      ),
+    );
+
+    const manager = createLeaseManager(
+      managerOptions({ storage, getNow: clock.now, holderId: 'engine-b' }),
+    );
+    await expect(manager.acquire()).rejects.toBeInstanceOf(EngineLeaseCorruptedError);
   });
 
   it('ignores a structurally-invalid holder object (valid JSON, wrong field types)', async () => {

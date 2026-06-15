@@ -214,7 +214,9 @@ export interface EngineInternals {
   /**
    * The active lease manager for `ownership: 'lease'`; `null` when ownership is
    * `'none'`. Acquired before recovery, renewed on a heartbeat, released on
-   * dispose. Unlike the second-instance detector this is a correctness path.
+   * dispose. Unlike the second-instance detector its acquire/renew errors are real
+   * (a failed acquire blocks recovery). Renewal loss is surfaced as a warning in
+   * Step 1; epoch fencing of durable writes (Step 2) is what makes it enforceable.
    */
   leaseManager: LeaseManager | null;
   reviewCoordinator: ReviewCoordinator;
