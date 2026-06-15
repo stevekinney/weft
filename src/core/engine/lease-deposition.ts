@@ -73,31 +73,14 @@ export function handleDeposition(internals: EngineInternals): void {
     ENGINE_LEASE_LOST_WARNING_NAME,
   );
 
-  // Defer teardown off the current commit's stack. Running disposeEngine inline
-  // would be re-entrant teardown while a generator is mid-advance, clearing maps
-  // the unwinding code still reads.
-  void Promise.resolve().then(() => tearDownDeposedEngine(internals));
-}
-
-/**
- * Tear down a deposed engine: dispose the in-memory machinery, then best-effort
- * release the lease holder. The release CAS-fails (the successor owns the holder
- * now) and is therefore a no-op that cannot clobber the new owner — it is issued
- * only for symmetry with the normal disposal paths. Already-disposed engines are
- * skipped so a deposition that races a normal dispose does not double-tear-down.
- *
- * `disposal.ts` is imported lazily here (not statically) to break an import cycle:
- * this module is reached from the durable-write helper (`fenced-write.ts`), and
- * `disposal.ts` transitively reaches that helper through `storage-io.ts`. The
- * teardown is already deferred to a later tick, so the dynamic import adds no real
- * cost on the only path that runs it.
- */
-async function tearDownDeposedEngine(internals: EngineInternals): Promise<void> {
-  if (internals.disposed) return;
-  // Capture the manager before disposeEngine() detaches it; disposeEngine stops
-  // renewals but never deletes the holder (release is each path's own job).
-  const leaseManager = internals.leaseManager;
-  const { disposeEngine } = await import('./disposal.ts');
-  disposeEngine(internals);
-  void leaseManager?.release();
+  // Defer teardown off the current commit's stack. Running it inline would be
+  // re-entrant teardown while a generator is mid-advance, clearing maps the
+  // unwinding code still reads. The teardown itself is the engine's
+  // `disposeAfterDeposition`, injected onto internals at construction — so this
+  // module never statically imports `disposal.ts` (which would close an import
+  // cycle through `storage-io → fenced-write → lease-deposition`).
+  const tearDown = internals.tearDownAfterDeposition;
+  if (tearDown !== null) {
+    void Promise.resolve().then(tearDown);
+  }
 }

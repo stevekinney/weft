@@ -609,6 +609,9 @@ export class Engine<
     getInternals(this).leaseManager = null;
     getInternals(this).inFlightLeaseAcquire = null;
     getInternals(this).deposed = false;
+    getInternals(this).tearDownAfterDeposition = (): void => {
+      this.#disposeAfterDeposition();
+    };
     getInternals(this).eventLogHeads = new Map();
     getInternals(this).workflowFeedListeners = new Map();
     getInternals(this).workflowVersionTuples = new Map();
@@ -772,6 +775,28 @@ export class Engine<
         internals.inFlightLeaseAcquire = null;
       }
     }
+  }
+
+  /**
+   * Tear down this engine after it has been deposed (a fenced durable write lost
+   * its CAS to a newer lease epoch, or the lease manager reported a confirmed
+   * `'deposed'` loss). Wired onto `internals.tearDownAfterDeposition` at
+   * construction and invoked deferred (a tick after detection) by
+   * {@link handleDeposition}, never inline — inline teardown would clear maps a
+   * mid-advance generator still reads. Captures the lease manager before
+   * `disposeEngine` detaches it, then best-effort releases the holder; the release
+   * CAS-fails (the successor owns the holder now) and is a no-op that cannot
+   * clobber the new owner. Skipped if the engine is already disposed, so a
+   * deposition that races a normal dispose does not double-tear-down. The release
+   * rejection is swallowed — best-effort teardown must not leak an unhandled
+   * rejection while the engine is already unwinding.
+   */
+  #disposeAfterDeposition(): void {
+    const internals = getInternals(this);
+    if (internals.disposed) return;
+    const leaseManager = internals.leaseManager;
+    disposeEngine(internals);
+    void leaseManager?.release().catch(() => {});
   }
 
   #startSecondInstanceDetection(): void {

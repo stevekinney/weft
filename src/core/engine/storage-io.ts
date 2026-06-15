@@ -113,12 +113,15 @@ function buildWorkflowStateCommit(
 }
 
 /**
- * Commit workflow state operations WITHOUT lease-epoch fencing. Use this for
- * operator/external mutations (e.g. `setAttributes`) that may legitimately run on
- * any engine regardless of ownership. Engine-generator-owned advances (suspend,
- * completion, transitions) must use {@link commitFencedWorkflowStateOperations}.
+ * Commit workflow state operations WITHOUT lease-epoch fencing. The explicit
+ * `Unfenced` in the name is deliberate: picking it for an engine-generator-owned
+ * advance would silently bypass the lease fence, so the wrong choice must be loud
+ * at the call site. Use it ONLY for operator/external mutations (e.g.
+ * `setAttributes`) that may legitimately run on any engine regardless of
+ * ownership. Engine-generator-owned advances (suspend, completion, transitions)
+ * must use {@link commitFencedWorkflowStateOperations}.
  */
-export async function commitWorkflowStateOperations(
+export async function commitUnfencedWorkflowStateOperations(
   internals: EngineInternals,
   state: WorkflowState,
   operations: BatchOperation[],
@@ -151,8 +154,8 @@ export async function commitWorkflowStateOperations(
  * epoch under `ownership: 'lease'` (issue #470 Step 2). A deposed engine's write
  * loses its CAS instead of corrupting the successor's state; the deposition is
  * detected and the engine halts (see {@link commitFencedEngineWrite}). Identical
- * to {@link commitWorkflowStateOperations} under `ownership: 'none'` — the epoch
- * condition is only appended when a lease is held. Use this for suspend,
+ * to {@link commitUnfencedWorkflowStateOperations} under `ownership: 'none'` — the
+ * epoch condition is only appended when a lease is held. Use this for suspend,
  * completion, and other state advances driven by the workflow lifecycle; never
  * for operator/external mutations.
  */

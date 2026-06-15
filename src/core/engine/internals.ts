@@ -240,6 +240,16 @@ export interface EngineInternals {
    * deferred engine teardown. Always `false` under `ownership: 'none'`.
    */
   deposed: boolean;
+  /**
+   * Teardown callback invoked (deferred to a later tick) when this engine is
+   * deposed. Set once during engine construction to the engine's own
+   * `disposeAfterDeposition` method. It exists as an injected field rather than a
+   * direct import so {@link handleDeposition} (reached from the durable-write
+   * helper) does not statically import `disposal.ts`, which would close an import
+   * cycle (`storage-io → fenced-write → lease-deposition → disposal → … →
+   * storage-io`). `null` until the constructor wires it.
+   */
+  tearDownAfterDeposition: (() => void) | null;
   reviewCoordinator: ReviewCoordinator;
   reviewWaiters: Map<string, (decision: HumanReviewResult) => void>;
   reviewWaitersByWorkflow: Map<string, TrackedWaiterKeys>;
