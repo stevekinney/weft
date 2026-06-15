@@ -177,22 +177,16 @@ describe('createLeaseManager', () => {
   it('throws EngineLeaseAcquisitionTimeoutError when the lease stays held past the wait window', async () => {
     const storage = new MemoryStorage();
     const clock = makeClock();
-    // The incumbent keeps a live lease the whole time. The injected delay advances
-    // the shared clock by one poll interval each iteration, so the wait deadline
-    // (read from getNow) trips deterministically — while the incumbent's
-    // expiresAt = T + 30000 stays far ahead of deadline = T + 60000... so the lease
-    // also lapses by then. To keep the lease live across the whole wait, the
-    // incumbent renews on each poll, modeling a healthy holder that refuses to
-    // hand off. The point under test is purely the timeout firing.
+    // The incumbent keeps a live lease. A zero wait window means the deadline equals
+    // boot time, so the FIRST attempt fails (lease live) and the bottom-of-loop
+    // deadline check fires before any sleep — the immediate-timeout path. (The
+    // first iteration always tries once even with a zero window; it then throws
+    // rather than acquiring.)
     const incumbent = createLeaseManager(managerOptions({ storage, getNow: clock.now }));
     await incumbent.acquire();
 
-    const delay = async (ms: number): Promise<void> => {
-      clock.advance(ms);
-      await incumbent.renewOnce(); // healthy incumbent keeps its lease alive
-    };
     const challenger = createLeaseManager(
-      managerOptions({ storage, getNow: clock.now, holderId: 'engine-b', delay }),
+      managerOptions({ storage, getNow: clock.now, holderId: 'engine-b', waitTimeoutMs: 0 }),
     );
 
     let caught: unknown;
@@ -203,7 +197,32 @@ describe('createLeaseManager', () => {
     }
     expect(caught).toBeInstanceOf(EngineLeaseAcquisitionTimeoutError);
     expect((caught as EngineLeaseAcquisitionTimeoutError).heldBy).toBe('engine-a');
-    expect((caught as EngineLeaseAcquisitionTimeoutError).waitedMs).toBe(WAIT_MS);
+    expect((caught as EngineLeaseAcquisitionTimeoutError).waitedMs).toBe(0);
+  });
+
+  it('times out at the top of the loop when a sleep overshoots the wait window', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const incumbent = createLeaseManager(managerOptions({ storage, getNow: clock.now }));
+    await incumbent.acquire();
+
+    // The delay overshoots the wait window AFTER the bottom-of-loop deadline check
+    // has already passed (the clock is still < deadline when that check runs). The
+    // next iteration's TOP-of-loop check then catches the elapsed window — the path
+    // that prevents a poll-and-acquire after an overshooting sleep.
+    let firstDelay = true;
+    const delay = async (): Promise<void> => {
+      if (firstDelay) {
+        firstDelay = false;
+        clock.advance(WAIT_MS + 1); // jump past the deadline during the sleep
+        await incumbent.renewOnce(); // keep the incumbent's lease live
+      }
+    };
+    const challenger = createLeaseManager(
+      managerOptions({ storage, getNow: clock.now, holderId: 'engine-b', delay }),
+    );
+
+    await expect(challenger.acquire()).rejects.toBeInstanceOf(EngineLeaseAcquisitionTimeoutError);
   });
 
   it('uses the real setTimeout poll when no delay is injected', async () => {

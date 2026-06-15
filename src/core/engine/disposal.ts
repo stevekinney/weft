@@ -106,16 +106,18 @@ function disposeSecondInstanceDetection(internals: EngineInternals): void {
 }
 
 /**
- * Tear down the ownership lease (synchronous path): stop renewals immediately and
- * fire the best-effort holder-key release. The `release()` storage delete is
- * fire-and-forget here because synchronous disposal must not await a round-trip;
- * for a clean deploy handoff `Engine[Symbol.asyncDispose]` awaits release FIRST so
- * the holder key is durably gone before the incoming instance acquires. A no-op
- * when `ownership: 'lease'` was never configured.
+ * Tear down the ownership lease: stop renewals and detach the manager. This does
+ * NOT release the holder key — releasing is left to the caller so each disposal
+ * path issues exactly one release. `Engine[Symbol.dispose]` fires a best-effort
+ * release after this returns; `Engine[Symbol.asyncDispose]` awaits the release
+ * after in-memory teardown (so the holder key is durably gone before it resolves,
+ * giving `await using` a clean handoff). A no-op when `ownership: 'lease'` was
+ * never configured. The manager is captured by the caller before this nulls the
+ * field, since `stop()` only halts renewals — it does not delete the holder.
  */
 function disposeLeaseManager(internals: EngineInternals): void {
   if (internals.leaseManager !== null) {
-    void internals.leaseManager.release();
+    internals.leaseManager.stop();
     internals.leaseManager = null;
   }
 }

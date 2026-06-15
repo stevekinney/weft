@@ -320,6 +320,7 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
   async function acquire(): Promise<void> {
     const deadline = getNow() + waitTimeoutMs;
     let lastHolderId: string | null = null;
+    let firstAttempt = true;
     // Bounded wait-for-handoff loop: NOT a retry of a failing operation, so the
     // "cap retries at 5" rule does not apply — it polls until another instance
     // releases (or its lease expires), then throws a typed error on timeout. The
@@ -328,12 +329,19 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
     // throws out of tryAcquireOnce immediately — waiting cannot heal corruption.
     for (;;) {
       if (stopped) return;
+      // Check the deadline at the TOP of every iteration after the first: if a
+      // prior sleep overshot the window, do not poll-and-acquire after it elapsed.
+      // (The first iteration always tries once, even with a zero wait window.)
+      if (!firstAttempt && getNow() >= deadline) {
+        throw new EngineLeaseAcquisitionTimeoutError(waitTimeoutMs, lastHolderId);
+      }
+      firstAttempt = false;
       if (await tryAcquireOnce()) return;
       // Record who we're waiting on for the timeout diagnostic.
       const holderRaw = await storage.get(KEYS.leaseHolder());
       lastHolderId = holderRaw === null ? null : (decodeHolder(holderRaw)?.holderId ?? null);
-      // Check the deadline BEFORE sleeping again so a zero/small wait window cannot
-      // overshoot into one more poll-and-acquire after the window has elapsed.
+      // Also short-circuit before sleeping so we don't wait out a full poll
+      // interval past an already-elapsed deadline.
       if (getNow() >= deadline) {
         throw new EngineLeaseAcquisitionTimeoutError(waitTimeoutMs, lastHolderId);
       }

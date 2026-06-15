@@ -1655,7 +1655,13 @@ export class Engine<
    * via `await using`.
    */
   [Symbol.dispose](): void {
+    // Capture the lease manager before disposeEngine() detaches it (disposeEngine
+    // only stops renewals — it does NOT release the holder, so each disposal path
+    // releases exactly once). Fire the holder release best-effort: synchronous
+    // disposal cannot await a storage round-trip.
+    const leaseManager = getInternals(this).leaseManager;
     disposeEngine(getInternals(this));
+    void leaseManager?.release();
   }
   /**
    * Async teardown (`await using engine = ...`). Drains pending inline launches
@@ -1676,24 +1682,25 @@ export class Engine<
     // even if the drain rejects: a half-disposed engine (abort un-fired,
     // awaiters hung, channels open) is worse than the footgun this fixes.
     if (!getInternals(this).disposed) {
-      // Capture the lease manager before synchronous disposal nulls the field;
-      // release it LAST (see below).
+      // Capture the lease manager before in-memory teardown detaches it; release it
+      // LAST (see below).
       const leaseManager = getInternals(this).leaseManager;
       try {
         await drainQueuedInlineWorkflowStartsForEngine(this);
       } finally {
-        // Synchronous teardown first: it aborts the engine and tears down every
-        // workflow/activity/storage-writing path in memory. The caller owns the
-        // storage lifecycle (`await using storage`), so storage stays open here and
-        // the awaited release below can still issue its delete.
-        this[Symbol.dispose]();
+        // Call disposeEngine DIRECTLY rather than this[Symbol.dispose](): the sync
+        // path fires a best-effort release, which would double-release and race the
+        // authoritative awaited release below. disposeEngine only aborts the engine
+        // and tears down every workflow/activity/storage-writing path in memory
+        // (and stops lease renewals) — it issues no storage writes itself. The
+        // caller owns the storage lifecycle (`await using storage`), so storage
+        // stays open and the awaited release below can still delete the holder.
+        disposeEngine(getInternals(this));
         // Clean deploy handoff: release the ownership lease as the LAST durable
-        // action, AFTER queued starts have drained and all write paths are down —
-        // so the incoming instance cannot acquire and recover while this one is
-        // still writing. Awaiting makes `await using engine` a zero-overlap
-        // handoff. The sync dispose above already fired a best-effort release, but
-        // release() is idempotent (CAS finds the holder gone and no-ops), so this
-        // awaited release is the authoritative one.
+        // action, AFTER queued starts have drained and all write paths are down, so
+        // the incoming instance cannot acquire and recover while this one is still
+        // writing. Awaiting makes `await using engine` a zero-overlap handoff, and
+        // this is the single release on the async path.
         await leaseManager?.release();
       }
       return;
