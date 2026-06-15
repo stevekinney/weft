@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
-import { KEYS } from '../../storage/interface.ts';
+import { KEYS, type Storage } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { EngineLeaseAcquisitionTimeoutError, EngineLeaseCorruptedError } from './errors.ts';
 import {
@@ -41,7 +41,7 @@ function managerOptions(
 
 const textDecoder = new TextDecoder();
 
-function readEpoch(storage: MemoryStorage): Promise<number | null> {
+function readEpoch(storage: Storage): Promise<number | null> {
   return storage.get(KEYS.leaseEpoch()).then((raw) => {
     if (raw === null) return null;
     return Number(new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getBigUint64(0, false));
@@ -49,7 +49,7 @@ function readEpoch(storage: MemoryStorage): Promise<number | null> {
 }
 
 async function readHolder(
-  storage: MemoryStorage,
+  storage: Storage,
 ): Promise<{ holderId: string; expiresAt: number; epoch: number } | null> {
   const raw = await storage.get(KEYS.leaseHolder());
   if (raw === null) return null;
@@ -58,11 +58,11 @@ async function readHolder(
 
 /** Field accessors that read the holder first, then access the field (avoids the
  * no-await-expression-member lint and keeps assertions terse). */
-async function holderId(storage: MemoryStorage): Promise<string | undefined> {
+async function holderId(storage: Storage): Promise<string | undefined> {
   const holder = await readHolder(storage);
   return holder?.holderId;
 }
-async function holderExpiry(storage: MemoryStorage): Promise<number | undefined> {
+async function holderExpiry(storage: Storage): Promise<number | undefined> {
   const holder = await readHolder(storage);
   return holder?.expiresAt;
 }
@@ -553,5 +553,137 @@ describe('createLeaseManager', () => {
 
     expect(await readEpoch(storage)).toBe(5);
     expect(await holderId(storage)).toBe('engine-b');
+  });
+
+  it('release awaits an in-flight renewal so the holder is deleted, not stranded', async () => {
+    // Regression for the renew×release race: during dispose, teardown stops
+    // renewals then releases — but a renewal that began just before stop() can
+    // still commit a NEWER holder afterward. If release CASes on the bytes it
+    // captured before that commit, the delete misses and the holder survives until
+    // TTL. release() must await the in-flight (guarded) renewal first so its
+    // CAS-delete conditions on the freshest holder. We drive the renewal through
+    // the real interval (so it populates inFlightRenewal), gate its conditionalBatch
+    // open, fire release concurrently, then let the renewal finish.
+    const base = new MemoryStorage();
+    const clock = makeClock();
+    let releaseRenewalGate!: () => void;
+    const renewalGate = new Promise<void>((resolve) => {
+      releaseRenewalGate = resolve;
+    });
+    let signalPutReached!: () => void;
+    const putReachedPromise = new Promise<void>((resolve) => {
+      signalPutReached = resolve;
+    });
+    let holderPuts = 0;
+    const storage: Storage = {
+      capabilities: () => base.capabilities(),
+      get: (key) => base.get(key),
+      put: (key, value) => base.put(key, value),
+      delete: (key) => base.delete(key),
+      scan: (prefix, options) => base.scan(prefix, options),
+      batch: (operations) => base.batch(operations),
+      conditionalBatch: async (conditions, operations) => {
+        // Gate ONLY the first RENEWAL write (holder put #2 — acquire is put #1),
+        // not acquire's initial take or release's delete. Commit first, THEN park,
+        // so the newer holder is durably in storage while release waits — exactly
+        // the ordering that would strand the holder if release did not await us.
+        const isHolderPut = operations.some(
+          (op) => op.type === 'put' && op.key === KEYS.leaseHolder(),
+        );
+        if (isHolderPut) holderPuts += 1;
+        const committed = await base.conditionalBatch(conditions, operations);
+        if (isHolderPut && holderPuts === 2) {
+          signalPutReached();
+          await renewalGate;
+        }
+        return committed;
+      },
+      [Symbol.dispose]: () => base[Symbol.dispose](),
+    };
+
+    const manager = createLeaseManager(
+      managerOptions({ storage, getNow: clock.now, renewIntervalMs: 5 }),
+    );
+    await manager.acquire(); // holder put #1
+    const holderAfterAcquire = await readHolder(storage);
+
+    // Drive a guarded renewal via the interval; it commits a newer holder then
+    // parks inside the gated conditionalBatch, leaving inFlightRenewal set.
+    clock.advance(RENEW_MS);
+    manager.startRenewal();
+    await putReachedPromise;
+    // The renewal already wrote a newer expiresAt before parking.
+    expect(await holderExpiry(storage)).toBeGreaterThan(holderAfterAcquire!.expiresAt);
+
+    // Release concurrently — it must await the parked renewal before its CAS-delete.
+    const released = manager.release();
+    releaseRenewalGate(); // let the parked renewal resolve
+    await released;
+
+    // The holder key is gone: release awaited the renewal and deleted the freshest
+    // bytes. Without the await, release's CAS (on pre-renewal bytes) would have
+    // missed and left the holder behind.
+    expect(await readHolder(storage)).toBeNull();
+    // The epoch high-water mark survives release.
+    expect(await readEpoch(storage)).toBe(1);
+  });
+
+  it('serializes renewals: an overlapping tick is skipped and does not falsely report deposed', async () => {
+    // Regression for overlapping renewal ticks: a second interval tick that fires
+    // while the first renewal is still in flight would CAS against stale
+    // lastHolderBytes and spuriously report 'deposed'. The single-flight guard
+    // skips the overlapping tick. We gate the first renewal's conditionalBatch so
+    // the interval fires repeatedly while it is parked, then assert no loss.
+    const base = new MemoryStorage();
+    const clock = makeClock();
+    const lost: LeaseLostReason[] = [];
+    let firstRenewalGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      firstRenewalGate = resolve;
+    });
+    let holderPuts = 0;
+    const storage: Storage = {
+      capabilities: () => base.capabilities(),
+      get: (key) => base.get(key),
+      put: (key, value) => base.put(key, value),
+      delete: (key) => base.delete(key),
+      scan: (prefix, options) => base.scan(prefix, options),
+      batch: (operations) => base.batch(operations),
+      conditionalBatch: async (conditions, operations) => {
+        const isHolderPut = operations.some(
+          (op) => op.type === 'put' && op.key === KEYS.leaseHolder(),
+        );
+        if (isHolderPut) {
+          holderPuts += 1;
+          if (holderPuts === 2) await gate; // park the first RENEWAL write (acquire is put #1)
+        }
+        return base.conditionalBatch(conditions, operations);
+      },
+      [Symbol.dispose]: () => base[Symbol.dispose](),
+    };
+
+    const manager = createLeaseManager(
+      managerOptions({
+        storage,
+        getNow: clock.now,
+        renewIntervalMs: 5,
+        onLeaseLost: (reason) => lost.push(reason),
+      }),
+    );
+    await manager.acquire(); // holder put #1 (not gated)
+
+    clock.advance(RENEW_MS);
+    manager.startRenewal();
+    // Let several interval ticks fire while the first renewal is parked. The guard
+    // must skip every overlapping tick — only the parked one is in flight.
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(holderPuts).toBe(2); // exactly one renewal write reached storage (the parked one)
+
+    firstRenewalGate(); // unblock the parked renewal
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    manager.stop();
+
+    // No overlapping renewal CASed against stale bytes → no false deposition.
+    expect(lost).toEqual([]);
   });
 });

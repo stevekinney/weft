@@ -209,6 +209,12 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
   let lastHolderBytes: Uint8Array | null = null;
   let renewalInterval: ReturnType<typeof setInterval> | null = null;
   let leaseLost = false;
+  // The single in-flight renewal, or null when none is running. Serializes
+  // renewals (an overlapping tick would CAS against stale `lastHolderBytes` and
+  // spuriously report 'deposed') and lets `release()` await a renewal that began
+  // just before disposal, so its CAS-delete conditions on the freshest holder
+  // bytes rather than a value the in-flight renewal is about to overwrite.
+  let inFlightRenewal: Promise<void> | null = null;
 
   const delay =
     options.delay ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
@@ -394,10 +400,25 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
     reportLeaseLost('deposed');
   }
 
+  /**
+   * Run one renewal under the single-flight guard: if a prior renewal is still
+   * in flight (slow storage, or an aggressively short interval), skip this tick
+   * rather than letting two renewals race the same `lastHolderBytes` CAS — an
+   * overlapping renewal would condition on bytes the in-flight one is about to
+   * supersede and spuriously report `'deposed'`. The promise is tracked so
+   * `release()` can await it.
+   */
+  function renewUnderGuard(): void {
+    if (inFlightRenewal !== null) return;
+    inFlightRenewal = renewOnce().finally(() => {
+      inFlightRenewal = null;
+    });
+  }
+
   function startRenewal(): void {
     if (stopped || renewalInterval !== null) return;
     renewalInterval = setInterval(() => {
-      void renewOnce();
+      renewUnderGuard();
     }, renewIntervalMs);
     // Don't let the renewal timer keep an otherwise-idle process alive.
     renewalInterval.unref?.();
@@ -425,17 +446,30 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
    * The CAS guard means a deposed instance (a successor already owns the holder)
    * does not clobber the successor's record. A storage failure is swallowed:
    * release must never reject during disposal.
+   *
+   * `stopped`/`clearRenewal()` prevent any NEW renewal from starting, but a
+   * renewal that began just before this call may still be mid-flight; we await it
+   * first so the CAS-delete conditions on the holder bytes that renewal actually
+   * left in storage, not a value it is about to overwrite (which would CAS-false
+   * and strand the holder until TTL expiry, breaking the clean handoff). We keep
+   * the CAS conditioned on `lastHolderBytes` — NOT a re-read-and-delete-whatever —
+   * so a genuine successor's holder is never deleted out from under it.
    */
   async function release(): Promise<void> {
     stopped = true;
     clearRenewal();
+    if (inFlightRenewal !== null) await inFlightRenewal;
     if (lastHolderBytes === null) return;
     try {
-      await storageConditionalBatch(
+      const deleted = await storageConditionalBatch(
         storage,
         [{ key: KEYS.leaseHolder(), expectedValue: lastHolderBytes }],
         [{ type: 'delete', key: KEYS.leaseHolder() }],
       );
+      // Null our cached bytes after a confirmed delete so a second release() is a
+      // clean no-op instead of re-issuing a now-doomed CAS. (If the delete missed
+      // because a successor took over, keep the bytes — we did not own the holder.)
+      if (deleted) lastHolderBytes = null;
     } catch {
       // Best-effort: a failed release just leaves the lease to expire via TTL.
     }
