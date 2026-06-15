@@ -156,7 +156,7 @@ import {
 } from './engine-runtime-helpers.ts';
 import type { EngineStateNamespace } from './engine-state-namespace.ts';
 import { EngineCreateNameMismatchError, EngineDisposedError } from './errors.ts';
-import { assertLeaseHeldForStart } from './fenced-write.ts';
+import { assertLeaseHeldForEngineWork } from './fenced-write.ts';
 import {
   createWorkflowHandleWithResultPromise as createWorkflowHandleWithResultPromiseFromInternals,
   getWorkflowResultPromise as getWorkflowResultPromiseFromInternals,
@@ -1082,7 +1082,7 @@ export class Engine<
     // have recovered) first. This rejects on the awaited entry — unlike the
     // fenced-write throw, which the inline strategy swallows. No-op when
     // ownership is 'none'.
-    assertLeaseHeldForStart(getInternals(this));
+    assertLeaseHeldForEngineWork(getInternals(this));
     if (options?.idempotencyKey !== undefined) {
       return startWithIdempotencyFromLifecycle(
         getInternals(this),
@@ -1138,7 +1138,7 @@ export class Engine<
   ): Promise<StartOrSignalResult> {
     // Lease-ownership precondition (same as `start`): startOrSignal may durably
     // create a fresh run, so it must hold the lease first. No-op for 'none'.
-    assertLeaseHeldForStart(getInternals(this));
+    assertLeaseHeldForEngineWork(getInternals(this));
     return startOrSignalFromLifecycle(
       getInternals(this),
       type,
@@ -1534,6 +1534,10 @@ export class Engine<
     return getOffloadFromInternals(getInternals(this), workflowId, key);
   }
   async fork(sourceWorkflowId: string, options?: ForkOptions): Promise<WorkflowHandle> {
+    // Fork plants a new run (engine-owned work) — require the lease first so a
+    // pre-recovery fork surfaces EngineLeaseNotHeldError rather than being
+    // misreported as a deposition by the fenced commit. No-op for 'none'.
+    assertLeaseHeldForEngineWork(getInternals(this));
     return forkFromLifecycle(
       getInternals(this),
       sourceWorkflowId,
@@ -1549,6 +1553,10 @@ export class Engine<
    * if the workflow is in any other status (terminal, pending) or not found.
    */
   async resume(workflowId: string): Promise<WorkflowHandle> {
+    // Resume reactivates a workflow (engine-owned advance) — require the lease
+    // first so a pre-recovery resume surfaces EngineLeaseNotHeldError rather than
+    // a deposition misreport from the fenced commit. No-op for 'none'.
+    assertLeaseHeldForEngineWork(getInternals(this));
     return resumeFromLifecycle(getInternals(this), workflowId, this.#createLifecycleCallbacks());
   }
   /**

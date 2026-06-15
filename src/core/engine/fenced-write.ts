@@ -26,17 +26,18 @@ import { handleDeposition } from './lease-deposition.ts';
 import { EngineDeposedError, EngineLeaseNotHeldError } from './lease-errors.ts';
 
 /**
- * Reject a new-workflow start when `ownership: 'lease'` is configured but the
- * engine does not currently hold the lease. The lease is acquired at the two boot
- * gates ({@link Engine.create} and {@link Engine.recoverAll}); a directly
- * constructed engine that starts work before `recoverAll()` would otherwise
- * durably write fresh workflow state without single-writer ownership and without
- * having recovered existing runs. Placed at the shared start-admission boundary so
- * every new-run entry point (start, startOrSignal, idempotent start) is covered.
- * This guard runs on the awaited entry — unlike the swallowed fenced-write throw,
- * its rejection reaches the caller. A no-op under `ownership: 'none'`.
+ * Reject an engine-owned work entry point (start, startOrSignal, fork, resume)
+ * when `ownership: 'lease'` is configured but the engine does not currently hold
+ * the lease. The lease is acquired at the two boot gates ({@link Engine.create}
+ * and {@link Engine.recoverAll}); a directly constructed engine that does engine
+ * work before `recoverAll()` would otherwise durably write workflow state without
+ * single-writer ownership and without having recovered existing runs. Placed at
+ * each public awaited entry so the caller gets a clean {@link EngineLeaseNotHeldError}
+ * — without this, fork/resume would reach `resolveFenceEpochOrHalt` with no held
+ * epoch and be misreported as a deposition (warn + teardown) rather than the true
+ * "lease not held yet" condition. A no-op under `ownership: 'none'`.
  */
-export function assertLeaseHeldForStart(internals: EngineInternals): void {
+export function assertLeaseHeldForEngineWork(internals: EngineInternals): void {
   if (internals.options.ownershipMode !== 'lease') return;
   const held =
     !internals.deposed &&
@@ -72,7 +73,7 @@ type FencedCommitResult = 'committed' | 'lost-race';
  * before touching storage, and a lease-mode write with no held epoch FAILS CLOSED
  * (halts via {@link handleDeposition} and throws) rather than downgrading to an
  * unfenced write — unreachable in normal use (the boot gates +
- * {@link assertLeaseHeldForStart} ensure a lease is held first).
+ * {@link assertLeaseHeldForEngineWork} ensure a lease is held first).
  */
 async function fencedCommit(
   internals: EngineInternals,
@@ -115,7 +116,7 @@ async function fencedCommit(
  * rejected before touching storage, and a lease-mode write with no held epoch FAILS
  * CLOSED — it halts the engine via {@link handleDeposition} and throws rather than
  * downgrading to an unfenced write a deposed instance could exploit (unreachable in
- * normal use; the boot gates + {@link assertLeaseHeldForStart} ensure a lease is
+ * normal use; the boot gates + {@link assertLeaseHeldForEngineWork} ensure a lease is
  * held first). Returns the held epoch bytes under lease ownership, or `null` under
  * `ownership: 'none'` (no epoch condition is added).
  */

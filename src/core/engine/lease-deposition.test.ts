@@ -352,6 +352,23 @@ describe('#470 Step 2: epoch fencing of durable writes', () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('rejects fork() and resume() in lease mode before the lease is held', async () => {
+    // Cursor Bugbot catch: fork/resume are engine-owned work and must reject with
+    // EngineLeaseNotHeldError before the lease is held — not be misreported as a
+    // deposition by the fenced commit's resolveFenceEpochOrHalt.
+    const storage = new BunSQLiteStorage(':memory:');
+    const engine = new Engine({ storage, ownership: 'lease' });
+    engine.register(waiterWorkflow);
+
+    await expect(engine.fork('nonexistent-src')).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
+    await expect(engine.resume('nonexistent-id')).rejects.toBeInstanceOf(EngineLeaseNotHeldError);
+    // The misuse must NOT have flipped the engine into the deposed/halting state.
+    expect(getInternals(engine).deposed).toBe(false);
+
+    await engine[Symbol.asyncDispose]();
+    storage[Symbol.dispose]?.();
+  });
+
   it('rejects start() on a deposed engine (no longer a valid writer)', async () => {
     const storage = new BunSQLiteStorage(':memory:');
     const engine = await Engine.create({

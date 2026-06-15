@@ -32,11 +32,19 @@ import type { EngineInternals } from './internals.ts';
 
 /**
  * The `name` of the `process` warning emitted when an engine configured with
- * `ownership: 'lease'` loses its lease — either its renewal was deposed by a
- * successor (Step 1) or a fenced durable write was rejected because a newer epoch
- * holds the store (Step 2). Filter `process.on('warning')` on this name to react
- * to ownership loss (alert, drain, restart). The same name covers both signals so
- * a single handler catches every "this engine no longer owns the store" event.
+ * `ownership: 'lease'` can no longer be sure it owns the store. The same name
+ * covers all three signals, so a single `process.on('warning')` handler catches
+ * every "this engine may no longer own the store" event:
+ *
+ * - **deposed (confirmed)** — a renewal's CAS failed (a successor stole the lease),
+ *   or a fenced durable write was rejected because a newer epoch holds the store
+ *   (Step 2). The engine halts.
+ * - **renewal-unconfirmable (transient)** — a storage error left the holder unable
+ *   to prove it still holds within the lease window. This is NOT a confirmed
+ *   deposition; the engine keeps running, and a later renewal or fenced write
+ *   resolves the truth. The warning is informational so operators can investigate.
+ *
+ * Filter on this name to react to ownership-loss signals (alert, drain, restart).
  *
  * @example
  * ```ts
@@ -44,7 +52,7 @@ import type { EngineInternals } from './internals.ts';
  *
  * process.on('warning', (warning) => {
  *   if (warning.name === ENGINE_LEASE_LOST_WARNING_NAME) {
- *     // This engine was deposed — another instance owns the store now.
+ *     // This engine may no longer own the store — investigate / drain / restart.
  *   }
  * });
  * ```
