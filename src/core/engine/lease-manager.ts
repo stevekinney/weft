@@ -68,18 +68,23 @@ function encodeEpoch(epoch: number): Uint8Array {
 
 /**
  * Decode an 8-byte big-endian uint64 epoch, or `null` when the stored value is
- * not a usable epoch — not exactly 8 bytes, or beyond the JS safe-integer range.
+ * not a usable epoch — not exactly 8 bytes, or outside `[1, MAX_SAFE_INTEGER)`.
  * The epoch is the monotonic fencing high-water mark, so it must stay exactly
- * comparable and exactly incrementable: a value above `Number.MAX_SAFE_INTEGER`
- * would lose precision and could collapse distinct generations or fail to advance
- * under `epoch + 1`. Returning `null` routes such a value to the corruption path
+ * comparable AND have room to increment: acquisition always mints `epoch + 1`, so
+ * `Number.MAX_SAFE_INTEGER` itself is rejected too — minting `2^53` would fail
+ * `Number.isSafeInteger` on the next boot and brick the lease. A value at or above
+ * the safe-integer ceiling (or below `1`) routes to the corruption path
  * (fail-closed at boot) rather than silently re-minting an imprecise generation.
  */
 function decodeEpoch(raw: Uint8Array): number | null {
   if (raw.byteLength !== 8) return null;
   const value = new DataView(raw.buffer, raw.byteOffset, raw.byteLength).getBigUint64(0, false);
   const numberValue = Number(value);
-  return Number.isSafeInteger(numberValue) && numberValue >= 1 ? numberValue : null;
+  return Number.isSafeInteger(numberValue) &&
+    numberValue >= 1 &&
+    numberValue < Number.MAX_SAFE_INTEGER
+    ? numberValue
+    : null;
 }
 
 function encodeHolder(record: LeaseHolderRecord): Uint8Array {

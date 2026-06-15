@@ -680,6 +680,11 @@ export class Engine<
   async #acquireLeaseIfConfigured(): Promise<void> {
     const internals = getInternals(this);
     if (internals.options.ownershipMode !== 'lease') return;
+    // Idempotent: both `Engine.create` and `recoverAll` call this so the lease is
+    // held before any recovery, whichever path runs first. Once a manager exists
+    // the lease is already held (and renewing), so re-acquiring would mint a fresh
+    // holderId and steal from ourselves. Bail out instead.
+    if (internals.leaseManager !== null) return;
     requireStorageCapability(internals.storage, 'conditionalBatch', "ownership: 'lease'");
     const manager = createLeaseManager({
       storage: internals.storage,
@@ -1458,6 +1463,14 @@ export class Engine<
    * {@link WorkflowRecoverySkippedEvent}.
    */
   async recoverAll(options?: RecoverAllOptions): Promise<WorkflowHandle[]> {
+    // Acquire the ownership lease before recovery on the `new Engine()` +
+    // `recoverAll()` boot path too, not just via `Engine.create`. Idempotent —
+    // a no-op when `Engine.create` already acquired it. NOTE: a caller that
+    // does `new Engine({ ownership: 'lease' })` then `engine.start(...)` WITHOUT
+    // ever calling `recoverAll` still writes without holding the lease; the
+    // lease is acquired only on the create/recover paths in Step 1. Use
+    // `Engine.create` (or call `recoverAll` before accepting traffic) to be safe.
+    await this.#acquireLeaseIfConfigured();
     // Reload durable async-activity tokens first so a callback that arrives
     // before (or during) workflow replay still resolves a parked activity.
     await recoverPendingAsyncActivities(getInternals(this));

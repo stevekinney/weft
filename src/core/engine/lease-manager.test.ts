@@ -459,6 +459,23 @@ describe('createLeaseManager', () => {
     await expect(manager.acquire()).rejects.toBeInstanceOf(EngineLeaseCorruptedError);
   });
 
+  it('throws EngineLeaseCorruptedError on an epoch at exactly MAX_SAFE_INTEGER (no room to increment)', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    // MAX_SAFE_INTEGER is itself a safe integer, but acquisition mints `epoch + 1`
+    // — and 2^53 is NOT a safe integer, so the next boot would brick the lease.
+    // decodeEpoch rejects the ceiling value up front (distinct branch from the
+    // 2^64-1 case, which fails isSafeInteger on the decoded value itself).
+    const ceilingEpoch = new Uint8Array(8);
+    new DataView(ceilingEpoch.buffer).setBigUint64(0, BigInt(Number.MAX_SAFE_INTEGER), false);
+    await storage.put(KEYS.leaseEpoch(), ceilingEpoch);
+
+    const manager = createLeaseManager(
+      managerOptions({ storage, getNow: clock.now, holderId: 'engine-b' }),
+    );
+    await expect(manager.acquire()).rejects.toBeInstanceOf(EngineLeaseCorruptedError);
+  });
+
   it('throws EngineLeaseCorruptedError when a holder exists with no epoch key', async () => {
     const storage = new MemoryStorage();
     const clock = makeClock();

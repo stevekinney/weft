@@ -64,6 +64,37 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('acquires the lease via `new Engine()` + `recoverAll()` (not only Engine.create)', async () => {
+    // The Cursor-flagged boot path: a caller that constructs directly and then
+    // recovers must still hold the lease before recovery runs. recoverAll calls
+    // #acquireLeaseIfConfigured (idempotently) so the lease is acquired here too.
+    const storage = new BunSQLiteStorage(':memory:');
+    // The direct constructor does not take a `workflows` registry (that is a
+    // create-time concept); register after construction. No running workflows
+    // exist here anyway — the assertion is purely that recoverAll acquires.
+    const engine = new Engine({ storage, ownership: 'lease' });
+    engine.register(pingWorkflow);
+
+    // No lease before recovery — the constructor does not acquire (it cannot await).
+    expect(getInternals(engine).leaseManager).toBeNull();
+    expect(await readHolder(storage)).toBeNull();
+
+    await engine.recoverAll();
+
+    // recoverAll acquired the lease before doing any recovery work.
+    expect(getInternals(engine).leaseManager).not.toBeNull();
+    expect(await holderEpoch(storage)).toBe(1);
+    expect(await readEpoch(storage)).toBe(1);
+
+    // Second recoverAll is a no-op for the lease (idempotent guard) — no self-steal.
+    await engine.recoverAll();
+    expect(await holderEpoch(storage)).toBe(1);
+    expect(await readEpoch(storage)).toBe(1);
+
+    await engine[Symbol.asyncDispose]();
+    storage[Symbol.dispose]?.();
+  });
+
   it('does not touch lease keys for the default ownership posture', async () => {
     const storage = new BunSQLiteStorage(':memory:');
     const engine = await Engine.create({ storage, workflows: { ping: pingWorkflow } });
