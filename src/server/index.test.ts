@@ -64,6 +64,17 @@ function serveTestServer(options: ServeOptions): WeftServer {
   return serve({ workerShutdownTimeoutMs: TEST_WORKER_SHUTDOWN_TIMEOUT_MS, ...options });
 }
 
+function createReconnectTestEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
+  const storage = new MemoryStorage();
+  const engine = new Engine({ storage });
+  engine.register(echoWorkflow);
+  return { engine, storage };
+}
+
+function serveFastReconnectTestServer(engine: Engine): WeftServer {
+  return serveTestServer({ engine, port: 0, workerReconnectGracePeriodMs: 100 });
+}
+
 async function waitForSocketClose(ws: WebSocket, _label = 'WebSocket close'): Promise<void> {
   try {
     if (ws.readyState !== WebSocket.CLOSED) ws.close();
@@ -4521,19 +4532,8 @@ describe('worker disconnection triggers task reassignment', () => {
     engine?.[Symbol.dispose]();
   });
 
-  function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
-    const s = new MemoryStorage();
-    const e = new Engine({ storage: s });
-    e.register(echoWorkflow);
-    return { engine: e, storage: s };
-  }
-
-  function serveFastReconnectTestServer(serverEngine: Engine): WeftServer {
-    return serveTestServer({ engine: serverEngine, port: 0, workerReconnectGracePeriodMs: 100 });
-  }
-
   it('requeues in-flight tasks to another worker on disconnect', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveFastReconnectTestServer(engine);
 
     const {
@@ -4569,7 +4569,7 @@ describe('worker disconnection triggers task reassignment', () => {
   });
 
   it('increments attempt count on reassigned tasks', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveFastReconnectTestServer(engine);
 
     const {
@@ -4605,7 +4605,7 @@ describe('worker disconnection triggers task reassignment', () => {
   });
 
   it('cleans up in-flight storage record on disconnect and reassignment', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveFastReconnectTestServer(engine);
 
     const ws1 = await connectWorker(server);
@@ -4642,7 +4642,7 @@ describe('worker disconnection triggers task reassignment', () => {
   });
 
   it('requeues to long-poll queue when no other WebSocket worker is available', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveFastReconnectTestServer(engine);
 
     const ws = await connectWorker(server);
@@ -4670,7 +4670,7 @@ describe('worker disconnection triggers task reassignment', () => {
   });
 
   it('records worker-disconnect requeue metadata and exposes it through diagnostics', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveFastReconnectTestServer(engine);
 
     const ws = await connectWorker(server);
@@ -4741,7 +4741,7 @@ describe('worker disconnection triggers task reassignment', () => {
   });
 
   it('reassigns multiple in-flight tasks when a worker disconnects', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveFastReconnectTestServer(engine);
 
     const ws1 = await connectWorker(server);
@@ -4784,7 +4784,7 @@ describe('worker disconnection triggers task reassignment', () => {
   });
 
   it('logs corrupt inflight records when a disconnected worker task cannot be decoded', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveFastReconnectTestServer(engine);
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
 
@@ -4820,7 +4820,7 @@ describe('worker disconnection triggers task reassignment', () => {
   });
 
   it('warns and clears missing inflight records when a worker disconnects before storage commit', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveFastReconnectTestServer(engine);
     const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -4857,7 +4857,7 @@ describe('worker disconnection triggers task reassignment', () => {
   });
 
   it('logs disconnect reassignment failures when storage access throws', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
     const originalGet = storage.get.bind(storage);
     server = serveFastReconnectTestServer(engine);
@@ -4902,7 +4902,7 @@ describe('worker disconnection triggers task reassignment', () => {
   });
 
   it('logs immediate redispatch failures when a non-retry-policy task cannot be requeued', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
     const originalPut = storage.put.bind(storage);
     server = serveFastReconnectTestServer(engine);
@@ -4958,7 +4958,7 @@ describe('worker disconnection triggers task reassignment', () => {
   });
 
   it('does nothing when a worker with no in-flight tasks disconnects', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     // Disable the reconnect grace period so the close handler unregisters
     // the worker synchronously, as this test asserts.
     server = serveTestServer({ engine, port: 0, workerReconnectGracePeriodMs: 0 });
@@ -6044,17 +6044,6 @@ describe('retry policy respected on reassignment', () => {
     engine?.[Symbol.dispose]();
   });
 
-  function createEngineWithStorage(): { engine: Engine; storage: MemoryStorage } {
-    const s = new MemoryStorage();
-    const e = new Engine({ storage: s });
-    e.register(echoWorkflow);
-    return { engine: e, storage: s };
-  }
-
-  function serveFastReconnectTestServer(serverEngine: Engine): WeftServer {
-    return serveTestServer({ engine: serverEngine, port: 0, workerReconnectGracePeriodMs: 100 });
-  }
-
   const testRetryPolicy: RetryPolicy = {
     maxAttempts: 2,
     initialBackoff: 100,
@@ -6063,7 +6052,7 @@ describe('retry policy respected on reassignment', () => {
   };
 
   it('does not re-dispatch when maxAttempts exceeded on visibility timeout expiry', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
@@ -6113,7 +6102,7 @@ describe('retry policy respected on reassignment', () => {
   });
 
   it('does not re-dispatch when maxAttempts exceeded on worker disconnect', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveFastReconnectTestServer(engine);
 
     const {
@@ -6154,7 +6143,7 @@ describe('retry policy respected on reassignment', () => {
   });
 
   it('re-dispatches when within maxAttempts on visibility timeout expiry', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
@@ -6198,7 +6187,7 @@ describe('retry policy respected on reassignment', () => {
   });
 
   it('applies backoff delay before re-dispatch on visibility timeout expiry', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);
@@ -6253,7 +6242,7 @@ describe('retry policy respected on reassignment', () => {
   });
 
   it('applies backoff delay before re-dispatch on worker disconnect', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveFastReconnectTestServer(engine);
 
     const ws1 = await connectWorker(server);
@@ -6302,7 +6291,7 @@ describe('retry policy respected on reassignment', () => {
   });
 
   it('logs delayed redispatch failures when backoff requeue dispatch throws', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     const errorSpy = spyOn(console, 'error').mockImplementation(() => {});
     const originalPut = storage.put.bind(storage);
     server = serveFastReconnectTestServer(engine);
@@ -6354,7 +6343,7 @@ describe('retry policy respected on reassignment', () => {
   });
 
   it('stores retryPolicy in the inflight record for use during reassignment', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveTestServer({ engine, port: 0 });
 
     const ws = await connectWorker(server);
@@ -6383,7 +6372,7 @@ describe('retry policy respected on reassignment', () => {
   });
 
   it('defaults to no maxAttempts limit when retryPolicy is not provided', async () => {
-    ({ engine, storage } = createEngineWithStorage());
+    ({ engine, storage } = createReconnectTestEngineWithStorage());
     server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 50 });
 
     const ws = await connectWorker(server);

@@ -18,6 +18,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { workflow } from '../types.ts';
 import { Engine, ENGINE_LEASE_LOST_WARNING_NAME } from './index.ts';
 import { getInternals } from './internals.ts';
+import { createLeaseHolderReadProbeStorage } from './lease.test-support.ts';
 
 const pingWorkflow = workflow({ name: 'ping' }).execute(async function* () {
   return 'pong';
@@ -185,27 +186,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     // untouched, (b) not start a renewal on the now-disposed engine, and (c) detach
     // its own lease manager — no durable holder/heartbeat leaking until TTL.
     const base = new BunSQLiteStorage(':memory:');
-    let holderReads = 0;
-    let signalParked!: () => void;
-    const parked = new Promise<void>((resolve) => {
-      signalParked = resolve;
-    });
-    const storage: Storage = {
-      capabilities: () => base.capabilities(),
-      get: (key) => {
-        if (key === KEYS.leaseHolder()) {
-          holderReads += 1;
-          if (holderReads >= 2) signalParked();
-        }
-        return base.get(key);
-      },
-      put: (key, value) => base.put(key, value),
-      delete: (key) => base.delete(key),
-      scan: (prefix, options) => base.scan(prefix, options),
-      batch: (operations) => base.batch(operations),
-      conditionalBatch: (conditions, operations) => base.conditionalBatch(conditions, operations),
-      [Symbol.dispose]: () => base[Symbol.dispose](),
-    };
+    const { parked, storage } = createLeaseHolderReadProbeStorage(base);
 
     const first = await Engine.create({
       storage,
@@ -269,27 +250,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     // consumed by the internal `await acquisition` chain (propagated to the
     // recoverAll() caller) — never left dangling as an unhandledRejection.
     const base = new BunSQLiteStorage(':memory:');
-    let holderReads = 0;
-    let signalParked!: () => void;
-    const parked = new Promise<void>((resolve) => {
-      signalParked = resolve;
-    });
-    const storage: Storage = {
-      capabilities: () => base.capabilities(),
-      get: (key) => {
-        if (key === KEYS.leaseHolder()) {
-          holderReads += 1;
-          if (holderReads >= 2) signalParked();
-        }
-        return base.get(key);
-      },
-      put: (key, value) => base.put(key, value),
-      delete: (key) => base.delete(key),
-      scan: (prefix, options) => base.scan(prefix, options),
-      batch: (operations) => base.batch(operations),
-      conditionalBatch: (conditions, operations) => base.conditionalBatch(conditions, operations),
-      [Symbol.dispose]: () => base[Symbol.dispose](),
-    };
+    const { parked, storage } = createLeaseHolderReadProbeStorage(base);
 
     const first = await Engine.create({ storage, ownership: 'lease' });
 
@@ -351,27 +312,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     // Instrument get() so the test learns, deterministically, when the challenger
     // has actually reached the lease-wait poll (it reads lease:holder there). After
     // two such reads the challenger is provably parked — no fixed sleep needed.
-    let holderReads = 0;
-    let signalParked!: () => void;
-    const parked = new Promise<void>((resolve) => {
-      signalParked = resolve;
-    });
-    const storage: Storage = {
-      capabilities: () => base.capabilities(),
-      get: (key) => {
-        if (key === KEYS.leaseHolder()) {
-          holderReads += 1;
-          if (holderReads >= 2) signalParked();
-        }
-        return base.get(key);
-      },
-      put: (key, value) => base.put(key, value),
-      delete: (key) => base.delete(key),
-      scan: (prefix, options) => base.scan(prefix, options),
-      batch: (operations) => base.batch(operations),
-      conditionalBatch: (conditions, operations) => base.conditionalBatch(conditions, operations),
-      [Symbol.dispose]: () => base[Symbol.dispose](),
-    };
+    const { parked, storage } = createLeaseHolderReadProbeStorage(base);
 
     const first = await Engine.create({
       storage,

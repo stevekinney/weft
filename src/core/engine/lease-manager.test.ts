@@ -8,6 +8,7 @@ import {
   type LeaseLostReason,
   type LeaseManagerOptions,
 } from './lease-manager.ts';
+import { createGatedLeaseHolderWriteStorage } from './lease.test-support.ts';
 
 const TTL_MS = 30_000;
 const RENEW_MS = 5_000;
@@ -697,40 +698,15 @@ describe('createLeaseManager', () => {
     // open, fire release concurrently, then let the renewal finish.
     const base = new MemoryStorage();
     const clock = makeClock();
-    let releaseRenewalGate!: () => void;
-    const renewalGate = new Promise<void>((resolve) => {
-      releaseRenewalGate = resolve;
+    const renewalGate = createGatedLeaseHolderWriteStorage(base, {
+      // Gate ONLY the first RENEWAL write (holder put #2 — acquire is put #1),
+      // not acquire's initial take or release's delete. Commit first, THEN park,
+      // so the newer holder is durably in storage while release waits — exactly
+      // the ordering that would strand the holder if release did not await us.
+      gateOnHolderPut: 2,
+      phase: 'afterCommit',
     });
-    let signalPutReached!: () => void;
-    const putReachedPromise = new Promise<void>((resolve) => {
-      signalPutReached = resolve;
-    });
-    let holderPuts = 0;
-    const storage: Storage = {
-      capabilities: () => base.capabilities(),
-      get: (key) => base.get(key),
-      put: (key, value) => base.put(key, value),
-      delete: (key) => base.delete(key),
-      scan: (prefix, options) => base.scan(prefix, options),
-      batch: (operations) => base.batch(operations),
-      conditionalBatch: async (conditions, operations) => {
-        // Gate ONLY the first RENEWAL write (holder put #2 — acquire is put #1),
-        // not acquire's initial take or release's delete. Commit first, THEN park,
-        // so the newer holder is durably in storage while release waits — exactly
-        // the ordering that would strand the holder if release did not await us.
-        const isHolderPut = operations.some(
-          (op) => op.type === 'put' && op.key === KEYS.leaseHolder(),
-        );
-        if (isHolderPut) holderPuts += 1;
-        const committed = await base.conditionalBatch(conditions, operations);
-        if (isHolderPut && holderPuts === 2) {
-          signalPutReached();
-          await renewalGate;
-        }
-        return committed;
-      },
-      [Symbol.dispose]: () => base[Symbol.dispose](),
-    };
+    const storage = renewalGate.storage;
 
     const manager = createLeaseManager(
       managerOptions({ storage, getNow: clock.now, renewIntervalMs: 5 }),
@@ -742,13 +718,13 @@ describe('createLeaseManager', () => {
     // parks inside the gated conditionalBatch, leaving inFlightRenewal set.
     clock.advance(RENEW_MS);
     manager.startRenewal();
-    await putReachedPromise;
+    await renewalGate.reached;
     // The renewal already wrote a newer expiresAt before parking.
     expect(await holderExpiry(storage)).toBeGreaterThan(holderAfterAcquire!.expiresAt);
 
     // Release concurrently — it must await the parked renewal before its CAS-delete.
     const released = manager.release();
-    releaseRenewalGate(); // let the parked renewal resolve
+    renewalGate.release(); // let the parked renewal resolve
     await released;
 
     // The holder key is gone: release awaited the renewal and deleted the freshest
@@ -768,30 +744,11 @@ describe('createLeaseManager', () => {
     const base = new MemoryStorage();
     const clock = makeClock();
     const lost: LeaseLostReason[] = [];
-    let firstRenewalGate!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      firstRenewalGate = resolve;
+    const renewalGate = createGatedLeaseHolderWriteStorage(base, {
+      gateOnHolderPut: 2,
+      phase: 'beforeCommit',
     });
-    let holderPuts = 0;
-    const storage: Storage = {
-      capabilities: () => base.capabilities(),
-      get: (key) => base.get(key),
-      put: (key, value) => base.put(key, value),
-      delete: (key) => base.delete(key),
-      scan: (prefix, options) => base.scan(prefix, options),
-      batch: (operations) => base.batch(operations),
-      conditionalBatch: async (conditions, operations) => {
-        const isHolderPut = operations.some(
-          (op) => op.type === 'put' && op.key === KEYS.leaseHolder(),
-        );
-        if (isHolderPut) {
-          holderPuts += 1;
-          if (holderPuts === 2) await gate; // park the first RENEWAL write (acquire is put #1)
-        }
-        return base.conditionalBatch(conditions, operations);
-      },
-      [Symbol.dispose]: () => base[Symbol.dispose](),
-    };
+    const storage = renewalGate.storage;
 
     const manager = createLeaseManager(
       managerOptions({
@@ -808,9 +765,9 @@ describe('createLeaseManager', () => {
     // Let several interval ticks fire while the first renewal is parked. The guard
     // must skip every overlapping tick — only the parked one is in flight.
     await new Promise((resolve) => setTimeout(resolve, 40));
-    expect(holderPuts).toBe(2); // exactly one renewal write reached storage (the parked one)
+    expect(renewalGate.holderPutCount()).toBe(2); // exactly one renewal write reached storage (the parked one)
 
-    firstRenewalGate(); // unblock the parked renewal
+    renewalGate.release(); // unblock the parked renewal
     await new Promise((resolve) => setTimeout(resolve, 10));
     manager.stop();
 

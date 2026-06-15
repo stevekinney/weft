@@ -230,7 +230,10 @@ describe('ctx.log engine-level replay safety', () => {
       await first.start('log-sink-frontier', null, { id: 'log-sink-frontier-id' });
       await flush();
     }
-    using sinkRecovered = new Engine({ storage: sinkStorage, onLog: (record) => sink.push(record) });
+    using sinkRecovered = new Engine({
+      storage: sinkStorage,
+      onLog: (record) => sink.push(record),
+    });
     build(sinkRecovered);
     const [sinkHandle] = await sinkRecovered.recoverAll();
     await flush();

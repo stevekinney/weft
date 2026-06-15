@@ -78,6 +78,44 @@ function createCallbacks(
   };
 }
 
+type DelayedStartServicesFixture = {
+  beginWorkflowExecution: () => void;
+  failed: Array<[string, Error]>;
+  failWorkflow(id: string, error: Error): Promise<void>;
+  registration: { handler: () => AsyncGenerator<unknown, void, unknown>; version: string };
+  state: WorkflowState;
+  storage: MemoryStorage;
+  workflowId: string;
+};
+
+async function createDelayedStartServicesFixture(
+  workflowId: string,
+): Promise<DelayedStartServicesFixture> {
+  const storage = new MemoryStorage();
+  const state = createWorkflowState(workflowId);
+  const checkpoint = createCheckpoint(workflowId);
+  const registration = { handler: async function* () {}, version: '1' };
+  const beginWorkflowExecution = mock(() => {});
+  const failed: Array<[string, Error]> = [];
+  const failWorkflow = async (id: string, error: Error): Promise<void> => {
+    failed.push([id, error]);
+  };
+
+  await storage.put(KEYS.workflow(workflowId), encode(state));
+  await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
+  await storage.put(KEYS.workflowHasServices(workflowId), new Uint8Array(0));
+
+  return {
+    beginWorkflowExecution,
+    failed,
+    failWorkflow,
+    registration,
+    state,
+    storage,
+    workflowId,
+  };
+}
+
 describe('engine time operation helpers', () => {
   it('ignores delayed-start timers for missing or non-pending workflows', async () => {
     const storage = new MemoryStorage();
@@ -259,23 +297,10 @@ describe('engine time operation helpers', () => {
   });
 
   it('fails a recovered delayed-start run whose services the resolver reports unavailable', async () => {
-    const storage = new MemoryStorage();
-    const workflowId = 'workflow-delayed-no-services';
-    const state = createWorkflowState(workflowId);
-    const checkpoint = createCheckpoint(workflowId);
-    const registration = { handler: async function* () {}, version: '1' };
-    const beginWorkflowExecution = mock(() => {});
-    const failed: Array<[string, Error]> = [];
-    const failWorkflow = async (id: string, error: Error): Promise<void> => {
-      failed.push([id, error]);
-    };
-
-    await storage.put(KEYS.workflow(workflowId), encode(state));
-    await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
+    const fixture = await createDelayedStartServicesFixture('workflow-delayed-no-services');
     // This run WAS launched with services, so its durable "expects services"
     // marker is present — that is what makes the recovery seam consult the
     // resolver on this fresh-process timer firing.
-    await storage.put(KEYS.workflowHasServices(workflowId), new Uint8Array(0));
 
     await startDelayedWorkflow(
       {
@@ -288,42 +313,29 @@ describe('engine time operation helpers', () => {
           getNow: () => 2_000,
           resolveWorkflowServices: () => ({ status: 'unavailable', reason: 'no config' }),
         },
-        registrations: new Map([[state.type, registration]]),
-        storage,
+        registrations: new Map([[fixture.state.type, fixture.registration]]),
+        storage: fixture.storage,
         workflowVersionTuples: new Map(),
       } as never,
-      createDelayedStartEntry(workflowId, { executionTimeoutMs: 500 }),
+      createDelayedStartEntry(fixture.workflowId, { executionTimeoutMs: 500 }),
       createCallbacks({
-        beginWorkflowExecution,
-        failWorkflow,
-        loadWorkflowState: async () => state,
+        beginWorkflowExecution: fixture.beginWorkflowExecution,
+        failWorkflow: fixture.failWorkflow,
+        loadWorkflowState: async () => fixture.state,
         runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
       }),
     );
 
     // The run is failed with the canonical unavailable-services error, and the
     // generator is never started.
-    expect(failed).toHaveLength(1);
-    expect(failed[0]![1].message).toContain('services unavailable');
-    expect(beginWorkflowExecution).not.toHaveBeenCalled();
+    expect(fixture.failed).toHaveLength(1);
+    expect(fixture.failed[0]![1].message).toContain('services unavailable');
+    expect(fixture.beginWorkflowExecution).not.toHaveBeenCalled();
   });
 
   it('fails a recovered delayed-start run and warns when it expected services but no resolver is configured', async () => {
-    const storage = new MemoryStorage();
-    const workflowId = 'workflow-delayed-missing-resolver';
-    const state = createWorkflowState(workflowId);
-    const checkpoint = createCheckpoint(workflowId);
-    const registration = { handler: async function* () {}, version: '1' };
-    const beginWorkflowExecution = mock(() => {});
-    const failed: Array<[string, Error]> = [];
+    const fixture = await createDelayedStartServicesFixture('workflow-delayed-missing-resolver');
     const warnings: DevelopmentWarningEvent[] = [];
-    const failWorkflow = async (id: string, error: Error): Promise<void> => {
-      failed.push([id, error]);
-    };
-
-    await storage.put(KEYS.workflow(workflowId), encode(state));
-    await storage.put(KEYS.checkpoint(workflowId), serializeCheckpoint(checkpoint));
-    await storage.put(KEYS.workflowHasServices(workflowId), new Uint8Array(0));
 
     await startDelayedWorkflow(
       {
@@ -331,30 +343,30 @@ describe('engine time operation helpers', () => {
         inlineStrategy: {},
         workflowServices: new Map<string, unknown>(),
         options: { getNow: () => 2_000 },
-        registrations: new Map([[state.type, registration]]),
-        storage,
+        registrations: new Map([[fixture.state.type, fixture.registration]]),
+        storage: fixture.storage,
         workflowVersionTuples: new Map(),
       } as never,
-      createDelayedStartEntry(workflowId, { executionTimeoutMs: 500 }),
+      createDelayedStartEntry(fixture.workflowId, { executionTimeoutMs: 500 }),
       createCallbacks({
-        beginWorkflowExecution,
+        beginWorkflowExecution: fixture.beginWorkflowExecution,
         dispatchEvent: (event) => {
           if (event instanceof DevelopmentWarningEvent) {
             warnings.push(event);
           }
         },
-        failWorkflow,
-        loadWorkflowState: async () => state,
+        failWorkflow: fixture.failWorkflow,
+        loadWorkflowState: async () => fixture.state,
         runSerializedWorkflowStateWrite: async (_workflowId, writeOperation) => writeOperation(),
       }),
     );
 
-    expect(failed).toHaveLength(1);
-    expect(failed[0]![1].message).toContain('resolveWorkflowServices');
+    expect(fixture.failed).toHaveLength(1);
+    expect(fixture.failed[0]![1].message).toContain('resolveWorkflowServices');
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]!.workflowId).toBe(workflowId);
+    expect(warnings[0]!.workflowId).toBe(fixture.workflowId);
     expect(warnings[0]!.message).toContain('resolveWorkflowServices');
-    expect(beginWorkflowExecution).not.toHaveBeenCalled();
+    expect(fixture.beginWorkflowExecution).not.toHaveBeenCalled();
   });
 
   it('starts a recovered delayed-start run with no services without consulting the resolver', async () => {
