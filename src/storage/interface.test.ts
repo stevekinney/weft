@@ -777,6 +777,7 @@ describe('KEYS', () => {
     expect(KEYS.updateIdempotency(workflowId, 'idem-1')).toBe(`upk:${encodedWorkflowId}:idem-1`);
     expect(KEYS.startIdempotency('idem-1')).toBe('start-idem:idem-1');
     expect(KEYS.startIdempotency('a:b')).toBe('start-idem:a%3Ab');
+    expect(KEYS.leasePrefix()).toBe('lease:');
     expect(KEYS.budget('account-a', 'daily', '2026-04-14')).toBe(
       'budget:account-a:daily:2026-04-14',
     );

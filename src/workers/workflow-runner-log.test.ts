@@ -4,6 +4,7 @@ import type { WorkerLoggerReplayState } from '../core/context/workflow-logger.ts
 import type { OperationRequest, WorkerOutboundMessage } from '../core/types.ts';
 import { WORKER_PROTOCOL_VERSION } from '../core/worker-protocol.ts';
 import { captureWorkflowLogConsole } from '../testing/workflow-log-capture.test-support.ts';
+import { createReplayState } from './worker-replay-state.ts';
 import {
   createWorkerWorkflowContext,
   createWorkflowRunnerContext,
@@ -370,5 +371,36 @@ describe('worker ctx.log', () => {
       });
       expect(context.replayStates.has('wf-leak')).toBe(false);
     });
+  });
+});
+
+describe('worker ctx.getVersion', () => {
+  it('yields a get-version request and pins the version in checkpoint locals', () => {
+    const replayState = createReplayState({ workflowId: 'wf-version' });
+    const ctx = createWorkerWorkflowContext(
+      { workflowId: 'wf-version', workflowType: 'versioning', input: null },
+      new AbortController(),
+      () => undefined,
+      undefined,
+      () => replayState,
+    );
+
+    const generator = ctx.getVersion('shipping-v2', 1, 2);
+    const request = generator.next();
+
+    expect(request).toMatchObject({
+      done: false,
+      value: {
+        type: 'get-version',
+        changeId: 'shipping-v2',
+        minSupported: 1,
+        maxSupported: 2,
+        version: 2,
+      },
+    });
+    expect(replayState.checkpoint.locals['version:shipping-v2']).toBe(2);
+
+    const completion = generator.next(2);
+    expect(completion).toEqual({ done: true, value: 2 });
   });
 });
