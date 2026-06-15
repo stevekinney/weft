@@ -4,6 +4,7 @@ import type { Storage as WeftStorage } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { ActivityWorkerDispatcher } from '../../workers/activity-worker-dispatcher.ts';
 import { WorkerPool } from '../../workers/pool.ts';
+import { presentInlineDependencies } from '../inline-execution-strategy.context-options.ts';
 import { InlineExecutionStrategy } from '../inline-execution-strategy.ts';
 import type { ComposedWorkflowInterceptor, Interceptor } from '../interceptor.ts';
 import {
@@ -398,6 +399,7 @@ export function createExecutionStrategyBundle(parameters: {
   getComposedWorkflowInterceptor?: () => ComposedWorkflowInterceptor | null;
   resolveWorkflowType: (target: string | Function) => string;
   registerCancelHandler?: (workflowId: string, handler: () => Promise<void> | void) => () => void;
+  recordFinalizerState?: (workflowId: string, value: unknown) => void;
   getWorkflowServices?: (workflowId: string) => unknown;
   getLogSink?: () => ((record: WorkflowLogRecord) => void) | undefined;
 }): ExecutionStrategyBundle {
@@ -411,6 +413,7 @@ export function createExecutionStrategyBundle(parameters: {
     getComposedWorkflowInterceptor,
     resolveWorkflowType,
     registerCancelHandler,
+    recordFinalizerState,
     getWorkflowServices,
     getLogSink,
   } = parameters;
@@ -444,14 +447,17 @@ export function createExecutionStrategyBundle(parameters: {
   }
   const inlineStrategy = new InlineExecutionStrategy({
     getRegistration,
-    ...(getComposedWorkflowInterceptor !== undefined && { getComposedWorkflowInterceptor }),
     getNow,
     maxNestingDepth,
     development,
     resolveWorkflowType,
-    ...(registerCancelHandler !== undefined && { registerCancelHandler }),
-    ...(getWorkflowServices !== undefined && { getWorkflowServices }),
-    ...(getLogSink !== undefined && { getLogSink }),
+    ...presentInlineDependencies({
+      getComposedWorkflowInterceptor,
+      registerCancelHandler,
+      recordFinalizerState,
+      getWorkflowServices,
+      getLogSink,
+    }),
   });
   return { strategy: inlineStrategy, inlineStrategy };
 }

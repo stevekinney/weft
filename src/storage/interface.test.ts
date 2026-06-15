@@ -193,6 +193,7 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.workflowConcurrency('workflow-type', 'partition:key'),
       KEYS.workflowConcurrencyHolder('workflow-id'),
       KEYS.workflowHasServices('workflow-id'),
+      KEYS.finalizerState('workflow-id'),
       KEYS.offload('workflow-id', 'key'),
       KEYS.archive('workflow-id', 'key'),
       KEYS.stateExecution('workflow-id', 'key'),

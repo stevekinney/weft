@@ -52,6 +52,7 @@ export const WEFT_RESERVED_KEY_PREFIXES = [
   'wf-concurrency-holder:',
   'wf-deadline:',
   'wf-delayed:',
+  'wf-finalizer-state:',
   'wf-has-services:',
   'wf-headers:',
   'wf-idx-',

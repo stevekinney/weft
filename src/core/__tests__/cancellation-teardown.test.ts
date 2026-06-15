@@ -12,10 +12,12 @@
 import { describe, expect, it } from 'bun:test';
 import { sleepForTesting } from '../../testing/fake-timers.test-support.ts';
 
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { decode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import type { ActivityDefinition, WorkflowContext } from '../types.ts';
-import { workflow } from '../types.ts';
+import { activity, workflow } from '../types.ts';
 
 async function flush(): Promise<void> {
   await sleepForTesting(10);
@@ -712,4 +714,77 @@ describe('cancel-handler race condition', () => {
 
     engine[Symbol.dispose]();
   });
+});
+
+// ---------------------------------------------------------------------------
+// ctx.setFinalizerState() — durable finalizer-state payload channel (#446)
+// ---------------------------------------------------------------------------
+
+describe('ctx.setFinalizerState() (#446)', () => {
+  const noop = activity({ name: 'finalizer-noop-step', execute: async () => undefined });
+
+  it('durably commits the recorded value, readable from storage after a checkpoint', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+
+    const provision = workflow({ name: 'finalizer-durable' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      ctx.setFinalizerState({ sandboxId: 'sbx-durable' });
+      // A real step forces a checkpoint commit, which flushes the staged
+      // finalizer-state side-effect to durable storage.
+      yield* ctx.run(noop);
+      yield* ctx.waitForSignal('never');
+    });
+    engine.register(provision);
+
+    const handle = await engine.start('finalizer-durable', null, { id: 'finalizer-durable-1' });
+    await flush();
+
+    const bytes = await storage.get(KEYS.finalizerState('finalizer-durable-1'));
+    expect(bytes).not.toBeNull();
+    expect(decode(bytes!)).toEqual({ sandboxId: 'sbx-durable' });
+
+    await engine.cancel(handle.id);
+    await expect(handle.result()).rejects.toThrow('Workflow cancelled');
+
+    engine[Symbol.dispose]();
+  });
+
+  it('commits the recorded value when the workflow parks, with no prior ctx.run checkpoint', async () => {
+    // No `ctx.run` before parking: the value is staged, then flushed by the
+    // suspend commit when the workflow parks on `waitForSignal`. This proves the
+    // staged side-effect rides the *suspend* commit even without an intervening
+    // `ctx.run` step. (The complementary path — a value staged with no commit at
+    // all, flushed by the terminal cancel batch's `includePendingAtomicSideEffects`
+    // — is the same `stageAtomicWorkflowCommitSideEffects` mechanism; in normal
+    // operation the suspend commit reaches it first.) Read while the workflow is
+    // still parked, before any terminal cleanup runs.
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage });
+
+    const provision = workflow({ name: 'finalizer-park-flush' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      ctx.setFinalizerState({ sandboxId: 'sbx-parked' });
+      yield* ctx.waitForSignal('never');
+    });
+    engine.register(provision);
+
+    const handle = await engine.start('finalizer-park-flush', null, { id: 'finalizer-park-1' });
+    await flush();
+
+    const bytes = await storage.get(KEYS.finalizerState('finalizer-park-1'));
+    expect(bytes).not.toBeNull();
+    expect(decode(bytes!)).toEqual({ sandboxId: 'sbx-parked' });
+
+    await engine.cancel(handle.id);
+    await expect(handle.result()).rejects.toThrow('Workflow cancelled');
+
+    engine[Symbol.dispose]();
+  });
+
+  // Orphan cleanup — the `cleanupWorkflowStorage` finalizer-state sweep — is covered
+  // in `src/core/engine/finalizer-state.test.ts`, which may import engine internals
+  // (this `__tests__` directory may not, per `check-internal-imports.ts`).
 });

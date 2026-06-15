@@ -12,6 +12,7 @@ import type { RetentionPolicy } from './retry-retention.ts';
 import type { SearchAttributeSchema } from './search-attributes.ts';
 import type { WorkflowConcurrencyOptions } from './workflow-concurrency.ts';
 import type { WorkflowFunction } from './workflow-function.ts';
+import type { AnyActivityDefinition } from './workflow-registries.ts';
 
 /**
  * Named workflow definition returned by {@link workflow}. The runtime object
@@ -65,4 +66,30 @@ export interface WorkflowDefinition<
    * (`workerExecution` option) will silently skip constraint evaluation.
    */
   constraints?: ConstraintDefinition[];
+  /**
+   * Definition-level teardown activity, driven by the engine to durable
+   * completion after this workflow reaches a `cancelled` or `timed-out` terminal
+   * state (issue #446). Unlike `ctx.onCancel` and saga compensation — which run
+   * in memory and are lost on a hard cancel or crash — the finalizer is backed by
+   * the full retry machinery and re-driven on recovery, so it guarantees
+   * resource cleanup (e.g. destroying a paid sandbox) survives cancellation and
+   * process death.
+   *
+   * The engine passes the value recorded by `ctx.setFinalizerState(value)` as the
+   * finalizer's input. The finalizer is skipped entirely when no finalizer state
+   * was recorded. Completed and failed workflows do not run the finalizer — place
+   * those teardown steps as a normal `ctx.run` after the `try/finally`.
+   *
+   * **Idempotency is required.** Across a lease handoff or crash the finalizer may
+   * run more than once; make it idempotent — destroying an already-destroyed
+   * resource must succeed. Derive its `idempotencyKey` from the resource id.
+   *
+   * **Note**: Not supported in worker execution mode (`workerExecution`) until a
+   * later release; registering a finalizer on a worker-mode engine throws.
+   *
+   * **Status**: the engine-driven teardown that runs this finalizer lands in a
+   * follow-up release. Declaring it and recording state with
+   * {@link WorkflowContext.setFinalizerState} are inert until that drive ships.
+   */
+  finalizer?: AnyActivityDefinition;
 }

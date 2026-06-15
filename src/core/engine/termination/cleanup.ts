@@ -299,6 +299,12 @@ export async function cleanupWorkflowStorage(
   // The "expects services" marker is per-run bookkeeping, not an output artifact,
   // so drop it on every terminal cleanup regardless of `includeOutputArtifacts`.
   await internals.storage.delete(KEYS.workflowHasServices(workflowId));
+  // The finalizer-state payload (#446) is per-run bookkeeping written by
+  // `ctx.setFinalizerState`. A completed/failed workflow never runs its finalizer,
+  // so the recorded value would otherwise leak permanently — sweep it here. (When
+  // the cancellation-teardown drive lands, a cancel/timeout finalizer clears this
+  // key itself on success; the deferred terminal-cleanup sweep is the backstop.)
+  await internals.storage.delete(KEYS.finalizerState(workflowId));
 
   // Use the storage adapter's native prefix deletion when available
   // (e.g., BunSQLiteStorage's prepared DELETE...WHERE key >= ? AND key < ?).

@@ -62,7 +62,7 @@ describe('assertPayloadWithinLimit', () => {
     expect(read).toBe(false);
   });
 
-  it.each<PayloadKind>(['workflow input', 'signal payload', 'activity result'])(
+  it.each<PayloadKind>(['workflow input', 'signal payload', 'activity result', 'finalizer state'])(
     'names the payload kind %p in the rejection message',
     (kind) => {
       try {

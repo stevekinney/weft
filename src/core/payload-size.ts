@@ -6,7 +6,11 @@ import { WeftError } from './weft-error.ts';
  * {@link PayloadSizeExceededError} message so operators can tell which
  * admission point rejected the value.
  */
-export type PayloadKind = 'workflow input' | 'signal payload' | 'activity result';
+export type PayloadKind =
+  | 'workflow input'
+  | 'signal payload'
+  | 'activity result'
+  | 'finalizer state';
 
 /**
  * Thrown at admission when a payload's serialized (codec-encoded) size exceeds

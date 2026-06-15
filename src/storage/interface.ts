@@ -667,6 +667,17 @@ export const KEYS = {
    */
   workflowHasServices: (workflowId: string) =>
     `wf-has-services:${encodeStorageKeyComponent(workflowId)}`,
+  /**
+   * Last-write-wins payload that `ctx.setFinalizerState(value)` records for a
+   * workflow's definition-level `finalizer` activity (issue #446). The engine
+   * passes the decoded value as the finalizer's input when driving teardown
+   * after a `cancelled`/`timed-out` terminal. Presence means "a resource was
+   * recorded"; absence means the finalizer is skipped. Staged as a pending
+   * atomic side-effect so it commits with the next checkpoint or the terminal
+   * batch. Swept on terminal cleanup.
+   */
+  finalizerState: (workflowId: string) =>
+    `wf-finalizer-state:${encodeStorageKeyComponent(workflowId)}`,
   offload: (workflowId: string, key: string) =>
     `offload:${encodeStorageKeyComponent(workflowId)}:${key}`,
   archive: (workflowId: string, key: string) =>

@@ -52,6 +52,28 @@ function assertConstraintsSupported(
   }
 }
 
+function assertFinalizerSupported(
+  internals: EngineInternals,
+  name: string,
+  registration: WorkflowDefinition,
+): void {
+  if (registration.finalizer === undefined) {
+    return;
+  }
+  // The durable cancellation-teardown finalizer (#446) drives its activity
+  // through the inline execution path after a `cancelled`/`timed-out` terminal.
+  // Worker-mode parity (advertisement, routing, attempt-token echo) lands in a
+  // later release; until then a worker-mode engine would silently never run the
+  // finalizer. Fail loud at registration rather than mid-teardown.
+  if (internals.inlineStrategy === null) {
+    throw new Error(
+      `Cannot register workflow "${name}" with a finalizer: definition-level finalizers are not yet supported in ` +
+        `worker execution mode. The engine was constructed with \`workerExecution\`. Remove the \`finalizer\` option, ` +
+        `or construct the engine without \`workerExecution\` to run workflows inline.`,
+    );
+  }
+}
+
 function buildBaseRegistrationEntry(
   name: string,
   registration: WorkflowDefinition,
@@ -120,6 +142,13 @@ function applyOptionalRegistrationFields(
   if (registration.constraints && registration.constraints.length > 0) {
     entry.constraints = registration.constraints;
   }
+  if (registration.finalizer !== undefined) {
+    // Rebuild the finalizer through `activity(...)` so the stored entry validates
+    // the wire-safe name grammar and holds an engine-owned callable independent of
+    // post-registration mutation — the same hardening `buildPerWorkflowActivityRegistry`
+    // applies to a workflow's activities.
+    entry.finalizer = activity(clonePlain(registration.finalizer));
+  }
 }
 
 function buildRegistrationEntry(name: string, registration: WorkflowDefinition): RegistrationEntry {
@@ -136,6 +165,7 @@ function commitWorkflowDefinition(
   const name = definition.name;
   validateWorkflowOrActivityName(name, 'workflow');
   assertConstraintsSupported(internals, name, definition);
+  assertFinalizerSupported(internals, name, definition);
   const entry = buildRegistrationEntry(name, definition);
   internals.registrations.set(name, entry);
   callbacks.ensureRetentionSweepInterval();

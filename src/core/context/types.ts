@@ -202,4 +202,12 @@ export interface ContextOptions {
    * behavior is preserved. Never checkpointed.
    */
   logSink?: (record: WorkflowLogRecord) => void;
+  /**
+   * Called by `ctx.setFinalizerState(value)` (#446) to durably record the payload
+   * the engine passes to the workflow's `finalizer` activity on cancel/timeout
+   * teardown. The engine stages it as a pending atomic side-effect so it commits
+   * with the next checkpoint or the terminal batch. Absent for worker-mode and
+   * speculative contexts, where `ctx.setFinalizerState` is unsupported.
+   */
+  recordFinalizerState?: (value: unknown) => void;
 }

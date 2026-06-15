@@ -157,6 +157,7 @@ import {
 import type { EngineStateNamespace } from './engine-state-namespace.ts';
 import { EngineCreateNameMismatchError, EngineDisposedError } from './errors.ts';
 import { assertLeaseHeldForEngineWork } from './fenced-write.ts';
+import { recordFinalizerState } from './finalizer-state.ts';
 import {
   createWorkflowHandleWithResultPromise as createWorkflowHandleWithResultPromiseFromInternals,
   getWorkflowResultPromise as getWorkflowResultPromiseFromInternals,
@@ -495,6 +496,8 @@ export class Engine<
       resolveWorkflowType: this.#resolveWorkflowTypeTarget.bind(this),
       registerCancelHandler: (workflowId, handler) =>
         registerCancelHandler(getInternals(this), workflowId, handler),
+      recordFinalizerState: (workflowId, value) =>
+        recordFinalizerState(getInternals(this), workflowId, value),
       getWorkflowServices: (workflowId) => getInternals(this).workflowServices.get(workflowId),
       // Capture the resolved-options local, not `getInternals(this).options` (assigned
       // later in this constructor): the worker path resolves the sink eagerly during

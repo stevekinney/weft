@@ -26,6 +26,7 @@ import type {
 import type { BuiltWorkflowDefinition } from './workflow-builder.ts';
 import type { WorkflowConcurrencyOptions } from './workflow-concurrency.ts';
 import type { WorkflowFunction } from './workflow-function.ts';
+import type { AnyActivityDefinition } from './workflow-registries.ts';
 
 // ---------------------------------------------------------------------------
 // Errors and options shape
@@ -93,6 +94,12 @@ export interface WorkflowBuilderOptions<
   retention?: RetentionPolicy;
   concurrency?: WorkflowConcurrencyOptions<TConcurrencyInput>;
   constraints?: ConstraintDefinition[];
+  /**
+   * Definition-level teardown activity driven by the engine after a
+   * `cancelled`/`timed-out` terminal (issue #446). See
+   * {@link WorkflowDefinition.finalizer}.
+   */
+  finalizer?: AnyActivityDefinition;
   inputSchema?: DefinitionSchema<unknown, unknown>;
   outputSchema?: DefinitionSchema<unknown, unknown>;
   /**
@@ -260,6 +267,7 @@ export class WorkflowBuilderImpl<TName extends string> {
       ...(this.#options.constraints !== undefined
         ? { constraints: this.#options.constraints }
         : {}),
+      ...(this.#options.finalizer !== undefined ? { finalizer: this.#options.finalizer } : {}),
       ...(this.#options.inputSchema !== undefined
         ? { inputSchema: this.#options.inputSchema }
         : {}),

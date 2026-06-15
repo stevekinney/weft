@@ -36,6 +36,13 @@ export interface ContextInternals {
    * to re-read per emit.
    */
   logSink: ((record: WorkflowLogRecord) => void) | undefined;
+  /**
+   * Engine callback that durably records `ctx.setFinalizerState(value)` payloads
+   * (#446); `undefined` when finalizer state is unsupported (worker-mode,
+   * speculative branches). Injected at context construction, mirroring
+   * {@link registerCancelHandler}.
+   */
+  recordFinalizerState: ((value: unknown) => void) | undefined;
 }
 
 const INTERNALS = new WeakMap<Context, ContextInternals>();
@@ -71,6 +78,7 @@ export function initializeInternals(
     registerCancelHandler: options.registerCancelHandler,
     services: options.services,
     logSink: options.logSink,
+    recordFinalizerState: options.recordFinalizerState,
   };
   INTERNALS.set(context, internals);
 }

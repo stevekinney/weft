@@ -87,6 +87,27 @@ describe('Context', () => {
     });
   });
 
+  describe('ctx.setFinalizerState (#446)', () => {
+    it('throws when finalizer state is not available for the execution mode', () => {
+      const context = createContext();
+
+      expect(() => context.setFinalizerState({ sandboxId: 'sbx' })).toThrow(
+        'ctx.setFinalizerState() is only supported for inline workflow execution',
+      );
+    });
+
+    it('delegates the value to the engine callback when supported', () => {
+      const recorded: unknown[] = [];
+      const context = createContext({
+        recordFinalizerState: (value) => recorded.push(value),
+      });
+
+      context.setFinalizerState({ sandboxId: 'sbx-7' });
+
+      expect(recorded).toEqual([{ sandboxId: 'sbx-7' }]);
+    });
+  });
+
   describe('ctx.run', () => {
     it('yields an activity request', () => {
       const context = createContext();

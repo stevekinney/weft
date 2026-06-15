@@ -3,6 +3,7 @@ import type { ConstraintDefinition } from '../constraint.ts';
 import type { ExecutionStrategy } from '../execution-strategy.ts';
 import type { InlineExecutionStrategy } from '../inline-execution-strategy.ts';
 import type {
+  AnyActivityDefinition,
   ArchiveAdapter,
   Checkpoint,
   DefinitionSchema,
@@ -27,6 +28,12 @@ export interface RegistrationEntry {
   retention?: NormalizedRetentionPolicy;
   concurrency?: WorkflowConcurrencyOptions;
   constraints?: ConstraintDefinition[];
+  /**
+   * Definition-level teardown activity (issue #446), driven by the engine after a
+   * `cancelled`/`timed-out` terminal. Stored on the engine-lifetime registry so it
+   * survives per-workflow terminal cleanup; resolved at teardown by workflow type.
+   */
+  finalizer?: AnyActivityDefinition;
 }
 
 export interface ResolvedOptions {
