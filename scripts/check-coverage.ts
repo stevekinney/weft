@@ -1649,10 +1649,11 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
         // Was line 386; shifted to 409 when `ctx.log` wiring was added above it, to 424
         // when the #529 worker-log forwarding removed the dead turnId plumbing, and to
         // 428 when `buildLogForwarder` captured the size cap at construction (dropping a
-        // live `context.replayStates.get` read). Same unchanged line — the closing brace
-        // of `processGeneratorStep`'s `while (true)` loop, which Bun's lcov marks
+        // live `context.replayStates.get` read), and to 498 after the worker replay
+        // helpers moved below `processGeneratorStep`. Same unchanged line — the closing
+        // brace of `processGeneratorStep`'s `while (true)` loop, which Bun's lcov marks
         // uncovered for an infinite loop with no fall-through — only its number moved.
-        lines: new Set([428]),
+        lines: new Set([498]),
       },
     ],
   ],
@@ -2164,7 +2165,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         lines: createMergedLineSet(
           createLineSet(101, 106),
           createLineSet(112, 151),
-          new Set([483]),
+          new Set([498]),
         ),
       },
     ],

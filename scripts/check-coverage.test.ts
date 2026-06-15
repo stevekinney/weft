@@ -122,7 +122,7 @@ describe('parseLcov', () => {
         'FNF:4',
         'FNH:0',
         'DA:101,0',
-        'DA:428,0',
+        'DA:498,0',
         'DA:999,1',
         'end_of_record',
       ].join('\n'),
@@ -391,7 +391,7 @@ describe('assertNoAllowanceKeyIsCoverageIgnored', () => {
       assertNoAllowanceKeyIsCoverageIgnored(
         new Map([
           ['src/core/engine/index.ts', { functions: 2 }],
-          ['src/workers/workflow-runner.ts', { lines: new Set([428]) }],
+          ['src/workers/workflow-runner.ts', { lines: new Set([498]) }],
         ]),
         ['scripts/check-coverage.ts', 'src/generated/**'],
       ),
