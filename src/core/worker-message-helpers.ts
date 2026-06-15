@@ -1,9 +1,28 @@
 import { logRecordToConsole } from './context/workflow-logger.ts';
 import type { WorkerOutboundMessage } from './types.ts';
 import type { WorkflowLogRecord } from './types/workflow-log.ts';
-import type { ForwardedWorkerLogOutcome } from './worker-log-abuse-counter.ts';
 import { isValidWorkerLogRecord, type WorkerLogMessageCandidate } from './worker-protocol-log.ts';
 import { assertWorkerProtocolMessageWithinLimit } from './worker-protocol.ts';
+
+/**
+ * The outcome of attempting to deliver one forwarded worker `ctx.log` (#545), produced
+ * by {@link deliverForwardedWorkerLog} and consumed by the abuse counter, which
+ * classifies each forwarded log by this outcome to feed its two buckets independently:
+ *
+ * - `accepted-valid`: a structurally valid, in-budget record. Counted toward the flood
+ *   budget (every owned arrival is) but never a strike. Returned even when no host sink
+ *   is installed — a valid log still consumes flood budget, because the host already
+ *   paid the structured-clone cost on receipt regardless of the sink.
+ * - `dropped-oversize`: the record exceeded the protocol size cap. An anomaly — a
+ *   well-behaved worker-side logger never emits oversize records — so it is a strike.
+ * - `dropped-invalid`: the record is not a structurally valid {@link WorkflowLogRecord},
+ *   or its `workflowId` does not match the envelope. Also a strike: a legitimate logger
+ *   always emits a well-formed record whose id matches the workflow it owns.
+ *
+ * `dropped-oversize` and `dropped-invalid` both feed the SAME lifetime strike bucket;
+ * the distinction is retained only for diagnostics/console fidelity.
+ */
+export type ForwardedWorkerLogOutcome = 'accepted-valid' | 'dropped-oversize' | 'dropped-invalid';
 
 export function emitWorkerMessageToEngine(
   handler: ((message: WorkerOutboundMessage) => void | Promise<void>) | null,

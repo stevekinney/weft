@@ -19,20 +19,20 @@ export const DEFAULT_WORKER_PROTOCOL_MESSAGE_BYTES = 1_048_576;
 export const MIN_WORKER_PROTOCOL_MESSAGE_BYTES = 4_096;
 
 /**
- * Default sliding-window length (ms) for the forwarded-log flood budget (#545). One
- * minute is generous: a workflow logging many records per second stays well under the
- * paired {@link DEFAULT_FORWARDED_LOG_FLOOD_THRESHOLD} across this window, so the
- * default never discards legitimate high-log traffic.
+ * Default fixed-window length (ms) for the forwarded-log flood budget (#545). Paired
+ * with {@link DEFAULT_FORWARDED_LOG_FLOOD_THRESHOLD} over this window.
  */
 export const DEFAULT_FORWARDED_LOG_FLOOD_WINDOW_MS = 60_000;
 /**
  * Default maximum forwarded-log arrivals per worker within
  * {@link DEFAULT_FORWARDED_LOG_FLOOD_WINDOW_MS} before the worker is discarded for
- * flooding (#545). Deliberately high — a false discard fails a real user's in-flight
- * workflows (an asymmetric harm), so the default tolerates bursty-but-honest logging
- * and only trips on sustained abuse.
+ * flooding (#545). This budget is AGGREGATE per (pooled) worker, across every workflow
+ * the worker currently owns — not per workflow. Set deliberately high (~83 arrivals/sec
+ * sustained) because the harm is asymmetric: a false discard fails ALL of that worker's
+ * in-flight workflows, while a real flood from a compromised worker runs at thousands per
+ * second and still trips comfortably. Honest high-log workflows stay well under it.
  */
-export const DEFAULT_FORWARDED_LOG_FLOOD_THRESHOLD = 1_000;
+export const DEFAULT_FORWARDED_LOG_FLOOD_THRESHOLD = 5_000;
 /**
  * Cumulative lifetime anomalous (oversize OR structurally invalid) forwarded-log
  * records tolerated per worker before discard (#545). A small constant — a well-behaved

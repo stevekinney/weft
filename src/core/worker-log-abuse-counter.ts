@@ -1,33 +1,16 @@
 import type { FailureCategory } from './types.ts';
 import type { WorkflowLogRecord } from './types/workflow-log.ts';
 import type { WorkerExecutionStrategyOptions } from './worker-execution-strategy-options.ts';
-import { deliverForwardedWorkerLog } from './worker-message-helpers.ts';
+import {
+  deliverForwardedWorkerLog,
+  type ForwardedWorkerLogOutcome,
+} from './worker-message-helpers.ts';
 import type { WorkerLogMessageCandidate } from './worker-protocol-log.ts';
 import {
   DEFAULT_FORWARDED_LOG_FLOOD_THRESHOLD,
   DEFAULT_FORWARDED_LOG_FLOOD_WINDOW_MS,
   FORWARDED_LOG_STRIKE_THRESHOLD,
 } from './worker-protocol.ts';
-
-/**
- * The outcome of attempting to deliver one forwarded worker `ctx.log` (#545). The
- * abuse counter classifies each forwarded log by this outcome so the two abuse
- * buckets (windowed flood, lifetime strikes) can be fed independently:
- *
- * - `accepted-valid`: a structurally valid, in-budget record. Counted toward the
- *   flood budget (every owned arrival is) but never a strike. This is returned even
- *   when no host sink is installed — a valid log still consumes flood budget, because
- *   the host already paid the structured-clone cost on receipt regardless of the sink.
- * - `dropped-oversize`: the record exceeded the protocol size cap. An anomaly — a
- *   well-behaved worker-side logger never emits oversize records — so it is a strike.
- * - `dropped-invalid`: the record is not a structurally valid {@link WorkflowLogRecord},
- *   or its `workflowId` does not match the envelope. Also a strike: a legitimate logger
- *   always emits a well-formed record whose id matches the workflow it owns.
- *
- * `dropped-oversize` and `dropped-invalid` both feed the SAME lifetime strike bucket;
- * the distinction is retained only for diagnostics/console fidelity.
- */
-export type ForwardedWorkerLogOutcome = 'accepted-valid' | 'dropped-oversize' | 'dropped-invalid';
 
 /**
  * The verdict the abuse counter returns after recording one forwarded-log outcome:
@@ -127,14 +110,18 @@ export class WorkerLogAbuseCounter {
   /**
    * Record one forwarded-log ARRIVAL for `worker` and return whether the worker
    * should be discarded for flooding. Called for every `type:'log'` message before
-   * the ownership gate. The window slides: an arrival more than `floodWindowMs` after
-   * the current window's start opens a fresh window (count resets to 1). Within a
-   * window, the verdict is `discard` once arrivals exceed `floodThreshold`.
+   * the ownership gate. This is a fixed/anchored window (not a true rolling window): an
+   * arrival at or beyond `floodWindowMs` after the window's start anchors a fresh window
+   * (count resets to 1). Within a window, the verdict is `discard` once arrivals exceed
+   * `floodThreshold`. A backwards clock jump (`now < windowStartedAt`, e.g. an NTP step
+   * when `getNow` is wall-clock) also re-anchors the window, so clock regression can never
+   * hold a window open and accumulate toward a premature discard.
    */
   recordArrival(worker: Worker): WorkerLogAbuseVerdict {
     const now = this.#getNow();
     const state = this.#stateFor(worker);
-    if (now - state.windowStartedAt >= this.#floodWindowMs) {
+    const elapsed = now - state.windowStartedAt;
+    if (elapsed >= this.#floodWindowMs || elapsed < 0) {
       state.windowStartedAt = now;
       state.arrivalsInWindow = 0;
     }
@@ -147,15 +134,25 @@ export class WorkerLogAbuseCounter {
    * whether the worker should be discarded for accumulated anomalies. An
    * `accepted-valid` outcome is a no-op (valid logs are accounted only by the flood
    * budget). An oversize or invalid outcome adds one lifetime strike; the verdict is
-   * `discard` once lifetime strikes reach `strikeThreshold`.
+   * `discard` once lifetime strikes reach `strikeThreshold`. The `switch` is exhaustive
+   * (the `never` default) so that adding a future non-strike dropped outcome forces the
+   * strike-vs-no-strike policy decision to be made here rather than defaulting to a strike.
    */
   recordOutcome(worker: Worker, outcome: ForwardedWorkerLogOutcome): WorkerLogAbuseVerdict {
-    if (outcome === 'accepted-valid') {
-      return 'tolerate';
+    switch (outcome) {
+      case 'accepted-valid':
+        return 'tolerate';
+      case 'dropped-oversize':
+      case 'dropped-invalid': {
+        const state = this.#stateFor(worker);
+        state.lifetimeStrikes += 1;
+        return state.lifetimeStrikes >= this.#strikeThreshold ? 'discard' : 'tolerate';
+      }
+      default: {
+        const exhaustive: never = outcome;
+        throw new Error(`Unknown forwarded-log outcome: ${String(exhaustive)}`);
+      }
     }
-    const state = this.#stateFor(worker);
-    state.lifetimeStrikes += 1;
-    return state.lifetimeStrikes >= this.#strikeThreshold ? 'discard' : 'tolerate';
   }
 
   /** Drop a worker's accounting (called when the worker is discarded/forgotten). */
@@ -171,6 +168,21 @@ export class WorkerLogAbuseCounter {
     }
     return state;
   }
+}
+
+/**
+ * Narrow construction config for {@link ForwardedLogGate} — decoupled from
+ * `WorkerExecutionStrategyOptions` so the gate names only what it consumes. The
+ * threshold fields are `| undefined` (the gate applies each default); build this from
+ * a strategy's options with {@link forwardedLogGateFromStrategyOptions}.
+ */
+export interface ForwardedLogGateOptions {
+  readonly onLog: ((record: WorkflowLogRecord) => void) | undefined;
+  readonly maxProtocolMessageBytes: number | undefined;
+  readonly getNow: (() => number) | undefined;
+  readonly floodWindowMs: number | undefined;
+  readonly floodThreshold: number | undefined;
+  readonly strikeThreshold: number | undefined;
 }
 
 /**
@@ -196,24 +208,20 @@ export class ForwardedLogGate {
   readonly #maxProtocolMessageBytes: number | undefined;
 
   /**
-   * Build the gate from the strategy's options (the gate is the sole consumer of the
-   * forwarded-log fields, so it owns reading + defaulting them — keeping the strategy
-   * constructor branch-free). `maxProtocolMessageBytes` is passed separately because the
-   * strategy also uses it for its protocol guard. Every forwarded-log default lives here:
-   * `getNow` → `Date.now`, flood window/threshold → the generous worker-protocol constants,
-   * strike threshold → the small non-configurable constant.
+   * Construct from a narrow gate-local config (decoupled from the strategy). Defaults
+   * are applied here so this is the one place every forwarded-log default lives: `getNow`
+   * → `Date.now`, flood window/threshold → the generous worker-protocol constants, strike
+   * threshold → the small non-configurable constant. Build it from a strategy's options
+   * with {@link forwardedLogGateFromStrategyOptions}.
    */
-  constructor(
-    options: WorkerExecutionStrategyOptions | undefined,
-    maxProtocolMessageBytes: number | undefined,
-  ) {
-    this.#onLog = options?.onLog;
-    this.#maxProtocolMessageBytes = maxProtocolMessageBytes;
+  constructor(config: ForwardedLogGateOptions) {
+    this.#onLog = config.onLog;
+    this.#maxProtocolMessageBytes = config.maxProtocolMessageBytes;
     this.#counter = new WorkerLogAbuseCounter({
-      floodWindowMs: options?.forwardedLogFloodWindowMs ?? DEFAULT_FORWARDED_LOG_FLOOD_WINDOW_MS,
-      floodThreshold: options?.forwardedLogFloodThreshold ?? DEFAULT_FORWARDED_LOG_FLOOD_THRESHOLD,
-      strikeThreshold: options?.forwardedLogStrikeThreshold ?? FORWARDED_LOG_STRIKE_THRESHOLD,
-      getNow: options?.getNow ?? Date.now,
+      floodWindowMs: config.floodWindowMs ?? DEFAULT_FORWARDED_LOG_FLOOD_WINDOW_MS,
+      floodThreshold: config.floodThreshold ?? DEFAULT_FORWARDED_LOG_FLOOD_THRESHOLD,
+      strikeThreshold: config.strikeThreshold ?? FORWARDED_LOG_STRIKE_THRESHOLD,
+      getNow: config.getNow ?? Date.now,
     });
   }
 
@@ -278,4 +286,24 @@ function discardForLogAbuse(reason: string): LogAbuseDiscardOptions {
     otherCategory: 'system',
     otherError: error,
   };
+}
+
+/**
+ * Build a {@link ForwardedLogGate} from a strategy's options. This is the one place that
+ * names {@link WorkerExecutionStrategyOptions} (type-only), so the gate class itself stays
+ * decoupled from the broader strategy surface. `maxProtocolMessageBytes` is passed
+ * separately because the strategy also consumes it for its protocol guard.
+ */
+export function forwardedLogGateFromStrategyOptions(
+  options: WorkerExecutionStrategyOptions | undefined,
+  maxProtocolMessageBytes: number | undefined,
+): ForwardedLogGate {
+  return new ForwardedLogGate({
+    onLog: options?.onLog,
+    maxProtocolMessageBytes,
+    getNow: options?.getNow,
+    floodWindowMs: options?.forwardedLogFloodWindowMs,
+    floodThreshold: options?.forwardedLogFloodThreshold,
+    strikeThreshold: options?.forwardedLogStrikeThreshold,
+  });
 }

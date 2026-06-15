@@ -16,7 +16,10 @@ import {
   type WorkerInboundMessageContext,
 } from './worker-inbound-message.ts';
 import { WorkerListenerRegistry } from './worker-listener-registry.ts';
-import { ForwardedLogGate } from './worker-log-abuse-counter.ts';
+import {
+  forwardedLogGateFromStrategyOptions,
+  type ForwardedLogGate,
+} from './worker-log-abuse-counter.ts';
 import {
   emitWorkerMessageToEngine,
   isParkableWaitSignalCheckpoint,
@@ -62,7 +65,7 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
     this.#maxProtocolMessageBytes = maxProtocolMessageBytes;
     this.#requireProtocolVersion = requireProtocolVersion;
     this.#discardOnCancel = discardOnCancel;
-    this.#forwardedLogGate = new ForwardedLogGate(options, maxProtocolMessageBytes);
+    this.#forwardedLogGate = forwardedLogGateFromStrategyOptions(options, maxProtocolMessageBytes);
     this.#turnWatchdog = new WorkerTurnWatchdog(this.#workflowTurnTimeoutMs, (turn) => {
       this.#handleTurnTimeout(turn);
     });

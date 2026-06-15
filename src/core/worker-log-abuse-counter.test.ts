@@ -67,6 +67,23 @@ describe('WorkerLogAbuseCounter', () => {
       expect(counter.recordArrival(worker)).toBe('discard'); // window B: 2 > 1
     });
 
+    it('re-anchors the window on a backwards clock jump (no premature discard from skew)', () => {
+      const clock = controllableClock(10_000);
+      const counter = new WorkerLogAbuseCounter({
+        floodWindowMs: 1_000,
+        floodThreshold: 1,
+        strikeThreshold: 100,
+        getNow: clock.now,
+      });
+      const worker = fakeWorker();
+
+      expect(counter.recordArrival(worker)).toBe('tolerate'); // window anchored at 10_000: 1
+      clock.advance(-5_000); // clock steps BACKWARDS (e.g. an NTP correction)
+      // Without the `elapsed < 0` re-anchor the old window would still be open and this
+      // 2nd arrival would discard. The guard re-anchors instead, so it tolerates.
+      expect(counter.recordArrival(worker)).toBe('tolerate');
+    });
+
     it('keeps per-worker windows independent', () => {
       const clock = controllableClock();
       const counter = new WorkerLogAbuseCounter({
@@ -98,6 +115,21 @@ describe('WorkerLogAbuseCounter', () => {
       // Even with a strikeThreshold of 1, valid records never accumulate strikes.
       expect(counter.recordOutcome(worker, 'accepted-valid')).toBe('tolerate');
       expect(counter.recordOutcome(worker, 'accepted-valid')).toBe('tolerate');
+    });
+
+    it('throws on an unknown outcome (exhaustiveness guard)', () => {
+      const clock = controllableClock();
+      const counter = new WorkerLogAbuseCounter({
+        floodWindowMs: 1_000,
+        floodThreshold: 100,
+        strikeThreshold: 3,
+        getNow: clock.now,
+      });
+      // A bogus outcome cannot arise from the typed union — force it to prove the default
+      // branch rejects rather than silently classifying it (a future outcome must decide).
+      expect(() => counter.recordOutcome(fakeWorker(), 'bogus' as never)).toThrow(
+        'Unknown forwarded-log outcome',
+      );
     });
 
     it('accumulates oversize and invalid into one bucket and discards at the threshold', () => {
