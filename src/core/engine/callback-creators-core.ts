@@ -198,10 +198,11 @@ export function createTerminationCallbacksWith<
     loadWorkflowState: (workflowId) => loadWorkflowState(getInternals(engine), workflowId),
     runSerializedWorkflowStateWrite: (workflowId, writeOperation) =>
       runSerializedWorkflowStateWrite(getInternals(engine), workflowId, writeOperation),
-    // Lifecycle advances (suspend, completion) commit through the FENCED variant so
-    // a deposed engine's terminal/suspend write loses its CAS instead of corrupting
-    // the successor. Operator mutations (setAttributes) call the unfenced variant
-    // directly in attributes-tags.ts and are intentionally NOT routed here.
+    // Lifecycle advances (suspend, completion) commit through the FENCED workflow-
+    // state path so a deposed engine's terminal/suspend write loses its CAS instead
+    // of corrupting the successor. Operator mutations (setAttributes, tag edits)
+    // batch directly in attributes-tags.ts / listing.ts and are intentionally never
+    // fenced — they legitimately run from any caller — so they are NOT routed here.
     commitWorkflowStateOperations: (state, operations, options) =>
       commitFencedWorkflowStateOperations(getInternals(engine), state, operations, options),
     cleanupReviews: (workflowId) => cleanupReviews(getInternals(engine), workflowId),

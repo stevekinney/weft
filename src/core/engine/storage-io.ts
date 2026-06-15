@@ -82,8 +82,9 @@ type WorkflowStateCommitOptions = {
 
 /**
  * Assemble the operations + CAS conditions for a workflow-state commit, folding in
- * any pending atomic side effects. Shared by the unfenced and fenced commit
- * variants so the side-effect batching and condition derivation live in one place.
+ * any pending atomic side effects, so the side-effect batching and condition
+ * derivation live in one place that {@link commitFencedWorkflowStateOperations}
+ * reuses.
  */
 function buildWorkflowStateCommit(
   internals: EngineInternals,
