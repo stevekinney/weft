@@ -222,10 +222,12 @@ describe("Engine.create({ ownership: 'lease' })", () => {
 
     await parked; // the second engine is provably waiting on the lease
 
-    // Dispose the parked second engine. Its parked acquire must observe `stopped`
-    // and exit without taking the holder; recoverAll() then rejects/returns.
+    // Dispose the parked second engine. Its parked acquire observes `stopped` and
+    // exits without taking the holder. The contract: recoverAll() must REJECT, not
+    // resolve — otherwise recovery would proceed on a disposed engine that never
+    // held the lease (the bug this asserts against).
     await second[Symbol.asyncDispose]();
-    await secondRecover.catch(() => {}); // acquire aborted by dispose — ignore outcome
+    await expect(secondRecover).rejects.toBeInstanceOf(Error);
 
     // The first engine's holder is intact at epoch 1 — the second never stole it.
     const holderAfter = await readHolder(storage);
@@ -233,6 +235,91 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     expect(holderAfter?.epoch).toBe(1);
     // The second engine detached its lease manager (no renewal running on it).
     expect(getInternals(second).leaseManager).toBeNull();
+
+    await first[Symbol.asyncDispose]();
+    base[Symbol.dispose]();
+  });
+
+  it('serializes concurrent recoverAll() calls on one engine behind a single acquire', async () => {
+    // The idempotency contract: a second recoverAll() racing the first must await
+    // the in-flight acquire, not observe a half-set leaseManager and proceed into
+    // recovery before the lease is genuinely held. Both calls resolve; the lease is
+    // acquired exactly once (epoch 1 — no self-steal to epoch 2).
+    const storage = new BunSQLiteStorage(':memory:');
+    const engine = new Engine({ storage, ownership: 'lease' });
+    engine.register(pingWorkflow);
+
+    // Fire two recoverAll() concurrently before either has resolved.
+    const [a, b] = await Promise.all([engine.recoverAll(), engine.recoverAll()]);
+    expect(Array.isArray(a)).toBe(true);
+    expect(Array.isArray(b)).toBe(true);
+
+    // Exactly one acquisition happened: epoch 1, a single live manager.
+    expect(getInternals(engine).leaseManager).not.toBeNull();
+    expect(await holderEpoch(storage)).toBe(1);
+    expect(await readEpoch(storage)).toBe(1);
+
+    await engine[Symbol.asyncDispose]();
+    storage[Symbol.dispose]?.();
+  });
+
+  it('synchronous dispose during a parked acquire surfaces no unhandled rejection', async () => {
+    // The acquire-cancelled-by-dispose path now REJECTS (EngineDisposedError). Sync
+    // dispose cannot await the in-flight acquire, so the rejection must still be
+    // consumed by the internal `await acquisition` chain (propagated to the
+    // recoverAll() caller) — never left dangling as an unhandledRejection.
+    const base = new BunSQLiteStorage(':memory:');
+    let holderReads = 0;
+    let signalParked!: () => void;
+    const parked = new Promise<void>((resolve) => {
+      signalParked = resolve;
+    });
+    const storage: Storage = {
+      capabilities: () => base.capabilities(),
+      get: (key) => {
+        if (key === KEYS.leaseHolder()) {
+          holderReads += 1;
+          if (holderReads >= 2) signalParked();
+        }
+        return base.get(key);
+      },
+      put: (key, value) => base.put(key, value),
+      delete: (key) => base.delete(key),
+      scan: (prefix, options) => base.scan(prefix, options),
+      batch: (operations) => base.batch(operations),
+      conditionalBatch: (conditions, operations) => base.conditionalBatch(conditions, operations),
+      [Symbol.dispose]: () => base[Symbol.dispose](),
+    };
+
+    const first = await Engine.create({ storage, ownership: 'lease' });
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const second = new Engine({ storage, ownership: 'lease' });
+      second.register(pingWorkflow);
+      // Fire-and-forget recoverAll(), but attach a catch so the *caller* promise is
+      // handled; the point of the test is that the engine's internal in-flight
+      // acquire promise has its own synchronous handler and never leaks.
+      const recover = second.recoverAll();
+      recover.catch(() => {});
+      await parked;
+
+      // Synchronous dispose while the acquire is parked.
+      second[Symbol.dispose]();
+
+      // Give the parked acquire a few macrotasks to observe `stopped`, run its
+      // disposed branch (which throws), and settle the in-flight promise.
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      await recover.catch(() => {});
+
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+    }
 
     await first[Symbol.asyncDispose]();
     base[Symbol.dispose]();

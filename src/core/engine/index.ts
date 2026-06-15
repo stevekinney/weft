@@ -155,7 +155,7 @@ import {
   isActivityDefinition,
 } from './engine-runtime-helpers.ts';
 import type { EngineStateNamespace } from './engine-state-namespace.ts';
-import { EngineCreateNameMismatchError } from './errors.ts';
+import { EngineCreateNameMismatchError, EngineDisposedError } from './errors.ts';
 import {
   createWorkflowHandleWithResultPromise as createWorkflowHandleWithResultPromiseFromInternals,
   getWorkflowResultPromise as getWorkflowResultPromiseFromInternals,
@@ -694,10 +694,21 @@ export class Engine<
   async #acquireLeaseIfConfigured(): Promise<void> {
     const internals = getInternals(this);
     if (internals.options.ownershipMode !== 'lease') return;
-    // Idempotent: both `Engine.create` and `recoverAll` call this so the lease is
-    // held before any recovery, whichever path runs first. Once a manager exists
-    // the lease is already held (and renewing), so re-acquiring would mint a fresh
-    // holderId and steal from ourselves. Bail out instead.
+    // Never start (or report success for) an acquire on a disposed engine: that is
+    // the contract `recoverAll` relies on — `await` resolves ONLY when the lease is
+    // actually held right now, otherwise it throws.
+    if (internals.disposed) throw new EngineDisposedError();
+    // Idempotent across the concurrent `Engine.create` + `recoverAll` (and repeated
+    // `recoverAll`) callers. The genuine "lease held" signal is the in-flight
+    // acquisition promise, NOT `leaseManager` (which is published before `acquire()`
+    // resolves so disposal can reach `stop()`). A second caller that observes only
+    // `leaseManager` set could proceed into recovery before the lease is truly held —
+    // so when an acquire is in flight, await IT, then return. Once it has settled and
+    // the manager is live, the lease is held and we can short-circuit.
+    if (internals.inFlightLeaseAcquire !== null) {
+      await internals.inFlightLeaseAcquire;
+      return;
+    }
     if (internals.leaseManager !== null) return;
     requireStorageCapability(internals.storage, 'conditionalBatch', "ownership: 'lease'");
     const manager = createLeaseManager({
@@ -744,10 +755,13 @@ export class Engine<
       }
       if (internals.disposed) {
         // Disposal raced this parked acquire. We may have just committed a holder;
-        // release it and stay detached — never renew on a disposed engine.
+        // release it, stay detached, and THROW — never renew on a disposed engine,
+        // and never let the caller (recoverAll / Engine.create) treat this as a
+        // held lease and proceed into recovery. The throw is the contract: `await`
+        // resolves only when the lease is genuinely held.
         await manager.release();
         if (internals.leaseManager === manager) internals.leaseManager = null;
-        return;
+        throw new EngineDisposedError();
       }
       manager.startRenewal();
     })();
@@ -1764,11 +1778,13 @@ export class Engine<
         disposeEngine(getInternals(this));
         // A lease acquire may still be parked (waiting for handoff) when disposal
         // runs. disposeEngine() set `disposed` and stopped the manager, so the
-        // parked acquire's wait loop will exit (or, if it already committed a
-        // holder this tick, its post-acquire `disposed` check releases it). Await
-        // it so that cleanup completes before we resolve — otherwise a holder it
-        // takes could outlive dispose until TTL.
-        await getInternals(this).inFlightLeaseAcquire;
+        // parked acquire's wait loop exits (or, if it already committed a holder
+        // this tick, its post-acquire `disposed` check releases it). Await it so
+        // cleanup completes before we resolve — otherwise a holder it takes could
+        // outlive dispose until TTL. A disposal-cancelled acquire now REJECTS
+        // (EngineDisposedError) — that rejection is the intended outcome, not a
+        // failure to surface, so swallow it here.
+        await getInternals(this).inFlightLeaseAcquire?.catch(() => {});
         // Clean deploy handoff: release the ownership lease as the LAST durable
         // action, AFTER queued starts have drained and all write paths are down, so
         // the incoming instance cannot acquire and recover while this one is still
