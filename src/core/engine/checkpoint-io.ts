@@ -1,5 +1,5 @@
 import type { BatchOperation, ConditionalBatchCondition } from '../../storage/interface.ts';
-import { KEYS, storageConditionalBatch } from '../../storage/interface.ts';
+import { KEYS } from '../../storage/interface.ts';
 import {
   advanceCheckpoint,
   deserializeCheckpoint,
@@ -39,6 +39,7 @@ import {
   serializeDeletedEntries,
   type CompactionResult,
 } from './event-log-compaction.ts';
+import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { getTimelineInputSummary, getTimelineOperationLabel } from './state-utilities.ts';
 import { buildPendingTimelineOperation } from './termination.ts';
@@ -325,11 +326,19 @@ async function commitCheckpoint(
     storageSupportsConditionalBatch,
     sideEffectConditions,
   );
-  if (conditions.length === 0) {
-    await internals.storage.batch(commit.operations);
-  } else {
-    await writeCheckpointCommitBatch(internals, workflowId, commit, conditions);
-  }
+  // commitFencedEngineWrite owns the batch-vs-conditionalBatch decision and adds
+  // the lease-epoch fence (under `ownership: 'lease'`). Passing the base
+  // conditions here — rather than branching on `conditions.length` and calling
+  // `storage.batch` directly — is load-bearing: the epoch condition must be
+  // appended UPSTREAM of any plain-batch shortcut, or a checkpoint with no
+  // checkpoint-CAS/side-effect condition would bypass the fence and let a deposed
+  // zombie's write land unconditioned. Under `ownership: 'none'` it is a
+  // byte-for-byte no-op (plain batch when no conditions, conditionalBatch otherwise).
+  await commitFencedEngineWrite(internals, commit.operations, conditions, () => {
+    return new Error(
+      `Checkpoint commit for workflow "${workflowId}" lost its CAS race against a newer checkpoint.`,
+    );
+  });
   if (pendingSideEffects !== undefined) {
     clearPendingAtomicWorkflowCommitSideEffects(internals, workflowId);
   }
@@ -363,20 +372,6 @@ async function commitCheckpoint(
   // pre-replay guard re-attempts termination on the next activation).
   if (historyEventLimitBreached(internals, newHead.sequence)) {
     await callbacks.enforceHistoryCircuitBreaker(workflowId);
-  }
-}
-
-async function writeCheckpointCommitBatch(
-  internals: EngineInternals,
-  workflowId: string,
-  commit: CheckpointCommit,
-  conditions: ConditionalBatchCondition[],
-): Promise<void> {
-  const committed = await storageConditionalBatch(internals.storage, conditions, commit.operations);
-  if (!committed) {
-    throw new Error(
-      `Checkpoint commit for workflow "${workflowId}" lost its CAS race against a newer checkpoint.`,
-    );
   }
 }
 

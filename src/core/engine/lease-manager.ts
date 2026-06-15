@@ -45,7 +45,6 @@
  */
 
 import { KEYS, storageConditionalBatch, type Storage } from '../../storage/interface.ts';
-import { EngineLeaseAcquisitionTimeoutError, EngineLeaseCorruptedError } from './errors.ts';
 import {
   decodeEpoch,
   decodeHolder,
@@ -53,6 +52,7 @@ import {
   encodeHolder,
   type LeaseHolderRecord,
 } from './lease-codec.ts';
+import { EngineLeaseAcquisitionTimeoutError, EngineLeaseCorruptedError } from './lease-errors.ts';
 
 /** Why a holder lost its lease — surfaced to {@link LeaseManagerOptions.onLeaseLost}. */
 export type LeaseLostReason = 'deposed' | 'renewal-unconfirmable';

@@ -48,6 +48,7 @@ export {
   EngineDisposedError,
   EngineLeaseAcquisitionTimeoutError,
   EngineLeaseCorruptedError,
+  EngineLeaseNotHeldError,
   IdempotencyKeyPurgedError,
   PersistedDataIncompatibleError,
   ScheduleHandle,

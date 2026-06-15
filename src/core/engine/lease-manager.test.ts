@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import { KEYS, type Storage } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { EngineLeaseAcquisitionTimeoutError, EngineLeaseCorruptedError } from './errors.ts';
+import { EngineLeaseAcquisitionTimeoutError, EngineLeaseCorruptedError } from './lease-errors.ts';
 import {
   createLeaseManager,
   type LeaseLostReason,

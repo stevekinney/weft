@@ -2,6 +2,7 @@ import { UpdateCompletedEvent, UpdateReceivedEvent } from '../events.ts';
 import type { UpdateRequest } from '../updates.ts';
 import { UpdateValidationError } from '../updates.ts';
 import { notifyConditionWaiters } from './condition-waiters.ts';
+import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import {
   extractStandardSchemaIssues,
@@ -231,7 +232,15 @@ async function rejectPendingUpdate(
     errorMessage,
     update.idempotencyKey,
   );
-  await internals.storage.batch(responseOperations);
+  // The update response is engine-generated (derived from running the update
+  // handler), so a deposed engine must not write a stale response over the
+  // successor's. Fence it on the lease epoch.
+  await commitFencedEngineWrite(
+    internals,
+    responseOperations,
+    [],
+    () => new Error(`Update rejection for workflow "${workflowId}" lost its CAS race.`),
+  );
   callbacks.broadcast({ type: 'update:completed', workflowId, updateId: update.updateId });
 }
 
@@ -261,7 +270,14 @@ async function deliverPendingUpdate(
     error,
     update.idempotencyKey,
   );
-  await internals.storage.batch(responseOperations);
+  // Engine-generated update response (see rejectPendingUpdate) — fence on the
+  // lease epoch so a deposed engine cannot overwrite the successor's response.
+  await commitFencedEngineWrite(
+    internals,
+    responseOperations,
+    [],
+    () => new Error(`Update response for workflow "${workflowId}" lost its CAS race.`),
+  );
 
   callbacks.dispatchEvent(
     new UpdateCompletedEvent(update.updateId, workflowId, update.name, result, error),

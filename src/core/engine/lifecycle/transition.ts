@@ -9,6 +9,7 @@ import { createCancelHandlerRegistration, resetCancelHandlers } from '../cancel-
 import { forgetCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { hydrateCheckpointReplayState } from '../checkpoint-replay.ts';
 import { WorkflowTypeNotRegisteredForRecoveryError } from '../errors.ts';
+import { commitFencedEngineWrite } from '../fenced-write.ts';
 import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { normalizeForkStep, selectPersistedWorkflowStartHeaders } from '../state-utilities.ts';
@@ -274,7 +275,11 @@ export async function fork(
   let forkStarted = false;
   try {
     const forkCheckpointBytes = serializeCheckpoint(forkCheckpoint);
-    await internals.storage.batch(
+    // Fork plants a new workflow run from an existing checkpoint — engine-generated
+    // workflow state. Fence it on the lease epoch (issue #470 Step 2) so a deposed
+    // engine cannot create a phantom forked run in the successor's store.
+    await commitFencedEngineWrite(
+      internals,
       buildForkBatchOperations(
         internals,
         workflowId,
@@ -284,6 +289,8 @@ export async function fork(
         persistedWorkflowStartHeaders,
         callbacks,
       ),
+      [],
+      () => new Error(`Fork of workflow "${workflowId}" lost its CAS race.`),
     );
     internals.eventLogHeads.set(workflowId, EMPTY_EVENT_HEAD);
     setWorkflowStartHeaders(internals, workflowId, persistedWorkflowStartHeaders, callbacks);

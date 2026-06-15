@@ -6,6 +6,7 @@ import type { ContextOperationRequest } from '../context.ts';
 import { buildTimerBatchOperations, normalizeStorageTimestamp } from '../scheduler.ts';
 import type { Checkpoint, Duration, StartOptions, TimerEntry, WorkflowState } from '../types.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
+import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { reprovideRecoveredServices } from './lifecycle/recovered-services.ts';
 import { buildWorkflowVisibilityIndexTransition } from './workflow-indexes.ts';
@@ -185,7 +186,19 @@ export async function startDelayedWorkflow(
         );
       }
 
-      await internals.storage.batch(operations);
+      // Fence the delayed-start pending→running transition on the lease epoch: a
+      // deposed timer must not flip a workflow the successor already owns. (Epoch-only
+      // is sufficient under lease ownership's single-writer invariant; the existing
+      // in-process serialization above handles same-engine ordering.)
+      await commitFencedEngineWrite(
+        internals,
+        operations,
+        [],
+        () =>
+          new Error(
+            `Delayed-start transition for workflow "${entry.workflowId}" lost its CAS race.`,
+          ),
+      );
       return nextRunningState;
     },
   );

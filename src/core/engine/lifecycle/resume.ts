@@ -10,6 +10,7 @@ import { type WorkflowVersionTuple } from '../../workflow-version-tuple.ts';
 import { createCancelHandlerRegistration, resetCancelHandlers } from '../cancel-handlers.ts';
 import { rememberCommittedCheckpointBytes } from '../checkpoint-commit-snapshots.ts';
 import { rehydrateChildCancellationHandlers } from '../child-workflow-cancellation.ts';
+import { commitFencedEngineWrite } from '../fenced-write.ts';
 import { getWorkflowExecutionStartedAt, type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { loadWorkflowState } from '../storage-io.ts';
@@ -244,18 +245,26 @@ async function reactivateSuspendedWorkflowState(
   const previousState: WorkflowState = { ...state };
   state.status = 'running';
   state.updatedAt = internals.options.getNow();
-  await internals.storage.batch([
-    { type: 'put', key: KEYS.workflow(state.id), value: encode(state) },
-    ...buildWorkflowVisibilityIndexTransition(state.id, previousState, state).batchOps,
-    ...(state.executionDeadline !== undefined
-      ? buildTimerBatchOperations({
-          id: `deadline:${state.id}`,
-          workflowId: state.id,
-          fireAt: state.executionDeadline,
-          kind: 'execution-deadline',
-        })
-      : []),
-  ]);
+  // Resume flips suspended→running — engine-generated workflow state. Fence it on
+  // the lease epoch (issue #470 Step 2) so a deposed engine cannot reactivate a
+  // workflow the successor already owns.
+  await commitFencedEngineWrite(
+    internals,
+    [
+      { type: 'put', key: KEYS.workflow(state.id), value: encode(state) },
+      ...buildWorkflowVisibilityIndexTransition(state.id, previousState, state).batchOps,
+      ...(state.executionDeadline !== undefined
+        ? buildTimerBatchOperations({
+            id: `deadline:${state.id}`,
+            workflowId: state.id,
+            fireAt: state.executionDeadline,
+            kind: 'execution-deadline',
+          })
+        : []),
+    ],
+    [],
+    () => new Error(`Resume of workflow "${state.id}" lost its CAS race.`),
+  );
 }
 
 export async function resumeWorkflowFromStorage(

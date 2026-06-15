@@ -21,6 +21,7 @@ import {
   handleScheduleTimerForEngine,
 } from './callback-creators-schedule.ts';
 import type { ChildWorkflowOperationCallbacks } from './child-workflow.ts';
+import { commitFencedEngineWrite } from './fenced-write.ts';
 import { guardTerminalWorkflow, guardTerminalWorkflowAfterCoordinatedRequest } from './guards.ts';
 import type { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
@@ -317,7 +318,16 @@ async function persistCoordinatedUpdateResponse<
     idempotencyKey,
   );
   try {
-    await internals.storage.batch(responseOperations);
+    // The coordinated update response is engine-generated (the update handler ran
+    // inside a workflow turn) — fence it on the lease epoch so a deposed engine
+    // cannot overwrite the successor's response (issue #470 Step 2).
+    await commitFencedEngineWrite(
+      internals,
+      responseOperations,
+      [],
+      () =>
+        new Error(`Coordinated update response for workflow "${workflowId}" lost its CAS race.`),
+    );
     engine.dispatchEvent(new UpdateCompletedEvent(updateId, workflowId, updateName, value));
     broadcastFromInternals(
       internals,

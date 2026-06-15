@@ -156,6 +156,7 @@ import {
 } from './engine-runtime-helpers.ts';
 import type { EngineStateNamespace } from './engine-state-namespace.ts';
 import { EngineCreateNameMismatchError, EngineDisposedError } from './errors.ts';
+import { assertLeaseHeldForStart } from './fenced-write.ts';
 import {
   createWorkflowHandleWithResultPromise as createWorkflowHandleWithResultPromiseFromInternals,
   getWorkflowResultPromise as getWorkflowResultPromiseFromInternals,
@@ -168,6 +169,7 @@ import {
   type InlineParkingCallbacks,
 } from './inline-parking.ts';
 import { getInternals, initializeInternals } from './internals.ts';
+import { ENGINE_LEASE_LOST_WARNING_NAME, handleDeposition } from './lease-deposition.ts';
 import { createLeaseManager, type LeaseLostReason } from './lease-manager.ts';
 import {
   fork as forkFromLifecycle,
@@ -280,8 +282,6 @@ export {
   BulkOperationConfirmationError,
   EngineCreateNameMismatchError,
   EngineDisposedError,
-  EngineLeaseAcquisitionTimeoutError,
-  EngineLeaseCorruptedError,
   IdempotencyKeyPurgedError,
   PersistedDataIncompatibleError,
   StartOrSignalConflictError,
@@ -293,6 +293,11 @@ export {
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './errors.ts';
 export { HANDLE_RESULT_PROMISE, WorkflowHandle } from './handles.ts';
+export {
+  EngineLeaseAcquisitionTimeoutError,
+  EngineLeaseCorruptedError,
+  EngineLeaseNotHeldError,
+} from './lease-errors.ts';
 export type { RecoverAllOptions } from './lifecycle.ts';
 export { ScheduleHandle } from './schedule-handle.ts';
 export type {
@@ -322,25 +327,7 @@ export const ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING = Symbol(
 export const ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING = Symbol('engineSignalWaiterCountForTesting');
 export const ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING = Symbol('engineSleepResolverCountForTesting');
 
-/**
- * The `name` of the warning emitted when an `ownership: 'lease'` holder loses its
- * lease while running. A stable, filterable identifier on the `Warning` object —
- * consumers subscribe to the process `warning` event and match `warning.name`
- * rather than hardcoding the string.
- *
- * @example
- * ```ts
- * import { ENGINE_LEASE_LOST_WARNING_NAME } from '@lostgradient/weft';
- *
- * process.on('warning', (warning) => {
- *   if (warning.name === ENGINE_LEASE_LOST_WARNING_NAME) {
- *     // This engine was deposed — another instance owns the store now.
- *     // Step out of the way (stop accepting traffic, begin shutdown).
- *   }
- * });
- * ```
- */
-export const ENGINE_LEASE_LOST_WARNING_NAME = 'WeftEngineLeaseLostWarning';
+export { ENGINE_LEASE_LOST_WARNING_NAME };
 
 /**
  * Durable execution engine.
@@ -621,6 +608,7 @@ export class Engine<
     getInternals(this).secondInstanceDetector = null;
     getInternals(this).leaseManager = null;
     getInternals(this).inFlightLeaseAcquire = null;
+    getInternals(this).deposed = false;
     getInternals(this).eventLogHeads = new Map();
     getInternals(this).workflowFeedListeners = new Map();
     getInternals(this).workflowVersionTuples = new Map();
@@ -719,11 +707,22 @@ export class Engine<
       renewIntervalMs: internals.options.leaseRenewIntervalMs,
       waitTimeoutMs: internals.options.leaseWaitTimeoutMs,
       onLeaseLost: (reason: LeaseLostReason) => {
+        if (reason === 'deposed') {
+          // A successor stole the lease out from under an otherwise-idle engine.
+          // Step 2 halts: set the deposed flag, warn, and tear down so the engine
+          // stops promptly instead of lingering until its next fenced write fails.
+          handleDeposition(internals);
+          return;
+        }
+        // 'renewal-unconfirmable': a transient storage error left the holder
+        // unable to prove it still holds. This is NOT a confirmed deposition —
+        // halting on a momentary storage blip would be a self-inflicted outage —
+        // so warn only. If the holder really was deposed, the next fenced write
+        // (or a later renewal) detects it and halts then.
         process.emitWarning(
-          `engine ownership lease lost (${reason}); another instance may now own this store. ` +
-            'Weft supports one engine process per store. In this release the lease is a ' +
-            'zero-downtime-deploy aid, not a correctness backstop — keep infrastructure-level ' +
-            'single-instance enforcement as the real control.',
+          'engine ownership lease renewal could not be confirmed (transient storage error); ' +
+            'another instance may take over if this persists. Weft supports one engine process ' +
+            'per store — keep infrastructure-level single-instance enforcement in place.',
           ENGINE_LEASE_LOST_WARNING_NAME,
         );
       },
@@ -1054,6 +1053,11 @@ export class Engine<
     input: unknown,
     options?: StartWorkflowOptions,
   ): Promise<WorkflowHandle> {
+    // Lease-ownership precondition: a new-workflow start must hold the lease (and
+    // have recovered) first. This rejects on the awaited entry — unlike the
+    // fenced-write throw, which the inline strategy swallows. No-op when
+    // ownership is 'none'.
+    assertLeaseHeldForStart(getInternals(this));
     if (options?.idempotencyKey !== undefined) {
       return startWithIdempotencyFromLifecycle(
         getInternals(this),
@@ -1107,6 +1111,9 @@ export class Engine<
     signal: StartOrSignalSignal,
     options?: StartOptions,
   ): Promise<StartOrSignalResult> {
+    // Lease-ownership precondition (same as `start`): startOrSignal may durably
+    // create a fresh run, so it must hold the lease first. No-op for 'none'.
+    assertLeaseHeldForStart(getInternals(this));
     return startOrSignalFromLifecycle(
       getInternals(this),
       type,

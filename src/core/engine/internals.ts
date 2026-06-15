@@ -228,6 +228,18 @@ export interface EngineInternals {
    * than leaking until TTL on an already-disposed engine.
    */
   inFlightLeaseAcquire: Promise<void> | null;
+  /**
+   * Set to `true` the instant this engine is detected as deposed under
+   * `ownership: 'lease'` — either a fenced durable write's CAS failed against a
+   * newer epoch ({@link commitFencedEngineWrite}) or the lease manager reported
+   * `onLeaseLost('deposed')`. It is the synchronous half of the deposition halt:
+   * {@link commitFencedEngineWrite} short-circuits at its top on this flag, so a
+   * write that *starts* after detection is rejected before reaching storage,
+   * while writes already in flight are caught by the epoch CAS itself. Set once
+   * by {@link handleDeposition}, which also warns the operator and schedules a
+   * deferred engine teardown. Always `false` under `ownership: 'none'`.
+   */
+  deposed: boolean;
   reviewCoordinator: ReviewCoordinator;
   reviewWaiters: Map<string, (decision: HumanReviewResult) => void>;
   reviewWaitersByWorkflow: Map<string, TrackedWaiterKeys>;

@@ -1,11 +1,11 @@
 import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
-import {
-  requireStorageCapability,
-  storageConditionalBatch,
-  storageValuesEqual,
-} from '../../../storage/interface.ts';
+import { requireStorageCapability, storageValuesEqual } from '../../../storage/interface.ts';
 import { AtomicStateConflictError } from '../../atomic-state.ts';
 import type { Checkpoint, StartOptions, TimerEntry, WorkflowState } from '../../types.ts';
+import {
+  commitFencedEngineWrite,
+  commitFencedEngineWriteAllowingPreconditionFailure,
+} from '../fenced-write.ts';
 import type { EngineInternals } from '../internals.ts';
 import type { WorkflowConcurrencyStartOperations } from '../workflow-concurrency.ts';
 import { type LifecycleCallbacks, type RegistrationEntry } from './shared.ts';
@@ -60,15 +60,28 @@ async function persistStartBatch(
   startOperations: BatchOperation[],
   conditions: TaggedStartCondition[],
 ): Promise<boolean> {
+  // The start record is engine-generated workflow state — fence it on the lease
+  // epoch (issue #470 Step 2) so a deposed engine cannot plant a phantom run in the
+  // successor's store. Both branches go through the fenced helpers, which append the
+  // epoch condition under `ownership: 'lease'` and are byte-for-byte no-ops under
+  // `ownership: 'none'`.
   if (conditions.length === 0) {
-    await internals.storage.batch(startOperations);
+    await commitFencedEngineWrite(
+      internals,
+      startOperations,
+      [],
+      () => new Error('Workflow start lost its CAS race.'),
+    );
     return true;
   }
   requireStorageCapability(internals.storage, 'conditionalBatch', 'start preconditions');
-  return storageConditionalBatch(
-    internals.storage,
-    conditions.map((entry) => entry.condition),
+  // Preserve the idempotent-start contract: a base-precondition failure returns
+  // `false` (caller resolves to the existing run), while a lost epoch fence is a
+  // hard deposition halt rather than a spurious "run already exists".
+  return commitFencedEngineWriteAllowingPreconditionFailure(
+    internals,
     startOperations,
+    conditions.map((entry) => entry.condition),
   );
 }
 
