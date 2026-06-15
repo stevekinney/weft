@@ -311,10 +311,14 @@ describe("Engine.create({ ownership: 'lease' })", () => {
       // Synchronous dispose while the acquire is parked.
       second[Symbol.dispose]();
 
-      // Give the parked acquire a few macrotasks to observe `stopped`, run its
-      // disposed branch (which throws), and settle the in-flight promise.
-      await new Promise((resolve) => setTimeout(resolve, 30));
+      // Deterministic barrier: await the observable completion (recover settling)
+      // instead of a fixed sleep. Sync dispose stops the manager; the parked acquire
+      // exits on its next `stopped` check and the in-flight promise rejects, settling
+      // recover. Then flush one macrotask so any unhandledRejection notification has
+      // fired before we assert. (No wall-clock sleep — the acquire poll interval is
+      // 1s by default, which a 30ms sleep could never reliably outwait.)
       await recover.catch(() => {});
+      await new Promise((resolve) => setImmediate(resolve));
 
       expect(unhandled).toEqual([]);
     } finally {
@@ -323,6 +327,23 @@ describe("Engine.create({ ownership: 'lease' })", () => {
 
     await first[Symbol.asyncDispose]();
     base[Symbol.dispose]();
+  });
+
+  it('refuses recoverAll() on an already-disposed engine (recovery entry guard)', async () => {
+    // The single closing invariant for the disposal interleavings: recovery never
+    // runs on a torn-down engine. A recoverAll() after dispose throws at the entry,
+    // before any storage recovery work — covering the direct path and (with the
+    // in-flight-acquire await) the concurrent-waiter path uniformly.
+    const storage = new BunSQLiteStorage(':memory:');
+    const engine = await Engine.create({
+      storage,
+      workflows: { ping: pingWorkflow },
+      ownership: 'lease',
+    });
+    await engine[Symbol.asyncDispose]();
+
+    await expect(engine.recoverAll()).rejects.toBeInstanceOf(Error);
+    storage[Symbol.dispose]?.();
   });
 
   it('blocks the second engine until the first releases (zero-overlap handoff)', async () => {

@@ -1538,6 +1538,14 @@ export class Engine<
     // lease is acquired only on the create/recover paths in Step 1. Use
     // `Engine.create` (or call `recoverAll` before accepting traffic) to be safe.
     await this.#acquireLeaseIfConfigured();
+    // Recovery must never run on a torn-down engine. This is the single closing
+    // guard for every disposal interleaving: a direct recoverAll() after dispose, a
+    // concurrent waiter that resumes after `#acquireLeaseIfConfigured` resolved, and
+    // the window where disposal + lease release land between the lease being acquired
+    // and recovery starting. (The lease itself is Step-1 deploy ergonomics, not a
+    // correctness backstop — but running recovery against disposed engine machinery
+    // is a real defect regardless of the lease, so it is gated here at the entry.)
+    if (getInternals(this).disposed) throw new EngineDisposedError();
     // Reload durable async-activity tokens first so a callback that arrives
     // before (or during) workflow replay still resolves a parked activity.
     await recoverPendingAsyncActivities(getInternals(this));
