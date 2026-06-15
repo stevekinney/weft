@@ -2,11 +2,15 @@
  * Lease-fenced single-writer ownership over a shared durable store. This is the
  * opt-in `Engine.create({ ownership: 'lease' })` mechanism — a CORRECTNESS-PATH
  * coordinator, NOT a best-effort smoke alarm like the second-instance detector.
- * Its acquire/renew errors are real, not swallowed: a failed acquire throws and
- * blocks recovery, and a CAS-failed renewal signals that this instance has been
- * deposed. In Step 1 deposition is surfaced through `onLeaseLost` (the engine
- * warns); Step 2 will make it enforceable by fencing every durable write on the
- * lease epoch, so a deposed instance loses the write rather than corrupting state.
+ * Lease outcomes are acted on, never silently dropped, but the channel differs by
+ * phase: a failed acquire THROWS and blocks recovery (corruption fails closed, a
+ * timed-out handoff raises a typed error); a renewal reports loss through
+ * `onLeaseLost` rather than throwing — a CAS-failed renewal means a successor took
+ * the lease ('deposed'), and a transient renewal storage error is tolerated until
+ * the lease is too close to lapsing to prove ownership, at which point it reports
+ * loss ('renewal-unconfirmable'). In Step 1 that loss is observability only (the
+ * engine warns); Step 2 will make it enforceable by fencing every durable write on
+ * the lease epoch, so a deposed instance loses the write rather than corrupting state.
  *
  * **Why a lease.** Weft's supported model is one engine process per durable
  * store. Without a lease, a rolling deploy briefly runs two engines (old draining
@@ -323,7 +327,8 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
   }
 
   async function acquire(): Promise<void> {
-    const deadline = getNow() + waitTimeoutMs;
+    const startedAt = getNow();
+    const deadline = startedAt + waitTimeoutMs;
     let lastHolderId: string | null = null;
     let firstAttempt = true;
     // Bounded wait-for-handoff loop: NOT a retry of a failing operation, so the
@@ -338,7 +343,7 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
       // prior sleep overshot the window, do not poll-and-acquire after it elapsed.
       // (The first iteration always tries once, even with a zero wait window.)
       if (!firstAttempt && getNow() >= deadline) {
-        throw new EngineLeaseAcquisitionTimeoutError(waitTimeoutMs, lastHolderId);
+        throw new EngineLeaseAcquisitionTimeoutError(getNow() - startedAt, lastHolderId);
       }
       firstAttempt = false;
       if (await tryAcquireOnce()) return;
@@ -348,7 +353,7 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
       // Also short-circuit before sleeping so we don't wait out a full poll
       // interval past an already-elapsed deadline.
       if (getNow() >= deadline) {
-        throw new EngineLeaseAcquisitionTimeoutError(waitTimeoutMs, lastHolderId);
+        throw new EngineLeaseAcquisitionTimeoutError(getNow() - startedAt, lastHolderId);
       }
       await delay(acquirePollIntervalMs);
     }

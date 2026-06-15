@@ -423,9 +423,12 @@ export class IdempotencyKeyPurgedError extends WeftError<'IdempotencyKeyPurgedEr
 }
 
 /**
- * Thrown by {@link Engine.create} when `ownership: 'lease'` is configured and the
- * engine cannot acquire the storage lease within the configured wait window —
- * another live instance still holds it. In a rolling deploy this means the
+ * Thrown when `ownership: 'lease'` is configured and the engine cannot acquire the
+ * storage lease within the configured wait window — another live instance still
+ * holds it. Raised from the lease-acquire step, which runs both inside
+ * {@link Engine.create} and at the top of {@link Engine.recoverAll} (so a
+ * `new Engine({ ownership: 'lease' })` + `recoverAll()` boot must handle it too).
+ * In a rolling deploy this means the
  * outgoing instance has not released the lease (or its lease has not yet expired)
  * within `leaseWaitTimeout`; size that window above the outgoing instance's drain
  * time and above the lease TTL so a crash (no clean release) still resolves once
@@ -459,8 +462,11 @@ export class EngineLeaseAcquisitionTimeoutError extends WeftError<'EngineLeaseAc
 }
 
 /**
- * Thrown by {@link Engine.create} when `ownership: 'lease'` is configured but the
- * lease keys in storage are corrupt — the `lease:epoch` high-water mark is present
+ * Thrown when `ownership: 'lease'` is configured but the lease keys in storage are
+ * corrupt. Raised from the lease-acquire step, which runs both inside
+ * {@link Engine.create} and at the top of {@link Engine.recoverAll} (so a
+ * `new Engine({ ownership: 'lease' })` + `recoverAll()` boot must handle it too) —
+ * the `lease:epoch` high-water mark is present
  * but does not decode to a valid epoch, or a holder record exists with no epoch
  * key (which the lease protocol never produces, since `release()` deletes only the
  * holder and never the epoch). The lease epoch is the sole source of truth for the

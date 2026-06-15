@@ -234,6 +234,14 @@ export interface EngineOptions<TServices = unknown> {
    * Requires a storage backend with the `conditionalBatch` capability (every
    * durable recovery backend already provides it).
    *
+   * **Step-1 acquisition boundary.** The lease is acquired on the standard boot
+   * paths — `Engine.create()` and `Engine.recoverAll()` (so `new Engine({ ownership:
+   * 'lease' })` followed by `recoverAll()` acquires it too). It is **not** yet
+   * acquired on a first durable write, so a `new Engine({ ownership: 'lease' })`
+   * that calls `engine.start(...)` *without* ever calling `recoverAll()` will write
+   * without holding the lease. Use `Engine.create()` (or call `recoverAll()` before
+   * accepting traffic) so acquisition runs before any write.
+   *
    * **Lease alone is deploy ergonomics, not a correctness guarantee.** It
    * prevents the *new* instance from recovering early; it does not by itself stop
    * a stalled *old* instance (e.g. a long GC pause past the lease TTL) from

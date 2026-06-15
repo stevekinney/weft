@@ -42,6 +42,7 @@ export {
   AsyncActivityTokenNotFoundError,
   BulkDeleteRequiresTerminalWorkflowsError,
   BulkOperationConfirmationError,
+  ENGINE_LEASE_LOST_WARNING_NAME,
   Engine,
   EngineCreateNameMismatchError,
   EngineDisposedError,

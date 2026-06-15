@@ -325,7 +325,20 @@ export const ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING = Symbol('engineSleepResolv
 /**
  * The `name` of the warning emitted when an `ownership: 'lease'` holder loses its
  * lease while running. A stable, filterable identifier on the `Warning` object —
- * consumers subscribe to the process `warning` event and match `warning.name`.
+ * consumers subscribe to the process `warning` event and match `warning.name`
+ * rather than hardcoding the string.
+ *
+ * @example
+ * ```ts
+ * import { ENGINE_LEASE_LOST_WARNING_NAME } from '@lostgradient/weft';
+ *
+ * process.on('warning', (warning) => {
+ *   if (warning.name === ENGINE_LEASE_LOST_WARNING_NAME) {
+ *     // This engine was deposed — another instance owns the store now.
+ *     // Step out of the way (stop accepting traffic, begin shutdown).
+ *   }
+ * });
+ * ```
  */
 export const ENGINE_LEASE_LOST_WARNING_NAME = 'WeftEngineLeaseLostWarning';
 
@@ -703,8 +716,14 @@ export class Engine<
         );
       },
     });
-    internals.leaseManager = manager;
+    // Assign the manager reference only AFTER a successful acquire. acquire() is
+    // commit-or-throw (corruption throws pre-commit, timeout throws with no commit,
+    // a committed conditionalBatch always returns), so on failure nothing durable
+    // was taken and the field stays null — letting the idempotency guard above
+    // re-attempt acquisition on a later recoverAll() rather than skipping it and
+    // recovering without the lease.
     await manager.acquire();
+    internals.leaseManager = manager;
     manager.startRenewal();
   }
 

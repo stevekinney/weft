@@ -222,7 +222,17 @@ describe('createLeaseManager', () => {
       managerOptions({ storage, getNow: clock.now, holderId: 'engine-b', delay }),
     );
 
-    await expect(challenger.acquire()).rejects.toBeInstanceOf(EngineLeaseAcquisitionTimeoutError);
+    let caught: unknown;
+    try {
+      await challenger.acquire();
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(EngineLeaseAcquisitionTimeoutError);
+    // waitedMs reports the ACTUAL elapsed wait (getNow - startedAt), not the
+    // configured window: the overshooting sleep advanced the clock by WAIT_MS + 1,
+    // so an accurate reading is WAIT_MS + 1 — the old code reported WAIT_MS flat.
+    expect((caught as EngineLeaseAcquisitionTimeoutError).waitedMs).toBe(WAIT_MS + 1);
   });
 
   it('uses the real setTimeout poll when no delay is injected', async () => {

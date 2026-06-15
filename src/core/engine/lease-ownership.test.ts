@@ -95,6 +95,37 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('re-attempts acquisition after a failed acquire (does not get stuck on the idempotency guard)', async () => {
+    // Regression for the assign-after-acquire fix: #acquireLeaseIfConfigured must
+    // assign internals.leaseManager only AFTER a successful acquire. If it assigned
+    // before awaiting acquire(), a thrown acquire would leave the field set, and the
+    // idempotency guard would make the NEXT recoverAll() skip acquisition entirely —
+    // recovering without the lease. So we force the first acquire to throw, then
+    // prove a later recoverAll() actually acquires rather than no-opping.
+    const storage = new BunSQLiteStorage(':memory:');
+    // Seed a corrupt epoch (present but not 8 bytes) so the first acquire fails
+    // closed with EngineLeaseCorruptedError before taking anything durable.
+    await storage.put(KEYS.leaseEpoch(), new Uint8Array([9, 9, 9]));
+
+    const engine = new Engine({ storage, ownership: 'lease' });
+    engine.register(pingWorkflow);
+
+    await expect(engine.recoverAll()).rejects.toBeInstanceOf(Error);
+    // The failed acquire left no manager — the field is null, so a retry re-acquires.
+    expect(getInternals(engine).leaseManager).toBeNull();
+
+    // Repair the corruption (operator action) and recover again. The idempotency
+    // guard must NOT short-circuit — acquisition runs and takes the lease.
+    await storage.delete(KEYS.leaseEpoch());
+    await engine.recoverAll();
+    expect(getInternals(engine).leaseManager).not.toBeNull();
+    expect(await holderEpoch(storage)).toBe(1);
+    expect(await readEpoch(storage)).toBe(1);
+
+    await engine[Symbol.asyncDispose]();
+    storage[Symbol.dispose]?.();
+  });
+
   it('does not touch lease keys for the default ownership posture', async () => {
     const storage = new BunSQLiteStorage(':memory:');
     const engine = await Engine.create({ storage, workflows: { ping: pingWorkflow } });
