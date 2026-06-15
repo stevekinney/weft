@@ -210,6 +210,8 @@ describe('WEFT_RESERVED_KEY_PREFIXES', () => {
       KEYS.workflowVisibilityMetaVersion(),
       KEYS.workflowVisibilityMetaBuiltAt(),
       KEYS.workflowVisibilityMetaCursor(),
+      KEYS.leaseEpoch(),
+      KEYS.leaseHolder(),
     ];
 
     for (const key of representativeKeys) {

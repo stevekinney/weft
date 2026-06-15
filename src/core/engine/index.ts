@@ -620,6 +620,7 @@ export class Engine<
     getInternals(this).secondInstanceDetectionInterval = null;
     getInternals(this).secondInstanceDetector = null;
     getInternals(this).leaseManager = null;
+    getInternals(this).inFlightLeaseAcquire = null;
     getInternals(this).eventLogHeads = new Map();
     getInternals(this).workflowFeedListeners = new Map();
     getInternals(this).workflowVersionTuples = new Map();
@@ -716,15 +717,48 @@ export class Engine<
         );
       },
     });
-    // Assign the manager reference only AFTER a successful acquire. acquire() is
-    // commit-or-throw (corruption throws pre-commit, timeout throws with no commit,
-    // a committed conditionalBatch always returns), so on failure nothing durable
-    // was taken and the field stays null — letting the idempotency guard above
-    // re-attempt acquisition on a later recoverAll() rather than skipping it and
-    // recovering without the lease.
-    await manager.acquire();
+    // Assign the manager BEFORE awaiting acquire(), so a concurrent disposal that
+    // races a parked acquire can still see it: disposeEngine() stops the manager,
+    // and the parked acquire's wait loop exits on its `stopped` check. The lease
+    // lifecycle is a small state machine; each transition is handled explicitly:
+    //
+    //   uninitialized → acquiring : assign manager, set inFlightLeaseAcquire
+    //   acquiring (acquire throws) : null the manager → a later recoverAll() retries
+    //                               (not stuck on the idempotency guard)
+    //   acquiring → disposed       : release the holder we may have just taken and
+    //                               do NOT startRenewal on a dead engine
+    //   acquiring → acquired       : startRenewal
+    //
+    // Disposal awaits `inFlightLeaseAcquire` so an acquire that commits a holder in
+    // the same tick disposal runs is released before asyncDispose resolves (clean
+    // handoff), rather than leaking a holder + heartbeat until TTL.
     internals.leaseManager = manager;
-    manager.startRenewal();
+    const acquisition = (async () => {
+      try {
+        await manager.acquire();
+      } catch (error) {
+        // Nothing durable was taken (acquire is commit-or-throw). Detach so the
+        // idempotency guard does not skip a later retry.
+        if (internals.leaseManager === manager) internals.leaseManager = null;
+        throw error;
+      }
+      if (internals.disposed) {
+        // Disposal raced this parked acquire. We may have just committed a holder;
+        // release it and stay detached — never renew on a disposed engine.
+        await manager.release();
+        if (internals.leaseManager === manager) internals.leaseManager = null;
+        return;
+      }
+      manager.startRenewal();
+    })();
+    internals.inFlightLeaseAcquire = acquisition;
+    try {
+      await acquisition;
+    } finally {
+      if (internals.inFlightLeaseAcquire === acquisition) {
+        internals.inFlightLeaseAcquire = null;
+      }
+    }
   }
 
   #startSecondInstanceDetection(): void {
@@ -1728,11 +1762,19 @@ export class Engine<
         // caller owns the storage lifecycle (`await using storage`), so storage
         // stays open and the awaited release below can still delete the holder.
         disposeEngine(getInternals(this));
+        // A lease acquire may still be parked (waiting for handoff) when disposal
+        // runs. disposeEngine() set `disposed` and stopped the manager, so the
+        // parked acquire's wait loop will exit (or, if it already committed a
+        // holder this tick, its post-acquire `disposed` check releases it). Await
+        // it so that cleanup completes before we resolve — otherwise a holder it
+        // takes could outlive dispose until TTL.
+        await getInternals(this).inFlightLeaseAcquire;
         // Clean deploy handoff: release the ownership lease as the LAST durable
         // action, AFTER queued starts have drained and all write paths are down, so
         // the incoming instance cannot acquire and recover while this one is still
         // writing. Awaiting makes `await using engine` a zero-overlap handoff, and
-        // this is the single release on the async path.
+        // this is the single release on the async path. Idempotent if the parked
+        // acquire's own `disposed`-branch already released.
         await leaseManager?.release();
       }
       return;

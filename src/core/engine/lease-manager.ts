@@ -113,7 +113,13 @@ function decodeHolder(raw: Uint8Array): LeaseHolderRecord | null {
   if (
     typeof holderId !== 'string' ||
     typeof expiresAt !== 'number' ||
-    !Number.isFinite(expiresAt) ||
+    // expiresAt must be a safe, non-negative integer — NOT merely finite. A
+    // corrupt/foreign holder with a huge `expiresAt` (e.g. `1e20`) is finite but
+    // would read as perpetually "live" (`getNow() < expiresAt`) and wedge
+    // acquisition until `leaseWaitTimeout`. Treating it as malformed (→ null)
+    // makes it stealable, the intended best-effort handling of a garbage holder.
+    !Number.isSafeInteger(expiresAt) ||
+    expiresAt < 0 ||
     typeof epoch !== 'number' ||
     !Number.isSafeInteger(epoch) ||
     epoch < 1

@@ -30,7 +30,7 @@ export function resolveOwnershipFields(
   ResolvedOptions,
   'ownershipMode' | 'leaseTtlMs' | 'leaseRenewIntervalMs' | 'leaseWaitTimeoutMs'
 > {
-  const ownershipMode = options?.ownership ?? 'none';
+  const ownershipMode = assertKnownOwnershipMode(options?.ownership ?? 'none');
   if (ownershipMode !== 'lease') {
     return {
       ownershipMode,
@@ -49,6 +49,20 @@ export function resolveOwnershipFields(
     DEFAULT_LEASE_WAIT_TIMEOUT_MS;
   assertLeaseTimingCoherent(leaseTtlMs, leaseRenewIntervalMs, leaseWaitTimeoutMs);
   return { ownershipMode, leaseTtlMs, leaseRenewIntervalMs, leaseWaitTimeoutMs };
+}
+
+/**
+ * Fail fast on an unknown ownership posture rather than silently degrading to
+ * `'none'`. A JS consumer (or a TS `as any`) passing a typo like
+ * `ownership: 'leases'` must not quietly disable boot-time ownership — mirror the
+ * runtime validation other string-union options get in construction. Returns the
+ * value narrowed to the accepted union.
+ */
+function assertKnownOwnershipMode(mode: string): 'none' | 'lease' {
+  if (mode !== 'none' && mode !== 'lease') {
+    throw new Error(`Unknown ownership posture "${String(mode)}". Expected 'none' or 'lease'.`);
+  }
+  return mode;
 }
 
 /**

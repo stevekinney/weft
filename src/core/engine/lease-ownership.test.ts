@@ -178,6 +178,66 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('disposing while a lease acquire is parked leaks no holder and starts no renewal', async () => {
+    // State-machine cell: acquiring → disposed. A second engine's recoverAll()
+    // parks waiting for the lease while the first holds it. If we asyncDispose the
+    // second engine while it is parked, it must (a) leave the first engine's holder
+    // untouched, (b) not start a renewal on the now-disposed engine, and (c) detach
+    // its own lease manager — no durable holder/heartbeat leaking until TTL.
+    const base = new BunSQLiteStorage(':memory:');
+    let holderReads = 0;
+    let signalParked!: () => void;
+    const parked = new Promise<void>((resolve) => {
+      signalParked = resolve;
+    });
+    const storage: Storage = {
+      capabilities: () => base.capabilities(),
+      get: (key) => {
+        if (key === KEYS.leaseHolder()) {
+          holderReads += 1;
+          if (holderReads >= 2) signalParked();
+        }
+        return base.get(key);
+      },
+      put: (key, value) => base.put(key, value),
+      delete: (key) => base.delete(key),
+      scan: (prefix, options) => base.scan(prefix, options),
+      batch: (operations) => base.batch(operations),
+      conditionalBatch: (conditions, operations) => base.conditionalBatch(conditions, operations),
+      [Symbol.dispose]: () => base[Symbol.dispose](),
+    };
+
+    const first = await Engine.create({
+      storage,
+      workflows: { ping: pingWorkflow },
+      ownership: 'lease',
+    });
+    const firstHolder = await readHolder(storage);
+    expect(firstHolder?.epoch).toBe(1);
+
+    // Second engine: construct directly, then recoverAll() parks on the live lease.
+    const second = new Engine({ storage, ownership: 'lease', leaseRenewInterval: '1s' });
+    second.register(pingWorkflow);
+    const secondRecover = second.recoverAll();
+
+    await parked; // the second engine is provably waiting on the lease
+
+    // Dispose the parked second engine. Its parked acquire must observe `stopped`
+    // and exit without taking the holder; recoverAll() then rejects/returns.
+    await second[Symbol.asyncDispose]();
+    await secondRecover.catch(() => {}); // acquire aborted by dispose — ignore outcome
+
+    // The first engine's holder is intact at epoch 1 — the second never stole it.
+    const holderAfter = await readHolder(storage);
+    expect(holderAfter?.holderId).toBe(firstHolder?.holderId);
+    expect(holderAfter?.epoch).toBe(1);
+    // The second engine detached its lease manager (no renewal running on it).
+    expect(getInternals(second).leaseManager).toBeNull();
+
+    await first[Symbol.asyncDispose]();
+    base[Symbol.dispose]();
+  });
+
   it('blocks the second engine until the first releases (zero-overlap handoff)', async () => {
     const base = new BunSQLiteStorage(':memory:');
     // Instrument get() so the test learns, deterministically, when the challenger

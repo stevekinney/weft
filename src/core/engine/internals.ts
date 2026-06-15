@@ -219,6 +219,15 @@ export interface EngineInternals {
    * Step 1; epoch fencing of durable writes (Step 2) is what makes it enforceable.
    */
   leaseManager: LeaseManager | null;
+  /**
+   * The in-flight lease acquisition, or `null` when none is running. Set while
+   * `#acquireLeaseIfConfigured` awaits `acquire()` (which can park for the whole
+   * `leaseWaitTimeout` waiting for a handoff) and cleared when it settles. Disposal
+   * awaits this so a dispose that races a parked acquire is a clean handoff — the
+   * holder this engine may take is released before `asyncDispose` resolves, rather
+   * than leaking until TTL on an already-disposed engine.
+   */
+  inFlightLeaseAcquire: Promise<void> | null;
   reviewCoordinator: ReviewCoordinator;
   reviewWaiters: Map<string, (decision: HumanReviewResult) => void>;
   reviewWaitersByWorkflow: Map<string, TrackedWaiterKeys>;

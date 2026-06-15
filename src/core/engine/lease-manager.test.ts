@@ -555,6 +555,32 @@ describe('createLeaseManager', () => {
     expect(await holderId(storage)).toBe('engine-b');
   });
 
+  it('treats a holder with a non-safe-integer expiresAt as malformed (stealable, not live)', async () => {
+    // A corrupt/foreign holder with a huge finite expiresAt (1e20) must NOT read as
+    // "live" and wedge acquisition until timeout — decodeHolder rejects it (expiresAt
+    // is validated as a safe integer like epoch), so it is stealable.
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    // A valid epoch must accompany it (epoch-absent + holder-present is corruption);
+    // the steal re-acquires at epoch+1 conditioning on the epoch.
+    const epochBytes = new Uint8Array(8);
+    new DataView(epochBytes.buffer).setBigUint64(0, 3n, false);
+    await storage.put(KEYS.leaseEpoch(), epochBytes);
+    await storage.put(
+      KEYS.leaseHolder(),
+      new TextEncoder().encode(JSON.stringify({ holderId: 'ghost', expiresAt: 1e20, epoch: 3 })),
+    );
+
+    const manager = createLeaseManager(
+      managerOptions({ storage, getNow: clock.now, holderId: 'engine-b', waitTimeoutMs: 0 }),
+    );
+    // Acquires immediately (the malformed holder is not live), does not time out.
+    await manager.acquire();
+
+    expect(await holderId(storage)).toBe('engine-b');
+    expect(await readEpoch(storage)).toBe(4);
+  });
+
   it('release awaits an in-flight renewal so the holder is deleted, not stranded', async () => {
     // Regression for the renew×release race: during dispose, teardown stops
     // renewals then releases — but a renewal that began just before stop() can

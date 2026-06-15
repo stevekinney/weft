@@ -156,6 +156,14 @@ describe('resolveEngineOptions', () => {
     expect(resolved.leaseTtlMs).toBe(30_000);
   });
 
+  it('throws on an unknown ownership posture rather than silently disabling it', () => {
+    // A JS consumer (or TS `as any`) passing a typo must fail fast, not quietly
+    // degrade to 'none' and ship without boot-time ownership.
+    expect(() =>
+      resolveEngineOptions(new MemoryStorage(), { ownership: 'leases' as any }, getNow),
+    ).toThrow(/Unknown ownership posture "leases"/);
+  });
+
   it("resolves lease tuning durations when ownership is 'lease'", () => {
     const resolved = resolveEngineOptions(
       new MemoryStorage(),
