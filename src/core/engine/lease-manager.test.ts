@@ -555,6 +555,30 @@ describe('createLeaseManager', () => {
     expect(await holderId(storage)).toBe('engine-b');
   });
 
+  it('fails closed before minting an epoch at the safe-integer ceiling', async () => {
+    // The stored epoch is MAX_SAFE_INTEGER - 1 (still decodable) with no live holder,
+    // so a steal would mint MAX_SAFE_INTEGER — which decodeEpoch rejects on the next
+    // boot (no room to increment), bricking the lease. tryAcquireOnce must fail closed
+    // here (operator repair) rather than write the unrecoverable epoch. Symmetric to
+    // the decode-side ceiling guard.
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const ceilingMinusOne = new Uint8Array(8);
+    new DataView(ceilingMinusOne.buffer).setBigUint64(
+      0,
+      BigInt(Number.MAX_SAFE_INTEGER - 1),
+      false,
+    );
+    await storage.put(KEYS.leaseEpoch(), ceilingMinusOne);
+
+    const manager = createLeaseManager(
+      managerOptions({ storage, getNow: clock.now, holderId: 'engine-b' }),
+    );
+    await expect(manager.acquire()).rejects.toBeInstanceOf(EngineLeaseCorruptedError);
+    // The epoch is untouched — no unrecoverable value was written.
+    expect(await readEpoch(storage)).toBe(Number.MAX_SAFE_INTEGER - 1);
+  });
+
   it('treats a holder with a non-safe-integer expiresAt as malformed (stealable, not live)', async () => {
     // A corrupt/foreign holder with a huge finite expiresAt (1e20) must NOT read as
     // "live" and wedge acquisition until timeout — decodeHolder rejects it (expiresAt

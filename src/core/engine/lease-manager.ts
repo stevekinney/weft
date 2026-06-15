@@ -7,10 +7,9 @@
  * timed-out handoff raises a typed error); a renewal reports loss through
  * `onLeaseLost` rather than throwing — a CAS-failed renewal means a successor took
  * the lease ('deposed'), and a transient renewal storage error is tolerated until
- * the lease is too close to lapsing to prove ownership, at which point it reports
- * loss ('renewal-unconfirmable'). In Step 1 that loss is observability only (the
- * engine warns); Step 2 will make it enforceable by fencing every durable write on
- * the lease epoch, so a deposed instance loses the write rather than corrupting state.
+ * the lease is too close to lapsing to prove ownership ('renewal-unconfirmable').
+ * In Step 1 that loss is observability only (the engine warns); Step 2 will make it
+ * enforceable by fencing every durable write on the lease epoch.
  *
  * **Why a lease.** Weft's supported model is one engine process per durable
  * store. Without a lease, a rolling deploy briefly runs two engines (old draining
@@ -335,6 +334,16 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
     // epoch advances to epoch+1. Condition on the EXACT bytes observed (null =
     // require-absent when genuinely empty, the raw bytes otherwise).
     const nextEpoch = (epoch ?? 0) + 1;
+    // Fail closed before writing an epoch `decodeEpoch` would later reject. It rejects
+    // `>= Number.MAX_SAFE_INTEGER` (no room to increment), so minting at that ceiling
+    // would brick the next boot — operator repair, not an unrecoverable write. The
+    // symmetric guard to the decode-side ceiling; 2^53 transfers away, never reached
+    // in practice.
+    if (nextEpoch >= Number.MAX_SAFE_INTEGER) {
+      throw new EngineLeaseCorruptedError(
+        `the next ownership epoch (${nextEpoch}) is at or above the safe-integer ceiling and cannot be minted without bricking future boots`,
+      );
+    }
     return takeOwnership(epochRaw, holderRaw, nextEpoch);
   }
 
