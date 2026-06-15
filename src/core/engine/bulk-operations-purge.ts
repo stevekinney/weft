@@ -2,6 +2,7 @@ import type { BatchOperation, Storage as WeftStorage } from '../../storage/inter
 import {
   KEYS,
   encodeStorageKeyComponent,
+  storageHas,
   storageKeys,
   tryDecodeStorageKeyComponent,
 } from '../../storage/interface.ts';
@@ -56,7 +57,9 @@ export async function purgeInternal(
       : streamWorkflowStates(internals, filter);
 
   for await (const state of workflowStateStream) {
-    if (!shouldPurgeWorkflowState(internals, state, parameters.expiredOnly, parameters.now)) {
+    if (
+      !(await shouldPurgeWorkflowState(internals, state, parameters.expiredOnly, parameters.now))
+    ) {
       continue;
     }
 
@@ -166,13 +169,22 @@ function resolvePurgeLimit(
   return Math.min(manualLimit, fallbackLimit);
 }
 
-function shouldPurgeWorkflowState(
+async function shouldPurgeWorkflowState(
   internals: EngineInternals,
   state: WorkflowState,
   expiredOnly: boolean,
   now: number,
-): boolean {
+): Promise<boolean> {
   if (!isTerminalWorkflowStatus(state.status)) return false;
+
+  // A workflow that still owes an engine-driven finalizer (#446) must not be
+  // purged: purge deletes the `finalizerState` payload the finalizer needs as its
+  // input, so purging first would silently abandon the teardown of a paid external
+  // resource — the exact leak #446 prevents. The finalizer deletes this marker on
+  // success or when it dead-letters, which is what unblocks purge. The dead-letter
+  // record (`teardownDeadLetter`) is deliberately NOT a gate — it is a terminal
+  // audit trail, not outstanding work, and is excluded from the purge delete-set.
+  if (await storageHas(internals.storage, KEYS.teardownOwed(state.id))) return false;
 
   if (!expiredOnly) return true;
 
@@ -322,6 +334,16 @@ function buildBaseWorkflowDeleteKeys(state: WorkflowState): Set<string> {
     // explicitly, else a purge + id reuse leaves a stale marker that would make
     // recovery re-provision services for a run that never had them.
     KEYS.workflowHasServices(state.id),
+    // The finalizer payload (`wf-finalizer-state:`) and the teardown-owed marker
+    // (`wf-teardown-needed:`) live under their own prefixes, not `wf:{id}:`, so the
+    // prefix sweep below misses them — delete them explicitly. Purge only reaches a
+    // workflow once teardown is done (`shouldPurgeWorkflowState` gates on the owed
+    // marker being absent), so by here these are normally already gone; including
+    // them is the idempotent backstop for any residue. The dead-letter record
+    // (`wf-teardown-deadletter:`) is intentionally NOT listed — it is the durable
+    // operator trail for a leaked resource and must outlive purge.
+    KEYS.finalizerState(state.id),
+    KEYS.teardownOwed(state.id),
     KEYS.attribute(state.id),
     KEYS.terminalWorkflow(state.updatedAt, state.id),
   ]);

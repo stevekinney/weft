@@ -12,6 +12,7 @@ function isTimerEntryKind(value: unknown): value is TimerEntry['kind'] {
     value === 'delayed-start' ||
     value === 'schedule' ||
     value === 'terminal-cleanup' ||
+    value === 'teardown' ||
     value === 'wait-condition'
   );
 }
@@ -55,6 +56,21 @@ export function buildTimerBatchOperations(entry: TimerEntry): BatchOperation[] {
       {
         type: 'put',
         key: KEYS.terminalCleanup(normalizedEntry.fireAt, normalizedEntry.id),
+        value: encode(normalizedEntry.workflowId),
+      },
+    ];
+  }
+
+  if (normalizedEntry.kind === 'teardown') {
+    // Like `terminal-cleanup`, the teardown timer is scanned by its own source
+    // (`wf-teardown:`) which re-derives the `teardown` kind, so the stored value
+    // is just the workflow id — and it gets no `timer-idx:` reverse entry because
+    // teardown is never cancelled out-of-band (reschedule-on-failure rewrites the
+    // entry from inside the drive; success consumes the fired timer).
+    return [
+      {
+        type: 'put',
+        key: KEYS.teardownTimer(normalizedEntry.fireAt, normalizedEntry.id),
         value: encode(normalizedEntry.workflowId),
       },
     ];

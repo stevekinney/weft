@@ -30,7 +30,12 @@ import { getWorkflowExecutionStartedAt } from '../handles.ts';
 import { dropQueuedInlineWorkflowStart } from '../inline-launch-queue.ts';
 import type { EngineInternals } from '../internals.ts';
 import { EMPTY_STORAGE_VALUE } from '../lifecycle.ts';
-import { createTerminalCleanupTimerId, summarizeTimelineValue } from '../state-utilities.ts';
+import {
+  createTeardownTimerId,
+  createTerminalCleanupTimerId,
+  summarizeTimelineValue,
+  type TeardownClaim,
+} from '../state-utilities.ts';
 import { releaseWorkflowConcurrencySlot } from '../workflow-concurrency.ts';
 import { buildWorkflowVisibilityIndexTransition } from '../workflow-indexes.ts';
 import {
@@ -101,6 +106,12 @@ export async function terminateWorkflow(
     const attributes = attributeBytes
       ? (decode(attributeBytes) as Record<string, SearchAttributeValue>)
       : {};
+    // A finalizer is only owed when the workflow recorded resource state
+    // (`ctx.setFinalizerState`) before terminating — read presence up front,
+    // alongside the attribute read, so the terminal batch can stage the marker
+    // and teardown timer atomically. Absent state means no resource to destroy.
+    const finalizerStatePresent =
+      (await internals.storage.get(KEYS.finalizerState(workflowId))) !== null;
     const retainedAttributes = buildRetainedTerminalSearchAttributes(attributes);
     const terminationMessage = status === 'timed-out' ? 'Workflow timed out' : 'Workflow cancelled';
     const terminationResult = await updateWorkflowState(
@@ -118,7 +129,7 @@ export async function terminateWorkflow(
         // above is a no-op for a suspended run (controller evicted at suspend), so
         // cancel runs the registered handlers without driving the gone generator.
         allowedStatuses: FORCIBLY_TERMINABLE_STATUSES,
-        buildAdditionalOperations: (_previousState, updatedAt) => {
+        buildAdditionalOperations: (previousState, updatedAt) => {
           finalizePendingTimelineEntry(
             internals,
             workflowId,
@@ -138,6 +149,18 @@ export async function terminateWorkflow(
                   terminalCleanupToken,
                 )
               : []),
+            // Stage the durable teardown marker + timer atomically with the
+            // terminal transition (#446 Phase 2). Only when this workflow type
+            // declares a `finalizer` AND a resource was recorded — otherwise no
+            // cost is added. The marker carries the execution claim, fenced on the
+            // lease epoch by the enclosing terminal batch.
+            ...buildTeardownOperations(
+              internals,
+              workflowId,
+              previousState.type,
+              finalizerStatePresent,
+              updatedAt,
+            ),
           ];
         },
       },
@@ -477,6 +500,46 @@ export function buildTerminalCleanupTimerOperations(
     fireAt: terminalizedAt + TERMINAL_CLEANUP_DELAY_MS,
     kind: 'terminal-cleanup',
   });
+}
+
+/**
+ * Stage the durable teardown marker + timer for the terminal batch (#446 Phase 2).
+ * Returns no operations unless the workflow type declares a `finalizer` AND a
+ * resource was recorded via `ctx.setFinalizerState` (so a workflow with no
+ * finalizer, or one that never recorded state, pays nothing). The durable
+ * `teardownOwed` marker rides this same terminal batch as the finalizer state, so
+ * the synchronous terminal cleanup that runs later in this call — and any cleanup
+ * after a crash/recover — reads the committed marker to skip sweeping the
+ * finalizer-needed keys while teardown is outstanding. The timer fires immediately
+ * (`fireAt = terminalizedAt`) because a paid external resource should be destroyed
+ * now, not after a delay.
+ */
+function buildTeardownOperations(
+  internals: EngineInternals,
+  workflowId: string,
+  workflowType: string,
+  finalizerStatePresent: boolean,
+  terminalizedAt: number,
+): BatchOperation[] {
+  if (
+    !finalizerStatePresent ||
+    internals.registrations.get(workflowType)?.finalizer === undefined
+  ) {
+    return [];
+  }
+
+  const token = crypto.randomUUID();
+  const claim: TeardownClaim = { status: 'owed', attempts: 0, token };
+
+  return [
+    { type: 'put', key: KEYS.teardownOwed(workflowId), value: encode(claim) },
+    ...buildTimerBatchOperations({
+      id: createTeardownTimerId(token),
+      workflowId,
+      fireAt: terminalizedAt,
+      kind: 'teardown',
+    }),
+  ];
 }
 
 export async function ensureTerminalCleanupTracked(

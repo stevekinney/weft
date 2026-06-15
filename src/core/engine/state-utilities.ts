@@ -26,6 +26,65 @@ const PRESERVE_OUTPUT_TERMINAL_CLEANUP_TIMER_PREFIX = 'terminal-cleanup:preserve
 
 const FULL_TERMINAL_CLEANUP_TIMER_PREFIX = 'terminal-cleanup:full:';
 
+const TEARDOWN_TIMER_PREFIX = 'teardown:';
+
+/**
+ * Durable execution-claim record stored at {@link KEYS.teardownOwed} for a workflow
+ * that owes an engine-driven finalizer run (issue #446 Phase 2). A holder fenced-CAS's
+ * it from `'owed'` to `'running'` before invoking the finalizer, then back to `'owed'`
+ * (with `attempts` bumped) on a retryable failure, or deletes it on success/dead-letter.
+ *
+ * Liveness is decided by TIME, not by an in-memory set or a lease epoch: a `'running'`
+ * claim is reclaimable once `claimedAt` is older than the stale threshold (the
+ * finalizer's per-attempt timeout plus a margin — see `teardownStaleThresholdMs`). This
+ * makes crash recovery an ordinary stale-claim retry with no special re-hydration: a
+ * fresh process simply re-fires the surviving timer and reclaims the stale `'running'`
+ * marker. The cost is that a finalizer running past the threshold may be re-driven
+ * concurrently, which is why workflow finalizers must be idempotent.
+ *
+ * - `status`: `'owed'` until claimed, `'running'` while a holder is executing it.
+ * - `attempts`: count of finalizer attempts so far (`0` until the first claim).
+ * - `token`: ties the marker to its `wf-teardown:` timer so a stale timer for a
+ *   re-armed (different-token) claim cannot drive it.
+ * - `claimedAt`: engine clock at the `owed → running` transition; `undefined` while
+ *   `'owed'`. Drives the time-based reclaim of an abandoned `'running'` claim.
+ */
+export type TeardownClaim = {
+  status: 'owed' | 'running';
+  attempts: number;
+  token: string;
+  claimedAt?: number;
+};
+
+/** Build the durable teardown timer id from its claim token (parsed by {@link parseTeardownTimerId}). */
+export function createTeardownTimerId(token: string): string {
+  return `${TEARDOWN_TIMER_PREFIX}${token}`;
+}
+
+/** Recover the claim token from a teardown timer id, or `null` when the id is malformed. */
+export function parseTeardownTimerId(timerId: string): string | null {
+  if (!timerId.startsWith(TEARDOWN_TIMER_PREFIX)) {
+    return null;
+  }
+  const token = timerId.slice(TEARDOWN_TIMER_PREFIX.length);
+  return token.length === 0 ? null : token;
+}
+
+/** Runtime type guard for a decoded {@link TeardownClaim} read back from storage. */
+export function isTeardownClaim(value: unknown): value is TeardownClaim {
+  if (typeof value !== 'object' || value === null) {
+    return false;
+  }
+  const candidate = value as Record<string, unknown>;
+  const claimedAt = candidate['claimedAt'];
+  return (
+    (candidate['status'] === 'owed' || candidate['status'] === 'running') &&
+    typeof candidate['attempts'] === 'number' &&
+    typeof candidate['token'] === 'string' &&
+    (claimedAt === undefined || typeof claimedAt === 'number')
+  );
+}
+
 type PaginationFilter = {
   limit?: number;
   offset?: number;

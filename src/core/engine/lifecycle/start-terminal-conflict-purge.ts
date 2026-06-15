@@ -1,12 +1,12 @@
 import type { BatchOperation } from '../../../storage/interface.ts';
-import { KEYS } from '../../../storage/interface.ts';
+import { KEYS, storageHas } from '../../../storage/interface.ts';
 import type { StartWorkflowOptions, WorkflowState } from '../../types.ts';
 import {
   clearPurgedWorkflowInMemoryState,
   collectWorkflowPurgeDeleteOperations,
   type CleanupWaiters,
 } from '../bulk-operations-purge.ts';
-import { WorkflowAlreadyExistsError } from '../errors.ts';
+import { WorkflowAlreadyExistsError, WorkflowTeardownPendingError } from '../errors.ts';
 import type { EngineInternals } from '../internals.ts';
 import { cleanupWaiters } from '../termination/cleanup.ts';
 import { decodeWorkflowState, isTerminalWorkflowStatus } from '../validation.ts';
@@ -28,6 +28,10 @@ import { type LifecycleCallbacks } from './shared.ts';
  *   throwing) leaves the prior terminal run intact.
  * - `'start-new'` on a **non-terminal** run: throw
  *   {@link WorkflowAlreadyExistsError} — `'start-new'` never displaces a live run.
+ * - `'start-new'` on a **terminal** run that still owes a finalizer (#446): throw
+ *   {@link WorkflowTeardownPendingError} (transient). The displacing purge would
+ *   delete the finalizer payload before the resource is torn down, leaking it, so
+ *   the restart is refused until teardown settles (which clears the marker).
  *
  * Returns `null` when there is no existing record (the create proceeds normally).
  */
@@ -46,6 +50,9 @@ export async function resolveTerminalConflictForRestart(
   const existingState = decodeWorkflowState(existingBytes);
   if (!isTerminalWorkflowStatus(existingState.status)) {
     throw new WorkflowAlreadyExistsError(workflowId);
+  }
+  if (await storageHas(internals.storage, KEYS.teardownOwed(workflowId))) {
+    throw new WorkflowTeardownPendingError(workflowId);
   }
   return existingState;
 }

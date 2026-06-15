@@ -301,3 +301,71 @@ export class WorkflowRecoverySkippedEvent extends Event {
     this.reason = reason;
   }
 }
+
+/**
+ * The lifecycle stage a {@link WorkflowTeardownEvent} reports for a workflow's
+ * definition-level `finalizer` (issue #446):
+ *
+ * - `'completed'`: the finalizer succeeded — the external resource recorded via
+ *   `ctx.setFinalizerState` has been torn down.
+ * - `'failed'`: a single attempt failed; the engine backs off and re-fires unless the
+ *   dead-letter horizon is reached. Per-attempt observability — fires on every retry.
+ * - `'dead-lettered'`: the retry horizon was reached without success; the external
+ *   resource may be leaked. The durable record is `KEYS.teardownDeadLetter`, which
+ *   survives purge so the leak is auditable after the workflow record is gone.
+ *
+ * @example
+ * ```ts
+ * import type { WorkflowTeardownStatus } from '@lostgradient/weft';
+ *
+ * const status: WorkflowTeardownStatus = 'dead-lettered';
+ * void status;
+ * ```
+ */
+export type WorkflowTeardownStatus = 'completed' | 'failed' | 'dead-lettered';
+
+/**
+ * Fired on the {@link Engine} as a workflow's definition-level `finalizer` progresses
+ * through teardown after a `cancelled`/`timed-out` terminal (issue #446). One event
+ * type carries the stage in `status`; `attempts` is the attempt count; `error` is the
+ * failure message on `'failed'`/`'dead-lettered'` (absent on `'completed'`). Fields are
+ * low-cardinality so the event stream stays bounded. Keep `'failed'` listeners
+ * side-effect-light — they fire on every retry.
+ *
+ * @example
+ * ```ts
+ * import { Engine, WorkflowTeardownEvent } from '@lostgradient/weft';
+ *
+ * const engine = new Engine();
+ * engine.addEventListener(WorkflowTeardownEvent.type, (event) => {
+ *   if (event.status === 'dead-lettered') {
+ *     console.error('LEAKED resource: teardown for', event.workflowId, 'gave up after', event.attempts);
+ *   } else {
+ *     console.log('teardown', event.status, 'for', event.workflowId, 'attempt', event.attempts);
+ *   }
+ * });
+ * ```
+ */
+export class WorkflowTeardownEvent extends Event {
+  static readonly type = 'workflow:teardown' as const;
+  readonly workflowId: string;
+  readonly workflowType: string;
+  readonly status: WorkflowTeardownStatus;
+  readonly attempts: number;
+  readonly error: string | undefined;
+
+  constructor(
+    workflowId: string,
+    workflowType: string,
+    status: WorkflowTeardownStatus,
+    attempts: number,
+    error?: string,
+  ) {
+    super(WorkflowTeardownEvent.type);
+    this.workflowId = workflowId;
+    this.workflowType = workflowType;
+    this.status = status;
+    this.attempts = attempts;
+    this.error = error;
+  }
+}

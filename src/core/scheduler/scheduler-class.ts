@@ -7,6 +7,7 @@ import type { ScannedTimerEntry, TimerSource } from './timer-sources.ts';
 import {
   advanceTimerSource,
   readNextScannedTimerEntry,
+  readNextTeardownTimerEntry,
   readNextTerminalCleanupTimerEntry,
   selectNextTimerSource,
   shouldDeleteTimerIndexWithoutLookup,
@@ -24,6 +25,7 @@ type TimerScanIterators = {
   delayedStart: AsyncIterable<[string, Uint8Array]>;
   schedule: AsyncIterable<[string, Uint8Array]>;
   terminalCleanup: AsyncIterable<[string, Uint8Array]>;
+  teardown: AsyncIterable<[string, Uint8Array]>;
 };
 
 type TimerProcessingResult = 'processed' | 'retry';
@@ -194,6 +196,10 @@ export class Scheduler implements Disposable {
         lt: resolvePrefixRangeEnd(KEYS.terminalCleanup(currentTime, '')),
         limit: EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE,
       }),
+      teardown: this.#storage.scan('wf-teardown:', {
+        lt: resolvePrefixRangeEnd(KEYS.teardownTimer(currentTime, '')),
+        limit: EXPIRED_TIMER_SCAN_LIMIT_PER_SOURCE,
+      }),
     };
   }
 
@@ -218,6 +224,11 @@ export class Scheduler implements Disposable {
         iterator: iterators.terminalCleanup[Symbol.asyncIterator](),
         next: null as ScannedTimerEntry | null,
         readNext: readNextTerminalCleanupTimerEntry,
+      },
+      {
+        iterator: iterators.teardown[Symbol.asyncIterator](),
+        next: null as ScannedTimerEntry | null,
+        readNext: readNextTeardownTimerEntry,
       },
     ] satisfies TimerSource[];
   }

@@ -30,4 +30,10 @@ export {
   terminateWorkflow,
   timeoutWorkflow,
 } from './termination/complete.ts';
+export {
+  runWorkflowFinalizer,
+  teardownStaleThresholdMs,
+  type FinalizerDriveCallbacks,
+  type TeardownDeadLetterRecord,
+} from './termination/finalizer.ts';
 export { suspendWorkflow } from './termination/suspend.ts';

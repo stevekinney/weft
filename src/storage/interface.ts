@@ -575,6 +575,16 @@ export const KEYS = {
     `wf-deadline:${formatSortableTimestamp(deadline)}:${encodeStorageKeyComponent(workflowId)}`,
   terminalCleanup: (fireAt: number, timerId: string) =>
     `wf-cleanup:${formatSortableTimestamp(fireAt)}:${encodeStorageKeyComponent(timerId)}`,
+  /**
+   * Durable timer that drives a workflow's finalizer after a `cancelled`/`timed-out`
+   * terminal (issue #446 Phase 2). Sortable by `fireAt` and scanned by its own
+   * source (`wf-teardown:`) so it dispatches as the `teardown` timer kind rather
+   * than `terminal-cleanup`. Re-armed with exponential backoff on a failed finalizer
+   * attempt; the scheduler deletes the fired entry after the drive returns without
+   * throwing, so a backoff reschedule is a write of a new entry at the later `fireAt`.
+   */
+  teardownTimer: (fireAt: number, timerId: string) =>
+    `wf-teardown:${formatSortableTimestamp(fireAt)}:${encodeStorageKeyComponent(timerId)}`,
   delayedStart: (startAt: number, workflowId: string) =>
     `wf-delayed:${formatSortableTimestamp(startAt)}:${encodeStorageKeyComponent(workflowId)}`,
   terminalWorkflowPrefix: () => 'wf-terminal:',
@@ -681,6 +691,35 @@ export const KEYS = {
    */
   finalizerState: (workflowId: string) =>
     `wf-finalizer-state:${encodeStorageKeyComponent(workflowId)}`,
+  /**
+   * Durable execution-claim + attempt marker for a workflow that owes a finalizer
+   * run after a `cancelled`/`timed-out` terminal (issue #446 Phase 2). Mirrors the
+   * `wf-cleanup-needed:` lifecycle. The value is the encoded claim record
+   * `{ status: 'owed' | 'running'; attempts: number; token: string; claimedAt?: number }`:
+   * the engine fenced-CAS's `owed → running` (stamping `claimedAt`) before invoking the
+   * finalizer, and settle-CAS's the exact `running` bytes it wrote when clearing or
+   * rescheduling. Liveness is decided purely by TIME: a `running` claim is reclaimable
+   * once `claimedAt` is older than the finalizer's per-attempt timeout plus a margin
+   * (see `teardownStaleThresholdMs`), so crash recovery is an ordinary stale-claim retry
+   * driven by the timer that survived the terminal batch — there is no in-memory liveness
+   * set and no epoch in the record. The cost is that a finalizer running past the stale
+   * threshold may be re-driven concurrently, which is why workflow finalizers must be
+   * idempotent. Present while teardown is outstanding; deleted by the finalizer on
+   * success or when it dead-letters, which is what unblocks purge.
+   */
+  teardownOwed: (workflowId: string) =>
+    `wf-teardown-needed:${encodeStorageKeyComponent(workflowId)}`,
+  /**
+   * Durable audit record written when a workflow's finalizer permanently fails — the
+   * retry horizon is reached, or the recorded resource state vanished so the finalizer
+   * can never run (issue #446 Phase 2). Holds the `TeardownDeadLetterRecord` shape
+   * `{ type, lastError, attempts, deadLetteredAt, finalizerInput? }`. **Excluded from
+   * the workflow purge delete-set** so it survives as the operator's evidence of a
+   * leaked external resource — in-process `WorkflowTeardownEvent`s are not durable, so
+   * raw inspection of this key is the supported operator surface after purge.
+   */
+  teardownDeadLetter: (workflowId: string) =>
+    `wf-teardown-deadletter:${encodeStorageKeyComponent(workflowId)}`,
   offload: (workflowId: string, key: string) =>
     `offload:${encodeStorageKeyComponent(workflowId)}:${key}`,
   archive: (workflowId: string, key: string) =>

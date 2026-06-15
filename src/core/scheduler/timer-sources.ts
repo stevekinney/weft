@@ -94,6 +94,49 @@ export async function readNextTerminalCleanupTimerEntry(
   }
 }
 
+export async function readNextTeardownTimerEntry(
+  iterator: AsyncIterator<[string, Uint8Array]>,
+  storage: Storage,
+): Promise<ScannedTimerEntry | null> {
+  const prefix = 'wf-teardown:';
+
+  while (true) {
+    const next = await iterator.next();
+    if (next.done) {
+      return null;
+    }
+
+    const [key, value] = next.value;
+    const separatorIndex = key.indexOf(':', prefix.length);
+    const fireAtValue =
+      separatorIndex === -1 ? Number.NaN : Number(key.slice(prefix.length, separatorIndex));
+    const timerId =
+      separatorIndex === -1 ? null : tryDecodeStorageKeyComponent(key.slice(separatorIndex + 1));
+    const decodedWorkflowId = decode(value);
+
+    if (
+      !Number.isSafeInteger(fireAtValue) ||
+      fireAtValue < 0 ||
+      timerId === null ||
+      typeof decodedWorkflowId !== 'string'
+    ) {
+      console.error(`Corrupted teardown timer entry at ${key}: removing`);
+      await storage.delete(key);
+      continue;
+    }
+
+    return {
+      key,
+      entry: {
+        id: timerId,
+        workflowId: decodedWorkflowId,
+        fireAt: fireAtValue,
+        kind: 'teardown',
+      },
+    };
+  }
+}
+
 export async function advanceTimerSource(
   timerSource: TimerSource,
   storage: Storage,
@@ -121,5 +164,7 @@ export function selectNextTimerSource(timerSources: TimerSource[]): TimerSource 
 }
 
 export function shouldDeleteTimerIndexWithoutLookup(entry: TimerEntry): boolean {
-  return entry.kind !== 'schedule' && entry.kind !== 'terminal-cleanup';
+  return (
+    entry.kind !== 'schedule' && entry.kind !== 'terminal-cleanup' && entry.kind !== 'teardown'
+  );
 }

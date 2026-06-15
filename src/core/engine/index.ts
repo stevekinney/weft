@@ -291,6 +291,7 @@ export {
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
   WorkflowSuspendNotSupportedError,
+  WorkflowTeardownPendingError,
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './errors.ts';
 export { HANDLE_RESULT_PROMISE, WorkflowHandle } from './handles.ts';

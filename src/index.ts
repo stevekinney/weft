@@ -59,6 +59,7 @@ export {
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
   WorkflowSuspendNotSupportedError,
+  WorkflowTeardownPendingError,
   WorkflowTypeNotRegisteredForRecoveryError,
 } from './core/engine';
 export type { EngineCreateOptions, EngineStateNamespace, RecoverAllOptions } from './core/engine';
@@ -245,9 +246,15 @@ export {
   WorkflowResumedEvent,
   WorkflowStartedEvent,
   WorkflowSuspendedEvent,
+  WorkflowTeardownEvent,
   WorkflowTimedOutEvent,
 } from './core/events';
-export type { TypedEventTarget, WeftEventMap, WorkflowRecoverySkippedReason } from './core/events';
+export type {
+  TypedEventTarget,
+  WeftEventMap,
+  WorkflowRecoverySkippedReason,
+  WorkflowTeardownStatus,
+} from './core/events';
 // Runtime — portable helpers for cross-runtime code
 export { detectRuntime, hashBytes, hashString, sleep } from './runtime/portable';
 export type { RuntimeKind } from './runtime/portable';

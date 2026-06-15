@@ -4,9 +4,11 @@
 
 import { describe, expect, it } from 'bun:test';
 
+import { encode } from '../../core/codec.ts';
 import type { Engine } from '../../core/engine.ts';
 import type { WorkflowContext } from '../../core/types.ts';
 import { workflow } from '../../core/types.ts';
+import { KEYS } from '../../storage/interface.ts';
 import { handleRequest } from '../handler.ts';
 import { createJsonRequest } from '../http-request.test-support.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
@@ -110,6 +112,48 @@ describe('weft.workflows.bulk.delete', () => {
     });
     expect(await engine.get('bulk-delete-selected-a')).toBeNull();
     expect(await engine.get('bulk-delete-selected-b')).toBeNull();
+  });
+
+  it('surfaces skippedTeardownPending in the transport response (#446 cross-transport parity)', async () => {
+    // A workflow that owes a finalizer teardown must be SKIPPED by bulk delete, and the
+    // skip must be VISIBLE on the wire (not silent) so an operator does not assume the
+    // run was deleted. `weft.workflows.bulk.delete` shapes the engine result through
+    // `shapeBulkJsonSuccess` (a transparent JSON.stringify over `z.unknown()`), so the
+    // engine's `skippedTeardownPending` field reaches REST and JSON-RPC identically.
+    // (junior MF4.) We seed the durable `owed` marker directly — the finalizer mechanics
+    // themselves are covered in finalizer-teardown.test.ts.
+    using engine = createEngine();
+
+    const handle = await engine.start('echo', 'owes-teardown', {
+      id: 'bulk-delete-teardown-owed',
+      tags: ['selected'],
+    });
+    await handle.result();
+    // Mark the (terminal) workflow as owing a finalizer teardown.
+    await engine.storage.put(
+      KEYS.teardownOwed('bulk-delete-teardown-owed'),
+      encode({ status: 'owed', attempts: 0, token: 'tok-parity' }),
+    );
+
+    const previewResponse = await handleRequest(
+      request({ filter: { tags: ['selected'] }, dryRun: true }),
+      engine,
+      bulkAdminHandlerOptions(),
+    );
+    const preview = await previewResponse.json();
+
+    const response = await handleRequest(
+      request({ filter: { tags: ['selected'] }, confirmationToken: preview.confirmationToken }),
+      engine,
+      bulkAdminHandlerOptions(),
+    );
+
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    // The teardown-owing workflow was skipped and reported on the wire; nothing deleted.
+    expect(body.deleted).toBe(0);
+    expect(body.skippedTeardownPending).toEqual(['bulk-delete-teardown-owed']);
+    expect(await engine.get('bulk-delete-teardown-owed')).not.toBeNull();
   });
 
   it('requires a confirmation token before deleting matching terminal workflows', async () => {

@@ -1446,6 +1446,18 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     ['src/core/engine/schedule-timer.ts', { lines: new Set([25, 33]) }],
     ['src/core/engine/storage-io.ts', { functions: 1, lines: new Set([65]) }],
     ['src/core/engine/termination/complete.ts', { lines: new Set([416]) }],
+    // The one `() => new Error('teardown self-heal re-arm lost the lease fence')` factory
+    // the finalizer claim layer passes to `commitFencedEngineWrite` in `rearmTeardownTimer`.
+    // It is invoked ONLY on a same-epoch lost CAS race, which `commitFencedEngineWrite`
+    // cannot produce under `ownership: 'none'` (the test default — no epoch condition, so
+    // the plain batch never "loses") with empty base conditions. Covering it needs lease
+    // mode plus an injected storage that fails the conditional batch mid-drive; the same
+    // genuinely-unreachable lost-fence factories at sibling fence sites carry the same
+    // allowance. The behavior it guards (re-drive on the next timer) is covered end-to-end
+    // by the crash-recovery test. Every OTHER marker mutation here is a precondition-failure
+    // path (no `onLostRace` factory), so this is the only uncovered function; the drive
+    // module `finalizer.ts` is fully covered (it no longer issues fenced writes).
+    ['src/core/engine/termination/finalizer-claim.ts', { functions: 1 }],
     ['src/core/engine/validation.ts', { lines: new Set([117]) }],
     ['src/core/engine/workflow-indexes.ts', { functions: 1, lines: new Set([44, 45, 46, 47, 48]) }],
     ['src/core/engine/workflow-state-stream.ts', { lines: new Set([114, 134]) }],

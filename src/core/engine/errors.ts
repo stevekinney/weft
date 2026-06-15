@@ -34,6 +34,38 @@ export class WorkflowAlreadyExistsError extends WeftError<'WorkflowAlreadyExists
 }
 
 /**
+ * Thrown by {@link Engine.start} with `onTerminalConflict: 'start-new'` when the
+ * prior terminal run under the requested id still owes an engine-driven finalizer
+ * (issue #446). Unlike {@link WorkflowAlreadyExistsError}, this is **transient**:
+ * the restart is refused only so the displacing purge cannot delete the finalizer
+ * payload before the resource is torn down. Once the finalizer completes (or
+ * permanently dead-letters), the marker clears and the same restart succeeds — so a
+ * caller should retry after a short delay rather than treat the id as permanently
+ * taken.
+ *
+ * @example
+ * ```ts
+ * import { WorkflowTeardownPendingError } from '@lostgradient/weft';
+ *
+ * function shouldRetryRestartLater(error: unknown): boolean {
+ *   return error instanceof WorkflowTeardownPendingError;
+ * }
+ * ```
+ */
+export class WorkflowTeardownPendingError extends WeftError<'WorkflowTeardownPendingError'> {
+  readonly workflowId: string;
+
+  constructor(workflowId: string) {
+    super(
+      'WorkflowTeardownPendingError',
+      `Cannot restart workflow "${workflowId}" under the same id: its prior run is tearing down a ` +
+        `resource (finalizer in progress). Retry after the teardown completes.`,
+    );
+    this.workflowId = workflowId;
+  }
+}
+
+/**
  * Thrown by {@link Engine.deleteAll} when the supplied filter would match
  * non-terminal workflows. Narrow the filter to completed, failed, cancelled,
  * or timed-out workflows before deleting in bulk.

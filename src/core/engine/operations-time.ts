@@ -42,6 +42,7 @@ export type TimeOperationCallbacks = {
     fieldName: 'options.executionTimeout' | 'options.startAfter',
   ) => number;
   runDeferredTerminalCleanup: (workflowId: string, timerId: string) => Promise<void>;
+  runWorkflowFinalizer: (workflowId: string, timerId: string) => Promise<void>;
   handleScheduleTimer: (entry: TimerEntry) => Promise<void>;
   timeout: (workflowId: string) => Promise<void>;
   handleCleanupError: (source: string, error: unknown, workflowId: string) => void;
@@ -314,6 +315,7 @@ export async function handleTimerFired(
     | 'loadWorkflowStartHeaders'
     | 'loadWorkflowState'
     | 'runDeferredTerminalCleanup'
+    | 'runWorkflowFinalizer'
     | 'runSerializedWorkflowStateWrite'
     | 'handleScheduleTimer'
     | 'setWorkflowStartHeaders'
@@ -335,6 +337,11 @@ export async function handleTimerFired(
 
   if (entry.kind === 'terminal-cleanup') {
     await callbacks.runDeferredTerminalCleanup(entry.workflowId, entry.id);
+    return;
+  }
+
+  if (entry.kind === 'teardown') {
+    await callbacks.runWorkflowFinalizer(entry.workflowId, entry.id);
     return;
   }
 

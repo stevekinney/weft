@@ -56,5 +56,8 @@ export const WEFT_RESERVED_KEY_PREFIXES = [
   'wf-has-services:',
   'wf-headers:',
   'wf-idx-',
+  'wf-teardown:',
+  'wf-teardown-deadletter:',
+  'wf-teardown-needed:',
   'wf-terminal:',
 ] as const;

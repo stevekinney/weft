@@ -241,6 +241,7 @@ export interface TimerEntry {
     | 'delayed-start'
     | 'schedule'
     | 'terminal-cleanup'
+    | 'teardown'
     | 'wait-condition';
   executionTimeoutMs?: number;
 }

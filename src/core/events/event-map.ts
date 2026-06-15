@@ -28,6 +28,7 @@ import type {
   WorkflowResumedEvent,
   WorkflowStartedEvent,
   WorkflowSuspendedEvent,
+  WorkflowTeardownEvent,
   WorkflowTimedOutEvent,
 } from './workflow-events.ts';
 
@@ -58,6 +59,7 @@ export type WeftEventMap = {
   'workflow:resumed': WorkflowResumedEvent;
   'workflow:suspended': WorkflowSuspendedEvent;
   'workflow:recovery-skipped': WorkflowRecoverySkippedEvent;
+  'workflow:teardown': WorkflowTeardownEvent;
   'activity:started': ActivityStartedEvent;
   'activity:completed': ActivityCompletedEvent;
   'activity:failed': ActivityFailedEvent;

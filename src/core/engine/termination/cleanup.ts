@@ -1,5 +1,5 @@
 import type { BatchOperation } from '../../../storage/interface.ts';
-import { KEYS, encodeStorageKeyComponent } from '../../../storage/interface.ts';
+import { KEYS, encodeStorageKeyComponent, storageHas } from '../../../storage/interface.ts';
 import { CleanupWarningEvent } from '../../events.ts';
 import type { WorkflowState, WorkflowStatus } from '../../types.ts';
 import { asyncActivityWorkflowPrefix } from '../async-activity-completion.ts';
@@ -301,10 +301,17 @@ export async function cleanupWorkflowStorage(
   await internals.storage.delete(KEYS.workflowHasServices(workflowId));
   // The finalizer-state payload (#446) is per-run bookkeeping written by
   // `ctx.setFinalizerState`. A completed/failed workflow never runs its finalizer,
-  // so the recorded value would otherwise leak permanently — sweep it here. (When
-  // the cancellation-teardown drive lands, a cancel/timeout finalizer clears this
-  // key itself on success; the deferred terminal-cleanup sweep is the backstop.)
-  await internals.storage.delete(KEYS.finalizerState(workflowId));
+  // so the recorded value would otherwise leak permanently — sweep it here. But a
+  // cancelled/timed-out workflow that owes an engine-driven finalizer still needs
+  // this key as the finalizer's input: skip the sweep while teardown is outstanding
+  // (the finalizer clears it on success, or its dead-letter path deletes it). The
+  // gate reads the DURABLE owed-marker rather than in-process tracking, so it stays
+  // correct after a crash/recover — the marker rides the same terminal batch as the
+  // finalizer state, and `recoverAll` never resumes a terminal workflow, so there is
+  // no in-memory state to re-hydrate that an empty boot could lose.
+  if (!(await storageHas(internals.storage, KEYS.teardownOwed(workflowId)))) {
+    await internals.storage.delete(KEYS.finalizerState(workflowId));
+  }
 
   // Use the storage adapter's native prefix deletion when available
   // (e.g., BunSQLiteStorage's prepared DELETE...WHERE key >= ? AND key < ?).
