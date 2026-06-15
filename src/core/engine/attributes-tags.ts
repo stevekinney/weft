@@ -20,7 +20,6 @@ import { WorkflowNotFoundError } from './errors.ts';
 import type { EngineInternals } from './internals.ts';
 import {
   commitFencedWorkflowStateOperations,
-  commitUnfencedWorkflowStateOperations,
   runSerializedWorkflowStateWrite,
 } from './storage-io.ts';
 import {
@@ -36,14 +35,6 @@ const EMPTY_STORAGE_VALUE = new Uint8Array(0);
 type WorkflowStateUpdateOptions = {
   allowedStatuses?: readonly WorkflowStatus[];
   buildAdditionalOperations?: (previousState: WorkflowState, updatedAt: number) => BatchOperation[];
-  /**
-   * Fence the commit on the lease epoch (issue #470 Step 2). Pass `true` for
-   * engine-generator-owned terminal transitions (workflow completion/failure/
-   * cancellation/timeout) so a deposed engine cannot write terminal state over a
-   * successor's running workflow. Defaults to `false` — operator/external mutations
-   * (tags, search attributes) legitimately run on any engine and must NOT be fenced.
-   */
-  fence?: boolean;
 };
 
 type WorkflowStateUpdateResult = {
@@ -160,10 +151,12 @@ export async function updateWorkflowState(
     };
     const additionalOperations = options.buildAdditionalOperations?.(state, updatedAt) ?? [];
 
-    const commit = options.fence
-      ? commitFencedWorkflowStateOperations
-      : commitUnfencedWorkflowStateOperations;
-    await commit(
+    // `updateWorkflowState` only ever applies an engine-generator-owned workflow
+    // STATUS transition (its sole callers are the terminal completion/failure
+    // paths), so it is ALWAYS fenced on the lease epoch (issue #470 Step 2) — a
+    // deposed engine cannot write terminal state over a successor's run. Operator
+    // tag/attribute mutations do NOT use this helper; they batch directly.
+    await commitFencedWorkflowStateOperations(
       internals,
       state,
       [

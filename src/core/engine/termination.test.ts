@@ -9,7 +9,7 @@ import { workflow } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 import { getInternals } from './internals.ts';
 import {
-  commitUnfencedWorkflowStateOperations,
+  commitFencedWorkflowStateOperations,
   loadWorkflowState,
   runSerializedWorkflowStateWrite,
 } from './storage-io.ts';
@@ -172,7 +172,7 @@ describe('termination helpers', () => {
       runSerializedWorkflowStateWrite: async (workflowId, writeOperation) =>
         await runSerializedWorkflowStateWrite(internals, workflowId, writeOperation),
       commitWorkflowStateOperations: async (state, operations) =>
-        await commitUnfencedWorkflowStateOperations(internals, state, operations),
+        await commitFencedWorkflowStateOperations(internals, state, operations),
     });
 
     await completeWorkflow(internals, handle.id, 'done', callbacks);
@@ -284,7 +284,7 @@ describe('termination helpers', () => {
       runSerializedWorkflowStateWrite: async (workflowId, writeOperation) =>
         await runSerializedWorkflowStateWrite(internals, workflowId, writeOperation),
       commitWorkflowStateOperations: async (state, operations) =>
-        await commitUnfencedWorkflowStateOperations(internals, state, operations),
+        await commitFencedWorkflowStateOperations(internals, state, operations),
     });
     await failWorkflow(internals, handle.id, new Error('boom'), callbacks);
 
@@ -418,7 +418,7 @@ describe('termination helpers', () => {
         await runSerializedWorkflowStateWrite(internals, workflowId, writeOperation),
       commitWorkflowStateOperations: async (state, operations) => {
         events.push('commit');
-        await commitUnfencedWorkflowStateOperations(internals, state, operations);
+        await commitFencedWorkflowStateOperations(internals, state, operations);
       },
       dispatchEvent: () => events.push('dispatchEvent'),
       forwardEventToHandle: () => events.push('forwardEventToHandle'),

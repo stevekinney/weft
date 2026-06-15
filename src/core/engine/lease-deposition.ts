@@ -81,6 +81,10 @@ export function handleDeposition(internals: EngineInternals): void {
   // cycle through `storage-io → fenced-write → lease-deposition`).
   const tearDown = internals.tearDownAfterDeposition;
   if (tearDown !== null) {
-    void Promise.resolve().then(tearDown);
+    // Contain the deferred callback: a synchronous throw inside it would otherwise
+    // become an unhandled rejection while the engine is already unwinding.
+    void Promise.resolve()
+      .then(tearDown)
+      .catch(() => {});
   }
 }

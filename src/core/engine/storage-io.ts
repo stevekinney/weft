@@ -1,6 +1,5 @@
 import {
   KEYS,
-  storageConditionalBatch,
   type BatchOperation,
   type ConditionalBatchCondition,
 } from '../../storage/interface.ts';
@@ -113,51 +112,15 @@ function buildWorkflowStateCommit(
 }
 
 /**
- * Commit workflow state operations WITHOUT lease-epoch fencing. The explicit
- * `Unfenced` in the name is deliberate: picking it for an engine-generator-owned
- * advance would silently bypass the lease fence, so the wrong choice must be loud
- * at the call site. Use it ONLY for operator/external mutations (e.g.
- * `setAttributes`) that may legitimately run on any engine regardless of
- * ownership. Engine-generator-owned advances (suspend, completion, transitions)
- * must use {@link commitFencedWorkflowStateOperations}.
- */
-export async function commitUnfencedWorkflowStateOperations(
-  internals: EngineInternals,
-  state: WorkflowState,
-  operations: BatchOperation[],
-  options: WorkflowStateCommitOptions = {},
-): Promise<void> {
-  const commit = buildWorkflowStateCommit(internals, state.id, operations, options);
-
-  if (commit.conditions.length === 0) {
-    await internals.storage.batch(commit.operations);
-  } else {
-    const committed = await storageConditionalBatch(
-      internals.storage,
-      commit.conditions,
-      commit.operations,
-    );
-    if (!committed) {
-      throw new Error(
-        `Workflow state commit for workflow "${state.id}" lost its atomic side-effect precondition.`,
-      );
-    }
-  }
-
-  if (commit.hasPendingSideEffects) {
-    clearPendingAtomicWorkflowCommitSideEffects(internals, state.id);
-  }
-}
-
-/**
  * Commit an engine-generator-owned workflow-state advance, FENCED on the lease
  * epoch under `ownership: 'lease'` (issue #470 Step 2). A deposed engine's write
  * loses its CAS instead of corrupting the successor's state; the deposition is
- * detected and the engine halts (see {@link commitFencedEngineWrite}). Identical
- * to {@link commitUnfencedWorkflowStateOperations} under `ownership: 'none'` — the
- * epoch condition is only appended when a lease is held. Use this for suspend,
- * completion, and other state advances driven by the workflow lifecycle; never
- * for operator/external mutations.
+ * detected and the engine halts (see {@link commitFencedEngineWrite}). Under
+ * `ownership: 'none'` it is byte-for-byte the pre-Step-2 commit shape — the epoch
+ * condition is only appended when a lease is held. Use this for suspend,
+ * completion, and other state advances driven by the workflow lifecycle. Operator/
+ * external mutations (search-attribute and tag edits) do NOT use this helper; they
+ * batch directly and are intentionally never fenced.
  */
 export async function commitFencedWorkflowStateOperations(
   internals: EngineInternals,

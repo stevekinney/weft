@@ -112,10 +112,6 @@ export async function terminateWorkflow(
         ...(terminalCleanupToken !== undefined ? { terminalCleanupToken } : {}),
       },
       {
-        // Engine-generator-owned terminal transition (cancel/timeout): fence on
-        // the lease epoch so a deposed engine cannot write terminal state over a
-        // successor's running workflow (issue #470 Step 2).
-        fence: true,
         // Total over non-terminal states (see FORCIBLY_TERMINABLE_STATUSES):
         // cancelling a suspended workflow terminates it and rejects its pending
         // result waiter rather than no-op'ing. The abort in strategy.cancelWorkflow
@@ -410,9 +406,6 @@ export async function failWorkflow(
     stateUpdate.terminalCleanupToken = terminalCleanupToken;
   }
   const failureResult = await updateWorkflowState(internals, workflowId, stateUpdate, {
-    // Engine-generator-owned terminal transition (fail): fence on the lease epoch
-    // so a deposed engine cannot write 'failed' over a successor's run (#470 Step 2).
-    fence: true,
     // See FORCIBLY_TERMINABLE_STATUSES — 'suspended' included so a cross-process
     // resume whose services are unavailable can fail the run (the fail path runs
     // before the suspended→running flip) instead of stranding it 'suspended'.
