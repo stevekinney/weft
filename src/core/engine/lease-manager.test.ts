@@ -555,6 +555,87 @@ describe('createLeaseManager', () => {
     expect(await holderId(storage)).toBe('engine-b');
   });
 
+  it('reads the holder before the epoch so a concurrent cold acquire is not seen as corruption', async () => {
+    // readState() reads the two keys non-atomically. A concurrent cold acquire that
+    // commits BOTH keys between our reads must not be observed as "epoch absent,
+    // holder present" (which tryAcquireOnce treats as corruption). Reading holder
+    // FIRST means the only torn view is "holder old/absent, epoch present" — the
+    // ordinary steal path. We inject a cold acquire on the holder read to force the
+    // interleaving, then assert the challenger does NOT fail closed.
+    const base = new MemoryStorage();
+    const clock = makeClock();
+    let injected = false;
+    const concurrent = createLeaseManager(
+      managerOptions({ storage: base, getNow: clock.now, holderId: 'engine-x' }),
+    );
+    const storage: Storage = {
+      capabilities: () => base.capabilities(),
+      get: async (key) => {
+        const value = await base.get(key);
+        // After the challenger reads the (empty) holder, a concurrent cold acquire
+        // commits epoch+holder before the challenger reads the epoch.
+        if (key === KEYS.leaseHolder() && !injected) {
+          injected = true;
+          await concurrent.acquire();
+        }
+        return value;
+      },
+      put: (key, value) => base.put(key, value),
+      delete: (key) => base.delete(key),
+      scan: (prefix, options) => base.scan(prefix, options),
+      batch: (operations) => base.batch(operations),
+      conditionalBatch: (conditions, operations) => base.conditionalBatch(conditions, operations),
+      [Symbol.dispose]: () => base[Symbol.dispose](),
+    };
+
+    const challenger = createLeaseManager(
+      managerOptions({ storage, getNow: clock.now, holderId: 'engine-b', waitTimeoutMs: 0 }),
+    );
+    // Must NOT throw EngineLeaseCorruptedError: the concurrent holder it now sees is
+    // live, so it cleanly times out (lease held) rather than fail-closing.
+    await expect(challenger.acquire()).rejects.toBeInstanceOf(EngineLeaseAcquisitionTimeoutError);
+
+    await concurrent.release();
+  });
+
+  it('contains a rejecting renewal so the interval and a later release never reject', async () => {
+    // renewUnderGuard swallows a renewal rejection so the fire-and-forget interval
+    // cannot leak an unhandled rejection, and release()'s await of the in-flight
+    // renewal stays safe (best-effort, never-reject). Force renewOnce to throw via a
+    // getNow that throws only once the renewal computes expiresAt (after acquire and
+    // the renewal's stopped/leaseLost guards have read the clock).
+    const storage = new MemoryStorage();
+    let throwOnNow = false;
+    let value = 1_000_000;
+    const getNow = (): number => {
+      if (throwOnNow) throw new Error('clock blew up mid-renewal');
+      value += 1;
+      return value;
+    };
+    const manager = createLeaseManager(managerOptions({ storage, getNow, renewIntervalMs: 5 }));
+    await manager.acquire();
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason);
+    };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      throwOnNow = true; // the next renewal's expiresAt computation throws
+      manager.startRenewal();
+      // Let the interval fire at least once; the guard must contain the rejection.
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      throwOnNow = false; // let release() compute its own clock value normally
+      // release() awaits the (contained) in-flight renewal and must still resolve.
+      await expect(manager.release()).resolves.toBeUndefined();
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      manager.stop();
+    }
+  });
+
   it('fails closed before minting an epoch at the safe-integer ceiling', async () => {
     // The stored epoch is MAX_SAFE_INTEGER - 1 (still decodable) with no live holder,
     // so a steal would mint MAX_SAFE_INTEGER — which decodeEpoch rejects on the next
