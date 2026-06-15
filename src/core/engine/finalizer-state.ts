@@ -40,7 +40,7 @@ export function recordFinalizerState(
   if (internals.terminalizingWorkflows.has(workflowId)) {
     if (internals.options.development) {
       console.warn(
-        `ctx.setFinalizerState() called for workflow "${workflowId}" after it began terminalizing; ` +
+        `[weft] ctx.setFinalizerState() called for workflow "${workflowId}" after it began terminalizing; ` +
           `the value is ignored. Record finalizer state while the workflow is still running.`,
       );
     }
