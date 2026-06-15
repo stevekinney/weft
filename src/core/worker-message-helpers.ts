@@ -2,7 +2,10 @@ import { logRecordToConsole } from './context/workflow-logger.ts';
 import type { WorkerOutboundMessage } from './types.ts';
 import type { WorkflowLogRecord } from './types/workflow-log.ts';
 import { isValidWorkerLogRecord, type WorkerLogMessageCandidate } from './worker-protocol-log.ts';
-import { assertWorkerProtocolMessageWithinLimit } from './worker-protocol.ts';
+import {
+  assertWorkerProtocolMessageWithinLimit,
+  WorkerProtocolMessageSizeError,
+} from './worker-protocol.ts';
 
 /**
  * The outcome of attempting to deliver one forwarded worker `ctx.log` (#545), produced
@@ -62,9 +65,11 @@ export function isParkableWaitSignalCheckpoint(
  * fail the workflow.
  *
  * The size check is intentionally performed BEFORE the structural check so that a huge
- * malformed record is classified `dropped-oversize` rather than `dropped-invalid` (#545):
- * the dominant abuse cost of an oversize record — the runtime's structured clone on
- * receipt — is paid regardless of whether the payload is well-formed.
+ * but otherwise-encodable malformed record is classified `dropped-oversize` rather than
+ * `dropped-invalid` (#545): the dominant abuse cost of an oversize record — the runtime's
+ * structured clone on receipt — is paid regardless of whether the payload is well-formed.
+ * Only a genuine size-cap breach ({@link WorkerProtocolMessageSizeError}) is oversize; the
+ * estimator's other throw (cyclic / non-cloneable payloads) is classified `dropped-invalid`.
  *
  * The returned {@link ForwardedWorkerLogOutcome} is what the strategy feeds to the
  * per-worker abuse counter (#545): `accepted-valid` counts a delivered (or, with no
@@ -80,8 +85,13 @@ export function deliverForwardedWorkerLog(
   if (maxProtocolMessageBytes !== undefined) {
     try {
       assertWorkerProtocolMessageWithinLimit(message, maxProtocolMessageBytes);
-    } catch {
-      return 'dropped-oversize';
+    } catch (error) {
+      // Only a true size-cap breach is `dropped-oversize`. The estimator also throws a
+      // plain `WorkerProtocolError` for cyclic/non-cloneable payloads — those are malformed,
+      // not oversize, so classify them `dropped-invalid` to keep the outcome distinction honest.
+      return error instanceof WorkerProtocolMessageSizeError
+        ? 'dropped-oversize'
+        : 'dropped-invalid';
     }
   }
   if (!isValidWorkerLogRecord(message.record)) return 'dropped-invalid';

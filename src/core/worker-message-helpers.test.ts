@@ -107,6 +107,17 @@ describe('deliverForwardedWorkerLog (#529)', () => {
     expect(sink).not.toHaveBeenCalled();
   });
 
+  it('classifies a non-encodable (cyclic) record as dropped-invalid, not dropped-oversize', () => {
+    const sink = mock(() => {});
+    // The size estimator throws a plain WorkerProtocolError (not a size error) for a cyclic
+    // graph. That is malformed, not oversize — it must be dropped-invalid so the outcome
+    // distinction stays honest (a wrong "oversize" would mislabel the abuse category).
+    const cyclic: Record<string, unknown> = { ...validRecord };
+    cyclic['self'] = cyclic;
+    expect(deliverForwardedWorkerLog(logMessage(cyclic), sink, 4_096)).toBe('dropped-invalid');
+    expect(sink).not.toHaveBeenCalled();
+  });
+
   it('falls a throwing sink back to console and still reports accepted-valid', () => {
     const sink = mock(() => {
       throw new Error('sink blew up');

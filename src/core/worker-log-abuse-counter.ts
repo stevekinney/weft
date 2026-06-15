@@ -14,11 +14,11 @@ import {
 
 /**
  * The verdict the abuse counter returns after recording one forwarded-log outcome:
- * whether the strategy should DISCARD the sending worker for sustained abuse. A
- * `false` verdict means "tolerate this occurrence" — a single anomaly or an
- * in-budget burst never discards. A `true` verdict means a threshold was crossed
- * (flood within the window, or accumulated lifetime strikes) and the worker should
- * be discarded as the hardened-worker threat model prescribes.
+ * whether the strategy should DISCARD the sending worker for sustained abuse.
+ * `'tolerate'` means a single anomaly or an in-budget burst that does not discard.
+ * `'discard'` means a threshold was crossed (flood within the window, or accumulated
+ * lifetime strikes) and the worker should be discarded as the hardened-worker threat
+ * model prescribes.
  */
 export type WorkerLogAbuseVerdict = 'tolerate' | 'discard';
 
@@ -31,7 +31,7 @@ export type WorkerLogAbuseVerdict = 'tolerate' | 'discard';
  * by a well-behaved logger, so a handful in a worker's lifetime already signals abuse.
  */
 export interface WorkerLogAbuseCounterOptions {
-  /** Sliding window length in milliseconds for the flood budget. */
+  /** Fixed/anchored window length in milliseconds for the flood budget. */
   readonly floodWindowMs: number;
   /**
    * Maximum forwarded-log ARRIVALS tolerated per worker within `floodWindowMs`
