@@ -6,18 +6,23 @@ import type { EngineInternals } from './internals.ts';
 
 /**
  * Engine-side handler for `ctx.setFinalizerState(value)` (issue #446). Durably
- * records the payload the engine will pass to the workflow's definition-level
- * `finalizer` activity when it drives cancel/timeout teardown.
+ * records the payload associated with the workflow's definition-level
+ * `finalizer` activity.
+ *
+ * **Current behavior (this release): records the value only.** Nothing reads
+ * this payload yet. **Planned behavior (future release):** the engine will pass
+ * the decoded value as the finalizer's input when it drives cancel/timeout
+ * teardown.
  *
  * The value is staged as a pending atomic side-effect — a `put` of
  * {@link KEYS.finalizerState} — so it commits with the next checkpoint or the
  * terminal `updateWorkflowState` batch (`includePendingAtomicSideEffects` is set
  * for terminal transitions). That makes the write atomic with the very
- * transition that triggers teardown: a cancel arriving before the next
- * checkpoint still flushes the staged op in the terminal batch, so the finalizer
- * always sees the resource id. The staged op inherits the lease-epoch fence
- * (#470) for free, since checkpoint and terminal commits route through
- * `commitFencedWorkflowStateOperations`.
+ * transition that will eventually trigger teardown: a cancel arriving before the
+ * next checkpoint still flushes the staged op in the terminal batch, so a future
+ * finalizer would always see the resource id. The staged op inherits the
+ * lease-epoch fence (#470) for free, since checkpoint and terminal commits route
+ * through `commitFencedWorkflowStateOperations`.
  *
  * Oversized payloads are rejected before staging (the same hostile-input guard
  * activity results use). A call made once the workflow is already terminalizing
