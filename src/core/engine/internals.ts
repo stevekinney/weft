@@ -48,6 +48,7 @@ import type {
 import type { EngineCleanupIntervalDisposalTracker } from './engine-leak-warnings.ts';
 import type { WorkflowHandle, WorkflowHandleEngine } from './handles.ts';
 import type { WorkflowFeedListener } from './index.ts';
+import type { LeaseManager } from './lease-manager.ts';
 import type { ScheduleHandleEngine } from './schedule-handle.ts';
 import type { SecondInstanceDetector } from './second-instance-detector.ts';
 
@@ -210,6 +211,12 @@ export interface EngineInternals {
   secondInstanceDetectionInterval: ReturnType<typeof setInterval> | null;
   /** The active second-instance detector; `null` when detection is disabled. */
   secondInstanceDetector: SecondInstanceDetector | null;
+  /**
+   * The active lease manager for `ownership: 'lease'`; `null` when ownership is
+   * `'none'`. Acquired before recovery, renewed on a heartbeat, released on
+   * dispose. Unlike the second-instance detector this is a correctness path.
+   */
+  leaseManager: LeaseManager | null;
   reviewCoordinator: ReviewCoordinator;
   reviewWaiters: Map<string, (decision: HumanReviewResult) => void>;
   reviewWaitersByWorkflow: Map<string, TrackedWaiterKeys>;

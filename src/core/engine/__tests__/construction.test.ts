@@ -133,6 +133,65 @@ describe('resolveEngineOptions', () => {
     expect(resolved.maxNestingDepth).toBe(10);
     expect(resolved.broadcastEvents).toBe(false);
   });
+
+  it("defaults ownership to 'none' with lease tuning at documented defaults", () => {
+    const resolved = resolveEngineOptions(new MemoryStorage(), undefined, getNow);
+
+    expect(resolved.ownershipMode).toBe('none');
+    expect(resolved.leaseTtlMs).toBe(30_000);
+    expect(resolved.leaseRenewIntervalMs).toBe(5_000);
+    expect(resolved.leaseWaitTimeoutMs).toBe(60_000);
+  });
+
+  it("does not validate lease durations when ownership is 'none'", () => {
+    // The lease tuning fields are "ignored when ownership is not 'lease'", so an
+    // invalid duration must not make an off-by-default config fatal.
+    const resolved = resolveEngineOptions(
+      new MemoryStorage(),
+      { leaseTtl: 'not-a-duration' as any },
+      getNow,
+    );
+
+    expect(resolved.ownershipMode).toBe('none');
+    expect(resolved.leaseTtlMs).toBe(30_000);
+  });
+
+  it("resolves lease tuning durations when ownership is 'lease'", () => {
+    const resolved = resolveEngineOptions(
+      new MemoryStorage(),
+      {
+        ownership: 'lease',
+        leaseTtl: '45s',
+        leaseRenewInterval: '7s',
+        leaseWaitTimeout: '90s',
+      },
+      getNow,
+    );
+
+    expect(resolved.ownershipMode).toBe('lease');
+    expect(resolved.leaseTtlMs).toBe(45_000);
+    expect(resolved.leaseRenewIntervalMs).toBe(7_000);
+    expect(resolved.leaseWaitTimeoutMs).toBe(90_000);
+  });
+
+  it("applies lease defaults for omitted tuning fields under ownership 'lease'", () => {
+    const resolved = resolveEngineOptions(new MemoryStorage(), { ownership: 'lease' }, getNow);
+
+    expect(resolved.ownershipMode).toBe('lease');
+    expect(resolved.leaseTtlMs).toBe(30_000);
+    expect(resolved.leaseRenewIntervalMs).toBe(5_000);
+    expect(resolved.leaseWaitTimeoutMs).toBe(60_000);
+  });
+
+  it("throws on an invalid lease duration when ownership is 'lease'", () => {
+    expect(() =>
+      resolveEngineOptions(
+        new MemoryStorage(),
+        { ownership: 'lease', leaseTtl: 'bogus' as any },
+        getNow,
+      ),
+    ).toThrow();
+  });
 });
 
 describe('normalizeWorkerExecutionConfiguration', () => {

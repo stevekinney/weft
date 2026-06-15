@@ -422,4 +422,40 @@ export class IdempotencyKeyPurgedError extends WeftError<'IdempotencyKeyPurgedEr
   }
 }
 
+/**
+ * Thrown by {@link Engine.create} when `ownership: 'lease'` is configured and the
+ * engine cannot acquire the storage lease within the configured wait window —
+ * another live instance still holds it. In a rolling deploy this means the
+ * outgoing instance has not released the lease (or its lease has not yet expired)
+ * within `leaseWaitTimeout`; size that window above the outgoing instance's drain
+ * time and above the lease TTL so a crash (no clean release) still resolves once
+ * the held lease expires. Inspect `waitedMs` for how long this instance waited
+ * and `heldBy` for the holder id observed when it gave up (`null` if unknown).
+ *
+ * @example
+ * ```ts
+ * import { EngineLeaseAcquisitionTimeoutError } from '@lostgradient/weft';
+ *
+ * function isLeaseHandoffStuck(error: unknown): boolean {
+ *   return error instanceof EngineLeaseAcquisitionTimeoutError;
+ * }
+ * ```
+ */
+export class EngineLeaseAcquisitionTimeoutError extends WeftError<'EngineLeaseAcquisitionTimeoutError'> {
+  readonly waitedMs: number;
+  readonly heldBy: string | null;
+
+  constructor(waitedMs: number, heldBy: string | null) {
+    const heldClause = heldBy === null ? '' : ` (currently held by "${heldBy}")`;
+    super(
+      'EngineLeaseAcquisitionTimeoutError',
+      `Could not acquire the storage ownership lease within ${waitedMs}ms${heldClause}. ` +
+        'Another engine instance still holds it. Increase leaseWaitTimeout above the outgoing ' +
+        "instance's drain time and the lease TTL, or ensure the previous instance releases the lease on shutdown.",
+    );
+    this.waitedMs = waitedMs;
+    this.heldBy = heldBy;
+  }
+}
+
 export { PersistedDataIncompatibleError } from '../persisted-data-incompatible-error.ts';

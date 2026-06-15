@@ -47,6 +47,18 @@ export interface ResolvedOptions {
   secondInstanceDetectionEnabled: boolean;
   /** Heartbeat interval (ms) for the second-instance detector when enabled. */
   secondInstanceHeartbeatIntervalMs: number;
+  /**
+   * Single-writer ownership posture. `'none'` recovers immediately (infra owns
+   * mutual exclusion); `'lease'` acquires a storage lease before recovery. The
+   * lease tuning fields below are only meaningful when this is `'lease'`.
+   */
+  ownershipMode: 'none' | 'lease';
+  /** Lease time-to-live (ms) when `ownershipMode` is `'lease'`. */
+  leaseTtlMs: number;
+  /** Lease renewal interval (ms) when `ownershipMode` is `'lease'`. */
+  leaseRenewIntervalMs: number;
+  /** Boot-time lease acquisition wait window (ms) when `ownershipMode` is `'lease'`. */
+  leaseWaitTimeoutMs: number;
   getNow: () => number;
   /**
    * Re-provides the non-serialized per-run `services` value on recovery; `null`

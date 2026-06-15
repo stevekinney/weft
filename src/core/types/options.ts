@@ -220,6 +220,53 @@ export interface EngineOptions<TServices = unknown> {
    */
   secondInstanceHeartbeatInterval?: Duration;
   /**
+   * Single-writer ownership posture over the shared durable store. Default
+   * `'none'` — the engine recovers immediately at boot and relies on
+   * infrastructure (one replica + a `Recreate` deploy) for mutual exclusion.
+   *
+   * `'lease'` opts into a storage-keyed ownership lease: at boot the engine
+   * acquires the lease (waiting, up to {@link EngineOptions.leaseWaitTimeout}, if
+   * another instance still holds it) **before** recovering, renews it on a
+   * heartbeat, and releases it on dispose. This turns a rolling deploy into a
+   * clean handoff — the incoming instance parks until the outgoing one releases
+   * (or its lease expires), so the two never recover concurrently.
+   *
+   * Requires a storage backend with the `conditionalBatch` capability (every
+   * durable recovery backend already provides it).
+   *
+   * **Lease alone is deploy ergonomics, not a correctness guarantee.** It
+   * prevents the *new* instance from recovering early; it does not by itself stop
+   * a stalled *old* instance (e.g. a long GC pause past the lease TTL) from
+   * writing after its lease expired. Epoch fencing of durable writes is what
+   * closes that gap. Keep infrastructure-level single-instance enforcement as the
+   * real control.
+   */
+  ownership?: 'none' | 'lease';
+  /**
+   * Lease time-to-live for `ownership: 'lease'` (default `30s`). A holder renews
+   * well within this window; once it lapses without renewal, a waiting instance
+   * may steal the lease. Must comfortably exceed the renewal interval plus the
+   * worst-case GC pause, clock skew, and storage round-trip. Ignored when
+   * `ownership` is not `'lease'`.
+   */
+  leaseTtl?: Duration;
+  /**
+   * Lease renewal interval for `ownership: 'lease'` (default `5s`). The holder
+   * re-asserts the lease this often; keep it well below {@link EngineOptions.leaseTtl}
+   * so a single slow renewal cannot let the lease lapse. Ignored when `ownership`
+   * is not `'lease'`.
+   */
+  leaseRenewInterval?: Duration;
+  /**
+   * How long a booting `ownership: 'lease'` instance waits to acquire the lease
+   * when another instance still holds it, before throwing
+   * {@link EngineLeaseAcquisitionTimeoutError} (default `60s`). Size this above
+   * both the outgoing instance's drain time and the lease TTL, so a graceful
+   * handoff and a crash (no clean release, lease expires after TTL) both resolve.
+   * Ignored when `ownership` is not `'lease'`.
+   */
+  leaseWaitTimeout?: Duration;
+  /**
    * History circuit-breaker thresholds. When `history.maxEvents` is set, a
    * workflow whose event-log record count would exceed it is forced to a
    * terminal `timed-out` state with reason {@link HISTORY_CIRCUIT_BREAKER_REASON}.

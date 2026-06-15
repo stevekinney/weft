@@ -27,6 +27,7 @@ import type {
   RegistrationEntry,
   ResolvedOptions,
 } from './engine-internal-types.ts';
+import { resolveOwnershipFields } from './ownership-options.ts';
 import {
   normalizeHistoryPolicy,
   normalizePayloadSizePolicy,
@@ -286,6 +287,7 @@ export function resolveEngineOptions(
     ...resolveRetentionFields(options),
     ...resolveHistoryFields(options),
     ...resolveSecondInstanceFields(options),
+    ...resolveOwnershipFields(options),
   };
 }
 

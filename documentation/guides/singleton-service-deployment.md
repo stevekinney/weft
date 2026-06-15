@@ -108,6 +108,26 @@ When enabled, each engine writes a periodic heartbeat to the store and warns (vi
 
 A few properties worth knowing. It warns only when a foreign heartbeat advances across two of its own intervals, so a clean `Recreate` deploy (no overlap) and a brief drain overlap both stay quiet—only sustained overlap warns. Advance is measured by a monotonic per-instance sequence, _not_ wall-clock time, so the warning is immune to clock skew between hosts—a peer's sequence can't climb across two of your ticks unless it is genuinely running. The default heartbeat interval is `15s`; tune it with `secondInstanceHeartbeatInterval`, and keep it comfortably above your deploy drain window so a normal handoff doesn't sustain two ticks of overlap. (Clocks only enter the picture for the once-on-boot sweep that garbage-collects long-dead heartbeat keys, and that threshold is deliberately many intervals wide—not a tuning knob for warnings.) Because it writes to the store on every interval, it has an ongoing cost—leave it off unless you want the backstop. It is off by default.
 
+## Optional: lease-based ownership for a clean deploy handoff
+
+The infrastructure controls above make a deploy correct by forcing _downtime_: a `Recreate` rollout stops the old pod before the new one starts. If you want a rolling deploy to be a clean **handoff** instead of a downtime window, opt into a storage ownership lease:
+
+```ts
+import { Engine } from '@lostgradient/weft';
+import { NeonStorage } from '@lostgradient/weft/storage/neon';
+
+await using storage = new NeonStorage({ url: process.env['NEON_DATABASE_URL']! });
+await using engine = await Engine.create({ storage, ownership: 'lease' });
+void engine;
+```
+
+With `ownership: 'lease'`, the engine acquires a lease key in the store **before** it recovers, renews it on a heartbeat while it runs, and releases it on dispose. During a rolling deploy the incoming instance parks at boot until the outgoing instance releases the lease (or its lease expires), then recovers—so the two never recover concurrently and you never get the double-resume / double-at-least-once-activity window that a naive rolling deploy opens. Disposing through `await using` (or `await engine[Symbol.asyncDispose]()`) is what releases the lease cleanly, so wire your `SIGTERM` handler to dispose the engine.
+
+Tuning (all optional, durations like `'30s'`): `leaseTtl` (default `30s`) is how long the lease stays valid without a renewal; `leaseRenewInterval` (default `5s`) is the heartbeat cadence—keep it well below the TTL; `leaseWaitTimeout` (default `60s`) is how long a booting instance waits for the lease before throwing `EngineLeaseAcquisitionTimeoutError`. Size `leaseWaitTimeout` above both your outgoing instance's drain time and the lease TTL, so a graceful handoff and a crash (no clean release—the lease expires after the TTL) both resolve. Lease ownership requires a storage backend with the `conditionalBatch` capability; every durable recovery backend provides it, and boot fails fast with a clear diagnostic otherwise.
+
+> [!WARNING]
+> In this release the lease is a **zero-downtime-deploy aid, not a correctness backstop.** It stops the _incoming_ instance from recovering early. It does not, on its own, stop a stalled _outgoing_ instance—say one in a GC pause longer than the lease TTL—from writing after its lease has expired while the new instance has already taken over. Fencing every durable write on the lease epoch is what closes that gap; until that ships, keep infrastructure-level single-instance enforcement (`replicas: 1` + `Recreate`, or a single unit) as the real correctness control. If the engine loses its lease while running, it emits a `process.emitWarning` whose `name` is `WeftEngineLeaseLostWarning`—subscribe to `process.on('warning', …)` so it reaches your logs.
+
 ## Related
 
 - [Recovery and deploys](recovery-and-deploys.md) — the recovery model and the one-engine-per-store constraint.

@@ -45,6 +45,7 @@ export {
   Engine,
   EngineCreateNameMismatchError,
   EngineDisposedError,
+  EngineLeaseAcquisitionTimeoutError,
   IdempotencyKeyPurgedError,
   PersistedDataIncompatibleError,
   ScheduleHandle,

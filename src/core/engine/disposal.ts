@@ -37,6 +37,7 @@ export function disposeEngine(internals: EngineInternals): void {
   }
   internals.nextRetentionSweepAt = null;
   disposeSecondInstanceDetection(internals);
+  disposeLeaseManager(internals);
   internals.handleCache.clear();
   // Reject pending result waiters before clearing so external `handle.result()`
   // callers observe a deterministic rejection instead of a promise that never
@@ -101,5 +102,20 @@ function disposeSecondInstanceDetection(internals: EngineInternals): void {
   if (internals.secondInstanceDetector !== null) {
     void internals.secondInstanceDetector.stop();
     internals.secondInstanceDetector = null;
+  }
+}
+
+/**
+ * Tear down the ownership lease (synchronous path): stop renewals immediately and
+ * fire the best-effort holder-key release. The `release()` storage delete is
+ * fire-and-forget here because synchronous disposal must not await a round-trip;
+ * for a clean deploy handoff `Engine[Symbol.asyncDispose]` awaits release FIRST so
+ * the holder key is durably gone before the incoming instance acquires. A no-op
+ * when `ownership: 'lease'` was never configured.
+ */
+function disposeLeaseManager(internals: EngineInternals): void {
+  if (internals.leaseManager !== null) {
+    void internals.leaseManager.release();
+    internals.leaseManager = null;
   }
 }

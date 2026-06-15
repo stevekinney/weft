@@ -617,6 +617,32 @@ export const KEYS = {
   livenessPrefix: () => 'liveness:',
   /** Per-engine liveness heartbeat key. One key per engine instance under the shared store. */
   liveness: (instanceId: string) => `liveness:${encodeStorageKeyComponent(instanceId)}`,
+  /**
+   * Scan/match prefix for the lease-fenced single-writer ownership keys
+   * ({@link KEYS.leaseEpoch} and {@link KEYS.leaseHolder}). Reserved so a
+   * caller can recognize lease-owned keys; the lease itself uses the two exact
+   * keys below, not a scan.
+   */
+  leasePrefix: () => 'lease:',
+  /**
+   * The fencing epoch for lease-fenced ownership. A single shared key (one lease
+   * per durable store) holding an 8-byte big-endian uint64. It changes ONLY on
+   * ownership transfer (initial acquire or a steal after expiry), never on a
+   * renewal — so a holder's cached epoch stays stable across heartbeats and can
+   * be used unchanged as a `conditionalBatch` fencing condition. Kept separate
+   * from {@link KEYS.leaseHolder} precisely because `conditionalBatch` compares
+   * the whole stored value as bytes: folding the churning holder fields into the
+   * fencing token would make every renewal invalidate the fence.
+   */
+  leaseEpoch: () => 'lease:epoch',
+  /**
+   * The current lease holder record for lease-fenced ownership. A single shared
+   * key (one lease per durable store) holding a JSON `{ holderId, expiresAt,
+   * epoch }`. Renewed every heartbeat tick (the `expiresAt` field advances), so
+   * its bytes churn and it must NOT be used as the fencing token — see
+   * {@link KEYS.leaseEpoch}.
+   */
+  leaseHolder: () => 'lease:holder',
   budget: (namespace: string, period: string, date: string) =>
     `budget:${namespace}:${period}:${date}`,
   review: (workflowId: string, reviewId: string) =>
