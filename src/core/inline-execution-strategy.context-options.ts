@@ -132,36 +132,34 @@ function resolveLogSinkOption(dependencies: InlineExecutionDependencies): {
   return logSink === undefined ? {} : { logSink };
 }
 
-/** The optional {@link InlineExecutionDependencies} fields that are only forwarded when present. */
-type OptionalInlineDependencyKey =
-  | 'getComposedWorkflowInterceptor'
-  | 'registerCancelHandler'
-  | 'recordFinalizerState'
-  | 'getWorkflowServices'
-  | 'getLogSink';
-
 /**
- * Keep only the defined optional inline-strategy dependencies, so
- * `InlineExecutionStrategy` construction stays valid under
- * `exactOptionalPropertyTypes` (a key set to `undefined` is rejected, an absent key
- * is fine). Extracted from `createExecutionStrategyBundle` so its conditional
- * spreads do not tip it over the cyclomatic-complexity cap.
+ * Keep only the defined optional inline-strategy dependencies. Under
+ * `exactOptionalPropertyTypes` a key set to `undefined` is rejected while an
+ * absent key is fine, so each optional is included only when present. Lives here
+ * (rather than inline in `createExecutionStrategyBundle`) so its conditional
+ * spreads do not tip that function over the cyclomatic-complexity cap.
  */
-export function presentInlineDependencies(candidates: {
-  [Key in OptionalInlineDependencyKey]?: InlineExecutionDependencies[Key] | undefined;
+export function optionalInlineDependencies(candidates: {
+  [Key in
+    | 'getComposedWorkflowInterceptor'
+    | 'registerCancelHandler'
+    | 'recordFinalizerState'
+    | 'getWorkflowServices'
+    | 'getLogSink']: InlineExecutionDependencies[Key] | undefined;
 }): Partial<InlineExecutionDependencies> {
-  const keys: OptionalInlineDependencyKey[] = [
-    'getComposedWorkflowInterceptor',
-    'registerCancelHandler',
-    'recordFinalizerState',
-    'getWorkflowServices',
-    'getLogSink',
-  ];
-  const present: Partial<InlineExecutionDependencies> = {};
-  for (const key of keys) {
-    if (candidates[key] !== undefined) {
-      Object.assign(present, { [key]: candidates[key] });
-    }
-  }
-  return present;
+  return {
+    ...(candidates.getComposedWorkflowInterceptor !== undefined && {
+      getComposedWorkflowInterceptor: candidates.getComposedWorkflowInterceptor,
+    }),
+    ...(candidates.registerCancelHandler !== undefined && {
+      registerCancelHandler: candidates.registerCancelHandler,
+    }),
+    ...(candidates.recordFinalizerState !== undefined && {
+      recordFinalizerState: candidates.recordFinalizerState,
+    }),
+    ...(candidates.getWorkflowServices !== undefined && {
+      getWorkflowServices: candidates.getWorkflowServices,
+    }),
+    ...(candidates.getLogSink !== undefined && { getLogSink: candidates.getLogSink }),
+  };
 }

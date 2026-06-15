@@ -31,8 +31,12 @@ export function recordFinalizerState(
   workflowId: string,
   value: unknown,
 ): void {
-  assertPayloadWithinLimit(value, internals.options.payloadSizePolicy.maxBytes, 'finalizer state');
-
+  // Terminalizing check FIRST — before payload validation or encoding. A late
+  // call (e.g. from an `onCancel` handler, which runs after the terminal batch
+  // already took the pending side-effects) is a structural no-op: it has no
+  // future commit to ride. Validating the payload before this guard would let an
+  // oversized late call THROW out of the cancellation-teardown path that this
+  // method documents as ignored — changing teardown behavior. So the guard wins.
   if (internals.terminalizingWorkflows.has(workflowId)) {
     if (internals.options.development) {
       console.warn(
@@ -42,6 +46,8 @@ export function recordFinalizerState(
     }
     return;
   }
+
+  assertPayloadWithinLimit(value, internals.options.payloadSizePolicy.maxBytes, 'finalizer state');
 
   stageAtomicWorkflowCommitSideEffects(internals, workflowId, {
     conditions: [],

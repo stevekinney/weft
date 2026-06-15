@@ -71,9 +71,9 @@ describe('finalizer registration (#446)', () => {
     engine[Symbol.dispose]();
   });
 
-  it('rebuilds the finalizer into an engine-owned callable (not the caller reference)', () => {
+  it('stores the declared finalizer reference as-is (no Phase 1 dispatch hardening)', () => {
     const engine = new Engine();
-    const provision = workflow({ name: 'provision-rebuilt', finalizer: destroySandbox }).execute(
+    const provision = workflow({ name: 'provision-stored', finalizer: destroySandbox }).execute(
       async function* () {
         return 'done';
       },
@@ -81,10 +81,10 @@ describe('finalizer registration (#446)', () => {
 
     engine.register(provision);
 
-    // The stored finalizer is rebuilt via `activity(...)`, so it is a fresh
-    // callable rather than the user's definition — post-registration mutation of
-    // the original cannot influence dispatch.
-    expect(getInternals(engine).registrations.get('provision-rebuilt')?.finalizer).not.toBe(
+    // Phase 1 only records the finalizer metadata; nothing dispatches it yet, so
+    // it is kept as-declared rather than rebuilt. Dispatch hardening is deferred to
+    // the phase that actually invokes finalizers.
+    expect(getInternals(engine).registrations.get('provision-stored')?.finalizer).toBe(
       destroySandbox,
     );
 

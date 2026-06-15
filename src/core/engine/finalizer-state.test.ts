@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { decode } from '../codec.ts';
@@ -124,6 +126,46 @@ describe('recordFinalizerState', () => {
 
       engine[Symbol.dispose]();
     });
+
+    it('ignores an OVERSIZED late call without throwing (guard precedes the size check)', () => {
+      // A late `onCancel`-handler call with an oversized payload must still be the
+      // documented no-op, NOT a PayloadSizeExceededError thrown into the
+      // cancellation-teardown path. The terminalizing guard runs before payload
+      // validation. (Development mode here only to assert the warning fires.)
+      const engine = new Engine({ payloadSize: { maxBytes: 8 }, development: true });
+      const internals = getInternals(engine);
+      const workflowId = 'provision-terminalizing-oversized';
+      internals.terminalizingWorkflows.add(workflowId);
+      warnSpy.mockClear();
+
+      expect(() =>
+        recordFinalizerState(internals, workflowId, {
+          sandboxId: 'a-very-long-sandbox-identifier',
+        }),
+      ).not.toThrow();
+      expect(internals.pendingAtomicWorkflowCommitSideEffects.has(workflowId)).toBe(false);
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+
+      engine[Symbol.dispose]();
+    });
+
+    it('ignores an oversized late call silently outside development mode', () => {
+      const engine = new Engine({ payloadSize: { maxBytes: 8 }, development: false });
+      const internals = getInternals(engine);
+      const workflowId = 'provision-terminalizing-oversized-prod';
+      internals.terminalizingWorkflows.add(workflowId);
+      warnSpy.mockClear();
+
+      expect(() =>
+        recordFinalizerState(internals, workflowId, {
+          sandboxId: 'a-very-long-sandbox-identifier',
+        }),
+      ).not.toThrow();
+      expect(internals.pendingAtomicWorkflowCommitSideEffects.has(workflowId)).toBe(false);
+      expect(warnSpy).not.toHaveBeenCalled();
+
+      engine[Symbol.dispose]();
+    });
   });
 
   describe('orphan cleanup via cleanupWorkflowStorage', () => {
@@ -145,8 +187,16 @@ describe('recordFinalizerState', () => {
       engine.register(provision);
 
       const handle = await engine.start('finalizer-orphan', null, { id: 'finalizer-orphan-run' });
-      // Let the workflow park so the suspend commit flushes the staged value.
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      // Wait for the suspend commit to flush the staged value to storage — a
+      // deterministic bounded poll, not a fixed sleep-before-assert.
+      await waitForCondition(
+        async () => (await storage.get(KEYS.finalizerState('finalizer-orphan-run'))) !== null,
+        {
+          label: 'finalizer state to be committed after the workflow parks',
+          timeoutMs: 400,
+          intervalMs: 5,
+        },
+      );
 
       expect(await storage.get(KEYS.finalizerState('finalizer-orphan-run'))).not.toBeNull();
 

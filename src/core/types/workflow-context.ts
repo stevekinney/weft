@@ -444,30 +444,29 @@ export interface WorkflowContext<
    */
   onCancel(handler: () => Promise<void> | void): void;
   /**
-   * Record the payload the engine passes to this workflow's definition-level
-   * `finalizer` activity when it drives durable teardown after a `cancelled` or
-   * `timed-out` terminal (issue #446). Call it immediately after acquiring an
-   * external paid resource — pass whatever the finalizer needs to destroy it
-   * (e.g. a sandbox id) so the destroy step survives cancellation and crashes.
+   * Durably record the payload that a future engine-driven teardown phase will
+   * pass to this workflow's definition-level `finalizer` activity (issue #446).
    *
-   * Unlike {@link WorkflowContext.onCancel}, this is **durable**: the value is
-   * staged as a pending atomic side-effect and committed with the next
-   * checkpoint or the terminal transition itself, so it is never lost between
-   * resource creation and cancellation. Last-write-wins — call it again to
-   * update the recorded value. When no value is ever recorded, the finalizer is
-   * skipped entirely; pass `null` if the finalizer needs to run with no payload.
+   * **Current behavior (this release): records the value only.** The value is
+   * durably staged (as a pending atomic side-effect, committed with the next
+   * checkpoint or the terminal transition, and fenced under lease ownership), but
+   * **nothing consumes it yet** — no finalizer runs. This method has no teardown
+   * effect until the engine-driven driver ships in a follow-up release. For
+   * cleanup you need today, use {@link WorkflowContext.onCancel} (best-effort,
+   * in-memory) or a `ctx.run` destroy step after a `try/finally`.
    *
-   * Calling this after the workflow is already terminal is a no-op (a development
-   * warning is logged); finalizer state is recordable only while the workflow is
-   * live.
+   * **Planned behavior (future release):** call this immediately after acquiring
+   * an external paid resource, passing whatever the finalizer needs to destroy it
+   * (e.g. a sandbox id). The recorded value is last-write-wins; recording `null`
+   * still counts as "recorded" (the finalizer would run with a `null` payload),
+   * while never recording anything means the future driver skips the finalizer.
+   *
+   * Calling this after the workflow is already terminalizing is a no-op (a
+   * development warning is logged); finalizer state is recordable only while the
+   * workflow is live.
    *
    * **Inline only**: this method throws under worker execution mode, matching the
    * registration-time rejection of worker-mode finalizers.
-   *
-   * > [!NOTE]
-   * > The engine-driven teardown that *consumes* this value lands in a follow-up
-   * > release. Today the value is recorded durably, but declaring a `finalizer` and
-   * > calling `setFinalizerState` are inert until that drive ships.
    *
    * @example
    * ```ts

@@ -143,11 +143,10 @@ function applyOptionalRegistrationFields(
     entry.constraints = registration.constraints;
   }
   if (registration.finalizer !== undefined) {
-    // Rebuild the finalizer through `activity(...)` so the stored entry validates
-    // the wire-safe name grammar and holds an engine-owned callable independent of
-    // post-registration mutation — the same hardening `buildPerWorkflowActivityRegistry`
-    // applies to a workflow's activities.
-    entry.finalizer = activity(clonePlain(registration.finalizer));
+    // Phase 1 only stores the finalizer metadata; nothing dispatches it yet, so
+    // it is kept as-declared. Dispatch hardening (rebuild through `activity(...)`,
+    // defensive cloning) belongs to the phase that actually invokes finalizers.
+    entry.finalizer = registration.finalizer;
   }
 }
 
