@@ -2394,5 +2394,50 @@ describe('WorkerExecutionStrategy', () => {
 
       expect(mockPool.discard).not.toHaveBeenCalled();
     });
+
+    it('cannot flood-count a worker that owns no workflows (listener detached on settle)', async () => {
+      // Proves the abuse counter and the "no owned workflows" discard branch are mutually
+      // exclusive: a flood discard can only fire while the worker owns >= 1 workflow (its
+      // message listener is attached); once its only workflow settles, the listener detaches
+      // and no further `log` reaches the counter. So the early-return-when-empty branch in
+      // #discardWorkerAndFailWorkflows is never the path that a log-abuse discard takes.
+      const sink = mock(() => {});
+      setup(1, {
+        requireProtocolVersion: true,
+        maxProtocolMessageBytes: 4_096,
+        onLog: sink,
+        forwardedLogFloodThreshold: 1, // trips on the 2nd arrival, if any arrive
+      });
+
+      await startOwned('wf-log');
+      const worker = firstWorker();
+      const runMessage = worker.postMessage.mock.calls[0]![0] as { turnId: number };
+      const runTurnId = runMessage.turnId;
+
+      // Settle the worker's only workflow → release + detach-if-idle.
+      dispatchToMockWorker(
+        worker,
+        'message',
+        new MessageEvent('message', {
+          data: {
+            type: 'completed',
+            protocolVersion: WORKER_PROTOCOL_VERSION,
+            turnId: runTurnId,
+            workflowId: 'wf-log',
+            result: 'done',
+          } satisfies WorkerOutboundMessage,
+        }),
+      );
+      await sleepForTesting(0);
+
+      const sinkCallsBefore = sink.mock.calls.length;
+      // Flood the now-unowned worker. The listener is detached, so these never reach
+      // #handleWorkerMessage / the counter: no delivery, no discard.
+      for (let i = 0; i < 10; i++) {
+        dispatchLog(worker, logRecord(`post-settle-${i}`));
+      }
+      expect(sink.mock.calls.length).toBe(sinkCallsBefore);
+      expect(mockPool.discard).not.toHaveBeenCalled();
+    });
   });
 });

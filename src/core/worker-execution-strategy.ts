@@ -261,11 +261,10 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   }
 
   async #handleWorkerMessage(worker: Worker, message: unknown): Promise<void> {
-    // A `log` bypasses the strict accept-or-discard gate and the watchdog (#529); the gate
-    // delivers it and returns discard options only on sustained abuse (#545).
+    // A `log` bypasses the strict gate and watchdog (#529); the gate delivers it and returns
+    // discard options only on sustained abuse (#545). See ForwardedLogGate for the lane.
     if (isWorkerLogMessage(message)) {
-      const owns = (workflowId: string): boolean =>
-        this.#ownership.getTargetWorker(workflowId) === worker;
+      const owns = (id: string): boolean => this.#ownership.getTargetWorker(id) === worker;
       const abuseDiscard = this.#forwardedLogGate.handle(worker, message, owns);
       if (abuseDiscard) this.#discardWorkerAndFailWorkflows(worker, abuseDiscard);
       return;
@@ -447,6 +446,11 @@ export class WorkerExecutionStrategy implements ExecutionStrategy {
   ): void {
     const workflowIds = this.#ownership.workflowIdsForWorker(worker);
     if (workflowIds.length === 0) {
+      // Redundant/already-cleaned-up case. Every discard trigger (timeout, crash, cancel,
+      // #545 log-abuse) owns >= 1 workflow when it fires — log-abuse runs only from
+      // #handleWorkerMessage, which needs an attached listener (>= 1 owned workflow); see the
+      // "cannot flood-count a worker that owns no workflows" test. Does NOT discard here: a
+      // fully-released worker may already be re-acquired for another workflow.
       this.#turnWatchdog.clear(worker);
       this.#forwardedLogGate.forget(worker);
       return;
