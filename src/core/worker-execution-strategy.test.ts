@@ -2198,4 +2198,201 @@ describe('WorkerExecutionStrategy', () => {
       expect(mockPool.discard).not.toHaveBeenCalled();
     });
   });
+
+  // -------------------------------------------------------------------------
+  // forwarded-log abuse counter (#545)
+  // -------------------------------------------------------------------------
+
+  describe('forwarded-log abuse counter (#545)', () => {
+    function logRecord(message: string, workflowId = 'wf-log'): WorkerOutboundMessage {
+      return {
+        level: 'info',
+        message,
+        workflowId,
+        workflowType: 'test',
+        timestamp: 0,
+      } as unknown as WorkerOutboundMessage;
+    }
+
+    /** A controllable clock injected as `getNow`, so flood windows are deterministic. */
+    function controllableClock(): { now: () => number; advance: (ms: number) => void } {
+      let current = 0;
+      return {
+        now: () => current,
+        advance: (ms: number) => {
+          current += ms;
+        },
+      };
+    }
+
+    function dispatchLog(worker: MockWorker, record: unknown, envelopeWorkflowId = 'wf-log'): void {
+      dispatchToMockWorker(
+        worker,
+        'message',
+        new MessageEvent('message', {
+          data: {
+            type: 'log',
+            protocolVersion: WORKER_PROTOCOL_VERSION,
+            workflowId: envelopeWorkflowId,
+            record,
+          } as unknown as WorkerOutboundMessage,
+        }),
+      );
+    }
+
+    async function startOwned(workflowId = 'wf-log'): Promise<void> {
+      strategy.startWorkflow({
+        workflowId,
+        workflowType: 'test',
+        input: null,
+        checkpoint: new ArrayBuffer(0),
+      });
+      await sleepForTesting(0);
+    }
+
+    it('discards a worker that floods more than the threshold within the window', async () => {
+      const sink = mock(() => {});
+      setup(1, {
+        maxProtocolMessageBytes: 4_096,
+        requireProtocolVersion: true,
+        onLog: sink,
+        forwardedLogFloodThreshold: 3,
+        forwardedLogFloodWindowMs: 1_000,
+      });
+
+      await startOwned('wf-log');
+      const worker = firstWorker();
+
+      // Three valid in-budget logs sit at the threshold — delivered, not a discard.
+      dispatchLog(worker, logRecord('a'));
+      dispatchLog(worker, logRecord('b'));
+      dispatchLog(worker, logRecord('c'));
+      expect(mockPool.discard).not.toHaveBeenCalled();
+      expect(sink).toHaveBeenCalledTimes(3);
+
+      // The fourth arrival exceeds the threshold → discard for flooding.
+      dispatchLog(worker, logRecord('d'));
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
+      expect(lastMessage()).toMatchObject({
+        type: 'failed',
+        workflowId: 'wf-log',
+        failureCategory: 'system',
+      });
+    });
+
+    it('does not flood-discard a slow trickle that resets across windows', async () => {
+      const clock = controllableClock();
+      const sink = mock(() => {});
+      setup(1, {
+        maxProtocolMessageBytes: 4_096,
+        requireProtocolVersion: true,
+        onLog: sink,
+        getNow: clock.now,
+        forwardedLogFloodThreshold: 1,
+        forwardedLogFloodWindowMs: 1_000,
+      });
+
+      await startOwned('wf-log');
+      const worker = firstWorker();
+
+      dispatchLog(worker, logRecord('window-a'));
+      clock.advance(1_000); // next arrival opens a fresh window
+      dispatchLog(worker, logRecord('window-b'));
+
+      expect(mockPool.discard).not.toHaveBeenCalled();
+      expect(sink).toHaveBeenCalledTimes(2);
+    });
+
+    it('counts wrong-owner logs toward the flood budget (host paid the clone cost) but never strikes', async () => {
+      const sink = mock(() => {});
+      setup(1, {
+        maxProtocolMessageBytes: 4_096,
+        requireProtocolVersion: true,
+        onLog: sink,
+        forwardedLogFloodThreshold: 2,
+        forwardedLogFloodWindowMs: 1_000,
+        forwardedLogStrikeThreshold: 2,
+      });
+
+      await startOwned('wf-log');
+      const worker = firstWorker();
+
+      // Wrong-owner logs are dropped (not delivered) but still counted as arrivals. They
+      // are NOT strikes (benign mistiming), so the discard here is FLOODING, not strikes:
+      // three arrivals exceed the flood threshold of 2.
+      dispatchLog(worker, logRecord('spoof', 'wf-victim'), 'wf-victim');
+      dispatchLog(worker, logRecord('spoof', 'wf-victim'), 'wf-victim');
+      expect(mockPool.discard).not.toHaveBeenCalled();
+      dispatchLog(worker, logRecord('spoof', 'wf-victim'), 'wf-victim');
+
+      expect(sink).not.toHaveBeenCalled();
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
+    });
+
+    it('discards after repeated oversize/invalid records reach the lifetime strike threshold', async () => {
+      const sink = mock(() => {});
+      setup(1, {
+        maxProtocolMessageBytes: 4_096,
+        requireProtocolVersion: true,
+        onLog: sink,
+        forwardedLogFloodThreshold: 1_000, // high, so this discard is strikes, not flood
+        forwardedLogStrikeThreshold: 3,
+      });
+
+      await startOwned('wf-log');
+      const worker = firstWorker();
+
+      const oversize = { ...logRecord('big'), attributes: { blob: 'x'.repeat(8_192) } };
+      const invalid = { not: 'a-log-record' };
+
+      // Mixed oversize + invalid accumulate into ONE lifetime strike bucket.
+      dispatchLog(worker, oversize); // strike 1 (oversize)
+      dispatchLog(worker, invalid); // strike 2 (invalid)
+      expect(mockPool.discard).not.toHaveBeenCalled();
+      dispatchLog(worker, oversize); // strike 3 == threshold → discard
+      expect(mockPool.discard).toHaveBeenCalledWith(worker);
+      expect(lastMessage()).toMatchObject({ type: 'failed', failureCategory: 'system' });
+    });
+
+    it('never strikes valid in-budget records (a high-log honest worker is safe)', async () => {
+      const sink = mock(() => {});
+      setup(1, {
+        maxProtocolMessageBytes: 4_096,
+        requireProtocolVersion: true,
+        onLog: sink,
+        forwardedLogFloodThreshold: 1_000,
+        forwardedLogStrikeThreshold: 1, // even at 1, valid records never strike
+      });
+
+      await startOwned('wf-log');
+      const worker = firstWorker();
+
+      dispatchLog(worker, logRecord('ok-1'));
+      dispatchLog(worker, logRecord('ok-2'));
+      dispatchLog(worker, logRecord('ok-3'));
+
+      expect(mockPool.discard).not.toHaveBeenCalled();
+      expect(sink).toHaveBeenCalledTimes(3);
+    });
+
+    it('does not strike a single oversize or invalid record (single occurrence never discards)', async () => {
+      const sink = mock(() => {});
+      setup(1, {
+        maxProtocolMessageBytes: 4_096,
+        requireProtocolVersion: true,
+        onLog: sink,
+        forwardedLogFloodThreshold: 1_000,
+        forwardedLogStrikeThreshold: 5,
+      });
+
+      await startOwned('wf-log');
+      const worker = firstWorker();
+
+      const oversize = { ...logRecord('big'), attributes: { blob: 'x'.repeat(8_192) } };
+      dispatchLog(worker, oversize); // one strike, below threshold
+      dispatchLog(worker, { not: 'a-log' }); // two strikes, still below threshold
+
+      expect(mockPool.discard).not.toHaveBeenCalled();
+    });
+  });
 });

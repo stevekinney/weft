@@ -431,6 +431,10 @@ export function createExecutionStrategyBundle(parameters: {
       discardOnCancel: workerExecutionConfiguration.discardOnCancel,
       workflowTurnTimeoutMs: workerExecutionConfiguration.workflowTurnTimeoutMs,
       maxProtocolMessageBytes: workerExecutionConfiguration.maxProtocolMessageBytes,
+      // Forwarded-log abuse counter (#545): the strategy uses the engine clock so the
+      // flood window is deterministic in tests (no wall-clock sleeps). Thresholds use
+      // the gate's generous defaults — not an operator-tunable surface.
+      getNow,
       ...(logSink !== undefined && { onLog: logSink }),
     };
     return {

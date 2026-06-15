@@ -45,47 +45,69 @@ describe('deliverForwardedWorkerLog (#529)', () => {
     timestamp: 0,
   };
 
-  it('delivers a valid in-budget record to the sink', () => {
+  it('delivers a valid in-budget record to the sink and reports accepted-valid', () => {
     const received: Array<{ message: string }> = [];
-    deliverForwardedWorkerLog(logMessage(validRecord), (record) => received.push(record), 4_096);
+    const outcome = deliverForwardedWorkerLog(
+      logMessage(validRecord),
+      (record) => received.push(record),
+      4_096,
+    );
     expect(received).toEqual([expect.objectContaining({ message: 'hello' })]);
+    expect(outcome).toBe('accepted-valid');
   });
 
   it('delivers when no size cap is configured', () => {
     const sink = mock(() => {});
-    deliverForwardedWorkerLog(logMessage(validRecord), sink, undefined);
+    expect(deliverForwardedWorkerLog(logMessage(validRecord), sink, undefined)).toBe(
+      'accepted-valid',
+    );
     expect(sink).toHaveBeenCalledTimes(1);
   });
 
-  it('drops a malformed record without calling the sink', () => {
+  it('drops a malformed record as dropped-invalid without calling the sink', () => {
     const sink = mock(() => {});
-    deliverForwardedWorkerLog(logMessage({ not: 'a-log' }), sink, 4_096);
+    expect(deliverForwardedWorkerLog(logMessage({ not: 'a-log' }), sink, 4_096)).toBe(
+      'dropped-invalid',
+    );
     expect(sink).not.toHaveBeenCalled();
   });
 
-  it('drops a record whose workflowId does not match the envelope', () => {
+  it('drops a record whose workflowId does not match the envelope as dropped-invalid', () => {
     const sink = mock(() => {});
     const otherWorkflowRecord = { ...validRecord, workflowId: 'wf-other' };
-    deliverForwardedWorkerLog(logMessage(otherWorkflowRecord, 'wf-1'), sink, 4_096);
+    expect(deliverForwardedWorkerLog(logMessage(otherWorkflowRecord, 'wf-1'), sink, 4_096)).toBe(
+      'dropped-invalid',
+    );
     expect(sink).not.toHaveBeenCalled();
   });
 
-  it('drops a record missing required envelope fields', () => {
+  it('drops a record missing required envelope fields as dropped-invalid', () => {
     const sink = mock(() => {});
     // Missing workflowType and timestamp.
     const partial = { level: 'info', message: 'hi', workflowId: 'wf-1' };
-    deliverForwardedWorkerLog(logMessage(partial), sink, 4_096);
+    expect(deliverForwardedWorkerLog(logMessage(partial), sink, 4_096)).toBe('dropped-invalid');
     expect(sink).not.toHaveBeenCalled();
   });
 
-  it('drops an oversized record without calling the sink', () => {
+  it('drops an oversized record as dropped-oversize without calling the sink', () => {
     const sink = mock(() => {});
     const oversize = { ...validRecord, attributes: { blob: 'x'.repeat(8_192) } };
-    deliverForwardedWorkerLog(logMessage(oversize), sink, 4_096);
+    expect(deliverForwardedWorkerLog(logMessage(oversize), sink, 4_096)).toBe('dropped-oversize');
     expect(sink).not.toHaveBeenCalled();
   });
 
-  it('falls a throwing sink back to console (a logging error never propagates)', () => {
+  it('classifies a huge malformed record as dropped-oversize (size checked before structure)', () => {
+    const sink = mock(() => {});
+    // Malformed (no log fields) AND over the cap — size is checked first, so this is
+    // an oversize anomaly, matching where the dominant structured-clone cost is paid.
+    const hugeMalformed = { not: 'a-log', blob: 'x'.repeat(8_192) };
+    expect(deliverForwardedWorkerLog(logMessage(hugeMalformed), sink, 4_096)).toBe(
+      'dropped-oversize',
+    );
+    expect(sink).not.toHaveBeenCalled();
+  });
+
+  it('falls a throwing sink back to console and still reports accepted-valid', () => {
     const sink = mock(() => {
       throw new Error('sink blew up');
     });
@@ -93,7 +115,11 @@ describe('deliverForwardedWorkerLog (#529)', () => {
     const originalConsoleInfo = console.info;
     console.info = consoleInfo as unknown as typeof console.info;
     try {
-      expect(() => deliverForwardedWorkerLog(logMessage(validRecord), sink, 4_096)).not.toThrow();
+      let outcome: string | undefined;
+      expect(() => {
+        outcome = deliverForwardedWorkerLog(logMessage(validRecord), sink, 4_096);
+      }).not.toThrow();
+      expect(outcome).toBe('accepted-valid');
       expect(sink).toHaveBeenCalledTimes(1);
       expect(consoleInfo).toHaveBeenCalledWith(expect.objectContaining({ message: 'hello' }));
     } finally {
@@ -101,9 +127,11 @@ describe('deliverForwardedWorkerLog (#529)', () => {
     }
   });
 
-  it('is a no-op when no sink is installed', () => {
-    expect(() =>
-      deliverForwardedWorkerLog(logMessage(validRecord), undefined, 4_096),
-    ).not.toThrow();
+  it('reports accepted-valid (does not throw) when no sink is installed', () => {
+    let outcome: string | undefined;
+    expect(() => {
+      outcome = deliverForwardedWorkerLog(logMessage(validRecord), undefined, 4_096);
+    }).not.toThrow();
+    expect(outcome).toBe('accepted-valid');
   });
 });

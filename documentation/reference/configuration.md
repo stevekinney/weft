@@ -158,6 +158,8 @@ interface WorkerExecutionOptions {
 
 The Worker protocol byte limit is separate from `payloadSize.maxBytes`. Payload limits guard workflow inputs, signals, and activity results at API boundaries. `maxProtocolMessageBytes` guards Weft-owned Worker envelopes, checkpoints, and operation-result messages crossing `postMessage`.
 
+In Worker mode, `ctx.log` records are forwarded to the host `onLog` sink through a lenient lane that never trips the turn watchdog. To bound abuse on that lane, a per-worker counter discards a worker that floods forwarded logs within a generous sliding window, or that accumulates repeated oversize/malformed records over its lifetime. The thresholds are internal and deliberately generous so honest high-log workflows are never discarded — a false discard would fail a real user's in-flight workflows. `maxProtocolMessageBytes` remains a post-receive guard: the runtime structured-clones each message before any handler runs, so the size cap drops oversize records but cannot prevent the clone allocation; repeated oversize records are what the strike limit escalates.
+
 ---
 
 ## `ServeOptions`

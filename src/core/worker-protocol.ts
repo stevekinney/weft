@@ -18,6 +18,30 @@ export const DEFAULT_WORKER_TURN_TIMEOUT_MS = 1_000;
 export const DEFAULT_WORKER_PROTOCOL_MESSAGE_BYTES = 1_048_576;
 export const MIN_WORKER_PROTOCOL_MESSAGE_BYTES = 4_096;
 
+/**
+ * Default sliding-window length (ms) for the forwarded-log flood budget (#545). One
+ * minute is generous: a workflow logging many records per second stays well under the
+ * paired {@link DEFAULT_FORWARDED_LOG_FLOOD_THRESHOLD} across this window, so the
+ * default never discards legitimate high-log traffic.
+ */
+export const DEFAULT_FORWARDED_LOG_FLOOD_WINDOW_MS = 60_000;
+/**
+ * Default maximum forwarded-log arrivals per worker within
+ * {@link DEFAULT_FORWARDED_LOG_FLOOD_WINDOW_MS} before the worker is discarded for
+ * flooding (#545). Deliberately high — a false discard fails a real user's in-flight
+ * workflows (an asymmetric harm), so the default tolerates bursty-but-honest logging
+ * and only trips on sustained abuse.
+ */
+export const DEFAULT_FORWARDED_LOG_FLOOD_THRESHOLD = 1_000;
+/**
+ * Cumulative lifetime anomalous (oversize OR structurally invalid) forwarded-log
+ * records tolerated per worker before discard (#545). A small constant — a well-behaved
+ * worker-side logger never emits oversize or malformed records, so a few in a worker's
+ * whole lifetime already signal abuse, and there is no legitimate-traffic reason to make
+ * this configurable. Not window-scoped and never reset.
+ */
+export const FORWARDED_LOG_STRIKE_THRESHOLD = 5;
+
 const BINARY_MARKER = '__weftBinaryBytes';
 const DATE_MARKER = '__weftDate';
 const ERROR_MARKER = '__weftError';
