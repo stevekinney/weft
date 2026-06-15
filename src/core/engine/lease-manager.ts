@@ -94,8 +94,11 @@ export type LeaseManagerOptions = {
 /**
  * A running lease manager.
  *
- * - `acquire()` blocks until this instance owns the lease (throws
- *   {@link EngineLeaseAcquisitionTimeoutError} on timeout). Call before recovery.
+ * - `acquire()` blocks until this instance owns the lease, then resolves; throws
+ *   {@link EngineLeaseAcquisitionTimeoutError} on timeout. Call before recovery.
+ *   One exception to "resolved ⇒ owned": if the manager was `stop()`ped (disposal)
+ *   while acquire was waiting, it resolves WITHOUT owning — the engine gates
+ *   recovery on `disposed` so a stopped-then-resolved acquire never proceeds.
  * - `startRenewal()` begins the heartbeat that keeps the lease held (drives
  *   {@link LeaseManager.renewOnce} on an interval).
  * - `renewOnce()` runs a single renewal round; exposed for tests so renewal can be
