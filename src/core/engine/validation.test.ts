@@ -200,10 +200,10 @@ describe('engine validation helpers', () => {
       status: 'running',
       createdAt: 1,
       updatedAt: 2,
-      tenant: { id: 'acme', attributes: { region: 'us' } },
+      extraPersistedField: { value: true },
     };
     const decoded = decodeWorkflowState(encode(stateWithUnknownField));
-    expect('tenant' in decoded).toBe(false);
+    expect('extraPersistedField' in decoded).toBe(false);
     expect(decoded.id).toBe('wf-extra-field');
   });
 

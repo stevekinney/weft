@@ -26,6 +26,27 @@ const WORKFLOW_TIMELINE_STATUSES = new Set<WorkflowTimelineStatus>([
   'timed-out',
 ]);
 
+const WORKFLOW_STATE_FIELD_NAMES = new Set<string>([
+  'id',
+  'type',
+  'status',
+  'tags',
+  'input',
+  'result',
+  'error',
+  'errorStack',
+  'failureCategory',
+  'terminationReason',
+  'versionTuple',
+  'executionStateOwnerId',
+  'createdAt',
+  'startedAt',
+  'updatedAt',
+  'terminalCleanupToken',
+  'executionDeadline',
+  'forkedFrom',
+] satisfies readonly (keyof WorkflowState)[]);
+
 export function isSanitizedSearchAttributeValue(
   value: unknown,
 ): value is import('../types.ts').SearchAttributeValue {
@@ -113,12 +134,6 @@ export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
   }
   // bytes were written by encode(WorkflowState) — shape is guaranteed by our own storage
   const state = decoded as WorkflowState;
-  // A persisted record may carry a `tenant` field that is not part of
-  // WorkflowState. Tolerate-and-drop it on decode rather than hard-failing the
-  // read of such a record.
-  if ('tenant' in state) {
-    delete (state as Record<string, unknown>)['tenant'];
-  }
   if (!isValidDecodedTags(state.tags)) {
     console.warn(
       `[weft] Decoded workflow state for "${String(state.id)}" has invalid tags; ` +
@@ -144,6 +159,15 @@ export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
           'This usually indicates corruption or tampering of the storage record.',
       );
       delete state.executionStateOwnerId;
+    }
+  }
+  return stripUnknownWorkflowStateFields(state);
+}
+
+function stripUnknownWorkflowStateFields(state: WorkflowState): WorkflowState {
+  for (const fieldName of Object.keys(state)) {
+    if (!WORKFLOW_STATE_FIELD_NAMES.has(fieldName)) {
+      delete state[fieldName as keyof WorkflowState];
     }
   }
   return state;

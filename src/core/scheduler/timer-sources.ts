@@ -51,16 +51,15 @@ export async function readNextScannedTimerEntry(
   }
 }
 
-async function readNextPrefixedWorkflowTimerEntry(
+async function readNextWorkflowTimerEntry(
   iterator: AsyncIterator<[string, Uint8Array]>,
   storage: Storage,
-  options: {
-    prefix: string;
-    diagnosticName: string;
-    kind: 'terminal-cleanup' | 'teardown';
-  },
+  kind: 'terminal-cleanup' | 'teardown',
 ): Promise<ScannedTimerEntry | null> {
-  const { diagnosticName, kind, prefix } = options;
+  const { diagnosticName, prefix } =
+    kind === 'terminal-cleanup'
+      ? { diagnosticName: 'terminal cleanup', prefix: 'wf-cleanup:' }
+      : { diagnosticName: 'teardown timer', prefix: 'wf-teardown:' };
 
   while (true) {
     const next = await iterator.next();
@@ -103,22 +102,14 @@ export async function readNextTerminalCleanupTimerEntry(
   iterator: AsyncIterator<[string, Uint8Array]>,
   storage: Storage,
 ): Promise<ScannedTimerEntry | null> {
-  return readNextPrefixedWorkflowTimerEntry(iterator, storage, {
-    prefix: 'wf-cleanup:',
-    diagnosticName: 'terminal cleanup',
-    kind: 'terminal-cleanup',
-  });
+  return readNextWorkflowTimerEntry(iterator, storage, 'terminal-cleanup');
 }
 
 export async function readNextTeardownTimerEntry(
   iterator: AsyncIterator<[string, Uint8Array]>,
   storage: Storage,
 ): Promise<ScannedTimerEntry | null> {
-  return readNextPrefixedWorkflowTimerEntry(iterator, storage, {
-    prefix: 'wf-teardown:',
-    diagnosticName: 'teardown',
-    kind: 'teardown',
-  });
+  return readNextWorkflowTimerEntry(iterator, storage, 'teardown');
 }
 
 export async function advanceTimerSource(

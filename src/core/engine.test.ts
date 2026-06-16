@@ -1144,7 +1144,7 @@ describe('Engine', () => {
       string,
       unknown
     >;
-    persisted['tenant'] = { id: 'acme', attributes: { region: 'us-east-1' } };
+    persisted['extraPersistedField'] = { value: true };
     await storage.put(KEYS.workflow(workflowId), encode(persisted));
 
     const engine2 = new Engine({ storage });
@@ -1160,7 +1160,7 @@ describe('Engine', () => {
       string,
       unknown
     >;
-    expect('tenant' in resumedState).toBe(false);
+    expect('extraPersistedField' in resumedState).toBe(false);
 
     engine2[Symbol.dispose]();
   });
