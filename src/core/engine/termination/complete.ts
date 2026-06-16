@@ -166,10 +166,12 @@ export async function terminateWorkflow(
                 )
               : []),
             // Stage the durable teardown marker + timer atomically with the
-            // terminal transition (#446 Phase 2). Only when this workflow type
-            // declares a `finalizer` AND a resource was recorded — otherwise no
-            // cost is added. The marker carries the execution claim, fenced on the
-            // lease epoch by the enclosing terminal batch.
+            // terminal transition (#446 Phase 2). Gated on recorded finalizer state
+            // ALONE — NOT on whether the current registration declares a finalizer —
+            // so a recorded resource is never silently dropped when the type isn't
+            // registered with a finalizer here (see buildTeardownOperations). A
+            // workflow that never recorded state pays nothing. The marker carries the
+            // execution claim, fenced on the lease epoch by the enclosing terminal batch.
             ...buildTeardownOperations(workflowId, finalizerStatePresent, updatedAt),
           ];
         },

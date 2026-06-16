@@ -147,7 +147,7 @@ export type BulkOperationDryRunResult = {
    * surfaces the skip without recomputing them (teardown-owed is transient and is
    * re-evaluated at commit time, where the authoritative skip list is reported).
    */
-  skippedTeardownPending?: string[];
+  skippedTeardownPending?: WorkflowId[];
 };
 
 /**
@@ -357,7 +357,7 @@ export type BulkSignalResult = {
 export type BulkDeleteResult = {
   deleted: number;
   /** Ids of terminal workflows skipped because they still owe a finalizer run. */
-  skippedTeardownPending?: string[];
+  skippedTeardownPending?: WorkflowId[];
   auditEvent?: BulkOperationAuditEvent;
 };
 
