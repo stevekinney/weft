@@ -92,14 +92,16 @@ export interface WorkflowDefinition<
    * worker execution mode isolates only the workflow generator in a Web Worker.
    *
    * Durable teardown, however, only fires when the workflow staged finalizer state
-   * via {@link WorkflowContext.setFinalizerState} before terminating — and although
-   * that method is declared on {@link WorkflowContext} (so the call type-checks in
-   * any generator), only inline execution wires up the engine callback it delegates
-   * to; in worker mode that callback is absent, so the call throws a guard error at
-   * runtime, and there is no host-side API to stage the state on the workflow's
-   * behalf. So a worker-mode workflow that needs durable finalizer teardown must run
-   * **inline** to record its state; registering a `finalizer` on a worker-mode engine
-   * no longer throws, but a worker generator cannot drive it. The inline-only alternatives are `ctx.onCancel`
+   * via {@link WorkflowContext.setFinalizerState} before terminating — and that
+   * call works only under inline execution. A handler annotated
+   * `(ctx: WorkflowContext)` type-checks the call in any generator (the static type
+   * declares the method), but at runtime in worker mode the generator's `ctx` is a
+   * reduced worker-side context that does not carry `setFinalizerState` at all, so
+   * the call fails with a `TypeError`; and there is no host-side API to stage the
+   * state on the workflow's behalf. So a worker-mode workflow that needs durable
+   * finalizer teardown must run **inline** to record its state; registering a
+   * `finalizer` on a worker-mode engine no longer throws, but a worker generator
+   * cannot drive it. The inline-only alternatives are `ctx.onCancel`
    * (in-process, best-effort cleanup that need not survive a crash) and `ctx.saga`
    * (multi-step ordered rollback) — both are unavailable in worker mode, where
    * teardown must happen in the workflow body (a `ctx.run` destroy step in a

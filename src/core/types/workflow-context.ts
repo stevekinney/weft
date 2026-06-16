@@ -438,8 +438,13 @@ export interface WorkflowContext<
    * in-generator `ctx.setFinalizerState` call requires inline execution (see
    * `setFinalizerState`).
    *
-   * **Worker-pool mode**: this method throws when the engine uses a remote
-   * worker pool so teardown does not silently drop.
+   * **Inline-only**: `onCancel` is in-process host wiring available only under
+   * inline execution. A handler annotated `(ctx: WorkflowContext)` type-checks the
+   * call (the static type declares it), but at runtime in worker mode the
+   * generator's `ctx` is a reduced worker-side context that does not carry
+   * `onCancel`, so the call fails with a `TypeError` rather than silently dropping
+   * teardown. (Inside a `ctx.speculate()` branch the method is present but its
+   * engine callback is unset, so it throws a descriptive guard error instead.)
    *
    * @example
    * ```ts
@@ -481,16 +486,26 @@ export interface WorkflowContext<
    * development warning is logged); finalizer state is recordable only while the
    * workflow is live.
    *
-   * **Worker-generator caveat**: this method type-checks in any workflow
-   * generator — the generator's `ctx` is typed as {@link WorkflowContext}, which
-   * declares `setFinalizerState` — but the limitation is at runtime. Only inline
-   * execution wires up the engine callback this method delegates to; in worker
-   * execution mode and inside `ctx.speculate()` branches that callback is absent,
-   * so the call throws a guard error rather than recording state. A workflow that
-   * must record finalizer state has to run in inline execution mode. Durable
-   * finalizer *registration* works in worker mode since #564; only the in-generator
-   * `setFinalizerState` call requires inline execution. For in-process, best-effort
-   * cleanup that does not need to survive a crash, use {@link WorkflowContext.onCancel}.
+   * **Inline-only caveat**: this method is durable host wiring, available only
+   * under inline execution — but its absence surfaces differently per path:
+   *
+   * - *Inline, top level*: the engine wires up the callback this method delegates
+   *   to, so it records state.
+   * - *Inside a `ctx.speculate()` branch*: the branch reuses the same
+   *   {@link WorkflowContext}, so `setFinalizerState` exists, but the engine
+   *   leaves its callback unset for speculation, so the call throws a descriptive
+   *   guard error rather than recording state.
+   * - *Worker execution mode*: the generator's runtime `ctx` is a reduced
+   *   worker-side context that does not carry `setFinalizerState` at all. A
+   *   handler annotated `(ctx: WorkflowContext)` still type-checks the call (the
+   *   static type declares the method), but at runtime the method is absent on the
+   *   worker context value, so the call fails with a `TypeError`.
+   *
+   * A workflow that must record finalizer state therefore has to run in inline
+   * execution mode. Durable finalizer *registration* works in worker mode since
+   * #564; only the in-generator `setFinalizerState` call requires inline execution.
+   * For in-process, best-effort cleanup that does not need to survive a crash, use
+   * {@link WorkflowContext.onCancel}.
    *
    * @example
    * ```ts
