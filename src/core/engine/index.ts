@@ -156,7 +156,7 @@ import {
 } from './engine-runtime-helpers.ts';
 import type { EngineStateNamespace } from './engine-state-namespace.ts';
 import { EngineCreateNameMismatchError, EngineDisposedError } from './errors.ts';
-import { assertLeaseHeldForEngineWork } from './fenced-write.ts';
+import { assertLeaseHeldForEngineWork, commitFencedEngineWrite } from './fenced-write.ts';
 import { recordFinalizerState } from './finalizer-state.ts';
 import {
   createWorkflowHandleWithResultPromise as createWorkflowHandleWithResultPromiseFromInternals,
@@ -548,6 +548,17 @@ export class Engine<
           this.#createTimeOperationCallbacks(),
         ),
       getNow,
+      // Fence the fired-timer delete on the lease epoch (#563) so a deposed
+      // engine cannot drop a timer while its callback's fenced reschedule/clear
+      // was rejected. Empty base conditions: the only guard is the epoch fence,
+      // so under single-engine ownership this commits like the unfenced default.
+      commitTimerCleanup: (operations) =>
+        commitFencedEngineWrite(
+          getInternals(this),
+          operations,
+          [],
+          () => new Error('Timer cleanup lost its fenced CAS race'),
+        ),
     });
     getInternals(this).strategy = strategyBundle.strategy;
     getInternals(this).inlineStrategy = strategyBundle.inlineStrategy;
