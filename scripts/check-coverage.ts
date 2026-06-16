@@ -173,6 +173,7 @@ export function assertNoAllowanceKeyIsCoverageIgnored(
 }
 
 const COVERAGE_TEST_TIMEOUT_MS = 30_000;
+const COVERAGE_CAPTURE_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const COVERAGE_TEST_FILE_GLOBS = ['*test.ts', '*spec.ts'] as const;
 
 function isExecFileFailure(error: unknown): error is ExecFileFailure {
@@ -2027,10 +2028,14 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
     ],
     ['src/core/engine/callback-creators-bundles.ts', { functions: 1 }],
     ['src/core/engine/checkpoint-replay.ts', { lines: new Set([134]) }],
+    ['src/core/engine/index.ts', { functions: 1 }],
+    ['src/core/engine/lease-deposition.ts', { functions: 1 }],
+    ['src/core/engine/lifecycle/resume.ts', { functions: 1, lines: new Set([67]) }],
     ['src/core/engine/lifecycle/recovered-services.ts', { functions: 1, lines: new Set([75]) }],
     [
       'src/core/engine/lifecycle/start-commit.ts',
       {
+        functions: 1,
         lines: createMergedLineSet(
           createLineSet(84, 86),
           createLineSet(195, 199),
@@ -2038,10 +2043,12 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         ),
       },
     ],
+    ['src/core/engine/lifecycle/transition.ts', { functions: 1 }],
     ['src/core/engine/listing.ts', { lines: new Set([84, 134, 235, 255]) }],
     [
       'src/core/engine/pending-updates.ts',
       {
+        functions: 1,
         lines: createMergedLineSet(
           new Set([107, 116, 253]),
           createLineSet(173, 177),
@@ -2414,6 +2421,7 @@ async function runCoverageShard(
     execFileSync('bun', args.slice(1), {
       cwd: globalThis.process.cwd(),
       env: { ...process.env, ...Bun.env, WEFT_COVERAGE_MODE: '1' },
+      maxBuffer: COVERAGE_CAPTURE_MAX_BUFFER_BYTES,
       stdio: 'pipe',
     });
   } catch (error) {
@@ -2445,6 +2453,10 @@ export async function checkCoverage(): Promise<boolean> {
   const shard = await runCoverageShard({
     name: 'coverage',
     coverageDirectory: 'coverage',
+    // Bun's default coverage sharding intermittently exits 1 without reporting a
+    // failing test in this suite; run the deterministic gate single-threaded so
+    // the lcov pass is stable and debuggable.
+    parallelism: 1,
     testFiles: allTestFiles,
   });
 

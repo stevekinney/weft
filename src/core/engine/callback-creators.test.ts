@@ -113,6 +113,94 @@ describe('engine callback creators', () => {
     engine[Symbol.dispose]();
   });
 
+  it('surfaces coordinated update response write failures through cleanup warnings', async () => {
+    const realStorage = new MemoryStorage();
+    const storage = {
+      batch: async (operations: Array<{ key?: string }>) => {
+        if (operations.some((operation) => operation.key?.startsWith('upr:'))) {
+          throw new Error('response write failed');
+        }
+        return realStorage.batch(operations as never);
+      },
+      capabilities: realStorage.capabilities.bind(realStorage),
+      conditionalBatch: realStorage.conditionalBatch?.bind(realStorage),
+      delete: realStorage.delete.bind(realStorage),
+      get: realStorage.get.bind(realStorage),
+      put: realStorage.put.bind(realStorage),
+      scan: realStorage.scan.bind(realStorage),
+      [Symbol.dispose]: () => realStorage[Symbol.dispose](),
+    };
+    const engine = new Engine({ storage: storage as never });
+    const warnings: CleanupWarningEvent[] = [];
+
+    engine.addEventListener(CleanupWarningEvent.type, (event) => {
+      warnings.push(event);
+    });
+
+    await createUpdateCallbacks(engine).persistCoordinatedUpdateResponse(
+      'workflow-update-response-failure',
+      'approve',
+      'update-1',
+      'idempotency-1',
+      { approved: true },
+    );
+
+    await sleepForTesting(0);
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        source: 'writeCoordinatedUpdateResponse',
+        workflowId: 'workflow-update-response-failure',
+        error: expect.objectContaining({ message: 'response write failed' }),
+      }),
+    ]);
+
+    engine[Symbol.dispose]();
+  });
+
+  it('surfaces coordinated update response lost-race errors through cleanup warnings', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ ownership: 'lease', storage });
+    const internals = getInternals(engine);
+    const warnings: CleanupWarningEvent[] = [];
+
+    const epochBytes = new Uint8Array(8);
+    new DataView(epochBytes.buffer).setBigUint64(0, 1n, false);
+    internals.leaseManager = {
+      currentEpochBytes: () => epochBytes,
+      release: async () => {},
+      stop: () => {},
+    } as never;
+    internals.options.ownershipMode = 'lease';
+    storage.conditionalBatch = async () => false;
+    await storage.put(KEYS.leaseEpoch(), epochBytes);
+
+    engine.addEventListener(CleanupWarningEvent.type, (event) => {
+      warnings.push(event);
+    });
+
+    await createUpdateCallbacks(engine).persistCoordinatedUpdateResponse(
+      'workflow-update-response-race',
+      'approve',
+      'update-2',
+      undefined,
+      { approved: true },
+    );
+
+    await sleepForTesting(0);
+    expect(warnings).toEqual([
+      expect.objectContaining({
+        source: 'writeCoordinatedUpdateResponse',
+        workflowId: 'workflow-update-response-race',
+        error: expect.objectContaining({
+          message:
+            'Coordinated update response for workflow "workflow-update-response-race" lost its CAS race.',
+        }),
+      }),
+    ]);
+
+    engine[Symbol.dispose]();
+  });
+
   it('binds submit-review dispatch callbacks to the engine', () => {
     const engine = new Engine();
     const event = new Event('review:submitted');

@@ -13,6 +13,29 @@ async function* waitForRelease(
 }
 
 describe('workflow definition concurrency', () => {
+  it('rejects non-positive workflow concurrency limits at registration time', async () => {
+    await using engine = new TestEngine({ startTime: 1_000 });
+
+    expect(() =>
+      engine.register(
+        workflow({ name: 'invalid-limit', concurrency: { max: 0 } }).execute(waitForRelease),
+      ),
+    ).toThrow('registration("invalid-limit").concurrency.max must be a positive integer');
+  });
+
+  it('rejects non-function workflow concurrency keys at registration time', async () => {
+    await using engine = new TestEngine({ startTime: 1_000 });
+
+    expect(() =>
+      engine.register(
+        workflow({
+          name: 'invalid-key',
+          concurrency: { max: 1, key: 'customer-id' as never },
+        }).execute(waitForRelease),
+      ),
+    ).toThrow('registration("invalid-key").concurrency.key must be a function when provided');
+  });
+
   it('rejects excess starts immediately for a workflow-wide limit', async () => {
     await using engine = new TestEngine({ startTime: 1_000 });
     engine.register(
