@@ -464,10 +464,10 @@ export interface WorkflowContext<
    * checkpoint or the terminal transition, fenced under lease ownership — so the
    * finalizer can run even across a hard cancel or an engine crash. Recording is
    * the engine's signal that there is something to tear down: if the workflow
-   * never calls this, the engine skips the finalizer entirely; recording `null`
-   * still counts as recorded (the finalizer runs with a `null` payload). The
-   * value is last-write-wins, so a later call replaces the earlier one — record
-   * the id of the resource that is currently live.
+   * never calls this, the engine skips the finalizer entirely. Recording `null`
+   * is different — it still counts as recorded, so the finalizer runs with a
+   * `null` payload. The value is last-write-wins, so a later call replaces the
+   * earlier one — record the id of the resource that is currently live.
    *
    * **The finalizer runs at least once and must be idempotent.** The engine
    * drives it with bounded retries and re-drives a stale claim after a crash, so
@@ -479,10 +479,11 @@ export interface WorkflowContext<
    * development warning is logged); finalizer state is recordable only while the
    * workflow is live.
    *
-   * **Inline only**: this method throws under worker execution mode, matching the
-   * registration-time rejection of worker-mode finalizers. Durable finalizers are
-   * not yet supported in worker mode (#564). For in-process, best-effort cleanup
-   * that does not need to survive a crash, use {@link WorkflowContext.onCancel}.
+   * **Inline only**: this method throws under worker execution mode and inside
+   * `ctx.speculate()` branches, matching the registration-time rejection of
+   * worker-mode finalizers. Durable finalizers are not yet supported in worker
+   * mode (#564). For in-process, best-effort cleanup that does not need to
+   * survive a crash, use {@link WorkflowContext.onCancel}.
    *
    * @example
    * ```ts

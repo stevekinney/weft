@@ -73,12 +73,13 @@ export interface WorkflowDefinition<
    *
    * After a `cancelled` or `timed-out` terminal, the engine drives this finalizer
    * to durable completion, passing the value recorded by
-   * {@link WorkflowContext.setFinalizerState} as its input. The drive survives a
-   * hard cancel and an engine crash: it runs from a durable timer + claim marker,
-   * retries with backoff on failure, re-drives a stale claim after recovery, and
-   * dead-letters durably once it exhausts its attempt budget. The engine skips the
-   * finalizer entirely when the workflow never recorded any finalizer state, and
-   * `completed`/`failed` workflows never run it (only `cancelled`/`timed-out`).
+   * {@link WorkflowContext.setFinalizerState} as its input. That teardown survives
+   * a hard cancel and an engine crash: the engine schedules it durably, claims it
+   * before running, retries failures with backoff, re-drives a stale claim after
+   * recovery, and records a durable dead-letter once the attempt budget is
+   * exhausted. The engine skips the finalizer entirely when the workflow never
+   * recorded any finalizer state, and `completed`/`failed` workflows never run it
+   * (only `cancelled`/`timed-out`).
    *
    * **The finalizer runs at least once and must be idempotent.** Bounded retries
    * and crash-recovery re-drive mean the same payload can reach it more than once,

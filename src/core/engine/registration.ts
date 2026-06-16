@@ -64,9 +64,10 @@ function assertFinalizerSupported(
   // execution path after a `cancelled`/`timed-out` terminal. It is inline-only
   // by design: a definition-level `finalizer` is never advertised to a worker's
   // activity table, so a worker-mode engine could not run it — dispatch would
-  // fail to match and the teardown would silently dead-letter a paid external
-  // resource. Worker-mode parity is tracked separately (#564). Fail loud at
-  // registration rather than mid-teardown so the limitation is obvious up front.
+  // fail to match and the teardown attempt would dead-letter while the paid
+  // external resource stayed live. Worker-mode parity is tracked separately
+  // (#564). Fail loud at registration rather than mid-teardown so the limitation
+  // is obvious up front.
   if (internals.inlineStrategy === null) {
     throw new Error(
       `Cannot register workflow "${name}" with a finalizer: durable finalizers require inline execution and are ` +
