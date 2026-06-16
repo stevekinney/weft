@@ -11,6 +11,10 @@ type LongLivedBinding = {
 
 const WEBSOCKET_SUBSCRIPTION_BINDINGS = [
   {
+    operationName: 'weft.events.subscribe',
+    transportKind: 'websocket-subscription',
+  },
+  {
     operationName: 'weft.workflows.events',
     transportKind: 'websocket-subscription',
   },

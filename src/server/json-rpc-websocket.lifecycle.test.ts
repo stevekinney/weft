@@ -89,7 +89,7 @@ function createSession(feed: WorkflowEventFeed, emitter = makeEmitter()) {
     session: createJsonRpcWebSocketSession({
       registry: createLiveOperationRegistry(),
       engine: fakeEngine,
-      principal: principalFromApiKey({ subject: 'test', scopes: ['workflows:read'] }),
+      principal: principalFromApiKey({ subject: 'test', scopes: ['events:read'] }),
       emitter,
       feed,
     }),

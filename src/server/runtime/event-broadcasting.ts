@@ -5,27 +5,18 @@ import {
   loadStoredStreamTailSequence,
 } from '../../core/engine/stream-chunk-loading.ts';
 import {
-  ActivityCompletedEvent,
-  ActivityFailedEvent,
-  ActivityStartedEvent,
-  AttributesChangedEvent,
-  SignalDeliveredEvent,
-  SignalReceivedEvent,
-  UpdateCompletedEvent,
-  UpdateReceivedEvent,
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
   WorkflowFailedEvent,
-  WorkflowStartedEvent,
   WorkflowTimedOutEvent,
 } from '../../core/events.ts';
 import { KEYS } from '../../storage/interface.ts';
+import type { FleetEventFeed } from '../fleet-event-feed.ts';
 import { claimNextSequence } from '../runtime-helpers.ts';
+import { CLIENT_VISIBLE_EVENT_TYPES, TOKEN_EVENT_TYPE } from './client-visible-events.ts';
 import type { ServerContext } from './context.ts';
 import { cancelTask } from './task-dispatch.ts';
 import { withRetry } from './websocket-worker.ts';
-
-const TOKEN_EVENT_TYPE = 'stream:token';
 
 function workflowChannelPath(workflowId: string, connectionType: 'watch' | 'stream'): string {
   return `/v1/workflows/${encodeURIComponent(workflowId)}/${connectionType}`;
@@ -195,6 +186,7 @@ export function wireEventBroadcasting(
   server: ReturnType<typeof Bun.serve>,
   options?: {
     publishTokenMessage?: (workflowId: string, sequence: number, message: string) => void;
+    fleetEventFeed?: FleetEventFeed;
   },
 ): EventBroadcastingHandle {
   const controller = new AbortController();
@@ -305,8 +297,13 @@ export function wireEventBroadcasting(
     // Claim the sequence number once — outside the retry scope so a
     // failed storage write doesn't consume an additional number.
     const sequence = claimNextSequence(sequenceCounters, workflowId);
+    const watchMessage = JSON.stringify({
+      ...parsed,
+      sequence,
+      cursor: String(sequence),
+    });
     const storageKey = KEYS.event(workflowId, sequence);
-    const encoded = encode(parsed);
+    const encoded = encode(JSON.parse(watchMessage));
 
     await withRetry(
       async () => engine.storage.put(storageKey, encoded),
@@ -315,7 +312,7 @@ export function wireEventBroadcasting(
 
     // Publish to the workflow's watch channel
     const watchChannel = workflowChannelPath(workflowId, 'watch');
-    server.publish(watchChannel, message);
+    server.publish(watchChannel, watchMessage);
 
     // For token events, also publish to the stream channel
     if (eventType === TOKEN_EVENT_TYPE) {
@@ -347,6 +344,7 @@ export function wireEventBroadcasting(
       const streamMessage = JSON.stringify({
         ...parsed,
         sequence: tokenSequence,
+        cursor: String(tokenSequence),
         data: tokenPayload,
       });
       if (options?.publishTokenMessage) {
@@ -358,32 +356,15 @@ export function wireEventBroadcasting(
     }
   }
 
-  const eventTypes = [
-    WorkflowStartedEvent.type,
-    WorkflowCompletedEvent.type,
-    WorkflowFailedEvent.type,
-    WorkflowCancelledEvent.type,
-    WorkflowTimedOutEvent.type,
-    ActivityStartedEvent.type,
-    ActivityCompletedEvent.type,
-    ActivityFailedEvent.type,
-    TOKEN_EVENT_TYPE,
-    SignalReceivedEvent.type,
-    SignalDeliveredEvent.type,
-    AttributesChangedEvent.type,
-    UpdateReceivedEvent.type,
-    UpdateCompletedEvent.type,
-  ] as const;
-
-  for (const eventType of eventTypes) {
+  for (const eventType of CLIENT_VISIBLE_EVENT_TYPES) {
     engine.addEventListener(
       eventType,
       (event) => {
         const workflowId = getWorkflowIdFromEvent(event);
-        if (workflowId === undefined) return;
-
         const message = serializeEvent(event);
         if (message === null) return;
+        void appendFleetEvent(options?.fleetEventFeed, eventType, workflowId, message);
+        if (workflowId === undefined) return;
 
         // Persist the event to storage for the REST events endpoint.
         // Sequence initialization is async (reads storage on first access per
@@ -455,4 +436,28 @@ export function wireEventBroadcasting(
     dispose: () => controller.abort(),
     cleanupWorkflow,
   };
+}
+
+async function appendFleetEvent(
+  fleetEventFeed: FleetEventFeed | undefined,
+  eventType: string,
+  workflowId: string | undefined,
+  message: string,
+): Promise<void> {
+  if (fleetEventFeed === undefined) return;
+  try {
+    const parsed = JSON.parse(message) as {
+      type: string;
+      timestamp: number;
+      data: Record<string, unknown>;
+    };
+    await fleetEventFeed.append({
+      kind: eventType,
+      emittedAtMs: parsed.timestamp,
+      ...(workflowId !== undefined ? { workflowId } : {}),
+      payload: parsed.data,
+    });
+  } catch (error) {
+    console.error(`[weft] Failed to append fleet event "${eventType}":`, error);
+  }
 }

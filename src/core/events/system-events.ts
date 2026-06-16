@@ -98,6 +98,36 @@ export class StorageSizeReportedEvent extends Event {
   }
 }
 
+/** Fired when a remote worker successfully registers with the server runtime. */
+export class WorkerConnectedEvent extends Event {
+  static readonly type = 'worker:connected' as const;
+  readonly workerId: string;
+  readonly queue: string;
+  readonly activities: readonly string[];
+  readonly concurrency: number;
+
+  constructor(workerId: string, queue: string, activities: readonly string[], concurrency: number) {
+    super(WorkerConnectedEvent.type);
+    this.workerId = workerId;
+    this.queue = queue;
+    this.activities = activities;
+    this.concurrency = concurrency;
+  }
+}
+
+/** Fired when a registered remote worker is removed after disconnect handling. */
+export class WorkerDisconnectedEvent extends Event {
+  static readonly type = 'worker:disconnected' as const;
+  readonly workerId: string;
+  readonly inFlightTaskCount: number;
+
+  constructor(workerId: string, inFlightTaskCount: number) {
+    super(WorkerDisconnectedEvent.type);
+    this.workerId = workerId;
+    this.inFlightTaskCount = inFlightTaskCount;
+  }
+}
+
 /**
  * Fired on the {@link Engine} when a built-in alert metric breaches its
  * threshold. Read `e.metric`, `e.threshold`, `e.currentValue`, and

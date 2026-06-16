@@ -62,7 +62,7 @@ const server = serve({
 });
 ```
 
-The built-in API-key configuration grants the configured key the default authenticated scope set. JWT and custom authenticators can provide narrower scope sets such as `workflows:read`, `workflows:write`, `workflows:admin`, and `system:read`; requests missing the required scope fail with `401` or `403` before the operation runs.
+The built-in API-key configuration grants the configured key the default authenticated scope set. JWT and custom authenticators can provide narrower scope sets such as `workflows:read`, `workflows:write`, `workflows:admin`, `events:read`, `streams:read`, and `system:read`; requests missing the required scope fail with `401` or `403` before the operation runs. Raw `/watch` sockets require `events:read`, raw token `/stream` sockets require `streams:read`, and `weft.events.subscribe` requires `events:read`.
 
 ### Audit trail
 
@@ -341,8 +341,10 @@ The server supports WebSocket connections for real-time streaming. When a reques
 
 Three WebSocket routes are available:
 
-- `/api/v1/workflows/:id/watch` — observe workflow state changes in real time
+- `/api/v1/workflows/:id/watch` — observe workflow state changes in real time; accepts `?resumeFrom=<sequence>`
+- `/api/v1/workflows/:id/stream` — stream workflow token chunks; accepts `?resumeFrom=<sequence>`
 - `/api/v1/tasks/:queue/stream` — [remote worker](./remote-workers.md) task dispatch
+- `/api/jsonrpc` — JSON-RPC WebSocket sessions, including `weft.workflows.subscribe` and fleet-wide `weft.events.subscribe`
 
 HTTP long-poll task requests use the request's `AbortSignal`. If the client
 disconnects before or during the poll, the waiter settles promptly and does

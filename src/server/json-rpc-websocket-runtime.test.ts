@@ -115,6 +115,7 @@ describe('json-rpc websocket runtime helpers', () => {
         registry: {} as never,
         engine: {},
         feed: {} as never,
+        fleetFeed: {} as never,
         activeSessions,
       });
 
@@ -144,6 +145,7 @@ describe('json-rpc websocket runtime helpers', () => {
         registry: {} as never,
         engine: {},
         feed: {} as never,
+        fleetFeed: {} as never,
         activeSessions,
       });
 

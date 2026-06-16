@@ -452,8 +452,8 @@ function assertForkCall(fetchCalls: FetchCall[]): void {
   expect(JSON.parse(forkBody)).toEqual({ fromStep: 2 });
 }
 
-// A static API key whose principal carries the scopes the streaming
-// subscription (`workflows:read`) and the REST surface need. The same
+// A static API key whose principal carries the scopes the event stream
+// subscription (`events:read`) and the REST surface need. The same
 // `Authorization: Bearer` header flows through both `fetch` and the WebSocket
 // upgrade, so live event streaming authenticates over the real `serve()` stack.
 const CONTRACT_API_KEY = 'http-client-contract-key';
@@ -486,7 +486,7 @@ beforeAll(() => {
     maxRequestBodyBytes: CONTRACT_PAYLOAD_CAP_BYTES * 3,
     auth: {
       apiKeys: [CONTRACT_API_KEY],
-      defaultApiKeyScopes: ['reviews:read', 'system:read', 'workflows:read'],
+      defaultApiKeyScopes: ['events:read', 'reviews:read', 'system:read', 'workflows:read'],
     },
   });
 

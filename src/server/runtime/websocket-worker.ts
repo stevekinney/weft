@@ -1,6 +1,7 @@
 import type { ServerWebSocket } from 'bun';
 
 import { decode, encode } from '../../core/codec.ts';
+import { WorkerConnectedEvent } from '../../core/events.ts';
 import { KEYS } from '../../storage/interface.ts';
 import {
   REMOTE_WORKER_PROTOCOL_VERSION,
@@ -125,6 +126,7 @@ function buildWorkerRegistrationInfo(
 
 function registerWorker(
   context: ServerContext,
+  options: ServeOptions,
   ws: ServerWebSocket<WebSocketData>,
   message: RegisterMessage,
 ): void {
@@ -168,6 +170,9 @@ function registerWorker(
     activities: [...message.activities],
     concurrency: clampedConcurrency,
   });
+  options.engine.dispatchEvent(
+    new WorkerConnectedEvent(message.workerId, queue, [...message.activities], clampedConcurrency),
+  );
 }
 
 function resolveTaskResultStatus(message: TaskResultMessage): 'completed' | 'failed' {
@@ -395,7 +400,7 @@ export function handleWorkerWebSocketMessage(
 
   switch (message.type) {
     case 'register': {
-      registerWorker(context, ws, message);
+      registerWorker(context, options, ws, message);
       break;
     }
     case 'taskResult': {

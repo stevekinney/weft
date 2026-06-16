@@ -486,6 +486,7 @@ export function serve(options: ServeOptions): WeftServer {
       publishTokenMessage: (workflowId, sequence, message) => {
         publishTokenMessage(context, workflowId, sequence, message);
       },
+      fleetEventFeed: context.fleetEventFeed,
     });
   } catch (error) {
     // Stop the server before propagating. The stack's async disposers have not

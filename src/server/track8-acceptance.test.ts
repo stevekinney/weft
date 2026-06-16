@@ -76,15 +76,15 @@ async function collectReplayEvents(engine: Engine, workflowId: string): Promise<
   return events;
 }
 
-// `weft.workflows.events` requires `workflows:read`. Tests below that drive
+// `weft.workflows.events` requires `events:read`. Tests below that drive
 // subscriptions configure `serve({ auth: { apiKeys: [...] } })` and present
 // the matching key on the WebSocket Authorization header.
-const SUBSCRIBE_TEST_API_KEY = 'weft_test_track8_workflows_read_key_xxxxxxxxxxxxxxxx';
+const SUBSCRIBE_TEST_API_KEY = 'weft_test_track8_events_read_key_xxxxxxxxxxxxxxxxxxx';
 const subscribeServeOptions = {
   port: 0,
   auth: {
     apiKeys: [SUBSCRIBE_TEST_API_KEY],
-    defaultApiKeyScopes: ['workflows:read'] as const,
+    defaultApiKeyScopes: ['events:read'] as const,
   },
 };
 

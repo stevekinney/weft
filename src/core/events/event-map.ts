@@ -17,6 +17,8 @@ import type {
   ConstraintViolatedEvent,
   DevelopmentWarningEvent,
   StorageSizeReportedEvent,
+  WorkerConnectedEvent,
+  WorkerDisconnectedEvent,
 } from './system-events.ts';
 import type { UpdateCompletedEvent, UpdateReceivedEvent } from './update-events.ts';
 import type {
@@ -78,6 +80,8 @@ export type WeftEventMap = {
   'development:warning': DevelopmentWarningEvent;
   'cleanup:warning': CleanupWarningEvent;
   'storage:size-reported': StorageSizeReportedEvent;
+  'worker:connected': WorkerConnectedEvent;
+  'worker:disconnected': WorkerDisconnectedEvent;
   'alert:fired': AlertFiredEvent;
   'alert:resolved': AlertResolvedEvent;
   'constraint:violated': ConstraintViolatedEvent;

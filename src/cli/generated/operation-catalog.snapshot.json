@@ -97,6 +97,78 @@
       }
     },
     {
+      "name": "weft.events.subscribe",
+      "kind": "subscription",
+      "summary": "Subscribe to fleet-wide events with replay-from-cursor",
+      "description": "Subscribes to the server-level event feed across workflows. Optional filters narrow delivery by workflow id or event kind after the single fleet cursor has been applied.",
+      "tags": ["Events"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["events:read"]
+      },
+      "transports": {
+        "http": false,
+        "jsonRpcHttp": false,
+        "jsonRpcWebSocket": true,
+        "jsonRpcStdio": false
+      },
+      "producibleFaults": [],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fromCursor": {
+            "type": "string"
+          },
+          "kind": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "subscriptionId": {
+            "type": "string"
+          }
+        },
+        "required": ["subscriptionId", "cursor"],
+        "type": "object"
+      },
+      "eventSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "emittedAtMs": {
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": {},
+          "sequence": {
+            "type": "number"
+          },
+          "workflowId": {
+            "type": "string"
+          }
+        },
+        "required": ["kind", "sequence", "cursor", "emittedAtMs", "payload"],
+        "type": "object"
+      }
+    },
+    {
       "name": "weft.recover.all",
       "kind": "unary",
       "summary": "Recover all interrupted workflows",
@@ -3269,8 +3341,7 @@
       "tags": ["Events"],
       "destructive": false,
       "access": {
-        "kind": "scoped",
-        "scopes": ["workflows:read"]
+        "kind": "authenticated"
       },
       "transports": {
         "http": false,

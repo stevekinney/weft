@@ -26,17 +26,17 @@ const holdWorkflow = workflow({ name: 'hold' }).execute(async function* (
 
 /**
  * `weft.workflows.events` (the operation that `weft.workflows.subscribe`
- * wraps) requires the `workflows:read` scope. Tests that subscribe must
+ * wraps) requires the `events:read` scope. Tests that subscribe must
  * authenticate with a key that carries that scope (passed to `openWebSocket`);
  * tests that only call public operations (e.g. `weft.workflows.get`) keep using
  * the no-auth `serve({ engine, port: 0 })` form.
  */
-const SUBSCRIBE_TEST_API_KEY = 'weft_test_subscribe_workflows_read_scope_key_xxx';
+const SUBSCRIBE_TEST_API_KEY = 'weft_test_subscribe_events_read_scope_key_xxxxxxx';
 const subscribeServeOptions = {
   port: 0,
   auth: {
     apiKeys: [SUBSCRIBE_TEST_API_KEY],
-    defaultApiKeyScopes: ['workflows:read'] as const,
+    defaultApiKeyScopes: ['events:read'] as const,
   },
 };
 

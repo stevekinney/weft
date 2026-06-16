@@ -627,13 +627,14 @@ The interface-level guarantee: all conditions are checked before any operation i
 
 WebSocket upgrade is supported on the following paths:
 
-| Path                          | Description                                                       |
-| ----------------------------- | ----------------------------------------------------------------- |
-| `/api/v1/workflows/:id/watch` | Observe workflow lifecycle events                                 |
-| `/api/v1/tasks/:queue/stream` | Worker task stream                                                |
-| `/api/jsonrpc`                | JSON-RPC over WebSocket session for the unified operation catalog |
+| Path                           | Description                                                         |
+| ------------------------------ | ------------------------------------------------------------------- |
+| `/api/v1/workflows/:id/watch`  | Observe workflow lifecycle events; requires `events:read` with auth |
+| `/api/v1/workflows/:id/stream` | Stream workflow token chunks; requires `streams:read` with auth     |
+| `/api/v1/tasks/:queue/stream`  | Worker task stream                                                  |
+| `/api/jsonrpc`                 | JSON-RPC over WebSocket session for the unified operation catalog   |
 
-Workflow stream and watch sockets share the `maxStreamConnectionsPerWorkflow` per-workflow cap. The default is `100`; excess connections are closed with WebSocket code `1008`.
+Workflow stream and watch sockets share the `maxStreamConnectionsPerWorkflow` per-workflow cap. The default is `100`; excess connections are closed with WebSocket code `1008`. Both routes accept `?resumeFrom=<sequence>` cursors. Raw watch frames preserve the `{ type, timestamp, data }` event shape and include `sequence` / `cursor` fields for resumption. JSON-RPC clients can subscribe to per-workflow events with `weft.workflows.subscribe` or to one fleet-wide event feed with `weft.events.subscribe`; both deliver notifications as `weft.events.deliver`.
 
 ### Error Responses
 

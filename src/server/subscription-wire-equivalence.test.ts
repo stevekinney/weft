@@ -119,7 +119,7 @@ describe('subscription wire-format fixtures — current-contract', () => {
     const session = createJsonRpcWebSocketSession({
       registry: createOperationRegistry([workflowEventsSubscriptionOperation]),
       engine: {} as unknown,
-      principal: principalFromApiKey({ subject: 'test', scopes: ['workflows:read'] }),
+      principal: principalFromApiKey({ subject: 'test', scopes: ['events:read'] }),
       emitter,
       feed,
     });
@@ -199,7 +199,7 @@ describe('subscription wire-format fixtures — current-contract', () => {
     const session = createJsonRpcWebSocketSession({
       registry: createOperationRegistry([workflowEventsSubscriptionOperation]),
       engine: {} as unknown,
-      principal: principalFromApiKey({ subject: 'test', scopes: ['workflows:read'] }),
+      principal: principalFromApiKey({ subject: 'test', scopes: ['events:read'] }),
       emitter,
       feed,
     });
@@ -271,7 +271,7 @@ describe('subscription wire-format fixtures — new-error-contract', () => {
     const session = createJsonRpcWebSocketSession({
       registry: createOperationRegistry([failingOp]),
       engine: {} as unknown,
-      principal: principalFromApiKey({ subject: 'test', scopes: ['workflows:read'] }),
+      principal: principalFromApiKey({ subject: 'test', scopes: ['events:read'] }),
       emitter,
       feed,
     });
@@ -347,7 +347,7 @@ describe('subscription wire-format fixtures — new-error-contract', () => {
     const session = createJsonRpcWebSocketSession({
       registry: createOperationRegistry([throwingOp]),
       engine: {} as unknown,
-      principal: principalFromApiKey({ subject: 'test', scopes: ['workflows:read'] }),
+      principal: principalFromApiKey({ subject: 'test', scopes: ['events:read'] }),
       emitter,
       feed,
     });

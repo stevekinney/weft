@@ -58,6 +58,7 @@ import {
   createScheduleOperation,
   createScheduleRestBinding,
 } from './operations/create-schedule.ts';
+import { fleetEventsSubscriptionOperation } from './operations/fleet-events-subscription.ts';
 import { forkWorkflowOperation, forkWorkflowRestBinding } from './operations/fork-workflow.ts';
 import {
   getCheckpointAtOperation,
@@ -461,6 +462,7 @@ export function createLiveOperationRegistry(
     getStreamChunksOperation,
     streamWorkflowSseOperation,
     workflowEventsSubscriptionOperation,
+    fleetEventsSubscriptionOperation,
     buildTaskDiagnosticsOperationForRegistry(resolved),
     clearTaskDeadLetterOperation,
     // Track 8 operation-backed routes

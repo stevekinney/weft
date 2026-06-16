@@ -81,7 +81,7 @@ it('All live views share the same sequence and cursor semantics. Replay, resume,
     port: 0,
     auth: {
       apiKeys: [SUBSCRIBE_TEST_API_KEY],
-      defaultApiKeyScopes: ['workflows:read'],
+      defaultApiKeyScopes: ['events:read'],
     },
   });
   servers.push(server);
@@ -131,6 +131,6 @@ it('All live views share the same sequence and cursor semantics. Replay, resume,
   }
 });
 
-// `weft.workflows.events` requires `workflows:read`. The test serve()
+// `weft.workflows.events` requires `events:read`. The test serve()
 // above issues a key with that scope; this connection presents it.
-const SUBSCRIBE_TEST_API_KEY = 'weft_test_sequence_cursor_workflows_read_key_xxxxxxxx';
+const SUBSCRIBE_TEST_API_KEY = 'weft_test_sequence_cursor_events_read_key_xxxxxxxxxxxx';

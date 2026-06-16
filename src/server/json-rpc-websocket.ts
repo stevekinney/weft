@@ -19,65 +19,29 @@ import { faultToJsonRpcError } from './fault-to-json-rpc.ts';
 import { dispatchJsonRpc } from './json-rpc-dispatch.ts';
 import { JSON_RPC_ERROR_CODES, JSON_RPC_VERSION, type JsonRpcId } from './json-rpc-protocol.ts';
 import {
+  FLEET_EVENTS_OPERATION_NAME,
+  SESSION_METHODS,
+  withSessionSubscriptionOperations,
+} from './json-rpc-websocket-subscriptions.ts';
+import type {
+  JsonRpcWebSocketSession,
+  JsonRpcWebSocketSessionOptions,
+} from './json-rpc-websocket-types.ts';
+import {
   validateMessageFrame,
   validateSessionPrimitiveFrame,
   validateSubscribeParams,
 } from './json-rpc-websocket-validation.ts';
-import {
-  executeSubscription,
-  SubscriptionElementValidationError,
-  type ErasedOperation,
-  type OperationRegistry,
-} from './operation-catalog.ts';
-import { workflowEventsSubscriptionOperation } from './operations/workflow-events-subscription.ts';
-import type { Principal } from './principal.ts';
-import type { EventEnvelope, WorkflowEventFeed } from './workflow-event-feed.ts';
+import { executeSubscription, SubscriptionElementValidationError } from './operation-catalog.ts';
 
-/** Emitter interface: any `send(string)`-shaped object. */
-export type JsonRpcWebSocketEmitter = {
-  send(message: string): void;
-};
-
-export type JsonRpcWebSocketSessionOptions = {
-  readonly registry: OperationRegistry;
-  readonly engine: unknown;
-  readonly principal: Principal;
-  readonly emitter: JsonRpcWebSocketEmitter;
-  readonly feed: WorkflowEventFeed;
-  /**
-   * Maximum concurrent subscriptions per session. Default 100 — a
-   * well-behaved client should never need more. Rejected `subscribe`
-   * requests above the cap return `InvalidRequest (-32600)` so clients
-   * can distinguish resource exhaustion from other failures.
-   */
-  readonly maxSubscriptions?: number;
-  /**
-   * Maximum size of a single incoming frame in bytes. Default 1 MB.
-   * Frames exceeding the limit are rejected with a parse error before
-   * `JSON.parse` touches the payload — a runaway producer cannot force
-   * an unbounded allocation inside the adapter.
-   */
-  readonly maxFrameBytes?: number;
-  /**
-   * Transport identity for the dispatcher's transport-availability
-   * check. Defaults to `'jsonRpcWebSocket'`. The stdio session reuses
-   * this factory but must pass `'jsonRpcStdio'` so operations with
-   * `transports.jsonRpcStdio: false` are rejected on stdio and,
-   * conversely, operations that are stdio-only aren't rejected just
-   * because they haven't been enabled for WS.
-   */
-  readonly transport?: 'jsonRpcHttp' | 'jsonRpcWebSocket' | 'jsonRpcStdio';
-};
+export type {
+  JsonRpcWebSocketEmitter,
+  JsonRpcWebSocketSession,
+  JsonRpcWebSocketSessionOptions,
+} from './json-rpc-websocket-types.ts';
 
 const DEFAULT_MAX_SUBSCRIPTIONS = 100;
 const DEFAULT_MAX_FRAME_BYTES = 1 * 1024 * 1024;
-
-export type JsonRpcWebSocketSession = {
-  /** Process one incoming WS frame (UTF-8 text). */
-  handleMessage(frame: string): Promise<void>;
-  /** Tear down every active subscription and release resources. */
-  close(): Promise<void>;
-};
 
 type ActiveSubscription = {
   readonly id: string;
@@ -91,41 +55,11 @@ type SessionRequest = {
   readonly expectsResponse: boolean;
 };
 
-/**
- * Method names handled directly by the session (not routed through the
- * standard operation dispatcher). These exist as session primitives
- * because subscribe/unsubscribe need per-frame correlation and live
- * state that doesn't fit the dispatch pipeline.
- */
-const SESSION_METHODS = {
-  SUBSCRIBE: 'weft.workflows.subscribe',
-  UNSUBSCRIBE: 'weft.workflows.unsubscribe',
-  DELIVER: 'weft.events.deliver',
-  TERMINATED: 'weft.events.terminated',
-} as const;
-
-const WORKFLOW_EVENTS_OPERATION_NAME = 'weft.workflows.events';
-const WORKFLOW_EVENTS_SUBSCRIPTION_OPERATION =
-  workflowEventsSubscriptionOperation as ErasedOperation;
-
-function withWorkflowEventsSubscriptionOperation(registry: OperationRegistry): OperationRegistry {
-  if (registry.get(WORKFLOW_EVENTS_OPERATION_NAME) !== undefined) return registry;
-  return {
-    get(name) {
-      if (name === WORKFLOW_EVENTS_OPERATION_NAME) return WORKFLOW_EVENTS_SUBSCRIPTION_OPERATION;
-      return registry.get(name);
-    },
-    list() {
-      return [...registry.list(), WORKFLOW_EVENTS_SUBSCRIPTION_OPERATION];
-    },
-  };
-}
-
 export function createJsonRpcWebSocketSession(
   options: JsonRpcWebSocketSessionOptions,
 ): JsonRpcWebSocketSession {
-  const { registry, engine, principal, emitter, feed } = options;
-  const subscriptionRegistry = withWorkflowEventsSubscriptionOperation(registry);
+  const { registry, engine, principal, emitter, feed, fleetFeed } = options;
+  const subscriptionRegistry = withSessionSubscriptionOperations(registry);
   const maxSubscriptions = options.maxSubscriptions ?? DEFAULT_MAX_SUBSCRIPTIONS;
   const maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
   const transport = options.transport ?? 'jsonRpcWebSocket';
@@ -203,10 +137,7 @@ export function createJsonRpcWebSocketSession(
     }
 
     const controller = new AbortController();
-    const result = await executeSubscription<
-      EventEnvelope,
-      { subscriptionId: string; cursor: string }
-    >(
+    const result = await executeSubscription<unknown, { subscriptionId: string; cursor: string }>(
       'weft.workflows.events',
       {
         workflowId: validation.workflowId,
@@ -256,9 +187,74 @@ export function createJsonRpcWebSocketSession(
     });
   }
 
+  async function handleFleetSubscribe(
+    request: SessionRequest,
+    params: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    if (subscriptions.size >= maxSubscriptions) {
+      emitResponse(request, {
+        jsonrpc: JSON_RPC_VERSION,
+        error: {
+          code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
+          message: `maximum concurrent subscriptions per session (${maxSubscriptions}) exceeded`,
+          data: {
+            weftCode: 'Unprocessable',
+            httpStatus: 422,
+            reason: 'per-session subscription cap exceeded',
+          },
+        },
+        id: request.id ?? null,
+      });
+      return;
+    }
+
+    const controller = new AbortController();
+    const result = await executeSubscription<unknown, { subscriptionId: string; cursor: string }>(
+      FLEET_EVENTS_OPERATION_NAME,
+      params ?? {},
+      {
+        principal,
+        engine: { fleetFeed },
+        transport,
+        registry: subscriptionRegistry,
+      },
+    );
+    if (!result.ok) {
+      const error = faultToJsonRpcError(result.fault);
+      emitResponse(request, {
+        jsonrpc: JSON_RPC_VERSION,
+        error: { code: error.code, message: error.message, data: error.data },
+        id: request.id ?? null,
+      });
+      return;
+    }
+
+    const { envelope, iterable, close: closeSubscription } = result.value;
+    const { subscriptionId, cursor } = envelope;
+
+    emitResponse(request, {
+      jsonrpc: JSON_RPC_VERSION,
+      result: { subscriptionId, cursor },
+      id: request.id ?? null,
+    });
+
+    const pump = pumpSubscriptionIterable(
+      subscriptionId,
+      iterable,
+      controller.signal,
+      closeSubscription,
+    );
+    subscriptions.set(subscriptionId, {
+      id: subscriptionId,
+      controller,
+      pump,
+      isTerminating: false,
+    });
+  }
+
   async function pumpSubscriptionIterable(
     subscriptionId: string,
-    iterable: AsyncIterable<EventEnvelope>,
+    iterable: AsyncIterable<unknown>,
     signal: AbortSignal,
     closeSubscription: () => Promise<void>,
   ): Promise<void> {
@@ -351,7 +347,7 @@ export function createJsonRpcWebSocketSession(
     }
   }
 
-  function deliver(subscriptionId: string, envelope: EventEnvelope): void {
+  function deliver(subscriptionId: string, envelope: unknown): void {
     emit({
       jsonrpc: JSON_RPC_VERSION,
       method: SESSION_METHODS.DELIVER,
@@ -411,6 +407,39 @@ export function createJsonRpcWebSocketSession(
     });
   }
 
+  function isSessionPrimitive(method: unknown): boolean {
+    return (
+      method === SESSION_METHODS.SUBSCRIBE ||
+      method === SESSION_METHODS.FLEET_SUBSCRIBE ||
+      method === SESSION_METHODS.UNSUBSCRIBE
+    );
+  }
+
+  async function handleSessionPrimitive(
+    validation: ReturnType<typeof validateMessageFrame> & { ok: true },
+  ): Promise<void> {
+    const sessionPrimitiveError = validateSessionPrimitiveFrame(validation);
+    if (sessionPrimitiveError !== null) {
+      emit({
+        jsonrpc: JSON_RPC_VERSION,
+        error: sessionPrimitiveError.error,
+        id: sessionPrimitiveError.id,
+      });
+      return;
+    }
+    const request: SessionRequest = {
+      id: validation.id,
+      expectsResponse: validation.hasRequestId,
+    };
+    if (validation.method === SESSION_METHODS.SUBSCRIBE) {
+      await handleSubscribe(request, validation.params);
+    } else if (validation.method === SESSION_METHODS.FLEET_SUBSCRIBE) {
+      await handleFleetSubscribe(request, validation.params);
+    } else {
+      handleUnsubscribe(request, validation.params);
+    }
+  }
+
   async function handleMessage(frame: string): Promise<void> {
     if (disposed || emitterBroken) return;
 
@@ -424,33 +453,8 @@ export function createJsonRpcWebSocketSession(
       return;
     }
 
-    // Session-primitive routing shares the same jsonrpc-version
-    // validation the standard dispatcher enforces — otherwise
-    // subscribe/unsubscribe would silently accept frames missing or
-    // with the wrong `jsonrpc` field while every other method
-    // rejects them as InvalidRequest.
-    if (
-      validation.method === SESSION_METHODS.SUBSCRIBE ||
-      validation.method === SESSION_METHODS.UNSUBSCRIBE
-    ) {
-      const sessionPrimitiveError = validateSessionPrimitiveFrame(validation);
-      if (sessionPrimitiveError !== null) {
-        emit({
-          jsonrpc: JSON_RPC_VERSION,
-          error: sessionPrimitiveError.error,
-          id: sessionPrimitiveError.id,
-        });
-        return;
-      }
-      const request: SessionRequest = {
-        id: validation.id,
-        expectsResponse: validation.hasRequestId,
-      };
-      if (validation.method === SESSION_METHODS.SUBSCRIBE) {
-        await handleSubscribe(request, validation.params);
-      } else {
-        handleUnsubscribe(request, validation.params);
-      }
+    if (isSessionPrimitive(validation.method)) {
+      await handleSessionPrimitive(validation);
       return;
     }
 

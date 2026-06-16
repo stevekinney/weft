@@ -1,5 +1,6 @@
 import type { ServerWebSocket } from 'bun';
 
+import { decode } from '../../core/codec.ts';
 import type { Engine } from '../../core/engine.ts';
 import { loadStoredStreamTailSequence } from '../../core/engine/stream-chunk-loading.ts';
 import { KEYS } from '../../storage/interface.ts';
@@ -47,6 +48,20 @@ export async function getHighestStoredStreamSequence(
     if (Number.isSafeInteger(sequence) && sequence >= 0) {
       return sequence;
     }
+  }
+
+  return -1;
+}
+
+export async function getHighestStoredWatchSequence(
+  engine: Engine,
+  workflowId: string,
+): Promise<number> {
+  const prefix = KEYS.eventPrefix(workflowId);
+
+  for await (const [storageKey] of engine.storage.scan(prefix, { reverse: true, limit: 50 })) {
+    const sequence = parseSequenceFromEventKey(prefix, storageKey);
+    if (sequence !== null) return sequence;
   }
 
   return -1;
@@ -214,4 +229,67 @@ export async function replayTokenStream(
     ws.data.replayInProgress = false;
     flushPendingStreamMessages(context, ws);
   }
+}
+
+/**
+ * Send stored raw watch events to a newly connected watch client. The raw
+ * watch transport keeps its historical frame shape but now honors the same
+ * `resumeFrom` cursor query parameter used by token streams.
+ */
+export async function replayWatchEvents(
+  engine: Engine,
+  ws: ServerWebSocket<WebSocketData>,
+  workflowId: string,
+): Promise<void> {
+  ws.data.lastDeliveredSequence = -1;
+
+  try {
+    const requestedResumeFrom = ws.data.resumeFrom;
+    const after =
+      requestedResumeFrom === undefined
+        ? -1
+        : Math.min(requestedResumeFrom, await getHighestStoredWatchSequence(engine, workflowId));
+    ws.data.lastDeliveredSequence = after;
+    const prefix = KEYS.eventPrefix(workflowId);
+    const scanOptions = after >= 0 ? { gt: KEYS.event(workflowId, after) } : undefined;
+
+    for await (const [storageKey, value] of engine.storage.scan(prefix, scanOptions)) {
+      const sequence = parseSequenceFromEventKey(prefix, storageKey);
+      if (sequence === null || sequence <= after) continue;
+      const decoded = decode(value);
+      if (!isStoredWatchEvent(decoded)) continue;
+      sendStreamMessage(
+        ws,
+        sequence,
+        JSON.stringify({
+          ...decoded,
+          sequence,
+          cursor: String(sequence),
+        }),
+      );
+    }
+  } catch (error) {
+    console.error(`[weft] Failed to replay watch events for workflow "${workflowId}":`, error);
+  }
+}
+
+function parseSequenceFromEventKey(prefix: string, storageKey: string): number | null {
+  if (!storageKey.startsWith(prefix)) return null;
+  const rawSequence = storageKey.slice(prefix.length);
+  if (!/^\d+$/.test(rawSequence)) return null;
+  const sequence = Number.parseInt(rawSequence, 10);
+  return Number.isSafeInteger(sequence) ? sequence : null;
+}
+
+function isStoredWatchEvent(
+  value: unknown,
+): value is { type: string; timestamp: number; data: Record<string, unknown> } {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record['type'] === 'string' &&
+    typeof record['timestamp'] === 'number' &&
+    typeof record['data'] === 'object' &&
+    record['data'] !== null
+  );
 }

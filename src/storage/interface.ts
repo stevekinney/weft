@@ -562,6 +562,9 @@ export const KEYS = {
     `ev:${encodeStorageKeyComponent(workflowId)}:${String(sequence).padStart(10, '0')}`,
   eventHead: (workflowId: string) => `ev:${encodeStorageKeyComponent(workflowId)}:head`,
   eventWatermark: (workflowId: string) => `ev:${encodeStorageKeyComponent(workflowId)}:watermark`,
+  fleetEventPrefix: () => 'fleet-event:',
+  fleetEvent: (sequence: number) => `fleet-event:${String(sequence).padStart(10, '0')}`,
+  fleetEventTail: () => 'fleet-event:tail',
   signal: (workflowId: string, name: string, id: string) =>
     signalStorageKey(workflowId, name, id, SIGNAL_SORT_CLASS_NORMAL),
   startSignal: (workflowId: string, name: string, id: string) =>

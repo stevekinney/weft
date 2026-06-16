@@ -7,6 +7,8 @@ import { Engine } from '../core/engine.ts';
 import {
   ActivityFailedEvent,
   TaskResultDeadLetteredEvent,
+  WorkerConnectedEvent,
+  WorkerDisconnectedEvent,
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
 } from '../core/events.ts';
@@ -844,6 +846,58 @@ describe('serve', () => {
     }
   });
 
+  it('rejects raw workflow watch WebSocket upgrades without events:read', async () => {
+    engine = createEngine();
+    server = serveTestServer({
+      engine,
+      port: 0,
+      auth: {
+        apiKeys: ['weft_key_streamsonly123456789012345'],
+        defaultApiKeyScopes: ['streams:read'],
+      },
+    });
+
+    const response = await fetch(`${server.url}/v1/workflows/wf-auth/watch`, {
+      method: 'GET',
+      headers: {
+        upgrade: 'websocket',
+        connection: 'Upgrade',
+        'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+        'sec-websocket-version': '13',
+        'x-api-key': 'weft_key_streamsonly123456789012345',
+      },
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe('Insufficient scope');
+  });
+
+  it('rejects raw token stream WebSocket upgrades without streams:read', async () => {
+    engine = createEngine();
+    server = serveTestServer({
+      engine,
+      port: 0,
+      auth: {
+        apiKeys: ['weft_key_eventsonly1234567890123456'],
+        defaultApiKeyScopes: ['events:read'],
+      },
+    });
+
+    const response = await fetch(`${server.url}/v1/workflows/wf-auth/stream`, {
+      method: 'GET',
+      headers: {
+        upgrade: 'websocket',
+        connection: 'Upgrade',
+        'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+        'sec-websocket-version': '13',
+        'x-api-key': 'weft_key_eventsonly1234567890123456',
+      },
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe('Insufficient scope');
+  });
+
   it('keeps JSON-RPC HTTP principal resolution inside the JSON-RPC error boundary', async () => {
     engine = createEngine();
     server = serveTestServer({
@@ -1181,6 +1235,41 @@ describe('worker WebSocket protocol', () => {
 
     ws.close();
     await waitForRealTimersForTesting(50);
+  });
+
+  it('dispatches worker connected and disconnected events', async () => {
+    engine = createEngine();
+    server = serveTestServer({ engine, port: 0, workerReconnectGracePeriodMs: 0 });
+    const connectedEvents: WorkerConnectedEvent[] = [];
+    const disconnectedEvents: WorkerDisconnectedEvent[] = [];
+    engine.addEventListener(WorkerConnectedEvent.type, (event) => {
+      connectedEvents.push(event);
+    });
+    engine.addEventListener(WorkerDisconnectedEvent.type, (event) => {
+      disconnectedEvents.push(event);
+    });
+
+    const ws = await connectWorker(server);
+    await registerWorker(ws, {
+      workerId: 'liveness-worker',
+      activities: ['charge'],
+      concurrency: 5,
+    });
+
+    await waitFor(() => connectedEvents.length === 1, { label: 'worker connected event' });
+    expect(connectedEvents[0]).toMatchObject({
+      workerId: 'liveness-worker',
+      queue: 'default',
+      activities: ['charge'],
+      concurrency: 5,
+    });
+
+    ws.close();
+    await waitFor(() => disconnectedEvents.length === 1, { label: 'worker disconnected event' });
+    expect(disconnectedEvents[0]).toMatchObject({
+      workerId: 'liveness-worker',
+      inFlightTaskCount: 0,
+    });
   });
 
   it('records deployment identity and capabilities from worker registration', async () => {
@@ -2660,9 +2749,17 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     });
   }
 
-  async function connectWatch(wsServer: WeftServer, workflowId: string): Promise<WebSocket> {
+  async function connectWatch(
+    wsServer: WeftServer,
+    workflowId: string,
+    options?: { resumeFrom?: number },
+  ): Promise<WebSocket> {
     const wsUrl = wsServer.url.replace('http://', 'ws://');
-    const ws = new WebSocket(`${wsUrl}/v1/workflows/${encodeURIComponent(workflowId)}/watch`);
+    const url = new URL(`${wsUrl}/v1/workflows/${encodeURIComponent(workflowId)}/watch`);
+    if (options?.resumeFrom !== undefined) {
+      url.searchParams.set('resumeFrom', String(options.resumeFrom));
+    }
+    const ws = new WebSocket(url.toString());
 
     await new Promise<void>((resolve, reject) => {
       ws.addEventListener('open', () => resolve());
@@ -2799,6 +2896,39 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
       workflowId,
       result: 'encoded-watch',
     });
+
+    ws.close();
+    await waitForRealTimersForTesting(50);
+  });
+
+  it('replays raw watch events after resumeFrom', async () => {
+    engine = createEngine();
+    server = serveTestServer({ engine, port: 0 });
+
+    engine.dispatchEvent(new WorkflowCompletedEvent('wf-watch-resume', 'first', 1));
+    engine.dispatchEvent(new WorkflowCompletedEvent('wf-watch-resume', 'second', 2));
+    await waitFor(
+      async () => (await engine.storage.get(KEYS.event('wf-watch-resume', 1))) !== null,
+      {
+        label: 'watch event sequence persisted',
+      },
+    );
+
+    const ws = await connectWatch(server, 'wf-watch-resume', { resumeFrom: 0 });
+    const messages = collectMessages(ws);
+    await waitFor(
+      () => messages.filter((message) => message.type === WorkflowCompletedEvent.type).length === 1,
+      {
+        label: 'resumed watch event streamed to client',
+      },
+    );
+
+    const completionMessages = messages.filter(
+      (message) => message.type === WorkflowCompletedEvent.type,
+    );
+    expect(completionMessages[0]?.['sequence']).toBe(1);
+    expect(completionMessages[0]?.['cursor']).toBe('1');
+    expect(completionMessages[0]?.['data']).toMatchObject({ result: 'second' });
 
     ws.close();
     await waitForRealTimersForTesting(50);

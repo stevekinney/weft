@@ -48,6 +48,7 @@ export function minimalServerContext(
     metricsCollector: new MetricsCollector(),
     eventFeedBackend: null as never,
     workflowEventFeed: null as never,
+    fleetEventFeed: null as never,
     activeJsonRpcSessions: new Set(),
     mcpSessionManager: null as never,
     authenticatorPromise: null,

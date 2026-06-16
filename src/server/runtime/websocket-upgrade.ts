@@ -1,4 +1,5 @@
 import type { AuthContext } from '../authentication.ts';
+import type { AuthorizationScope } from '../authorization-scope.ts';
 import { authContextToPrincipal } from '../handler.ts';
 import type { ServeOptions } from '../index.ts';
 import { finalizeWebSocketUpgrade } from '../json-rpc-transport-helpers.ts';
@@ -93,7 +94,8 @@ type PrincipalResolution =
  * Resolve the connection principal and enforce scope for connection types that
  * make authorization decisions after the upgrade.
  *
- * - Stream/watch sockets are one-way transports and do not consume a principal.
+ * - Workflow watch sockets require `events:read` when auth is configured.
+ * - Workflow stream sockets require `streams:read` when auth is configured.
  * - Worker connections require `workers:write` when auth is configured.
  * - Returns `{ ok: false }` to reject the upgrade with a 401/403 response.
  */
@@ -101,7 +103,12 @@ function resolvePrincipalForUpgrade(
   connectionType: WebSocketData['connectionType'] | undefined,
   authContext: AuthContext | undefined,
 ): PrincipalResolution {
-  if (connectionType !== 'jsonrpc' && connectionType !== 'worker') {
+  if (
+    connectionType !== 'jsonrpc' &&
+    connectionType !== 'worker' &&
+    connectionType !== 'watch' &&
+    connectionType !== 'stream'
+  ) {
     return { ok: true, principal: undefined };
   }
   if (authContext === undefined) {
@@ -114,16 +121,33 @@ function resolvePrincipalForUpgrade(
     console.error('[weft] WebSocket upgrade principal resolution failed', error);
     return { ok: false, response: new Response('Authentication context invalid', { status: 401 }) };
   }
-  // Enforce workers:write at upgrade time so a no-scope credential cannot even
-  // establish a worker WebSocket, regardless of post-upgrade checks.
-  if (
-    connectionType === 'worker' &&
-    isAuthenticated(principal) &&
-    !principal.hasScope('workers:write')
-  ) {
-    return { ok: false, response: new Response('Insufficient scope', { status: 403 }) };
+  const requiredScope = upgradeScope(connectionType);
+  if (requiredScope !== null) {
+    if (!isAuthenticated(principal)) {
+      return { ok: false, response: new Response('Authentication required', { status: 401 }) };
+    }
+    if (!principal.hasScope(requiredScope)) {
+      return { ok: false, response: new Response('Insufficient scope', { status: 403 }) };
+    }
   }
   return { ok: true, principal };
+}
+
+function upgradeScope(
+  connectionType: WebSocketData['connectionType'] | undefined,
+): AuthorizationScope | null {
+  switch (connectionType) {
+    case 'worker':
+      return 'workers:write';
+    case 'watch':
+      return 'events:read';
+    case 'stream':
+      return 'streams:read';
+    case 'jsonrpc':
+    case 'generic':
+    case undefined:
+      return null;
+  }
 }
 
 export function handleWebSocketUpgrade(

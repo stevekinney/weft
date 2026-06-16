@@ -6,6 +6,7 @@ import type { WorkerRegistry } from '../../worker/registry.ts';
 import type { Authenticator, RateLimiter } from '../authentication.ts';
 import type { DeadlineTracker } from '../deadline-tracker.ts';
 import type { createEngineEventFeedBackend } from '../engine-event-feed-backend.ts';
+import type { FleetEventFeed } from '../fleet-event-feed.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
 import type { JsonRpcWebSocketSession } from '../json-rpc-websocket.ts';
 import type { OpenApiSecuritySchemeName } from '../openapi.ts';
@@ -46,6 +47,7 @@ export interface ServerContext {
   readonly metricsCollector: MetricsCollector;
   readonly eventFeedBackend: ReturnType<typeof createEngineEventFeedBackend>;
   readonly workflowEventFeed: WorkflowEventFeed;
+  readonly fleetEventFeed: FleetEventFeed;
   readonly activeJsonRpcSessions: Set<JsonRpcWebSocketSession>;
   readonly mcpSessionManager: McpSessionManager;
   readonly authenticatorPromise: Promise<Authenticator> | null;

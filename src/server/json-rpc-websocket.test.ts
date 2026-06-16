@@ -15,6 +15,8 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import { MemoryStorage } from '../storage/memory.ts';
+import { createFleetEventFeed } from './fleet-event-feed.ts';
 import {
   createJsonRpcWebSocketSession,
   type JsonRpcWebSocketEmitter,
@@ -35,13 +37,13 @@ import {
 const fakeEngine = {} as unknown;
 
 /**
- * Subscribe-tests need an authenticated principal carrying `workflows:read`
- * because `weft.workflows.events`'s access policy is `scoped: workflows:read`.
+ * Subscribe-tests need an authenticated principal carrying `events:read`
+ * because event-selector subscriptions require the event feed scope.
  * Frame-dispatch tests (the first describe block) don't touch the
  * subscription operation and continue to use `anonymousPrincipal()`.
  */
 function subscribePrincipal() {
-  return principalFromApiKey({ subject: 'subscribe-test', scopes: ['workflows:read'] });
+  return principalFromApiKey({ subject: 'subscribe-test', scopes: ['events:read'] });
 }
 
 function makeOp<I, O>(
@@ -335,6 +337,56 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     // The first message is the success response; subsequent are deliver notifications.
     const response = JSON.parse(emitter.sent[0]!);
     expect(response.id).toBe('sub-1');
+    expect(response.result.subscriptionId).toMatch(/^sub_/);
+    expect(response.result.cursor).toBe('-1');
+    await session.close();
+  });
+
+  it('weft.events.subscribe delivers fleet events across workflows', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const fleetFeed = createFleetEventFeed(new MemoryStorage());
+    await fleetFeed.append({
+      kind: 'workflow:started',
+      workflowId: 'wf-a',
+      emittedAtMs: Date.now(),
+      payload: { workflowId: 'wf-a' },
+    });
+    await fleetFeed.append({
+      kind: 'workflow:completed',
+      workflowId: 'wf-b',
+      emittedAtMs: Date.now(),
+      payload: { workflowId: 'wf-b' },
+    });
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: subscribePrincipal(),
+      emitter,
+      feed,
+      fleetFeed,
+    });
+
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.events.subscribe',
+        params: {},
+        id: 'fleet-sub',
+      }),
+    );
+
+    await emitter.waitForParsedMessage('fleet event for wf-a', (message) => {
+      const params = message['params'] as { envelope?: { workflowId?: string } } | undefined;
+      return params?.envelope?.workflowId === 'wf-a';
+    });
+    await emitter.waitForParsedMessage('fleet event for wf-b', (message) => {
+      const params = message['params'] as { envelope?: { workflowId?: string } } | undefined;
+      return params?.envelope?.workflowId === 'wf-b';
+    });
+
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.id).toBe('fleet-sub');
     expect(response.result.subscriptionId).toMatch(/^sub_/);
     expect(response.result.cursor).toBe('-1');
     await session.close();

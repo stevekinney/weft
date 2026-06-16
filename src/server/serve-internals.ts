@@ -19,6 +19,7 @@ import {
 } from './authentication.ts';
 import { DeadlineTracker } from './deadline-tracker.ts';
 import { createEngineEventFeedBackend } from './engine-event-feed-backend.ts';
+import { createFleetEventFeed } from './fleet-event-feed.ts';
 import type { ServeOptions } from './index.ts';
 import type { WebSocketData } from './json-rpc-websocket-runtime.ts';
 import { closeJsonRpcSessionsForShutdown } from './json-rpc-websocket-runtime.ts';
@@ -223,6 +224,7 @@ export function buildServerContext(
     metricsCollector: serverMetricsCollector,
     eventFeedBackend,
     workflowEventFeed: createWorkflowEventFeed(eventFeedBackend),
+    fleetEventFeed: createFleetEventFeed(options.engine.storage),
     activeJsonRpcSessions: new Set(),
     mcpSessionManager: createMcpSessionManager(options.engine),
     // The authenticator is initialized asynchronously (key import) but the
