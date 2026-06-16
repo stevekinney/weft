@@ -1162,9 +1162,9 @@ describe('crash recovery', () => {
       });
     }
 
-    // First engine via Engine.create (stamps the schema-version sentinel so the
-    // recovering engine opens the store without a legacy-data opt-in). recover:
-    // false because the store is empty and there is nothing to resume yet.
+    // First engine via Engine.create stamps the schema-version sentinel so the
+    // recovering engine opens the store through the current schema gate. Set
+    // recover: false because the store is empty and there is nothing to resume yet.
     const engine1 = await Engine.create({
       storage,
       workflows: { 'default-recover-parked': makeWorkflow() },

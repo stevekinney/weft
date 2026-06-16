@@ -193,18 +193,18 @@ describe('engine validation helpers', () => {
     });
   });
 
-  it('drops tenant fields from decoded workflow state records', () => {
-    const stateWithTenant = {
-      id: 'wf-legacy',
+  it('drops unknown persisted fields from decoded workflow state records', () => {
+    const stateWithUnknownField = {
+      id: 'wf-extra-field',
       type: 'checkout',
       status: 'running',
       createdAt: 1,
       updatedAt: 2,
       tenant: { id: 'acme', attributes: { region: 'us' } },
     };
-    const decoded = decodeWorkflowState(encode(stateWithTenant));
+    const decoded = decodeWorkflowState(encode(stateWithUnknownField));
     expect('tenant' in decoded).toBe(false);
-    expect(decoded.id).toBe('wf-legacy');
+    expect(decoded.id).toBe('wf-extra-field');
   });
 
   it('lifts a pre-unification flat version tuple into versionTuple on decode', () => {

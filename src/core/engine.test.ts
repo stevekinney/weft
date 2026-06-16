@@ -1114,17 +1114,17 @@ describe('Engine', () => {
     engine2[Symbol.dispose]();
   });
 
-  // Acceptance-critical: a workflow state record may carry a retired `tenant`
-  // field. Such a record must not just decode — it must fully RESUME on the
-  // current engine (decode → find registration → deserialize checkpoint →
-  // relaunch handler → run to result).
-  it('recovers and resumes a workflow whose persisted state carries a retired tenant field', async () => {
+  // Acceptance-critical: persisted workflow state records may carry fields that
+  // are not part of the current WorkflowState shape. Such a record must not just
+  // decode — it must fully RESUME on the current engine (decode → find
+  // registration → deserialize checkpoint → relaunch handler → run to result).
+  it('recovers and resumes a workflow whose persisted state carries an unknown field', async () => {
     const storage = new MemoryStorage();
-    const workflowId = 'retired-tenant-resume';
+    const workflowId = 'unknown-field-resume';
 
     const registerWorkflow = (engine: Engine) => {
       engine.register(
-        workflow({ name: 'retired-tenant-wait' }).execute(async function* (ctx: WorkflowContext) {
+        workflow({ name: 'unknown-field-wait' }).execute(async function* (ctx: WorkflowContext) {
           const value = yield* ctx.waitForSignal<string>('go');
           return `resumed:${value}`;
         }),
@@ -1133,13 +1133,13 @@ describe('Engine', () => {
 
     const engine1 = new Engine({ storage });
     registerWorkflow(engine1);
-    await engine1.start('retired-tenant-wait', null, { id: workflowId });
+    await engine1.start('unknown-field-wait', null, { id: workflowId });
     await flush();
     engine1[Symbol.dispose]();
     await flush();
 
-    // Re-write the state blob with a `tenant` field grafted on — a persisted
-    // record carrying a field that is not part of the current WorkflowState.
+    // Re-write the state blob with an extra field grafted on — a persisted
+    // record field that is not part of the current WorkflowState.
     const persisted = decode((await storage.get(KEYS.workflow(workflowId)))!) as Record<
       string,
       unknown

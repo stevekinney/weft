@@ -462,8 +462,6 @@ export function decodeScheduleRuntimeFields(
   const missedFireCount = decodeScheduleMissedFireCount(decoded, scheduleId);
   if (missedFireCount === null) return null;
 
-  // Legacy schedule records may carry a `tenant` field; it is ignored
-  // (tolerate-and-drop) so old persisted schedules still decode.
   return {
     backfill,
     ...(jitterMs !== undefined && { jitterMs }),
