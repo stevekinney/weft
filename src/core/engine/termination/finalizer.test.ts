@@ -269,6 +269,72 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     engine[Symbol.dispose]();
   });
 
+  // Cursor Bugbot round 4: every settle path must re-arm a self-heal timer when its CAS
+  // loses (a concurrent reclaimer overwrote our `running` bytes) — the scheduler already
+  // deleted the fired timer, so returning silently would strand the marker. We force the
+  // loss by having the finalizer overwrite the marker with a DIFFERENT running claim
+  // mid-run, then exercise each settle path: success, failure-reschedule, dead-letter, and
+  // shutdown-abort. Each must leave exactly one self-heal timer.
+  const lostSettleCases = [
+    { name: 'success', ok: true, startAttempts: 0, disposeBeforeRun: false },
+    { name: 'failure-reschedule', ok: false, startAttempts: 0, disposeBeforeRun: false },
+    { name: 'dead-letter (at horizon)', ok: false, startAttempts: 7, disposeBeforeRun: false },
+    { name: 'shutdown-abort', ok: false, startAttempts: 0, disposeBeforeRun: true },
+  ] as const;
+
+  for (const testCase of lostSettleCases) {
+    it(`re-arms a self-heal timer when the ${testCase.name} settle CAS loses its race`, async () => {
+      const clock = 1_000_000;
+      const engine = new Engine({ getNow: () => clock });
+      const slug = testCase.name.replace(/\W+/g, '-');
+      const workflowId = `wf-lost-settle-${slug}`;
+      const workflowType = `teardown-lost-settle-${slug}`;
+      const token = 'tok-lost-settle';
+      let internalsRef!: ReturnType<typeof getInternals>;
+      const provision = workflow({
+        name: workflowType,
+        finalizer: activity({
+          name: 'destroy-lost-settle',
+          timeout: '1m',
+          execute: async () => {
+            // Overwrite the marker so the drive's settle CAS on its own running bytes loses.
+            await internalsRef.storage.put(
+              KEYS.teardownOwed(workflowId),
+              encode({ status: 'running', attempts: 99, token: 'other-token', claimedAt: clock }),
+            );
+            // Trigger shutdown so result.abortedByShutdown is true (abort path) — the body
+            // still resolves, which runFinalizerActivity reports as shutdown-aborted.
+            if (testCase.disposeBeforeRun)
+              internalsRef.abortController.abort(new Error('disposed'));
+            if (!testCase.ok && !testCase.disposeBeforeRun) throw new Error('finalizer boom');
+          },
+        }),
+      }).execute(async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('never');
+      });
+      engine.register(provision);
+      internalsRef = getInternals(engine);
+
+      await internalsRef.storage.put(
+        KEYS.teardownOwed(workflowId),
+        encode({ status: 'owed', attempts: testCase.startAttempts, token }),
+      );
+      await internalsRef.storage.put(KEYS.finalizerState(workflowId), encode({ sandboxId: 'sbx' }));
+
+      await runWorkflowFinalizer(
+        internalsRef,
+        workflowId,
+        createTeardownTimerId(token),
+        makeCallbacks(terminalState(workflowId, workflowType)),
+      );
+
+      // The settle CAS lost (the marker now holds 'other-token'), so the drive re-armed a
+      // self-heal timer rather than stranding the marker.
+      expect(await teardownTimerCount(internalsRef)).toBe(1);
+      engine[Symbol.dispose]();
+    });
+  }
+
   it('reclaims a stale running claim left by a crashed holder', async () => {
     // A `running` claim whose `claimedAt` is older than the stale threshold is reclaimable
     // — the drive runs the finalizer (advancing the clock past timeout + margin first).
@@ -522,6 +588,46 @@ describe('terminal teardown gate — staged-but-not-durable finalizer state', ()
     await engine.scheduler.tick(now);
     expect(destroyed).toEqual([{ sandboxId: 'sbx-staged' }]);
     expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).toBeNull();
+
+    engine[Symbol.dispose]();
+  });
+
+  it('writes the owed marker when finalizer state is present but the registration lacks a finalizer', async () => {
+    // Cursor Bugbot round 4: the terminal gate must write the owed marker whenever finalizer
+    // STATE is present, even if the current registration has no `finalizer` — otherwise the
+    // batch commits wf-finalizer-state: and deferred cleanup deletes it with no marker, so a
+    // recorded resource leaks. This matches the drive's missing-registration stance (leave +
+    // re-arm so a node that DOES register the type can run it). We register the workflow type
+    // WITHOUT a finalizer and stage finalizer state directly.
+    const now = 1_000_000;
+    const engine = new Engine({ getNow: () => now });
+    const provision = workflow({ name: 'teardown-no-registered-finalizer' }).execute(
+      async function* (ctx: WorkflowContext) {
+        yield* ctx.waitForSignal('never');
+      },
+    );
+    engine.register(provision);
+    const internals = getInternals(engine);
+
+    const workflowId = 'teardown-no-reg-finalizer-1';
+    const runningState: WorkflowState = {
+      id: workflowId,
+      type: 'teardown-no-registered-finalizer',
+      status: 'running',
+      input: null,
+      createdAt: now,
+      updatedAt: now,
+      versionTuple: { workflowVersion: '0' },
+    };
+    await internals.storage.put(KEYS.workflow(workflowId), encode(runningState));
+    recordFinalizerState(internals, workflowId, { sandboxId: 'sbx-orphan' });
+
+    await engine.cancel(workflowId);
+
+    // The marker IS written (so the resource is not silently dropped), conditioned on the
+    // recorded state — even though no finalizer is registered to run it yet.
+    expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).not.toBeNull();
+    expect(await internals.storage.get(KEYS.finalizerState(workflowId))).not.toBeNull();
 
     engine[Symbol.dispose]();
   });

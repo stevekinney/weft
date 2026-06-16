@@ -145,7 +145,7 @@ export async function terminateWorkflow(
         // above is a no-op for a suspended run (controller evicted at suspend), so
         // cancel runs the registered handlers without driving the gone generator.
         allowedStatuses: FORCIBLY_TERMINABLE_STATUSES,
-        buildAdditionalOperations: (previousState, updatedAt) => {
+        buildAdditionalOperations: (_previousState, updatedAt) => {
           finalizePendingTimelineEntry(
             internals,
             workflowId,
@@ -170,13 +170,7 @@ export async function terminateWorkflow(
             // declares a `finalizer` AND a resource was recorded — otherwise no
             // cost is added. The marker carries the execution claim, fenced on the
             // lease epoch by the enclosing terminal batch.
-            ...buildTeardownOperations(
-              internals,
-              workflowId,
-              previousState.type,
-              finalizerStatePresent,
-              updatedAt,
-            ),
+            ...buildTeardownOperations(workflowId, finalizerStatePresent, updatedAt),
           ];
         },
       },
@@ -520,27 +514,30 @@ export function buildTerminalCleanupTimerOperations(
 
 /**
  * Stage the durable teardown marker + timer for the terminal batch (#446 Phase 2).
- * Returns no operations unless the workflow type declares a `finalizer` AND a
- * resource was recorded via `ctx.setFinalizerState` (so a workflow with no
- * finalizer, or one that never recorded state, pays nothing). The durable
- * `teardownOwed` marker rides this same terminal batch as the finalizer state, so
- * the synchronous terminal cleanup that runs later in this call — and any cleanup
- * after a crash/recover — reads the committed marker to skip sweeping the
- * finalizer-needed keys while teardown is outstanding. The timer fires immediately
- * (`fireAt = terminalizedAt`) because a paid external resource should be destroyed
- * now, not after a delay.
+ * Returns no operations unless a resource was recorded via `ctx.setFinalizerState`
+ * (a workflow that never recorded state pays nothing). The durable `teardownOwed`
+ * marker rides this same terminal batch as the finalizer state, so the synchronous
+ * terminal cleanup that runs later in this call — and any cleanup after a crash/recover —
+ * reads the committed marker to skip sweeping the finalizer-needed keys while teardown is
+ * outstanding. The timer fires immediately (`fireAt = terminalizedAt`) because a paid
+ * external resource should be destroyed now, not after a delay.
+ *
+ * The gate is `finalizerStatePresent` ALONE — it does NOT also require the current
+ * registration to declare a `finalizer`. This matches the drive's stance: a fired timer
+ * whose workflow type isn't registered with a finalizer LEAVES the marker and re-arms (a
+ * node that recovers the type can run it), rather than clearing it. Skipping the marker
+ * here when the registration lacks a finalizer would commit `wf-finalizer-state:` and then
+ * let deferred cleanup delete it with no marker → a recorded external resource leaks
+ * silently. Tradeoff (assumed transient): if the workflow type is NEVER (re)registered
+ * with a finalizer, the marker is immortal and re-arms on the self-heal interval — a
+ * VISIBLE unpurgeable workflow, which we prefer over a silent resource leak.
  */
 function buildTeardownOperations(
-  internals: EngineInternals,
   workflowId: string,
-  workflowType: string,
   finalizerStatePresent: boolean,
   terminalizedAt: number,
 ): BatchOperation[] {
-  if (
-    !finalizerStatePresent ||
-    internals.registrations.get(workflowType)?.finalizer === undefined
-  ) {
+  if (!finalizerStatePresent) {
     return [];
   }
 

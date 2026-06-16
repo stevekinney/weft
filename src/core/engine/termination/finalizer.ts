@@ -71,6 +71,23 @@ function errorMessage(error: unknown): string {
 }
 
 /**
+ * Re-arm a self-heal timer after a settle CAS lost its race (the `running` bytes we wrote
+ * were reclaimed by another holder). The scheduler deletes the fired `wf-teardown:` timer
+ * once the drive returns, so without this the marker could be stranded with no follow-up
+ * timer — violating the self-heal invariant. Symmetric with the lost-CLAIM-CAS re-arm in
+ * {@link driveResolvedTeardown}. Idempotent and bounded: a redundant timer just makes the
+ * next drive re-read the marker (re-arm on a still-fresh claim, or clear if it's gone), and
+ * the dead-letter horizon caps total attempts. (Cursor Bugbot round 4.)
+ */
+async function rearmOnLostSettle(
+  internals: EngineInternals,
+  workflowId: string,
+  token: string,
+): Promise<void> {
+  await rearmTeardownTimer(internals, workflowId, token, TEARDOWN_SELF_HEAL_DELAY_MS);
+}
+
+/**
  * The resolved inputs for a teardown attempt, once every bail-out guard has passed.
  * Produced by {@link resolveTeardownDrive}; consumed by {@link runWorkflowFinalizer}.
  */
@@ -333,6 +350,7 @@ async function driveResolvedTeardown(
       internals,
       workflowId,
       state.type,
+      token,
       attempt,
       runningBytes,
       callbacks,
@@ -344,8 +362,10 @@ async function driveResolvedTeardown(
     // `owed` at the UNCHANGED attempt count (settle-CAS'd on our running bytes) and re-arm
     // a near-future timer, so the next owner retries from the same count and the resource
     // is never dead-lettered just because the engine was disposed. (Codex MF4 / junior MF2.)
+    // A lost settle CAS means a reclaimer took the running bytes — re-arm so the marker is
+    // never stranded after the scheduler deletes the fired timer. (Cursor Bugbot round 4.)
     const fireAt = internals.options.getNow() + TEARDOWN_SELF_HEAL_DELAY_MS;
-    await settleOnRunningClaim(internals, workflowId, runningBytes, [
+    const settled = await settleOnRunningClaim(internals, workflowId, runningBytes, [
       {
         type: 'put',
         key: KEYS.teardownOwed(workflowId),
@@ -353,6 +373,9 @@ async function driveResolvedTeardown(
       },
       ...teardownTimerOperations(token, workflowId, fireAt),
     ]);
+    if (!settled) {
+      await rearmOnLostSettle(internals, workflowId, token);
+    }
     return;
   }
   await settleTeardownFailure(
@@ -370,12 +393,13 @@ async function driveResolvedTeardown(
 /**
  * Finalizer succeeded: clear both keys, conditioned on still owning the `running` claim.
  * Emits the completed event only when the settle CAS commits (a lost CAS means a
- * reclaimer took over — stay silent and let it settle).
+ * reclaimer took over — stay silent and re-arm so the marker is never stranded).
  */
 async function settleTeardownSuccess(
   internals: EngineInternals,
   workflowId: string,
   workflowType: string,
+  token: string,
   attempt: number,
   runningBytes: Uint8Array,
   callbacks: FinalizerDriveCallbacks,
@@ -384,7 +408,10 @@ async function settleTeardownSuccess(
     { type: 'delete', key: KEYS.teardownOwed(workflowId) },
     { type: 'delete', key: KEYS.finalizerState(workflowId) },
   ]);
-  if (!settled) return;
+  if (!settled) {
+    await rearmOnLostSettle(internals, workflowId, token);
+    return;
+  }
   callbacks.dispatchEvent(
     new WorkflowTeardownEvent(workflowId, workflowType, 'completed', attempt),
   );
@@ -415,7 +442,13 @@ async function settleTeardownFailure(
         finalizerInput: finalizerStateBytes === null ? undefined : decode(finalizerStateBytes),
       },
     );
-    if (!settled) return;
+    // A lost settle CAS means a reclaimer took the running bytes (it will settle/re-arm).
+    // Re-arm anyway so the marker is never stranded after the fired timer is deleted —
+    // symmetric with the lost-CLAIM-CAS re-arm. (Cursor Bugbot round 4.)
+    if (!settled) {
+      await rearmOnLostSettle(internals, workflowId, token);
+      return;
+    }
     callbacks.dispatchEvent(
       new WorkflowTeardownEvent(workflowId, state.type, 'dead-lettered', attempt, message),
     );
@@ -429,7 +462,10 @@ async function settleTeardownFailure(
     { type: 'put', key: KEYS.teardownOwed(workflowId), value: encodeOwedClaim(attempt, token) },
     ...teardownTimerOperations(token, workflowId, fireAt),
   ]);
-  if (!settled) return;
+  if (!settled) {
+    await rearmOnLostSettle(internals, workflowId, token);
+    return;
+  }
   callbacks.dispatchEvent(
     new WorkflowTeardownEvent(workflowId, state.type, 'failed', attempt, message),
   );
