@@ -20,7 +20,17 @@
  * It also installs a targeted `console.warn` filter (see below) that drops the
  * intentional-but-noisy production startup warnings many server tests trigger,
  * keeping signal warnings visible.
+ *
+ * Finally, it registers a global `afterEach` that restores real timers after
+ * every test, so a failed teardown cannot leak a fake clock into later tests
+ * (`jest.useFakeTimers()` traps `Bun.sleep`, so a leaked clock hangs the next
+ * `Bun.sleep`). Same order-dependent-flakiness rationale as the `fake-indexeddb`
+ * shim above.
  */
+import { afterEach } from 'bun:test';
+
+import { restoreRealTimers } from '../src/testing/fake-timers.test-support.ts';
+
 import 'fake-indexeddb/auto';
 
 /**
@@ -73,3 +83,16 @@ console.warn = (...args: Parameters<typeof console.warn>): void => {
   }
   originalConsoleWarn(...args);
 };
+
+/**
+ * Global safety net: after every test, restore real timers if a test left the
+ * fake clock installed. `restoreRealTimers()` is a no-op (guarded by
+ * `jest.isFakeTimers()`) when timers were never faked or a file already restored
+ * them, so this never interferes with a well-behaved test — it only prevents a
+ * leaked fake clock from one file from hanging `Bun.sleep` in the next. No file
+ * installs fake timers in `beforeAll` (every install is per-`it`/`beforeEach`),
+ * so restoring between tests cannot strip a clock a test still depends on.
+ */
+afterEach(() => {
+  restoreRealTimers();
+});

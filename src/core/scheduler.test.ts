@@ -595,3 +595,106 @@ describe('Scheduler — implementation-specific', () => {
     expect(fired).toEqual(['timer-a']);
   });
 });
+
+// ---------------------------------------------------------------------------
+// commitTimerCleanup — the lease-fenced fired-timer delete (#563). The engine
+// supplies a fenced commit so a deposed engine cannot drop a fired timer while
+// its callback's fenced reschedule/clear was rejected. These tests exercise the
+// option directly (the contract above always uses the unfenced default).
+// ---------------------------------------------------------------------------
+
+describe('Scheduler — commitTimerCleanup (#563)', () => {
+  let context: SchedulerContractContext;
+  let storage: SchedulerContractContext['storage'];
+  let firedEntries: TimerEntry[];
+  let scheduler: Scheduler | undefined;
+
+  const now = () => context.getCurrentTime();
+
+  beforeEach(() => {
+    context = createSchedulerContractContext();
+    ({ storage, firedEntries } = context);
+  });
+
+  afterEach(() => {
+    // `scheduler` is assigned per-test, not in beforeEach, and dispose() can
+    // throw. Optional-chain the dispose and run restoreRealTimers() in a finally
+    // so a test that threw before assigning `scheduler` (or a disposal that
+    // throws) cannot mask the real failure or leak the fake clock.
+    try {
+      scheduler?.[Symbol.dispose]();
+    } finally {
+      restoreRealTimers();
+    }
+  });
+
+  it('routes the fired-timer cleanup batch through commitTimerCleanup instead of storage.batch', async () => {
+    const cleanupBatches: BatchOperation[][] = [];
+    scheduler = new Scheduler({
+      storage,
+      onTimerFired: (entry) => {
+        firedEntries.push(entry);
+      },
+      getNow: () => now(),
+      commitTimerCleanup: async (operations) => {
+        cleanupBatches.push(operations);
+        await storage.batch(operations);
+      },
+    });
+
+    const entry = context.makeTimer({ fireAt: now() - 1000 });
+    await scheduler.schedule(entry);
+
+    await scheduler.tick(now());
+
+    // The timer fired, and its cleanup went through the supplied commit.
+    expect(firedEntries).toHaveLength(1);
+    expect(cleanupBatches).toHaveLength(1);
+    // The cleanup deletes the deadline key (+ its index): no deadline key remains.
+    const remainingKeys = await context.collectStorageKeys();
+    expect(remainingKeys.filter((key) => key.startsWith('wf-deadline:'))).toHaveLength(0);
+  });
+
+  it('leaves the fired timer in storage when commitTimerCleanup rejects (deposed engine: timer survives for the successor)', async () => {
+    // Model a deposed engine: the fenced cleanup commit is rejected (the same
+    // fence the callback's reschedule/clear lost). The unfenced default would
+    // have dropped the timer; the fenced commit must leave it for re-drive.
+    scheduler = new Scheduler({
+      storage,
+      onTimerFired: (entry) => {
+        firedEntries.push(entry);
+      },
+      getNow: () => now(),
+      commitTimerCleanup: () =>
+        Promise.reject(new Error('engine deposed: fenced timer cleanup rejected')),
+    });
+
+    const entry = context.makeTimer({ id: 'survivor', fireAt: now() - 1000 });
+    await scheduler.schedule(entry);
+
+    await scheduler.tick(now());
+
+    // It fired (the callback ran) but the rejected cleanup left the durable
+    // timer in place — so a successor that re-reads storage finds it and re-drives.
+    expect(firedEntries).toHaveLength(1);
+    const remainingKeys = await context.collectStorageKeys();
+    expect(remainingKeys.filter((key) => key.startsWith('wf-deadline:'))).toHaveLength(1);
+
+    // A later tick (e.g. on the successor) re-fires the surviving timer and, with
+    // a healthy commit, finally clears it.
+    scheduler[Symbol.dispose]();
+    scheduler = new Scheduler({
+      storage,
+      onTimerFired: (entry) => {
+        firedEntries.push(entry);
+      },
+      getNow: () => now(),
+      commitTimerCleanup: (operations) => storage.batch(operations),
+    });
+    await scheduler.tick(now());
+
+    expect(firedEntries).toHaveLength(2);
+    const afterRedrive = await context.collectStorageKeys();
+    expect(afterRedrive.filter((key) => key.startsWith('wf-deadline:'))).toHaveLength(0);
+  });
+});

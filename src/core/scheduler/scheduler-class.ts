@@ -18,6 +18,15 @@ export interface SchedulerOptions {
   onTimerFired: (entry: TimerEntry) => void | Promise<void>;
   pollIntervalMs?: number;
   getNow?: () => number;
+  /**
+   * Commit the batch that deletes a fired timer's keys after its callback
+   * returns. Defaults to an unfenced `storage.batch`. The engine supplies a
+   * lease-fenced commit (#563) so the fired-timer delete and the callback's own
+   * follow-up writes share the same ownership fence — under deposition both are
+   * rejected and the timer survives for the successor to re-drive. With no lease
+   * held this commits exactly as the unfenced default would.
+   */
+  commitTimerCleanup?: (operations: BatchOperation[]) => Promise<void>;
 }
 
 type TimerScanIterators = {
@@ -64,6 +73,7 @@ export class Scheduler implements Disposable {
   readonly #onTimerFired: (entry: TimerEntry) => void | Promise<void>;
   readonly #pollIntervalMs: number;
   readonly #getNow: () => number;
+  readonly #commitTimerCleanup: (operations: BatchOperation[]) => Promise<void>;
   #intervalHandle: ReturnType<typeof setInterval> | null = null;
   #stopped = false;
 
@@ -72,6 +82,8 @@ export class Scheduler implements Disposable {
     this.#onTimerFired = options.onTimerFired;
     this.#pollIntervalMs = options.pollIntervalMs ?? 1000;
     this.#getNow = options.getNow ?? Date.now;
+    this.#commitTimerCleanup =
+      options.commitTimerCleanup ?? ((operations) => this.#storage.batch(operations));
   }
 
   /** Start the polling loop. */
@@ -269,7 +281,12 @@ export class Scheduler implements Disposable {
     if (cleanupOperations.length === 0) return;
 
     try {
-      await this.#storage.batch(cleanupOperations);
+      // Routed through the (engine-supplied, lease-fenced) cleanup commit so a
+      // deposed engine cannot drop a fired timer while its fenced follow-up
+      // write was rejected (#563). A rejected fenced commit throws here and is
+      // logged-and-swallowed exactly like an unfenced batch failure: the timer
+      // stays in storage and the successor re-drives it.
+      await this.#commitTimerCleanup(cleanupOperations);
     } catch (deleteError) {
       console.error('Failed to delete timer keys for processed scheduler tick:', deleteError);
     }

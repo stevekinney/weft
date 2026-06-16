@@ -47,6 +47,16 @@ const waiterWorkflow = workflow({ name: 'deposition-waiter' }).execute(async fun
   return 'resumed';
 });
 
+const sleeperWorkflow = workflow({ name: 'deposition-sleeper' }).execute(async function* (
+  ctx: WorkflowContext,
+) {
+  // Parks on a durable `wf-deadline:` timer — the kind whose resume callback
+  // swallows the fenced-checkpoint throw at the turn boundary, so the scheduler
+  // reaches the fired-timer cleanup delete even under deposition (#563).
+  yield* ctx.sleep('1h');
+  return 'slept';
+});
+
 async function readEpoch(storage: Storage): Promise<number | null> {
   const raw = await storage.get(KEYS.leaseEpoch());
   if (raw === null) return null;
@@ -773,5 +783,66 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
 
     await engine[Symbol.asyncDispose]();
     storage[Symbol.dispose]?.();
+  });
+
+  it('a deposed engine does not drop a fired timer: the fenced cleanup is rejected so the durable timer survives for the successor (#563)', async () => {
+    // End-to-end through the real Engine → Scheduler → commitFencedEngineWrite
+    // wiring: the seam that caused #563. A deposed engine's scheduler still runs
+    // briefly (teardown is deferred), so a fired timer's cleanup delete must be
+    // fenced — otherwise it lands while the callback's fenced follow-up is
+    // rejected, stranding durable state with no timer.
+    const storage = new BunSQLiteStorage(':memory:');
+    const engine = await Engine.create({
+      storage,
+      workflows: { 'deposition-sleeper': sleeperWorkflow },
+      ownership: 'lease',
+      leaseTtl: '10m',
+      leaseRenewInterval: '5m',
+    });
+    const internals = getInternals(engine);
+
+    try {
+      // Start the workflow; it parks on a durable `wf-deadline:` timer at epoch 1.
+      await engine.start('deposition-sleeper', null, { id: 'deposed-sleeper' });
+      const deadlineKeys = async (): Promise<string[]> => {
+        const keys: string[] = [];
+        for await (const [key] of storage.scan('wf-deadline:')) keys.push(key);
+        return keys;
+      };
+      await waitForCondition(
+        async () => {
+          const keys = await deadlineKeys();
+          return keys.length === 1;
+        },
+        { label: 'sleep timer armed at epoch 1' },
+      );
+      const armedKeys = await deadlineKeys();
+      const armedKey = armedKeys[0]!;
+
+      // A successor steals the lease (epoch 1 -> 2) and this engine is deposed —
+      // set the flag directly (the same state the commit-path detection reaches;
+      // mirrors the sticky-halt test) so the scheduler tick below runs while
+      // deposed, deterministically, before the deferred teardown disposes it.
+      await stealLease(storage, 2, 'successor');
+      internals.deposed = true;
+
+      // Fire the timer well past its fireAt. The resume callback's fenced
+      // checkpoint loses its CAS (deposed) and is swallowed at the turn boundary,
+      // so onTimerFired returns normally and the scheduler reaches the cleanup
+      // delete — which is now fenced and therefore ALSO rejected.
+      await internals.scheduler.tick(internals.options.getNow() + 2 * 60 * 60 * 1000);
+
+      // The durable timer SURVIVES: a deposed engine could not delete it, so the
+      // successor that recovers this store finds the timer and re-drives the sleep.
+      const survivors = await deadlineKeys();
+      expect(survivors).toContain(armedKey);
+    } finally {
+      // The engine is deposed; disposing it is a no-op lease release (the CAS
+      // guard fails silently), so await it directly like the sibling deposition
+      // test above — a throw here would be a real teardown regression, not
+      // something to swallow.
+      await engine[Symbol.asyncDispose]();
+      storage[Symbol.dispose]?.();
+    }
   });
 });
