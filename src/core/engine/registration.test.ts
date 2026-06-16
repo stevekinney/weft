@@ -124,7 +124,10 @@ describe('finalizer registration (#446)', () => {
     engine[Symbol.dispose]();
   });
 
-  it('throws when registering a finalizer on a worker-mode engine', () => {
+  it('succeeds when registering a finalizer on a worker-mode engine (#564)', () => {
+    // Finalizers are host-side trusted activity code. workflowExecutionMode:'worker'
+    // isolates only the workflow generator; the finalizer always runs on the engine
+    // host via runFinalizerActivity, so the registration guard is not needed.
     const engine = new Engine({
       workflowExecutionMode: 'worker',
       workerExecution: {
@@ -140,9 +143,11 @@ describe('finalizer registration (#446)', () => {
       return 'done';
     });
 
-    expect(() => engine.register(workerModeFinalized)).toThrow(
-      /durable finalizers require inline execution and are not supported in worker execution mode/,
-    );
+    expect(() => engine.register(workerModeFinalized)).not.toThrow();
+
+    const entry = getInternals(engine).registrations.get('worker-mode-finalized');
+    expect(entry?.finalizer).toBeDefined();
+    expect(entry?.finalizer?.name).toBe('destroySandbox');
 
     engine[Symbol.dispose]();
   });

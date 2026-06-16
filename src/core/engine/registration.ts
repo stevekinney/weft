@@ -52,32 +52,6 @@ function assertConstraintsSupported(
   }
 }
 
-function assertFinalizerSupported(
-  internals: EngineInternals,
-  name: string,
-  registration: WorkflowDefinition,
-): void {
-  if (registration.finalizer === undefined) {
-    return;
-  }
-  // The durable cancellation-teardown finalizer (#446) runs through the inline
-  // execution path after a `cancelled`/`timed-out` terminal. It is inline-only
-  // by design: a definition-level `finalizer` is never advertised to a worker's
-  // activity table, so a worker-mode engine could not run it — dispatch would
-  // fail to match and the teardown attempt would dead-letter while the paid
-  // external resource stayed live. Worker-mode parity is tracked separately
-  // (#564). Fail loud at registration rather than mid-teardown so the limitation
-  // is obvious up front.
-  if (internals.inlineStrategy === null) {
-    throw new Error(
-      `Cannot register workflow "${name}" with a finalizer: durable finalizers require inline execution and are ` +
-        `not supported in worker execution mode. The engine was constructed with \`workerExecution\`. Construct the ` +
-        `engine without \`workerExecution\` to run workflows inline, or remove the \`finalizer\` option. See the ` +
-        `"Durable cancellation teardown" section of the Workflows guide for the finalizer contract.`,
-    );
-  }
-}
-
 function buildBaseRegistrationEntry(
   name: string,
   registration: WorkflowDefinition,
@@ -150,6 +124,9 @@ function applyOptionalRegistrationFields(
     // Stored as-declared. The teardown drive (#446 Phase 2) resolves it from this
     // entry by the workflow's durable `state.type` and narrows it to the
     // structural `RunnableFinalizer` it invokes — see `runWorkflowFinalizer`.
+    // Finalizers are host-side trusted activity code. workflowExecutionMode:'worker'
+    // isolates only the workflow generator; the finalizer always runs on the engine
+    // host via runFinalizerActivity (see #564).
     entry.finalizer = registration.finalizer;
   }
 }
@@ -168,7 +145,6 @@ function commitWorkflowDefinition(
   const name = definition.name;
   validateWorkflowOrActivityName(name, 'workflow');
   assertConstraintsSupported(internals, name, definition);
-  assertFinalizerSupported(internals, name, definition);
   const entry = buildRegistrationEntry(name, definition);
   internals.registrations.set(name, entry);
   callbacks.ensureRetentionSweepInterval();

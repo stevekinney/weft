@@ -86,13 +86,16 @@ export interface WorkflowDefinition<
    * so destroying an already-destroyed resource must succeed (or no-op) rather
    * than throw — the same contract as keying a destroy by `sandboxId`.
    *
-   * **Inline execution only.** Registering a finalizer on a worker-execution-mode
-   * engine throws: a definition-level finalizer is never advertised to a worker's
-   * activity table, so it could not run there. Worker-mode parity is tracked in
-   * #564. The inline-only alternatives are `ctx.onCancel` (in-process,
-   * best-effort cleanup that need not survive a crash) and `ctx.saga` (multi-step
-   * ordered rollback) — both are also unavailable in worker mode, where teardown
-   * must happen in the workflow body (a `ctx.run` destroy step in a `try/finally`).
+   * A `finalizer` is trusted host code and works in both inline and worker
+   * execution modes. Worker execution mode isolates the workflow generator in a
+   * Web Worker; the finalizer teardown runs on the engine host regardless of
+   * execution mode and regardless of whether `activityExecution` is configured.
+   * Note that `ctx.setFinalizerState` is not callable from within the worker
+   * generator — record finalizer state from engine-host code if needed. The
+   * inline-only alternatives are `ctx.onCancel` (in-process, best-effort cleanup
+   * that need not survive a crash) and `ctx.saga` (multi-step ordered rollback) —
+   * both are unavailable in worker mode, where teardown must happen in the workflow
+   * body (a `ctx.run` destroy step in a `try/finally`).
    */
   finalizer?: AnyActivityDefinition;
 }

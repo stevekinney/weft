@@ -479,11 +479,15 @@ export interface WorkflowContext<
    * development warning is logged); finalizer state is recordable only while the
    * workflow is live.
    *
-   * **Inline only**: this method throws under worker execution mode and inside
-   * `ctx.speculate()` branches, matching the registration-time rejection of
-   * worker-mode finalizers. Durable finalizers are not yet supported in worker
-   * mode (#564). For in-process, best-effort cleanup that does not need to
-   * survive a crash, use {@link WorkflowContext.onCancel}.
+   * **Worker-generator caveat**: this method is unavailable inside the workflow
+   * generator when running in worker execution mode (`WorkerWorkflowContext` does
+   * not expose it; `internals.recordFinalizerState` is undefined there). Record
+   * finalizer state from engine-host code, or use inline execution mode. The
+   * method also throws inside `ctx.speculate()` branches. Durable finalizer
+   * *registration* works in worker mode since #564; only the in-generator
+   * `setFinalizerState` call requires the inline context. For in-process,
+   * best-effort cleanup that does not need to survive a crash,
+   * use {@link WorkflowContext.onCancel}.
    *
    * @example
    * ```ts
