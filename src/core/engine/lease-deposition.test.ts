@@ -837,13 +837,11 @@ describe('#470 Step 2: fenced-write fan-out — behavior-level coverage', () => 
       const survivors = await deadlineKeys();
       expect(survivors).toContain(armedKey);
     } finally {
-      // The engine is deposed; dispose directly (no graceful lease release races
-      // the successor). Swallow the deposed-release CAS no-op.
-      try {
-        await engine[Symbol.asyncDispose]();
-      } catch {
-        /* deposed dispose best-effort */
-      }
+      // The engine is deposed; disposing it is a no-op lease release (the CAS
+      // guard fails silently), so await it directly like the sibling deposition
+      // test above — a throw here would be a real teardown regression, not
+      // something to swallow.
+      await engine[Symbol.asyncDispose]();
       storage[Symbol.dispose]?.();
     }
   });

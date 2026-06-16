@@ -607,7 +607,7 @@ describe('Scheduler — commitTimerCleanup (#563)', () => {
   let context: SchedulerContractContext;
   let storage: SchedulerContractContext['storage'];
   let firedEntries: TimerEntry[];
-  let scheduler: Scheduler;
+  let scheduler: Scheduler | undefined;
 
   const now = () => context.getCurrentTime();
 
@@ -617,8 +617,15 @@ describe('Scheduler — commitTimerCleanup (#563)', () => {
   });
 
   afterEach(() => {
-    scheduler[Symbol.dispose]();
-    restoreRealTimers();
+    // `scheduler` is assigned per-test, not in beforeEach, and dispose() can
+    // throw. Optional-chain the dispose and run restoreRealTimers() in a finally
+    // so a test that threw before assigning `scheduler` (or a disposal that
+    // throws) cannot mask the real failure or leak the fake clock.
+    try {
+      scheduler?.[Symbol.dispose]();
+    } finally {
+      restoreRealTimers();
+    }
   });
 
   it('routes the fired-timer cleanup batch through commitTimerCleanup instead of storage.batch', async () => {
