@@ -161,6 +161,9 @@ export function registerWorkflowEventLifecycle(
  *   token messages, enabling per-workflow stream sockets to be used in
  *   place of the default pub/sub channel. Leave unset unless you manage stream
  *   sockets separately (as `serve()` does internally).
+ * @param options.publishWatchMessage - Optional override for watch-event delivery.
+ *   When provided, this callback is called instead of `server.publish()` for
+ *   watch messages, enabling per-socket replay buffering during catch-up.
  *
  * @example
  * ```ts
@@ -186,6 +189,7 @@ export function wireEventBroadcasting(
   server: ReturnType<typeof Bun.serve>,
   options?: {
     publishTokenMessage?: (workflowId: string, sequence: number, message: string) => void;
+    publishWatchMessage?: (workflowId: string, sequence: number, message: string) => void;
     fleetEventFeed?: FleetEventFeed;
   },
 ): EventBroadcastingHandle {
@@ -286,35 +290,12 @@ export function wireEventBroadcasting(
     eventType: string,
     message: string,
   ): Promise<void> {
-    await ensureSequenceInitialized(workflowId);
-
     const parsed = JSON.parse(message) as {
       type: string;
       timestamp: number;
       data: Record<string, unknown>;
     };
 
-    // Claim the sequence number once — outside the retry scope so a
-    // failed storage write doesn't consume an additional number.
-    const sequence = claimNextSequence(sequenceCounters, workflowId);
-    const watchMessage = JSON.stringify({
-      ...parsed,
-      sequence,
-      cursor: String(sequence),
-    });
-    const storageKey = KEYS.event(workflowId, sequence);
-    const encoded = encode(JSON.parse(watchMessage));
-
-    await withRetry(
-      async () => engine.storage.put(storageKey, encoded),
-      `persist event "${eventType}" for workflow "${workflowId}"`,
-    );
-
-    // Publish to the workflow's watch channel
-    const watchChannel = workflowChannelPath(workflowId, 'watch');
-    server.publish(watchChannel, watchMessage);
-
-    // For token events, also publish to the stream channel
     if (eventType === TOKEN_EVENT_TYPE) {
       const tokenPayload = {
         workflowId:
@@ -342,7 +323,8 @@ export function wireEventBroadcasting(
       );
 
       const streamMessage = JSON.stringify({
-        ...parsed,
+        type: parsed.type,
+        timestamp: parsed.timestamp,
         sequence: tokenSequence,
         cursor: String(tokenSequence),
         data: tokenPayload,
@@ -353,6 +335,35 @@ export function wireEventBroadcasting(
         const streamChannel = workflowChannelPath(workflowId, 'stream');
         server.publish(streamChannel, streamMessage);
       }
+      return;
+    }
+
+    await ensureSequenceInitialized(workflowId);
+
+    // Claim the sequence number once — outside the retry scope so a
+    // failed storage write doesn't consume an additional number.
+    const sequence = claimNextSequence(sequenceCounters, workflowId);
+    const watchMessage = JSON.stringify({
+      type: parsed.type,
+      timestamp: parsed.timestamp,
+      data: parsed.data,
+      sequence,
+      cursor: String(sequence),
+    });
+    const storageKey = KEYS.event(workflowId, sequence);
+    const encoded = encode(JSON.parse(watchMessage));
+
+    await withRetry(
+      async () => engine.storage.put(storageKey, encoded),
+      `persist event "${eventType}" for workflow "${workflowId}"`,
+    );
+
+    // Publish to the workflow's watch channel
+    if (options?.publishWatchMessage) {
+      options.publishWatchMessage(workflowId, sequence, watchMessage);
+    } else {
+      const watchChannel = workflowChannelPath(workflowId, 'watch');
+      server.publish(watchChannel, watchMessage);
     }
   }
 
@@ -444,6 +455,7 @@ async function appendFleetEvent(
   workflowId: string | undefined,
   message: string,
 ): Promise<void> {
+  if (eventType === TOKEN_EVENT_TYPE) return;
   if (fleetEventFeed === undefined) return;
   try {
     const parsed = JSON.parse(message) as {

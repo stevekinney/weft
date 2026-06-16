@@ -1,15 +1,29 @@
 import { z } from 'zod';
 
 import type { FleetEventEnvelope, FleetEventFeed } from '../fleet-event-feed.ts';
+import { raiseFault } from '../operation-catalog/raise-fault.ts';
+import type { TransportKind } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
-import type { Cursor, FeedEventKind } from '../workflow-event-feed.ts';
+import { EVENTS_READ_EVENT_TYPES } from '../runtime/client-visible-events.ts';
+import { decodeCursor, type Cursor } from '../workflow-event-feed.ts';
 
 const INITIAL_SUBSCRIPTION_CURSOR: Cursor = '-1';
 
+const fleetEventKindSet = new Set<string>(EVENTS_READ_EVENT_TYPES);
+const fleetEventKindSchema = z
+  .string()
+  .min(1)
+  .refine((kind) => fleetEventKindSet.has(kind), {
+    message: 'Unsupported fleet event kind',
+  });
+const fleetCursorSchema = z.string().refine((cursor) => decodeCursor(cursor) !== null, {
+  message: 'Invalid cursor',
+});
+
 const fleetEventsSubscriptionInput = z.object({
   workflowId: z.string().min(1).optional(),
-  kind: z.string().min(1).optional(),
-  fromCursor: z.string().optional(),
+  kind: fleetEventKindSchema.optional(),
+  fromCursor: fleetCursorSchema.optional(),
 });
 
 const fleetEventsSubscriptionEnvelope = z.object({
@@ -34,6 +48,7 @@ export const fleetEventsSubscriptionOperation = defineOperation<
   tags: ['Events'],
   inputSchema: fleetEventsSubscriptionInput,
   outputSchema: fleetEventsSubscriptionEnvelope,
+  producibleFaults: ['UnsupportedTransport'],
   eventSchema: z.object({
     kind: z.string(),
     workflowId: z.string().optional(),
@@ -49,8 +64,8 @@ export const fleetEventsSubscriptionOperation = defineOperation<
   discoverable: true,
   transports: { http: false, jsonRpcHttp: false, jsonRpcWebSocket: true, jsonRpcStdio: false },
   unknownKeyPolicy: { http: 'strip', jsonRpc: 'reject' },
-  invoke: async ({ input, engine }) => {
-    const fleetFeed = (engine as { fleetFeed: FleetEventFeed }).fleetFeed;
+  invoke: async ({ input, engine, transport }) => {
+    const fleetFeed = getFleetEventFeed(engine, transport);
     const controller = new AbortController();
     const startingCursor = input.fromCursor ?? INITIAL_SUBSCRIPTION_CURSOR;
     const iterable = filterFleetEvents(
@@ -75,10 +90,28 @@ async function* filterFleetEvents(
   iterable: AsyncIterable<FleetEventEnvelope>,
   input: FleetEventsSubscriptionInput,
 ): AsyncIterable<FleetEventEnvelope> {
-  const kind = input.kind as FeedEventKind | undefined;
   for await (const envelope of iterable) {
     if (input.workflowId !== undefined && envelope.workflowId !== input.workflowId) continue;
-    if (kind !== undefined && envelope.kind !== kind) continue;
+    if (input.kind !== undefined && envelope.kind !== input.kind) continue;
     yield envelope;
   }
+}
+
+function getFleetEventFeed(engine: unknown, transport: TransportKind): FleetEventFeed {
+  if (typeof engine === 'object' && engine !== null && 'fleetFeed' in engine) {
+    const fleetFeed = engine.fleetFeed;
+    if (isFleetEventFeed(fleetFeed)) return fleetFeed;
+  }
+
+  raiseFault(fleetEventsSubscriptionOperation, {
+    code: 'UnsupportedTransport',
+    message: 'Fleet event subscription requires a WebSocket fleet event feed',
+    data: { transport, supported: ['jsonRpcWebSocket'] },
+  });
+}
+
+function isFleetEventFeed(value: unknown): value is FleetEventFeed {
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record['subscribe'] === 'function';
 }

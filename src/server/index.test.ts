@@ -11,6 +11,7 @@ import {
   WorkerDisconnectedEvent,
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
+  WorkflowSuspendedEvent,
 } from '../core/events.ts';
 import type { RetryPolicy, WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
@@ -1025,9 +1026,9 @@ describe('serve', () => {
     const workflowId = 'terminal-cleanup-wf';
 
     // Emit a sequence of events before the terminal state.
-    engine.dispatchEvent(new TokenEvent(workflowId, 'first', 'gpt-4'));
-    engine.dispatchEvent(new TokenEvent(workflowId, 'second', 'gpt-4'));
-    engine.dispatchEvent(new TokenEvent(workflowId, 'third', 'gpt-4'));
+    engine.dispatchEvent(new WorkflowSuspendedEvent(workflowId));
+    engine.dispatchEvent(new WorkflowSuspendedEvent(workflowId));
+    engine.dispatchEvent(new WorkflowSuspendedEvent(workflowId));
 
     // Wait until the serialization chain has persisted all three. Polling on
     // the observable count is deterministic across CI load — a raw
@@ -1049,7 +1050,7 @@ describe('serve', () => {
     // sequence state evicted, `ensureSequenceInitialized` must re-read from
     // storage and resume after the highest existing sequence number — not
     // restart at 0 and overwrite the previously persisted events.
-    engine.dispatchEvent(new TokenEvent(workflowId, 'post-terminal', 'gpt-4'));
+    engine.dispatchEvent(new WorkflowSuspendedEvent(workflowId));
     await waitFor(async () => (await countKeys(engine, `ev:${workflowId}:`)) === 5, {
       label: 'post-terminal event persisted without collision',
     });
@@ -1059,7 +1060,7 @@ describe('serve', () => {
       keys.push(key);
     }
 
-    // 3 tokens + 1 terminal + 1 post-terminal = 5 distinct sequence keys.
+    // 3 pre-terminal + 1 terminal + 1 post-terminal = 5 distinct sequence keys.
     // If the cleanup dropped the counter mid-persist or the rehydration
     // restarted at 0, we would see fewer than 5 entries (collisions).
     expect(keys.length).toBe(5);
@@ -1090,7 +1091,7 @@ describe('serve', () => {
     const workflowCount = 25;
     for (let i = 0; i < workflowCount; i++) {
       const workflowId = `bulk-wf-${i}`;
-      engine.dispatchEvent(new TokenEvent(workflowId, `token-${i}`, 'gpt-4'));
+      engine.dispatchEvent(new WorkflowSuspendedEvent(workflowId));
       engine.dispatchEvent(new WorkflowCompletedEvent(workflowId, i, 1));
     }
 
@@ -1108,7 +1109,7 @@ describe('serve', () => {
       { label: 'all 25 bulk workflows persisted their events' },
     );
 
-    // Each workflow should have exactly 2 stored events (the token + terminal).
+    // Each workflow should have exactly 2 stored events (non-terminal + terminal).
     for (let i = 0; i < workflowCount; i++) {
       const count = await countKeys(engine, `ev:bulk-wf-${i}:`);
       expect(count).toBe(2);
@@ -1141,20 +1142,25 @@ describe('serve', () => {
     const workflowId = 'stream-fallback-publish-wf';
     engine.dispatchEvent(new TokenEvent(workflowId, 'hello', 'gpt-4'));
 
-    await waitFor(() => publishedMessages.length === 2, {
-      label: 'watch and stream channel publishes',
+    await waitFor(() => publishedMessages.length === 1, {
+      label: 'stream channel publish',
     });
 
     expect(publishedMessages).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          channel: `/v1/workflows/${encodeURIComponent(workflowId)}/watch`,
-        }),
-        expect.objectContaining({
           channel: `/v1/workflows/${encodeURIComponent(workflowId)}/stream`,
         }),
       ]),
     );
+    expect(publishedMessages).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          channel: `/v1/workflows/${encodeURIComponent(workflowId)}/watch`,
+        }),
+      ]),
+    );
+    expect(await countKeys(engine, KEYS.eventPrefix(workflowId))).toBe(0);
 
     broadcaster.dispose();
   });
@@ -1165,7 +1171,7 @@ describe('serve', () => {
 
     const workflowId = 'terminal-recursion-wf';
 
-    engine.dispatchEvent(new TokenEvent(workflowId, 'before-terminal', 'gpt-4'));
+    engine.dispatchEvent(new WorkflowSuspendedEvent(workflowId));
     await waitFor(async () => (await countKeys(engine, `ev:${workflowId}:`)) === 1, {
       label: 'pre-terminal event persisted',
     });
@@ -1174,7 +1180,7 @@ describe('serve', () => {
     // event chain before the terminal cleanup can drain. This exercises the
     // recursive cleanup path inside `cleanupWorkflow`.
     engine.dispatchEvent(new WorkflowCompletedEvent(workflowId, 'ok', 1));
-    engine.dispatchEvent(new TokenEvent(workflowId, 'during-terminal-cleanup', 'gpt-4'));
+    engine.dispatchEvent(new WorkflowSuspendedEvent(workflowId));
 
     await waitFor(async () => (await countKeys(engine, `ev:${workflowId}:`)) === 3, {
       label: 'terminal and immediate follow-up events persisted',
@@ -1183,7 +1189,7 @@ describe('serve', () => {
     // Once the recursive cleanup has drained the extended chain, a later event
     // should rehydrate from storage and continue the sequence without
     // collisions or gaps.
-    engine.dispatchEvent(new TokenEvent(workflowId, 'after-recursive-cleanup', 'gpt-4'));
+    engine.dispatchEvent(new WorkflowSuspendedEvent(workflowId));
     await waitFor(async () => (await countKeys(engine, `ev:${workflowId}:`)) === 4, {
       label: 'post-recursion event persisted after cleanup',
     });
@@ -2687,9 +2693,12 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     wsServer: WeftServer,
     workflowId: string,
     resumeFrom: string,
+    connectionType: 'stream' | 'watch' = 'stream',
   ): Promise<void> {
     const wsUrl = wsServer.url.replace('http://', 'ws://');
-    const url = new URL(`${wsUrl}/v1/workflows/${encodeURIComponent(workflowId)}/stream`);
+    const url = new URL(
+      `${wsUrl}/v1/workflows/${encodeURIComponent(workflowId)}/${connectionType}`,
+    );
     url.searchParams.set('resumeFrom', resumeFrom);
 
     await new Promise<void>((resolve, reject) => {
@@ -2703,7 +2712,7 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
       ws.addEventListener('open', () => {
         clearTimeout(timeout);
         ws.close();
-        reject(new Error(`Unexpectedly connected with resumeFrom=${resumeFrom}`));
+        reject(new Error(`Unexpectedly connected ${connectionType} with resumeFrom=${resumeFrom}`));
       });
       ws.addEventListener('error', finish, { once: true });
       ws.addEventListener('close', finish, { once: true });
@@ -3046,8 +3055,15 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });
 
-    for (const resumeFrom of ['', 'not-a-number', '1.5', '1abc', '0x10', '1e3']) {
-      await expectStreamConnectionFailure(server, 'wf-invalid-resume', resumeFrom);
+    for (const connectionType of ['stream', 'watch'] as const) {
+      for (const resumeFrom of ['', 'not-a-number', '1.5', '1abc', '0x10', '1e3']) {
+        await expectStreamConnectionFailure(
+          server,
+          `wf-invalid-resume-${connectionType}`,
+          resumeFrom,
+          connectionType,
+        );
+      }
     }
 
     const healthResponse = await fetch(`${server.url}/v1/health`);
@@ -3060,14 +3076,14 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     await storage.put(
       KEYS.event('wf-sequence', 4),
       encode({
-        type: TokenEvent.type,
+        type: WorkflowSuspendedEvent.type,
         timestamp: Date.now(),
-        data: { workflowId: 'wf-sequence', token: 'old', model: 'gpt-4' },
+        data: { workflowId: 'wf-sequence' },
       }),
     );
     server = serveTestServer({ engine, port: 0 });
 
-    engine.dispatchEvent(new TokenEvent('wf-sequence', 'new', 'gpt-4'));
+    engine.dispatchEvent(new WorkflowSuspendedEvent('wf-sequence'));
     await waitFor(async () => (await storage.get(KEYS.event('wf-sequence', 5))) !== null, {
       label: 'event persistence at next sequence',
     });
@@ -3120,11 +3136,11 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     server = serveTestServer({ engine, port: 0 });
 
     try {
-      engine.dispatchEvent(new TokenEvent('wf-sequence-retry', 'first', 'gpt-4'));
+      engine.dispatchEvent(new WorkflowSuspendedEvent('wf-sequence-retry'));
       await waitFor(() => errorSpy.mock.calls.length > 0, {
         label: 'initial event sequence scan failure to surface',
       });
-      engine.dispatchEvent(new TokenEvent('wf-sequence-retry', 'second', 'gpt-4'));
+      engine.dispatchEvent(new WorkflowSuspendedEvent('wf-sequence-retry'));
       await waitFor(async () => (await storage.get(KEYS.event('wf-sequence-retry', 0))) !== null, {
         label: 'event persistence after retry',
       });

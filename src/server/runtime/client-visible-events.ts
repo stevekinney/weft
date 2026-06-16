@@ -29,7 +29,7 @@ import { ReviewCompletedEvent, ReviewRequestedEvent } from '../../core/review/ev
 
 export const TOKEN_EVENT_TYPE = 'stream:token';
 
-export const CLIENT_VISIBLE_EVENT_TYPES = [
+export const EVENTS_READ_EVENT_TYPES = [
   WorkflowStartedEvent.type,
   WorkflowCompletedEvent.type,
   WorkflowFailedEvent.type,
@@ -43,7 +43,6 @@ export const CLIENT_VISIBLE_EVENT_TYPES = [
   ActivityFailedEvent.type,
   ActivityAsyncPendingEvent.type,
   TaskResultDeadLetteredEvent.type,
-  TOKEN_EVENT_TYPE,
   SignalReceivedEvent.type,
   SignalDeliveredEvent.type,
   AttributesChangedEvent.type,
@@ -58,4 +57,10 @@ export const CLIENT_VISIBLE_EVENT_TYPES = [
   ConstraintViolatedEvent.type,
   WorkerConnectedEvent.type,
   WorkerDisconnectedEvent.type,
+] as const;
+
+export const CLIENT_VISIBLE_EVENT_TYPES = [
+  ...EVENTS_READ_EVENT_TYPES.slice(0, 13),
+  TOKEN_EVENT_TYPE,
+  ...EVENTS_READ_EVENT_TYPES.slice(13),
 ] as const;

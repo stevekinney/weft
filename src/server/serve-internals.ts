@@ -202,6 +202,7 @@ export function buildServerContext(
     taskQueue,
     workerSockets: new Map(),
     streamSockets: new Map(),
+    watchSockets: new Map(),
     workflowStreamConnectionCounts: new Map(),
     maxStreamConnectionsPerWorkflow:
       options.maxStreamConnectionsPerWorkflow ?? DEFAULT_MAX_STREAM_CONNECTIONS_PER_WORKFLOW,

@@ -63,7 +63,10 @@ export const workflowEventsSubscriptionOperation = defineOperation<
     emittedAtMs: z.number(),
     payload: z.unknown(),
   }),
-  access: { kind: 'authenticated' },
+  access: {
+    kind: 'scoped',
+    scopes: { kind: 'anyOf', scopes: ['events:read', 'streams:read'] },
+  },
   authorize: async ({ input, principal }) => {
     const requiredScope = workflowSubscriptionScope(input.selector);
     if (!isAuthenticated(principal)) {

@@ -28,6 +28,7 @@ import {
   addStreamSocket,
   addWatchSocket,
   removeStreamSocket,
+  removeWatchSocket,
   removeWorkflowStreamConnection,
   replayTokenStream,
   replayWatchEvents,
@@ -285,22 +286,27 @@ export function createServerWebSocketHandlers(
         return;
       }
       if (connectionType === 'watch' && workflowId) {
-        void replayWatchEvents(options.engine, ws, workflowId);
+        ws.data.watchReplayInProgress = true;
+        ws.data.pendingWatchMessages = [];
+        void replayWatchEvents(context, options.engine, ws, workflowId);
       }
 
-      // Watch and worker sockets ride Bun pub/sub by pathname. Stream
-      // sockets do not: `serve()` wires token delivery through
-      // `publishTokenMessage()` and the `streamSockets` registry instead,
-      // while `wireEventBroadcasting()` retains the `server.publish()`
-      // fallback for direct callers that manage subscriptions themselves.
-      if (pathname && connectionType !== 'stream' && connectionType !== 'jsonrpc') {
+      // Worker sockets ride Bun pub/sub by pathname. Stream and watch sockets
+      // do not: `serve()` wires delivery through per-workflow socket
+      // registries so reconnect replay can buffer concurrent live frames.
+      if (
+        pathname &&
+        connectionType !== 'stream' &&
+        connectionType !== 'watch' &&
+        connectionType !== 'jsonrpc'
+      ) {
         ws.subscribe(pathname);
       }
 
       // Stream sockets track replay state individually so reconnects can
       // catch up from durable storage without duplicate live tokens.
       if (connectionType === 'stream' && workflowId) {
-        ws.data.replayInProgress = true;
+        ws.data.streamReplayInProgress = true;
         ws.data.pendingStreamMessages = [];
         if (!addStreamSocket(context, workflowId, ws)) {
           return;
@@ -355,6 +361,7 @@ export function createServerWebSocketHandlers(
       }
 
       if (ws.data.connectionType === 'watch') {
+        removeWatchSocket(context, ws);
         removeWorkflowStreamConnection(context, ws);
       }
 

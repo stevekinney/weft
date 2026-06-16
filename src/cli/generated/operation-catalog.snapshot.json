@@ -113,7 +113,7 @@
         "jsonRpcWebSocket": true,
         "jsonRpcStdio": false
       },
-      "producibleFaults": [],
+      "producibleFaults": ["UnsupportedTransport"],
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -3341,7 +3341,8 @@
       "tags": ["Events"],
       "destructive": false,
       "access": {
-        "kind": "authenticated"
+        "kind": "scoped",
+        "scopes": ["events:read", "streams:read"]
       },
       "transports": {
         "http": false,

@@ -392,6 +392,68 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     await session.close();
   });
 
+  it('rejects fleet subscriptions with malformed cursors and unsupported kinds', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const fleetFeed = createFleetEventFeed(new MemoryStorage());
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: subscribePrincipal(),
+      emitter,
+      feed,
+      fleetFeed,
+    });
+
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.events.subscribe',
+        params: { fromCursor: 'not-a-cursor' },
+        id: 'bad-cursor',
+      }),
+    );
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.events.subscribe',
+        params: { kind: 'stream:token' },
+        id: 'bad-kind',
+      }),
+    );
+
+    const badCursorResponse = JSON.parse(emitter.sent[0]!);
+    const badKindResponse = JSON.parse(emitter.sent[1]!);
+    expect(badCursorResponse.error.data.weftCode).toBe('InvalidParams');
+    expect(badKindResponse.error.data.weftCode).toBe('InvalidParams');
+    await session.close();
+  });
+
+  it('rejects fleet subscriptions when no fleet feed is available', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: subscribePrincipal(),
+      emitter,
+      feed,
+    });
+
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.events.subscribe',
+        params: {},
+        id: 'missing-fleet-feed',
+      }),
+    );
+
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.error.data.weftCode).toBe('UnsupportedTransport');
+    await session.close();
+  });
+
   it('initial subscribe cursor does not skip sequence 0 on reconnect', async () => {
     // Bugbot regression: previously the cursor defaulted to `'0'`,
     // which decodes to `afterSequence: 0` and SKIPS the envelope at

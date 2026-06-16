@@ -20,9 +20,12 @@ export interface WebSocketData {
   workerId?: string;
   workerRegistered?: boolean;
   workerProtocolVersion?: number;
-  lastDeliveredSequence?: number;
-  replayInProgress?: boolean;
+  streamLastDeliveredSequence?: number;
+  streamReplayInProgress?: boolean;
   pendingStreamMessages?: Array<{ sequence: number; message: string }>;
+  watchLastDeliveredSequence?: number;
+  watchReplayInProgress?: boolean;
+  pendingWatchMessages?: Array<{ sequence: number; message: string }>;
   workflowStreamConnectionAccepted?: boolean;
   principal?: Principal;
   jsonRpcSession?: JsonRpcWebSocketSession;

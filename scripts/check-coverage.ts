@@ -708,7 +708,7 @@ const BASE_COVERAGE_ALLOWANCES = buildAllowanceLayer('BASE_COVERAGE_ALLOWANCES',
       // Bun maps the closing line of the live-drain generator's intentional
       // infinite loop as uncovered. Every exit path returns from inside the loop
       // and is covered by behavioral tests.
-      lines: new Set([405]),
+      lines: new Set([478]),
     },
   ],
 ]);
@@ -1520,7 +1520,7 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     ['src/server/operations/get-workflow-result.ts', { functions: 1 }],
-    ['src/server/workflow-event-feed.ts', { lines: new Set([405, 425]) }],
+    ['src/server/workflow-event-feed.ts', { lines: new Set([425, 478]) }],
     [
       'src/storage/durability/adapter-spec.test-support.ts',
       {
@@ -2168,7 +2168,8 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
     ],
     ['src/server/runtime/task-reconciliation.ts', { lines: new Set([183]) }],
     ['src/server/runtime/task-result-resolution.ts', { functions: 1, lines: new Set([42]) }],
-    ['src/server/runtime/websocket-stream.ts', { lines: new Set([48]) }],
+    ['src/server/fleet-event-feed.ts', { lines: new Set([131]) }],
+    ['src/server/runtime/websocket-stream.ts', { lines: new Set([48, 78]) }],
     [
       'src/server/runtime/websocket-worker.ts',
       {

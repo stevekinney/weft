@@ -745,7 +745,7 @@ describe('KEYS', () => {
     expect(KEYS.eventHead(workflowId)).toBe(`ev:${encodedWorkflowId}:head`);
     expect(KEYS.fleetEventPrefix()).toBe('fleet-event:');
     expect(KEYS.fleetEvent(9)).toBe('fleet-event:0000000009');
-    expect(KEYS.fleetEventTail()).toBe('fleet-event:tail');
+    expect(KEYS.fleetEventTail()).toBe('fleet-event-tail');
     expect(KEYS.signal(workflowId, 'approve', 'signal:1')).toBe(
       `sig:${encodedWorkflowId}:approve:1:signal%3A1`,
     );

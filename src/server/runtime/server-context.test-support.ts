@@ -34,6 +34,7 @@ export function minimalServerContext(
     taskQueue: new TaskQueue(),
     workerSockets: new Map(),
     streamSockets: new Map(),
+    watchSockets: new Map(),
     workflowStreamConnectionCounts: new Map(),
     maxStreamConnectionsPerWorkflow: 100,
     workerAffinity: new Map(),

@@ -1,10 +1,14 @@
 import { decode, encode } from '../core/codec.ts';
 import { KEYS, type Storage } from '../storage/interface.ts';
 import {
+  createReplayLiveFeed,
   decodeCursor,
   encodeCursor,
   type Cursor,
   type FeedEventKind,
+  type ReplayLiveFeed,
+  type ReplayLiveFeedBackend,
+  type WorkflowEventFeedOptions,
 } from './workflow-event-feed.ts';
 
 export type FleetEventEnvelope = {
@@ -34,49 +38,38 @@ export type FleetEventFeed = {
   dispose(): void;
 };
 
-const DEFAULT_LIVE_BUFFER_SIZE = 1000;
-
 export function createFleetEventFeed(
   storage: Storage,
-  feedOptions?: { liveBufferSize?: number },
+  feedOptions?: WorkflowEventFeedOptions,
 ): FleetEventFeed {
-  const liveBufferSize = feedOptions?.liveBufferSize ?? DEFAULT_LIVE_BUFFER_SIZE;
   const listeners = new Set<(envelope: FleetEventEnvelope) => void>();
   let sequenceInitPromise: Promise<number> | null = null;
   let nextSequence: number | null = null;
   let appendChain = Promise.resolve();
 
+  const backend: ReplayLiveFeedBackend<FleetEventEnvelope> = {
+    replay: replayPersistedFleetEvents,
+    snapshotTailSequence,
+    subscribeLive,
+  };
+  const replayLiveFeed: ReplayLiveFeed<FleetEventEnvelope> = createReplayLiveFeed(
+    backend,
+    feedOptions,
+  );
+
   async function initializeNextSequence(): Promise<number> {
     if (nextSequence !== null) return nextSequence;
     if (sequenceInitPromise) return sequenceInitPromise;
 
-    sequenceInitPromise = (async () => {
-      const storedTail = await storage.get(KEYS.fleetEventTail());
-      if (storedTail !== null) {
-        const decodedTail = decode(storedTail);
-        if (isTailRecord(decodedTail)) {
-          nextSequence = decodedTail.sequence + 1;
-          return nextSequence;
-        }
-      }
-
-      let highestSequence = -1;
-      for await (const [key] of storage.scan(KEYS.fleetEventPrefix(), {
-        reverse: true,
-        limit: 50,
-      })) {
-        const sequence = parseFleetEventSequenceFromKey(key);
-        if (sequence !== null && sequence > highestSequence) {
-          highestSequence = sequence;
-          break;
-        }
-      }
-      nextSequence = highestSequence + 1;
-      return nextSequence;
-    })().catch((error) => {
-      sequenceInitPromise = null;
-      throw error;
-    });
+    sequenceInitPromise = snapshotTailSequence()
+      .then((tailSequence) => {
+        nextSequence = tailSequence + 1;
+        return nextSequence;
+      })
+      .catch((error) => {
+        sequenceInitPromise = null;
+        throw error;
+      });
 
     return sequenceInitPromise;
   }
@@ -109,117 +102,35 @@ export function createFleetEventFeed(
     return appended;
   }
 
-  async function* replay(replayOptions?: {
-    fromCursor?: Cursor;
-    limit?: number;
+  async function* replayPersistedFleetEvents(options: {
+    afterSequence: number;
   }): AsyncIterable<FleetEventEnvelope> {
-    const afterSequence =
-      replayOptions?.fromCursor !== undefined ? (decodeCursor(replayOptions.fromCursor) ?? -1) : -1;
-    let yielded = 0;
     for await (const [key, value] of storage.scan(KEYS.fleetEventPrefix())) {
-      if (hasReachedLimit(yielded, replayOptions?.limit)) return;
       const sequence = parseFleetEventSequenceFromKey(key);
-      const decoded = decode(value);
-      if (!shouldReplayFleetEvent(sequence, afterSequence, decoded)) continue;
+      if (sequence === null || sequence <= options.afterSequence) continue;
+      const decoded = decodeStorageValue(value);
+      if (!isFleetEventEnvelope(decoded)) continue;
       yield decoded;
-      yielded += 1;
     }
   }
 
   async function snapshotTailSequence(): Promise<number> {
     const storedTail = await storage.get(KEYS.fleetEventTail());
-    if (storedTail === null) return -1;
-    const decodedTail = decode(storedTail);
-    return isTailRecord(decodedTail) ? decodedTail.sequence : -1;
-  }
+    const decodedTail = storedTail === null ? null : decodeStorageValue(storedTail);
+    if (isTailRecord(decodedTail)) return decodedTail.sequence;
 
-  function subscribe(subscribeOptions?: {
-    fromCursor?: Cursor;
-    signal?: AbortSignal;
-  }): AsyncIterable<FleetEventEnvelope> {
-    const buffer: FleetEventEnvelope[] = [];
-    let bufferOverflowed = false;
-    let waker: (() => void) | null = null;
-
-    const unsubscribe = subscribeLive((envelope) => {
-      if (buffer.length >= liveBufferSize) {
-        bufferOverflowed = true;
-      } else {
-        buffer.push(envelope);
-      }
-      if (waker) {
-        const fire = waker;
-        waker = null;
-        fire();
-      }
-    });
-
-    const onAbort = () => {
-      if (waker) {
-        const fire = waker;
-        waker = null;
-        fire();
-      }
-    };
-    const signal = subscribeOptions?.signal;
-    const fromCursor = subscribeOptions?.fromCursor;
-    signal?.addEventListener('abort', onAbort);
-
-    async function* generator(): AsyncIterable<FleetEventEnvelope> {
-      try {
-        yield* streamSubscription(
-          fromCursor,
-          signal,
-          buffer,
-          () => bufferOverflowed,
-          (w) => {
-            waker = w;
-          },
-        );
-      } finally {
-        signal?.removeEventListener('abort', onAbort);
-        unsubscribe();
+    let highestSequence = -1;
+    for await (const [key] of storage.scan(KEYS.fleetEventPrefix(), {
+      reverse: true,
+      limit: 50,
+    })) {
+      const sequence = parseFleetEventSequenceFromKey(key);
+      if (sequence !== null && sequence > highestSequence) {
+        highestSequence = sequence;
+        break;
       }
     }
-
-    return generator();
-  }
-
-  async function* streamSubscription(
-    fromCursor: Cursor | undefined,
-    signal: AbortSignal | undefined,
-    buffer: FleetEventEnvelope[],
-    overflowed: () => boolean,
-    installWaker: (fn: (() => void) | null) => void,
-  ): AsyncIterable<FleetEventEnvelope> {
-    if (signal?.aborted) return;
-    const snapshot = await snapshotTailSequence();
-    const requestedAfter = fromCursor !== undefined ? (decodeCursor(fromCursor) ?? -1) : -1;
-
-    yield* replaySnapshot(requestedAfter, snapshot, signal);
-    if (signal?.aborted) return;
-    yield* drainLive(buffer, snapshot, signal, overflowed, installWaker);
-  }
-
-  async function* replayUpTo(
-    afterSequence: number,
-    snapshot: number,
-    signal: AbortSignal | undefined,
-  ): AsyncIterable<FleetEventEnvelope> {
-    for await (const envelope of replay({ fromCursor: encodeInitialCursor(afterSequence) })) {
-      if (envelope.sequence > snapshot) break;
-      if (signal?.aborted) return;
-      yield envelope;
-    }
-  }
-
-  async function* replaySnapshot(
-    requestedAfter: number,
-    snapshot: number,
-    signal: AbortSignal | undefined,
-  ): AsyncIterable<FleetEventEnvelope> {
-    if (snapshot <= requestedAfter) return;
-    yield* replayUpTo(requestedAfter, snapshot, signal);
+    return highestSequence;
   }
 
   function subscribeLive(listener: (envelope: FleetEventEnvelope) => void): () => void {
@@ -242,87 +153,22 @@ export function createFleetEventFeed(
 
   return {
     append,
-    replay,
-    subscribe,
+    replay: (options) => replayLiveFeed.replay(options),
+    subscribe: (options) => replayLiveFeed.subscribe(options),
     snapshotTailSequence,
     dispose() {
       listeners.clear();
+      replayLiveFeed.dispose();
     },
   };
 }
 
-async function* drainLive(
-  buffer: FleetEventEnvelope[],
-  snapshot: number,
-  signal: AbortSignal | undefined,
-  overflowed: () => boolean,
-  installWaker: (fn: (() => void) | null) => void,
-): AsyncIterable<FleetEventEnvelope> {
-  let watermark = snapshot;
-  while (true) {
-    if (shouldStopLiveDrain(signal, overflowed)) return;
-    const { batch, nextWatermark } = takeLiveBatch(buffer, watermark);
-    watermark = nextWatermark;
-    for (const envelope of batch) {
-      if (shouldStopLiveDrain(signal, overflowed)) return;
-      yield envelope;
-    }
-    if (batch.length > 0) continue;
-    await armAndWait(buffer, overflowed, signal, installWaker);
+function decodeStorageValue(value: Uint8Array): unknown {
+  try {
+    return decode(value);
+  } catch {
+    return null;
   }
-}
-
-async function armAndWait(
-  buffer: FleetEventEnvelope[],
-  overflowed: () => boolean,
-  signal: AbortSignal | undefined,
-  installWaker: (fn: (() => void) | null) => void,
-): Promise<void> {
-  const armed = new Promise<void>((resolve) => {
-    installWaker(resolve);
-  });
-  if (buffer.length > 0 || overflowed() || signal?.aborted) {
-    installWaker(null);
-    return;
-  }
-  await armed;
-}
-
-function hasReachedLimit(yielded: number, limit: number | undefined): boolean {
-  return limit !== undefined && yielded >= limit;
-}
-
-function shouldReplayFleetEvent(
-  sequence: number | null,
-  afterSequence: number,
-  decoded: unknown,
-): decoded is FleetEventEnvelope {
-  return sequence !== null && sequence > afterSequence && isFleetEventEnvelope(decoded);
-}
-
-function shouldStopLiveDrain(signal: AbortSignal | undefined, overflowed: () => boolean): boolean {
-  return signal?.aborted === true || overflowed();
-}
-
-function takeLiveBatch(
-  buffer: FleetEventEnvelope[],
-  watermark: number,
-): { batch: FleetEventEnvelope[]; nextWatermark: number } {
-  const batch: FleetEventEnvelope[] = [];
-  let nextWatermark = watermark;
-  let head = buffer.shift();
-  while (head !== undefined) {
-    if (head.sequence > nextWatermark) {
-      batch.push(head);
-      nextWatermark = head.sequence;
-    }
-    head = buffer.shift();
-  }
-  return { batch, nextWatermark };
-}
-
-function encodeInitialCursor(sequence: number): Cursor {
-  return sequence < 0 ? '-1' : encodeCursor(sequence);
 }
 
 function parseFleetEventSequenceFromKey(key: string): number | null {
@@ -349,6 +195,7 @@ function isFleetEventEnvelope(value: unknown): value is FleetEventEnvelope {
     typeof record['kind'] === 'string' &&
     Number.isSafeInteger(record['sequence']) &&
     typeof record['cursor'] === 'string' &&
+    decodeCursor(record['cursor']) === record['sequence'] &&
     Number.isFinite(record['emittedAtMs']) &&
     (record['workflowId'] === undefined || typeof record['workflowId'] === 'string') &&
     Object.hasOwn(record, 'payload')
