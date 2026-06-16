@@ -8,6 +8,7 @@ import { TestEngine } from '../../testing/test-engine.ts';
 import { Engine } from '../engine.ts';
 import type { WorkflowContext } from '../types.ts';
 import { workflow } from '../types.ts';
+import { drainQueuedInlineWorkflowStartsForEngine } from './engine-runtime-helpers.ts';
 import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from './errors.ts';
 import { getInternals } from './internals.ts';
 import { startWithIdempotency } from './lifecycle/start-or-signal.ts';
@@ -1059,6 +1060,15 @@ describe('engine.startOrSignal', () => {
       const { handle: loser } = await loserPromise;
       expect(loser.id).toBe('sos-abort');
       expect(await countWorkflowRecords(engine)).toBe(1);
+      // Drive the loser's queued inline start in-band instead of waiting on its
+      // background flush macrotask. The freshly-created run consumes its
+      // create-batch `release` signal on first drive (scan-then-park) and reaches
+      // terminal synchronously here, so `result()` resolves on engine state rather
+      // than on macrotask scheduling — which a heavily loaded test runner can
+      // starve past the test timeout (the macrotask-starvation footgun the dispose
+      // drain also guards against). Without this the assertion is real-time-budget
+      // dependent under parallel-suite Worker contention rather than deterministic.
+      await drainQueuedInlineWorkflowStartsForEngine(engine);
       expect(await loser.result()).toBe('loser');
     } finally {
       pendingStarts.has = originalHas;
