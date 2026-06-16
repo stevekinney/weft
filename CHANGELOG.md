@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed — durable finalizers register under worker execution mode
+
+Registering a workflow with a durable `finalizer` (#446) on an engine constructed
+with `workflowExecutionMode: 'worker'` no longer throws. The previous guard rested
+on a false premise: the finalizer drive (`runFinalizerActivity`) runs entirely on
+the engine host and never consults the worker's activity table, so worker mode —
+which isolates only the workflow generator — never prevented teardown from running.
+Finalizers now work in both execution modes. `ctx.setFinalizerState` remains
+unavailable inside a worker generator; a workflow that records finalizer state must
+run in inline mode. Code that relied on catching the old registration error to
+detect "unsupported in worker mode" will no longer see that error (#564).
+
 ## [0.3.0] - 2026-06-06
 
 ### Added — durable step-based workflows

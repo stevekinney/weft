@@ -38,8 +38,10 @@ export interface ContextInternals {
   logSink: ((record: WorkflowLogRecord) => void) | undefined;
   /**
    * Engine callback that durably records `ctx.setFinalizerState(value)` payloads
-   * (#446); `undefined` when finalizer state is unsupported (worker-mode,
-   * speculative branches). Injected at context construction, mirroring
+   * (#446); `undefined` in worker-mode generator contexts (where
+   * `ctx.setFinalizerState` is unavailable) and in speculative branches.
+   * Finalizer *registration* and teardown are unaffected — those run on the
+   * engine host in every mode (#564). Injected at context construction, mirroring
    * {@link registerCancelHandler}.
    */
   recordFinalizerState: ((value: unknown) => void) | undefined;

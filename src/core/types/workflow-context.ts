@@ -433,8 +433,10 @@ export interface WorkflowContext<
    * {@link WorkflowContext.setFinalizerState} and declare a definition-level
    * `finalizer` activity — the engine drives it durably post-terminal. `onCancel`
    * remains the right tool for in-process, best-effort cleanup (releasing an
-   * in-memory lock, flushing a buffer) where durability is not required. The
-   * durable finalizer path is inline-only (see `setFinalizerState`).
+   * in-memory lock, flushing a buffer) where durability is not required.
+   * Registering a `finalizer` works in both inline and worker mode; only the
+   * in-generator `ctx.setFinalizerState` call requires inline execution (see
+   * `setFinalizerState`).
    *
    * **Worker-pool mode**: this method throws when the engine uses a remote
    * worker pool so teardown does not silently drop.
@@ -479,10 +481,10 @@ export interface WorkflowContext<
    * development warning is logged); finalizer state is recordable only while the
    * workflow is live.
    *
-   * **Worker-generator caveat**: this method is unavailable inside the workflow
-   * generator when running in worker execution mode (`WorkerWorkflowContext` does
-   * not expose it; `internals.recordFinalizerState` is undefined there). Record
-   * finalizer state from engine-host code, or use inline execution mode. The
+   * **Worker-generator caveat**: this method is part of the inline workflow
+   * context and is absent from the worker generator's context, so calling it from
+   * a worker-mode workflow does not type-check and throws at runtime. A workflow
+   * that must record finalizer state has to run in inline execution mode. The
    * method also throws inside `ctx.speculate()` branches. Durable finalizer
    * *registration* works in worker mode since #564; only the in-generator
    * `setFinalizerState` call requires the inline context. For in-process,

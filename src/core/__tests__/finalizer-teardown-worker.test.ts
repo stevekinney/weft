@@ -17,9 +17,7 @@
  *         (proven by a signal-waiter observable), and after cancellation the finalizer
  *         runs to durable completion on the engine host.
  *
- *   T3 — Timeout path: SKIPPED. Cancel and timeout both reach the finalizer drive via the
- *         same `buildTeardownOperations` call in `complete.ts`; the drive code is
- *         path-identical. Adding a timeout variant here would exercise no new branch.
+ *   T3 — Timeout path: intentionally omitted (rationale at the T3 marker below).
  *
  *   T4 — activityExecution negative-dispatch: a recording dispatcher installed through
  *         `setActivityWorkerDispatcherForTesting` must not receive any call during
@@ -33,6 +31,15 @@
  *   T6 — Worker-mode finalizer failure: a finalizer that throws on attempt 1 is retried
  *         through the engine's normal backoff schedule, proving failure is never silently
  *         swallowed in worker mode.
+ *
+ *   T7 — Worker-mode no recorded state: a worker-mode workflow that declares a finalizer
+ *         but never records finalizer state stages no teardown marker and never drives the
+ *         finalizer — the engine's "nothing to tear down" gate is execution-mode-neutral.
+ *
+ *   T8 — Worker-mode crash recovery: stage a worker-mode teardown, dispose the engine, then
+ *         bring up a NEW worker-mode engine over the same storage and recover. The finalizer
+ *         runs to durable completion on the restarted host — the strongest proof that the
+ *         drive depends on durable storage, not on any live inline-strategy state.
  *
  * ### Why `ctx.setFinalizerState` cannot run in the Worker
  *
@@ -54,13 +61,15 @@ import type {
   ActivityExecutionResult,
 } from '../../workers/activity-runner.ts';
 import type { ActivityWorkerDispatcher } from '../../workers/activity-worker-dispatcher.ts';
-import { encode } from '../codec.ts';
+import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
 import { setActivityWorkerDispatcherForTesting } from '../engine/activity-worker-dispatcher.test-support.ts';
 import {
   ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING,
   ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING,
 } from '../engine/index.ts';
+import { getInternals } from '../engine/internals.ts';
+import { type TeardownClaim } from '../engine/state-utilities.ts';
 import type { WorkflowTeardownStatus } from '../events.ts';
 import type { WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
@@ -149,6 +158,11 @@ async function writeFinalizerStateToStorage(
 // Shared engine factory
 // ---------------------------------------------------------------------------
 
+/**
+ * Build a worker-mode engine. Each test seeds its own monotonic `now` with a distinct
+ * base value (1_000_000, 2_000_000, …) so scheduler timers staged by one test cannot
+ * collide with another's when suites run in the same process.
+ */
 function createWorkerModeEngine(storage: MemoryStorage, getNow: () => number): Engine {
   return new Engine({
     storage,
@@ -259,12 +273,15 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
   // T4 — activityExecution negative-dispatch
   // -------------------------------------------------------------------------
   it('T4: the finalizer does not dispatch through the activity worker pool even when activityExecution is configured', async () => {
-    // A recording dispatcher installed through the SAME slot production code consults:
-    // `internals.activityWorkerDispatcher`. Because this engine is constructed without
-    // `activityExecution`, that slot starts as null; we replace it with this recorder,
-    // so the test proves the finalizer drive never consults the slot at all (rather than
-    // proving a live pool is bypassed). If the finalizer is ever dispatched through this
-    // slot, `dispatchCallCount` increments and the test fails.
+    // To make `dispatchCallCount === 0` a falsifiable proof, we construct the engine WITH
+    // `activityExecution` so the engine's own constructor populates
+    // `internals.activityWorkerDispatcher` with a real, pool-backed dispatcher through the
+    // production path. We then dispose that real dispatcher (so the worker pool does not
+    // leak) and overwrite the slot with this recording poison dispatcher. The slot is now
+    // genuinely the one a configured activity pool would occupy: if the finalizer ever
+    // dispatched through it, the recorder would be called (incrementing `dispatchCallCount`)
+    // and would return a poison failure. A zero count therefore proves the finalizer drive
+    // bypasses a configured activity pool, not merely that an empty slot was untouched.
     let dispatchCallCount = 0;
     const recordingDispatcher = {
       execute: async (_request: ActivityExecutionRequest): Promise<ActivityExecutionResult> => {
@@ -305,10 +322,22 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
 
     const storage = new MemoryStorage();
     let now = 2_000_000;
-    engine = createWorkerModeEngine(storage, () => now);
+    // Construct WITH activityExecution so the engine installs a real, pool-backed
+    // dispatcher via the production path (the slot is genuinely non-null).
+    engine = new Engine({
+      storage,
+      getNow: () => now,
+      workflowExecutionMode: 'worker',
+      workerExecution: { workerUrl, poolSize: 1, workflowTurnTimeoutMs: 30_000 },
+      activityExecution: { workerUrl, poolSize: 1 },
+    });
     engine.register(engineSideWorkflow);
 
-    // Install the recording dispatcher through the production slot.
+    // The engine populated `internals.activityWorkerDispatcher` with a real pool-backed
+    // dispatcher. Dispose it so the worker pool does not leak, then overwrite the slot with
+    // the recording poison dispatcher — now any finalizer dispatch through the slot is
+    // observable and fails.
+    getInternals(engine).activityWorkerDispatcher?.[Symbol.dispose]();
     setActivityWorkerDispatcherForTesting(engine, recordingDispatcher);
 
     const handle = await engine.start(
@@ -336,7 +365,8 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
 
     // Finalizer ran host-side — correct output.
     expect(destroyed).toEqual([{ sandboxId: 'sbx-no-dispatch' }]);
-    // Dispatcher was NEVER called — the finalizer did not go through the activity pool.
+    // The configured activity dispatcher was NEVER called — the finalizer did not go
+    // through the activity pool even though `activityExecution` was configured.
     expect(dispatchCallCount).toBe(0);
     // Storage keys swept.
     expect(await storage.get(KEYS.teardownOwed('worker-finalizer-no-dispatch-1'))).toBeNull();
@@ -480,5 +510,127 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
     expect(attempts).toBe(2);
     expect(await storage.get(KEYS.teardownOwed('worker-finalizer-flaky-1'))).toBeNull();
     expect(await storage.get(KEYS.finalizerState('worker-finalizer-flaky-1'))).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // T7 — Worker-mode no recorded state
+  // -------------------------------------------------------------------------
+  it('T7: a worker-mode workflow that records no finalizer state never drives the finalizer', async () => {
+    // The "nothing to tear down" gate lives in `buildTeardownOperations`, keyed solely on
+    // whether the `finalizerState` storage key is present — there is no execution-mode
+    // branch. A worker-mode workflow that declares a finalizer but never records state must
+    // therefore behave exactly like the inline baseline: no teardown marker, no drive.
+    let finalizerRan = false;
+    const destroySandbox = activity({
+      name: 'destroy-sandbox-worker-unrecorded',
+      execute: async () => {
+        finalizerRan = true;
+      },
+    });
+
+    const engineSideWorkflow = workflow({
+      name: 'wait-signal-then-complete',
+      finalizer: destroySandbox,
+    }).execute(async function* (_ctx: WorkflowContext) {
+      return { ranIn: 'engine-isolate' };
+    });
+
+    const storage = new MemoryStorage();
+    const now = 5_000_000;
+    engine = createWorkerModeEngine(storage, () => now);
+    engine.register(engineSideWorkflow);
+    const events = collectTeardownEvents(engine);
+
+    const handle = await engine.start(
+      'wait-signal-then-complete',
+      { signalName: 'never' },
+      { id: 'worker-finalizer-nostate-1' },
+    );
+    const resultPromise = handle.result();
+
+    await waitForWorkerPark(engine, 'T7');
+
+    // No `writeFinalizerStateToStorage` call here — nothing is recorded.
+    await engine.cancel(handle.id);
+    await waitForWorkerParkCleanup(engine, 'T7');
+    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
+
+    // No teardown marker was staged because no finalizer state was recorded.
+    expect(await storage.get(KEYS.teardownOwed('worker-finalizer-nostate-1'))).toBeNull();
+
+    // Ticking the scheduler drives nothing — the finalizer never runs.
+    await engine.scheduler.tick(now);
+    expect(finalizerRan).toBe(false);
+    expect(events).toEqual([]);
+    expect(await storage.get(KEYS.teardownOwed('worker-finalizer-nostate-1'))).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // T8 — Worker-mode crash recovery
+  // -------------------------------------------------------------------------
+  it('T8: a staged worker-mode teardown is driven to completion by a restarted worker-mode engine', async () => {
+    // The discriminating proof for #564: the finalizer drive reads everything it needs
+    // (the registry entry, the `finalizerState` payload, the `teardownOwed` marker/timer)
+    // from durable storage, so it cannot depend on any live inline-strategy state. We stage
+    // the teardown on engine1 through the real worker-mode terminal path, then "crash" by
+    // disposing engine1 with the marker still `owed`. A fresh worker-mode engine2 over the
+    // same storage must recover and run the finalizer to durable completion — with no inline
+    // strategy in either engine.
+    const storage = new MemoryStorage();
+    let now = 6_000_000;
+    const destroyed: unknown[] = [];
+    const destroySandbox = activity({
+      name: 'destroy-sandbox-worker-recover',
+      execute: async (input: unknown) => {
+        destroyed.push(input);
+      },
+    });
+    const engineSideWorkflow = workflow({
+      name: 'wait-signal-then-complete',
+      finalizer: destroySandbox,
+    }).execute(async function* (_ctx: WorkflowContext) {
+      return { ranIn: 'engine-isolate' };
+    });
+
+    // engine1: start in worker mode, record finalizer state, cancel to stage the teardown.
+    const engine1 = createWorkerModeEngine(storage, () => now);
+    engine1.register(engineSideWorkflow);
+    const handle = await engine1.start(
+      'wait-signal-then-complete',
+      { signalName: 'never' },
+      { id: 'worker-finalizer-recover-1' },
+    );
+    const resultPromise = handle.result();
+    await waitForWorkerPark(engine1, 'T8/engine1');
+    await writeFinalizerStateToStorage(storage, 'worker-finalizer-recover-1', {
+      sandboxId: 'sbx-worker-recover',
+    });
+    await engine1.cancel(handle.id);
+    await waitForWorkerParkCleanup(engine1, 'T8/engine1');
+    await expect(resultPromise).rejects.toThrow('Workflow cancelled');
+
+    // The teardown marker is staged and still `owed` — engine1 dies before any drive tick.
+    const owedBytes = await storage.get(KEYS.teardownOwed('worker-finalizer-recover-1'));
+    expect(owedBytes).not.toBeNull();
+    expect((decode(owedBytes!) as TeardownClaim).status).toBe('owed');
+    expect(destroyed).toEqual([]); // not driven yet
+    engine1[Symbol.dispose](); // "crash" — no in-flight drive.
+
+    // engine2: a brand-new worker-mode engine over the SAME storage recovers and drives it.
+    engine = createWorkerModeEngine(storage, () => now);
+    engine.register(engineSideWorkflow);
+    const events = collectTeardownEvents(engine);
+    await engine.recoverAll();
+
+    await engine.scheduler.tick(now);
+
+    // The finalizer ran on the restarted host with the recovered payload, and the durable
+    // keys were swept — proving the drive is storage-driven, not inline-strategy-driven.
+    expect(destroyed).toEqual([{ sandboxId: 'sbx-worker-recover' }]);
+    expect(events).toEqual([
+      { workflowId: 'worker-finalizer-recover-1', status: 'completed', attempts: 1 },
+    ]);
+    expect(await storage.get(KEYS.teardownOwed('worker-finalizer-recover-1'))).toBeNull();
+    expect(await storage.get(KEYS.finalizerState('worker-finalizer-recover-1'))).toBeNull();
   });
 });
