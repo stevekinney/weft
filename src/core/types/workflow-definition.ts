@@ -71,27 +71,25 @@ export interface WorkflowDefinition<
    * cancellation cleanup (issue #446) — for example destroying a paid sandbox
    * when a workflow is cancelled or times out.
    *
-   * **Current behavior (this release): metadata only.** Declaring a finalizer
-   * records it on the workflow definition. **Nothing invokes it yet** — the
-   * engine-driven teardown that runs the finalizer (with retry, recovery
-   * re-drive, and idempotent at-least-once semantics) ships in a follow-up
-   * release. Until then, declaring a finalizer and recording state with
-   * {@link WorkflowContext.setFinalizerState} have no runtime effect. For
-   * teardown you need today, use `ctx.onCancel` (best-effort, in-memory) or a
-   * `ctx.run` destroy step after a `try/finally`.
+   * After a `cancelled` or `timed-out` terminal, the engine drives this finalizer
+   * to durable completion, passing the value recorded by
+   * {@link WorkflowContext.setFinalizerState} as its input. The drive survives a
+   * hard cancel and an engine crash: it runs from a durable timer + claim marker,
+   * retries with backoff on failure, re-drives a stale claim after recovery, and
+   * dead-letters durably once it exhausts its attempt budget. The engine skips the
+   * finalizer entirely when the workflow never recorded any finalizer state, and
+   * `completed`/`failed` workflows never run it (only `cancelled`/`timed-out`).
    *
-   * **Planned behavior (future release):** the engine will drive this finalizer
-   * to durable completion after a `cancelled`/`timed-out` terminal, passing the
-   * value recorded by `ctx.setFinalizerState(value)` as its input, skipping it
-   * when no state was recorded, and re-driving it on recovery. Because it may
-   * run more than once across a lease handoff or crash, the finalizer must be
-   * idempotent (destroying an already-destroyed resource must succeed); derive
-   * its `idempotencyKey` from the resource id. Completed and failed workflows
-   * will not run the finalizer.
+   * **The finalizer runs at least once and must be idempotent.** Bounded retries
+   * and crash-recovery re-drive mean the same payload can reach it more than once,
+   * so destroying an already-destroyed resource must succeed (or no-op) rather
+   * than throw — the same contract as keying a destroy by `sandboxId`.
    *
-   * **Note**: Not supported in worker execution mode (`workerExecution`);
-   * registering a finalizer on a worker-mode engine throws today, and worker
-   * parity lands with the teardown driver.
+   * **Inline execution only.** Registering a finalizer on a worker-execution-mode
+   * engine throws: a definition-level finalizer is never advertised to a worker's
+   * activity table, so it could not run there. Worker-mode parity is tracked in
+   * #564. For in-process, best-effort cleanup that does not need to survive a
+   * crash, use `ctx.onCancel`; for multi-step ordered rollback, use `ctx.saga`.
    */
   finalizer?: AnyActivityDefinition;
 }

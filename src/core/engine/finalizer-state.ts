@@ -9,10 +9,8 @@ import type { EngineInternals } from './internals.ts';
  * records the payload associated with the workflow's definition-level
  * `finalizer` activity.
  *
- * **Current behavior (this release): records the value only.** Nothing reads
- * this payload yet. **Planned behavior (future release):** the engine will pass
- * the decoded value as the finalizer's input when it drives cancel/timeout
- * teardown.
+ * This handler only records the value; the engine passes the decoded payload as
+ * the finalizer's input when it drives cancel/timeout teardown (#446 Phase 2).
  *
  * The value is staged as a pending atomic side-effect — a `put` of
  * {@link KEYS.finalizerState} — so it commits with the next checkpoint or the

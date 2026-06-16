@@ -424,7 +424,17 @@ export interface WorkflowContext<
    *
    * **Best-effort only**: handlers run outside the durable effect log and are
    * not retried. Side effects in handlers are not replay-safe, and registered
-   * handlers are not restored after an engine restart.
+   * handlers are not restored after an engine restart. A hard cancel or an
+   * engine crash that evicts the workflow before the handler runs loses it.
+   *
+   * **Prefer a durable `finalizer` for resource teardown.** To tear down a paid
+   * external resource (a sandbox, a leased VM) so it is destroyed even across a
+   * hard cancel or a crash, record the resource with
+   * {@link WorkflowContext.setFinalizerState} and declare a definition-level
+   * `finalizer` activity — the engine drives it durably post-terminal. `onCancel`
+   * remains the right tool for in-process, best-effort cleanup (releasing an
+   * in-memory lock, flushing a buffer) where durability is not required. The
+   * durable finalizer path is inline-only (see `setFinalizerState`).
    *
    * **Worker-pool mode**: this method throws when the engine uses a remote
    * worker pool so teardown does not silently drop.
@@ -444,29 +454,35 @@ export interface WorkflowContext<
    */
   onCancel(handler: () => Promise<void> | void): void;
   /**
-   * Durably record the payload that a future engine-driven teardown phase will
-   * pass to this workflow's definition-level `finalizer` activity (issue #446).
+   * Durably record the payload the engine passes to this workflow's
+   * definition-level `finalizer` activity when it drives teardown after a
+   * `cancelled` or `timed-out` terminal (issue #446).
    *
-   * **Current behavior (this release): records the value only.** The value is
-   * durably staged (as a pending atomic side-effect, committed with the next
-   * checkpoint or the terminal transition, and fenced under lease ownership), but
-   * **nothing consumes it yet** — no finalizer runs. This method has no teardown
-   * effect until the engine-driven driver ships in a follow-up release. For
-   * cleanup you need today, use {@link WorkflowContext.onCancel} (best-effort,
-   * in-memory) or a `ctx.run` destroy step after a `try/finally`.
+   * Call this immediately after acquiring a paid external resource, passing
+   * whatever the finalizer needs to destroy it (e.g. a sandbox id). The value is
+   * durably staged — as a pending atomic side-effect committed with the next
+   * checkpoint or the terminal transition, fenced under lease ownership — so the
+   * finalizer can run even across a hard cancel or an engine crash. Recording is
+   * the engine's signal that there is something to tear down: if the workflow
+   * never calls this, the engine skips the finalizer entirely; recording `null`
+   * still counts as recorded (the finalizer runs with a `null` payload). The
+   * value is last-write-wins, so a later call replaces the earlier one — record
+   * the id of the resource that is currently live.
    *
-   * **Planned behavior (future release):** call this immediately after acquiring
-   * an external paid resource, passing whatever the finalizer needs to destroy it
-   * (e.g. a sandbox id). The recorded value is last-write-wins; recording `null`
-   * still counts as "recorded" (the finalizer would run with a `null` payload),
-   * while never recording anything means the future driver skips the finalizer.
+   * **The finalizer runs at least once and must be idempotent.** The engine
+   * drives it with bounded retries and re-drives a stale claim after a crash, so
+   * the same payload can reach the finalizer more than once (the same contract as
+   * keying a destroy by `sandboxId`). Make the teardown safe to repeat —
+   * destroying an already-destroyed resource must succeed (or no-op), not throw.
    *
    * Calling this after the workflow is already terminalizing is a no-op (a
    * development warning is logged); finalizer state is recordable only while the
    * workflow is live.
    *
    * **Inline only**: this method throws under worker execution mode, matching the
-   * registration-time rejection of worker-mode finalizers.
+   * registration-time rejection of worker-mode finalizers. Durable finalizers are
+   * not yet supported in worker mode (#564). For in-process, best-effort cleanup
+   * that does not need to survive a crash, use {@link WorkflowContext.onCancel}.
    *
    * @example
    * ```ts

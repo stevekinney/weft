@@ -358,7 +358,64 @@ void engine;
 
 Saga steps run sequentially through the same durable activity pipeline as `ctx.run()`. If a step fails, Weft runs compensators for previously completed steps in reverse order, skips the failing step's own compensator, swallows compensator errors, and then rethrows the original step error into the workflow. The saga result is the last successful step output, or `undefined` for an empty saga.
 
-Cancellation has a narrower compensation path: in inline execution, cancelling an active saga runs completed compensators in reverse order through an in-memory best-effort path. That cancellation path is not recovered after engine restart, so use normal activity idempotency and external reconciliation for effects that must survive process failure.
+Cancellation has a narrower compensation path: in inline execution, cancelling an active saga runs completed compensators in reverse order through an in-memory, best-effort path. That path is _not_ durable — it is not recovered after an engine restart, and a hard cancel or a crash that evicts the workflow before it runs loses it. So, for saga compensation that must survive process failure, rely on normal activity idempotency and external reconciliation. When the thing you need to clean up is a single paid external resource (rather than a multi-step rollback), reach for a durable [`finalizer`](#durable-cancellation-teardown) instead — it survives hard cancel and crash.
+
+## Durable cancellation teardown
+
+A saga compensates a _sequence_ of steps, and `ctx.onCancel` runs an _in-memory, best-effort_ handler. Neither survives a hard cancel or a crash. So, when a workflow holds a single paid external resource — a sandbox, a leased VM, a reserved seat — that _must_ be released even if the process dies, use a **durable finalizer**.
+
+A finalizer is two pieces working together: a definition-level `finalizer` activity, and a `ctx.setFinalizerState(value)` call that records what the finalizer needs to tear the resource down. Record the state the moment you acquire the resource. After the workflow reaches a `cancelled` or `timed-out` terminal, the engine drives the finalizer to durable completion — passing your recorded value as its input.
+
+```typescript
+import { Engine, activity, workflow } from '@lostgradient/weft';
+
+type Sandbox = { id: string };
+
+async function createSandbox(): Promise<Sandbox> {
+  return { id: 'sandbox-1' };
+}
+
+async function destroySandboxById(sandboxId: string): Promise<void> {
+  // Idempotent: destroying an already-destroyed sandbox must not throw.
+  void sandboxId;
+}
+
+const engine = new Engine();
+
+const destroySandbox = activity({
+  name: 'destroySandbox',
+  execute: async (state: { sandboxId: string }) => {
+    await destroySandboxById(state.sandboxId);
+  },
+});
+
+engine.register(
+  workflow({ name: 'run-in-sandbox', finalizer: destroySandbox }).execute(async function* (ctx) {
+    const sandbox = yield* ctx.run(createSandbox);
+    // Record the teardown payload as soon as the resource exists, so the
+    // engine can destroy it even if this run is hard-cancelled or crashes.
+    ctx.setFinalizerState({ sandboxId: sandbox.id });
+    yield* ctx.sleep('1h');
+    return sandbox.id;
+  }),
+);
+
+void engine;
+```
+
+What the engine guarantees once you have recorded finalizer state:
+
+- **It runs on `cancelled` and `timed-out` only.** A workflow that `completed` or `failed` never runs its finalizer — those paths are the workflow's own responsibility (clean up in the body). Recording no state at all means the engine skips the finalizer entirely.
+- **It survives crashes.** The drive runs from a durable timer and a claim marker that ride the same atomic batch as the terminal transition, so a crash mid-teardown re-drives the finalizer after recovery rather than dropping it.
+- **It retries with backoff and dead-letters.** A finalizer that throws is retried on a backoff schedule; after it exhausts its attempt budget the failure is recorded durably (a dead-letter) rather than retried forever.
+- **It runs _at least once_, so it must be idempotent.** Retries and crash-recovery re-drive mean your finalizer can see the same payload more than once. Destroying an already-destroyed resource must succeed (or no-op) — the same discipline as keying a destroy by `sandboxId`. This is the central contract: write the teardown so repetition is harmless.
+
+The recorded value is last-write-wins: call `setFinalizerState` again to replace it when the live resource changes (for example, after re-provisioning). Recording `null` still counts as recorded — the finalizer runs with a `null` payload — which is the difference between "tear down with no extra detail" and "nothing to tear down."
+
+> [!WARNING] Inline execution only
+> Durable finalizers require inline execution (the default). Registering a `finalizer` on a worker-execution-mode engine throws at registration time: a definition-level finalizer is never advertised to a worker's activity table, so it could not run there. Worker-mode parity is tracked as a follow-up. For in-process, best-effort teardown in worker mode, use `ctx.onCancel`.
+
+Choosing between the three teardown tools: use a **`finalizer`** for a single external resource that must be released durably; use **`ctx.saga`** for a multi-step operation whose completed steps need ordered compensation if a later step fails; use **`ctx.onCancel`** for in-process, best-effort cleanup (releasing an in-memory lock, flushing a buffer) where durability is not required.
 
 ## Child workflows
 

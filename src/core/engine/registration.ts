@@ -60,16 +60,19 @@ function assertFinalizerSupported(
   if (registration.finalizer === undefined) {
     return;
   }
-  // The durable cancellation-teardown finalizer (#446) drives its activity
-  // through the inline execution path after a `cancelled`/`timed-out` terminal.
-  // Worker-mode parity (advertisement, routing, attempt-token echo) lands in a
-  // later release; until then a worker-mode engine would silently never run the
-  // finalizer. Fail loud at registration rather than mid-teardown.
+  // The durable cancellation-teardown finalizer (#446) runs through the inline
+  // execution path after a `cancelled`/`timed-out` terminal. It is inline-only
+  // by design: a definition-level `finalizer` is never advertised to a worker's
+  // activity table, so a worker-mode engine could not run it — dispatch would
+  // fail to match and the teardown would silently dead-letter a paid external
+  // resource. Worker-mode parity is tracked separately (#564). Fail loud at
+  // registration rather than mid-teardown so the limitation is obvious up front.
   if (internals.inlineStrategy === null) {
     throw new Error(
-      `Cannot register workflow "${name}" with a finalizer: definition-level finalizers are not yet supported in ` +
-        `worker execution mode. The engine was constructed with \`workerExecution\`. Remove the \`finalizer\` option, ` +
-        `or construct the engine without \`workerExecution\` to run workflows inline.`,
+      `Cannot register workflow "${name}" with a finalizer: durable finalizers require inline execution and are ` +
+        `not supported in worker execution mode. The engine was constructed with \`workerExecution\`. Construct the ` +
+        `engine without \`workerExecution\` to run workflows inline, or remove the \`finalizer\` option. See the ` +
+        `resource-management guide for the durable finalizer contract.`,
     );
   }
 }
@@ -143,9 +146,9 @@ function applyOptionalRegistrationFields(
     entry.constraints = registration.constraints;
   }
   if (registration.finalizer !== undefined) {
-    // Phase 1 only stores the finalizer metadata; nothing dispatches it yet, so
-    // it is kept as-declared. Dispatch hardening (rebuild through `activity(...)`,
-    // defensive cloning) belongs to the phase that actually invokes finalizers.
+    // Stored as-declared. The teardown drive (#446 Phase 2) resolves it from this
+    // entry by the workflow's durable `state.type` and narrows it to the
+    // structural `RunnableFinalizer` it invokes — see `runWorkflowFinalizer`.
     entry.finalizer = registration.finalizer;
   }
 }

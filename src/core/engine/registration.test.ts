@@ -141,7 +141,7 @@ describe('finalizer registration (#446)', () => {
     });
 
     expect(() => engine.register(workerModeFinalized)).toThrow(
-      /finalizers are not yet supported in worker execution mode/,
+      /durable finalizers require inline execution and are not supported in worker execution mode/,
     );
 
     engine[Symbol.dispose]();
