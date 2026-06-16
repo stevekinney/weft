@@ -16,9 +16,11 @@ the engine host and never consults the worker's activity table, so worker mode �
 which isolates only the workflow generator — never prevented teardown from running.
 The behavior change is registration only: worker-mode registration no longer throws,
 and finalizer execution remains host-side. Durable teardown is still gated on the
-workflow having staged state via `ctx.setFinalizerState`, which is unavailable inside
-a worker generator (with no host-side API to stage it) — so a worker-mode workflow
-that needs durable finalizer teardown must run in inline mode. Code that relied on
+workflow having staged state via `ctx.setFinalizerState`. That call type-checks in any
+generator, but only inline execution wires up the engine callback it delegates to — in
+worker mode that callback is absent, so the call throws a guard error at runtime, and
+there is no host-side API to stage the state — so a worker-mode workflow that needs
+durable finalizer teardown must run in inline mode. Code that relied on
 catching the old registration error to detect "unsupported in worker mode" will no
 longer see that error (#564).
 
