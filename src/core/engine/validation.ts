@@ -26,26 +26,41 @@ const WORKFLOW_TIMELINE_STATUSES = new Set<WorkflowTimelineStatus>([
   'timed-out',
 ]);
 
-const WORKFLOW_STATE_FIELD_NAMES = new Set<string>([
-  'id',
-  'type',
-  'status',
-  'tags',
-  'input',
-  'result',
-  'error',
-  'errorStack',
-  'failureCategory',
-  'terminationReason',
-  'versionTuple',
-  'executionStateOwnerId',
-  'createdAt',
-  'startedAt',
-  'updatedAt',
-  'terminalCleanupToken',
-  'executionDeadline',
-  'forkedFrom',
-] satisfies readonly (keyof WorkflowState)[]);
+type CompleteWorkflowStateFieldNames<FieldNames extends readonly (keyof WorkflowState)[]> =
+  Exclude<keyof WorkflowState, FieldNames[number]> extends never
+    ? FieldNames
+    : FieldNames & {
+        readonly __missingWorkflowStateFields: Exclude<keyof WorkflowState, FieldNames[number]>;
+      };
+
+function defineCompleteWorkflowStateFieldNames<
+  const FieldNames extends readonly (keyof WorkflowState)[],
+>(fieldNames: CompleteWorkflowStateFieldNames<FieldNames>): FieldNames {
+  return fieldNames;
+}
+
+const WORKFLOW_STATE_FIELD_NAMES = new Set<string>(
+  defineCompleteWorkflowStateFieldNames([
+    'id',
+    'type',
+    'status',
+    'tags',
+    'input',
+    'result',
+    'error',
+    'errorStack',
+    'failureCategory',
+    'terminationReason',
+    'versionTuple',
+    'executionStateOwnerId',
+    'createdAt',
+    'startedAt',
+    'updatedAt',
+    'terminalCleanupToken',
+    'executionDeadline',
+    'forkedFrom',
+  ]),
+);
 
 export function isSanitizedSearchAttributeValue(
   value: unknown,
@@ -123,14 +138,15 @@ export function isValidDecodedTags(value: unknown): value is string[] | undefine
 
 export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
   const decoded = decode(bytes);
+  const decodedRecord = isRecord(decoded) ? decoded : undefined;
   // A persisted record may carry the version metadata as three flat fields
   // (`version`, `agentVersion`, `toolVersions`) rather than a nested
   // `versionTuple`. Normalize it into the current shape on the raw decoded
   // record (before the `WorkflowState` cast) and drop the flat keys so the rest
   // of the engine sees one representation. Read-only normalization: the engine
   // only ever writes the nested `versionTuple`.
-  if (isRecord(decoded)) {
-    liftFlatVersionTuple(decoded);
+  if (decodedRecord !== undefined) {
+    liftFlatVersionTuple(decodedRecord);
   }
   // bytes were written by encode(WorkflowState) — shape is guaranteed by our own storage
   const state = decoded as WorkflowState;
@@ -161,13 +177,18 @@ export function decodeWorkflowState(bytes: Uint8Array): WorkflowState {
       delete state.executionStateOwnerId;
     }
   }
-  return stripUnknownWorkflowStateFields(state);
+  return decodedRecord === undefined
+    ? state
+    : stripUnknownWorkflowStateFields(state, decodedRecord);
 }
 
-function stripUnknownWorkflowStateFields(state: WorkflowState): WorkflowState {
-  for (const fieldName of Object.keys(state)) {
+function stripUnknownWorkflowStateFields(
+  state: WorkflowState,
+  stateFields: Record<string, unknown>,
+): WorkflowState {
+  for (const fieldName of Object.keys(stateFields)) {
     if (!WORKFLOW_STATE_FIELD_NAMES.has(fieldName)) {
-      delete state[fieldName as keyof WorkflowState];
+      delete stateFields[fieldName];
     }
   }
   return state;
