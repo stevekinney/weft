@@ -21,13 +21,10 @@ export interface SchedulerOptions {
   /**
    * Commit the batch that deletes a fired timer's keys after its callback
    * returns. Defaults to an unfenced `storage.batch`. The engine supplies a
-   * lease-fenced commit (#563) so that under deposition the fired-timer delete
-   * shares fate with the callback's fenced reschedule/clear: if the engine has
-   * lost the lease, BOTH are rejected and the timer survives at its (now past)
-   * `fireAt` for the successor to re-drive — rather than the unfenced delete
-   * landing while the fenced follow-up write is rejected, stranding durable
-   * state with no timer. In the supported single-engine path the engine holds
-   * the lease, so this commits exactly as the unfenced default would.
+   * lease-fenced commit (#563) so the fired-timer delete and the callback's own
+   * follow-up writes share the same ownership fence — under deposition both are
+   * rejected and the timer survives for the successor to re-drive. With no lease
+   * held this commits exactly as the unfenced default would.
    */
   commitTimerCleanup?: (operations: BatchOperation[]) => Promise<void>;
 }
