@@ -51,11 +51,15 @@ export async function readNextScannedTimerEntry(
   }
 }
 
-export async function readNextTerminalCleanupTimerEntry(
+async function readNextWorkflowTimerEntry(
   iterator: AsyncIterator<[string, Uint8Array]>,
   storage: Storage,
+  kind: 'terminal-cleanup' | 'teardown',
 ): Promise<ScannedTimerEntry | null> {
-  const prefix = 'wf-cleanup:';
+  const { diagnosticName, prefix } =
+    kind === 'terminal-cleanup'
+      ? { diagnosticName: 'terminal cleanup', prefix: 'wf-cleanup:' }
+      : { diagnosticName: 'teardown timer', prefix: 'wf-teardown:' };
 
   while (true) {
     const next = await iterator.next();
@@ -77,7 +81,7 @@ export async function readNextTerminalCleanupTimerEntry(
       timerId === null ||
       typeof decodedWorkflowId !== 'string'
     ) {
-      console.error(`Corrupted terminal cleanup entry at ${key}: removing`);
+      console.error(`Corrupted ${diagnosticName} entry at ${key}: removing`);
       await storage.delete(key);
       continue;
     }
@@ -88,53 +92,24 @@ export async function readNextTerminalCleanupTimerEntry(
         id: timerId,
         workflowId: decodedWorkflowId,
         fireAt: fireAtValue,
-        kind: 'terminal-cleanup',
+        kind,
       },
     };
   }
+}
+
+export async function readNextTerminalCleanupTimerEntry(
+  iterator: AsyncIterator<[string, Uint8Array]>,
+  storage: Storage,
+): Promise<ScannedTimerEntry | null> {
+  return readNextWorkflowTimerEntry(iterator, storage, 'terminal-cleanup');
 }
 
 export async function readNextTeardownTimerEntry(
   iterator: AsyncIterator<[string, Uint8Array]>,
   storage: Storage,
 ): Promise<ScannedTimerEntry | null> {
-  const prefix = 'wf-teardown:';
-
-  while (true) {
-    const next = await iterator.next();
-    if (next.done) {
-      return null;
-    }
-
-    const [key, value] = next.value;
-    const separatorIndex = key.indexOf(':', prefix.length);
-    const fireAtValue =
-      separatorIndex === -1 ? Number.NaN : Number(key.slice(prefix.length, separatorIndex));
-    const timerId =
-      separatorIndex === -1 ? null : tryDecodeStorageKeyComponent(key.slice(separatorIndex + 1));
-    const decodedWorkflowId = decode(value);
-
-    if (
-      !Number.isSafeInteger(fireAtValue) ||
-      fireAtValue < 0 ||
-      timerId === null ||
-      typeof decodedWorkflowId !== 'string'
-    ) {
-      console.error(`Corrupted teardown timer entry at ${key}: removing`);
-      await storage.delete(key);
-      continue;
-    }
-
-    return {
-      key,
-      entry: {
-        id: timerId,
-        workflowId: decodedWorkflowId,
-        fireAt: fireAtValue,
-        kind: 'teardown',
-      },
-    };
-  }
+  return readNextWorkflowTimerEntry(iterator, storage, 'teardown');
 }
 
 export async function advanceTimerSource(
