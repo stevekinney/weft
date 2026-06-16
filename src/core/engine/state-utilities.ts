@@ -70,19 +70,42 @@ export function parseTeardownTimerId(timerId: string): string | null {
   return token.length === 0 ? null : token;
 }
 
-/** Runtime type guard for a decoded {@link TeardownClaim} read back from storage. */
+/**
+ * Runtime type guard for a decoded {@link TeardownClaim} read back from storage.
+ *
+ * `attempts` must be a non-negative SAFE INTEGER and `claimedAt` (when present) a
+ * finite non-negative number — not merely `typeof === 'number'`. A persisted `NaN`
+ * or `Infinity` would otherwise drive the marker forever: `attempt >= MAX_TEARDOWN_ATTEMPTS`
+ * is always false for `NaN` (never dead-letters) and `now - claimedAt >= threshold` never
+ * holds for a non-finite `claimedAt` (never reclaims a stale running claim). Rejecting them
+ * here routes a corrupt-but-claim-shaped marker through the clear path instead. `claimedAt`
+ * is checked with `isFinite` rather than `isSafeInteger` because `getNow()` may return a
+ * fractional timestamp.
+ */
 export function isTeardownClaim(value: unknown): value is TeardownClaim {
   if (typeof value !== 'object' || value === null) {
     return false;
   }
   const candidate = value as Record<string, unknown>;
-  const claimedAt = candidate['claimedAt'];
   return (
     (candidate['status'] === 'owed' || candidate['status'] === 'running') &&
-    typeof candidate['attempts'] === 'number' &&
     typeof candidate['token'] === 'string' &&
-    (claimedAt === undefined || typeof claimedAt === 'number')
+    isNonNegativeSafeInteger(candidate['attempts']) &&
+    isAbsentOrFiniteNonNegative(candidate['claimedAt'])
   );
+}
+
+/** A non-negative safe integer — the valid shape for a teardown claim's `attempts`. */
+function isNonNegativeSafeInteger(value: unknown): boolean {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+/**
+ * Absent, or a finite non-negative number — the valid shape for `claimedAt`. Finite
+ * (not safe-integer) because `getNow()` may return a fractional timestamp.
+ */
+function isAbsentOrFiniteNonNegative(value: unknown): boolean {
+  return value === undefined || (typeof value === 'number' && Number.isFinite(value) && value >= 0);
 }
 
 type PaginationFilter = {

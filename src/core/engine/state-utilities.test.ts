@@ -10,6 +10,7 @@ import {
   getTimelineOperationLabel,
   getTimelineReviewArtifactType,
   intersectIdentifierSets,
+  isTeardownClaim,
   matchesListFilter,
   matchesScheduleFilter,
   normalizeForkStep,
@@ -357,5 +358,44 @@ describe('engine state utilities', () => {
     });
     expect(parseTerminalCleanupTimerId('terminal-cleanup:full:')).toBeNull();
     expect(parseTerminalCleanupTimerId('not-a-cleanup-timer')).toBeNull();
+  });
+
+  describe('isTeardownClaim', () => {
+    it('accepts a valid owed/running claim, with or without a finite claimedAt', () => {
+      expect(isTeardownClaim({ status: 'owed', attempts: 0, token: 't' })).toBe(true);
+      expect(
+        isTeardownClaim({ status: 'running', attempts: 3, token: 't', claimedAt: 1_000 }),
+      ).toBe(true);
+      // A fractional claimedAt is legal — getNow() may return a non-integer timestamp.
+      expect(
+        isTeardownClaim({ status: 'running', attempts: 0, token: 't', claimedAt: 1_000.5 }),
+      ).toBe(true);
+    });
+
+    it('rejects non-objects and bad status/token shapes', () => {
+      expect(isTeardownClaim(null)).toBe(false);
+      expect(isTeardownClaim('not-a-claim')).toBe(false);
+      expect(isTeardownClaim({ status: 'bogus', attempts: 0, token: 't' })).toBe(false);
+      expect(isTeardownClaim({ status: 'owed', attempts: 0, token: 5 })).toBe(false);
+    });
+
+    it('rejects non-finite, negative, or non-integer attempts (would never dead-letter)', () => {
+      expect(isTeardownClaim({ status: 'owed', attempts: NaN, token: 't' })).toBe(false);
+      expect(isTeardownClaim({ status: 'owed', attempts: Infinity, token: 't' })).toBe(false);
+      expect(isTeardownClaim({ status: 'owed', attempts: -1, token: 't' })).toBe(false);
+      expect(isTeardownClaim({ status: 'owed', attempts: 1.5, token: 't' })).toBe(false);
+    });
+
+    it('rejects non-finite or negative claimedAt (would never reclaim a stale running claim)', () => {
+      expect(isTeardownClaim({ status: 'running', attempts: 0, token: 't', claimedAt: NaN })).toBe(
+        false,
+      );
+      expect(
+        isTeardownClaim({ status: 'running', attempts: 0, token: 't', claimedAt: Infinity }),
+      ).toBe(false);
+      expect(isTeardownClaim({ status: 'running', attempts: 0, token: 't', claimedAt: -5 })).toBe(
+        false,
+      );
+    });
   });
 });

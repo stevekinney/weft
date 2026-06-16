@@ -175,6 +175,50 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     engine[Symbol.dispose]();
   });
 
+  it('clears an UNDECODABLE marker (bytes that decode throws on) so it cannot block forever', async () => {
+    // Cursor Bugbot round 3: a marker holding bytes that `decode` cannot parse threw out of
+    // resolveTeardownDrive before the corrupt-marker branch, so the outer catch only re-armed
+    // the timer and left the marker — blocking purge/start-new/bulk-delete forever. The drive
+    // must clear undecodable bytes too. `0xc1` is the msgpack "never used" byte.
+    const engine = new Engine();
+    const internals = getInternals(engine);
+    const workflowId = 'wf-undecodable';
+    await internals.storage.put(KEYS.teardownOwed(workflowId), new Uint8Array([0xc1]));
+
+    await runWorkflowFinalizer(
+      internals,
+      workflowId,
+      createTeardownTimerId('tok'),
+      makeCallbacks(terminalState(workflowId, 'any')),
+    );
+
+    expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).toBeNull();
+    engine[Symbol.dispose]();
+  });
+
+  it('clears a claim-shaped marker with NaN attempts (would otherwise never dead-letter)', async () => {
+    // Copilot round 3: a persisted `attempts: NaN` made `attempt >= MAX_TEARDOWN_ATTEMPTS`
+    // always false (never dead-letters) and would drive forever. The tightened isTeardownClaim
+    // rejects non-finite/negative numbers, routing it through the clear path.
+    const engine = new Engine();
+    const internals = getInternals(engine);
+    const workflowId = 'wf-nan-attempts';
+    await internals.storage.put(
+      KEYS.teardownOwed(workflowId),
+      encode({ status: 'owed', attempts: NaN, token: 'tok' }),
+    );
+
+    await runWorkflowFinalizer(
+      internals,
+      workflowId,
+      createTeardownTimerId('tok'),
+      makeCallbacks(terminalState(workflowId, 'any')),
+    );
+
+    expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).toBeNull();
+    engine[Symbol.dispose]();
+  });
+
   it('leaves the marker and re-arms a timer when a fresh running claim is presumed live', async () => {
     // A `running` claim whose `claimedAt` is recent (well under the stale threshold) is a
     // genuine live sibling — the drive must NOT reclaim or clear it, and must re-arm a

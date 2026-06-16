@@ -102,6 +102,39 @@ type TeardownResolution =
  * absent finalizer state cannot be run, so it dead-letters in place. Pulling these
  * guards out keeps the drive focused on the claim-CAS → run → settle sequence.
  */
+/**
+ * Decode the teardown marker bytes into a valid {@link TeardownClaim}, or clear a corrupt
+ * marker in place and return `null`. Corrupt-marker handling is EXHAUSTIVE (Cursor Bugbot
+ * round 2 + 3): after a non-null read, a marker is exactly one of —
+ * (a) UNDECODABLE bytes → `decode` THROWS → clear → null;
+ * (b) decodes to a non-claim shape → `!isTeardownClaim` → clear → null;
+ * (c) decodes claim-shaped with garbage numbers (NaN/Infinity/negative `attempts`/`claimedAt`)
+ *     → `!isTeardownClaim` (tightened guard) → clear → null;
+ * (d)/(e) a valid claim → returned to the caller.
+ * (a)-(c) all clear (conditioned on the exact bytes read, so a concurrent re-claim isn't
+ * clobbered) so a corrupt marker can never block purge / start-new / bulk-delete forever.
+ * Each clear's own CAS write stays OUTSIDE the decode try/catch, so a genuine storage fault
+ * still propagates to the caller's self-heal re-arm rather than being swallowed.
+ */
+async function readDriveableClaim(
+  internals: EngineInternals,
+  workflowId: string,
+  markerBytes: Uint8Array,
+): Promise<TeardownClaim | null> {
+  let decoded: unknown;
+  try {
+    decoded = decode(markerBytes);
+  } catch {
+    await clearTeardownMarker(internals, workflowId, markerBytes); // (a)
+    return null;
+  }
+  if (!isTeardownClaim(decoded)) {
+    await clearTeardownMarker(internals, workflowId, markerBytes); // (b)/(c)
+    return null;
+  }
+  return decoded;
+}
+
 async function resolveTeardownDrive(
   internals: EngineInternals,
   workflowId: string,
@@ -115,12 +148,11 @@ async function resolveTeardownDrive(
   if (markerBytes === null) {
     return { kind: 'cleared' }; // already cleared by a prior successful drive.
   }
-  const claim = decode(markerBytes);
-  if (!isTeardownClaim(claim)) {
-    // A corrupt marker (decodes to a non-claim) can never be driven and would otherwise
-    // block purge/start-new forever. Clear it, conditioned on the bytes we read so a
-    // concurrent re-claim isn't clobbered. (Cursor Bugbot: "invalid marker blocks forever".)
-    await clearTeardownMarker(internals, workflowId, markerBytes);
+  // Resolve the bytes to a valid claim, clearing any corrupt marker in place (see
+  // {@link readDriveableClaim} for the exhaustive case analysis). A `null` return means the
+  // marker was corrupt and has been cleared — nothing to drive.
+  const claim = await readDriveableClaim(internals, workflowId, markerBytes);
+  if (claim === null) {
     return { kind: 'cleared' };
   }
   if (claim.token !== token) {

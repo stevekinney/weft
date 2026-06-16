@@ -328,9 +328,10 @@ export type WorkflowTeardownStatus = 'completed' | 'failed' | 'dead-lettered';
  * Fired on the {@link Engine} as a workflow's definition-level `finalizer` progresses
  * through teardown after a `cancelled`/`timed-out` terminal (issue #446). One event
  * type carries the stage in `status`; `attempts` is the attempt count; `error` is the
- * failure message on `'failed'`/`'dead-lettered'` (absent on `'completed'`). Fields are
- * low-cardinality so the event stream stays bounded. Keep `'failed'` listeners
- * side-effect-light — they fire on every retry.
+ * failure message on `'failed'`/`'dead-lettered'` (absent on `'completed'`). The schema is
+ * stable and compact, and `status` is low-cardinality; `workflowId`/`workflowType` are
+ * naturally high-cardinality identifiers. Keep `'failed'` listeners side-effect-light —
+ * they fire on every retry.
  *
  * @example
  * ```ts

@@ -118,10 +118,11 @@ describe('weft.workflows.bulk.delete', () => {
     // A workflow that owes a finalizer teardown must be SKIPPED by bulk delete, and the
     // skip must be VISIBLE on the wire (not silent) so an operator does not assume the
     // run was deleted. `weft.workflows.bulk.delete` shapes the engine result through
-    // `shapeBulkJsonSuccess` (a transparent JSON.stringify over `z.unknown()`), so the
-    // engine's `skippedTeardownPending` field reaches REST and JSON-RPC identically.
-    // (junior MF4.) We seed the durable `owed` marker directly — the finalizer mechanics
-    // themselves are covered in finalizer-teardown.test.ts.
+    // `shapeBulkJsonSuccess`, which is a direct `new Response(JSON.stringify(result))` — it
+    // performs no schema shaping, so every field on the engine result (including the new
+    // `skippedTeardownPending`) reaches REST and JSON-RPC identically. (junior MF4.) We seed
+    // the durable `owed` marker directly — the finalizer mechanics themselves are covered in
+    // finalizer-teardown.test.ts.
     using engine = createEngine();
 
     const handle = await engine.start('echo', 'owes-teardown', {
