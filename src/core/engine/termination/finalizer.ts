@@ -116,9 +116,16 @@ async function resolveTeardownDrive(
     return { kind: 'cleared' }; // already cleared by a prior successful drive.
   }
   const claim = decode(markerBytes);
-  if (!isTeardownClaim(claim) || claim.token !== token) {
-    // Stale timer for a re-armed (or corrupt) marker; the live claim owns its own timer.
-    // Do NOT touch the marker — and do NOT re-arm under this (wrong) token.
+  if (!isTeardownClaim(claim)) {
+    // A corrupt marker (decodes to a non-claim) can never be driven and would otherwise
+    // block purge/start-new forever. Clear it, conditioned on the bytes we read so a
+    // concurrent re-claim isn't clobbered. (Cursor Bugbot: "invalid marker blocks forever".)
+    await clearTeardownMarker(internals, workflowId, markerBytes);
+    return { kind: 'cleared' };
+  }
+  if (claim.token !== token) {
+    // Stale timer for a re-armed claim; the live claim (different token) owns its own
+    // timer. Leave the marker — clearing here would delete a live re-armed claim.
     return { kind: 'cleared' };
   }
 

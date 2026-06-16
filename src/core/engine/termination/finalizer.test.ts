@@ -155,12 +155,14 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     engine[Symbol.dispose]();
   });
 
-  it('returns (leaving the marker) when the marker bytes are not a valid claim', async () => {
+  it('clears a corrupt marker (one that does not decode to a claim) so it cannot block forever', async () => {
     const engine = new Engine();
     const internals = getInternals(engine);
     const workflowId = 'wf-bad-claim';
     await internals.storage.put(KEYS.teardownOwed(workflowId), encode({ not: 'a-claim' }));
 
+    // A marker that decodes to a non-claim can never be driven — it would otherwise block
+    // purge / start-new forever. The drive clears it (conditioned on the bytes it read).
     await runWorkflowFinalizer(
       internals,
       workflowId,
@@ -168,7 +170,7 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
       makeCallbacks(terminalState(workflowId, 'any')),
     );
 
-    expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).not.toBeNull();
+    expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).toBeNull();
     engine[Symbol.dispose]();
   });
 
@@ -412,7 +414,7 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
 });
 
 describe('runFinalizerActivity — primitive', () => {
-  it('aborts the attempt immediately when the shutdown signal is already aborted', async () => {
+  it('reports shutdown-aborted when a silent finalizer resolves under an already-aborted signal', async () => {
     const controller = new AbortController();
     controller.abort(new Error('engine disposed'));
 
@@ -424,6 +426,9 @@ describe('runFinalizerActivity — primitive', () => {
         context?: { signal: AbortSignal; heartbeat: () => void },
       ) => {
         sawAbortedSignal = context?.signal.aborted === true;
+        // This finalizer ignores its abort signal and resolves anyway — a silent
+        // "success" under a shutdown. The drive must NOT treat that as a real
+        // teardown; the engine never confirmed the resource is gone.
         // The finalizer may call heartbeat; it is a no-op post-terminal but must
         // not throw. Exercising it covers the ActivityContext heartbeat stub.
         context?.heartbeat();
@@ -432,7 +437,11 @@ describe('runFinalizerActivity — primitive', () => {
 
     const result = await runFinalizerActivity(finalizer, null, 1, controller.signal);
 
-    expect(result.ok).toBe(true);
+    // A clean disposal must re-open the claim at the unchanged attempt count, so the
+    // attempt is reported as shutdown-aborted (NOT ok), even though the body resolved.
+    if (result.ok)
+      throw new Error('expected the silent finalizer to be reported as shutdown-aborted');
+    expect(result.abortedByShutdown).toBe(true);
     expect(sawAbortedSignal).toBe(true);
   });
 

@@ -103,6 +103,23 @@ export async function runFinalizerActivity(
       attempt,
       attemptController,
     );
+    // A finalizer that ignores its abort signal can resolve successfully even though the
+    // engine was shutting down (e.g. it never awaited `signal`, or finished its own work
+    // before the abort propagated). That `ok: true` is NOT a real teardown success: a
+    // clean disposal must re-open the claim at the unchanged attempt count, not clear the
+    // marker. Treat an attempt that finishes under an already-aborted shutdown as a
+    // shutdown-abort so the drive re-arms instead of charging an attempt. (Cursor Bugbot.)
+    if (shutdownSignal.aborted) {
+      return {
+        ok: false,
+        error: new Error(
+          `Finalizer "${finalizer.name}" resolved while the engine was shutting down; ` +
+            `treating attempt ${attempt} as shutdown-aborted so the teardown re-runs after restart.`,
+          { cause: shutdownSignal.reason },
+        ),
+        abortedByShutdown: true,
+      };
+    }
     return { ok: true };
   } catch (error) {
     return { ok: false, error, abortedByShutdown: shutdownSignal.aborted };
