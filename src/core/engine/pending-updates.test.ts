@@ -292,8 +292,8 @@ describe('pending update helpers', () => {
     } as never;
 
     schedulePendingInlineUpdateDrain(harness.internals, workflowId, harness.callbacks);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     await sleepForTesting(0);
-
     expect(harness.broadcasts).toEqual([]);
   });
 });
