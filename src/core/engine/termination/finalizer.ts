@@ -88,6 +88,23 @@ async function rearmOnLostSettle(
 }
 
 /**
+ * Clear the marker (conditioned on `markerBytes`) and report the resolution: `'cleared'`
+ * when the conditional delete committed, or `'rearm'` when it did not (a deposed-fence throw,
+ * or — only under unsupported multi-engine — a concurrent rewrite), so the caller re-arms a
+ * self-heal timer instead of stranding the marker after the scheduler deletes the fired one.
+ * (Cursor Bugbot round 5.)
+ */
+async function clearOrRearm(
+  internals: EngineInternals,
+  workflowId: string,
+  token: string,
+  markerBytes: Uint8Array,
+): Promise<TeardownResolution> {
+  const cleared = await clearTeardownMarker(internals, workflowId, markerBytes);
+  return cleared ? { kind: 'cleared' } : { kind: 'rearm', token };
+}
+
+/**
  * The resolved inputs for a teardown attempt, once every bail-out guard has passed.
  * Produced by {@link resolveTeardownDrive}; consumed by {@link runWorkflowFinalizer}.
  */
@@ -112,46 +129,51 @@ type TeardownResolution =
   | { kind: 'rearm'; token: string };
 
 /**
- * Resolve a fired `wf-teardown:` timer into one of three drive outcomes. The marker is
- * cleared only for a vanished/ineligible workflow or a stale (re-armed) token; an
- * unavailable definition leaves the marker and asks the caller to re-arm (a node that
- * recovers the type can run it later); a presumed-live `running` claim also re-arms;
- * absent finalizer state cannot be run, so it dead-letters in place. Pulling these
- * guards out keeps the drive focused on the claim-CAS → run → settle sequence.
+ * Outcome of resolving the marker bytes: a valid `claim` to drive, or a non-claim
+ * {@link TeardownResolution} (`'cleared'` when a corrupt marker was deleted, `'rearm'` when
+ * the conditional delete did not commit) that the caller passes straight through.
  */
+type ClaimResolution = { kind: 'claim'; claim: TeardownClaim } | TeardownResolution;
+
 /**
  * Decode the teardown marker bytes into a valid {@link TeardownClaim}, or clear a corrupt
- * marker in place and return `null`. Corrupt-marker handling is EXHAUSTIVE (Cursor Bugbot
- * round 2 + 3): after a non-null read, a marker is exactly one of —
- * (a) UNDECODABLE bytes → `decode` THROWS → clear → null;
- * (b) decodes to a non-claim shape → `!isTeardownClaim` → clear → null;
+ * marker in place. Corrupt-marker handling is EXHAUSTIVE (Cursor Bugbot round 2 + 3): after
+ * a non-null read, a marker is exactly one of —
+ * (a) UNDECODABLE bytes → `decode` THROWS → clear;
+ * (b) decodes to a non-claim shape → `!isTeardownClaim` → clear;
  * (c) decodes claim-shaped with garbage numbers (NaN/Infinity/negative `attempts`/`claimedAt`)
- *     → `!isTeardownClaim` (tightened guard) → clear → null;
+ *     → `!isTeardownClaim` (tightened guard) → clear;
  * (d)/(e) a valid claim → returned to the caller.
- * (a)-(c) all clear (conditioned on the exact bytes read, so a concurrent re-claim isn't
- * clobbered) so a corrupt marker can never block purge / start-new / bulk-delete forever.
- * Each clear's own CAS write stays OUTSIDE the decode try/catch, so a genuine storage fault
- * still propagates to the caller's self-heal re-arm rather than being swallowed.
+ * Each clear is conditioned on the exact bytes read, so a concurrent re-claim isn't clobbered.
+ * If the conditional delete does NOT commit (a deposed-fence throw, or — only under unsupported
+ * multi-engine — a concurrent rewrite), {@link clearOrRearm} returns `'rearm'` so the caller
+ * re-arms a self-heal timer instead of stranding the marker once the scheduler deletes the
+ * fired timer. (Cursor Bugbot round 5: a failed corrupt-marker clear skipped re-arm.)
  */
 async function readDriveableClaim(
   internals: EngineInternals,
   workflowId: string,
+  token: string,
   markerBytes: Uint8Array,
-): Promise<TeardownClaim | null> {
+): Promise<ClaimResolution> {
   let decoded: unknown;
   try {
     decoded = decode(markerBytes);
   } catch {
-    await clearTeardownMarker(internals, workflowId, markerBytes); // (a)
-    return null;
+    return clearOrRearm(internals, workflowId, token, markerBytes); // (a)
   }
   if (!isTeardownClaim(decoded)) {
-    await clearTeardownMarker(internals, workflowId, markerBytes); // (b)/(c)
-    return null;
+    return clearOrRearm(internals, workflowId, token, markerBytes); // (b)/(c)
   }
-  return decoded;
+  return { kind: 'claim', claim: decoded };
 }
 
+/**
+ * Resolve a fired `wf-teardown:` timer into a drive outcome. The marker is cleared for a
+ * corrupt marker (see {@link readDriveableClaim}), a vanished/ineligible workflow, or a
+ * stale (re-armed) token; an unavailable definition or a presumed-live `running` claim
+ * re-arms; absent finalizer state dead-letters in place.
+ */
 async function resolveTeardownDrive(
   internals: EngineInternals,
   workflowId: string,
@@ -165,13 +187,13 @@ async function resolveTeardownDrive(
   if (markerBytes === null) {
     return { kind: 'cleared' }; // already cleared by a prior successful drive.
   }
-  // Resolve the bytes to a valid claim, clearing any corrupt marker in place (see
-  // {@link readDriveableClaim} for the exhaustive case analysis). A `null` return means the
-  // marker was corrupt and has been cleared — nothing to drive.
-  const claim = await readDriveableClaim(internals, workflowId, markerBytes);
-  if (claim === null) {
-    return { kind: 'cleared' };
+  // Resolve the bytes to a valid claim, clearing (or re-arming on a failed clear) any
+  // corrupt marker in place. A non-`claim` resolution passes straight through.
+  const resolution = await readDriveableClaim(internals, workflowId, token, markerBytes);
+  if (resolution.kind !== 'claim') {
+    return resolution;
   }
+  const claim = resolution.claim;
   if (claim.token !== token) {
     // Stale timer for a re-armed claim; the live claim (different token) owns its own
     // timer. Leave the marker — clearing here would delete a live re-armed claim.
@@ -180,10 +202,10 @@ async function resolveTeardownDrive(
 
   const state = await callbacks.loadWorkflowState(workflowId);
   // The workflow vanished (purged/retained) or is no longer in a teardown-owed terminal
-  // state — clear the marker (conditioned on the bytes we read) and stop.
+  // state — clear the marker (conditioned on the bytes we read), re-arming if the clear
+  // did not commit so the marker isn't stranded. (Cursor Bugbot round 5.)
   if (state === null || !TERMINAL_STATUSES_OWED_TEARDOWN.has(state.status)) {
-    await clearTeardownMarker(internals, workflowId, markerBytes);
-    return { kind: 'cleared' };
+    return clearOrRearm(internals, workflowId, token, markerBytes);
   }
 
   const registeredFinalizer = internals.registrations.get(state.type)?.finalizer;

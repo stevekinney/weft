@@ -186,15 +186,16 @@ export async function clearTeardownMarker(
   internals: EngineInternals,
   workflowId: string,
   expectedBytes: Uint8Array,
-): Promise<void> {
+): Promise<boolean> {
   try {
-    await commitFencedEngineWriteAllowingPreconditionFailure(
+    return await commitFencedEngineWriteAllowingPreconditionFailure(
       internals,
       [{ type: 'delete', key: KEYS.teardownOwed(workflowId) }],
       [{ key: KEYS.teardownOwed(workflowId), expectedValue: expectedBytes }],
     );
   } catch {
     // Deposed: leave the marker; the current owner re-drives it.
+    return false;
   }
 }
 

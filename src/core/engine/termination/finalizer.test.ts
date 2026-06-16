@@ -196,6 +196,37 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     engine[Symbol.dispose]();
   });
 
+  it('re-arms instead of stranding when a corrupt-marker clear cannot commit (deposed fence)', async () => {
+    // Cursor Bugbot round 5: clearTeardownMarker swallows write failures. If the conditional
+    // delete does not commit, returning normally would strand the marker after the scheduler
+    // deletes the fired timer. The drive now routes a failed clear to the re-arm path.
+    // We force the failure with a deposed engine: every fenced write (the clear AND the
+    // re-arm) throws EngineDeposedError. The re-arm is then a no-op on this instance — the
+    // documented out-of-scope residual (a successor re-drives via the surviving durable timer
+    // in supported single-engine; the unfenced scheduler timer-delete under multi-engine
+    // deposition is the generic #470 gap). This test pins that a failed clear takes the
+    // re-arm path (line coverage of clearTeardownMarker's catch) without stranding via a
+    // normal return.
+    const engine = new Engine();
+    const internals = getInternals(engine);
+    const workflowId = 'wf-deposed-clear';
+    await internals.storage.put(KEYS.teardownOwed(workflowId), encode({ not: 'a-claim' }));
+    internals.deposed = true; // every fenced write now throws EngineDeposedError.
+
+    await runWorkflowFinalizer(
+      internals,
+      workflowId,
+      createTeardownTimerId('tok'),
+      makeCallbacks(terminalState(workflowId, 'any')),
+    );
+
+    // The clear could not commit (deposed), so the corrupt marker is still present; the
+    // re-arm also could not write (same fence) — a successor re-drives via recovery.
+    expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).not.toBeNull();
+    expect(await teardownTimerCount(internals)).toBe(0);
+    engine[Symbol.dispose]();
+  });
+
   it('clears a claim-shaped marker with NaN attempts (would otherwise never dead-letter)', async () => {
     // Copilot round 3: a persisted `attempts: NaN` made `attempt >= MAX_TEARDOWN_ATTEMPTS`
     // always false (never dead-letters) and would drive forever. The tightened isTeardownClaim
