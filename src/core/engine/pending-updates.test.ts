@@ -270,10 +270,12 @@ describe('pending update helpers', () => {
     const harness = createInternals();
     const workflowId = 'pending-scheduled-drain-failure';
     await harness.updateCoordinator.createRequest(workflowId, 'approve', { approved: true });
+    let scheduledDrainAttempts = 0;
 
     const realStorage = harness.storage;
     harness.internals.storage = {
       batch: async () => {
+        scheduledDrainAttempts += 1;
         throw new Error('scheduled drain failed');
       },
       capabilities: realStorage.capabilities.bind(realStorage),
@@ -292,8 +294,12 @@ describe('pending update helpers', () => {
     } as never;
 
     schedulePendingInlineUpdateDrain(harness.internals, workflowId, harness.callbacks);
+    await waitForCondition(async () => scheduledDrainAttempts === 1, {
+      label: 'scheduled drain failure callback',
+    });
     await sleepForTesting(0);
 
+    expect(scheduledDrainAttempts).toBe(1);
     expect(harness.broadcasts).toEqual([]);
   });
 });
