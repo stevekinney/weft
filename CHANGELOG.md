@@ -14,10 +14,13 @@ with `workflowExecutionMode: 'worker'` no longer throws. The previous guard rest
 on a false premise: the finalizer drive (`runFinalizerActivity`) runs entirely on
 the engine host and never consults the worker's activity table, so worker mode —
 which isolates only the workflow generator — never prevented teardown from running.
-Finalizers now work in both execution modes. `ctx.setFinalizerState` remains
-unavailable inside a worker generator; a workflow that records finalizer state must
-run in inline mode. Code that relied on catching the old registration error to
-detect "unsupported in worker mode" will no longer see that error (#564).
+The behavior change is registration only: worker-mode registration no longer throws,
+and finalizer execution remains host-side. Durable teardown is still gated on the
+workflow having staged state via `ctx.setFinalizerState`, which is unavailable inside
+a worker generator (with no host-side API to stage it) — so a worker-mode workflow
+that needs durable finalizer teardown must run in inline mode. Code that relied on
+catching the old registration error to detect "unsupported in worker mode" will no
+longer see that error (#564).
 
 ## [0.3.0] - 2026-06-06
 

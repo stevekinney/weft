@@ -86,16 +86,22 @@ export interface WorkflowDefinition<
    * so destroying an already-destroyed resource must succeed (or no-op) rather
    * than throw — the same contract as keying a destroy by `sandboxId`.
    *
-   * A `finalizer` is trusted host code and works in both inline and worker
-   * execution modes. Worker execution mode isolates the workflow generator in a
-   * Web Worker; the finalizer teardown runs on the engine host regardless of
-   * execution mode and regardless of whether `activityExecution` is configured.
-   * Note that `ctx.setFinalizerState` is not callable from within the worker
-   * generator — record finalizer state from engine-host code if needed. The
-   * inline-only alternatives are `ctx.onCancel` (in-process, best-effort cleanup
-   * that need not survive a crash) and `ctx.saga` (multi-step ordered rollback) —
-   * both are unavailable in worker mode, where teardown must happen in the workflow
-   * body (a `ctx.run` destroy step in a `try/finally`).
+   * A `finalizer` is trusted host code. **Registration** works in both inline and
+   * worker execution modes, and the teardown **runs on the engine host** regardless
+   * of execution mode (and regardless of whether `activityExecution` is configured):
+   * worker execution mode isolates only the workflow generator in a Web Worker.
+   *
+   * Durable teardown, however, only fires when the workflow staged finalizer state
+   * via {@link WorkflowContext.setFinalizerState} before terminating — and that
+   * method is part of the inline workflow context, unavailable in a worker generator
+   * (there is no host-side API to stage it on the workflow's behalf). So a worker-mode
+   * workflow that needs durable finalizer teardown must run **inline** to record its
+   * state; registering a `finalizer` on a worker-mode engine no longer throws, but a
+   * worker generator cannot drive it. The inline-only alternatives are `ctx.onCancel`
+   * (in-process, best-effort cleanup that need not survive a crash) and `ctx.saga`
+   * (multi-step ordered rollback) — both are unavailable in worker mode, where
+   * teardown must happen in the workflow body (a `ctx.run` destroy step in a
+   * `try/finally`).
    */
   finalizer?: AnyActivityDefinition;
 }
