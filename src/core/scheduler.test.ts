@@ -669,8 +669,8 @@ describe('Scheduler — commitTimerCleanup (#563)', () => {
         Promise.reject(new Error('engine deposed: fenced timer cleanup rejected')),
     });
 
-    const entry = context.makeTimer({ id: 'survivor', fireAt: now() - 1000 });
-    await scheduler.schedule(entry);
+    const survivorTimer = context.makeTimer({ id: 'survivor', fireAt: now() - 1000 });
+    await scheduler.schedule(survivorTimer);
 
     await scheduler.tick(now());
 

@@ -63,12 +63,11 @@ import type {
 import type { ActivityWorkerDispatcher } from '../../workers/activity-worker-dispatcher.ts';
 import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
-import { setActivityWorkerDispatcherForTesting } from '../engine/activity-worker-dispatcher.test-support.ts';
+import { replaceActivityWorkerDispatcherForTesting } from '../engine/activity-worker-dispatcher.test-support.ts';
 import {
   ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING,
   ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING,
 } from '../engine/index.ts';
-import { getInternals } from '../engine/internals.ts';
 import { type TeardownClaim } from '../engine/state-utilities.ts';
 import type { WorkflowTeardownStatus } from '../events.ts';
 import type { WorkflowContext } from '../types.ts';
@@ -334,11 +333,10 @@ describe('worker-mode finalizer teardown (#564 WS2)', () => {
     engine.register(engineSideWorkflow);
 
     // The engine populated `internals.activityWorkerDispatcher` with a real pool-backed
-    // dispatcher. Dispose it so the worker pool does not leak, then overwrite the slot with
-    // the recording poison dispatcher — now any finalizer dispatch through the slot is
-    // observable and fails.
-    getInternals(engine).activityWorkerDispatcher?.[Symbol.dispose]();
-    setActivityWorkerDispatcherForTesting(engine, recordingDispatcher);
+    // dispatcher. `replaceActivityWorkerDispatcherForTesting` disposes it (so the worker
+    // pool does not leak) and overwrites the slot with the recording poison dispatcher —
+    // now any finalizer dispatch through the slot is observable and fails.
+    replaceActivityWorkerDispatcherForTesting(engine, recordingDispatcher);
 
     const handle = await engine.start(
       'wait-signal-then-complete',
