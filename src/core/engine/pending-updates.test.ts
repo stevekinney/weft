@@ -294,6 +294,7 @@ describe('pending update helpers', () => {
     } as never;
 
     schedulePendingInlineUpdateDrain(harness.internals, workflowId, harness.callbacks);
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
     await waitForCondition(async () => scheduledDrainAttempts === 1, {
       label: 'scheduled drain failure callback',
     });
