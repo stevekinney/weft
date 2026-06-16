@@ -89,8 +89,10 @@ export interface WorkflowDefinition<
    * **Inline execution only.** Registering a finalizer on a worker-execution-mode
    * engine throws: a definition-level finalizer is never advertised to a worker's
    * activity table, so it could not run there. Worker-mode parity is tracked in
-   * #564. For in-process, best-effort cleanup that does not need to survive a
-   * crash, use `ctx.onCancel`; for multi-step ordered rollback, use `ctx.saga`.
+   * #564. The inline-only alternatives are `ctx.onCancel` (in-process,
+   * best-effort cleanup that need not survive a crash) and `ctx.saga` (multi-step
+   * ordered rollback) — both are also unavailable in worker mode, where teardown
+   * must happen in the workflow body (a `ctx.run` destroy step in a `try/finally`).
    */
   finalizer?: AnyActivityDefinition;
 }

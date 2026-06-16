@@ -13,14 +13,15 @@ import type { EngineInternals } from './internals.ts';
  * the finalizer's input when it drives cancel/timeout teardown (#446 Phase 2).
  *
  * The value is staged as a pending atomic side-effect — a `put` of
- * {@link KEYS.finalizerState} — so it commits with the next checkpoint or the
- * terminal `updateWorkflowState` batch (`includePendingAtomicSideEffects` is set
- * for terminal transitions). That makes the write atomic with the very
- * transition that will eventually trigger teardown: a cancel arriving before the
- * next checkpoint still flushes the staged op in the terminal batch, so a future
- * finalizer would always see the resource id. The staged op inherits the
- * lease-epoch fence (#470) for free, since checkpoint and terminal commits route
- * through `commitFencedWorkflowStateOperations`.
+ * {@link KEYS.finalizerState} — that commits with whichever durable write lands
+ * first: the next checkpoint/suspend commit, or, if no checkpoint runs before the
+ * workflow terminates, the terminal `updateWorkflowState` batch
+ * (`includePendingAtomicSideEffects` is set for terminal transitions). Either way
+ * the resource id is durable before teardown is driven: a cancel arriving before
+ * the next checkpoint still flushes the staged op in the terminal batch, so the
+ * finalizer always sees the resource id. The staged op inherits the lease-epoch
+ * fence (#470) for free, since checkpoint and terminal commits route through
+ * `commitFencedWorkflowStateOperations`.
  *
  * Oversized payloads are rejected before staging (the same hostile-input guard
  * activity results use). A call made once the workflow is already terminalizing

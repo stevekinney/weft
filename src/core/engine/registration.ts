@@ -73,7 +73,7 @@ function assertFinalizerSupported(
       `Cannot register workflow "${name}" with a finalizer: durable finalizers require inline execution and are ` +
         `not supported in worker execution mode. The engine was constructed with \`workerExecution\`. Construct the ` +
         `engine without \`workerExecution\` to run workflows inline, or remove the \`finalizer\` option. See the ` +
-        `resource-management guide for the durable finalizer contract.`,
+        `"Durable cancellation teardown" section of the Workflows guide for the finalizer contract.`,
     );
   }
 }

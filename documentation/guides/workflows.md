@@ -413,7 +413,7 @@ What the engine guarantees once you have recorded finalizer state:
 The recorded value is last-write-wins: call `setFinalizerState` again to replace it when the live resource changes (for example, after re-provisioning). Recording `null` still counts as recorded — the finalizer runs with a `null` payload — which is the difference between "tear down with no extra detail" and "nothing to tear down."
 
 > [!WARNING] Inline execution only
-> Durable finalizers require inline execution (the default). Registering a `finalizer` on a worker-execution-mode engine throws at registration time: a definition-level finalizer is never advertised to a worker's activity table, so it could not run there. Worker-mode parity is tracked as a follow-up. For in-process, best-effort teardown in worker mode, use `ctx.onCancel`.
+> Durable finalizers require inline execution (the default). Registering a `finalizer` on a worker-execution-mode engine throws at registration time: a definition-level finalizer is never advertised to a worker's activity table, so it could not run there. Worker-mode parity is tracked as a follow-up. Note that `ctx.onCancel` is also inline-only — it is unavailable in worker mode too — so a worker-mode workflow that needs teardown should do it in the workflow body (a `ctx.run` destroy step inside a `try/finally`).
 
 Choosing between the three teardown tools: use a **`finalizer`** for a single external resource that must be released durably; use **`ctx.saga`** for a multi-step operation whose completed steps need ordered compensation if a later step fails; use **`ctx.onCancel`** for in-process, best-effort cleanup (releasing an in-memory lock, flushing a buffer) where durability is not required.
 
