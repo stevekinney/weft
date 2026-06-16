@@ -138,6 +138,16 @@ export type BulkOperationDryRunResult = {
   sampleWorkflowIds: WorkflowId[];
   confirmationToken: string;
   confirmationTokenVersion: 1;
+  /**
+   * Delete-only, point-in-time advisory: ids in the matched scope that currently owe an
+   * engine-driven finalizer (#446) and so would be SKIPPED by the commit (mirrors
+   * {@link BulkDeleteResult.skippedTeardownPending}). Present only on a `delete` preview
+   * and only when non-empty. `matched`, `scope`, and `confirmationToken` still describe
+   * the full filter scope — they are stable and derive the commit token — so this field
+   * surfaces the skip without recomputing them (teardown-owed is transient and is
+   * re-evaluated at commit time, where the authoritative skip list is reported).
+   */
+  skippedTeardownPending?: string[];
 };
 
 /**

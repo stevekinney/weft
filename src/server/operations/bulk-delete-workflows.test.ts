@@ -142,6 +142,12 @@ describe('weft.workflows.bulk.delete', () => {
     );
     const preview = await previewResponse.json();
 
+    // The DRY-RUN preview must surface the skip too (Cursor Bugbot: the preview previously
+    // implied every matched workflow would be deleted). `matched` still counts the full
+    // scope (it derives the commit token), so this is point-in-time advisory.
+    expect(preview.matched).toBe(1);
+    expect(preview.skippedTeardownPending).toEqual(['bulk-delete-teardown-owed']);
+
     const response = await handleRequest(
       request({ filter: { tags: ['selected'] }, confirmationToken: preview.confirmationToken }),
       engine,

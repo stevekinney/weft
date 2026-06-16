@@ -55,3 +55,28 @@ export function clearPendingAtomicWorkflowCommitSideEffects(
 ): void {
   internals.pendingAtomicWorkflowCommitSideEffects.delete(workflowId);
 }
+
+/**
+ * Non-destructively report whether a workflow's pending atomic side-effect buffer
+ * already stages a `put` to `key`. Unlike {@link takePendingAtomicWorkflowCommitSideEffects},
+ * this does NOT consume the buffer, so it is safe to call at a gate that runs before the
+ * commit that will flush those same side-effects.
+ *
+ * The terminal-transition path (#446) needs this: `ctx.setFinalizerState()` stages the
+ * `wf-finalizer-state:` put as a pending side-effect that the terminal batch flushes, but
+ * a pre-batch `storage.get()` cannot see a staged-but-unflushed write. Peeking the buffer
+ * lets the terminal batch stage its teardown marker atomically alongside that put — without
+ * it, a `setFinalizerState` with no intervening checkpoint would commit the resource state
+ * yet skip the teardown marker, silently leaking the external resource.
+ */
+export function pendingAtomicWorkflowCommitSideEffectsStagePut(
+  internals: EngineInternals,
+  workflowId: string,
+  key: string,
+): boolean {
+  const pending = internals.pendingAtomicWorkflowCommitSideEffects.get(workflowId);
+  if (pending === undefined) {
+    return false;
+  }
+  return pending.operations.some((operation) => operation.type === 'put' && operation.key === key);
+}

@@ -21,6 +21,7 @@ import { decode, encode } from '../../codec.ts';
 import { Engine } from '../../engine.ts';
 import type { WorkflowContext, WorkflowState } from '../../types.ts';
 import { activity, workflow } from '../../types.ts';
+import { recordFinalizerState } from '../finalizer-state.ts';
 import { getInternals } from '../internals.ts';
 import { createTeardownTimerId, type TeardownClaim } from '../state-utilities.ts';
 import { runFinalizerActivity } from './finalizer-activity.ts';
@@ -335,9 +336,16 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     expect(record.attempts).toBe(2);
     expect(record.lastError).toContain('finalizer state missing');
     expect('finalizerInput' in record).toBe(false);
-    // The dead-lettered event fires for symmetry with the retry-horizon path.
+    // The dead-lettered event fires for symmetry with the retry-horizon path, and carries
+    // the `error` reason (present for every 'failed'/'dead-lettered' status — Copilot). It
+    // matches the dead-letter record's `lastError`.
     expect(events).toHaveLength(1);
-    expect(events[0]).toMatchObject({ type: 'workflow:teardown' });
+    expect(events[0]).toMatchObject({
+      type: 'workflow:teardown',
+      status: 'dead-lettered',
+      attempts: 2,
+      error: record.lastError,
+    });
     engine[Symbol.dispose]();
   });
 
@@ -409,6 +417,68 @@ describe('runWorkflowFinalizer — defensive bail-out branches', () => {
     expect(cleanupErrors[0]?.source).toBe('runWorkflowFinalizer');
     // The catch re-armed a self-heal timer so the marker is not stranded (Codex round-2 MF3).
     expect(await teardownTimerCount(internals)).toBe(1);
+    engine[Symbol.dispose]();
+  });
+});
+
+describe('terminal teardown gate — staged-but-not-durable finalizer state', () => {
+  it('stages the owed marker when finalizer state is staged-only at cancel (no leak)', async () => {
+    // Regression for the silent-leak path (Cursor Bugbot / Copilot): `ctx.setFinalizerState`
+    // STAGES its `wf-finalizer-state:` put as a pending atomic side-effect that the terminal
+    // batch flushes. If a cancel arrives before any checkpoint flushed that put, a pre-batch
+    // `storage.get()` returns null — yet the staged put commits in the SAME terminal batch.
+    // Reading durable storage ALONE would skip the teardown marker while the resource state
+    // is durably written, leaking the external resource. The terminal path must also peek the
+    // staged buffer. We reproduce the exact interleaving by staging the state directly (no
+    // intervening checkpoint) on a seeded running workflow, then cancelling.
+    const destroyed: unknown[] = [];
+    const destroySandbox = activity({
+      name: 'destroy-sandbox-staged',
+      execute: async (input: unknown) => {
+        destroyed.push(input);
+      },
+    });
+
+    const now = 1_000_000;
+    const engine = new Engine({ getNow: () => now });
+    const provision = workflow({
+      name: 'teardown-staged-state',
+      finalizer: destroySandbox,
+    }).execute(async function* (ctx: WorkflowContext) {
+      yield* ctx.waitForSignal('never');
+    });
+    engine.register(provision);
+    const internals = getInternals(engine);
+
+    const workflowId = 'teardown-staged-1';
+    const runningState: WorkflowState = {
+      id: workflowId,
+      type: 'teardown-staged-state',
+      status: 'running',
+      input: null,
+      createdAt: now,
+      updatedAt: now,
+      versionTuple: { workflowVersion: '0' },
+    };
+    await internals.storage.put(KEYS.workflow(workflowId), encode(runningState));
+
+    // Stage the finalizer state WITHOUT a checkpoint flush — this is the un-flushed window.
+    recordFinalizerState(internals, workflowId, { sandboxId: 'sbx-staged' });
+    // Proof the state is staged-only: it is NOT in durable storage yet.
+    expect(await internals.storage.get(KEYS.finalizerState(workflowId))).toBeNull();
+
+    await engine.cancel(workflowId);
+
+    // The terminal batch staged the owed marker + flushed the finalizer state atomically —
+    // peeking the staged buffer is what makes `finalizerStatePresent` true.
+    expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).not.toBeNull();
+    expect(await internals.storage.get(KEYS.finalizerState(workflowId))).not.toBeNull();
+
+    // And the finalizer actually drives with the recorded input — no leak.
+    await engine.scheduler.tick(now);
+    expect(destroyed).toEqual([{ sandboxId: 'sbx-staged' }]);
+    expect(await internals.storage.get(KEYS.teardownOwed(workflowId))).toBeNull();
+
     engine[Symbol.dispose]();
   });
 });

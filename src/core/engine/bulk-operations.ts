@@ -582,7 +582,22 @@ async function runBulkDeletion(
     candidateWorkflowSnapshots,
     options,
   );
-  if (options.dryRun === true) return preparation.preview;
+  if (options.dryRun === true) {
+    // Surface the point-in-time teardown-owed subset so the preview does not silently
+    // imply every matched workflow will be deleted — the commit skips ids that still owe
+    // a finalizer (#446). `matched`/scope/token still describe the full scope (they derive
+    // the commit token, and the set is transient), so this is advisory only; the
+    // authoritative skip list is `skippedTeardownPending` on the commit result.
+    const skippedTeardownPending: string[] = [];
+    for (const workflowId of preparation.workflowIds) {
+      if (await storageHas(internals.storage, KEYS.teardownOwed(workflowId))) {
+        skippedTeardownPending.push(workflowId);
+      }
+    }
+    return skippedTeardownPending.length > 0
+      ? { ...preparation.preview, skippedTeardownPending }
+      : preparation.preview;
+  }
 
   validateBulkConfirmation(options, preparation);
   const bulkConcurrency = resolveBulkOperationConcurrency(options);

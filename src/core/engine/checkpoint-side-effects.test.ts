@@ -18,6 +18,7 @@ import {
 import { rememberCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts';
 import { persistCheckpoint } from './checkpoint-io.ts';
 import {
+  pendingAtomicWorkflowCommitSideEffectsStagePut,
   stageAtomicWorkflowCommitSideEffects,
   takePendingAtomicWorkflowCommitSideEffects,
 } from './checkpoint-side-effects.ts';
@@ -184,6 +185,62 @@ describe('atomic workflow commit side effects', () => {
 
     expect(takePendingAtomicWorkflowCommitSideEffects(internals, 'empty-workflow')).toBeUndefined();
     expect(internals.pendingAtomicWorkflowCommitSideEffects.has('empty-workflow')).toBe(false);
+  });
+
+  describe('pendingAtomicWorkflowCommitSideEffectsStagePut', () => {
+    const targetKey = KEYS.finalizerState('wf-peek');
+
+    it('returns false when no pending bucket exists for the workflow', () => {
+      const internals = {
+        pendingAtomicWorkflowCommitSideEffects: new Map(),
+      } as unknown as EngineInternals;
+
+      expect(pendingAtomicWorkflowCommitSideEffectsStagePut(internals, 'wf-peek', targetKey)).toBe(
+        false,
+      );
+    });
+
+    it('returns true when the bucket stages a put to the key (non-destructively)', () => {
+      const pending = new Map([
+        [
+          'wf-peek',
+          {
+            conditions: [],
+            operations: [{ type: 'put', key: targetKey, value: new Uint8Array([1]) }],
+          },
+        ],
+      ]);
+      const internals = {
+        pendingAtomicWorkflowCommitSideEffects: pending,
+      } as unknown as EngineInternals;
+
+      expect(pendingAtomicWorkflowCommitSideEffectsStagePut(internals, 'wf-peek', targetKey)).toBe(
+        true,
+      );
+      // The peek must NOT consume the buffer — the terminal commit still flushes it.
+      expect(internals.pendingAtomicWorkflowCommitSideEffects.has('wf-peek')).toBe(true);
+    });
+
+    it('returns false when the bucket stages other keys but not the target put', () => {
+      const internals = {
+        pendingAtomicWorkflowCommitSideEffects: new Map([
+          [
+            'wf-peek',
+            {
+              conditions: [],
+              operations: [
+                { type: 'put', key: KEYS.finalizerState('other'), value: new Uint8Array([1]) },
+                { type: 'delete', key: targetKey },
+              ],
+            },
+          ],
+        ]),
+      } as unknown as EngineInternals;
+
+      expect(pendingAtomicWorkflowCommitSideEffectsStagePut(internals, 'wf-peek', targetKey)).toBe(
+        false,
+      );
+    });
   });
 
   it('keeps a top-level buffered signal when the checkpoint batch fails', async () => {

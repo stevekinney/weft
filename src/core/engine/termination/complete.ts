@@ -26,6 +26,7 @@ import {
 } from '../attributes-tags.ts';
 import { TERMINAL_CLEANUP_DELAY_MS } from '../bulk-operations.ts';
 import { takeCancelHandlers, type CancelHandler } from '../cancel-handlers.ts';
+import { pendingAtomicWorkflowCommitSideEffectsStagePut } from '../checkpoint-side-effects.ts';
 import { getWorkflowExecutionStartedAt } from '../handles.ts';
 import { dropQueuedInlineWorkflowStart } from '../inline-launch-queue.ts';
 import type { EngineInternals } from '../internals.ts';
@@ -110,8 +111,23 @@ export async function terminateWorkflow(
     // (`ctx.setFinalizerState`) before terminating — read presence up front,
     // alongside the attribute read, so the terminal batch can stage the marker
     // and teardown timer atomically. Absent state means no resource to destroy.
+    //
+    // `setFinalizerState` STAGES its `wf-finalizer-state:` put as a pending atomic
+    // side-effect that the terminal `updateWorkflowState` batch below flushes
+    // (`includePendingAtomicSideEffects` is set for terminal transitions). If no
+    // checkpoint ran between the call and this terminal transition, that put has NOT
+    // reached durable storage yet, so `storage.get()` alone returns null and we would
+    // skip the marker even though the state is about to be committed — silently leaking
+    // the resource. Peek the staged buffer too (non-destructively; the commit flush
+    // still consumes it). The buffer is frozen here: `terminalizingWorkflows` already
+    // contains this id, so `recordFinalizerState` can stage nothing new.
     const finalizerStatePresent =
-      (await internals.storage.get(KEYS.finalizerState(workflowId))) !== null;
+      (await internals.storage.get(KEYS.finalizerState(workflowId))) !== null ||
+      pendingAtomicWorkflowCommitSideEffectsStagePut(
+        internals,
+        workflowId,
+        KEYS.finalizerState(workflowId),
+      );
     const retainedAttributes = buildRetainedTerminalSearchAttributes(attributes);
     const terminationMessage = status === 'timed-out' ? 'Workflow timed out' : 'Workflow cancelled';
     const terminationResult = await updateWorkflowState(

@@ -193,6 +193,7 @@ async function deadLetterMissingState(
   expectedBytes: Uint8Array,
   callbacks: FinalizerDriveCallbacks,
 ): Promise<void> {
+  const lastError = 'finalizer state missing — recorded resource cannot be torn down';
   const settled = await deadLetterTeardown(
     internals,
     workflowId,
@@ -200,13 +201,16 @@ async function deadLetterMissingState(
     attempts,
     expectedBytes,
     {
-      lastError: 'finalizer state missing — recorded resource cannot be torn down',
+      lastError,
       finalizerInput: undefined,
     },
   );
   if (settled) {
+    // The event's `error` is present for every 'failed'/'dead-lettered' status (the
+    // documented contract). Carry the same reason the dead-letter record stores so the
+    // event stream is consistent with the attempt-exhausted dead-letter path.
     callbacks.dispatchEvent(
-      new WorkflowTeardownEvent(workflowId, workflowType, 'dead-lettered', attempts),
+      new WorkflowTeardownEvent(workflowId, workflowType, 'dead-lettered', attempts, lastError),
     );
   }
 }
