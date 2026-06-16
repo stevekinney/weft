@@ -167,12 +167,13 @@ async function runBulkCancellation(
       continue;
     }
 
-    if (cancellationResult.value.status === 'cancelled') {
+    const { value } = cancellationResult;
+    if (value.status === 'cancelled') {
       cancelled += 1;
       continue;
     }
 
-    errors.push(cancellationResult.value.error);
+    errors.push(value.error);
   }
 
   const result: BulkCancelResult = { cancelled, failed: errors.length, errors };
@@ -252,12 +253,13 @@ async function runBulkFailedWorkflowRetry(
       continue;
     }
 
-    if (retryResult.value.status === 'retried') {
+    const { value } = retryResult;
+    if (value.status === 'retried') {
       retried += 1;
       continue;
     }
 
-    errors.push(retryResult.value.error);
+    errors.push(value.error);
   }
 
   const result: BulkRetryFailedResult = { retried, failed: errors.length, errors };
@@ -395,12 +397,7 @@ async function reactivateFailedWorkflowFromCheckpointSerialized(
       ...(concurrencyStartOperations?.operations ?? []),
     ];
     const conditions = concurrencyStartOperations?.conditions ?? [];
-    const committed = await commitFailedWorkflowReactivation(
-      internals,
-      operations,
-      conditions,
-      concurrencyStartOperations?.stateKey,
-    );
+    const committed = await commitFailedWorkflowReactivation(internals, operations, conditions);
 
     if (committed) {
       return {
@@ -421,7 +418,6 @@ async function commitFailedWorkflowReactivation(
   internals: EngineInternals,
   operations: BatchOperation[],
   conditions: ConditionalBatchCondition[],
-  stateKey: string | undefined,
 ): Promise<boolean> {
   if (conditions.length === 0) {
     await internals.storage.batch(operations);
@@ -429,11 +425,7 @@ async function commitFailedWorkflowReactivation(
   }
 
   requireStorageCapability(internals.storage, 'conditionalBatch', 'retry failed workflow');
-  const committed = await storageConditionalBatch(internals.storage, conditions, operations);
-  if (!committed && stateKey === undefined) {
-    throw new Error('Retry failed workflow compare-and-swap lost unexpectedly');
-  }
-  return committed;
+  return storageConditionalBatch(internals.storage, conditions, operations);
 }
 
 function buildReactivatedWorkflowState(

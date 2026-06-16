@@ -101,6 +101,12 @@ describe('engine state utilities', () => {
     expect(encodedValuesEqual({ b: 2, a: 1 }, { a: 1, b: 2 })).toBe(true);
     expect(encodedValuesEqual([1], [1, 2])).toBe(false);
     expect(encodedValuesEqual({ value: 1 }, { value: 2 })).toBe(false);
+    expect(
+      encodedValuesEqual(
+        new Date('2026-06-16T00:00:00.000Z'),
+        new Date('2026-06-16T00:00:00.000Z'),
+      ),
+    ).toBe(true);
   });
 
   it('applies status and workflow type schedule filters', () => {
@@ -190,6 +196,51 @@ describe('engine state utilities', () => {
         ['critical'],
       ),
     ).toBe(true);
+  });
+
+  it('matches date-valued attribute filters only when the timestamp actually satisfies the predicate', () => {
+    const exactTimestamp = new Date('2026-06-16T12:00:00.000Z');
+    const searchAttributes = {
+      launchedAt: exactTimestamp,
+    };
+    const state = createWorkflowState({});
+
+    expect(
+      matchesListFilter(
+        state,
+        { attributes: [{ key: 'launchedAt', value: new Date('2026-06-16T12:00:00.000Z') }] },
+        null,
+        undefined,
+        searchAttributes,
+      ),
+    ).toBe(true);
+    expect(
+      matchesListFilter(
+        state,
+        { attributes: [{ key: 'launchedAt', value: new Date('2026-06-16T12:00:02.000Z') }] },
+        null,
+        undefined,
+        searchAttributes,
+      ),
+    ).toBe(false);
+    expect(
+      matchesListFilter(
+        state,
+        { attributes: [{ key: 'launchedAt', gt: new Date('2026-06-16T11:59:59.000Z') }] },
+        null,
+        undefined,
+        searchAttributes,
+      ),
+    ).toBe(true);
+    expect(
+      matchesListFilter(
+        state,
+        { attributes: [{ key: 'launchedAt', gt: new Date('2026-06-16T12:00:02.000Z') }] },
+        null,
+        undefined,
+        searchAttributes,
+      ),
+    ).toBe(false);
   });
 
   it('rejects every indexed schedule-filter dimension independently', () => {

@@ -337,7 +337,7 @@ async function snapshotMatchingWorkflowIds(
     }
 
     if (remainingLimit === 0) {
-      break;
+      return workflowIds;
     }
   }
 
