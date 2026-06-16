@@ -21,17 +21,11 @@
  * intentional-but-noisy production startup warnings many server tests trigger,
  * keeping signal warnings visible.
  *
- * Finally, it registers a global `afterEach` that unconditionally restores real
- * timers after every test. This is a test-isolation safety net, not a feature:
- * `jest.useFakeTimers()` (via `useFakeTimers()` in
- * `src/testing/fake-timers.test-support.ts`) traps `Bun.sleep`, and the CI suite
- * runs sequentially in one process. If a file's own `afterEach` runs a teardown
- * step (e.g. `dispose()`) that throws BEFORE it reaches `restoreRealTimers()`,
- * the fake clock leaks into the next file — and a later `await Bun.sleep(...)`
- * (e.g. `awaitReservationCleared` in start-or-signal) then never settles and the
- * test hangs to its timeout. A global `afterEach` runs after each file's own
- * teardown, so the leak is impossible regardless of local ordering. (Same
- * order-dependent-flakiness rationale as the `fake-indexeddb` shim above.)
+ * Finally, it registers a global `afterEach` that restores real timers after
+ * every test, so a failed teardown cannot leak a fake clock into later tests
+ * (`jest.useFakeTimers()` traps `Bun.sleep`, so a leaked clock hangs the next
+ * `Bun.sleep`). Same order-dependent-flakiness rationale as the `fake-indexeddb`
+ * shim above.
  */
 import { afterEach } from 'bun:test';
 
