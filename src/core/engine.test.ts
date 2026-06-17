@@ -532,6 +532,25 @@ describe('Engine', () => {
     }
   });
 
+  it('Engine.create starts the scheduler by default when both recover and startScheduler are omitted (#590)', async () => {
+    // The common production path: no recovery flag and no scheduler flag. The
+    // default `options.startScheduler ?? (options.recover !== false)` collapses
+    // to `undefined !== false` → true, so the poller arms — exactly the
+    // pre-#590 boot behavior. Pinned so a future rewrite of the defaulting
+    // expression cannot silently regress it.
+    const { Scheduler } = await import('./scheduler.ts');
+    const startSpy = spyOn(Scheduler.prototype, 'start');
+
+    let engine: Engine | undefined;
+    try {
+      engine = await Engine.create({});
+      expect(startSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      await engine?.[Symbol.asyncDispose]();
+      startSpy.mockRestore();
+    }
+  });
+
   it('register(workflow) registers a workflow', async () => {
     const engine = new Engine();
     const handler = async function* (_ctx: WorkflowContext, input: unknown) {
