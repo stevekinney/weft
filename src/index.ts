@@ -542,6 +542,7 @@ export type { HttpClientOptions } from './client/index';
 export type {
   ClientHandle,
   ClientStartOptions,
+  StartOrSignalOutcome,
   UpdateResult,
   WeftClient,
   WeftClientActivity,

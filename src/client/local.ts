@@ -176,7 +176,7 @@ export class LocalClient implements WeftClient {
    */
   readonly activity: WeftClientActivity;
 
-  constructor(engine: Engine) {
+  constructor(engine: Engine<any, any>) {
     this.#engine = runtimeWorkflowEngine(engine);
     this.#rawEngine = engine;
     this.activity = {
