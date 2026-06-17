@@ -126,6 +126,10 @@ export class LocalClient<
   readonly activity: WeftClientActivity;
   constructor(engine: Engine<TWorkflows, TActivities> | Engine) {
     this.#engine = runtimeWorkflowEngine(engine);
+    // Erase the registry brand for internal storage: the in-process event feed
+    // (`tail`) and catalog transport are registry-agnostic, and a branded
+    // `Engine<TWorkflows, TActivities>` is structurally a plain `Engine`. The
+    // public constructor keeps the brand so call-site inference is preserved.
     this.#rawEngine = engine as Engine;
     this.activity = {
       complete: (token, result) => this.#engine.completeAsyncActivity(token, result),
