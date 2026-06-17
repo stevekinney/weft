@@ -79,13 +79,21 @@ export type ClientStartOptions = Omit<StartOptions, 'defer' | 'services'> & {
 // Client handle — lightweight reference to a running workflow
 // ---------------------------------------------------------------------------
 
-// `StartOrSignalOutcome` is defined once in the engine layer (the engine
-// produces the value) and re-exported here so client consumers import it
-// alongside `ClientHandle` without reaching into `core/engine`. `'started'`
-// when the call created the run; `'signalled'` when it signalled a run that
-// already existed, including losing a concurrent same-key create race and
-// converging onto the winner. Each call returns its OWN handle, so converged
-// concurrent callers each observe their own per-call outcome.
+/**
+ * Which atomic path a {@link WeftClient.startOrSignal} call took, returned
+ * alongside the {@link ClientHandle}. `'started'` when the call created the
+ * run; `'signalled'` when it delivered a signal to a run that already existed,
+ * including losing a concurrent same-key create race and converging onto the
+ * winner. Each call receives its OWN handle regardless of the outcome.
+ *
+ * @example
+ * ```ts
+ * import type { StartOrSignalOutcome } from '@lostgradient/weft/client';
+ *
+ * const outcome: StartOrSignalOutcome = 'started';
+ * void outcome;
+ * ```
+ */
 export type StartOrSignalOutcome = EngineStartOrSignalOutcome;
 
 /**
