@@ -49,11 +49,14 @@ actionable error.
 `ctx.race()` and `ctx.all()` now accept `ctx.sleep(duration)` and
 `ctx.waitForSignal(name)` branches alongside `ctx.run()` branches (#456). Sleep
 branches use abortable in-process timers. Wait-signal branches use a
-deferred-consume protocol so only the winning branch consumes its durable signal
-record; losers drop their envelopes unfinalized, leaving the signal available
-for a later `waitForSignal`. Duplicate signal names within one coordination tree
-are rejected at validation time, and only the top coordinator finalizes the
-winner.
+deferred-consume protocol that consumes a durable signal record only for a
+branch whose result is actually kept: under `ctx.race()` that is just the
+winning branch, so a losing wait-signal branch drops its envelope unfinalized
+and leaves the signal available for a later `waitForSignal`; under `ctx.all()`
+every branch is kept, so each fulfilled wait-signal branch consumes its signal,
+but only once all branches have settled and immediately before the coordinator
+checkpoints. Duplicate signal names within one coordination tree are rejected at
+validation time.
 
 ### Added — `onTerminalConflict: 'start-new'` on `engine.start`
 
