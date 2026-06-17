@@ -129,6 +129,7 @@ export type ReplayLiveSubscribeOptions<TEnvelope extends SequencedEventEnvelope>
   fromCursor?: Cursor;
   signal?: AbortSignal;
   replayLimit?: number;
+  filterEnvelope?: (envelope: TEnvelope) => boolean;
   countReplayEnvelope?: (envelope: TEnvelope) => boolean;
   createReplayLimitError?: (count: number, limit: number) => unknown;
 };
@@ -175,6 +176,7 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
     const requestedAfter = fromCursor !== undefined ? decodeCursorOrThrow(fromCursor) : -1;
 
     const unsubscribe = backend.subscribeLive((envelope) => {
+      if (!shouldDeliverEnvelope(envelope, args)) return;
       if (buffer.length >= bufferSize) {
         bufferOverflowed = true;
       } else {
@@ -266,6 +268,7 @@ export function createWorkflowEventFeed(
     fromCursor?: Cursor;
     signal?: AbortSignal;
     replayLimit?: number;
+    filterEnvelope?: (envelope: EventEnvelope) => boolean;
     countReplayEnvelope?: (envelope: EventEnvelope) => boolean;
     createReplayLimitError?: (count: number, limit: number) => unknown;
   }): AsyncIterable<EventEnvelope> {
@@ -273,6 +276,9 @@ export function createWorkflowEventFeed(
     if (args.fromCursor !== undefined) subscribeOptions.fromCursor = args.fromCursor;
     if (args.signal !== undefined) subscribeOptions.signal = args.signal;
     if (args.replayLimit !== undefined) subscribeOptions.replayLimit = args.replayLimit;
+    if (args.filterEnvelope !== undefined) {
+      subscribeOptions.filterEnvelope = args.filterEnvelope;
+    }
     if (args.countReplayEnvelope !== undefined) {
       subscribeOptions.countReplayEnvelope = args.countReplayEnvelope;
     }
@@ -311,6 +317,7 @@ async function* replayUpTo<TEnvelope extends SequencedEventEnvelope>(
   for await (const envelope of backend.replay({ afterSequence })) {
     if (envelope.sequence > snapshot) break;
     if (signal?.aborted) return;
+    if (!shouldDeliverEnvelope(envelope, replayOptions)) continue;
     if (shouldCountReplayEnvelope(envelope, replayOptions)) {
       replayCount += 1;
       const replayLimit = replayOptions?.replayLimit;
@@ -320,6 +327,13 @@ async function* replayUpTo<TEnvelope extends SequencedEventEnvelope>(
     }
     yield envelope;
   }
+}
+
+function shouldDeliverEnvelope<TEnvelope extends SequencedEventEnvelope>(
+  envelope: TEnvelope,
+  replayOptions: ReplayLiveSubscribeOptions<TEnvelope> | undefined,
+): boolean {
+  return replayOptions?.filterEnvelope?.(envelope) ?? true;
 }
 
 function shouldCountReplayEnvelope<TEnvelope extends SequencedEventEnvelope>(

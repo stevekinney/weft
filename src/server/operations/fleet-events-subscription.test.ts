@@ -31,12 +31,16 @@ async function invokeFleetSubscription(
   liveEvents: readonly FleetEventEnvelope[] = [],
 ) {
   const fleetFeed = {
-    subscribe() {
+    subscribe(options?: { filterEnvelope?: (envelope: FleetEventEnvelope) => boolean }) {
       return (async function* subscriptionEvents() {
+        const shouldDeliver = (event: FleetEventEnvelope): boolean =>
+          options?.filterEnvelope?.(event) ?? true;
         const replayTail = replayEvents.reduce((tail, event) => Math.max(tail, event.sequence), -1);
-        yield* replayEvents;
+        for (const event of replayEvents) {
+          if (shouldDeliver(event)) yield event;
+        }
         for (const event of liveEvents) {
-          if (event.sequence > replayTail) yield event;
+          if (event.sequence > replayTail && shouldDeliver(event)) yield event;
         }
       })();
     },
@@ -186,6 +190,52 @@ describe('weft.events.subscribe operation', () => {
       message:
         'Fleet event replay window is 1001 matching events; maximum is 1000. Supply a more recent fromCursor.',
     });
+    await subscription.close();
+  });
+
+  it('filters live events before they consume the subscription live buffer', async () => {
+    const fleetFeed = createFleetEventFeed(new MemoryStorage(), { liveBufferSize: 1 });
+    const subscription = await fleetEventsSubscriptionOperation.invoke({
+      input: { workflowId: 'wf-match' },
+      principal: anonymousPrincipal(),
+      engine: { fleetFeed },
+      transport: 'jsonRpcWebSocket',
+    });
+
+    expect(hasFleetEventIterable(subscription)).toBe(true);
+    if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
+
+    const iterator = subscription.iterable[Symbol.asyncIterator]();
+    const nextEnvelope = iterator.next();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    await fleetFeed.append({
+      kind: 'workflow:completed',
+      workflowId: 'wf-other-1',
+      emittedAtMs: 1,
+      payload: { workflowId: 'wf-other-1' },
+    });
+    await fleetFeed.append({
+      kind: 'workflow:completed',
+      workflowId: 'wf-other-2',
+      emittedAtMs: 2,
+      payload: { workflowId: 'wf-other-2' },
+    });
+    await fleetFeed.append({
+      kind: 'workflow:completed',
+      workflowId: 'wf-match',
+      emittedAtMs: 3,
+      payload: { workflowId: 'wf-match' },
+    });
+
+    const delivered = await nextEnvelope;
+    expect(delivered.done).toBe(false);
+    expect(delivered.value).toMatchObject({
+      sequence: 2,
+      workflowId: 'wf-match',
+    });
+
+    await iterator.return?.();
     await subscription.close();
   });
 

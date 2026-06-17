@@ -73,16 +73,13 @@ export const fleetEventsSubscriptionOperation = defineOperation<
     }
     const fleetFeed = getFleetEventFeed(engine, transport);
     const controller = new AbortController();
-    const iterable = filterFleetEvents(
-      fleetFeed.subscribe({
-        ...(input.fromCursor === undefined ? {} : { fromCursor: input.fromCursor }),
-        signal: controller.signal,
-        replayLimit: MAX_FLEET_SUBSCRIPTION_REPLAY_EVENTS,
-        countReplayEnvelope: (envelope) => matchesFleetEventFilter(envelope, input),
-        createReplayLimitError: (count, limit) => fleetReplayLimitFault(count, limit),
-      }),
-      input,
-    );
+    const iterable = fleetFeed.subscribe({
+      ...(input.fromCursor === undefined ? {} : { fromCursor: input.fromCursor }),
+      signal: controller.signal,
+      replayLimit: MAX_FLEET_SUBSCRIPTION_REPLAY_EVENTS,
+      filterEnvelope: (envelope) => matchesFleetEventFilter(envelope, input),
+      createReplayLimitError: (count, limit) => fleetReplayLimitFault(count, limit),
+    });
 
     return {
       envelope: { subscriptionId: `sub_${crypto.randomUUID()}`, cursor: startingCursor },
@@ -93,16 +90,6 @@ export const fleetEventsSubscriptionOperation = defineOperation<
     };
   },
 });
-
-async function* filterFleetEvents(
-  iterable: AsyncIterable<FleetEventEnvelope>,
-  input: FleetEventsSubscriptionInput,
-): AsyncIterable<FleetEventEnvelope> {
-  for await (const envelope of iterable) {
-    if (!matchesFleetEventFilter(envelope, input)) continue;
-    yield envelope;
-  }
-}
 
 function fleetReplayLimitFault(
   count: number,
