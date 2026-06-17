@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.5.0] - 2026-06-17
 
-### Added — `ctx.race` aborts a losing `ctx.run` activity branch
+### Fixed — `ctx.race` aborts a losing `ctx.run` activity branch
 
 When a non-activity branch wins a `ctx.race([...])`, the losing `ctx.run()`
 activity branch now fires its activity's `ctx.signal` (`AbortSignal`) for
@@ -20,7 +20,7 @@ threaded through the activity sub-operation executor and composed into
 signals, so the activity aborts when any source fires. This makes the
 `ctx.race` supersede idiom self-sufficient: a superseded activity is signalled
 to stop rather than running to completion and risking a stale last-writer-wins
-write. This reverses the prior `#453` contract that left race losers running;
+write. This reverses the prior #453 contract that left race losers running;
 the pinned cancellation test now asserts the abort-on-loss behavior.
 
 ### Fixed — `Engine.create()` starts the scheduler

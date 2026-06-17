@@ -7,7 +7,7 @@ Weft is currently at `0.5.x` (pre-1.0). Security fixes are applied to the latest
 | Version | Supported |
 | ------- | --------- |
 | 0.5.x   | ✅        |
-| < 0.4   | ❌        |
+| < 0.5   | ❌        |
 
 ## Scope
 
