@@ -35,8 +35,9 @@ scheduler via `[Symbol.asyncDispose]`.
 
 ### Fixed — public `StartOrSignalOutcome` export and `LocalClient` engine typing
 
-`StartOrSignalOutcome` (`'started' | 'signalled'`, the type of the public
-`ClientHandle.outcome` field) is now re-exported from both the package root
+`StartOrSignalOutcome` (`'started' | 'signalled'`, the type carried by the
+public `ClientHandle.outcome` field and the engine's `StartOrSignalResult.outcome`)
+is now re-exported from both the package root
 (`@lostgradient/weft`) and the `/client` barrel (`@lostgradient/weft/client`),
 so consumers can name the type to annotate their own result interfaces (#583).
 The `LocalClient` constructor is now generic over the engine's workflow
