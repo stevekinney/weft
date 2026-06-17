@@ -469,11 +469,14 @@ describe('Engine', () => {
     const { Scheduler } = await import('./scheduler.ts');
     const startSpy = spyOn(Scheduler.prototype, 'start');
 
-    const engine = await Engine.create({ recover: true });
+    // Wrap engine creation inside the try/finally so spy is always restored
+    // even if Engine.create throws (e.g. schema-version check failure).
+    let engine: Engine | undefined;
     try {
+      engine = await Engine.create({ recover: true });
       expect(startSpy).toHaveBeenCalledTimes(1);
     } finally {
-      engine[Symbol.dispose]();
+      engine?.[Symbol.dispose]();
       startSpy.mockRestore();
     }
   });
@@ -485,11 +488,12 @@ describe('Engine', () => {
     const { Scheduler } = await import('./scheduler.ts');
     const startSpy = spyOn(Scheduler.prototype, 'start');
 
-    const engine = await Engine.create({ recover: false });
+    let engine: Engine | undefined;
     try {
+      engine = await Engine.create({ recover: false });
       expect(startSpy).not.toHaveBeenCalled();
     } finally {
-      engine[Symbol.dispose]();
+      engine?.[Symbol.dispose]();
       startSpy.mockRestore();
     }
   });
