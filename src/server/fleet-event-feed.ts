@@ -1,5 +1,5 @@
 import { decode, encode } from '../core/codec.ts';
-import { KEYS, type Storage } from '../storage/interface.ts';
+import { KEYS, type BatchOperation, type Storage } from '../storage/interface.ts';
 import {
   createReplayLiveFeed,
   decodeCursor,
@@ -8,12 +8,13 @@ import {
   type FeedEventKind,
   type ReplayLiveFeed,
   type ReplayLiveFeedBackend,
+  type ReplayLiveSubscribeOptions,
   type WorkflowEventFeedOptions,
 } from './workflow-event-feed.ts';
 
 export type FleetEventEnvelope = {
   readonly kind: FeedEventKind;
-  readonly workflowId?: string;
+  readonly workflowId?: string | undefined;
   readonly sequence: number;
   readonly cursor: Cursor;
   readonly emittedAtMs: number;
@@ -22,7 +23,7 @@ export type FleetEventEnvelope = {
 
 export type FleetEventInput = {
   readonly kind: FeedEventKind;
-  readonly workflowId?: string;
+  readonly workflowId?: string | undefined;
   readonly emittedAtMs: number;
   readonly payload: unknown;
 };
@@ -30,10 +31,9 @@ export type FleetEventInput = {
 export type FleetEventFeed = {
   append(event: FleetEventInput): Promise<FleetEventEnvelope>;
   replay(options?: { fromCursor?: Cursor; limit?: number }): AsyncIterable<FleetEventEnvelope>;
-  subscribe(options?: {
-    fromCursor?: Cursor;
-    signal?: AbortSignal;
-  }): AsyncIterable<FleetEventEnvelope>;
+  subscribe(
+    options?: ReplayLiveSubscribeOptions<FleetEventEnvelope>,
+  ): AsyncIterable<FleetEventEnvelope>;
   snapshotTailSequence(): Promise<number>;
   dispose(): void;
 };
@@ -88,10 +88,19 @@ export function createFleetEventFeed(
         payload: event.payload,
       };
 
-      await storage.batch([
+      const operations: BatchOperation[] = [
         { type: 'put', key: KEYS.fleetEvent(sequence), value: encode(envelope) },
         { type: 'put', key: KEYS.fleetEventTail(), value: encode({ sequence }) },
-      ]);
+      ];
+      if (event.workflowId !== undefined) {
+        operations.push({
+          type: 'put',
+          key: KEYS.fleetEventByWorkflow(event.workflowId, sequence),
+          value: new Uint8Array(),
+        });
+      }
+
+      await storage.batch(operations);
       nextSequence = sequence + 1;
       fireLive(envelope);
       return envelope;
@@ -123,10 +132,7 @@ export function createFleetEventFeed(
     const decodedTail = storedTail === null ? null : decodeStorageValue(storedTail);
     if (isTailRecord(decodedTail)) return decodedTail.sequence;
 
-    for await (const [key] of storage.scan(KEYS.fleetEventPrefix(), {
-      reverse: true,
-      limit: 50,
-    })) {
+    for await (const [key] of storage.scan(KEYS.fleetEventPrefix(), { reverse: true })) {
       const sequence = parseFleetEventSequenceFromKey(key);
       if (sequence !== null) return sequence;
     }

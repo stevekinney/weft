@@ -80,6 +80,7 @@ type OpenRpcMethod = {
   result: ContentDescriptor;
   errors?: Array<{ $ref: string }>;
   'x-weft-paramsSchema': Record<string, unknown>;
+  'x-weft-parameterizedAccess'?: Record<string, unknown>;
   'x-weft-mcp'?: OpenRpcMcpMethodMetadata;
 };
 
@@ -269,8 +270,40 @@ function buildMethod(operation: ErasedOperation): OpenRpcMethod {
   if (operation.tags.length > 0) {
     method.tags = [...operation.tags].toSorted(compareStrings).map((name) => ({ name }));
   }
+  if (operation.parameterizedAccess !== undefined) {
+    method['x-weft-parameterizedAccess'] = {
+      discriminator: operation.parameterizedAccess.discriminator,
+      ...(operation.parameterizedAccess.defaultValue === undefined
+        ? {}
+        : { defaultValue: operation.parameterizedAccess.defaultValue }),
+      variants: operation.parameterizedAccess.variants.map((variant) => ({
+        value: variant.value,
+        access: accessPolicyExtension(variant.access),
+      })),
+    };
+  }
   method.errors = buildMethodErrorReferences(operation);
   return method;
+}
+
+function accessPolicyExtension(access: ErasedOperation['access']): Record<string, unknown> {
+  if (access.kind === 'public') return { kind: 'public' };
+  if (access.kind === 'authenticated') return { kind: 'authenticated' };
+  if (access.kind === 'scoped') {
+    return { kind: 'scoped', scopes: [...access.scopes.scopes].toSorted(compareStrings) };
+  }
+  if (access.kind === 'optionalAuth') {
+    return {
+      kind: 'optionalAuth',
+      scopes: [...access.authenticatedScopes.scopes].toSorted(compareStrings),
+    };
+  }
+  return {
+    kind: 'scopedAlternatives',
+    alternatives: access.alternatives.map((alternative) =>
+      [...alternative.scopes].toSorted(compareStrings),
+    ),
+  };
 }
 
 function buildDiscoverMethod(): OpenRpcMethod {

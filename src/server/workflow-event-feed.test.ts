@@ -30,6 +30,7 @@ import {
   createWorkflowEventFeed,
   decodeCursor,
   encodeCursor,
+  ReplayWindowExceededError,
   type EventEnvelope,
   type WorkflowEventFeedBackend,
 } from './workflow-event-feed.ts';
@@ -512,6 +513,31 @@ describe('WorkflowEventFeed — subscribe (live + replay)', () => {
 
     const result = await iterator.next();
     expect(result.done).toBe(true);
+  });
+
+  it('uses the default replay-window error when no custom factory is provided', async () => {
+    const backend = createInMemoryEventBackend();
+    await backend.append(makeEnvelope({ sequence: 0 }));
+    await backend.append(makeEnvelope({ sequence: 1 }));
+    const feed = createWorkflowEventFeed(backend);
+
+    const consume = async () => {
+      for await (const _envelope of feed.subscribe({
+        workflowId: 'wf-1',
+        selector: 'events',
+        replayLimit: 1,
+      })) {
+        // The second replayed envelope exceeds the cap before yielding.
+      }
+    };
+
+    await expect(consume()).rejects.toThrow(ReplayWindowExceededError);
+    await expect(consume()).rejects.toMatchObject({
+      name: 'ReplayWindowExceededError',
+      count: 2,
+      limit: 1,
+      message: 'Replay window is 2 events; maximum is 1.',
+    });
   });
 });
 

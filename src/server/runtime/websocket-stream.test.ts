@@ -144,9 +144,10 @@ describe('watch WebSocket delivery', () => {
     expect(context.workflowStreamConnectionCounts.has('wf-watch')).toBe(false);
   });
 
-  it('clears watch replay state and flushes pending messages when replay scanning fails', async () => {
+  it('closes watch sockets and drops pending messages when replay scanning fails', async () => {
     const context = minimalServerContext();
     const sentMessages: string[] = [];
+    const closeReasons: Array<{ code: number; reason: string }> = [];
     const socket = {
       data: {
         pathname: '/v1/workflows/wf-watch/watch',
@@ -154,12 +155,17 @@ describe('watch WebSocket delivery', () => {
         workflowId: 'wf-watch',
         watchReplayInProgress: true,
         pendingWatchMessages: [{ sequence: 2, message: 'pending-watch-frame' }],
+        workflowStreamConnectionAccepted: true,
       },
       send(message: string) {
         sentMessages.push(message);
       },
-      close() {},
+      close(code: number, reason: string) {
+        closeReasons.push({ code, reason });
+      },
     } as unknown as ServerWebSocket<WebSocketData>;
+    context.watchSockets.set('wf-watch', new Set([socket]));
+    context.workflowStreamConnectionCounts.set('wf-watch', 1);
     const engine = {
       storage: {
         async *scan() {
@@ -181,7 +187,15 @@ describe('watch WebSocket delivery', () => {
 
     expect(socket.data.watchReplayInProgress).toBe(false);
     expect(socket.data.pendingWatchMessages).toEqual([]);
-    expect(sentMessages).toEqual(['pending-watch-frame']);
+    expect(sentMessages).toEqual([]);
+    expect(closeReasons).toEqual([
+      {
+        code: 1008,
+        reason: 'watch replay failed before catch-up completed; reconnect with a newer resumeFrom',
+      },
+    ]);
+    expect(context.watchSockets.has('wf-watch')).toBe(false);
+    expect(context.workflowStreamConnectionCounts.has('wf-watch')).toBe(false);
     expect(logged[0]![0]).toBe('[weft] Failed to replay watch events for workflow "wf-watch":');
   });
 

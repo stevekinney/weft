@@ -93,12 +93,12 @@ export type WorkflowEventFeed = {
     limit?: number;
   }): AsyncIterable<EventEnvelope>;
 
-  subscribe(options: {
-    workflowId: string;
-    selector: EventSelector;
-    fromCursor?: Cursor;
-    signal?: AbortSignal;
-  }): AsyncIterable<EventEnvelope>;
+  subscribe(
+    options: {
+      workflowId: string;
+      selector: EventSelector;
+    } & ReplayLiveSubscribeOptions<EventEnvelope>,
+  ): AsyncIterable<EventEnvelope>;
 
   dispose(): void;
 };
@@ -121,9 +121,27 @@ export type ReplayLiveFeedBackend<TEnvelope extends SequencedEventEnvelope> = {
 
 export type ReplayLiveFeed<TEnvelope extends SequencedEventEnvelope> = {
   replay(options?: { fromCursor?: Cursor; limit?: number }): AsyncIterable<TEnvelope>;
-  subscribe(options?: { fromCursor?: Cursor; signal?: AbortSignal }): AsyncIterable<TEnvelope>;
+  subscribe(options?: ReplayLiveSubscribeOptions<TEnvelope>): AsyncIterable<TEnvelope>;
   dispose(): void;
 };
+
+export type ReplayLiveSubscribeOptions<TEnvelope extends SequencedEventEnvelope> = {
+  fromCursor?: Cursor;
+  signal?: AbortSignal;
+  replayLimit?: number;
+  countReplayEnvelope?: (envelope: TEnvelope) => boolean;
+  createReplayLimitError?: (count: number, limit: number) => unknown;
+};
+
+export class ReplayWindowExceededError extends Error {
+  constructor(
+    readonly count: number,
+    readonly limit: number,
+  ) {
+    super(`Replay window is ${count} events; maximum is ${limit}.`);
+    this.name = 'ReplayWindowExceededError';
+  }
+}
 
 const DEFAULT_LIVE_BUFFER_SIZE = 1000;
 
@@ -148,10 +166,7 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
     }
   }
 
-  function subscribe(args?: {
-    fromCursor?: Cursor;
-    signal?: AbortSignal;
-  }): AsyncIterable<TEnvelope> {
+  function subscribe(args?: ReplayLiveSubscribeOptions<TEnvelope>): AsyncIterable<TEnvelope> {
     const buffer: TEnvelope[] = [];
     let bufferOverflowed = false;
     let waker: (() => void) | null = null;
@@ -186,7 +201,7 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
         if (signal?.aborted) return;
 
         const snapshot = await backend.snapshotTailSequence();
-        yield* replayUpTo(backend, requestedAfter, snapshot, signal);
+        yield* replayUpTo(backend, requestedAfter, snapshot, signal, args);
         if (signal?.aborted) return;
         yield* drainLive(
           buffer,
@@ -250,10 +265,20 @@ export function createWorkflowEventFeed(
     selector: EventSelector;
     fromCursor?: Cursor;
     signal?: AbortSignal;
+    replayLimit?: number;
+    countReplayEnvelope?: (envelope: EventEnvelope) => boolean;
+    createReplayLimitError?: (count: number, limit: number) => unknown;
   }): AsyncIterable<EventEnvelope> {
-    const subscribeOptions: { fromCursor?: Cursor; signal?: AbortSignal } = {};
+    const subscribeOptions: ReplayLiveSubscribeOptions<EventEnvelope> = {};
     if (args.fromCursor !== undefined) subscribeOptions.fromCursor = args.fromCursor;
     if (args.signal !== undefined) subscribeOptions.signal = args.signal;
+    if (args.replayLimit !== undefined) subscribeOptions.replayLimit = args.replayLimit;
+    if (args.countReplayEnvelope !== undefined) {
+      subscribeOptions.countReplayEnvelope = args.countReplayEnvelope;
+    }
+    if (args.createReplayLimitError !== undefined) {
+      subscribeOptions.createReplayLimitError = args.createReplayLimitError;
+    }
     return createScopedFeed(args.workflowId, args.selector).subscribe(subscribeOptions);
   }
 
@@ -280,12 +305,39 @@ async function* replayUpTo<TEnvelope extends SequencedEventEnvelope>(
   afterSequence: number,
   snapshot: number,
   signal: AbortSignal | undefined,
+  replayOptions: ReplayLiveSubscribeOptions<TEnvelope> | undefined,
 ): AsyncIterable<TEnvelope> {
+  let replayCount = 0;
   for await (const envelope of backend.replay({ afterSequence })) {
     if (envelope.sequence > snapshot) break;
     if (signal?.aborted) return;
+    if (shouldCountReplayEnvelope(envelope, replayOptions)) {
+      replayCount += 1;
+      const replayLimit = replayOptions?.replayLimit;
+      if (replayLimit !== undefined && replayCount > replayLimit) {
+        throw createReplayLimitError(replayOptions, replayCount, replayLimit);
+      }
+    }
     yield envelope;
   }
+}
+
+function shouldCountReplayEnvelope<TEnvelope extends SequencedEventEnvelope>(
+  envelope: TEnvelope,
+  replayOptions: ReplayLiveSubscribeOptions<TEnvelope> | undefined,
+): boolean {
+  return replayOptions?.countReplayEnvelope?.(envelope) ?? true;
+}
+
+function createReplayLimitError<TEnvelope extends SequencedEventEnvelope>(
+  replayOptions: ReplayLiveSubscribeOptions<TEnvelope> | undefined,
+  count: number,
+  limit: number,
+): unknown {
+  return (
+    replayOptions?.createReplayLimitError?.(count, limit) ??
+    new ReplayWindowExceededError(count, limit)
+  );
 }
 
 function flushPendingBuffer<TEnvelope extends SequencedEventEnvelope>(

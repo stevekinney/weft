@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test';
 
+import { MemoryStorage } from '../../storage/memory.ts';
 import type { FleetEventEnvelope } from '../fleet-event-feed.ts';
+import { createFleetEventFeed } from '../fleet-event-feed.ts';
 import { anonymousPrincipal } from '../principal.ts';
 import {
   fleetEventsSubscriptionOperation,
@@ -37,12 +39,13 @@ async function invokeFleetSubscription(
   liveEvents: readonly FleetEventEnvelope[] = [],
 ) {
   const fleetFeed = {
-    async *replay() {
-      yield* replayEvents;
-    },
     subscribe() {
-      return (async function* liveFleetEvents() {
-        yield* liveEvents;
+      return (async function* subscriptionEvents() {
+        const replayTail = replayEvents.reduce((tail, event) => Math.max(tail, event.sequence), -1);
+        yield* replayEvents;
+        for (const event of liveEvents) {
+          if (event.sequence > replayTail) yield event;
+        }
       })();
     },
   };
@@ -102,48 +105,74 @@ describe('weft.events.subscribe operation', () => {
 
   it('applies filters before enforcing the replay cap', async () => {
     const fleetFeed = {
-      async snapshotTailSequence() {
-        return 1005;
-      },
-      async *replay() {
-        yield MATCHING_FLEET_EVENT;
-      },
       subscribe() {
-        return (async function* emptyLiveEvents() {})();
+        return (async function* subscriptionEvents() {
+          yield MATCHING_FLEET_EVENT;
+        })();
       },
     };
 
-    await expect(
-      fleetEventsSubscriptionOperation.invoke({
-        input: { workflowId: 'wf-match' },
-        principal: anonymousPrincipal(),
-        engine: { fleetFeed },
-        transport: 'jsonRpcWebSocket',
-      }),
-    ).resolves.toMatchObject({
-      envelope: { cursor: '-1' },
+    const subscription = await fleetEventsSubscriptionOperation.invoke({
+      input: { workflowId: 'wf-match' },
+      principal: anonymousPrincipal(),
+      engine: { fleetFeed },
+      transport: 'jsonRpcWebSocket',
     });
+
+    expect(hasFleetEventIterable(subscription)).toBe(true);
+    if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
+    await expect(collectSequences(subscription.iterable)).resolves.toEqual([1005]);
   });
 
   it('matches every workflow status fallback and rejects events without a status', async () => {
-    await expect(
-      invokeFleetSubscription(
-        { status: ['running', 'completed', 'failed', 'cancelled', 'timed-out', 'suspended'] },
-        [
-          fleetEvent(0, { kind: 'workflow:started' }),
-          fleetEvent(1, { kind: 'workflow:resumed' }),
-          fleetEvent(2, { kind: 'workflow:completed' }),
-          fleetEvent(3, { kind: 'workflow:failed' }),
-          fleetEvent(4, { kind: 'workflow:cancelled' }),
-          fleetEvent(5, { kind: 'workflow:timed-out' }),
-          fleetEvent(6, { kind: 'workflow:suspended' }),
-          fleetEvent(7, { kind: 'worker:connected', payload: {} }),
-          fleetEvent(8, { kind: 'worker:connected', payload: { status: 'running' } }),
-        ],
-      ),
-    ).resolves.toMatchObject({
-      envelope: { cursor: '-1' },
+    const subscription = await invokeFleetSubscription(
+      { status: ['running', 'completed', 'failed', 'cancelled', 'timed-out', 'suspended'] },
+      [
+        fleetEvent(0, { kind: 'workflow:started' }),
+        fleetEvent(1, { kind: 'workflow:resumed' }),
+        fleetEvent(2, { kind: 'workflow:completed' }),
+        fleetEvent(3, { kind: 'workflow:failed' }),
+        fleetEvent(4, { kind: 'workflow:cancelled' }),
+        fleetEvent(5, { kind: 'workflow:timed-out' }),
+        fleetEvent(6, { kind: 'workflow:suspended' }),
+        fleetEvent(7, { kind: 'worker:connected', payload: {} }),
+        fleetEvent(8, { kind: 'worker:connected', payload: { status: 'running' } }),
+      ],
+    );
+
+    expect(hasFleetEventIterable(subscription)).toBe(true);
+    if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
+    await expect(collectSequences(subscription.iterable)).resolves.toEqual([
+      0, 1, 2, 3, 4, 5, 6, 8,
+    ]);
+  });
+
+  it('enforces the replay cap from the actual subscription iterable', async () => {
+    const fleetFeed = createFleetEventFeed(new MemoryStorage());
+    for (let sequence = 0; sequence <= 1000; sequence += 1) {
+      await fleetFeed.append({
+        kind: 'workflow:completed',
+        workflowId: 'wf-match',
+        emittedAtMs: sequence,
+        payload: { workflowId: 'wf-match' },
+      });
+    }
+
+    const subscription = await fleetEventsSubscriptionOperation.invoke({
+      input: { workflowId: 'wf-match' },
+      principal: anonymousPrincipal(),
+      engine: { fleetFeed },
+      transport: 'jsonRpcWebSocket',
     });
+
+    expect(hasFleetEventIterable(subscription)).toBe(true);
+    if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
+    await expect(collectSequences(subscription.iterable)).rejects.toMatchObject({
+      code: 'InvalidParams',
+      message:
+        'Fleet event replay window is 1001 matching events; maximum is 1000. Supply a more recent fromCursor.',
+    });
+    await subscription.close();
   });
 
   it('filters fleet events by type, failure category, tags, and attributes', async () => {

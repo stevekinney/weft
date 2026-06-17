@@ -6,6 +6,7 @@ import { UNSAFE_PROTOTYPE_KEYS } from './pipeline-helpers.ts';
 import {
   type ErasedOperation,
   type OperationRegistry,
+  type ParameterizedAccessHint,
   type RegistrableOperation,
   validateOperationName,
 } from './types.ts';
@@ -48,6 +49,24 @@ function freezeScopeRequirement(requirement: ScopeRequirement): ScopeRequirement
     kind: requirement.kind,
     scopes,
   }) as ScopeRequirement;
+}
+
+function freezeParameterizedAccessHint(
+  hint: ParameterizedAccessHint | undefined,
+): ParameterizedAccessHint | undefined {
+  if (hint === undefined) return undefined;
+  return Object.freeze({
+    discriminator: hint.discriminator,
+    ...(hint.defaultValue === undefined ? {} : { defaultValue: hint.defaultValue }),
+    variants: Object.freeze(
+      hint.variants.map((variant) =>
+        Object.freeze({
+          value: variant.value,
+          access: freezeAccessPolicy(variant.access),
+        }),
+      ),
+    ),
+  });
 }
 
 function objectInputSchema(operation: RegistrableOperation): z.ZodObject {
@@ -134,6 +153,9 @@ function freezeOperation(operation: RegistrableOperation): ErasedOperation {
       ? {}
       : { producibleFaults: Object.freeze([...operation.producibleFaults]) }),
     access: freezeAccessPolicy(operation.access),
+    ...(operation.parameterizedAccess === undefined
+      ? {}
+      : { parameterizedAccess: freezeParameterizedAccessHint(operation.parameterizedAccess) }),
     ...(operation.mcpTool === undefined
       ? {}
       : { mcpTool: Object.freeze({ workflowType: operation.mcpTool.workflowType }) }),

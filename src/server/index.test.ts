@@ -30,7 +30,7 @@ import {
   createGetTaskDiagnosticsOperation,
   type GetTaskDiagnosticsOutput,
 } from './operations/get-task-diagnostics.ts';
-import { principalFromApiKey } from './principal.ts';
+import { anonymousPrincipal, principalFromApiKey } from './principal.ts';
 import type { InflightRecord, QueuedRecord, ResolvedRecord } from './task-state.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
@@ -860,6 +860,66 @@ describe('serve', () => {
     }
   });
 
+  it('rejects worker WebSocket upgrades without workers:write', async () => {
+    engine = createEngine();
+    server = serveTestServer({
+      engine,
+      port: 0,
+      auth: {
+        apiKeys: ['weft_key_eventsonly1234567890123456'],
+        defaultApiKeyScopes: ['events:read'],
+      },
+    });
+
+    const response = await fetch(`${server.url}/v1/tasks/default/stream`, {
+      method: 'GET',
+      headers: {
+        upgrade: 'websocket',
+        connection: 'Upgrade',
+        'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+        'sec-websocket-version': '13',
+        'x-api-key': 'weft_key_eventsonly1234567890123456',
+      },
+    });
+
+    expect(response.status).toBe(403);
+    expect(await response.text()).toBe('Insufficient scope');
+  });
+
+  it('rejects raw watch WebSocket upgrades when the resolved principal is anonymous', async () => {
+    engine = createEngine();
+    server = serveTestServer({
+      engine,
+      port: 0,
+      auth: {
+        apiKeys: ['weft_key_eventsread1234567890123456'],
+        defaultApiKeyScopes: ['events:read'],
+      },
+    });
+
+    const principalSpy = spyOn(handlerModule, 'authContextToPrincipal').mockImplementation(() =>
+      anonymousPrincipal(),
+    );
+
+    try {
+      const response = await fetch(`${server.url}/v1/workflows/wf-auth/watch`, {
+        method: 'GET',
+        headers: {
+          upgrade: 'websocket',
+          connection: 'Upgrade',
+          'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+          'sec-websocket-version': '13',
+          'x-api-key': 'weft_key_eventsread1234567890123456',
+        },
+      });
+
+      expect(response.status).toBe(401);
+      expect(await response.text()).toBe('Authentication required');
+    } finally {
+      principalSpy.mockRestore();
+    }
+  });
+
   it('rejects raw workflow watch WebSocket upgrades without events:read', async () => {
     engine = createEngine();
     server = serveTestServer({
@@ -885,6 +945,84 @@ describe('serve', () => {
     expect(response.status).toBe(403);
     expect(await response.text()).toBe('Insufficient scope');
   });
+
+  it.each([
+    {
+      route: 'watch',
+      apiKey: 'weft_key_eventsread1234567890123456',
+      scopes: ['events:read'] as const,
+    },
+    {
+      route: 'stream',
+      apiKey: 'weft_key_streamsread123456789012345',
+      scopes: ['streams:read'] as const,
+    },
+  ])(
+    'rejects raw workflow $route WebSocket upgrades with configured auth but no credential',
+    async ({ route, apiKey, scopes }) => {
+      engine = createEngine();
+      server = serveTestServer({
+        engine,
+        port: 0,
+        auth: {
+          apiKeys: [apiKey],
+          defaultApiKeyScopes: scopes,
+        },
+      });
+
+      const response = await fetch(`${server.url}/v1/workflows/wf-auth/${route}`, {
+        method: 'GET',
+        headers: {
+          upgrade: 'websocket',
+          connection: 'Upgrade',
+          'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+          'sec-websocket-version': '13',
+        },
+      });
+
+      expect(response.status).toBe(401);
+      await expect(response.json()).resolves.toEqual({ error: 'No valid credentials provided' });
+    },
+  );
+
+  it.each([
+    {
+      route: 'watch',
+      apiKey: 'weft_key_eventsread1234567890123456',
+      scopes: ['events:read'] as const,
+    },
+    {
+      route: 'stream',
+      apiKey: 'weft_key_streamsread123456789012345',
+      scopes: ['streams:read'] as const,
+    },
+  ])(
+    'rejects raw workflow $route WebSocket upgrades with invalid credentials',
+    async ({ route, apiKey, scopes }) => {
+      engine = createEngine();
+      server = serveTestServer({
+        engine,
+        port: 0,
+        auth: {
+          apiKeys: [apiKey],
+          defaultApiKeyScopes: scopes,
+        },
+      });
+
+      const response = await fetch(`${server.url}/v1/workflows/wf-auth/${route}`, {
+        method: 'GET',
+        headers: {
+          upgrade: 'websocket',
+          connection: 'Upgrade',
+          'sec-websocket-key': 'dGhlIHNhbXBsZSBub25jZQ==',
+          'sec-websocket-version': '13',
+          'x-api-key': 'weft_key_invalid12345678901234567890',
+        },
+      });
+
+      expect(response.status).toBe(401);
+    },
+  );
 
   it('accepts raw workflow watch WebSocket upgrades with events:read', async () => {
     const apiKey = 'weft_key_eventsread1234567890123456';

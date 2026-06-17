@@ -409,27 +409,20 @@ async function addWorkflowLinkedFleetEventDeleteKeys(
   deleteKeys: Set<string>,
   workflowId: string,
 ): Promise<void> {
-  for await (const [key, value] of storage.scan(KEYS.fleetEventPrefix())) {
-    if (fleetEventBelongsToWorkflow(value, workflowId)) deleteKeys.add(key);
+  const prefix = KEYS.fleetEventByWorkflowPrefix(workflowId);
+  for await (const [key] of storage.scan(prefix)) {
+    deleteKeys.add(key);
+    const sequence = parseFleetEventSequenceFromWorkflowIndexKey(prefix, key);
+    if (sequence !== null) deleteKeys.add(KEYS.fleetEvent(sequence));
   }
 }
 
-function fleetEventBelongsToWorkflow(value: Uint8Array, workflowId: string): boolean {
-  let decoded: unknown;
-  try {
-    decoded = decode(value);
-  } catch {
-    return false;
-  }
-  if (!isRecord(decoded)) return false;
-  if (decoded['workflowId'] === workflowId) return true;
-
-  const payload = decoded['payload'];
-  return isRecord(payload) && payload['workflowId'] === workflowId;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+function parseFleetEventSequenceFromWorkflowIndexKey(prefix: string, key: string): number | null {
+  if (!key.startsWith(prefix)) return null;
+  const rawSequence = key.slice(prefix.length);
+  if (!/^\d+$/.test(rawSequence)) return null;
+  const sequence = Number(rawSequence);
+  return Number.isSafeInteger(sequence) ? sequence : null;
 }
 
 function workflowPurgePrefixes(workflowId: string): string[] {

@@ -7,6 +7,7 @@ import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../core/engine.ts';
+import { WorkflowSuspendedEvent } from '../core/events.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { MemoryStorage } from '../storage/memory.ts';
@@ -475,7 +476,62 @@ describe('serve() — WebSocket /jsonrpc', () => {
     wsB.close();
   });
 
-  it('test i: server.stop with an active subscription drains sessions cleanly', async () => {
+  it('test i: fleet subscription receives events from multiple workflows through serve wiring', async () => {
+    engine = createHoldEngine();
+    server = serve({ engine, ...subscribeServeOptions });
+    const ws = await openWebSocket(jsonRpcWebSocketUrl(server), SUBSCRIBE_TEST_API_KEY);
+
+    const subscribeResponsePromise = waitForMessage(
+      ws,
+      (parsed: any) => parsed?.id === 30 && parsed?.result?.subscriptionId,
+    );
+    ws.send(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 30,
+        method: 'weft.events.subscribe',
+        params: { kind: WorkflowSuspendedEvent.type },
+      }),
+    );
+    const subscribeResponse = (await subscribeResponsePromise) as any;
+    const subscriptionId = subscribeResponse.result.subscriptionId as string;
+
+    const deliveryA = waitForMessage(
+      ws,
+      (parsed: any) =>
+        parsed?.method === 'weft.events.deliver' &&
+        parsed?.params?.subscriptionId === subscriptionId &&
+        parsed?.params?.envelope?.workflowId === 'fleet-wf-a',
+    );
+    const deliveryB = waitForMessage(
+      ws,
+      (parsed: any) =>
+        parsed?.method === 'weft.events.deliver' &&
+        parsed?.params?.subscriptionId === subscriptionId &&
+        parsed?.params?.envelope?.workflowId === 'fleet-wf-b',
+    );
+
+    engine.dispatchEvent(new WorkflowSuspendedEvent('fleet-wf-a'));
+    engine.dispatchEvent(new WorkflowSuspendedEvent('fleet-wf-b'));
+
+    const [deliveredA, deliveredB] = (await Promise.all([deliveryA, deliveryB])) as any[];
+    expect(deliveredA.params.envelope).toMatchObject({
+      kind: WorkflowSuspendedEvent.type,
+      workflowId: 'fleet-wf-a',
+    });
+    expect(deliveredB.params.envelope).toMatchObject({
+      kind: WorkflowSuspendedEvent.type,
+      workflowId: 'fleet-wf-b',
+    });
+    expect(typeof deliveredA.params.envelope.sequence).toBe('number');
+    expect(typeof deliveredA.params.envelope.cursor).toBe('string');
+    expect(typeof deliveredB.params.envelope.sequence).toBe('number');
+    expect(typeof deliveredB.params.envelope.cursor).toBe('string');
+
+    ws.close();
+  });
+
+  it('test j: server.stop with an active subscription drains sessions cleanly', async () => {
     // Shutdown-ordering regression guard. The shared
     // `WorkflowEventFeed` is registered in the AsyncDisposableStack
     // after the active-session close hook, so disposal runs:

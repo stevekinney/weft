@@ -21,12 +21,17 @@ import type { z } from 'zod';
 
 import type { AuthorizationScope } from './authorization-scope.ts';
 import type { AccessPolicy, ScopeRequirement } from './authorization.ts';
-import {
-  validateOperationName,
-  type OperationDefinition,
-  type TransportAvailability,
-  type UnknownKeyPolicy,
-} from './operation-catalog.ts';
+import { validateOperationName } from './operation-catalog.ts';
+import type {
+  AuthorizationDecision,
+  McpToolMetadata,
+  OperationContext,
+  OperationDefinition,
+  OperationInvocationResult,
+  ParameterizedAccessHint,
+  TransportAvailability,
+  UnknownKeyPolicy,
+} from './operation-catalog/types.ts';
 import type { FaultCode } from './operation-fault.ts';
 
 // Re-exported so callers that import the typed builder also get the name
@@ -46,10 +51,10 @@ export { isValidOperationName, validateOperationName } from './operation-catalog
  * passes. When present, BOTH `access` AND `authorize` must permit the
  * call: the policy runs first, then the parameter-aware hook.
  */
-type OperationDefinitionInputBase<Input, Output> = {
+type OperationDefinitionInputBase<Input, Output, Element = unknown> = {
   readonly name: string;
   readonly mcpExposable: boolean;
-  readonly mcpTool?: OperationDefinition<Input, Output>['mcpTool'];
+  readonly mcpTool?: McpToolMetadata;
   readonly summary: string;
   /**
    * Optional longer-form prose. See {@link OperationDefinition} for the
@@ -68,12 +73,15 @@ type OperationDefinitionInputBase<Input, Output> = {
   readonly inputSchema: z.ZodType<Input>;
   readonly outputSchema: z.ZodType<Output>;
   readonly access: AccessPolicy;
+  readonly parameterizedAccess?: ParameterizedAccessHint;
   readonly producibleFaults?: ReadonlyArray<FaultCode>;
   readonly discoverable?: boolean;
   readonly transports: TransportAvailability;
   readonly unknownKeyPolicy: UnknownKeyPolicy;
-  readonly authorize?: OperationDefinition<Input, Output>['authorize'];
-  readonly invoke: OperationDefinition<Input, Output>['invoke'];
+  readonly authorize?: (context: OperationContext<Input>) => Promise<AuthorizationDecision>;
+  readonly invoke: (
+    context: OperationContext<Input>,
+  ) => Promise<OperationInvocationResult<Output, Element>>;
 };
 
 /**
@@ -84,18 +92,18 @@ type OperationDefinitionInputBase<Input, Output> = {
  * that would otherwise fire when a streaming operation tries to validate
  * elements without a schema.
  */
-export type OperationDefinitionInput<Input, Output> =
-  | (OperationDefinitionInputBase<Input, Output> & {
+export type OperationDefinitionInput<Input, Output, Element = unknown> =
+  | (OperationDefinitionInputBase<Input, Output, Element> & {
       readonly kind?: 'unary';
       readonly eventSchema?: never;
     })
-  | (OperationDefinitionInputBase<Input, Output> & {
+  | (OperationDefinitionInputBase<Input, Output, Element> & {
       readonly kind: 'stream';
-      readonly eventSchema: z.ZodType;
+      readonly eventSchema: z.ZodType<Element>;
     })
-  | (OperationDefinitionInputBase<Input, Output> & {
+  | (OperationDefinitionInputBase<Input, Output, Element> & {
       readonly kind: 'subscription';
-      readonly eventSchema: z.ZodType;
+      readonly eventSchema: z.ZodType<Element>;
     });
 
 /**
@@ -117,9 +125,9 @@ export type OperationDefinitionInput<Input, Output> =
  * the assembly check is the trust boundary that OpenRPC discovery and
  * JSON-RPC dispatch rely on.
  */
-export function defineOperation<Input, Output>(
-  input: OperationDefinitionInput<Input, Output>,
-): OperationDefinition<Input, Output> {
+export function defineOperation<Input, Output, Element = unknown>(
+  input: OperationDefinitionInput<Input, Output, Element>,
+): OperationDefinition<Input, Output, Element> {
   validateOperationName(input.name);
   // The discriminated union on the input forces `eventSchema` to match
   // `kind`. We construct the same shape on the output: streaming /
@@ -138,6 +146,9 @@ export function defineOperation<Input, Output>(
     destructive: input.destructive,
     inputSchema: input.inputSchema,
     outputSchema: input.outputSchema,
+    ...(input.parameterizedAccess === undefined
+      ? {}
+      : { parameterizedAccess: copyParameterizedAccessHint(input.parameterizedAccess) }),
     ...(input.producibleFaults === undefined
       ? {}
       : { producibleFaults: [...input.producibleFaults] }),
@@ -163,6 +174,17 @@ export function defineOperation<Input, Output>(
   }
   return {
     ...baseFields,
+  };
+}
+
+function copyParameterizedAccessHint(hint: ParameterizedAccessHint): ParameterizedAccessHint {
+  return {
+    discriminator: hint.discriminator,
+    ...(hint.defaultValue === undefined ? {} : { defaultValue: hint.defaultValue }),
+    variants: hint.variants.map((variant) => ({
+      value: variant.value,
+      access: copyAccessPolicy(variant.access),
+    })),
   };
 }
 

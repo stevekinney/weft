@@ -36,6 +36,7 @@ export {
   type OperationInvocationResult,
   type OperationKind,
   type OperationRegistry,
+  type ParameterizedAccessHint,
   type PipelineTrace,
   type PipelineTraceMarker,
   type RegistrableOperation,

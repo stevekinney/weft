@@ -63,10 +63,10 @@ export type SubscriptionOperationInvocation<Element, Envelope> = {
   readonly close: () => Promise<void>;
 };
 
-export type OperationInvocationResult<Output> =
+export type OperationInvocationResult<Output, Element = unknown> =
   | Output
-  | StreamOperationInvocation<unknown>
-  | SubscriptionOperationInvocation<unknown, Output>;
+  | StreamOperationInvocation<Element>
+  | SubscriptionOperationInvocation<Element, Output>;
 
 /**
  * Metadata that connects an operation-catalog entry to a live MCP tool.
@@ -86,6 +86,15 @@ export type McpToolMetadata = {
  * sensitive context in a denial reason.
  */
 export type AuthorizationDecision = { allowed: true } | { allowed: false; reason: string };
+
+export type ParameterizedAccessHint = {
+  readonly discriminator: string;
+  readonly defaultValue?: string;
+  readonly variants: ReadonlyArray<{
+    readonly value: string;
+    readonly access: AccessPolicy;
+  }>;
+};
 
 /**
  * Stable audit markers emitted after each successful operation pipeline stage.
@@ -120,7 +129,7 @@ export type OperationContext<Input> = {
  * Common operation fields shared by unary, stream, and subscription kinds.
  * The discriminated union below adds `kind` and `eventSchema` per kind.
  */
-type OperationDefinitionBase<Input, Output> = {
+type OperationDefinitionBase<Input, Output, Element = unknown> = {
   readonly name: string;
   readonly mcpExposable: boolean;
   readonly mcpTool?: McpToolMetadata;
@@ -158,6 +167,7 @@ type OperationDefinitionBase<Input, Output> = {
    */
   readonly outputSchema: z.ZodType<Output>;
   readonly access: AccessPolicy;
+  readonly parameterizedAccess?: ParameterizedAccessHint;
   /** Fault codes this operation can raise in addition to universal pipeline defaults. */
   readonly producibleFaults?: ReadonlyArray<FaultCode>;
   /** Whether non-public operations should appear in generated discovery documents. */
@@ -165,7 +175,9 @@ type OperationDefinitionBase<Input, Output> = {
   readonly transports: TransportAvailability;
   readonly unknownKeyPolicy: UnknownKeyPolicy;
   readonly authorize?: (context: OperationContext<Input>) => Promise<AuthorizationDecision>;
-  readonly invoke: (context: OperationContext<Input>) => Promise<OperationInvocationResult<Output>>;
+  readonly invoke: (
+    context: OperationContext<Input>,
+  ) => Promise<OperationInvocationResult<Output, Element>>;
 };
 
 /**
@@ -175,7 +187,11 @@ type OperationDefinitionBase<Input, Output> = {
  * enforces this at the type level: passing `eventSchema` to a unary
  * operation is a TypeScript error, not a silent runtime mismatch.
  */
-type UnaryOperationDefinition<Input, Output> = OperationDefinitionBase<Input, Output> & {
+type UnaryOperationDefinition<Input, Output, Element = unknown> = OperationDefinitionBase<
+  Input,
+  Output,
+  Element
+> & {
   readonly kind?: 'unary';
   readonly eventSchema?: never;
 };
@@ -187,9 +203,13 @@ type UnaryOperationDefinition<Input, Output> = OperationDefinitionBase<Input, Ou
  * have no contract to validate per-element output against, which would
  * silently leak un-validated data to consumers.
  */
-type StreamOperationDefinition<Input, Output> = OperationDefinitionBase<Input, Output> & {
+type StreamOperationDefinition<Input, Output, Element> = OperationDefinitionBase<
+  Input,
+  Output,
+  Element
+> & {
   readonly kind: 'stream';
-  readonly eventSchema: z.ZodType;
+  readonly eventSchema: z.ZodType<Element>;
 };
 
 /**
@@ -198,9 +218,13 @@ type StreamOperationDefinition<Input, Output> = OperationDefinitionBase<Input, O
  * rationale as `StreamOperationDefinition` — the type forbids declaring a
  * subscription without its element schema.
  */
-type SubscriptionOperationDefinition<Input, Output> = OperationDefinitionBase<Input, Output> & {
+type SubscriptionOperationDefinition<Input, Output, Element> = OperationDefinitionBase<
+  Input,
+  Output,
+  Element
+> & {
   readonly kind: 'subscription';
-  readonly eventSchema: z.ZodType;
+  readonly eventSchema: z.ZodType<Element>;
 };
 
 /**
@@ -211,10 +235,10 @@ type SubscriptionOperationDefinition<Input, Output> = OperationDefinitionBase<In
  * rather than a runtime EngineFailure; unary operations cannot
  * accidentally carry an `eventSchema` that the pipeline would never read.
  */
-export type OperationDefinition<Input, Output> =
-  | UnaryOperationDefinition<Input, Output>
-  | StreamOperationDefinition<Input, Output>
-  | SubscriptionOperationDefinition<Input, Output>;
+export type OperationDefinition<Input, Output, Element = unknown> =
+  | UnaryOperationDefinition<Input, Output, Element>
+  | StreamOperationDefinition<Input, Output, Element>
+  | SubscriptionOperationDefinition<Input, Output, Element>;
 
 /**
  * An operation with its Input/Output type parameters erased. The dispatcher
@@ -248,6 +272,7 @@ type RegistrableOperationBase = {
   readonly inputSchema: z.ZodType;
   readonly outputSchema: z.ZodType;
   readonly access: AccessPolicy;
+  readonly parameterizedAccess?: ParameterizedAccessHint;
   /** Fault codes this operation can raise in addition to universal pipeline defaults. */
   readonly producibleFaults?: ReadonlyArray<FaultCode>;
   /** Whether non-public operations should appear in generated discovery documents. */

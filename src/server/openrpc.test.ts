@@ -343,6 +343,98 @@ describe('generateOpenRpcDocument — params schema fidelity', () => {
     expect(paramsSchema['additionalProperties']).toBe(false);
   });
 
+  it('emits parameterized access metadata for selector-scoped operations', () => {
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.workflows.events',
+        inputSchema: z.object({ selector: z.enum(['events', 'tokens']).optional() }),
+        outputSchema: z.object({ subscriptionId: z.string() }),
+        access: { kind: 'authenticated' },
+        discoverable: true,
+        parameterizedAccess: {
+          discriminator: 'selector',
+          defaultValue: 'events',
+          variants: [
+            {
+              value: 'events',
+              access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['events:read'] } },
+            },
+            {
+              value: 'tokens',
+              access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['streams:read'] } },
+            },
+          ],
+        },
+      }),
+    ]);
+    const document = generateOpenRpcDocument({ registry, transports: ['websocket'] });
+    const method = (document['methods'] as Array<Record<string, unknown>>).find(
+      (candidate) => candidate['name'] === 'weft.workflows.events',
+    )!;
+
+    expect(method['x-weft-parameterizedAccess']).toEqual({
+      discriminator: 'selector',
+      defaultValue: 'events',
+      variants: [
+        { value: 'events', access: { kind: 'scoped', scopes: ['events:read'] } },
+        { value: 'tokens', access: { kind: 'scoped', scopes: ['streams:read'] } },
+      ],
+    });
+  });
+
+  it('emits parameterized access metadata for optional and alternative scope policies', () => {
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.policy.example',
+        inputSchema: z.object({ mode: z.enum(['optional', 'alternative']).optional() }),
+        outputSchema: z.object({ ok: z.boolean() }),
+        access: { kind: 'authenticated' },
+        discoverable: true,
+        parameterizedAccess: {
+          discriminator: 'mode',
+          variants: [
+            {
+              value: 'optional',
+              access: {
+                kind: 'optionalAuth',
+                authenticatedScopes: { kind: 'anyOf', scopes: ['events:read'] },
+              },
+            },
+            {
+              value: 'alternative',
+              access: {
+                kind: 'scopedAlternatives',
+                alternatives: [
+                  { kind: 'anyOf', scopes: ['events:read'] },
+                  { kind: 'anyOf', scopes: ['streams:read'] },
+                ],
+              },
+            },
+          ],
+        },
+      }),
+    ]);
+
+    const document = generateOpenRpcDocument({ registry, transports: ['http'] });
+    const method = (document['methods'] as Array<Record<string, unknown>>).find(
+      (candidate) => candidate['name'] === 'weft.policy.example',
+    )!;
+
+    expect(method['x-weft-parameterizedAccess']).toEqual({
+      discriminator: 'mode',
+      variants: [
+        { value: 'optional', access: { kind: 'optionalAuth', scopes: ['events:read'] } },
+        {
+          value: 'alternative',
+          access: {
+            kind: 'scopedAlternatives',
+            alternatives: [['events:read'], ['streams:read']],
+          },
+        },
+      ],
+    });
+  });
+
   it('emits x-weft-paramsSchema with additionalProperties=true when unknownKeyPolicy.jsonRpc is strip or passthrough', () => {
     const registry = createOperationRegistry([
       makeOp({
@@ -587,6 +679,46 @@ describe('generateOpenRpcDocument — MCP metadata', () => {
         mcpTools: [],
       }),
     ).toThrow(/live MCP tools\/list/);
+  });
+
+  it('rejects MCP-exposable operations missing workflow tool metadata', () => {
+    const registry = createRegistryDouble([
+      makeOp({
+        name: 'weft.workflows.unmapped.start',
+        mcpExposable: true,
+        inputSchema: z.object({ id: z.string() }),
+        outputSchema: z.object({ workflowId: z.string(), status: z.string() }),
+        discoverable: true,
+      }),
+    ]);
+
+    expect(() =>
+      generateOpenRpcDocument({
+        registry,
+        transports: ['http'],
+        mcpTools: [],
+      }),
+    ).toThrow(/lacks mcpTool\.workflowType metadata/);
+  });
+
+  it('rejects MCP-exposable operations when live MCP tool metadata is absent', () => {
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.workflows.checkout.start',
+        mcpExposable: true,
+        mcpTool: { workflowType: 'checkout-flow' },
+        inputSchema: z.object({ orderId: z.string() }),
+        outputSchema: z.object({ workflowId: z.string(), status: z.string() }),
+        discoverable: true,
+      }),
+    ]);
+
+    expect(() =>
+      generateOpenRpcDocument({
+        registry,
+        transports: ['http'],
+      }),
+    ).toThrow(/no live MCP tools\/list metadata/);
   });
 });
 

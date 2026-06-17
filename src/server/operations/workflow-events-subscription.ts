@@ -7,10 +7,13 @@ import {
   decodeCursor,
   type Cursor,
   type EventEnvelope,
+  type ReplayLiveSubscribeOptions,
   type WorkflowEventFeed,
 } from '../workflow-event-feed.ts';
+import { invalidParamsFault } from './operation-helpers.ts';
 
 const INITIAL_SUBSCRIPTION_CURSOR: Cursor = '-1';
+const MAX_WORKFLOW_SUBSCRIPTION_REPLAY_EVENTS = 1_000;
 
 const workflowEventsSubscriptionInput = z.object({
   workflowId: z.string().min(1),
@@ -52,7 +55,8 @@ export type WorkflowEventsSubscriptionEnvelope = z.infer<typeof workflowEventsSu
  */
 export const workflowEventsSubscriptionOperation = defineOperation<
   WorkflowEventsSubscriptionInput,
-  WorkflowEventsSubscriptionEnvelope
+  WorkflowEventsSubscriptionEnvelope,
+  EventEnvelope
 >({
   name: 'weft.workflows.events',
   mcpExposable: false,
@@ -64,6 +68,7 @@ export const workflowEventsSubscriptionOperation = defineOperation<
   tags: ['Events'],
   inputSchema: workflowEventsSubscriptionInput,
   outputSchema: workflowEventsSubscriptionEnvelope,
+  producibleFaults: ['InvalidParams'],
   eventSchema: z.object({
     kind: z.string(),
     workflowId: z.string(),
@@ -74,6 +79,20 @@ export const workflowEventsSubscriptionOperation = defineOperation<
     payload: z.unknown(),
   }),
   access: { kind: 'authenticated' },
+  parameterizedAccess: {
+    discriminator: 'selector',
+    defaultValue: 'events',
+    variants: [
+      {
+        value: 'events',
+        access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['events:read'] } },
+      },
+      {
+        value: 'tokens',
+        access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['streams:read'] } },
+      },
+    ],
+  },
   authorize: async ({ input, principal }) => {
     const requiredScope = workflowSubscriptionScope(input.selector);
     if (!isAuthenticated(principal)) {
@@ -101,12 +120,21 @@ export const workflowEventsSubscriptionOperation = defineOperation<
     const feed = (engine as { feed: WorkflowEventFeed }).feed;
     const controller = new AbortController();
     const startingCursor = input.fromCursor ?? INITIAL_SUBSCRIPTION_CURSOR;
-    const iterable: AsyncIterable<EventEnvelope> = feed.subscribe({
+    const subscribeOptions: {
+      workflowId: string;
+      selector: WorkflowEventsSubscriptionInput['selector'];
+    } & ReplayLiveSubscribeOptions<EventEnvelope> = {
       workflowId: input.workflowId,
       selector: input.selector,
       ...(input.fromCursor === undefined ? {} : { fromCursor: input.fromCursor }),
       signal: controller.signal,
-    });
+      replayLimit: MAX_WORKFLOW_SUBSCRIPTION_REPLAY_EVENTS,
+      createReplayLimitError: (count: number, limit: number) =>
+        invalidParamsFault(
+          `Workflow event replay window is ${count} events; maximum is ${limit}. Supply a more recent fromCursor.`,
+        ),
+    };
+    const iterable: AsyncIterable<EventEnvelope> = feed.subscribe(subscribeOptions);
 
     return {
       envelope: { subscriptionId: `sub_${crypto.randomUUID()}`, cursor: startingCursor },

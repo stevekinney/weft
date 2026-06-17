@@ -370,6 +370,12 @@ export async function replayWatchEvents(
     }
   } catch (error) {
     console.error(`[weft] Failed to replay watch events for workflow "${workflowId}":`, error);
+    shouldFlushPending = false;
+    closeWatchSocketForReplayLimit(
+      context,
+      ws,
+      'watch replay failed before catch-up completed; reconnect with a newer resumeFrom',
+    );
   } finally {
     ws.data.watchReplayInProgress = false;
     if (shouldFlushPending) {

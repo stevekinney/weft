@@ -22,6 +22,17 @@ const OpenRpcMcpMethodMetadataSchema = z.strictObject({
   }),
 });
 
+const OpenRpcParameterizedAccessSchema = z.strictObject({
+  discriminator: z.string(),
+  defaultValue: z.string().optional(),
+  variants: z.array(
+    z.strictObject({
+      value: z.string(),
+      access: z.record(z.string(), z.unknown()),
+    }),
+  ),
+});
+
 export const OpenRpcMethodSchema = z.strictObject({
   name: z.string(),
   summary: z.string().optional(),
@@ -33,6 +44,7 @@ export const OpenRpcMethodSchema = z.strictObject({
   errors: z.array(z.strictObject({ $ref: z.string() })).optional(),
   'x-weft-paramsSchema': z.record(z.string(), z.unknown()),
   'x-weft-mcp': OpenRpcMcpMethodMetadataSchema.optional(),
+  'x-weft-parameterizedAccess': OpenRpcParameterizedAccessSchema.optional(),
 });
 
 const OpenRpcMcpMetadataSchema = z.strictObject({

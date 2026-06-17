@@ -113,7 +113,7 @@
         "jsonRpcWebSocket": true,
         "jsonRpcStdio": false
       },
-      "producibleFaults": ["UnsupportedTransport"],
+      "producibleFaults": ["InvalidParams", "UnsupportedTransport"],
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
@@ -189,10 +189,43 @@
             ]
           },
           "fromCursor": {
+            "pattern": "^(?:-1|\\d+)$",
             "type": "string"
           },
           "kind": {
-            "minLength": 1,
+            "enum": [
+              "workflow:started",
+              "workflow:completed",
+              "workflow:failed",
+              "workflow:cancelled",
+              "workflow:timed-out",
+              "workflow:resumed",
+              "workflow:suspended",
+              "workflow:teardown",
+              "activity:started",
+              "activity:completed",
+              "activity:failed",
+              "activity:async-pending",
+              "task:dead-lettered",
+              "signal:received",
+              "signal:delivered",
+              "attributes:changed",
+              "update:received",
+              "update:completed",
+              "schedule:fired",
+              "schedule:missed-fire",
+              "checkpoint:size-warning",
+              "development:warning",
+              "cleanup:warning",
+              "storage:size-reported",
+              "human-review:requested",
+              "human-review:completed",
+              "alert:fired",
+              "alert:resolved",
+              "constraint:violated",
+              "worker:connected",
+              "worker:disconnected"
+            ],
             "type": "string"
           },
           "status": {
@@ -258,29 +291,7 @@
         "required": ["subscriptionId", "cursor"],
         "type": "object"
       },
-      "eventSchema": {
-        "additionalProperties": false,
-        "properties": {
-          "cursor": {
-            "type": "string"
-          },
-          "emittedAtMs": {
-            "type": "number"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "payload": {},
-          "sequence": {
-            "type": "number"
-          },
-          "workflowId": {
-            "type": "string"
-          }
-        },
-        "required": ["kind", "sequence", "cursor", "emittedAtMs", "payload"],
-        "type": "object"
-      }
+      "eventSchema": {}
     },
     {
       "name": "weft.recover.all",
@@ -3458,13 +3469,33 @@
       "access": {
         "kind": "authenticated"
       },
+      "parameterizedAccess": {
+        "discriminator": "selector",
+        "defaultValue": "events",
+        "variants": [
+          {
+            "value": "events",
+            "access": {
+              "kind": "scoped",
+              "scopes": ["events:read"]
+            }
+          },
+          {
+            "value": "tokens",
+            "access": {
+              "kind": "scoped",
+              "scopes": ["streams:read"]
+            }
+          }
+        ]
+      },
       "transports": {
         "http": false,
         "jsonRpcHttp": false,
         "jsonRpcWebSocket": true,
         "jsonRpcStdio": false
       },
-      "producibleFaults": [],
+      "producibleFaults": ["InvalidParams"],
       "inputSchema": {
         "additionalProperties": false,
         "properties": {

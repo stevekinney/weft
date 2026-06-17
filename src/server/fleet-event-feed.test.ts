@@ -76,6 +76,26 @@ describe('createFleetEventFeed', () => {
     expect(second.cursor).toBe('1');
   });
 
+  it('indexes workflow-owned fleet events for purge', async () => {
+    const storage = new MemoryStorage();
+    const feed = createFleetEventFeed(storage);
+    await feed.append({
+      kind: 'workflow:started',
+      workflowId: 'wf-indexed',
+      emittedAtMs: 1,
+      payload: { workflowId: 'wf-indexed' },
+    });
+    await feed.append({
+      kind: 'worker:connected',
+      emittedAtMs: 2,
+      payload: { workerId: 'worker-a' },
+    });
+
+    expect(await storage.get(KEYS.fleetEventByWorkflow('wf-indexed', 0))).not.toBeNull();
+    expect(await storage.get(KEYS.fleetEventByWorkflow('wf-indexed', 1))).toBeNull();
+    feed.dispose();
+  });
+
   it('subscribes with replay then live events under one cursor space', async () => {
     const feed = createFleetEventFeed(new MemoryStorage());
     await feed.append({
@@ -228,6 +248,35 @@ describe('createFleetEventFeed', () => {
 
     expect(appended.sequence).toBe(3);
     expect(appended.cursor).toBe('3');
+    feed.dispose();
+  });
+
+  it('scans past malformed high keys when recovering the tail sequence', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(
+      KEYS.fleetEvent(7),
+      encode({
+        kind: 'workflow:started',
+        workflowId: 'wf-existing',
+        sequence: 7,
+        cursor: '7',
+        emittedAtMs: 1,
+        payload: { workflowId: 'wf-existing' },
+      }),
+    );
+    await storage.put(`${KEYS.fleetEventPrefix()}zzzz`, encode({ ignored: true }));
+    await storage.put(KEYS.fleetEventTail(), new Uint8Array([0xc1]));
+
+    const feed = createFleetEventFeed(storage);
+    const appended = await feed.append({
+      kind: 'workflow:completed',
+      workflowId: 'wf-new',
+      emittedAtMs: 2,
+      payload: { workflowId: 'wf-new' },
+    });
+
+    expect(appended.sequence).toBe(8);
+    expect(appended.cursor).toBe('8');
     feed.dispose();
   });
 });

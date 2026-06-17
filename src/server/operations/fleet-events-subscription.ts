@@ -36,16 +36,13 @@ const attributeFilterSchema = z.object({
   lt: comparableAttributeValueSchema.optional(),
   lte: comparableAttributeValueSchema.optional(),
 });
-const fleetEventKindSet = new Set<string>(EVENTS_READ_EVENT_TYPES);
-const fleetEventKindSchema = z
+const fleetEventKindSchema = z.enum(EVENTS_READ_EVENT_TYPES);
+const fleetCursorSchema = z
   .string()
-  .min(1)
-  .refine((kind) => fleetEventKindSet.has(kind), {
-    message: 'Unsupported fleet event kind',
+  .regex(/^(?:-1|\d+)$/, 'Invalid cursor')
+  .refine((cursor) => decodeCursor(cursor) !== null, {
+    message: 'Invalid cursor',
   });
-const fleetCursorSchema = z.string().refine((cursor) => decodeCursor(cursor) !== null, {
-  message: 'Invalid cursor',
-});
 
 const fleetEventsSubscriptionInput = z.object({
   workflowId: z.string().min(1).optional(),
@@ -65,12 +62,33 @@ const fleetEventsSubscriptionEnvelope = z.object({
   cursor: z.string(),
 });
 
+const fleetEventEnvelopeSchema: z.ZodType<FleetEventEnvelope> = z
+  .object({
+    kind: z.string(),
+    workflowId: z.string().optional(),
+    sequence: z.number(),
+    cursor: z.string(),
+    emittedAtMs: z.number(),
+    payload: z.unknown(),
+  })
+  .transform(
+    (value): FleetEventEnvelope => ({
+      kind: value.kind,
+      ...(value.workflowId === undefined ? {} : { workflowId: value.workflowId }),
+      sequence: value.sequence,
+      cursor: value.cursor,
+      emittedAtMs: value.emittedAtMs,
+      payload: value.payload,
+    }),
+  );
+
 export type FleetEventsSubscriptionInput = z.infer<typeof fleetEventsSubscriptionInput>;
 export type FleetEventsSubscriptionEnvelope = z.infer<typeof fleetEventsSubscriptionEnvelope>;
 
 export const fleetEventsSubscriptionOperation = defineOperation<
   FleetEventsSubscriptionInput,
-  FleetEventsSubscriptionEnvelope
+  FleetEventsSubscriptionEnvelope,
+  FleetEventEnvelope
 >({
   name: 'weft.events.subscribe',
   mcpExposable: false,
@@ -82,15 +100,8 @@ export const fleetEventsSubscriptionOperation = defineOperation<
   tags: ['Events'],
   inputSchema: fleetEventsSubscriptionInput,
   outputSchema: fleetEventsSubscriptionEnvelope,
-  producibleFaults: ['UnsupportedTransport'],
-  eventSchema: z.object({
-    kind: z.string(),
-    workflowId: z.string().optional(),
-    sequence: z.number(),
-    cursor: z.string(),
-    emittedAtMs: z.number(),
-    payload: z.unknown(),
-  }),
+  producibleFaults: ['UnsupportedTransport', 'InvalidParams'],
+  eventSchema: fleetEventEnvelopeSchema,
   access: {
     kind: 'scoped',
     scopes: { kind: 'anyOf', scopes: ['events:read'] },
@@ -105,11 +116,13 @@ export const fleetEventsSubscriptionOperation = defineOperation<
     }
     const fleetFeed = getFleetEventFeed(engine, transport);
     const controller = new AbortController();
-    await assertFilteredReplayWithinLimit(fleetFeed, input, startingCursor);
     const iterable = filterFleetEvents(
       fleetFeed.subscribe({
         ...(input.fromCursor === undefined ? {} : { fromCursor: input.fromCursor }),
         signal: controller.signal,
+        replayLimit: MAX_FLEET_SUBSCRIPTION_REPLAY_EVENTS,
+        countReplayEnvelope: (envelope) => matchesFleetEventFilter(envelope, input),
+        createReplayLimitError: (count, limit) => fleetReplayLimitFault(count, limit),
       }),
       input,
     );
@@ -134,24 +147,13 @@ async function* filterFleetEvents(
   }
 }
 
-async function assertFilteredReplayWithinLimit(
-  fleetFeed: Pick<FleetEventFeed, 'replay'>,
-  input: FleetEventsSubscriptionInput,
-  fromCursor: Cursor,
-): Promise<void> {
-  let replayWindowSize = 0;
-  for await (const envelope of fleetFeed.replay({ fromCursor })) {
-    if (!matchesFleetEventFilter(envelope, input)) continue;
-    replayWindowSize += 1;
-    if (replayWindowSize > MAX_FLEET_SUBSCRIPTION_REPLAY_EVENTS) {
-      raiseFault(
-        fleetEventsSubscriptionOperation,
-        invalidParamsFault(
-          `Fleet event replay window is ${replayWindowSize} matching events; maximum is ${MAX_FLEET_SUBSCRIPTION_REPLAY_EVENTS}. Supply a more recent fromCursor.`,
-        ),
-      );
-    }
-  }
+function fleetReplayLimitFault(
+  count: number,
+  limit: number,
+): ReturnType<typeof invalidParamsFault> {
+  return invalidParamsFault(
+    `Fleet event replay window is ${count} matching events; maximum is ${limit}. Supply a more recent fromCursor.`,
+  );
 }
 
 function matchesFleetEventFilter(
@@ -360,7 +362,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function getFleetEventFeed(
   engine: unknown,
   transport: TransportKind,
-): Pick<FleetEventFeed, 'replay' | 'subscribe'> {
+): Pick<FleetEventFeed, 'subscribe'> {
   if (typeof engine === 'object' && engine !== null && 'fleetFeed' in engine) {
     const fleetFeed = engine.fleetFeed;
     if (isFleetEventSubscriber(fleetFeed)) return fleetFeed;
@@ -373,10 +375,8 @@ function getFleetEventFeed(
   });
 }
 
-function isFleetEventSubscriber(
-  value: unknown,
-): value is Pick<FleetEventFeed, 'replay' | 'subscribe'> {
+function isFleetEventSubscriber(value: unknown): value is Pick<FleetEventFeed, 'subscribe'> {
   if (typeof value !== 'object' || value === null) return false;
   const record = value as Record<string, unknown>;
-  return typeof record['replay'] === 'function' && typeof record['subscribe'] === 'function';
+  return typeof record['subscribe'] === 'function';
 }

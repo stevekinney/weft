@@ -682,30 +682,22 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
   it('rejects fleet subscriptions when the replay window is too large', async () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
-    const fleetFeed = {
-      async *replay() {
-        for (let sequence = 0; sequence <= 1000; sequence += 1) {
-          yield {
-            kind: 'workflow:completed',
-            workflowId: `wf-${sequence}`,
-            sequence,
-            cursor: String(sequence),
-            emittedAtMs: sequence,
-            payload: { workflowId: `wf-${sequence}` },
-          };
-        }
-      },
-      subscribe() {
-        throw new Error('subscribe should not run when replay window is rejected');
-      },
-    };
+    const fleetFeed = createFleetEventFeed(new MemoryStorage());
+    for (let sequence = 0; sequence <= 1000; sequence += 1) {
+      await fleetFeed.append({
+        kind: 'workflow:completed',
+        workflowId: `wf-${sequence}`,
+        emittedAtMs: sequence,
+        payload: { workflowId: `wf-${sequence}` },
+      });
+    }
     const session = createJsonRpcWebSocketSession({
       registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
       feed,
-      fleetFeed: fleetFeed as never,
+      fleetFeed,
     });
 
     await session.handleMessage(
@@ -718,8 +710,56 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     );
 
     const response = JSON.parse(emitter.sent[0]!);
-    expect(response.error.data.weftCode).toBe('InvalidParams');
-    expect(response.error.message).toContain('maximum is 1000');
+    expect(response.result.subscriptionId).toMatch(/^sub_/);
+    await emitter.waitForParsedMessage('fleet replay limit termination', (message) => {
+      const params = message['params'] as
+        | { fault?: { code?: string; message?: string } }
+        | undefined;
+      return (
+        message['method'] === 'weft.events.terminated' &&
+        params?.fault?.code === 'InvalidParams' &&
+        params.fault.message?.includes('maximum is 1000') === true
+      );
+    });
+    await session.close();
+  });
+
+  it('terminates workflow subscriptions when the replay window is too large', async () => {
+    const emitter = makeEmitter();
+    const backend = createInMemoryEventBackend();
+    for (let sequence = 0; sequence <= 1000; sequence += 1) {
+      await backend.append(makeEnvelope(sequence, 'wf-replay-cap'));
+    }
+    const feed = createWorkflowEventFeed(backend);
+    const session = createJsonRpcWebSocketSession({
+      registry: createWebSocketOperationRegistry(),
+      engine: fakeEngine,
+      principal: subscribePrincipal(),
+      emitter,
+      feed,
+    });
+
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: 'wf-replay-cap', selector: 'events' },
+        id: 'workflow-too-far-behind',
+      }),
+    );
+
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.result.subscriptionId).toMatch(/^sub_/);
+    await emitter.waitForParsedMessage('workflow replay limit termination', (message) => {
+      const params = message['params'] as
+        | { fault?: { code?: string; message?: string } }
+        | undefined;
+      return (
+        message['method'] === 'weft.events.terminated' &&
+        params?.fault?.code === 'InvalidParams' &&
+        params.fault.message?.includes('maximum is 1000') === true
+      );
+    });
     await session.close();
   });
 

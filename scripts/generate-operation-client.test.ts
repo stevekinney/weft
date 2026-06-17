@@ -4,7 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import type { CatalogOperationTypes } from '../src/cli/generated/operation-client.generated.ts';
-import { createCatalogSnapshot } from '../src/cli/operation-catalog-snapshot.ts';
+import {
+  createCatalogSnapshot,
+  stringifyCatalogSnapshot,
+} from '../src/cli/operation-catalog-snapshot.ts';
 import { MAX_BATCH_OPERATIONS, MAX_SCAN_LIMIT } from '../src/storage/interface.ts';
 import {
   aliasNameFor,
@@ -144,6 +147,27 @@ describe('createOperationClientSource — generated output', () => {
       .inputSchema['properties'] as Record<string, Record<string, unknown>>;
     expect(conditionalBatchProperties['conditions']['maxItems']).toBe(MAX_BATCH_OPERATIONS);
     expect(conditionalBatchProperties['operations']['maxItems']).toBe(MAX_BATCH_OPERATIONS);
+  });
+
+  it('stringifies catalog snapshots with a trailing newline', () => {
+    const snapshot = createCatalogSnapshot();
+    const serialized = stringifyCatalogSnapshot(snapshot);
+
+    expect(serialized.endsWith('\n')).toBe(true);
+    expect(JSON.parse(serialized)).toEqual(snapshot);
+  });
+
+  it('serializes parameterized selector access in the catalog snapshot', () => {
+    const operation = snapshotOperation('weft.workflows.events');
+
+    expect(operation.parameterizedAccess).toEqual({
+      discriminator: 'selector',
+      defaultValue: 'events',
+      variants: [
+        { value: 'events', access: { kind: 'scoped', scopes: ['events:read'] } },
+        { value: 'tokens', access: { kind: 'scoped', scopes: ['streams:read'] } },
+      ],
+    });
   });
 
   it('is deterministic across runs', async () => {

@@ -1702,7 +1702,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     ['src/cli/noun-verb-arguments.ts', { lines: new Set([172]) }],
     [
       'src/cli/operation-catalog-snapshot.ts',
-      { functions: 1, lines: new Set([56, 89, 90, 91, 92]) },
+      { functions: 1, lines: new Set([56, 89, 90, 91, 92, 115, 116, 117, 118]) },
     ],
     [
       'src/cli/output.ts',
@@ -1904,7 +1904,6 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
     ],
     ['src/server/runtime/cors.ts', { lines: new Set([304]) }],
     ['src/server/runtime/request-gate.ts', { lines: new Set([118, 119]) }],
-    ['src/server/runtime/websocket-upgrade.ts', { lines: new Set([123, 124]) }],
     ['src/server/runtime/websocket-worker.ts', { lines: new Set([405, 406, 409, 410]) }],
     ['src/server/serve-internals.ts', { lines: new Set([236, 279, 334]) }],
   ],
@@ -2128,7 +2127,6 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
       },
     ],
     ['src/server/operations/update-workflow.ts', { lines: new Set([98]) }],
-    ['src/server/operations/workflow-events-subscription.ts', { lines: new Set([119, 120]) }],
     [
       'src/server/operations/worker-drain.ts',
       { lines: createMergedLineSet(new Set([265, 272]), createLineSet(278, 282)) },
@@ -2159,7 +2157,6 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
     ['src/server/runtime/task-reconciliation.ts', { lines: new Set([183]) }],
     ['src/server/runtime/task-result-resolution.ts', { functions: 1, lines: new Set([42]) }],
     ['src/server/runtime/websocket-stream.ts', { lines: new Set([48, 78]) }],
-    ['src/server/runtime/websocket-upgrade.ts', { lines: new Set([123, 124, 127, 140]) }],
     [
       'src/server/runtime/websocket-worker.ts',
       {

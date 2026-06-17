@@ -27,6 +27,14 @@ export type CatalogOperationSnapshot = {
   readonly tags: ReadonlyArray<string>;
   readonly destructive: boolean;
   readonly access: CatalogAccessSnapshot;
+  readonly parameterizedAccess?: {
+    readonly discriminator: string;
+    readonly defaultValue?: string;
+    readonly variants: ReadonlyArray<{
+      readonly value: string;
+      readonly access: CatalogAccessSnapshot;
+    }>;
+  };
   readonly transports: TransportAvailability;
   readonly producibleFaults: ReadonlyArray<FaultCode>;
   readonly inputSchema: Record<string, unknown>;
@@ -67,6 +75,9 @@ function operationToSnapshot(operation: ErasedOperation): CatalogOperationSnapsh
     tags: [...operation.tags].toSorted(compareStrings),
     destructive: operation.destructive ?? false,
     access: accessToSnapshot(operation.access),
+    ...(operation.parameterizedAccess === undefined
+      ? {}
+      : { parameterizedAccess: parameterizedAccessToSnapshot(operation.parameterizedAccess) }),
     transports: { ...operation.transports },
     producibleFaults: [...(operation.producibleFaults ?? [])].toSorted(compareStrings),
     inputSchema: normalizeJsonObject(definitionSchemaToJsonSchema(operation.inputSchema, 'input')),
@@ -76,6 +87,21 @@ function operationToSnapshot(operation: ErasedOperation): CatalogOperationSnapsh
     ...(eventSchema === undefined
       ? {}
       : { eventSchema: normalizeJsonObject(definitionSchemaToJsonSchema(eventSchema, 'output')) }),
+  };
+}
+
+function parameterizedAccessToSnapshot(
+  hint: NonNullable<ErasedOperation['parameterizedAccess']>,
+): NonNullable<CatalogOperationSnapshot['parameterizedAccess']> {
+  return {
+    discriminator: hint.discriminator,
+    ...(hint.defaultValue === undefined ? {} : { defaultValue: hint.defaultValue }),
+    variants: hint.variants
+      .map((variant) => ({
+        value: variant.value,
+        access: accessToSnapshot(variant.access),
+      }))
+      .toSorted((left, right) => compareStrings(left.value, right.value)),
   };
 }
 

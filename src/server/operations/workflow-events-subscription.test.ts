@@ -18,6 +18,20 @@ describe('weft.workflows.events authorization', () => {
 
   it('uses authenticated catalog access because selector scopes are parameter-specific', () => {
     expect(workflowEventsSubscriptionOperation.access).toEqual({ kind: 'authenticated' });
+    expect(workflowEventsSubscriptionOperation.parameterizedAccess).toEqual({
+      discriminator: 'selector',
+      defaultValue: 'events',
+      variants: [
+        {
+          value: 'events',
+          access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['events:read'] } },
+        },
+        {
+          value: 'tokens',
+          access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['streams:read'] } },
+        },
+      ],
+    });
   });
 
   it('rejects unauthenticated callers before checking selector scope', async () => {
@@ -59,6 +73,14 @@ describe('weft.workflows.events authorization', () => {
       allowed: false,
       classification: 'forbidden',
       reason: 'requires scope: streams:read',
+    });
+    const inverseWrongScopeResult = await workflowEventsSubscriptionOperation.authorize!(
+      authorizationContext({ workflowId: 'wf-auth', selector: 'events' }, streamsPrincipal),
+    );
+    expect(inverseWrongScopeResult).toMatchObject({
+      allowed: false,
+      classification: 'forbidden',
+      reason: 'requires scope: events:read',
     });
   });
 });

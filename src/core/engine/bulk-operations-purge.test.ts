@@ -109,6 +109,7 @@ describe('bulk purge helpers', () => {
         payload: { workflowId: purgedWorkflowId, result: 'secret' },
       }),
     );
+    await storage.put(KEYS.fleetEventByWorkflow(purgedWorkflowId, 0), new Uint8Array());
     await storage.put(
       KEYS.fleetEvent(1),
       encode({
@@ -117,9 +118,10 @@ describe('bulk purge helpers', () => {
         sequence: 1,
         cursor: '1',
         emittedAtMs: 1_001,
-        payload: { workflowId: 'other-workflow', result: 'kept' },
+        payload: { workflowId: purgedWorkflowId, result: 'kept' },
       }),
     );
+    await storage.put(KEYS.fleetEventByWorkflow('other-workflow', 1), new Uint8Array());
     await storage.put(KEYS.fleetEvent(2), Uint8Array.of(0xc1));
 
     const result = await purgeInternal(
@@ -131,7 +133,9 @@ describe('bulk purge helpers', () => {
 
     expect(result).toEqual({ deleted: 1 });
     expect(await storage.get(KEYS.fleetEvent(0))).toBeNull();
+    expect(await storage.get(KEYS.fleetEventByWorkflow(purgedWorkflowId, 0))).toBeNull();
     expect(await storage.get(KEYS.fleetEvent(1))).not.toBeNull();
+    expect(await storage.get(KEYS.fleetEventByWorkflow('other-workflow', 1))).not.toBeNull();
     expect(await storage.get(KEYS.fleetEvent(2))).not.toBeNull();
   });
 });

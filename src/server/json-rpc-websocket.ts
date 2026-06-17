@@ -20,6 +20,7 @@ import type { FleetEventEnvelope } from './fleet-event-feed.ts';
 import { dispatchJsonRpc } from './json-rpc-dispatch.ts';
 import { JSON_RPC_ERROR_CODES, JSON_RPC_VERSION, type JsonRpcId } from './json-rpc-protocol.ts';
 import {
+  createSubscriptionErrorTerminatedFrame,
   FLEET_EVENTS_OPERATION_NAME,
   SESSION_METHODS,
 } from './json-rpc-websocket-subscriptions.ts';
@@ -32,7 +33,7 @@ import {
   validateSessionPrimitiveFrame,
   validateSubscribeParams,
 } from './json-rpc-websocket-validation.ts';
-import { executeSubscription, SubscriptionElementValidationError } from './operation-catalog.ts';
+import { executeSubscription } from './operation-catalog.ts';
 import type { EventEnvelope } from './workflow-event-feed.ts';
 
 export type {
@@ -325,27 +326,7 @@ export function createJsonRpcWebSocketSession(
       // raises during cleanup) must not produce a duplicate `terminated`
       // frame for the same `subscriptionId`.
       if (!signal.aborted && !shouldSuppressOutput()) {
-        if (error instanceof SubscriptionElementValidationError) {
-          emit({
-            jsonrpc: JSON_RPC_VERSION,
-            method: SESSION_METHODS.TERMINATED,
-            params: {
-              subscriptionId,
-              reason: 'validation-failed',
-              fault: error.fault,
-            },
-          });
-        } else {
-          emit({
-            jsonrpc: JSON_RPC_VERSION,
-            method: SESSION_METHODS.TERMINATED,
-            params: {
-              subscriptionId,
-              reason: 'server-closed',
-              fault: { code: 'EngineFailure', message: 'internal error', data: {} },
-            },
-          });
-        }
+        emit(createSubscriptionErrorTerminatedFrame(subscriptionId, error));
       }
     } finally {
       signal.removeEventListener('abort', abortSubscription);
