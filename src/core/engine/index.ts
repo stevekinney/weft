@@ -465,6 +465,12 @@ export class Engine<
             ? { acknowledgeUnknownWorkflowTypes: options.acknowledgeUnknownWorkflowTypes }
             : {},
         );
+        // Start the scheduler's polling loop after recovery so durable
+        // ctx.sleep timers fire in long-lived in-process hosts (#586).
+        // TestEngine bypasses Engine.create (it calls new Engine() directly
+        // and drives time via scheduler.tick()), so it never reaches this
+        // line and stays deterministic — no live setInterval races manual ticks.
+        getInternals(engine).scheduler.start();
       }
     } catch (error) {
       // Constructor side effects (broadcast channel, scheduler, dispatchers,
