@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-17
+
+### Added — `ctx.race` aborts a losing `ctx.run` activity branch
+
+When a non-activity branch wins a `ctx.race([...])`, the losing `ctx.run()`
+activity branch now fires its activity's `ctx.signal` (`AbortSignal`) for
+cooperative cancellation, consistent with how losing `sleep` and `wait-signal`
+branches were already torn down (#584). The coordinator's `AbortSignal` is
+threaded through the activity sub-operation executor and composed into
+`ActivityContext.signal` alongside the workflow-cancel and per-attempt-timeout
+signals, so the activity aborts when any source fires. This makes the
+`ctx.race` supersede idiom self-sufficient: a superseded activity is signalled
+to stop rather than running to completion and risking a stale last-writer-wins
+write. This reverses the prior `#453` contract that left race losers running;
+the pinned cancellation test now asserts the abort-on-loss behavior.
+
+### Fixed — `Engine.create()` starts the scheduler
+
+`Engine.create()` now starts the scheduler's timer-polling loop on the default
+recovery path (`recover !== false`), so durable `ctx.sleep(...)` timers fire in
+long-lived in-process hosts without an explicit `engine.scheduler.start()`
+(#586). `recover: false` (tests, isolated `ScopedStorage` engines, pre-recovery
+inspection) intentionally skips the auto-start, and `TestEngine`'s manual
+`advanceTime()` tick-based time control is unaffected. Disposal still stops the
+scheduler via `[Symbol.asyncDispose]`.
+
+### Fixed — public `StartOrSignalOutcome` export and `LocalClient` engine typing
+
+`StartOrSignalOutcome` (`'started' | 'signalled'`, the type of the public
+`ClientHandle.outcome` field) is now re-exported from both the package root
+(`@lostgradient/weft`) and the `/client` barrel (`@lostgradient/weft/client`),
+so consumers can name the type to annotate their own result interfaces (#583).
+The `LocalClient` constructor is now generic over the engine's workflow
+registry, so a branded engine returned by `Engine.create({ workflows })` is
+accepted without a cast: the canonical in-process topology
+`Engine.create({ workflows }) → new LocalClient(engine)` type-checks directly
+(#585).
+
 ## [0.4.0] - 2026-06-17
 
 ### Added — replay-safe structured logging

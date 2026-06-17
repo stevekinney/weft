@@ -2,11 +2,11 @@
 
 ## Supported Versions
 
-Weft is currently at `0.4.x` (pre-1.0). Security fixes are applied to the latest release only. Once 1.0 ships, this policy will be updated to cover the most recent minor release.
+Weft is currently at `0.5.x` (pre-1.0). Security fixes are applied to the latest release only. Once 1.0 ships, this policy will be updated to cover the most recent minor release.
 
 | Version | Supported |
 | ------- | --------- |
-| 0.4.x   | ✅        |
+| 0.5.x   | ✅        |
 | < 0.4   | ❌        |
 
 ## Scope
