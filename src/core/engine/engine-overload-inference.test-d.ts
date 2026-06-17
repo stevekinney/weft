@@ -58,6 +58,22 @@ void mismatched;
 declare const storage: WeftStorage;
 const assertResult: Promise<void> = assertCompatiblePersistedDataVersion(storage);
 void assertResult;
+
+// ---- Engine.create startScheduler option (#590) --------------------------
+// `startScheduler` arms the durable-timer poller independently of `recover`, so
+// a host that owns its own recovery (recover:false) can still run timers, and a
+// host that ticks deterministically can opt out while recovery runs.
+const createdWithStartScheduler: Promise<Engine> = Engine.create({
+  recover: false,
+  startScheduler: true,
+});
+void createdWithStartScheduler;
+
+const createdWithoutScheduler: Promise<Engine> = Engine.create({
+  recover: true,
+  startScheduler: false,
+});
+void createdWithoutScheduler;
 // @ts-expect-error: the gate takes no options argument — there is no opt-out.
 const assertRejectsOptions: Promise<void> = assertCompatiblePersistedDataVersion(storage, {});
 void assertRejectsOptions;

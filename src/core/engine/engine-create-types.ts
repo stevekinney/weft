@@ -42,6 +42,20 @@ export type EngineCreateOptions<
   workflows?: TWorkflowDefinitions;
   /** Activity definitions to register before workflows. */
   activities?: TActivityDefinitions;
+  /**
+   * Start the scheduler's durable-timer polling loop after registration so
+   * `ctx.sleep(...)` and `engine.schedule(...)` timers fire in a long-lived
+   * in-process host. This is independent of `recover`: it controls *whether
+   * timers fire*, not *who drives `recoverAll`*.
+   *
+   * Defaults to `recover !== false`. A host that opts out of auto-recovery
+   * with `recover: false` (because it drives its own `recoverAll()` to capture
+   * the recovered handles) can still arm the poller by passing
+   * `startScheduler: true`. Pass `startScheduler: false` to keep the poller
+   * stopped even when recovery runs (tests / `ScopedStorage` engines that tick
+   * the scheduler deterministically).
+   */
+  startScheduler?: boolean;
 } & (
     | {
         /**

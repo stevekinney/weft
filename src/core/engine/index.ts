@@ -465,10 +465,16 @@ export class Engine<
             ? { acknowledgeUnknownWorkflowTypes: options.acknowledgeUnknownWorkflowTypes }
             : {},
         );
-        // Start polling after recovery so durable timers fire for long-lived
-        // in-process engines (#586). recover:false intentionally skips
-        // auto-starting the scheduler (tests / ScopedStorage / inspection);
-        // it does not imply callers tick the scheduler themselves.
+      }
+      // Start polling so durable timers fire for long-lived in-process engines
+      // (#586, #590). This is independent of `recover`: the flag controls who
+      // drives `recoverAll`, not whether timers should fire. Defaults to
+      // `recover !== false`, so the existing behavior is preserved — but a
+      // `recover: false` host that owns its own recovery can arm the poller with
+      // `startScheduler: true`, and tests / `ScopedStorage` engines that tick the
+      // scheduler deterministically can keep it stopped with `startScheduler: false`.
+      const shouldStartScheduler = options.startScheduler ?? options.recover !== false;
+      if (shouldStartScheduler) {
         getInternals(engine).scheduler.start();
       }
     } catch (error) {

@@ -50,6 +50,7 @@ export type EngineCreateRuntimeOptions = EngineConstructorOptions & {
   workflows?: Record<string, AnyWorkflowDefinition> | undefined;
   recover?: boolean | undefined;
   acknowledgeUnknownWorkflowTypes?: boolean | undefined;
+  startScheduler?: boolean | undefined;
 };
 
 export type NormalizedWorkerExecutionConfiguration =

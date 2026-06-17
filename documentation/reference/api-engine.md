@@ -73,6 +73,8 @@ static create<
 
 Construct an engine, register any `activities` first, register every workflow in the `workflows` map, then run recovery by default. Pass `recover: false` for tests, `ScopedStorage` isolation, or explicit operator inspection. Map keys are validated against each definition's runtime `name` so an accidentally mismatched key fails during startup.
 
+By default the durable-timer polling loop starts whenever recovery runs (`recover !== false`), so `ctx.sleep(...)` and `engine.schedule(...)` timers fire in a long-lived in-process host. The `startScheduler` option decouples that from recovery: it controls *whether timers fire*, not *who drives `recoverAll`*. A host that owns its own recovery — passing `recover: false` so it can capture the recovered handles from its own `recoverAll()` — can still arm the poller with `startScheduler: true`. Conversely, `startScheduler: false` keeps the poller stopped even when recovery runs, for engines that tick the scheduler deterministically.
+
 TypeScript treats `Engine.create({ workflows: {} })` the same as omitting `workflows`: both return the default-registry engine type. A non-empty map narrows the returned engine type to those workflow definitions, so `engine.start(...)` autocompletes their names and checks their input/output types.
 
 ### `register()`

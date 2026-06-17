@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added — `Engine.create({ startScheduler })` decouples timer polling from recovery
+
+`Engine.create()` accepts a new `startScheduler?: boolean` option that controls
+the durable-timer polling loop independently of `recover` (#590). `recover`
+decides *who drives `recoverAll`*; `startScheduler` decides *whether timers
+fire*. It defaults to `recover !== false`, so existing behavior is unchanged. A
+host that owns its own recovery — passing `recover: false` so it can capture the
+recovered handles from its own `engine.recoverAll()` — can now arm the poller
+with `startScheduler: true`, so durable `ctx.sleep(...)` and
+`engine.schedule(...)` timers still fire. Conversely, `startScheduler: false`
+keeps the poller stopped even when recovery runs, for engines that tick the
+scheduler deterministically.
+
 ## [0.5.0] - 2026-06-17
 
 ### Fixed — `ctx.race` aborts a losing `ctx.run` activity branch

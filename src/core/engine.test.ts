@@ -498,6 +498,40 @@ describe('Engine', () => {
     }
   });
 
+  it('Engine.create starts the scheduler when recover:false but startScheduler:true (#590)', async () => {
+    // A host that owns its own recovery passes recover:false (so it can capture
+    // recovered handles from its own recoverAll()), but still needs durable
+    // ctx.sleep / engine.schedule timers to fire. startScheduler:true arms the
+    // poller independently of the recovery flag.
+    const { Scheduler } = await import('./scheduler.ts');
+    const startSpy = spyOn(Scheduler.prototype, 'start');
+
+    let engine: Engine | undefined;
+    try {
+      engine = await Engine.create({ recover: false, startScheduler: true });
+      expect(startSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      await engine?.[Symbol.asyncDispose]();
+      startSpy.mockRestore();
+    }
+  });
+
+  it('Engine.create does NOT start the scheduler when recover:true but startScheduler:false (#590)', async () => {
+    // startScheduler:false keeps the poller stopped even though recovery runs,
+    // so a host that ticks the scheduler deterministically can opt out.
+    const { Scheduler } = await import('./scheduler.ts');
+    const startSpy = spyOn(Scheduler.prototype, 'start');
+
+    let engine: Engine | undefined;
+    try {
+      engine = await Engine.create({ recover: true, startScheduler: false });
+      expect(startSpy).not.toHaveBeenCalled();
+    } finally {
+      await engine?.[Symbol.asyncDispose]();
+      startSpy.mockRestore();
+    }
+  });
+
   it('register(workflow) registers a workflow', async () => {
     const engine = new Engine();
     const handler = async function* (_ctx: WorkflowContext, input: unknown) {
