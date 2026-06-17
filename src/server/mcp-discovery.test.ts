@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 
+import { VERSION } from '../version.ts';
 import { generateMcpDiscovery } from './mcp-discovery.ts';
 
 describe('MCP discovery document', () => {
@@ -12,7 +13,7 @@ describe('MCP discovery document', () => {
       protocolVersion: '2025-11-25',
       serverInfo: {
         name: 'weft',
-        version: '0.5.0',
+        version: VERSION,
       },
       transports: {
         streamableHttp: {

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { z } from 'zod';
 
+import { VERSION } from '../version.ts';
 import { emitBindings, generateOpenApiDocument } from './openapi.ts';
 import { createOperationRegistry } from './operation-catalog.ts';
 import { defineOperation } from './operation-registry.ts';
@@ -51,7 +52,7 @@ describe('OpenAPI document generation', () => {
   it('uses default title and version', () => {
     const info = document['info'] as Record<string, unknown>;
     expect(info['title']).toBe('Weft Workflow Engine');
-    expect(info['version']).toBe('0.5.0');
+    expect(info['version']).toBe(VERSION);
   });
 
   it('accepts custom options', () => {

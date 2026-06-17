@@ -19,6 +19,7 @@ import { workflow } from '../core/types.ts';
 import type { StandardJSONSchemaV1 } from '../core/types/definition-schema.ts';
 import { listMcpTools } from '../mcp/tools.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { VERSION } from '../version.ts';
 import { OpenRpcDocumentSchema } from './openrpc-document-schema.ts';
 import { generateOpenRpcDocument } from './openrpc.ts';
 import {
@@ -119,7 +120,7 @@ describe('generateOpenRpcDocument — basic shape', () => {
     expect(document['openrpc']).toBe('1.3.2');
     expect(typeof document['info']).toBe('object');
     expect((document['info'] as Record<string, unknown>)['title']).toBeDefined();
-    expect((document['info'] as Record<string, unknown>)['version']).toBe('0.5.0');
+    expect((document['info'] as Record<string, unknown>)['version']).toBe(VERSION);
     expect(Array.isArray(document['methods'])).toBe(true);
   });
 

@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { Engine } from '../core/engine.ts';
 import { MemoryStorage } from '../storage/memory.ts';
+import { VERSION } from '../version.ts';
 import { generateAsyncApiDocument } from './asyncapi.ts';
 import { isDiscoverable } from './discovery-filter.ts';
 import { serve, type WeftServer } from './index.ts';
@@ -189,7 +190,7 @@ describe('AsyncAPI document', () => {
     }) as AsyncApiDocument;
 
     expect(document.info?.title).toBe('Weft Workflow Engine');
-    expect(document.info?.version).toBe('0.5.0');
+    expect(document.info?.version).toBe(VERSION);
   });
 
   it('uses ws for non-TLS server URLs', () => {
