@@ -99,6 +99,8 @@ TimeControl does NOT monkey-patch global timers. It provides an explicit virtual
 
 For real-timer integration tests, prefer `waitFor(...)` or `waitForCondition(...)` over fixed sleeps before assertions. Only use fixed delays for `negative assertion`, `pre-dispatch settle`, or `hang guard`, annotated with the structured comment required by `verify:no-test-sleeps`.
 
+If a test must call `jest.useFakeTimers()`, restore real timers in that test or file teardown. The shared Bun preload runs `afterEach(restoreRealTimers)` as a final isolation guard because leaked fake timers trap later `Bun.sleep(...)` calls in the sequential suite; do not use the global cleanup as an excuse to leave fake timers installed intentionally.
+
 ### ActivityMockRegistry — Activity Isolation
 
 Use `testEngine.mock(activity, implementation)` to substitute activity implementations. Returns a `MockHandle` for inspecting calls.
@@ -156,6 +158,7 @@ it('resumes from checkpoint after restart', async () => {
 - Descriptive test names: "returns empty array when no workflows match filter"
 - AAA pattern: Arrange (set up), Act (execute), Assert (verify)
 - Test files have relaxed linting: `any`, non-null assertions, and unused variables are allowed
+- Fake-timer tests should include a local restore path and, when changing timer isolation, a regression proving `Bun.sleep(...)` works in the following test
 
 ## Choosing the Right Tool
 

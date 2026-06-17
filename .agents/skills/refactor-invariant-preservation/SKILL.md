@@ -15,6 +15,7 @@ description: >-
 - Modifying TypeScript overloads, default generics, inference helpers, or exported type ergonomics.
 - Replacing implementation structure while claiming behavior is unchanged.
 - Deduplicating server operation helpers, REST fault shapers, storage helpers, client delegation, or test-support utilities while keeping endpoint contracts unchanged.
+- Deduplicating JSON-RPC WebSocket subscription setup while keeping workflow and fleet subscription inputs explicit at their call sites.
 - Cleaning up API surface exports, lifecycle overloads, compression framing, visibility filters, or route helpers after review feedback.
 - Removing oxlint suppressions or splitting oversized modules while claiming public behavior, type inference, and dispatch ordering are unchanged.
 - Removing dead public options or stale deleted-module references after the owning feature has already been removed.
@@ -50,6 +51,7 @@ description: >-
 17. For RemoteWorker cleanup, preserve the required `workflows` map and qualified activity-name behavior; do not add a compatibility alias for removed `activities`.
 18. For `Engine.create` type ergonomics, pin both the integration shape and the exact type: `Engine.create({ workflows: {} })` must satisfy `ServeOptions['engine']` and equal the absent-workflows default-registry return type, while a non-empty map keeps literal workflow-name inference.
 19. For cleanup-audit work, classify generated artifacts, documentation mirrors, and intentional script cross-checks before extracting shared helpers. `scripts/audit-jsdoc-manifest.ts` intentionally duplicates selected parsing helpers from `scripts/lib/jsdoc-manifest.ts` so the audit has an independent implementation to compare against.
+20. For finalizer teardown test cleanup, keep shared event collection in `.test-support.ts` and preserve the single `workflow:teardown` event shape with its `status` field across inline and worker-mode suites.
 
 ## Verification
 
@@ -59,3 +61,4 @@ description: >-
 - Run focused tests, `bun run typecheck`, and documentation verification when examples changed.
 - For generated client cleanup, also run `bun run scripts/generate-operation-client.ts && bun run scripts/check-catalog-drift.ts` and `jscpd` against `src/cli/generated/operation-client.generated.ts`.
 - For duplicate-audit cleanup, run `jscpd src scripts documentation tests --min-lines 18 --min-tokens 120 --exit-code 0` and document any intentionally independent duplicate with a concrete owner instead of adding broad ignores.
+- For JSON-RPC subscription setup cleanup, run `bun test src/server/json-rpc-websocket.test.ts src/server/json-rpc-websocket-runtime.test.ts` and prove workflow and fleet subscriptions still enforce caps, shape responses, and register pumps independently.

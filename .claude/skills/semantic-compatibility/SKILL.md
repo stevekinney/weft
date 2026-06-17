@@ -26,6 +26,7 @@ description: >-
 - Changing idempotent start storage (`start-idem:`), signal id derivation, `startOrSignal` convergence semantics, serializer registry tags, recovered launch/snapshot public shapes, or durable task in-flight records such as `attemptToken`.
 - Changing buffered signal storage keys, including encoded signal names, `KEYS.startSignal` sort-class behavior, and the class-independent `sigres:` accepted-response dedup record.
 - Changing workflow version metadata on persisted `WorkflowState`; the current canonical state shape is `versionTuple`, while old flat version fields are read-normalized only.
+- Changing the persisted `WorkflowState` decoder field allowlist or unknown-field behavior. Current decode tolerates extra keys but strips every field outside the current state shape before recovery continues.
 - Removing or changing workflow version recovery behavior. Current recovery has no checkpoint migration hook: stored and registered versions plus `versionTuple` metadata are strict recovery guards that fail with `VersionMismatchError` on drift.
 
 ## Do not use
@@ -59,6 +60,7 @@ description: >-
 21. For persisted workflow version metadata, write only `versionTuple` on fresh state, lift old flat `version` / `agentVersion` / `toolVersions` records through `decodeWorkflowState()`, route diagnostics through the decoder, and regenerate replay/checkpoint fixtures only after verifying the diff is shape-only.
 22. For versioning changes, keep `checkVersionCompatibility()` to compatible/incompatible outcomes, keep `weft version:check` to safe/unsafe reporting, and do not reintroduce `migrate`, `migrateCheckpoint`, or `needs-migration` surfaces unless the task explicitly restores them with storage fixtures.
 23. When persisted data or checkpoint wording is touched, frame exact-schema rejection as the current contract: Weft does not upgrade older database records in place unless the task explicitly adds and tests that upgrade path.
+24. For unknown persisted workflow-state fields, add neutral extra-field fixtures that prove decode drops the field and resumes with only current `WorkflowState` keys. Do not reintroduce tenant-specific or legacy alias normalization when the current contract is tolerate-and-strip.
 
 ## Verification
 
@@ -73,6 +75,7 @@ description: >-
 - For Neon/Postgres storage, run PGlite-backed storage contract tests, retry fault-injection tests, schema/table query-shape tests, net-effect resolver tests, and any env-gated live Neon tests when `NEON_DATABASE_URL` is available.
 - For task attempt-token changes, run protocol parser tests, WebSocket stale-attempt regressions, long-poll completion authorization tests, conformance fixtures, and server restart restoration tests.
 - For workflow-state version-shape changes, run decode-lift tests, recovery/version-drift tests, diagnostics scans, and fixture regeneration review that proves no unrelated replay data changed.
+- For unknown workflow-state field cleanup, run `bun test src/core/engine/validation.test.ts src/core/engine.test.ts src/core/crash-recovery.test.ts tests/replay-fixtures/replay-fixtures.test.ts`.
 - For failure-category compatibility changes, run `bun test src/core/failure-category.test.ts src/core/list-filter-validation.test.ts src/core/engine/validation.test.ts src/core/engine/list-candidate-resolution.test.ts src/server/operations/list-workflows.test.ts src/server/json-rpc-http-integration.test.ts`.
 - For versioning-surface removals or recovery-guard changes, run `bun test src/core/versioning.test.ts src/diagnostics/version-check.test.ts src/diagnostics/format.test.ts src/core/engine.test.ts` plus `bun run verify:documentation`.
 - Run the relevant focused test, then `bun run typecheck` and `bun run validate` before shipping.

@@ -40,6 +40,7 @@ The server routes through operation handlers plus transport-specific discovery e
 - [ ] REST `EngineFailure` responses use the canonical masked body; raw engine messages stay out of HTTP responses
 - [ ] Schedule routes use operation-catalog access policies consistently across REST and JSON-RPC; do not add tenant-claim gates back into core schedule access
 - [ ] Async activity completion routes keep tokens in the body, not the path; treat tokens as deterministic identifiers rather than secrets; require payload validation and `serve({ auth })` guidance when exposed outside a trusted boundary
+- [ ] Raw workflow event `/watch` upgrades require `events:read`, raw token `/stream` upgrades require `streams:read`, and JSON-RPC `weft.events.subscribe` uses the operation-catalog `events:read` policy instead of a dashboard-only shortcut
 
 Routes that accept bodies include workflow start, signal, update, query, attributes, review decisions, bulk actions, JSON-RPC, HTTP storage, and MCP `POST /mcp`.
 Async activity completion (`POST /api/v1/activities/complete` and `/fail`) also accepts bodies and must return 400 for malformed JSON.
@@ -64,8 +65,9 @@ User-defined workflow functions run inside the engine. They should not be able t
 - [ ] Access engine internals or other workflows' state
 - [ ] Corrupt checkpoint data (verify checkpoint writes are atomic)
 - [ ] Inject arbitrary data that gets `eval()`'d or `new Function()`'d on replay
-- [ ] Cause unbounded memory growth through oversized checkpoint payloads
+- [ ] Cause unbounded memory growth through oversized checkpoint payloads; `payloadSize.maxBytes` must reject workflow inputs, signal payloads, and activity results before any durable write
 - [ ] Escape the workflow context to access the underlying storage directly
+- [ ] Bypass the explicit trust posture: untrusted workflow code uses `workflowExecutionMode: 'worker'` with bounded turn timeouts and protocol-message sizes, while `workflowExecutionMode: 'inline'` rejects `workerExecution`
 
 ### 4. Storage and Serialization
 
@@ -76,6 +78,8 @@ User-defined workflow functions run inside the engine. They should not be able t
 - [ ] Storage keys constructed from user input (workflow IDs, attribute names) are bounded in length and character set
 - [ ] Bounded range deletes go through `storageDeleteRange()` or the same normalized bounds; unbounded deletion must use explicit `deletePrefix()`, never a malformed `deleteRange()`
 - [ ] Bounded delete tests cover empty options rejection, invalid negative limits, impossible bound intersections, and scoped-storage prefix-smuggling attempts
+- [ ] Event-log compaction deletes only behind a confirmed checkpoint and writes the watermark atomically with that checkpoint commit; archive adapters are best-effort post-commit sinks, not durability barriers
+- [ ] Fleet event retention and purge cleanup remove workflow-linked feed entries without deleting unrelated operational events such as worker connect/disconnect records
 - [ ] Batch operations in storage cannot be used to overwrite keys belonging to other workflows
 - [ ] IndexedDB storage (`src/storage/indexeddb.ts`) applies the same key validation
 

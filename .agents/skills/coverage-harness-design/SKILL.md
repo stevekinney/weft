@@ -16,6 +16,7 @@ description: >-
 - Covering codegen declaration output, doctest extraction, skip-count parsing, or generated fixture typechecking.
 - Covering workflow visibility indexes, aggregate distinct-key caps, failure-category query aliases, backfill watermarks, or Bun SQLite smoke paths.
 - Covering event-log compaction watermark verification, Worker replay signatures, Worker protocol guards, payload-size admission, or post-build distribution guards.
+- Covering coverage-runner allowance validation, including duplicate keys, cross-layer-shadowed keys, and dead allowances for paths excluded by `coveragePathIgnorePatterns`.
 - Covering CLI output/error paths that moved coverage because of current-branch instrumentation gaps, such as `api`, `server`, `workflow`, `tail`, `version`, `completions`, and output helper regressions.
 - Covering callback creator bundles whose wrappers delegate to cleanup handlers, including time-operation and stream cleanup-error paths that coverage may miss until invoked directly.
 - Covering `.test-support.ts` harness modules whose consumers execute the behavior but Bun reports nested callback or unnamed-function misses.
@@ -62,6 +63,7 @@ description: >-
 23. For schedule and `startOrSignal` coverage, prove real lifecycle edges: cancelled schedules cannot resume, cleanup-error callbacks report failures, buffered-signal races converge on one winner, and plain storage batch failures do not masquerade as idempotent success.
 24. For coverage artifact filters, require both a generalized temporary-root prefix and the known generated-fixture filename pattern; add negative tests proving unrelated files under `tmp/` still count as uncovered.
 25. For coverage allowance edits, test duplicate allowance keys and cross-layer-shadowed keys explicitly so one broad production allowance cannot hide a narrower source/test allowance.
+26. For coverage ignore-pattern integration, read `coveragePathIgnorePatterns` from `bunfig.toml` as the source of truth and reject allowances for files the coverage runner never instruments.
 
 ## Verification
 

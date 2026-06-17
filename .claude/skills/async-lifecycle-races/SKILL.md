@@ -15,7 +15,7 @@ description: >-
 - Introducing a promise that can outlive its owner or wait on an event from another process.
 - Fixing tests that rely on real sleeps, timing slack, or unbounded polling.
 - Changing server task polling, request `AbortSignal` handling, or `TaskQueue` disposal.
-- Changing client workflow-event streaming, including `HttpClient` `/v1/workflows/:id/watch` subscriptions, `client.tail(id)`, `handle.tail()`, `whenConnected()`, reconnect catch-up, or WebSocket factory behavior.
+- Changing client workflow-event streaming, including `HttpClient` `/v1/workflows/:id/watch` subscriptions, `client.tail(id)`, `handle.tail()`, `whenConnected()`, reconnect catch-up, JSON-RPC `weft.workflows.subscribe` / `weft.events.subscribe`, or WebSocket factory behavior.
 - Changing pending workflow updates during inline advance or resume, especially where durable update responses can drain before handlers are registered.
 - Changing out-of-band activity completion, including `ActivityContext.completeAsync()`, token claiming, REST/JSON-RPC completion, or payload rejection before token consumption.
 - Changing per-run workflow `services`, `resolveWorkflowServices`, delayed-start recovery, scheduled occurrences, or the durable `wf-has-services:` marker that gates re-provisioning.
@@ -25,6 +25,7 @@ description: >-
 - Changing workflow suspend/resume, recovered-handle observation, idempotent start reservation, `startOrSignal`, inline launch deferral, or engine disposal while queued inline launches can still flush.
 - Changing scheduled occurrence launch flow or `schedule:fired` event dispatch, including overlap-policy gating, queued-drain launches, unavailable-services ordering, and process-local notification behavior.
 - Changing RemoteWorker or long-poll task completion authorization, including per-dispatch `attemptToken` generation, echoing, registry restore, malformed-token rejection, and missing-token compatibility.
+- Changing durable timer cleanup under lease ownership, especially fired timer deletion, deadline timers, terminal cleanup, delayed starts, schedules, teardown, or successor re-drive after deposition.
 
 ## Do not use
 
@@ -49,6 +50,7 @@ description: >-
 13. For queryable parked workflows, retain only the context needed for `ctx.onQuery()` while parked on `waitForSignal()`, prefer the live context after resume, and evict retained contexts on suspend and terminal cleanup.
 14. For wait-condition gates, model the first predicate evaluation, update-driven re-evaluation, timeout fire, predicate throw, cancellation, recovery, and disposal as separate paths. Signals are pull-only and must not wake a condition waiter.
 15. For race/all signal branches, model the top-level coordinator, nested `race`/`all`, and `ctx.speculate` as separate consumers. Losers must release waiters without consuming durable signals, and winners must finalize before checkpointing encoded results.
+16. For fired timers under `ownership: 'lease'`, route cleanup through the same lease-fenced commit path as the timer callback's durable writes. A deposed engine must not delete a fired timer whose fenced follow-up write was rejected; the successor needs the durable marker to re-drive.
 
 ### Client event-streaming work
 
@@ -58,6 +60,7 @@ description: >-
 - Buffer from construction for `tail()` so `await tail.whenConnected(); for await (...)` still sees catch-up history. Do not buffer indefinitely for callback-only `addEventListener` subscriptions.
 - Keep `HttpHandle` subscription lifetime explicit: do not silently re-open a terminal or exhausted subscription if doing so would replay already-delivered events to existing listeners.
 - Fail first-connect factory errors loudly. Missing global WebSocket support or header-capability mismatches should point at `HttpClientOptions.webSocketFactory`.
+- For server subscriptions, keep raw `/watch` replay bounded by cursor, raw token `/stream` separate from event feeds, `weft.events.subscribe` cursor-ordered under the current one-server-process-per-durable-store model, and fleet events purge-safe for workflow deletion.
 
 ### RemoteWorker reconnect work
 
@@ -72,6 +75,7 @@ description: >-
 - For reconnect behavior, cover grace-window cancellation, visibility-timeout takeover, stale completion rejection, server-restart redelivery, and buffered `taskResult` resend after a socket failure.
 - For client event streaming, cover connect catch-up, reconnect during catch-up, duplicate-looking live frames, callback-only no-leak behavior, `whenConnected()` after close, and missing or inadequate WebSocket factories.
 - For long-poll task queues, cover disconnect during wait, already-aborted signals, pending-task retention for dead callers, idempotent disposal, and timer cleanup.
+- For lease-fenced timer cleanup, cover a deposed engine whose timer callback write is rejected and prove the fired timer remains for a successor scheduler to clear.
 - For pending-update drains, cover resume and inline advancement paths where the update is durable before the handler is visible.
 - For wait-condition gates, cover met predicates, timed-out predicates, throwing predicates on initial and update-driven evaluation, cancellation, recovery, cleanup, and rejection inside `ctx.race()`, `ctx.all()`, and `ctx.speculate()`.
 - For async activity completion, cover double-completion races, malformed JSON, oversized payload rejection that preserves the token, and cross-transport parity between `LocalClient` and `HttpClient`.
@@ -83,5 +87,6 @@ description: >-
 - For inline launch scheduling, cover queued launch draining on disposal, `defer: false` synchronous launch, and the timeout flush path when `MessageChannel` is unavailable.
 - For schedule firing events, cover interval and cron cadence, each overlap policy, recovery backfill without double-fire, queued drain with `occurrence: undefined`, and `schedule:fired` before `workflow:failed` when service resolution fails.
 - For attempt-token work, cover same-worker stale completion rejection over WebSocket, long-poll stale-token rejection, malformed echoed tokens, token-less records, absent echoes from older workers, and server-restart restoration of token-bearing in-flight records.
+- For fleet event subscriptions, cover replay caps, workflow and event-kind filters, worker connect/disconnect events, purge cleanup, and request/response dispatch rejection for subscription-only operations.
 - Prove no test depends on unbounded waits or real-time sleeps.
 - Run the focused lifecycle or worker tests plus `bun run verify:no-test-sleeps` when relevant.

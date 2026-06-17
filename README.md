@@ -216,7 +216,7 @@ const quorum = workflow({ name: 'quorum' })
 
 ### Live Workflow Events
 
-Workflow handles expose lifecycle events through `addEventListener`, and client handles can open a live tail for progress UIs or operators. `LocalClient` reads from the in-process engine stream; `HttpClient` uses the per-workflow `/v1/workflows/:id/watch` WebSocket channel with history catch-up on connect and reconnect, so `addEventListener`, `client.tail(id)`, and `handle.tail()` are push-based rather than a polling loop. Client code that receives a workflow id from another process can call `client.getHandle(id)` to re-attach a `ClientHandle` or get `null` when the run does not exist.
+Workflow handles expose lifecycle events through `addEventListener`, and client handles can open a live tail for progress UIs or operators. `LocalClient` reads from the in-process engine stream; `HttpClient` uses the per-workflow `/v1/workflows/:id/watch` WebSocket channel with history catch-up on connect and reconnect, so `addEventListener`, `client.tail(id)`, and `handle.tail()` are push-based rather than a polling loop. JSON-RPC clients can subscribe over WebSocket with `weft.workflows.subscribe` for one workflow or `weft.events.subscribe` for the fleet-wide event feed. Client code that receives a workflow id from another process can call `client.getHandle(id)` to re-attach a `ClientHandle` or get `null` when the run does not exist.
 
 ```typescript
 const handle = await client.start('checkout', order);
@@ -360,7 +360,7 @@ await using server = serve({ engine, port: 7233 });
 // server.url is e.g. "http://0.0.0.0:7233"
 ```
 
-Endpoints under `/api/v1/` cover the full lifecycle: start workflows, list, signal, update, query, cancel, fork, and stream events. Content negotiation supports JSON and MessagePack. The server can also mount an externally supplied dashboard shell at known page routes; see the [server guide](documentation/guides/server.md#external-dashboard-mounting) for the hosting contract.
+Endpoints under `/api/v1/` cover the full lifecycle: start workflows, list, signal, update, query, cancel, fork, and stream events. JSON-RPC over WebSocket also exposes workflow and fleet event subscriptions for operator UIs that need live state without polling. Content negotiation supports JSON and MessagePack. The server can also mount an externally supplied dashboard shell at known page routes; see the [server guide](documentation/guides/server.md#external-dashboard-mounting) for the hosting contract.
 
 ### Remote Workers
 
