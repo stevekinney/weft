@@ -28,19 +28,21 @@ no sink installed, inline logs go to the host console and worker logs to the
 worker console. A throwing sink falls back to console without failing the
 workflow, and the same sink behavior applies inside `ctx.speculate()` branches
 and across recovered and forked inline contexts (#533, #535, #549). The
-forwarded-log lane is rate-limited per `Worker` reference by an internal
-flood budget and a small lifetime strike threshold for oversize or
-structurally invalid records, so a misbehaving worker is discarded without
+worker-forwarded log lane is internally rate-limited so a misbehaving worker
+that floods or repeatedly sends malformed records is torn down, without
 affecting honest high-log workflows (#545).
 
 ### Added — `ctx.waitUntil` condition gate
 
 `ctx.waitUntil(predicate, timeout?)` is a new inline-only durable condition
-primitive (#448). It re-evaluates a pure predicate when `ctx.onUpdate()` drives
-workflow-local state, or resolves when an optional deterministic deadline
-elapses, and consumes one durable slot regardless of how many times it wakes.
-Signals do not re-drive it, and it is rejected inside `ctx.race()`, `ctx.all()`,
-and `ctx.speculate()` with an actionable error.
+primitive (#448). It re-evaluates a pure predicate each time `ctx.onUpdate()`
+drives workflow-local state, and consumes one durable slot regardless of how
+many times it wakes. With a `timeout`, it resolves `true` once the predicate
+holds or `false` if the deterministic deadline elapses first (predicate-first,
+so a predicate true exactly at the deadline counts as met); without a timeout it
+waits indefinitely and resolves `void`. Signals do not re-drive it, and it is
+rejected inside `ctx.race()`, `ctx.all()`, and `ctx.speculate()` with an
+actionable error.
 
 ### Added — sleep and wait-signal branches in `ctx.race` / `ctx.all`
 
@@ -57,11 +59,10 @@ winner.
 
 `engine.start(..., { id, onTerminalConflict: 'start-new' })` restarts a workflow
 under an id whose prior run is in a terminal state (#452). The terminal run is
-purged and a fresh run created in a single atomic batch (purge deletes prepended
-to the create puts, last-op-wins on overlapping keys). It requires an explicit
-`id`, rejects `idempotencyKey`, never displaces a non-terminal run, and is
-in-process `engine.start` only — it is absent from REST, JSON-RPC,
-`engine.startOrSignal()`, and `ctx.startChild()`.
+purged and a fresh run created atomically. It requires an explicit `id`, rejects
+`idempotencyKey`, never displaces a non-terminal run, and is in-process
+`engine.start` only — it is absent from REST, JSON-RPC, `engine.startOrSignal()`,
+and `ctx.startChild()`.
 
 ### Added — durable finalizers
 
@@ -70,12 +71,17 @@ teardown activity driven post-terminal when a workflow is cancelled or times out
 (#446). The engine drives it durably with retry and backoff, re-drives it on
 crash recovery, and dead-letters it after a bounded horizon.
 `ctx.setFinalizerState(value)` records the payload the finalizer receives and
-commits it atomically with the next checkpoint or the terminal batch. Three new
-`WorkflowTeardownEvent` kinds are emitted: `workflow:teardown-completed`,
-`workflow:teardown-failed`, and `workflow:teardown-dead-lettered`. Purge,
-bulk-delete, and `onTerminalConflict: 'start-new'` are blocked while teardown is
-pending: purge and bulk-delete skip the run and surface it under
-`skippedTeardownPending`, while a restart throws `WorkflowTeardownPendingError`.
+commits it atomically with the next checkpoint or the terminal batch. A new
+`WorkflowTeardownEvent` (kind `workflow:teardown`) is emitted as the finalizer
+progresses; its `status` field carries `WorkflowTeardownStatus` —
+`'completed'`, `'failed'`, or `'dead-lettered'`. Purge, bulk-delete, and
+`onTerminalConflict: 'start-new'` are blocked while teardown is pending: purge
+and bulk-delete skip the run and surface it under `skippedTeardownPending`,
+while a restart throws `WorkflowTeardownPendingError`. The finalizer activity
+always runs on the engine host, so registering a `finalizer` is allowed under
+both inline and worker execution modes; staging teardown state via
+`ctx.setFinalizerState` works only under inline execution, since the
+worker-side `ctx` does not carry that method.
 
 ### Added — lease-fenced single-writer ownership
 
@@ -160,33 +166,19 @@ multiple engines share one Neon database under distinct schemas.
 key (last write wins, with the put-set and delete-set kept disjoint) and issue
 at most one `unnest(...)` upsert plus one `DELETE ... = ANY(...)` per call,
 regardless of operation count (#469). `conditionalBatch` reads all preconditions
-in a single query outside the `SERIALIZABLE` retry loop. This collapses O(keys)
-sequential round trips to O(1) for checkpoint commits.
-
-### Changed — durable finalizers register under worker execution mode
-
-Registering a workflow with a durable `finalizer` (#446) on an engine
-constructed with `workflowExecutionMode: 'worker'` no longer throws (#564). The
-previous guard rested on a false premise: the finalizer drive runs entirely on
-the engine host and never consults the worker's activity table, so worker mode —
-which isolates only the workflow generator — never prevented teardown from
-running. The behavior change is registration only; finalizer execution remains
-host-side. Durable teardown is still gated on the workflow having staged state
-via `ctx.setFinalizerState`, which works only under inline execution — the
-worker-side `ctx` does not carry the method at all — so a worker-mode workflow
-that needs durable teardown must run inline. Code that relied on catching the
-old registration error to detect "unsupported in worker mode" will no longer
-see it.
+with a single `key = ANY(...)` query inside the same `SERIALIZABLE` transaction
+as its writes, and the whole `read → compare → write → commit` cycle is retried
+as a unit on a `40001` serialization failure. This collapses O(keys) sequential
+round trips to O(1) per attempt for checkpoint commits.
 
 ### Changed — `startOrSignal` same-tick ordering and signal key format
 
 The start signal is now always consumed before any concurrent anonymous signal
-buffered for the same workflow in the same event-loop tick (#458). This is made
-deterministic by a buffered-signal key change from `sig:<wf>:<name>:<id>` to
-`sig:<wf>:<name>:<class>:<id>`, where `<class>` is `0` for the start signal and
-`1` otherwise, with signal names percent-encoded. **This is a breaking change to
-the raw storage key layout**: there is no migration path for in-flight buffered
-signals across the boundary, so upgrade between runs rather than mid-run.
+buffered for the same workflow in the same event-loop tick (#458). Making this
+deterministic required changing the internal buffered-signal storage key layout.
+**This is a breaking change to the persisted key format**: there is no migration
+path for in-flight buffered signals across the boundary, so drain in-flight
+signals and upgrade between runs rather than mid-run.
 
 ### Changed — scheduled occurrences resolve workflow services
 
