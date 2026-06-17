@@ -25,9 +25,9 @@ import { decode, encode } from '../codec.ts';
 import { Engine, WorkflowTeardownPendingError } from '../engine.ts';
 import { type TeardownClaim } from '../engine/state-utilities.ts';
 import type { TeardownDeadLetterRecord } from '../engine/termination.ts';
-import type { WorkflowTeardownStatus } from '../events.ts';
 import type { AnyActivityDefinition, WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
+import { collectTeardownEvents } from './finalizer-teardown.test-support.ts';
 
 /** A finalizer whose run is gated on an explicit `release()` (or `reject()`) — never a sleep. */
 interface ControllableFinalizer {
@@ -123,27 +123,6 @@ function registerTeardownWorkflow(
     yield* ctx.waitForSignal('never');
   });
   engine.register(provision);
-}
-
-/** Collect `workflow:teardown` events as `{ status, attempts, error }` tuples. */
-function collectTeardownEvents(
-  engine: Engine,
-): Array<{ workflowId: string; status: WorkflowTeardownStatus; attempts: number; error?: string }> {
-  const events: Array<{
-    workflowId: string;
-    status: WorkflowTeardownStatus;
-    attempts: number;
-    error?: string;
-  }> = [];
-  engine.addEventListener('workflow:teardown', (event) => {
-    events.push({
-      workflowId: event.workflowId,
-      status: event.status,
-      attempts: event.attempts,
-      ...(event.error === undefined ? {} : { error: event.error }),
-    });
-  });
-  return events;
 }
 
 describe('engine-driven finalizer teardown (#446 Phase 2)', () => {

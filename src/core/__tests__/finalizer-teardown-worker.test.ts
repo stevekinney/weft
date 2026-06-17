@@ -69,9 +69,9 @@ import {
   ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING,
 } from '../engine/index.ts';
 import { type TeardownClaim } from '../engine/state-utilities.ts';
-import type { WorkflowTeardownStatus } from '../events.ts';
 import type { WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
+import { collectTeardownEvents } from './finalizer-teardown.test-support.ts';
 
 // ---------------------------------------------------------------------------
 // Shared constants
@@ -116,27 +116,6 @@ async function waitForWorkerParkCleanup(engine: Engine, label: string): Promise<
 // ---------------------------------------------------------------------------
 // Finalizer and teardown helpers (mirrors finalizer-teardown.test.ts idioms)
 // ---------------------------------------------------------------------------
-
-/** Collect `workflow:teardown` events as `{ status, attempts, error }` tuples. */
-function collectTeardownEvents(
-  engine: Engine,
-): Array<{ workflowId: string; status: WorkflowTeardownStatus; attempts: number; error?: string }> {
-  const events: Array<{
-    workflowId: string;
-    status: WorkflowTeardownStatus;
-    attempts: number;
-    error?: string;
-  }> = [];
-  engine.addEventListener('workflow:teardown', (event) => {
-    events.push({
-      workflowId: event.workflowId,
-      status: event.status,
-      attempts: event.attempts,
-      ...(event.error === undefined ? {} : { error: event.error }),
-    });
-  });
-  return events;
-}
 
 /**
  * Write the `finalizerState` key directly to storage on behalf of a workflow that cannot

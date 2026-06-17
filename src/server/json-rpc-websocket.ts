@@ -34,7 +34,7 @@ import {
   validateSessionPrimitiveFrame,
   validateSubscribeParams,
 } from './json-rpc-websocket-validation.ts';
-import { executeSubscription } from './operation-catalog.ts';
+import { executeSubscription, type DispatchResult } from './operation-catalog.ts';
 import type { EventEnvelope } from './workflow-event-feed.ts';
 
 export type {
@@ -64,6 +64,14 @@ type SubscriptionStartEnvelope = {
 };
 
 type JsonRpcSubscriptionEnvelope = EventEnvelope | FleetEventEnvelope;
+
+type SubscriptionExecution<TEnvelope extends JsonRpcSubscriptionEnvelope> = Promise<
+  DispatchResult<{
+    envelope: SubscriptionStartEnvelope;
+    iterable: AsyncIterable<TEnvelope>;
+    close: () => Promise<void>;
+  }>
+>;
 
 export function createJsonRpcWebSocketSession(
   options: JsonRpcWebSocketSessionOptions,
@@ -128,77 +136,48 @@ export function createJsonRpcWebSocketSession(
       return;
     }
 
-    if (subscriptions.size >= maxSubscriptions) {
-      emitResponse(request, {
-        jsonrpc: JSON_RPC_VERSION,
-        error: {
-          code: JSON_RPC_ERROR_CODES.INVALID_REQUEST,
-          message: `maximum concurrent subscriptions per session (${maxSubscriptions}) exceeded`,
-          data: {
-            weftCode: 'Unprocessable',
-            httpStatus: 422,
-            reason: 'per-session subscription cap exceeded',
-          },
+    await startSubscription(request, () =>
+      executeSubscription<EventEnvelope, SubscriptionStartEnvelope>(
+        WORKFLOW_EVENTS_OPERATION_NAME,
+        {
+          workflowId: validation.workflowId,
+          selector: validation.selector,
+          ...(validation.fromCursor === undefined ? {} : { fromCursor: validation.fromCursor }),
         },
-        id: request.id ?? null,
-      });
-      return;
-    }
-
-    const controller = new AbortController();
-    const result = await executeSubscription<EventEnvelope, SubscriptionStartEnvelope>(
-      WORKFLOW_EVENTS_OPERATION_NAME,
-      {
-        workflowId: validation.workflowId,
-        selector: validation.selector,
-        ...(validation.fromCursor === undefined ? {} : { fromCursor: validation.fromCursor }),
-      },
-      {
-        principal,
-        engine: { feed },
-        // Subscribe is a session primitive, but the transport identity still
-        // needs to reflect the adapter reusing this implementation so
-        // availability checks enforce stdio-only and websocket-only policies.
-        transport,
-        registry,
-      },
+        {
+          principal,
+          engine: { feed },
+          // Subscribe is a session primitive, but the transport identity still
+          // needs to reflect the adapter reusing this implementation so
+          // availability checks enforce stdio-only and websocket-only policies.
+          transport,
+          registry,
+        },
+      ),
     );
-    if (!result.ok) {
-      const error = faultToJsonRpcError(result.fault);
-      emitResponse(request, {
-        jsonrpc: JSON_RPC_VERSION,
-        error: { code: error.code, message: error.message, data: error.data },
-        id: request.id ?? null,
-      });
-      return;
-    }
-
-    const { envelope, iterable, close: closeSubscription } = result.value;
-    const { subscriptionId, cursor } = envelope;
-
-    emitResponse(request, {
-      jsonrpc: JSON_RPC_VERSION,
-      result: { subscriptionId, cursor },
-      id: request.id ?? null,
-    });
-
-    const pump = pumpSubscriptionIterable(
-      subscriptionId,
-      iterable,
-      controller.signal,
-      closeSubscription,
-    );
-    subscriptions.set(subscriptionId, {
-      id: subscriptionId,
-      controller,
-      pump,
-      isTerminating: false,
-    });
   }
 
   async function handleFleetSubscribe(
     request: SessionRequest,
     params: Record<string, unknown> | undefined,
+  ): Promise<void> {
+    await startSubscription(request, () =>
+      executeSubscription<FleetEventEnvelope, SubscriptionStartEnvelope>(
+        FLEET_EVENTS_OPERATION_NAME,
+        params ?? {},
+        {
+          principal,
+          engine: { fleetFeed },
+          transport,
+          registry,
+        },
+      ),
+    );
+  }
+
+  async function startSubscription<TEnvelope extends JsonRpcSubscriptionEnvelope>(
+    request: SessionRequest,
+    execute: () => SubscriptionExecution<TEnvelope>,
   ): Promise<void> {
     if (subscriptions.size >= maxSubscriptions) {
       emitResponse(request, {
@@ -218,16 +197,7 @@ export function createJsonRpcWebSocketSession(
     }
 
     const controller = new AbortController();
-    const result = await executeSubscription<FleetEventEnvelope, SubscriptionStartEnvelope>(
-      FLEET_EVENTS_OPERATION_NAME,
-      params ?? {},
-      {
-        principal,
-        engine: { fleetFeed },
-        transport,
-        registry,
-      },
-    );
+    const result = await execute();
     if (!result.ok) {
       const error = faultToJsonRpcError(result.fault);
       emitResponse(request, {
