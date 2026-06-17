@@ -65,10 +65,7 @@ export const workflowEventsSubscriptionOperation = defineOperation<
     emittedAtMs: z.number(),
     payload: z.unknown(),
   }),
-  access: {
-    kind: 'scoped',
-    scopes: { kind: 'anyOf', scopes: ['events:read', 'streams:read'] },
-  },
+  access: { kind: 'authenticated' },
   authorize: async ({ input, principal }) => {
     const requiredScope = workflowSubscriptionScope(input.selector);
     if (!isAuthenticated(principal)) {
@@ -114,8 +111,5 @@ export const workflowEventsSubscriptionOperation = defineOperation<
 });
 
 function workflowSubscriptionScope(selector: 'events' | 'tokens'): AuthorizationScope {
-  if (selector === 'events') return 'events:read';
-  if (selector === 'tokens') return 'streams:read';
-  selector satisfies never;
-  throw new Error(`Unhandled workflow event selector: ${String(selector)}`);
+  return selector === 'tokens' ? 'streams:read' : 'events:read';
 }

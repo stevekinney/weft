@@ -45,6 +45,8 @@ export function createFleetEventFeed(
   const listeners = new Set<(envelope: FleetEventEnvelope) => void>();
   let sequenceInitPromise: Promise<number> | null = null;
   let nextSequence: number | null = null;
+  // Current durable recovery supports one server process per durable store.
+  // Multi-process fleet feeds need a conditional storage allocator here.
   let appendChain = Promise.resolve();
 
   const backend: ReplayLiveFeedBackend<FleetEventEnvelope> = {

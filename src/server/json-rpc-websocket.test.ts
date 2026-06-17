@@ -17,7 +17,6 @@ import { z } from 'zod';
 
 import { MemoryStorage } from '../storage/memory.ts';
 import { createFleetEventFeed } from './fleet-event-feed.ts';
-import { withSessionSubscriptionOperations } from './json-rpc-websocket-subscriptions.ts';
 import {
   createJsonRpcWebSocketSession,
   type JsonRpcWebSocketEmitter,
@@ -27,6 +26,8 @@ import {
   type ErasedOperation,
   type OperationDefinition,
 } from './operation-catalog.ts';
+import { fleetEventsSubscriptionOperation } from './operations/fleet-events-subscription.ts';
+import { workflowEventsSubscriptionOperation } from './operations/workflow-events-subscription.ts';
 import { anonymousPrincipal, principalFromApiKey } from './principal.ts';
 import {
   createInMemoryEventBackend,
@@ -40,11 +41,20 @@ const fakeEngine = {} as unknown;
 /**
  * Subscribe-tests need an authenticated principal carrying `events:read`
  * because event-selector subscriptions require the event feed scope.
- * Frame-dispatch tests (the first describe block) don't touch the
- * subscription operation and continue to use `anonymousPrincipal()`.
  */
 function subscribePrincipal() {
   return principalFromApiKey({ subject: 'subscribe-test', scopes: ['events:read'] });
+}
+
+function streamOnlyPrincipal() {
+  return principalFromApiKey({ subject: 'stream-only-test', scopes: ['streams:read'] });
+}
+
+function createWebSocketOperationRegistry() {
+  return createOperationRegistry([
+    workflowEventsSubscriptionOperation,
+    fleetEventsSubscriptionOperation,
+  ]);
 }
 
 function makeOp<I, O>(
@@ -162,7 +172,7 @@ async function createSubscribedWorkflowSession(feed: WorkflowEventFeed): Promise
 }> {
   const emitter = makeEmitter();
   const session = createJsonRpcWebSocketSession({
-    registry: createOperationRegistry([]),
+    registry: createWebSocketOperationRegistry(),
     engine: fakeEngine,
     principal: subscribePrincipal(),
     emitter,
@@ -200,12 +210,30 @@ async function createSubscribedWorkflowSession(feed: WorkflowEventFeed): Promise
 }
 
 describe('createJsonRpcWebSocketSession — frame dispatch', () => {
-  it('adds missing session subscription operations to registry listings', () => {
-    const registry = withSessionSubscriptionOperations(createOperationRegistry([]));
+  it('does not synthesize missing subscription operations into a custom registry', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const session = createJsonRpcWebSocketSession({
+      registry: createOperationRegistry([]),
+      engine: fakeEngine,
+      principal: subscribePrincipal(),
+      emitter,
+      feed,
+    });
 
-    expect(registry.list().map((operation) => operation.name)).toEqual(
-      expect.arrayContaining(['weft.workflows.events', 'weft.events.subscribe']),
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: 'wf-1', selector: 'events' },
+        id: 'missing-subscription-operation',
+      }),
     );
+
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.error.code).toBe(-32601);
+    expect(response.error.data.weftCode).toBe('MethodNotFound');
+    await session.close();
   });
 
   it('dispatches a single request and emits the response as a JSON frame', async () => {
@@ -248,7 +276,7 @@ describe('createJsonRpcWebSocketSession — frame dispatch', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: anonymousPrincipal(),
       emitter,
@@ -294,7 +322,7 @@ describe('createJsonRpcWebSocketSession — frame dispatch', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: anonymousPrincipal(),
       emitter,
@@ -338,7 +366,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     await backend.append(makeEnvelope(0));
     const feed = createWorkflowEventFeed(backend);
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -378,7 +406,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
       payload: { workflowId: 'wf-b' },
     });
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -411,12 +439,54 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     await session.close();
   });
 
+  it('weft.events.subscribe rejects unauthenticated and wrong-scope principals', async () => {
+    const cases = [
+      {
+        name: 'anonymous',
+        principal: anonymousPrincipal(),
+        expectedWeftCode: 'Unauthorized',
+      },
+      {
+        name: 'stream-only',
+        principal: streamOnlyPrincipal(),
+        expectedWeftCode: 'Forbidden',
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const emitter = makeEmitter();
+      const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+      const fleetFeed = createFleetEventFeed(new MemoryStorage());
+      const session = createJsonRpcWebSocketSession({
+        registry: createWebSocketOperationRegistry(),
+        engine: fakeEngine,
+        principal: testCase.principal,
+        emitter,
+        feed,
+        fleetFeed,
+      });
+
+      await session.handleMessage(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          method: 'weft.events.subscribe',
+          params: {},
+          id: `fleet-auth-${testCase.name}`,
+        }),
+      );
+
+      const response = JSON.parse(emitter.sent[0]!);
+      expect(response.error.data.weftCode).toBe(testCase.expectedWeftCode);
+      await session.close();
+    }
+  });
+
   it('weft.events.subscribe delivers live fleet events after subscription setup', async () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const fleetFeed = createFleetEventFeed(new MemoryStorage());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -485,7 +555,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
         payload: { workflowId: 'wf-other' },
       });
       const session = createJsonRpcWebSocketSession({
-        registry: createOperationRegistry([]),
+        registry: createWebSocketOperationRegistry(),
         engine: fakeEngine,
         principal: subscribePrincipal(),
         emitter,
@@ -522,7 +592,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const fleetFeed = createFleetEventFeed(new MemoryStorage());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -546,11 +616,56 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
         id: 'bad-kind',
       }),
     );
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.events.subscribe',
+        params: { kind: 'worker:connected' },
+        id: 'worker-kind',
+      }),
+    );
 
     const badCursorResponse = JSON.parse(emitter.sent[0]!);
     const badKindResponse = JSON.parse(emitter.sent[1]!);
+    const workerKindResponse = JSON.parse(emitter.sent[2]!);
     expect(badCursorResponse.error.data.weftCode).toBe('InvalidParams');
     expect(badKindResponse.error.data.weftCode).toBe('InvalidParams');
+    expect(workerKindResponse.error.data.weftCode).toBe('InvalidParams');
+    await session.close();
+  });
+
+  it('rejects fleet subscriptions when the replay window is too large', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const fleetFeed = {
+      async snapshotTailSequence() {
+        return 1000;
+      },
+      subscribe() {
+        throw new Error('subscribe should not run when replay window is rejected');
+      },
+    };
+    const session = createJsonRpcWebSocketSession({
+      registry: createWebSocketOperationRegistry(),
+      engine: fakeEngine,
+      principal: subscribePrincipal(),
+      emitter,
+      feed,
+      fleetFeed: fleetFeed as never,
+    });
+
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.events.subscribe',
+        params: {},
+        id: 'fleet-too-far-behind',
+      }),
+    );
+
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.error.data.weftCode).toBe('InvalidParams');
+    expect(response.error.message).toContain('maximum is 1000');
     await session.close();
   });
 
@@ -558,7 +673,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -584,7 +699,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const fleetFeed = createFleetEventFeed(new MemoryStorage());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -635,7 +750,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     // Session 1: subscribe without a cursor, capture the initial cursor.
     const emitter1 = makeEmitter();
     const session1 = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter: emitter1,
@@ -657,7 +772,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     // Session 2: reconnect with the cursor before receiving any deliveries.
     const emitter2 = makeEmitter();
     const session2 = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter: emitter2,
@@ -695,7 +810,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -718,7 +833,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -747,7 +862,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -781,7 +896,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -834,7 +949,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const backend = createInMemoryEventBackend();
     const feed = createWorkflowEventFeed(backend);
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -873,7 +988,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const backend = createInMemoryEventBackend();
     const feed = createWorkflowEventFeed(backend);
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1034,7 +1149,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const backend = createInMemoryEventBackend();
     const feed = createWorkflowEventFeed(backend);
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1062,7 +1177,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1085,7 +1200,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1109,7 +1224,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1132,7 +1247,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1155,7 +1270,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1178,7 +1293,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1218,7 +1333,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
       dispose() {},
     };
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1265,7 +1380,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
       dispose() {},
     };
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1304,7 +1419,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1374,7 +1489,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
       },
     };
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1403,7 +1518,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1438,7 +1553,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
       dispose() {},
     };
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1470,7 +1585,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const backend = createInMemoryEventBackend();
     const feed = createWorkflowEventFeed(backend);
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1527,7 +1642,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,
@@ -1547,7 +1662,7 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const session = createJsonRpcWebSocketSession({
-      registry: createOperationRegistry([]),
+      registry: createWebSocketOperationRegistry(),
       engine: fakeEngine,
       principal: subscribePrincipal(),
       emitter,

@@ -87,6 +87,19 @@ async function waitForSocketClose(ws: WebSocket, _label = 'WebSocket close'): Pr
   await waitForRealTimersForTesting(100);
 }
 
+async function connectAuthenticatedWebSocket(url: string, apiKey: string): Promise<WebSocket> {
+  const ws = new WebSocket(url, { headers: { 'x-api-key': apiKey } } as any);
+
+  await new Promise<void>((resolve, reject) => {
+    ws.addEventListener('open', () => resolve(), { once: true });
+    ws.addEventListener('error', () => reject(new Error(`WebSocket connection failed: ${url}`)), {
+      once: true,
+    });
+  });
+
+  return ws;
+}
+
 async function waitForWorkerMessage(
   ws: WebSocket,
   predicate: (message: Record<string, unknown>) => boolean,
@@ -873,6 +886,24 @@ describe('serve', () => {
     expect(await response.text()).toBe('Insufficient scope');
   });
 
+  it('accepts raw workflow watch WebSocket upgrades with events:read', async () => {
+    const apiKey = 'weft_key_eventsread1234567890123456';
+    engine = createEngine();
+    server = serveTestServer({
+      engine,
+      port: 0,
+      auth: {
+        apiKeys: [apiKey],
+        defaultApiKeyScopes: ['events:read'],
+      },
+    });
+
+    const wsUrl = server.url.replace('http://', 'ws://');
+    const ws = await connectAuthenticatedWebSocket(`${wsUrl}/v1/workflows/wf-auth/watch`, apiKey);
+
+    await waitForSocketClose(ws);
+  });
+
   it('rejects raw token stream WebSocket upgrades without streams:read', async () => {
     engine = createEngine();
     server = serveTestServer({
@@ -897,6 +928,24 @@ describe('serve', () => {
 
     expect(response.status).toBe(403);
     expect(await response.text()).toBe('Insufficient scope');
+  });
+
+  it('accepts raw token stream WebSocket upgrades with streams:read', async () => {
+    const apiKey = 'weft_key_streamsread123456789012345';
+    engine = createEngine();
+    server = serveTestServer({
+      engine,
+      port: 0,
+      auth: {
+        apiKeys: [apiKey],
+        defaultApiKeyScopes: ['streams:read'],
+      },
+    });
+
+    const wsUrl = server.url.replace('http://', 'ws://');
+    const ws = await connectAuthenticatedWebSocket(`${wsUrl}/v1/workflows/wf-auth/stream`, apiKey);
+
+    await waitForSocketClose(ws);
   });
 
   it('keeps JSON-RPC HTTP principal resolution inside the JSON-RPC error boundary', async () => {

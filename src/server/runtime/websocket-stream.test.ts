@@ -151,6 +151,14 @@ describe('watch WebSocket delivery', () => {
         data: { workflowId: 'wf-watch' },
       }),
     );
+    await storage.put(
+      KEYS.event('wf-watch', 3),
+      encode({
+        type: 'workflow:failed',
+        timestamp: Number.NaN,
+        data: [],
+      }),
+    );
     const sentMessages: string[] = [];
     const socket = {
       data: {

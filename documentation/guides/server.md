@@ -62,7 +62,7 @@ const server = serve({
 });
 ```
 
-The built-in API-key configuration grants the configured key the default authenticated scope set. JWT and custom authenticators can provide narrower scope sets such as `workflows:read`, `workflows:write`, `workflows:admin`, `events:read`, `streams:read`, and `system:read`; requests missing the required scope fail with `401` or `403` before the operation runs. Raw `/watch` sockets require `events:read`, raw token `/stream` sockets require `streams:read`, and `weft.events.subscribe` requires `events:read`.
+The built-in API-key configuration grants the configured key the default authenticated scope set. JWT and custom authenticators can provide narrower scope sets such as `workflows:read`, `workflows:write`, `workflows:admin`, `events:read`, `streams:read`, and `system:read`; requests missing the required scope fail with `401` or `403` before the operation runs. Raw `/watch` sockets require `events:read`, raw token `/stream` sockets require `streams:read`, and `weft.events.subscribe` requires `events:read`. The `events:read` feeds expose workflow-facing operational events; worker connection lifecycle events remain server-side diagnostics.
 
 ### Audit trail
 
@@ -348,7 +348,7 @@ Four WebSocket routes are available:
 
 When `auth` is configured, raw `/watch` sockets require `events:read` and raw token `/stream` sockets require `streams:read`. When `auth` is omitted, these raw sockets follow the same open local-development posture as the rest of `serve({ engine })`: anyone who can connect can observe the matching workflow stream.
 
-`resumeFrom` accepts `-1` or a non-negative decimal sequence cursor. Missing `resumeFrom` starts before the first retained frame. Malformed values such as an empty string, decimals, hexadecimal, or exponent notation reject the WebSocket upgrade with `400`. Future cursors above the durable tail are clamped to the current tail, so the socket stays connected and receives later live frames instead of replaying from the beginning.
+`resumeFrom` accepts `-1` or a non-negative decimal sequence cursor. Missing `resumeFrom` starts before the first retained frame. Malformed values such as an empty string, decimals, hexadecimal, or exponent notation reject the WebSocket upgrade with `400`. Future cursors above the durable tail are clamped to the current tail, so the socket stays connected and receives later live frames instead of replaying from the beginning. Fleet-wide `weft.events.subscribe` uses a single fleet cursor, rejects replay windows above 1,000 retained events, and follows Weft's current one-server-process-per-durable-store deployment model for fleet event ordering.
 
 HTTP long-poll task requests use the request's `AbortSignal`. If the client
 disconnects before or during the poll, the waiter settles promptly and does

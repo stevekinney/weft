@@ -100,7 +100,7 @@
       "name": "weft.events.subscribe",
       "kind": "subscription",
       "summary": "Subscribe to fleet-wide events with replay-from-cursor",
-      "description": "Subscribes to the server-level event feed across workflows. Optional filters narrow delivery by workflow id or event kind after the single fleet cursor has been applied.",
+      "description": "Subscribes to the server-level event feed across workflows. Optional filters narrow delivery by workflow id or event kind after the single fleet cursor has been applied. Historical replay is capped at 1,000 retained events per subscription; use a recent fromCursor for older feeds.",
       "tags": ["Events"],
       "destructive": false,
       "access": {
@@ -3342,8 +3342,7 @@
       "tags": ["Events"],
       "destructive": false,
       "access": {
-        "kind": "scoped",
-        "scopes": ["events:read", "streams:read"]
+        "kind": "authenticated"
       },
       "transports": {
         "http": false,

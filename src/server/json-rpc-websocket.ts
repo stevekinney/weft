@@ -22,7 +22,6 @@ import { JSON_RPC_ERROR_CODES, JSON_RPC_VERSION, type JsonRpcId } from './json-r
 import {
   FLEET_EVENTS_OPERATION_NAME,
   SESSION_METHODS,
-  withSessionSubscriptionOperations,
 } from './json-rpc-websocket-subscriptions.ts';
 import type {
   JsonRpcWebSocketSession,
@@ -68,7 +67,6 @@ export function createJsonRpcWebSocketSession(
   options: JsonRpcWebSocketSessionOptions,
 ): JsonRpcWebSocketSession {
   const { registry, engine, principal, emitter, feed, fleetFeed } = options;
-  const subscriptionRegistry = withSessionSubscriptionOperations(registry);
   const maxSubscriptions = options.maxSubscriptions ?? DEFAULT_MAX_SUBSCRIPTIONS;
   const maxFrameBytes = options.maxFrameBytes ?? DEFAULT_MAX_FRAME_BYTES;
   const transport = options.transport ?? 'jsonRpcWebSocket';
@@ -160,7 +158,7 @@ export function createJsonRpcWebSocketSession(
         // needs to reflect the adapter reusing this implementation so
         // availability checks enforce stdio-only and websocket-only policies.
         transport,
-        registry: subscriptionRegistry,
+        registry,
       },
     );
     if (!result.ok) {
@@ -225,7 +223,7 @@ export function createJsonRpcWebSocketSession(
         principal,
         engine: { fleetFeed },
         transport,
-        registry: subscriptionRegistry,
+        registry,
       },
     );
     if (!result.ok) {

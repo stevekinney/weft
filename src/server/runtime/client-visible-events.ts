@@ -14,8 +14,6 @@ import {
   TaskResultDeadLetteredEvent,
   UpdateCompletedEvent,
   UpdateReceivedEvent,
-  WorkerConnectedEvent,
-  WorkerDisconnectedEvent,
   WorkflowCancelledEvent,
   WorkflowCompletedEvent,
   WorkflowFailedEvent,
@@ -55,8 +53,6 @@ export const EVENTS_READ_EVENT_TYPES = [
   AlertFiredEvent.type,
   AlertResolvedEvent.type,
   ConstraintViolatedEvent.type,
-  WorkerConnectedEvent.type,
-  WorkerDisconnectedEvent.type,
 ] as const;
 
 export const CLIENT_VISIBLE_EVENT_TYPES = [...EVENTS_READ_EVENT_TYPES, TOKEN_EVENT_TYPE] as const;

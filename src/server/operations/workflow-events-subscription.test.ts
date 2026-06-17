@@ -16,6 +16,10 @@ describe('weft.workflows.events authorization', () => {
     };
   }
 
+  it('uses authenticated catalog access because selector scopes are parameter-specific', () => {
+    expect(workflowEventsSubscriptionOperation.access).toEqual({ kind: 'authenticated' });
+  });
+
   it('rejects unauthenticated callers before checking selector scope', async () => {
     const result = await workflowEventsSubscriptionOperation.authorize!(
       authorizationContext({ workflowId: 'wf-auth', selector: 'events' }, anonymousPrincipal()),

@@ -376,7 +376,11 @@ function isStoredWatchEvent(
   return (
     typeof record['type'] === 'string' &&
     typeof record['timestamp'] === 'number' &&
-    typeof record['data'] === 'object' &&
-    record['data'] !== null
+    Number.isFinite(record['timestamp']) &&
+    isPlainRecord(record['data'])
   );
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }

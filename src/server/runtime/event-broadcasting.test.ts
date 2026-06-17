@@ -34,7 +34,7 @@ class TokenEvent extends Event {
 }
 
 describe('wireEventBroadcasting', () => {
-  it('keeps operational runtime events in the client-visible broadcast set', () => {
+  it('keeps workflow-facing operational events in the client-visible broadcast set', () => {
     expect(CLIENT_VISIBLE_EVENT_TYPES).toEqual(
       expect.arrayContaining([
         ActivityAsyncPendingEvent.type,
@@ -48,10 +48,10 @@ describe('wireEventBroadcasting', () => {
         WorkflowResumedEvent.type,
         WorkflowSuspendedEvent.type,
         WorkflowTeardownEvent.type,
-        WorkerConnectedEvent.type,
-        WorkerDisconnectedEvent.type,
       ]),
     );
+    expect(CLIENT_VISIBLE_EVENT_TYPES).not.toContain(WorkerConnectedEvent.type);
+    expect(CLIENT_VISIBLE_EVENT_TYPES).not.toContain(WorkerDisconnectedEvent.type);
   });
 
   it('publishes no-workflow operational events through the fleet feed', async () => {
