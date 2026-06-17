@@ -29,7 +29,16 @@ void _rootToClient;
 const _clientToRoot: OutcomeFromRoot = outcomeClient;
 void _clientToRoot;
 
-// The union must only admit the documented members.
+// The union must only admit the documented members — exact-type check.
+type _ExactOutcomeUnion = OutcomeFromRoot extends 'started' | 'signalled'
+  ? 'started' | 'signalled' extends OutcomeFromRoot
+    ? true
+    : never
+  : never;
+declare const _exactCheck: _ExactOutcomeUnion;
+const _provedExact: true = _exactCheck;
+void _provedExact;
+
 // @ts-expect-error: 'pending' is not a valid StartOrSignalOutcome.
 const _invalid: OutcomeFromRoot = 'pending';
 void _invalid;
