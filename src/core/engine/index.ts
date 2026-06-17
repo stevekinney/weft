@@ -473,7 +473,7 @@ export class Engine<
       // `recover: false` host that owns its own recovery can arm the poller with
       // `startScheduler: true`, and tests / `ScopedStorage` engines that tick the
       // scheduler deterministically can keep it stopped with `startScheduler: false`.
-      const shouldStartScheduler = options.startScheduler ?? options.recover !== false;
+      const shouldStartScheduler = options.startScheduler ?? (options.recover !== false);
       if (shouldStartScheduler) {
         getInternals(engine).scheduler.start();
       }
