@@ -51,7 +51,7 @@ describe('OpenAPI document generation', () => {
   it('uses default title and version', () => {
     const info = document['info'] as Record<string, unknown>;
     expect(info['title']).toBe('Weft Workflow Engine');
-    expect(info['version']).toBe('0.3.0');
+    expect(info['version']).toBe('0.4.0');
   });
 
   it('accepts custom options', () => {
