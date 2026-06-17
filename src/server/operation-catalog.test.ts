@@ -145,6 +145,42 @@ describe('executeOperation — step 2: transport availability', () => {
     expect(result.fault.data.supported).toContain('jsonRpcWebSocket');
     expect(result.fault.data.supported).not.toContain('jsonRpcHttp');
   });
+
+  it('non-unary stream operation -> Unprocessable before invoke', async () => {
+    let invokeCount = 0;
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.streamoverrequest',
+        kind: 'stream',
+        eventSchema: z.object({ chunk: z.string() }),
+        inputSchema: z.object({}),
+        outputSchema: z.object({}),
+        invoke: async () => {
+          invokeCount += 1;
+          async function* stream() {
+            yield { chunk: 'should-not-run' };
+          }
+          return stream();
+        },
+      }),
+    ]);
+    const result = await executeOperation(
+      'weft.test.streamoverrequest',
+      {},
+      {
+        principal: anonymousPrincipal(),
+        engine: fakeEngine,
+        transport: 'jsonRpcHttp',
+        registry,
+      },
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error('expected fault');
+    expect(result.fault.code).toBe('Unprocessable');
+    expect(result.fault.message).toBe('operation "weft.test.streamoverrequest" is not unary');
+    expect(result.fault.data).toEqual({ reason: 'operation kind is "stream"' });
+    expect(invokeCount).toBe(0);
+  });
 });
 
 describe('executeOperation — step 3: access check', () => {

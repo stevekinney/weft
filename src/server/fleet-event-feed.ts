@@ -49,6 +49,8 @@ export type FleetEventFeed = {
   dispose(): void;
 };
 
+const MAX_WORKFLOW_OWNED_APPEND_ATTEMPTS = 5;
+
 export function createFleetEventFeed(
   storage: Storage,
   feedOptions?: WorkflowEventFeedOptions,
@@ -111,40 +113,46 @@ export function createFleetEventFeed(
     loadConditions?: () => Promise<readonly ConditionalBatchCondition[] | null>,
   ): Promise<FleetEventEnvelope | null> {
     const appended = appendChain.then(async () => {
-      const conditions = loadConditions === undefined ? undefined : await loadConditions();
-      if (conditions === null) return null;
+      for (let attempt = 1; attempt <= MAX_WORKFLOW_OWNED_APPEND_ATTEMPTS; attempt += 1) {
+        const conditions = loadConditions === undefined ? undefined : await loadConditions();
+        if (conditions === null) return null;
 
-      const sequence = await initializeNextSequence();
-      const envelope: FleetEventEnvelope = {
-        kind: event.kind,
-        sequence,
-        cursor: encodeCursor(sequence),
-        emittedAtMs: event.emittedAtMs,
-        ...(event.workflowId !== undefined ? { workflowId: event.workflowId } : {}),
-        payload: event.payload,
-      };
+        const sequence = await initializeNextSequence();
+        const envelope: FleetEventEnvelope = {
+          kind: event.kind,
+          sequence,
+          cursor: encodeCursor(sequence),
+          emittedAtMs: event.emittedAtMs,
+          ...(event.workflowId !== undefined ? { workflowId: event.workflowId } : {}),
+          payload: event.payload,
+        };
 
-      const operations: BatchOperation[] = [
-        { type: 'put', key: KEYS.fleetEvent(sequence), value: encode(envelope) },
-        { type: 'put', key: KEYS.fleetEventTail(), value: encode({ sequence }) },
-      ];
-      if (event.workflowId !== undefined) {
-        operations.push({
-          type: 'put',
-          key: KEYS.fleetEventByWorkflow(event.workflowId, sequence),
-          value: new Uint8Array(),
-        });
+        const operations: BatchOperation[] = [
+          { type: 'put', key: KEYS.fleetEvent(sequence), value: encode(envelope) },
+          { type: 'put', key: KEYS.fleetEventTail(), value: encode({ sequence }) },
+        ];
+        if (event.workflowId !== undefined) {
+          operations.push({
+            type: 'put',
+            key: KEYS.fleetEventByWorkflow(event.workflowId, sequence),
+            value: new Uint8Array(),
+          });
+        }
+
+        if (conditions === undefined) {
+          await storage.batch(operations);
+        } else {
+          const committed = await storageConditionalBatch(storage, [...conditions], operations);
+          if (!committed) continue;
+        }
+        nextSequence = sequence + 1;
+        fireLive(envelope);
+        return envelope;
       }
 
-      if (conditions === undefined) {
-        await storage.batch(operations);
-      } else {
-        const committed = await storageConditionalBatch(storage, [...conditions], operations);
-        if (!committed) return null;
-      }
-      nextSequence = sequence + 1;
-      fireLive(envelope);
-      return envelope;
+      throw new Error(
+        `Fleet event append for workflow "${event.workflowId ?? '<none>'}" lost its storage precondition after ${MAX_WORKFLOW_OWNED_APPEND_ATTEMPTS} attempts.`,
+      );
     });
 
     appendChain = appended.then(

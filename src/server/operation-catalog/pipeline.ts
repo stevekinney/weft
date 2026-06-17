@@ -22,7 +22,12 @@ export async function executeOperation<Output>(
   if (!lookup.ok) return lookup;
   const operation = lookup.value;
   const operationKind = operation.kind ?? 'unary';
-  if (operationKind === 'subscription') {
+  // REST streaming bindings use this pipeline so shapeSuccess can emit SSE.
+  // Request/response JSON-RPC transports must reject stream operations before invoke.
+  if (
+    operationKind === 'subscription' ||
+    (operationKind === 'stream' && context.transport !== 'http-rest')
+  ) {
     return dispatchFailure({
       code: 'Unprocessable',
       message: `operation "${operation.name}" is not unary`,

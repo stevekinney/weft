@@ -61,6 +61,42 @@ class PurgingConditionalBatchStorage extends MemoryStorage {
   }
 }
 
+class UpdatingConditionalBatchStorage extends MemoryStorage {
+  conditionalBatchCalls = 0;
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    this.conditionalBatchCalls += 1;
+    const workflowCondition = conditions.find(
+      (condition) => condition.key === KEYS.workflow('wf-updated'),
+    );
+    if (workflowCondition !== undefined && this.conditionalBatchCalls === 1) {
+      await super.put(workflowCondition.key, encode({ status: 'running', step: 1 }));
+    }
+    return super.conditionalBatch(conditions, operations);
+  }
+}
+
+class ContendedConditionalBatchStorage extends MemoryStorage {
+  conditionalBatchCalls = 0;
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    const workflowCondition = conditions.find(
+      (condition) => condition.key === KEYS.workflow('wf-contended'),
+    );
+    if (workflowCondition !== undefined) {
+      this.conditionalBatchCalls += 1;
+      return false;
+    }
+    return super.conditionalBatch(conditions, operations);
+  }
+}
+
 async function collect(
   iterable: AsyncIterable<FleetEventEnvelope>,
   limit: number,
@@ -157,6 +193,56 @@ describe('createFleetEventFeed', () => {
     expect(await storage.get(KEYS.fleetEvent(0))).toBeNull();
     expect(await storage.get(KEYS.fleetEventByWorkflow('wf-race', 0))).toBeNull();
     feed.dispose();
+  });
+
+  it('retries a workflow-owned append when the workflow record changes before commit', async () => {
+    const storage = new UpdatingConditionalBatchStorage();
+    await storage.put(KEYS.workflow('wf-updated'), encode({ status: 'running', step: 0 }));
+    const feed = createFleetEventFeed(storage);
+
+    const appended = await feed.appendWorkflowEventIfPresent({
+      kind: 'workflow:completed',
+      workflowId: 'wf-updated',
+      emittedAtMs: 1,
+      payload: { workflowId: 'wf-updated' },
+    });
+
+    expect(storage.conditionalBatchCalls).toBe(2);
+    expect(appended?.sequence).toBe(0);
+    expect(await storage.get(KEYS.fleetEvent(0))).not.toBeNull();
+    expect(await storage.get(KEYS.fleetEventByWorkflow('wf-updated', 0))).not.toBeNull();
+    expect(await storage.get(KEYS.fleetEvent(1))).toBeNull();
+    feed.dispose();
+  });
+
+  it('fails loudly without advancing the sequence when workflow-owned append contention persists', async () => {
+    const storage = new ContendedConditionalBatchStorage();
+    await storage.put(KEYS.workflow('wf-contended'), encode({ status: 'running' }));
+    const feed = createFleetEventFeed(storage);
+
+    try {
+      await expect(
+        feed.appendWorkflowEventIfPresent({
+          kind: 'workflow:completed',
+          workflowId: 'wf-contended',
+          emittedAtMs: 1,
+          payload: { workflowId: 'wf-contended' },
+        }),
+      ).rejects.toThrow('lost its storage precondition after 5 attempts');
+
+      expect(storage.conditionalBatchCalls).toBe(5);
+      expect(await storage.get(KEYS.workflow('wf-contended'))).not.toBeNull();
+      expect(await storage.get(KEYS.fleetEvent(0))).toBeNull();
+
+      const later = await feed.append({
+        kind: 'worker:connected',
+        emittedAtMs: 2,
+        payload: { workerId: 'worker-a' },
+      });
+      expect(later.sequence).toBe(0);
+    } finally {
+      feed.dispose();
+    }
   });
 
   it('subscribes with replay then live events under one cursor space', async () => {
