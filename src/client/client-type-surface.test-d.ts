@@ -17,6 +17,9 @@ import { MemoryStorage } from '../storage/memory.ts';
 import type { StartOrSignalOutcome as OutcomeFromClientBarrel } from './index.ts';
 import { LocalClient } from './local.ts';
 
+type Equals<X, Y> =
+  (<T>() => T extends X ? 1 : 2) extends <T>() => T extends Y ? 1 : 2 ? true : false;
+
 // --- Issue #583: StartOrSignalOutcome export surface -------------------------
 
 // Both re-exports must resolve to the same underlying union.
@@ -30,13 +33,7 @@ const _clientToRoot: OutcomeFromRoot = outcomeClient;
 void _clientToRoot;
 
 // The union must only admit the documented members — exact-type check.
-type _ExactOutcomeUnion = OutcomeFromRoot extends 'started' | 'signalled'
-  ? 'started' | 'signalled' extends OutcomeFromRoot
-    ? true
-    : never
-  : never;
-declare const _exactCheck: _ExactOutcomeUnion;
-const _provedExact: true = _exactCheck;
+const _provedExact: Equals<OutcomeFromRoot, 'started' | 'signalled'> = true;
 void _provedExact;
 
 // @ts-expect-error: 'pending' is not a valid StartOrSignalOutcome.
@@ -75,3 +72,16 @@ void proveBrandedEngineAccepted;
 declare const bareEngine: Engine;
 const _bareClient = new LocalClient(bareEngine);
 void _bareClient;
+
+// Generic constructor must infer without any cast.
+async function proveGenericConstructor(): Promise<void> {
+  const brandedEngine2 = await Engine.create({
+    storage,
+    workflows: { greet: greetWorkflow },
+    recover: false,
+  });
+  // No `as` cast — constructor is generic and infers TWorkflows from brandedEngine2.
+  const _typedClient = new LocalClient(brandedEngine2);
+  void _typedClient;
+}
+void proveGenericConstructor;

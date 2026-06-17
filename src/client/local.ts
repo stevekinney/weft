@@ -29,6 +29,8 @@ import type {
   BulkSignalResult,
   BulkTagResult,
   CoordinatedUpdateResult,
+  DefaultActivityTypes,
+  DefaultWorkflowRegistry,
   ForkOptions,
   ListFilter,
   MessageName,
@@ -151,7 +153,10 @@ class LocalScheduleHandle extends ScheduleHandleDelegation<LocalClient> {
  * console.log(await handle.result()); // 'Hello, World!'
  * ```
  */
-export class LocalClient implements WeftClient {
+export class LocalClient<
+  TWorkflows extends object = DefaultWorkflowRegistry,
+  TActivities extends object = DefaultActivityTypes,
+> implements WeftClient {
   readonly #engine: RuntimeWorkflowEngine;
   /** The raw engine, kept for the in-process event feed used by {@link tail}. */
   readonly #rawEngine: Engine;
@@ -175,17 +180,16 @@ export class LocalClient implements WeftClient {
    * ```
    */
   readonly activity: WeftClientActivity;
-
-  constructor(engine: Engine<any, any>) {
+  constructor(engine: Engine<TWorkflows, TActivities> | Engine) {
     this.#engine = runtimeWorkflowEngine(engine);
-    this.#rawEngine = engine;
+    this.#rawEngine = engine as Engine;
     this.activity = {
       complete: (token, result) => this.#engine.completeAsyncActivity(token, result),
       completeExceptionally: (token, error) => this.#engine.failAsyncActivity(token, error),
     };
     this.operations = createCatalogWeftClient<CatalogOperationTypes>(
       CATALOG_OPERATION_NAMES,
-      inProcessCatalogTransport(engine),
+      inProcessCatalogTransport(this.#rawEngine),
     );
   }
 
