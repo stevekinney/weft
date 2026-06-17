@@ -50,6 +50,8 @@ export const workflowEventsSubscriptionOperation = defineOperation<
   mcpExposable: false,
   kind: 'subscription',
   summary: 'Subscribe to workflow events with replay-from-cursor',
+  description:
+    '`selector: "events"` requires `events:read`; `selector: "tokens"` requires `streams:read`. The grant is checked when the WebSocket subscription starts and remains active until unsubscribe, socket close, or feed termination.',
   destructive: false,
   tags: ['Events'],
   inputSchema: workflowEventsSubscriptionInput,

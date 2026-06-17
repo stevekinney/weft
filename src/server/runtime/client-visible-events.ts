@@ -59,8 +59,4 @@ export const EVENTS_READ_EVENT_TYPES = [
   WorkerDisconnectedEvent.type,
 ] as const;
 
-export const CLIENT_VISIBLE_EVENT_TYPES = [
-  ...EVENTS_READ_EVENT_TYPES.slice(0, 13),
-  TOKEN_EVENT_TYPE,
-  ...EVENTS_READ_EVENT_TYPES.slice(13),
-] as const;
+export const CLIENT_VISIBLE_EVENT_TYPES = [...EVENTS_READ_EVENT_TYPES, TOKEN_EVENT_TYPE] as const;

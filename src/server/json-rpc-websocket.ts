@@ -16,6 +16,7 @@
  */
 
 import { faultToJsonRpcError } from './fault-to-json-rpc.ts';
+import type { FleetEventEnvelope } from './fleet-event-feed.ts';
 import { dispatchJsonRpc } from './json-rpc-dispatch.ts';
 import { JSON_RPC_ERROR_CODES, JSON_RPC_VERSION, type JsonRpcId } from './json-rpc-protocol.ts';
 import {
@@ -33,6 +34,7 @@ import {
   validateSubscribeParams,
 } from './json-rpc-websocket-validation.ts';
 import { executeSubscription, SubscriptionElementValidationError } from './operation-catalog.ts';
+import type { EventEnvelope } from './workflow-event-feed.ts';
 
 export type {
   JsonRpcWebSocketEmitter,
@@ -54,6 +56,13 @@ type SessionRequest = {
   readonly id: JsonRpcId | undefined;
   readonly expectsResponse: boolean;
 };
+
+type SubscriptionStartEnvelope = {
+  readonly subscriptionId: string;
+  readonly cursor: string;
+};
+
+type JsonRpcSubscriptionEnvelope = EventEnvelope | FleetEventEnvelope;
 
 export function createJsonRpcWebSocketSession(
   options: JsonRpcWebSocketSessionOptions,
@@ -137,7 +146,7 @@ export function createJsonRpcWebSocketSession(
     }
 
     const controller = new AbortController();
-    const result = await executeSubscription<unknown, { subscriptionId: string; cursor: string }>(
+    const result = await executeSubscription<EventEnvelope, SubscriptionStartEnvelope>(
       'weft.workflows.events',
       {
         workflowId: validation.workflowId,
@@ -209,7 +218,7 @@ export function createJsonRpcWebSocketSession(
     }
 
     const controller = new AbortController();
-    const result = await executeSubscription<unknown, { subscriptionId: string; cursor: string }>(
+    const result = await executeSubscription<FleetEventEnvelope, SubscriptionStartEnvelope>(
       FLEET_EVENTS_OPERATION_NAME,
       params ?? {},
       {
@@ -252,9 +261,9 @@ export function createJsonRpcWebSocketSession(
     });
   }
 
-  async function pumpSubscriptionIterable(
+  async function pumpSubscriptionIterable<TEnvelope extends JsonRpcSubscriptionEnvelope>(
     subscriptionId: string,
-    iterable: AsyncIterable<unknown>,
+    iterable: AsyncIterable<TEnvelope>,
     signal: AbortSignal,
     closeSubscription: () => Promise<void>,
   ): Promise<void> {
@@ -347,7 +356,7 @@ export function createJsonRpcWebSocketSession(
     }
   }
 
-  function deliver(subscriptionId: string, envelope: unknown): void {
+  function deliver(subscriptionId: string, envelope: JsonRpcSubscriptionEnvelope): void {
     emit({
       jsonrpc: JSON_RPC_VERSION,
       method: SESSION_METHODS.DELIVER,

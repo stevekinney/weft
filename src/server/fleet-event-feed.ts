@@ -77,7 +77,6 @@ export function createFleetEventFeed(
   async function append(event: FleetEventInput): Promise<FleetEventEnvelope> {
     const appended = appendChain.then(async () => {
       const sequence = await initializeNextSequence();
-      nextSequence = sequence + 1;
       const envelope: FleetEventEnvelope = {
         kind: event.kind,
         sequence,
@@ -91,6 +90,7 @@ export function createFleetEventFeed(
         { type: 'put', key: KEYS.fleetEvent(sequence), value: encode(envelope) },
         { type: 'put', key: KEYS.fleetEventTail(), value: encode({ sequence }) },
       ]);
+      nextSequence = sequence + 1;
       fireLive(envelope);
       return envelope;
     });
@@ -105,7 +105,9 @@ export function createFleetEventFeed(
   async function* replayPersistedFleetEvents(options: {
     afterSequence: number;
   }): AsyncIterable<FleetEventEnvelope> {
-    for await (const [key, value] of storage.scan(KEYS.fleetEventPrefix())) {
+    const scanOptions =
+      options.afterSequence >= 0 ? { gt: KEYS.fleetEvent(options.afterSequence) } : undefined;
+    for await (const [key, value] of storage.scan(KEYS.fleetEventPrefix(), scanOptions)) {
       const sequence = parseFleetEventSequenceFromKey(key);
       if (sequence === null || sequence <= options.afterSequence) continue;
       const decoded = decodeStorageValue(value);
@@ -119,18 +121,14 @@ export function createFleetEventFeed(
     const decodedTail = storedTail === null ? null : decodeStorageValue(storedTail);
     if (isTailRecord(decodedTail)) return decodedTail.sequence;
 
-    let highestSequence = -1;
     for await (const [key] of storage.scan(KEYS.fleetEventPrefix(), {
       reverse: true,
       limit: 50,
     })) {
       const sequence = parseFleetEventSequenceFromKey(key);
-      if (sequence !== null && sequence > highestSequence) {
-        highestSequence = sequence;
-        break;
-      }
+      if (sequence !== null) return sequence;
     }
-    return highestSequence;
+    return -1;
   }
 
   function subscribeLive(listener: (envelope: FleetEventEnvelope) => void): () => void {

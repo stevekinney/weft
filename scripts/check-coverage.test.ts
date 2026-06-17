@@ -147,11 +147,6 @@ describe('parseLcov', () => {
         if (command === 'rg') {
           return 'src/example.test.ts\n';
         }
-        if (command === 'bun') {
-          const error = new Error('coverage shard failed') as Error & { status: number };
-          error.status = 1;
-          throw error;
-        }
         throw new Error(`Unexpected command: ${command}`);
       },
     }));
@@ -160,9 +155,26 @@ describe('parseLcov', () => {
 
     try {
       using consoleErrorSpy = spyOn(console, 'error').mockImplementation(errorSpy);
+      using spawnSpy = spyOn(Bun, 'spawn').mockImplementation(
+        () =>
+          ({
+            exited: Promise.resolve(1),
+            stderr: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.close();
+              },
+            }),
+            stdout: new ReadableStream<Uint8Array>({
+              start(controller) {
+                controller.close();
+              },
+            }),
+          }) as ReturnType<typeof Bun.spawn>,
+      );
       const { checkCoverage } = await import(`./check-coverage.ts?failure=${randomUUID()}`);
 
       await expect(checkCoverage()).resolves.toBe(false);
+      expect(spawnSpy).toHaveBeenCalled();
       expect(consoleErrorSpy).toHaveBeenCalledWith('Coverage execution failed.');
     } finally {
       mock.restore();

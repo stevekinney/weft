@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 
 import { encode } from '../core/codec.ts';
-import { KEYS } from '../storage/interface.ts';
+import { KEYS, type BatchOperation, type ScanOptions } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { createFleetEventFeed, type FleetEventEnvelope } from './fleet-event-feed.ts';
 
@@ -14,6 +14,30 @@ class FailingTailReadStorage extends MemoryStorage {
       throw new Error('tail read failed');
     }
     return super.get(key);
+  }
+}
+
+class FailingFleetBatchStorage extends MemoryStorage {
+  failNextFleetBatch = true;
+
+  override async batch(operations: BatchOperation[]): Promise<void> {
+    if (
+      this.failNextFleetBatch &&
+      operations.some((operation) => operation.key.startsWith(KEYS.fleetEventPrefix()))
+    ) {
+      this.failNextFleetBatch = false;
+      throw new Error('fleet batch failed');
+    }
+    await super.batch(operations);
+  }
+}
+
+class RecordingScanStorage extends MemoryStorage {
+  readonly scanCalls: Array<{ prefix: string; options: ScanOptions | undefined }> = [];
+
+  override scan(prefix: string, options?: ScanOptions): AsyncIterable<[string, Uint8Array]> {
+    this.scanCalls.push({ prefix, options });
+    return super.scan(prefix, options);
   }
 }
 
@@ -127,6 +151,55 @@ describe('createFleetEventFeed', () => {
 
     expect(appended.sequence).toBe(0);
     expect(appended.cursor).toBe('0');
+    feed.dispose();
+  });
+
+  it('does not advance the next sequence when durable append fails', async () => {
+    const storage = new FailingFleetBatchStorage();
+    const feed = createFleetEventFeed(storage);
+
+    await expect(
+      feed.append({
+        kind: 'workflow:started',
+        workflowId: 'wf-fail',
+        emittedAtMs: 1,
+        payload: { workflowId: 'wf-fail' },
+      }),
+    ).rejects.toThrow('fleet batch failed');
+
+    const appended = await feed.append({
+      kind: 'workflow:started',
+      workflowId: 'wf-recovered',
+      emittedAtMs: 2,
+      payload: { workflowId: 'wf-recovered' },
+    });
+
+    expect(appended.sequence).toBe(0);
+    expect(appended.cursor).toBe('0');
+    await expect(feed.snapshotTailSequence()).resolves.toBe(0);
+    feed.dispose();
+  });
+
+  it('uses a lower-bound scan when replaying after a cursor', async () => {
+    const storage = new RecordingScanStorage();
+    const feed = createFleetEventFeed(storage);
+
+    for (let index = 0; index < 5; index += 1) {
+      await feed.append({
+        kind: 'workflow:started',
+        workflowId: `wf-${index}`,
+        emittedAtMs: index,
+        payload: { workflowId: `wf-${index}` },
+      });
+    }
+
+    const replayed = await collect(feed.replay({ fromCursor: '2' }), 10);
+
+    expect(replayed.map((envelope) => envelope.sequence)).toEqual([3, 4]);
+    expect(storage.scanCalls).toContainEqual({
+      prefix: KEYS.fleetEventPrefix(),
+      options: { gt: KEYS.fleetEvent(2) },
+    });
     feed.dispose();
   });
 

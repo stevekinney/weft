@@ -138,4 +138,43 @@ describe('watch WebSocket delivery', () => {
     expect(sentMessages).toEqual(['pending-watch-frame']);
     expect(logged[0]![0]).toBe('[weft] Failed to replay watch events for workflow "wf-watch":');
   });
+
+  it('skips malformed stored watch records and continues replaying later events', async () => {
+    const context = minimalServerContext();
+    const storage = new MemoryStorage();
+    await storage.put(KEYS.event('wf-watch', 1), new Uint8Array([0xc1]));
+    await storage.put(
+      KEYS.event('wf-watch', 2),
+      encode({
+        type: 'workflow:suspended',
+        timestamp: 2,
+        data: { workflowId: 'wf-watch' },
+      }),
+    );
+    const sentMessages: string[] = [];
+    const socket = {
+      data: {
+        pathname: '/v1/workflows/wf-watch/watch',
+        connectionType: 'watch',
+        workflowId: 'wf-watch',
+        watchReplayInProgress: true,
+        pendingWatchMessages: [],
+      },
+      send(message: string) {
+        sentMessages.push(message);
+      },
+      close() {},
+    } as unknown as ServerWebSocket<WebSocketData>;
+    const engine = { storage } as unknown as Engine;
+
+    await replayWatchEvents(context, engine, socket, 'wf-watch');
+
+    expect(sentMessages).toHaveLength(1);
+    expect(JSON.parse(sentMessages[0]!)).toMatchObject({
+      type: 'workflow:suspended',
+      sequence: 2,
+      cursor: '2',
+    });
+    expect(socket.data.watchReplayInProgress).toBe(false);
+  });
 });

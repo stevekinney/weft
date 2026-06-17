@@ -330,7 +330,7 @@ export async function replayWatchEvents(
     for await (const [storageKey, value] of engine.storage.scan(prefix, scanOptions)) {
       const sequence = parseSequenceFromEventKey(prefix, storageKey);
       if (sequence === null || sequence <= after) continue;
-      const decoded = decode(value);
+      const decoded = decodeStoredWatchEvent(value);
       if (!isStoredWatchEvent(decoded)) continue;
       sendWatchMessage(
         ws,
@@ -349,6 +349,14 @@ export async function replayWatchEvents(
   } finally {
     ws.data.watchReplayInProgress = false;
     flushPendingWatchMessages(context, ws);
+  }
+}
+
+function decodeStoredWatchEvent(value: Uint8Array): unknown {
+  try {
+    return decode(value);
+  } catch {
+    return null;
   }
 }
 
