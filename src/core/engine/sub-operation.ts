@@ -104,6 +104,7 @@ const subOperationExecutors: SubOperationExecutorMap = {
       context.workflowId,
       operation,
       context.callbacks,
+      context.signal,
       context.speculativeState,
     ),
   'child-workflow': (context, operation) =>
@@ -167,6 +168,7 @@ async function executeActivitySubOperation(
   workflowId: string,
   operation: Extract<ContextOperationRequest, { type: 'activity' }>,
   callbacks: SubOperationCallbacks,
+  signal?: AbortSignal,
   speculativeState?: SpeculativeExecutionState,
 ): Promise<unknown> {
   return executeActivityOperationResult(
@@ -174,6 +176,7 @@ async function executeActivitySubOperation(
     workflowId,
     operation,
     callbacks.createActivityOperationCallbacks(),
+    signal,
     speculativeState,
   );
 }

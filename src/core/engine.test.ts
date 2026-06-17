@@ -476,7 +476,7 @@ describe('Engine', () => {
       engine = await Engine.create({ recover: true });
       expect(startSpy).toHaveBeenCalledTimes(1);
     } finally {
-      engine?.[Symbol.dispose]();
+      await engine?.[Symbol.asyncDispose]();
       startSpy.mockRestore();
     }
   });
@@ -493,7 +493,7 @@ describe('Engine', () => {
       engine = await Engine.create({ recover: false });
       expect(startSpy).not.toHaveBeenCalled();
     } finally {
-      engine?.[Symbol.dispose]();
+      await engine?.[Symbol.asyncDispose]();
       startSpy.mockRestore();
     }
   });

@@ -357,6 +357,7 @@ describe('activity operation helpers', () => {
       'workflow-id',
       operation,
       createCallbacks(),
+      undefined,
       {
         recordCompensation: () => undefined,
         recordVerification: (verification: Promise<void>) => {
@@ -844,6 +845,7 @@ describe('activity operation helpers', () => {
         'workflow-id',
         operation,
         createCallbacks(),
+        undefined,
         {
           recordCompensation: () => undefined,
           recordVerification: (verification: Promise<void>) => {

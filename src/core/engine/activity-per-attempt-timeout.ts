@@ -19,11 +19,17 @@ type ActivityOperation = Extract<ContextOperationRequest, { type: 'activity' }>;
  * EITHER workflow cancellation OR a per-attempt timeout — without the timeout
  * reaching back to cancel the whole workflow (which would also poison the next
  * retry's signal).
+ *
+ * An optional `coordinatorSignal` (from a `ctx.race` or `ctx.all` coordinator)
+ * is also composed in (#584): when a sibling branch wins the race, the coordinator
+ * aborts its controller, propagating to the activity's `ctx.signal` for
+ * cooperative cancellation of losing activity branches.
  */
 export function resolvePerAttemptTimeout(
   internals: EngineInternals,
   workflowId: string,
   operation: ActivityOperation,
+  coordinatorSignal?: AbortSignal,
 ): {
   perAttemptTimeoutMs: number | undefined;
   attemptAbortController: AbortController | undefined;
@@ -38,21 +44,24 @@ export function resolvePerAttemptTimeout(
   const activitySignal = composeActivitySignal(
     workflowAbortController?.signal,
     attemptAbortController?.signal,
+    coordinatorSignal,
   );
   return { perAttemptTimeoutMs, attemptAbortController, activitySignal };
 }
 
 /**
- * Compose the activity's `ctx.signal` from the workflow-wide cancellation signal
- * and the optional per-attempt timeout signal. The activity aborts on EITHER
- * source. Falls back to a lone signal (or a never-aborting one) so the activity
- * context always has a usable `AbortSignal`.
+ * Compose the activity's `ctx.signal` from the workflow-wide cancellation signal,
+ * the optional per-attempt timeout signal, and the optional coordinator signal
+ * (from a `ctx.race` / `ctx.all` branch context). The activity aborts when ANY
+ * source fires. Falls back to a lone signal (or a never-aborting one) so the
+ * activity context always has a usable `AbortSignal`.
  */
 function composeActivitySignal(
   workflowSignal: AbortSignal | undefined,
   attemptSignal: AbortSignal | undefined,
+  coordinatorSignal?: AbortSignal,
 ): AbortSignal {
-  const signals = [workflowSignal, attemptSignal].filter(
+  const signals = [workflowSignal, attemptSignal, coordinatorSignal].filter(
     (signal): signal is AbortSignal => signal !== undefined,
   );
   const [first] = signals;

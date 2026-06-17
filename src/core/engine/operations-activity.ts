@@ -160,6 +160,7 @@ export async function executeActivity(
   operation: ActivityOperation,
   callbacks: ActivityOperationCallbacks,
   attempt = getActivityAttempt(operation),
+  coordinatorSignal?: AbortSignal,
 ): Promise<unknown> {
   const activityInput = operation.input;
 
@@ -178,6 +179,7 @@ export async function executeActivity(
     internals,
     workflowId,
     operation,
+    coordinatorSignal,
   );
   const activityContext = buildActivityContext(internals, workflowId, step, activitySignal, () => {
     throw new AsyncActivityDeferral(asyncToken);
@@ -269,6 +271,7 @@ export async function executeActivityOperationResult(
   workflowId: string,
   operation: ActivityOperation,
   callbacks: ActivityOperationCallbacks,
+  coordinatorSignal?: AbortSignal,
   speculativeState?: SpeculativeExecutionState,
 ): Promise<unknown> {
   const activity = getActivityFunctionWithMetadata(internals, workflowId, operation);
@@ -302,6 +305,7 @@ export async function executeActivityOperationResult(
       operation,
       callbacks,
       started.attempt,
+      coordinatorSignal,
     );
     validateActivityResultForReconciliation(result, internals.options.payloadSizePolicy.maxBytes);
     await finalizeActivityResult(
@@ -342,6 +346,7 @@ export async function executeActivityOperationResult(
     operation,
     callbacks,
     operationAttempt,
+    coordinatorSignal,
   );
 
   assertPayloadWithinLimit(result, internals.options.payloadSizePolicy.maxBytes, 'activity result');

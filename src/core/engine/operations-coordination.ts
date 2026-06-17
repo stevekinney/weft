@@ -503,6 +503,7 @@ export async function executeRunAllOperationResult(
           input,
         },
         callbacks.getActivityOperationCallbacks(),
+        undefined,
         speculativeState,
       );
     },

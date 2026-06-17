@@ -1,13 +1,18 @@
 /**
- * #453: cooperative activity cancellation — the TRUE behavior.
+ * #453 / #584: cooperative activity cancellation — the CURRENT behavior.
  *
- * Weft activity cancellation is cooperative AND fires only on WORKFLOW
- * cancellation. `ActivityContext.signal` is derived from the per-workflow
- * AbortController, which `engine.cancel()` aborts. A `ctx.race()` branch LOSS
- * does NOT abort the losing activity's signal — the race is a result-selection
- * primitive, not a cancellation primitive: it stops awaiting the loser but lets
- * it run to completion. These tests pin both directions so the docs (and users
- * migrating from Temporal's CancellationScope) describe what actually happens.
+ * `ActivityContext.signal` is composed from three sources: the per-workflow
+ * AbortController (fired by `engine.cancel()`), an optional per-attempt timeout
+ * controller, and the coordinator's AbortController when the activity runs as a
+ * `ctx.race()` branch (#584 contract reversal).
+ *
+ * As of #584, a `ctx.race()` branch LOSS fires the losing activity's `ctx.signal`
+ * via the coordinator's AbortController — consistent with how losing sleep and
+ * wait-signal branches are torn down, and enabling the supersede idiom to signal
+ * cooperative cancellation without application-level generation fencing.
+ *
+ * These tests pin the current behavior so migrations from Temporal's
+ * CancellationScope are documented accurately.
  */
 import { describe, expect, it } from 'bun:test';
 
@@ -16,12 +21,11 @@ import type { ActivityContext, WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
 import { Engine } from './index.ts';
 
-describe('#453 cooperative activity cancellation', () => {
-  it('does NOT abort a losing activity signal when a ctx.race branch wins', async () => {
+describe('#453/#584 cooperative activity cancellation', () => {
+  it('DOES abort a losing activity signal when a ctx.race sibling wins (#584)', async () => {
     await using engine = new Engine();
     let losingActivityStarted = false;
     let losingSignalAborted = false;
-    let losingActivityCompleted = false;
     let releaseLoser: () => void = () => {};
 
     const slowLoser = activity({
@@ -31,10 +35,11 @@ describe('#453 cooperative activity cancellation', () => {
         ctx?.signal.addEventListener('abort', () => {
           losingSignalAborted = true;
         });
+        // Park until released or the coordinator aborts the signal.
         await new Promise<void>((resolve) => {
           releaseLoser = resolve;
+          ctx?.signal.addEventListener('abort', () => resolve());
         });
-        losingActivityCompleted = true;
         return 'loser-done';
       },
     });
@@ -57,14 +62,14 @@ describe('#453 cooperative activity cancellation', () => {
 
     const winner = await handle.result();
     expect(winner).toBe('signal-wins');
-    // Drain pending microtasks so that if a race loss WERE going to abort the
-    // loser's signal, the abort listener would have fired by now. It must not.
-    await flushMicrotasks();
-    // The race settled — but the losing activity's signal was NOT aborted.
-    expect(losingSignalAborted).toBe(false);
-    // The loser is still running (we never released it); it was abandoned, not
-    // cancelled. Release it so it does not leak.
-    expect(losingActivityCompleted).toBe(false);
+    // The race coordinator aborts its controller when a sibling wins, which
+    // propagates into the losing activity's ctx.signal (#584).
+    await waitForCondition(() => losingSignalAborted, {
+      timeoutMs: 2000,
+      label: 'losing activity signal aborted after race loss',
+    });
+    expect(losingSignalAborted).toBe(true);
+    // Release the loser in case the abort listener did not already resolve it.
     releaseLoser();
   });
 
@@ -212,5 +217,65 @@ describe('#453 cooperative activity cancellation', () => {
 
     // The bail-out happened at the top of the resumed iteration: no further poll ran.
     expect(iterations).toBe(iterationsBeforeCancel);
+  });
+
+  it('#584 supersede: waitForSignal win fires the concurrent activity ctx.signal', async () => {
+    // Regression test for #584. The canonical supersede idiom:
+    //   ctx.race([ ctx.run('longActivity', ...), ctx.waitForSignal('supersede') ])
+    // When the signal wins, the losing activity's ctx.signal must be aborted so
+    // cooperative activities can stop writing stale output. Before #584, the
+    // coordinator AbortController was not threaded into activity ctx.signal, so
+    // the activity ran to completion silently.
+    await using engine = new Engine();
+    let activityAbortObserved = false;
+    let activityStarted = false;
+    let releaseActivity: () => void = () => {};
+
+    const longActivity = activity({
+      name: 'analyze',
+      execute: async (_input: unknown, ctx?: ActivityContext) => {
+        activityStarted = true;
+        ctx?.signal.addEventListener('abort', () => {
+          activityAbortObserved = true;
+        });
+        // Park until signal fires (supersede) or explicit release.
+        await new Promise<void>((resolve) => {
+          releaseActivity = resolve;
+          ctx?.signal.addEventListener('abort', () => resolve());
+        });
+        return 'analysis-result';
+      },
+    });
+
+    engine.register(
+      workflow({ name: 'supersede-wf' })
+        .activities({ analyze: longActivity })
+        .execute(async function* (ctx: WorkflowContext) {
+          return yield* ctx.race([
+            ctx.run('analyze', null),
+            ctx.waitForSignal<string>('supersede'),
+          ]);
+        }),
+    );
+
+    const handle = await engine.start('supersede-wf', null, { id: 'supersede-1' });
+    await waitForCondition(() => activityStarted, {
+      timeoutMs: 2000,
+      label: 'long activity started',
+    });
+
+    // The supersede signal arrives while the activity is in-flight.
+    await engine.signal('supersede-1', 'supersede', 'newer-event');
+    const winner = await handle.result();
+    expect(winner).toBe('newer-event');
+
+    // The activity's ctx.signal must have been aborted by the coordinator.
+    await waitForCondition(() => activityAbortObserved, {
+      timeoutMs: 2000,
+      label: 'in-flight activity ctx.signal aborted by supersede',
+    });
+    expect(activityAbortObserved).toBe(true);
+    // Release in case the abort listener did not already unpark the activity.
+    releaseActivity();
   });
 });

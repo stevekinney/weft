@@ -466,8 +466,9 @@ export class Engine<
             : {},
         );
         // Start polling after recovery so durable timers fire for long-lived
-        // in-process engines (#586). Engines that skip recovery (recover:false)
-        // drive the scheduler manually and bypass this line.
+        // in-process engines (#586). recover:false intentionally skips
+        // auto-starting the scheduler (tests / ScopedStorage / inspection);
+        // it does not imply callers tick the scheduler themselves.
         getInternals(engine).scheduler.start();
       }
     } catch (error) {
