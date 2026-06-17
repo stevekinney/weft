@@ -1,5 +1,11 @@
 import { decode, encode } from '../core/codec.ts';
-import { KEYS, type BatchOperation, type Storage } from '../storage/interface.ts';
+import {
+  KEYS,
+  storageConditionalBatch,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  type Storage,
+} from '../storage/interface.ts';
 import {
   createReplayLiveFeed,
   decodeCursor,
@@ -28,8 +34,13 @@ export type FleetEventInput = {
   readonly payload: unknown;
 };
 
+export type FleetWorkflowEventInput = FleetEventInput & {
+  readonly workflowId: string;
+};
+
 export type FleetEventFeed = {
   append(event: FleetEventInput): Promise<FleetEventEnvelope>;
+  appendWorkflowEventIfPresent(event: FleetWorkflowEventInput): Promise<FleetEventEnvelope | null>;
   replay(options?: { fromCursor?: Cursor; limit?: number }): AsyncIterable<FleetEventEnvelope>;
   subscribe(
     options?: ReplayLiveSubscribeOptions<FleetEventEnvelope>,
@@ -77,7 +88,32 @@ export function createFleetEventFeed(
   }
 
   async function append(event: FleetEventInput): Promise<FleetEventEnvelope> {
+    return appendInternal(event);
+  }
+
+  async function appendWorkflowEventIfPresent(
+    event: FleetWorkflowEventInput,
+  ): Promise<FleetEventEnvelope | null> {
+    return appendInternal(event, async () => {
+      const workflowValue = await storage.get(KEYS.workflow(event.workflowId));
+      if (workflowValue === null) return null;
+      return [{ key: KEYS.workflow(event.workflowId), expectedValue: workflowValue }];
+    });
+  }
+
+  function appendInternal(event: FleetEventInput): Promise<FleetEventEnvelope>;
+  function appendInternal(
+    event: FleetEventInput,
+    loadConditions: () => Promise<readonly ConditionalBatchCondition[] | null>,
+  ): Promise<FleetEventEnvelope | null>;
+  async function appendInternal(
+    event: FleetEventInput,
+    loadConditions?: () => Promise<readonly ConditionalBatchCondition[] | null>,
+  ): Promise<FleetEventEnvelope | null> {
     const appended = appendChain.then(async () => {
+      const conditions = loadConditions === undefined ? undefined : await loadConditions();
+      if (conditions === null) return null;
+
       const sequence = await initializeNextSequence();
       const envelope: FleetEventEnvelope = {
         kind: event.kind,
@@ -100,7 +136,12 @@ export function createFleetEventFeed(
         });
       }
 
-      await storage.batch(operations);
+      if (conditions === undefined) {
+        await storage.batch(operations);
+      } else {
+        const committed = await storageConditionalBatch(storage, [...conditions], operations);
+        if (!committed) return null;
+      }
       nextSequence = sequence + 1;
       fireLive(envelope);
       return envelope;
@@ -159,6 +200,7 @@ export function createFleetEventFeed(
 
   return {
     append,
+    appendWorkflowEventIfPresent,
     replay: (options) => replayLiveFeed.replay(options),
     subscribe: (options) => replayLiveFeed.subscribe(options),
     snapshotTailSequence,

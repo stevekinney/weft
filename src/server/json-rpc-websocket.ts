@@ -23,6 +23,7 @@ import {
   createSubscriptionErrorTerminatedFrame,
   FLEET_EVENTS_OPERATION_NAME,
   SESSION_METHODS,
+  WORKFLOW_EVENTS_OPERATION_NAME,
 } from './json-rpc-websocket-subscriptions.ts';
 import type {
   JsonRpcWebSocketSession,
@@ -146,7 +147,7 @@ export function createJsonRpcWebSocketSession(
 
     const controller = new AbortController();
     const result = await executeSubscription<EventEnvelope, SubscriptionStartEnvelope>(
-      'weft.workflows.events',
+      WORKFLOW_EVENTS_OPERATION_NAME,
       {
         workflowId: validation.workflowId,
         selector: validation.selector,
@@ -398,6 +399,7 @@ export function createJsonRpcWebSocketSession(
   function isSessionPrimitive(method: unknown): boolean {
     return (
       method === SESSION_METHODS.SUBSCRIBE ||
+      method === WORKFLOW_EVENTS_OPERATION_NAME ||
       method === SESSION_METHODS.FLEET_SUBSCRIBE ||
       method === SESSION_METHODS.UNSUBSCRIBE
     );
@@ -419,7 +421,10 @@ export function createJsonRpcWebSocketSession(
       id: validation.id,
       expectsResponse: validation.hasRequestId,
     };
-    if (validation.method === SESSION_METHODS.SUBSCRIBE) {
+    if (
+      validation.method === SESSION_METHODS.SUBSCRIBE ||
+      validation.method === WORKFLOW_EVENTS_OPERATION_NAME
+    ) {
       await handleSubscribe(request, validation.params);
     } else if (validation.method === SESSION_METHODS.FLEET_SUBSCRIBE) {
       await handleFleetSubscribe(request, validation.params);

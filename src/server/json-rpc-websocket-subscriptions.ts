@@ -11,6 +11,7 @@ export const SESSION_METHODS = {
   TERMINATED: 'weft.events.terminated',
 } as const;
 
+export const WORKFLOW_EVENTS_OPERATION_NAME = 'weft.workflows.events';
 export const FLEET_EVENTS_OPERATION_NAME = 'weft.events.subscribe';
 
 const ENGINE_FAILURE_FAULT: OperationFault = {

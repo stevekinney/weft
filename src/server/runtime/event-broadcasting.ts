@@ -358,6 +358,8 @@ export function wireEventBroadcasting(
       `persist event "${eventType}" for workflow "${workflowId}"`,
     );
 
+    await appendFleetEvent(options?.fleetEventFeed, eventType, workflowId, message);
+
     // Publish to the workflow's watch channel
     if (options?.publishWatchMessage) {
       options.publishWatchMessage(workflowId, sequence, watchMessage);
@@ -374,8 +376,10 @@ export function wireEventBroadcasting(
         const workflowId = getWorkflowIdFromEvent(event);
         const message = serializeEvent(event);
         if (message === null) return;
-        void appendFleetEvent(options?.fleetEventFeed, eventType, workflowId, message);
-        if (workflowId === undefined) return;
+        if (workflowId === undefined) {
+          void appendFleetEvent(options?.fleetEventFeed, eventType, undefined, message);
+          return;
+        }
 
         // Persist the event to storage for the REST events endpoint.
         // Sequence initialization is async (reads storage on first access per
@@ -463,11 +467,18 @@ async function appendFleetEvent(
       timestamp: number;
       data: Record<string, unknown>;
     };
-    await fleetEventFeed.append({
+    const event = {
       kind: eventType,
       emittedAtMs: parsed.timestamp,
-      ...(workflowId !== undefined ? { workflowId } : {}),
       payload: parsed.data,
+    };
+    if (workflowId === undefined) {
+      await fleetEventFeed.append(event);
+      return;
+    }
+    await fleetEventFeed.appendWorkflowEventIfPresent({
+      ...event,
+      workflowId,
     });
   } catch (error) {
     console.error(`[weft] Failed to append fleet event "${eventType}":`, error);

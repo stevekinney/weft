@@ -34,6 +34,10 @@ export type MessageFrameValidation =
       readonly rawId: unknown;
     };
 
+type SubscribeSelectorValidation =
+  | { readonly ok: true; readonly selector: EventSelector }
+  | { readonly ok: false; readonly error: JsonRpcErrorPayload };
+
 export function validateSubscribeParams(
   params: Record<string, unknown> | undefined,
 ): SubscribeParamsValidation {
@@ -42,17 +46,23 @@ export function validateSubscribeParams(
     return invalidParams('params.workflowId must be a non-empty string');
   }
 
-  const selector = params?.['selector'];
-  if (selector !== 'events' && selector !== 'tokens') {
-    return invalidParams("params.selector must be 'events' or 'tokens'");
-  }
+  const selector = validateSubscribeSelector(params?.['selector']);
+  if (!selector.ok) return selector;
 
   const fromCursor = params?.['fromCursor'];
   if (fromCursor !== undefined && typeof fromCursor !== 'string') {
     return invalidParams('params.fromCursor must be a string when present');
   }
 
-  return { ok: true, workflowId, selector, fromCursor };
+  return { ok: true, workflowId, selector: selector.selector, fromCursor };
+}
+
+function validateSubscribeSelector(rawSelector: unknown): SubscribeSelectorValidation {
+  if (rawSelector === undefined) return { ok: true, selector: 'events' };
+  if (rawSelector === 'events' || rawSelector === 'tokens') {
+    return { ok: true, selector: rawSelector };
+  }
+  return invalidParams("params.selector must be 'events' or 'tokens'");
 }
 
 export function validateMessageFrame(frame: string, maxFrameBytes: number): MessageFrameValidation {

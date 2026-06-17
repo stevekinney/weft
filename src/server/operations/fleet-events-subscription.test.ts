@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'bun:test';
+import { z } from 'zod';
 
 import { MemoryStorage } from '../../storage/memory.ts';
 import type { FleetEventEnvelope } from '../fleet-event-feed.ts';
@@ -8,15 +9,6 @@ import {
   fleetEventsSubscriptionOperation,
   type FleetEventsSubscriptionInput,
 } from './fleet-events-subscription.ts';
-
-const MATCHING_FLEET_EVENT: FleetEventEnvelope = {
-  kind: 'workflow:completed',
-  workflowId: 'wf-match',
-  sequence: 1005,
-  cursor: '1005',
-  emittedAtMs: 1,
-  payload: { workflowId: 'wf-match', result: 'done' },
-};
 
 function fleetEvent(
   sequence: number,
@@ -66,6 +58,27 @@ async function collectSequences(iterable: AsyncIterable<FleetEventEnvelope>): Pr
   return sequences;
 }
 
+async function collectFirstSequences(
+  iterable: AsyncIterable<FleetEventEnvelope>,
+  count: number,
+): Promise<number[]> {
+  const sequences: number[] = [];
+  for await (const envelope of iterable) {
+    sequences.push(envelope.sequence);
+    if (sequences.length >= count) break;
+  }
+  return sequences;
+}
+
+function eventSchemaJson(): Record<string, unknown> {
+  const result: unknown = z.toJSONSchema(fleetEventsSubscriptionOperation.eventSchema!, {
+    unrepresentable: 'any',
+  });
+  if (typeof result !== 'object' || result === null || Array.isArray(result)) return {};
+  const { $schema: _schema, ...rest } = result as Record<string, unknown>;
+  return rest;
+}
+
 function hasFleetEventIterable(value: unknown): value is {
   readonly iterable: AsyncIterable<FleetEventEnvelope>;
 } {
@@ -103,14 +116,22 @@ describe('weft.events.subscribe operation', () => {
     });
   });
 
-  it('applies filters before enforcing the replay cap', async () => {
-    const fleetFeed = {
-      subscribe() {
-        return (async function* subscriptionEvents() {
-          yield MATCHING_FLEET_EVENT;
-        })();
-      },
-    };
+  it('applies filters before enforcing the replay cap against the real feed', async () => {
+    const fleetFeed = createFleetEventFeed(new MemoryStorage());
+    for (let sequence = 0; sequence <= 1000; sequence += 1) {
+      await fleetFeed.append({
+        kind: 'workflow:completed',
+        workflowId: `wf-other-${sequence}`,
+        emittedAtMs: sequence,
+        payload: { workflowId: `wf-other-${sequence}` },
+      });
+    }
+    await fleetFeed.append({
+      kind: 'workflow:completed',
+      workflowId: 'wf-match',
+      emittedAtMs: 1002,
+      payload: { workflowId: 'wf-match', result: 'done' },
+    });
 
     const subscription = await fleetEventsSubscriptionOperation.invoke({
       input: { workflowId: 'wf-match' },
@@ -121,30 +142,23 @@ describe('weft.events.subscribe operation', () => {
 
     expect(hasFleetEventIterable(subscription)).toBe(true);
     if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    await expect(collectSequences(subscription.iterable)).resolves.toEqual([1005]);
+    await expect(collectFirstSequences(subscription.iterable, 1)).resolves.toEqual([1001]);
+    await subscription.close();
   });
 
-  it('matches every workflow status fallback and rejects events without a status', async () => {
-    const subscription = await invokeFleetSubscription(
-      { status: ['running', 'completed', 'failed', 'cancelled', 'timed-out', 'suspended'] },
-      [
-        fleetEvent(0, { kind: 'workflow:started' }),
-        fleetEvent(1, { kind: 'workflow:resumed' }),
-        fleetEvent(2, { kind: 'workflow:completed' }),
-        fleetEvent(3, { kind: 'workflow:failed' }),
-        fleetEvent(4, { kind: 'workflow:cancelled' }),
-        fleetEvent(5, { kind: 'workflow:timed-out' }),
-        fleetEvent(6, { kind: 'workflow:suspended' }),
-        fleetEvent(7, { kind: 'worker:connected', payload: {} }),
-        fleetEvent(8, { kind: 'worker:connected', payload: { status: 'running' } }),
-      ],
-    );
+  it('describes the fleet event envelope for generated discovery clients', () => {
+    const schema = eventSchemaJson();
+    const properties = schema['properties'];
 
-    expect(hasFleetEventIterable(subscription)).toBe(true);
-    if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    await expect(collectSequences(subscription.iterable)).resolves.toEqual([
-      0, 1, 2, 3, 4, 5, 6, 8,
-    ]);
+    expect(schema['type']).toBe('object');
+    expect(properties).toMatchObject({
+      kind: expect.objectContaining({ type: 'string' }),
+      sequence: expect.objectContaining({ type: 'number' }),
+      cursor: expect.objectContaining({ type: 'string' }),
+      emittedAtMs: expect.objectContaining({ type: 'number' }),
+      payload: {},
+      workflowId: expect.objectContaining({ type: 'string' }),
+    });
   });
 
   it('enforces the replay cap from the actual subscription iterable', async () => {
@@ -175,139 +189,18 @@ describe('weft.events.subscribe operation', () => {
     await subscription.close();
   });
 
-  it('filters fleet events by type, failure category, tags, and attributes', async () => {
-    const input: FleetEventsSubscriptionInput = {
-      status: 'running',
-      type: 'invoice',
-      failureCategory: ['application', 'timeout'],
-      tags: ['urgent', 'vip'],
-      attributes: [
-        { key: 'priority', value: ['high', 'critical'] },
-        { key: 'choices', value: 'gold' },
-        { key: 'score', gt: 10, gte: 15, lt: 20, lte: 15 },
-        { key: 'stage', value: 'beta' },
-      ],
-    };
-    const events = [
-      fleetEvent(10, { kind: 'workflow:completed' }),
-      fleetEvent(11, { payload: 'not-an-object' }),
-      fleetEvent(12, { payload: { workflowType: 'other' } }),
-      fleetEvent(13, { payload: { type: 'invoice', failureCategory: 'system' } }),
-      fleetEvent(14, {
-        payload: { type: 'invoice', failureCategory: 'application', tags: 'urgent' },
-      }),
-      fleetEvent(15, {
-        payload: { type: 'invoice', failureCategory: 'application', tags: ['urgent'] },
-      }),
-      fleetEvent(16, {
-        payload: { type: 'invoice', failureCategory: 'application', tags: ['urgent', 'vip'] },
-      }),
-      fleetEvent(17, {
-        payload: {
-          type: 'invoice',
-          failureCategory: 'application',
-          tags: ['urgent', 'vip'],
-          attributes: { priority: 'low', choices: ['gold'], score: 15, stage: 'beta' },
-        },
-      }),
-      fleetEvent(18, {
-        payload: {
-          type: 'invoice',
-          failureCategory: 'application',
-          tags: ['urgent', 'vip'],
-          attributes: { priority: 'critical', choices: ['gold'], score: 5, stage: 'beta' },
-        },
-      }),
-      fleetEvent(19, {
-        payload: {
-          type: 'invoice',
-          failureCategory: 'application',
-          tags: ['urgent', 'vip'],
-          attributes: { priority: 'critical', choices: ['gold'], score: 14, stage: 'beta' },
-        },
-      }),
-      fleetEvent(20, {
-        payload: {
-          type: 'invoice',
-          failureCategory: 'application',
-          tags: ['urgent', 'vip'],
-          attributes: { priority: 'critical', choices: ['gold'], score: 20, stage: 'beta' },
-        },
-      }),
-      fleetEvent(21, {
-        payload: {
-          type: 'invoice',
-          failureCategory: 'application',
-          tags: ['urgent', 'vip'],
-          attributes: { priority: 'critical', choices: ['gold'], score: 16, stage: 'beta' },
-        },
-      }),
-      fleetEvent(22, {
-        payload: {
-          type: 'invoice',
-          failureCategory: 'application',
-          tags: ['urgent', 'vip'],
-          attributes: { priority: 'critical', choices: ['gold'], score: '15', stage: 'beta' },
-        },
-      }),
-      fleetEvent(23, {
-        payload: {
-          type: 'invoice',
-          failureCategory: 'application',
-          tags: ['urgent', 'vip'],
-          attributes: { priority: 'critical', choices: ['gold'], score: true, stage: 'beta' },
-        },
-      }),
-      fleetEvent(24, {
-        payload: {
-          workflowType: 'invoice',
-          failureCategory: 'application',
-          tags: ['urgent', 'vip', 42],
-          attributes: {
-            priority: 'critical',
-            choices: ['gold', 'silver'],
-            score: 15,
-            stage: 'beta',
-          },
-        },
-      }),
-      fleetEvent(25, {
-        payload: {
-          type: 'invoice',
-          failureCategory: 'timeout',
-          tags: ['urgent', 'vip'],
-          changes: {
-            priority: 'high',
-            choices: ['gold'],
-            score: 15,
-            stage: 'beta',
-          },
-        },
-      }),
-    ];
-
-    const subscription = await invokeFleetSubscription(input, events, events);
-
-    expect(hasFleetEventIterable(subscription)).toBe(true);
-    if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    await expect(collectSequences(subscription.iterable)).resolves.toEqual([24, 25]);
-  });
-
-  it('matches a scalar failure-category filter', async () => {
+  it('filters fleet events by workflow id and kind only', async () => {
     const subscription = await invokeFleetSubscription(
-      { failureCategory: 'application' },
+      { workflowId: 'wf-match', kind: 'workflow:completed' },
       [
-        fleetEvent(30, { payload: { failureCategory: 'timeout' } }),
-        fleetEvent(31, { payload: { failureCategory: 'application' } }),
-      ],
-      [
-        fleetEvent(30, { payload: { failureCategory: 'timeout' } }),
-        fleetEvent(31, { payload: { failureCategory: 'application' } }),
+        fleetEvent(20, { kind: 'workflow:started', workflowId: 'wf-match' }),
+        fleetEvent(21, { kind: 'workflow:completed', workflowId: 'wf-other' }),
+        fleetEvent(22, { kind: 'workflow:completed', workflowId: 'wf-match' }),
       ],
     );
 
     expect(hasFleetEventIterable(subscription)).toBe(true);
     if (!hasFleetEventIterable(subscription)) throw new Error('expected subscription result');
-    await expect(collectSequences(subscription.iterable)).resolves.toEqual([31]);
+    await expect(collectSequences(subscription.iterable)).resolves.toEqual([22]);
   });
 });

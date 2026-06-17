@@ -21,6 +21,14 @@ export async function executeOperation<Output>(
   const lookup = lookupOperation(operationName, context);
   if (!lookup.ok) return lookup;
   const operation = lookup.value;
+  const operationKind = operation.kind ?? 'unary';
+  if (operationKind === 'subscription') {
+    return dispatchFailure({
+      code: 'Unprocessable',
+      message: `operation "${operation.name}" is not unary`,
+      data: { reason: `operation kind is "${operationKind}"` },
+    });
+  }
 
   const prepared = await prepareAuthorizedInput(operation, rawInput, context);
   if (!prepared.ok) return prepared;

@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'bun:test';
 
 import { encode } from '../core/codec.ts';
-import { KEYS, type BatchOperation, type ScanOptions } from '../storage/interface.ts';
+import {
+  KEYS,
+  type BatchOperation,
+  type ConditionalBatchCondition,
+  type ScanOptions,
+} from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { createFleetEventFeed, type FleetEventEnvelope } from './fleet-event-feed.ts';
 
@@ -38,6 +43,21 @@ class RecordingScanStorage extends MemoryStorage {
   override scan(prefix: string, options?: ScanOptions): AsyncIterable<[string, Uint8Array]> {
     this.scanCalls.push({ prefix, options });
     return super.scan(prefix, options);
+  }
+}
+
+class PurgingConditionalBatchStorage extends MemoryStorage {
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    const workflowCondition = conditions.find(
+      (condition) => condition.key === KEYS.workflow('wf-race'),
+    );
+    if (workflowCondition !== undefined) {
+      await super.delete(workflowCondition.key);
+    }
+    return super.conditionalBatch(conditions, operations);
   }
 }
 
@@ -93,6 +113,49 @@ describe('createFleetEventFeed', () => {
 
     expect(await storage.get(KEYS.fleetEventByWorkflow('wf-indexed', 0))).not.toBeNull();
     expect(await storage.get(KEYS.fleetEventByWorkflow('wf-indexed', 1))).toBeNull();
+    feed.dispose();
+  });
+
+  it('appends a workflow-owned event only while the workflow record still exists', async () => {
+    const storage = new MemoryStorage();
+    await storage.put(KEYS.workflow('wf-present'), encode({ status: 'running' }));
+    const feed = createFleetEventFeed(storage);
+
+    const appended = await feed.appendWorkflowEventIfPresent({
+      kind: 'workflow:started',
+      workflowId: 'wf-present',
+      emittedAtMs: 1,
+      payload: { workflowId: 'wf-present' },
+    });
+    const dropped = await feed.appendWorkflowEventIfPresent({
+      kind: 'workflow:completed',
+      workflowId: 'wf-missing',
+      emittedAtMs: 2,
+      payload: { workflowId: 'wf-missing' },
+    });
+
+    expect(appended?.sequence).toBe(0);
+    expect(dropped).toBeNull();
+    expect(await storage.get(KEYS.fleetEvent(0))).not.toBeNull();
+    expect(await storage.get(KEYS.fleetEvent(1))).toBeNull();
+    feed.dispose();
+  });
+
+  it('drops a workflow-owned append when purge wins the conditional batch race', async () => {
+    const storage = new PurgingConditionalBatchStorage();
+    await storage.put(KEYS.workflow('wf-race'), encode({ status: 'running' }));
+    const feed = createFleetEventFeed(storage);
+
+    const appended = await feed.appendWorkflowEventIfPresent({
+      kind: 'workflow:completed',
+      workflowId: 'wf-race',
+      emittedAtMs: 1,
+      payload: { workflowId: 'wf-race' },
+    });
+
+    expect(appended).toBeNull();
+    expect(await storage.get(KEYS.fleetEvent(0))).toBeNull();
+    expect(await storage.get(KEYS.fleetEventByWorkflow('wf-race', 0))).toBeNull();
     feed.dispose();
   });
 

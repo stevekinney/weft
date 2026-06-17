@@ -478,6 +478,10 @@ describe('serve() — WebSocket /jsonrpc', () => {
 
   it('test i: fleet subscription receives events from multiple workflows through serve wiring', async () => {
     engine = createHoldEngine();
+    await engine.start('hold', null, { id: 'fleet-wf-a' });
+    await engine.start('hold', null, { id: 'fleet-wf-b' });
+    await waitForStatus(engine, 'fleet-wf-a', 'running');
+    await waitForStatus(engine, 'fleet-wf-b', 'running');
     server = serve({ engine, ...subscribeServeOptions });
     const ws = await openWebSocket(jsonRpcWebSocketUrl(server), SUBSCRIBE_TEST_API_KEY);
 

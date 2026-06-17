@@ -22,13 +22,35 @@ const OpenRpcMcpMethodMetadataSchema = z.strictObject({
   }),
 });
 
+const OpenRpcScopeRequirementSchema = z.strictObject({
+  kind: z.enum(['anyOf', 'allOf']),
+  scopes: z.array(z.string()),
+});
+
+const OpenRpcAccessPolicySchema = z.discriminatedUnion('kind', [
+  z.strictObject({ kind: z.literal('public') }),
+  z.strictObject({ kind: z.literal('authenticated') }),
+  z.strictObject({
+    kind: z.literal('scoped'),
+    scopes: OpenRpcScopeRequirementSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('optionalAuth'),
+    authenticatedScopes: OpenRpcScopeRequirementSchema,
+  }),
+  z.strictObject({
+    kind: z.literal('scopedAlternatives'),
+    alternatives: z.array(OpenRpcScopeRequirementSchema),
+  }),
+]);
+
 const OpenRpcParameterizedAccessSchema = z.strictObject({
   discriminator: z.string(),
   defaultValue: z.string().optional(),
   variants: z.array(
     z.strictObject({
       value: z.string(),
-      access: z.record(z.string(), z.unknown()),
+      access: OpenRpcAccessPolicySchema,
     }),
   ),
 });

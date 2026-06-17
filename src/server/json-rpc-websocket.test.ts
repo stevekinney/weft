@@ -389,6 +389,42 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     await session.close();
   });
 
+  it('weft.workflows.events routes through the session lifecycle and defaults to event envelopes', async () => {
+    const emitter = makeEmitter();
+    const backend = createInMemoryEventBackend();
+    await backend.append(makeEnvelope(0));
+    const feed = createWorkflowEventFeed(backend);
+    const session = createJsonRpcWebSocketSession({
+      registry: createWebSocketOperationRegistry(),
+      engine: fakeEngine,
+      principal: subscribePrincipal(),
+      emitter,
+      feed,
+    });
+
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.events',
+        params: { workflowId: 'wf-1' },
+        id: 'catalog-sub-1',
+      }),
+    );
+
+    await emitter.waitForParsedMessage(
+      'workflow event delivered for catalog subscription',
+      (message) => {
+        const params = message['params'] as { envelope?: { selector?: string } } | undefined;
+        return params?.envelope?.selector === 'events';
+      },
+    );
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.id).toBe('catalog-sub-1');
+    expect(response.result.subscriptionId).toMatch(/^sub_/);
+    expect(response.result.cursor).toBe('-1');
+    await session.close();
+  });
+
   it('weft.events.subscribe delivers fleet events across workflows', async () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());

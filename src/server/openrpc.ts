@@ -27,6 +27,7 @@ import { z } from 'zod';
 import { definitionSchemaToJsonSchema } from '../core/types/definition-schema-to-json.ts';
 import type { McpToolDefinition } from '../mcp/tools.ts';
 import { VERSION } from '../version.ts';
+import type { ScopeRequirement } from './authorization.ts';
 import { isDiscoverable } from './discovery-filter.ts';
 import { applyDiscoveryInfo, type DiscoveryInfo } from './discovery-info.ts';
 import { asPlainObject, compareStrings } from './json-schema-utilities.ts';
@@ -290,19 +291,24 @@ function accessPolicyExtension(access: ErasedOperation['access']): Record<string
   if (access.kind === 'public') return { kind: 'public' };
   if (access.kind === 'authenticated') return { kind: 'authenticated' };
   if (access.kind === 'scoped') {
-    return { kind: 'scoped', scopes: [...access.scopes.scopes].toSorted(compareStrings) };
+    return { kind: 'scoped', scopes: scopeRequirementExtension(access.scopes) };
   }
   if (access.kind === 'optionalAuth') {
     return {
       kind: 'optionalAuth',
-      scopes: [...access.authenticatedScopes.scopes].toSorted(compareStrings),
+      authenticatedScopes: scopeRequirementExtension(access.authenticatedScopes),
     };
   }
   return {
     kind: 'scopedAlternatives',
-    alternatives: access.alternatives.map((alternative) =>
-      [...alternative.scopes].toSorted(compareStrings),
-    ),
+    alternatives: access.alternatives.map(scopeRequirementExtension),
+  };
+}
+
+function scopeRequirementExtension(requirement: ScopeRequirement): Record<string, unknown> {
+  return {
+    kind: requirement.kind,
+    scopes: [...requirement.scopes].toSorted(compareStrings),
   };
 }
 

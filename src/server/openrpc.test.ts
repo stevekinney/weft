@@ -376,8 +376,14 @@ describe('generateOpenRpcDocument — params schema fidelity', () => {
       discriminator: 'selector',
       defaultValue: 'events',
       variants: [
-        { value: 'events', access: { kind: 'scoped', scopes: ['events:read'] } },
-        { value: 'tokens', access: { kind: 'scoped', scopes: ['streams:read'] } },
+        {
+          value: 'events',
+          access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['events:read'] } },
+        },
+        {
+          value: 'tokens',
+          access: { kind: 'scoped', scopes: { kind: 'anyOf', scopes: ['streams:read'] } },
+        },
       ],
     });
   });
@@ -423,12 +429,21 @@ describe('generateOpenRpcDocument — params schema fidelity', () => {
     expect(method['x-weft-parameterizedAccess']).toEqual({
       discriminator: 'mode',
       variants: [
-        { value: 'optional', access: { kind: 'optionalAuth', scopes: ['events:read'] } },
+        {
+          value: 'optional',
+          access: {
+            kind: 'optionalAuth',
+            authenticatedScopes: { kind: 'anyOf', scopes: ['events:read'] },
+          },
+        },
         {
           value: 'alternative',
           access: {
             kind: 'scopedAlternatives',
-            alternatives: [['events:read'], ['streams:read']],
+            alternatives: [
+              { kind: 'anyOf', scopes: ['events:read'] },
+              { kind: 'anyOf', scopes: ['streams:read'] },
+            ],
           },
         },
       ],

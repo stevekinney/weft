@@ -108,6 +108,40 @@ describe('dispatchJsonRpc — single request', () => {
     expect(result.response.error.code).toBe(-32030);
   });
 
+  it('rejects long-lived operations before invoking them on the request-response path', async () => {
+    let invoked = false;
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.subscribe',
+        kind: 'subscription',
+        inputSchema: z.object({}),
+        outputSchema: z.object({ subscriptionId: z.string() }),
+        eventSchema: z.object({ value: z.string() }),
+        invoke: async () => {
+          invoked = true;
+          return {
+            envelope: { subscriptionId: 'sub_test' },
+            iterable: (async function* events() {
+              yield { value: 'leaked' };
+            })(),
+            close: async () => {},
+          };
+        },
+      }),
+    ]);
+    const body = JSON.stringify({ jsonrpc: '2.0', method: 'weft.test.subscribe', id: 1 });
+    const result = await dispatchJsonRpc(body, { ...baseContext(), registry });
+
+    if (result.kind !== 'single') throw new Error('shape');
+    if (!('error' in result.response)) throw new Error('expected error');
+    const errorData = result.response.error.data;
+    if (typeof errorData !== 'object' || errorData === null || !('weftCode' in errorData)) {
+      throw new Error('expected Weft error data');
+    }
+    expect(errorData.weftCode).toBe('Unprocessable');
+    expect(invoked).toBe(false);
+  });
+
   it('returns no response for a notification (id absent)', async () => {
     const registry = createOperationRegistry([
       makeOp({
