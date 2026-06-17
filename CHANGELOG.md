@@ -150,11 +150,13 @@ stay silent, and catch-up occurrences during recovery emit exactly once.
 
 ### Added — MCP anonymous-session continuation token
 
-Under `authRequired: false`, each anonymous MCP session now receives a random
-`Mcp-Session-Token` on the `initialize` response (#525). Every subsequent
-`POST`, `GET`, and `DELETE` for that session must echo the token alongside its
-`Mcp-Session-Id`; a missing or wrong token is rejected with `403`. The token is
-disclosed exactly once at `initialize`. Authenticated sessions are unchanged.
+Every session-creating MCP `initialize` response now carries a random
+`Mcp-Session-Token` alongside its `Mcp-Session-Id`, disclosed exactly once and
+never echoed again (#525). The token is _required_ only to continue an anonymous
+session under `authRequired: false`: every subsequent `POST`, `GET`, and
+`DELETE` for such a session must echo it, and a missing or wrong token is
+rejected with `403`. Authenticated callers re-present their credential on each
+request, so their session binding is unchanged and is not gated on the token.
 
 ### Added — Neon storage schema/table configuration
 
