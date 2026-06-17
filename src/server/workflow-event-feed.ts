@@ -39,6 +39,12 @@ export function decodeCursor(cursor: Cursor): number | null {
   return value;
 }
 
+function decodeCursorOrThrow(cursor: Cursor): number {
+  const sequence = decodeCursor(cursor);
+  if (sequence === null) throw new Error('Invalid cursor');
+  return sequence;
+}
+
 // ---------------------------------------------------------------------------
 // Envelope
 // ---------------------------------------------------------------------------
@@ -133,7 +139,7 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
 
   async function* replay(args?: { fromCursor?: Cursor; limit?: number }): AsyncIterable<TEnvelope> {
     const afterSequence =
-      args?.fromCursor !== undefined ? (decodeCursor(args.fromCursor) ?? -1) : -1;
+      args?.fromCursor !== undefined ? decodeCursorOrThrow(args.fromCursor) : -1;
     let yielded = 0;
     for await (const envelope of backend.replay({ afterSequence })) {
       if (args?.limit !== undefined && yielded >= args.limit) return;
@@ -151,6 +157,7 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
     let waker: (() => void) | null = null;
     const signal = args?.signal;
     const fromCursor = args?.fromCursor;
+    const requestedAfter = fromCursor !== undefined ? decodeCursorOrThrow(fromCursor) : -1;
 
     const unsubscribe = backend.subscribeLive((envelope) => {
       if (buffer.length >= bufferSize) {
@@ -179,7 +186,6 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
         if (signal?.aborted) return;
 
         const snapshot = await backend.snapshotTailSequence();
-        const requestedAfter = fromCursor !== undefined ? (decodeCursor(fromCursor) ?? -1) : -1;
         yield* replayUpTo(backend, requestedAfter, snapshot, signal);
         if (signal?.aborted) return;
         yield* drainLive(
@@ -324,7 +330,7 @@ async function* drainLive<TEnvelope extends SequencedEventEnvelope>(
 ): AsyncIterable<TEnvelope> {
   let watermark = snapshot;
   while (true) {
-    if (signal?.aborted || overflowed()) return;
+    if (signal?.aborted || overflowed()) break;
     const { batch, newWatermark } = flushPendingBuffer(buffer, watermark);
     watermark = newWatermark;
     for (const envelope of batch) {

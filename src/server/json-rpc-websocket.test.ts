@@ -616,6 +616,27 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
         id: 'bad-kind',
       }),
     );
+
+    const badCursorResponse = JSON.parse(emitter.sent[0]!);
+    const badKindResponse = JSON.parse(emitter.sent[1]!);
+    expect(badCursorResponse.error.data.weftCode).toBe('InvalidParams');
+    expect(badKindResponse.error.data.weftCode).toBe('InvalidParams');
+    await session.close();
+  });
+
+  it('accepts worker lifecycle fleet event kinds', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const fleetFeed = createFleetEventFeed(new MemoryStorage());
+    const session = createJsonRpcWebSocketSession({
+      registry: createWebSocketOperationRegistry(),
+      engine: fakeEngine,
+      principal: subscribePrincipal(),
+      emitter,
+      feed,
+      fleetFeed,
+    });
+
     await session.handleMessage(
       JSON.stringify({
         jsonrpc: '2.0',
@@ -625,12 +646,36 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
       }),
     );
 
-    const badCursorResponse = JSON.parse(emitter.sent[0]!);
-    const badKindResponse = JSON.parse(emitter.sent[1]!);
-    const workerKindResponse = JSON.parse(emitter.sent[2]!);
-    expect(badCursorResponse.error.data.weftCode).toBe('InvalidParams');
-    expect(badKindResponse.error.data.weftCode).toBe('InvalidParams');
-    expect(workerKindResponse.error.data.weftCode).toBe('InvalidParams');
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.result.subscriptionId).toBeString();
+    await session.close();
+  });
+
+  it('rejects explicit non-object fleet subscription params', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const fleetFeed = createFleetEventFeed(new MemoryStorage());
+    const session = createJsonRpcWebSocketSession({
+      registry: createWebSocketOperationRegistry(),
+      engine: fakeEngine,
+      principal: subscribePrincipal(),
+      emitter,
+      feed,
+      fleetFeed,
+    });
+
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.events.subscribe',
+        params: [],
+        id: 'bad-fleet-params',
+      }),
+    );
+
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.error.data.weftCode).toBe('InvalidParams');
+    expect(response.error.message).toBe('params must be an object when present');
     await session.close();
   });
 
@@ -638,8 +683,17 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     const emitter = makeEmitter();
     const feed = createWorkflowEventFeed(createInMemoryEventBackend());
     const fleetFeed = {
-      async snapshotTailSequence() {
-        return 1000;
+      async *replay() {
+        for (let sequence = 0; sequence <= 1000; sequence += 1) {
+          yield {
+            kind: 'workflow:completed',
+            workflowId: `wf-${sequence}`,
+            sequence,
+            cursor: String(sequence),
+            emittedAtMs: sequence,
+            payload: { workflowId: `wf-${sequence}` },
+          };
+        }
       },
       subscribe() {
         throw new Error('subscribe should not run when replay window is rejected');
@@ -826,6 +880,31 @@ describe('createJsonRpcWebSocketSession — subscribe / unsubscribe', () => {
     );
     const response = JSON.parse(emitter.sent[0]!);
     expect(response.result.cursor).toBe('5');
+    await session.close();
+  });
+
+  it('rejects workflow subscriptions with malformed cursors', async () => {
+    const emitter = makeEmitter();
+    const feed = createWorkflowEventFeed(createInMemoryEventBackend());
+    const session = createJsonRpcWebSocketSession({
+      registry: createWebSocketOperationRegistry(),
+      engine: fakeEngine,
+      principal: subscribePrincipal(),
+      emitter,
+      feed,
+    });
+
+    await session.handleMessage(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'weft.workflows.subscribe',
+        params: { workflowId: 'wf-1', selector: 'events', fromCursor: 'not-a-cursor' },
+        id: 'bad-workflow-cursor',
+      }),
+    );
+
+    const response = JSON.parse(emitter.sent[0]!);
+    expect(response.error.data.weftCode).toBe('InvalidParams');
     await session.close();
   });
 

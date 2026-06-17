@@ -135,6 +135,20 @@ export function validateSessionPrimitiveFrame(
       id: null,
     };
   }
+  if (
+    Object.hasOwn(frame.parsed, 'params') &&
+    frame.parsed['params'] !== undefined &&
+    !isPlainObject(frame.parsed['params'])
+  ) {
+    return {
+      error: {
+        code: JSON_RPC_ERROR_CODES.INVALID_PARAMS,
+        message: 'params must be an object when present',
+        data: { weftCode: 'InvalidParams', httpStatus: 400 },
+      },
+      id: frame.id ?? null,
+    };
+  }
   return null;
 }
 

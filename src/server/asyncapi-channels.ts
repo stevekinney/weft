@@ -8,6 +8,8 @@ import { externalApiPath } from './route-model.ts';
 const JSON_RPC_VERSION = '2.0';
 const EVENT_DELIVER_METHOD = 'weft.events.deliver';
 const EVENTS_TERMINATED_METHOD = 'weft.events.terminated';
+const WORKFLOW_SUBSCRIPTION_OPERATION_NAME = 'weft.workflows.events';
+const WORKFLOW_SUBSCRIPTION_REQUEST_METHOD = 'weft.workflows.subscribe';
 const UNSUBSCRIBE_METHOD = 'weft.workflows.unsubscribe';
 
 // Accepts string | number for normal request/response correlation, plus
@@ -118,7 +120,7 @@ export function buildWebSocketMessages(
     [names.subscribeRequest]: {
       name: names.subscribeRequest,
       contentType: 'application/json',
-      payload: jsonRpcRequestPayload(operation.name, inputSchema),
+      payload: jsonRpcRequestPayload(subscriptionRequestMethod(operation), inputSchema),
       summary: `Subscribe to ${operation.name}.`,
     },
     [names.subscribeAck]: {
@@ -262,6 +264,12 @@ export function buildOperationEntry(
 
 function operationPrefix(operation: ErasedOperation): string {
   return operation.name.replaceAll('.', '_');
+}
+
+function subscriptionRequestMethod(operation: ErasedOperation): string {
+  return operation.name === WORKFLOW_SUBSCRIPTION_OPERATION_NAME
+    ? WORKFLOW_SUBSCRIPTION_REQUEST_METHOD
+    : operation.name;
 }
 
 function webSocketMessageNames(operation: ErasedOperation): WebSocketMessageNames {

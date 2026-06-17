@@ -9,6 +9,8 @@ import type { ServerContext } from './context.ts';
 
 const TOKEN_EVENT_TYPE = 'stream:token';
 const STREAM_CONNECTION_POLICY_CLOSE_CODE = 1008;
+const MAX_WATCH_REPLAY_EVENTS = 1_000;
+const MAX_PENDING_WATCH_REPLAY_MESSAGES = 1_000;
 
 /**
  * Default per-workflow cap for one-way workflow WebSocket connections
@@ -74,7 +76,8 @@ export async function getHighestStoredWatchSequence(
 
   for await (const [storageKey] of engine.storage.scan(prefix, { reverse: true, limit: 50 })) {
     const sequence = parseSequenceFromEventKey(prefix, storageKey);
-    if (sequence !== null) return sequence;
+    if (sequence === null) continue;
+    return sequence;
   }
 
   return -1;
@@ -244,8 +247,17 @@ export function publishWatchMessage(
 
   for (const ws of sockets) {
     if (ws.data.watchReplayInProgress) {
-      ws.data.pendingWatchMessages ??= [];
-      ws.data.pendingWatchMessages.push({ sequence, message });
+      const pendingMessages = ws.data.pendingWatchMessages ?? [];
+      if (pendingMessages.length >= MAX_PENDING_WATCH_REPLAY_MESSAGES) {
+        closeWatchSocketForReplayLimit(
+          context,
+          ws,
+          `watch replay buffer exceeded ${MAX_PENDING_WATCH_REPLAY_MESSAGES} pending messages`,
+        );
+        continue;
+      }
+      pendingMessages.push({ sequence, message });
+      ws.data.pendingWatchMessages = pendingMessages;
       continue;
     }
 
@@ -316,6 +328,8 @@ export async function replayWatchEvents(
   workflowId: string,
 ): Promise<void> {
   ws.data.watchLastDeliveredSequence = -1;
+  let shouldFlushPending = true;
+  let replayedEvents = 0;
 
   try {
     const requestedResumeFrom = ws.data.resumeFrom;
@@ -332,6 +346,15 @@ export async function replayWatchEvents(
       if (sequence === null || sequence <= after) continue;
       const decoded = decodeStoredWatchEvent(value);
       if (!isStoredWatchEvent(decoded)) continue;
+      if (replayedEvents >= MAX_WATCH_REPLAY_EVENTS) {
+        shouldFlushPending = false;
+        closeWatchSocketForReplayLimit(
+          context,
+          ws,
+          `watch replay window exceeds ${MAX_WATCH_REPLAY_EVENTS} events; reconnect with a newer resumeFrom`,
+        );
+        return;
+      }
       sendWatchMessage(
         ws,
         sequence,
@@ -343,13 +366,30 @@ export async function replayWatchEvents(
           cursor: String(sequence),
         }),
       );
+      replayedEvents += 1;
     }
   } catch (error) {
     console.error(`[weft] Failed to replay watch events for workflow "${workflowId}":`, error);
   } finally {
     ws.data.watchReplayInProgress = false;
-    flushPendingWatchMessages(context, ws);
+    if (shouldFlushPending) {
+      flushPendingWatchMessages(context, ws);
+    } else {
+      ws.data.pendingWatchMessages = [];
+    }
   }
+}
+
+function closeWatchSocketForReplayLimit(
+  context: ServerContext,
+  ws: ServerWebSocket<WebSocketData>,
+  reason: string,
+): void {
+  ws.data.pendingWatchMessages = [];
+  ws.data.watchReplayInProgress = false;
+  ws.close(STREAM_CONNECTION_POLICY_CLOSE_CODE, reason);
+  removeWatchSocket(context, ws);
+  removeWorkflowStreamConnection(context, ws);
 }
 
 function decodeStoredWatchEvent(value: Uint8Array): unknown {

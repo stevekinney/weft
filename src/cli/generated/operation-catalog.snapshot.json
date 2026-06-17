@@ -100,7 +100,7 @@
       "name": "weft.events.subscribe",
       "kind": "subscription",
       "summary": "Subscribe to fleet-wide events with replay-from-cursor",
-      "description": "Subscribes to the server-level event feed across workflows. Optional filters narrow delivery by workflow id or event kind after the single fleet cursor has been applied. Historical replay is capped at 1,000 retained events per subscription; use a recent fromCursor for older feeds.",
+      "description": "Subscribes to the server-level event feed across workflows. Optional filters narrow delivery by workflow id, event kind, status, workflow type, failure category, tags, or attributes after the single fleet cursor has been applied. Historical replay is capped at 1,000 matching retained events per subscription; use a recent fromCursor for older feeds.",
       "tags": ["Events"],
       "destructive": false,
       "access": {
@@ -117,10 +117,124 @@
       "inputSchema": {
         "additionalProperties": false,
         "properties": {
+          "attributes": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "gt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "gte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "key": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "lt": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "lte": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "value": {}
+              },
+              "required": ["key"],
+              "type": "object"
+            },
+            "type": "array"
+          },
+          "failureCategory": {
+            "anyOf": [
+              {
+                "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": ["application", "timeout", "cancellation", "resource", "system"],
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            ]
+          },
           "fromCursor": {
             "type": "string"
           },
           "kind": {
+            "minLength": 1,
+            "type": "string"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "pending",
+                  "running",
+                  "completed",
+                  "failed",
+                  "cancelled",
+                  "timed-out",
+                  "suspended"
+                ],
+                "type": "string"
+              },
+              {
+                "items": {
+                  "enum": [
+                    "pending",
+                    "running",
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "timed-out",
+                    "suspended"
+                  ],
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            ]
+          },
+          "tags": {
+            "items": {
+              "minLength": 1,
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": {
             "minLength": 1,
             "type": "string"
           },

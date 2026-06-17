@@ -76,6 +76,8 @@ _Operational events:_
 
 - `AttributesChangedEvent` (`'attributes:changed'`) -- carries `workflowId` and `changes`
 - `ScheduleMissedFireEvent` (`'schedule:missed-fire'`) -- carries `scheduleId`, `missedCount`, `windowStart`, and `windowEnd` when a non-backfill schedule skips timers more than one second late
+- `WorkerConnectedEvent` (`'worker:connected'`) -- carries `workerId`, `queue`, `activities`, and `concurrency`
+- `WorkerDisconnectedEvent` (`'worker:disconnected'`) -- carries `workerId` and `inFlightTaskCount`
 - `CheckpointSizeWarningEvent` (`'checkpoint:size-warning'`) -- carries `workflowId`, `sizeBytes`, and `step`
 - `DevelopmentWarningEvent` (`'development:warning'`) -- carries `workflowId`, `message`, and `fieldPaths`
 
@@ -180,7 +182,7 @@ async function observeTail(): Promise<void> {
 void observeTail;
 ```
 
-`HttpClient` tails ride the `/v1/workflows/:id/watch` WebSocket channel and catch up from `getEvents()` on connect and reconnect. Raw watch sockets accept `?resumeFrom=<sequence>` and include `sequence` / `cursor` on each event frame. JSON-RPC clients can use `weft.workflows.subscribe` for one workflow or `weft.events.subscribe` for the fleet-wide event feed. Fleet subscriptions reject replay windows above 1,000 retained events, and their cursor ordering follows the current one-server-process-per-durable-store deployment model. `LocalClient` tails bridge the engine event stream and perform the same history catch-up. A tail is single-consumer: open a fresh `client.tail(id)` or `handle.tail()` for each independent reader.
+`HttpClient` tails ride the `/v1/workflows/:id/watch` WebSocket channel and catch up from `getEvents()` on connect and reconnect. Raw watch sockets accept `?resumeFrom=<sequence>` and include `sequence` / `cursor` on each event frame. JSON-RPC clients can use `weft.workflows.subscribe` for one workflow or `weft.events.subscribe` for the fleet-wide event feed. Fleet subscriptions can filter by workflow id, event kind, status, workflow type, failure category, tags, and attributes; they reject replay windows above 1,000 matching retained events, and their cursor ordering follows the current one-server-process-per-durable-store deployment model. `LocalClient` tails bridge the engine event stream and perform the same history catch-up. A tail is single-consumer: open a fresh `client.tail(id)` or `handle.tail()` for each independent reader.
 
 _Pattern 4: Observable._ `WorkflowHandle` also implements `Symbol.observable`, making it compatible with RxJS and other reactive libraries.
 

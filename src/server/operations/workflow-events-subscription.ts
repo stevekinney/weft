@@ -3,14 +3,22 @@ import { z } from 'zod';
 import type { AuthorizationScope } from '../authorization-scope.ts';
 import { defineOperation } from '../operation-registry.ts';
 import { isAuthenticated } from '../principal.ts';
-import type { Cursor, EventEnvelope, WorkflowEventFeed } from '../workflow-event-feed.ts';
+import {
+  decodeCursor,
+  type Cursor,
+  type EventEnvelope,
+  type WorkflowEventFeed,
+} from '../workflow-event-feed.ts';
 
 const INITIAL_SUBSCRIPTION_CURSOR: Cursor = '-1';
 
 const workflowEventsSubscriptionInput = z.object({
   workflowId: z.string().min(1),
   selector: z.enum(['events', 'tokens']).optional().default('events'),
-  fromCursor: z.string().optional(),
+  fromCursor: z
+    .string()
+    .refine((cursor) => decodeCursor(cursor) !== null, { message: 'Invalid cursor' })
+    .optional(),
 });
 
 const workflowEventsSubscriptionEnvelope = z.object({

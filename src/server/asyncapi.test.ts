@@ -98,6 +98,18 @@ describe('AsyncAPI document', () => {
     expect(document['channels']).toHaveProperty('weft/workflows/events');
   });
 
+  it('documents the workflow subscription session method on the subscribe request', () => {
+    const document = generateAsyncApiDocument({
+      registry: createLiveOperationRegistry(),
+    }) as AsyncApiDocument;
+    const request = document.components?.messages?.['weft_workflows_events_subscribeRequest'];
+    const payload = request?.payload as
+      | { properties?: { method?: { const?: unknown } } }
+      | undefined;
+
+    expect(payload?.properties?.method?.const).toBe('weft.workflows.subscribe');
+  });
+
   it('includes the workflow SSE stream channel', () => {
     const document = generateAsyncApiDocument({ registry: createLiveOperationRegistry() });
 

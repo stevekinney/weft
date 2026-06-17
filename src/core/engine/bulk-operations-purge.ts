@@ -401,6 +401,35 @@ async function addWorkflowPrefixDeleteKeys(
     const keys = await collectKeysForPrefix(storage, prefix);
     for (const key of keys) deleteKeys.add(key);
   }
+  await addWorkflowLinkedFleetEventDeleteKeys(storage, deleteKeys, workflowId);
+}
+
+async function addWorkflowLinkedFleetEventDeleteKeys(
+  storage: WeftStorage,
+  deleteKeys: Set<string>,
+  workflowId: string,
+): Promise<void> {
+  for await (const [key, value] of storage.scan(KEYS.fleetEventPrefix())) {
+    if (fleetEventBelongsToWorkflow(value, workflowId)) deleteKeys.add(key);
+  }
+}
+
+function fleetEventBelongsToWorkflow(value: Uint8Array, workflowId: string): boolean {
+  let decoded: unknown;
+  try {
+    decoded = decode(value);
+  } catch {
+    return false;
+  }
+  if (!isRecord(decoded)) return false;
+  if (decoded['workflowId'] === workflowId) return true;
+
+  const payload = decoded['payload'];
+  return isRecord(payload) && payload['workflowId'] === workflowId;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function workflowPurgePrefixes(workflowId: string): string[] {

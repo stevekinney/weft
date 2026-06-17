@@ -45,13 +45,13 @@ describe('wireEventBroadcasting', () => {
         ReviewCompletedEvent.type,
         AlertFiredEvent.type,
         ConstraintViolatedEvent.type,
+        WorkerConnectedEvent.type,
+        WorkerDisconnectedEvent.type,
         WorkflowResumedEvent.type,
         WorkflowSuspendedEvent.type,
         WorkflowTeardownEvent.type,
       ]),
     );
-    expect(CLIENT_VISIBLE_EVENT_TYPES).not.toContain(WorkerConnectedEvent.type);
-    expect(CLIENT_VISIBLE_EVENT_TYPES).not.toContain(WorkerDisconnectedEvent.type);
   });
 
   it('publishes no-workflow operational events through the fleet feed', async () => {
