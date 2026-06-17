@@ -85,7 +85,13 @@ export type McpToolMetadata = {
  * **`reason` is wire-visible.** Hook authors must not embed secrets or
  * sensitive context in a denial reason.
  */
-export type AuthorizationDecision = { allowed: true } | { allowed: false; reason: string };
+export type AuthorizationDecision =
+  | { allowed: true }
+  | {
+      allowed: false;
+      classification?: 'unauthorized' | 'forbidden';
+      reason: string;
+    };
 
 export type ParameterizedAccessHint = {
   readonly discriminator: string;

@@ -96,6 +96,13 @@ export async function checkAuthorization(
     return failure({ code: 'EngineFailure', message: 'internal error', data: {} });
   }
   if (!decision.allowed) {
+    if (decision.classification === 'unauthorized') {
+      return failure({
+        code: 'Unauthorized',
+        message: decision.reason,
+        data: { reason: decision.reason },
+      });
+    }
     return failure({
       code: 'Forbidden',
       message: decision.reason,
@@ -253,21 +260,30 @@ function safeParseInput(inputSchema: z.ZodType, input: unknown): PipelineParseOu
 
 function isAuthorizationDecision(value: unknown): value is AuthorizationDecision {
   if (typeof value !== 'object' || value === null) return false;
-  let allowed: unknown;
+  const allowed = readObjectProperty(value, 'allowed');
+  if (!allowed.ok) return false;
+  if (allowed.value === true) return true;
+  if (allowed.value !== false) return false;
+  const reason = readObjectProperty(value, 'reason');
+  if (!reason.ok || typeof reason.value !== 'string') return false;
+  const classification = readObjectProperty(value, 'classification');
+  if (!classification.ok) return false;
+  return isAuthorizationFailureClassification(classification.value);
+}
+
+function readObjectProperty(
+  value: object,
+  property: PropertyKey,
+): { readonly ok: true; readonly value: unknown } | { readonly ok: false } {
   try {
-    allowed = (value as { allowed?: unknown }).allowed;
+    return { ok: true, value: (value as Record<PropertyKey, unknown>)[property] };
   } catch {
-    return false;
+    return { ok: false };
   }
-  if (allowed === true) return true;
-  if (allowed !== false) return false;
-  let reason: unknown;
-  try {
-    reason = (value as { reason?: unknown }).reason;
-  } catch {
-    return false;
-  }
-  return typeof reason === 'string';
+}
+
+function isAuthorizationFailureClassification(value: unknown): boolean {
+  return value === undefined || value === 'unauthorized' || value === 'forbidden';
 }
 
 function failure(fault: OperationFault): DispatchResult<never> {

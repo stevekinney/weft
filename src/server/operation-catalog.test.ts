@@ -475,6 +475,34 @@ describe('executeOperation — step 6: authorize hook', () => {
     expect(denied.fault.data.reason).toContain('workflow not permitted');
   });
 
+  it('hook denial can classify unauthenticated callers as Unauthorized', async () => {
+    const registry = createOperationRegistry([
+      makeOp({
+        name: 'weft.test.hookunauthorized',
+        inputSchema: z.object({}),
+        outputSchema: z.object({}),
+        invoke: async () => ({}),
+        access: { kind: 'public' },
+        authorize: async () => ({
+          allowed: false,
+          classification: 'unauthorized',
+          reason: 'authentication required',
+        }),
+      }),
+    ]);
+
+    const result = await executeOperation(
+      'weft.test.hookunauthorized',
+      {},
+      { principal: anonymousPrincipal(), engine: fakeEngine, transport: 'http-rest', registry },
+    );
+
+    if (result.ok) throw new Error('expected fault');
+    expect(result.fault.code).toBe('Unauthorized');
+    if (result.fault.code !== 'Unauthorized') throw new Error('shape');
+    expect(result.fault.data.reason).toBe('authentication required');
+  });
+
   it('hook throw -> EngineFailure (no internal detail leaked)', async () => {
     const registry = createOperationRegistry([
       makeOp({
@@ -1140,6 +1168,27 @@ describe('executeOperation — additional coverage', () => {
             Object.defineProperty({ allowed: false }, 'reason', {
               get() {
                 throw new Error('reason getter exploded');
+              },
+            }) as Awaited<ReturnType<NonNullable<ErasedOperation['authorize']>>>,
+        }),
+      },
+    );
+    if (result.ok) throw new Error('expected fault');
+    expect(result.fault).toEqual(ENGINE_FAILURE_FAULT);
+
+    result = await executeOperation(
+      'weft.test.defensive',
+      {},
+      {
+        principal: anonymousPrincipal(),
+        engine: fakeEngine,
+        transport: 'http-rest',
+        registry: registryFor({
+          ...baseOperation,
+          authorize: async () =>
+            Object.defineProperty({ allowed: false, reason: 'denied' }, 'classification', {
+              get() {
+                throw new Error('classification getter exploded');
               },
             }) as Awaited<ReturnType<NonNullable<ErasedOperation['authorize']>>>,
         }),

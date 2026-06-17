@@ -3130,6 +3130,45 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     await waitForRealTimersForTesting(50);
   });
 
+  it('clamps raw watch resumeFrom above the durable event range so live events still arrive', async () => {
+    engine = createEngine();
+    server = serveTestServer({ engine, port: 0 });
+
+    engine.dispatchEvent(new WorkflowCompletedEvent('wf-watch-clamped', 'first', 1));
+    await waitFor(
+      async () => (await engine.storage.get(KEYS.event('wf-watch-clamped', 0))) !== null,
+      {
+        label: 'watch event sequence persisted before clamped resume',
+      },
+    );
+
+    const ws = await connectWatch(server, 'wf-watch-clamped', { resumeFrom: 999 });
+    const messages = collectMessages(ws);
+    await waitForRealTimersForTesting(50);
+
+    engine.dispatchEvent(new WorkflowSuspendedEvent('wf-watch-clamped'));
+    await waitFor(
+      () => messages.filter((message) => message.type === WorkflowSuspendedEvent.type).length === 1,
+      {
+        label: 'clamped resume live watch event to client',
+      },
+    );
+
+    const watchMessages = messages.filter(
+      (message) =>
+        message.type === WorkflowCompletedEvent.type ||
+        message.type === WorkflowSuspendedEvent.type,
+    );
+    expect(watchMessages).toHaveLength(1);
+    expect(watchMessages[0]?.['type']).toBe(WorkflowSuspendedEvent.type);
+    expect(watchMessages[0]?.['sequence']).toBe(1);
+    expect(watchMessages[0]?.['cursor']).toBe('1');
+    expect(watchMessages[0]?.['data']).toMatchObject({ workflowId: 'wf-watch-clamped' });
+
+    ws.close();
+    await waitForRealTimersForTesting(50);
+  });
+
   it('only receives token events for the subscribed workflow', async () => {
     engine = createEngine();
     server = serveTestServer({ engine, port: 0 });

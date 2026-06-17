@@ -67,6 +67,42 @@ function jsonRpcWebSocketUrl(runningServer: WeftServer): string {
   return `${runningServer.url.replace('http://', 'ws://')}/jsonrpc`;
 }
 
+function workerWebSocketUrl(runningServer: WeftServer): string {
+  return `${runningServer.url.replace('http://', 'ws://')}/v1/tasks/default/stream`;
+}
+
+async function openWorkerWebSocket(runningServer: WeftServer, apiKey: string): Promise<WebSocket> {
+  const socket = new WebSocket(workerWebSocketUrl(runningServer), {
+    headers: { authorization: `Bearer ${apiKey}` },
+  } as any);
+
+  await new Promise<void>((resolve, reject) => {
+    socket.addEventListener('open', () => resolve());
+    socket.addEventListener('error', (event: Event) => reject(event));
+  });
+
+  return socket;
+}
+
+function registerWorker(
+  socket: WebSocket,
+  options: {
+    readonly workerId: string;
+    readonly activities: readonly string[];
+    readonly concurrency?: number;
+  },
+): void {
+  socket.send(
+    JSON.stringify({
+      type: 'register',
+      protocolVersion: 2,
+      workerId: options.workerId,
+      activities: options.activities,
+      concurrency: options.concurrency ?? 10,
+    }),
+  );
+}
+
 /**
  * Open an authenticated socket against a subscribe-capable server, send a
  * `weft.workflows.subscribe` request for `workflowId`'s events, and resolve
@@ -535,7 +571,83 @@ describe('serve() — WebSocket /jsonrpc', () => {
     ws.close();
   });
 
-  it('test j: server.stop with an active subscription drains sessions cleanly', async () => {
+  it('test j: fleet subscription receives worker lifecycle events through serve wiring', async () => {
+    engine = createHoldEngine();
+    server = serve({
+      engine,
+      port: 0,
+      workerReconnectGracePeriodMs: 0,
+      auth: {
+        apiKeys: [SUBSCRIBE_TEST_API_KEY],
+        defaultApiKeyScopes: ['events:read', 'workers:write'] as const,
+      },
+    });
+    const ws = await openWebSocket(jsonRpcWebSocketUrl(server), SUBSCRIBE_TEST_API_KEY);
+
+    const subscribeResponsePromise = waitForMessage(
+      ws,
+      (parsed: any) => parsed?.id === 40 && parsed?.result?.subscriptionId,
+    );
+    ws.send(
+      JSON.stringify({
+        jsonrpc: '2.0',
+        id: 40,
+        method: 'weft.events.subscribe',
+        params: {},
+      }),
+    );
+    const subscribeResponse = (await subscribeResponsePromise) as any;
+    const subscriptionId = subscribeResponse.result.subscriptionId as string;
+
+    const connectedDelivery = waitForMessage(
+      ws,
+      (parsed: any) =>
+        parsed?.method === 'weft.events.deliver' &&
+        parsed?.params?.subscriptionId === subscriptionId &&
+        parsed?.params?.envelope?.kind === 'worker:connected',
+    );
+    const disconnectedDelivery = waitForMessage(
+      ws,
+      (parsed: any) =>
+        parsed?.method === 'weft.events.deliver' &&
+        parsed?.params?.subscriptionId === subscriptionId &&
+        parsed?.params?.envelope?.kind === 'worker:disconnected',
+    );
+
+    const workerSocket = await openWorkerWebSocket(server, SUBSCRIBE_TEST_API_KEY);
+    registerWorker(workerSocket, {
+      workerId: 'fleet-lifecycle-worker',
+      activities: ['hold.activity'],
+      concurrency: 3,
+    });
+
+    const connected = (await connectedDelivery) as any;
+    expect(connected.params.envelope).toMatchObject({
+      kind: 'worker:connected',
+      payload: {
+        workerId: 'fleet-lifecycle-worker',
+        queue: 'default',
+        activities: ['hold.activity'],
+        concurrency: 3,
+      },
+    });
+    expect(connected.params.envelope.workflowId).toBeUndefined();
+
+    workerSocket.close();
+    const disconnected = (await disconnectedDelivery) as any;
+    expect(disconnected.params.envelope).toMatchObject({
+      kind: 'worker:disconnected',
+      payload: {
+        workerId: 'fleet-lifecycle-worker',
+        inFlightTaskCount: 0,
+      },
+    });
+    expect(disconnected.params.envelope.workflowId).toBeUndefined();
+
+    ws.close();
+  });
+
+  it('test k: server.stop with an active subscription drains sessions cleanly', async () => {
     // Shutdown-ordering regression guard. The shared
     // `WorkflowEventFeed` is registered in the AsyncDisposableStack
     // after the active-session close hook, so disposal runs:
