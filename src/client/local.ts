@@ -15,8 +15,7 @@ import {
   type WeftClient as CatalogOperations,
 } from '../cli/generated/operation-client.generated.ts';
 import { createCatalogWeftClient } from '../cli/operation-client-runtime.ts';
-import type { Engine, WorkflowHandle } from '../core/engine.ts';
-import type { WeftEventMap } from '../core/events.ts';
+import type { Engine } from '../core/engine.ts';
 import {
   runtimeWorkflowEngine,
   type RuntimeWorkflowEngine,
@@ -63,72 +62,17 @@ import type {
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
-import { ScheduleHandleDelegation, WorkflowHandleDelegation } from './handle-delegation.ts';
 import { inProcessCatalogTransport } from './in-process-operations.ts';
 import type {
   ClientHandle,
   ClientScheduleHandle,
-  StartOrSignalOutcome,
   UpdateResult,
   WeftClient,
   WeftClientActivity,
 } from './interface.ts';
 import { createLocalWorkflowEventTail } from './local-event-tail.ts';
+import { LocalHandle, LocalScheduleHandle } from './local-handles.ts';
 import type { KnownWorkflowName, UnknownNameWhenRegistryEmpty } from './workflow-name-typing.ts';
-
-// ---------------------------------------------------------------------------
-// LocalHandle — wraps Engine's WorkflowHandle
-// ---------------------------------------------------------------------------
-
-class LocalHandle extends WorkflowHandleDelegation<LocalClient> {
-  readonly #handle: WorkflowHandle;
-
-  constructor(handle: WorkflowHandle, client: LocalClient, outcome?: StartOrSignalOutcome) {
-    super(handle.id, client, outcome);
-    this.#handle = handle;
-  }
-
-  async result(): Promise<unknown> {
-    return this.#handle.result();
-  }
-
-  addEventListener<K extends keyof WeftEventMap>(
-    type: K,
-    listener: (event: WeftEventMap[K]) => void,
-    options?: boolean | AddEventListenerOptions,
-  ): void;
-  addEventListener(
-    type: string,
-    listener: EventListenerOrEventListenerObject,
-    options?: boolean | AddEventListenerOptions,
-  ): void {
-    this.#handle.addEventListener(type, listener, options);
-  }
-
-  removeEventListener<K extends keyof WeftEventMap>(
-    type: K,
-    listener: (event: WeftEventMap[K]) => void,
-    options?: boolean | EventListenerOptions,
-  ): void;
-  removeEventListener(
-    type: string,
-    listener: EventListenerOrEventListenerObject,
-    options?: boolean | EventListenerOptions,
-  ): void {
-    this.#handle.removeEventListener(type, listener, options);
-  }
-
-  [Symbol.dispose](): void {
-    // LocalHandle has no resources to clean up — events flow through
-    // the engine's EventTarget which is managed by the engine lifecycle.
-  }
-}
-
-class LocalScheduleHandle extends ScheduleHandleDelegation<LocalClient> {
-  [Symbol.dispose](): void {
-    // Local schedule handles do not hold long-lived resources.
-  }
-}
 
 // ---------------------------------------------------------------------------
 // LocalClient
