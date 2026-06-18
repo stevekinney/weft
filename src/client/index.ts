@@ -8,6 +8,7 @@
  * @module client/index
  */
 
+export type { WorkflowEventStreamOptions, WorkflowEventTransport } from './event-stream-options.ts';
 export type { WorkflowEventTail } from './event-tail.ts';
 export { HttpClient } from './http-client.ts';
 export { HttpClientError } from './http-request.ts';

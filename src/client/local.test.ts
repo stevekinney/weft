@@ -20,6 +20,7 @@ import {
 } from './client-contract.test-support.ts';
 import { ScheduleHandleDelegation, WorkflowHandleDelegation } from './handle-delegation.ts';
 import type { ClientHandle, WeftClient } from './interface.ts';
+import { LocalScheduleHandle } from './local-handles.ts';
 import { LocalClient } from './local.ts';
 
 // ---------------------------------------------------------------------------
@@ -664,6 +665,15 @@ describe('LocalClient delegation surface', () => {
     expect(scheduleClient.cancelSchedule).toHaveBeenCalledWith('shared-schedule');
   });
 
+  it('constructs and disposes the concrete local schedule handle', () => {
+    const client = new LocalClient(new Engine({ storage: new MemoryStorage() }));
+    const scheduleHandle = new LocalScheduleHandle('concrete-schedule', client);
+
+    expect(scheduleHandle.id).toBe('concrete-schedule');
+    scheduleHandle[Symbol.dispose]();
+    scheduleHandle[Symbol.dispose]();
+  });
+
   it('forwards every method to the underlying engine and wraps handles', async () => {
     const workflowHandle = new EventTarget() as EventTarget & {
       id: string;
@@ -810,6 +820,7 @@ describe('LocalClient delegation surface', () => {
       id: 'delegated-schedule',
       cronExpression: '0 * * * *',
     });
+    scheduleHandle[Symbol.dispose]();
     await handle.cancel();
     await handle.signal('status', { ok: true });
     expect(await handle.update('rename', { value: 1 }, { timeout: 50 })).toBe('update-result');

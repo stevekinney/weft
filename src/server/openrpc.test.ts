@@ -249,6 +249,19 @@ describe('generateOpenRpcDocument — runtime filtering', () => {
     expect(methods.find((m) => m['name'] === 'rpc.discover')).toBeDefined();
   });
 
+  it('omits REST-only SSE operations from JSON-RPC discovery', () => {
+    const document = generateOpenRpcDocument({
+      registry: createLiveOperationRegistry(),
+      transports: ['http', 'websocket'],
+    });
+    const methodNames = (document['methods'] as Array<Record<string, unknown>>).map((method) =>
+      String(method['name']),
+    );
+
+    expect(methodNames).not.toContain('weft.workflows.events.sse');
+    expect(methodNames).not.toContain('weft.events.sse');
+  });
+
   it('includes methods that are live only on websocket or stdio transports', () => {
     const registry = createOperationRegistry([
       makeOp({

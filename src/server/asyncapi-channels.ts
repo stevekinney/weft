@@ -39,11 +39,19 @@ type WebSocketMessageNames = {
   readonly errorFrame: string;
 };
 
-type SseMessageNames = {
+type EventSseMessageNames = {
+  readonly eventEnvelopeEvent: string;
+  readonly pingEvent: string;
+  readonly errorEvent: string;
+};
+
+type TokenSseMessageNames = {
   readonly tokenEvent: string;
   readonly doneEvent: string;
   readonly errorEvent: string;
 };
+
+type SseMessageNames = EventSseMessageNames | TokenSseMessageNames;
 
 /**
  * Build the AsyncAPI channel object for a WebSocket subscription operation.
@@ -183,12 +191,63 @@ export function buildSseMessages(
     direction?: DefinitionSchemaDirection,
   ) => Record<string, unknown>,
 ): Record<string, Record<string, unknown>> {
-  const names = sseMessageNames(operation);
   const logicalEventSchema = eventJsonSchema(operation, definitionSchemaToJsonSchema);
 
+  if (!isTokenSseOperation(operation)) {
+    const eventNames = eventSseMessageNames(operation);
+    return {
+      [eventNames.eventEnvelopeEvent]: {
+        name: eventNames.eventEnvelopeEvent,
+        contentType: 'text/event-stream',
+        payload: logicalEventSchema,
+        summary: `SSE event envelope for ${operation.name}.`,
+        bindings: {
+          http: {
+            event: '<envelope.kind>',
+          },
+        },
+        'x-weft-sse-frame':
+          'id: <cursor>\\nevent: <envelope.kind>\\ndata: <JSON event envelope>\\n\\n',
+      },
+      [eventNames.pingEvent]: {
+        name: eventNames.pingEvent,
+        contentType: 'text/event-stream',
+        payload: {
+          additionalProperties: false,
+          properties: {
+            emittedAtMs: { type: 'number' },
+          },
+          required: ['emittedAtMs'],
+          type: 'object',
+        },
+        summary: `SSE ping keepalive for ${operation.name}.`,
+        bindings: {
+          http: {
+            event: 'ping',
+          },
+        },
+        'x-weft-sse-frame': 'event: ping\\ndata: {"emittedAtMs":<timestamp>}\\n\\n',
+      },
+      [eventNames.errorEvent]: {
+        name: eventNames.errorEvent,
+        contentType: 'text/event-stream',
+        payload: sseErrorPayloadSchema(),
+        summary: `SSE error event for ${operation.name}.`,
+        bindings: {
+          http: {
+            event: 'error',
+          },
+        },
+        'x-weft-sse-frame': 'event: error\\ndata: <JSON Error>\\n\\n',
+      },
+    };
+  }
+
+  const tokenNames = tokenSseMessageNames(operation);
+
   return {
-    [names.tokenEvent]: {
-      name: names.tokenEvent,
+    [tokenNames.tokenEvent]: {
+      name: tokenNames.tokenEvent,
       contentType: 'text/event-stream',
       payload: { type: 'string' },
       summary: `SSE token event for ${operation.name}. The data: line carries the token text.`,
@@ -200,8 +259,8 @@ export function buildSseMessages(
       'x-weft-sse-frame': 'event: token\\nid: <sequence>\\ndata: <token-text>\\n\\n',
       'x-weft-event-schema': logicalEventSchema,
     },
-    [names.doneEvent]: {
-      name: names.doneEvent,
+    [tokenNames.doneEvent]: {
+      name: tokenNames.doneEvent,
       contentType: 'text/event-stream',
       payload: {
         additionalProperties: false,
@@ -216,18 +275,10 @@ export function buildSseMessages(
       },
       'x-weft-sse-frame': 'event: done\\n\\n',
     },
-    [names.errorEvent]: {
-      name: names.errorEvent,
+    [tokenNames.errorEvent]: {
+      name: tokenNames.errorEvent,
       contentType: 'text/event-stream',
-      payload: {
-        properties: {
-          code: { type: 'string' },
-          data: {},
-          message: { type: 'string' },
-        },
-        required: ['message'],
-        type: 'object',
-      },
+      payload: sseErrorPayloadSchema(),
       summary: `SSE error event for ${operation.name}.`,
       bindings: {
         http: {
@@ -285,11 +336,42 @@ function webSocketMessageNames(operation: ErasedOperation): WebSocketMessageName
 }
 
 function sseMessageNames(operation: ErasedOperation): SseMessageNames {
+  return isTokenSseOperation(operation)
+    ? tokenSseMessageNames(operation)
+    : eventSseMessageNames(operation);
+}
+
+function eventSseMessageNames(operation: ErasedOperation): EventSseMessageNames {
+  const prefix = operationPrefix(operation);
+  return {
+    eventEnvelopeEvent: `${prefix}_eventEnvelopeEvent`,
+    pingEvent: `${prefix}_pingEvent`,
+    errorEvent: `${prefix}_errorEvent`,
+  };
+}
+
+function tokenSseMessageNames(operation: ErasedOperation): TokenSseMessageNames {
   const prefix = operationPrefix(operation);
   return {
     tokenEvent: `${prefix}_tokenEvent`,
     doneEvent: `${prefix}_doneEvent`,
     errorEvent: `${prefix}_errorEvent`,
+  };
+}
+
+function isTokenSseOperation(operation: ErasedOperation): boolean {
+  return operation.name === 'weft.workflows.streams.sse';
+}
+
+function sseErrorPayloadSchema(): Record<string, unknown> {
+  return {
+    properties: {
+      code: { type: 'string' },
+      data: {},
+      message: { type: 'string' },
+    },
+    required: ['message'],
+    type: 'object',
   };
 }
 

@@ -58,6 +58,10 @@ import {
   createScheduleOperation,
   createScheduleRestBinding,
 } from './operations/create-schedule.ts';
+import {
+  fleetEventsSseOperation,
+  fleetEventsSseRestBinding,
+} from './operations/fleet-events-sse.ts';
 import { fleetEventsSubscriptionOperation } from './operations/fleet-events-subscription.ts';
 import { forkWorkflowOperation, forkWorkflowRestBinding } from './operations/fork-workflow.ts';
 import {
@@ -216,6 +220,10 @@ import {
   drainDeploymentOperation,
   drainWorkerOperation,
 } from './operations/worker-drain.ts';
+import {
+  workflowEventsSseOperation,
+  workflowEventsSseRestBinding,
+} from './operations/workflow-events-sse.ts';
 import { workflowEventsSubscriptionOperation } from './operations/workflow-events-subscription.ts';
 import type { RestBinding } from './rest-binding.ts';
 import type { TaskQueue } from './task-queue.ts';
@@ -288,6 +296,8 @@ export const REST_BINDINGS: ReadonlyArray<UnknownRestBinding> = [
   resumeScheduleRestBinding,
   getStreamChunksRestBinding,
   streamWorkflowSseRestBinding,
+  workflowEventsSseRestBinding,
+  fleetEventsSseRestBinding,
   getTaskDiagnosticsRestBinding,
   clearTaskDeadLetterRestBinding,
   // Track 8 operation-backed routes
@@ -461,6 +471,8 @@ export function createLiveOperationRegistry(
     resumeScheduleOperation,
     getStreamChunksOperation,
     streamWorkflowSseOperation,
+    workflowEventsSseOperation,
+    fleetEventsSseOperation,
     workflowEventsSubscriptionOperation,
     fleetEventsSubscriptionOperation,
     buildTaskDiagnosticsOperationForRegistry(resolved),

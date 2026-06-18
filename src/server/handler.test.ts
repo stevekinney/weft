@@ -3461,7 +3461,7 @@ describe('handleRequest', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(response.headers.get('Content-Type')).toBe('text/event-stream');
+    expect(response.headers.get('Content-Type')).toBe('text/event-stream; charset=utf-8');
 
     const body = await response.text();
     expect(body).toContain('id: 3');
@@ -3529,8 +3529,9 @@ describe('handleRequest', () => {
       );
 
       expect(response.status).toBe(200);
-      expect(response.headers.get('Content-Type')).toBe('text/event-stream');
-      expect(response.headers.get('Cache-Control')).toBe('no-cache');
+      expect(response.headers.get('Content-Type')).toBe('text/event-stream; charset=utf-8');
+      expect(response.headers.get('Cache-Control')).toBe('no-cache, no-transform');
+      expect(response.headers.get('X-Accel-Buffering')).toBe('no');
     });
 
     it('SSE response body contains data: prefixed lines', async () => {

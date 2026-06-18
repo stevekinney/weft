@@ -533,8 +533,8 @@ export interface WeftClient {
   /**
    * Open a live, push-based tail of a workflow's events. Async-iterate the
    * returned {@link WorkflowEventTail} to consume events as they happen. In
-   * server mode this rides the per-workflow `/v1/workflows/:id/watch` WebSocket
-   * channel (replacing the old 2-second poll); in library mode it bridges the
+   * server mode this rides the configured per-workflow WebSocket or SSE event
+   * stream (replacing the old 2-second poll); in library mode it bridges the
    * engine's event stream directly. Both transports deliver the same
    * {@link WorkflowEvent} records and terminate cleanly on completion or close.
    */

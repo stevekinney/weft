@@ -539,7 +539,11 @@ export type {
 
 export type { WorkflowEventTail } from './client/event-tail';
 export { HttpClient, HttpClientError } from './client/index';
-export type { HttpClientOptions } from './client/index';
+export type {
+  HttpClientOptions,
+  WorkflowEventStreamOptions,
+  WorkflowEventTransport,
+} from './client/index';
 export type {
   ClientHandle,
   ClientStartOptions,

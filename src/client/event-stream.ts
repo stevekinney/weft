@@ -2,27 +2,31 @@
  * Live workflow-event streaming for {@link HttpClient}.
  *
  * The server broadcasts a workflow's lifecycle events over a per-workflow
- * WebSocket channel at `/v1/workflows/:id/watch` (see the server's
- * `wireEventBroadcasting`). Each frame is a JSON {@link WorkflowEvent}
- * (`{ type, timestamp, data }`) — the same shape `getEvents()` returns. This
- * module opens that channel and exposes the events through two surfaces: a push
- * callback (`onEvent`) used by {@link HttpHandle.addEventListener} so listeners
- * fire the moment an event lands instead of on a 2-second poll, and an
- * {@link AsyncIterable} used by `client.tail(id)` / `handle.tail()`.
+ * WebSocket channel at `/v1/workflows/:id/watch`, with fetch-based SSE at
+ * `/v1/workflows/:id/events/sse` for authenticated runtimes that cannot carry
+ * headers through WebSocket construction. Each delivered frame becomes a JSON
+ * {@link WorkflowEvent} (`{ type, timestamp, data }`) — the same shape
+ * `getEvents()` returns. This module opens the selected channel and exposes the
+ * events through two surfaces: a push callback (`onEvent`) used by
+ * {@link HttpHandle.addEventListener} so listeners fire the moment an event
+ * lands instead of on a 2-second poll, and an {@link AsyncIterable} used by
+ * `client.tail(id)` / `handle.tail()`.
  *
- * **Catch-up + reconnect.** The watch channel is live-only and a dropped socket
- * can miss events while disconnected. To close both gaps the subscription
- * fetches the persisted event history (`getEvents`) on every (re)connect, emits
- * the events past a confirmed-contiguous history watermark, then drops any live
- * frame buffered during the fetch that the replayed history already covered (the
- * overlap window). Delivery is at-least-once: a failed fetch or a shorter
- * compaction-rebased history array may re-deliver a frame once rather than lose
- * it. The lone exception is a sequence-less-cursor edge under event-log
- * compaction — a compacted+regrown log of unchanged length — documented on
- * `#historyWatermark`; closing it needs a server-exposed event sequence.
- * Reconnect attempts back off and are capped; the cap is honored even for
- * open-then-close sockets, since the counter resets only after a catch-up proves
- * the connection healthy (`#catchUp`).
+ * **Catch-up + reconnect.** The WebSocket watch channel is live-only and a
+ * dropped socket can miss events while disconnected. To close both gaps the
+ * WebSocket subscription fetches the persisted event history (`getEvents`) on
+ * every (re)connect, emits the events past a confirmed-contiguous history
+ * watermark, then drops any live frame buffered during the fetch that the
+ * replayed history already covered (the overlap window). SSE uses the server's
+ * cursor-backed replay feed and reconnects with `Last-Event-ID`. Delivery is
+ * at-least-once: a failed fetch or a shorter compaction-rebased history array
+ * may re-deliver a frame once rather than lose it. The lone WebSocket exception
+ * is a sequence-less-cursor edge under event-log compaction — a
+ * compacted+regrown log of unchanged length — documented on `#historyWatermark`;
+ * closing it needs a server-exposed event sequence. Reconnect attempts back off
+ * and are capped; for WebSocket the cap is honored even for open-then-close
+ * sockets, since the counter resets only after a catch-up proves the connection
+ * healthy (`#catchUp`).
  *
  * **Clean close.** `close()` closes the socket and resolves the iterable.
  * Terminal workflow events (`completed`, `failed`, `cancelled`, `timed-out`)
@@ -34,6 +38,7 @@
 
 import { WORKFLOW_TERMINAL_EVENT_TYPES } from '../core/events/workflow-events.ts';
 import type { WorkflowEvent } from '../core/types.ts';
+import type { WorkflowEventStreamOptions } from './event-stream-options.ts';
 import {
   defaultWebSocketFactory,
   dropOverlappingLiveFrames,
@@ -47,28 +52,6 @@ export type StreamCloseReason = 'workflow-terminal' | 'client-closed' | 'reconne
 
 /** Fetches a workflow's persisted event history for connect/reconnect catch-up. */
 export type EventHistoryFetcher = (workflowId: string) => Promise<WorkflowEvent[]>;
-
-/** Options for opening a workflow event subscription. */
-export type WorkflowEventStreamOptions = {
-  /** Maximum reconnect attempts after a dropped socket. Default 5. */
-  readonly maxReconnectAttempts?: number;
-  /** Base reconnect backoff in milliseconds. Default 50. */
-  readonly reconnectBackoffMs?: number;
-  /**
-   * Constructor override for the underlying socket. Tests inject a fake here;
-   * production omits it and the global `WebSocket` is used.
-   */
-  readonly webSocketFactory?: WebSocketFactory;
-  /**
-   * Buffer events for async iteration from construction rather than lazily on
-   * first iterator pull. `tail()` sets this so the documented
-   * `await tail.whenConnected(); for await (…)` pattern still sees the connect
-   * catch-up history (which is emitted before the `for await` loop begins).
-   * Callback-only subscribers (`HttpHandle.addEventListener`) leave it off so
-   * the iterator buffer never accumulates a never-drained queue. Default false.
-   */
-  readonly bufferForIteration?: boolean;
-};
 
 const DEFAULT_MAX_RECONNECT_ATTEMPTS = 5;
 const DEFAULT_RECONNECT_BACKOFF_MS = 50;

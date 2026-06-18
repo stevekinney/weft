@@ -2,6 +2,7 @@ import { resolveConnection } from '../connection.ts';
 import { failureCategoryForFaultCode, isFaultCode, type FaultCode } from '../core/fault-code.ts';
 import type { FailureCategory } from '../core/types/identity.ts';
 import { isWeftErrorCode, WeftError, type WeftErrorCode } from '../core/weft-error.ts';
+import type { WorkflowEventTransport } from './event-stream-options.ts';
 import type { WebSocketFactory } from './event-stream-transport.ts';
 
 /**
@@ -34,6 +35,12 @@ export interface HttpClientOptions {
   token?: string;
   /** Optional headers to include on every request (e.g. auth tokens). */
   headers?: Record<string, string>;
+  /**
+   * Live workflow-event transport. `auto` prefers WebSocket and falls back to
+   * fetch-based SSE when the initial WebSocket constructor cannot carry the
+   * configured headers. Defaults to `auto`.
+   */
+  eventTransport?: WorkflowEventTransport;
   /**
    * Override the WebSocket constructor used for live event streaming
    * (`tail()` / push-based `handle.addEventListener`). Production omits this and

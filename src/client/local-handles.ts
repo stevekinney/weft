@@ -60,7 +60,16 @@ export class LocalHandle extends WorkflowHandleDelegation<LocalClient> {
 }
 
 export class LocalScheduleHandle extends ScheduleHandleDelegation<LocalClient> {
+  #disposed: boolean;
+
+  constructor(id: string, client: LocalClient) {
+    super(id, client);
+    this.#disposed = false;
+  }
+
   [Symbol.dispose](): void {
+    if (this.#disposed) return;
+    this.#disposed = true;
     // Local schedule handles do not hold long-lived resources.
   }
 }

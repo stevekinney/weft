@@ -49,9 +49,10 @@ describe('weft.workflows.streams.sse', () => {
       );
 
       expect(response.status).toBe(200);
-      expect(response.headers.get('content-type')).toBe('text/event-stream');
-      expect(response.headers.get('cache-control')).toBe('no-cache');
+      expect(response.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
+      expect(response.headers.get('cache-control')).toBe('no-cache, no-transform');
       expect(response.headers.get('connection')).toBe('keep-alive');
+      expect(response.headers.get('x-accel-buffering')).toBe('no');
       const body = await response.text();
       expect(body).toContain('id: 1');
       expect(body).toContain('data: alpha');

@@ -195,7 +195,7 @@ if (snapshot) {
 
 ## EventTarget Interface
 
-`WorkflowHandle` extends `EventTarget`, so you can listen for lifecycle events using the standard `addEventListener` / `removeEventListener` API. In-process handles receive events directly from the engine. Client handles preserve the same listener contract; `HttpClient` bridges workflow events over the per-workflow `/v1/workflows/:id/watch` WebSocket channel instead of polling `getEvents()`.
+`WorkflowHandle` extends `EventTarget`, so you can listen for lifecycle events using the standard `addEventListener` / `removeEventListener` API. In-process handles receive events directly from the engine. Client handles preserve the same listener contract; `HttpClient` bridges workflow events over the per-workflow `/v1/workflows/:id/watch` WebSocket channel, or `/v1/workflows/:id/events/sse` when SSE is selected or WebSocket header support is unavailable, instead of polling `getEvents()`.
 
 ```ts partial
 handle.addEventListener('workflow:completed', (event) => {
@@ -235,7 +235,7 @@ for await (const event of tail) {
 
 The tail is a single-consumer `AsyncIterable<WorkflowEvent>` with `close()` and `whenConnected()`. `whenConnected()` resolves after the transport is live and the initial history catch-up has run, so the common `await tail.whenConnected(); for await (...)` pattern still sees already-persisted events. Iteration ends on `workflow:completed`, `workflow:failed`, `workflow:cancelled`, `workflow:timed-out`, server close, or `tail.close()`.
 
-In server mode, `HttpClient` uses the `/v1/workflows/:id/watch` WebSocket channel and performs `getEvents()` catch-up on connect and reconnect. If the runtime has no global `WebSocket`, or cannot send configured authentication headers through its WebSocket constructor, pass `HttpClientOptions.webSocketFactory`.
+In server mode, `HttpClient` defaults to `eventTransport: 'auto'`: it uses the `/v1/workflows/:id/watch` WebSocket channel when the runtime can construct an authenticated WebSocket, and falls back to fetch-based SSE at `/v1/workflows/:id/events/sse` when the initial WebSocket construction fails because headers cannot be carried. Pass `eventTransport: 'websocket'` to require WebSocket, `eventTransport: 'sse'` to require SSE, or `webSocketFactory` to provide a runtime-specific WebSocket constructor.
 
 ---
 

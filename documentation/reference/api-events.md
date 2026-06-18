@@ -4,6 +4,14 @@ Weft uses the standard `EventTarget` API for lifecycle observability. The `Engin
 
 All event classes extend the built-in `Event` with a static `type` property matching the event string.
 
+## Live Event Streams
+
+HTTP clients can observe committed events without polling through either WebSockets or fetch-based Server-Sent Events. Per-workflow SSE is available at `GET /api/v1/workflows/:id/events/sse`; fleet SSE is available at `GET /api/v1/events/sse`. Both require `Accept: text/event-stream`. With server authentication enabled, workflow `selector=events` and fleet SSE require `events:read`; workflow `selector=tokens` requires `streams:read`.
+
+SSE data frames use `id: <cursor>`, `event: <event kind>`, and `data: <JSON event envelope>`. Reconnect with `Last-Event-ID: <cursor>`; that header takes precedence over `fromCursor=<cursor>`. Idle streams emit `event: ping` with JSON metadata and no `id`, so keepalives prove the connection is alive without advancing the replay cursor. Stream errors after headers are sent are reported as sanitized `event: error` frames before the server closes the connection.
+
+JSON-RPC over HTTP remains request/response only. Use JSON-RPC WebSocket subscriptions (`weft.workflows.subscribe` and `weft.events.subscribe`) when you want JSON-RPC live delivery instead of REST SSE. The older `/api/v1/workflows/:id/sse` route is a finite token replay stream, not a live event stream, and does not emit `ping`.
+
 ## Core Events
 
 ### `WorkflowStartedEvent`

@@ -117,6 +117,13 @@ describe('AsyncAPI document', () => {
     expect(document['channels']).toHaveProperty('weft/workflows/streams/sse');
   });
 
+  it('includes live event SSE stream channels', () => {
+    const document = generateAsyncApiDocument({ registry: createLiveOperationRegistry() });
+
+    expect(document['channels']).toHaveProperty('weft/workflows/events/sse');
+    expect(document['channels']).toHaveProperty('weft/events/sse');
+  });
+
   it('emits object payload schemas for every component message', () => {
     const document = generateAsyncApiDocument({
       registry: createLiveOperationRegistry(),

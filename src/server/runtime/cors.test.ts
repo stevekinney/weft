@@ -122,6 +122,23 @@ describe('buildPreflightResponse', () => {
     expect(response.headers.get('Cache-Control')).toBe('no-store');
   });
 
+  it('allows Last-Event-ID under the default allowed headers for SSE reconnects', () => {
+    const defaultHeaderPolicy = resolveCorsPolicy({
+      allowedOrigins: ['https://app.example.com'],
+    });
+
+    const response = buildPreflightResponse(
+      defaultHeaderPolicy,
+      preflight({
+        origin: 'https://app.example.com',
+        'access-control-request-method': 'GET',
+        'access-control-request-headers': 'last-event-id',
+      }),
+    );
+
+    expect(response.headers.get('Access-Control-Allow-Headers')).toContain('Last-Event-ID');
+  });
+
   it('omits CORS headers for a disallowed origin', () => {
     const response = buildPreflightResponse(
       policy,

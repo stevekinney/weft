@@ -164,7 +164,7 @@ In Worker mode, `ctx.log` records are forwarded to the host `onLog` sink through
 
 ## `ServeOptions`
 
-Passed to the `serve()` function to start the Weft HTTP + WebSocket server.
+Passed to the `serve()` function to start the Weft HTTP + WebSocket + SSE server.
 
 ```ts partial
 interface ServeOptions {
@@ -200,7 +200,7 @@ interface ServeOptions {
 | `cors`                            | `CorsOptions`                   | `undefined`      | Optional browser cross-origin policy; see [CORS](../guides/server.md#cross-origin-resource-sharing-cors) |
 | `unauthenticatedAccess`           | `'warn' \| 'allow' \| 'reject'` | `'warn'`         | Startup policy when `auth` is omitted                                                                    |
 | `maxRequestBodyBytes`             | `number`                        | `1048576`        | Maximum body size for REST operation routes and JSON-RPC over HTTP                                       |
-| `maxStreamConnectionsPerWorkflow` | `number`                        | `100`            | Maximum workflow stream/watch WebSocket connections per workflow                                         |
+| `maxStreamConnectionsPerWorkflow` | `number`                        | `100`            | Maximum workflow stream/watch WebSocket and event SSE connections per workflow                           |
 | `visibilityPollIntervalMs`        | `number`                        | `5000`           | Polling interval for task visibility timeout checks                                                      |
 | `workerReconnectGracePeriodMs`    | `number`                        | `2000`           | Reconnect grace before worker-disconnect task requeue                                                    |
 | `workerShutdownTimeoutMs`         | `number`                        | `30000`          | Shutdown drain window for connected remote workers                                                       |
@@ -212,7 +212,7 @@ The returned `WeftServer` exposes the resolved `port`, `hostname`, and `url`, al
 
 When `auth` is omitted, [`serve()`](./api-server.md#serve) defaults to `unauthenticatedAccess: 'warn'`: it logs a startup warning and runs open for local development. Set `unauthenticatedAccess: 'reject'` or [`WEFT_SERVER_AUTHENTICATION_REQUIRED=1`](#environment-variables) for production deployments so startup fails before binding unless `auth` is configured. `auth` satisfies the requirement; `unauthenticatedAccess: 'allow'` suppresses the local warning but does not override `WEFT_SERVER_AUTHENTICATION_REQUIRED`.
 
-`maxRequestBodyBytes` rejects oversized REST operation and JSON-RPC HTTP request bodies with `413 Payload Too Large`. `maxStreamConnectionsPerWorkflow` limits concurrent `/v1/workflows/:id/stream` and `/v1/workflows/:id/watch` sockets for one workflow; excess connections close with WebSocket code `1008`.
+`maxRequestBodyBytes` rejects oversized REST operation and JSON-RPC HTTP request bodies with `413 Payload Too Large`. `maxStreamConnectionsPerWorkflow` limits concurrent `/v1/workflows/:id/stream`, `/v1/workflows/:id/watch`, and `/v1/workflows/:id/events/sse` connections for one workflow; excess WebSockets close with WebSocket code `1008`, and excess workflow SSE requests return `429`.
 
 `workerReconnectGracePeriodMs` is clamped to `0..5000`. A same-`workerId` reconnect inside the window cancels the pending worker-disconnect requeue and keeps the worker's in-flight task assignments. The default is `2000` ms because Weft's common single-node and local-first deployments need a short buffer for transient socket churn without delaying genuine dead-worker detection for a full cloud drain window. Use `100` only for low-latency test or embedded scenarios, set `0` to requeue synchronously from the close handler, and set `5000` for cloud or load-balancer deployments where replacement workers commonly need several seconds to reconnect.
 

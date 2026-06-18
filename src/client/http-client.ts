@@ -44,7 +44,7 @@ import type {
   WorkflowTimelineEntry,
 } from '../core/types.ts';
 import { messageName } from '../core/types.ts';
-import { type WorkflowEventStreamOptions, type WorkflowEventSubscription } from './event-stream.ts';
+import type { WorkflowEventStreamOptions } from './event-stream-options.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
 import {
   addTagsRequest,
@@ -164,8 +164,12 @@ export class HttpClient implements WeftClient {
       complete: (token, result) => completeAsyncActivityRequest(this, token, result),
       completeExceptionally: (token, error) => failAsyncActivityRequest(this, token, error),
     };
-    this.#streamOptions =
-      options.webSocketFactory === undefined ? {} : { webSocketFactory: options.webSocketFactory };
+    this.#streamOptions = {
+      ...(options.eventTransport === undefined ? {} : { eventTransport: options.eventTransport }),
+      ...(options.webSocketFactory === undefined
+        ? {}
+        : { webSocketFactory: options.webSocketFactory }),
+    };
   }
 
   // Duplicate intentionally retained: the call/start overload stacks mirror
@@ -469,7 +473,7 @@ export class HttpClient implements WeftClient {
     id: string,
     onEvent: (event: WorkflowEvent) => void,
     bufferForIteration = false,
-  ): WorkflowEventSubscription {
+  ): WorkflowEventTail {
     return openClientEventSubscription(this, this.#streamOptions, id, onEvent, bufferForIteration);
   }
 

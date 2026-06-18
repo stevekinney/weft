@@ -68,6 +68,23 @@ describe('AsyncAPI channel builders', () => {
     ]);
   });
 
+  it('buildSseMessages includes event envelopes and pings for live event streams', () => {
+    const messages = buildSseMessages(
+      operation('weft.workflows.events.sse'),
+      definitionSchemaToJsonSchema,
+    );
+
+    expect(Object.keys(messages).toSorted()).toEqual([
+      'weft_workflows_events_sse_errorEvent',
+      'weft_workflows_events_sse_eventEnvelopeEvent',
+      'weft_workflows_events_sse_pingEvent',
+    ]);
+    expect(messages['weft_workflows_events_sse_pingEvent']).toMatchObject({
+      bindings: { http: { event: 'ping' } },
+      'x-weft-sse-frame': 'event: ping\\ndata: {"emittedAtMs":<timestamp>}\\n\\n',
+    });
+  });
+
   it('omits empty bindings from SSE channels', () => {
     const channel = buildSseChannel(
       operation('weft.workflows.streams.sse'),

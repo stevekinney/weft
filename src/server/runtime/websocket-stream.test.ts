@@ -8,6 +8,7 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import type { WebSocketData } from '../json-rpc-websocket-runtime.ts';
 import { minimalServerContext } from './server-context.test-support.ts';
 import {
+  acquireWorkflowStreamConnection,
   addWatchSocket,
   flushPendingWatchMessages,
   getHighestStoredStreamSequence,
@@ -71,6 +72,19 @@ describe('watch WebSocket delivery', () => {
         reason: 'maximum stream connections per workflow (0) exceeded',
       },
     ]);
+  });
+
+  it('leases workflow stream capacity and releases it idempotently', () => {
+    const context = minimalServerContext();
+    const lease = acquireWorkflowStreamConnection(context, 'wf-lease');
+
+    expect(lease).not.toBeNull();
+    expect(context.workflowStreamConnectionCounts.get('wf-lease')).toBe(1);
+
+    lease?.release();
+    lease?.release();
+
+    expect(context.workflowStreamConnectionCounts.has('wf-lease')).toBe(false);
   });
 
   it('buffers live watch frames during replay and dedupes by the watch cursor', () => {

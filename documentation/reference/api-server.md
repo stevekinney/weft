@@ -1,6 +1,6 @@
 # Server API
 
-Weft includes a built-in HTTP + WebSocket server that exposes workflows over a REST API. The `serve()` function wraps `Bun.serve()` with WebSocket upgrade support and clean shutdown. The `handleRequest()` function is a platform-agnostic request handler you can embed in your own server.
+Weft includes a built-in HTTP + WebSocket server that exposes workflows over a REST API, JSON-RPC, WebSocket subscriptions, and authenticated fetch-based Server-Sent Events. The `serve()` function wraps `Bun.serve()` with WebSocket upgrade support and clean shutdown. The `handleRequest()` function is a platform-agnostic request handler you can embed in your own server.
 
 ## `serve()`
 
@@ -8,7 +8,7 @@ Weft includes a built-in HTTP + WebSocket server that exposes workflows over a R
 function serve(options: ServeOptions): WeftServer;
 ```
 
-Start the Weft HTTP + WebSocket server. Returns a `WeftServer` handle for introspection and shutdown.
+Start the Weft HTTP + WebSocket + SSE server. Returns a `WeftServer` handle for introspection and shutdown.
 
 ```ts partial
 import { Engine, workflow } from '@lostgradient/weft';
@@ -51,25 +51,25 @@ interface ServeOptions {
 }
 ```
 
-| Field                             | Type                            | Default          | Description                                                                 |
-| --------------------------------- | ------------------------------- | ---------------- | --------------------------------------------------------------------------- |
-| `engine`                          | `Engine`                        | (required)       | The engine instance to expose over HTTP                                     |
-| `port`                            | `number`                        | `7233`           | TCP port to listen on                                                       |
-| `hostname`                        | `string`                        | `'0.0.0.0'`      | Hostname/IP to bind to                                                      |
-| `development`                     | `boolean`                       | `false`          | Enable development mode with verbose error responses                        |
-| `dashboard`                       | `DashboardRouteTarget`          | `undefined`      | External dashboard shell served at supported page routes when supplied      |
-| `auth`                            | `AuthConfig`                    | `undefined`      | Authentication configuration (JWT, mTLS, or custom)                         |
-| `rateLimit`                       | `RateLimitConfig`               | `undefined`      | Optional single-process request throttling                                  |
-| `cors`                            | `CorsOptions`                   | `undefined`      | Optional browser cross-origin policy                                        |
-| `unauthenticatedAccess`           | `'warn' \| 'allow' \| 'reject'` | `'warn'`         | Startup policy when `auth` is omitted                                       |
-| `maxRequestBodyBytes`             | `number`                        | `1048576`        | Maximum body size for REST operation routes and JSON-RPC over HTTP          |
-| `maxStreamConnectionsPerWorkflow` | `number`                        | `100`            | Maximum concurrent workflow stream/watch WebSocket connections per workflow |
-| `visibilityPollIntervalMs`        | `number`                        | `5000`           | Polling interval for task visibility timeout checks                         |
-| `workerReconnectGracePeriodMs`    | `number`                        | `2000`           | Milliseconds before a disconnected worker's in-flight tasks are requeued    |
-| `workerShutdownTimeoutMs`         | `number`                        | `30000`          | Milliseconds `server.stop()` waits for connected workers to drain           |
-| `routingPolicy`                   | `RoutingPolicy`                 | `'least-loaded'` | Worker routing policy                                                       |
-| `schedulingPolicy`                | `SchedulingPolicy`              | `'priority'`     | Scheduling policy for task dispatch                                         |
-| `prometheusExporter`              | `PrometheusExporter`            | `undefined`      | Exporter that produces the response body for `/v1/metrics`                  |
+| Field                             | Type                            | Default          | Description                                                                               |
+| --------------------------------- | ------------------------------- | ---------------- | ----------------------------------------------------------------------------------------- |
+| `engine`                          | `Engine`                        | (required)       | The engine instance to expose over HTTP                                                   |
+| `port`                            | `number`                        | `7233`           | TCP port to listen on                                                                     |
+| `hostname`                        | `string`                        | `'0.0.0.0'`      | Hostname/IP to bind to                                                                    |
+| `development`                     | `boolean`                       | `false`          | Enable development mode with verbose error responses                                      |
+| `dashboard`                       | `DashboardRouteTarget`          | `undefined`      | External dashboard shell served at supported page routes when supplied                    |
+| `auth`                            | `AuthConfig`                    | `undefined`      | Authentication configuration (JWT, mTLS, or custom)                                       |
+| `rateLimit`                       | `RateLimitConfig`               | `undefined`      | Optional single-process request throttling                                                |
+| `cors`                            | `CorsOptions`                   | `undefined`      | Optional browser cross-origin policy                                                      |
+| `unauthenticatedAccess`           | `'warn' \| 'allow' \| 'reject'` | `'warn'`         | Startup policy when `auth` is omitted                                                     |
+| `maxRequestBodyBytes`             | `number`                        | `1048576`        | Maximum body size for REST operation routes and JSON-RPC over HTTP                        |
+| `maxStreamConnectionsPerWorkflow` | `number`                        | `100`            | Maximum concurrent workflow stream/watch WebSocket and event SSE connections per workflow |
+| `visibilityPollIntervalMs`        | `number`                        | `5000`           | Polling interval for task visibility timeout checks                                       |
+| `workerReconnectGracePeriodMs`    | `number`                        | `2000`           | Milliseconds before a disconnected worker's in-flight tasks are requeued                  |
+| `workerShutdownTimeoutMs`         | `number`                        | `30000`          | Milliseconds `server.stop()` waits for connected workers to drain                         |
+| `routingPolicy`                   | `RoutingPolicy`                 | `'least-loaded'` | Worker routing policy                                                                     |
+| `schedulingPolicy`                | `SchedulingPolicy`              | `'priority'`     | Scheduling policy for task dispatch                                                       |
+| `prometheusExporter`              | `PrometheusExporter`            | `undefined`      | Exporter that produces the response body for `/v1/metrics`                                |
 
 See [configuration.md](./configuration.md) for `AuthConfig`, `RateLimitConfig`, `CorsOptions`, `RoutingPolicy`, and `SchedulingPolicy` details. The [server guide](../guides/server.md#rate-limiting) covers rate limiting, and the [CORS section](../guides/server.md#cross-origin-resource-sharing-cors) covers browser cross-origin policy.
 
@@ -77,7 +77,7 @@ When `auth` is omitted, [`serve()`](#serve) defaults to `unauthenticatedAccess: 
 
 `workerReconnectGracePeriodMs` is clamped to `0..5000`. A same-`workerId` reconnect inside the window cancels the pending requeue and keeps the worker's in-flight assignments. The default is `2000` ms because Weft's common single-node and local-first deployments need a short buffer for transient socket churn without delaying genuine dead-worker detection for a full cloud drain window. Set `100` only for low-latency test or embedded scenarios. Set `5000` for cloud or load-balancer deployments where replacement workers commonly need several seconds to reconnect. `0` disables the grace period and requeues synchronously from the close handler.
 
-`maxRequestBodyBytes` applies to REST operation routes and JSON-RPC over HTTP; oversized bodies return `413 Payload Too Large` before the full body is buffered. `maxStreamConnectionsPerWorkflow` applies to `/v1/workflows/:id/stream` and `/v1/workflows/:id/watch`; connections over the per-workflow cap are closed with WebSocket policy-violation code `1008`.
+`maxRequestBodyBytes` applies to REST operation routes and JSON-RPC over HTTP; oversized bodies return `413 Payload Too Large` before the full body is buffered. `maxStreamConnectionsPerWorkflow` applies to `/v1/workflows/:id/stream`, `/v1/workflows/:id/watch`, and `/v1/workflows/:id/events/sse`; connections over the per-workflow cap are closed with WebSocket policy-violation code `1008` or rejected with `429` for workflow SSE.
 
 `server.stop()` drains connected remote workers before stopping the Bun server. It sends each worker a shutdown frame, accepts in-flight `taskResult` messages during the drain window, and waits up to `workerShutdownTimeoutMs` before teardown continues. The CLI `serve` signal handlers use the same stop path.
 
@@ -623,7 +623,7 @@ The interface-level guarantee: all conditions are checked before any operation i
 | ------ | ------------- | ------------------------------------------ |
 | `GET`  | `/v1/metrics` | Prometheus-compatible metrics (text/plain) |
 
-### WebSocket Routes
+### Live Event Streaming Routes
 
 WebSocket upgrade is supported on the following paths:
 
@@ -634,7 +634,21 @@ WebSocket upgrade is supported on the following paths:
 | `/api/v1/tasks/:queue/stream`  | Worker task stream                                                  |
 | `/api/jsonrpc`                 | JSON-RPC over WebSocket session for the unified operation catalog   |
 
-Workflow stream and watch sockets share the `maxStreamConnectionsPerWorkflow` per-workflow cap. The default is `100`; excess connections are closed with WebSocket code `1008`. Both routes accept `?resumeFrom=<sequence>` cursors. The cursor grammar is `-1` or a non-negative decimal integer; malformed values reject the WebSocket upgrade with `400`. A missing cursor starts before the first retained frame, and a future cursor above the durable tail is clamped to the tail so the socket can remain connected for later live frames. Raw watch replay sends at most 1,000 retained events per socket and buffers at most 1,000 live frames while replay is catching up; older cursors or overloaded replay buffers close the socket with code `1008`. The listed scope requirements apply when `auth` is configured; without `auth`, raw WebSocket routes are open to any client that can connect. Raw watch frames preserve the `{ type, timestamp, data }` event shape and include `sequence` / `cursor` fields for resumption. JSON-RPC clients can subscribe to per-workflow events with `weft.workflows.subscribe` or to one fleet-wide event feed with `weft.events.subscribe`; both deliver notifications as `weft.events.deliver`. Fleet-wide subscriptions expose workflow-facing operational events and worker connection lifecycle events, accept optional `workflowId` and `kind` filters, reject replay windows above 1,000 matching retained events, and order their cursor on the server process that owns the durable store under Weft's current one-server-process-per-durable-store model.
+REST SSE is supported on the following paths when the request has `Accept: text/event-stream`:
+
+| Path                               | Description                                                                     |
+| ---------------------------------- | ------------------------------------------------------------------------------- |
+| `/api/v1/workflows/:id/events/sse` | Stream workflow event envelopes with `selector=events`; requires `events:read`  |
+| `/api/v1/workflows/:id/events/sse` | Stream workflow token envelopes with `selector=tokens`; requires `streams:read` |
+| `/api/v1/events/sse`               | Stream the fleet event feed; requires `events:read`                             |
+
+Workflow stream/watch WebSockets and workflow event SSE connections share the `maxStreamConnectionsPerWorkflow` per-workflow cap. The default is `100`; excess WebSockets are closed with WebSocket code `1008`, and excess workflow SSE requests return `429`.
+
+The raw WebSocket `/stream` and `/watch` routes accept `?resumeFrom=<sequence>` cursors. The cursor grammar is `-1` or a non-negative decimal integer; malformed values reject the WebSocket upgrade with `400`. A missing cursor starts before the first retained frame, and a future cursor above the durable tail is clamped to the tail so the socket can remain connected for later live frames. Raw watch replay sends at most 1,000 retained events per socket and buffers at most 1,000 live frames while replay is catching up; older cursors or overloaded replay buffers close the socket with code `1008`. The listed scope requirements apply when `auth` is configured; without `auth`, raw WebSocket routes are open to any client that can connect. Raw watch frames preserve the `{ type, timestamp, data }` event shape and include `sequence` / `cursor` fields for resumption.
+
+The live SSE routes use the committed workflow and fleet event feeds. Data frames include `id: <cursor>`, `event: <event kind>`, and `data: <JSON event envelope>`. Idle connections emit `event: ping` with JSON metadata and no `id`, so keepalives never advance replay cursors. After headers are sent, stream failures emit a sanitized `event: error` frame and then close. Workflow SSE accepts `selector=events|tokens` and `fromCursor=<cursor>`; fleet SSE accepts `workflowId`, `kind`, and `fromCursor`. For both routes, the `Last-Event-ID` header takes precedence over `fromCursor` so reconnecting clients resume from the server-confirmed cursor. Invalid cursors fail with `400`, and requests without `Accept: text/event-stream` fail with `406`.
+
+JSON-RPC over HTTP remains request/response only. JSON-RPC clients can subscribe to per-workflow events with `weft.workflows.subscribe` or to one fleet-wide event feed with `weft.events.subscribe` over WebSocket or stdio; both deliver notifications as `weft.events.deliver`. Fleet-wide subscriptions expose workflow-facing operational events and worker connection lifecycle events, accept optional `workflowId` and `kind` filters, reject replay windows above 1,000 matching retained events, and order their cursor on the server process that owns the durable store under Weft's current one-server-process-per-durable-store model. The finite token replay SSE route, `/api/v1/workflows/:id/sse`, remains a separate historical token stream and does not emit live `ping` keepalives.
 
 ### Error Responses
 

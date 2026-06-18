@@ -9,6 +9,7 @@ import { generateAsyncApiDocument } from '../asyncapi.ts';
 import type { AuthContext } from '../authentication.ts';
 import type { DiscoveryInfo } from '../discovery-info.ts';
 import { faultToHttpResponse } from '../fault-to-http.ts';
+import type { FleetEventFeed } from '../fleet-event-feed.ts';
 import { generateMcpDiscovery } from '../mcp-discovery.ts';
 import { generateOpenApiDocument, type OpenApiSecuritySchemeName } from '../openapi.ts';
 import { generateOpenRpcDocument } from '../openrpc.ts';
@@ -19,18 +20,14 @@ import {
 } from '../operation-catalog.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { FAULT_CODE_TO_HTTP_STATUS } from '../operation-fault.ts';
-import {
-  anonymousPrincipal,
-  principalFromApiKey,
-  principalFromJwtClaims,
-  principalFromMutualTls,
-  type Principal,
-} from '../principal.ts';
+import type { WorkflowStreamConnectionAcquirer } from '../operations/workflow-events-sse.ts';
+import type { Principal } from '../principal.ts';
 import {
   createLiveOperationRegistry,
   createLiveRestBindings,
   type UnknownRestBinding,
 } from '../rest-bindings.ts';
+import type { WorkflowEventFeed } from '../workflow-event-feed.ts';
 import {
   defaultShapeSuccess,
   errorResponse,
@@ -38,9 +35,11 @@ import {
   negotiatedResponse,
 } from './response-helpers.ts';
 import type { DirectRouteHandlerName } from './route-matching.ts';
-
-/** Alias for `AuthContext` — kept local so handler-internal code reads naturally. */
-type AuthenticatedRequestContext = AuthContext;
+import {
+  dispatchServerSentEventsBinding,
+  isDirectServerSentEventsOperation,
+  type LiveEventStreamContext,
+} from './sse-route-dispatch.ts';
 
 /**
  * Options bag passed to `handleRequest` by the HTTP server wrapper.
@@ -115,6 +114,12 @@ export interface HandlerOptions {
   trustedHosts?: ReadonlyArray<string>;
   /** Maximum REST operation request body size in bytes. Defaults to 1 MB. */
   maxRequestBodyBytes?: number;
+  /** Event feed used by live workflow SSE routes. */
+  workflowEventFeed?: WorkflowEventFeed;
+  /** Fleet feed used by live fleet SSE routes. */
+  fleetEventFeed?: Pick<FleetEventFeed, 'subscribe'>;
+  /** Shared per-workflow long-lived stream connection limiter. */
+  acquireWorkflowStreamConnection?: WorkflowStreamConnectionAcquirer;
   /**
    * Optional pipeline-trace observer. **Internal test seam** used by the
    * dispatch-audit suite to prove every transport drives the full
@@ -283,22 +288,31 @@ export async function dispatchViaExecuteOperation(
   principal: Principal,
   pipelineTrace?: PipelineTrace,
   maxRequestBodyBytes?: number,
+  supportedAuthenticationSchemes?: ReadonlySet<OpenApiSecuritySchemeName>,
+  liveEventStreamContext?: LiveEventStreamContext,
 ): Promise<Response> {
-  let input: unknown;
-  try {
-    input = await binding.extractInput(
+  const extracted = await extractRestBindingInput(
+    request,
+    binding,
+    pathParams,
+    maxRequestBodyBytes,
+  );
+  if (!extracted.ok) return extracted.response;
+
+  if (isDirectServerSentEventsOperation(binding.operationName)) {
+    return dispatchServerSentEventsBinding({
       request,
-      pathParams,
-      maxRequestBodyBytes !== undefined ? { maxBodyBytes: maxRequestBodyBytes } : {},
-    );
-  } catch (error) {
-    if (isOperationFaultLike(error)) {
-      return binding.shapeFault ? binding.shapeFault(error) : faultToHttpResponse(error);
-    }
-    const message = error instanceof Error ? error.message : String(error);
-    return errorResponse(message, 400);
+      binding,
+      rawInput: extracted.input,
+      principal,
+      registry,
+      ...(pipelineTrace === undefined ? {} : { pipelineTrace }),
+      ...(supportedAuthenticationSchemes === undefined ? {} : { supportedAuthenticationSchemes }),
+      ...(liveEventStreamContext === undefined ? {} : { liveEventStreamContext }),
+    });
   }
-  const result = await executeOperation(binding.operationName, input, {
+
+  const result = await executeOperation(binding.operationName, extracted.input, {
     principal,
     engine,
     transport: 'http-rest',
@@ -311,6 +325,39 @@ export async function dispatchViaExecuteOperation(
       : defaultShapeSuccess(result.value, binding.success);
   }
   return binding.shapeFault ? binding.shapeFault(result.fault) : faultToHttpResponse(result.fault);
+}
+
+type RestBindingInputResult =
+  | {
+      readonly ok: true;
+      readonly input: unknown;
+    }
+  | {
+      readonly ok: false;
+      readonly response: Response;
+    };
+
+async function extractRestBindingInput(
+  request: Request,
+  binding: UnknownRestBinding,
+  pathParams: Record<string, string>,
+  maxRequestBodyBytes: number | undefined,
+): Promise<RestBindingInputResult> {
+  try {
+    const input = await binding.extractInput(
+      request,
+      pathParams,
+      maxRequestBodyBytes !== undefined ? { maxBodyBytes: maxRequestBodyBytes } : {},
+    );
+    return { ok: true, input };
+  } catch (error) {
+    if (isOperationFaultLike(error)) {
+      const response = binding.shapeFault ? binding.shapeFault(error) : faultToHttpResponse(error);
+      return { ok: false, response };
+    }
+    const message = error instanceof Error ? error.message : String(error);
+    return { ok: false, response: errorResponse(message, 400) };
+  }
 }
 
 function hasRequiredFaultProperties(candidate: Record<string, unknown>): boolean {
@@ -382,46 +429,6 @@ export function isOperationFaultLike(value: unknown): value is OperationFault {
     fields.data !== null &&
     !Array.isArray(fields.data)
   );
-}
-
-/**
- * Convert the REST transport's `authContext` into a `Principal`. The
- * authenticator (`serve()`) reports method + optional claims; this maps
- * that transport authentication result into the `Principal` used by the
- * operation pipeline.
- * Returns `anonymousPrincipal()` when no context is provided (public
- * request).
- *
- * @example
- * ```ts
- * import { authContextToPrincipal } from '@lostgradient/weft/server/handler';
- *
- * const principal = authContextToPrincipal({ method: 'api-key' });
- * console.log(principal.method); // 'api-key'
- * ```
- */
-export function authContextToPrincipal(
-  authContext: AuthenticatedRequestContext | undefined,
-): Principal {
-  if (authContext === undefined) return anonymousPrincipal();
-  if (authContext.principal !== undefined) return authContext.principal;
-  switch (authContext.method) {
-    case 'jwt': {
-      if (authContext.claims === undefined) {
-        throw new Error(
-          'authContextToPrincipal: jwt authContext reached the pipeline without claims — ' +
-            'authenticator contract violation',
-        );
-      }
-      return principalFromJwtClaims(authContext.claims);
-    }
-    case 'api-key':
-      return principalFromApiKey({ subject: 'api-key-caller', scopes: [] });
-    case 'mtls':
-      return principalFromMutualTls({ subject: 'mtls-caller', scopes: [] });
-    case 'public':
-      return anonymousPrincipal();
-  }
 }
 
 /**

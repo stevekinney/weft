@@ -141,4 +141,4 @@ A few endpoints are intentionally REST-only or unauthenticated:
 - `GET /v1/health` — anonymous liveness probe for load balancers
 - `GET /v1/metrics` — Prometheus exposition format (`text/plain`); the JSON-shaped form is `weft.system.metrics` on the catalog
 
-SSE (`GET /api/v1/workflows/:id/sse`) is transport-specific—the JSON-RPC analogue is WebSocket subscription notifications.
+SSE is transport-specific. `GET /api/v1/workflows/:id/sse` is the finite token replay route, while `GET /api/v1/workflows/:id/events/sse` and `GET /api/v1/events/sse` are live event streams with `ping` keepalives and `Last-Event-ID` reconnect cursors. The JSON-RPC analogue is WebSocket subscription notifications.

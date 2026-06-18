@@ -19,6 +19,10 @@ const MAX_PENDING_WATCH_REPLAY_MESSAGES = 1_000;
  */
 export const DEFAULT_MAX_STREAM_CONNECTIONS_PER_WORKFLOW = 100;
 
+export type WorkflowStreamConnectionLease = {
+  release(): void;
+};
+
 export function sendStreamMessage(
   ws: ServerWebSocket<WebSocketData>,
   sequence: number,
@@ -159,6 +163,31 @@ export function removeWorkflowStreamConnection(
   if (!workflowId || !ws.data.workflowStreamConnectionAccepted) return;
 
   ws.data.workflowStreamConnectionAccepted = false;
+  releaseWorkflowStreamConnection(context, workflowId);
+}
+
+export function acquireWorkflowStreamConnection(
+  context: ServerContext,
+  workflowId: string,
+): WorkflowStreamConnectionLease | null {
+  const currentCount = context.workflowStreamConnectionCounts.get(workflowId);
+  const maxConnections = context.maxStreamConnectionsPerWorkflow;
+  if ((currentCount ?? 0) >= maxConnections) {
+    return null;
+  }
+
+  context.workflowStreamConnectionCounts.set(workflowId, (currentCount ?? 0) + 1);
+  let released = false;
+  return {
+    release() {
+      if (released) return;
+      released = true;
+      releaseWorkflowStreamConnection(context, workflowId);
+    },
+  };
+}
+
+function releaseWorkflowStreamConnection(context: ServerContext, workflowId: string): void {
   const currentCount = context.workflowStreamConnectionCounts.get(workflowId);
   if (currentCount === undefined || currentCount <= 1) {
     context.workflowStreamConnectionCounts.delete(workflowId);
@@ -173,9 +202,9 @@ function addWorkflowStreamConnection(
   workflowId: string,
   ws: ServerWebSocket<WebSocketData>,
 ): boolean {
-  const currentCount = context.workflowStreamConnectionCounts.get(workflowId) ?? 0;
   const maxConnections = context.maxStreamConnectionsPerWorkflow;
-  if (currentCount >= maxConnections) {
+  const lease = acquireWorkflowStreamConnection(context, workflowId);
+  if (lease === null) {
     ws.close(
       STREAM_CONNECTION_POLICY_CLOSE_CODE,
       `maximum stream connections per workflow (${maxConnections}) exceeded`,
@@ -183,7 +212,6 @@ function addWorkflowStreamConnection(
     return false;
   }
 
-  context.workflowStreamConnectionCounts.set(workflowId, currentCount + 1);
   ws.data.workflowStreamConnectionAccepted = true;
   return true;
 }

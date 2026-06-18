@@ -31,6 +31,7 @@ import {
   type GetTaskDiagnosticsOutput,
 } from './operations/get-task-diagnostics.ts';
 import { anonymousPrincipal, principalFromApiKey } from './principal.ts';
+import { buildFetchHandler, buildServerContext, resolveNetworkConfig } from './serve-internals.ts';
 import type { InflightRecord, QueuedRecord, ResolvedRecord } from './task-state.ts';
 
 const echoWorkflow = workflow({ name: 'echo' }).execute(async function* (
@@ -2994,6 +2995,8 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
 
     const close = await expectWorkflowStreamPolicyClose(server, 'test-wf', 'stream');
     expect(close.code).toBe(1008);
+    const watchClose = await expectWorkflowStreamPolicyClose(server, 'test-wf', 'watch');
+    expect(watchClose.code).toBe(1008);
 
     watch.close();
     await waitFor(() => watch.readyState === WebSocket.CLOSED, {
@@ -3006,6 +3009,94 @@ describe('token streaming WebSocket (WS /v1/workflows/:id/stream)', () => {
     stream.close();
     replacement.close();
     await waitForRealTimersForTesting(50);
+  });
+
+  it('serves authenticated workflow event SSE through the live event bridge', async () => {
+    const apiKey = 'weft_key_eventsread1234567890123456';
+    engine = createEngine();
+    const { serverOptions, serverMetricsCollector } = resolveNetworkConfig({
+      engine,
+      port: 0,
+      publicOrigin: 'http://localhost',
+      auth: {
+        apiKeys: [apiKey],
+        defaultApiKeyScopes: ['events:read'],
+      },
+    });
+    const context = buildServerContext(serverOptions, serverMetricsCollector);
+    const fetchHandler = buildFetchHandler(
+      {
+        current: {
+          requestIP: () => null,
+          upgrade: () => false,
+        } as unknown as ReturnType<typeof Bun.serve>,
+      },
+      context,
+      serverOptions,
+    );
+
+    const abortController = new AbortController();
+    try {
+      const response = await fetchHandler(
+        new Request('http://localhost/v1/workflows/wf-auth/events/sse', {
+          headers: {
+            Accept: 'text/event-stream',
+            'x-api-key': apiKey,
+          },
+          signal: abortController.signal,
+        }),
+      );
+
+      expect(response).toBeDefined();
+      expect(response?.status).toBe(200);
+      expect(response?.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
+      await response?.body?.cancel().catch(() => undefined);
+    } finally {
+      abortController.abort();
+      context.workflowEventFeed.dispose();
+      context.fleetEventFeed.dispose();
+    }
+  });
+
+  it('serves unauthenticated workflow event SSE when server auth is disabled', async () => {
+    engine = createEngine();
+    const { serverOptions, serverMetricsCollector } = resolveNetworkConfig({
+      engine,
+      port: 0,
+      publicOrigin: 'http://localhost',
+    });
+    const context = buildServerContext(serverOptions, serverMetricsCollector);
+    const fetchHandler = buildFetchHandler(
+      {
+        current: {
+          requestIP: () => null,
+          upgrade: () => false,
+        } as unknown as ReturnType<typeof Bun.serve>,
+      },
+      context,
+      serverOptions,
+    );
+
+    const abortController = new AbortController();
+    try {
+      const response = await fetchHandler(
+        new Request('http://localhost/v1/workflows/wf-auth/events/sse', {
+          headers: {
+            Accept: 'text/event-stream',
+          },
+          signal: abortController.signal,
+        }),
+      );
+
+      expect(response).toBeDefined();
+      expect(response?.status).toBe(200);
+      expect(response?.headers.get('content-type')).toBe('text/event-stream; charset=utf-8');
+      await response?.body?.cancel().catch(() => undefined);
+    } finally {
+      abortController.abort();
+      context.workflowEventFeed.dispose();
+      context.fleetEventFeed.dispose();
+    }
   });
 
   it('receives live token events through the stream connection', async () => {

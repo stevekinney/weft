@@ -1,23 +1,22 @@
 import type { WeftEventMap } from '../core/events.ts';
-import type { WorkflowEventSubscription } from './event-stream.ts';
+import type { WorkflowEventTail } from './event-tail.ts';
 import { WorkflowHandleDelegation } from './handle-delegation.ts';
 import type { HttpClient } from './http-client.ts';
 import { HttpClientError, request } from './http-request.ts';
 
 /**
  * Server-mode workflow handle. Lifecycle events are delivered push-based over
- * the server's per-workflow `/v1/workflows/:id/watch` WebSocket channel rather
- * than by polling `getEvents()` on a timer — listeners fire the moment an event
- * lands on the server. Each delivered event is re-dispatched as a `CustomEvent`
- * whose `detail` is the event's `data`, matching the long-standing handle
- * contract.
+ * the server's per-workflow WebSocket or SSE event stream rather than by
+ * polling `getEvents()` on a timer — listeners fire the moment an event lands
+ * on the server. Each delivered event is re-dispatched as a `CustomEvent` whose
+ * `detail` is the event's `data`, matching the long-standing handle contract.
  */
 export class HttpHandle extends WorkflowHandleDelegation<HttpClient> {
   readonly #events = new EventTarget();
-  #subscription: WorkflowEventSubscription | null = null;
+  #subscription: WorkflowEventTail | null = null;
   #closed = false;
 
-  #ensureSubscribed(): WorkflowEventSubscription | null {
+  #ensureSubscribed(): WorkflowEventTail | null {
     if (this.#closed) return null;
     // Open once and cache for the handle's lifetime. We deliberately do NOT
     // re-open after the subscription terminates (workflow reached a terminal

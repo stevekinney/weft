@@ -1,6 +1,6 @@
 /**
- * Bun.serve() wrapper with WebSocket support, optional external UI mounting,
- * and clean shutdown.
+ * Bun.serve() wrapper with WebSocket and SSE support, optional external UI
+ * mounting, and clean shutdown.
  *
  * @module server
  */
@@ -225,10 +225,11 @@ export interface ServeOptions {
    */
   maxRequestBodyBytes?: number;
   /**
-   * Maximum concurrent `/v1/workflows/:id/stream` and
-   * `/v1/workflows/:id/watch` WebSocket connections for a single workflow.
-   * Defaults to 100. Excess connections are closed with policy-violation code
-   * `1008` after the WebSocket upgrade opens.
+   * Maximum concurrent `/v1/workflows/:id/stream`,
+   * `/v1/workflows/:id/watch`, and `/v1/workflows/:id/events/sse`
+   * connections for a single workflow. Defaults to 100. Excess WebSockets are
+   * closed with policy-violation code `1008` after the upgrade opens; excess
+   * workflow SSE requests return `429`.
    */
   maxStreamConnectionsPerWorkflow?: number;
   /** How often (in ms) the server scans `op:inflight:*` for expired visibility deadlines. Defaults to 5 000. */
@@ -410,7 +411,7 @@ export interface WeftServer extends AsyncDisposable {
 // ---------------------------------------------------------------------------
 
 /**
- * Start the Weft HTTP + WebSocket server.
+ * Start the Weft HTTP + WebSocket + SSE server.
  *
  * `serve()` validates the supplied `auth` configuration synchronously and
  * throws `Error` before binding the port if any auth setting is invalid.

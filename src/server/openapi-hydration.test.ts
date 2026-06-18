@@ -98,12 +98,42 @@ describe('OpenAPI hydration', () => {
       paths: Record<string, Record<string, Record<string, unknown>>>;
     };
 
-    const sseGet = document.paths['/api/v1/workflows/{id}/sse']?.['get'];
-    expect(sseGet).toBeDefined();
-    const sseResponses = sseGet!['responses'] as Record<string, Record<string, unknown>>;
-    const sseSuccess = sseResponses['200'] as { content: Record<string, unknown> };
-    expect(sseSuccess.content).toHaveProperty('text/event-stream');
-    expect(sseSuccess.content).not.toHaveProperty('application/json');
+    for (const path of [
+      '/api/v1/workflows/{id}/sse',
+      '/api/v1/workflows/{id}/events/sse',
+      '/api/v1/events/sse',
+    ]) {
+      const sseGet = document.paths[path]?.['get'];
+      expect(sseGet).toBeDefined();
+      const sseResponses = sseGet!['responses'] as Record<string, Record<string, unknown>>;
+      const sseSuccess = sseResponses['200'] as { content: Record<string, unknown> };
+      expect(sseSuccess.content).toHaveProperty('text/event-stream');
+      expect(sseSuccess.content).not.toHaveProperty('application/json');
+    }
+  });
+
+  it('documents live SSE reconnect cursors as query and header parameters', async () => {
+    const engine = new Engine({ storage: new MemoryStorage() });
+    engines.push(engine);
+    const server = serve({ engine, port: 0 });
+    servers.push(server);
+
+    const response = await fetch(`${server.url}/openapi.json`);
+    const document = (await response.json()) as {
+      paths: Record<string, Record<string, Record<string, unknown>>>;
+    };
+
+    for (const path of ['/api/v1/workflows/{id}/events/sse', '/api/v1/events/sse']) {
+      const operation = document.paths[path]?.['get'];
+      expect(operation).toBeDefined();
+      const parameters = operation!['parameters'] as Array<Record<string, unknown>>;
+      expect(parameters).toContainEqual(
+        expect.objectContaining({ name: 'fromCursor', in: 'query' }),
+      );
+      expect(parameters).toContainEqual(
+        expect.objectContaining({ name: 'Last-Event-ID', in: 'header' }),
+      );
+    }
   });
 
   it('document is deterministic across two generations', async () => {

@@ -25,6 +25,7 @@ import { gateRequest } from './request-gate.ts';
 import { handleTaskPollRequest, handleTaskResultRequest } from './task-polling.ts';
 import { reassignOrExpireTask } from './task-reconciliation.ts';
 import {
+  acquireWorkflowStreamConnection,
   addStreamSocket,
   addWatchSocket,
   removeStreamSocket,
@@ -266,6 +267,10 @@ function buildHandlerOptions(
       : {}),
     operationRegistry: context.liveOperationRegistry,
     restBindings: context.liveRestBindings,
+    workflowEventFeed: context.workflowEventFeed,
+    fleetEventFeed: context.fleetEventFeed,
+    acquireWorkflowStreamConnection: (workflowId) =>
+      acquireWorkflowStreamConnection(context, workflowId),
     supportedAuthenticationSchemes: context.supportedAuthenticationSchemes,
   };
 }

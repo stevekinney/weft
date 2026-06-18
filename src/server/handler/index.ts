@@ -12,10 +12,10 @@
 
 import type { Engine } from '../../core/engine.ts';
 import { MalformedRouteParameterError } from '../rest-binding.ts';
+import { authContextToPrincipal } from './auth-context-principal.ts';
 import { matchRestBinding } from './binding-dispatch.ts';
 import { errorResponse } from './response-helpers.ts';
 import {
-  authContextToPrincipal,
   defaultOperationRegistry,
   defaultRestBindings,
   DIRECT_ROUTE_EXECUTORS,
@@ -23,28 +23,21 @@ import {
   type HandlerOptions,
 } from './route-dispatch.ts';
 import { matchDirectRoute } from './route-matching.ts';
+import type { LiveEventStreamContext } from './sse-route-dispatch.ts';
 
-export {
-  authContextToPrincipal,
-  isOperationFaultLike,
-  type HandlerOptions,
-} from './route-dispatch.ts';
+export { authContextToPrincipal } from './auth-context-principal.ts';
+export { isOperationFaultLike, type HandlerOptions } from './route-dispatch.ts';
 export { extractRouteParameters, getRequiredRouteParameter } from './route-matching.ts';
 
 type RouteLookup<T> = { kind: 'matched'; value: T } | { kind: 'malformed'; response: Response };
-
-function routeParameterErrorResponse(error: unknown): Response | null {
-  if (error instanceof MalformedRouteParameterError) return errorResponse(error.message, 400);
-  return null;
-}
 
 function matchRouteBoundary<T>(matcher: () => T): RouteLookup<T> {
   try {
     return { kind: 'matched', value: matcher() };
   } catch (error) {
-    const response = routeParameterErrorResponse(error);
-    if (response !== null) return { kind: 'malformed', response };
-    throw error;
+    const message =
+      error instanceof MalformedRouteParameterError ? error.message : 'Malformed route parameter';
+    return { kind: 'malformed', response: errorResponse(message, 400) };
   }
 }
 
@@ -56,6 +49,19 @@ function validateHandlerOptions(options: HandlerOptions | undefined): Response |
     '`restBindings` and `operationRegistry` must be supplied together (or both omitted).',
     500,
   );
+}
+
+function liveEventStreamContextFromOptions(
+  options: HandlerOptions | undefined,
+): LiveEventStreamContext {
+  const context: LiveEventStreamContext = {};
+  if (options?.workflowEventFeed !== undefined)
+    context.workflowEventFeed = options.workflowEventFeed;
+  if (options?.fleetEventFeed !== undefined) context.fleetEventFeed = options.fleetEventFeed;
+  if (options?.acquireWorkflowStreamConnection !== undefined) {
+    context.acquireWorkflowStreamConnection = options.acquireWorkflowStreamConnection;
+  }
+  return context;
 }
 
 async function dispatchRestBinding(
@@ -77,6 +83,8 @@ async function dispatchRestBinding(
       principal,
       options?.pipelineTrace,
       options?.maxRequestBodyBytes,
+      options?.supportedAuthenticationSchemes,
+      liveEventStreamContextFromOptions(options),
     );
   } catch (error) {
     console.error('Unhandled error in dispatchViaExecuteOperation', {

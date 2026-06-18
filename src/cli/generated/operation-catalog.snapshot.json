@@ -97,6 +97,101 @@
       }
     },
     {
+      "name": "weft.events.sse",
+      "kind": "stream",
+      "summary": "Stream fleet events as Server-Sent Events",
+      "description": "Streams the server-level event feed across workflows. Optional filters narrow delivery by workflow id or event kind after the single fleet cursor has been applied. The stream emits `ping` keepalives while idle.",
+      "tags": ["Events"],
+      "destructive": false,
+      "access": {
+        "kind": "scoped",
+        "scopes": ["events:read"]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": false,
+        "jsonRpcWebSocket": false,
+        "jsonRpcStdio": false
+      },
+      "producibleFaults": ["InvalidParams", "UnsupportedTransport"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fromCursor": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "workflow:started",
+              "workflow:completed",
+              "workflow:failed",
+              "workflow:cancelled",
+              "workflow:timed-out",
+              "workflow:resumed",
+              "workflow:suspended",
+              "workflow:teardown",
+              "activity:started",
+              "activity:completed",
+              "activity:failed",
+              "activity:async-pending",
+              "task:dead-lettered",
+              "signal:received",
+              "signal:delivered",
+              "attributes:changed",
+              "update:received",
+              "update:completed",
+              "schedule:fired",
+              "schedule:missed-fire",
+              "checkpoint:size-warning",
+              "development:warning",
+              "cleanup:warning",
+              "storage:size-reported",
+              "human-review:requested",
+              "human-review:completed",
+              "alert:fired",
+              "alert:resolved",
+              "constraint:violated",
+              "worker:connected",
+              "worker:disconnected"
+            ],
+            "type": "string"
+          },
+          "lastEventId": {
+            "type": "string"
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "type": "object"
+      },
+      "outputSchema": {},
+      "eventSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "emittedAtMs": {
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": {},
+          "sequence": {
+            "type": "number"
+          },
+          "workflowId": {
+            "type": "string"
+          }
+        },
+        "required": ["kind", "sequence", "cursor", "emittedAtMs", "payload"],
+        "type": "object"
+      }
+    },
+    {
       "name": "weft.events.subscribe",
       "kind": "subscription",
       "summary": "Subscribe to fleet-wide events with replay-from-cursor",
@@ -3500,6 +3595,102 @@
         "type": "object"
       },
       "outputSchema": {}
+    },
+    {
+      "name": "weft.workflows.events.sse",
+      "kind": "stream",
+      "summary": "Stream workflow events as Server-Sent Events",
+      "description": "`selector: \"events\"` requires `events:read`; `selector: \"tokens\"` requires `streams:read`. The stream replays from `fromCursor` or `Last-Event-ID`, then remains open for live events and `ping` keepalives.",
+      "tags": ["Events"],
+      "destructive": false,
+      "access": {
+        "kind": "authenticated"
+      },
+      "parameterizedAccess": {
+        "discriminator": "selector",
+        "defaultValue": "events",
+        "variants": [
+          {
+            "value": "events",
+            "access": {
+              "kind": "scoped",
+              "scopes": ["events:read"]
+            }
+          },
+          {
+            "value": "tokens",
+            "access": {
+              "kind": "scoped",
+              "scopes": ["streams:read"]
+            }
+          }
+        ]
+      },
+      "transports": {
+        "http": true,
+        "jsonRpcHttp": false,
+        "jsonRpcWebSocket": false,
+        "jsonRpcStdio": false
+      },
+      "producibleFaults": ["InvalidParams", "UnsupportedTransport"],
+      "inputSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "fromCursor": {
+            "type": "string"
+          },
+          "lastEventId": {
+            "type": "string"
+          },
+          "selector": {
+            "default": "events",
+            "enum": ["events", "tokens"],
+            "type": "string"
+          },
+          "workflowId": {
+            "minLength": 1,
+            "type": "string"
+          }
+        },
+        "required": ["workflowId", "selector"],
+        "type": "object"
+      },
+      "outputSchema": {},
+      "eventSchema": {
+        "additionalProperties": false,
+        "properties": {
+          "cursor": {
+            "type": "string"
+          },
+          "emittedAtMs": {
+            "type": "number"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "payload": {},
+          "selector": {
+            "enum": ["events", "tokens"],
+            "type": "string"
+          },
+          "sequence": {
+            "type": "number"
+          },
+          "workflowId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "workflowId",
+          "selector",
+          "sequence",
+          "cursor",
+          "emittedAtMs",
+          "payload"
+        ],
+        "type": "object"
+      }
     },
     {
       "name": "weft.workflows.fork",
