@@ -46,7 +46,7 @@ The `checkExpiredDeadlines()` function scans storage for workflows whose deadlin
 
 1. The workflow's `AbortController` fires, cascading to all in-flight activities via the existing `ctx.signal` abort signal.
 2. The workflow is marked as `'timed-out'`.
-3. A `WorkflowTimeoutError` is thrown with the workflow ID, timeout type, and elapsed time.
+3. A `WorkflowTimeoutError` is thrown with the workflow ID, timeout type, elapsed time, and optional termination reason.
 
 ```typescript partial
 try {
@@ -56,11 +56,12 @@ try {
     console.log(error.workflowId); // 'order-xyz'
     console.log(error.timeoutType); // 'execution' or 'run'
     console.log(error.elapsed); // milliseconds since start
+    console.log(error.terminationReason); // undefined for deadline timeouts
   }
 }
 ```
 
-The `timeoutType` distinguishes between `'execution'` (total wall-clock cap) and `'run'` (single-run time limit).
+The `timeoutType` distinguishes between `'execution'` (total wall-clock cap) and `'run'` (single-run time limit). The optional `terminationReason` distinguishes a history circuit-breaker termination from an ordinary deadline: it is `'history-circuit-breaker'` when `history.maxEvents` forces termination and `undefined` for normal execution or run timeouts.
 
 ## Cleanup
 
