@@ -1096,6 +1096,10 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
     ],
     ['src/client/http-handle.ts', { functions: 1 }],
     ['src/client/http-schedule-handle.ts', { functions: 1 }],
+    // `src/client/local-handles.test.ts` drives every wrapper directly, but Bun still
+    // leaves one function cold in this thin delegation module — matching the same
+    // wrapper-only function-count drift already allowlisted for the HTTP handle peers.
+    ['src/client/local-handles.ts', { functions: 1 }],
     ['src/client/local.ts', { functions: 1, lines: new Set([124]) }],
     [
       'src/core/context/parallel-operations.ts',
