@@ -79,6 +79,10 @@ function envelopeFrame(cursor: string, kind = 'workflow:completed', workflowId =
   );
 }
 
+function replayCompletePing(): string {
+  return 'event: ping\ndata: {"emittedAtMs":1,"replayComplete":true}\n\n';
+}
+
 describe('workflowEventsSseUrl', () => {
   it('targets the workflow event SSE endpoint without rewriting the scheme', () => {
     expect(workflowEventsSseUrl('http://localhost:7233', 'a/b')).toBe(
@@ -144,7 +148,7 @@ describe('SseWorkflowEventSubscription', () => {
       requestHeaders.push(new Headers(init?.headers));
       callCount += 1;
       if (callCount === 1) {
-        return eventStreamResponse(envelopeFrame('2', 'workflow:started'));
+        return eventStreamResponse(envelopeFrame('2', 'workflow:started') + replayCompletePing());
       }
       return eventStreamResponse(envelopeFrame('3', 'workflow:completed'));
     }) as typeof fetch;
@@ -179,7 +183,8 @@ describe('SseWorkflowEventSubscription', () => {
         return eventStreamResponse(
           'event: workflow:started\ndata: not-json\n\n' +
             envelopeFrame('5', 'workflow:started', 'wf-other') +
-            envelopeFrame('6', 'workflow:started'),
+            envelopeFrame('6', 'workflow:started') +
+            replayCompletePing(),
         );
       }
       return eventStreamResponse(envelopeFrame('7', 'workflow:completed'));
@@ -230,10 +235,13 @@ describe('SseWorkflowEventSubscription', () => {
     expect(subscription.closeReason).toBe('client-closed');
   });
 
-  it('resolves whenConnected once an idle SSE response is established', async () => {
+  it('resolves whenConnected after the SSE replay-complete ping', async () => {
     const stream = controllableEventStreamResponse();
-    globalThis.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) =>
-      stream.response) as typeof fetch;
+    const responseServed = Promise.withResolvers<void>();
+    globalThis.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      responseServed.resolve();
+      return stream.response;
+    }) as typeof fetch;
 
     const subscription = new SseWorkflowEventSubscription(
       'http://localhost:7233/v1/workflows/wf-sse/events/sse',
@@ -246,8 +254,12 @@ describe('SseWorkflowEventSubscription', () => {
       connected = true;
     });
 
+    await responseServed.promise;
+    await Promise.resolve();
+    expect(connected).toBe(false);
+    stream.enqueue(replayCompletePing());
     await waitForCondition(() => connected, {
-      label: 'idle SSE connection established',
+      label: 'SSE replay-complete ping observed',
     });
 
     subscription.close();
@@ -269,6 +281,7 @@ describe('SseWorkflowEventSubscription', () => {
     const iterator = subscription[Symbol.asyncIterator]();
     const nextEvent = iterator.next();
 
+    stream.enqueue(replayCompletePing());
     await subscription.whenConnected();
     stream.enqueue(envelopeFrame('0', 'workflow:completed'));
     stream.close();

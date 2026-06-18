@@ -24,6 +24,7 @@ type ServerSentEventEnvelope = {
 type EventEnvelopeSSEStreamOptions<TEnvelope extends ServerSentEventEnvelope> = {
   readonly iterable: AsyncIterable<TEnvelope>;
   readonly close: () => Promise<void>;
+  readonly ready?: Promise<void>;
   readonly heartbeat?: ServerSentEventHeartbeatOptions;
   readonly signal?: AbortSignal;
 };
@@ -175,12 +176,24 @@ export function createEventEnvelopeSSEStream<TEnvelope extends ServerSentEventEn
       options.signal?.addEventListener('abort', onAbort, { once: true });
 
       const heartbeat = heartbeatOptions(options.heartbeat);
+      const enqueuePing = (data: Record<string, unknown>): void => {
+        enqueue({
+          event: 'ping',
+          data: JSON.stringify(data),
+        });
+      };
+      if (options.ready !== undefined) {
+        void options.ready.then(
+          () => {
+            enqueuePing({ emittedAtMs: heartbeat.now(), replayComplete: true });
+            return undefined;
+          },
+          () => undefined,
+        );
+      }
       if (heartbeat.intervalMs > 0) {
         clearHeartbeat = heartbeat.schedule(() => {
-          enqueue({
-            event: 'ping',
-            data: JSON.stringify({ emittedAtMs: heartbeat.now() }),
-          });
+          enqueuePing({ emittedAtMs: heartbeat.now() });
         }, heartbeat.intervalMs);
       }
 

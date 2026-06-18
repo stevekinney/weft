@@ -6,7 +6,7 @@ import type { FleetEventEnvelope, FleetEventFeed } from '../fleet-event-feed.ts'
 import { handleRequest, type HandlerOptions } from '../handler.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
 import { principalFromApiKey } from '../principal.ts';
-import type { ReplayLiveSubscribeOptions } from '../workflow-event-feed.ts';
+import { createReplayLiveFeed, type ReplayLiveSubscribeOptions } from '../workflow-event-feed.ts';
 import { fleetEventsSseOperation, fleetEventsSseRestBinding } from './fleet-events-sse.ts';
 
 const registry = createOperationRegistry([fleetEventsSseOperation]);
@@ -66,9 +66,10 @@ function envelope(
   };
 }
 
-function request(path: string, headers?: Record<string, string>): Request {
+function request(path: string, headers?: Record<string, string>, signal?: AbortSignal): Request {
   return new Request(`http://localhost${path}`, {
     method: 'GET',
+    ...(signal === undefined ? {} : { signal }),
     headers: {
       Accept: 'text/event-stream',
       ...headers,
@@ -85,6 +86,35 @@ function handlerOptions(feed: Pick<FleetEventFeed, 'subscribe'>): HandlerOptions
     operationRegistry: registry,
     restBindings: bindings,
     fleetEventFeed: feed,
+  };
+}
+
+function listenerCountingFleetEventFeed(): {
+  readonly feed: Pick<FleetEventFeed, 'subscribe'>;
+  liveListeners(): number;
+} {
+  let liveListeners = 0;
+  const replayLiveFeed = createReplayLiveFeed<FleetEventEnvelope>({
+    async *replay() {
+      return;
+    },
+    async snapshotTailSequence() {
+      return -1;
+    },
+    subscribeLive() {
+      liveListeners += 1;
+      return () => {
+        liveListeners -= 1;
+      };
+    },
+  });
+  return {
+    feed: {
+      subscribe: (options) => replayLiveFeed.subscribe(options),
+    },
+    liveListeners() {
+      return liveListeners;
+    },
   };
 }
 
@@ -128,6 +158,42 @@ describe('weft.events.sse', () => {
     expect(response.status).toBe(200);
     const body = await response.text();
     expect(body).toContain('id: 9');
+  });
+
+  it('unsubscribes the fleet event feed when an SSE request is already aborted', async () => {
+    const { feed, liveListeners } = listenerCountingFleetEventFeed();
+    const engine = new Engine({ storage: new MemoryStorage() });
+    const controller = new AbortController();
+    controller.abort();
+
+    const response = await handleRequest(
+      request('/v1/events/sse', undefined, controller.signal),
+      engine,
+      handlerOptions(feed),
+    );
+
+    expect(response.status).toBe(200);
+    await response.text();
+    expect(liveListeners()).toBe(0);
+  });
+
+  it('emits a replay-complete ping after fleet SSE replay drains', async () => {
+    const { feed, liveListeners } = listenerCountingFleetEventFeed();
+    const engine = new Engine({ storage: new MemoryStorage() });
+
+    const response = await handleRequest(request('/v1/events/sse'), engine, handlerOptions(feed));
+
+    expect(response.status).toBe(200);
+    const reader = response.body?.getReader();
+    if (reader === undefined) throw new Error('Expected SSE response body');
+    const firstFrame = await reader.read();
+    await reader.cancel();
+    const body = new TextDecoder().decode(firstFrame.value);
+
+    expect(body).toContain('event: ping');
+    expect(body).toContain('"replayComplete":true');
+    expect(body).not.toContain('id:');
+    expect(liveListeners()).toBe(0);
   });
 
   it('uses Last-Event-ID before fromCursor', async () => {

@@ -233,7 +233,7 @@ for await (const event of tail) {
 }
 ```
 
-The tail is a single-consumer `AsyncIterable<WorkflowEvent>` with `close()` and `whenConnected()`. `whenConnected()` resolves after the transport is live and the initial history catch-up has run, so the common `await tail.whenConnected(); for await (...)` pattern still sees already-persisted events. Iteration ends on `workflow:completed`, `workflow:failed`, `workflow:cancelled`, `workflow:timed-out`, server close, or `tail.close()`.
+The tail is a single-consumer `AsyncIterable<WorkflowEvent>` with `close()` and `whenConnected()`. `whenConnected()` resolves after the transport is live and the initial history catch-up has run, so the common `await tail.whenConnected(); for await (...)` pattern still sees already-persisted events. WebSocket tails use the `getEvents()` catch-up; SSE tails use the replay-complete `ping` frame. Iteration ends on `workflow:completed`, `workflow:failed`, `workflow:cancelled`, `workflow:timed-out`, server close, or `tail.close()`.
 
 In server mode, `HttpClient` defaults to `eventTransport: 'auto'`: it uses the `/v1/workflows/:id/watch` WebSocket channel when the runtime can construct an authenticated WebSocket, and falls back to fetch-based SSE at `/v1/workflows/:id/events/sse` when the initial WebSocket construction fails because headers cannot be carried. Pass `eventTransport: 'websocket'` to require WebSocket, `eventTransport: 'sse'` to require SSE, or `webSocketFactory` to provide a runtime-specific WebSocket constructor.
 

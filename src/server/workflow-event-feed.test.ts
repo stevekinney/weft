@@ -331,6 +331,39 @@ describe('WorkflowEventFeed — subscribe (live + replay)', () => {
     expect(received).toEqual([0, 1]);
   });
 
+  it('signals replay completion before draining buffered live events', async () => {
+    const real = createInMemoryEventBackend();
+    await real.append(makeEnvelope({ sequence: 0 }));
+
+    let liveInjected = false;
+    const backend: WorkflowEventFeedBackend = {
+      replay: real.replay.bind(real),
+      subscribeLive: real.subscribeLive.bind(real),
+      async snapshotTailSequence(workflowId, selector) {
+        if (!liveInjected) {
+          liveInjected = true;
+          await real.emitLive(makeEnvelope({ sequence: 1 }));
+        }
+        return real.snapshotTailSequence(workflowId, selector);
+      },
+    };
+
+    const feed = createWorkflowEventFeed(backend);
+    const order: string[] = [];
+    for await (const envelope of feed.subscribe({
+      workflowId: 'wf-1',
+      selector: 'events',
+      onReplayComplete() {
+        order.push('replay-complete');
+      },
+    })) {
+      order.push(`event:${envelope.sequence}`);
+      if (envelope.sequence >= 1) break;
+    }
+
+    expect(order).toEqual(['event:0', 'replay-complete', 'event:1']);
+  });
+
   it('serves two concurrent subscribers independently', async () => {
     // Two subscribers on the same workflow: both must receive every
     // event, neither's buffer should interfere with the other's.

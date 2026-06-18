@@ -47,7 +47,9 @@ export interface WorkflowEventTail extends AsyncIterable<WorkflowEvent> {
    * the workflow's persisted history (server mode after the `/watch` socket's
    * `getEvents` catch-up; library mode after the in-process `engine.getEvents`
    * replay), so awaiting it may perform async work and a `for await` started
-   * afterward still sees the replayed history ahead of any live frame.
+   * afterward still sees the replayed history ahead of any live frame. Server
+   * mode uses the `/watch` socket's `getEvents` catch-up for WebSocket tails
+   * and the replay-complete `ping` frame for SSE tails.
    */
   whenConnected(): Promise<void>;
 }

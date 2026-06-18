@@ -110,6 +110,50 @@ describe('Server-Sent Event helpers', () => {
     expect(heartbeat.cleared).toBe(true);
   });
 
+  it('emits a replay-complete ping without advancing the cursor', async () => {
+    const ready = Promise.withResolvers<void>();
+    const stream = createEventEnvelopeSSEStream({
+      iterable: neverEnding(),
+      close: async () => undefined,
+      ready: ready.promise,
+      heartbeat: { intervalMs: 0, now: () => 42 },
+    });
+    const reader = stream.getReader();
+
+    ready.resolve();
+    const ping = await reader.read();
+    await reader.cancel();
+
+    expect(decode(ping.value)).toBe(
+      'event: ping\ndata: {"emittedAtMs":42,"replayComplete":true}\n\n',
+    );
+    expect(decode(ping.value)).not.toContain('id:');
+  });
+
+  it('ignores replay-complete readiness rejections', async () => {
+    const ready = Promise.withResolvers<void>();
+    let closed = false;
+    const stream = createEventEnvelopeSSEStream({
+      iterable: (async function* finishAfterTick() {
+        await Promise.resolve();
+      })(),
+      close: async () => {
+        closed = true;
+      },
+      ready: ready.promise,
+      heartbeat: { intervalMs: 0 },
+    });
+    const reader = stream.getReader();
+
+    ready.reject(new Error('replay cancelled'));
+    await Promise.resolve();
+    await Promise.resolve();
+    const result = await reader.read();
+
+    expect(result.done).toBe(true);
+    expect(closed).toBe(true);
+  });
+
   it('closes immediately when the request signal is already aborted', async () => {
     const controller = new AbortController();
     controller.abort();

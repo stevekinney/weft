@@ -114,6 +114,11 @@ function parseWorkflowEventEnvelope(data: string): WorkflowEventEnvelope | null 
   return workflowEventEnvelopeFromRecord(parsed);
 }
 
+function isReplayCompletePing(data: string): boolean {
+  const parsed = parseJson(data);
+  return isRecord(parsed) && parsed['replayComplete'] === true;
+}
+
 function parseJson(data: string): unknown {
   try {
     return JSON.parse(data);
@@ -230,7 +235,6 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
         this.#scheduleReconnect();
         return;
       }
-      this.#markConnected();
       await this.#readResponseBody(response.body);
       if (!this.#closed) this.#scheduleReconnect();
     } catch {
@@ -277,7 +281,8 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
 
   #handleFrame(frame: ServerSentEventFrame): ServerSentEventFrameHandling {
     if (frame.event === 'ping') {
-      this.#markHealthyConnection();
+      this.#markHealthyFrame();
+      if (isReplayCompletePing(frame.data)) this.#markConnected();
       return 'healthy';
     }
     if (frame.event === 'error') {
@@ -288,7 +293,7 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
     if (envelope === null) return 'ignored';
     if (envelope.workflowId !== this.#workflowId) return 'ignored';
     this.#lastEventId = frame.id ?? envelope.cursor;
-    this.#markHealthyConnection();
+    this.#markHealthyFrame();
     this.#emit(envelopeToWorkflowEvent(envelope));
     return 'healthy';
   }
@@ -329,9 +334,8 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
     this.#connected.resolve();
   }
 
-  #markHealthyConnection(): void {
+  #markHealthyFrame(): void {
     this.#reconnectAttempts = 0;
-    this.#markConnected();
   }
 
   #terminate(reason: StreamCloseReason): void {

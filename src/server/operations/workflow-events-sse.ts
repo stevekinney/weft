@@ -38,6 +38,9 @@ type WorkflowEventsSseOutput = AsyncIterable<EventEnvelope>;
 type ClosableWorkflowEventsIterable = AsyncIterable<EventEnvelope> & {
   close(): Promise<void>;
 };
+type ReplayAwareWorkflowEventsIterable = ClosableWorkflowEventsIterable & {
+  readonly replayComplete: Promise<void>;
+};
 
 const INITIAL_CURSOR: Cursor = '-1';
 const MAX_WORKFLOW_SSE_REPLAY_EVENTS = 1_000;
@@ -158,10 +161,20 @@ function isClosableWorkflowEventsIterable(
   return 'close' in value && typeof value.close === 'function';
 }
 
+function isReplayAwareWorkflowEventsIterable(
+  value: AsyncIterable<EventEnvelope>,
+): value is ReplayAwareWorkflowEventsIterable {
+  return (
+    isClosableWorkflowEventsIterable(value) &&
+    'replayComplete' in value &&
+    value.replayComplete instanceof Promise
+  );
+}
+
 function createWorkflowEventsIterable(
   input: WorkflowEventsSseInput,
   context: EventStreamOperationContext,
-): ClosableWorkflowEventsIterable {
+): ReplayAwareWorkflowEventsIterable {
   const feed = context.workflowEventFeed;
   if (feed === undefined) {
     throw unsupportedEventStreamContextFault('workflow event SSE requires a workflow event feed');
@@ -173,6 +186,7 @@ function createWorkflowEventsIterable(
   }
 
   const controller = new AbortController();
+  const replayComplete = Promise.withResolvers<void>();
   let closed = false;
   const close = async (): Promise<void> => {
     if (closed) return;
@@ -191,6 +205,7 @@ function createWorkflowEventsIterable(
     fromCursor,
     signal: controller.signal,
     replayLimit: MAX_WORKFLOW_SSE_REPLAY_EVENTS,
+    onReplayComplete: () => replayComplete.resolve(),
     createReplayLimitError: (count, limit) =>
       invalidParamsFault(
         `Workflow event replay window is ${count} events; maximum is ${limit}. Supply a more recent fromCursor.`,
@@ -213,6 +228,7 @@ function createWorkflowEventsIterable(
         await close();
       }
     },
+    replayComplete: replayComplete.promise,
     close,
   };
 }
@@ -229,6 +245,7 @@ function shapeWorkflowEventsSseSuccess(
     createEventEnvelopeSSEStream({
       iterable: output,
       close,
+      ...(isReplayAwareWorkflowEventsIterable(output) ? { ready: output.replayComplete } : {}),
       signal: request.signal,
     }),
     {

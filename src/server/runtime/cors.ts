@@ -64,7 +64,7 @@ export interface CorsOptions {
   readonly allowedOrigins?: ReadonlyArray<string> | ((origin: string) => boolean);
   /** Methods advertised in preflight responses. Defaults to the common verbs plus `OPTIONS`. */
   readonly allowedMethods?: ReadonlyArray<string>;
-  /** Request headers a client may send. Defaults to `Authorization, Content-Type, Last-Event-ID`. */
+  /** Request headers a client may send. Defaults to `Authorization, Content-Type, Last-Event-ID, Cache-Control`. */
   readonly allowedHeaders?: ReadonlyArray<string>;
   /** Response headers exposed to client scripts via `Access-Control-Expose-Headers`. */
   readonly exposedHeaders?: ReadonlyArray<string>;
@@ -75,7 +75,12 @@ export interface CorsOptions {
 }
 
 const DEFAULT_ALLOWED_METHODS = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'] as const;
-const DEFAULT_ALLOWED_HEADERS = ['Authorization', 'Content-Type', 'Last-Event-ID'] as const;
+const DEFAULT_ALLOWED_HEADERS = [
+  'Authorization',
+  'Content-Type',
+  'Last-Event-ID',
+  'Cache-Control',
+] as const;
 const DEFAULT_MAX_AGE_SECONDS = 600;
 const WILDCARD_ORIGIN = '*';
 

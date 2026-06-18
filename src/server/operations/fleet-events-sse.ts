@@ -22,6 +22,9 @@ type FleetEventsSseOutput = AsyncIterable<FleetEventEnvelope>;
 type ClosableFleetEventsIterable = AsyncIterable<FleetEventEnvelope> & {
   close(): Promise<void>;
 };
+type ReplayAwareFleetEventsIterable = ClosableFleetEventsIterable & {
+  readonly replayComplete: Promise<void>;
+};
 
 type FleetEventStreamOperationContext = {
   readonly fleetEventFeed?: Pick<FleetEventFeed, 'subscribe'>;
@@ -112,6 +115,16 @@ function isClosableFleetEventsIterable(
   return 'close' in value && typeof value.close === 'function';
 }
 
+function isReplayAwareFleetEventsIterable(
+  value: AsyncIterable<FleetEventEnvelope>,
+): value is ReplayAwareFleetEventsIterable {
+  return (
+    isClosableFleetEventsIterable(value) &&
+    'replayComplete' in value &&
+    value.replayComplete instanceof Promise
+  );
+}
+
 function matchesFleetEventFilter(
   envelope: FleetEventEnvelope,
   input: FleetEventsSseInput,
@@ -124,13 +137,14 @@ function matchesFleetEventFilter(
 function createFleetEventsIterable(
   input: FleetEventsSseInput,
   context: FleetEventStreamOperationContext,
-): ClosableFleetEventsIterable {
+): ReplayAwareFleetEventsIterable {
   const feed = context.fleetEventFeed;
   if (feed === undefined) {
     throw unsupportedEventStreamContextFault('fleet event SSE requires a fleet event feed');
   }
 
   const controller = new AbortController();
+  const replayComplete = Promise.withResolvers<void>();
   let closed = false;
   const close = async (): Promise<void> => {
     if (closed) return;
@@ -144,6 +158,7 @@ function createFleetEventsIterable(
     signal: controller.signal,
     replayLimit: MAX_FLEET_SSE_REPLAY_EVENTS,
     filterEnvelope: (envelope) => matchesFleetEventFilter(envelope, input),
+    onReplayComplete: () => replayComplete.resolve(),
     createReplayLimitError: (count, limit) =>
       invalidParamsFault(
         `Fleet event replay window is ${count} matching events; maximum is ${limit}. Supply a more recent fromCursor.`,
@@ -166,6 +181,7 @@ function createFleetEventsIterable(
         await close();
       }
     },
+    replayComplete: replayComplete.promise,
     close,
   };
 }
@@ -179,6 +195,7 @@ function shapeFleetEventsSseSuccess(output: FleetEventsSseOutput, request: Reque
     createEventEnvelopeSSEStream({
       iterable: output,
       close,
+      ...(isReplayAwareFleetEventsIterable(output) ? { ready: output.replayComplete } : {}),
       signal: request.signal,
     }),
     {

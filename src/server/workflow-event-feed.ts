@@ -132,6 +132,7 @@ export type ReplayLiveSubscribeOptions<TEnvelope extends SequencedEventEnvelope>
   filterEnvelope?: (envelope: TEnvelope) => boolean;
   countReplayEnvelope?: (envelope: TEnvelope) => boolean;
   createReplayLimitError?: (count: number, limit: number) => unknown;
+  onReplayComplete?: () => void;
 };
 
 export class ReplayWindowExceededError extends Error {
@@ -171,6 +172,7 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
     const buffer: TEnvelope[] = [];
     let bufferOverflowed = false;
     let waker: (() => void) | null = null;
+    let cleanedUp = false;
     const signal = args?.signal;
     const fromCursor = args?.fromCursor;
     const requestedAfter = fromCursor !== undefined ? decodeCursorOrThrow(fromCursor) : -1;
@@ -189,14 +191,25 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
       }
     });
 
-    const onAbort = () => {
+    const wake = () => {
       if (waker) {
         const fire = waker;
         waker = null;
         fire();
       }
     };
-    signal?.addEventListener('abort', onAbort);
+
+    const cleanup = () => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      signal?.removeEventListener('abort', onAbort);
+      unsubscribe();
+      wake();
+    };
+
+    const onAbort = () => cleanup();
+    signal?.addEventListener('abort', onAbort, { once: true });
+    if (signal?.aborted) cleanup();
 
     async function* generator(): AsyncIterable<TEnvelope> {
       try {
@@ -205,6 +218,7 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
         const snapshot = await backend.snapshotTailSequence();
         yield* replayUpTo(backend, requestedAfter, snapshot, signal, args);
         if (signal?.aborted) return;
+        args?.onReplayComplete?.();
         yield* drainLive(
           buffer,
           snapshot,
@@ -215,8 +229,7 @@ export function createReplayLiveFeed<TEnvelope extends SequencedEventEnvelope>(
           },
         );
       } finally {
-        signal?.removeEventListener('abort', onAbort);
-        unsubscribe();
+        cleanup();
       }
     }
 
@@ -271,6 +284,7 @@ export function createWorkflowEventFeed(
     filterEnvelope?: (envelope: EventEnvelope) => boolean;
     countReplayEnvelope?: (envelope: EventEnvelope) => boolean;
     createReplayLimitError?: (count: number, limit: number) => unknown;
+    onReplayComplete?: () => void;
   }): AsyncIterable<EventEnvelope> {
     const subscribeOptions: ReplayLiveSubscribeOptions<EventEnvelope> = {};
     if (args.fromCursor !== undefined) subscribeOptions.fromCursor = args.fromCursor;
@@ -284,6 +298,9 @@ export function createWorkflowEventFeed(
     }
     if (args.createReplayLimitError !== undefined) {
       subscribeOptions.createReplayLimitError = args.createReplayLimitError;
+    }
+    if (args.onReplayComplete !== undefined) {
+      subscribeOptions.onReplayComplete = args.onReplayComplete;
     }
     return createScopedFeed(args.workflowId, args.selector).subscribe(subscribeOptions);
   }
