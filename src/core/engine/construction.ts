@@ -229,25 +229,25 @@ function resolveBooleanDefaults(
   };
 }
 
-type NumericDefaults = Pick<
+function resolveNumericDefaults(
+  options: EngineConstructorOptions | undefined,
+): Pick<
   ResolvedOptions,
-  'checkpointHistory' | 'checkpointSizeWarningThreshold' | 'maxNestingDepth'
-> & { schedulerPollIntervalMs: number };
-
-function resolveNumericDefaults(options: EngineConstructorOptions | undefined): NumericDefaults {
-  // schedulerPollIntervalMs is validated, not passed through: it drives a live
-  // setInterval, so 0 / negative / NaN / Infinity throws here instead of looping hot.
-  const schedulerPollIntervalMs =
-    normalizePositiveSafeIntegerOption(
-      options?.schedulerPollIntervalMs,
-      'options.schedulerPollIntervalMs',
-      DEFAULT_POLL_INTERVAL_MS,
-    ) ?? DEFAULT_POLL_INTERVAL_MS;
+  | 'checkpointHistory'
+  | 'checkpointSizeWarningThreshold'
+  | 'maxNestingDepth'
+  | 'schedulerPollIntervalMs'
+> {
   return {
     checkpointHistory: defaultTo(options?.checkpointHistory, 10),
     checkpointSizeWarningThreshold: defaultTo(options?.checkpointSizeWarningThreshold, 65_536),
     maxNestingDepth: defaultTo(options?.maxNestingDepth, 10),
-    schedulerPollIntervalMs,
+    schedulerPollIntervalMs:
+      normalizePositiveSafeIntegerOption(
+        options?.schedulerPollIntervalMs,
+        'options.schedulerPollIntervalMs',
+        DEFAULT_POLL_INTERVAL_MS,
+      ) ?? DEFAULT_POLL_INTERVAL_MS,
   };
 }
 
