@@ -555,9 +555,9 @@ describe('Engine', () => {
     // schedulerPollIntervalMs lets a host (or test) shorten the real-time poll
     // cycle. We prove the value reaches the Scheduler's setInterval by parking a
     // run on a short durable ctx.sleep and asserting it completes well within a
-    // window the default 1000ms poll could not meet. The poll loop uses a real
-    // setInterval (not macrotasks), so this is deterministic under fake-timer-free
-    // real time.
+    // window the default 1000ms poll could not meet. The poll loop is a real
+    // setInterval (not a macrotask), so the assertion is event-driven — it awaits
+    // handle.result() bounded by a failure-guard timeout, not a fixed sleep.
     const sleepingWorkflow = workflow({ name: 'short-sleep' }).execute(async function* (
       ctx: WorkflowContext,
     ) {
@@ -583,6 +583,17 @@ describe('Engine', () => {
       await engine[Symbol.asyncDispose]();
     }
   });
+
+  it.each([0, -10, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'Engine.create rejects a non-positive-safe-integer schedulerPollIntervalMs (%p)',
+    async (badInterval) => {
+      // The value drives a live setInterval poll loop, so an invalid interval is
+      // rejected at construction rather than silently coerced into a hot loop.
+      await expect(
+        Engine.create({ recover: false, schedulerPollIntervalMs: badInterval }),
+      ).rejects.toThrow('options.schedulerPollIntervalMs must be a positive safe integer');
+    },
+  );
 
   it('register(workflow) registers a workflow', async () => {
     const engine = new Engine();

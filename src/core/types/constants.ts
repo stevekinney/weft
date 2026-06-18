@@ -34,7 +34,8 @@ export const DEFAULT_MAX_NESTING_DEPTH = 10;
  * Default durable-timer scheduler poll interval in milliseconds. The scheduler
  * scans for expired deadlines, delayed starts, and scheduled occurrences once
  * per interval. Override via {@link EngineOptions.schedulerPollIntervalMs} —
- * primarily useful for tests that need a fast, deterministic poll cycle.
+ * primarily useful for tests that need a fast (real-time, not deterministic)
+ * poll cycle.
  *
  * @example
  * ```ts
