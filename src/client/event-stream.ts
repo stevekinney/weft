@@ -48,7 +48,11 @@ import {
 } from './event-stream-transport.ts';
 
 /** Reason a {@link WorkflowEventSubscription} terminated. */
-export type StreamCloseReason = 'workflow-terminal' | 'client-closed' | 'reconnect-exhausted';
+export type StreamCloseReason =
+  | 'workflow-terminal'
+  | 'client-closed'
+  | 'reconnect-exhausted'
+  | 'server-error';
 
 /** Fetches a workflow's persisted event history for connect/reconnect catch-up. */
 export type EventHistoryFetcher = (workflowId: string) => Promise<WorkflowEvent[]>;

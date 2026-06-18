@@ -403,30 +403,27 @@ describe('SseWorkflowEventSubscription', () => {
     expect(callCount).toBe(3);
   });
 
-  it('aborts the active fetch before reconnecting after an error frame', async () => {
+  it('treats an SSE error frame as a terminal stream close', async () => {
     const signals: AbortSignal[] = [];
     let callCount = 0;
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
       callCount += 1;
       if (init?.signal instanceof AbortSignal) signals.push(init.signal);
-      if (callCount === 1) {
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              controller.enqueue(
-                new TextEncoder().encode(
-                  'event: error\ndata: {"code":"InvalidParams","message":"bad"}\n\n',
-                ),
-              );
-            },
-          }),
-          {
-            status: 200,
-            headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(
+                'event: error\ndata: {"code":"InvalidParams","message":"bad"}\n\n',
+              ),
+            );
           },
-        );
-      }
-      return eventStreamResponse(envelopeFrame('1', 'workflow:completed'));
+        }),
+        {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
+        },
+      );
     }) as typeof fetch;
 
     const received: WorkflowEvent[] = [];
@@ -437,17 +434,18 @@ describe('SseWorkflowEventSubscription', () => {
       (event) => received.push(event),
       { reconnectBackoffMs: 0 },
     );
+    const iterator = subscription[Symbol.asyncIterator]();
 
-    await waitForCondition(() => callCount >= 2, {
-      label: 'SSE error frame reconnect opened',
-    });
-    await waitForCondition(() => received.length > 0, {
-      label: 'SSE error frame reconnect delivered event',
+    await waitForCondition(() => subscription.closeReason === 'server-error', {
+      label: 'SSE error frame closed subscription',
     });
 
+    const iteratorResult = await iterator.next();
+
+    expect(callCount).toBe(1);
     expect(signals[0]?.aborted).toBe(true);
-    expect(received.map((event) => event.type)).toEqual(['workflow:completed']);
-    subscription.close();
+    expect(iteratorResult.done).toBe(true);
+    expect(received).toEqual([]);
   });
 
   it('auto transport rethrows unexpected WebSocket construction errors', () => {

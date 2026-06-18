@@ -281,7 +281,7 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
       return 'healthy';
     }
     if (frame.event === 'error') {
-      this.#abortController?.abort();
+      this.#terminate('server-error');
       return 'server-error';
     }
     const envelope = parseWorkflowEventEnvelope(frame.data);
