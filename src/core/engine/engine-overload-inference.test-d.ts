@@ -74,6 +74,16 @@ const createdWithoutScheduler: Promise<Engine> = Engine.create({
   startScheduler: false,
 });
 void createdWithoutScheduler;
+
+// ---- Engine.create schedulerPollIntervalMs option ------------------------
+// The poll interval is a typed numeric option (not an env var), so a host or
+// test can shorten the durable-timer poll cycle through the public surface.
+const createdWithPollInterval: Promise<Engine> = Engine.create({
+  recover: false,
+  startScheduler: true,
+  schedulerPollIntervalMs: 10,
+});
+void createdWithPollInterval;
 // @ts-expect-error: the gate takes no options argument — there is no opt-out.
 const assertRejectsOptions: Promise<void> = assertCompatiblePersistedDataVersion(storage, {});
 void assertRejectsOptions;

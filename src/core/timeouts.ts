@@ -12,6 +12,7 @@ import { KEYS, resolvePrefixRangeEnd } from '../storage/interface';
 import { decode, encode } from './codec';
 import { normalizeStorageTimestamp, parseDuration } from './scheduler';
 import type { Duration, WorkflowId } from './types';
+import type { TerminationReason } from './types/history-policy';
 import { WeftError } from './weft-error';
 
 // ---------------------------------------------------------------------------
@@ -134,6 +135,12 @@ export function timeRemaining(deadline: number | undefined, now: number): number
  * The `timeoutType` distinguishes `'execution'` (wall-clock cap set via
  * {@link StartOptions.executionTimeout}) from `'run'` (per-step run timeout).
  *
+ * When the run was force-terminated by the history circuit breaker
+ * (`history.maxEvents`) rather than a genuine deadline, `terminationReason` is
+ * set to {@link HISTORY_CIRCUIT_BREAKER_REASON}; for ordinary deadline timeouts
+ * it is `undefined`. This mirrors {@link WorkflowTimedOutEvent.reason} so callers
+ * can classify the two without a second `engine.get(runId)` read.
+ *
  * @example
  * ```ts
  * import { workflow, Engine, WorkflowTimeoutError } from '@lostgradient/weft';
@@ -160,8 +167,18 @@ export class WorkflowTimeoutError extends WeftError<'WorkflowTimeoutError'> {
   readonly workflowId: string;
   readonly timeoutType: 'execution' | 'run';
   readonly elapsed: number;
+  /**
+   * Set to {@link HISTORY_CIRCUIT_BREAKER_REASON} when the run was force-terminated
+   * by the history circuit breaker; `undefined` for an ordinary deadline timeout.
+   */
+  readonly terminationReason?: TerminationReason;
 
-  constructor(workflowId: string, timeoutType: 'execution' | 'run', elapsed: number) {
+  constructor(
+    workflowId: string,
+    timeoutType: 'execution' | 'run',
+    elapsed: number,
+    terminationReason?: TerminationReason,
+  ) {
     super(
       'WorkflowTimeoutError',
       `Workflow "${workflowId}" exceeded ${timeoutType} timeout after ${elapsed}ms`,
@@ -169,5 +186,10 @@ export class WorkflowTimeoutError extends WeftError<'WorkflowTimeoutError'> {
     this.workflowId = workflowId;
     this.timeoutType = timeoutType;
     this.elapsed = elapsed;
+    // `exactOptionalPropertyTypes` forbids assigning `undefined` to an optional
+    // field whose type omits it; mirror WorkflowTimedOutEvent's guarded set.
+    if (terminationReason !== undefined) {
+      this.terminationReason = terminationReason;
+    }
   }
 }

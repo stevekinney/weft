@@ -30,6 +30,21 @@ export const DEFAULT_CHECKPOINT_SIZE_WARNING_THRESHOLD = 65_536; // 64KB
  */
 export const DEFAULT_MAX_NESTING_DEPTH = 10;
 
+/**
+ * Default durable-timer scheduler poll interval in milliseconds. The scheduler
+ * scans for expired deadlines, delayed starts, and scheduled occurrences once
+ * per interval. Override via {@link EngineOptions.schedulerPollIntervalMs} —
+ * primarily useful for tests that need a fast, deterministic poll cycle.
+ *
+ * @example
+ * ```ts
+ * import { Engine, DEFAULT_POLL_INTERVAL_MS } from '@lostgradient/weft';
+ *
+ * // A test can shorten the poll cycle far below the 1000ms default.
+ * const engine = new Engine({ schedulerPollIntervalMs: DEFAULT_POLL_INTERVAL_MS / 100 });
+ * void engine;
+ * ```
+ */
 export const DEFAULT_POLL_INTERVAL_MS = 1000;
 
 /**

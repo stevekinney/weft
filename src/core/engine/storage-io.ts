@@ -71,7 +71,7 @@ export async function loadWorkflowResult(
     const elapsed = state.executionDeadline
       ? state.executionDeadline - getWorkflowExecutionStartedAt(state)
       : 0;
-    throw new WorkflowTimeoutError(workflowId, 'execution', elapsed);
+    throw new WorkflowTimeoutError(workflowId, 'execution', elapsed, state.terminationReason);
   }
   throw new Error(`Workflow "${workflowId}" is still ${state.status}`);
 }

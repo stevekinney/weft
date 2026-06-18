@@ -42,6 +42,8 @@ export interface ResolvedOptions {
   checkpointHistory: number;
   checkpointSizeWarningThreshold: number;
   maxNestingDepth: number;
+  /** Durable-timer scheduler poll interval (ms). */
+  schedulerPollIntervalMs: number;
   broadcastEvents: boolean;
   retention: NormalizedRetentionPolicy | null;
   retentionSweepIntervalMs: number;

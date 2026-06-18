@@ -160,9 +160,53 @@ describe('history circuit breaker — write path', () => {
     expect(events[0]!.workflowId).toBe(handle.id);
     expect(events[0]!.reason).toBe(HISTORY_CIRCUIT_BREAKER_REASON);
 
-    await expect(handle.result()).rejects.toBeInstanceOf(WorkflowTimeoutError);
+    const liveError = await handle.result().then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(liveError).toBeInstanceOf(WorkflowTimeoutError);
+    // The rejection itself carries the termination reason, so a caller can
+    // classify circuit-breaker vs deadline without a second engine.get() read.
+    expect((liveError as WorkflowTimeoutError).terminationReason).toBe(
+      HISTORY_CIRCUIT_BREAKER_REASON,
+    );
 
     engine[Symbol.dispose]();
+  });
+
+  it('exposes the circuit-breaker reason on a late result() reading persisted state', async () => {
+    const storage = new MemoryStorage();
+    const engine = new Engine({ storage, history: { maxEvents: 3 } });
+    registerCountingWorkflow(engine, 10);
+
+    const handle = await engine.start('counting', null);
+    suppressResult(handle);
+    await flush();
+
+    const state = await loadState(engine, handle.id);
+    expect(state.status).toBe('timed-out');
+    expect(state.terminationReason).toBe(HISTORY_CIRCUIT_BREAKER_REASON);
+
+    engine[Symbol.dispose]();
+
+    // A second engine over the same storage has no in-memory result resolver, so
+    // getHandle().result() bootstraps from the already-terminal persisted state
+    // via loadWorkflowResult. That path must thread state.terminationReason onto
+    // the rejection so a late caller can still classify it without engine.get().
+    const reader = new Engine({ storage, history: { maxEvents: 3 } });
+    const lateError = await reader
+      .getHandle(handle.id)
+      .result()
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(lateError).toBeInstanceOf(WorkflowTimeoutError);
+    expect((lateError as WorkflowTimeoutError).terminationReason).toBe(
+      HISTORY_CIRCUIT_BREAKER_REASON,
+    );
+
+    reader[Symbol.dispose]();
   });
 
   it('commits no checkpoint beyond the breaching one (hard bound, no overshoot)', async () => {

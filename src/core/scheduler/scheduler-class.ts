@@ -2,6 +2,7 @@ import type { BatchOperation, Storage } from '../../storage/interface.ts';
 import { KEYS, resolvePrefixRangeEnd } from '../../storage/interface.ts';
 import { decode } from '../codec.ts';
 import type { TimerEntry } from '../types.ts';
+import { DEFAULT_POLL_INTERVAL_MS } from '../types/constants.ts';
 import { buildTimerBatchOperations } from './timer-batch.ts';
 import type { ScannedTimerEntry, TimerSource } from './timer-sources.ts';
 import {
@@ -80,7 +81,7 @@ export class Scheduler implements Disposable {
   constructor(options: SchedulerOptions) {
     this.#storage = options.storage;
     this.#onTimerFired = options.onTimerFired;
-    this.#pollIntervalMs = options.pollIntervalMs ?? 1000;
+    this.#pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
     this.#getNow = options.getNow ?? Date.now;
     this.#commitTimerCleanup =
       options.commitTimerCleanup ?? ((operations) => this.#storage.batch(operations));

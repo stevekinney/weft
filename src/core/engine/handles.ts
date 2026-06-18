@@ -424,7 +424,12 @@ export class WorkflowHandle<TResult = unknown> extends EventTarget implements As
           } else if (event instanceof WorkflowTimedOutEvent) {
             terminalDelivered = true;
             observer.error?.(
-              new WorkflowTimeoutError(event.workflowId, event.timeoutType, event.elapsed),
+              new WorkflowTimeoutError(
+                event.workflowId,
+                event.timeoutType,
+                event.elapsed,
+                event.reason,
+              ),
             );
           }
         };

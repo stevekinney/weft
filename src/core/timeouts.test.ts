@@ -9,6 +9,7 @@ import {
   timeRemaining,
   WorkflowTimeoutError,
 } from './timeouts';
+import { HISTORY_CIRCUIT_BREAKER_REASON } from './types/history-policy';
 
 // ---------------------------------------------------------------------------
 // createDeadlineOperations
@@ -174,5 +175,22 @@ describe('WorkflowTimeoutError', () => {
     expect(error.message).toContain('wf-456');
     expect(error.message).toContain('run');
     expect(error.message).toContain('60000');
+  });
+
+  it('leaves terminationReason undefined for an ordinary deadline timeout', () => {
+    const error = new WorkflowTimeoutError('wf-789', 'execution', 1_000);
+
+    expect(error.terminationReason).toBeUndefined();
+  });
+
+  it('carries the circuit-breaker termination reason when provided', () => {
+    const error = new WorkflowTimeoutError(
+      'wf-cb',
+      'execution',
+      1_000,
+      HISTORY_CIRCUIT_BREAKER_REASON,
+    );
+
+    expect(error.terminationReason).toBe(HISTORY_CIRCUIT_BREAKER_REASON);
   });
 });

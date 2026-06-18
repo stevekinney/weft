@@ -199,7 +199,7 @@ export async function terminateWorkflow(
     }
 
     const resolver = internals.resultResolvers.get(workflowId);
-    const terminalError = buildTerminalError(workflowId, status, elapsed);
+    const terminalError = buildTerminalError(workflowId, status, elapsed, reason);
 
     try {
       await cleanupTerminalWorkflowSynchronously(internals, workflowId, true, callbacks);
@@ -228,9 +228,10 @@ function buildTerminalError(
   workflowId: string,
   status: 'cancelled' | 'timed-out',
   elapsed: number,
+  reason: TerminationReason | undefined,
 ): Error {
   return status === 'timed-out'
-    ? new WorkflowTimeoutError(workflowId, 'execution', elapsed)
+    ? new WorkflowTimeoutError(workflowId, 'execution', elapsed, reason)
     : new Error('Workflow cancelled');
 }
 

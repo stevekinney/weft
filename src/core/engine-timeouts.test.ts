@@ -118,6 +118,8 @@ describe('Execution Timeouts', () => {
     expect(timeoutError.workflowId).toBe(handle.id);
     expect(timeoutError.timeoutType).toBe('execution');
     expect(timeoutError.elapsed).toBeGreaterThanOrEqual(1000);
+    // A genuine deadline timeout is not a circuit-breaker termination.
+    expect(timeoutError.terminationReason).toBeUndefined();
 
     engine[Symbol.dispose]();
   });

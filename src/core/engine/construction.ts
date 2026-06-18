@@ -8,6 +8,7 @@ import { optionalInlineDependencies } from '../inline-execution-strategy.context
 import { InlineExecutionStrategy } from '../inline-execution-strategy.ts';
 import type { ComposedWorkflowInterceptor, Interceptor } from '../interceptor.ts';
 import {
+  DEFAULT_POLL_INTERVAL_MS,
   DEFAULT_RETENTION_SWEEP_BATCH_SIZE,
   DEFAULT_RETENTION_SWEEP_INTERVAL_MS,
   type AnyActivityDefinition,
@@ -232,12 +233,16 @@ function resolveNumericDefaults(
   options: EngineConstructorOptions | undefined,
 ): Pick<
   ResolvedOptions,
-  'checkpointHistory' | 'checkpointSizeWarningThreshold' | 'maxNestingDepth'
+  | 'checkpointHistory'
+  | 'checkpointSizeWarningThreshold'
+  | 'maxNestingDepth'
+  | 'schedulerPollIntervalMs'
 > {
   return {
     checkpointHistory: defaultTo(options?.checkpointHistory, 10),
     checkpointSizeWarningThreshold: defaultTo(options?.checkpointSizeWarningThreshold, 65_536),
     maxNestingDepth: defaultTo(options?.maxNestingDepth, 10),
+    schedulerPollIntervalMs: defaultTo(options?.schedulerPollIntervalMs, DEFAULT_POLL_INTERVAL_MS),
   };
 }
 
