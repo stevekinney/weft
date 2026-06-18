@@ -25,9 +25,9 @@ export type WorkflowEventTransport = 'auto' | 'websocket' | 'sse';
  * ```ts
  * import { HttpClient, type WorkflowEventStreamOptions } from '@lostgradient/weft';
  *
- * const eventStreamOptions: WorkflowEventStreamOptions = {
+ * const eventStreamOptions = {
  *   eventTransport: 'sse',
- * };
+ * } satisfies WorkflowEventStreamOptions;
  *
  * const client = new HttpClient({
  *   baseUrl: 'http://localhost:7233',
