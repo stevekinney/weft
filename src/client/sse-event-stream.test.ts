@@ -416,6 +416,56 @@ describe('SseWorkflowEventSubscription', () => {
     expect(callCount).toBe(3);
   });
 
+  it('treats non-OK SSE HTTP responses as terminal server errors', async () => {
+    let callCount = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      callCount += 1;
+      return new Response(JSON.stringify({ error: 'Forbidden' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    const subscription = new SseWorkflowEventSubscription(
+      'http://localhost:7233/v1/workflows/wf-sse/events/sse',
+      {},
+      'wf-sse',
+      () => {},
+      { maxReconnectAttempts: 2, reconnectBackoffMs: 0 },
+    );
+
+    await waitForCondition(() => subscription.closeReason === 'server-error', {
+      label: 'SSE non-OK response closed subscription',
+    });
+
+    expect(callCount).toBe(1);
+  });
+
+  it('treats non-SSE HTTP responses as terminal server errors', async () => {
+    let callCount = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      callCount += 1;
+      return new Response(JSON.stringify({ error: 'Not acceptable' }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    const subscription = new SseWorkflowEventSubscription(
+      'http://localhost:7233/v1/workflows/wf-sse/events/sse',
+      {},
+      'wf-sse',
+      () => {},
+      { maxReconnectAttempts: 2, reconnectBackoffMs: 0 },
+    );
+
+    await waitForCondition(() => subscription.closeReason === 'server-error', {
+      label: 'SSE content-type mismatch closed subscription',
+    });
+
+    expect(callCount).toBe(1);
+  });
+
   it('treats an SSE error frame as a terminal stream close', async () => {
     const signals: AbortSignal[] = [];
     let callCount = 0;

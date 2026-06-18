@@ -228,11 +228,11 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
         signal: abortController.signal,
       });
       if (!response.ok || response.body === null) {
-        this.#scheduleReconnect();
+        this.#terminate('server-error');
         return;
       }
       if (!isEventStreamResponse(response)) {
-        this.#scheduleReconnect();
+        this.#terminate('server-error');
         return;
       }
       await this.#readResponseBody(response.body);

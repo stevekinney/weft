@@ -1,6 +1,11 @@
 import type { StoredStreamChunk } from '../../core/context.ts';
 import type { OperationFault } from '../operation-fault.ts';
-import { invalidParamsFault, jsonErrorResponse, shapeRestFault } from './operation-helpers.ts';
+import {
+  invalidParamsFault,
+  isOperationFault,
+  jsonErrorResponse,
+  shapeRestFault,
+} from './operation-helpers.ts';
 
 const textEncoder = new TextEncoder();
 
@@ -84,16 +89,6 @@ function scheduleInterval(callback: () => void, intervalMs: number): () => void 
 
 function encodeFrame(frame: { id?: string; event?: string; data: string }): Uint8Array {
   return textEncoder.encode(formatServerSentEvent(frame));
-}
-
-function isOperationFault(value: unknown): value is OperationFault {
-  return (
-    typeof value === 'object' &&
-    value !== null &&
-    'code' in value &&
-    'message' in value &&
-    'data' in value
-  );
 }
 
 function sanitizedErrorFrame(error: unknown): { id?: string; event: string; data: string } {
