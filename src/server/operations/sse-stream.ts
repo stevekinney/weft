@@ -1,5 +1,6 @@
 import type { StoredStreamChunk } from '../../core/context.ts';
 import type { OperationFault } from '../operation-fault.ts';
+import { decodeCursor, type Cursor } from '../workflow-event-feed.ts';
 import {
   invalidParamsFault,
   isOperationFault,
@@ -54,6 +55,18 @@ export function requireServerSentEventsAccept(request: Request): void {
   if (!acceptsServerSentEvents(request.headers.get('Accept'))) {
     throw invalidParamsFault(SSE_ACCEPT_REQUIRED_MESSAGE);
   }
+}
+
+/**
+ * Validate an SSE reconnect cursor taken from a `Last-Event-ID` header or
+ * `fromCursor` query parameter. Returns `undefined` for an absent value and
+ * throws an `InvalidParams` fault for a malformed one. Shared by every SSE
+ * binding so cursor validation stays defined in exactly one place.
+ */
+export function readServerSentEventsCursor(value: string | null): Cursor | undefined {
+  if (value === null) return undefined;
+  if (decodeCursor(value) === null) throw invalidParamsFault('Invalid cursor');
+  return value;
 }
 
 export function shapeServerSentEventsFault(fault: OperationFault): Response {

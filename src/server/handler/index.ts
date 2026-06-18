@@ -35,9 +35,13 @@ function matchRouteBoundary<T>(matcher: () => T): RouteLookup<T> {
   try {
     return { kind: 'matched', value: matcher() };
   } catch (error) {
-    const message =
-      error instanceof MalformedRouteParameterError ? error.message : 'Malformed route parameter';
-    return { kind: 'malformed', response: errorResponse(message, 400) };
+    // Only malformed route parameters are a client error (400). Any other
+    // throw is an unexpected bug in route matching; re-throw it so the caller
+    // logs it and returns 500 instead of silently masking it as a 400.
+    if (error instanceof MalformedRouteParameterError) {
+      return { kind: 'malformed', response: errorResponse(error.message, 400) };
+    }
+    throw error;
   }
 }
 
@@ -116,31 +120,12 @@ async function dispatchDirectRoute(
   }
 }
 
-/**
- * Pure HTTP request handler. Maps Request to Response.
- *
- * @example
- * ```ts
- * import { workflow, Engine, MemoryStorage, handleRequest } from '@lostgradient/weft';
- *
- * await using engine = new Engine({ storage: new MemoryStorage() });
- * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));
- *
- * const request = new Request('http://localhost/v1/health');
- * const response = await handleRequest(request, engine);
- * console.log(response.status); // 200
- * ```
- */
-export async function handleRequest(
+async function dispatchMatchedRoute(
   request: Request,
   engine: Engine,
-  options?: HandlerOptions,
+  options: HandlerOptions | undefined,
+  url: URL,
 ): Promise<Response> {
-  const url = new URL(request.url);
-
-  const optionError = validateHandlerOptions(options);
-  if (optionError !== null) return optionError;
-
   const directRouteLookup = matchRouteBoundary(() =>
     matchDirectRoute(request.method, url.pathname),
   );
@@ -169,4 +154,53 @@ export async function handleRequest(
   }
 
   return errorResponse(`Not found: ${request.method} ${url.pathname}`, 404);
+}
+
+async function dispatchMatchedRouteBoundary(
+  request: Request,
+  engine: Engine,
+  options: HandlerOptions | undefined,
+  url: URL,
+): Promise<Response> {
+  try {
+    return await dispatchMatchedRoute(request, engine, options, url);
+  } catch (error) {
+    // Unexpected route-matching failure (not a MalformedRouteParameterError,
+    // which `matchRouteBoundary` already turns into a 400). Surface it as a
+    // logged 500 rather than letting it escape uncaught.
+    console.error('Unhandled error in handleRequest route matching', {
+      method: request.method,
+      path: url.pathname,
+      error,
+    });
+    return errorResponse('Internal server error', 500);
+  }
+}
+
+/**
+ * Pure HTTP request handler. Maps Request to Response.
+ *
+ * @example
+ * ```ts
+ * import { workflow, Engine, MemoryStorage, handleRequest } from '@lostgradient/weft';
+ *
+ * await using engine = new Engine({ storage: new MemoryStorage() });
+ * engine.register(workflow({ name: 'ping' }).execute(async function* () { return 'pong'; }));
+ *
+ * const request = new Request('http://localhost/v1/health');
+ * const response = await handleRequest(request, engine);
+ * console.log(response.status); // 200
+ * ```
+ */
+export async function handleRequest(
+  request: Request,
+  engine: Engine,
+  options?: HandlerOptions,
+): Promise<Response> {
+  const url = new URL(request.url);
+
+  const optionError = validateHandlerOptions(options);
+  if (optionError !== null) return optionError;
+
+  return dispatchMatchedRouteBoundary(request, engine, options, url);
 }

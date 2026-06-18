@@ -183,7 +183,6 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
   readonly #buffer: WorkflowEvent[] = [];
   readonly #connected: ReturnType<typeof Promise.withResolvers<void>> = Promise.withResolvers();
 
-  #connectedSettled = false;
   #closed = false;
   #closeReason: StreamCloseReason | null = null;
   #iterating = false;
@@ -329,8 +328,8 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
   }
 
   #markConnected(): void {
-    if (this.#connectedSettled) return;
-    this.#connectedSettled = true;
+    // `Promise.withResolvers` resolvers are idempotent — repeat calls are
+    // no-ops per spec, so no separate "settled" guard is needed.
     this.#connected.resolve();
   }
 

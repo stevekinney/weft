@@ -5,6 +5,7 @@ import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import { isAuthenticated } from '../principal.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
+import type { WorkflowStreamConnectionLease } from '../runtime/websocket-stream.ts';
 import {
   decodeCursor,
   type Cursor,
@@ -16,14 +17,11 @@ import {
 import { invalidParamsFault, jsonErrorResponse } from './operation-helpers.ts';
 import {
   createEventEnvelopeSSEStream,
+  readServerSentEventsCursor,
   requireServerSentEventsAccept,
   shapeServerSentEventsFault,
   SSE_RESPONSE_HEADERS,
 } from './sse-stream.ts';
-
-export type WorkflowStreamConnectionLease = {
-  release(): void;
-};
 
 export type WorkflowStreamConnectionAcquirer = (
   workflowId: string,
@@ -262,12 +260,6 @@ function shapeWorkflowEventsSseFault(fault: OperationFault): Response {
   return shapeServerSentEventsFault(fault);
 }
 
-function readCursor(value: string | null): Cursor | undefined {
-  if (value === null) return undefined;
-  if (decodeCursor(value) === null) throw invalidParamsFault('Invalid cursor');
-  return value;
-}
-
 function readSelector(request: Request): string | undefined {
   const value = new URL(request.url).searchParams.get('selector');
   if (value === null) return undefined;
@@ -289,9 +281,11 @@ export const workflowEventsSseRestBinding: UnknownRestBinding = {
   extractInput: async (request, pathParams) => {
     requireServerSentEventsAccept(request);
     const url = new URL(request.url);
-    const lastEventId = readCursor(request.headers.get('Last-Event-ID'));
+    const lastEventId = readServerSentEventsCursor(request.headers.get('Last-Event-ID'));
     const fromCursor =
-      lastEventId === undefined ? readCursor(url.searchParams.get('fromCursor')) : undefined;
+      lastEventId === undefined
+        ? readServerSentEventsCursor(url.searchParams.get('fromCursor'))
+        : undefined;
     const selector = readSelector(request);
     return {
       workflowId: pathParams['id'] ?? '',

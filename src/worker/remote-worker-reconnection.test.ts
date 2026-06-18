@@ -21,7 +21,7 @@ import { Engine } from '../core/engine.ts';
 import { serve, type ServeOptions, type WeftServer } from '../server/index.ts';
 import { KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
+import { sleepForTesting, waitForCondition } from '../testing/fake-timers.test-support.ts';
 import {
   killAndReboot,
   spawnServerSubprocess,
@@ -432,10 +432,10 @@ describe('RemoteWorker durability — transient reconnect continuity', () => {
 
 describe('RemoteWorker durability — backpressure decline is redelivered', () => {
   it('redelivers a task that a buffer-full RemoteWorker declines without executing', async () => {
-    // workerReconnectGracePeriodMs is short so the decline (which fails the SDK
-    // worker's socket) is treated as a disconnect and the task becomes eligible
-    // for redelivery quickly. visibilityTimeout is the redelivery ceiling.
-    const setup = createSetup({ workerReconnectGracePeriodMs: 30 });
+    // Disable reconnect grace so the decline (which fails the SDK worker's
+    // socket) requeues inline. The behavior under test is the backpressure
+    // decline plus redelivery, not real-time grace timer scheduling.
+    const setup = createSetup({ workerReconnectGracePeriodMs: 0 });
 
     // worker-A is the real RemoteWorker SDK with a zero-capacity result buffer:
     // isOutboxFull(0, 0) is true, so it declines every task without executing
@@ -459,8 +459,16 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
     });
     await workerA.connect();
 
-    // Dispatch with only worker-A registered, so the first attempt lands on A,
-    // which declines it (buffer full) and fails its socket.
+    // Worker B is registered before dispatch so the no-grace requeue has a
+    // live WebSocket target. Round-robin preserves the first attempt for A
+    // because A registered first.
+    const workerB = await connectAndRegisterWorker(setup, 'worker-b', {
+      activities: ['orders.echo'],
+    });
+    const taskForB = workerB.nextServerMessage(isTask, { timeoutMs: 5_000 });
+
+    // Dispatch with A first in the round-robin order, so the first attempt
+    // lands on A, which declines it (buffer full) and fails its socket.
     const operationId = 'backpressure-redelivery-op';
     void setup.server.dispatchTask({
       operationId,
@@ -472,19 +480,16 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
     });
 
     // worker-A's socket fails as a result of the decline.
-    const aDeadline = Date.now() + 3_000;
-    while (Date.now() < aDeadline && workerA.connected) {
-      await sleepForTesting(10);
-    }
+    await waitForCondition(() => !workerA.connected, {
+      timeoutMs: 3_000,
+      label: 'worker-A socket failed after backpressure decline',
+    });
     expect(workerA.connected).toBe(false);
     // worker-A's activity must never have executed — it declined the task.
     expect(activityRan).toBe(false);
 
-    // worker-B registers and receives the redelivery after A's lease expires.
-    const workerB = await connectAndRegisterWorker(setup, 'worker-b', {
-      activities: ['orders.echo'],
-    });
-    const dispatchToB = await workerB.nextServerMessage(isTask, { timeoutMs: 5_000 });
+    // worker-B receives the inline redelivery.
+    const dispatchToB = await taskForB;
     if (!isTask(dispatchToB)) throw new Error('expected task on B');
     expect(dispatchToB.operationId).toBe(operationId);
 
@@ -497,14 +502,16 @@ describe('RemoteWorker durability — backpressure decline is redelivered', () =
       attemptToken: dispatchToB.attemptToken!,
     });
 
-    let resolved: unknown;
-    const deadline = Date.now() + 2_000;
-    while (Date.now() < deadline) {
-      resolved = await readResolvedRecord(setup.engine, operationId);
-      if (resolved !== undefined && resolved !== null) break;
-      await sleepForTesting(10);
-    }
-    expect(resolved !== undefined && resolved !== null).toBe(true);
+    await waitForCondition(
+      async () => {
+        const resolved = await readResolvedRecord(setup.engine, operationId);
+        return resolved !== undefined && resolved !== null;
+      },
+      {
+        timeoutMs: 2_000,
+        label: 'backpressure redelivery task resolution',
+      },
+    );
     await waitForInflightCleared(setup.engine, operationId);
   });
 });

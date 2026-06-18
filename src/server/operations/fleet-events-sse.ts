@@ -13,6 +13,7 @@ import {
 import { invalidParamsFault } from './operation-helpers.ts';
 import {
   createEventEnvelopeSSEStream,
+  readServerSentEventsCursor,
   requireServerSentEventsAccept,
   shapeServerSentEventsFault,
   SSE_RESPONSE_HEADERS,
@@ -209,12 +210,6 @@ function shapeFleetEventsSseFault(fault: OperationFault): Response {
   return shapeServerSentEventsFault(fault);
 }
 
-function readCursor(value: string | null): Cursor | undefined {
-  if (value === null) return undefined;
-  if (decodeCursor(value) === null) throw invalidParamsFault('Invalid cursor');
-  return value;
-}
-
 export const fleetEventsSseRestBinding: UnknownRestBinding = {
   method: 'GET',
   path: '/v1/events/sse',
@@ -232,9 +227,11 @@ export const fleetEventsSseRestBinding: UnknownRestBinding = {
     const url = new URL(request.url);
     const workflowId = url.searchParams.get('workflowId') ?? undefined;
     const kind = url.searchParams.get('kind') ?? undefined;
-    const lastEventId = readCursor(request.headers.get('Last-Event-ID'));
+    const lastEventId = readServerSentEventsCursor(request.headers.get('Last-Event-ID'));
     const fromCursor =
-      lastEventId === undefined ? readCursor(url.searchParams.get('fromCursor')) : undefined;
+      lastEventId === undefined
+        ? readServerSentEventsCursor(url.searchParams.get('fromCursor'))
+        : undefined;
     return {
       ...(workflowId === undefined ? {} : { workflowId }),
       ...(kind === undefined ? {} : { kind }),
