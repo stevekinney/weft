@@ -3,7 +3,7 @@ import { describe, expect, it } from 'bun:test';
 import packageJson from '../../package.json';
 
 describe('storage package exports', () => {
-  it('does not expose the legacy Bun SQLite subpath', () => {
+  it('does not expose the retired Bun SQLite subpath', () => {
     expect(Object.hasOwn(packageJson.exports, './storage/bun-sqlite')).toBe(false);
   });
 

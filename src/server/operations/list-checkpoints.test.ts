@@ -85,8 +85,8 @@ describe('weft.workflows.checkpoints.list', () => {
 
   it('returns 200 with an empty array for an unknown workflow id', async () => {
     // `engine.listCheckpoints` returns `[]` rather than throwing
-    // when the workflow does not exist — the migrated operation
-    // preserves that contract verbatim. This test pins the behavior
+    // when the workflow does not exist, and the REST operation keeps
+    // that engine contract verbatim. This test pins the behavior
     // so a future change in the engine can't silently flip the API
     // contract from "always 200, possibly empty" to "404 on missing".
     engine = createEngine();

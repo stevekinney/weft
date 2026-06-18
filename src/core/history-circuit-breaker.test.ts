@@ -614,10 +614,10 @@ describe('history circuit breaker — synthesized terminal event', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Decoder compatibility (preserve + tolerate)
+// Persisted-state decode contract for history circuit breaker fields.
 // ---------------------------------------------------------------------------
 
-describe('history circuit breaker — persisted-shape compatibility', () => {
+describe('history circuit breaker persisted-state fields', () => {
   it('round-trips terminationReason through the state codec (preserve)', () => {
     const state = {
       id: 'wf-1',

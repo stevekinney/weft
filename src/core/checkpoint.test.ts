@@ -514,7 +514,7 @@ describe('validateCheckpointShape (via deserializeCheckpoint)', () => {
     expect(() => deserializeCheckpoint(bytes)).toThrow('locals');
   });
 
-  it('ignores legacy pendingSignals when old bytes contain it', () => {
+  it('drops retired pendingSignals from checkpoint bytes', () => {
     const { encode } = require('./codec.ts');
     const bytes = encode({
       workflowId: 'wf-1',

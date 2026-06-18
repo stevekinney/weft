@@ -126,7 +126,7 @@ describe('generateOpenRpcDocument — basic shape', () => {
 
   it('does not advertise a stale root /jsonrpc or /mcp endpoint URL', () => {
     // The live OpenRPC handler emits no `servers` URL, so the document must not
-    // leak a root-relative transport endpoint that the /api migration moved.
+    // leak a root-relative transport endpoint outside current API routing.
     // This guards against a regression that hardcodes `/jsonrpc` or `/mcp`.
     const document = generateOpenRpcDocument({
       registry: createOperationRegistry([
