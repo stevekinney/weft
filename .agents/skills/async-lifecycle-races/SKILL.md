@@ -21,7 +21,7 @@ description: >-
 - Changing per-run workflow `services`, `resolveWorkflowServices`, delayed-start recovery, scheduled occurrences, or the durable `wf-has-services:` marker that gates re-provisioning.
 - Changing inline `waitForSignal()` parking, retained contexts, or query-handler availability while a workflow is parked, resumed, suspended, or cleaned up.
 - Changing `ctx.waitUntil(predicate, timeout?)`, condition waiters, wait-condition timers, update-driven re-evaluation, or predicate failure routing.
-- Changing `ctx.race()` / `ctx.all()` branch execution for sleeps or signal waits, especially deferred-consume envelopes, nested coordinator propagation, `ctx.speculate`, duplicate signal-name validation, abort ordering, or engine-disposal cleanup.
+- Changing `ctx.race()` / `ctx.all()` branch execution for sleeps, signal waits, or `ctx.run()` activity branches, especially deferred-consume envelopes, nested coordinator propagation, `ctx.speculate`, duplicate signal-name validation, abort ordering, or engine-disposal cleanup.
 - Changing workflow suspend/resume, recovered-handle observation, idempotent start reservation, `startOrSignal`, inline launch deferral, or engine disposal while queued inline launches can still flush.
 - Changing scheduled occurrence launch flow or `schedule:fired` event dispatch, including overlap-policy gating, queued-drain launches, unavailable-services ordering, and process-local notification behavior.
 - Changing RemoteWorker or long-poll task completion authorization, including per-dispatch `attemptToken` generation, echoing, registry restore, malformed-token rejection, and missing-token compatibility.
@@ -49,7 +49,7 @@ description: >-
 12. For inline launch queues, model `defer: false`, queued async launch, disposal before flush, and runtimes without `MessageChannel` as separate execution paths.
 13. For queryable parked workflows, retain only the context needed for `ctx.onQuery()` while parked on `waitForSignal()`, prefer the live context after resume, and evict retained contexts on suspend and terminal cleanup.
 14. For wait-condition gates, model the first predicate evaluation, update-driven re-evaluation, timeout fire, predicate throw, cancellation, recovery, and disposal as separate paths. Signals are pull-only and must not wake a condition waiter.
-15. For race/all signal branches, model the top-level coordinator, nested `race`/`all`, and `ctx.speculate` as separate consumers. Losers must release waiters without consuming durable signals, and winners must finalize before checkpointing encoded results.
+15. For race/all branches, model the top-level coordinator, nested `race`/`all`, and `ctx.speculate` as separate consumers. Losers must release waiters without consuming durable signals, losing `ctx.run()` branches inside `ctx.race()` must receive the coordinator `AbortSignal` on `ActivityContext.signal`, and winners must finalize before checkpointing encoded results.
 16. For fired timers under `ownership: 'lease'`, route cleanup through the same lease-fenced commit path as the timer callback's durable writes. A deposed engine must not delete a fired timer whose fenced follow-up write was rejected; the successor needs the durable marker to re-drive.
 
 ### Client event-streaming work
@@ -81,7 +81,7 @@ description: >-
 - For async activity completion, cover double-completion races, malformed JSON, oversized payload rejection that preserves the token, and cross-transport parity between `LocalClient` and `HttpClient`.
 - For per-run services, cover normal start, Worker-mode rejection, running recovery, delayed-start recovery, scheduled occurrences, resolver throw/unavailable sibling isolation, terminal cleanup, purge, and retention marker deletion.
 - For queryable parked workflows, cover the first signal park, a post-resume second park, unregistered query names, suspend teardown, terminal teardown, and wait-signal replay failure paths.
-- For race/all signal branches, cover top-level and nested wait-signal winners and losers, `ctx.speculate` finalization, duplicate signal-name rejection, `ctx.all` finalize-after-all-settle behavior, abort reason propagation, and engine-disposal cleanup for long sleep branches.
+- For race/all branches, cover top-level and nested wait-signal winners and losers, losing `ctx.run()` activity aborts when a sibling wins, `ctx.speculate` finalization, duplicate signal-name rejection, `ctx.all` finalize-after-all-settle behavior, abort reason propagation, and engine-disposal cleanup for long sleep branches.
 - For suspend/resume and recovered-handle observation, cover suspended workflows as non-terminal, explicit resume after recovery, terminal/nonexistent faults, `getLaunchMetadata()` null after purge, and `snapshot()` status/step reads without awaiting `result()`.
 - For start idempotency and `startOrSignal`, cover concurrent same-key callers, spent-key conflicts after retention or purge, terminal-target conflicts, bare-`signalId` non-convergence, and same-id pre-commit abort recovery.
 - For inline launch scheduling, cover queued launch draining on disposal, `defer: false` synchronous launch, and the timeout flush path when `MessageChannel` is unavailable.

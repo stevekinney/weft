@@ -23,6 +23,7 @@ description: >-
 - Deduplicating CLI suggestion helpers or generated operation-client type output while claiming user-visible CLI wording, thresholds, or TypeScript inference are unchanged.
 - Deduplicating client or handle overload implementations where `.d.ts` emission and call-site inference still require each public class to declare its overloads locally.
 - Changing `Engine.create` overloads or helper types where an empty workflow map must keep the same default-registry brand as omitting `workflows`.
+- Changing `Engine.create` scheduler startup, recovery options, or poll interval plumbing while preserving default boot behavior.
 
 ## Do not use
 
@@ -52,12 +53,14 @@ description: >-
 18. For `Engine.create` type ergonomics, pin both the integration shape and the exact type: `Engine.create({ workflows: {} })` must satisfy `ServeOptions['engine']` and equal the absent-workflows default-registry return type, while a non-empty map keeps literal workflow-name inference.
 19. For cleanup-audit work, classify generated artifacts, documentation mirrors, and intentional script cross-checks before extracting shared helpers. `scripts/audit-jsdoc-manifest.ts` intentionally duplicates selected parsing helpers from `scripts/lib/jsdoc-manifest.ts` so the audit has an independent implementation to compare against.
 20. For finalizer teardown test cleanup, keep shared event collection in `.test-support.ts` and preserve the single `workflow:teardown` event shape with its `status` field across inline and worker-mode suites.
+21. For `Engine.create` scheduler changes, keep `startScheduler` orthogonal to `recover`: omitted `startScheduler` follows `recover !== false`, `recover: false` does not auto-start the poller unless `startScheduler: true`, and `schedulerPollIntervalMs` remains a validated positive safe integer option.
 
 ## Verification
 
 - Add or update runtime tests for ordering, event sequence, and return shape invariants.
 - Add type-level coverage when the refactor changes public TypeScript ergonomics.
 - For `Engine.create` overload changes, run the focused `.test-d.ts` files that cover server options and core type ergonomics.
+- For scheduler startup changes, cover default recovery startup, `recover: false`, `recover: false` plus `startScheduler: true`, `recover: true` plus `startScheduler: false`, and invalid `schedulerPollIntervalMs` values.
 - Run focused tests, `bun run typecheck`, and documentation verification when examples changed.
 - For generated client cleanup, also run `bun run scripts/generate-operation-client.ts && bun run scripts/check-catalog-drift.ts` and `jscpd` against `src/cli/generated/operation-client.generated.ts`.
 - For duplicate-audit cleanup, run `jscpd src scripts documentation tests --min-lines 18 --min-tokens 120 --exit-code 0` and document any intentionally independent duplicate with a concrete owner instead of adding broad ignores.
