@@ -235,6 +235,64 @@ describe('SseWorkflowEventSubscription', () => {
     expect(subscription.closeReason).toBe('client-closed');
   });
 
+  it('does not replay pre-iterator events for callback-only subscribers', async () => {
+    const stream = controllableEventStreamResponse();
+    globalThis.fetch = (async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      stream.response) as typeof fetch;
+
+    const received: WorkflowEvent[] = [];
+    const subscription = new SseWorkflowEventSubscription(
+      'http://localhost:7233/v1/workflows/wf-sse/events/sse',
+      {},
+      'wf-sse',
+      (event) => received.push(event),
+    );
+
+    stream.enqueue(envelopeFrame('0', 'workflow:started') + replayCompletePing());
+    await subscription.whenConnected();
+    expect(received.map((event) => event.type)).toEqual(['workflow:started']);
+
+    const iterator = subscription[Symbol.asyncIterator]();
+    const nextEvent = iterator.next();
+    stream.enqueue(envelopeFrame('1', 'workflow:completed'));
+
+    const result = await nextEvent;
+    expect(result.done).toBe(false);
+    expect(result.value?.type).toBe('workflow:completed');
+    expect(received.map((event) => event.type)).toEqual(['workflow:started', 'workflow:completed']);
+  });
+
+  it('close() resolves a parked iterator and aborts the active fetch', async () => {
+    let capturedSignal: AbortSignal | undefined;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedSignal = init?.signal ?? undefined;
+      return new Response(new ReadableStream<Uint8Array>(), {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
+      });
+    }) as typeof fetch;
+
+    const subscription = new SseWorkflowEventSubscription(
+      'http://localhost:7233/v1/workflows/wf-sse/events/sse',
+      {},
+      'wf-sse',
+      () => {},
+    );
+
+    await waitForCondition(() => capturedSignal !== undefined, {
+      label: 'SSE fetch signal captured before parked iterator close',
+    });
+    const iterator = subscription[Symbol.asyncIterator]();
+    const nextEvent = iterator.next();
+
+    subscription.close();
+    const result = await nextEvent;
+
+    expect(result.done).toBe(true);
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(subscription.closeReason).toBe('client-closed');
+  });
+
   it('resolves whenConnected after the SSE replay-complete ping', async () => {
     const stream = controllableEventStreamResponse();
     const responseServed = Promise.withResolvers<void>();
@@ -289,6 +347,42 @@ describe('SseWorkflowEventSubscription', () => {
     const result = await nextEvent;
     expect(result.done).toBe(false);
     expect(result.value?.type).toBe('workflow:completed');
+  });
+
+  it('terminal workflow events abort an otherwise-open SSE fetch and stop iteration', async () => {
+    const stream = controllableEventStreamResponse();
+    let capturedSignal: AbortSignal | undefined;
+    let callCount = 0;
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      callCount += 1;
+      capturedSignal = init?.signal ?? undefined;
+      return stream.response;
+    }) as typeof fetch;
+
+    const received: WorkflowEvent[] = [];
+    const subscription = new SseWorkflowEventSubscription(
+      'http://localhost:7233/v1/workflows/wf-sse/events/sse',
+      {},
+      'wf-sse',
+      (event) => received.push(event),
+      { bufferForIteration: true, reconnectBackoffMs: 0 },
+    );
+    const iterator = subscription[Symbol.asyncIterator]();
+
+    stream.enqueue(replayCompletePing());
+    await subscription.whenConnected();
+    stream.enqueue(envelopeFrame('0', 'workflow:completed'));
+
+    const eventResult = await iterator.next();
+    const doneResult = await iterator.next();
+
+    expect(eventResult.done).toBe(false);
+    expect(eventResult.value?.type).toBe('workflow:completed');
+    expect(doneResult.done).toBe(true);
+    expect(received.map((event) => event.type)).toEqual(['workflow:completed']);
+    expect(subscription.closeReason).toBe('workflow-terminal');
+    expect(capturedSignal?.aborted).toBe(true);
+    expect(callCount).toBe(1);
   });
 
   it('forced SSE transport opens the SSE endpoint directly', async () => {

@@ -46,13 +46,9 @@ import {
   type StreamSocket,
   type WebSocketFactory,
 } from './event-stream-transport.ts';
+import { WorkflowEventTailLifecycle, type StreamCloseReason } from './event-tail-lifecycle.ts';
 
-/** Reason a {@link WorkflowEventSubscription} terminated. */
-export type StreamCloseReason =
-  | 'workflow-terminal'
-  | 'client-closed'
-  | 'reconnect-exhausted'
-  | 'server-error';
+export type { StreamCloseReason } from './event-tail-lifecycle.ts';
 
 /** Fetches a workflow's persisted event history for connect/reconnect catch-up. */
 export type EventHistoryFetcher = (workflowId: string) => Promise<WorkflowEvent[]>;
@@ -80,9 +76,9 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   readonly #maxReconnectAttempts: number;
   readonly #reconnectBackoffMs: number;
   readonly #onEvent: (event: WorkflowEvent) => void;
+  readonly #lifecycle: WorkflowEventTailLifecycle;
 
   #socket: StreamSocket | null = null;
-  #closed = false;
   // The history cursor: the length of the `getEvents` array the last *successful*
   // catch-up reconciled. The next catch-up replays `history.slice(watermark)` so
   // it does not re-emit what that array already covered. This is deliberately the
@@ -123,15 +119,6 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   // leave the in-flight guard set, the reconnect's catch-up a no-op, and the
   // events between the stale snapshot and the new socket permanently missed.
   #connectGeneration = 0;
-  // Async-iterator plumbing: buffered events plus a parked waker. The buffer is
-  // filled while `#iterating` is set — either because an iterator is actively
-  // consuming or because the subscription was opened for iteration
-  // (`bufferForIteration`, used by `tail()`). A callback-only subscriber leaves
-  // it off so it never accumulates a never-drained queue.
-  readonly #buffer: WorkflowEvent[] = [];
-  #waker: (() => void) | null = null;
-  #iterating = false;
-  #closeReason: StreamCloseReason | null = null;
   // Resolves once the socket has opened and its first catch-up has completed,
   // so callers can wait for the stream to be live before advancing a workflow
   // (the watch channel does not replay events emitted before it connected).
@@ -154,16 +141,16 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     this.#factory = options?.webSocketFactory ?? defaultWebSocketFactory;
     this.#maxReconnectAttempts = options?.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
     this.#reconnectBackoffMs = options?.reconnectBackoffMs ?? DEFAULT_RECONNECT_BACKOFF_MS;
-    // Iteration-intended consumers (`tail()`) buffer from construction so the
-    // connect catch-up — emitted before the `for await` loop starts — is not
-    // dropped. Callback-only subscribers keep the lazy default.
-    this.#iterating = options?.bufferForIteration ?? false;
+    this.#lifecycle = new WorkflowEventTailLifecycle({
+      bufferForIteration: options?.bufferForIteration ?? false,
+      onClose: (reason) => this.#onLifecycleClose(reason),
+    });
     this.#connect();
   }
 
   /** Why the stream terminated, or `null` while it is still open. */
   get closeReason(): StreamCloseReason | null {
-    return this.#closeReason;
+    return this.#lifecycle.closeReason;
   }
 
   /**
@@ -183,7 +170,7 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   }
 
   #connect(): void {
-    if (this.#closed) return;
+    if (this.#lifecycle.closed) return;
     let socket: StreamSocket;
     try {
       socket = this.#factory(this.#url, this.#headers);
@@ -204,7 +191,7 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     this.#socket = socket;
 
     socket.addEventListener('open', () => {
-      if (this.#closed || this.#socket !== socket) return;
+      if (this.#lifecycle.closed || this.#socket !== socket) return;
       // The reconnect counter is intentionally NOT reset here. A socket `open`
       // only proves the upgrade was accepted, not that the connection is
       // healthy: a server or proxy that accepts then immediately closes would,
@@ -237,7 +224,7 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   }
 
   async #catchUp(): Promise<void> {
-    if (this.#catchUpInFlight || this.#closed) return;
+    if (this.#catchUpInFlight || this.#lifecycle.closed) return;
     this.#catchUpInFlight = true;
     // Do NOT reset `#pendingLive` here. `#deliverLive` only buffers while a
     // catch-up is in flight and a successful reconcile drains it to empty, so it
@@ -256,7 +243,7 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
       succeeded = await this.#reconcileHistory(generation);
     } finally {
       this.#catchUpInFlight = false;
-      if (!this.#closed && generation !== this.#connectGeneration) {
+      if (!this.#lifecycle.closed && generation !== this.#connectGeneration) {
         // A reconnect happened mid-flight; this catch-up reconciled against the
         // dropped socket. Re-run for the current socket so events between the
         // stale snapshot and the new connection are not lost.
@@ -301,7 +288,7 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
       fetchSucceeded = false;
       history = [];
     }
-    if (this.#closed) return false;
+    if (this.#lifecycle.closed) return false;
 
     // A reconnect happened while we awaited history. This snapshot was taken
     // against the dropped socket, and `#pendingLive` now holds frames from the
@@ -362,24 +349,12 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
     // Once the stream has terminated (e.g. a terminal event earlier in this same
     // reconcile pass closed it), emitting is a no-op — the consumer has been told
     // the stream ended, so a late frame must not slip through.
-    if (this.#closed) return;
+    if (this.#lifecycle.closed) return;
     // The history cursor is advanced once per successful reconcile (to the
     // reconciled array length), not here per-event — emitting must not inflate it
     // with duplicate replays or between-catch-up live frames (see
     // `#historyWatermark`).
-    try {
-      this.#onEvent(event);
-    } catch {
-      // A listener throwing must not corrupt the stream.
-    }
-    // Only queue for the async iterator when one is actually consuming. The
-    // push callback (`HttpHandle.addEventListener`) never iterates, so without
-    // this guard the buffer would grow unbounded for the subscription's
-    // lifetime — a leak proportional to event count on long-running workflows.
-    if (this.#iterating) {
-      this.#buffer.push(event);
-      this.#wake();
-    }
+    this.#lifecycle.emit(event, this.#onEvent);
     if (WORKFLOW_TERMINAL_EVENT_TYPES.has(event.type)) {
       this.#terminate('workflow-terminal');
     }
@@ -387,12 +362,12 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
 
   #handleSocketDrop(): void {
     this.#socket = null;
-    if (this.#closed) return;
+    if (this.#lifecycle.closed) return;
     this.#scheduleReconnect();
   }
 
   #scheduleReconnect(): void {
-    if (this.#closed) return;
+    if (this.#lifecycle.closed) return;
     if (this.#reconnectAttempts >= this.#maxReconnectAttempts) {
       this.#terminate('reconnect-exhausted');
       return;
@@ -406,9 +381,10 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
   }
 
   #terminate(reason: StreamCloseReason): void {
-    if (this.#closed) return;
-    this.#closed = true;
-    this.#closeReason = reason;
+    this.#lifecycle.terminate(reason);
+  }
+
+  #onLifecycleClose(_reason: StreamCloseReason): void {
     // Unblock anyone awaiting connection — the stream will deliver nothing more.
     this.#markConnected();
     if (this.#reconnectTimer !== null) {
@@ -424,15 +400,6 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
         // Closing an already-dead socket is a no-op for our purposes.
       }
     }
-    this.#wake();
-  }
-
-  #wake(): void {
-    const waker = this.#waker;
-    if (waker !== null) {
-      this.#waker = null;
-      waker();
-    }
   }
 
   /**
@@ -440,38 +407,10 @@ export class WorkflowEventSubscription implements AsyncIterable<WorkflowEvent> {
    * async iteration. Idempotent.
    */
   close(): void {
-    this.#terminate('client-closed');
+    this.#lifecycle.close();
   }
 
   [Symbol.asyncIterator](): AsyncIterator<WorkflowEvent> {
-    // Flip the flag synchronously when the iterator is obtained — not lazily on
-    // first `next()` — so events emitted by catch-up between obtaining the
-    // iterator and the first pull are still queued, regardless of microtask
-    // ordering. Until now a callback-only subscriber kept the buffer empty.
-    this.#iterating = true;
-    return this.#iterate();
-  }
-
-  async *#iterate(): AsyncIterator<WorkflowEvent> {
-    try {
-      while (true) {
-        while (this.#buffer.length > 0) {
-          yield this.#buffer.shift()!;
-        }
-        if (this.#closed) return;
-        await this.#waitForEvent();
-      }
-    } finally {
-      this.#iterating = false;
-      // A consumer that breaks out of `for await` closes the subscription so
-      // the socket does not leak.
-      this.close();
-    }
-  }
-
-  #waitForEvent(): Promise<void> {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    this.#waker = resolve;
-    return promise;
+    return this.#lifecycle[Symbol.asyncIterator]();
   }
 }

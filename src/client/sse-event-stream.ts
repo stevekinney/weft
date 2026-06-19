@@ -1,6 +1,7 @@
 import { WORKFLOW_TERMINAL_EVENT_TYPES } from '../core/events/workflow-events.ts';
 import type { WorkflowEvent } from '../core/types.ts';
 import type { StreamCloseReason } from './event-stream.ts';
+import { WorkflowEventTailLifecycle } from './event-tail-lifecycle.ts';
 import type { WorkflowEventTail } from './event-tail.ts';
 
 export type ServerSentEventFrame = {
@@ -180,13 +181,9 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
   readonly #onEvent: (event: WorkflowEvent) => void;
   readonly #maxReconnectAttempts: number;
   readonly #reconnectBackoffMs: number;
-  readonly #buffer: WorkflowEvent[] = [];
+  readonly #lifecycle: WorkflowEventTailLifecycle;
   readonly #connected: ReturnType<typeof Promise.withResolvers<void>> = Promise.withResolvers();
 
-  #closed = false;
-  #closeReason: StreamCloseReason | null = null;
-  #iterating = false;
-  #waker: (() => void) | null = null;
   #abortController: AbortController | null = null;
   #reconnectAttempts = 0;
   #reconnectTimer: ReturnType<typeof setTimeout> | null = null;
@@ -205,12 +202,15 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
     this.#onEvent = onEvent;
     this.#maxReconnectAttempts = options?.maxReconnectAttempts ?? DEFAULT_MAX_RECONNECT_ATTEMPTS;
     this.#reconnectBackoffMs = options?.reconnectBackoffMs ?? DEFAULT_RECONNECT_BACKOFF_MS;
-    this.#iterating = options?.bufferForIteration ?? false;
+    this.#lifecycle = new WorkflowEventTailLifecycle({
+      bufferForIteration: options?.bufferForIteration ?? false,
+      onClose: (reason) => this.#onLifecycleClose(reason),
+    });
     void this.#connect();
   }
 
   get closeReason(): StreamCloseReason | null {
-    return this.#closeReason;
+    return this.#lifecycle.closeReason;
   }
 
   whenConnected(): Promise<void> {
@@ -218,7 +218,7 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
   }
 
   async #connect(): Promise<void> {
-    if (this.#closed) return;
+    if (this.#lifecycle.closed) return;
     const abortController = new AbortController();
     this.#abortController = abortController;
     try {
@@ -235,9 +235,9 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
         return;
       }
       await this.#readResponseBody(response.body);
-      if (!this.#closed) this.#scheduleReconnect();
+      if (!this.#lifecycle.closed) this.#scheduleReconnect();
     } catch {
-      if (!this.#closed) this.#scheduleReconnect();
+      if (!this.#lifecycle.closed) this.#scheduleReconnect();
     } finally {
       if (this.#abortController === abortController) {
         this.#abortController = null;
@@ -260,7 +260,7 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
     const decoder = new TextDecoder();
     let remainder = '';
     try {
-      while (!this.#closed) {
+      while (!this.#lifecycle.closed) {
         const chunk = await reader.read();
         if (chunk.done) return;
         const parsed = parseServerSentEventChunk(
@@ -270,7 +270,7 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
         remainder = parsed.remainder;
         for (const frame of parsed.frames) {
           const handling = this.#handleFrame(frame);
-          if (this.#closed || handling === 'server-error') return;
+          if (this.#lifecycle.closed || handling === 'server-error') return;
         }
       }
     } finally {
@@ -298,23 +298,14 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
   }
 
   #emit(event: WorkflowEvent): void {
-    if (this.#closed) return;
-    try {
-      this.#onEvent(event);
-    } catch {
-      // Listener failures must not corrupt stream state.
-    }
-    if (this.#iterating) {
-      this.#buffer.push(event);
-      this.#wake();
-    }
+    if (!this.#lifecycle.emit(event, this.#onEvent)) return;
     if (WORKFLOW_TERMINAL_EVENT_TYPES.has(event.type)) {
       this.#terminate('workflow-terminal');
     }
   }
 
   #scheduleReconnect(): void {
-    if (this.#closed || this.#reconnectTimer !== null) return;
+    if (this.#lifecycle.closed || this.#reconnectTimer !== null) return;
     if (this.#reconnectAttempts >= this.#maxReconnectAttempts) {
       this.#terminate('reconnect-exhausted');
       return;
@@ -338,9 +329,10 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
   }
 
   #terminate(reason: StreamCloseReason): void {
-    if (this.#closed) return;
-    this.#closed = true;
-    this.#closeReason = reason;
+    this.#lifecycle.terminate(reason);
+  }
+
+  #onLifecycleClose(_reason: StreamCloseReason): void {
     this.#markConnected();
     if (this.#reconnectTimer !== null) {
       clearTimeout(this.#reconnectTimer);
@@ -348,44 +340,13 @@ export class SseWorkflowEventSubscription implements WorkflowEventTail {
     }
     this.#abortController?.abort();
     this.#abortController = null;
-    this.#wake();
   }
 
   close(): void {
-    this.#terminate('client-closed');
+    this.#lifecycle.close();
   }
 
   [Symbol.asyncIterator](): AsyncIterator<WorkflowEvent> {
-    this.#iterating = true;
-    return this.#iterate();
-  }
-
-  async *#iterate(): AsyncIterator<WorkflowEvent> {
-    try {
-      while (true) {
-        while (this.#buffer.length > 0) {
-          yield this.#buffer.shift()!;
-        }
-        if (this.#closed) return;
-        await this.#waitForEvent();
-      }
-    } finally {
-      this.#iterating = false;
-      this.close();
-    }
-  }
-
-  #waitForEvent(): Promise<void> {
-    const { promise, resolve } = Promise.withResolvers<void>();
-    this.#waker = resolve;
-    return promise;
-  }
-
-  #wake(): void {
-    const waker = this.#waker;
-    if (waker !== null) {
-      this.#waker = null;
-      waker();
-    }
+    return this.#lifecycle[Symbol.asyncIterator]();
   }
 }

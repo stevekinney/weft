@@ -31,6 +31,8 @@ import {
   type GetTaskDiagnosticsOutput,
 } from './operations/get-task-diagnostics.ts';
 import { anonymousPrincipal, principalFromApiKey } from './principal.ts';
+import { minimalServerContext } from './runtime/server-context.test-support.ts';
+import { reconcileOrphanedRecords, scanExpiredTasks } from './runtime/task-reconciliation.ts';
 import { buildFetchHandler, buildServerContext, resolveNetworkConfig } from './serve-internals.ts';
 import type { InflightRecord, QueuedRecord, ResolvedRecord } from './task-state.ts';
 
@@ -4477,7 +4479,7 @@ describe('task assignment deduplication', () => {
     engine.addEventListener(TaskResultDeadLetteredEvent.type, (event) => {
       deadLetterEvents.push(event);
     });
-    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 20 });
+    server = serveTestServer({ engine, port: 0, visibilityPollIntervalMs: 1_000 });
 
     const ws = await connectWorker(server);
     const messages = collectAndCompleteTaskMessages(ws);
@@ -4518,13 +4520,21 @@ describe('task assignment deduplication', () => {
         reason: 'result-resolution-storage-exhausted',
       });
 
-      // fixed delay: negative assertion waits through a reconciliation window to prove the dead-letter guard prevents redispatch.
-      await waitForRealTimersForTesting(350);
+      const scannerContext = minimalServerContext({ registry: server.registry });
+      scannerContext.deadlineTracker.add({ operationId, deadline: Date.now() - 1 });
+      const cleanedOperations: string[] = [];
+      await scanExpiredTasks(scannerContext, { engine, port: 0 }, (cleanedOperationId) => {
+        cleanedOperations.push(cleanedOperationId);
+      });
+      await reconcileOrphanedRecords(scannerContext, { engine, port: 0 }, (cleanedOperationId) => {
+        cleanedOperations.push(cleanedOperationId);
+      });
       expect(
         messages.filter(
           (message) => message.type === 'task' && message.operationId === operationId,
         ),
       ).toHaveLength(1);
+      expect(cleanedOperations).toEqual([]);
       expect(await engine.storage.get(KEYS.operationInflight(operationId))).not.toBeNull();
       expect(await engine.storage.get(KEYS.operationResolved(operationId))).toBeNull();
 
