@@ -222,6 +222,8 @@ const engine = await Engine.create({
 
 Fresh-process recovery consults the resolver only for inline runs that were launched with `services`, using the durable presence marker written at start. Scheduled inline occurrences are different: when `resolveWorkflowServices` is configured, each occurrence consults it before the workflow body runs. Returning `unavailable` or throwing fails only that run or scheduled occurrence with a system failure category. Child workflows do not inherit the parent's `services`; start each child with its own durable input and host services if it needs them.
 
+The resolver info includes `launchOptions.id` and current durable tags for recovered runs. Scheduled occurrences include `schedule.id` and the occurrence timestamp when one is known, so a resolver can branch on schedule origin without adding duplicate `scheduleId` fields to every workflow input.
+
 > Warning: if a recovered run has the durable services marker but the fresh engine was created without `resolveWorkflowServices`, Weft fails that run before the workflow body advances and emits a `DevelopmentWarningEvent` naming the workflow id and `EngineOptions.resolveWorkflowServices`. It never resumes the workflow with `ctx.services === undefined`.
 
 ## Bounded checkpoint growth

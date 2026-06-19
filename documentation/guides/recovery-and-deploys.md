@@ -83,12 +83,13 @@ Configure `resolveWorkflowServices` on the engine:
 const engine = await Engine.create({
   storage,
   workflows: { order },
-  resolveWorkflowServices: async ({ workflowId, workflowType, input }) => {
+  resolveWorkflowServices: async ({ workflowId, workflowType, input, launchOptions, schedule }) => {
+    const origin = schedule?.id ?? launchOptions?.tags?.find((tag) => tag.startsWith('origin:'));
     const services = await rebuildServicesFor(input);
     if (!services) {
       return {
         status: 'unavailable',
-        reason: `Cannot rebuild services for ${workflowType}/${workflowId}`,
+        reason: `Cannot rebuild services for ${origin ?? workflowType}/${workflowId}`,
       };
     }
     return { status: 'available', services };
@@ -96,7 +97,7 @@ const engine = await Engine.create({
 });
 ```
 
-The resolver is consulted only for recovered inline workflows that were originally launched with `services`; Weft persists a presence marker for those runs and skips the resolver for ordinary workflows. If the resolver returns `unavailable` or throws, Weft fails that one recovered workflow with a system failure category and continues recovering siblings. If terminal failure cannot be committed because storage fails, recovery surfaces that storage problem like any other failed commit.
+The resolver is consulted only for recovered inline workflows that were originally launched with `services`; Weft persists a presence marker for those runs and skips the resolver for ordinary workflows. Recovered runs include `launchOptions.id` and the current durable tags when present, so the resolver can use the same launch labels visible through `WorkflowHandle.getLaunchMetadata()`. Scheduled occurrences include `schedule.id` and the occurrence timestamp when available, so services can be keyed by schedule without copying that identity into every workflow input. If the resolver returns `unavailable` or throws, Weft fails that one recovered workflow with a system failure category and continues recovering siblings. If terminal failure cannot be committed because storage fails, recovery surfaces that storage problem like any other failed commit.
 
 Do not use `services` to hide durable business state outside checkpoints. Put durable decisions in workflow input, checkpointed local state, `ctx.state`, activities, or offloads. Use `services` only for live capabilities that can be reconstructed from durable input or deployment configuration.
 

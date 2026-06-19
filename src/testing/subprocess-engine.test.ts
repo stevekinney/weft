@@ -200,7 +200,6 @@ describe('subprocess server harness', () => {
       spawnServerSubprocess({
         entrypoint,
         databasePath: join(createFixturePath('startup-crash-db'), 'weft.db'),
-        startupTimeoutMs: 500,
       }),
     ).rejects.toThrow(/startup exploded/);
   });

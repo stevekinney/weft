@@ -510,7 +510,7 @@ interface EngineOptions {
 }
 ```
 
-See [Configuration](./configuration.md) for defaults and Worker execution hardening options. `interceptors` is equivalent to registering each entry with `addInterceptor()` during construction. Explicit `workflowExecutionMode: 'worker'` is the untrusted workflow posture; inline execution remains available for trusted deployments. `resolveWorkflowServices` rebuilds services for recovered inline runs that were launched with `StartOptions.services`; when configured, it is also consulted for scheduled inline occurrences before their workflow bodies run.
+See [Configuration](./configuration.md) for defaults and Worker execution hardening options. `interceptors` is equivalent to registering each entry with `addInterceptor()` during construction. Explicit `workflowExecutionMode: 'worker'` is the untrusted workflow posture; inline execution remains available for trusted deployments. `resolveWorkflowServices` rebuilds services for recovered inline runs that were launched with `StartOptions.services`; its `info.launchOptions` includes the workflow id and current tags when present. When configured, it is also consulted for scheduled inline occurrences before their workflow bodies run, with `info.schedule` carrying the schedule id and occurrence timestamp when available.
 
 ### `StartOptions`
 

@@ -1,6 +1,6 @@
 import { KEYS } from '../../../storage/interface.ts';
 import { DevelopmentWarningEvent } from '../../events.ts';
-import type { WorkflowState } from '../../types.ts';
+import type { WorkflowServicesResolverLaunchOptions, WorkflowState } from '../../types.ts';
 import type { EngineInternals } from '../internals.ts';
 
 const RESOLVE_WORKFLOW_SERVICES_OPTION_PATH = 'EngineOptions.resolveWorkflowServices';
@@ -84,6 +84,7 @@ export async function reprovideRecoveredServices(
       workflowId: state.id,
       workflowType: state.type,
       input: state.input,
+      launchOptions: launchOptionsFromWorkflowState(state),
     });
     if (resolution.status === 'available') {
       internals.workflowServices.set(state.id, resolution.services);
@@ -124,4 +125,13 @@ function missingServicesResolverReason(workflowId: string): string {
     'resolveWorkflowServices option. Configure EngineOptions.resolveWorkflowServices before ' +
     'recovery so ctx.services can be re-provided.'
   );
+}
+
+function launchOptionsFromWorkflowState(
+  state: WorkflowState,
+): WorkflowServicesResolverLaunchOptions {
+  return {
+    id: state.id,
+    ...(state.tags !== undefined && state.tags.length > 0 ? { tags: [...state.tags] } : {}),
+  };
 }

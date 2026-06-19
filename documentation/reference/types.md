@@ -686,10 +686,18 @@ interface WorkflowServicesResolverInfo {
   workflowId: string;
   workflowType: string;
   input: unknown;
+  launchOptions?: {
+    id: string;
+    tags?: string[];
+  };
+  schedule?: {
+    id: string;
+    occurrence?: number;
+  };
 }
 ```
 
-The resolver receives the original durable workflow input so applications can rebuild the right host dependencies without persisting a second side table.
+The resolver receives the original durable workflow input so applications can rebuild the right host dependencies without persisting a second side table. Recovered runs also include `launchOptions.id` and the current durable tags when present. Scheduled occurrences include `schedule.id` and, when available, the occurrence timestamp that launched the run.
 
 ### `Serializer`
 

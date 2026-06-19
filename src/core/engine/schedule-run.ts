@@ -33,7 +33,7 @@ export async function startScheduledRun(
       ? []
       : [{ type: 'put', key: KEYS.scheduleRun(workflowId), value: encode(state.id) }];
 
-  const resolution = await resolveScheduledRunServices(internals, workflowId, state);
+  const resolution = await resolveScheduledRunServices(internals, workflowId, state, occurrence);
 
   if (resolution !== null) {
     // Write the "expects services" marker and terminal-cleanup flag atomically
@@ -113,6 +113,7 @@ async function resolveScheduledRunServices(
   internals: EngineInternals,
   workflowId: string,
   state: ScheduleState,
+  occurrence: number | undefined,
 ): Promise<
   { status: 'available'; services: unknown } | { status: 'unavailable'; reason: string } | null
 > {
@@ -122,7 +123,16 @@ async function resolveScheduledRunServices(
   }
 
   try {
-    return await resolver({ workflowId, workflowType: state.workflowType, input: state.input });
+    return await resolver({
+      workflowId,
+      workflowType: state.workflowType,
+      input: state.input,
+      launchOptions: { id: workflowId },
+      schedule: {
+        id: state.id,
+        ...(occurrence !== undefined ? { occurrence } : {}),
+      },
+    });
   } catch (error) {
     return {
       status: 'unavailable',

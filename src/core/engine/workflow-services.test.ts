@@ -213,6 +213,52 @@ describe('ctx.services — recovery re-provision', () => {
     await secondEngine[Symbol.asyncDispose]();
   });
 
+  it('passes current launch tags to the recovered services resolver', async () => {
+    const storage = new MemoryStorage();
+    const wf = workflow({ name: 'tagged-resumable' }).execute(async function* (
+      ctx: WorkflowContext,
+    ) {
+      yield* ctx.waitForSignal('continue');
+      return (ctx.services as { origin: string }).origin;
+    });
+
+    const firstEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'tagged-resumable': wf },
+    });
+    const handle = await firstEngine.start('tagged-resumable', null, {
+      id: 'tagged-run',
+      tags: ['session', 'scheduler-origin'],
+      services: { origin: 'first-engine' },
+    });
+    await handle.removeTags('session');
+    await handle.addTags('recovered');
+    await flush();
+    await firstEngine[Symbol.asyncDispose]();
+
+    const resolverLaunchOptions: unknown[] = [];
+    const secondEngine = await Engine.create({
+      storage,
+      recover: false,
+      workflows: { 'tagged-resumable': wf },
+      resolveWorkflowServices: (info) => {
+        resolverLaunchOptions.push(info.launchOptions);
+        return { status: 'available', services: { origin: 'second-engine' } };
+      },
+    });
+
+    const handles = await secondEngine.recoverAll();
+    expect(handles).toHaveLength(1);
+    expect(resolverLaunchOptions).toEqual([
+      { id: 'tagged-run', tags: ['recovered', 'scheduler-origin'] },
+    ]);
+
+    await handles[0]!.signal('continue');
+    expect(await handles[0]!.result()).toBe('second-engine');
+    await secondEngine[Symbol.asyncDispose]();
+  });
+
   it('fails just the recovered run when the resolver reports unavailable, not the engine', async () => {
     const storage = new MemoryStorage();
     const wf = workflow({ name: 'unresolvable' }).execute(async function* (ctx: WorkflowContext) {
@@ -578,12 +624,17 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
     const clock = { now: Date.UTC(2026, 0, 1, 0, 0, 0) };
     const results: string[] = [];
     let resolverCalls = 0;
+    const resolverContext: unknown[] = [];
 
     const engine = new Engine({
       storage: new MemoryStorage(),
       getNow: () => clock.now,
-      resolveWorkflowServices: () => {
+      resolveWorkflowServices: (info) => {
         resolverCalls++;
+        resolverContext.push({
+          launchOptions: info.launchOptions,
+          schedule: info.schedule,
+        });
         return { status: 'available' as const, services: { generate: () => 'from-resolver' } };
       },
     });
@@ -598,7 +649,9 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
     });
     engine.register(wf);
 
-    const handle = await engine.schedule('scheduled-with-services', null, '* * * * *');
+    const handle = await engine.schedule('scheduled-with-services', null, '* * * * *', {
+      id: 'scheduled-services',
+    });
     const description = await handle.describe();
     expect(description.nextFireAt).not.toBeNull();
 
@@ -609,6 +662,10 @@ describe('ctx.services — scheduled workflow (engine.schedule)', () => {
     // turns. Wait for it explicitly to keep the test load-insensitive.
     await waitForCondition(() => results.length > 0, { label: 'scheduled occurrence body' });
     expect(resolverCalls).toBeGreaterThanOrEqual(1);
+    expect(resolverContext[0]).toEqual({
+      launchOptions: expect.objectContaining({ id: expect.any(String) }),
+      schedule: { id: 'scheduled-services', occurrence: description.nextFireAt },
+    });
     expect(results).toEqual(['from-resolver']);
     await engine[Symbol.asyncDispose]();
   });

@@ -23,10 +23,34 @@ export type WorkflowServicesResolution<TServices = unknown> =
   | { status: 'unavailable'; reason: string };
 
 /**
+ * Durable launch context passed to {@link EngineOptions.resolveWorkflowServices}
+ * when it is available before the workflow body advances.
+ *
+ * `tags` reflects the workflow's current durable tag set, not necessarily the
+ * exact tag list supplied at launch, because callers can mutate tags after
+ * start.
+ */
+export interface WorkflowServicesResolverLaunchOptions {
+  id: string;
+  tags?: string[];
+}
+
+/**
+ * Schedule context passed to {@link EngineOptions.resolveWorkflowServices} for
+ * scheduled occurrences.
+ */
+export interface WorkflowServicesResolverScheduleInfo {
+  id: string;
+  occurrence?: number;
+}
+
+/**
  * Information passed to {@link EngineOptions.resolveWorkflowServices} for each
- * recovered workflow. `input` is the original durable launch input, available
- * at resume time — typically enough to rebuild the run's dependencies (tenant,
- * model, tool registry) without a side table.
+ * recovered workflow or scheduled occurrence. `input` is the original durable
+ * launch input, available at resume time — typically enough to rebuild the run's
+ * dependencies (tenant, model, tool registry) without a side table. When tags or
+ * schedule identity are part of the durable launch context, they are exposed so
+ * resolvers do not need parallel side channels for the same classification.
  *
  * @example
  * ```ts
@@ -41,4 +65,6 @@ export interface WorkflowServicesResolverInfo {
   workflowId: string;
   workflowType: string;
   input: unknown;
+  launchOptions?: WorkflowServicesResolverLaunchOptions;
+  schedule?: WorkflowServicesResolverScheduleInfo;
 }
