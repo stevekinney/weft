@@ -40,7 +40,7 @@ The server routes through operation handlers plus transport-specific discovery e
 - [ ] REST `EngineFailure` responses use the canonical masked body; raw engine messages stay out of HTTP responses
 - [ ] Schedule routes use operation-catalog access policies consistently across REST and JSON-RPC; do not add tenant-claim gates back into core schedule access
 - [ ] Async activity completion routes keep tokens in the body, not the path; treat tokens as deterministic identifiers rather than secrets; require payload validation and `serve({ auth })` guidance when exposed outside a trusted boundary
-- [ ] Raw workflow event `/watch` upgrades require `events:read`, raw token `/stream` upgrades require `streams:read`, and JSON-RPC `weft.events.subscribe` uses the operation-catalog `events:read` policy instead of a dashboard-only shortcut
+- [ ] Raw workflow event `/watch` upgrades require `events:read`, raw token `/stream` upgrades require `streams:read`, REST workflow and fleet SSE routes require `Accept: text/event-stream`, preserve `Last-Event-ID` reconnect handling, and route authorization through the operation catalog instead of a dashboard-only shortcut
 
 Routes that accept bodies include workflow start, signal, update, query, attributes, review decisions, bulk actions, JSON-RPC, HTTP storage, and MCP `POST /mcp`.
 Async activity completion (`POST /api/v1/activities/complete` and `/fail`) also accepts bodies and must return 400 for malformed JSON.

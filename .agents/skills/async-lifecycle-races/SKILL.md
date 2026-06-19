@@ -15,7 +15,7 @@ description: >-
 - Introducing a promise that can outlive its owner or wait on an event from another process.
 - Fixing tests that rely on real sleeps, timing slack, or unbounded polling.
 - Changing server task polling, request `AbortSignal` handling, or `TaskQueue` disposal.
-- Changing client workflow-event streaming, including `HttpClient` `/v1/workflows/:id/watch` subscriptions, `client.tail(id)`, `handle.tail()`, `whenConnected()`, reconnect catch-up, JSON-RPC `weft.workflows.subscribe` / `weft.events.subscribe`, or WebSocket factory behavior.
+- Changing client workflow-event streaming, including `HttpClient` `/v1/workflows/:id/watch` subscriptions, fetch-based `/v1/workflows/:id/events/sse` tails, `eventTransport` selection, `client.tail(id)`, `handle.tail()`, `whenConnected()`, reconnect catch-up, JSON-RPC `weft.workflows.subscribe` / `weft.events.subscribe`, or WebSocket factory behavior.
 - Changing pending workflow updates during inline advance or resume, especially where durable update responses can drain before handlers are registered.
 - Changing out-of-band activity completion, including `ActivityContext.completeAsync()`, token claiming, REST/JSON-RPC completion, or payload rejection before token consumption.
 - Changing per-run workflow `services`, `resolveWorkflowServices`, delayed-start recovery, scheduled occurrences, or the durable `wf-has-services:` marker that gates re-provisioning.
@@ -74,6 +74,7 @@ description: >-
 - Add race regression tests for before-ack disposal, socket close, cancellation, and shutdown paths touched by the change.
 - For reconnect behavior, cover grace-window cancellation, visibility-timeout takeover, stale completion rejection, server-restart redelivery, and buffered `taskResult` resend after a socket failure.
 - For client event streaming, cover connect catch-up, reconnect during catch-up, duplicate-looking live frames, callback-only no-leak behavior, `whenConnected()` after close, and missing or inadequate WebSocket factories.
+- For SSE event streaming, cover replay-complete readiness, `Last-Event-ID` reconnect cursors, parked iterator close, terminal-event auto-close, and abort cleanup before iteration begins so feed listeners and connection leases cannot leak.
 - For long-poll task queues, cover disconnect during wait, already-aborted signals, pending-task retention for dead callers, idempotent disposal, and timer cleanup.
 - For lease-fenced timer cleanup, cover a deposed engine whose timer callback write is rejected and prove the fired timer remains for a successor scheduler to clear.
 - For pending-update drains, cover resume and inline advancement paths where the update is durable before the handler is visible.

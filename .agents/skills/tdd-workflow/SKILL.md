@@ -97,7 +97,7 @@ it('retries after a delay', async () => {
 
 TimeControl does NOT monkey-patch global timers. It provides an explicit virtual clock that the engine's scheduler respects.
 
-For real-timer integration tests, prefer `waitFor(...)` or `waitForCondition(...)` over fixed sleeps before assertions. Only use fixed delays for `negative assertion`, `pre-dispatch settle`, or `hang guard`, annotated with the structured comment required by `verify:no-test-sleeps`.
+For real-timer integration tests, prefer `waitFor(...)` or `waitForCondition(...)` over fixed sleeps before assertions. When the code exposes a scanner, reconciliation hook, event feed, or other deterministic driver, call that path directly instead of waiting on a real-time window. Only use fixed delays for `negative assertion`, `pre-dispatch settle`, or `hang guard`, annotated with the structured comment required by `verify:no-test-sleeps`.
 
 If a test must call `jest.useFakeTimers()`, restore real timers in that test or file teardown. The shared Bun preload runs `afterEach(restoreRealTimers)` as a final isolation guard because leaked fake timers trap later `Bun.sleep(...)` calls in the sequential suite; do not use the global cleanup as an excuse to leave fake timers installed intentionally.
 

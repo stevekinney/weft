@@ -216,7 +216,7 @@ const quorum = workflow({ name: 'quorum' })
 
 ### Live Workflow Events
 
-Workflow handles expose lifecycle events through `addEventListener`, and client handles can open a live tail for progress UIs or operators. `LocalClient` reads from the in-process engine stream; `HttpClient` uses the per-workflow `/v1/workflows/:id/watch` WebSocket channel with history catch-up on connect and reconnect, so `addEventListener`, `client.tail(id)`, and `handle.tail()` are push-based rather than a polling loop. JSON-RPC clients can subscribe over WebSocket with `weft.workflows.subscribe` for one workflow or `weft.events.subscribe` for the fleet-wide event feed. Client code that receives a workflow id from another process can call `client.getHandle(id)` to re-attach a `ClientHandle` or get `null` when the run does not exist.
+Workflow handles expose lifecycle events through `addEventListener`, and client handles can open a live tail for progress UIs or operators. `LocalClient` reads from the in-process engine stream; `HttpClient` defaults to the per-workflow `/v1/workflows/:id/watch` WebSocket channel when the runtime can carry authentication headers, and falls back to fetch-based SSE at `/v1/workflows/:id/events/sse` when it cannot. Both transports run history catch-up on connect and reconnect, so `addEventListener`, `client.tail(id)`, and `handle.tail()` are push-based rather than a polling loop. JSON-RPC clients can subscribe over WebSocket with `weft.workflows.subscribe` for one workflow or `weft.events.subscribe` for the fleet-wide event feed. Client code that receives a workflow id from another process can call `client.getHandle(id)` to re-attach a `ClientHandle` or get `null` when the run does not exist.
 
 ```typescript
 const handle = await client.start('checkout', order);
@@ -229,7 +229,7 @@ for await (const event of tail) {
 }
 ```
 
-The tail is single-consumer and stops on terminal workflow events or `tail.close()`. In runtimes without a built-in WebSocket, or where authenticated WebSockets need headers the platform constructor cannot send, provide `HttpClientOptions.webSocketFactory`.
+The tail is single-consumer and stops on terminal workflow events or `tail.close()`. Pass `eventTransport: 'websocket'` to require WebSocket, `eventTransport: 'sse'` to require SSE, or `HttpClientOptions.webSocketFactory` to provide a runtime-specific WebSocket constructor.
 
 ### Idempotent Starts and Signal-With-Start
 
