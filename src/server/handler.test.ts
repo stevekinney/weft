@@ -7,6 +7,7 @@ import { StartWorkflowValidationError } from '../core/start-workflow-validation.
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { UpdateCoordinator, WorkflowTerminalError } from '../core/updates.ts';
+import type { UnknownRestBinding } from '../server/rest-bindings.ts';
 import { encodeStorageKeyComponent, KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { getRequiredRouteParameter, handleRequest } from './handler.ts';
@@ -707,6 +708,65 @@ describe('handleRequest', () => {
 
     expect(response.status).toBe(400);
     expect(await json(response)).toEqual({ error: 'Malformed route parameter encoding' });
+  });
+
+  it('returns 500 when rest bindings and the operation registry are not supplied together', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(request('GET', '/v1/unknown'), engine, {
+      restBindings: [],
+    });
+
+    expect(response.status).toBe(500);
+    expect(await json(response)).toEqual({
+      error: '`restBindings` and `operationRegistry` must be supplied together (or both omitted).',
+    });
+  });
+
+  it('returns 500 when unexpected route-matching errors escape the malformed-route boundary', async () => {
+    engine = createEngine();
+
+    const restBindings: ReadonlyArray<UnknownRestBinding> = [
+      {
+        get method(): 'GET' {
+          throw new Error('binding lookup exploded');
+        },
+        path: '/v1/workflows/:id',
+        pathParamNames: ['id'],
+        operationName: 'explosive.binding',
+        inputSources: {},
+        async extractInput() {
+          return {};
+        },
+        success: { kind: 'json', status: 200 },
+      },
+    ];
+
+    const recordedCalls: unknown[][] = [];
+    const originalError = console.error;
+    console.error = ((...args: unknown[]) => {
+      recordedCalls.push(args);
+    }) as typeof console.error;
+
+    let response: Response;
+    try {
+      response = await handleRequest(request('GET', '/v1/workflows/test-workflow'), engine, {
+        restBindings,
+        operationRegistry: {} as never,
+      });
+    } finally {
+      console.error = originalError;
+    }
+
+    expect(response.status).toBe(500);
+    expect(await json(response)).toEqual({ error: 'Internal server error' });
+    expect(recordedCalls).toHaveLength(1);
+    expect(recordedCalls[0]?.[0]).toBe('Unhandled error in handleRequest route matching');
+    expect(recordedCalls[0]?.[1]).toMatchObject({
+      method: 'GET',
+      path: '/v1/workflows/test-workflow',
+      error: expect.objectContaining({ message: 'binding lookup exploded' }),
+    });
   });
 
   it('getRequiredRouteParameter throws a descriptive error when a parameter is missing', () => {
