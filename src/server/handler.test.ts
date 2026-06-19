@@ -7,11 +7,11 @@ import { StartWorkflowValidationError } from '../core/start-workflow-validation.
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
 import { UpdateCoordinator, WorkflowTerminalError } from '../core/updates.ts';
-import type { UnknownRestBinding } from '../server/rest-bindings.ts';
 import { encodeStorageKeyComponent, KEYS } from '../storage/interface.ts';
 import { MemoryStorage } from '../storage/memory.ts';
 import { getRequiredRouteParameter, handleRequest } from './handler.ts';
 import { principalFromApiKey } from './principal.ts';
+import type { UnknownRestBinding } from './rest-bindings.ts';
 
 // ---------------------------------------------------------------------------
 // Helpers
