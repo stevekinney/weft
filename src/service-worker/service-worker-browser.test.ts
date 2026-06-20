@@ -631,7 +631,12 @@ describe('Service Worker browser smoke', () => {
           signalPayload: 'done',
         },
       });
-      await waitForActivityCount(origin, 1);
+      // The parked-workflow result has resolved (a quiescence point) and the
+      // activity already ran exactly once before the kill, so read the counter
+      // directly rather than polling: a direct equality read catches a late
+      // duplicate from a recovery re-execution that `waitForActivityCount` would
+      // silently pass the instant the count first reached 1.
+      expect(await getActivityCount(origin)).toBe(1);
     },
     { timeout: 30_000 },
   );
