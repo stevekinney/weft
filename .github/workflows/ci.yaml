@@ -41,8 +41,11 @@ jobs:
             --path-ignore-patterns 'src/storage/web-extension-browser.test.ts'
   # Real-browser smoke tests (IndexedDB durability, Service Worker runtime,
   # WebExtension storage) run here against Playwright's pinned Chromium.
-  # This is a required gate: the browser surfaces are part of the stable tier
-  # per the "browser-surface promotion gate" in documentation/roadmap-to-1.0.md.
+  # This is now a required blocking gate (continue-on-error removed), which
+  # starts the real-CI bake. The browser surfaces stay EXPERIMENTAL and only
+  # graduate to the stable tier once this gate has been reliably green across
+  # real CI runs — see the "browser-surface promotion gate" in
+  # documentation/roadmap-to-1.0.md.
   browser-smoke:
     runs-on: ubuntu-latest
     timeout-minutes: 15

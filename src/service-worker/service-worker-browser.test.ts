@@ -271,9 +271,25 @@ serviceWorker.addEventListener('message', (event) => {
   event.waitUntil((async () => {
     // Await the setup promise (which includes recovery) before replying.
     // This makes weft:test:instance a reliable recovery-completion barrier.
-    const { scheduler } = await setup;
+    const { scheduler, storage } = await setup;
     if (message.type === 'weft:test:instance') {
       port.postMessage({ instanceId });
+      return;
+    }
+    if (message.type === 'weft:test:timer-armed') {
+      // Report whether a durable timer deadline has been checkpointed. The
+      // scheduler persists each armed timer under a 'wf-deadline:' key, so the
+      // presence of one proves the sleeping workflow reached its ctx.sleep
+      // checkpoint (not merely that the workflow is 'running'). The timer-
+      // recovery test waits on this before killing the worker so the kill
+      // always lands AFTER the timer is durable — there is always something to
+      // re-arm on recovery.
+      let armed = false;
+      for await (const _entry of storage.scan('wf-deadline:')) {
+        armed = true;
+        break;
+      }
+      port.postMessage({ armed });
       return;
     }
     if (message.type === 'weft:test:periodic-sync') {
@@ -409,6 +425,25 @@ async function sendWorkerMessage<T>(page: Page, message: Record<string, unknown>
       }),
     message,
   );
+}
+
+// Poll the worker until a durable timer deadline has been checkpointed. The
+// `weft:test:timer-armed` handler scans storage for a 'wf-deadline:' key, which
+// only exists once a workflow has reached its ctx.sleep checkpoint. This is the
+// barrier the timer-recovery test waits on before killing the worker, so the
+// kill cannot race the sleep checkpoint write — recovery always has a real timer
+// to re-arm. Uses an iteration counter rather than a Date.now() deadline so
+// Chromium timer throttling can't starve the loop.
+async function waitForTimerArmed(page: Page): Promise<void> {
+  let remainingAttempts = 200;
+  while (remainingAttempts-- > 0) {
+    const { armed } = await sendWorkerMessage<{ armed: boolean }>(page, {
+      type: 'weft:test:timer-armed',
+    });
+    if (armed) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error('Timed out waiting for the durable sleep timer to be armed');
 }
 
 async function waitForActivityCount(origin: string, expectedCount: number): Promise<void> {
@@ -737,6 +772,12 @@ describe('Service Worker browser smoke', () => {
       });
       expect(timerWorkflow.id).toBe('setup-timer-workflow');
       await waitForPageWorkflowStatus(page, timerWorkflow.id, 'running');
+      // 'running' alone does not prove the ctx.sleep timer is durable. Wait for
+      // the deadline to be checkpointed so the kill below always lands AFTER the
+      // timer is persisted — recovery then has a real timer to re-arm, and the
+      // test exercises the recovery path it claims rather than racing the
+      // checkpoint write.
+      await waitForTimerArmed(page);
 
       // Record the current worker identity before stopping.
       const instanceBeforeStop = await sendWorkerMessage<{ instanceId: string }>(page, {
