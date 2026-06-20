@@ -244,6 +244,11 @@ const waitForSignalWorkflow = workflow({ name: 'wait-for-signal' }).execute(asyn
   return { count, signalPayload };
 });
 
+const sleepThenFinishWorkflow = workflow({ name: 'sleep-then-finish' }).execute(async function* (ctx) {
+  yield* ctx.sleep(60 * 60 * 1000);
+  return 'slept-then-finished';
+});
+
 // setupServiceWorker wires all four event listeners (install, activate, fetch,
 // periodicsync) and calls engine.recoverAll() before the ready promise settles
 // because recover: true is set. The message listener below awaits the returned
@@ -255,6 +260,7 @@ const setup = setupServiceWorker({
   register(engine) {
     engine.register(countedActivity);
     engine.register(waitForSignalWorkflow);
+    engine.register(sleepThenFinishWorkflow);
   },
 });
 
@@ -265,9 +271,19 @@ serviceWorker.addEventListener('message', (event) => {
   event.waitUntil((async () => {
     // Await the setup promise (which includes recovery) before replying.
     // This makes weft:test:instance a reliable recovery-completion barrier.
-    await setup;
+    const { scheduler } = await setup;
     if (message.type === 'weft:test:instance') {
       port.postMessage({ instanceId });
+      return;
+    }
+    if (message.type === 'weft:test:periodic-sync') {
+      // Tick the scheduler with the clock advanced two hours past the one-hour
+      // sleep deadline so the durable timer fires deterministically without a
+      // real wall-clock wait. setupServiceWorker's own periodicsync listener
+      // ticks at real Date.now(); driving the returned scheduler directly with
+      // an explicit future time keeps the test hermetic.
+      await scheduler.tick(Date.now() + 2 * 60 * 60 * 1000);
+      port.postMessage({ ticked: true });
       return;
     }
     port.postMessage({ error: 'unknown message type' });
@@ -406,6 +422,17 @@ async function waitForActivityCount(origin: string, expectedCount: number): Prom
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(`Timed out waiting for activity count ${expectedCount}; got ${actualCount}`);
+}
+
+// Direct, single-shot read of the host's activity counter. `waitForActivityCount`
+// resolves the moment the count first *reaches* its target, so it cannot catch a
+// duplicate activity that lands *later* (e.g. a recovery re-execution arriving
+// after the workflow result is observed). Use this after a quiescence point to
+// assert the count is *exactly* N and has not crept past it.
+async function getActivityCount(origin: string): Promise<number> {
+  const response = await fetch(`${origin}/activity-count`);
+  const body = (await response.json()) as { count: number };
+  return body.count;
 }
 
 async function waitForPageWorkflowStatus(
@@ -657,8 +684,90 @@ describe('Service Worker browser smoke', () => {
           signalPayload: 'recovered',
         },
       });
-      // Activity must have run exactly once (recovery must not re-execute checkpointed steps).
-      await waitForActivityCount(origin, 1);
+      // Activity must have run exactly once: recovery must resume from the
+      // checkpoint, not re-execute the already-completed activity. Read the
+      // counter directly *after* the result resolves (a quiescence point) and
+      // assert strict equality — a polling wait would pass the instant the count
+      // reached 1 and miss a late duplicate from a recovery re-execution.
+      expect(await getActivityCount(origin)).toBe(1);
+    },
+    { timeout: 30_000 },
+  );
+
+  browserSmokeTest(
+    'setupServiceWorker({ recover: true }) resumes a sleeping timer workflow via periodic sync after SW restart',
+    async () => {
+      const serviceWorkerSource = await buildSetupServiceWorkerBundle(
+        `weft-setup-timer-smoke-${crypto.randomUUID()}`,
+      );
+      const { origin } = createSmokeServer(serviceWorkerSource);
+      const browser = await launchBrowser();
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      const browserDiagnostics: string[] = [];
+      page.on('console', (message) => browserDiagnostics.push(`console:${message.text()}`));
+      page.on('pageerror', (error) => browserDiagnostics.push(`pageerror:${error.message}`));
+      context.on('serviceworker', (worker) => {
+        browserDiagnostics.push(`serviceworker:${worker.url()}`);
+        worker.on('close', () => browserDiagnostics.push(`serviceworker-close:${worker.url()}`));
+      });
+
+      await registerServiceWorker(page, origin, browserDiagnostics);
+
+      // Start a workflow that parks on ctx.sleep(). This is a DISTINCT recovery
+      // path from the signal-parked case: a sleeping workflow only advances when
+      // a periodic-sync tick fires the durable timer — there is no external
+      // signal to drive it. Recovery must re-arm that timer in the new worker.
+      const timerWorkflow = await page.evaluate(async () => {
+        const response = await fetch('/weft/v1/workflows', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'sleep-then-finish',
+            input: null,
+            id: 'setup-timer-workflow',
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(
+            `timer workflow start failed: ${response.status} ${await response.text()}`,
+          );
+        }
+        return (await response.json()) as { id: string };
+      });
+      expect(timerWorkflow.id).toBe('setup-timer-workflow');
+      await waitForPageWorkflowStatus(page, timerWorkflow.id, 'running');
+
+      // Record the current worker identity before stopping.
+      const instanceBeforeStop = await sendWorkerMessage<{ instanceId: string }>(page, {
+        type: 'weft:test:instance',
+      });
+
+      // Kill the Service Worker via CDP while the workflow is still sleeping.
+      await stopServiceWorkers(context, page);
+
+      // A new worker identity proves recovery (via recover: true) completed and
+      // the sleeping workflow's durable timer was re-armed in the fresh worker.
+      const instanceAfterStop = await sendWorkerMessage<{ instanceId: string }>(page, {
+        type: 'weft:test:instance',
+      });
+      expect(instanceAfterStop.instanceId).not.toBe(instanceBeforeStop.instanceId);
+
+      // Drive a periodic-sync tick with the scheduler clock advanced past the
+      // timer deadline. The recovered worker must fire the re-armed timer and
+      // let the workflow run to completion.
+      await sendWorkerMessage(page, { type: 'weft:test:periodic-sync' });
+
+      await expect(
+        page.evaluate(async () => {
+          const response = await fetch('/weft/v1/workflows/setup-timer-workflow/result');
+          return response.json();
+        }),
+      ).resolves.toEqual({ result: 'slept-then-finished' });
+
+      // This workflow runs no activity, so the counter must still be exactly 0 —
+      // recovery must not synthesize spurious activity executions.
+      expect(await getActivityCount(origin)).toBe(0);
     },
     { timeout: 30_000 },
   );

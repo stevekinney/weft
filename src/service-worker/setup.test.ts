@@ -629,6 +629,25 @@ describe('setupServiceWorker recover option', () => {
     });
   });
 
+  it('recover:true with empty storage resolves ready without error (recoverAll is a no-op)', async () => {
+    const scope = createFakeServiceWorkerScope();
+    await withFakeSelf(scope, async () => {
+      const storage = new MemoryStorage();
+      // No prior workflows were ever started against this storage, so recoverAll
+      // scans an empty keyspace and finds nothing to resume. Setup must still
+      // resolve cleanly — an empty store is the steady state on first install.
+      const setup = await setupServiceWorker({
+        storage,
+        recover: true,
+        register() {
+          // Intentionally register no workflows.
+        },
+      });
+      await expect(setup.ready).resolves.toBeUndefined();
+      setup.engine[Symbol.dispose]();
+    });
+  });
+
   it('recover:true with a pre-built engine calls recoverAll on that engine exactly once', async () => {
     const scope = createFakeServiceWorkerScope();
     await withFakeSelf(scope, async () => {

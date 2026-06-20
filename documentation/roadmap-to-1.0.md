@@ -23,9 +23,8 @@ The 1.0 compatibility promise applies to surfaces that graduate into the stable 
 - `serve()` and the `/v1` REST surface.
 - Source and binary CLI commands `serve`, `doctor`, `version`, `--version`, and `-v`.
 - Exported public error codes.
-- Browser runtime: Service Worker integration, [`IndexedDBStorage`](reference/api-storage.md#indexeddbstorage), and [`WebExtensionStorage`](reference/api-storage.md#webextensionstorage) — these cleared the [real-browser promotion gate](#browser-surface-promotion-gate).
 
-Experimental surfaces can continue changing before they graduate. That includes MCP, HTTP and compressed storage, [Turso](reference/api-storage.md#tursostorage) until conformance proof is complete, CLI commands beyond `serve`, `doctor`, `version`, `--version`, and `-v`, OpenTelemetry metric names, externally supplied dashboard mounting, and `ctx.step()` sugar.
+Experimental surfaces can continue changing before they graduate. That includes the browser runtime, MCP, IndexedDB, WebExtension, HTTP and compressed storage, [Turso](reference/api-storage.md#tursostorage) until conformance proof is complete, CLI commands beyond `serve`, `doctor`, `version`, `--version`, and `-v`, OpenTelemetry metric names, externally supplied dashboard mounting, and `ctx.step()` sugar.
 
 ## Required Before 1.0
 
@@ -35,18 +34,18 @@ Experimental surfaces can continue changing before they graduate. That includes 
 - Security disclosure process is published.
 - Getting-started documentation uses only commands and APIs shipped in the package.
 - Launch-blocking regression tests are either passing or replaced by explicit tracked work with owner sign-off.
-- The browser surfaces cleared the [real-browser promotion gate](#browser-surface-promotion-gate).
+- The browser surfaces clear the [real-browser promotion gate](#browser-surface-promotion-gate) below.
 
 ## Browser-Surface Promotion Gate
 
-The browser adapters (IndexedDB, WebExtension) and the Service Worker runtime graduated to stable when their real-browser smoke tests became a **required** CI gate. Real-browser coverage is the explicit, single criterion: green unit tests against a fake IndexedDB or a stubbed `chrome.storage` driver are not sufficient evidence that the durability and lifecycle guarantees hold in an actual browser.
+The browser adapters (IndexedDB, WebExtension) and the Service Worker runtime stay **experimental** until their real-browser smoke tests have been green in the **required** CI gate for long enough to trust them. Real-browser coverage is the explicit, single criterion that graduates them to stable: green unit tests against a fake IndexedDB or a stubbed `chrome.storage` driver are not sufficient evidence that the durability and lifecycle guarantees hold in an actual browser.
 
 The mechanics:
 
 - The `browser-smoke` job in [`.github/workflows/ci.yaml`](../.github/workflows/ci.yaml) provisions a pinned Chromium through Playwright (`bunx playwright install --with-deps chromium`) and runs all three real-browser smoke suites — IndexedDB durability, Service Worker lifecycle, and WebExtension storage — under `bun:test` via a single `test:browser-smoke` entry point. Each suite drives that pinned Chromium directly (Playwright supplies the binary; the suites themselves are Bun tests, not `@playwright/test` runs), so `bun:test` stays the sole test runner.
-- The job is a **required** blocking gate. `continue-on-error` has been removed. A browser-surface regression fails CI.
+- The job is now a **required** blocking gate. `continue-on-error` has been removed, so a browser-surface regression fails CI. This starts the real-CI bake: the gate has only been proven green locally so far, not yet across a run of CI executions.
 
-The browser surfaces have cleared this gate and are part of the stable tier listed under [What 1.0 Covers](#what-10-covers).
+Graduation is the remaining step: once `browser-smoke` has been reliably green as a required check for roughly two weeks of real CI runs, the browser surfaces become eligible to move from the experimental list above into the stable tier. Until then, treat every browser surface as experimental regardless of how its non-browser unit tests look.
 
 ## Release Posture
 

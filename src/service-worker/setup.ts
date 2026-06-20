@@ -75,16 +75,18 @@ export interface SetupServiceWorkerOptions {
    */
   register?: (engine: Engine) => void | Promise<void>;
   /**
-   * When `true`, calls `engine.recoverAll()` after `options.register`
-   * completes and before the `ready` promise settles. Fetch and
-   * periodic-sync handlers therefore block on both workflow registration
-   * AND recovery before serving any traffic.
+   * When `true`, calls `engine.recoverAll()` (with no arguments) after
+   * `options.register` completes and before the `ready` promise settles.
+   * Fetch and periodic-sync handlers therefore block on both workflow
+   * registration AND recovery before serving any traffic.
    *
-   * Equivalent to calling `await engine.recoverAll()` at the end of your
-   * `register` callback. Use this for the common case where you do not need
-   * to pass `RecoverAllOptions` (e.g., `acknowledgeUnknownWorkflowTypes`);
-   * for fine-grained control, call `engine.recoverAll(opts)` yourself inside
-   * `register`.
+   * This is the zero-boilerplate replacement for the common pattern of
+   * calling `await engine.recoverAll()` at the end of your `register`
+   * callback. It does NOT forward `RecoverAllOptions`: if you need
+   * `acknowledgeUnknownWorkflowTypes` or any other recovery option, call
+   * `engine.recoverAll(opts)` yourself inside `register` and leave `recover`
+   * unset — do not set both, or recovery runs twice (the helper has no guard
+   * against a second, no-argument pass).
    *
    * Defaults to `false` — no behavior change for callers that omit this option.
    */

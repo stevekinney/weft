@@ -2,8 +2,8 @@
 
 Weft can run a browser-local engine behind a Service Worker. The page talks to the engine through the same HTTP shape it would use for a remote Weft server, but requests under a path like `/weft/` are intercepted locally and backed by IndexedDB.
 
-> [!NOTE]
-> The Service Worker runtime, [`IndexedDBStorage`](../reference/api-storage.md#indexeddbstorage), and [`WebExtensionStorage`](../reference/api-storage.md#webextensionstorage) are part of the browser-surface stable tier. Their real-browser smoke tests are enforced by a required CI gate.
+> [!WARNING]
+> The Service Worker runtime, [`IndexedDBStorage`](../reference/api-storage.md#indexeddbstorage), and [`WebExtensionStorage`](../reference/api-storage.md#webextensionstorage) are experimental in the pre-1.0 stability plan. Use them for prototypes and controlled trials, but do not assume their persistence, recovery, or compatibility contracts are frozen. Their real-browser smoke tests are now enforced by a required CI gate; they graduate to stable once that gate has been reliably green across real CI runs — see the [browser-surface promotion gate](../roadmap-to-1.0.md#browser-surface-promotion-gate).
 
 This guide covers two paths: `setupServiceWorker()` for the standard PWA case, and the lower-level `createFetchHandler()` / `createLifecycleHandlers()` / `createPeriodicSyncHandler()` factories when you need explicit listener attachment.
 
