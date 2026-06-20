@@ -2,8 +2,8 @@
 
 Weft can run a browser-local engine behind a Service Worker. The page talks to the engine through the same HTTP shape it would use for a remote Weft server, but requests under a path like `/weft/` are intercepted locally and backed by IndexedDB.
 
-> [!WARNING]
-> The browser runtime, [Service Worker](https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API) integration, [`IndexedDBStorage`](../reference/api-storage.md#indexeddbstorage), and [`WebExtensionStorage`](../reference/api-storage.md#webextensionstorage) are experimental in the pre-1.0 stability plan. Use them for prototypes and controlled trials, but do not assume their persistence, recovery, or compatibility contracts are frozen. They graduate to stable only after their real-browser smoke tests are green in a required CI gate — see the [browser-surface promotion gate](../roadmap-to-1.0.md#browser-surface-promotion-gate).
+> [!NOTE]
+> The Service Worker runtime, [`IndexedDBStorage`](../reference/api-storage.md#indexeddbstorage), and [`WebExtensionStorage`](../reference/api-storage.md#webextensionstorage) are part of the browser-surface stable tier. Their real-browser smoke tests are enforced by a required CI gate.
 
 This guide covers two paths: `setupServiceWorker()` for the standard PWA case, and the lower-level `createFetchHandler()` / `createLifecycleHandlers()` / `createPeriodicSyncHandler()` factories when you need explicit listener attachment.
 
@@ -56,7 +56,7 @@ It does not handle, and you still need to configure yourself:
 - **`navigator.serviceWorker.register()`.** Page code still calls `register('/sw.js', { scope, type })`. Weft's helper runs inside the worker; it doesn't reach back into the page.
 - **Cache strategies.** If you want service-worker-level HTTP caching for application assets, layer that yourself. Weft's `fetch` listener only intercepts requests under the path prefix.
 - **Browser permissions for Periodic Background Sync.** Page code is responsible for `registration.periodicSync.register('weft-timers', { minInterval })` and the permission query.
-- **Workflow recovery.** `setupServiceWorker()` does not call `engine.recoverAll()` for you. If you want previously-running workflows to resume after the Service Worker is evaluated fresh (browser update, eviction, or first install of a new version), call `engine.recoverAll()` yourself. The recommended placement is inside the `register` callback, after registering activities and workflows. See [Workflow recovery](#workflow-recovery) below.
+- **Workflow recovery.** Pass `recover: true` to have `setupServiceWorker()` call `engine.recoverAll()` automatically after your `register` callback, before any fetch or periodic-sync handler runs. For fine-grained control (e.g., passing `acknowledgeUnknownWorkflowTypes`), call `engine.recoverAll(opts)` yourself inside `register` instead. See [Workflow recovery](#workflow-recovery) below.
 
 ## Quick start with `setupServiceWorker()`
 
@@ -75,7 +75,8 @@ const formatGreeting = activity({
 
 const setup = await setupServiceWorker({
   pathPrefix: '/weft/',
-  async register(engine) {
+  recover: true,
+  register(engine) {
     engine.register(formatGreeting);
     engine.register(
       workflow({ name: 'welcome' }).execute(async function* (ctx, input: { name: string }) {
@@ -84,9 +85,6 @@ const setup = await setupServiceWorker({
         return { greeting };
       }),
     );
-
-    // Resume any workflows that were running when the previous worker was terminated.
-    await engine.recoverAll();
   },
 });
 
@@ -94,7 +92,7 @@ const setup = await setupServiceWorker({
 void setup;
 ```
 
-The `register` callback receives the engine. Register activities and workflows inside it, then call `engine.recoverAll()` so previously-running workflows resume on this worker evaluation. The helper awaits `register` before fetch and periodic-sync events trigger real work, so your handlers see fully-registered workflows _and_ recovery is complete before serving traffic.
+The `register` callback receives the engine. Register activities and workflows inside it. With `recover: true`, the helper calls `engine.recoverAll()` after `register` completes, before fetch and periodic-sync events trigger real work — so your handlers see fully-registered workflows and recovery is complete before serving any traffic.
 
 `setupServiceWorker` is safe to call once per worker evaluation. Concurrent calls during initialization converge on the same result. Calling it again after it's already attached throws.
 
@@ -192,10 +190,12 @@ self.addEventListener('message', (event) => {
 
 Service Workers can be evaluated fresh at any time: browser update, eviction, first install of a new version, manual unregister/reregister during development. When that happens, the new evaluation has zero in-memory workflow state — but IndexedDB still holds checkpoints for any workflow that was running when the previous worker was terminated. Those workflows resume only if you call `engine.recoverAll()`.
 
-Neither `setupServiceWorker()` nor `createFetchHandler()` nor the scheduler does this for you. The recommended placement:
+Neither `createFetchHandler()` nor the scheduler calls `engine.recoverAll()` for you. With `setupServiceWorker()`, you have two options:
 
-- **With `setupServiceWorker()`**: call `await engine.recoverAll()` at the end of your `register` callback, after registering activities and workflows. The helper awaits `register` before letting fetch/periodicsync handlers do real work, so recovery completes before steady-state traffic begins.
-- **With manual setup**: call `await engine.recoverAll()` at module top-level, after the engine is constructed and workflows are registered, but before attaching the `fetch` listener. The Advanced section below shows this pattern.
+- **`recover: true` (recommended)**: Pass `recover: true` to `setupServiceWorker()`. The helper calls `engine.recoverAll()` after your `register` callback completes, before fetch and periodic-sync handlers accept any traffic. This is the zero-boilerplate path.
+- **Manual `register` callback**: Call `await engine.recoverAll()` at the end of your `register` callback. Use this when you need to pass `RecoverAllOptions` (e.g., `acknowledgeUnknownWorkflowTypes: true`) or want explicit control over the recovery step.
+
+With manual setup (using `createFetchHandler` and the lower-level APIs), call `await engine.recoverAll()` at module top-level after the engine is constructed and workflows are registered, but before attaching the `fetch` listener. The Advanced section below shows this pattern.
 
 If you skip recovery, sleeping or in-flight workflows from the previous worker evaluation stay parked in IndexedDB until something else triggers a recovery — usually a manual call after the user reports "my workflow is stuck." Don't ship without it.
 
@@ -203,7 +203,7 @@ If you skip recovery, sleeping or in-flight workflows from the previous worker e
 
 - [MDN documents Service Workers](https://developer.mozilla.org/en-US/docs/Web/API/Service_Worker_API) as secure-context APIs: production pages need HTTPS. `http://localhost` is treated as secure for local development.
 - Service Workers can be terminated by the browser shortly after an event finishes. The engine's checkpoint-and-recover model is what makes this safe: in-flight workflow state lives in IndexedDB, and `engine.recoverAll()` resumes from the last checkpoint when called.
-- **You are responsible for calling `engine.recoverAll()` after a fresh worker evaluation if you want previously-running workflows to resume.** Neither `setupServiceWorker()` nor `createFetchHandler()` nor the scheduler calls it for you. See [Workflow recovery](#workflow-recovery) below for the recommended placement.
+- Pass `recover: true` to `setupServiceWorker()` so `engine.recoverAll()` runs automatically after your `register` callback. Without it, sleeping or in-flight workflows from the previous evaluation stay parked in IndexedDB. See [Workflow recovery](#workflow-recovery) for both options.
 - IndexedDB has quota limits and can be evicted under storage pressure. Use server-side Weft for workflows that cannot tolerate local storage loss.
 
 ## Activities in the browser

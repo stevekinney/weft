@@ -22,6 +22,7 @@ const serviceWorkerModulePath = fileURLToPath(
 const schedulerModulePath = fileURLToPath(
   new URL('src/service-worker/scheduler.ts', repositoryRoot),
 );
+const setupModulePath = fileURLToPath(new URL('src/service-worker/setup.ts', repositoryRoot));
 
 const createdDirectories: string[] = [];
 const browsers: Browser[] = [];
@@ -202,6 +203,96 @@ serviceWorker.addEventListener('message', (event) => {
   return Bun.file(join(outputDirectory, 'service-worker-entrypoint.js')).text();
 }
 
+/**
+ * Builds a Service Worker bundle that uses `setupServiceWorker({ recover: true })`
+ * instead of a manual `engine.recoverAll()` call. Used by the second smoke test
+ * that verifies the `recover: true` option through the high-level helper.
+ */
+async function buildSetupServiceWorkerBundle(databaseName: string): Promise<string> {
+  const directory = createTemporaryDirectory('setup-bundle');
+  const entrypoint = join(directory, 'setup-service-worker-entrypoint.ts');
+  const outputDirectory = join(directory, 'dist');
+  await Bun.write(
+    entrypoint,
+    `
+/// <reference lib="webworker" />
+import { activity, workflow } from ${JSON.stringify(typesModulePath)};
+import { IndexedDBStorage } from ${JSON.stringify(indexedDatabaseStorageModulePath)};
+import { setupServiceWorker } from ${JSON.stringify(setupModulePath)};
+
+const serviceWorker = self;
+const instanceId = crypto.randomUUID();
+let activityCount = 0;
+
+const storage = new IndexedDBStorage(${JSON.stringify(databaseName)});
+
+const countedActivity = activity({
+  name: 'countedActivity',
+  execute: async () => {
+    activityCount++;
+    const response = await fetch(new URL('/activity-count/increment', serviceWorker.location.origin), {
+      method: 'POST',
+    });
+    if (!response.ok) throw new Error('activity count request failed: ' + response.status);
+    return activityCount;
+  },
+});
+
+const waitForSignalWorkflow = workflow({ name: 'wait-for-signal' }).execute(async function* (ctx) {
+  const count = yield* ctx.run(countedActivity);
+  const signalPayload = yield* ctx.waitForSignal('finish');
+  return { count, signalPayload };
+});
+
+// setupServiceWorker wires all four event listeners (install, activate, fetch,
+// periodicsync) and calls engine.recoverAll() before the ready promise settles
+// because recover: true is set. The message listener below awaits the returned
+// promise so replies are only sent after recovery is confirmed complete.
+const setup = setupServiceWorker({
+  storage,
+  pathPrefix: '/weft/',
+  recover: true,
+  register(engine) {
+    engine.register(countedActivity);
+    engine.register(waitForSignalWorkflow);
+  },
+});
+
+serviceWorker.addEventListener('message', (event) => {
+  const port = event.ports[0];
+  if (port === undefined) return;
+  const message = event.data ?? {};
+  event.waitUntil((async () => {
+    // Await the setup promise (which includes recovery) before replying.
+    // This makes weft:test:instance a reliable recovery-completion barrier.
+    await setup;
+    if (message.type === 'weft:test:instance') {
+      port.postMessage({ instanceId });
+      return;
+    }
+    port.postMessage({ error: 'unknown message type' });
+  })());
+});
+`,
+  );
+
+  const result = await Bun.build({
+    entrypoints: [entrypoint],
+    outdir: outputDirectory,
+    target: 'browser',
+    format: 'esm',
+    minify: false,
+    sourcemap: 'none',
+  });
+
+  if (!result.success) {
+    const diagnostics = result.logs.map((log) => log.message).join('\n');
+    throw new Error(`Setup Service Worker bundle failed:\n${diagnostics}`);
+  }
+
+  return Bun.file(join(outputDirectory, 'setup-service-worker-entrypoint.js')).text();
+}
+
 function createSmokeServer(serviceWorkerSource: string): { origin: string } {
   let activityCount = 0;
   server = Bun.serve({
@@ -324,9 +415,12 @@ async function waitForPageWorkflowStatus(
 ): Promise<void> {
   await page.evaluate(
     async ({ expectedStatus, id }) => {
-      const deadline = Date.now() + 5_000;
+      // Use an iteration counter instead of Date.now() so Chromium timer
+      // throttling under background-tab / CDP conditions cannot stall the loop.
+      // 200 iterations × 25 ms ≈ 5 000 ms equivalent.
+      let remainingAttempts = 200;
       let actualStatus = '<missing>';
-      while (Date.now() < deadline) {
+      while (remainingAttempts-- > 0) {
         const response = await fetch(`/weft/v1/workflows/${encodeURIComponent(id)}`);
         if (response.ok) {
           const body = (await response.json()) as { status?: string };
@@ -444,6 +538,17 @@ describe('Service Worker browser smoke', () => {
       });
       await stopServiceWorkers(context, page);
 
+      // Confirm a new worker identity (and therefore completed recovery) BEFORE
+      // sending the signal. The message handler in the bundle gates on
+      // `recoveryReady`, so a successful `weft:test:instance` reply proves the
+      // new worker has finished `engine.recoverAll()` and the resumed generator
+      // is live. Sending the signal before this barrier risked delivering it
+      // before the parked workflow was re-activated in the new worker.
+      const instanceAfterStop = await sendWorkerMessage<{ instanceId: string }>(page, {
+        type: 'weft:test:instance',
+      });
+      expect(instanceAfterStop.instanceId).not.toBe(instanceBeforeStop.instanceId);
+
       await page.evaluate(async () => {
         const response = await fetch('/weft/v1/workflows/parked-workflow/signal/finish', {
           method: 'POST',
@@ -452,10 +557,6 @@ describe('Service Worker browser smoke', () => {
         });
         if (!response.ok) throw new Error(`signal failed: ${response.status}`);
       });
-      const instanceAfterStop = await sendWorkerMessage<{ instanceId: string }>(page, {
-        type: 'weft:test:instance',
-      });
-      expect(instanceAfterStop.instanceId).not.toBe(instanceBeforeStop.instanceId);
 
       await expect(
         page.evaluate(async () => {
@@ -468,6 +569,95 @@ describe('Service Worker browser smoke', () => {
           signalPayload: 'done',
         },
       });
+      await waitForActivityCount(origin, 1);
+    },
+    { timeout: 30_000 },
+  );
+
+  browserSmokeTest(
+    'setupServiceWorker({ recover: true }) auto-recovers a parked workflow after SW restart',
+    async () => {
+      const serviceWorkerSource = await buildSetupServiceWorkerBundle(
+        `weft-setup-smoke-${crypto.randomUUID()}`,
+      );
+      const { origin } = createSmokeServer(serviceWorkerSource);
+      const browser = await launchBrowser();
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      const browserDiagnostics: string[] = [];
+      page.on('console', (message) => browserDiagnostics.push(`console:${message.text()}`));
+      page.on('pageerror', (error) => browserDiagnostics.push(`pageerror:${error.message}`));
+      context.on('serviceworker', (worker) => {
+        browserDiagnostics.push(`serviceworker:${worker.url()}`);
+        worker.on('close', () => browserDiagnostics.push(`serviceworker-close:${worker.url()}`));
+      });
+
+      await registerServiceWorker(page, origin, browserDiagnostics);
+
+      // Start a workflow that parks on a signal (after running one activity).
+      const parkedWorkflow = await page.evaluate(async () => {
+        const response = await fetch('/weft/v1/workflows', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            type: 'wait-for-signal',
+            input: null,
+            id: 'setup-parked-workflow',
+          }),
+        });
+        if (!response.ok) {
+          throw new Error(
+            `parked workflow start failed: ${response.status} ${await response.text()}`,
+          );
+        }
+        return (await response.json()) as { id: string };
+      });
+      expect(parkedWorkflow.id).toBe('setup-parked-workflow');
+      await waitForPageWorkflowStatus(page, parkedWorkflow.id, 'running');
+      // Wait for the activity to complete so the workflow is parked on the signal.
+      await waitForActivityCount(origin, 1);
+
+      // Record the current worker identity before stopping.
+      const instanceBeforeStop = await sendWorkerMessage<{ instanceId: string }>(page, {
+        type: 'weft:test:instance',
+      });
+
+      // Kill the Service Worker via CDP — simulates the browser evicting the worker.
+      await stopServiceWorkers(context, page);
+
+      // Confirm a new worker identity BEFORE sending the signal. Because the
+      // message handler in the bundle awaits the `setup` promise (which includes
+      // `engine.recoverAll()` via `recover: true`), a successful
+      // `weft:test:instance` reply is proof that recovery completed and the
+      // parked workflow's generator is live in the new worker.
+      const instanceAfterStop = await sendWorkerMessage<{ instanceId: string }>(page, {
+        type: 'weft:test:instance',
+      });
+      expect(instanceAfterStop.instanceId).not.toBe(instanceBeforeStop.instanceId);
+
+      // Send the signal — the recovered worker must be ready to resume.
+      await page.evaluate(async () => {
+        const response = await fetch('/weft/v1/workflows/setup-parked-workflow/signal/finish', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ payload: 'recovered' }),
+        });
+        if (!response.ok) throw new Error(`signal failed: ${response.status}`);
+      });
+
+      // Confirm the workflow completed with the expected result.
+      await expect(
+        page.evaluate(async () => {
+          const response = await fetch('/weft/v1/workflows/setup-parked-workflow/result');
+          return response.json();
+        }),
+      ).resolves.toEqual({
+        result: {
+          count: 1,
+          signalPayload: 'recovered',
+        },
+      });
+      // Activity must have run exactly once (recovery must not re-execute checkpointed steps).
       await waitForActivityCount(origin, 1);
     },
     { timeout: 30_000 },

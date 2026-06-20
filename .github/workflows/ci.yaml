@@ -40,17 +40,11 @@ jobs:
             --path-ignore-patterns 'src/storage/indexeddb-browser.test.ts' \
             --path-ignore-patterns 'src/storage/web-extension-browser.test.ts'
   # Real-browser smoke tests (IndexedDB durability, Service Worker runtime,
-  # WebExtension storage) run here against Playwright's pinned Chromium. The job
-  # is intentionally NON-BLOCKING (continue-on-error) while these tests bake:
-  # new real-browser tests are flaky to introduce and runner browser
-  # provisioning varies. Once the job has been green for ~2 weeks, drop
-  # continue-on-error to flip it into a required gate. That required-gate state
-  # is the documented criterion for graduating the browser adapters and the
-  # Service Worker runtime from experimental to stable — see the
-  # "Browser-Surface Promotion Gate" section of documentation/roadmap-to-1.0.md.
+  # WebExtension storage) run here against Playwright's pinned Chromium.
+  # This is a required gate: the browser surfaces are part of the stable tier
+  # per the "browser-surface promotion gate" in documentation/roadmap-to-1.0.md.
   browser-smoke:
     runs-on: ubuntu-latest
-    continue-on-error: true
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4

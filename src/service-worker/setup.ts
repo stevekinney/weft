@@ -74,6 +74,21 @@ export interface SetupServiceWorkerOptions {
    * fetch/periodic-sync handlers to fail-fast with explicit errors.
    */
   register?: (engine: Engine) => void | Promise<void>;
+  /**
+   * When `true`, calls `engine.recoverAll()` after `options.register`
+   * completes and before the `ready` promise settles. Fetch and
+   * periodic-sync handlers therefore block on both workflow registration
+   * AND recovery before serving any traffic.
+   *
+   * Equivalent to calling `await engine.recoverAll()` at the end of your
+   * `register` callback. Use this for the common case where you do not need
+   * to pass `RecoverAllOptions` (e.g., `acknowledgeUnknownWorkflowTypes`);
+   * for fine-grained control, call `engine.recoverAll(opts)` yourself inside
+   * `register`.
+   *
+   * Defaults to `false` — no behavior change for callers that omit this option.
+   */
+  recover?: boolean;
 }
 
 /**
@@ -98,7 +113,7 @@ export interface SetupServiceWorkerResult {
   engine: Engine;
   storage: WeftStorage;
   scheduler: ServiceWorkerScheduler;
-  /** Resolves when `options.register` completes. Rejects if it threw. */
+  /** Resolves when registration (and recovery, if `recover: true`) completes. Rejects if either threw. */
   ready: Promise<void>;
 }
 
@@ -288,10 +303,15 @@ export function setupServiceWorker(
     periodicSyncTag,
   });
 
-  const registrationReady: Promise<void> = Promise.resolve().then(() => {
-    if (options.register === undefined) return undefined;
-    return options.register(engine);
-  });
+  async function runRegistrationAndRecovery(): Promise<void> {
+    if (options.register !== undefined) {
+      await options.register(engine);
+    }
+    if (options.recover === true) {
+      await engine.recoverAll();
+    }
+  }
+  const registrationReady: Promise<void> = Promise.resolve().then(runRegistrationAndRecovery);
 
   attachListeners(scope, pathPrefix, periodicSyncTag, engine, scheduler, registrationReady);
 

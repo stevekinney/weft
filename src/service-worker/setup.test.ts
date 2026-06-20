@@ -1,8 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../core/engine';
+import { WorkflowResumedEvent } from '../core/events.ts';
 import { workflow } from '../core/types/workflow-function.ts';
+import { IndexedDBStorage } from '../storage/indexeddb';
 import { MemoryStorage } from '../storage/memory';
+import { sleepForTesting } from '../testing/fake-timers.test-support.ts';
 import { resetSetupServiceWorkerRegistry, setupServiceWorker } from './setup.ts';
 
 interface FakeEvent {
@@ -408,6 +411,468 @@ describe('setupServiceWorker', () => {
 
       first.engine[Symbol.dispose]();
       second.engine[Symbol.dispose]();
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// recover option tests
+// ---------------------------------------------------------------------------
+
+/** Drain the microtask queue so fire-and-forget engine work settles. */
+async function flush(): Promise<void> {
+  await sleepForTesting(10);
+}
+
+const parkingWorkflow = workflow({ name: 'parking-workflow' }).execute(async function* (ctx) {
+  yield* ctx.waitForSignal<string>('finish');
+  return 'done';
+});
+
+describe('setupServiceWorker recover option', () => {
+  afterEach(() => {
+    delete (globalThis as { self?: unknown }).self;
+  });
+
+  it('recover:true calls recoverAll after register and before ready settles (call-order proof)', async () => {
+    const scope = createFakeServiceWorkerScope();
+    await withFakeSelf(scope, async () => {
+      let registerSettled = false;
+      let recoverCalledAfterRegister = false;
+
+      const storage = new MemoryStorage();
+      const engine = new Engine({ storage });
+
+      // Spy: capture whether register had settled when recoverAll runs.
+      const originalRecoverAll = engine.recoverAll.bind(engine);
+      engine.recoverAll = async (...args: Parameters<typeof engine.recoverAll>) => {
+        recoverCalledAfterRegister = registerSettled;
+        return originalRecoverAll(...args);
+      };
+
+      try {
+        const setup = await setupServiceWorker({
+          engine,
+          storage,
+          recover: true,
+          register: async () => {
+            await new Promise<void>((resolve) => setTimeout(resolve, 5));
+            registerSettled = true;
+          },
+        });
+
+        expect(recoverCalledAfterRegister).toBe(true);
+        setup.engine[Symbol.dispose]();
+      } finally {
+        engine[Symbol.dispose]();
+      }
+    });
+  });
+
+  it('recover:true resumes a parked-on-signal workflow stored before this worker evaluated', async () => {
+    const scope = createFakeServiceWorkerScope();
+    await withFakeSelf(scope, async () => {
+      // Phase 1: start a workflow on a first engine and let it park.
+      const storage = new MemoryStorage();
+      const firstEngine = new Engine({ storage });
+      firstEngine.register(parkingWorkflow);
+      await firstEngine.start('parking-workflow', null, { id: 'parked-1' });
+      await flush();
+      firstEngine[Symbol.dispose]();
+
+      // Phase 2: a new worker evaluation (via setupServiceWorker) with recover:true.
+      const setup = await setupServiceWorker({
+        storage,
+        recover: true,
+        register(engine) {
+          engine.register(parkingWorkflow);
+        },
+      });
+
+      // The workflow is now live in the new engine. Signal it and confirm completion.
+      await setup.engine.signal('parked-1', 'finish', 'hello');
+      const handle = setup.engine.getHandle('parked-1');
+      await expect(handle.result()).resolves.toBe('done');
+
+      setup.engine[Symbol.dispose]();
+    });
+  });
+
+  it('recover:false leaves a checkpointed workflow dormant', async () => {
+    const scope = createFakeServiceWorkerScope();
+    await withFakeSelf(scope, async () => {
+      const storage = new MemoryStorage();
+
+      // Seed storage with a parked workflow.
+      const firstEngine = new Engine({ storage });
+      firstEngine.register(parkingWorkflow);
+      await firstEngine.start('parking-workflow', null, { id: 'dormant-1' });
+      await flush();
+      firstEngine[Symbol.dispose]();
+
+      const resumedEvents: WorkflowResumedEvent[] = [];
+      const setup = await setupServiceWorker({
+        storage,
+        recover: false,
+        register(engine) {
+          engine.register(parkingWorkflow);
+          engine.addEventListener(WorkflowResumedEvent.type, (event) => {
+            resumedEvents.push(event);
+          });
+        },
+      });
+
+      await flush();
+
+      // The workflow exists in storage but is NOT live in the new engine.
+      // No WorkflowResumedEvent proves the engine did not call recoverAll().
+      const storedState = await setup.engine.get('dormant-1');
+      expect(storedState?.status).toBe('running');
+      expect(resumedEvents).toHaveLength(0);
+
+      setup.engine[Symbol.dispose]();
+    });
+  });
+
+  it('recover omitted (default) behaves identically to recover:false', async () => {
+    const scope = createFakeServiceWorkerScope();
+    await withFakeSelf(scope, async () => {
+      const storage = new MemoryStorage();
+
+      const firstEngine = new Engine({ storage });
+      firstEngine.register(parkingWorkflow);
+      await firstEngine.start('parking-workflow', null, { id: 'default-dormant-1' });
+      await flush();
+      firstEngine[Symbol.dispose]();
+
+      const resumedEvents: WorkflowResumedEvent[] = [];
+      // No recover field at all.
+      const setup = await setupServiceWorker({
+        storage,
+        register(engine) {
+          engine.register(parkingWorkflow);
+          engine.addEventListener(WorkflowResumedEvent.type, (event) => {
+            resumedEvents.push(event);
+          });
+        },
+      });
+
+      await flush();
+
+      const storedState = await setup.engine.get('default-dormant-1');
+      expect(storedState?.status).toBe('running');
+      // No WorkflowResumedEvent: engine did not call recoverAll() by default.
+      expect(resumedEvents).toHaveLength(0);
+
+      setup.engine[Symbol.dispose]();
+    });
+  });
+
+  it('recoverAll rejection rejects ready and makes subsequent fetch handlers return 503', async () => {
+    const scope = createFakeServiceWorkerScope();
+    await withFakeSelf(scope, async () => {
+      const storage = new MemoryStorage();
+      const engine = new Engine({ storage });
+
+      // Make recoverAll throw.
+      engine.recoverAll = async () => {
+        throw new Error('storage-explodes');
+      };
+
+      let caught: unknown;
+      try {
+        await setupServiceWorker({ engine, storage, recover: true });
+      } catch (error) {
+        caught = error;
+      }
+
+      expect((caught as Error | undefined)?.message).toMatch(/storage-explodes/);
+
+      // Fetch handler must now return 503 with the error message.
+      const fetchListener = listenerFor(scope, 'fetch');
+      let respondedWith: Promise<Response> | undefined;
+      fetchListener({
+        request: new Request('https://example.com/weft/v1/health'),
+        respondWith(response) {
+          respondedWith = Promise.resolve(response);
+        },
+      });
+      const response = await respondedWith!;
+      expect(response.status).toBe(503);
+      const text = await response.text();
+      expect(text).toMatch(/storage-explodes/);
+
+      engine[Symbol.dispose]();
+    });
+  });
+
+  it('recover:true with no register option still calls recoverAll', async () => {
+    const scope = createFakeServiceWorkerScope();
+    await withFakeSelf(scope, async () => {
+      const storage = new MemoryStorage();
+      const engine = new Engine({ storage });
+
+      let recoverCalled = false;
+      const originalRecoverAll = engine.recoverAll.bind(engine);
+      engine.recoverAll = async (...args: Parameters<typeof engine.recoverAll>) => {
+        recoverCalled = true;
+        return originalRecoverAll(...args);
+      };
+
+      try {
+        const setup = await setupServiceWorker({ engine, storage, recover: true });
+        expect(recoverCalled).toBe(true);
+        setup.engine[Symbol.dispose]();
+      } finally {
+        engine[Symbol.dispose]();
+      }
+    });
+  });
+
+  it('recover:true with a pre-built engine calls recoverAll on that engine exactly once', async () => {
+    const scope = createFakeServiceWorkerScope();
+    await withFakeSelf(scope, async () => {
+      const storage = new MemoryStorage();
+      const engine = new Engine({ storage });
+
+      let recoverCallCount = 0;
+      const originalRecoverAll = engine.recoverAll.bind(engine);
+      engine.recoverAll = async (...args: Parameters<typeof engine.recoverAll>) => {
+        recoverCallCount++;
+        return originalRecoverAll(...args);
+      };
+
+      try {
+        const setup = await setupServiceWorker({ engine, storage, recover: true });
+        expect(recoverCallCount).toBe(1);
+        expect(setup.engine).toBe(engine);
+        setup.engine[Symbol.dispose]();
+      } finally {
+        engine[Symbol.dispose]();
+      }
+    });
+  });
+
+  it('fetch gate waits on recoverAll when recover:true (response still pending while recovery is blocked)', async () => {
+    const scope = createFakeServiceWorkerScope();
+    await withFakeSelf(scope, async () => {
+      let releaseScan: () => void = () => {};
+      const scanBarrier = new Promise<void>((resolve) => {
+        releaseScan = resolve;
+      });
+
+      // Subclass MemoryStorage so scan() blocks until the latch is released.
+      class BlockingStorage extends MemoryStorage {
+        override async *scan(prefix: string): AsyncIterable<[string, Uint8Array]> {
+          await scanBarrier;
+          yield* super.scan(prefix);
+        }
+      }
+
+      const storage = new BlockingStorage();
+      const setupPromise = setupServiceWorker({
+        storage,
+        recover: true,
+        register(engine) {
+          engine.register(parkingWorkflow);
+        },
+      });
+
+      const fetchListener = listenerFor(scope, 'fetch');
+      let respondedWith: Promise<Response> | undefined;
+      fetchListener({
+        request: new Request('https://example.com/weft/v1/health'),
+        respondWith(response) {
+          respondedWith = Promise.resolve(response);
+        },
+      });
+
+      // Response is still pending while scan (and thus recoverAll) is blocked.
+      const racedBefore = await Promise.race([
+        respondedWith!.then(() => 'response'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('timer'), 10)),
+      ]);
+      expect(racedBefore).toBe('timer');
+
+      // Release the scan latch; setup and response should now settle.
+      releaseScan();
+      const setup = await setupPromise;
+      const response = await respondedWith!;
+      expect(response).toBeInstanceOf(Response);
+      setup.engine[Symbol.dispose]();
+    });
+  });
+
+  it('periodicsync waitUntil also waits on recoverAll when recover:true', async () => {
+    const scope = createFakeServiceWorkerScope();
+    await withFakeSelf(scope, async () => {
+      let releaseScan: () => void = () => {};
+      const scanBarrier = new Promise<void>((resolve) => {
+        releaseScan = resolve;
+      });
+
+      class BlockingStorage extends MemoryStorage {
+        override async *scan(prefix: string): AsyncIterable<[string, Uint8Array]> {
+          await scanBarrier;
+          yield* super.scan(prefix);
+        }
+      }
+
+      const storage = new BlockingStorage();
+      const setupPromise = setupServiceWorker({
+        storage,
+        recover: true,
+        register(engine) {
+          engine.register(parkingWorkflow);
+        },
+      });
+
+      const periodicListener = listenerFor(scope, 'periodicsync');
+      let captured: Promise<unknown> | undefined;
+      periodicListener({
+        tag: 'weft-timers',
+        waitUntil(promise) {
+          captured = promise;
+        },
+      });
+
+      // The waitUntil promise is still pending while scan is blocked.
+      const racedBefore = await Promise.race([
+        captured!.then(() => 'settled'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('timer'), 10)),
+      ]);
+      expect(racedBefore).toBe('timer');
+
+      // Release the latch.
+      releaseScan();
+      const setup = await setupPromise;
+      await captured!;
+      setup.engine[Symbol.dispose]();
+    });
+  });
+
+  it('recover:true is equivalent to calling engine.recoverAll() manually inside register', async () => {
+    const scope1 = createFakeServiceWorkerScope();
+    const scope2 = createFakeServiceWorkerScope();
+
+    // Both engines share the same initial checkpoint (identical storage state).
+    const storageA = new MemoryStorage();
+    const storageB = new MemoryStorage();
+
+    // Seed both with the same parked workflow.
+    async function seedStorage(storage: MemoryStorage, id: string): Promise<void> {
+      const seedEngine = new Engine({ storage });
+      seedEngine.register(parkingWorkflow);
+      await seedEngine.start('parking-workflow', null, { id });
+      await flush();
+      seedEngine[Symbol.dispose]();
+    }
+
+    await Promise.all([seedStorage(storageA, 'equiv-a'), seedStorage(storageB, 'equiv-b')]);
+
+    // Path A: recover:true via setupServiceWorker.
+    let setupA!: Awaited<ReturnType<typeof setupServiceWorker>>;
+    await withFakeSelf(scope1, async () => {
+      setupA = await setupServiceWorker({
+        storage: storageA,
+        recover: true,
+        register(engine) {
+          engine.register(parkingWorkflow);
+        },
+      });
+    });
+
+    // Path B: manual recoverAll inside register.
+    let setupB!: Awaited<ReturnType<typeof setupServiceWorker>>;
+    await withFakeSelf(scope2, async () => {
+      setupB = await setupServiceWorker({
+        storage: storageB,
+        register: async (engine) => {
+          engine.register(parkingWorkflow);
+          await engine.recoverAll();
+        },
+      });
+    });
+
+    // Both engines should have a live handle for their respective parked workflows.
+    expect(setupA.engine.getHandle('equiv-a')).not.toBeNull();
+    expect(setupB.engine.getHandle('equiv-b')).not.toBeNull();
+
+    // Signal both and confirm both complete.
+    await setupA.engine.signal('equiv-a', 'finish', 'hello');
+    await setupB.engine.signal('equiv-b', 'finish', 'hello');
+
+    await expect(setupA.engine.getHandle('equiv-a').result()).resolves.toBe('done');
+    await expect(setupB.engine.getHandle('equiv-b').result()).resolves.toBe('done');
+
+    setupA.engine[Symbol.dispose]();
+    setupB.engine[Symbol.dispose]();
+  });
+
+  it('recover:true with an internally-created engine (no options.engine) calls recoverAll', async () => {
+    // Covers the resolveStorageAndEngine path where the helper constructs the
+    // engine itself. The spy must be installed after setup returns the engine
+    // reference, so we verify via end-to-end revival instead of a call spy.
+    const scope = createFakeServiceWorkerScope();
+    await withFakeSelf(scope, async () => {
+      const storage = new MemoryStorage();
+
+      // Seed storage with a parked workflow using a separate engine.
+      const seedEngine = new Engine({ storage });
+      seedEngine.register(parkingWorkflow);
+      await seedEngine.start('parking-workflow', null, { id: 'internal-engine-1' });
+      await flush();
+      seedEngine[Symbol.dispose]();
+
+      // Call setupServiceWorker with only storage (no engine option) and recover:true.
+      // The helper will construct the engine internally and call recoverAll() on it.
+      const setup = await setupServiceWorker({
+        storage,
+        recover: true,
+        register(engine) {
+          engine.register(parkingWorkflow);
+        },
+      });
+
+      // The internally-created engine must have recovered the parked workflow.
+      await setup.engine.signal('internal-engine-1', 'finish', 'hello');
+      await expect(setup.engine.getHandle('internal-engine-1').result()).resolves.toBe('done');
+
+      setup.engine[Symbol.dispose]();
+    });
+  });
+
+  it('recover:true with IndexedDBStorage resumes a parked workflow (fake-indexeddb harness)', async () => {
+    // Covers the IndexedDBStorage code path. The test preload (tests/test-preload.ts)
+    // installs fake-indexeddb globally, making IndexedDBStorage usable without a
+    // real browser. A unique database name prevents cross-test state.
+    const scope = createFakeServiceWorkerScope();
+    await withFakeSelf(scope, async () => {
+      const databaseName = `weft-recover-test-${crypto.randomUUID()}`;
+      const storage = new IndexedDBStorage(databaseName);
+
+      // Seed: park a workflow on the first engine backed by the fake IndexedDB.
+      const seedEngine = new Engine({ storage });
+      seedEngine.register(parkingWorkflow);
+      await seedEngine.start('parking-workflow', null, { id: 'idb-parked-1' });
+      await flush();
+      seedEngine[Symbol.dispose]();
+
+      // Recovery: new setup on the same IndexedDB database with recover:true.
+      const recoveryStorage = new IndexedDBStorage(databaseName);
+      const setup = await setupServiceWorker({
+        storage: recoveryStorage,
+        recover: true,
+        register(engine) {
+          engine.register(parkingWorkflow);
+        },
+      });
+
+      // The workflow must be live after recovery — signal drives it to completion.
+      await setup.engine.signal('idb-parked-1', 'finish', 'hello');
+      await expect(setup.engine.getHandle('idb-parked-1').result()).resolves.toBe('done');
+
+      setup.engine[Symbol.dispose]();
     });
   });
 });
