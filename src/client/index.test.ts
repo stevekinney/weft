@@ -829,6 +829,7 @@ describe('HttpClient', () => {
       retentionEngine.register(retainedEchoWorkflow);
 
       const retentionServer = Bun.serve({
+        hostname: '127.0.0.1',
         port: 0,
         async fetch(request) {
           return handleRequest(request, retentionEngine);
@@ -837,7 +838,7 @@ describe('HttpClient', () => {
 
       try {
         const retentionClient = new HttpClient({
-          baseUrl: `http://localhost:${retentionServer.port}`,
+          baseUrl: `http://127.0.0.1:${retentionServer.port}`,
         });
 
         const overview = await retentionClient.getRetentionOverview();

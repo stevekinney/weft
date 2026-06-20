@@ -4,6 +4,7 @@ import { StartWorkflowValidationError } from '../../core/start-workflow-validati
 import type { SearchAttributeSchema } from '../../core/types.ts';
 import {
   buildSharedStartWorkflowOptions,
+  buildStartOrSignalWorkflowOptions,
   coerceStartWorkflowSearchAttributes,
 } from './start-workflow-options.ts';
 
@@ -66,6 +67,16 @@ describe('buildSharedStartWorkflowOptions', () => {
   it('propagates a malformed-field validation error (e.g. a non-string id)', () => {
     expect(() => buildSharedStartWorkflowOptions({ id: 42 }, undefined)).toThrow(
       StartWorkflowValidationError,
+    );
+  });
+});
+
+describe('buildStartOrSignalWorkflowOptions', () => {
+  it('rejects an invalid onTerminalConflict value', () => {
+    expect(() =>
+      buildStartOrSignalWorkflowOptions({ onTerminalConflict: 'restart-later' }, undefined),
+    ).toThrow(
+      new StartWorkflowValidationError('Field "onTerminalConflict" must be "error" or "start-new"'),
     );
   });
 });

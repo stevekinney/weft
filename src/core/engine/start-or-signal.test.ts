@@ -5,14 +5,17 @@ import type { BatchOperation, Storage } from '../../storage/interface.ts';
 import { encodeStorageKeyComponent, KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { TestEngine } from '../../testing/test-engine.ts';
+import { decode, encode } from '../codec.ts';
 import { Engine } from '../engine.ts';
-import type { WorkflowContext } from '../types.ts';
+import type { WorkflowContext, WorkflowState } from '../types.ts';
 import { workflow } from '../types.ts';
 import { drainQueuedInlineWorkflowStartsForEngine } from './engine-runtime-helpers.ts';
 import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from './errors.ts';
 import { getInternals } from './internals.ts';
 import {
+  requireWinnerId,
   resolveCallerIdWinnerOrRetry,
+  resolveWinnerWithSignal,
   type StartOrSignalCallbacks,
 } from './lifecycle/start-or-signal-resolution.ts';
 import { startWithIdempotency } from './lifecycle/start-or-signal.ts';
@@ -184,6 +187,14 @@ async function countWorkflowRecords(engine: Engine): Promise<number> {
     }
   }
   return count;
+}
+
+async function readStoredWorkflowState(engine: Engine, workflowId: string): Promise<WorkflowState> {
+  const bytes = await engine.storage.get(KEYS.workflow(workflowId));
+  if (bytes === null) {
+    throw new Error(`Expected stored workflow state for ${workflowId}`);
+  }
+  return decode(bytes) as WorkflowState;
 }
 
 function unexpectedStartOrSignalCallbacks(): StartOrSignalCallbacks {
@@ -810,6 +821,100 @@ describe('engine.startOrSignal', () => {
     }
   });
 
+  it('conflicts immediately when a caller-id race resolves to an existing terminal run without restart permission', async () => {
+    const engine = createEngine();
+    try {
+      const completed = await engine.start('completes-immediately', null, {
+        id: 'sos-terminal-conflict',
+      });
+      expect(await completed.result()).toBe('done');
+
+      await expect(
+        resolveCallerIdWinnerOrRetry(
+          getInternals(engine),
+          'sos-terminal-conflict',
+          {
+            name: 'release',
+            payload: 'after-terminal',
+            signalId: 'sig-terminal-conflict',
+          },
+          'sig-terminal-conflict',
+          unexpectedStartOrSignalCallbacks(),
+        ),
+      ).rejects.toBeInstanceOf(StartOrSignalConflictError);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('conflicts when a restart-capable caller-id race rereads a different terminal run after the reservation clears', async () => {
+    const workflowId = 'sos-terminal-rerun';
+    const inner = new MemoryStorage();
+    const engine = createEngine(
+      new Proxy(inner, {
+        get(target, property, receiver) {
+          if (property === 'get') {
+            return async (key: string): Promise<Uint8Array | null> => {
+              const value = await target.get(key);
+              if (key === KEYS.workflow(workflowId) && shouldReturnRereadState && value !== null) {
+                shouldReturnRereadState = false;
+                return encode(rereadState);
+              }
+              return value;
+            };
+          }
+          const value = Reflect.get(target, property, receiver);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      }),
+    );
+    const pendingStarts = getInternals(engine).pendingStarts;
+    let shouldReturnRereadState = false;
+    let rereadState!: WorkflowState;
+    const originalHas = pendingStarts.has.bind(pendingStarts);
+    try {
+      const completed = await engine.start('completes-immediately', null, {
+        id: workflowId,
+      });
+      expect(await completed.result()).toBe('done');
+
+      const previousState = await readStoredWorkflowState(engine, workflowId);
+      rereadState = {
+        ...previousState,
+        updatedAt: previousState.updatedAt + 1,
+        terminalCleanupToken: 'changed-terminal-cleanup-token',
+      };
+      pendingStarts.add(workflowId);
+      pendingStarts.has = (id: string): boolean => {
+        const present = originalHas(id);
+        if (present && id === workflowId) {
+          shouldReturnRereadState = true;
+          pendingStarts.delete(workflowId);
+        }
+        return present;
+      };
+
+      await expect(
+        resolveCallerIdWinnerOrRetry(
+          getInternals(engine),
+          workflowId,
+          {
+            name: 'release',
+            payload: 'after-restart-loss',
+            signalId: 'sig-terminal-rerun',
+          },
+          'sig-terminal-rerun',
+          unexpectedStartOrSignalCallbacks(),
+          true,
+        ),
+      ).rejects.toBeInstanceOf(StartOrSignalConflictError);
+    } finally {
+      pendingStarts.has = originalHas;
+      pendingStarts.delete(workflowId);
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
   it('requires a signalId or idempotencyKey for convergence', async () => {
     const engine = createEngine();
     try {
@@ -1258,6 +1363,40 @@ describe('engine.startOrSignal', () => {
           { idempotencyKey: 'sos-cas-purged' },
         ),
       ).rejects.toBeInstanceOf(IdempotencyKeyPurgedError);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('throws the invariant error when keyed winner resolution exhausts after the idempotency mapping changes', async () => {
+    const engine = createEngine();
+    try {
+      await engine.storage.put(
+        KEYS.startIdempotency('sos-remapped'),
+        encode({ workflowId: 'other-winner' }),
+      );
+
+      await expect(
+        resolveWinnerWithSignal(
+          getInternals(engine),
+          'missing-winner',
+          { name: 'release', payload: 'x', signalId: 'sig-remapped' },
+          'sig-remapped',
+          unexpectedStartOrSignalCallbacks(),
+          'sos-remapped',
+        ),
+      ).rejects.toThrow(/record never became readable after 5 attempts/);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('throws when the winner idempotency mapping vanishes after a lost compare-and-swap', async () => {
+    const engine = createEngine();
+    try {
+      await expect(requireWinnerId(getInternals(engine), 'missing-key')).rejects.toThrow(
+        /vanished after a lost compare-and-swap/,
+      );
     } finally {
       await engine[Symbol.asyncDispose]();
     }
