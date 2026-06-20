@@ -59,6 +59,7 @@ export type WeftErrorCode =
   | 'ActivityPerAttemptTimeoutError'
   | 'PayloadSizeExceededError'
   | 'StartOrSignalConflictError'
+  | 'WorkflowTeardownPendingError'
   | 'IdempotencyKeyPurgedError';
 
 /**
@@ -128,6 +129,7 @@ const publicWeftErrorCodeMap = {
   ActivityPerAttemptTimeoutError: true,
   PayloadSizeExceededError: true,
   StartOrSignalConflictError: true,
+  WorkflowTeardownPendingError: true,
   IdempotencyKeyPurgedError: true,
 } satisfies Record<WeftErrorCode, true>;
 

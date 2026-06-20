@@ -11,6 +11,10 @@ import { workflow } from '../types.ts';
 import { drainQueuedInlineWorkflowStartsForEngine } from './engine-runtime-helpers.ts';
 import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from './errors.ts';
 import { getInternals } from './internals.ts';
+import {
+  resolveCallerIdWinnerOrRetry,
+  type StartOrSignalCallbacks,
+} from './lifecycle/start-or-signal-resolution.ts';
 import { startWithIdempotency } from './lifecycle/start-or-signal.ts';
 
 const waitForRelease = workflow({ name: 'wait-for-release' }).execute(async function* (
@@ -180,6 +184,34 @@ async function countWorkflowRecords(engine: Engine): Promise<number> {
     }
   }
   return count;
+}
+
+function unexpectedStartOrSignalCallbacks(): StartOrSignalCallbacks {
+  const unexpected = (): never => {
+    throw new Error('restart retry regression must not use lifecycle callbacks');
+  };
+  const unexpectedAsync = async (): Promise<never> => unexpected();
+
+  return {
+    dispatchEvent: unexpected,
+    getHandle: unexpected,
+    createWorkflowHandleWithResultPromise: unexpected,
+    runSerializedWorkflowStateWrite: unexpectedAsync,
+    getComposedWorkflowInterceptor: () => null,
+    resolveWorkflowTypeTarget: unexpected,
+    processPendingUpdatesAfterReplay: unexpectedAsync,
+    processPendingUpdatesAfterInlineAdvance: unexpectedAsync,
+    processPendingUpdatesForHandlers: unexpectedAsync,
+    queueInlineWorkflowExecutionStart: unexpected,
+    isInlineWorkflowLocallyOwned: () => false,
+    hasLocalCheckpointOwnership: () => false,
+    handleCleanupError: unexpected,
+    swallowPromiseRejection: async () => {},
+    enforceHistoryCircuitBreaker: unexpectedAsync,
+    failWorkflowForUnavailableServices: unexpectedAsync,
+    failWorkflowForCheckpointDecodeError: unexpectedAsync,
+    signalExistingWorkflow: unexpectedAsync,
+  };
 }
 
 /**
@@ -745,6 +777,34 @@ describe('engine.startOrSignal', () => {
 
       await results[0].handle.signal('hold', 'done');
       expect(await results[0].handle.result()).toBe('done');
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('retries restart create when a lost caller-id reservation leaves the old terminal record', async () => {
+    const engine = createEngine();
+    try {
+      const completed = await engine.start('completes-immediately', null, {
+        id: 'sos-restart-stale-terminal',
+      });
+      expect(await completed.result()).toBe('done');
+
+      await expect(
+        resolveCallerIdWinnerOrRetry(
+          getInternals(engine),
+          'sos-restart-stale-terminal',
+          {
+            name: 'release',
+            payload: 'after-aborted-winner',
+            signalId: 'sig-restart-stale-terminal',
+          },
+          'sig-restart-stale-terminal',
+          unexpectedStartOrSignalCallbacks(),
+          true,
+        ),
+      ).resolves.toBeUndefined();
+      expect(await engine.getHandle('sos-restart-stale-terminal').result()).toBe('done');
     } finally {
       await engine[Symbol.asyncDispose]();
     }

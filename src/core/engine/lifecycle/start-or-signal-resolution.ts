@@ -126,7 +126,7 @@ export async function resolveCallerIdWinnerOrRetry(
       );
       return callbacks.getHandle(winnerId);
     }
-    if (!allowTerminalRestart || !internals.pendingStarts.has(winnerId)) {
+    if (!allowTerminalRestart) {
       throw new StartOrSignalConflictError(winnerId, state.status);
     }
   }

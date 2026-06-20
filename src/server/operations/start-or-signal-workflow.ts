@@ -155,11 +155,12 @@ function resolveStartOrSignalWorkflowFault(error: unknown): never {
     // spent key whose run was purged, or a terminal run still waiting on teardown.
     // Surface as Conflict (409) so callers can retry or choose a different
     // identity — not an opaque masked 500.
-    // `weftCode` recovers which of the two collapsed typed errors this was.
-    const data: Extract<OperationFault, { code: 'Conflict' }>['data'] = { reason: message };
-    if (error instanceof StartOrSignalConflictError || error instanceof IdempotencyKeyPurgedError) {
-      data.weftCode = error.code;
-    }
+    // `weftCode` recovers which collapsed typed error this was, including the
+    // transient teardown-pending case that clients can retry.
+    const data: Extract<OperationFault, { code: 'Conflict' }>['data'] = {
+      reason: message,
+      weftCode: error.code,
+    };
     const fault: OperationFault = {
       code: 'Conflict',
       message,

@@ -31,6 +31,7 @@ import {
   WorkflowNotFoundError,
   WorkflowNotRegisteredError,
   WorkflowSuspendNotSupportedError,
+  WorkflowTeardownPendingError,
   WorkflowTerminalError,
   WorkflowTimeoutError,
   WorkflowTypeNotRegisteredForRecoveryError,
@@ -120,6 +121,7 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
     new ActivityScheduleToCloseTimeoutError('charge', 2_000, 1_000),
   ActivityPerAttemptTimeoutError: () => new ActivityPerAttemptTimeoutError('charge', 2, 1_000),
   StartOrSignalConflictError: () => new StartOrSignalConflictError('wf-1', 'completed'),
+  WorkflowTeardownPendingError: () => new WorkflowTeardownPendingError('wf-1'),
   IdempotencyKeyPurgedError: () => new IdempotencyKeyPurgedError('wf-1'),
 };
 

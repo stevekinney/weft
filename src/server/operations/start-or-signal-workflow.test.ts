@@ -2,9 +2,11 @@ import { afterEach, describe, expect, it } from 'bun:test';
 
 import { Engine } from '../../core/engine.ts';
 import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
-import type { WorkflowContext } from '../../core/types.ts';
-import { workflow } from '../../core/types.ts';
+import type { AnyActivityDefinition, WorkflowContext } from '../../core/types.ts';
+import { activity, workflow } from '../../core/types.ts';
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
 import { handleRequest } from '../handler.ts';
 import { serve, type WeftServer } from '../index.ts';
 import { createOperationRegistry } from '../operation-catalog.ts';
@@ -31,6 +33,56 @@ const waitWithSearchAttributes = workflow({ name: 'wait-with-search-attributes' 
   .execute(async function* (ctx: WorkflowContext) {
     return yield* ctx.waitForSignal<string>('release');
   });
+
+type ControllableFinalizer = {
+  destroy: AnyActivityDefinition;
+  release: () => void;
+  started: Promise<void>;
+};
+
+function createControllableFinalizer(name: string): ControllableFinalizer {
+  let signalStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    signalStarted = resolve;
+  });
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const destroy = activity({
+    name,
+    execute: async () => {
+      signalStarted();
+      await gate;
+    },
+  });
+  return { destroy, release, started };
+}
+
+function registerTeardownWorkflow(
+  engine: Engine,
+  type: string,
+  finalizer: AnyActivityDefinition,
+): void {
+  const definition = workflow({ name: type, finalizer }).execute(async function* (
+    ctx: WorkflowContext,
+  ) {
+    ctx.setFinalizerState({ resourceId: type });
+    yield* ctx.waitForSignal('never');
+  });
+  engine.register(definition);
+}
+
+async function waitForRecordedFinalizerState(engine: Engine, workflowId: string): Promise<void> {
+  await waitForCondition(
+    async () => (await engine.storage.get(KEYS.finalizerState(workflowId))) !== null,
+    {
+      label: `workflow ${workflowId} recorded finalizer state`,
+      timeoutMs: 2000,
+      intervalMs: 5,
+    },
+  );
+}
 
 function createEngine(): Engine {
   const engine = new Engine({ storage: new MemoryStorage() });
@@ -142,6 +194,45 @@ describe('weft.workflows.startorsignal', () => {
     expect(response.status).toBe(201);
     expect(await response.json()).toEqual({ id: 'sos-rest-restart', outcome: 'started' });
     expect(await engine.getHandle('sos-rest-restart').result()).toBe('fresh');
+  });
+
+  it('includes weftCode when restart is blocked by pending teardown', async () => {
+    const finalizer = createControllableFinalizer('destroy-sos-rest-teardown');
+    const now = 1_000_000;
+    engine = new Engine({ storage: new MemoryStorage(), getNow: () => now });
+    registerTeardownWorkflow(engine, 'teardown-for-start-or-signal', finalizer.destroy);
+
+    const handle = await engine.start('teardown-for-start-or-signal', null, {
+      id: 'sos-rest-teardown-pending',
+    });
+    await waitForRecordedFinalizerState(engine, 'sos-rest-teardown-pending');
+    await engine.cancel(handle.id);
+    await expect(handle.result()).rejects.toThrow('Workflow cancelled');
+
+    const drive = engine.scheduler.tick(now);
+    await finalizer.started;
+    try {
+      const response = await handleRequest(
+        startOrSignalRequest({
+          type: 'teardown-for-start-or-signal',
+          signalName: 'release',
+          signalId: 'sig-rest-teardown-pending',
+          id: 'sos-rest-teardown-pending',
+          onTerminalConflict: 'start-new',
+        }),
+        engine,
+        { operationRegistry: registry, restBindings: bindings },
+      );
+
+      expect(response.status).toBe(409);
+      expect(await response.json()).toEqual({
+        error: expect.stringContaining('tearing down a resource'),
+        weftCode: 'WorkflowTeardownPendingError',
+      });
+    } finally {
+      finalizer.release();
+      await drive;
+    }
   });
 
   it('forwards executionTimeout, startAfter, and tags to the create path', async () => {

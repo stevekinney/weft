@@ -104,12 +104,12 @@ export interface StartOptions<TServices = unknown> {
  * Options accepted by `engine.start(type, input, options?)` — the shared
  * {@link StartOptions} plus the start-only `onTerminalConflict` policy.
  *
- * `onTerminalConflict` lives here, not on {@link StartOptions}, so it is
- * structurally rejected on every other start-like surface: `engine.startOrSignal`
- * (whose identity is the permanent at-most-once idempotency mapping),
- * `ctx.startChild` (which re-attaches to an existing run by id on replay), and the
- * REST/JSON-RPC transport (which keeps `weft.workflows.start` honestly
- * `destructive: false`). It is therefore an in-process `engine.start`-only policy.
+ * `onTerminalConflict` lives here, not on {@link StartOptions}, so
+ * `weft.workflows.start` stays non-restart-capable over REST/JSON-RPC and keeps
+ * its `destructive: false` operation contract. `ctx.startChild` also rejects the
+ * policy because it re-attaches to an existing run by id on replay. The
+ * signal-with-start surface accepts its own narrower
+ * {@link StartOrSignalOptions.onTerminalConflict} policy.
  */
 export interface StartWorkflowOptions<TServices = unknown> extends StartOptions<TServices> {
   /**
