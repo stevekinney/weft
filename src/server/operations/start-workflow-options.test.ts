@@ -54,8 +54,8 @@ describe('buildSharedStartWorkflowOptions', () => {
   });
 
   it('ignores onTerminalConflict — it is not part of the shared transport surface', () => {
-    // onTerminalConflict is an in-process engine.start-only policy; the shared
-    // builder (used by start AND startOrSignal) must not coerce or forward it.
+    // The shared builder feeds the transport start operation, which stays
+    // non-restart-capable. startOrSignal has its own narrower option builder.
     const options = buildSharedStartWorkflowOptions(
       { id: 'wf-restart', onTerminalConflict: 'start-new' } as Record<string, unknown>,
       undefined,

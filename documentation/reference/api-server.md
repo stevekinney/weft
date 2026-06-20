@@ -183,7 +183,7 @@ Returns `201` with `{ "id": "<workflow-id>" }`.
 }
 ```
 
-Returns `201` with `{ "id": "<workflow-id>" }`. Supply exactly one of `signalId` or `idempotencyKey`. Concurrent callers converge only with a shared `idempotencyKey`, or with a shared `id` plus `signalId`; a bare `signalId` does not converge absent-target callers because each one generates a different workflow id. Terminal targets and spent idempotency keys return `409 Conflict`.
+Returns `201` with `{ "id": "<workflow-id>", "outcome": "started" | "signalled" }`. Supply exactly one of `signalId` or `idempotencyKey`. Concurrent callers converge only with a shared `idempotencyKey`, or with a shared `id` plus `signalId`; a bare `signalId` does not converge absent-target callers because each one generates a different workflow id. Terminal targets return `409 Conflict` by default. To replace a terminal prior run under a stable id, send `onTerminalConflict: "start-new"` with `id` and `signalId`; this option rejects `idempotencyKey`. Spent idempotency keys also return `409 Conflict`.
 
 #### List Workflows -- Query Parameters
 

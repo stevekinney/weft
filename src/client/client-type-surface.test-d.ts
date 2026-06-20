@@ -12,9 +12,15 @@
 import { Engine } from '../core/engine.ts';
 import type { WorkflowContext } from '../core/types.ts';
 import { workflow } from '../core/types.ts';
-import type { StartOrSignalOutcome as OutcomeFromRoot } from '../index.ts';
+import type {
+  StartOrSignalOptions as OptionsFromRoot,
+  StartOrSignalOutcome as OutcomeFromRoot,
+} from '../index.ts';
 import { MemoryStorage } from '../storage/memory.ts';
-import type { StartOrSignalOutcome as OutcomeFromClientBarrel } from './index.ts';
+import type {
+  ClientStartOrSignalOptions,
+  StartOrSignalOutcome as OutcomeFromClientBarrel,
+} from './index.ts';
 import { LocalClient } from './local.ts';
 
 type Equals<X, Y> =
@@ -39,6 +45,24 @@ void _provedExact;
 // @ts-expect-error: 'pending' is not a valid StartOrSignalOutcome.
 const _invalid: OutcomeFromRoot = 'pending';
 void _invalid;
+
+// --- Issue #604: restart-capable startOrSignal option surface ---------------
+
+const _rootStartOrSignalOptions: OptionsFromRoot = {
+  id: 'stable-id',
+  onTerminalConflict: 'start-new',
+};
+void _rootStartOrSignalOptions;
+
+const _clientStartOrSignalOptions: ClientStartOrSignalOptions = {
+  id: 'stable-id',
+  onTerminalConflict: 'start-new',
+};
+void _clientStartOrSignalOptions;
+
+// @ts-expect-error: client start-or-signal options cannot carry inline services.
+const _clientStartOrSignalRejectsServices: ClientStartOrSignalOptions = { services: {} };
+void _clientStartOrSignalRejectsServices;
 
 // --- Issue #585: LocalClient accepts a branded Engine from Engine.create ----
 

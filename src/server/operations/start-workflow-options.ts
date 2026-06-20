@@ -1,6 +1,7 @@
 import { validateAttributeType } from '../../core/search-attributes.ts';
 import {
   assertExclusiveStartWorkflowOptions,
+  assertValidOnTerminalConflict,
   coerceStartWorkflowDuration,
   coerceStartWorkflowId,
   coerceStartWorkflowIdempotencyKey,
@@ -12,6 +13,7 @@ import type {
   SearchAttributeSchema,
   SearchAttributeValue,
   StartOptions,
+  StartOrSignalOptions,
 } from '../../core/types.ts';
 
 /**
@@ -30,6 +32,10 @@ export type SharedStartWorkflowOptionInput = {
   searchAttributes?: unknown;
 };
 
+export type StartOrSignalWorkflowOptionInput = SharedStartWorkflowOptionInput & {
+  onTerminalConflict?: unknown;
+};
+
 /**
  * Coerce the shared start-option fields into a validated {@link StartOptions}.
  * Both start operations call this so they cannot drift in how they validate `id`,
@@ -37,11 +43,10 @@ export type SharedStartWorkflowOptionInput = {
  * `searchAttributes` (a new field added here covers both surfaces at once). Throws
  * {@link StartWorkflowValidationError} on any malformed field.
  *
- * `onTerminalConflict` is intentionally NOT part of this shared path: it is an
- * in-process `engine.start`-only policy (its purge-and-restart would make the
- * transport `weft.workflows.start` operation conditionally destructive and would
- * violate `startOrSignal`'s at-most-once identity), so it is not exposed over
- * REST/JSON-RPC. See follow-up issue #489.
+ * `onTerminalConflict` is intentionally NOT part of this shared path:
+ * `weft.workflows.start` remains non-restart-capable over transport. The
+ * start-or-signal operation adds its narrower restart policy through
+ * {@link buildStartOrSignalWorkflowOptions}.
  */
 export function buildSharedStartWorkflowOptions(
   input: SharedStartWorkflowOptionInput,
@@ -84,6 +89,36 @@ export function buildSharedStartWorkflowOptions(
   assertExclusiveStartWorkflowOptions(options.startAt, options.startAfter);
 
   return options;
+}
+
+export function buildStartOrSignalWorkflowOptions(
+  input: StartOrSignalWorkflowOptionInput,
+  searchAttributeSchema: SearchAttributeSchema | undefined,
+): StartOrSignalOptions {
+  const options: StartOrSignalOptions = buildSharedStartWorkflowOptions(
+    input,
+    searchAttributeSchema,
+  );
+
+  if (input.onTerminalConflict !== undefined) {
+    options.onTerminalConflict = coerceStartOrSignalOnTerminalConflict(
+      input.onTerminalConflict,
+      'Field "onTerminalConflict"',
+    );
+  }
+
+  assertValidOnTerminalConflict(options);
+  return options;
+}
+
+function coerceStartOrSignalOnTerminalConflict(
+  value: unknown,
+  fieldName: string,
+): 'error' | 'start-new' {
+  if (value === 'error' || value === 'start-new') {
+    return value;
+  }
+  throw new StartWorkflowValidationError(`${fieldName} must be "error" or "start-new"`);
 }
 
 /**

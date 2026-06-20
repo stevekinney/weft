@@ -634,6 +634,16 @@ interface StartOptions {
 
 `idempotencyKey` enforces at-most-once starts: a repeated key returns the existing run rather than starting a second. It also powers `engine.startOrSignal` convergence — when `StartOrSignalSignal.signalId` is omitted, the delivered signal's id derives from the key. Requires a storage backend with `conditionalBatch`.
 
+### `StartOrSignalOptions`
+
+```ts partial
+interface StartOrSignalOptions extends StartOptions {
+  onTerminalConflict?: 'error' | 'start-new';
+}
+```
+
+`onTerminalConflict: 'start-new'` lets `engine.startOrSignal()` reuse a stable workflow `id` after the prior run is terminal. It requires an explicit `id`, requires `StartOrSignalSignal.signalId`, and rejects `idempotencyKey`. Non-terminal targets are still signalled and are not replaced.
+
 ### `StartOrSignalSignal`
 
 ```ts partial
@@ -644,7 +654,7 @@ interface StartOrSignalSignal {
 }
 ```
 
-The signal half of `engine.startOrSignal` (signal-with-start). When `signalId` is omitted it derives from `StartOptions.idempotencyKey`; supply exactly one (not both) so concurrent callers converge on a single delivered signal.
+The signal half of `engine.startOrSignal` (signal-with-start). When `signalId` is omitted it derives from `StartOrSignalOptions.idempotencyKey`; supply exactly one (not both) so concurrent callers converge on a single delivered signal. Restart-capable calls with `onTerminalConflict: 'start-new'` must supply `signalId`.
 
 ### `StartOrSignalOutcome` and `StartOrSignalResult`
 

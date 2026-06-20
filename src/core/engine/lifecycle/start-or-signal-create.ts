@@ -11,7 +11,7 @@
 import type { BatchOperation, ConditionalBatchCondition } from '../../../storage/interface.ts';
 import { KEYS } from '../../../storage/interface.ts';
 import { encode } from '../../codec.ts';
-import type { StartOptions, StartOrSignalSignal } from '../../types.ts';
+import type { StartOrSignalOptions, StartOrSignalSignal } from '../../types.ts';
 import { WorkflowAlreadyExistsError } from '../errors.ts';
 import { type StartOrSignalOutcome, type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
@@ -88,6 +88,12 @@ export type StartOrSignalResult<TResult = unknown> = {
   outcome: StartOrSignalOutcome;
 };
 
+type CreateRaceOutcome =
+  | { kind: 'created'; handle: WorkflowHandle }
+  | { kind: 'lost-caller-id'; id: string }
+  | { kind: 'lost-keyed'; id: string; idempotencyKey: string }
+  | { kind: 'signal-already-buffered' };
+
 /**
  * Create the workflow and deliver the signal atomically, recovering from a lost
  * create batch:
@@ -117,7 +123,7 @@ export async function createWithSignalOrFallback(
   input: unknown,
   signalSpec: StartOrSignalSignal,
   signalId: string,
-  options: StartOptions | undefined,
+  options: StartOrSignalOptions | undefined,
   callbacks: StartOrSignalCallbacks,
 ): Promise<StartOrSignalResult> {
   const idempotencyKey = options?.idempotencyKey;
@@ -144,54 +150,21 @@ export async function createWithSignalOrFallback(
     if (outcome.kind === 'created') {
       return { handle: outcome.handle, outcome: 'started' }; // this call created the run
     }
-    if (outcome.kind === 'lost-keyed') {
-      // The keyed winner committed atomically with its mapping. Deliver via the
-      // signal path; bounded record-read retries cover commit settling, and the
-      // idempotency key lets exhaustion distinguish a purged run from the
-      // never-committed invariant. We lost the create race → signalled.
-      return {
-        handle: await resolveWinnerWithSignal(
-          internals,
-          outcome.id,
-          signalSpec,
-          signalId,
-          callbacks,
-          outcome.idempotencyKey,
-        ),
-        outcome: 'signalled',
-      };
-    }
     // Both remaining outcomes resolve a committed winner, or return undefined so
     // the loop retries (the winner aborted pre-commit); re-running the create
     // re-reserves and re-CASes so a winner committing in the gap is a clean loss.
-    if (outcome.kind === 'lost-caller-id') {
-      // Lost a caller-`id` reservation → a resolved winner means we signalled it.
-      const resolved = await resolveCallerIdWinnerOrRetry(
-        internals,
-        outcome.id,
-        signalSpec,
-        signalId,
-        callbacks,
-      );
-      if (resolved !== undefined) {
-        return { handle: resolved, outcome: 'signalled' };
-      }
-    } else {
-      // `signal-already-buffered`: a pre-buffered signal forces a plain create.
-      // Winning it 'started' the run; losing a concurrent caller-`id` race
-      // 'signalled' the winner — `plainCreateBufferedSignalOrResolve` classifies.
-      const resolved = await plainCreateBufferedSignalOrResolve(
-        internals,
-        type,
-        input,
-        signalSpec,
-        signalId,
-        options,
-        callbacks,
-      );
-      if (resolved !== undefined) {
-        return resolved;
-      }
+    const resolved = await resolveCreateFallbackOutcome(
+      internals,
+      outcome,
+      type,
+      input,
+      signalSpec,
+      signalId,
+      options,
+      callbacks,
+    );
+    if (resolved !== undefined) {
+      return resolved;
     }
   }
   // Every attempt collided with a caller-`id` winner that then aborted before
@@ -201,6 +174,60 @@ export async function createWithSignalOrFallback(
     `startOrSignal could not create workflow "${options?.id ?? '<generated>'}" after ` +
       `${CALLER_ID_CREATE_MAX_ATTEMPTS} attempts: each concurrent same-id winner aborted before ` +
       'its durable commit.',
+  );
+}
+
+async function resolveCreateFallbackOutcome(
+  internals: EngineInternals,
+  outcome: Exclude<CreateRaceOutcome, { kind: 'created' }>,
+  type: string,
+  input: unknown,
+  signalSpec: StartOrSignalSignal,
+  signalId: string,
+  options: StartOrSignalOptions | undefined,
+  callbacks: StartOrSignalCallbacks,
+): Promise<StartOrSignalResult | undefined> {
+  if (outcome.kind === 'lost-keyed') {
+    // The keyed winner committed atomically with its mapping. Deliver via the
+    // signal path; bounded record-read retries cover commit settling, and the
+    // idempotency key lets exhaustion distinguish a purged run from the
+    // never-committed invariant. We lost the create race → signalled.
+    return {
+      handle: await resolveWinnerWithSignal(
+        internals,
+        outcome.id,
+        signalSpec,
+        signalId,
+        callbacks,
+        outcome.idempotencyKey,
+      ),
+      outcome: 'signalled',
+    };
+  }
+  const allowTerminalRestart = options?.onTerminalConflict === 'start-new';
+  if (outcome.kind === 'lost-caller-id') {
+    // Lost a caller-`id` reservation → a resolved winner means we signalled it.
+    const resolved = await resolveCallerIdWinnerOrRetry(
+      internals,
+      outcome.id,
+      signalSpec,
+      signalId,
+      callbacks,
+      allowTerminalRestart,
+    );
+    return resolved === undefined ? undefined : { handle: resolved, outcome: 'signalled' };
+  }
+  // `signal-already-buffered`: a pre-buffered signal forces a plain create.
+  // Winning it 'started' the run; losing a concurrent caller-`id` race
+  // 'signalled' the winner — `plainCreateBufferedSignalOrResolve` classifies.
+  return plainCreateBufferedSignalOrResolve(
+    internals,
+    type,
+    input,
+    signalSpec,
+    signalId,
+    options,
+    callbacks,
   );
 }
 
@@ -220,7 +247,7 @@ async function plainCreateBufferedSignalOrResolve(
   input: unknown,
   signalSpec: StartOrSignalSignal,
   signalId: string,
-  options: StartOptions | undefined,
+  options: StartOrSignalOptions | undefined,
   callbacks: StartOrSignalCallbacks,
 ): Promise<StartOrSignalResult | undefined> {
   try {
@@ -242,6 +269,7 @@ async function plainCreateBufferedSignalOrResolve(
       signalSpec,
       signalId,
       callbacks,
+      options?.onTerminalConflict === 'start-new',
     );
     return resolved === undefined ? undefined : { handle: resolved, outcome: 'signalled' };
   }
@@ -270,14 +298,9 @@ async function plainCreateBufferedSignalOrResolve(
  */
 async function resolveCreateRaceOutcome(
   internals: EngineInternals,
-  options: StartOptions | undefined,
+  options: StartOrSignalOptions | undefined,
   runCreate: () => Promise<WorkflowHandle>,
-): Promise<
-  | { kind: 'created'; handle: WorkflowHandle }
-  | { kind: 'lost-caller-id'; id: string }
-  | { kind: 'lost-keyed'; id: string; idempotencyKey: string }
-  | { kind: 'signal-already-buffered' }
-> {
+): Promise<CreateRaceOutcome> {
   try {
     return { kind: 'created', handle: await runCreate() };
   } catch (error) {

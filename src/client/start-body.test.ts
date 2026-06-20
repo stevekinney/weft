@@ -48,7 +48,11 @@ describe('start body helpers', () => {
         'waiter',
         { greeting: 'hello' },
         { name: 'continue', payload: { ok: true }, signalId: 'signal-123' },
-        { idempotencyKey: 'idem-123', searchAttributes: { customerId: 'acme' } },
+        {
+          id: 'workflow-123',
+          onTerminalConflict: 'start-new',
+          searchAttributes: { customerId: 'acme' },
+        },
       ),
     ).toEqual({
       type: 'waiter',
@@ -56,7 +60,8 @@ describe('start body helpers', () => {
       signalName: 'continue',
       signalPayload: { ok: true },
       signalId: 'signal-123',
-      idempotencyKey: 'idem-123',
+      id: 'workflow-123',
+      onTerminalConflict: 'start-new',
       searchAttributes: { customerId: 'acme' },
     });
   });

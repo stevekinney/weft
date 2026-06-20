@@ -25,6 +25,10 @@ const completesImmediately = workflow({ name: 'completes-immediately' }).execute
   },
 );
 
+const throwsImmediately = workflow({ name: 'throws-immediately' }).execute(async function* () {
+  throw new Error('boom');
+});
+
 // Stays parked after consuming the create-batch `release` signal: it then waits
 // for a second `hold` signal that the create batch never sends. Used by the
 // white-box race-recovery test so the winning run is still non-terminal when a
@@ -57,6 +61,7 @@ function createEngine(storage: Storage = new MemoryStorage()): Engine {
   const engine = new Engine({ storage });
   engine.register(waitForRelease);
   engine.register(completesImmediately);
+  engine.register(throwsImmediately);
   engine.register(releaseThenHold);
   engine.register(collectEvents);
   return engine;
@@ -541,6 +546,205 @@ describe('engine.startOrSignal', () => {
           { id: 'sos-terminal' },
         ),
       ).rejects.toBeInstanceOf(StartOrSignalConflictError);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('restarts a completed prior run under the same id and delivers the initial signal', async () => {
+    const engine = createEngine();
+    try {
+      const completed = await engine.start('completes-immediately', null, {
+        id: 'sos-restart-completed',
+      });
+      expect(await completed.result()).toBe('done');
+
+      const { handle, outcome } = await engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'after-completed', signalId: 'sig-restart-completed' },
+        { id: 'sos-restart-completed', onTerminalConflict: 'start-new' },
+      );
+
+      expect(outcome).toBe('started');
+      expect(handle.id).toBe('sos-restart-completed');
+      expect(await handle.result()).toBe('after-completed');
+      expect(await countWorkflowRecords(engine)).toBe(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('restarts a failed prior run under the same id and delivers the initial signal', async () => {
+    const engine = createEngine();
+    try {
+      const failed = await engine.start('throws-immediately', null, { id: 'sos-restart-failed' });
+      await expect(failed.result()).rejects.toThrow('boom');
+
+      const { handle, outcome } = await engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'after-failed', signalId: 'sig-restart-failed' },
+        { id: 'sos-restart-failed', onTerminalConflict: 'start-new' },
+      );
+
+      expect(outcome).toBe('started');
+      expect(await handle.result()).toBe('after-failed');
+      expect(await countWorkflowRecords(engine)).toBe(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('restarts a cancelled prior run under the same id and delivers the initial signal', async () => {
+    const engine = createEngine();
+    try {
+      const cancelled = await engine.start('wait-for-release', null, {
+        id: 'sos-restart-cancelled',
+      });
+      const settled = cancelled.result().then(
+        () => 'resolved',
+        () => 'rejected',
+      );
+      await engine.cancel('sos-restart-cancelled');
+      expect(await settled).toBe('rejected');
+
+      const { handle, outcome } = await engine.startOrSignal(
+        'wait-for-release',
+        null,
+        { name: 'release', payload: 'after-cancelled', signalId: 'sig-restart-cancelled' },
+        { id: 'sos-restart-cancelled', onTerminalConflict: 'start-new' },
+      );
+
+      expect(outcome).toBe('started');
+      expect(await handle.result()).toBe('after-cancelled');
+      expect(await countWorkflowRecords(engine)).toBe(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('restarts a timed-out prior run under the same id and delivers the initial signal', async () => {
+    await using engine = new TestEngine();
+    engine.register(waitForRelease);
+
+    const timedOut = await engine.start('wait-for-release', null, {
+      id: 'sos-restart-timed-out',
+      executionTimeout: '1s',
+    });
+    const settled = timedOut.result().then(
+      () => 'resolved',
+      () => 'rejected',
+    );
+    await engine.advanceTime('2s');
+    expect(await settled).toBe('rejected');
+
+    const { handle, outcome } = await engine.startOrSignal(
+      'wait-for-release',
+      null,
+      { name: 'release', payload: 'after-timeout', signalId: 'sig-restart-timed-out' },
+      { id: 'sos-restart-timed-out', onTerminalConflict: 'start-new' },
+    );
+
+    expect(outcome).toBe('started');
+    expect(await handle.result()).toBe('after-timeout');
+    expect(await countWorkflowRecords(engine)).toBe(1);
+  });
+
+  it('signals an existing non-terminal run when restart policy is present', async () => {
+    const engine = createEngine();
+    try {
+      const running = await engine.start('wait-for-release', 'original', {
+        id: 'sos-restart-non-terminal',
+      });
+
+      const { handle, outcome } = await engine.startOrSignal(
+        'completes-immediately',
+        'ignored',
+        { name: 'release', payload: 'still-running', signalId: 'sig-restart-non-terminal' },
+        { id: 'sos-restart-non-terminal', onTerminalConflict: 'start-new' },
+      );
+
+      expect(outcome).toBe('signalled');
+      expect(handle.id).toBe(running.id);
+      expect(await running.result()).toBe('still-running');
+      expect(await countWorkflowRecords(engine)).toBe(1);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('rejects idempotencyKey with restart-capable startOrSignal', async () => {
+    const engine = createEngine();
+    try {
+      await expect(
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release' },
+          { idempotencyKey: 'sos-restart-idempotency', onTerminalConflict: 'start-new' },
+        ),
+      ).rejects.toThrow(/mutually exclusive with options\.idempotencyKey/);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('rejects restart-capable startOrSignal without a deterministic signalId', async () => {
+    const engine = createEngine();
+    try {
+      await expect(
+        engine.startOrSignal(
+          'wait-for-release',
+          null,
+          { name: 'release' },
+          { id: 'sos-restart-missing-signal', onTerminalConflict: 'start-new' },
+        ),
+      ).rejects.toThrow(/requires signal\.signalId/);
+    } finally {
+      await engine[Symbol.asyncDispose]();
+    }
+  });
+
+  it('converges concurrent restart-capable callers for the same terminal id', async () => {
+    const engine = createEngine();
+    try {
+      const completed = await engine.start('completes-immediately', null, {
+        id: 'sos-restart-concurrent',
+      });
+      expect(await completed.result()).toBe('done');
+
+      const results = await Promise.all([
+        engine.startOrSignal(
+          'release-then-hold',
+          null,
+          { name: 'release', payload: 'go', signalId: 'sig-restart-concurrent' },
+          { id: 'sos-restart-concurrent', onTerminalConflict: 'start-new' },
+        ),
+        engine.startOrSignal(
+          'release-then-hold',
+          null,
+          { name: 'release', payload: 'go', signalId: 'sig-restart-concurrent' },
+          { id: 'sos-restart-concurrent', onTerminalConflict: 'start-new' },
+        ),
+      ]);
+
+      expect(new Set(results.map((result) => result.handle.id)).size).toBe(1);
+      expect(await countWorkflowRecords(engine)).toBe(1);
+      expect(
+        results
+          .map((result) => result.outcome)
+          .toSorted((first, second) => (first < second ? -1 : first > second ? 1 : 0)),
+      ).toEqual(['signalled', 'started']);
+
+      let acceptedMarkers = 0;
+      for await (const _entry of engine.storage.scan(`sigres:v1:`)) {
+        acceptedMarkers += 1;
+      }
+      expect(acceptedMarkers).toBe(1);
+
+      await results[0].handle.signal('hold', 'done');
+      expect(await results[0].handle.result()).toBe('done');
     } finally {
       await engine[Symbol.asyncDispose]();
     }

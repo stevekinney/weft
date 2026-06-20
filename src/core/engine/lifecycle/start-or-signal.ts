@@ -1,13 +1,12 @@
 import { KEYS, requireStorageCapability } from '../../../storage/interface.ts';
 import {
   assertIdAndIdempotencyKeyExclusive,
-  assertOnTerminalConflictUnsupported,
   assertValidIdempotencyKey,
   assertValidOnTerminalConflict,
   StartWorkflowValidationError,
 } from '../../start-workflow-validation.ts';
-import type { StartOptions, StartOrSignalSignal } from '../../types.ts';
-import { IdempotencyKeyPurgedError } from '../errors.ts';
+import type { StartOptions, StartOrSignalOptions, StartOrSignalSignal } from '../../types.ts';
+import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
 import { type LifecycleCallbacks } from './shared.ts';
@@ -147,7 +146,7 @@ export async function startWithIdempotency(
  */
 function validateStartOrSignalConvergence(
   signalSpec: StartOrSignalSignal,
-  options: StartOptions | undefined,
+  options: StartOrSignalOptions | undefined,
 ): void {
   const idempotencyKey = options?.idempotencyKey;
   if (idempotencyKey === undefined) {
@@ -163,6 +162,19 @@ function validateStartOrSignalConvergence(
   }
 }
 
+function validateStartOrSignalRestartPolicy(
+  signalSpec: StartOrSignalSignal,
+  options: StartOrSignalOptions | undefined,
+): void {
+  if (options?.onTerminalConflict !== 'start-new' || signalSpec.signalId !== undefined) {
+    return;
+  }
+  throw new StartWorkflowValidationError(
+    "startOrSignal options.onTerminalConflict: 'start-new' requires signal.signalId so " +
+      'concurrent restart-capable callers converge on one deterministic initial signal.',
+  );
+}
+
 /**
  * Atomic start-or-signal (signal-with-start). Resolves the target workflow, then:
  *
@@ -172,8 +184,10 @@ function validateStartOrSignalConvergence(
  * - **Non-terminal** (running, pending, suspended) → deliver the signal through
  *   the standard engine signal path with the same `signalId`, so it dedups
  *   against a create-batch signal a concurrent winner may have written.
- * - **Terminal** → throw {@link StartOrSignalConflictError}: a finished run
- *   cannot be signalled and is not silently replaced.
+ * - **Terminal** → throw {@link StartOrSignalConflictError} by default. With
+ *   `options.onTerminalConflict: 'start-new'`, purge the prior terminal run
+ *   through the shared terminal-replacement path, start a fresh run, and deliver
+ *   the initial signal in the create batch.
  *
  * Convergence requires a SHARED workflow identity. Concurrent callers converge on
  * one workflow and one signal only when they share an `options.idempotencyKey`
@@ -192,13 +206,12 @@ export async function startOrSignal(
   type: string,
   input: unknown,
   signalSpec: StartOrSignalSignal,
-  options: StartOptions | undefined,
+  options: StartOrSignalOptions | undefined,
   callbacks: StartOrSignalCallbacks,
 ): Promise<StartOrSignalResult> {
   requireStorageCapability(internals.storage, 'conditionalBatch', 'startOrSignal');
-  // Runtime backstop for a transport/JS caller smuggling the engine.start-only
-  // `onTerminalConflict` past the type boundary (see the assert's JSDoc, #489).
-  assertOnTerminalConflictUnsupported(options, 'startOrSignal');
+  assertValidOnTerminalConflict(options);
+  validateStartOrSignalRestartPolicy(signalSpec, options);
 
   const idempotencyKey = options?.idempotencyKey;
   validateStartOrSignalConvergence(signalSpec, options);
@@ -211,11 +224,13 @@ export async function startOrSignal(
   const existingId = mappedId ?? options?.id;
 
   if (existingId !== undefined) {
-    const resolved = await signalOrConflictExistingWorkflow(
+    const resolved = await resolveExistingStartOrSignalTarget(
       internals,
       existingId,
+      mappedId,
       signalSpec,
       signalId,
+      options,
       callbacks,
     );
     if (resolved !== undefined) {
@@ -239,5 +254,42 @@ export async function startOrSignal(
     signalId,
     options,
     callbacks,
+  );
+}
+
+async function resolveExistingStartOrSignalTarget(
+  internals: EngineInternals,
+  existingId: string,
+  mappedId: string | undefined,
+  signalSpec: StartOrSignalSignal,
+  signalId: string,
+  options: StartOrSignalOptions | undefined,
+  callbacks: StartOrSignalCallbacks,
+): Promise<WorkflowHandle | undefined> {
+  try {
+    return await signalOrConflictExistingWorkflow(
+      internals,
+      existingId,
+      signalSpec,
+      signalId,
+      callbacks,
+    );
+  } catch (error) {
+    if (canRestartTerminalCallerIdTarget(error, options, mappedId)) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+function canRestartTerminalCallerIdTarget(
+  error: unknown,
+  options: StartOrSignalOptions | undefined,
+  mappedId: string | undefined,
+): boolean {
+  return (
+    error instanceof StartOrSignalConflictError &&
+    options?.onTerminalConflict === 'start-new' &&
+    mappedId === undefined
   );
 }

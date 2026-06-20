@@ -133,11 +133,10 @@ export function assertIdAndIdempotencyKeyExclusive(options: {
 
 /**
  * Reject `onTerminalConflict` on a start surface that does not support it
- * (`engine.startOrSignal`). The option is type-absent from those surfaces, but a
+ * (`ctx.startChild`). The option is type-absent from those surfaces, but a
  * transport or untyped JS caller could still smuggle the field into the options
- * object — this is the runtime backstop. `engine.startOrSignal`'s identity is the
- * permanent at-most-once idempotency mapping, which `'start-new'` would violate,
- * so the policy is `engine.start`-only (see follow-up issue #489).
+ * object — this is the runtime backstop. Child starts reattach by id during
+ * parent replay, so purging a terminal child mid-replay would break determinism.
  */
 export function assertOnTerminalConflictUnsupported(
   options: object | undefined,
@@ -152,7 +151,7 @@ export function assertOnTerminalConflictUnsupported(
     (options as { onTerminalConflict?: unknown }).onTerminalConflict !== undefined
   ) {
     throw new StartWorkflowValidationError(
-      `${surface} does not support options.onTerminalConflict; it is available on engine.start only`,
+      `${surface} does not support options.onTerminalConflict`,
     );
   }
 }

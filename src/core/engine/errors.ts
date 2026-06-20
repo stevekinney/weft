@@ -390,14 +390,14 @@ export class ActivityResolutionError extends WeftError<'ActivityResolutionError'
 /**
  * Thrown by {@link Engine.startOrSignal} when the target workflow already exists
  * and is in a terminal state (completed, failed, cancelled, or timed out). A
- * terminal run cannot accept a signal and must not be silently replaced, so
- * `startOrSignal` surfaces this conflict instead of starting a fresh run under
- * the same id or dropping the signal.
+ * terminal run cannot accept a signal. By default `startOrSignal` surfaces this
+ * conflict instead of starting a fresh run under the same id or dropping the
+ * signal.
  *
  * Inspect `workflowId` to identify the conflicting run and `status` to see why
- * it was rejected. To deliberately start a new run, choose a different id (or
- * idempotency key); to deliver to a fresh run, terminal-state reuse is not a
- * supported policy.
+ * it was rejected. To deliberately reuse a stable id, call `startOrSignal` with
+ * `onTerminalConflict: 'start-new'`, an explicit `id`, and a deterministic
+ * `signalId`; otherwise choose a different id or idempotency key.
  *
  * @example
  * ```ts
@@ -416,8 +416,8 @@ export class StartOrSignalConflictError extends WeftError<'StartOrSignalConflict
     super(
       'StartOrSignalConflictError',
       `Workflow "${workflowId}" is already in terminal state "${status}" and cannot accept a ` +
-        'startOrSignal: a terminal run cannot be signalled and is not replaced. Use a different ' +
-        'id or idempotency key to start a new run.',
+        "startOrSignal. Use options.onTerminalConflict: 'start-new' with an explicit id and " +
+        'signalId, or choose a different id or idempotency key to start a new run.',
     );
     this.workflowId = workflowId;
     this.status = status;

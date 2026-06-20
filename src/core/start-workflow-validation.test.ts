@@ -202,15 +202,15 @@ describe('assertValidOnTerminalConflict', () => {
 
 describe('assertOnTerminalConflictUnsupported', () => {
   it('accepts undefined options and options without the policy', () => {
-    expect(() => assertOnTerminalConflictUnsupported(undefined, 'startOrSignal')).not.toThrow();
-    expect(() => assertOnTerminalConflictUnsupported({}, 'startOrSignal')).not.toThrow();
+    expect(() => assertOnTerminalConflictUnsupported(undefined, 'ctx.startChild')).not.toThrow();
+    expect(() => assertOnTerminalConflictUnsupported({}, 'ctx.startChild')).not.toThrow();
   });
 
   it('rejects any present onTerminalConflict, naming the surface', () => {
     const error = captureValidationError(() =>
-      assertOnTerminalConflictUnsupported({ onTerminalConflict: 'start-new' }, 'startOrSignal'),
+      assertOnTerminalConflictUnsupported({ onTerminalConflict: 'start-new' }, 'ctx.startChild'),
     );
-    expect(error.message).toContain('startOrSignal does not support options.onTerminalConflict');
+    expect(error.message).toContain('ctx.startChild does not support options.onTerminalConflict');
   });
 
   it("rejects even the 'error' policy value as smuggled-in on an unsupported surface", () => {
@@ -219,8 +219,8 @@ describe('assertOnTerminalConflictUnsupported', () => {
     // not accept the option at all. (A key present with an `undefined` value is
     // indistinguishable from an absent key, so that case is allowed; see above.)
     const error = captureValidationError(() =>
-      assertOnTerminalConflictUnsupported({ onTerminalConflict: 'error' }, 'startOrSignal'),
+      assertOnTerminalConflictUnsupported({ onTerminalConflict: 'error' }, 'ctx.startChild'),
     );
-    expect(error.message).toContain('available on engine.start only');
+    expect(error.message).toContain('ctx.startChild does not support options.onTerminalConflict');
   });
 });

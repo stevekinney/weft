@@ -17,6 +17,7 @@ export type {
   ClientHandle,
   ClientScheduleHandle,
   ClientStartOptions,
+  ClientStartOrSignalOptions,
   StartOrSignalOutcome,
   UpdateResult,
   WeftClient,

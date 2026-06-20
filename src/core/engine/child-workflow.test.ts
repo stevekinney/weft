@@ -8,7 +8,7 @@ import { WorkflowAlreadyExistsError } from './errors.ts';
 
 // The public defense: `onTerminalConflict` must stay absent from `ChildWorkflowOptions`.
 // If a future edit adds it, this fails to compile and forces a deliberate decision rather
-// than silently turning the engine.start-only restart policy into a child-start option.
+// than silently turning the top-level restart policy into a child-start option.
 type OnTerminalConflictAbsentFromChildOptions =
   'onTerminalConflict' extends keyof ChildWorkflowOptions ? false : true;
 const _onTerminalConflictAbsent: OnTerminalConflictAbsentFromChildOptions = true;
@@ -206,7 +206,7 @@ describe('engine child workflow helpers', () => {
     });
   });
 
-  it('rejects onTerminalConflict smuggled onto a child-start (it is engine.start-only; #489)', async () => {
+  it('rejects onTerminalConflict smuggled onto a child-start', async () => {
     const internals = createInternals();
     const start = mock(async () => ({ result: async () => 'never' }) as never);
 

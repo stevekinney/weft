@@ -1,7 +1,7 @@
 import { sleep } from '../../../runtime/portable.ts';
 import { KEYS } from '../../../storage/interface.ts';
 import { decode } from '../../codec.ts';
-import type { StartOrSignalSignal } from '../../types.ts';
+import type { StartOrSignalSignal, WorkflowState } from '../../types.ts';
 import { IdempotencyKeyPurgedError, StartOrSignalConflictError } from '../errors.ts';
 import { type WorkflowHandle } from '../handles.ts';
 import type { EngineInternals } from '../internals.ts';
@@ -113,19 +113,47 @@ export async function resolveCallerIdWinnerOrRetry(
   signalSpec: StartOrSignalSignal,
   signalId: string,
   callbacks: StartOrSignalCallbacks,
+  allowTerminalRestart = false,
 ): Promise<WorkflowHandle | undefined> {
-  const resolved = await signalOrConflictExistingWorkflow(
-    internals,
-    winnerId,
-    signalSpec,
-    signalId,
-    callbacks,
-  );
-  if (resolved !== undefined) {
-    return resolved;
+  const state = await loadWorkflowState(internals, winnerId);
+  if (state !== null) {
+    if (!isTerminalWorkflowStatus(state.status)) {
+      await callbacks.signalExistingWorkflow(
+        winnerId,
+        signalSpec.name,
+        signalSpec.payload,
+        signalId,
+      );
+      return callbacks.getHandle(winnerId);
+    }
+    if (!allowTerminalRestart || !internals.pendingStarts.has(winnerId)) {
+      throw new StartOrSignalConflictError(winnerId, state.status);
+    }
   }
   await awaitReservationCleared(internals, winnerId);
-  return signalOrConflictExistingWorkflow(internals, winnerId, signalSpec, signalId, callbacks);
+  const stateAfterReservation = await loadWorkflowState(internals, winnerId);
+  if (stateAfterReservation === null) {
+    return undefined;
+  }
+  if (isTerminalWorkflowStatus(stateAfterReservation.status)) {
+    if (state !== null && isSameTerminalRun(state, stateAfterReservation)) {
+      return undefined;
+    }
+    throw new StartOrSignalConflictError(winnerId, stateAfterReservation.status);
+  }
+  await callbacks.signalExistingWorkflow(winnerId, signalSpec.name, signalSpec.payload, signalId);
+  return callbacks.getHandle(winnerId);
+}
+
+function isSameTerminalRun(before: WorkflowState, after: WorkflowState): boolean {
+  return (
+    before.id === after.id &&
+    before.type === after.type &&
+    before.status === after.status &&
+    before.createdAt === after.createdAt &&
+    before.updatedAt === after.updatedAt &&
+    before.terminalCleanupToken === after.terminalCleanupToken
+  );
 }
 
 /**

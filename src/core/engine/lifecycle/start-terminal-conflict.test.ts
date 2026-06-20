@@ -581,17 +581,3 @@ describe("engine.start onTerminalConflict: 'start-new'", () => {
     expect(await second.result()).toBe('survived');
   });
 });
-
-describe('engine.startOrSignal rejects onTerminalConflict (engine.start-only policy)', () => {
-  it('throws when onTerminalConflict is smuggled into startOrSignal options', async () => {
-    const engine = createEngine();
-    await expect(
-      // Cast past the type boundary the way an untyped/transport caller could.
-      engine.startOrSignal('echo-input', null, { name: 'go' }, {
-        id: 'sos-reject',
-        onTerminalConflict: 'start-new',
-      } as Record<string, unknown>),
-    ).rejects.toBeInstanceOf(StartWorkflowValidationError);
-    engine[Symbol.dispose]();
-  });
-});

@@ -47,6 +47,7 @@ import type {
   SignalDefinition,
   SignalDeliveryOptions,
   StartOptions,
+  StartOrSignalOptions,
   StartOrSignalSignal,
   SubmitReviewOptions,
   TypedListFilter,
@@ -175,19 +176,19 @@ export class LocalClient<
     type: TName,
     input: WorkflowInput<WorkflowRegistry, TName>,
     signal: StartOrSignalSignal,
-    options?: StartOptions,
+    options?: StartOrSignalOptions,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
   async startOrSignal<TName extends string>(
     type: UnknownNameWhenRegistryEmpty<TName>,
     input: unknown,
     signal: StartOrSignalSignal,
-    options?: StartOptions,
+    options?: StartOrSignalOptions,
   ): Promise<ClientHandle>;
   async startOrSignal(
     type: string,
     input: unknown,
     signal: StartOrSignalSignal,
-    options?: StartOptions,
+    options?: StartOrSignalOptions,
   ): Promise<ClientHandle> {
     const { handle, outcome } = await this.#engine.startOrSignal(type, input, signal, options);
     return new LocalHandle(handle, this, outcome);

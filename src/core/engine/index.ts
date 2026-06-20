@@ -61,7 +61,7 @@ import {
   type SearchAttributeValue,
   type SignalDefinition,
   type SignalDeliveryOptions,
-  type StartOptions,
+  type StartOrSignalOptions,
   type StartOrSignalSignal,
   type StartWorkflowOptions,
   type SubmitReviewOptions,
@@ -1134,8 +1134,9 @@ export class Engine<
    * first signal commit in one batch and the freshly-launched run consumes the
    * signal on its first drive. A non-terminal target (running, pending, or
    * suspended) is signalled through the normal signal path; a terminal target
-   * throws {@link StartOrSignalConflictError} rather than starting a new run or
-   * dropping the signal.
+   * throws {@link StartOrSignalConflictError} unless
+   * `options.onTerminalConflict: 'start-new'` is supplied with an explicit
+   * workflow id and deterministic `signal.signalId`.
    *
    * Concurrent callers converge on one workflow and one delivered signal. Pass
    * `options.idempotencyKey` to dedup independent callers (e.g. retried
@@ -1149,19 +1150,19 @@ export class Engine<
     type: TName,
     input: WorkflowInput<TWorkflows, TName>,
     signal: StartOrSignalSignal,
-    options?: StartOptions<WorkflowServices<TWorkflows, TName>>,
+    options?: StartOrSignalOptions<WorkflowServices<TWorkflows, TName>>,
   ): Promise<StartOrSignalResult<WorkflowOutput<TWorkflows, TName>>>;
   async startOrSignal<TName extends string>(
     type: UnknownWorkflowNameWhenDefaultRegistryIsEmpty<TWorkflows, TName>,
     input: unknown,
     signal: StartOrSignalSignal,
-    options?: StartOptions,
+    options?: StartOrSignalOptions,
   ): Promise<StartOrSignalResult>;
   async startOrSignal(
     type: string,
     input: unknown,
     signal: StartOrSignalSignal,
-    options?: StartOptions,
+    options?: StartOrSignalOptions,
   ): Promise<StartOrSignalResult> {
     // Lease-ownership precondition (same as `start`): startOrSignal may durably
     // create a fresh run, so it must hold the lease first. No-op for 'none'.

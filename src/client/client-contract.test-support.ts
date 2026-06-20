@@ -469,6 +469,25 @@ export function runWeftClientContractTests(options: ClientContractTestOptions): 
       expect(result).toBe('outcome:done');
     });
 
+    it('startOrSignal can restart a terminal stable-id run when requested (#604)', async () => {
+      const client = getClient();
+      const id = `${idPrefix}-start-or-signal-restart`;
+
+      const completed = await client.start(workflowTypes.echo, 'old-run', { id });
+      expect(await completed.result()).toBe('old-run');
+
+      const restarted = await client.startOrSignal(
+        workflowTypes.waiting,
+        'new-run',
+        { name: 'continue', payload: 'created', signalId: `${id}-signal` },
+        { id, onTerminalConflict: 'start-new' },
+      );
+
+      expect(restarted.id).toBe(id);
+      expect(restarted.outcome).toBe('started');
+      expect(await restarted.result()).toBe('new-run:created');
+    });
+
     it('startOrSignal gives converged concurrent callers their own per-call outcome (#466)', async () => {
       const client = getClient();
       // Concurrent same-key callers converge on ONE run, but each call returns its

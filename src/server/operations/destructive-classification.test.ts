@@ -34,6 +34,7 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
   'weft.workflows.timeout': true,
   'weft.workflows.purge': true,
   'weft.workflows.signal': true,
+  'weft.workflows.startorsignal': true,
   'weft.workflows.update': true,
   'weft.activities.complete': true,
   'weft.activities.fail': true,
@@ -54,7 +55,6 @@ const EXPECTED_DESTRUCTIVE: Readonly<Record<string, boolean>> = {
 
   // Reads, additive starts, and reversible control-plane operations.
   'weft.workflows.start': false,
-  'weft.workflows.startorsignal': false,
   'weft.workflows.fork': false,
   'weft.workflows.resume': false,
   'weft.workflows.suspend': false,

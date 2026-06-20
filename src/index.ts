@@ -171,6 +171,7 @@ export type {
   SignalMap,
   SignalPayload,
   StartOptions,
+  StartOrSignalOptions,
   StartOrSignalSignal,
   SubmitReviewOptions,
   TerminationReason,

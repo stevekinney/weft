@@ -65,7 +65,7 @@ const handle = await engine.startOrSignal(
 );
 ```
 
-An absent target is created and receives the first signal in the same durable batch. A running, pending, or suspended target receives the signal through the normal signal path. A terminal target returns a conflict; it is not replaced. Concurrent callers converge on one workflow and one signal only when they share `idempotencyKey`, or when they share both `id` and `signalId`. A bare `signalId` starts a fresh generated workflow id per absent-target caller, so it is useful for single-call signal identity but not for multi-caller convergence.
+An absent target is created and receives the first signal in the same durable batch. A running, pending, or suspended target receives the signal through the normal signal path. A terminal target returns a conflict by default. For stable-id re-sync flows, pass `onTerminalConflict: 'start-new'` with both `id` and `signalId` to replace a terminal prior run and deliver the first signal to the fresh run. That restart policy rejects `idempotencyKey`; idempotency keys are permanent at-most-once mappings. Concurrent callers converge on one workflow and one signal only when they share `idempotencyKey`, or when they share both `id` and `signalId`. A bare `signalId` starts a fresh generated workflow id per absent-target caller, so it is useful for single-call signal identity but not for multi-caller convergence.
 
 ## Signal durability
 

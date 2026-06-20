@@ -119,6 +119,31 @@ describe('weft.workflows.startorsignal', () => {
     expect(response.status).toBe(409);
   });
 
+  it('restarts a terminal target when onTerminalConflict is start-new', async () => {
+    engine = createEngine();
+    const completed = await engine.start('completes-immediately', null, {
+      id: 'sos-rest-restart',
+    });
+    await completed.result();
+
+    const response = await handleRequest(
+      startOrSignalRequest({
+        type: 'wait-for-release',
+        signalName: 'release',
+        signalPayload: 'fresh',
+        signalId: 'sig-rest-restart',
+        id: 'sos-rest-restart',
+        onTerminalConflict: 'start-new',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(201);
+    expect(await response.json()).toEqual({ id: 'sos-rest-restart', outcome: 'started' });
+    expect(await engine.getHandle('sos-rest-restart').result()).toBe('fresh');
+  });
+
   it('forwards executionTimeout, startAfter, and tags to the create path', async () => {
     engine = createEngine();
 
@@ -316,6 +341,44 @@ describe('weft.workflows.startorsignal', () => {
     expect(response.status).toBe(400);
     const body = (await response.json()) as { error: string };
     expect(body.error).toMatch(/does not accept both/);
+  });
+
+  it('returns 400 when idempotencyKey is combined with restart policy', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      startOrSignalRequest({
+        type: 'wait-for-release',
+        signalName: 'release',
+        idempotencyKey: 'sos-rest-restart-key',
+        onTerminalConflict: 'start-new',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toMatch(/mutually exclusive with options\.idempotencyKey/);
+  });
+
+  it('returns 400 when restart policy is missing signalId', async () => {
+    engine = createEngine();
+
+    const response = await handleRequest(
+      startOrSignalRequest({
+        type: 'wait-for-release',
+        signalName: 'release',
+        id: 'sos-rest-restart-missing-signal',
+        onTerminalConflict: 'start-new',
+      }),
+      engine,
+      { operationRegistry: registry, restBindings: bindings },
+    );
+
+    expect(response.status).toBe(400);
+    const body = (await response.json()) as { error: string };
+    expect(body.error).toMatch(/requires signalId/);
   });
 
   it('returns 400 when neither signalId nor idempotencyKey is provided', async () => {

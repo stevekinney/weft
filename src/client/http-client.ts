@@ -89,6 +89,7 @@ import type {
   ClientHandle,
   ClientScheduleHandle,
   ClientStartOptions,
+  ClientStartOrSignalOptions,
   StartOrSignalOutcome,
   UpdateResult,
   WeftClient,
@@ -210,19 +211,19 @@ export class HttpClient implements WeftClient {
     type: TName,
     input: WorkflowInput<WorkflowRegistry, TName>,
     signal: StartOrSignalSignal,
-    options?: ClientStartOptions,
+    options?: ClientStartOrSignalOptions,
   ): Promise<ClientHandle<WorkflowOutput<WorkflowRegistry, TName>>>;
   async startOrSignal<TName extends string>(
     type: UnknownNameWhenRegistryEmpty<TName>,
     input: unknown,
     signal: StartOrSignalSignal,
-    options?: ClientStartOptions,
+    options?: ClientStartOrSignalOptions,
   ): Promise<ClientHandle>;
   async startOrSignal(
     type: string,
     input: unknown,
     signal: StartOrSignalSignal,
-    options?: ClientStartOptions,
+    options?: ClientStartOrSignalOptions,
   ): Promise<ClientHandle> {
     const body = buildStartOrSignalBody(type, input, signal, options);
     const response = await request<{ id: string; outcome: StartOrSignalOutcome }>(

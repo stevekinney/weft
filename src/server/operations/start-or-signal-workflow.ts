@@ -4,16 +4,21 @@ import {
   IdempotencyKeyPurgedError,
   StartOrSignalConflictError,
   WorkflowNotRegisteredError,
+  WorkflowTeardownPendingError,
 } from '../../core/engine/errors.ts';
 import { runtimeWorkflowEngine } from '../../core/runtime-workflow-engine.ts';
 import { isSignalIdWithinByteLimit } from '../../core/signal-id.ts';
 import { StartWorkflowValidationError } from '../../core/start-workflow-validation.ts';
-import type { SearchAttributeSchema, StartOptions, StartOrSignalSignal } from '../../core/types.ts';
+import type {
+  SearchAttributeSchema,
+  StartOrSignalOptions,
+  StartOrSignalSignal,
+} from '../../core/types.ts';
 import type { OperationFault } from '../operation-fault.ts';
 import { defineOperation } from '../operation-registry.ts';
 import type { UnknownRestBinding } from '../rest-bindings.ts';
 import { invalidParamsFault, shapeRestFault } from './operation-helpers.ts';
-import { buildSharedStartWorkflowOptions } from './start-workflow-options.ts';
+import { buildStartOrSignalWorkflowOptions } from './start-workflow-options.ts';
 import {
   extractSharedStartWorkflowRestFields,
   parseStartWorkflowRequestRecord,
@@ -38,6 +43,7 @@ const startOrSignalWorkflowInput = z.object({
   tags: z.unknown().optional(),
   idempotencyKey: z.unknown().optional(),
   searchAttributes: z.unknown().optional(),
+  onTerminalConflict: z.unknown().optional(),
 });
 
 const startOrSignalWorkflowOutput = z.object({
@@ -62,7 +68,7 @@ function validateStartOrSignalWorkflowInput(
 ): {
   type: string;
   signal: StartOrSignalSignal;
-  options: StartOptions;
+  options: StartOrSignalOptions;
 } {
   if (typeof input.type !== 'string' || input.type.length === 0) {
     throw invalidParamsFault('Missing required field: type');
@@ -70,15 +76,15 @@ function validateStartOrSignalWorkflowInput(
   // `signalName` is `z.string().min(1)` — Zod rejects an absent or empty value
   // at the schema boundary before `invoke`, so no manual guard is needed here.
 
-  let options: StartOptions;
+  let options: StartOrSignalOptions;
   try {
-    options = buildSharedStartWorkflowOptions(input, lookupSearchAttributeSchema(input.type));
+    options = buildStartOrSignalWorkflowOptions(input, lookupSearchAttributeSchema(input.type));
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     throw invalidParamsFault(message);
   }
 
-  assertConvergenceTokenProvided(input.signalId, options.idempotencyKey);
+  assertConvergenceTokenProvided(input.signalId, options);
 
   const signal: StartOrSignalSignal = {
     name: input.signalName,
@@ -99,9 +105,15 @@ function validateStartOrSignalWorkflowInput(
  */
 function assertConvergenceTokenProvided(
   signalId: string | undefined,
-  idempotencyKey: string | undefined,
+  options: StartOrSignalOptions,
 ): void {
-  if (signalId === undefined && idempotencyKey === undefined) {
+  if (options.onTerminalConflict === 'start-new' && signalId === undefined) {
+    throw invalidParamsFault(
+      "startOrSignal options.onTerminalConflict: 'start-new' requires signalId so " +
+        'concurrent restart-capable callers converge on one deterministic initial signal.',
+    );
+  }
+  if (signalId === undefined && options.idempotencyKey === undefined) {
     throw invalidParamsFault(
       'startOrSignal requires either signalId or idempotencyKey to identify the signal to ' +
         'deliver. (Concurrent callers converge on one workflow and one signal only with a shared ' +
@@ -109,7 +121,7 @@ function assertConvergenceTokenProvided(
         'caller.)',
     );
   }
-  if (signalId !== undefined && idempotencyKey !== undefined) {
+  if (signalId !== undefined && options.idempotencyKey !== undefined) {
     throw invalidParamsFault(
       'startOrSignal does not accept both signalId and idempotencyKey: the signal id derives ' +
         'from the idempotency key for convergence. Provide exactly one.',
@@ -124,8 +136,9 @@ function assertConvergenceTokenProvided(
  *   1. WorkflowNotRegisteredError   → InvalidParams
  *   2. StartOrSignalConflictError   → Conflict (target already terminal)
  *   3. IdempotencyKeyPurgedError    → Conflict (key maps to a purged run)
- *   4. StartWorkflowValidationError → InvalidParams
- *   5. otherwise                    → EngineFailure
+ *   4. WorkflowTeardownPendingError → Conflict (terminal cleanup not done)
+ *   5. StartWorkflowValidationError → InvalidParams
+ *   6. otherwise                    → EngineFailure
  */
 function resolveStartOrSignalWorkflowFault(error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
@@ -133,15 +146,24 @@ function resolveStartOrSignalWorkflowFault(error: unknown): never {
   if (error instanceof WorkflowNotRegisteredError) {
     throw invalidParamsFault(message, error.code);
   }
-  if (error instanceof StartOrSignalConflictError || error instanceof IdempotencyKeyPurgedError) {
-    // Both are client-actionable convergence conflicts: a terminal target, or a
-    // spent key whose run was purged. Surface as Conflict (409) so the caller can
-    // choose a different id / idempotency key — not an opaque masked 500.
+  if (
+    error instanceof StartOrSignalConflictError ||
+    error instanceof IdempotencyKeyPurgedError ||
+    error instanceof WorkflowTeardownPendingError
+  ) {
+    // These are client-actionable convergence conflicts: a terminal target, a
+    // spent key whose run was purged, or a terminal run still waiting on teardown.
+    // Surface as Conflict (409) so callers can retry or choose a different
+    // identity — not an opaque masked 500.
     // `weftCode` recovers which of the two collapsed typed errors this was.
+    const data: Extract<OperationFault, { code: 'Conflict' }>['data'] = { reason: message };
+    if (error instanceof StartOrSignalConflictError || error instanceof IdempotencyKeyPurgedError) {
+      data.weftCode = error.code;
+    }
     const fault: OperationFault = {
       code: 'Conflict',
       message,
-      data: { reason: message, weftCode: error.code },
+      data,
     };
     throw fault;
   }
@@ -167,17 +189,21 @@ export const startOrSignalWorkflowOperation = defineOperation<
   description:
     'Start a workflow or deliver a signal to it if it already exists (signal-with-start). An ' +
     'absent target is created and delivered the signal in one batch; a non-terminal target ' +
-    '(running, pending, or suspended) is signalled; a terminal target faults with Conflict, as ' +
-    'does a spent `idempotencyKey` whose run was purged or swept by retention. ' +
+    '(running, pending, or suspended) is signalled; a terminal target faults with Conflict unless ' +
+    '`onTerminalConflict: "start-new"` is supplied with `id` and `signalId`, in which case the ' +
+    'prior terminal run is replaced through the shared terminal-replacement path and the initial ' +
+    'signal is delivered to the fresh run. A spent `idempotencyKey` whose run was purged or swept ' +
+    'by retention also faults with Conflict. ' +
     'Requires `type`, `signalName`, and exactly one of `signalId` or `idempotencyKey` (not ' +
     'both). Accepts `input`, `signalPayload`, and the non-idempotency start options from ' +
     'weft.workflows.start (`id`, `executionTimeout`, `startAt`/`startAfter`, `tags`, ' +
-    '`searchAttributes`); `idempotencyKey` is governed solely by the "exactly one of" rule above. ' +
+    '`searchAttributes`) plus `onTerminalConflict`; `idempotencyKey` is governed by the ' +
+    '"exactly one of" rule above and cannot be combined with restart. ' +
     'Returns the workflow `id`. Concurrent callers converge on one workflow ' +
     'and one signal only with a shared `idempotencyKey`, or a shared `id` plus `signalId`; a ' +
     'bare `signalId` (no `id`/`idempotencyKey`) starts a fresh run per caller and does not ' +
     'converge.',
-  destructive: false,
+  destructive: true,
   tags: ['Workflows', 'Signals'],
   inputSchema: startOrSignalWorkflowInput,
   outputSchema: startOrSignalWorkflowOutput,
@@ -223,6 +249,7 @@ export const startOrSignalWorkflowRestBinding: UnknownRestBinding = {
     tags: { kind: 'body-field', bodyField: 'tags' },
     idempotencyKey: { kind: 'body-field', bodyField: 'idempotencyKey' },
     searchAttributes: { kind: 'body-field', bodyField: 'searchAttributes' },
+    onTerminalConflict: { kind: 'body-field', bodyField: 'onTerminalConflict' },
   },
   extractInput: async (request, _pathParams, context) => {
     const record = await parseStartWorkflowRequestRecord(request, context);
@@ -231,6 +258,7 @@ export const startOrSignalWorkflowRestBinding: UnknownRestBinding = {
       signalName: record['signalName'],
       signalPayload: record['signalPayload'],
       signalId: record['signalId'],
+      onTerminalConflict: record['onTerminalConflict'],
     };
   },
   success: { kind: 'json', status: 201 },

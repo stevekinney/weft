@@ -552,6 +552,7 @@ export type CatalogOperationTypes = {
       readonly id?: unknown;
       readonly idempotencyKey?: unknown;
       readonly input?: unknown;
+      readonly onTerminalConflict?: unknown;
       readonly searchAttributes?: unknown;
       readonly signalId?: string;
       readonly signalName: string;
