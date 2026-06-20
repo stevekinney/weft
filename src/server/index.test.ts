@@ -4657,50 +4657,46 @@ describe('task assignment deduplication', () => {
     await waitForRealTimersForTesting(50);
   });
 
-  it('ignores stale socket close events after a grace-period reconnect', async () => {
+  it('accepts a same-workerId reconnect within the grace period', async () => {
     // When a worker disconnects and reconnects within the grace period, the
-    // fresh socket becomes the owner. The stale-socket guard in the close
-    // handler logs a warning when the old socket's close event eventually fires.
+    // pending-requeue entry marks it as a legitimate reconnect, so the
+    // duplicate-active guard is bypassed and the fresh socket becomes the owner
+    // (keeping its in-flight work). This is the path the #609 hijacking guard
+    // must NOT block.
     engine = createEngine();
-    // Non-zero grace period: ws1 closes, a grace timer fires, ws2 registers
-    // before the timer expires. After ws2 registers, ws1's close event is
-    // processed by the stale-socket guard.
+    // Non-zero grace period: ws1 closes and schedules a grace timer; ws2
+    // re-registers the same workerId before the timer expires.
     server = serveTestServer({ engine, port: 0, workerReconnectGracePeriodMs: 100 });
-    const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
 
-    try {
-      const ws1 = await connectWorker(server);
-      await registerWorker(ws1, { workerId: 'grace-reconnect-worker', activities: ['charge'] });
+    const ws1 = await connectWorker(server);
+    await registerWorker(ws1, { workerId: 'grace-reconnect-worker', activities: ['charge'] });
 
-      // ws1 closes, starting the grace-period timer.
-      ws1.close();
+    // ws1 closes, starting the grace-period timer.
+    ws1.close();
 
-      // ws2 reconnects within the grace window.
-      const ws2 = await connectWorker(server);
-      const ackPromise = waitForWorkerMessage(
-        ws2,
-        (message) => message['type'] === 'registerAck',
-        'registerAck for grace reconnect',
-      );
-      ws2.send(
-        JSON.stringify({
-          type: 'register',
-          protocolVersion: 2,
-          workerId: 'grace-reconnect-worker',
-          activities: ['charge'],
-          concurrency: 10,
-        }),
-      );
-      await ackPromise;
+    // ws2 reconnects within the grace window.
+    const ws2 = await connectWorker(server);
+    const ackPromise = waitForWorkerMessage(
+      ws2,
+      (message) => message['type'] === 'registerAck',
+      'registerAck for grace reconnect',
+    );
+    ws2.send(
+      JSON.stringify({
+        type: 'register',
+        protocolVersion: 2,
+        workerId: 'grace-reconnect-worker',
+        activities: ['charge'],
+        concurrency: 10,
+      }),
+    );
+    await ackPromise;
 
-      // The grace-period reconnect succeeded.
-      expect(server.registry.getWorker('grace-reconnect-worker')).toBeDefined();
+    // The grace-period reconnect succeeded.
+    expect(server.registry.getWorker('grace-reconnect-worker')).toBeDefined();
 
-      ws2.close();
-      await waitForRealTimersForTesting(50);
-    } finally {
-      warningSpy.mockRestore();
-    }
+    ws2.close();
+    await waitForRealTimersForTesting(50);
   });
 
   it('allows re-dispatch of an operationId after completion', async () => {

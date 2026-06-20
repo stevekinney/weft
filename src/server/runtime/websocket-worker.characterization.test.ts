@@ -621,5 +621,35 @@ describe('handleWorkerWebSocketMessage', () => {
 
       clearTimeout(timerHandle);
     });
+
+    it('keeps the registry and workerSockets map in agreement after a successful registration', () => {
+      // The duplicate-active guard reads `workerSockets` as the liveness source;
+      // the close handler's stale-socket guard relies on the same map agreeing
+      // with the registry. Pin that both are populated together on a successful
+      // register so a future change cannot let them diverge (which would either
+      // bypass the guard or falsely reject a fresh worker).
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
+
+      const ws = createFakeWs();
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'register',
+          protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+          workerId: 'w-sync',
+          activities: ['doWork'],
+          concurrency: 2,
+        }),
+        NOOP_CLEANUP,
+      );
+
+      expect(JSON.parse(ws.sentMessages[0]!).type).toBe('registerAck');
+      expect(context.workerSockets.has('w-sync')).toBe(true);
+      expect(context.registry.getWorker('w-sync')).toBeDefined();
+      expect(context.workerSockets.get('w-sync') as unknown).toBe(ws);
+    });
   });
 });
