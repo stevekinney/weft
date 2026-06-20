@@ -161,11 +161,14 @@ function registerWorker(
   // Guard against workerId hijacking. A `workerSockets` entry for this ID
   // indicates a live socket — but only block if the previous socket never
   // disconnected (no pending-requeue entry existed). A grace-period reconnect
-  // legitimately finds the old socket still in the map (it was not removed
-  // until the grace timer fired); the stale-socket guard in the close handler
-  // in authentication-bridge.ts detects and handles that old close event when
-  // it eventually arrives. An unauthenticated or malicious client claiming an
-  // actively-connected workerId is rejected here instead.
+  // legitimately finds the old socket still in the map: the old socket's close
+  // event already fired (that is what created the pending-requeue entry, since
+  // it was still the owner at close so the stale-socket guard did not trip),
+  // and it will not fire again. That path is made safe just above and below —
+  // the deferred-requeue timer was cleared, and the `workerSockets.set` below
+  // overwrites the stale entry with this socket — not by the close handler. An
+  // unauthenticated or malicious client claiming an actively-connected workerId
+  // (no pending requeue) is rejected here instead.
   if (!isGracePeriodReconnect && context.workerSockets.has(message.workerId)) {
     rejectRegistration(
       ws,
