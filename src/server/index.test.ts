@@ -4657,47 +4657,15 @@ describe('task assignment deduplication', () => {
     await waitForRealTimersForTesting(50);
   });
 
-  it('accepts a same-workerId reconnect within the grace period', async () => {
-    // When a worker disconnects and reconnects within the grace period, the
-    // pending-requeue entry marks it as a legitimate reconnect, so the
-    // duplicate-active guard is bypassed and the fresh socket becomes the owner
-    // (keeping its in-flight work). This is the path the #609 hijacking guard
-    // must NOT block.
-    engine = createEngine();
-    // Non-zero grace period: ws1 closes and schedules a grace timer; ws2
-    // re-registers the same workerId before the timer expires.
-    server = serveTestServer({ engine, port: 0, workerReconnectGracePeriodMs: 100 });
-
-    const ws1 = await connectWorker(server);
-    await registerWorker(ws1, { workerId: 'grace-reconnect-worker', activities: ['charge'] });
-
-    // ws1 closes, starting the grace-period timer.
-    ws1.close();
-
-    // ws2 reconnects within the grace window.
-    const ws2 = await connectWorker(server);
-    const ackPromise = waitForWorkerMessage(
-      ws2,
-      (message) => message['type'] === 'registerAck',
-      'registerAck for grace reconnect',
-    );
-    ws2.send(
-      JSON.stringify({
-        type: 'register',
-        protocolVersion: 2,
-        workerId: 'grace-reconnect-worker',
-        activities: ['charge'],
-        concurrency: 10,
-      }),
-    );
-    await ackPromise;
-
-    // The grace-period reconnect succeeded.
-    expect(server.registry.getWorker('grace-reconnect-worker')).toBeDefined();
-
-    ws2.close();
-    await waitForRealTimersForTesting(50);
-  });
+  // NOTE: The grace-period reconnect bypass is covered deterministically by the
+  // characterization unit test "allows reconnect within the grace period for the
+  // same workerId" in websocket-worker.characterization.test.ts, which seeds the
+  // pending-requeue + stale-socket state directly. An end-to-end version here is
+  // intentionally omitted: the bypass only engages once the server has processed
+  // the first socket's close (which silently schedules the requeue with no public
+  // signal), so an integration test cannot deterministically wait for that state
+  // before reconnecting — reconnecting too early hits the documented reconnect-
+  // before-close race and the assertion flakes under CI load. See #615 review.
 
   it('allows re-dispatch of an operationId after completion', async () => {
     engine = createEngine();
