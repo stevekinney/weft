@@ -80,18 +80,16 @@ export type ClientStartOptions = Omit<StartOptions, 'defer' | 'services'> & {
  * Remote-capable start-or-signal options, including terminal restart policy.
  * @example
  * ```ts
+ * import type { ClientStartOrSignalOptions } from '@lostgradient/weft/client';
  * const options: ClientStartOrSignalOptions = {
  *   id: 'github:installations:42:sync',
  *   onTerminalConflict: 'start-new',
  * };
+ * void options;
  * ```
  */
 export type ClientStartOrSignalOptions = ClientStartOptions &
   Pick<StartOrSignalOptions, 'onTerminalConflict'>;
-
-// ---------------------------------------------------------------------------
-// Client handle — lightweight reference to a running workflow
-// ---------------------------------------------------------------------------
 
 /**
  * Which atomic path a {@link WeftClient.startOrSignal} call took, returned
