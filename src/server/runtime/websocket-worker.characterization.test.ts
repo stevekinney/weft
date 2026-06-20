@@ -621,19 +621,20 @@ describe('handleWorkerWebSocketMessage', () => {
 
     it('allows reconnect within the grace period for the same workerId (clears pendingWorkerRequeues entry)', () => {
       // A worker that disconnects and reconnects before its grace-period timer fires
-      // must still be accepted: the pending-requeue entry is cleared first, so the
-      // duplicate-active guard never fires.
+      // must still be accepted: the pending-requeue entry sets isGracePeriodReconnect,
+      // which bypasses the duplicate-active rejection.
       const context = minimalServerContext();
       const options = minimalServeOptions();
 
-      // Simulate a pending requeue entry — as if the first socket closed and the
-      // grace-period timer is still pending. In the real close-handler path the
-      // old socket stays in `workerSockets` until the timer fires or the
-      // reconnecting socket overwrites it; here the unit-level guard is exercised
-      // purely through `pendingWorkerRequeues`, which sets `isGracePeriodReconnect`
-      // and bypasses the duplicate-active rejection regardless of the map entry.
-      // The end-to-end real state (old socket still mapped at reconnect) is
-      // covered by the integration test in src/server/index.test.ts.
+      // Faithfully model the real close-handler state: the OLD socket is still in
+      // `workerSockets` (it is not removed until the grace timer fires or the new
+      // socket overwrites it), AND a pending requeue entry exists. With a stale
+      // entry present, the duplicate-active guard's `existingSocket !== ws` branch
+      // is true — so the ONLY thing letting this registration through is the
+      // `isGracePeriodReconnect` bypass. (Without the stale entry the test would
+      // still pass even if the bypass were removed, so it would not pin it.)
+      const staleSocket = createFakeWs();
+      context.workerSockets.set('w-reconnect', staleSocket as never);
       const timerHandle = setTimeout(() => {}, 60_000);
       context.pendingWorkerRequeues.set('w-reconnect', timerHandle);
 
@@ -653,7 +654,8 @@ describe('handleWorkerWebSocketMessage', () => {
         NOOP_CLEANUP,
       );
 
-      // Must succeed: registerAck sent, timer cleared, socket in map.
+      // Must succeed: registerAck sent (not a registerError), timer cleared, and
+      // the fresh socket has overwritten the stale entry in the map.
       expect(ws.sentMessages).toHaveLength(1);
       expect(JSON.parse(ws.sentMessages[0]!).type).toBe('registerAck');
       expect(ws.closeCode).toBeUndefined();
