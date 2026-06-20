@@ -158,18 +158,22 @@ function registerWorker(
     context.pendingWorkerRequeues.delete(message.workerId);
   }
 
-  // Guard against workerId hijacking. A `workerSockets` entry for this ID
-  // indicates a live socket — but only block if the previous socket never
-  // disconnected (no pending-requeue entry existed). A grace-period reconnect
-  // legitimately finds the old socket still in the map: the old socket's close
-  // event already fired (that is what created the pending-requeue entry, since
-  // it was still the owner at close so the stale-socket guard did not trip),
-  // and it will not fire again. That path is made safe just above and below —
-  // the deferred-requeue timer was cleared, and the `workerSockets.set` below
-  // overwrites the stale entry with this socket — not by the close handler. An
-  // unauthenticated or malicious client claiming an actively-connected workerId
-  // (no pending requeue) is rejected here instead.
-  if (!isGracePeriodReconnect && context.workerSockets.has(message.workerId)) {
+  // Guard against workerId hijacking. A `workerSockets` entry for this ID held
+  // by a DIFFERENT live socket means another connection already owns it — but
+  // only block when the previous socket never disconnected (no pending-requeue
+  // entry existed). Two registrations are intentionally allowed:
+  //   - The same socket re-registering (identity match) to refresh its metadata;
+  //     `WorkerRegistry.register` is built to refresh an existing id.
+  //   - A grace-period reconnect: the old socket's close event already fired
+  //     (that is what created the pending-requeue entry, since it was still the
+  //     owner at close so the stale-socket guard did not trip), and it will not
+  //     fire again. That path is made safe just above and below — the deferred-
+  //     requeue timer was cleared, and the `workerSockets.set` below overwrites
+  //     the stale entry — not by the close handler.
+  // A different unauthenticated or malicious client claiming an actively-
+  // connected workerId (no pending requeue) is rejected here instead.
+  const existingSocket = context.workerSockets.get(message.workerId);
+  if (!isGracePeriodReconnect && existingSocket !== undefined && existingSocket !== ws) {
     rejectRegistration(
       ws,
       'invalid_registration',

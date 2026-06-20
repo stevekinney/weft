@@ -578,6 +578,47 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(context.workerSockets.get('w-live') as unknown).toBe(ws1);
     });
 
+    it('allows the same socket to re-register the same workerId (metadata refresh)', () => {
+      // The hijacking guard keys on socket IDENTITY, not mere presence: a second
+      // register on the SAME connection (e.g. to refresh its activity list or
+      // concurrency) is a legitimate refresh, not a takeover, and must be
+      // accepted. `WorkerRegistry.register` is built to refresh an existing id.
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
+
+      const ws = createFakeWs();
+      const register = (activities: string[], concurrency: number) =>
+        handleWorkerWebSocketMessage(
+          context,
+          options,
+          ws as never,
+          JSON.stringify({
+            type: 'register',
+            protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+            workerId: 'w-refresh',
+            activities,
+            concurrency,
+          }),
+          NOOP_CLEANUP,
+        );
+
+      register(['doWork'], 2);
+      expect(JSON.parse(ws.sentMessages[0]!).type).toBe('registerAck');
+
+      // Same socket re-registers with updated metadata — must be accepted, not
+      // rejected as a duplicate.
+      register(['doWork', 'doMore'], 5);
+      expect(ws.sentMessages).toHaveLength(2);
+      const second = JSON.parse(ws.sentMessages[1]!);
+      expect(second.type).toBe('registerAck');
+      expect(second.activities).toEqual(['doWork', 'doMore']);
+      expect(second.concurrency).toBe(5);
+      // No rejection, socket stays open and owns the id.
+      expect(ws.closeCode).toBeUndefined();
+      expect(context.workerSockets.get('w-refresh') as unknown).toBe(ws);
+      expect(context.registry.getWorker('w-refresh')?.concurrency).toBe(5);
+    });
+
     it('allows reconnect within the grace period for the same workerId (clears pendingWorkerRequeues entry)', () => {
       // A worker that disconnects and reconnects before its grace-period timer fires
       // must still be accepted: the pending-requeue entry is cleared first, so the
