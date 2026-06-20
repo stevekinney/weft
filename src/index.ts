@@ -199,6 +199,8 @@ export type {
   WorkflowReplay,
   WorkflowServicesResolution,
   WorkflowServicesResolverInfo,
+  WorkflowServicesResolverLaunchOptions,
+  WorkflowServicesResolverScheduleInfo,
   WorkflowSessionState,
   WorkflowSnapshot,
   WorkflowState,

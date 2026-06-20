@@ -29,6 +29,17 @@ export type WorkflowServicesResolution<TServices = unknown> =
  * `tags` reflects the workflow's current durable tag set, not necessarily the
  * exact tag list supplied at launch, because callers can mutate tags after
  * start.
+ *
+ * @example
+ * ```ts
+ * import { type WorkflowServicesResolverLaunchOptions } from '@lostgradient/weft';
+ *
+ * const launchOptions: WorkflowServicesResolverLaunchOptions = {
+ *   id: 'checkout-123',
+ *   tags: ['tenant:acme'],
+ * };
+ * void launchOptions;
+ * ```
  */
 export interface WorkflowServicesResolverLaunchOptions {
   id: string;
@@ -38,6 +49,17 @@ export interface WorkflowServicesResolverLaunchOptions {
 /**
  * Schedule context passed to {@link EngineOptions.resolveWorkflowServices} for
  * scheduled occurrences.
+ *
+ * @example
+ * ```ts
+ * import { type WorkflowServicesResolverScheduleInfo } from '@lostgradient/weft';
+ *
+ * const schedule: WorkflowServicesResolverScheduleInfo = {
+ *   id: 'nightly-reconciliation',
+ *   occurrence: Date.parse('2026-01-01T00:00:00.000Z'),
+ * };
+ * void schedule;
+ * ```
  */
 export interface WorkflowServicesResolverScheduleInfo {
   id: string;
