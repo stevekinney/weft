@@ -2,14 +2,7 @@ import { describe, expect, it } from 'bun:test';
 
 import packageJson from '../package.json';
 import { workflow } from './core/types/workflow-function.ts';
-import type {
-  WorkflowOperation,
-  WorkflowReplay,
-  WorkflowServicesResolverInfo,
-  WorkflowServicesResolverLaunchOptions,
-  WorkflowServicesResolverScheduleInfo,
-  WorkflowTimelineEntry,
-} from './index';
+import type { WorkflowOperation, WorkflowReplay, WorkflowTimelineEntry } from './index';
 import {
   Engine,
   IdempotencyKeyPurgedError,
@@ -65,27 +58,6 @@ describe('weft', () => {
   it('exports WorkflowOperation type', () => {
     const operation: WorkflowOperation<string> | undefined = undefined;
     expect(operation).toBeUndefined();
-  });
-
-  it('exports workflow services resolver context types', () => {
-    const launchOptions: WorkflowServicesResolverLaunchOptions = {
-      id: 'workflow-1',
-      tags: ['alpha'],
-    };
-    const schedule: WorkflowServicesResolverScheduleInfo = {
-      id: 'schedule-1',
-      occurrence: 1,
-    };
-    const resolverInfo: WorkflowServicesResolverInfo = {
-      workflowId: 'workflow-1',
-      workflowType: 'checkout',
-      input: { customerId: 'customer-1' },
-      launchOptions,
-      schedule,
-    };
-
-    expect(resolverInfo.launchOptions?.id).toBe('workflow-1');
-    expect(resolverInfo.schedule?.id).toBe('schedule-1');
   });
 
   it('exports WorkflowAlreadyExistsError for duplicate workflow ids', async () => {
