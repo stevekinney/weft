@@ -53,13 +53,22 @@ const DEFAULT_WORKER_RECONNECT_GRACE_PERIOD_MS = 2_000;
 const MAX_WORKER_RECONNECT_GRACE_PERIOD_MS = 5_000;
 
 /**
- * Hard ceiling on WebSocket frame size for worker connections. Bun's default
- * is 16 MiB; this cap is applied at the transport layer before any JSON parse
- * so a malicious worker cannot force a 16 MiB parse per message. When
- * `payloadSize.maxBytes` is set to a positive value smaller than this ceiling,
- * the configured app cap wins (the minimum of the two is used). A `null` or
- * `0` app cap (both mean "no app-level admission cap") falls back to this
- * ceiling — it never lowers the frame limit to zero.
+ * Hard ceiling on the raw WebSocket frame size for every connection (worker
+ * stream, `/watch`, token `/stream`, and JSON-RPC). Bun's default is 16 MiB;
+ * this caps the frame at the transport layer before any JSON parse, so a
+ * malicious peer cannot force a 16 MiB parse per message. A bounded 4 MiB parse
+ * is not a CPU-burn, so this constant ceiling fully closes the DoS on its own.
+ *
+ * This is deliberately NOT derived from `payloadSize.maxBytes`. That option is
+ * an application-level admission policy measured on the codec-encoded (msgpack)
+ * byte length of the bare value, whereas `maxPayloadLength` bounds the raw
+ * UTF-8 JSON frame (envelope plus JSON-serialized value) — different units.
+ * Tightening the frame limit down to a smaller `payloadSize.maxBytes` would
+ * reject legitimate frames whose value is within the admission cap (JSON and
+ * envelope overhead inflate the frame past the msgpack value size) with an
+ * opaque transport close instead of a clean `PayloadSizeExceededError`, across
+ * every shared WebSocket endpoint — for no additional DoS protection. Value
+ * size stays enforced by the post-parse admission check.
  *
  * @internal Exported only for test assertions.
  */
@@ -296,12 +305,12 @@ export function cleanupWorkflowIndex(context: ServerContext, operationId: string
  * Assembles the `Bun.serve()` options object. Separating this avoids a
  * conditional spread (`...(tlsOptions ? { tls } : {})`) inside `serve()`.
  *
- * The `payloadSizeMaxBytes` argument threads the engine's payload cap into the
- * WebSocket transport layer. A positive cap yields the smaller of it and
- * `WEBSOCKET_MAX_PAYLOAD_BYTES` (the hard 4 MiB ceiling); a `null` or `0` cap
- * (both mean "no app-level admission cap") falls back to the ceiling rather
- * than collapsing the frame limit to zero. Either way Bun rejects oversized
- * frames before any JSON parse occurs.
+ * Sets a constant `maxPayloadLength` of `WEBSOCKET_MAX_PAYLOAD_BYTES` (4 MiB)
+ * so Bun rejects oversized frames at the transport layer before any JSON parse
+ * occurs. The cap is intentionally a fixed transport-safety ceiling, not
+ * derived from `payloadSize.maxBytes` (see that constant's docs for why mixing
+ * the raw-frame limit with the application value-size policy would cause false
+ * rejections in the wrong unit).
  */
 export function buildBunServeConfig(
   port: number,
@@ -311,24 +320,14 @@ export function buildBunServeConfig(
   tlsOptions: ReturnType<typeof buildTLSOptions>,
   fetchHandler: (request: Request) => Promise<Response | undefined>,
   websocketCallbacks: ReturnType<typeof createServerWebSocketHandlers>,
-  payloadSizeMaxBytes: number | null,
 ): Parameters<typeof Bun.serve<WebSocketData>>[0] {
-  // A `null` or `0` app cap both mean "no app-level admission cap" — neither
-  // should lower the WebSocket frame limit. `??` alone would not catch `0`
-  // (0 is not nullish), so `Math.min(0, ceiling)` would brick the transport at
-  // a zero-byte frame limit. Treat any non-positive cap as "use the ceiling".
-  const requestedFrameLimit =
-    payloadSizeMaxBytes !== null && payloadSizeMaxBytes > 0
-      ? payloadSizeMaxBytes
-      : WEBSOCKET_MAX_PAYLOAD_BYTES;
-  const maxPayloadLength = Math.min(requestedFrameLimit, WEBSOCKET_MAX_PAYLOAD_BYTES);
   const config: Parameters<typeof Bun.serve<WebSocketData>>[0] = {
     port,
     hostname,
     development,
     routes,
     fetch: fetchHandler,
-    websocket: { ...websocketCallbacks, maxPayloadLength },
+    websocket: { ...websocketCallbacks, maxPayloadLength: WEBSOCKET_MAX_PAYLOAD_BYTES },
   };
   if (tlsOptions) {
     config.tls = tlsOptions;

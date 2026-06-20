@@ -237,7 +237,6 @@ describe('registerStackDisposers', () => {
       undefined,
       async () => new Response('ok'),
       websocketCallbacks,
-      null,
     );
     expect(baseConfig.tls).toBeUndefined();
     expect(baseConfig.websocket!.maxPayloadLength).toBe(WEBSOCKET_MAX_PAYLOAD_BYTES);
@@ -253,7 +252,6 @@ describe('registerStackDisposers', () => {
       tlsOptions,
       async () => new Response('ok'),
       websocketCallbacks,
-      null,
     );
     expect(tlsConfig.tls).toBe(tlsOptions);
   });
@@ -265,7 +263,12 @@ describe('registerStackDisposers', () => {
       close() {},
     };
 
-    it('sets maxPayloadLength to the hard ceiling when payloadSizeMaxBytes is null (default unconfigured case)', () => {
+    it('sets maxPayloadLength to the constant 4 MiB transport ceiling', () => {
+      // The frame cap is a fixed transport-safety ceiling, independent of
+      // `payloadSize.maxBytes` (which is an application value-size policy in a
+      // different unit). A bounded 4 MiB parse is not a CPU-burn, so the
+      // constant ceiling closes the DoS without risking false rejections of
+      // legitimate frames whose value is within the admission cap.
       const config = buildBunServeConfig(
         7233,
         '127.0.0.1',
@@ -274,74 +277,9 @@ describe('registerStackDisposers', () => {
         undefined,
         async () => new Response('ok'),
         websocketCallbacks,
-        null,
       );
       expect(config.websocket!.maxPayloadLength).toBe(WEBSOCKET_MAX_PAYLOAD_BYTES);
       expect(config.websocket!.maxPayloadLength).toBe(4 * 1024 * 1024);
-    });
-
-    it('uses payloadSizeMaxBytes when it is smaller than the hard ceiling', () => {
-      const smallCap = 1 * 1024 * 1024; // 1 MiB — less than the 4 MiB ceiling
-      const config = buildBunServeConfig(
-        7233,
-        '127.0.0.1',
-        false,
-        {},
-        undefined,
-        async () => new Response('ok'),
-        websocketCallbacks,
-        smallCap,
-      );
-      expect(config.websocket!.maxPayloadLength).toBe(smallCap);
-    });
-
-    it('clamps maxPayloadLength to the hard ceiling when payloadSizeMaxBytes exceeds it', () => {
-      const largeCap = 8 * 1024 * 1024; // 8 MiB — larger than the 4 MiB ceiling
-      const config = buildBunServeConfig(
-        7233,
-        '127.0.0.1',
-        false,
-        {},
-        undefined,
-        async () => new Response('ok'),
-        websocketCallbacks,
-        largeCap,
-      );
-      expect(config.websocket!.maxPayloadLength).toBe(WEBSOCKET_MAX_PAYLOAD_BYTES);
-    });
-
-    it('falls back to the hard ceiling when payloadSizeMaxBytes is 0 (app cap disabled)', () => {
-      // `0` means "no app-level admission cap" — it must NOT collapse the
-      // WebSocket frame limit to zero (which would reject every worker frame and
-      // re-open the DoS framing). Regression guard for the `0 ?? ceiling === 0`
-      // footgun.
-      const config = buildBunServeConfig(
-        7233,
-        '127.0.0.1',
-        false,
-        {},
-        undefined,
-        async () => new Response('ok'),
-        websocketCallbacks,
-        0,
-      );
-      expect(config.websocket!.maxPayloadLength).toBe(WEBSOCKET_MAX_PAYLOAD_BYTES);
-      expect(config.websocket!.maxPayloadLength).toBe(4 * 1024 * 1024);
-    });
-
-    it('uses payloadSizeMaxBytes when it equals the hard ceiling exactly (boundary)', () => {
-      const exactCap = WEBSOCKET_MAX_PAYLOAD_BYTES; // 4 MiB — equal to the ceiling
-      const config = buildBunServeConfig(
-        7233,
-        '127.0.0.1',
-        false,
-        {},
-        undefined,
-        async () => new Response('ok'),
-        websocketCallbacks,
-        exactCap,
-      );
-      expect(config.websocket!.maxPayloadLength).toBe(WEBSOCKET_MAX_PAYLOAD_BYTES);
     });
   });
 
