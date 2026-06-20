@@ -51,6 +51,17 @@ const RECONCILIATION_MULTIPLIER = 12;
 
 const DEFAULT_WORKER_RECONNECT_GRACE_PERIOD_MS = 2_000;
 const MAX_WORKER_RECONNECT_GRACE_PERIOD_MS = 5_000;
+
+/**
+ * Hard ceiling on WebSocket frame size for worker connections. Bun's default
+ * is 16 MiB; this cap is applied at the transport layer before any JSON parse
+ * so a malicious worker cannot force a 16 MiB parse per message. When
+ * `payloadSize.maxBytes` is set to a value smaller than this ceiling, the
+ * configured app cap wins (the minimum of the two is used).
+ *
+ * @internal Exported only for test assertions.
+ */
+export const WEBSOCKET_MAX_PAYLOAD_BYTES = 4 * 1024 * 1024; // 4 MiB
 const AUTHENTICATION_REQUIRED_ENVIRONMENT_VARIABLE = 'WEFT_SERVER_AUTHENTICATION_REQUIRED';
 /**
  * @internal
@@ -282,6 +293,11 @@ export function cleanupWorkflowIndex(context: ServerContext, operationId: string
 /**
  * Assembles the `Bun.serve()` options object. Separating this avoids a
  * conditional spread (`...(tlsOptions ? { tls } : {})`) inside `serve()`.
+ *
+ * The `payloadSizeMaxBytes` argument threads the engine's payload cap into the
+ * WebSocket transport layer. The resulting `maxPayloadLength` is the smaller of
+ * `payloadSizeMaxBytes` and `WEBSOCKET_MAX_PAYLOAD_BYTES` (the hard 4 MiB
+ * ceiling), so Bun rejects oversized frames before any JSON parse occurs.
  */
 export function buildBunServeConfig(
   port: number,
@@ -291,14 +307,19 @@ export function buildBunServeConfig(
   tlsOptions: ReturnType<typeof buildTLSOptions>,
   fetchHandler: (request: Request) => Promise<Response | undefined>,
   websocketCallbacks: ReturnType<typeof createServerWebSocketHandlers>,
+  payloadSizeMaxBytes: number | null,
 ): Parameters<typeof Bun.serve<WebSocketData>>[0] {
+  const maxPayloadLength = Math.min(
+    payloadSizeMaxBytes ?? WEBSOCKET_MAX_PAYLOAD_BYTES,
+    WEBSOCKET_MAX_PAYLOAD_BYTES,
+  );
   const config: Parameters<typeof Bun.serve<WebSocketData>>[0] = {
     port,
     hostname,
     development,
     routes,
     fetch: fetchHandler,
-    websocket: websocketCallbacks,
+    websocket: { ...websocketCallbacks, maxPayloadLength },
   };
   if (tlsOptions) {
     config.tls = tlsOptions;

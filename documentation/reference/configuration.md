@@ -93,7 +93,7 @@ const engine = new Engine({
 
 `archive` is an optional best-effort notification sink for compacted ranges. It runs after the truncation commit. A rejected or throwing archive adapter never rolls back the checkpoint or restores deleted event records, so operators who need guaranteed archival must make that durable before compaction can delete the primary records.
 
-`payloadSize.maxBytes` caps the codec-encoded byte length of each workflow input, signal payload, and activity result at admission time. A payload exactly at the limit is allowed; one byte over the limit throws `PayloadSizeExceededError` before any durable write. `0`, `null`, `undefined`, or omission disables the cap and the disabled path performs no extra encode. The cap is separate from storage compression and from Worker protocol message bounds.
+`payloadSize.maxBytes` caps the codec-encoded byte length of each workflow input, signal payload, and activity result at admission time. A payload exactly at the limit is allowed; one byte over the limit throws `PayloadSizeExceededError` before any durable write. `0`, `null`, `undefined`, or omission disables the cap and the disabled path performs no extra encode. The cap is separate from storage compression and from Worker protocol message bounds. When serving a Weft server, `payloadSize.maxBytes` also controls the WebSocket frame-size ceiling for worker connections: when unset, a hard 4 MiB ceiling applies at the transport layer before any JSON parse occurs; setting a value below 4 MiB tightens the cap further (the minimum of the two is used).
 
 ### Workflow Execution Mode
 

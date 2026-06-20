@@ -472,6 +472,7 @@ export function serve(options: ServeOptions): WeftServer {
       tlsOptions,
       buildFetchHandler(serverHolder, context, serverOptions),
       createServerWebSocketHandlers(context, serverOptions, boundCleanup),
+      context.payloadSizeMaxBytes,
     ),
   );
   serverHolder.current = server;

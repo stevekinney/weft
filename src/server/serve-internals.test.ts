@@ -13,6 +13,7 @@ import {
   registerStackDisposers,
   resolveNetworkConfig,
   restoreInflightTasks,
+  WEBSOCKET_MAX_PAYLOAD_BYTES,
 } from './serve-internals.ts';
 import { transitionQueuedToInflight } from './task-state.ts';
 
@@ -236,8 +237,10 @@ describe('registerStackDisposers', () => {
       undefined,
       async () => new Response('ok'),
       websocketCallbacks,
+      null,
     );
     expect(baseConfig.tls).toBeUndefined();
+    expect(baseConfig.websocket!.maxPayloadLength).toBe(WEBSOCKET_MAX_PAYLOAD_BYTES);
 
     const tlsOptions = { key: 'key', cert: 'cert' } as unknown as ReturnType<
       typeof resolveNetworkConfig
@@ -250,8 +253,62 @@ describe('registerStackDisposers', () => {
       tlsOptions,
       async () => new Response('ok'),
       websocketCallbacks,
+      null,
     );
     expect(tlsConfig.tls).toBe(tlsOptions);
+  });
+
+  describe('buildBunServeConfig websocket frame size', () => {
+    const websocketCallbacks: Parameters<typeof buildBunServeConfig>[6] = {
+      open() {},
+      message() {},
+      close() {},
+    };
+
+    it('sets maxPayloadLength to the hard ceiling when payloadSizeMaxBytes is null (default unconfigured case)', () => {
+      const config = buildBunServeConfig(
+        7233,
+        '127.0.0.1',
+        false,
+        {},
+        undefined,
+        async () => new Response('ok'),
+        websocketCallbacks,
+        null,
+      );
+      expect(config.websocket!.maxPayloadLength).toBe(WEBSOCKET_MAX_PAYLOAD_BYTES);
+      expect(config.websocket!.maxPayloadLength).toBe(4 * 1024 * 1024);
+    });
+
+    it('uses payloadSizeMaxBytes when it is smaller than the hard ceiling', () => {
+      const smallCap = 1 * 1024 * 1024; // 1 MiB — less than the 4 MiB ceiling
+      const config = buildBunServeConfig(
+        7233,
+        '127.0.0.1',
+        false,
+        {},
+        undefined,
+        async () => new Response('ok'),
+        websocketCallbacks,
+        smallCap,
+      );
+      expect(config.websocket!.maxPayloadLength).toBe(smallCap);
+    });
+
+    it('clamps maxPayloadLength to the hard ceiling when payloadSizeMaxBytes exceeds it', () => {
+      const largeCap = 8 * 1024 * 1024; // 8 MiB — larger than the 4 MiB ceiling
+      const config = buildBunServeConfig(
+        7233,
+        '127.0.0.1',
+        false,
+        {},
+        undefined,
+        async () => new Response('ok'),
+        websocketCallbacks,
+        largeCap,
+      );
+      expect(config.websocket!.maxPayloadLength).toBe(WEBSOCKET_MAX_PAYLOAD_BYTES);
+    });
   });
 
   it('disposes the task queue from the timer-cleanup disposer', () => {
