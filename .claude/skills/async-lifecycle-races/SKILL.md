@@ -64,7 +64,7 @@ description: >-
 
 ### RemoteWorker reconnect work
 
-- Model close, deferred requeue, same-`workerId` re-register, peer takeover, heartbeat visibility extension, and stale `taskResult` arrival as separate transitions.
+- Model close, deferred requeue, same-`workerId` re-register, duplicate-live-`workerId` rejection, grace-period reconnect, heartbeat visibility extension, and stale `taskResult` arrival as separate transitions. Do not restore the old latest-socket-wins peer takeover path; a second live socket must receive `invalid_registration`.
 - Treat `taskResult` send failures as durable lifecycle work: buffer bounded results, flush them after reconnect, and prove backpressure does not drop terminal outcomes silently.
 - Persist task ownership before sending work across a socket; otherwise a fast worker can complete before the in-flight record exists and leave an orphan that the scanner redelivers.
 - Mint a fresh `attemptToken` on every dispatch or long-poll claim, persist it with the in-flight owner before sending work, echo it from upgraded workers, and restore it when rebuilding in-flight registry state after server restart.
@@ -72,7 +72,7 @@ description: >-
 ## Verification
 
 - Add race regression tests for before-ack disposal, socket close, cancellation, and shutdown paths touched by the change.
-- For reconnect behavior, cover grace-window cancellation, visibility-timeout takeover, stale completion rejection, server-restart redelivery, and buffered `taskResult` resend after a socket failure.
+- For reconnect behavior, cover grace-window cancellation, duplicate-live-`workerId` rejection, visibility-timeout takeover after the grace window, stale completion rejection, server-restart redelivery, and buffered `taskResult` resend after a socket failure.
 - For client event streaming, cover connect catch-up, reconnect during catch-up, duplicate-looking live frames, callback-only no-leak behavior, `whenConnected()` after close, and missing or inadequate WebSocket factories.
 - For SSE event streaming, cover replay-complete readiness, `Last-Event-ID` reconnect cursors, parked iterator close, terminal-event auto-close, and abort cleanup before iteration begins so feed listeners and connection leases cannot leak.
 - For long-poll task queues, cover disconnect during wait, already-aborted signals, pending-task retention for dead callers, idempotent disposal, and timer cleanup.

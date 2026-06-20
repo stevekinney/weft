@@ -248,6 +248,8 @@ console.log(handle.id, outcome); // outcome is 'started' or 'signalled'
 
 The idempotency mapping intentionally outlives terminal cleanup. If retention removes the workflow record, the key is spent and future calls return a conflict instead of starting a replacement.
 
+For stable-id re-sync flows, `engine.startOrSignal()` can replace a terminal prior run with `{ id, onTerminalConflict: 'start-new' }` when the initial signal also carries a deterministic `signalId`. Non-terminal runs are still signalled, not replaced, and restart-capable calls reject `idempotencyKey` because idempotency keys are permanent at-most-once mappings.
+
 ### Search Attributes
 
 Attach indexed metadata to a workflow at runtime, then list and filter on it.

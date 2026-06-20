@@ -14,6 +14,7 @@ JSON Schemas instead of reverse-engineering the source.
 - **Direction**: bidirectional. Workers send `register`, `heartbeat`, `taskResult`. Server sends `task`, `cancel`, `shutdown`, `registerAck`, `registerError`, `protocolError`.
 - **Heartbeat**: workers heartbeat every 10 seconds after registration is acknowledged.
 - **Authentication**: not part of the protocol envelope. Auth happens at the WebSocket transport layer.
+- **Frame limit**: every server WebSocket endpoint is capped at a fixed 4 MiB raw frame size before JSON parsing. This transport ceiling is separate from `payloadSize.maxBytes`, which applies to codec-encoded workflow values at admission time.
 - **Fatal close codes**: unsupported or invalid registration receives `registerError`, then WebSocket close code `1008`. Malformed protocol frames receive `protocolError`, then WebSocket close code `1002`.
 
 The public schema contract is exported from `@lostgradient/weft/worker-protocol`:
@@ -102,7 +103,9 @@ Worker                              Server
   |   <-------- close 1002 --------   |
 ```
 
-The server tracks the worker by `workerId` in an in-memory registry. If a registered worker disconnects with tasks in flight, the server waits for the configured `ServeOptions.workerReconnectGracePeriodMs` before requeueing those tasks. A same-`workerId` `register` inside that grace window cancels the pending requeue and preserves the worker's in-flight assignments. If the window expires, the server reassigns the tasks to another available worker on the same queue or moves them through the fallback queue path according to the dispatch machinery. The grace window defaults to `2000` ms. Use `100` only for low-latency test or embedded scenarios, and use `5000` for cloud or load-balancer deployments where replacement workers commonly need several seconds to reconnect.
+The server tracks the worker by `workerId` in an in-memory registry. While a worker socket is live, another socket cannot claim the same `workerId`: the duplicate registration receives `registerError` with code `invalid_registration` and the server closes that socket. This blocks same-id task hijacking when authentication is disabled, but it also means a legitimate reconnect can be rejected until the old socket's close is observed.
+
+If a registered worker disconnects with tasks in flight, the server waits for the configured `ServeOptions.workerReconnectGracePeriodMs` before requeueing those tasks. A same-`workerId` `register` inside that grace window cancels the pending requeue and preserves the worker's in-flight assignments. If the window expires, the server reassigns the tasks to another available worker on the same queue or moves them through the fallback queue path according to the dispatch machinery. The grace window defaults to `2000` ms. Use `100` only for low-latency test or embedded scenarios, and use `5000` for cloud or load-balancer deployments where replacement workers commonly need several seconds to reconnect.
 
 ## Message catalog
 

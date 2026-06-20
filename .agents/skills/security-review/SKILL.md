@@ -41,6 +41,7 @@ The server routes through operation handlers plus transport-specific discovery e
 - [ ] Schedule routes use operation-catalog access policies consistently across REST and JSON-RPC; do not add tenant-claim gates back into core schedule access
 - [ ] Async activity completion routes keep tokens in the body, not the path; treat tokens as deterministic identifiers rather than secrets; require payload validation and `serve({ auth })` guidance when exposed outside a trusted boundary
 - [ ] Raw workflow event `/watch` upgrades require `events:read`, raw token `/stream` upgrades require `streams:read`, REST workflow and fleet SSE routes require `Accept: text/event-stream`, preserve `Last-Event-ID` reconnect handling, and route authorization through the operation catalog instead of a dashboard-only shortcut
+- [ ] WebSocket endpoints keep the fixed 4 MiB raw-frame ceiling on the Bun transport; do not derive it from `payloadSize.maxBytes`, which measures codec-encoded workflow values after parsing
 
 Routes that accept bodies include workflow start, signal, update, query, attributes, review decisions, bulk actions, JSON-RPC, HTTP storage, and MCP `POST /mcp`.
 Async activity completion (`POST /api/v1/activities/complete` and `/fail`) also accepts bodies and must return 400 for malformed JSON.
@@ -91,6 +92,7 @@ User-defined workflow functions run inside the engine. They should not be able t
 - [ ] Activity results are bounded in size before being written to checkpoints
 - [ ] Failed activities do not leak internal engine state in their error messages
 - [ ] Worker pool exhaustion is handled gracefully (backpressure, not crash)
+- [ ] Remote worker registration rejects a duplicate live `workerId` while preserving same-socket refresh and grace-period reconnect; a new same-id socket must not silently take over task dispatch
 
 ### 6. Input Validation at API Boundaries
 

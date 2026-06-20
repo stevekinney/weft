@@ -110,6 +110,12 @@ bun run verify:release-version
 
 The version gate keeps the package version, exported `VERSION`, and OpenAPI/OpenRPC/AsyncAPI/MCP discovery defaults in sync.
 
+When Service Worker, IndexedDB, WebExtension, browser runtime recovery, or CI browser-gate wiring changes, run the real-browser smoke gate instead of relying only on fake-IndexedDB unit tests:
+
+```bash
+WEFT_BROWSER_SMOKE=1 bun test src/service-worker/service-worker-browser.test.ts
+```
+
 When touching gate orchestration, benchmark wiring, or generated gate output, run the focused gate tests before the broader loop:
 
 ```bash
