@@ -429,6 +429,41 @@ const parkingWorkflow = workflow({ name: 'parking-workflow' }).execute(async fun
   return 'done';
 });
 
+/**
+ * Builds a `setupServiceWorker({ recover: true })` harness whose recovery scan
+ * blocks until the returned `releaseScan` latch is called. Recovery-gate tests
+ * use this to prove an event surface stays pending while recovery is blocked,
+ * then release the latch to let setup settle. The event-specific listener
+ * wiring and assertions stay at each call site.
+ */
+function startBlockedRecoverySetup(): {
+  releaseScan: () => void;
+  setupPromise: ReturnType<typeof setupServiceWorker>;
+} {
+  let releaseScan: () => void = () => {};
+  const scanBarrier = new Promise<void>((resolve) => {
+    releaseScan = resolve;
+  });
+
+  // Subclass MemoryStorage so scan() blocks until the latch is released.
+  class BlockingStorage extends MemoryStorage {
+    override async *scan(prefix: string): AsyncIterable<[string, Uint8Array]> {
+      await scanBarrier;
+      yield* super.scan(prefix);
+    }
+  }
+
+  const setupPromise = setupServiceWorker({
+    storage: new BlockingStorage(),
+    recover: true,
+    register(engine) {
+      engine.register(parkingWorkflow);
+    },
+  });
+
+  return { releaseScan, setupPromise };
+}
+
 describe('setupServiceWorker recover option', () => {
   afterEach(() => {
     delete (globalThis as { self?: unknown }).self;
@@ -675,27 +710,7 @@ describe('setupServiceWorker recover option', () => {
   it('fetch gate waits on recoverAll when recover:true (response still pending while recovery is blocked)', async () => {
     const scope = createFakeServiceWorkerScope();
     await withFakeSelf(scope, async () => {
-      let releaseScan: () => void = () => {};
-      const scanBarrier = new Promise<void>((resolve) => {
-        releaseScan = resolve;
-      });
-
-      // Subclass MemoryStorage so scan() blocks until the latch is released.
-      class BlockingStorage extends MemoryStorage {
-        override async *scan(prefix: string): AsyncIterable<[string, Uint8Array]> {
-          await scanBarrier;
-          yield* super.scan(prefix);
-        }
-      }
-
-      const storage = new BlockingStorage();
-      const setupPromise = setupServiceWorker({
-        storage,
-        recover: true,
-        register(engine) {
-          engine.register(parkingWorkflow);
-        },
-      });
+      const { releaseScan, setupPromise } = startBlockedRecoverySetup();
 
       const fetchListener = listenerFor(scope, 'fetch');
       let respondedWith: Promise<Response> | undefined;
@@ -725,26 +740,7 @@ describe('setupServiceWorker recover option', () => {
   it('periodicsync waitUntil also waits on recoverAll when recover:true', async () => {
     const scope = createFakeServiceWorkerScope();
     await withFakeSelf(scope, async () => {
-      let releaseScan: () => void = () => {};
-      const scanBarrier = new Promise<void>((resolve) => {
-        releaseScan = resolve;
-      });
-
-      class BlockingStorage extends MemoryStorage {
-        override async *scan(prefix: string): AsyncIterable<[string, Uint8Array]> {
-          await scanBarrier;
-          yield* super.scan(prefix);
-        }
-      }
-
-      const storage = new BlockingStorage();
-      const setupPromise = setupServiceWorker({
-        storage,
-        recover: true,
-        register(engine) {
-          engine.register(parkingWorkflow);
-        },
-      });
+      const { releaseScan, setupPromise } = startBlockedRecoverySetup();
 
       const periodicListener = listenerFor(scope, 'periodicsync');
       let captured: Promise<unknown> | undefined;
