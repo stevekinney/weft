@@ -4619,29 +4619,82 @@ describe('task assignment deduplication', () => {
     expect(server.registry.getWorker('w-missing-op-id')).toBeUndefined();
   });
 
-  it('ignores stale socket close events after a worker reconnects', async () => {
+  it('rejects a duplicate workerId registration while the first socket is still live', async () => {
+    // Security fix for #609: a new socket that claims an already-active workerId
+    // must receive a registerError and be closed. The original socket must remain
+    // the owner in the registry.
     engine = createEngine();
-    // Disable the reconnect grace period so the stale-socket guard is the
-    // only path that could ignore the close event (the assertion this test
-    // pins). With a non-zero grace period, the timer might fire after the
-    // 100ms test wait and produce a different observable.
     server = serveTestServer({ engine, port: 0, workerReconnectGracePeriodMs: 0 });
+
+    const ws1 = await connectWorker(server);
+    await registerWorker(ws1, { workerId: 'reconnecting-worker', activities: ['charge'] });
+
+    // ws2 tries to claim the same workerId while ws1 is still alive.
+    const ws2 = await connectWorker(server);
+    const registerError = waitForWorkerMessage(
+      ws2,
+      (message) => message['type'] === 'registerError',
+      'registerError for duplicate workerId',
+    );
+    ws2.send(
+      JSON.stringify({
+        type: 'register',
+        protocolVersion: 2,
+        workerId: 'reconnecting-worker',
+        activities: ['charge'],
+        concurrency: 10,
+      }),
+    );
+
+    const error = await registerError;
+    expect(error['type']).toBe('registerError');
+    expect(error['code']).toBe('invalid_registration');
+
+    // ws1 must still own the workerId.
+    expect(server.registry.getWorker('reconnecting-worker')).toBeDefined();
+
+    ws1.close();
+    await waitForRealTimersForTesting(50);
+  });
+
+  it('ignores stale socket close events after a grace-period reconnect', async () => {
+    // When a worker disconnects and reconnects within the grace period, the
+    // fresh socket becomes the owner. The stale-socket guard in the close
+    // handler logs a warning when the old socket's close event eventually fires.
+    engine = createEngine();
+    // Non-zero grace period: ws1 closes, a grace timer fires, ws2 registers
+    // before the timer expires. After ws2 registers, ws1's close event is
+    // processed by the stale-socket guard.
+    server = serveTestServer({ engine, port: 0, workerReconnectGracePeriodMs: 100 });
     const warningSpy = spyOn(console, 'warn').mockImplementation(() => {});
 
     try {
       const ws1 = await connectWorker(server);
-      await registerWorker(ws1, { workerId: 'reconnecting-worker', activities: ['charge'] });
+      await registerWorker(ws1, { workerId: 'grace-reconnect-worker', activities: ['charge'] });
 
-      const ws2 = await connectWorker(server);
-      await registerWorker(ws2, { workerId: 'reconnecting-worker', activities: ['charge'] });
-
+      // ws1 closes, starting the grace-period timer.
       ws1.close();
-      await waitFor(() => warningSpy.mock.calls.length > 0, {
-        label: 'stale socket close warning to be logged',
-      });
 
-      expect(server.registry.getWorker('reconnecting-worker')).toBeDefined();
-      expect(warningSpy).toHaveBeenCalled();
+      // ws2 reconnects within the grace window.
+      const ws2 = await connectWorker(server);
+      const ackPromise = waitForWorkerMessage(
+        ws2,
+        (message) => message['type'] === 'registerAck',
+        'registerAck for grace reconnect',
+      );
+      ws2.send(
+        JSON.stringify({
+          type: 'register',
+          protocolVersion: 2,
+          workerId: 'grace-reconnect-worker',
+          activities: ['charge'],
+          concurrency: 10,
+        }),
+      );
+      await ackPromise;
+
+      // The grace-period reconnect succeeded.
+      expect(server.registry.getWorker('grace-reconnect-worker')).toBeDefined();
 
       ws2.close();
       await waitForRealTimersForTesting(50);

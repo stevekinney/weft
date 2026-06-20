@@ -152,9 +152,28 @@ function registerWorker(
   // reconnecting before that fires, so we hold its in-flight tasks instead of
   // reassigning them.
   const pendingRequeue = context.pendingWorkerRequeues.get(message.workerId);
-  if (pendingRequeue !== undefined) {
+  const isGracePeriodReconnect = pendingRequeue !== undefined;
+  if (isGracePeriodReconnect) {
     clearTimeout(pendingRequeue);
     context.pendingWorkerRequeues.delete(message.workerId);
+  }
+
+  // Guard against workerId hijacking. A `workerSockets` entry for this ID
+  // indicates a live socket — but only block if the previous socket never
+  // disconnected (no pending-requeue entry existed). A grace-period reconnect
+  // legitimately finds the old socket still in the map (it was not removed
+  // until the grace timer fired); the stale-socket guard in the close handler
+  // in authentication-bridge.ts detects and handles that old close event when
+  // it eventually arrives. An unauthenticated or malicious client claiming an
+  // actively-connected workerId is rejected here instead.
+  if (!isGracePeriodReconnect && context.workerSockets.has(message.workerId)) {
+    rejectRegistration(
+      ws,
+      'invalid_registration',
+      'workerId is already registered to an active connection',
+      message.protocolVersion,
+    );
+    return;
   }
 
   ws.data.workerId = message.workerId;

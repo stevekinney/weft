@@ -521,4 +521,105 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(ws.sentMessages).toHaveLength(0);
     });
   });
+
+  describe('duplicate workerId registration', () => {
+    it('rejects a second register message for a workerId already mapped to a live socket', () => {
+      // Security regression: an unauthenticated or malicious client that knows an
+      // active workerId must not be able to displace the legitimate socket.
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
+
+      // First socket — the legitimate worker.
+      const ws1 = createFakeWs();
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws1 as never,
+        JSON.stringify({
+          type: 'register',
+          protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+          workerId: 'w-live',
+          activities: ['doWork'],
+          concurrency: 2,
+        }),
+        NOOP_CLEANUP,
+      );
+      expect(ws1.sentMessages).toHaveLength(1);
+      expect(JSON.parse(ws1.sentMessages[0]!).type).toBe('registerAck');
+      // `workerSockets` is typed against the real `ServerWebSocket`; the stored
+      // value is our `FakeWs` (passed in as `never`), so widen to `unknown` to
+      // assert reference identity without a `ServerWebSocket` overlap mismatch.
+      expect(context.workerSockets.get('w-live') as unknown).toBe(ws1);
+
+      // Second (attacker) socket — attempts to claim the same workerId.
+      const ws2 = createFakeWs();
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws2 as never,
+        JSON.stringify({
+          type: 'register',
+          protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+          workerId: 'w-live',
+          activities: ['doWork'],
+          concurrency: 2,
+        }),
+        NOOP_CLEANUP,
+      );
+
+      // Attacker must receive registerError with code 'invalid_registration'.
+      expect(ws2.sentMessages).toHaveLength(1);
+      const rejection = JSON.parse(ws2.sentMessages[0]!);
+      expect(rejection.type).toBe('registerError');
+      expect(rejection.code).toBe('invalid_registration');
+      // Attacker socket must be closed.
+      expect(ws2.closeCode).toBeDefined();
+      // Original socket must remain the owner in the map.
+      expect(context.workerSockets.get('w-live') as unknown).toBe(ws1);
+    });
+
+    it('allows reconnect within the grace period for the same workerId (clears pendingWorkerRequeues entry)', () => {
+      // A worker that disconnects and reconnects before its grace-period timer fires
+      // must still be accepted: the pending-requeue entry is cleared first, so the
+      // duplicate-active guard never fires.
+      const context = minimalServerContext();
+      const options = minimalServeOptions();
+
+      // Simulate a pending requeue entry — as if the first socket closed and the
+      // grace-period timer is still pending. In the real close-handler path the
+      // old socket stays in `workerSockets` until the timer fires or the
+      // reconnecting socket overwrites it; here the unit-level guard is exercised
+      // purely through `pendingWorkerRequeues`, which sets `isGracePeriodReconnect`
+      // and bypasses the duplicate-active rejection regardless of the map entry.
+      // The end-to-end real state (old socket still mapped at reconnect) is
+      // covered by the integration test in src/server/index.test.ts.
+      const timerHandle = setTimeout(() => {}, 60_000);
+      context.pendingWorkerRequeues.set('w-reconnect', timerHandle);
+
+      // Reconnecting socket registers under the same workerId.
+      const ws = createFakeWs();
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'register',
+          protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+          workerId: 'w-reconnect',
+          activities: ['doWork'],
+          concurrency: 4,
+        }),
+        NOOP_CLEANUP,
+      );
+
+      // Must succeed: registerAck sent, timer cleared, socket in map.
+      expect(ws.sentMessages).toHaveLength(1);
+      expect(JSON.parse(ws.sentMessages[0]!).type).toBe('registerAck');
+      expect(ws.closeCode).toBeUndefined();
+      expect(context.pendingWorkerRequeues.has('w-reconnect')).toBe(false);
+      expect(context.workerSockets.get('w-reconnect') as unknown).toBe(ws);
+
+      clearTimeout(timerHandle);
+    });
+  });
 });
