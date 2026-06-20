@@ -56,8 +56,10 @@ const MAX_WORKER_RECONNECT_GRACE_PERIOD_MS = 5_000;
  * Hard ceiling on WebSocket frame size for worker connections. Bun's default
  * is 16 MiB; this cap is applied at the transport layer before any JSON parse
  * so a malicious worker cannot force a 16 MiB parse per message. When
- * `payloadSize.maxBytes` is set to a value smaller than this ceiling, the
- * configured app cap wins (the minimum of the two is used).
+ * `payloadSize.maxBytes` is set to a positive value smaller than this ceiling,
+ * the configured app cap wins (the minimum of the two is used). A `null` or
+ * `0` app cap (both mean "no app-level admission cap") falls back to this
+ * ceiling — it never lowers the frame limit to zero.
  *
  * @internal Exported only for test assertions.
  */
@@ -295,9 +297,11 @@ export function cleanupWorkflowIndex(context: ServerContext, operationId: string
  * conditional spread (`...(tlsOptions ? { tls } : {})`) inside `serve()`.
  *
  * The `payloadSizeMaxBytes` argument threads the engine's payload cap into the
- * WebSocket transport layer. The resulting `maxPayloadLength` is the smaller of
- * `payloadSizeMaxBytes` and `WEBSOCKET_MAX_PAYLOAD_BYTES` (the hard 4 MiB
- * ceiling), so Bun rejects oversized frames before any JSON parse occurs.
+ * WebSocket transport layer. A positive cap yields the smaller of it and
+ * `WEBSOCKET_MAX_PAYLOAD_BYTES` (the hard 4 MiB ceiling); a `null` or `0` cap
+ * (both mean "no app-level admission cap") falls back to the ceiling rather
+ * than collapsing the frame limit to zero. Either way Bun rejects oversized
+ * frames before any JSON parse occurs.
  */
 export function buildBunServeConfig(
   port: number,
@@ -309,10 +313,15 @@ export function buildBunServeConfig(
   websocketCallbacks: ReturnType<typeof createServerWebSocketHandlers>,
   payloadSizeMaxBytes: number | null,
 ): Parameters<typeof Bun.serve<WebSocketData>>[0] {
-  const maxPayloadLength = Math.min(
-    payloadSizeMaxBytes ?? WEBSOCKET_MAX_PAYLOAD_BYTES,
-    WEBSOCKET_MAX_PAYLOAD_BYTES,
-  );
+  // A `null` or `0` app cap both mean "no app-level admission cap" — neither
+  // should lower the WebSocket frame limit. `??` alone would not catch `0`
+  // (0 is not nullish), so `Math.min(0, ceiling)` would brick the transport at
+  // a zero-byte frame limit. Treat any non-positive cap as "use the ceiling".
+  const requestedFrameLimit =
+    payloadSizeMaxBytes !== null && payloadSizeMaxBytes > 0
+      ? payloadSizeMaxBytes
+      : WEBSOCKET_MAX_PAYLOAD_BYTES;
+  const maxPayloadLength = Math.min(requestedFrameLimit, WEBSOCKET_MAX_PAYLOAD_BYTES);
   const config: Parameters<typeof Bun.serve<WebSocketData>>[0] = {
     port,
     hostname,

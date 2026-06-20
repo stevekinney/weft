@@ -309,6 +309,40 @@ describe('registerStackDisposers', () => {
       );
       expect(config.websocket!.maxPayloadLength).toBe(WEBSOCKET_MAX_PAYLOAD_BYTES);
     });
+
+    it('falls back to the hard ceiling when payloadSizeMaxBytes is 0 (app cap disabled)', () => {
+      // `0` means "no app-level admission cap" — it must NOT collapse the
+      // WebSocket frame limit to zero (which would reject every worker frame and
+      // re-open the DoS framing). Regression guard for the `0 ?? ceiling === 0`
+      // footgun.
+      const config = buildBunServeConfig(
+        7233,
+        '127.0.0.1',
+        false,
+        {},
+        undefined,
+        async () => new Response('ok'),
+        websocketCallbacks,
+        0,
+      );
+      expect(config.websocket!.maxPayloadLength).toBe(WEBSOCKET_MAX_PAYLOAD_BYTES);
+      expect(config.websocket!.maxPayloadLength).toBe(4 * 1024 * 1024);
+    });
+
+    it('uses payloadSizeMaxBytes when it equals the hard ceiling exactly (boundary)', () => {
+      const exactCap = WEBSOCKET_MAX_PAYLOAD_BYTES; // 4 MiB — equal to the ceiling
+      const config = buildBunServeConfig(
+        7233,
+        '127.0.0.1',
+        false,
+        {},
+        undefined,
+        async () => new Response('ok'),
+        websocketCallbacks,
+        exactCap,
+      );
+      expect(config.websocket!.maxPayloadLength).toBe(WEBSOCKET_MAX_PAYLOAD_BYTES);
+    });
   });
 
   it('disposes the task queue from the timer-cleanup disposer', () => {
