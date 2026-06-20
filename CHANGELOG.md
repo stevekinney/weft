@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-20
+
+### Added — secure REST Server-Sent Event streams
+
+REST now exposes authenticated Server-Sent Event feeds for workflow and fleet
+events (#598). The new `weft.workflows.events.sse` and `weft.events.sse`
+operations stream committed event envelopes with cursor-keyed frames, idle
+`ping` keepalives, `Last-Event-ID` / `fromCursor` replay, `Accept:
+text/event-stream` negotiation, sanitized in-stream error frames, and
+scope-aware authorization. `maxStreamConnectionsPerWorkflow` now accounts for
+workflow event SSE connections alongside the existing stream and watch paths.
+
+`HttpClient` gains `eventTransport: 'auto' | 'websocket' | 'sse'`, keeping
+WebSocket delivery as the preferred path while falling back to fetch-based SSE
+when the runtime cannot construct header-capable WebSockets. Shared tail
+lifecycle code now backs both WebSocket and SSE clients, reducing duplicate
+iterator, buffering, close, and terminal cleanup behavior (#601).
+
+### Added — restart-capable `startOrSignal`
+
+`engine.startOrSignal()` can now reuse a stable workflow id after the prior run
+is terminal, mirroring `engine.start(..., { onTerminalConflict: 'start-new' })`
+while preserving the single start-or-signal call shape (#606). The restart path
+requires an explicit workflow `id` and deterministic `signal.signalId`, rejects
+`idempotencyKey`, signals non-terminal runs instead of replacing them, and
+purges the terminal prior run through the shared terminal-replacement path
+before creating the fresh run with its initial signal.
+
+The option is available through `WeftClient`, `LocalClient`, `HttpClient`, REST,
+JSON-RPC, generated catalog/client metadata, and public exports.
+`weft.workflows.startorsignal` is now classified as destructive because this
+option can purge a terminal run. `WorkflowTeardownPendingError` is surfaced as a
+typed conflict when durable finalizer teardown blocks the restart.
+
+### Added — services resolver launch context
+
+`resolveWorkflowServices` now receives optional `launchOptions` and `schedule`
+context so inline hosts can rebuild services from durable launch identity rather
+than duplicating that identity in workflow inputs (#605). Recovered runs include
+the workflow id and current durable tags; scheduled occurrences include the
+schedule id and occurrence timestamp when known. The package root now exports
+`WorkflowServicesResolverLaunchOptions` and
+`WorkflowServicesResolverScheduleInfo` so consumers can name every nested field
+on `WorkflowServicesResolverInfo` without deep imports (#607).
+
+### Added — timeout and scheduler diagnostics
+
+`WorkflowTimeoutError` now exposes an optional `terminationReason`, aligned with
+`WorkflowTimedOutEvent.reason`, so callers can distinguish history
+circuit-breaker termination from execution-deadline timeouts directly from
+`handle.result()` / Observable errors without a second `engine.get()` lookup
+(#593).
+
+`EngineOptions.schedulerPollIntervalMs` configures the durable-timer scheduler's
+real-time poll interval, with positive-safe-integer validation before it reaches
+`setInterval`. `DEFAULT_POLL_INTERVAL_MS` is now wired into the scheduler and
+exported for diagnostics and tests (#593).
+
+### Fixed — coverage, documentation, and source-compatibility classification
+
+- Restored route-match, local handle wrapper, and event-stream lifecycle
+  coverage without weakening the release gates (#596, #600, #601).
+- Refreshed public documentation, agent guidance, and event-streaming docs after
+  the recent API changes (#597, #602).
+- Reclassified source-compatibility wording in tests so compatibility assertions
+  describe current contracts rather than retired compatibility layers (#595).
+
 ## [0.6.0] - 2026-06-17
 
 ### Added — `Engine.create({ startScheduler })` decouples timer polling from recovery

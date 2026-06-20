@@ -1,6 +1,6 @@
 # Weft
 
-A Bun-native durable execution engine. Current release: `0.6.0`.
+A Bun-native durable execution engine. Current release: `0.7.0`.
 
 Install the library from npm as `@lostgradient/weft`:
 
