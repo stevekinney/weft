@@ -26,6 +26,12 @@ bun run validate
 
 `verify:markdown-doctests` typechecks runnable TypeScript fences under `documentation/**`. Use a bare `ts` or `typescript` fence only for standalone snippets that should compile. Use `ts partial` for fragments that need surrounding setup, and only add a new skip reason when the existing allowlist cannot describe the case.
 
+## Pull Request Evidence Refreshes
+
+When refreshing documentation from recent pull requests, build the evidence set before editing prose. List merged pull requests in the requested window, read the pull request body, changed files, review comments, and verification notes, then update only documentation that reflects shipped behavior on `main`.
+
+For documentation-only refresh pull requests, include an evidence section in the pull request body that names the source pull requests and the specific contracts being documented. The June 2026 worker and restart refresh used this pattern for restart-capable `startOrSignal`, services resolver context, WebSocket frame limits, duplicate `workerId` registration, and browser smoke verification. Do not re-document already-covered behavior when the latest pull request in the window was itself a documentation refresh.
+
 ## Recovery Examples
 
 Recovery examples should say the durable contract directly:
