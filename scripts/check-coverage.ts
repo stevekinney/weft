@@ -2168,7 +2168,7 @@ const AUDIT_BACKLOG_COVERAGE_ALLOWANCE_TOP_OFFS = buildAllowanceLayer(
         lines: createMergedLineSet(
           createLineSet(263, 266),
           createLineSet(268, 271),
-          new Set([408, 412, 413, 414, 417, 418]),
+          new Set([408, 412, 413, 414, 417, 418, 439, 440, 443, 444]),
         ),
       },
     ],

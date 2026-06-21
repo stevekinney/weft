@@ -6,7 +6,7 @@
  * malformed/unknown-type paths. They do NOT assert private call order.
  */
 
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 
 import { decode } from '../../core/codec.ts';
 import { KEYS } from '../../storage/interface.ts';
@@ -471,6 +471,59 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(resolved.status).toBe('failed');
       expect(resolved.error).toContain('activity result exceeds');
       expect(resolved.error).not.toContain('x'.repeat(100));
+    });
+
+    it('logs when inflight resolution throws after the task is dequeued', async () => {
+      const storage = {
+        get: async () => {
+          throw new Error('storage read failed');
+        },
+      } as unknown as MemoryStorage;
+      const context = minimalServerContext();
+      const options = minimalServeOptions(storage);
+      const ws = createFakeWs();
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'register',
+          protocolVersion: REMOTE_WORKER_PROTOCOL_VERSION,
+          workerId: 'w-storage-failure',
+          activities: ['doWork'],
+          concurrency: 5,
+        }),
+        NOOP_CLEANUP,
+      );
+
+      context.registry.assignTask('w-storage-failure', 'op-storage-failure', 30_000, undefined);
+
+      using errorSpy = spyOn(console, 'error').mockImplementation(() => {});
+
+      handleWorkerWebSocketMessage(
+        context,
+        options,
+        ws as never,
+        JSON.stringify({
+          type: 'taskResult',
+          operationId: 'op-storage-failure',
+          status: 'completed',
+          value: 'done',
+        }),
+        NOOP_CLEANUP,
+      );
+
+      await waitForCondition(async () => errorSpy.mock.calls.length > 0, {
+        timeoutMs: 1000,
+        intervalMs: 10,
+        label: 'taskResult resolution failure to be logged',
+      });
+
+      expect(errorSpy).toHaveBeenCalledWith(
+        '[weft] Failed to transition task "op-storage-failure" to resolved — inflight record may leak:',
+        expect.any(Error),
+      );
     });
   });
 
