@@ -107,6 +107,7 @@ type AsyncHooksModule = {
 };
 
 let durableActivityScopeStorage: AsyncLocalStorageLike<DurableActivityScope> | null | undefined;
+const fallbackDurableActivityScopes: DurableActivityScope[] = [];
 
 function loadAsyncLocalStorageConstructor(): AsyncLocalStorageConstructor | undefined {
   const processValue =
@@ -132,7 +133,11 @@ function getDurableActivityScopeStorage(): AsyncLocalStorageLike<DurableActivity
 }
 
 function currentDurableActivityScope(): DurableActivityScope | undefined {
-  return getDurableActivityScopeStorage()?.getStore();
+  const storage = getDurableActivityScopeStorage();
+  if (storage !== null) {
+    return storage.getStore();
+  }
+  return fallbackDurableActivityScopes.at(-1);
 }
 
 export function runWithDurableActivityScope<TResult>(
@@ -141,9 +146,44 @@ export function runWithDurableActivityScope<TResult>(
 ): TResult {
   const storage = getDurableActivityScopeStorage();
   if (storage === null) {
-    return execute();
+    return runWithFallbackDurableActivityScope(scope, execute);
   }
   return storage.run(scope, execute);
+}
+
+function runWithFallbackDurableActivityScope<TResult>(
+  scope: DurableActivityScope,
+  execute: () => TResult,
+): TResult {
+  fallbackDurableActivityScopes.push(scope);
+  let result: TResult;
+  try {
+    result = execute();
+  } catch (error) {
+    removeFallbackDurableActivityScope(scope);
+    throw error;
+  }
+  if (hasFinally(result)) {
+    return result.finally(() => removeFallbackDurableActivityScope(scope));
+  }
+  removeFallbackDurableActivityScope(scope);
+  return result;
+}
+
+function removeFallbackDurableActivityScope(scope: DurableActivityScope): void {
+  const index = fallbackDurableActivityScopes.lastIndexOf(scope);
+  if (index >= 0) {
+    fallbackDurableActivityScopes.splice(index, 1);
+  }
+}
+
+function hasFinally<TResult>(
+  value: TResult,
+): value is TResult & { finally(onFinally: () => void): TResult } {
+  if ((typeof value !== 'object' && typeof value !== 'function') || value === null) {
+    return false;
+  }
+  return 'finally' in value && typeof value.finally === 'function';
 }
 
 /**
