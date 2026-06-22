@@ -68,21 +68,23 @@ export class DurableActivityScopeError extends WeftError<'DurableActivityScopeEr
  *
  * @example
  * ```ts
- * import { durableActivity, DurableActivityUnsupportedError } from '@lostgradient/weft';
+ * import { durableActivity, DurableActivityUnsupportedError, workflow } from '@lostgradient/weft';
  *
- * async function runHelperActivity(): Promise<void> {
+ * export const completionWorkflow = workflow({ name: 'manual-completion' }).execute(async function* (
+ *   ctx,
+ * ) {
  *   try {
- *     await durableActivity('manualCompletionActivity', undefined, {
- *       idempotencyKey: 'manual-completion:1',
- *     });
+ *     yield* ctx.memo('manual-completion-helper', async () =>
+ *       durableActivity('manualCompletionActivity', undefined, {
+ *         idempotencyKey: 'manual-completion:1',
+ *       }),
+ *     );
  *   } catch (error) {
  *     if (error instanceof DurableActivityUnsupportedError) {
  *       console.error(error.message);
  *     }
  *   }
- * }
- *
- * void runHelperActivity;
+ * });
  * ```
  */
 export class DurableActivityUnsupportedError extends WeftError<'DurableActivityUnsupportedError'> {
