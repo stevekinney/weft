@@ -1,6 +1,6 @@
 # Tier-0 Behavioral Contract
 
-This contract gates the Tier-0 implementation work for activity result reconciliation, signal idempotency, concurrent-resume checkpoint ownership, and persisted-format compatibility. It is intentionally stricter than the current implementation. Sections labeled "current behavior" describe Weft 0.1.0 behavior observed in source; sections labeled "Tier-0 required behavior" define what the follow-up implementation tasks must make true.
+This contract gates the Tier-0 implementation work for activity result reconciliation, signal idempotency, concurrent-resume checkpoint ownership, and persisted-format rolling-upgrade contract. It is intentionally stricter than the current implementation. Sections labeled "current behavior" describe Weft 0.1.0 behavior observed in source; sections labeled "Tier-0 required behavior" define what the follow-up implementation tasks must make true.
 
 The goal is not blanket exactly-once execution. Weft can reconcile durable records it has committed. It cannot undo an external side effect that completed before the engine durably recorded the result. Activities that talk to payment processors, queues, email providers, or databases still need user-supplied idempotency keys for those external systems.
 
@@ -136,7 +136,7 @@ Crash windows:
 
 The `SignalAcceptanceIndeterminate` fault is retryable only after operator inspection or retention cleanup. REST returns `409 Conflict`; JSON-RPC returns the Weft conflict code used for operation conflicts; the client SDK rejects with a typed Weft error whose `code` is `SignalAcceptanceIndeterminate`. The public fault includes `workflowId`, `signalName`, `signalId`, and a generated diagnostic correlation identifier, but never includes the signal payload.
 
-The signal task must test duplicate `signalId` delivery for REST, JSON-RPC, and client SDK paths that expose the field. It must include a concurrent duplicate race test, a durable replay-after-crash test, legacy no-`signalId` behavior, retention-expiry behavior, reserved-character key-collision coverage, canonical accepted-result replay, JSON-RPC duplicate replay with a different request `id`, cross-transport duplicate replay, and `SignalAcceptanceIndeterminate` transport assertions.
+The signal task must test duplicate `signalId` delivery for REST, JSON-RPC, and client SDK paths that expose the field. It must include a concurrent duplicate race test, a durable replay-after-crash test, requests without `signalId` (non-idempotent path), retention-expiry behavior, reserved-character key-collision coverage, canonical accepted-result replay, JSON-RPC duplicate replay with a different request `id`, cross-transport duplicate replay, and `SignalAcceptanceIndeterminate` transport assertions.
 
 ## Concurrent Resume And Checkpoint Ownership
 
@@ -168,7 +168,7 @@ Mixed-version concurrent ownership is forbidden. Operators must prevent old and 
 
 The CAS task must prove that two owners cannot both commit over the same checkpoint on a CAS-capable adapter. It must also test the documented single-owner mode and the `CheckpointOwnershipCapabilityError` fail-fast path for a backend whose `capabilities().conditionalBatch` is `false`.
 
-## Persisted-Format Compatibility And Rollback
+## Persisted-Format Rolling-Upgrade Contract And Rollback
 
 ### Current Behavior
 
@@ -178,22 +178,22 @@ Weft stores hierarchical key-value records such as `wf:{id}`, `wf:{id}:ckpt`, `w
 
 The Tier-0 policy is additive records plus rolling-upgrade support, with mixed-version concurrent ownership forbidden.
 
-Compatibility matrix:
+Rolling-upgrade matrix:
 
 | Scenario                                      | Required behavior                                                                                                                                      |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | New writer, new reader                        | Full Tier-0 behavior.                                                                                                                                  |
-| Old writer, new reader                        | New reader accepts missing Tier-0 records and applies legacy behavior where no record exists.                                                          |
+| Old writer, new reader                        | New reader accepts missing Tier-0 records and applies non-idempotent behavior where no Tier-0 record exists.                                          |
 | New writer, old reader during rolling upgrade | Old reader must ignore unknown additive record prefixes and must not corrupt them. It must not concurrently own the same workflow as a new reader.     |
 | Downgrade after new records exist             | Downgrade is allowed only after workflows are drained or ownership is forced to old-version single-owner mode with accepted loss of Tier-0 guarantees. |
 | Mixed old and new owners on one workflow      | Unsupported. Operators must prevent it; later CAS work may turn this into a deterministic conflict.                                                    |
 | Cleanup or garbage collection                 | Retention jobs must delete only Tier-0 records whose owning workflow or response-retention window is complete.                                         |
 
-New record prefixes must be additive: old engines that scan `wf:`, `sig:`, `upd:`, or `op:` must not see a Tier-0 record as a legacy workflow, signal, update, or operation. If a Tier-0 implementation needs to change an existing record shape, it must add a migration test and update this contract first.
+New record prefixes must be additive: old engines that scan `wf:`, `sig:`, `upd:`, or `op:` must not see a Tier-0 record as a current workflow, signal, update, or operation. If a Tier-0 implementation needs to change an existing record shape, it must add a persisted-format test and update this contract first.
 
 ### Implementation Verification Target
 
-Each Tier-0 implementation task must add persisted-format tests for its new records. At minimum, tests must prove that missing records preserve legacy behavior, unknown additive records do not break existing scans, and retention removes only records that are safe to remove.
+Each Tier-0 implementation task must add persisted-format tests for its new records. At minimum, tests must prove that missing records apply non-idempotent behavior, unknown additive records do not break existing scans, and retention removes only records that are safe to remove.
 
 ## Storage Capability Requirements
 
@@ -206,5 +206,5 @@ Each Tier-0 implementation task must add persisted-format tests for its new reco
 - Activity section has current behavior, Tier-0 required behavior, implementation verification target, key scope, record shape, verify state table, and outcome matrix.
 - Signal section has current behavior, Tier-0 required behavior, implementation verification target, uniqueness scope, validation table, accepted-response shape, concurrent duplicate rule, and crash-window table.
 - Concurrent-resume section has current behavior, Tier-0 required behavior, implementation verification target, adapter classes, CAS precondition, fail-fast boundary, and mixed-version rollout precondition.
-- Persisted-format section has current behavior, Tier-0 required behavior, implementation verification target, compatibility matrix, additive-record policy, downgrade behavior, and cleanup rule.
+- Persisted-format section has current behavior, Tier-0 required behavior, implementation verification target, rolling-upgrade matrix, additive-record policy, downgrade behavior, and cleanup rule.
 - No runtime source, transport schema, generated-client, or generated-artifact changes are part of this contract task.
