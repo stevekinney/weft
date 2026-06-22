@@ -108,6 +108,9 @@ type AsyncHooksModule = {
 
 let durableActivityScopeStorage: AsyncLocalStorageLike<DurableActivityScope> | null | undefined;
 const fallbackDurableActivityScopes: DurableActivityScope[] = [];
+const AMBIGUOUS_FALLBACK_DURABLE_ACTIVITY_SCOPE = Symbol(
+  'AMBIGUOUS_FALLBACK_DURABLE_ACTIVITY_SCOPE',
+);
 
 function loadAsyncLocalStorageConstructor(): AsyncLocalStorageConstructor | undefined {
   const processValue =
@@ -132,10 +135,16 @@ function getDurableActivityScopeStorage(): AsyncLocalStorageLike<DurableActivity
   return durableActivityScopeStorage;
 }
 
-function currentDurableActivityScope(): DurableActivityScope | undefined {
+function currentDurableActivityScope():
+  | DurableActivityScope
+  | typeof AMBIGUOUS_FALLBACK_DURABLE_ACTIVITY_SCOPE
+  | undefined {
   const storage = getDurableActivityScopeStorage();
   if (storage !== null) {
     return storage.getStore();
+  }
+  if (fallbackDurableActivityScopes.length > 1) {
+    return AMBIGUOUS_FALLBACK_DURABLE_ACTIVITY_SCOPE;
   }
   return fallbackDurableActivityScopes.at(-1);
 }
@@ -247,6 +256,14 @@ export function durableActivity<TResult>(
   ...activityArguments: unknown[]
 ): Promise<TResult> {
   const scope = currentDurableActivityScope();
+  if (scope === AMBIGUOUS_FALLBACK_DURABLE_ACTIVITY_SCOPE) {
+    return Promise.reject(
+      new DurableActivityScopeError(
+        'durableActivity() cannot resolve a unique ctx.memo() scope because AsyncLocalStorage is unavailable ' +
+          'and multiple memo callbacks are active. Run this workflow in a runtime with AsyncLocalStorage support.',
+      ),
+    );
+  }
   if (scope === undefined) {
     return Promise.reject(
       new DurableActivityScopeError(
