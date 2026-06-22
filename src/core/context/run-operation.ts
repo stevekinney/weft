@@ -259,6 +259,8 @@ export function createRunActivityRequest<TResult>(
   rest: readonly unknown[],
   explicitName?: string,
 ): RunActivityRequest<TResult> {
+  // Intentionally parse before reserving a workflow step index; the at-step helper
+  // parses again when it builds the request from the validated arguments.
   parseRunArguments(activity, rest);
   const internals = getInternals(context);
   const step = internals.stepIndex++;
