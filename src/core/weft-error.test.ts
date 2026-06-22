@@ -12,6 +12,8 @@ import {
   BranchTopologyChangedError,
   BulkDeleteRequiresTerminalWorkflowsError,
   BulkOperationConfirmationError,
+  DurableActivityScopeError,
+  DurableActivityUnsupportedError,
   EffectReplayConflictError,
   EngineCreateNameMismatchError,
   EngineDisposedError,
@@ -109,6 +111,9 @@ const cases: Record<WeftErrorCode, () => WeftError> = {
   ActivityReconciliationConflictError: () => new ActivityReconciliationConflictError('conflict'),
   ActivityReconciliationIndeterminateError: () =>
     new ActivityReconciliationIndeterminateError('indeterminate'),
+  DurableActivityScopeError: () => new DurableActivityScopeError('durable activity scope closed'),
+  DurableActivityUnsupportedError: () =>
+    new DurableActivityUnsupportedError('durable activity unsupported feature'),
   PayloadSizeExceededError: () => new PayloadSizeExceededError('activity result', 2_048, 1_024),
   StandardSchemaValidationError: () =>
     new StandardSchemaValidationError({

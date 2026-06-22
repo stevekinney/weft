@@ -8,12 +8,14 @@ import {
   activity,
   Context,
   DevelopmentWarningEvent,
+  durableActivity,
   Engine,
   ScheduleMissedFireEvent,
   signal,
   update,
   workflow,
   WorkflowStartedEvent,
+  type ActivityCallable,
   type AnyActivityDefinition,
   type AnyWorkflowDefinition,
   type ChildWorkflowHandle,
@@ -102,6 +104,36 @@ void concreteContextContractGuard;
 
 const approvalSignal = signal<{ approved: boolean }>('approval');
 const setNameUpdate = update<{ name: string }, string>('set-name');
+
+const typedToolActivity = activity({
+  name: 'typedTool',
+  execute: async (input: { tool: string }) => ({ result: input.tool }),
+});
+
+async function sharedDurableActivityHelper(input: { tool: string }): Promise<void> {
+  const byName = await durableActivity<{ result: string }>('typedTool', input, {
+    idempotencyKey: `tool:${input.tool}`,
+  });
+  const byCallable = await durableActivity(typedToolActivity, input, {
+    idempotencyKey: `callable:${input.tool}`,
+  });
+  const noInputActivity: ActivityCallable<void, number> = activity(async () => 42);
+  const noInputResult = await durableActivity(noInputActivity);
+  async function noInputBareTool(): Promise<number> {
+    return 42;
+  }
+  const noInputBareResult = await durableActivity(noInputBareTool, {
+    idempotencyKey: 'bare:no-input',
+  });
+  // @ts-expect-error typed ActivityCallable inputs must match the activity input type.
+  await durableActivity(typedToolActivity, { missing: input.tool });
+
+  void (byName satisfies { result: string });
+  void (byCallable satisfies { result: string });
+  void (noInputResult satisfies number);
+  void (noInputBareResult satisfies number);
+}
+void sharedDurableActivityHelper;
 
 // Activity names are now typed per-workflow via the builder's `.activities()`
 // step. This replaces the global `ActivityTypes` module augmentation that the

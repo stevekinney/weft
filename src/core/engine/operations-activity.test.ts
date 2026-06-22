@@ -118,6 +118,18 @@ class InitialClaimLosingStorage extends MemoryStorage {
   }
 }
 
+class RecordingConditionalBatchStorage extends MemoryStorage {
+  readonly conditionBatches: ConditionalBatchCondition[][] = [];
+
+  override async conditionalBatch(
+    conditions: ConditionalBatchCondition[],
+    operations: BatchOperation[],
+  ): Promise<boolean> {
+    this.conditionBatches.push(conditions);
+    return super.conditionalBatch(conditions, operations);
+  }
+}
+
 async function digestIdempotencyKey(idempotencyKey: string): Promise<string> {
   const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(idempotencyKey));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('');
@@ -475,6 +487,75 @@ describe('activity operation helpers', () => {
         createCallbacks(),
       ),
     ).resolves.toBe('first-result');
+  });
+
+  it('can commit a keyed activity completion immediately without staging a checkpoint side effect', async () => {
+    const storage = new MemoryStorage();
+    const operation = createActivityOperation({
+      fn: () => 'immediate-result',
+      options: { idempotencyKey: 'immediate-key' },
+    });
+    const internals = createInternals({ storage });
+
+    await expect(
+      executeActivityOperationResult(
+        internals as never,
+        'workflow:id',
+        operation,
+        createCallbacks(),
+        undefined,
+        undefined,
+        { reconciliationCompletion: 'immediate-fenced' },
+      ),
+    ).resolves.toBe('immediate-result');
+
+    expect(internals.pendingAtomicWorkflowCommitSideEffects.has('workflow:id')).toBe(false);
+    expect(await readSingleActivityReconciliationRecord(storage, 'workflow:id')).toMatchObject({
+      status: 'completed',
+      result: 'immediate-result',
+    });
+  });
+
+  it('lease-fences immediate keyed activity completion writes', async () => {
+    const storage = new RecordingConditionalBatchStorage();
+    const epoch = new Uint8Array([0, 0, 0, 0, 0, 0, 0, 1]);
+    await storage.put(KEYS.leaseEpoch(), epoch);
+    const operation = createActivityOperation({
+      fn: () => 'fenced-result',
+      options: { idempotencyKey: 'lease-fenced-key' },
+    });
+    const internals = createInternals({
+      deposed: false,
+      leaseManager: { currentEpochBytes: () => epoch },
+      options: {
+        getNow: () => 1_700_000_000_000,
+        ownershipMode: 'lease',
+        payloadSizePolicy: { maxBytes: null },
+      },
+      storage,
+    });
+
+    await expect(
+      executeActivityOperationResult(
+        internals as never,
+        'workflow:id',
+        operation,
+        createCallbacks(),
+        undefined,
+        undefined,
+        { reconciliationCompletion: 'immediate-fenced' },
+      ),
+    ).resolves.toBe('fenced-result');
+
+    expect(
+      storage.conditionBatches.some((conditions) =>
+        conditions.some((condition) => condition.key === KEYS.leaseEpoch()),
+      ),
+    ).toBe(true);
+    expect(await readSingleActivityReconciliationRecord(storage, 'workflow:id')).toMatchObject({
+      status: 'completed',
+      result: 'fenced-result',
+    });
   });
 
   it('fails closed when a keyed activity has a prior started record and no verifier', async () => {

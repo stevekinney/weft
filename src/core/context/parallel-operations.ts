@@ -271,6 +271,7 @@ export function* memo<T>(
     type: 'memo',
     operationId,
     key,
+    step,
     fn,
     callerStack,
   };

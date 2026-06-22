@@ -200,6 +200,56 @@ The `queue` routes the activity to a specific worker queue (useful for rate limi
 > [!WARNING]
 > Activities are at-least-once side effects. Payment providers, queues, email APIs, and databases still need their own idempotency keys. Weft can replay a completed result it durably recorded, or ask your verifier whether a prior keyed side effect completed, but it cannot undo an external side effect that finished before Weft recorded the outcome. A keyed activity without a Tier-0 verifier can fail closed after a crash in that execution window because recovery sees only the prior start marker and cannot prove whether redispatch is safe.
 
+## Plain async helper calls
+
+Use `durableActivity()` when shared workflow logic already lives in plain async helper functions and you do not want to convert the whole helper stack to generators. The helper is intentionally narrow: it only works while an inline workflow is executing a `ctx.memo()` callback. Outside that activation boundary it rejects with `DurableActivityScopeError`.
+
+```typescript
+import { durableActivity, workflow } from '@lostgradient/weft';
+
+interface Input {
+  tool: { name: string; arguments: unknown };
+  toolKey: string;
+}
+
+async function executeTool(input: Input['tool']): Promise<{ output: unknown }> {
+  return { output: input.arguments };
+}
+
+async function sharedStep(input: Input): Promise<{ toolResult: unknown }> {
+  const toolResult = await durableActivity('executeTool', input.tool, {
+    idempotencyKey: input.toolKey,
+  });
+  return { toolResult };
+}
+
+const run = workflow({ name: 'agent-like-run' })
+  .activities({ executeTool })
+  .execute(async function* (ctx, input: Input) {
+    return yield* ctx.memo('step-0', async () => sharedStep(input));
+  });
+
+void run;
+```
+
+Each `durableActivity()` call gets a deterministic sub-operation identity derived from the owning memo step, memo key, and call ordinal. That identity keeps retry state, heartbeat state, timeline labels, reconciliation metadata, and diagnostics separate from the surrounding memo operation. Calls in one memo callback must be awaited sequentially. If the callback returns while a helper activity promise is still pending, Weft fails the memo and closes the scope so no detached promise can later commit.
+
+Keyed and unkeyed calls intentionally differ:
+
+- With `options.idempotencyKey` (or a definition-level `idempotencyKey`), Weft commits the completed reconciliation record immediately through the same lease-fenced write path used by engine commits. If the process crashes after the activity returns but before the memo result is checkpointed, recovery replays the completed result without redispatching.
+- Without an idempotency key, no immediate result record is written. A crash before the memo checkpoints keeps the existing at-least-once behavior and may run the activity again.
+
+`durableActivity()` preserves the normal activity registration, name validation, retry, per-attempt timeout, schedule-to-close timeout, verifier, heartbeat, interceptor, and observability paths. It does not serialize helper locals; only the memo result and normal activity metadata become durable. Workflow cancellation and engine disposal abort pending helper activities and reject their promises; a late keyed result cannot write a completed reconciliation record after the memo owner is gone.
+
+`ActivityContext.completeAsync()` is not supported from `durableActivity()`. Use `yield* ctx.run()` directly for async-completion activities, worker-mode workflows, parallel `ctx.all`/`ctx.race` activity branches, signals, timers, child workflows, or any helper code that cannot run inside a single `ctx.memo()` callback.
+
+Verification checklist for this pattern:
+
+- Give side-effecting helper activities stable idempotency keys.
+- Keep helper activity calls sequential and awaited.
+- Test fresh-process recovery after the helper activity returns but before the memo callback returns.
+- Keep an unkeyed recovery test if you intentionally rely on at-least-once behavior.
+
 ## Activity definitions
 
 When you find yourself specifying the same retry policy and timeout at every call site, it is time to colocate that configuration with the activity itself using `ActivityDefinition`.

@@ -50,6 +50,10 @@ type PendingTimelineEntryValue = {
   entry: WorkflowTimelineEntry;
 };
 
+export type PersistCheckpointOptions = {
+  timeline?: 'record-operation' | 'preserve-pending';
+};
+
 type PersistCheckpointCallbacks = {
   appendTimelineBatchOperations: (
     workflowId: string,
@@ -132,11 +136,12 @@ export async function persistCheckpoint(
   operation: ContextOperationRequest,
   workerCheckpointBytes: ArrayBuffer | undefined,
   callbacks: PersistCheckpointCallbacks,
+  options: PersistCheckpointOptions = {},
 ): Promise<void> {
   const context = internals.inlineStrategy?.getContext(workflowId);
 
   if (context) {
-    await persistInlineCheckpoint(internals, workflowId, operation, callbacks);
+    await persistInlineCheckpoint(internals, workflowId, operation, callbacks, options);
   } else if (workerCheckpointBytes && workerCheckpointBytes.byteLength > 0) {
     await persistWorkerCheckpoint(
       internals,
@@ -144,6 +149,7 @@ export async function persistCheckpoint(
       operation,
       workerCheckpointBytes,
       callbacks,
+      options,
     );
   }
 }
@@ -153,6 +159,7 @@ async function persistInlineCheckpoint(
   workflowId: string,
   operation: ContextOperationRequest,
   callbacks: PersistCheckpointCallbacks,
+  options: PersistCheckpointOptions,
 ): Promise<void> {
   const current = internals.checkpoints.get(workflowId);
   const context = internals.inlineStrategy?.getContext(workflowId);
@@ -187,7 +194,7 @@ async function persistInlineCheckpoint(
     hasPendingAttributeChangesValue,
     callbacks,
   );
-  await commitCheckpoint(internals, workflowId, operation, commit, callbacks);
+  await commitCheckpoint(internals, workflowId, operation, commit, callbacks, options);
   if (hasPendingAttributeChangesValue) {
     callbacks.dispatchEvent(new AttributesChangedEvent(workflowId, { ...pendingAttributeChanges }));
   }
@@ -199,6 +206,7 @@ async function persistWorkerCheckpoint(
   operation: ContextOperationRequest,
   workerCheckpointBytes: ArrayBuffer,
   callbacks: PersistCheckpointCallbacks,
+  options: PersistCheckpointOptions,
 ): Promise<void> {
   const serialized = new Uint8Array(workerCheckpointBytes);
   const checkpoint = deserializeCheckpoint(serialized);
@@ -223,6 +231,7 @@ async function persistWorkerCheckpoint(
       replayPayload,
     ),
     callbacks,
+    options,
   );
 }
 
@@ -282,15 +291,19 @@ async function commitCheckpoint(
   operation: ContextOperationRequest,
   commit: CheckpointCommit,
   callbacks: PersistCheckpointCallbacks,
+  options: PersistCheckpointOptions,
 ): Promise<void> {
   dispatchCheckpointSizeWarning(internals, workflowId, commit, callbacks);
-  const nextPendingTimelineEntry = callbacks.appendTimelineBatchOperations(
-    workflowId,
-    operation,
-    commit.step,
-    commit.timestamp,
-    commit.operations,
-  );
+  const nextPendingTimelineEntry =
+    options.timeline === 'preserve-pending'
+      ? preservePendingTimelineEntry(internals, workflowId, commit.operations)
+      : callbacks.appendTimelineBatchOperations(
+          workflowId,
+          operation,
+          commit.step,
+          commit.timestamp,
+          commit.operations,
+        );
   const { newHead, timestamp } = appendCheckpointEventLog(internals, workflowId, commit);
 
   // Event-log compaction: fold the deletes + watermark into the SAME batch as the
@@ -345,7 +358,11 @@ async function commitCheckpoint(
   if (commit.expectedSerialized !== undefined) {
     rememberCommittedCheckpointBytes(internals, workflowId, commit.serialized);
   }
-  internals.pendingTimelineEntries.set(workflowId, nextPendingTimelineEntry);
+  if (nextPendingTimelineEntry === undefined) {
+    internals.pendingTimelineEntries.delete(workflowId);
+  } else {
+    internals.pendingTimelineEntries.set(workflowId, nextPendingTimelineEntry);
+  }
   internals.checkpoints.set(workflowId, commit.checkpoint);
   internals.eventLogHeads.set(workflowId, newHead);
   // Archival runs only after the truncation has committed durably; it is a
@@ -373,6 +390,18 @@ async function commitCheckpoint(
   if (historyEventLimitBreached(internals, newHead.sequence)) {
     await callbacks.enforceHistoryCircuitBreaker(workflowId);
   }
+}
+
+function preservePendingTimelineEntry(
+  internals: EngineInternals,
+  workflowId: string,
+  operations: BatchOperation[],
+): PendingTimelineEntryValue | undefined {
+  const pendingTimelineOperation = buildPendingTimelineOperation(internals, workflowId);
+  if (pendingTimelineOperation) {
+    operations.push(pendingTimelineOperation);
+  }
+  return internals.pendingTimelineEntries.get(workflowId);
 }
 
 function checkpointSideEffectConditions(

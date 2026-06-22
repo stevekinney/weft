@@ -42,6 +42,14 @@ export type ContextOperationRequest =
        * anchors the durable async-completion task token to a fixed activity.
        */
       step?: number;
+      /**
+       * Optional deterministic state key for activity sub-operations that are
+       * owned by another workflow step. Plain `ctx.run()` leaves this unset and
+       * uses `step`; memo-scoped helper activities set it to a key derived from
+       * the owning memo step, memo key, and helper-call ordinal so retry and
+       * heartbeat state cannot collide with the parent memo step.
+       */
+      activityStateKey?: string;
       /** Serialized interceptor headers (Map entries) for remote worker propagation. */
       headers?: [string, string][];
     }
@@ -132,6 +140,13 @@ export type ContextOperationRequest =
       type: 'memo';
       operationId: string;
       key: string;
+      /**
+       * Workflow step index for the owning `ctx.memo()` call. Plain async
+       * helper activity calls derive sub-operation identity from this parent
+       * step, the memo key, and their call ordinal without consuming the
+       * workflow's outer step index.
+       */
+      step?: number;
       fn: () => unknown;
       callerStack?: string;
     }

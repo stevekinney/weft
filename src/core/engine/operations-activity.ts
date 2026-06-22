@@ -6,11 +6,13 @@ import {
   buildActivityContext,
   clearLastHeartbeatForStep,
   warnIfRetryMissingHeartbeat,
+  type ActivityHeartbeatKey,
 } from './activity-heartbeat-tracking.ts';
 import { resolvePerAttemptTimeout, withPerAttemptTimeout } from './activity-per-attempt-timeout.ts';
 import {
   buildActivityReconciliationReference,
   buildActivityVerificationContext,
+  commitActivityReconciliationTransitionWithFencedWrite,
   createCompletedActivityReconciliationRecord,
   resolveActivityIdempotencyKey,
   resolveStartedActivityReconciliationRecord,
@@ -40,6 +42,11 @@ export type ActivityFunctionWithMetadata = ((...arguments_: unknown[]) => unknow
   };
 
 type ActivityOperation = Extract<ContextOperationRequest, { type: 'activity' }>;
+
+export interface ActivityExecutionOptions {
+  reconciliationCompletion?: 'stage-with-workflow-commit' | 'immediate-fenced';
+  beforeImmediateReconciliationCommit?: () => void | (() => void);
+}
 
 export type ActivityOperationCallbacks = {
   runOperationWithResult: (
@@ -150,6 +157,10 @@ function getActivityAttempt(operation: ActivityOperation): number {
   return typeof attempt === 'number' && Number.isInteger(attempt) && attempt > 0 ? attempt : 1;
 }
 
+function getActivityStateKey(operation: ActivityOperation): ActivityHeartbeatKey {
+  return operation.activityStateKey ?? operation.step ?? 0;
+}
+
 /**
  * Execute an activity function, dispatching to a Web Worker pool when
  * `activityExecution` is configured, or running inline on the main thread.
@@ -166,14 +177,14 @@ export async function executeActivity(
 
   // Build an ActivityContext so the activity function can send heartbeats and
   // defer to out-of-band completion. The async-completion token is derived from
-  // the deterministic workflow step (not the per-yield operationId), so it is
-  // stable across crash/replay. The step is always set when the operation is
-  // created via ctx.run(); a missing step is a caller contract violation.
-  const step = operation.step ?? 0;
+  // the deterministic activity state key (not the per-yield operationId), so it
+  // is stable across crash/replay. Plain ctx.run uses the workflow step; helper
+  // activities owned by ctx.memo carry their own sub-operation key.
+  const activityStateKey = getActivityStateKey(operation);
   // #493: surface the resumable-batch footgun in development — a retry that
   // starts with no in-memory heartbeat (e.g. after a process restart).
-  warnIfRetryMissingHeartbeat(internals, workflowId, step, attempt);
-  const asyncToken = deriveAsyncActivityToken(workflowId, step, attempt);
+  warnIfRetryMissingHeartbeat(internals, workflowId, activityStateKey, attempt);
+  const asyncToken = deriveAsyncActivityToken(workflowId, activityStateKey, attempt);
 
   const { perAttemptTimeoutMs, attemptAbortController, activitySignal } = resolvePerAttemptTimeout(
     internals,
@@ -181,9 +192,15 @@ export async function executeActivity(
     operation,
     coordinatorSignal,
   );
-  const activityContext = buildActivityContext(internals, workflowId, step, activitySignal, () => {
-    throw new AsyncActivityDeferral(asyncToken);
-  });
+  const activityContext = buildActivityContext(
+    internals,
+    workflowId,
+    activityStateKey,
+    activitySignal,
+    () => {
+      throw new AsyncActivityDeferral(asyncToken);
+    },
+  );
 
   // Build the leaf executor: either dispatch to a worker or call inline.
   const invokeActivity: (activityName: string, input: unknown) => unknown =
@@ -273,6 +290,7 @@ export async function executeActivityOperationResult(
   callbacks: ActivityOperationCallbacks,
   coordinatorSignal?: AbortSignal,
   speculativeState?: SpeculativeExecutionState,
+  executionOptions: ActivityExecutionOptions = {},
 ): Promise<unknown> {
   const activity = getActivityFunctionWithMetadata(internals, workflowId, operation);
   const idempotencyKey = resolveActivityIdempotencyKey(activity, operation);
@@ -324,18 +342,33 @@ export async function executeActivityOperationResult(
       result,
       internals.options.getNow(),
     );
-    stageActivityReconciliationTransitionWithAtomicWorkflowCommit(
-      internals,
-      workflowId,
-      reference,
-      started,
-      completedRecord,
-    );
+    if (executionOptions.reconciliationCompletion === 'immediate-fenced') {
+      const finishImmediateReconciliationCommit =
+        executionOptions.beforeImmediateReconciliationCommit?.();
+      try {
+        await commitActivityReconciliationTransitionWithFencedWrite(
+          internals,
+          reference,
+          started,
+          completedRecord,
+        );
+      } finally {
+        finishImmediateReconciliationCommit?.();
+      }
+    } else {
+      stageActivityReconciliationTransitionWithAtomicWorkflowCommit(
+        internals,
+        workflowId,
+        reference,
+        started,
+        completedRecord,
+      );
+    }
     // Step succeeded durably: drop its tracked heartbeat. Guarded on the
     // non-speculative path only — a speculative step can still roll back and
     // re-run, so it relies on terminal cleanup to clear instead.
     if (!speculativeState) {
-      clearLastHeartbeatForStep(internals, workflowId, operation.step ?? 0);
+      clearLastHeartbeatForStep(internals, workflowId, getActivityStateKey(operation));
     }
     return result;
   }
@@ -366,7 +399,7 @@ export async function executeActivityOperationResult(
   // non-speculative path only — a speculative step can still roll back and
   // re-run, so it relies on terminal cleanup to clear instead.
   if (!speculativeState) {
-    clearLastHeartbeatForStep(internals, workflowId, operation.step ?? 0);
+    clearLastHeartbeatForStep(internals, workflowId, getActivityStateKey(operation));
   }
 
   return result;

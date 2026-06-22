@@ -169,15 +169,16 @@ function isPersistedAsyncActivity(value: unknown): value is PersistedAsyncActivi
 /**
  * Derive the durable, deterministic task token for an async activity.
  *
- * The token is anchored to the workflow id, the workflow step index, and the
+ * The token is anchored to the workflow id, the activity state key, and the
  * dispatch attempt — all of which are stable across replay — so a workflow that
  * crashes while parked on an async activity mints the identical token after
- * recovery. `operationId` is deliberately excluded because it is regenerated on
- * every yield and would change on replay.
+ * recovery. Plain `ctx.run()` uses the workflow step as the state key.
+ * `operationId` is deliberately excluded because it is regenerated on every
+ * yield and would change on replay.
  */
 export function deriveAsyncActivityToken(
   workflowId: string,
-  step: number,
+  step: number | string,
   attempt: number,
 ): string {
   return `${ASYNC_ACTIVITY_TOKEN_PREFIX}:${workflowId}:${step}:${attempt}`;

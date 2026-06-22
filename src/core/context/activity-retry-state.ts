@@ -12,6 +12,7 @@ import type { ContextInternals } from './internals.ts';
 export const ACTIVITY_RETRY_STATE_LOCAL_KEY = '__weftActivityRetryState';
 const ACTIVITY_RETRY_STATE_VERSION = 1;
 export const MAX_CHECKPOINTED_RETRY_ATTEMPT = 10_000;
+export type ActivityRetryStateKey = number | string;
 
 export interface ActivityRetryState {
   version: typeof ACTIVITY_RETRY_STATE_VERSION;
@@ -41,36 +42,53 @@ export function isActivityRetryState(value: unknown): value is ActivityRetryStat
   );
 }
 
-function assertValidRetryAttempt(attempt: number, step: number): void {
+function retryStateSlotKey(key: ActivityRetryStateKey): string {
+  if (typeof key === 'number') {
+    return String(key);
+  }
+  if (key.length === 0) {
+    throw new Error('Invalid empty checkpointed activity retry state key');
+  }
+  return key;
+}
+
+function retryStateKeyLabel(key: ActivityRetryStateKey): string {
+  return typeof key === 'number' ? `step ${String(key)}` : `key ${key}`;
+}
+
+function assertValidRetryAttempt(attempt: number, key: ActivityRetryStateKey): void {
   if (!Number.isInteger(attempt) || attempt <= 1 || attempt > MAX_CHECKPOINTED_RETRY_ATTEMPT) {
     throw new Error(
-      `Invalid checkpointed activity retry attempt ${String(attempt)} for step ${String(step)}`,
+      `Invalid checkpointed activity retry attempt ${String(attempt)} for ${retryStateKeyLabel(key)}`,
     );
   }
 }
 
 export function readActivityRetryAttempt(
   internals: ContextInternals,
-  step: number,
+  key: ActivityRetryStateKey,
 ): number | undefined {
   const state = internals.checkpointLocals[ACTIVITY_RETRY_STATE_LOCAL_KEY];
   if (!isActivityRetryState(state)) return undefined;
 
-  const attempt = state.attempts[String(step)];
+  const attempt = state.attempts[retryStateSlotKey(key)];
   if (attempt === undefined) return undefined;
-  assertValidRetryAttempt(attempt, step);
+  assertValidRetryAttempt(attempt, key);
   return attempt;
 }
 
-export function readCompletedRetrySleepCount(internals: ContextInternals, step: number): number {
+export function readCompletedRetrySleepCount(
+  internals: ContextInternals,
+  key: ActivityRetryStateKey,
+): number {
   const state = internals.checkpointLocals[ACTIVITY_RETRY_STATE_LOCAL_KEY];
   if (!isActivityRetryState(state)) return 0;
 
-  const count = state.completedRetrySleeps?.[String(step)];
+  const count = state.completedRetrySleeps?.[retryStateSlotKey(key)];
   if (count === undefined) return 0;
   if (!Number.isInteger(count) || count < 0 || count > MAX_CHECKPOINTED_RETRY_ATTEMPT) {
     throw new Error(
-      `Invalid checkpointed activity retry sleep count ${String(count)} for step ${String(step)}`,
+      `Invalid checkpointed activity retry sleep count ${String(count)} for ${retryStateKeyLabel(key)}`,
     );
   }
   return count;
@@ -120,31 +138,31 @@ function writeRetryStateSlot(
 
 export function writeActivityRetryAttempt(
   internals: ContextInternals,
-  step: number,
+  key: ActivityRetryStateKey,
   attempt: number,
 ): void {
-  assertValidRetryAttempt(attempt, step);
+  assertValidRetryAttempt(attempt, key);
   const current = currentRetryState(internals);
   const attempts = current ? { ...current.attempts } : {};
-  attempts[String(step)] = attempt;
+  attempts[retryStateSlotKey(key)] = attempt;
   // Preserve completedRetrySleeps and dispatchedAt: rebuilding the slot with only
   // `attempts` would erase them, causing a recovered workflow to re-run backoff
   // sleeps it already completed or to reset its scheduleToCloseTimeout window.
   writeRetryStateSlot(internals, attempts, current?.completedRetrySleeps, current?.dispatchedAt);
 }
 
-function clearActivityRetryAttempt(internals: ContextInternals, step: number): void {
+function clearActivityRetryAttempt(internals: ContextInternals, key: ActivityRetryStateKey): void {
   const current = currentRetryState(internals);
   if (!current) return;
 
   const attempts = { ...current.attempts };
-  delete attempts[String(step)];
+  delete attempts[retryStateSlotKey(key)];
   writeRetryStateSlot(internals, attempts, current.completedRetrySleeps, current.dispatchedAt);
 }
 
 export function completeActivityRetryAttempt(
   internals: ContextInternals,
-  step: number,
+  key: ActivityRetryStateKey,
   completedRetrySleepCount: number,
 ): void {
   if (
@@ -153,16 +171,16 @@ export function completeActivityRetryAttempt(
     completedRetrySleepCount > MAX_CHECKPOINTED_RETRY_ATTEMPT
   ) {
     throw new Error(
-      `Invalid completed activity retry sleep count ${String(completedRetrySleepCount)} for step ${String(step)}`,
+      `Invalid completed activity retry sleep count ${String(completedRetrySleepCount)} for ${retryStateKeyLabel(key)}`,
     );
   }
-  clearActivityRetryAttempt(internals, step);
+  clearActivityRetryAttempt(internals, key);
   if (completedRetrySleepCount === 0) return;
 
   const current = currentRetryState(internals);
   const attempts = current ? { ...current.attempts } : {};
   const completedRetrySleeps = current ? { ...current.completedRetrySleeps } : {};
-  completedRetrySleeps[String(step)] = completedRetrySleepCount;
+  completedRetrySleeps[retryStateSlotKey(key)] = completedRetrySleepCount;
   writeRetryStateSlot(internals, attempts, completedRetrySleeps, current?.dispatchedAt);
 }
 
@@ -174,11 +192,12 @@ export function completeActivityRetryAttempt(
  */
 export function readOrInitActivityDispatchedAt(
   internals: ContextInternals,
-  step: number,
+  key: ActivityRetryStateKey,
   now: number,
 ): number {
   const current = currentRetryState(internals);
-  const existing = current?.dispatchedAt?.[String(step)];
+  const slotKey = retryStateSlotKey(key);
+  const existing = current?.dispatchedAt?.[slotKey];
   // Honor any finite anchor, including 0: a test clock can legitimately report 0,
   // and an `existing > 0` guard would treat that as "unset" and re-anchor on every
   // replay, resetting the wall-clock budget.
@@ -191,12 +210,12 @@ export function readOrInitActivityDispatchedAt(
   // Only an ABSENT anchor (undefined) is a legitimate first dispatch / old record.
   if (existing !== undefined) {
     throw new Error(
-      `Invalid checkpointed activity dispatch anchor ${String(existing)} for step ${String(step)}`,
+      `Invalid checkpointed activity dispatch anchor ${String(existing)} for ${retryStateKeyLabel(key)}`,
     );
   }
   const attempts = current ? { ...current.attempts } : {};
   const dispatchedAt = current?.dispatchedAt ? { ...current.dispatchedAt } : {};
-  dispatchedAt[String(step)] = now;
+  dispatchedAt[slotKey] = now;
   writeRetryStateSlot(internals, attempts, current?.completedRetrySleeps, dispatchedAt);
   return now;
 }

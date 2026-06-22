@@ -2,37 +2,49 @@ import { DevelopmentWarningEvent } from '../events.ts';
 import type { ActivityContext } from '../types.ts';
 import type { EngineInternals } from './internals.ts';
 
+export type ActivityHeartbeatKey = number | string;
+
 /**
- * Per-step heartbeat tracking for {@link ActivityContext.lastHeartbeatDetails}.
+ * Per-activity heartbeat tracking for {@link ActivityContext.lastHeartbeatDetails}.
  *
- * The store is keyed `workflowId -> step` (not `workflowId` alone) so a retry of
- * an activity step reads the heartbeat ITS prior attempt recorded — and so a
+ * The store is keyed `workflowId -> activity key` (not `workflowId` alone) so a
+ * retry of an activity reads the heartbeat its prior attempt recorded — and so a
  * later step's first attempt never inherits an earlier step's heartbeat, and
- * concurrent `ctx.all` activities never clobber one another. The step is stable
- * across retry attempts (assigned once at `stepIndex++`). Held only in engine
- * memory and cleared by workflowId (the outer key) on terminal cleanup and purge.
+ * concurrent `ctx.all` activities never clobber one another. Plain `ctx.run`
+ * uses the deterministic numeric workflow step; memo-scoped helper activities
+ * use a string sub-operation key derived from their owning memo call.
  */
 
-/** Record the heartbeat the current attempt of a step sent. */
+function activityHeartbeatKeyLabel(key: ActivityHeartbeatKey): string {
+  return typeof key === 'number' ? `step ${String(key)}` : `activity state key ${key}`;
+}
+
+function activityHeartbeatFieldPath(key: ActivityHeartbeatKey): string {
+  return typeof key === 'number'
+    ? `step.${String(key)}.lastHeartbeatDetails`
+    : `activityStateKey.${key}.lastHeartbeatDetails`;
+}
+
+/** Record the heartbeat the current attempt of an activity sent. */
 export function recordLastHeartbeatForStep(
   internals: EngineInternals,
   workflowId: string,
-  step: number,
+  step: ActivityHeartbeatKey,
   details: unknown,
 ): void {
   let byStep = internals.lastHeartbeatDetailsByStep.get(workflowId);
   if (byStep === undefined) {
-    byStep = new Map<number, unknown>();
+    byStep = new Map<ActivityHeartbeatKey, unknown>();
     internals.lastHeartbeatDetailsByStep.set(workflowId, byStep);
   }
   byStep.set(step, details);
 }
 
-/** Read the heartbeat a prior attempt of this step recorded, or `undefined`. */
+/** Read the heartbeat a prior attempt of this activity recorded, or `undefined`. */
 export function readLastHeartbeatForStep(
   internals: EngineInternals,
   workflowId: string,
-  step: number,
+  step: ActivityHeartbeatKey,
 ): unknown {
   return internals.lastHeartbeatDetailsByStep.get(workflowId)?.get(step);
 }
@@ -52,7 +64,7 @@ export function readLastHeartbeatForStep(
 export function clearLastHeartbeatForStep(
   internals: EngineInternals,
   workflowId: string,
-  step: number,
+  step: ActivityHeartbeatKey,
 ): void {
   const byStep = internals.lastHeartbeatDetailsByStep.get(workflowId);
   if (byStep === undefined) {
@@ -93,7 +105,7 @@ export function clearLastHeartbeatForStep(
 export function warnIfRetryMissingHeartbeat(
   internals: EngineInternals,
   workflowId: string,
-  step: number,
+  step: ActivityHeartbeatKey,
   attempt: number,
 ): void {
   if (!internals.options.development) return;
@@ -104,13 +116,13 @@ export function warnIfRetryMissingHeartbeat(
   internals.engine.dispatchEvent(
     new DevelopmentWarningEvent(
       workflowId,
-      `Activity retry (attempt ${attempt}) at step ${step} has no lastHeartbeatDetails. ` +
+      `Activity retry (attempt ${attempt}) at ${activityHeartbeatKeyLabel(step)} has no lastHeartbeatDetails. ` +
         'Either the previous attempt never recorded heartbeat details (it never ' +
         'called heartbeat(), or called it with no details), or the engine process ' +
         'restarted and discarded the in-memory heartbeat (it is not durable). The ' +
         'resumable-batch pattern only resumes across in-process retries; design the ' +
         'activity to restart cleanly when lastHeartbeatDetails is undefined.',
-      [`step.${step}.lastHeartbeatDetails`],
+      [activityHeartbeatFieldPath(step)],
     ),
   );
 }
@@ -125,7 +137,7 @@ export function warnIfRetryMissingHeartbeat(
 export function buildActivityContext(
   internals: EngineInternals,
   workflowId: string,
-  step: number,
+  step: ActivityHeartbeatKey,
   signal: AbortSignal,
   completeAsync: () => never,
 ): ActivityContext {

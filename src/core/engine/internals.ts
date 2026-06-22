@@ -37,6 +37,7 @@ import type { Checkpoint, StartWorkflowOptions } from '../types.ts';
 import type { UpdateCoordinator } from '../updates.ts';
 import type { WorkflowVersionTuple } from '../workflow-version-tuple.ts';
 
+import type { ActivityHeartbeatKey } from './activity-heartbeat-tracking.ts';
 import type {
   PendingTimelineEntry,
   QueuedInlineWorkflowExecutionStart,
@@ -171,7 +172,7 @@ export interface EngineInternals {
    * {@link heartbeatDetails}. Inline-execution only; worker-executed activities run
    * their function out of process and never observe this.
    */
-  lastHeartbeatDetailsByStep: Map<string, Map<number, unknown>>;
+  lastHeartbeatDetailsByStep: Map<string, Map<ActivityHeartbeatKey, unknown>>;
   /**
    * Per-run, non-serialized `services` value exposed to the workflow body as
    * `ctx.services`. Set at `engine.start({ services })` and re-provided on

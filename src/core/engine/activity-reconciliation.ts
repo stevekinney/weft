@@ -10,6 +10,7 @@ import { assertPayloadWithinLimit } from '../payload-size.ts';
 import type { ActivityVerificationContext, ActivityVerificationResult } from '../types.ts';
 import { WeftError } from '../weft-error.ts';
 import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
+import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 
 type ActivityOperation = Extract<ContextOperationRequest, { type: 'activity' }>;
@@ -283,6 +284,28 @@ export function stageActivityReconciliationTransitionWithAtomicWorkflowCommit(
     internals,
     workflowId,
     buildActivityReconciliationTransitionSideEffects(reference, expectedRecord, nextRecord),
+  );
+}
+
+export async function commitActivityReconciliationTransitionWithFencedWrite(
+  internals: EngineInternals,
+  reference: ActivityReconciliationReference,
+  expectedRecord: ActivityReconciliationRecord,
+  nextRecord: ActivityReconciliationRecord,
+): Promise<void> {
+  const sideEffects = buildActivityReconciliationTransitionSideEffects(
+    reference,
+    expectedRecord,
+    nextRecord,
+  );
+  await commitFencedEngineWrite(
+    internals,
+    sideEffects.operations,
+    sideEffects.conditions,
+    () =>
+      new ActivityReconciliationConflictError(
+        'Activity reconciliation completion lost compare-and-set ownership.',
+      ),
   );
 }
 

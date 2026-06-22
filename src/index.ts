@@ -35,6 +35,11 @@ export {
 export type { FaultCode } from './core/fault-code.ts';
 // Core
 export {
+  DurableActivityScopeError,
+  DurableActivityUnsupportedError,
+  durableActivity,
+} from './core/context/durable-activity.ts';
+export {
   ActivityReconciliationCapabilityError,
   ActivityReconciliationConflictError,
   ActivityReconciliationIndeterminateError,

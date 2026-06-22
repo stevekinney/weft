@@ -1659,6 +1659,7 @@ describe('Context', () => {
       expect(request.callerStack).toBeDefined();
       expect(typeof request.callerStack).toBe('string');
       expect(request.callerStack!.length).toBeGreaterThan(0);
+      expect(request.step).toBe(0);
     });
 
     it('ctx.load yields a request with callerStack', () => {

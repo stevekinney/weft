@@ -568,12 +568,43 @@ Per-invocation options when calling an activity from a workflow.
 ```ts partial
 interface ActivityCallOptions {
   timeout?: Duration;
+  scheduleToCloseTimeout?: Duration;
   queue?: string;
   retry?: Partial<RetryPolicy>;
   idempotencyKey?: string;
   sticky?: boolean;
+  visibilityTimeout?: Duration;
 }
 ```
+
+### `durableActivity()`
+
+Plain async helper for running an activity from inside an inline `ctx.memo()` callback.
+
+```ts
+import type { ActivityCallable, ActivityCallOptions } from '@lostgradient/weft';
+
+declare function durableActivity<TResult = unknown>(
+  name: string,
+  input?: unknown,
+  options?: ActivityCallOptions,
+): Promise<TResult>;
+
+declare function durableActivity<TResult>(
+  fn: ActivityCallable<void, TResult> | (() => Promise<TResult> | TResult),
+  options?: ActivityCallOptions,
+): Promise<TResult>;
+
+declare function durableActivity<TInput, TResult>(
+  fn: ActivityCallable<TInput, TResult> | ((input: TInput) => Promise<TResult> | TResult),
+  input: TInput,
+  options?: ActivityCallOptions,
+): Promise<TResult>;
+```
+
+The helper is not a `WorkflowOperation`; do not `yield*` it. Await it from a plain async function that is itself called by `ctx.memo()`. It rejects with `DurableActivityScopeError` outside that memo activation boundary and with `DurableActivityUnsupportedError` when the activity calls `ActivityContext.completeAsync()`.
+
+Immediate result durability applies only when the activity has an idempotency key. Unkeyed helper calls keep the same at-least-once crash behavior as other unkeyed activities.
 
 ### `EngineOptions`
 

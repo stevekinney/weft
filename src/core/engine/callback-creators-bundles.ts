@@ -5,6 +5,7 @@ import {
   broadcast as broadcastFromInternals,
   dispatchPendingUpdateReceived as dispatchPendingUpdateReceivedFromBroadcast,
 } from './broadcast.ts';
+import { persistCheckpointForDataOperation } from './callback-checkpoint-persistence.ts';
 import {
   createBroadcastCallbacks,
   createGuardCallbacks,
@@ -152,6 +153,9 @@ export function createDataOperationCallbacks<TWorkflows extends object, TActivit
   return {
     runOperationWithResult: (workflowId, operation, execute) =>
       runOperationWithResultForEngine(engine, workflowId, operation, execute),
+    persistCheckpoint: (workflowId, operation) =>
+      persistCheckpointForDataOperation(engine, workflowId, operation),
+    getActivityOperationCallbacks: () => createActivityOperationCallbacks(engine),
   };
 }
 

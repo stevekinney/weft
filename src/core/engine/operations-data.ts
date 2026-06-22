@@ -2,8 +2,9 @@ import { KEYS } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
 import type { EngineInternals } from './internals.ts';
+import { callMemoFunctionWithDurableActivityScope } from './memo-durable-activity.ts';
+import type { ActivityOperationCallbacks } from './operations-activity.ts';
 import type { OperationWithCallerStack } from './operations-router.ts';
-import { callMemoFunction } from './state-utilities.ts';
 
 type MemoOperation = Extract<ContextOperationRequest, { type: 'memo' }>;
 type OffloadOperation = Extract<ContextOperationRequest, { type: 'offload' }>;
@@ -16,16 +17,18 @@ export type DataOperationCallbacks = {
     operation: OperationWithCallerStack,
     execute: () => Promise<unknown>,
   ) => Promise<void>;
+  persistCheckpoint: (workflowId: string, operation: ContextOperationRequest) => Promise<void>;
+  getActivityOperationCallbacks?: () => ActivityOperationCallbacks;
 };
 
 export async function processMemoOperation(
-  _internals: EngineInternals,
+  internals: EngineInternals,
   workflowId: string,
   operation: MemoOperation,
   callbacks: DataOperationCallbacks,
 ): Promise<void> {
   return callbacks.runOperationWithResult(workflowId, operation, async () =>
-    callMemoFunction(operation.fn),
+    callMemoFunctionWithDurableActivityScope(internals, workflowId, operation, callbacks),
   );
 }
 

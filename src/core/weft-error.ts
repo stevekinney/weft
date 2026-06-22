@@ -54,6 +54,8 @@ export type WeftErrorCode =
   | 'ActivityReconciliationCapabilityError'
   | 'ActivityReconciliationConflictError'
   | 'ActivityReconciliationIndeterminateError'
+  | 'DurableActivityScopeError'
+  | 'DurableActivityUnsupportedError'
   | 'AsyncActivityTokenNotFoundError'
   | 'ActivityScheduleToCloseTimeoutError'
   | 'ActivityPerAttemptTimeoutError'
@@ -124,6 +126,8 @@ const publicWeftErrorCodeMap = {
   ActivityReconciliationCapabilityError: true,
   ActivityReconciliationConflictError: true,
   ActivityReconciliationIndeterminateError: true,
+  DurableActivityScopeError: true,
+  DurableActivityUnsupportedError: true,
   AsyncActivityTokenNotFoundError: true,
   ActivityScheduleToCloseTimeoutError: true,
   ActivityPerAttemptTimeoutError: true,
