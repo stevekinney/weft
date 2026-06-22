@@ -10,6 +10,8 @@ import type { ActivityContext, WorkflowContext } from '../types.ts';
 import { activity, workflow } from '../types.ts';
 import type { ActivityReconciliationRecord } from './activity-reconciliation.ts';
 import { Engine } from './index.ts';
+import type { EngineInternals } from './internals.ts';
+import { callMemoFunctionWithDurableActivityScope } from './memo-durable-activity.ts';
 
 type ToolInput = {
   tool: string;
@@ -532,5 +534,66 @@ describe('ctx.memo durableActivity helper', () => {
     await expect(handle.result()).rejects.toThrow(
       'ActivityContext.completeAsync() is not supported from durableActivity()',
     );
+  });
+
+  it('removes memo-scope abort listeners when a later forwarded signal is already aborted', async () => {
+    const contextAbortController = new AbortController();
+    const engineAbortController = new AbortController();
+    engineAbortController.abort();
+    let addAbortListenerCount = 0;
+    let removeAbortListenerCount = 0;
+    const signal = contextAbortController.signal;
+    const addEventListener = signal.addEventListener.bind(signal);
+    const removeEventListener = signal.removeEventListener.bind(signal);
+    signal.addEventListener = ((
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | AddEventListenerOptions,
+    ) => {
+      if (type === 'abort') {
+        addAbortListenerCount++;
+      }
+      return addEventListener(type, listener, options);
+    }) as AbortSignal['addEventListener'];
+    signal.removeEventListener = ((
+      type: string,
+      listener: EventListenerOrEventListenerObject,
+      options?: boolean | EventListenerOptions,
+    ) => {
+      if (type === 'abort') {
+        removeAbortListenerCount++;
+      }
+      return removeEventListener(type, listener, options);
+    }) as AbortSignal['removeEventListener'];
+
+    const context = {
+      signal,
+      workflowType: 'listener-cleanup',
+    } as Context;
+    const internals = {
+      abortController: engineAbortController,
+      inlineStrategy: { getContext: () => context },
+      workflowTypeByWorkflowId: new Map<string, string>(),
+    } as unknown as EngineInternals;
+
+    await expect(
+      callMemoFunctionWithDurableActivityScope(
+        internals,
+        'listener-cleanup-1',
+        {
+          fn: () => 'memo-result',
+          key: 'step-0',
+          operationId: 'memo-listener-cleanup',
+          step: 0,
+          type: 'memo',
+        },
+        {
+          getActivityOperationCallbacks: () => ({}) as never,
+          persistCheckpoint: async () => {},
+        },
+      ),
+    ).resolves.toBe('memo-result');
+    expect(addAbortListenerCount).toBe(1);
+    expect(removeAbortListenerCount).toBe(1);
   });
 });

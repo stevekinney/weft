@@ -364,23 +364,26 @@ class MemoDurableActivityScope implements DurableActivityScope {
 
   #forwardAbortSignals(): () => void {
     const signals = [this.#context.signal, this.#internals.abortController.signal];
+    const listeningSignals: AbortSignal[] = [];
     const onAbort = () => {
       this.#close(
         new DurableActivityScopeError('durableActivity() scope closed before completion.'),
       );
     };
-    for (const signal of signals) {
-      if (signal.aborted) {
-        onAbort();
-        return () => {};
-      }
-      signal.addEventListener('abort', onAbort, { once: true });
-    }
-    return () => {
-      for (const signal of signals) {
+    const cleanup = () => {
+      for (const signal of listeningSignals) {
         signal.removeEventListener('abort', onAbort);
       }
     };
+    for (const signal of signals) {
+      if (signal.aborted) {
+        onAbort();
+        return cleanup;
+      }
+      signal.addEventListener('abort', onAbort, { once: true });
+      listeningSignals.push(signal);
+    }
+    return cleanup;
   }
 
   #close(reason?: unknown): void {
