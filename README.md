@@ -147,7 +147,7 @@ Because recovery never re-executes the workflow from the beginning, your workflo
 
 ### Durable Workflows
 
-Generator functions with automatic checkpointing at every `yield*` boundary. Activities, sleeps, signals, condition gates with `ctx.waitUntil()`, queries, updates, structured logs with `ctx.log`, parallel execution via `ctx.all()`, race semantics via `ctx.race()`, memoization via `ctx.memo()`, sagas via `ctx.saga()`, child workflows, and forks. `ctx.all()` and `ctx.race()` can branch over activities, sleeps, and signal waits; use `ctx.race([ctx.waitForSignal(name), ctx.sleep(timeout)])` for signal timeouts instead of placing an unbounded signal wait directly in `ctx.all()`.
+Generator functions with automatic checkpointing at every `yield*` boundary. Activities, sleeps, signals, condition gates with `ctx.waitUntil()`, queries, updates, structured logs with `ctx.log`, parallel execution via `ctx.all()`, race semantics via `ctx.race()`, memoization via `ctx.memo()`, sagas via `ctx.saga()`, child workflows, and forks. Plain async helpers called from inline `ctx.memo()` callbacks can use `durableActivity()` for activity-level retry, heartbeat, reconciliation, and observability without converting the helper stack to generators. `ctx.all()` and `ctx.race()` can branch over activities, sleeps, and signal waits; use `ctx.race([ctx.waitForSignal(name), ctx.sleep(timeout)])` for signal timeouts instead of placing an unbounded signal wait directly in `ctx.all()`.
 
 Every workflow context exposes `ctx.workflowId` and `ctx.workflowType`. `workflowType` is the registered name from `workflow({ name })`, so shared workflow code can log, tag, or branch on the current workflow type without closing over definition-site state.
 

@@ -73,6 +73,8 @@ bun run scripts/check-coverage.ts
 
 The verifier removes stale `coverage/` output, runs Bun coverage once with LCOV output, parses `coverage/lcov.info`, applies the repository's narrow coverage allowances, and exits non-zero when the coverage process fails or adjusted line or function coverage is below 100 percent. It is a coverage gate only, so keep `bun test` or `bun run validate` as the passing-suite gate. Use it when changing coverage-sensitive code, generated clients, CLI paths, or the allowance table itself.
 
+When restoring coverage around server runtime paths, prefer characterization tests for reachable lifecycle behavior before editing allowances. Recent examples cover stale worker socket closes by asserting the warning, no requeue, and preserved fresh socket mapping, and cover `taskResult` resolution storage failures by asserting the operator-facing `console.error` that an in-flight record may leak. Only keep an allowance after fresh LCOV output proves the remaining branch is unreachable, such as a type-level exhaustiveness default arm.
+
 ### Testing conventions
 
 Test files live next to the source they test, using the `.test.ts` suffix. A separate `tsconfig.test.json` provides relaxed TypeScript settings for test code. Oxlint rules are also relaxed for test files (`*.test.ts`, `*.spec.ts`, `test/**`, `__tests__/**`)—you can freely use `any`, non-null assertions, unused variables, and other patterns that would normally be flagged in production code.
