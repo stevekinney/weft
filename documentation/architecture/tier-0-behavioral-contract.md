@@ -1,6 +1,6 @@
 # Tier-0 Behavioral Contract
 
-This contract gates the Tier-0 implementation work for activity result reconciliation, signal idempotency, concurrent-resume checkpoint ownership, and persisted-format rolling-upgrade contract. It is intentionally stricter than the current implementation. Sections labeled "current behavior" describe Weft 0.1.0 behavior observed in source; sections labeled "Tier-0 required behavior" define what the follow-up implementation tasks must make true.
+This contract gates the Tier-0 implementation work for activity result reconciliation, signal idempotency, concurrent-resume checkpoint ownership, and persisted-format rolling-upgrade support. It is intentionally stricter than the current implementation. Sections labeled "current behavior" describe Weft 0.1.0 behavior observed in source; sections labeled "Tier-0 required behavior" define what the follow-up implementation tasks must make true.
 
 The goal is not blanket exactly-once execution. Weft can reconcile durable records it has committed. It cannot undo an external side effect that completed before the engine durably recorded the result. Activities that talk to payment processors, queues, email providers, or databases still need user-supplied idempotency keys for those external systems.
 
