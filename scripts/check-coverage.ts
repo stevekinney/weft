@@ -1822,13 +1822,6 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       },
     ],
     [
-      // The retry-state corruption guards and non-Error retryability path are now
-      // covered by focused unit tests. Bun still reports the generator loop's
-      // closing brace as uncovered after the retry back-edge executes.
-      'src/core/context/run-operation.ts',
-      { lines: new Set([448]) },
-    ],
-    [
       'src/core/engine/activity-reconciliation.ts',
       {
         lines: new Set([319, 320, 321, 322, 374, 375, 376]),
