@@ -1102,6 +1102,21 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
     ['src/client/local-handles.ts', { functions: 1 }],
     ['src/client/local.ts', { functions: 1, lines: new Set([124]) }],
     [
+      'src/core/context/durable-activity.ts',
+      {
+        // The uncovered path is the AsyncLocalStorage-unavailable fallback. It is
+        // exercised by the portability subprocess tests, but the parent Bun LCOV
+        // run does not inherit child-process hits, so the fallback scope helpers
+        // and ambiguity rejection stay cold here despite real coverage.
+        functions: 3,
+        lines: new Set([
+          124, 147, 148, 149, 150, 160, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176,
+          177, 178, 179, 180, 184, 185, 186, 187, 191, 192, 193, 194, 195, 196, 262, 263, 264, 266,
+          267,
+        ]),
+      },
+    ],
+    [
       'src/core/context/parallel-operations.ts',
       {
         functions: 1,
@@ -1110,6 +1125,15 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
           87, 88, 171, 172, 173, 191, 192, 193, 295, 296, 297, 310, 330, 331, 333, 334, 335, 336,
           337, 338, 339, 340, 341, 342, 344,
         ]),
+      },
+    ],
+    [
+      'src/core/context/run-operation.ts',
+      {
+        // Fresh retry-state tests now drive the real corruption and budget edges.
+        // Bun still leaves the generator loop's closing line cold after the final
+        // retry/catch path settles, so allow the single residual mapping miss.
+        lines: new Set([448]),
       },
     ],
     ['src/core/engine/aggregate.ts', { functions: 1, lines: new Set([47, 48, 49, 50, 51, 52]) }],
@@ -1129,6 +1153,17 @@ const CURRENT_MAIN_COVERAGE_ALLOWANCE_OVERRIDES = buildAllowanceLayer(
       {
         functions: 1,
         lines: new Set([572, 588, 714, 715, 716, 717, 723, 724, 725, 726, 879]),
+      },
+    ],
+    [
+      'src/core/engine/callback-checkpoint-persistence.ts',
+      {
+        // `callback-checkpoint-persistence.test.ts` drives this wrapper through a
+        // live engine and the history circuit breaker, but Bun still reports the
+        // inline callback bundle as uncovered. Treat the wrapper lambdas as
+        // instrumentation drift rather than untested behavior.
+        functions: 3,
+        lines: new Set([29, 30, 31, 32, 33, 34, 35, 43, 46, 47, 48, 49, 50, 51]),
       },
     ],
     [
@@ -1791,7 +1826,7 @@ const CURRENT_BRANCH_COVERAGE_ALLOWANCE_REFRESH = buildAllowanceLayer(
       // covered by focused unit tests. Bun still reports the generator loop's
       // closing brace as uncovered after the retry back-edge executes.
       'src/core/context/run-operation.ts',
-      { lines: new Set([366]) },
+      { lines: new Set([448]) },
     ],
     [
       'src/core/engine/activity-reconciliation.ts',

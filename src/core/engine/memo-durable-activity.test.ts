@@ -596,4 +596,43 @@ describe('ctx.memo durableActivity helper', () => {
     expect(addAbortListenerCount).toBe(1);
     expect(removeAbortListenerCount).toBe(1);
   });
+
+  it.each([
+    ['plain string failure', 'plain string failure'],
+    [7, '7'],
+    [true, 'true'],
+  ])(
+    'formats non-Error memo failures into DurableActivityScopeError messages (%p)',
+    async (thrownValue, expectedMessage) => {
+      const context = {
+        signal: new AbortController().signal,
+        workflowType: 'non-error-memo-failure',
+      } as Context;
+      const internals = {
+        abortController: new AbortController(),
+        inlineStrategy: { getContext: () => context },
+        workflowTypeByWorkflowId: new Map<string, string>(),
+      } as unknown as EngineInternals;
+
+      await expect(
+        callMemoFunctionWithDurableActivityScope(
+          internals,
+          'non-error-memo-failure-1',
+          {
+            fn: () => {
+              throw thrownValue;
+            },
+            key: 'step-0',
+            operationId: 'memo-non-error-failure',
+            step: 0,
+            type: 'memo',
+          },
+          {
+            getActivityOperationCallbacks: () => ({}) as never,
+            persistCheckpoint: async () => {},
+          },
+        ),
+      ).rejects.toThrow(expectedMessage);
+    },
+  );
 });

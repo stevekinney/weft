@@ -8,6 +8,7 @@ import {
   createRunActivityRequest,
   readActivityRetryAttemptForTesting,
   readCompletedRetrySleepCountForTesting,
+  readOrInitActivityRetrySleepFireAt,
   runActivityWithRetry,
   shouldRetryActivityError,
 } from './run-operation.ts';
@@ -54,6 +55,21 @@ describe('run-operation retry state', () => {
 
     expect(() => createRunActivityRequest(context, 'activity-name', ['payload'])).toThrow(
       'Invalid checkpointed activity retry sleep count -1 for step 0',
+    );
+  });
+
+  it('rejects an empty string retry-state key', () => {
+    const context = createContext();
+    getInternals(context).checkpointLocals = {
+      ...getInternals(context).checkpointLocals,
+      [ACTIVITY_RETRY_STATE_LOCAL_KEY]: {
+        version: 1,
+        attempts: { '': 2 },
+      },
+    };
+
+    expect(() => readActivityRetryAttemptForTesting(getInternals(context), '')).toThrow(
+      'Invalid empty checkpointed activity retry state key',
     );
   });
 
@@ -147,6 +163,18 @@ describe('run-operation retry state', () => {
 
     const completed = generator.next('final-result');
     expect(completed).toEqual({ done: true, value: 'final-result' });
+  });
+
+  it('rejects an invalid persisted retry sleep deadline local', () => {
+    const context = createContext();
+    getInternals(context).checkpointLocals = {
+      ...getInternals(context).checkpointLocals,
+      '__weftActivityRetrySleepDeadline:retry-sleep-op': 'invalid-deadline',
+    };
+
+    expect(() => readOrInitActivityRetrySleepFireAt(context, 'retry-sleep-op', 1000)).toThrow(
+      'Invalid checkpointed activity retry sleep deadline "invalid-deadline" for "retry-sleep-op".',
+    );
   });
 });
 

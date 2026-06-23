@@ -231,6 +231,31 @@ describe('checkpoint commit compare-and-swap guard', () => {
     );
   });
 
+  it('clears a pending timeline entry when the checkpoint append returns no next pending entry', async () => {
+    const storage = new CountingConditionalBatchStorage();
+    const initialCheckpoint = createCheckpoint('checkpoint-workflow', '1', 1_000);
+    const internals = createCheckpointInternals(storage, initialCheckpoint);
+    await seedCheckpoint(storage, initialCheckpoint);
+    rememberRecoveredCheckpoint(internals, initialCheckpoint);
+    internals.pendingTimelineEntries.set(initialCheckpoint.workflowId, {
+      entry: { stale: true } as never,
+      startedAt: 999,
+    });
+
+    await persistCheckpoint(
+      internals,
+      initialCheckpoint.workflowId,
+      checkpointOperation,
+      serializeCheckpointBuffer({ ...initialCheckpoint, step: 1, createdAt: 2_000 }),
+      {
+        ...createPersistCallbacks(),
+        appendTimelineBatchOperations: () => undefined as never,
+      },
+    );
+
+    expect(internals.pendingTimelineEntries.has(initialCheckpoint.workflowId)).toBe(false);
+  });
+
   it('documents single-owner-only storage by allowing normal commits without conditionalBatch', async () => {
     const storage = new NoConditionalBatchStorage();
     const initialCheckpoint = createCheckpoint('checkpoint-workflow', '1', 1_000);
