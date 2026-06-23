@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'bun:test';
 
+import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
-import { workflow } from '../types.ts';
+import { waitForCondition } from '../../testing/fake-timers.test-support.ts';
+import { decode } from '../codec.ts';
+import type { WorkflowState } from '../types.ts';
+import { HISTORY_CIRCUIT_BREAKER_REASON, workflow } from '../types.ts';
 import { persistCheckpointForDataOperation } from './callback-checkpoint-persistence.ts';
 import { Engine } from './index.ts';
 import { getInternals } from './internals.ts';
@@ -27,6 +31,23 @@ describe('persistCheckpointForDataOperation', () => {
       data: { hello: 'world' },
     });
 
-    await expect(handle.result()).rejects.toThrow('exceeded execution timeout');
+    let state: WorkflowState | undefined;
+    await waitForCondition(
+      async () => {
+        const stateBytes = await storage.get(KEYS.workflow(handle.id));
+        if (stateBytes === null) {
+          return false;
+        }
+        state = decode(stateBytes) as WorkflowState;
+        return state.status === 'timed-out';
+      },
+      { label: 'history circuit breaker timeout state' },
+    );
+
+    if (state === undefined) {
+      throw new Error('Expected history circuit breaker to mark the workflow as timed-out');
+    }
+    expect(state.status).toBe('timed-out');
+    expect(state.terminationReason).toBe(HISTORY_CIRCUIT_BREAKER_REASON);
   });
 });

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'bun:test';
 
-import type { ConditionalBatchCondition } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { encode } from '../codec.ts';
 import type { ContextOperationRequest } from '../context.ts';
@@ -16,24 +15,25 @@ import type { EngineInternals } from './internals.ts';
 type ActivityOperation = Extract<ContextOperationRequest, { type: 'activity' }>;
 
 class ClaimLosingWithoutRecordStorage extends MemoryStorage {
-  override async conditionalBatch(
-    conditions: ConditionalBatchCondition[],
-    operations: Array<{ type: 'put'; key: string; value: Uint8Array }>,
-  ): Promise<boolean> {
+  override conditionalBatch(
+    ...[conditions, operations]: Parameters<MemoryStorage['conditionalBatch']>
+  ): ReturnType<MemoryStorage['conditionalBatch']> {
     const condition = conditions[0];
     const operation = operations[0];
     const isInitialClaim =
       conditions.length === 1 && condition?.expectedValue === null && operation?.type === 'put';
     if (isInitialClaim) {
-      return false;
+      return Promise.resolve(false);
     }
     return super.conditionalBatch(conditions, operations);
   }
 }
 
 class TransitionLosingStorage extends MemoryStorage {
-  override async conditionalBatch(): Promise<boolean> {
-    return false;
+  override conditionalBatch(
+    ..._arguments: Parameters<MemoryStorage['conditionalBatch']>
+  ): ReturnType<MemoryStorage['conditionalBatch']> {
+    return Promise.resolve(false);
   }
 }
 

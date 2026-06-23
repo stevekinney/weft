@@ -231,26 +231,20 @@ describe('checkpoint commit compare-and-swap guard', () => {
     );
   });
 
-  it('clears a pending timeline entry when the checkpoint append returns no next pending entry', async () => {
+  it('leaves pending timeline entries empty when preserve-pending finds no existing entry', async () => {
     const storage = new CountingConditionalBatchStorage();
     const initialCheckpoint = createCheckpoint('checkpoint-workflow', '1', 1_000);
     const internals = createCheckpointInternals(storage, initialCheckpoint);
     await seedCheckpoint(storage, initialCheckpoint);
     rememberRecoveredCheckpoint(internals, initialCheckpoint);
-    internals.pendingTimelineEntries.set(initialCheckpoint.workflowId, {
-      entry: { stale: true } as never,
-      startedAt: 999,
-    });
 
     await persistCheckpoint(
       internals,
       initialCheckpoint.workflowId,
       checkpointOperation,
       serializeCheckpointBuffer({ ...initialCheckpoint, step: 1, createdAt: 2_000 }),
-      {
-        ...createPersistCallbacks(),
-        appendTimelineBatchOperations: () => undefined as never,
-      },
+      createPersistCallbacks(),
+      { timeline: 'preserve-pending' },
     );
 
     expect(internals.pendingTimelineEntries.has(initialCheckpoint.workflowId)).toBe(false);

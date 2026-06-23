@@ -47,6 +47,12 @@ function task() {
   return 'result';
 }
 
+function createSingleActivityBranch<TActivity extends (...arguments_: never[]) => unknown>(
+  activity: TActivity,
+): [TActivity] {
+  return [activity];
+}
+
 const handler = (payload: unknown) => payload;
 const accessor = () => 42;
 
@@ -1135,8 +1141,8 @@ describe('Context', () => {
     it('yields a run-all operation request with named branches', () => {
       const context = createContext();
       const branches = {
-        charge: [taskA, 'arg1'] as [Function, unknown],
-        notify: [taskB] as [Function],
+        charge: [greet, 'arg1'] satisfies [typeof greet, string],
+        notify: createSingleActivityBranch(taskB),
       };
 
       const generator = context.runAll(branches);
@@ -1155,8 +1161,8 @@ describe('Context', () => {
       const context = createContext({ accumulatedResults });
 
       const generator = context.runAll({
-        charge: [taskA] as [Function],
-        notify: [taskB] as [Function],
+        charge: createSingleActivityBranch(taskA),
+        notify: createSingleActivityBranch(taskB),
       });
       const result = generator.next();
 
@@ -1185,8 +1191,8 @@ describe('Context', () => {
       });
 
       const generator = context.runAll({
-        charge: [taskA] as [Function],
-        notify: [taskB] as [Function],
+        charge: createSingleActivityBranch(taskA),
+        notify: createSingleActivityBranch(taskB),
       });
       const result = generator.next();
 
@@ -1214,8 +1220,8 @@ describe('Context', () => {
       });
 
       const generator = context.runAll({
-        charge: [taskA] as [Function],
-        notify: [taskB] as [Function],
+        charge: createSingleActivityBranch(taskA),
+        notify: createSingleActivityBranch(taskB),
       });
 
       expect(() => generator.next()).toThrow(BranchTopologyChangedError);
@@ -1242,8 +1248,8 @@ describe('Context', () => {
       });
 
       const generator = context.runAll({
-        charge: [taskA] as [Function],
-        notify: [taskB] as [Function],
+        charge: createSingleActivityBranch(taskA),
+        notify: createSingleActivityBranch(taskB),
       });
       const request = expectRequest(generator.next(), 'run-all');
 
@@ -1333,8 +1339,8 @@ describe('Context', () => {
     it('returns the fed-back result', () => {
       const context = createContext();
       const branches = {
-        charge: [taskA] as [Function],
-        notify: [taskB] as [Function],
+        charge: createSingleActivityBranch(taskA),
+        notify: createSingleActivityBranch(taskB),
       };
 
       const generator = context.runAll(branches);
@@ -1617,8 +1623,8 @@ describe('Context', () => {
       context.explain(true);
 
       const branches = {
-        fetch: [taskA] as [Function],
-        compute: [taskB] as [Function],
+        fetch: createSingleActivityBranch(taskA),
+        compute: createSingleActivityBranch(taskB),
       };
       const generator = context.runAll(branches);
       generator.next();
@@ -1757,8 +1763,8 @@ describe('Context', () => {
     it('ctx.runAll yields a request with callerStack', () => {
       const context = createContext();
       const branches = {
-        a: [taskA] as [Function],
-        b: [taskB] as [Function],
+        a: createSingleActivityBranch(taskA),
+        b: createSingleActivityBranch(taskB),
       };
       const generator = context.runAll(branches);
       const request = expectRequest(generator.next(), 'run-all');
