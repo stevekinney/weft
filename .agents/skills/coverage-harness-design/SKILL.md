@@ -24,6 +24,7 @@ description: >-
 - Restoring coverage for session state, `startOrSignal`, schedules, and parity wait helpers by driving real helper behavior first, then deleting stale production branches or allowance entries only when tests prove they are dead.
 - Fixing `scripts/check-coverage.ts` path filtering for Bun-generated temporary workflow fixtures, especially when coverage runs from deep git worktrees that record `private/tmp/` or `tmp/` paths with more `../` segments.
 - Restoring retry/checkpoint coverage around `run-operation` by proving corrupt persisted retry attempts or sleep counts fail, missing retry policies on replay fail, non-`Error` failures still honor `nonRetryableErrors`, and retry-to-sleep-to-success paths checkpoint correctly.
+- Restoring coverage for parallel-operation caches, activity reconciliation, callback checkpoint persistence, or coverage allowance refresh entries.
 - Restoring runtime coverage around worker socket lifecycle and result-resolution diagnostics, including stale same-`workerId` socket closes and post-`taskResult` storage failures.
 - Covering inline parking regressions where a workflow waiting on `waitForSignal()` replays, resumes, or serves `ctx.onQuery()` from a retained context.
 - Covering `ctx.race()` / `ctx.all()` sleep, wait-signal, and activity branches, including nested deferred-consume envelopes, losing `ctx.run()` activity aborts, `ctx.speculate` finalization, duplicate signal-name rejection, and long sleep disposal.
@@ -62,10 +63,13 @@ description: >-
 21. For retry-state coverage, drive the persisted-state edge rather than asserting the helper directly when possible; only expose `ForTesting` helpers when the branch is otherwise unreachable through a real workflow drive.
 22. For inline parking coverage, prefer a real workflow that parks on `waitForSignal()`, queries while parked, resumes to a second park, and proves replay failure handling instead of only inspecting parked-context maps.
 23. For race/all branch coverage, drive real workflows through top-level and nested coordinators before adding helper-level assertions. Prove losing signal branches do not consume `sig:` records, losing `ctx.run()` branches see an aborted `ActivityContext.signal` when a sibling wins, winning branches checkpoint encoded values, and `ctx.all` waits for all finalizers before throwing.
-24. For schedule and `startOrSignal` coverage, prove real lifecycle edges: cancelled schedules cannot resume, cleanup-error callbacks report failures, buffered-signal races converge on one winner, and plain storage batch failures do not masquerade as idempotent success.
-25. For coverage artifact filters, require both a generalized temporary-root prefix and the known generated-fixture filename pattern; add negative tests proving unrelated files under `tmp/` still count as uncovered.
-26. For coverage allowance edits, test duplicate allowance keys and cross-layer-shadowed keys explicitly so one broad production allowance cannot hide a narrower source/test allowance.
-27. For coverage ignore-pattern integration, read `coveragePathIgnorePatterns` from `bunfig.toml` as the source of truth and reject allowances for files the coverage runner never instruments.
+24. For `ctx.runAll()` cache coverage, assert both fully fulfilled cache reconstruction and partial cache re-yielding so replay topology failures do not hide behind helper-only assertions.
+25. For activity reconciliation coverage, prefer malformed persisted records, verifier-normalization rejection, and structural storage doubles that force claim or fenced-write conflicts over allowances for reachable ownership branches.
+26. For callback checkpoint persistence coverage, drive the callback through a live engine and assert the durable workflow state, including `history.maxEvents` circuit-breaker termination, instead of only awaiting a handle-level error.
+27. For schedule and `startOrSignal` coverage, prove real lifecycle edges: cancelled schedules cannot resume, cleanup-error callbacks report failures, buffered-signal races converge on one winner, and plain storage batch failures do not masquerade as idempotent success.
+28. For coverage artifact filters, require both a generalized temporary-root prefix and the known generated-fixture filename pattern; add negative tests proving unrelated files under `tmp/` still count as uncovered.
+29. For coverage allowance edits, test duplicate allowance keys and cross-layer-shadowed keys explicitly so one broad production allowance cannot hide a narrower source/test allowance; delete duplicate current-branch refresh entries when fresh LCOV proves the branch-level allowance is stale.
+30. For coverage ignore-pattern integration, read `coveragePathIgnorePatterns` from `bunfig.toml` as the source of truth and reject allowances for files the coverage runner never instruments.
 
 ## Verification
 
@@ -73,6 +77,7 @@ description: >-
 - For changes to the coverage runner itself, also run the focused `scripts/check-coverage.test.ts` tests that cover coverage-process failure, LCOV parsing, and allowance handling.
 - For feature-adjacent coverage restoration, run the focused tests that exercise the newly covered behavior before `bun run scripts/check-coverage.ts`, so the coverage gate is not the only proof that the assertion is meaningful.
 - For retry-state coverage, run `bun test src/core/context/run-operation.test.ts` before the coverage gate.
+- For parallel-cache, reconciliation, and callback checkpoint persistence coverage, run `bun test src/core/context.test.ts src/core/engine/activity-reconciliation.test.ts src/core/engine/callback-checkpoint-persistence.test.ts src/core/engine/checkpoint-io.test.ts` before the coverage gate.
 - For inline parking coverage, run `bun test src/core/engine/inline-parking.test.ts src/core/engine.test.ts src/core/engine/suspend-resume.test.ts` before the coverage gate.
 - For race/all branch coverage, run `bun test src/core/engine/race-branches.test.ts src/core/engine/operations-coordination.test.ts src/core/crash-recovery.test.ts` before the coverage gate.
 - For session-state, schedule, and `startOrSignal` coverage, run `bun test src/core/session-state-helpers.test.ts src/core/schedule.test.ts src/core/engine/start-or-signal.test.ts src/core/engine/callback-creators.test.ts src/core/parity/real-timer-wait.test-support.test.ts` before the coverage gate.

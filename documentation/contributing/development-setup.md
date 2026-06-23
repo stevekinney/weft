@@ -75,6 +75,8 @@ The verifier removes stale `coverage/` output, runs Bun coverage once with LCOV 
 
 When restoring coverage around server runtime paths, prefer characterization tests for reachable lifecycle behavior before editing allowances. Recent examples cover stale worker socket closes by asserting the warning, no requeue, and preserved fresh socket mapping, and cover `taskResult` resolution storage failures by asserting the operator-facing `console.error` that an in-flight record may leak. Only keep an allowance after fresh LCOV output proves the remaining branch is unreachable, such as a type-level exhaustiveness default arm.
 
+When restoring coverage around retry, checkpoint, or reconciliation paths, drive the durable behavior before changing `scripts/check-coverage.ts`. Recent focused tests cover corrupt retry-state locals, `ctx.runAll()` cached replay reconstruction, malformed activity reconciliation records, fenced-write conflicts, callback checkpoint persistence through a live engine, and `history.maxEvents` circuit-breaker termination. Remove duplicate or stale allowance refresh entries after fresh LCOV proves the remaining miss is instrumentation drift rather than reachable behavior.
+
 ### Testing conventions
 
 Test files live next to the source they test, using the `.test.ts` suffix. A separate `tsconfig.test.json` provides relaxed TypeScript settings for test code. Oxlint rules are also relaxed for test files (`*.test.ts`, `*.spec.ts`, `test/**`, `__tests__/**`)—you can freely use `any`, non-null assertions, unused variables, and other patterns that would normally be flagged in production code.
