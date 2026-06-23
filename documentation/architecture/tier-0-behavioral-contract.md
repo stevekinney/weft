@@ -183,7 +183,7 @@ Rolling-upgrade matrix:
 | Scenario                                      | Required behavior                                                                                                                                      |
 | --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | New writer, new reader                        | Full Tier-0 behavior.                                                                                                                                  |
-| Old writer, new reader                        | New reader accepts missing Tier-0 records and applies non-idempotent behavior where no Tier-0 record exists.                                          |
+| Old writer, new reader                        | New reader accepts missing Tier-0 records and applies current pre-Tier-0 behavior where no Tier-0 record exists.                                       |
 | New writer, old reader during rolling upgrade | Old reader must ignore unknown additive record prefixes and must not corrupt them. It must not concurrently own the same workflow as a new reader.     |
 | Downgrade after new records exist             | Downgrade is allowed only after workflows are drained or ownership is forced to old-version single-owner mode with accepted loss of Tier-0 guarantees. |
 | Mixed old and new owners on one workflow      | Unsupported. Operators must prevent it; later CAS work may turn this into a deterministic conflict.                                                    |
