@@ -189,11 +189,11 @@ Rolling-upgrade matrix:
 | Mixed old and new owners on one workflow      | Unsupported. Operators must prevent it; later CAS work may turn this into a deterministic conflict.                                                    |
 | Cleanup or garbage collection                 | Retention jobs must delete only Tier-0 records whose owning workflow or response-retention window is complete.                                         |
 
-New record prefixes must be additive: old engines that scan `wf:`, `sig:`, `upd:`, or `op:` must not see a Tier-0 record as a current workflow, signal, update, or operation. If a Tier-0 implementation needs to change an existing record shape, it must add a persisted-format test and update this contract first.
+New record prefixes must be additive: old engines that scan `wf:`, `sig:`, `upd:`, or `op:` must not see a Tier-0 record as a workflow, signal, update, or operation. If a Tier-0 implementation needs to change an existing record shape, it must add a persisted-format test and update this contract first.
 
 ### Implementation Verification Target
 
-Each Tier-0 implementation task must add persisted-format tests for its new records. At minimum, tests must prove that missing records apply non-idempotent behavior, unknown additive records do not break existing scans, and retention removes only records that are safe to remove.
+Each Tier-0 implementation task must add persisted-format tests for its new records. At minimum, tests must prove that missing Tier-0 records apply current pre-Tier-0 behavior, unknown additive records do not break existing scans, and retention removes only records that are safe to remove.
 
 ## Storage Capability Requirements
 
