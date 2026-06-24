@@ -494,10 +494,7 @@ export async function processReviewOperation(
   }
 
   if (!outcome.ok) {
-    // The workflow was already failed directly (e.g., by the timeout handler).
-    // Just return without feeding a result.
     return;
   }
-
   callbacks.feedOperationResult(workflowId, { status: 'completed', value: outcome.value });
 }

@@ -26,9 +26,6 @@
  * arrives after token recovery but before replay has adopted the workflow
  * generator, the engine buffers the completion or failure outcome and drains it
  * when replay reaches the same deterministic token.
- *
- * Internal-only. Imported from `src/core/engine/**` and the `ActivityContext`
- * construction path.
  */
 
 import { KEYS, encodeStorageKeyComponent, type BatchOperation } from '../../storage/interface.ts';
