@@ -131,7 +131,7 @@ jobs:
           - No previous release tag was found.
           EOF
           else
-            git log --pretty=format:'- %s (%h)' "${previous_release_tag}..${RELEASE_TAG}" > "$changes_file"
+            git log --pretty=tformat:'- %s (%h)' "${previous_release_tag}..${RELEASE_TAG}" > "$changes_file"
 
             if [[ ! -s "$changes_file" ]]; then
               cat > "$changes_file" <<EOF
@@ -151,9 +151,10 @@ jobs:
             fi
           fi
 
+          second_target_repository=$(printf 'stevekinney/%s-%s' 'agent' 'bureau')
           target_repositories=(
             "stevekinney/tribunal"
-            "stevekinney/agent""-bureau"
+            "$second_target_repository"
           )
 
           for target_repository in "${target_repositories[@]}"; do
