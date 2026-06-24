@@ -151,11 +151,41 @@ jobs:
             fi
           fi
 
-          second_target_repository=$(printf 'stevekinney/%s-%s' 'agent' 'bureau')
-          target_repositories=(
-            "stevekinney/tribunal"
-            "$second_target_repository"
-          )
+          target_repositories_file=$(mktemp)
+          python3 <<'PY' > "$target_repositories_file"
+          import sys
+          import tomllib
+
+          with open("downstream-release-repositories.toml", "rb") as configuration_file:
+              configuration = tomllib.load(configuration_file)
+
+          repositories = configuration.get("repositories", [])
+          if not repositories:
+              sys.exit("downstream-release-repositories.toml must define at least one repository")
+
+          for repository in repositories:
+              owner = repository.get("owner")
+              name = repository.get("name")
+              if not isinstance(owner, str) or not owner.strip():
+                  sys.exit("Each downstream release repository must define a non-empty owner")
+              if not isinstance(name, str) or not name.strip():
+                  sys.exit("Each downstream release repository must define a non-empty name")
+              print(f"{owner}/{name}")
+          PY
+          mapfile -t target_repositories < "$target_repositories_file"
+          rm "$target_repositories_file"
+
+          if [[ ${#target_repositories[@]} -eq 0 ]]; then
+            echo "downstream-release-repositories.toml must define at least one repository" >&2
+            exit 1
+          fi
+
+          for target_repository in "${target_repositories[@]}"; do
+            if [[ "$target_repository" != */* ]]; then
+              echo "Invalid downstream repository: ${target_repository}" >&2
+              exit 1
+            fi
+          done
 
           for target_repository in "${target_repositories[@]}"; do
             existing_issue_number=$(
