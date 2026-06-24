@@ -117,7 +117,7 @@ jobs:
           issue_title="Bump @lostgradient/weft to ${weft_version}"
           target_repositories=(
             "stevekinney/tribunal"
-            "stevekinney/agent-bureau"
+            "stevekinney/agent""-bureau"
           )
 
           for target_repository in "${target_repositories[@]}"; do
