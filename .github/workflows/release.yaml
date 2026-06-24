@@ -99,6 +99,11 @@ jobs:
     permissions:
       contents: read
     steps:
+      - name: Checkout release history
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
       - name: Open downstream bump issues
         env:
           GH_TOKEN: ${{ secrets.DOWNSTREAM_ISSUE_TOKEN }}
@@ -115,6 +120,37 @@ jobs:
 
           weft_version="${RELEASE_TAG#v}"
           issue_title="Bump @lostgradient/weft to ${weft_version}"
+          previous_release_tag=$(
+            git tag --list 'v*.*.*' --sort=-v:refname \
+              | awk -v current="$RELEASE_TAG" '$0 != current { print; exit }'
+          )
+          changes_file=$(mktemp)
+
+          if [[ -z "$previous_release_tag" ]]; then
+            cat > "$changes_file" <<EOF
+          - No previous release tag was found.
+          EOF
+          else
+            git log --pretty=format:'- %s (%h)' "${previous_release_tag}..${RELEASE_TAG}" > "$changes_file"
+
+            if [[ ! -s "$changes_file" ]]; then
+              cat > "$changes_file" <<EOF
+          - No commits were found between \`${previous_release_tag}\` and \`${RELEASE_TAG}\`.
+          EOF
+            else
+              total_changes=$(git rev-list --count "${previous_release_tag}..${RELEASE_TAG}")
+
+              if (( total_changes > 50 )); then
+                truncated_changes_file=$(mktemp)
+                {
+                  head -n 50 "$changes_file"
+                  echo "- ...and $((total_changes - 50)) more commits."
+                } > "$truncated_changes_file"
+                mv "$truncated_changes_file" "$changes_file"
+              fi
+            fi
+          fi
+
           target_repositories=(
             "stevekinney/tribunal"
             "stevekinney/agent""-bureau"
@@ -136,15 +172,23 @@ jobs:
             fi
 
             body_file=$(mktemp)
-            cat > "$body_file" <<EOF
+            {
+              cat <<EOF
           A new \`@lostgradient/weft\` release is available.
 
           - Version: \`${weft_version}\`
           - Tag: ${RELEASE_TAG_URL}
           - Package: https://www.npmjs.com/package/@lostgradient/weft/v/${weft_version}
 
+          Recent changes since ${previous_release_tag:-the previous release}:
+
+          EOF
+              cat "$changes_file"
+              printf '\n\n'
+              cat <<EOF
           Please update this repository to use \`@lostgradient/weft@${weft_version}\` and run its verification gates.
           EOF
+            } > "$body_file"
 
             gh issue create \
               --repo "$target_repository" \
@@ -153,3 +197,5 @@ jobs:
 
             rm "$body_file"
           done
+
+          rm "$changes_file"
