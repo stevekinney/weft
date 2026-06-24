@@ -192,10 +192,10 @@ jobs:
 
           for target_repository in "${target_repositories[@]}"; do
             existing_issue_number=$(
-              ISSUE_TITLE="$issue_title" gh issue list \
+              ISSUE_TITLE="$issue_title" gh search issues "$issue_title" \
                 --repo "$target_repository" \
-                --state all \
-                --limit 1000 \
+                --match title \
+                --limit 100 \
                 --json number,title \
                 --jq 'map(select(.title == env.ISSUE_TITLE)) | .[0].number // ""'
             )
