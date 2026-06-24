@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-06-24
+
+### Added — Service Worker recovery and release automation
+
+Browser Service Worker hosts can now opt into durable recovery with
+`recover: true`, and `browser-smoke` is part of the required validation gate so
+browser storage and recovery regressions are caught before release (#611, #616).
+
+The release workflow now has a documented `release-publish` playbook and a
+post-publish downstream notification job. After a successful tagged publish, the
+workflow opens versioned bump issues for configured downstream repositories,
+deduplicating existing issues for the same target version (#638, #640).
+
+### Added — durable helper workflow support
+
+Plain async helpers running inside an inline `ctx.memo()` callback can use the
+package-root `durableActivity()` helper to launch durable activities while
+preserving memo-scoped operation identities for retry, heartbeat,
+reconciliation, diagnostics, and timeline labels (#621, #624).
+
+### Added — explicit lease shutdown ergonomics
+
+`Engine.shutdown()` is now the explicit awaited shutdown primitive for hosts
+that need prompt lease release during process termination. Lease-owning engines
+also warn on synchronous disposal through the exported
+`ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME`, nudging rolling deployments
+toward `shutdown()` or `await using` when handoff latency matters (#639).
+
+### Fixed — worker transport and runtime hardening
+
+Remote worker registration now rejects duplicate live `workerId` connections,
+with reconnect grace still allowed for the legitimate worker, and the WebSocket
+transport caps raw frames before parsing so oversized messages cannot force a
+large JSON allocation (#609, #610, #614, #615).
+
+Start-or-signal restart behavior, durable lease-fenced writes, async activity
+completion, opaque signal identifiers, and JSON negative-zero handling gained
+additional regression coverage and documentation refreshes to keep the runtime
+contract pinned across future cleanup work (#613, #617, #623, #635, #637).
+
+### Fixed — coverage and documentation gates
+
+Runtime coverage is back at the repository's deterministic 100 percent adjusted
+coverage gate, with refreshed coverage guidance for the restoration workflow
+(#620, #625, #626). Public documentation, agent guidance, and mirrored skills
+were refreshed around durable helper workflows, worker and restart behavior,
+and pull request evidence collection (#619, #624, #637).
+
 ## [0.7.0] - 2026-06-20
 
 ### Added — secure REST Server-Sent Event streams
