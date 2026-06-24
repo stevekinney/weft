@@ -70,7 +70,7 @@ function contentForCheck(relativePath: string, content: string): string {
 }
 
 describe('Weft-owned language', () => {
-  it('does not name downstream projects outside the documented historical changelog export token', async () => {
+  it('does not name downstream projects outside documented allowlisted tokens', async () => {
     const matches: string[] = [];
 
     for (const relativePath of await trackedFiles()) {

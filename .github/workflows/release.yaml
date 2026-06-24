@@ -163,10 +163,14 @@ jobs:
               configuration = tomllib.load(configuration_file)
 
           repositories = configuration.get("repositories", [])
+          if not isinstance(repositories, list):
+              sys.exit("downstream-release-repositories.toml repositories must be a list of tables")
           if not repositories:
               sys.exit("downstream-release-repositories.toml must define at least one repository")
 
           for repository in repositories:
+              if not isinstance(repository, dict):
+                  sys.exit("Each downstream release repository must be a table")
               owner = repository.get("owner")
               name = repository.get("name")
               if not isinstance(owner, str) or not owner.strip():
