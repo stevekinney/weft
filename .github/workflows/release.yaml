@@ -92,3 +92,64 @@ jobs:
         env:
           NPM_CONFIG_PROVENANCE: 'true'
         run: npm publish --ignore-scripts
+
+  notify-downstream-repositories:
+    needs: publish-npm
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Open downstream bump issues
+        env:
+          GH_TOKEN: ${{ secrets.DOWNSTREAM_ISSUE_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_TAG_URL: https://github.com/${{ github.repository }}/tree/${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ -z "${GH_TOKEN:-}" ]]; then
+            echo "The DOWNSTREAM_ISSUE_TOKEN secret is required to open issues in downstream repositories." >&2
+            exit 1
+          fi
+
+          weft_version="${RELEASE_TAG#v}"
+          issue_title="Bump @lostgradient/weft to ${weft_version}"
+          target_repositories=(
+            "stevekinney/tribunal"
+            "stevekinney/agent-bureau"
+          )
+
+          for target_repository in "${target_repositories[@]}"; do
+            existing_issue_number=$(
+              ISSUE_TITLE="$issue_title" gh issue list \
+                --repo "$target_repository" \
+                --state all \
+                --limit 1000 \
+                --json number,title \
+                --jq 'map(select(.title == env.ISSUE_TITLE)) | .[0].number // ""'
+            )
+
+            if [[ -n "$existing_issue_number" ]]; then
+              echo "Issue #${existing_issue_number} already exists in ${target_repository}; skipping."
+              continue
+            fi
+
+            body_file=$(mktemp)
+            cat > "$body_file" <<EOF
+          A new \`@lostgradient/weft\` release is available.
+
+          - Version: \`${weft_version}\`
+          - Tag: ${RELEASE_TAG_URL}
+          - Package: https://www.npmjs.com/package/@lostgradient/weft/v/${weft_version}
+
+          Please update this repository to use \`@lostgradient/weft@${weft_version}\` and run its verification gates.
+          EOF
+
+            gh issue create \
+              --repo "$target_repository" \
+              --title "$issue_title" \
+              --body-file "$body_file"
+
+            rm "$body_file"
+          done
