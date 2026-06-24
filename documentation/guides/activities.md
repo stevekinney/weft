@@ -158,6 +158,8 @@ curl -X POST http://localhost:7233/api/v1/activities/complete \
 
 Tokens are single-use. A replayed or unknown token returns `NotFound`; oversized completion and failure payloads return `InvalidParams` before the parked token is consumed, so the workflow remains waiting.
 
+When a completion is accepted, token consumption is staged with the workflow checkpoint that records the result. That means a crash cannot leave a workflow result committed while the same completion token remains reusable, and it cannot consume the token before the workflow has durably adopted the result.
+
 After a restart, register workflows and activities, then await `engine.recoverAll()` before accepting callback traffic if your application needs deterministic startup ordering. If a completion or failure races recovery after the token has been recovered but before replay has adopted the workflow generator, Weft buffers that outcome and delivers it when replay reaches the same async-activity token.
 
 The token is a deterministic identifier, not a secret. Treat completion payloads as hostile external input, validate them the same way you validate signal payloads, and enable `serve({ auth })` before exposing completion endpoints outside a trusted boundary.

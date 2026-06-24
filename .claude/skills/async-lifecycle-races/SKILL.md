@@ -27,6 +27,7 @@ description: >-
 - Changing scheduled occurrence launch flow or `schedule:fired` event dispatch, including overlap-policy gating, queued-drain launches, unavailable-services ordering, and process-local notification behavior.
 - Changing RemoteWorker or long-poll task completion authorization, including per-dispatch `attemptToken` generation, echoing, registry restore, malformed-token rejection, and missing-token compatibility.
 - Changing durable timer cleanup under lease ownership, especially fired timer deletion, deadline timers, terminal cleanup, delayed starts, schedules, teardown, or successor re-drive after deposition.
+- Changing lease-owned engine write paths for schedules, purges, bulk retry reactivation, activity reconciliation, completed reviews, async-activity registration, or checkpoint side effects.
 
 ## Do not use
 
@@ -53,6 +54,7 @@ description: >-
 15. For wait-condition gates, model the first predicate evaluation, update-driven re-evaluation, timeout fire, predicate throw, cancellation, recovery, and disposal as separate paths. Signals are pull-only and must not wake a condition waiter.
 16. For race/all branches, model the top-level coordinator, nested `race`/`all`, and `ctx.speculate` as separate consumers. Losers must release waiters without consuming durable signals, losing `ctx.run()` branches inside `ctx.race()` must receive the coordinator `AbortSignal` on `ActivityContext.signal`, and winners must finalize before checkpointing encoded results.
 17. For fired timers under `ownership: 'lease'`, route cleanup through the same lease-fenced commit path as the timer callback's durable writes. A deposed engine must not delete a fired timer whose fenced follow-up write was rejected; the successor needs the durable marker to re-drive.
+18. For async completion and review-timeout cleanup, stage token or pending-key deletion with the workflow checkpoint commit that records the result or failure. Do not restore standalone `storage.delete()` paths that can consume the key without the workflow adopting the outcome.
 
 ### Client event-streaming work
 
@@ -79,6 +81,7 @@ description: >-
 - For SSE event streaming, cover replay-complete readiness, `Last-Event-ID` reconnect cursors, parked iterator close, terminal-event auto-close, and abort cleanup before iteration begins so feed listeners and connection leases cannot leak.
 - For long-poll task queues, cover disconnect during wait, already-aborted signals, pending-task retention for dead callers, idempotent disposal, and timer cleanup.
 - For lease-fenced timer cleanup, cover a deposed engine whose timer callback write is rejected and prove the fired timer remains for a successor scheduler to clear.
+- For lease-fenced engine writes, cover each touched path with a deposed-engine or fenced-write conflict case so schedules, purge, bulk retry, activity reconciliation, async-activity registration, completed reviews, and staged side effects cannot fall back to bare `storage.batch()`.
 - For pending-update drains, cover resume and inline advancement paths where the update is durable before the handler is visible.
 - For wait-condition gates, cover met predicates, timed-out predicates, throwing predicates on initial and update-driven evaluation, cancellation, recovery, cleanup, and rejection inside `ctx.race()`, `ctx.all()`, and `ctx.speculate()`.
 - For async activity completion, cover double-completion races, malformed JSON, oversized payload rejection that preserves the token, and cross-transport parity between `LocalClient` and `HttpClient`.

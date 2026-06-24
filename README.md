@@ -248,7 +248,7 @@ console.log(handle.id, outcome); // outcome is 'started' or 'signalled'
 
 The idempotency mapping intentionally outlives terminal cleanup. If retention removes the workflow record, the key is spent and future calls return a conflict instead of starting a replacement.
 
-For stable-id re-sync flows, `engine.startOrSignal()` can replace a terminal prior run with `{ id, onTerminalConflict: 'start-new' }` when the initial signal also carries a deterministic `signalId`. Non-terminal runs are still signalled, not replaced, and restart-capable calls reject `idempotencyKey` because idempotency keys are permanent at-most-once mappings.
+For stable-id re-sync flows, `engine.startOrSignal()` can replace a terminal prior run with `{ id, onTerminalConflict: 'start-new' }` when the initial signal also carries a deterministic `signalId`. Non-terminal runs are still signalled, not replaced, and restart-capable calls reject `idempotencyKey` because idempotency keys are permanent at-most-once mappings. Signal identifiers are treated as opaque user identifiers before storage-key construction, so caller-provided values that contain separator-looking text such as `anonymous:` stay explicit signal IDs instead of colliding with Weft's generated anonymous-signal sequence.
 
 ### Search Attributes
 

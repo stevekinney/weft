@@ -42,6 +42,7 @@ description: >-
 16. For MCP Streamable HTTP sessions, distinguish the public session id from the anonymous continuation token: `initialize` returns both headers, later anonymous POST/GET/DELETE requests require both, and authenticated sessions rely on the re-presented credential plus bound principal.
 17. For timeout docs, distinguish deadline timeouts from history circuit-breaker termination: `WorkflowTimeoutError.terminationReason` is `'history-circuit-breaker'` only for breaker trips and `undefined` for execution or run deadline timeouts.
 18. For cleanup wording in tests and comments, describe the current contract directly. Use "retired" or "persisted-state fields" when code tolerates old shapes; avoid "legacy", "migration", or "compatibility" framing unless the file is an actual migration guide or compatibility policy.
+19. For Tier-0 or persisted-format prose, use rolling-upgrade contract language when that is the actual guarantee. Do not describe pre-release current behavior as "legacy" behavior, and do not call shape tests "migration tests" unless they test an implemented migration path.
 
 ## Verification
 

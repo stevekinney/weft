@@ -257,6 +257,8 @@ When using `textValueStore()` or `withCodec()` over a storage instance also owne
 
 Both wrappers expose `conditionalBatch()` for compare-and-swap application state. Text wrappers compare and write UTF-8 strings; typed wrappers compare and write values through their codec before delegating to raw storage CAS.
 
+`jsonCodec()` accepts only values that round-trip through JSON without changing their meaning. It rejects `NaN`, infinities, cyclic structures, unsupported object types, and `-0`; JavaScript's `JSON.stringify(-0)` emits `0`, so accepting negative zero would silently erase information before the value reached storage.
+
 ### Importing an existing string KV database
 
 For an existing SQLite database with a string-valued `kv(key TEXT PRIMARY KEY, value TEXT NOT NULL)` table, import rows into a Weft database under an application prefix:

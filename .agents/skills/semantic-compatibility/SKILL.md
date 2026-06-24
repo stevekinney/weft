@@ -25,6 +25,7 @@ description: >-
 - Changing failure-category values, workflow visibility index keys, or framed compressed-storage payloads.
 - Changing idempotent start storage (`start-idem:`), signal id derivation, `startOrSignal` convergence or terminal-restart semantics, serializer registry tags, recovered launch/snapshot public shapes, or durable task in-flight records such as `attemptToken`.
 - Changing buffered signal storage keys, including encoded signal names, `KEYS.startSignal` sort-class behavior, and the class-independent `sigres:` accepted-response dedup record.
+- Changing anonymous signal sequence derivation or explicit `signalId` validation. Caller-supplied `signalId` values are opaque after validation, so strings containing `anonymous:` or separators must never be parsed as generated anonymous identifiers.
 - Changing workflow version metadata on persisted `WorkflowState`; the current canonical state shape is `versionTuple`, while old flat version fields are read-normalized only.
 - Changing the persisted `WorkflowState` decoder field allowlist or unknown-field behavior. Current decode tolerates extra keys but strips every field outside the current state shape before recovery continues.
 - Removing or changing workflow version recovery behavior. Current recovery has no checkpoint migration hook: stored and registered versions plus `versionTuple` metadata are strict recovery guards that fail with `VersionMismatchError` on drift.
@@ -61,6 +62,7 @@ description: >-
 22. For versioning changes, keep `checkVersionCompatibility()` to compatible/incompatible outcomes, keep `weft version:check` to safe/unsafe reporting, and do not reintroduce `migrate`, `migrateCheckpoint`, or `needs-migration` surfaces unless the task explicitly restores them with storage fixtures.
 23. When persisted data or checkpoint wording is touched, frame exact-schema rejection as the current contract: Weft does not upgrade older database records in place unless the task explicitly adds and tests that upgrade path.
 24. For unknown persisted workflow-state fields, add neutral extra-field fixtures that prove decode drops the field and resumes with only current `WorkflowState` keys. Do not reintroduce tenant-specific or legacy alias normalization when the current contract is tolerate-and-strip.
+25. For JSON value validation or typed storage codecs, reject values whose JSON encoding would erase information. `-0` must stay invalid because `JSON.stringify(-0)` emits `0`; add regression coverage in both `src/core/json.test.ts` and `src/storage/typed-storage.test.ts` when this boundary moves.
 
 ## Verification
 
@@ -71,6 +73,7 @@ description: >-
 - For services marker changes, run the recovered-services, workflow-services, delayed-start, schedule, purge, and retention tests that prove marker lifecycle across storage paths.
 - For idempotent start and signal-with-start changes, run the start workflow, start-or-signal, generated operation-client drift, and storage capability tests that prove convergence and conflict behavior.
 - For buffered signal key changes, run focused signal and start-or-signal tests that prove same-tick start-signal-first ordering, duplicate `signalId` dedup across start/live paths, and separator-containing signal names do not prefix-match other names.
+- For anonymous signal sequence changes, include explicit `signalId` values containing `anonymous:` plus overflow cases near `Number.MAX_SAFE_INTEGER`.
 - For serializer registry changes, run focused codec tests for custom serializer round trips, corrupt extension payloads, duplicate constructor/tag rejection, and `Error` subclass field preservation.
 - For Neon/Postgres storage, run PGlite-backed storage contract tests, retry fault-injection tests, schema/table query-shape tests, net-effect resolver tests, and any env-gated live Neon tests when `NEON_DATABASE_URL` is available.
 - For task attempt-token changes, run protocol parser tests, WebSocket stale-attempt regressions, long-poll completion authorization tests, conformance fixtures, and server restart restoration tests.

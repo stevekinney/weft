@@ -52,6 +52,8 @@ Both forms do the same thing. The handle version is convenient when you already 
 
 When retrying a sender request, pass a stable `signalId`. Weft uses it as an idempotency key for that workflow and signal name: the first delivery is accepted once, and duplicate retries return the same successful acknowledgement instead of queuing the signal again. This requires a storage adapter that supports `conditionalBatch`; plain signals without `signalId` continue to work without that capability.
 
+`signalId` is an opaque, case-sensitive user identifier. Separator-looking values are allowed and encoded before key construction, so an explicit `signalId` such as `anonymous:upstream-42` remains distinct from Weft's internally generated anonymous signal IDs.
+
 ## Starting or signalling atomically
 
 Webhook-style integrations often need "start the workflow if this is the first event, otherwise deliver the event to the existing run." Use `engine.startOrSignal()` for that signal-with-start path.
