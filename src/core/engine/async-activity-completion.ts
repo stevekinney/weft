@@ -31,12 +31,14 @@
  * construction path.
  */
 
-import { KEYS, encodeStorageKeyComponent, type Storage } from '../../storage/interface.ts';
+import { KEYS, encodeStorageKeyComponent, type BatchOperation } from '../../storage/interface.ts';
 import { decode, encode } from '../codec.ts';
 import { ActivityAsyncPendingEvent } from '../events.ts';
 import { assertPayloadWithinLimit } from '../payload-size.ts';
 import type { OperationOutcome } from '../types.ts';
 import { WeftError } from '../weft-error.ts';
+import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
+import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 
 const ASYNC_ACTIVITY_TOKEN_PREFIX = 'async-act:v1';
@@ -184,10 +186,7 @@ export function deriveAsyncActivityToken(
   return `${ASYNC_ACTIVITY_TOKEN_PREFIX}:${workflowId}:${step}:${attempt}`;
 }
 
-function persistPendingAsyncActivity(
-  storage: Storage,
-  pending: PendingAsyncActivity,
-): Promise<void> {
+function buildPersistPendingAsyncActivityOperation(pending: PendingAsyncActivity): BatchOperation {
   const record: PersistedAsyncActivity = {
     version: 1,
     token: pending.token,
@@ -198,7 +197,11 @@ function persistPendingAsyncActivity(
     attempt: pending.attempt,
     createdAt: pending.createdAt,
   };
-  return storage.put(KEYS.asyncActivity(pending.workflowId, pending.token), encode(record));
+  return {
+    type: 'put',
+    key: KEYS.asyncActivity(pending.workflowId, pending.token),
+    value: encode(record),
+  };
 }
 
 /**
@@ -215,7 +218,13 @@ export async function registerPendingAsyncActivity(
 ): Promise<void> {
   const alreadyRegistered = internals.pendingAsyncActivities.has(pending.token);
   internals.pendingAsyncActivities.set(pending.token, pending);
-  await persistPendingAsyncActivity(internals.storage, pending);
+  await commitFencedEngineWrite(
+    internals,
+    [buildPersistPendingAsyncActivityOperation(pending)],
+    [],
+    () =>
+      new Error(`Async activity registration for token "${pending.token}" lost its precondition.`),
+  );
   if (!alreadyRegistered) {
     internals.engine.dispatchEvent(
       new ActivityAsyncPendingEvent(
@@ -308,14 +317,10 @@ async function consumePendingAsyncActivity(
   // The synchronous delete makes the second caller's `get` miss and throw
   // `AsyncActivityTokenNotFoundError`.
   internals.pendingAsyncActivities.delete(token);
-  try {
-    await internals.storage.delete(KEYS.asyncActivity(pending.workflowId, token));
-  } catch (error) {
-    // Restore the in-memory token on storage failure so the caller can retry —
-    // preserving the original "don't lose the token if storage rejects" invariant.
-    internals.pendingAsyncActivities.set(token, pending);
-    throw error;
-  }
+  stageAtomicWorkflowCommitSideEffects(internals, pending.workflowId, {
+    conditions: [],
+    operations: [{ type: 'delete', key: KEYS.asyncActivity(pending.workflowId, token) }],
+  });
   return pending;
 }
 

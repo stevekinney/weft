@@ -15,6 +15,7 @@ import type {
   ReviewListFilter,
   SubmitReviewOptions,
 } from '../types.ts';
+import { stageAtomicWorkflowCommitSideEffects } from './checkpoint-side-effects.ts';
 import {
   deleteCompletedReviewsForWorkflow,
   listCompletedReviewsFromStorage,
@@ -75,7 +76,7 @@ async function dispatchCompletedReview(
   decisionResult: HumanReviewResult,
   dispatchEvent: (event: Event) => boolean,
 ): Promise<void> {
-  await persistCompletedReviewRecord(internals.storage, reviewKey, reviewData, decisionResult);
+  await persistCompletedReviewRecord(internals, reviewKey, reviewData, decisionResult);
   dispatchEvent(
     new ReviewCompletedEvent(
       reviewData.workflowId,
@@ -242,9 +243,11 @@ export async function handleReviewEscalationTimer(
     internals.reviewWaiters.delete(waiterKey);
     untrackWaiterKey(internals.reviewWaitersByWorkflow, workflowId, waiterKey);
     const elapsed = internals.options.getNow() - reviewRequest.createdAt;
-    await internals.storage.delete(KEYS.review(workflowId, reviewId));
-
     const timeoutError = new ReviewTimeoutError(reviewId, elapsed);
+    stageAtomicWorkflowCommitSideEffects(internals, workflowId, {
+      operations: [{ type: 'delete', key: KEYS.review(workflowId, reviewId) }],
+      conditions: [],
+    });
     await callbacks.failWorkflow(workflowId, timeoutError);
     resolve({ ok: false, error: timeoutError });
     return true;

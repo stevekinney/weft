@@ -190,7 +190,12 @@ export async function writeScheduleState(
     );
   }
 
-  await internals.storage.batch(operations);
+  await commitFencedEngineWrite(
+    internals,
+    operations,
+    [],
+    () => new Error(`Schedule state commit for schedule "${state.id}" lost its precondition.`),
+  );
 }
 
 /** Load persisted workflow start headers by workflow ID. */

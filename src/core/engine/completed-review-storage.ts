@@ -3,6 +3,8 @@ import { encodeStorageKeyComponent } from '../../storage/interface.ts';
 import { encode } from '../codec.ts';
 import type { HumanReviewResult, ReviewRequest } from '../review/index.ts';
 import type { CompletedReviewEntry, ReviewListFilter } from '../types.ts';
+import { commitFencedEngineWrite } from './fenced-write.ts';
+import type { EngineInternals } from './internals.ts';
 import { parseCompletedReviewEntry, toCompletedReviewEntry } from './review-list-entries.ts';
 
 type ReviewListFilterableEntry = {
@@ -78,20 +80,28 @@ export async function listCompletedReviewsFromStorage(
 }
 
 export async function persistCompletedReviewRecord(
-  storage: Storage,
+  internals: EngineInternals,
   reviewKey: string,
   reviewData: ReviewRequest,
   decisionResult: HumanReviewResult,
 ): Promise<void> {
   const completedReview = toCompletedReviewEntry(reviewData, decisionResult);
-  await storage.batch([
-    {
-      type: 'put',
-      key: completedReviewStorageKey(reviewData.workflowId, reviewData.reviewId),
-      value: encode(completedReview),
-    },
-    { type: 'delete', key: reviewKey },
-  ]);
+  await commitFencedEngineWrite(
+    internals,
+    [
+      {
+        type: 'put',
+        key: completedReviewStorageKey(reviewData.workflowId, reviewData.reviewId),
+        value: encode(completedReview),
+      },
+      { type: 'delete', key: reviewKey },
+    ],
+    [],
+    () =>
+      new Error(
+        `Completed review commit for review "${reviewData.reviewId}" lost its precondition.`,
+      ),
+  );
 }
 
 export async function deleteCompletedReviewsForWorkflow(

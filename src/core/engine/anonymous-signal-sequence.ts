@@ -167,23 +167,27 @@ async function scanNextAnonymousSignalSequence(
     }
   }
 
+  if (!Number.isSafeInteger(nextSequence)) {
+    throw new Error(
+      `Anonymous signal sequence overflow for workflow "${workflowId}": computed ${nextSequence}`,
+    );
+  }
+
   return nextSequence;
 }
 
 function extractAnonymousSignalSequence(key: string): number | null {
-  const marker = ':anonymous%3A';
-  const markerIndex = key.lastIndexOf(marker);
-  if (markerIndex === -1) {
+  const idComponent = key.slice(key.lastIndexOf(':') + 1);
+  const marker = 'anonymous%3A';
+  if (!idComponent.startsWith(marker)) {
     return null;
   }
 
-  const sequenceStart = markerIndex + marker.length;
-  const sequenceEnd = key.indexOf('%3A', sequenceStart);
-  if (sequenceEnd === -1) {
-    return null;
-  }
+  const sequenceStart = marker.length;
+  const sequenceEnd = idComponent.indexOf('%3A', sequenceStart);
+  if (sequenceEnd === -1) return null;
 
-  const sequence = Number(key.slice(sequenceStart, sequenceEnd));
+  const sequence = Number(idComponent.slice(sequenceStart, sequenceEnd));
   return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : null;
 }
 

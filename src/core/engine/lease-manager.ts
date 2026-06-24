@@ -133,8 +133,6 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
   // Margin before `expiresAt` past which a holder can no longer prove it holds:
   // one renewal interval, so a single failed renewal still leaves a full interval
   // of slack before the holder must self-terminate.
-  const unconfirmableMarginMs = renewIntervalMs;
-
   let stopped = false;
   let heldEpoch: number | null = null;
   let heldEpochBytes: Uint8Array | null = null;
@@ -334,11 +332,11 @@ export function createLeaseManager(options: LeaseManagerOptions): LeaseManager {
         [{ type: 'put', key: KEYS.leaseHolder(), value: holderBytes }],
       );
     } catch {
-      // Transient storage failure: we could not confirm renewal. If the lease is
-      // about to lapse beyond the safety margin we can no longer prove ownership
-      // and must self-terminate; otherwise a later tick may still succeed.
+      // Transient storage failure: we could not confirm renewal. If the prior
+      // lease has already expired, the process can no longer prove ownership.
+      // Before expiry, a later tick may still succeed.
       const priorExpiry = decodeHolder(lastHolderBytes)?.expiresAt ?? 0;
-      if (getNow() >= priorExpiry - unconfirmableMarginMs) {
+      if (getNow() >= priorExpiry) {
         reportLeaseLost('renewal-unconfirmable');
       }
       return;

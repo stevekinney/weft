@@ -18,6 +18,7 @@ import type {
 import { buildWorkflowTagIndexOperations, normalizeWorkflowTags } from '../workflow-tags.ts';
 import { asyncActivityWorkflowPrefix } from './async-activity-completion.ts';
 import { forgetCommittedCheckpointBytes } from './checkpoint-commit-snapshots.ts';
+import { commitFencedEngineWrite } from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { streamWorkflowStates } from './listing.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
@@ -211,7 +212,12 @@ export async function purgeWorkflow(
   cleanupWaiters: CleanupWaiters,
 ): Promise<void> {
   const deleteOperations = await collectWorkflowPurgeDeleteOperations(internals, state);
-  await internals.storage.batch(deleteOperations);
+  await commitFencedEngineWrite(
+    internals,
+    deleteOperations,
+    [],
+    () => new Error(`Purge commit for workflow "${state.id}" lost its precondition.`),
+  );
   clearPurgedWorkflowInMemoryState(internals, state.id, cleanupWaiters);
 }
 

@@ -17,6 +17,11 @@ describe('isJSONValue', () => {
     expect(isJSONValue(Number.NEGATIVE_INFINITY)).toBe(false);
   });
 
+  it('rejects negative zero instead of silently normalizing it to positive zero', () => {
+    expect(isJSONValue(-0)).toBe(false);
+    expect(isJSONValue({ value: -0 })).toBe(false);
+  });
+
   it('rejects unsupported primitive types', () => {
     expect(isJSONValue(undefined)).toBe(false);
     expect(isJSONValue(BigInt(1))).toBe(false);

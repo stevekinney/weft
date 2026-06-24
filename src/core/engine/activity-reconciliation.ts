@@ -219,7 +219,12 @@ export async function resolveStartedActivityReconciliationRecord(
       ownerId: crypto.randomUUID(),
       updatedAt: internals.options.getNow(),
     };
-    await writeActivityReconciliationTransition(internals.storage, reference, record, nextRecord);
+    await commitActivityReconciliationTransitionWithFencedWrite(
+      internals,
+      reference,
+      record,
+      nextRecord,
+    );
     return nextRecord;
   }
   if (normalized === 'completed-result-unavailable') {
@@ -241,8 +246,8 @@ export async function resolveStartedActivityReconciliationRecord(
     normalized.result,
     internals.options.getNow(),
   );
-  await writeActivityReconciliationTransition(
-    internals.storage,
+  await commitActivityReconciliationTransitionWithFencedWrite(
+    internals,
     reference,
     record,
     completedRecord,

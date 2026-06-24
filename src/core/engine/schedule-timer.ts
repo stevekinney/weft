@@ -40,6 +40,8 @@ export async function handleScheduleTimer(
   entry: TimerEntry,
   callbacks: ScheduleCallbacks,
 ): Promise<void> {
+  if (internals.deposed) return;
+
   const state = await loadScheduleState(internals, entry.workflowId);
   if (!isCurrentActiveScheduleTimer(state, entry)) {
     return;

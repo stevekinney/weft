@@ -26,6 +26,12 @@ const awaitCallback = activity({
   execute: (_input: void, context?: ActivityContext): unknown => context!.completeAsync(),
 });
 
+class DeleteRejectingMemoryStorage extends MemoryStorage {
+  override async delete(key: string): Promise<void> {
+    throw new Error(`unexpected direct delete for ${key}`);
+  }
+}
+
 describe('async activity completion', () => {
   it('defers an activity and resumes the workflow when completed by token', async () => {
     await using storage = new MemoryStorage();
@@ -137,6 +143,30 @@ describe('async activity completion', () => {
     await expect(engine.completeAsyncActivity(token, 'second')).rejects.toBeInstanceOf(
       AsyncActivityTokenNotFoundError,
     );
+
+    engine[Symbol.dispose]();
+  });
+
+  it('deletes async activity tokens through the checkpoint commit batch', async () => {
+    await using storage = new DeleteRejectingMemoryStorage();
+    const engine = new Engine({ storage });
+
+    const orderWorkflow = workflow({ name: 'atomic-delete-order' })
+      .activities({ awaitCallback })
+      .execute(async function* (ctx: WorkflowContext) {
+        return yield* ctx.run(awaitCallback);
+      });
+
+    engine.register(orderWorkflow);
+
+    const tokenPromise = nextAsyncPendingToken(engine);
+    const handle = await engine.start('atomic-delete-order', null);
+    const token = await tokenPromise;
+
+    await engine.completeAsyncActivity(token, 'batched');
+
+    await expect(handle.result()).resolves.toBe('batched');
+    expect(await storage.get(KEYS.asyncActivity(handle.id, token))).toBeNull();
 
     engine[Symbol.dispose]();
   });

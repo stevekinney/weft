@@ -236,6 +236,14 @@ describe('withCodec', () => {
     );
   });
 
+  it('jsonCodec rejects negative zero before JSON.stringify can erase its sign', () => {
+    const codec = jsonCodec();
+
+    expect(() => codec.encode(-0 as JSONValue)).toThrow(
+      'jsonCodec only supports JSON-serializable values.',
+    );
+  });
+
   it('msgpackCodec without a parser rejects non-cloneable values before serialization', () => {
     const codec = msgpackCodec();
 

@@ -3,7 +3,7 @@ import {
   encode as encodeMessagePack,
   validateCloneable,
 } from '../core/codec.ts';
-import type { JSONValue } from '../core/json.ts';
+import { isJSONValue, type JSONValue } from '../core/json.ts';
 
 import { storageDeleteRange, type DeleteRangeOptions } from './delete-range.ts';
 import {
@@ -348,6 +348,9 @@ export function withCodec<Value>(
 
 function encodeJsonValue(value: JSONValue): Uint8Array {
   try {
+    if (!isJSONValue(value)) {
+      throw new TypeError('jsonCodec only supports JSON-serializable values.');
+    }
     const serializedValue = JSON.stringify(value);
     if (serializedValue === undefined) {
       throw new TypeError('jsonCodec only supports JSON-serializable values.');

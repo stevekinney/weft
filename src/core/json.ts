@@ -98,7 +98,7 @@ type JSONValueWalker = (current: unknown) => current is JSONValue;
 
 function isJSONPrimitive(value: unknown): value is JSONPrimitive {
   if (value === null) return true;
-  if (typeof value === 'number') return Number.isFinite(value);
+  if (typeof value === 'number') return Number.isFinite(value) && !Object.is(value, -0);
   return typeof value === 'string' || typeof value === 'boolean';
 }
 

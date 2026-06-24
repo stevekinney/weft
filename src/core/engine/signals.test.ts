@@ -380,6 +380,35 @@ describe('engine signals', () => {
     expect(storage.signalScanCount).toBe(1);
   });
 
+  it('does not treat an anonymous-prefixed signal name as an anonymous signal id', async () => {
+    const storage = new MemoryStorage();
+    const internals = createSignalInternals(storage);
+    const callbacks = createSignalCallbacks();
+
+    await signal(
+      internals as never,
+      'workflow-anonymous-name-prefix',
+      'anonymous:9007199254740990:x',
+      'poison',
+      callbacks,
+      { signalId: 'explicit-id' },
+    );
+    await signal(
+      internals as never,
+      'workflow-anonymous-name-prefix',
+      'release',
+      'allowed',
+      callbacks,
+    );
+
+    expect(
+      await consumeSignal(internals as never, 'workflow-anonymous-name-prefix', 'release'),
+    ).toEqual({
+      found: true,
+      payload: 'allowed',
+    });
+  });
+
   it('rejects oversize signalIds before persistence', async () => {
     const storage = new MemoryStorage();
     const internals = createSignalInternals(storage);

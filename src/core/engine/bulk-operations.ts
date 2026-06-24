@@ -1,7 +1,6 @@
 import {
   KEYS,
   requireStorageCapability,
-  storageConditionalBatch,
   storageHas,
   type BatchOperation,
   type ConditionalBatchCondition,
@@ -46,6 +45,10 @@ import {
   withBulkAuditEvent,
 } from './bulk-operations-shared.ts';
 import { BulkDeleteRequiresTerminalWorkflowsError } from './errors.ts';
+import {
+  assertLeaseHeldForEngineWork,
+  commitFencedEngineWriteAllowingPreconditionFailure,
+} from './fenced-write.ts';
 import type { EngineInternals } from './internals.ts';
 import { BULK_OPERATION_BATCH_SIZE } from './listing.ts';
 import { createTerminalCleanupTimerId } from './state-utilities.ts';
@@ -287,6 +290,7 @@ export async function retryFailedAll(
   filter: ListFilter,
   options: BulkOperationOptions = {},
 ): Promise<BulkRetryFailedResult | BulkOperationDryRunResult> {
+  assertLeaseHeldForEngineWork(internals);
   return runBulkFailedWorkflowRetry(internals, filter, options);
 }
 
@@ -419,13 +423,10 @@ async function commitFailedWorkflowReactivation(
   operations: BatchOperation[],
   conditions: ConditionalBatchCondition[],
 ): Promise<boolean> {
-  if (conditions.length === 0) {
-    await internals.storage.batch(operations);
-    return true;
+  if (conditions.length > 0) {
+    requireStorageCapability(internals.storage, 'conditionalBatch', 'retry failed workflow');
   }
-
-  requireStorageCapability(internals.storage, 'conditionalBatch', 'retry failed workflow');
-  return storageConditionalBatch(internals.storage, conditions, operations);
+  return commitFencedEngineWriteAllowingPreconditionFailure(internals, operations, conditions);
 }
 
 function buildReactivatedWorkflowState(

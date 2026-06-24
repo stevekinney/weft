@@ -423,7 +423,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
-  it('warns without halting when lease renewal becomes unconfirmable near expiry', async () => {
+  it('tolerates an unconfirmed lease renewal before expiry without warning or halt', async () => {
     let now = 0;
     const storage = new MemoryStorage();
     const engine = await Engine.create({
@@ -457,11 +457,7 @@ describe("Engine.create({ ownership: 'lease' })", () => {
       process.off('warning', listener);
     }
 
-    expect(warnings).toContainEqual({
-      name: ENGINE_LEASE_LOST_WARNING_NAME,
-      message:
-        'engine ownership lease renewal could not be confirmed (transient storage error); another instance may take over if this persists. Weft supports one engine process per store — keep infrastructure-level single-instance enforcement in place.',
-    });
+    expect(warnings).toEqual([]);
     expect(getInternals(engine).deposed).toBe(false);
     expect(getInternals(engine).leaseManager).not.toBeNull();
 

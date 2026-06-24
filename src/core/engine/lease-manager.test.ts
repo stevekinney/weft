@@ -308,7 +308,7 @@ describe('createLeaseManager', () => {
     expect(await readEpoch(storage)).toBe(2);
   });
 
-  it('reports renewal-unconfirmable when storage fails and the lease is past its safety margin', async () => {
+  it('reports renewal-unconfirmable when storage fails after the lease expired', async () => {
     const storage = new MemoryStorage();
     const clock = makeClock();
     const lost: LeaseLostReason[] = [];
@@ -317,15 +317,33 @@ describe('createLeaseManager', () => {
     );
     await manager.acquire();
 
-    // Make conditionalBatch throw, and advance the clock so we are within one
-    // renewal interval of expiry (past the unconfirmable margin).
+    // Make conditionalBatch throw, and advance the clock past expiry so the
+    // engine can no longer prove ownership.
     storage.conditionalBatch = (): Promise<boolean> => {
       throw new Error('storage offline');
     };
-    clock.advance(TTL_MS - RENEW_MS + 1);
+    clock.advance(TTL_MS + 1);
     await manager.renewOnce();
 
     expect(lost).toEqual(['renewal-unconfirmable']);
+  });
+
+  it('does not report loss on a transient storage failure before expiry', async () => {
+    const storage = new MemoryStorage();
+    const clock = makeClock();
+    const lost: LeaseLostReason[] = [];
+    const manager = createLeaseManager(
+      managerOptions({ storage, getNow: clock.now, onLeaseLost: (r) => lost.push(r) }),
+    );
+    await manager.acquire();
+
+    storage.conditionalBatch = (): Promise<boolean> => {
+      throw new Error('storage offline');
+    };
+    clock.advance(TTL_MS - 1);
+    await manager.renewOnce();
+
+    expect(lost).toEqual([]);
   });
 
   it('does not report loss on a transient storage failure with ample slack before expiry', async () => {
