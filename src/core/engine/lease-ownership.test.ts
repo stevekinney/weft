@@ -16,7 +16,11 @@ import type { Storage, StorageCapabilities } from '../../storage/interface.ts';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { workflow } from '../types.ts';
-import { Engine, ENGINE_LEASE_LOST_WARNING_NAME } from './index.ts';
+import {
+  Engine,
+  ENGINE_LEASE_LOST_WARNING_NAME,
+  ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME,
+} from './index.ts';
 import { getInternals } from './internals.ts';
 import { createLeaseHolderReadProbeStorage } from './lease.test-support.ts';
 
@@ -477,9 +481,74 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     // The durable holder-key delete is fire-and-forget on the sync path, so the
     // "holder is gone" guarantee is asserted on the async-dispose path (below),
     // where the await makes it deterministic — not via a fixed sleep here.
-    engine[Symbol.dispose]();
+    const listener = (): void => {};
+    process.on('warning', listener);
+    try {
+      engine[Symbol.dispose]();
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      process.off('warning', listener);
+    }
     expect(getInternals(engine).leaseManager).toBeNull();
     storage[Symbol.dispose]?.();
+  });
+
+  it('warns when synchronous dispose runs while holding a lease', async () => {
+    const storage = new BunSQLiteStorage(':memory:');
+    const engine = await Engine.create({
+      storage,
+      workflows: { ping: pingWorkflow },
+      ownership: 'lease',
+    });
+
+    const warnings: { name: string; message: string }[] = [];
+    const listener = (warning: Error): void => {
+      warnings.push({ name: warning.name, message: warning.message });
+    };
+    process.on('warning', listener);
+    try {
+      engine[Symbol.dispose]();
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      process.off('warning', listener);
+    }
+
+    expect(
+      warnings.some((warning) => warning.name === ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME),
+    ).toBe(true);
+    storage[Symbol.dispose]?.();
+  });
+
+  it('does not warn for synchronous dispose while lease acquisition is only parked', async () => {
+    const base = new BunSQLiteStorage(':memory:');
+    const { parked, storage } = createLeaseHolderReadProbeStorage(base);
+
+    const first = await Engine.create({ storage, ownership: 'lease' });
+    const second = new Engine({ storage, ownership: 'lease' });
+    second.register(pingWorkflow);
+    const recover = second.recoverAll();
+    recover.catch(() => {});
+    await parked;
+
+    const warnings: { name: string; message: string }[] = [];
+    const listener = (warning: Error): void => {
+      warnings.push({ name: warning.name, message: warning.message });
+    };
+    process.on('warning', listener);
+    try {
+      second[Symbol.dispose]();
+      await recover.catch(() => {});
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      process.off('warning', listener);
+    }
+
+    expect(
+      warnings.some((warning) => warning.name === ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME),
+    ).toBe(false);
+
+    await first[Symbol.asyncDispose]();
+    base[Symbol.dispose]();
   });
 
   it('async dispose durably releases the holder key', async () => {
@@ -493,6 +562,20 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     // asyncDispose awaits the lease release, so the holder key is deterministically
     // gone once it resolves — no polling needed.
     await engine[Symbol.asyncDispose]();
+    expect(await readHolder(storage)).toBeNull();
+    expect(await readEpoch(storage)).toBe(1);
+    storage[Symbol.dispose]?.();
+  });
+
+  it('shutdown durably releases the holder key', async () => {
+    const storage = new BunSQLiteStorage(':memory:');
+    const engine = await Engine.create({
+      storage,
+      workflows: { ping: pingWorkflow },
+      ownership: 'lease',
+    });
+
+    await engine.shutdown();
     expect(await readHolder(storage)).toBeNull();
     expect(await readEpoch(storage)).toBe(1);
     storage[Symbol.dispose]?.();

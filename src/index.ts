@@ -48,6 +48,7 @@ export {
   BulkDeleteRequiresTerminalWorkflowsError,
   BulkOperationConfirmationError,
   ENGINE_LEASE_LOST_WARNING_NAME,
+  ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME,
   Engine,
   EngineCreateNameMismatchError,
   EngineDisposedError,

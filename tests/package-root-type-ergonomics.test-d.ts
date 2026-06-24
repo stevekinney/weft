@@ -4,13 +4,14 @@ import {
   BulkOperationConfirmationError,
   DevelopmentWarningEvent,
   Engine,
+  ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME,
+  isWeftErrorCode,
   ScheduleMissedFireEvent,
+  signal,
+  workflow,
   WorkflowConcurrencyLimitExceededError,
   WorkflowStartedEvent,
   WorkflowSuspendNotSupportedError,
-  isWeftErrorCode,
-  signal,
-  workflow,
   type BulkOperationDryRunResult,
   type BulkOperationOptions,
   type BulkSignalResult,
@@ -140,6 +141,11 @@ const packageRootWelcome = workflow({ name: 'packageRootWelcome' })
   });
 
 const engine = new Engine().register(packageRootWelcome);
+const shutdownResult: Promise<void> = engine.shutdown();
+void shutdownResult;
+const leaseSynchronousDisposeWarningName: 'WeftEngineLeaseSynchronousDisposeWarning' =
+  ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME;
+void leaseSynchronousDisposeWarningName;
 
 function verifyPackageRootEngineEventListenerTyping(): void {
   engine.addEventListener('workflow:completed', (event) => {

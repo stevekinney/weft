@@ -329,6 +329,27 @@ export const ENGINE_PARKED_WORKFLOW_COUNT_FOR_TESTING = Symbol(
 export const ENGINE_SIGNAL_WAITER_COUNT_FOR_TESTING = Symbol('engineSignalWaiterCountForTesting');
 export const ENGINE_SLEEP_RESOLVER_COUNT_FOR_TESTING = Symbol('engineSleepResolverCountForTesting');
 
+/**
+ * The `name` of the `process` warning emitted when a lease-owning engine is
+ * disposed through the synchronous `[Symbol.dispose]()` path. Sync disposal can
+ * only fire the lease release in the background; use `await engine.shutdown()`,
+ * `await using`, or `await engine[Symbol.asyncDispose]()` when prompt rolling
+ * deploy handoff matters.
+ *
+ * @example
+ * ```ts
+ * import { ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME } from '@lostgradient/weft';
+ *
+ * process.on('warning', (warning) => {
+ *   if (warning.name === ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME) {
+ *     // Alert on shutdown paths that can make lease handoff wait for leaseTtl.
+ *   }
+ * });
+ * ```
+ */
+export const ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME =
+  'WeftEngineLeaseSynchronousDisposeWarning';
+
 export { ENGINE_LEASE_LOST_WARNING_NAME };
 
 /**
@@ -1804,6 +1825,21 @@ export class Engine<
     );
   }
   /**
+   * Awaited engine shutdown. Equivalent to
+   * `await engine[Symbol.asyncDispose]()` and useful in explicit signal handlers
+   * where `await using` syntax cannot own the process lifetime directly.
+   *
+   * Under `ownership: 'lease'`, this is the explicit prompt-handoff primitive:
+   * it drains queued inline starts, tears down in-memory write paths, and awaits
+   * lease release before resolving. Synchronous disposal remains immediate and
+   * can make the next engine wait for `leaseTtl` if the process exits before its
+   * background release completes.
+   */
+  async shutdown(): Promise<void> {
+    return this[Symbol.asyncDispose]();
+  }
+
+  /**
    * Synchronous teardown (`using engine = ...`). Pending inline launches that
    * have not yet run are **discarded**, not executed. When you need queued
    * starts to complete before teardown — or want a clean event loop with no
@@ -1816,6 +1852,15 @@ export class Engine<
     // releases exactly once). Fire the holder release best-effort: synchronous
     // disposal cannot await a storage round-trip.
     const leaseManager = getInternals(this).leaseManager;
+    if (leaseManager !== null && leaseManager.currentEpochBytes() !== null) {
+      process.emitWarning(
+        'engine ownership lease disposed synchronously; lease release is fire-and-forget, ' +
+          'so exiting before the release completes can make the next instance wait for leaseTtl. ' +
+          'Use await engine.shutdown(), await using, or await engine[Symbol.asyncDispose]() for ' +
+          'prompt rolling-deploy handoff.',
+        ENGINE_LEASE_SYNCHRONOUS_DISPOSE_WARNING_NAME,
+      );
+    }
     disposeEngine(getInternals(this));
     void leaseManager?.release();
   }

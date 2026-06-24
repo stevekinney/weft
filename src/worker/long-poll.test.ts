@@ -480,11 +480,12 @@ describe('LongPollWorker', () => {
     const completedTasks: any[] = [];
     const taskCompleted = createDeferred();
     const interceptorOrder: string[] = [];
+    const originalFetch = globalThis.fetch;
     let pollCount = 0;
 
-    server = Bun.serve({
-      port: 0,
-      async fetch(request) {
+    const fetchStub: typeof fetch = Object.assign(
+      async (input: Parameters<typeof fetch>[0], init: Parameters<typeof fetch>[1]) => {
+        const request = new Request(input, init);
         const url = new URL(request.url);
 
         if (POLL_PATH_RE.test(url.pathname) && request.method === 'GET') {
@@ -508,7 +509,9 @@ describe('LongPollWorker', () => {
 
         return new Response('not found', { status: 404 });
       },
-    });
+      { preconnect: originalFetch.preconnect },
+    );
+    globalThis.fetch = fetchStub;
 
     const loggingInterceptor: ActivityInterceptor = {
       async execute(interception, next) {
@@ -520,20 +523,25 @@ describe('LongPollWorker', () => {
     };
 
     const worker = new LongPollWorker({
-      serverUrl: `http://localhost:${server.port}`,
+      serverUrl: 'http://localhost:12345',
       activities: {
         processOrder: async (input: any) => ({ processed: true, orderId: input.orderId }),
       },
       interceptors: [loggingInterceptor],
     });
 
-    worker.start();
-    await withTimeout(
-      taskCompleted.promise,
-      LONG_POLL_TEST_TIMEOUT_MS,
-      'intercepted task completion',
-    );
-    await worker.stop();
+    try {
+      worker.start();
+      await withTimeout(
+        taskCompleted.promise,
+        LONG_POLL_TEST_TIMEOUT_MS,
+        'intercepted task completion',
+      );
+      await worker.stop();
+    } finally {
+      worker[Symbol.dispose]();
+      globalThis.fetch = originalFetch;
+    }
 
     expect(interceptorOrder).toEqual(['before:processOrder', 'after:processOrder']);
 

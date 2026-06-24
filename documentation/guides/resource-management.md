@@ -25,7 +25,9 @@ declare const orderWorkflow: never; // your registered workflow
 
 Every major Weft object implements `Disposable`, `AsyncDisposable`, or both.
 
-_Engine_ implements both. `Symbol.dispose` does immediate teardown—aborts all pending operations, terminates the worker pool, stops the scheduler, and clears caches. `Symbol.asyncDispose` does the same thing (it delegates to the synchronous dispose internally, though future versions may add graceful drain semantics).
+_Engine_ implements both. `Symbol.dispose` does immediate teardown—aborts pending operations, stops the scheduler, clears caches, and starts any ownership-lease release in the background. `Symbol.asyncDispose` and `engine.shutdown()` take the awaited path: they drain queued inline starts, tear down in-memory write paths, and await lease release before resolving.
+
+If the engine uses `ownership: 'lease'`, prefer `await using` or `await engine.shutdown()` in process shutdown handlers. A synchronous `using` block or bare `engine[Symbol.dispose]()` while the engine currently holds the lease can make the next instance wait for `leaseTtl` if the process exits before the background release finishes.
 
 ```typescript partial
 {

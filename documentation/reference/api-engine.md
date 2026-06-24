@@ -352,6 +352,28 @@ get scheduler(): Scheduler
 
 Direct access to the underlying scheduler. Primarily useful for `TestEngine` and debugging.
 
+### `shutdown()`
+
+```ts
+declare class Engine {
+  shutdown(): Promise<void>;
+}
+```
+
+Awaited engine shutdown. This is equivalent to `await engine[Symbol.asyncDispose]()` and is useful in process signal handlers where `await using` cannot own the whole process lifetime directly. With `ownership: 'lease'`, `shutdown()` drains queued inline starts, tears down in-memory write paths, and awaits lease release before resolving.
+
+```ts
+import { Engine } from '@lostgradient/weft';
+
+const engine = new Engine();
+process.on('SIGTERM', () => {
+  void engine.shutdown().then(
+    () => process.exit(0),
+    () => process.exit(1),
+  );
+});
+```
+
 ### Disposal
 
 ```ts partial
@@ -360,6 +382,8 @@ Direct access to the underlying scheduler. Primarily useful for `TestEngine` and
 ```
 
 Clean up all engine resources — aborts the scheduler, clears active generators, handles, resolvers, signal waiters, sleep resolvers, and closes the `BroadcastChannel` if active. Supports both `using` and `await using` syntax.
+
+`[Symbol.dispose]()` is synchronous and immediate. With `ownership: 'lease'`, it can only start lease release in the background; if the process exits before that release completes, the next instance waits until the lease expires, bounded by `leaseWaitTimeout`. Use `await using`, `await engine.shutdown()`, or `await engine[Symbol.asyncDispose]()` for prompt lease handoff.
 
 ```ts partial
 {
