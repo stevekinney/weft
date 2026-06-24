@@ -5,27 +5,27 @@ import { encode as msgpackEncode } from '@msgpack/msgpack';
 import { decode, encode, validateCloneable } from './codec';
 import { extensionCodec, replaceUndefined } from './codec/extension-codec.ts';
 
-function legacyReplaceUndefined(value: unknown, visited: Set<object>): unknown {
+function byteStabilityPreprocess(value: unknown, visited: Set<object>): unknown {
   if (value === null || typeof value !== 'object') return value;
   if (visited.has(value)) return value;
 
   visited.add(value);
   try {
     if (Array.isArray(value)) {
-      return value.map((item) => legacyReplaceUndefined(item, visited));
+      return value.map((item) => byteStabilityPreprocess(item, visited));
     }
 
     if (value instanceof Map) {
       return new Map(
         [...value.entries()].map(([key, mapValue]) => [
-          legacyReplaceUndefined(key, visited),
-          legacyReplaceUndefined(mapValue, visited),
+          byteStabilityPreprocess(key, visited),
+          byteStabilityPreprocess(mapValue, visited),
         ]),
       );
     }
 
     if (value instanceof Set) {
-      return new Set([...value.values()].map((item) => legacyReplaceUndefined(item, visited)));
+      return new Set([...value.values()].map((item) => byteStabilityPreprocess(item, visited)));
     }
 
     if (
@@ -41,7 +41,7 @@ function legacyReplaceUndefined(value: unknown, visited: Set<object>): unknown {
     const record = value as Record<string, unknown>;
     const result: Record<string, unknown> = {};
     for (const key of Object.keys(record)) {
-      result[key] = legacyReplaceUndefined(record[key], visited);
+      result[key] = byteStabilityPreprocess(record[key], visited);
     }
     return result;
   } finally {
@@ -303,7 +303,9 @@ describe('codec', () => {
       );
     });
 
-    it('matches the previous preprocessing bytes for representative storage fixtures', () => {
+    it('matches the current byte-stability baseline for representative storage fixtures', () => {
+      // Persisted checkpoints and event records depend on stable bytes when
+      // representative payloads contain no undefined values to normalize.
       const fixtures = [
         {
           workflowId: 'wf-checkpoint',
@@ -334,10 +336,10 @@ describe('codec', () => {
       ];
 
       for (const fixture of fixtures) {
-        const previousBytes = msgpackEncode(legacyReplaceUndefined(fixture, new Set()), {
+        const baselineBytes = msgpackEncode(byteStabilityPreprocess(fixture, new Set()), {
           extensionCodec,
         });
-        expect(encode(fixture)).toEqual(previousBytes);
+        expect(encode(fixture)).toEqual(baselineBytes);
       }
     });
 

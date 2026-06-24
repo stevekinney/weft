@@ -52,12 +52,12 @@ const invalidPackageRootDashboardServeOptions: ServeOptions = {
 };
 void invalidPackageRootDashboardServeOptions;
 
-const legacyPackageRootServeOptions: ServeOptions = {
+const removedMetricsCollectorServeOptions: ServeOptions = {
   engine: packageRootEngine,
   // @ts-expect-error `metricsCollector` is no longer a public package server option.
   metricsCollector: undefined,
 };
-void legacyPackageRootServeOptions;
+void removedMetricsCollectorServeOptions;
 
 const packageRootHandlerOptions: HandlerOptions = {
   prometheusExporter: packageRootPrometheusExporter,
@@ -65,8 +65,8 @@ const packageRootHandlerOptions: HandlerOptions = {
 void packageRootHandlerOptions;
 
 // @ts-expect-error `metricsCollector` is no longer a public package handler option.
-const legacyPackageRootHandlerOptions: HandlerOptions = { metricsCollector: undefined };
-void legacyPackageRootHandlerOptions;
+const removedMetricsCollectorHandlerOptions: HandlerOptions = { metricsCollector: undefined };
+void removedMetricsCollectorHandlerOptions;
 
 // Every option/handle TYPE named in ServeOptions / WeftServer / TaskDispatch is
 // importable from the published '@lostgradient/weft/server' subpath. The `Engine`

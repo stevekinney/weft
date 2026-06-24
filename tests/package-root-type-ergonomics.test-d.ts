@@ -229,12 +229,12 @@ async function verifyPackageRootBulkSignalTyping(): Promise<void> {
     { approved: true },
     { confirmationToken: preview.confirmationToken },
   );
-  const legacyPayloadCommit: BulkSignalResult = await engine.signalAll(
+  const payloadCommitResult: BulkSignalResult = await engine.signalAll(
     { tags: ['nightly'] },
     'continue',
     { approved: true },
   );
-  const legacyRequestIdPayloadCommit: BulkSignalResult = await engine.signalAll(
+  const requestIdPayloadCommitResult: BulkSignalResult = await engine.signalAll(
     { tags: ['nightly'] },
     'continue',
     { requestId: 'payload-request' },
@@ -265,8 +265,8 @@ async function verifyPackageRootBulkSignalTyping(): Promise<void> {
   isWeftErrorCode(topologyCode);
   void noPayloadPreview;
   void confirmed;
-  void legacyPayloadCommit;
-  void legacyRequestIdPayloadCommit;
+  void payloadCommitResult;
+  void requestIdPayloadCommitResult;
   void confirmationError;
   void terminalOnlyError;
   void concurrencyError;
