@@ -121,8 +121,11 @@ jobs:
           weft_version="${RELEASE_TAG#v}"
           issue_title="Bump @lostgradient/weft to ${weft_version}"
           previous_release_tag=$(
-            git tag --list 'v*.*.*' --sort=-v:refname \
-              | awk -v current="$RELEASE_TAG" '$0 != current { print; exit }'
+            git tag --list 'v*.*.*' --sort=v:refname \
+              | awk -v current="$RELEASE_TAG" '
+                  $0 == current { print previous; exit }
+                  { previous = $0 }
+                '
           )
           changes_file=$(mktemp)
 
