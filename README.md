@@ -342,6 +342,8 @@ A small `Storage` interface over string keys and `Uint8Array` values: five requi
 
 Bring your own backend by implementing the interface—five methods is enough.
 
+For demos and local-first prototypes, `resolveDefaultStorage()` from `@lostgradient/weft/storage/auto` picks a durable default for the current runtime: SQLite under Bun or Node, `WebExtensionStorage` in extension contexts, and `IndexedDBStorage` in browsers and Service Workers. It deliberately throws instead of falling back to `MemoryStorage`, so a "default" engine does not silently lose checkpoints after a restart. Use `resolveStorage({ type: 'auto' })` only when an ephemeral fallback is acceptable.
+
 Production recovery needs one engine process per durable store. Use a local durable adapter (`SQLiteStorage` or `LMDBStorage`) when the service owns its disk, or `NeonStorage` when the deployment wants managed Postgres durability and point-in-time restore. In either case, validate the store at boot with `assertDurableStorageForRecovery()` and enforce the singleton topology in infrastructure; the [singleton service deployment guide](documentation/guides/singleton-service-deployment.md) covers the checklist and the optional warn-only second-instance detector.
 
 For long-running workflows, `history.retentionWindow` can compact old event-log records behind the latest checkpoint while preserving verification through a durable watermark. `history.maxEvents` remains a lifetime circuit breaker even after compaction. Use `payloadSize.maxBytes` when operators need an admission-time cap on workflow inputs, signal payloads, and activity results before those values reach storage.
@@ -386,7 +388,9 @@ await worker.connect();
 
 ### Browser Support
 
-The core engine runs inside a Web Worker, with a Service Worker acting as the durable persistence layer over `IndexedDB`. Browser-compatible workflow logic ships across server and browser without modification—useful for offline-first apps that need durable client-side workflows. Activities, storage adapters, and other environment-bound pieces still need browser-safe implementations: use `IndexedDBStorage` or `WebExtensionStorage` instead of SQLite storage, swap server-only activities for `fetch`-based equivalents, and so on. See the [Service Worker guide](documentation/guides/service-worker.md) for the browser runtime wiring.
+The core engine runs inside a Web Worker, with a Service Worker acting as the durable persistence layer over `IndexedDB`. Browser-compatible workflow logic ships across server and browser without modification—useful for offline-first apps that need durable client-side workflows. Activities, storage adapters, and other environment-bound pieces still need browser-safe implementations: use `IndexedDBStorage`, `WebExtensionStorage`, or `resolveDefaultStorage()` instead of SQLite storage, swap server-only activities for `fetch`-based equivalents, and so on.
+
+Service Worker deployments can import `ServiceWorkerScheduler` from `@lostgradient/weft/service-worker` and wire timer wakeups through `onTimerFired: (entry) => engine.fireTimer(entry)`. See the [Service Worker guide](documentation/guides/service-worker.md) for the browser runtime wiring and Periodic Background Sync fallback pattern.
 
 ### Observability
 

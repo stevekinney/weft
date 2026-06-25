@@ -55,6 +55,7 @@ description: >-
 16. For race/all branches, model the top-level coordinator, nested `race`/`all`, and `ctx.speculate` as separate consumers. Losers must release waiters without consuming durable signals, losing `ctx.run()` branches inside `ctx.race()` must receive the coordinator `AbortSignal` on `ActivityContext.signal`, and winners must finalize before checkpointing encoded results.
 17. For fired timers under `ownership: 'lease'`, route cleanup through the same lease-fenced commit path as the timer callback's durable writes. A deposed engine must not delete a fired timer whose fenced follow-up write was rejected; the successor needs the durable marker to re-drive.
 18. For async completion and review-timeout cleanup, stage token or pending-key deletion with the workflow checkpoint commit that records the result or failure. Do not restore standalone `storage.delete()` paths that can consume the key without the workflow adopting the outcome.
+19. For inline cancellation, preserve the prompt ordering contract: `engine.cancel()` aborts `ctx.signal` for already-running inline work before `ctx.onCancel()` handlers run, and `ctx.onCancel()` runs after the cancelled state commits but before `cancel()` resolves.
 
 ### Client event-streaming work
 
@@ -76,6 +77,7 @@ description: >-
 ## Verification
 
 - Add race regression tests for before-ack disposal, socket close, cancellation, and shutdown paths touched by the change.
+- For inline cancellation, assert `ctx.signal` abort observation, `ctx.onCancel()` ordering, and the terminal cancelled status without depending on wall-clock sleeps.
 - For reconnect behavior, cover grace-window cancellation, duplicate-live-`workerId` rejection, visibility-timeout takeover after the grace window, stale completion rejection, server-restart redelivery, and buffered `taskResult` resend after a socket failure.
 - For client event streaming, cover connect catch-up, reconnect during catch-up, duplicate-looking live frames, callback-only no-leak behavior, `whenConnected()` after close, and missing or inadequate WebSocket factories.
 - For SSE event streaming, cover replay-complete readiness, `Last-Event-ID` reconnect cursors, parked iterator close, terminal-event auto-close, and abort cleanup before iteration begins so feed listeners and connection leases cannot leak.

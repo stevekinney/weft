@@ -14,7 +14,9 @@ local `npm publish`. The workflow triggers from a pushed `vX.Y.Z` tag, verifies
 that the tag, `package.json.version`, and `src/version.ts` agree, runs
 `bun run validate`, runs `bun run prepack`, performs
 `npm publish --dry-run --ignore-scripts`, and publishes with npm provenance via
-`npm publish --ignore-scripts`.
+`npm publish --ignore-scripts`. After the npm publish succeeds, the workflow
+opens downstream bump issues for repositories listed in
+`downstream-release-repositories.toml` using `DOWNSTREAM_ISSUE_TOKEN`.
 
 ## Preparation
 
@@ -108,10 +110,12 @@ gh run watch <run-id> --exit-status
 npm view @lostgradient/weft version
 ```
 
-The release is complete only when the workflow succeeded and npm reports the new
-version. If the tag workflow fails, diagnose the failing job, fix the repository
-state through a pull request when code changes are needed, delete or move the tag
-only with explicit user confirmation, and re-run the release from a clean tag.
+The release is complete only when the workflow succeeded, npm reports the new
+version, and the downstream notification job either created or explicitly
+skipped the configured bump issues as duplicates. If the tag workflow fails,
+diagnose the failing job, fix the repository state through a pull request when
+code changes are needed, delete or move the tag only with explicit user
+confirmation, and re-run the release from a clean tag.
 
 ## Emergency manual publish
 
