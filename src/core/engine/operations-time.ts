@@ -100,15 +100,18 @@ export async function processSleepOperation(
   //   reach here; the storage index is gone but no marker was set (or it was
   //   already consumed on a prior replay). storageHas() catches this case.
   //
-  // Both routes call resolveSleepTimer so the resolver is properly untracked.
-  // If a concurrent tick has since settled the resolver via the normal path,
-  // resolveSleepTimer is a no-op (resolver already deleted from sleepResolvers).
+  // The resolver guard (`sleepResolvers.has`) prevents calling resolveSleepTimer
+  // when the tick already settled the resolver via the normal path (after
+  // registration). In that case the promise is already resolved and the resolver
+  // is gone from sleepResolvers; calling resolveSleepTimer would find no resolver
+  // and incorrectly add a spurious sleepTimersFiredWithoutResolver marker that
+  // could prematurely self-resolve a later replay of the same sleep step.
   const resolverKey = `${workflowId}:${operation.operationId}`;
   const firedBeforeRegistration = internals.sleepTimersFiredWithoutResolver.delete(resolverKey);
   const timerIndexGone =
     !firedBeforeRegistration &&
     !(await storageHas(internals.storage, `timer-idx:sleep:${operation.operationId}`));
-  if (firedBeforeRegistration || timerIndexGone) {
+  if ((firedBeforeRegistration || timerIndexGone) && internals.sleepResolvers.has(resolverKey)) {
     resolveSleepTimer(internals, {
       id: `sleep:${operation.operationId}`,
       workflowId,
