@@ -18,6 +18,25 @@ import { scopedStorage } from './scoped-storage';
 
 const STORE_NAME = 'kv';
 
+type IndexedDbRuntime = {
+  indexedDB: Pick<typeof indexedDB, 'open'>;
+  IDBKeyRange: Pick<typeof IDBKeyRange, 'bound'>;
+};
+
+function resolveIndexedDbRuntime(
+  runtime: Partial<IndexedDbRuntime> = globalThis,
+): IndexedDbRuntime {
+  const indexedDbFactory = runtime.indexedDB;
+  const keyRangeFactory = runtime.IDBKeyRange;
+  if (indexedDbFactory === undefined || keyRangeFactory === undefined) {
+    throw new Error('IndexedDBStorage requires both indexedDB and IDBKeyRange runtime globals.');
+  }
+  return {
+    indexedDB: indexedDbFactory,
+    IDBKeyRange: keyRangeFactory,
+  };
+}
+
 /** Wrap an IDBRequest in a Promise, resolving on success and rejecting on error. */
 function promisify<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -130,9 +149,14 @@ export class IndexedDBStorage implements Storage {
   #databaseName: string;
   #database: IDBDatabase | null = null;
   #databasePromise: Promise<IDBDatabase>;
+  readonly #runtime: IndexedDbRuntime;
 
-  constructor(databaseName: string = 'weft') {
+  constructor(
+    databaseName: string = 'weft',
+    runtime: IndexedDbRuntime = resolveIndexedDbRuntime(),
+  ) {
     this.#databaseName = databaseName;
+    this.#runtime = runtime;
     this.#databasePromise = this.#open();
   }
 
@@ -156,7 +180,7 @@ export class IndexedDBStorage implements Storage {
   }
 
   #open(): Promise<IDBDatabase> {
-    const request = indexedDB.open(this.#databaseName, 1);
+    const request = this.#runtime.indexedDB.open(this.#databaseName, 1);
 
     request.onupgradeneeded = () => {
       const database = request.result;
@@ -203,7 +227,7 @@ export class IndexedDBStorage implements Storage {
   async deletePrefix(prefix: string): Promise<number> {
     const database = await this.#databasePromise;
     const prefixEnd = resolvePrefixRangeEnd(prefix);
-    const range = IDBKeyRange.bound(prefix, prefixEnd, false, true);
+    const range = this.#runtime.IDBKeyRange.bound(prefix, prefixEnd, false, true);
 
     return new Promise<number>((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readwrite');
@@ -229,7 +253,7 @@ export class IndexedDBStorage implements Storage {
     if (bounds === null) {
       return 0;
     }
-    const range = IDBKeyRange.bound(
+    const range = this.#runtime.IDBKeyRange.bound(
       bounds.lower.key,
       bounds.upper.key,
       bounds.lower.open,
@@ -277,7 +301,7 @@ export class IndexedDBStorage implements Storage {
     const database = await this.#databasePromise;
 
     const prefixEnd = resolvePrefixRangeEnd(prefix);
-    const range = IDBKeyRange.bound(prefix, prefixEnd, false, true);
+    const range = this.#runtime.IDBKeyRange.bound(prefix, prefixEnd, false, true);
     const direction: IDBCursorDirection = reverse ? 'prev' : 'next';
 
     const transaction = database.transaction(STORE_NAME, 'readonly');
@@ -439,7 +463,7 @@ export class IndexedDBStorage implements Storage {
     const { limit, reverse } = options;
     const database = await this.#databasePromise;
     const prefixEnd = resolvePrefixRangeEnd(prefix);
-    const range = IDBKeyRange.bound(prefix, prefixEnd, false, true);
+    const range = this.#runtime.IDBKeyRange.bound(prefix, prefixEnd, false, true);
     const direction: IDBCursorDirection = reverse ? 'prev' : 'next';
 
     const transaction = database.transaction(STORE_NAME, 'readonly');
@@ -486,7 +510,7 @@ export class IndexedDBStorage implements Storage {
     const prefixEnd = resolvePrefixRangeEnd(prefix);
     const transaction = database.transaction(STORE_NAME, 'readonly');
     const store = transaction.objectStore(STORE_NAME);
-    return promisify(store.count(IDBKeyRange.bound(prefix, prefixEnd, false, true)));
+    return promisify(store.count(this.#runtime.IDBKeyRange.bound(prefix, prefixEnd, false, true)));
   }
 
   scoped(prefix: string): Storage {

@@ -31,14 +31,13 @@ type RuntimeGlobalsLike = {
   browser?: { storage?: unknown };
   chrome?: { storage?: unknown };
   indexedDB?: unknown;
+  IDBKeyRange?: unknown;
   process?: {
     cwd?: () => string;
     env?: Record<string, string | undefined>;
     versions?: { node?: unknown };
   };
 };
-
-type BrowserGlobalKey = 'browser' | 'chrome' | 'indexedDB';
 
 interface DetectionGlobals {
   hasBun: boolean;
@@ -104,43 +103,34 @@ async function importStorageModule<Module>(specifier: string): Promise<Module> {
   return (await import(specifier)) as Module;
 }
 
-function runtimeGlobalHasOwn(runtimeGlobals: RuntimeGlobalsLike, key: BrowserGlobalKey): boolean {
-  return Object.prototype.hasOwnProperty.call(runtimeGlobals, key);
+function resolveWebExtensionNamespace(runtimeGlobals: RuntimeGlobalsLike): {
+  storage?: unknown;
+} {
+  return runtimeGlobals.browser ?? runtimeGlobals.chrome ?? {};
 }
 
-async function withPatchedBrowserGlobals<T>(
-  runtimeGlobals: RuntimeGlobalsLike,
-  callback: () => Promise<T>,
-): Promise<T> {
-  const keys = (['browser', 'chrome', 'indexedDB'] as const).filter((key) =>
-    runtimeGlobalHasOwn(runtimeGlobals, key),
-  );
-  if (keys.length === 0) {
-    return callback();
+function resolveIndexedDbRuntime(runtimeGlobals: RuntimeGlobalsLike): {
+  indexedDB: Pick<typeof indexedDB, 'open'>;
+  IDBKeyRange: Pick<typeof IDBKeyRange, 'bound'>;
+} {
+  const indexedDbFactory = runtimeGlobals.indexedDB ?? (globalThis as RuntimeGlobalsLike).indexedDB;
+  const keyRangeFactory =
+    runtimeGlobals.IDBKeyRange ?? (globalThis as RuntimeGlobalsLike).IDBKeyRange;
+  if (indexedDbFactory === undefined || keyRangeFactory === undefined) {
+    throw new Error(
+      'resolveDefaultStorage: IndexedDB resolution requires both indexedDB and IDBKeyRange.',
+    );
   }
+  return {
+    indexedDB: indexedDbFactory as Pick<typeof indexedDB, 'open'>,
+    IDBKeyRange: keyRangeFactory as Pick<typeof IDBKeyRange, 'bound'>,
+  };
+}
 
-  const previousDescriptors = new Map<BrowserGlobalKey, PropertyDescriptor | undefined>();
-  for (const key of keys) {
-    previousDescriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
-    Object.defineProperty(globalThis, key, {
-      configurable: true,
-      writable: true,
-      value: runtimeGlobals[key],
-    });
-  }
-
-  try {
-    return await callback();
-  } finally {
-    for (const key of keys) {
-      const descriptor = previousDescriptors.get(key);
-      if (descriptor === undefined) {
-        Reflect.deleteProperty(globalThis, key);
-      } else {
-        Object.defineProperty(globalThis, key, descriptor);
-      }
-    }
-  }
+function describeIndexedDbSupport(runtimeGlobals: RuntimeGlobalsLike): string {
+  const indexedDbType = typeof (runtimeGlobals.indexedDB ?? globalThis.indexedDB);
+  const keyRangeType = typeof (runtimeGlobals.IDBKeyRange ?? globalThis.IDBKeyRange);
+  return `typeof indexedDB=${indexedDbType}, typeof IDBKeyRange=${keyRangeType}`;
 }
 
 const BUN_SQLITE_STORAGE_MODULE = storageModuleSpecifier('./bun-sql.ts', './bun-sql.js');
@@ -190,13 +180,13 @@ export async function resolveDefaultStorage(
     const { WebExtensionStorage } = await importStorageModule<typeof import('./web-extension.ts')>(
       WEB_EXTENSION_STORAGE_MODULE,
     );
-    return withPatchedBrowserGlobals(runtimeGlobals, async () => new WebExtensionStorage());
+    return new WebExtensionStorage({}, resolveWebExtensionNamespace(runtimeGlobals) as never);
   }
 
   if (detected.hasIndexedDB) {
     const { IndexedDBStorage } =
       await importStorageModule<typeof import('./indexeddb.ts')>(INDEXEDDB_STORAGE_MODULE);
-    return withPatchedBrowserGlobals(runtimeGlobals, async () => new IndexedDBStorage());
+    return new IndexedDBStorage('weft', resolveIndexedDbRuntime(runtimeGlobals));
   }
 
   throw new Error(
@@ -204,6 +194,6 @@ export async function resolveDefaultStorage(
       `Detected: typeof Bun=${describeGlobal(runtimeGlobals, 'Bun')}, ` +
       `typeof process=${describeGlobal(runtimeGlobals, 'process')}, ` +
       `typeof browser.storage=${describeGlobal(runtimeGlobals, 'browser.storage')}, ` +
-      `typeof indexedDB=${describeGlobal(runtimeGlobals, 'indexedDB')}.`,
+      `${describeIndexedDbSupport(runtimeGlobals)}.`,
   );
 }

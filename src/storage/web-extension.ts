@@ -261,10 +261,11 @@ export class WebExtensionStorage implements Storage {
   readonly #persistence: WebExtensionStoragePersistence;
   readonly #changeListener: WebExtensionStorageChangeListener;
 
-  constructor(options: WebExtensionStorageOptions = {}) {
+  constructor(options: WebExtensionStorageOptions = {}, namespace: unknown = undefined) {
     this.#area = options.area ?? 'local';
     this.#persistence = webExtensionAreaPersistence(this.#area);
-    this.#namespace = resolveNamespace();
+    this.#namespace =
+      namespace === undefined ? resolveNamespace() : (namespace as WebExtensionNamespace);
     this.#driver = resolveStorageArea(this.#namespace, this.#area);
     this.#changeListener = () => {};
     this.#namespace.storage?.onChanged?.addListener?.(this.#changeListener);
