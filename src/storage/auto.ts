@@ -113,9 +113,8 @@ function resolveIndexedDbRuntime(runtimeGlobals: RuntimeGlobalsLike): {
   indexedDB: Pick<typeof indexedDB, 'open'>;
   IDBKeyRange: Pick<typeof IDBKeyRange, 'bound'>;
 } {
-  const indexedDbFactory = runtimeGlobals.indexedDB ?? (globalThis as RuntimeGlobalsLike).indexedDB;
-  const keyRangeFactory =
-    runtimeGlobals.IDBKeyRange ?? (globalThis as RuntimeGlobalsLike).IDBKeyRange;
+  const indexedDbFactory = runtimeGlobals.indexedDB;
+  const keyRangeFactory = runtimeGlobals.IDBKeyRange;
   if (indexedDbFactory === undefined || keyRangeFactory === undefined) {
     throw new Error(
       'resolveDefaultStorage: IndexedDB resolution requires both indexedDB and IDBKeyRange.',
@@ -128,8 +127,8 @@ function resolveIndexedDbRuntime(runtimeGlobals: RuntimeGlobalsLike): {
 }
 
 function describeIndexedDbSupport(runtimeGlobals: RuntimeGlobalsLike): string {
-  const indexedDbType = typeof (runtimeGlobals.indexedDB ?? globalThis.indexedDB);
-  const keyRangeType = typeof (runtimeGlobals.IDBKeyRange ?? globalThis.IDBKeyRange);
+  const indexedDbType = typeof runtimeGlobals.indexedDB;
+  const keyRangeType = typeof runtimeGlobals.IDBKeyRange;
   return `typeof indexedDB=${indexedDbType}, typeof IDBKeyRange=${keyRangeType}`;
 }
 
@@ -180,7 +179,7 @@ export async function resolveDefaultStorage(
     const { WebExtensionStorage } = await importStorageModule<typeof import('./web-extension.ts')>(
       WEB_EXTENSION_STORAGE_MODULE,
     );
-    return new WebExtensionStorage({}, resolveWebExtensionNamespace(runtimeGlobals) as never);
+    return new WebExtensionStorage({}, resolveWebExtensionNamespace(runtimeGlobals));
   }
 
   if (detected.hasIndexedDB) {
