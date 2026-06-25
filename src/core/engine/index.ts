@@ -550,6 +550,7 @@ export class Engine<
     getInternals(this).updateWaitersByWorkflow = new Map();
     getInternals(this).sleepResolvers = new Map();
     getInternals(this).sleepResolversByWorkflow = new Map();
+    getInternals(this).sleepTimersFiredWithoutResolver = new Set();
     getInternals(this).interceptors = resolveEngineInterceptors(options);
     getInternals(this).composedWorkflowInterceptor = undefined;
     getInternals(this).composedActivityInterceptor = undefined;

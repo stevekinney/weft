@@ -64,6 +64,7 @@ export function disposeEngine(internals: EngineInternals): void {
   internals.pendingWebhooks.clear();
   internals.sleepResolvers.clear();
   internals.sleepResolversByWorkflow.clear();
+  internals.sleepTimersFiredWithoutResolver.clear();
   internals.checkpoints.clear();
   internals.pendingExecutionStateOwnerId = undefined;
   internals.workflowNestingDepths.clear();

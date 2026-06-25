@@ -109,6 +109,7 @@ function cleanupSleepResolvers(internals: EngineInternals, workflowId: string): 
     const resolver = internals.sleepResolvers.get(key);
     if (resolver) resolver();
     internals.sleepResolvers.delete(key);
+    internals.sleepTimersFiredWithoutResolver.delete(key);
   }
   internals.sleepResolversByWorkflow.delete(workflowId);
 }
@@ -126,7 +127,9 @@ function evictSleepResolversWithoutResolving(internals: EngineInternals, workflo
   const sleepOps = internals.sleepResolversByWorkflow.get(workflowId);
   if (!sleepOps) return;
   for (const operationId of sleepOps) {
-    internals.sleepResolvers.delete(`${workflowId}:${operationId}`);
+    const key = `${workflowId}:${operationId}`;
+    internals.sleepResolvers.delete(key);
+    internals.sleepTimersFiredWithoutResolver.delete(key);
   }
   internals.sleepResolversByWorkflow.delete(workflowId);
 }

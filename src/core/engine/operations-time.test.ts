@@ -3,7 +3,7 @@ import { describe, expect, it, mock } from 'bun:test';
 import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { serializeCheckpoint } from '../checkpoint/serialization.ts';
-import { encode } from '../codec.ts';
+import { decode, encode } from '../codec.ts';
 import { DevelopmentWarningEvent } from '../events.ts';
 import { buildTimerBatchOperations } from '../scheduler.ts';
 import type { Checkpoint, TimerEntry, WorkflowState } from '../types.ts';
@@ -508,42 +508,24 @@ describe('engine time operation helpers', () => {
 });
 
 describe('processSleepOperation', () => {
-  it('resolves when the scheduler tick fires the timer before the sleep resolver is registered', async () => {
-    // Regression test for the race condition where:
-    // 1. processSleepOperation awaits internals.scheduler.schedule() (async storage write)
-    // 2. A scheduler tick fires during that write, finds no resolver, silently returns,
-    //    and deletes the timer from storage
-    // 3. registerSleepResolver() registers the resolver — but the timer is already gone
-    //
-    // Without the post-registration storage check, the workflow would park on `await
-    // promise` indefinitely. The fix detects a missing timer index after registration
-    // and calls resolve() directly.
-    const storage = new MemoryStorage();
-    const workflowId = 'sleep-race-test';
-    const operationId = 'op-1';
+  // Shared fixture for both race-condition tests.
+  function createSleepInternals(
+    storage: MemoryStorage,
+    scheduler: { schedule(entry: TimerEntry): Promise<void> },
+    sleepTimersFiredWithoutResolver = new Set<string>(),
+  ) {
+    return {
+      options: { getNow: () => 0 },
+      scheduler,
+      sleepResolvers: new Map<string, () => void>(),
+      sleepResolversByWorkflow: new Map<string, Set<string>>(),
+      sleepTimersFiredWithoutResolver,
+      storage,
+    } as never;
+  }
 
-    const scheduler = {
-      schedule: async (entry: TimerEntry) => {
-        // Write the timer to storage (normal behavior).
-        await storage.batch(buildTimerBatchOperations(entry));
-
-        // Simulate the scheduler tick firing mid-write: scan for the timer,
-        // call onTimerFired (no resolver registered yet — silently returns),
-        // then delete the timer from storage exactly as ServiceWorkerScheduler.tick() would.
-        const indexKey = `timer-idx:${entry.id}`;
-        const indexValue = await storage.get(indexKey);
-        if (indexValue !== null) {
-          const { decode } = await import('../codec.ts');
-          const deadlineKey = decode(indexValue) as string;
-          await storage.batch([
-            { type: 'delete', key: deadlineKey },
-            { type: 'delete', key: indexKey },
-          ]);
-        }
-      },
-    };
-
-    const completeOperation = mock((_workflowId: string, _value: unknown) => {});
+  function createSleepCallbacks(workflowId: string) {
+    const completeOperation = mock((_id: string, _value: unknown) => {});
     const loadWorkflowState = mock(async () => ({
       createdAt: 1_000,
       id: workflowId,
@@ -553,27 +535,76 @@ describe('processSleepOperation', () => {
       updatedAt: 1_000,
       versionTuple: { workflowVersion: '1' },
     }));
+    return { completeOperation, loadWorkflowState };
+  }
 
+  it('resolves via storage check when the tick deletes the timer index before registration (Window B)', async () => {
+    // Race: tick fires, finds no resolver, deletes timer from storage, THEN
+    // registerSleepResolver() runs. storageHas() returns false → self-resolve.
+    const storage = new MemoryStorage();
+    const workflowId = 'sleep-race-window-b';
+    const operationId = 'op-b';
+
+    const scheduler = {
+      schedule: async (entry: TimerEntry) => {
+        await storage.batch(buildTimerBatchOperations(entry));
+        // Simulate tick: onTimerFired finds no resolver, then deletes the index.
+        const indexKey = `timer-idx:${entry.id}`;
+        const indexValue = await storage.get(indexKey);
+        if (indexValue !== null) {
+          const deadlineKey = decode(indexValue) as string;
+          await storage.batch([
+            { type: 'delete', key: deadlineKey },
+            { type: 'delete', key: indexKey },
+          ]);
+        }
+      },
+    };
+
+    const { completeOperation, loadWorkflowState } = createSleepCallbacks(workflowId);
     await expect(
       processSleepOperation(
-        {
-          options: { getNow: () => 0 },
-          scheduler,
-          sleepResolvers: new Map(),
-          sleepResolversByWorkflow: new Map(),
-          storage,
-        } as never,
+        createSleepInternals(storage, scheduler),
         workflowId,
-        {
-          type: 'sleep',
-          operationId,
-          duration: 60 * 60 * 1000,
-          scheduledFireAt: 60 * 60 * 1000,
-        },
+        { type: 'sleep', operationId, duration: 3_600_000, scheduledFireAt: 3_600_000 },
         { completeOperation, loadWorkflowState },
       ),
     ).resolves.toBeUndefined();
-
     expect(completeOperation).toHaveBeenCalledWith(workflowId, undefined);
+  });
+
+  it('resolves via in-memory marker when the tick fires before index deletion (Window A)', async () => {
+    // Race: tick fires, finds no resolver, sets marker in sleepTimersFiredWithoutResolver,
+    // but has NOT yet deleted the storage index. storageHas() would return true (index
+    // still present), so the storage-only check would miss this window. The in-memory
+    // marker catches it instead.
+    const storage = new MemoryStorage();
+    const workflowId = 'sleep-race-window-a';
+    const operationId = 'op-a';
+    const resolverKey = `${workflowId}:${operationId}`;
+    const firedWithoutResolver = new Set<string>();
+
+    const scheduler = {
+      schedule: async (entry: TimerEntry) => {
+        await storage.batch(buildTimerBatchOperations(entry));
+        // Simulate tick calling resolveSleepTimer with no resolver registered yet:
+        // the marker is set but the storage index is deliberately left in place to
+        // reproduce the pre-deletion window.
+        firedWithoutResolver.add(resolverKey);
+      },
+    };
+
+    const { completeOperation, loadWorkflowState } = createSleepCallbacks(workflowId);
+    await expect(
+      processSleepOperation(
+        createSleepInternals(storage, scheduler, firedWithoutResolver),
+        workflowId,
+        { type: 'sleep', operationId, duration: 3_600_000, scheduledFireAt: 3_600_000 },
+        { completeOperation, loadWorkflowState },
+      ),
+    ).resolves.toBeUndefined();
+    expect(completeOperation).toHaveBeenCalledWith(workflowId, undefined);
+    // Marker consumed — no leak into sleepTimersFiredWithoutResolver.
+    expect(firedWithoutResolver.size).toBe(0);
   });
 });

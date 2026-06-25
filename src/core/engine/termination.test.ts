@@ -63,6 +63,7 @@ describe('termination helpers', () => {
       deliveredPendingUpdateIds: new Map<string, Set<string>>(),
       sleepResolvers: new Map<string, () => void>(),
       sleepResolversByWorkflow: new Map<string, Set<string>>(),
+      sleepTimersFiredWithoutResolver: new Set<string>(),
       workflowReviewIds: new Map<string, Set<string>>(),
       reviewEscalationHandlers: new Map<
         string,
@@ -122,6 +123,7 @@ describe('termination helpers', () => {
       deliveredPendingUpdateIds: new Map<string, Set<string>>(),
       sleepResolvers: new Map<string, () => void>(),
       sleepResolversByWorkflow: new Map<string, Set<string>>(),
+      sleepTimersFiredWithoutResolver: new Set<string>(),
       workflowReviewIds: new Map<string, Set<string>>(),
       reviewEscalationHandlers: new Map<
         string,

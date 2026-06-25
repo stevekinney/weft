@@ -109,6 +109,14 @@ export interface EngineInternals {
   updateWaitersByWorkflow: Map<string, TrackedWaiterKeys>;
   sleepResolvers: Map<string, () => void>;
   sleepResolversByWorkflow: Map<string, Set<string>>;
+  /**
+   * Resolver keys (`${workflowId}:${operationId}`) for which the scheduler
+   * tick fired the sleep timer before the resolver was registered. Set by
+   * `resolveSleepTimer` when no resolver is found; consumed and cleared by
+   * `processSleepOperation` after `registerSleepResolver`. Cleared at engine
+   * disposal and during per-workflow eviction/cleanup.
+   */
+  sleepTimersFiredWithoutResolver: Set<string>;
   interceptors: Interceptor[];
   // `undefined` means "not yet computed". `null` means "computed and empty —
   // no interceptor implements hooks for this side". Distinguishing the two
