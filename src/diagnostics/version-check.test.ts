@@ -163,7 +163,7 @@ describe('runVersionCheck', () => {
     const storage = new MemoryStorage();
     await seedWorkflow(
       storage,
-      makeWorkflowState({ id: 'wf-1', type: 'legacy', version: '1.0.0', status: 'running' }),
+      makeWorkflowState({ id: 'wf-1', type: 'unregistered', version: '1.0.0', status: 'running' }),
     );
     await seedWorkflow(
       storage,

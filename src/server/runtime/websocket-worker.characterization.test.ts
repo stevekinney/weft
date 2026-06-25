@@ -227,7 +227,7 @@ describe('handleWorkerWebSocketMessage', () => {
         JSON.stringify({
           type: 'register',
           protocolVersion: 1,
-          workerId: 'w-legacy',
+          workerId: 'w-old-protocol',
           activities: ['formatGreeting'],
           concurrency: 1,
         }),
@@ -243,7 +243,7 @@ describe('handleWorkerWebSocketMessage', () => {
       expect(msg.message).toContain('got v1');
       expect(msg.message).toContain('qualified activity names');
       // Old-protocol worker never enters the registry.
-      expect(context.registry.getWorker('w-legacy')).toBeUndefined();
+      expect(context.registry.getWorker('w-old-protocol')).toBeUndefined();
       expect(ws.closeCode).toBeDefined();
     });
 

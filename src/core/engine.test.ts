@@ -1396,7 +1396,7 @@ describe('Engine', () => {
     >;
     delete persisted['versionTuple'];
     persisted['version'] = '1.0.0';
-    persisted['agentVersion'] = 'agent-legacy';
+    persisted['agentVersion'] = 'agent-flat-version-record';
     persisted['toolVersions'] = ['search@1'];
     await storage.put(KEYS.workflow(workflowId), encode(persisted));
 
@@ -4787,12 +4787,14 @@ describe('Engine', () => {
     const storage = new MemoryStorage();
     const engine = new Engine({ storage });
 
+    // Historical fixture shape: older runtimes could persist decision-only records
+    // without review metadata, and listReviews({status:'completed'}) must skip them.
     await storage.put(
-      'review-decision:legacy-review',
+      'review-decision:historical-review',
       encode({
-        reviewId: 'legacy-review',
+        reviewId: 'historical-review',
         decision: 'approved',
-        reviewer: 'legacy-bot',
+        reviewer: 'historical-bot',
         feedback: 'stored by an older runtime',
         timestamp: 9_000,
       }),
