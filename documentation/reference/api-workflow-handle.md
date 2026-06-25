@@ -120,6 +120,8 @@ await handle.cancel();
 
 Cancellation is _total_ over non-terminal states: cancelling a `'suspended'` workflow terminates it and rejects its still-pending `result()`, so a suspended-then-abandoned run never hangs.
 
+For inline workflows, cancellation promptly aborts `ctx.signal` for code currently awaiting inside the workflow body; it does not wait for the next durable `yield`. Use that signal to stop cooperative work such as fetches, streams, and provider SDK calls. `ctx.onCancel()` handlers run after the cancelled state is committed and before `cancel()` settles, but they remain best-effort inline callbacks rather than durable finalizers.
+
 ---
 
 ### `suspend()`

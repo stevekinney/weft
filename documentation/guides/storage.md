@@ -4,7 +4,7 @@ Every checkpoint, workflow state, signal, and timer in Weft is ultimately a key-
 
 ## Quick start
 
-SQLite is the default for Bun and Node. IndexedDB is the browser default. For local Bun or Node work, `resolveDefaultStorage()` picks the matching SQLite backend and gives you a persistent database without extra setup.
+SQLite is the default for Bun and Node. WebExtension storage is the browser-extension default, and IndexedDB is the browser and Service Worker default. `resolveDefaultStorage()` picks the matching persistent backend and gives you durable local storage without environment branches.
 
 ```ts
 import { Engine } from '@lostgradient/weft';
@@ -15,10 +15,7 @@ await using engine = new Engine({ storage });
 void engine;
 ```
 
-This works under Bun and Node. The path lives under `${tmpdir()}/weft-default/<cwd-hash>.db` (or `WEFT_DEFAULT_STORAGE_PATH` if set).
-
-> [!WARNING]
-> `@lostgradient/weft/storage/auto` requires Bun or Node. For browsers, import `IndexedDBStorage` from `@lostgradient/weft/storage/indexeddb` directly, or use `setupServiceWorker()` from `@lostgradient/weft/service-worker`.
+Under Bun and Node, the SQLite path lives under `${tmpdir()}/weft-default/<cwd-hash>.db` (or `WEFT_DEFAULT_STORAGE_PATH` if set). Browser and extension adapters use their own default store names.
 
 `resolveDefaultStorage()` is for development, demos, and Hello World. Production deployments usually pick an explicit adapter so the storage path and backend are part of deployment configuration. For the production topology itself—one engine per durable store, enforced at the infrastructure layer—see [Running Weft as a Singleton Service](singleton-service-deployment.md).
 
@@ -70,8 +67,8 @@ Every variant of the union, the required fields for each, and the `ResolvedStora
 
 Two `auto`-style resolvers exist, and the difference matters:
 
-- `resolveStorage({ type: 'auto' })` falls through Bun → Node → WebExtension → IndexedDB → `MemoryStorage`. Reach for it when one configuration object must run across several runtimes. See [Auto-detection order](../reference/api-storage.md#auto-detection-order) for the exact sequence.
-- `resolveDefaultStorage()` is Bun/Node-only and _throws_ in browser and WebExtension contexts instead of falling through — the thrown error tells you to use `IndexedDBStorage` or `setupServiceWorker()` directly. See [`resolveDefaultStorage()`](../reference/api-storage.md#resolvedefaultstorage).
+- `resolveStorage({ type: 'auto' })` falls through Bun -> Node -> WebExtension -> IndexedDB -> `MemoryStorage`. Reach for it when one configuration object must run across several runtimes and a non-durable fallback is acceptable. See [Auto-detection order](../reference/api-storage.md#auto-detection-order) for the exact sequence.
+- `resolveDefaultStorage()` follows the same durable runtime order through IndexedDB, but _throws_ instead of falling through to `MemoryStorage`. See [`resolveDefaultStorage()`](../reference/api-storage.md#resolvedefaultstorage).
 
 > [!WARNING]
 > The final `MemoryStorage` fallback is non-durable. Do not use `resolveStorage({ type: 'auto' })` for production recovery unless you also validate that the resolved adapter is persistent for your deployment target.
@@ -474,6 +471,6 @@ Wraps any `Storage` implementation. Disposing the `CompressedStorage` disposes t
 
 **Missing optional dependencies (`better-sqlite3`, `lmdb`, `@libsql/client`, `@neondatabase/serverless`).** `NodeSQLiteStorage`, `LMDBStorage`, `TursoStorage`, and `NeonStorage` import their dependencies lazily. If the package isn't installed, you'll see an error when you first call `resolveStorage` or instantiate the adapter. Install the adapter you selected with `bun add better-sqlite3`, `bun add lmdb`, `bun add @libsql/client`, or `bun add @neondatabase/serverless`.
 
-**`@lostgradient/weft/storage/auto` in a browser bundler.** The module statically imports Node built-ins, so bundlers like Vite or webpack will fail or warn when targeting the browser. Switch to `@lostgradient/weft/storage/indexeddb` directly, or use `setupServiceWorker()` from `@lostgradient/weft/service-worker`. If you need a single configuration that works across runtimes including browsers, use `resolveStorage({ type: 'auto' })` instead—it lazy-loads adapters and includes browser fallbacks.
+**Unexpected `MemoryStorage` from automatic resolution.** `resolveStorage({ type: 'auto' })` intentionally falls back to `MemoryStorage` when no durable runtime backend is available. Use `resolveDefaultStorage()` when automatic selection must be durable or fail loudly.
 
 **HTTP storage connectivity issues.** `HTTPStorage` returns the underlying `fetch` errors. For 4xx responses, the response body usually contains an error message; for network errors, the `fetch` exception propagates. If scans hit the 64MB response limit, the client throws explicitly—narrow the prefix or paginate with `limit` and `gt`.

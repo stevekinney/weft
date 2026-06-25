@@ -274,6 +274,10 @@ async cancel(workflowId: string): Promise<void>
 
 Cancel a running workflow. Aborts the workflow's `AbortController`, cleans up the generator, updates the persisted state to `'cancelled'`, and rejects the result promise.
 
+In inline execution, the abort is prompt: `engine.cancel(id)` calls `AbortController.abort()` synchronously before in-memory workflow state is evicted, so work currently awaiting an API wired to `ctx.signal` can stop without waiting for the next `yield` or checkpoint boundary. Cancellation is still cooperative. Work that ignores `ctx.signal` cannot be force-interrupted by JavaScript.
+
+Registered `ctx.onCancel()` handlers run after the cancelled terminal state is durably written and before `cancel()` settles. They are inline-only, best-effort host callbacks, not durable finalizers. Already checkpointed workflow state remains queryable through the terminal workflow record and retained checkpoint/history data until terminal cleanup or retention removes it; local variables that were never checkpointed are not recoverable after cancellation.
+
 ### `list()`
 
 ```ts partial

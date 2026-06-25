@@ -828,7 +828,7 @@ The mapping:
 4. Else if `globalThis.indexedDB` is defined, returns `IndexedDBStorage` (default `databaseName: 'weft'`).
 5. Else returns `MemoryStorage`.
 
-For a Bun-or-Node-only helper that throws in browsers (instead of falling through), use `resolveDefaultStorage()` from `@lostgradient/weft/storage/auto`.
+For a persistent-only helper that throws instead of falling through to `MemoryStorage`, use `resolveDefaultStorage()` from `@lostgradient/weft/storage/auto`.
 
 ---
 
@@ -838,7 +838,7 @@ For a Bun-or-Node-only helper that throws in browsers (instead of falling throug
 function resolveDefaultStorage(): Promise<Storage>;
 ```
 
-Picks a SQLite-backed storage adapter for the current runtime. Bun returns `BunSQLiteStorage`; Node returns `NodeSQLiteStorage`; everything else throws.
+Picks a persistent storage adapter for the current runtime. Bun returns `BunSQLiteStorage`; Node returns `NodeSQLiteStorage`; WebExtension contexts return `WebExtensionStorage` with the default `local` area; browser and Service Worker contexts with IndexedDB return `IndexedDBStorage` with the default `'weft'` database. Environments without one of those durable backends throw instead of falling through to `MemoryStorage`.
 
 ```ts
 import { resolveDefaultStorage } from '@lostgradient/weft/storage/auto';
@@ -846,14 +846,11 @@ import { resolveDefaultStorage } from '@lostgradient/weft/storage/auto';
 await using storage = await resolveDefaultStorage();
 ```
 
-The path is resolved as:
+For SQLite runtimes, the path is resolved as:
 
 1. `process.env.WEFT_DEFAULT_STORAGE_PATH` if set, else
 2. `${tmpdir()}/weft-default/<cwd-hash>.db` where `<cwd-hash>` is the first 16 hex characters of the SHA-256 of `process.cwd()`.
 
-The parent directory is created (recursive) before the path is returned.
-
-> [!WARNING]
-> `@lostgradient/weft/storage/auto` statically imports `node:fs`, `node:os`, `node:path`, and `node:crypto`. Bundling it for a browser target will fail. Browser and Service Worker contexts should use `IndexedDBStorage` directly, or `setupServiceWorker()` from `@lostgradient/weft/service-worker`.
+The parent directory is created (recursive) before the SQLite path is returned. Browser and extension adapters use their own default storage locations.
 
 This helper is for development convenience. Production deployments should pick an explicit adapter and pass it to `new Engine({ storage })`.

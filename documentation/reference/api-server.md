@@ -684,6 +684,7 @@ The `@lostgradient/weft/service-worker` module provides bootstrap functions for 
 
 ```ts partial
 import {
+  ServiceWorkerScheduler,
   createFetchHandler,
   createLifecycleHandlers,
   createPeriodicSyncHandler,
@@ -734,13 +735,17 @@ function createPeriodicSyncHandler(
 Returns a `periodicsync` event listener. The default tag is `'weft-timers'`. Matching events call `scheduler.tick()` inside `event.waitUntil(...)`; non-matching events are ignored.
 
 ```ts partial
-self.addEventListener('periodicsync', createPeriodicSyncHandler(engine.scheduler));
+const scheduler = new ServiceWorkerScheduler({
+  storage,
+  onTimerFired: (entry) => engine.fireTimer(entry),
+});
+self.addEventListener('periodicsync', createPeriodicSyncHandler(scheduler));
 ```
 
 Pass a custom tag when the page registers a non-default Periodic Background Sync tag:
 
 ```ts partial
-self.addEventListener('periodicsync', createPeriodicSyncHandler(engine.scheduler, 'custom-timers'));
+self.addEventListener('periodicsync', createPeriodicSyncHandler(scheduler, 'custom-timers'));
 ```
 
 ---
@@ -769,10 +774,14 @@ self.addEventListener('activate', activate);
 
 ### Timer wakeup
 
-Use `createPeriodicSyncHandler()` or the engine's public scheduler from the Service Worker event handler:
+Use `createPeriodicSyncHandler()` or the exported `ServiceWorkerScheduler` from the Service Worker event handler:
 
 ```ts partial
-self.addEventListener('periodicsync', createPeriodicSyncHandler(engine.scheduler));
+const scheduler = new ServiceWorkerScheduler({
+  storage,
+  onTimerFired: (entry) => engine.fireTimer(entry),
+});
+self.addEventListener('periodicsync', createPeriodicSyncHandler(scheduler));
 ```
 
 The manual equivalent is:
@@ -780,7 +789,7 @@ The manual equivalent is:
 ```ts partial
 self.addEventListener('periodicsync', (event) => {
   if (event.tag !== 'weft-timers') return;
-  event.waitUntil(engine.scheduler.tick());
+  event.waitUntil(scheduler.tick());
 });
 ```
 

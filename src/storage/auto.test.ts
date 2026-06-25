@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { resolveDefaultStorage } from './auto.ts';
 
@@ -38,9 +39,33 @@ describe('resolveDefaultStorage', () => {
     expect(existsSync(join(testTempDir, 'nested', 'subdir'))).toBe(true);
   });
 
-  // The throw branch (no Bun, no Node) can't be exercised in a Bun
-  // test runner because the runtime is, by definition, Bun. Smoke
-  // verification is left to the `scripts/smoke-storage-auto.ts`
-  // integration script and to the message format below — verified by
-  // round-tripping the underlying detection function.
+  it('bundles for browser targets without static Node built-ins', async () => {
+    const temporaryDirectory = mkdtempSync(join(tmpdir(), 'weft-auto-browser-build-'));
+    const entryPath = join(temporaryDirectory, 'entry.ts');
+    const autoModulePath = fileURLToPath(new URL('./auto.ts', import.meta.url));
+
+    try {
+      await Bun.write(
+        entryPath,
+        `import { resolveDefaultStorage } from ${JSON.stringify(autoModulePath)};
+(globalThis as Record<string, unknown>)['resolveDefaultStorage'] = resolveDefaultStorage;
+`,
+      );
+
+      const build = await Bun.build({
+        entrypoints: [entryPath],
+        format: 'iife',
+        minify: false,
+        target: 'browser',
+      });
+
+      expect(build.success).toBe(true);
+      const source = await build.outputs[0]!.text();
+      expect(source).toContain('resolveDefaultStorage');
+      expect(source).toContain('IndexedDBStorage');
+      expect(source).toContain('WebExtensionStorage');
+    } finally {
+      rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+  });
 });

@@ -1,13 +1,15 @@
 import { beforeEach, describe, expect, it, mock } from 'bun:test';
 
+import { MemoryStorage } from '../storage/memory.ts';
 import {
   buildDelegatedRequest,
   createFetchHandler,
   createLifecycleHandlers,
   createPeriodicSyncHandler,
   normalizePathPrefix,
+  ServiceWorkerScheduler,
 } from './index';
-import type { ServiceWorkerScheduler } from './scheduler';
+import type { ServiceWorkerScheduler as ServiceWorkerSchedulerInstance } from './scheduler';
 
 // ---------------------------------------------------------------------------
 // Minimal types mirroring the shapes in the implementation
@@ -185,9 +187,19 @@ describe('createFetchHandler', () => {
 // ---------------------------------------------------------------------------
 
 describe('createPeriodicSyncHandler', () => {
+  it('re-exports ServiceWorkerScheduler from the service-worker entrypoint', () => {
+    using storage = new MemoryStorage();
+    using scheduler = new ServiceWorkerScheduler({
+      storage,
+      onTimerFired: () => {},
+    });
+
+    expect(scheduler).toBeInstanceOf(ServiceWorkerScheduler);
+  });
+
   it('calls waitUntil with scheduler.tick() for matching tag', () => {
     const tickMock = mock(() => Promise.resolve());
-    const scheduler = { tick: tickMock } as unknown as ServiceWorkerScheduler;
+    const scheduler = { tick: tickMock } as unknown as ServiceWorkerSchedulerInstance;
 
     const handler = createPeriodicSyncHandler(scheduler);
     const event = createMockPeriodicSyncEvent('weft-timers');
@@ -200,7 +212,7 @@ describe('createPeriodicSyncHandler', () => {
 
   it('does nothing for non-matching tag', () => {
     const tickMock = mock(() => Promise.resolve());
-    const scheduler = { tick: tickMock } as unknown as ServiceWorkerScheduler;
+    const scheduler = { tick: tickMock } as unknown as ServiceWorkerSchedulerInstance;
 
     const handler = createPeriodicSyncHandler(scheduler);
     const event = createMockPeriodicSyncEvent('other-tag');
@@ -213,7 +225,7 @@ describe('createPeriodicSyncHandler', () => {
 
   it('uses custom tag when provided', () => {
     const tickMock = mock(() => Promise.resolve());
-    const scheduler = { tick: tickMock } as unknown as ServiceWorkerScheduler;
+    const scheduler = { tick: tickMock } as unknown as ServiceWorkerSchedulerInstance;
 
     const handler = createPeriodicSyncHandler(scheduler, 'custom-sync-tag');
     const event = createMockPeriodicSyncEvent('custom-sync-tag');
@@ -226,7 +238,7 @@ describe('createPeriodicSyncHandler', () => {
 
   it('does not match default tag when custom tag is provided', () => {
     const tickMock = mock(() => Promise.resolve());
-    const scheduler = { tick: tickMock } as unknown as ServiceWorkerScheduler;
+    const scheduler = { tick: tickMock } as unknown as ServiceWorkerSchedulerInstance;
 
     const handler = createPeriodicSyncHandler(scheduler, 'custom-sync-tag');
     const event = createMockPeriodicSyncEvent('weft-timers');

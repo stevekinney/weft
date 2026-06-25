@@ -9,7 +9,7 @@
 
 import type { Engine } from '../core/engine';
 import { handleRequest } from '../server/handler';
-import type { ServiceWorkerScheduler } from './scheduler';
+import type { ServiceWorkerScheduler } from './scheduler.ts';
 import type {
   MinimalExtendableEvent,
   MinimalFetchEvent,
@@ -17,6 +17,8 @@ import type {
 } from './shared.ts';
 import { buildDelegatedRequest, DEFAULT_PERIODIC_SYNC_TAG, normalizePathPrefix } from './shared.ts';
 
+export { ServiceWorkerScheduler } from './scheduler.ts';
+export type { ServiceWorkerSchedulerOptions } from './scheduler.ts';
 export { buildDelegatedRequest, DEFAULT_PERIODIC_SYNC_TAG, normalizePathPrefix } from './shared.ts';
 export type {
   MinimalExtendableEvent,
@@ -115,21 +117,15 @@ export function createFetchHandler(
  * `event.waitUntil(...)` so the sync extends until the tick promise
  * resolves.
  *
- * Note: `ServiceWorkerScheduler` is the parameter type but is not currently
- * re-exported from `@lostgradient/weft/service-worker` — construct the scheduler in the
- * module that imports it directly (e.g. the dashboard runtime) and pass
- * the instance to this factory.
- *
  * @example
  * ```ts
- * import { createPeriodicSyncHandler } from '@lostgradient/weft/service-worker';
+ * import { ServiceWorkerScheduler, createPeriodicSyncHandler } from '@lostgradient/weft/service-worker';
  *
- * // In your Service Worker (with a scheduler from the runtime that imports it):
- * declare const scheduler: { tick(): Promise<void> };
- * const handler = createPeriodicSyncHandler(
- *   scheduler as Parameters<typeof createPeriodicSyncHandler>[0],
- *   'weft-timers',
- * );
+ * const scheduler = new ServiceWorkerScheduler({
+ *   storage,
+ *   onTimerFired: (entry) => engine.fireTimer(entry),
+ * });
+ * const handler = createPeriodicSyncHandler(scheduler, 'weft-timers');
  * // self.addEventListener('periodicsync', handler);
  * console.log(typeof handler); // 'function'
  * ```

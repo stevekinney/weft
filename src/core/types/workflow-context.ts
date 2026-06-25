@@ -422,6 +422,12 @@ export interface WorkflowContext<
    * Handlers run in registration order; async handlers are awaited; failures
    * are swallowed — the workflow still finalizes as cancelled.
    *
+   * For inline workflows, `engine.cancel(id)` aborts {@link WorkflowContext.signal}
+   * promptly before in-memory execution state is evicted. A handler registered
+   * on the live context then runs after the cancelled state commits and before
+   * `cancel()` settles. Work that ignores the abort signal is still cooperative
+   * JavaScript and cannot be force-interrupted.
+   *
    * **Best-effort only**: handlers run outside the durable effect log and are
    * not retried. Side effects in handlers are not replay-safe, and registered
    * handlers are not restored after an engine restart. A hard cancel or an

@@ -91,6 +91,57 @@ describe('ctx.onCancel()', () => {
     engine[Symbol.dispose]();
   });
 
+  it('aborts ctx.signal promptly for work awaiting inside the workflow body', async () => {
+    const engine = new Engine();
+    const workflowAwaitingAbort = deferred();
+    const signalAborted = deferred();
+    const events: string[] = [];
+
+    const cancelPromptnessWorkflow = workflow({ name: 'cancel-promptness' }).execute(
+      async function* (ctx: WorkflowContext) {
+        ctx.onCancel(() => {
+          events.push('on-cancel');
+        });
+
+        workflowAwaitingAbort.resolve();
+        await new Promise<void>((resolve) => {
+          if (ctx.signal.aborted) {
+            events.push('signal-aborted');
+            signalAborted.resolve();
+            resolve();
+            return;
+          }
+
+          ctx.signal.addEventListener(
+            'abort',
+            () => {
+              events.push('signal-aborted');
+              signalAborted.resolve();
+              resolve();
+            },
+            { once: true },
+          );
+        });
+
+        return 'should-not-complete-after-cancel';
+      },
+    );
+    engine.register(cancelPromptnessWorkflow);
+
+    const handle = await engine.start('cancel-promptness', null);
+    await workflowAwaitingAbort.promise;
+
+    const cancelPromise = engine.cancel(handle.id);
+    await signalAborted.promise;
+    await cancelPromise;
+
+    await expect(handle.result()).rejects.toThrow('Workflow cancelled');
+    expect(await engine.get(handle.id)).toMatchObject({ status: 'cancelled' });
+    expect(events).toEqual(['signal-aborted', 'on-cancel']);
+
+    engine[Symbol.dispose]();
+  });
+
   // -------------------------------------------------------------------------
   // 2. Multiple handlers run in registration order
   // -------------------------------------------------------------------------

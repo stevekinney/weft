@@ -105,17 +105,17 @@ self.addEventListener('periodicsync', createPeriodicSyncHandler(scheduler));
 
 Workflows need timers—`yield* ctx.sleep("1 hour")` has to actually wake up an hour later. In Bun, the scheduler polls the database. In the browser, the **Periodic Background Sync API** serves the same purpose.
 
-The engine scheduler manages timer wakeup. It checks IndexedDB for expired timers and advances waiting workflows. When Periodic Background Sync is available, the browser wakes the Service Worker at the registered interval. When it is not available, you need a page-controlled fallback that calls `engine.scheduler.tick()` while a tab is open.
+The Service Worker scheduler manages timer wakeup. It checks IndexedDB for expired timers and advances waiting workflows. When Periodic Background Sync is available, the browser wakes the Service Worker at the registered interval. When it is not available, you need a page-controlled fallback that calls `scheduler.tick()` while a tab is open.
 
 ```typescript partial
 self.addEventListener('periodicsync', (event) => {
   if (event.tag !== 'weft-timers') return;
-  event.waitUntil(engine.scheduler.tick());
+  event.waitUntil(scheduler.tick());
 });
 
 self.addEventListener('message', (event) => {
   if (event.data?.type !== 'weft:tick') return;
-  event.waitUntil(engine.scheduler.tick());
+  event.waitUntil(scheduler.tick());
 });
 ```
 
