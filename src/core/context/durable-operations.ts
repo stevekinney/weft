@@ -28,7 +28,22 @@ export function prepareSleepOperation(
     console.log(`  → Scheduling timer for ${milliseconds}ms`);
   }
 
-  const operationId = crypto.randomUUID();
+  // The sleep operationId MUST be deterministic across replay, not a random
+  // UUID. A sleep parks on a durable timer keyed `sleep:${operationId}`; if a
+  // crash happens while parked, the step never lands in accumulatedResults, so
+  // replay re-enters this branch. A random id would arm a *second* timer under a
+  // fresh key while the original durable timer (old id) is orphaned — the engine
+  // fires the old timer but the replayed generator waits on the new one, and the
+  // workflow hangs. Deriving the id from `(workflowId, step)` makes the re-armed
+  // timer reuse the original key so recovery resolves the same sleep.
+  //
+  // `workflowId` (not `executionStateOwnerId`) is the unique scope: child
+  // workflows inherit the parent's `executionStateOwnerId` but have their own
+  // step space, so `${owner}:${step}` would collide across parent and child.
+  // The `timer-idx:` reverse index is not workflow-scoped, so the id itself must
+  // carry workflow identity. Sub-operation sleeps inside race/all/speculate are
+  // re-stamped deterministically by their parent coordinator, overriding this.
+  const operationId = `${internals.context.workflowId}:${step}`;
   const callerStack = captureCallerStack();
   const referenceTime = internals.sleepReferenceTime ?? internals.getNow();
   internals.sleepReferenceTime = undefined;

@@ -514,6 +514,19 @@ describe('Context', () => {
       expect(request.duration).toBe(5000);
       expect(request.scheduledFireAt).toBe(now + 5000);
     });
+
+    it('uses a deterministic operationId derived from workflowId and step, not a random UUID', () => {
+      // The sleep operationId keys the durable timer. It MUST be stable across
+      // replay so a crash-during-sleep re-arms the same timer instead of
+      // orphaning it. Two contexts for the same workflow at the same step
+      // (a replay) must produce the identical operationId.
+      const first = expectRequest(createContext().sleep(5000).next(), 'sleep');
+      const replay = expectRequest(createContext().sleep(5000).next(), 'sleep');
+
+      expect(first.operationId).toBe('wf-test-123:0');
+      expect(replay.operationId).toBe(first.operationId);
+      expect(first.operationId).not.toMatch(UUID_PATTERN);
+    });
   });
 
   describe('ctx.waitForSignal', () => {

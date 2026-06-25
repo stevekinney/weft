@@ -615,6 +615,59 @@ describe('crash recovery', () => {
     engine2[Symbol.dispose]();
   });
 
+  it('re-arms the same durable sleep timer on recovery instead of orphaning a second one', async () => {
+    // Regression: the sleep operationId must be deterministic across replay. When
+    // a workflow crashes while parked on ctx.sleep, the step never lands in
+    // accumulatedResults, so recovery re-enters the sleep branch. A random
+    // operationId would arm a SECOND durable timer under a fresh key while the
+    // original (old-id) timer is orphaned — the engine fires the orphaned timer,
+    // the replayed generator waits on the new one, and the workflow hangs. The
+    // re-armed timer must reuse the original key so exactly one timer survives.
+    const storage = new MemoryStorage();
+    let currentTime = 1000;
+
+    const sleeper = workflow({ name: 'sleeper' }).execute(async function* (ctx) {
+      yield* ctx.sleep(5000);
+      return 'awake';
+    });
+
+    const engine1 = new Engine({ storage, getNow: () => currentTime });
+    engine1.register(sleeper);
+    await engine1.start('sleeper', null, { id: 'wf-sleep-deterministic' });
+    await flush();
+
+    const timerKeysBeforeCrash: string[] = [];
+    for await (const [key] of storage.scan('timer-idx:sleep:')) {
+      timerKeysBeforeCrash.push(key);
+    }
+    expect(timerKeysBeforeCrash).toHaveLength(1);
+
+    // Crash while still parked — do NOT advance past the deadline, so recovery
+    // re-arms the timer rather than taking the expired-timer fast path.
+    engine1[Symbol.dispose]();
+
+    // Fresh engine on the same storage; the in-memory sleep resolver is gone.
+    const engine2 = new Engine({ storage, getNow: () => currentTime });
+    engine2.register(sleeper);
+    const handles = await engine2.recoverAll();
+    expect(handles).toHaveLength(1);
+    await flush();
+
+    const timerKeysAfterRecovery: string[] = [];
+    for await (const [key] of storage.scan('timer-idx:sleep:')) {
+      timerKeysAfterRecovery.push(key);
+    }
+    expect(timerKeysAfterRecovery).toEqual(timerKeysBeforeCrash);
+
+    // A single tick past the deadline must fire the re-armed timer and complete.
+    currentTime = 7000;
+    await engine2.scheduler.tick(currentTime);
+    await flush();
+    expect(await handles[0]!.result()).toBe('awake');
+
+    engine2[Symbol.dispose]();
+  });
+
   it('resolves expired sleep immediately on resume via fast path', async () => {
     const { MemoryStorage: TestMemoryStorage } = await import('../storage/memory.ts');
 
