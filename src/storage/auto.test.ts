@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { IDBFactory, IDBKeyRange } from 'fake-indexeddb';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -7,11 +8,11 @@ import { fileURLToPath } from 'node:url';
 import { resolveDefaultStorage } from './auto.ts';
 
 async function withActualGlobals(
-  overrides: Partial<Record<'browser' | 'chrome' | 'indexedDB' | 'IDBKeyRange', unknown>>,
+  overrides: Partial<Record<'browser' | 'chrome', unknown>>,
   callback: () => Promise<void>,
 ): Promise<void> {
   const previousDescriptors = new Map<string, PropertyDescriptor | undefined>();
-  for (const key of ['browser', 'chrome', 'indexedDB', 'IDBKeyRange'] as const) {
+  for (const key of ['browser', 'chrome'] as const) {
     previousDescriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
     Object.defineProperty(globalThis, key, {
       configurable: true,
@@ -23,7 +24,7 @@ async function withActualGlobals(
   try {
     await callback();
   } finally {
-    for (const key of ['browser', 'chrome', 'indexedDB', 'IDBKeyRange'] as const) {
+    for (const key of ['browser', 'chrome'] as const) {
       const descriptor = previousDescriptors.get(key);
       if (descriptor === undefined) {
         Reflect.deleteProperty(globalThis, key);
@@ -110,8 +111,6 @@ describe('resolveDefaultStorage', () => {
   });
 
   it('selects WebExtension and IndexedDB adapters from injected runtime globals', async () => {
-    const actualIndexedDb = indexedDB;
-    const actualIdbKeyRange = IDBKeyRange;
     const browserStorage = {
       local: {
         get: async () => ({}),
@@ -128,8 +127,6 @@ describe('resolveDefaultStorage', () => {
       {
         browser: undefined,
         chrome: undefined,
-        indexedDB: undefined,
-        IDBKeyRange: undefined,
       },
       async () => {
         await using webExtensionStorage = await resolveDefaultStorage({
@@ -141,30 +138,35 @@ describe('resolveDefaultStorage', () => {
       },
     );
 
-    await withActualGlobals(
-      {
-        browser: undefined,
-        chrome: undefined,
-        indexedDB: undefined,
-        IDBKeyRange: undefined,
+    const injectedIndexedDb = new IDBFactory();
+    let openCallCount = 0;
+    let keyRangeBoundCallCount = 0;
+    const indexedDbRuntime = {
+      indexedDB: {
+        open: (...args: Parameters<IDBFactory['open']>) => {
+          openCallCount += 1;
+          return injectedIndexedDb.open(...args);
+        },
       },
-      async () => {
-        await using indexedDbStorage = await resolveDefaultStorage({
-          indexedDB: actualIndexedDb,
-          IDBKeyRange: actualIdbKeyRange,
-        });
-        expect(indexedDbStorage.constructor.name).toBe('IndexedDBStorage');
-        expect(Object.getOwnPropertyDescriptor(globalThis, 'indexedDB')?.value).toBeUndefined();
-        expect(Object.getOwnPropertyDescriptor(globalThis, 'IDBKeyRange')?.value).toBeUndefined();
-        await indexedDbStorage.put('pref:a', new TextEncoder().encode('a'));
-        await indexedDbStorage.put('pref:b', new TextEncoder().encode('b'));
-        expect(indexedDbStorage.deletePrefix).toBeDefined();
-        if (indexedDbStorage.deletePrefix === undefined) {
-          throw new Error('IndexedDBStorage.deletePrefix is unavailable');
-        }
-        expect(await indexedDbStorage.deletePrefix('pref:')).toBe(2);
+      IDBKeyRange: {
+        bound: (...args: Parameters<typeof IDBKeyRange.bound>) => {
+          keyRangeBoundCallCount += 1;
+          return IDBKeyRange.bound(...args);
+        },
       },
-    );
+    };
+
+    await using indexedDbStorage = await resolveDefaultStorage(indexedDbRuntime);
+    expect(indexedDbStorage.constructor.name).toBe('IndexedDBStorage');
+    await indexedDbStorage.put('pref:a', new TextEncoder().encode('a'));
+    await indexedDbStorage.put('pref:b', new TextEncoder().encode('b'));
+    expect(indexedDbStorage.deletePrefix).toBeDefined();
+    if (indexedDbStorage.deletePrefix === undefined) {
+      throw new Error('IndexedDBStorage.deletePrefix is unavailable');
+    }
+    expect(await indexedDbStorage.deletePrefix('pref:')).toBe(2);
+    expect(openCallCount).toBeGreaterThan(0);
+    expect(keyRangeBoundCallCount).toBeGreaterThan(0);
   });
 
   it('describes missing runtime globals when no default adapter is available', async () => {
