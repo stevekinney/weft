@@ -1,0 +1,1 @@
+- When runtime detection can succeed from multiple injected globals, pass the same concrete global that satisfied detection into adapter construction instead of preferring a placeholder namespace.

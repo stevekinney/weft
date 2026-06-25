@@ -103,7 +103,15 @@ async function importStorageModule<Module>(specifier: string): Promise<Module> {
 function resolveWebExtensionNamespace(runtimeGlobals: RuntimeGlobalsLike): {
   readonly storage?: unknown;
 } {
-  return runtimeGlobals.browser ?? runtimeGlobals.chrome ?? {};
+  if (runtimeGlobals.browser?.storage !== undefined) {
+    return runtimeGlobals.browser;
+  }
+
+  if (runtimeGlobals.chrome?.storage !== undefined) {
+    return runtimeGlobals.chrome;
+  }
+
+  return {};
 }
 
 function resolveIndexedDbRuntime(runtimeGlobals: RuntimeGlobalsLike): {

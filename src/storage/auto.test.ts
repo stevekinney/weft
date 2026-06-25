@@ -138,6 +138,20 @@ describe('resolveDefaultStorage', () => {
       },
     );
 
+    await withActualGlobals(
+      {
+        browser: undefined,
+        chrome: undefined,
+      },
+      async () => {
+        await using webExtensionStorage = await resolveDefaultStorage({
+          browser: {},
+          chrome: { storage: browserStorage },
+        });
+        expect(webExtensionStorage.constructor.name).toBe('WebExtensionStorage');
+      },
+    );
+
     const injectedIndexedDb = new IDBFactory();
     let openCallCount = 0;
     let keyRangeBoundCallCount = 0;
