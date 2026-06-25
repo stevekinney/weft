@@ -88,6 +88,19 @@ export async function processSleepOperation(
     kind: 'sleep',
   });
   registerSleepResolver(internals, workflowId, operation.operationId, resolve);
+
+  // Guard against a race where the scheduler tick fires the timer in the window
+  // between the schedule() write and registerSleepResolver(). If the tick ran
+  // but found no resolver, resolveSleepTimer silently returned and the tick
+  // deleted the timer from storage. Checking the index after registration
+  // detects this: a missing index means the timer already fired without a
+  // resolver, so resolve() here. If the tick races this check and calls the
+  // resolver concurrently, the duplicate resolve() is a safe no-op.
+  const timerIndexKey = `timer-idx:sleep:${operation.operationId}`;
+  if (!(await storageHas(internals.storage, timerIndexKey))) {
+    resolve();
+  }
+
   await promise;
 
   const postSleepState = await callbacks.loadWorkflowState(workflowId);

@@ -5,8 +5,13 @@ import { MemoryStorage } from '../../storage/memory.ts';
 import { serializeCheckpoint } from '../checkpoint/serialization.ts';
 import { encode } from '../codec.ts';
 import { DevelopmentWarningEvent } from '../events.ts';
+import { buildTimerBatchOperations } from '../scheduler.ts';
 import type { Checkpoint, TimerEntry, WorkflowState } from '../types.ts';
-import { startDelayedWorkflow, type TimeOperationCallbacks } from './operations-time.ts';
+import {
+  processSleepOperation,
+  startDelayedWorkflow,
+  type TimeOperationCallbacks,
+} from './operations-time.ts';
 
 function createWorkflowState(
   workflowId: string,
@@ -499,5 +504,76 @@ describe('engine time operation helpers', () => {
 
     expect(workflowsNeedingTerminalCleanup.has('workflow-delayed-no-marker')).toBe(false);
     expect(beginWorkflowExecution).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('processSleepOperation', () => {
+  it('resolves when the scheduler tick fires the timer before the sleep resolver is registered', async () => {
+    // Regression test for the race condition where:
+    // 1. processSleepOperation awaits internals.scheduler.schedule() (async storage write)
+    // 2. A scheduler tick fires during that write, finds no resolver, silently returns,
+    //    and deletes the timer from storage
+    // 3. registerSleepResolver() registers the resolver — but the timer is already gone
+    //
+    // Without the post-registration storage check, the workflow would park on `await
+    // promise` indefinitely. The fix detects a missing timer index after registration
+    // and calls resolve() directly.
+    const storage = new MemoryStorage();
+    const workflowId = 'sleep-race-test';
+    const operationId = 'op-1';
+
+    const scheduler = {
+      schedule: async (entry: TimerEntry) => {
+        // Write the timer to storage (normal behavior).
+        await storage.batch(buildTimerBatchOperations(entry));
+
+        // Simulate the scheduler tick firing mid-write: scan for the timer,
+        // call onTimerFired (no resolver registered yet — silently returns),
+        // then delete the timer from storage exactly as ServiceWorkerScheduler.tick() would.
+        const indexKey = `timer-idx:${entry.id}`;
+        const indexValue = await storage.get(indexKey);
+        if (indexValue !== null) {
+          const { decode } = await import('../codec.ts');
+          const deadlineKey = decode(indexValue) as string;
+          await storage.batch([
+            { type: 'delete', key: deadlineKey },
+            { type: 'delete', key: indexKey },
+          ]);
+        }
+      },
+    };
+
+    const completeOperation = mock((_workflowId: string, _value: unknown) => {});
+    const loadWorkflowState = mock(async () => ({
+      createdAt: 1_000,
+      id: workflowId,
+      input: null,
+      status: 'running' as const,
+      type: 'test-workflow',
+      updatedAt: 1_000,
+      versionTuple: { workflowVersion: '1' },
+    }));
+
+    await expect(
+      processSleepOperation(
+        {
+          options: { getNow: () => 0 },
+          scheduler,
+          sleepResolvers: new Map(),
+          sleepResolversByWorkflow: new Map(),
+          storage,
+        } as never,
+        workflowId,
+        {
+          type: 'sleep',
+          operationId,
+          duration: 60 * 60 * 1000,
+          scheduledFireAt: 60 * 60 * 1000,
+        },
+        { completeOperation, loadWorkflowState },
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(completeOperation).toHaveBeenCalledWith(workflowId, undefined);
   });
 });
