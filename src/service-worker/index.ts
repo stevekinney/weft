@@ -120,10 +120,15 @@ export function createFetchHandler(
  * @example
  * ```ts
  * import { ServiceWorkerScheduler, createPeriodicSyncHandler } from '@lostgradient/weft/service-worker';
+ * import { MemoryStorage } from '@lostgradient/weft';
+ *
+ * const storage = new MemoryStorage();
  *
  * const scheduler = new ServiceWorkerScheduler({
  *   storage,
- *   onTimerFired: (entry) => engine.fireTimer(entry),
+ *   onTimerFired: (entry) => {
+ *     console.log(`Timer ${entry.id} fired.`);
+ *   },
  * });
  * const handler = createPeriodicSyncHandler(scheduler, 'weft-timers');
  * // self.addEventListener('periodicsync', handler);

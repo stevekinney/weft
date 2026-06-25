@@ -36,10 +36,15 @@ interface RegistrationWithPeriodicSync extends ServiceWorkerRegistration {
  * @example
  * ```ts
  * import { ServiceWorkerScheduler, type ServiceWorkerSchedulerOptions } from '@lostgradient/weft/service-worker';
+ * import { MemoryStorage } from '@lostgradient/weft';
+ *
+ * const storage = new MemoryStorage();
  *
  * const options: ServiceWorkerSchedulerOptions = {
  *   storage,
- *   onTimerFired: (entry) => engine.fireTimer(entry),
+ *   onTimerFired: (entry) => {
+ *     console.log(`Timer ${entry.id} fired.`);
+ *   },
  * };
  * const scheduler = new ServiceWorkerScheduler(options);
  * void scheduler;
@@ -72,13 +77,19 @@ const DEFAULT_PERIODIC_SYNC_MIN_INTERVAL = 60_000;
  * @example
  * ```ts
  * import { ServiceWorkerScheduler, createPeriodicSyncHandler } from '@lostgradient/weft/service-worker';
+ * import { MemoryStorage } from '@lostgradient/weft';
+ *
+ * const storage = new MemoryStorage();
  *
  * const scheduler = new ServiceWorkerScheduler({
  *   storage,
- *   onTimerFired: (entry) => engine.fireTimer(entry),
+ *   onTimerFired: (entry) => {
+ *     console.log(`Timer ${entry.id} fired.`);
+ *   },
  * });
  *
- * self.addEventListener('periodicsync', createPeriodicSyncHandler(scheduler));
+ * const handlePeriodicSync = createPeriodicSyncHandler(scheduler);
+ * void handlePeriodicSync;
  * ```
  */
 export class ServiceWorkerScheduler implements Disposable {
