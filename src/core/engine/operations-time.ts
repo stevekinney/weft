@@ -69,6 +69,30 @@ export function createDelayedStartTimerEntry(
   };
 }
 
+/**
+ * Returns true when the scheduler tick fired a sleep timer in the window
+ * between `schedule()` completing and `registerSleepResolver()` running.
+ *
+ * Window A (pre-deletion): `resolveSleepTimer` ran with no resolver and set
+ *   an in-memory marker. Timer index may still be in storage.
+ * Window B (post-deletion): tick completed its cleanup batch first; the
+ *   storage index is gone but no marker was set (or was consumed on a prior
+ *   replay). `storageHas()` catches this case.
+ */
+async function sleepTimerFiredEarly(
+  internals: EngineInternals,
+  workflowId: string,
+  operation: Pick<SleepOperation, 'operationId'>,
+): Promise<boolean> {
+  const workflowMarkers = internals.sleepTimersFiredWithoutResolver.get(workflowId);
+  const firedBeforeRegistration = workflowMarkers?.delete(operation.operationId) ?? false;
+  if (firedBeforeRegistration && workflowMarkers?.size === 0) {
+    internals.sleepTimersFiredWithoutResolver.delete(workflowId);
+  }
+  if (firedBeforeRegistration) return true;
+  return !(await storageHas(internals.storage, `timer-idx:sleep:${operation.operationId}`));
+}
+
 export async function processSleepOperation(
   internals: EngineInternals,
   workflowId: string,
@@ -90,28 +114,14 @@ export async function processSleepOperation(
   registerSleepResolver(internals, workflowId, operation.operationId, resolve);
 
   // Guard against the race where the scheduler tick fires the timer in the
-  // window between the schedule() write and registerSleepResolver(). Two
-  // observable states both require an immediate self-resolve:
-  //
-  // Window A (pre-deletion): resolveSleepTimer ran with no resolver and set
-  //   an in-memory marker. The timer index may still be in storage at this
-  //   point because the tick deletes it *after* onTimerFired returns.
-  // Window B (post-deletion): the tick completed its cleanup batch before we
-  //   reach here; the storage index is gone but no marker was set (or it was
-  //   already consumed on a prior replay). storageHas() catches this case.
-  //
-  // The resolver guard (`sleepResolvers.has`) prevents calling resolveSleepTimer
-  // when the tick already settled the resolver via the normal path (after
-  // registration). In that case the promise is already resolved and the resolver
-  // is gone from sleepResolvers; calling resolveSleepTimer would find no resolver
-  // and incorrectly add a spurious sleepTimersFiredWithoutResolver marker that
-  // could prematurely self-resolve a later replay of the same sleep step.
+  // window between the schedule() write and registerSleepResolver(). The
+  // resolver guard prevents a spurious resolveSleepTimer call when the tick
+  // already settled the resolver via the normal post-registration path.
   const resolverKey = `${workflowId}:${operation.operationId}`;
-  const firedBeforeRegistration = internals.sleepTimersFiredWithoutResolver.delete(resolverKey);
-  const timerIndexGone =
-    !firedBeforeRegistration &&
-    !(await storageHas(internals.storage, `timer-idx:sleep:${operation.operationId}`));
-  if ((firedBeforeRegistration || timerIndexGone) && internals.sleepResolvers.has(resolverKey)) {
+  if (
+    (await sleepTimerFiredEarly(internals, workflowId, operation)) &&
+    internals.sleepResolvers.has(resolverKey)
+  ) {
     resolveSleepTimer(internals, {
       id: `sleep:${operation.operationId}`,
       workflowId,
@@ -432,7 +442,12 @@ function resolveSleepTimer(internals: EngineInternals, entry: TimerEntry): void 
     // schedule() completing and registerSleepResolver() running. Mark it so
     // processSleepOperation can self-resolve after registration instead of
     // parking on a promise that will never be called.
-    internals.sleepTimersFiredWithoutResolver.add(resolverKey);
+    let workflowMarkers = internals.sleepTimersFiredWithoutResolver.get(entry.workflowId);
+    if (!workflowMarkers) {
+      workflowMarkers = new Set();
+      internals.sleepTimersFiredWithoutResolver.set(entry.workflowId, workflowMarkers);
+    }
+    workflowMarkers.add(operationId);
     return;
   }
 

@@ -141,7 +141,7 @@ function createCleanupInternals(storage: MemoryStorage, checkpoint: Checkpoint):
     deliveredPendingUpdateIds: new Map(),
     sleepResolvers: new Map(),
     sleepResolversByWorkflow: new Map(),
-    sleepTimersFiredWithoutResolver: new Set(),
+    sleepTimersFiredWithoutResolver: new Map(),
     updateWaiters: new Map(),
     updateWaitersByWorkflow: new Map(),
     workflowHeaders: new Map(),
