@@ -152,7 +152,7 @@ describe('resolveDefaultStorage', () => {
     resolved[Symbol.dispose]?.();
   });
 
-  it('selects WebExtension and IndexedDB adapters from their runtime globals', async () => {
+  it('selects WebExtension and IndexedDB adapters from injected runtime globals', async () => {
     const browserStorage = {
       local: {
         get: async () => ({}),
@@ -167,15 +167,17 @@ describe('resolveDefaultStorage', () => {
 
     await withActualGlobals(
       {
-        browser: { storage: browserStorage },
+        browser: undefined,
         chrome: undefined,
         indexedDB: undefined,
       },
       async () => {
-        const webExtensionStorage = await resolveDefaultStorage({
+        await using webExtensionStorage = await resolveDefaultStorage({
           browser: { storage: browserStorage },
         });
         expect(webExtensionStorage.constructor.name).toBe('WebExtensionStorage');
+        expect(Object.getOwnPropertyDescriptor(globalThis, 'browser')?.value).toBeUndefined();
+        expect(Object.getOwnPropertyDescriptor(globalThis, 'chrome')?.value).toBeUndefined();
       },
     );
 
@@ -183,13 +185,14 @@ describe('resolveDefaultStorage', () => {
       {
         browser: undefined,
         chrome: undefined,
-        indexedDB: createIndexedDbFactory(),
+        indexedDB: undefined,
       },
       async () => {
         const indexedDbStorage = await resolveDefaultStorage({
           indexedDB: createIndexedDbFactory(),
         });
         expect(indexedDbStorage.constructor.name).toBe('IndexedDBStorage');
+        expect(Object.getOwnPropertyDescriptor(globalThis, 'indexedDB')?.value).toBeUndefined();
       },
     );
   });

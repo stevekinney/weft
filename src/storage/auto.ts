@@ -38,6 +38,8 @@ type RuntimeGlobalsLike = {
   };
 };
 
+type BrowserGlobalKey = 'browser' | 'chrome' | 'indexedDB';
+
 interface DetectionGlobals {
   hasBun: boolean;
   hasIndexedDB: boolean;
@@ -102,6 +104,45 @@ async function importStorageModule<Module>(specifier: string): Promise<Module> {
   return (await import(specifier)) as Module;
 }
 
+function runtimeGlobalHasOwn(runtimeGlobals: RuntimeGlobalsLike, key: BrowserGlobalKey): boolean {
+  return Object.prototype.hasOwnProperty.call(runtimeGlobals, key);
+}
+
+async function withPatchedBrowserGlobals<T>(
+  runtimeGlobals: RuntimeGlobalsLike,
+  callback: () => Promise<T>,
+): Promise<T> {
+  const keys = (['browser', 'chrome', 'indexedDB'] as const).filter((key) =>
+    runtimeGlobalHasOwn(runtimeGlobals, key),
+  );
+  if (keys.length === 0) {
+    return callback();
+  }
+
+  const previousDescriptors = new Map<BrowserGlobalKey, PropertyDescriptor | undefined>();
+  for (const key of keys) {
+    previousDescriptors.set(key, Object.getOwnPropertyDescriptor(globalThis, key));
+    Object.defineProperty(globalThis, key, {
+      configurable: true,
+      writable: true,
+      value: runtimeGlobals[key],
+    });
+  }
+
+  try {
+    return await callback();
+  } finally {
+    for (const key of keys) {
+      const descriptor = previousDescriptors.get(key);
+      if (descriptor === undefined) {
+        Reflect.deleteProperty(globalThis, key);
+      } else {
+        Object.defineProperty(globalThis, key, descriptor);
+      }
+    }
+  }
+}
+
 const BUN_SQLITE_STORAGE_MODULE = storageModuleSpecifier('./bun-sql.ts', './bun-sql.js');
 const NODE_SQLITE_STORAGE_MODULE = storageModuleSpecifier('./node-sqlite.ts', './node-sqlite.js');
 const INDEXEDDB_STORAGE_MODULE = storageModuleSpecifier('./indexeddb.ts', './indexeddb.js');
@@ -149,13 +190,13 @@ export async function resolveDefaultStorage(
     const { WebExtensionStorage } = await importStorageModule<typeof import('./web-extension.ts')>(
       WEB_EXTENSION_STORAGE_MODULE,
     );
-    return new WebExtensionStorage();
+    return withPatchedBrowserGlobals(runtimeGlobals, async () => new WebExtensionStorage());
   }
 
   if (detected.hasIndexedDB) {
     const { IndexedDBStorage } =
       await importStorageModule<typeof import('./indexeddb.ts')>(INDEXEDDB_STORAGE_MODULE);
-    return new IndexedDBStorage();
+    return withPatchedBrowserGlobals(runtimeGlobals, async () => new IndexedDBStorage());
   }
 
   throw new Error(
