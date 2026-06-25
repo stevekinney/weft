@@ -174,4 +174,18 @@ describe('resolveDefaultStorage', () => {
       'resolveDefaultStorage: requires Bun, Node, WebExtension storage, or IndexedDB.',
     );
   });
+
+  it('rejects incomplete injected IndexedDB runtime globals', async () => {
+    await expect(
+      resolveDefaultStorage({
+        indexedDB: {
+          open: () => {
+            throw new Error('should not be called');
+          },
+        },
+      }),
+    ).rejects.toThrow(
+      'resolveDefaultStorage: IndexedDB resolution requires both indexedDB and IDBKeyRange.',
+    );
+  });
 });

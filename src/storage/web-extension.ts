@@ -152,15 +152,28 @@ function serializedByteLength(value: unknown): number {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;
 }
 
-function resolveNamespace(): WebExtensionNamespace {
+function isWebExtensionNamespace(value: unknown): value is WebExtensionNamespace {
+  if (!isRecord(value)) return false;
+  if (value['runtime'] !== undefined && !isRecord(value['runtime'])) return false;
+  return value['storage'] === undefined || isRecord(value['storage']);
+}
+
+function resolveNamespace(namespace: unknown = undefined): WebExtensionNamespace {
+  if (namespace !== undefined) {
+    if (!isWebExtensionNamespace(namespace)) {
+      throw new Error('WebExtensionStorage injected namespace must be an object.');
+    }
+    return namespace;
+  }
+
   const globalObject = globalThis as WebExtensionGlobal;
-  const namespace = globalObject.browser ?? globalObject.chrome;
-  if (namespace?.storage === undefined) {
+  const globalNamespace = globalObject.browser ?? globalObject.chrome;
+  if (globalNamespace?.storage === undefined) {
     throw new Error(
       'WebExtensionStorage requires globalThis.browser.storage or globalThis.chrome.storage.',
     );
   }
-  return namespace;
+  return globalNamespace;
 }
 
 function resolveStorageArea(
@@ -264,8 +277,7 @@ export class WebExtensionStorage implements Storage {
   constructor(options: WebExtensionStorageOptions = {}, namespace: unknown = undefined) {
     this.#area = options.area ?? 'local';
     this.#persistence = webExtensionAreaPersistence(this.#area);
-    this.#namespace =
-      namespace === undefined ? resolveNamespace() : (namespace as WebExtensionNamespace);
+    this.#namespace = resolveNamespace(namespace);
     this.#driver = resolveStorageArea(this.#namespace, this.#area);
     this.#changeListener = () => {};
     this.#namespace.storage?.onChanged?.addListener?.(this.#changeListener);

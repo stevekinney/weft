@@ -81,13 +81,10 @@ async function defaultSqlitePath(runtimeGlobals: RuntimeGlobalsLike): Promise<st
 
 function describeGlobal(
   runtimeGlobals: RuntimeGlobalsLike,
-  name: 'Bun' | 'process' | 'browser.storage' | 'indexedDB',
+  name: 'Bun' | 'process' | 'browser.storage',
 ): string {
   if (name === 'Bun') {
     return typeof runtimeGlobals.Bun;
-  }
-  if (name === 'indexedDB') {
-    return typeof runtimeGlobals.indexedDB;
   }
   if (name === 'browser.storage') {
     return typeof (runtimeGlobals.browser?.storage ?? runtimeGlobals.chrome?.storage);
@@ -104,7 +101,7 @@ async function importStorageModule<Module>(specifier: string): Promise<Module> {
 }
 
 function resolveWebExtensionNamespace(runtimeGlobals: RuntimeGlobalsLike): {
-  storage?: unknown;
+  readonly storage?: unknown;
 } {
   return runtimeGlobals.browser ?? runtimeGlobals.chrome ?? {};
 }
