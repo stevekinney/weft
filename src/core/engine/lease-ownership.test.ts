@@ -469,6 +469,48 @@ describe("Engine.create({ ownership: 'lease' })", () => {
     storage[Symbol.dispose]?.();
   });
 
+  it('warns without deposing the engine when renewal becomes unconfirmable after expiry', async () => {
+    let now = 0;
+    const storage = new MemoryStorage();
+    const engine = await Engine.create({
+      storage,
+      workflows: { ping: pingWorkflow },
+      ownership: 'lease',
+      getNow: () => now,
+      leaseRenewInterval: '1s',
+      leaseTtl: '2s',
+    });
+
+    const warnings: { name: string; message: string }[] = [];
+    const listener = (warning: Error): void => {
+      warnings.push({ name: warning.name, message: warning.message });
+    };
+
+    const originalConditionalBatch = storage.conditionalBatch.bind(storage);
+    storage.conditionalBatch = async () => {
+      throw new Error('storage offline');
+    };
+
+    process.on('warning', listener);
+    try {
+      now = 2_001;
+      const manager = getInternals(engine).leaseManager;
+      expect(manager).not.toBeNull();
+      await manager!.renewOnce();
+      await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+      storage.conditionalBatch = originalConditionalBatch;
+      process.off('warning', listener);
+    }
+
+    expect(warnings.some((warning) => warning.name === ENGINE_LEASE_LOST_WARNING_NAME)).toBe(true);
+    expect(getInternals(engine).deposed).toBe(false);
+    expect(getInternals(engine).leaseManager).not.toBeNull();
+
+    await engine[Symbol.asyncDispose]();
+    storage[Symbol.dispose]?.();
+  });
+
   it('synchronous dispose clears the lease manager and stops renewals', async () => {
     const storage = new BunSQLiteStorage(':memory:');
     const engine = await Engine.create({

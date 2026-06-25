@@ -142,23 +142,16 @@ async function runBulkCancellation(
     workflowIdsToCancel,
     bulkConcurrency,
     async (workflowId) => {
-      try {
-        await internals.engine.cancel(workflowId);
-        const refreshedState = await loadWorkflowState(internals, workflowId);
-        if (refreshedState?.status === 'cancelled') {
-          return { status: 'cancelled' as const };
-        }
-
-        return {
-          status: 'failed' as const,
-          error: { id: workflowId, error: 'Workflow no longer cancellable' },
-        };
-      } catch (error) {
-        return {
-          status: 'failed' as const,
-          error: toBulkOperationError(internals, workflowId, error),
-        };
+      await internals.engine.cancel(workflowId);
+      const refreshedState = await loadWorkflowState(internals, workflowId);
+      if (refreshedState?.status === 'cancelled') {
+        return { status: 'cancelled' as const };
       }
+
+      return {
+        status: 'failed' as const,
+        error: { id: workflowId, error: 'Workflow no longer cancellable' },
+      };
     },
   );
 
@@ -238,15 +231,8 @@ async function runBulkFailedWorkflowRetry(
     preparation.workflowIds,
     bulkConcurrency,
     async (workflowId) => {
-      try {
-        await retryFailedWorkflow(internals, workflowId);
-        return { status: 'retried' as const };
-      } catch (error) {
-        return {
-          status: 'failed' as const,
-          error: toBulkOperationError(internals, workflowId, error),
-        };
-      }
+      await retryFailedWorkflow(internals, workflowId);
+      return { status: 'retried' as const };
     },
   );
 
@@ -256,13 +242,7 @@ async function runBulkFailedWorkflowRetry(
       continue;
     }
 
-    const { value } = retryResult;
-    if (value.status === 'retried') {
-      retried += 1;
-      continue;
-    }
-
-    errors.push(value.error);
+    retried += 1;
   }
 
   const result: BulkRetryFailedResult = { retried, failed: errors.length, errors };

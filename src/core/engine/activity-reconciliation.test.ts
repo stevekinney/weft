@@ -9,6 +9,7 @@ import {
   normalizePreDispatchVerificationResult,
   readActivityReconciliationRecord,
   resolveStartedActivityReconciliationRecord,
+  writeActivityReconciliationTransition,
 } from './activity-reconciliation.ts';
 import type { EngineInternals } from './internals.ts';
 
@@ -145,6 +146,72 @@ describe('activity reconciliation helpers', () => {
 
     await expect(
       commitActivityReconciliationTransitionWithFencedWrite(internals, reference, expectedRecord, {
+        ...expectedRecord,
+        status: 'completed',
+        result: 'done',
+        updatedAt: 2,
+      }),
+    ).rejects.toThrow('Activity reconciliation completion lost compare-and-set ownership.');
+  });
+
+  it('writes a reconciliation transition directly when the compare-and-set succeeds', async () => {
+    const storage = new MemoryStorage();
+    const reference = await buildActivityReconciliationReference(
+      'workflow-id',
+      'test-activity',
+      'activity-key',
+    );
+    const expectedRecord = {
+      version: 1 as const,
+      status: 'started' as const,
+      workflowId: 'workflow-id',
+      operationId: 'activity-operation',
+      activityName: 'test-activity',
+      idempotencyKeyDigest: reference.idempotencyKeyDigest,
+      attempt: 1,
+      ownerId: 'owner',
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    await storage.put(reference.key, encode(expectedRecord));
+
+    await writeActivityReconciliationTransition(storage, reference, expectedRecord, {
+      ...expectedRecord,
+      status: 'completed',
+      result: 'done',
+      updatedAt: 2,
+    });
+
+    await expect(readActivityReconciliationRecord(storage, reference.key)).resolves.toEqual({
+      ...expectedRecord,
+      status: 'completed',
+      result: 'done',
+      updatedAt: 2,
+    });
+  });
+
+  it('throws from the direct transition writer when the compare-and-set loses', async () => {
+    const storage = new TransitionLosingStorage();
+    const reference = await buildActivityReconciliationReference(
+      'workflow-id',
+      'test-activity',
+      'activity-key',
+    );
+    const expectedRecord = {
+      version: 1 as const,
+      status: 'started' as const,
+      workflowId: 'workflow-id',
+      operationId: 'activity-operation',
+      activityName: 'test-activity',
+      idempotencyKeyDigest: reference.idempotencyKeyDigest,
+      attempt: 1,
+      ownerId: 'owner',
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    await expect(
+      writeActivityReconciliationTransition(storage, reference, expectedRecord, {
         ...expectedRecord,
         status: 'completed',
         result: 'done',

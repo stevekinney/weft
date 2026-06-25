@@ -4,7 +4,14 @@ import { KEYS } from '../../storage/interface.ts';
 import { MemoryStorage } from '../../storage/memory.ts';
 import { encode } from '../codec.ts';
 import type { WorkflowState } from '../types.ts';
-import { clearPurgedWorkflowInMemoryState, purgeInternal } from './bulk-operations-purge.ts';
+import {
+  clearPurgedWorkflowInMemoryState,
+  collectWorkflowPurgeDeleteOperations,
+  purgeInternal,
+  purgeWorkflow,
+} from './bulk-operations-purge.ts';
+import { encodeEpoch } from './lease-codec.ts';
+import { createTerminalCleanupTimerId } from './state-utilities.ts';
 
 function createWorkflowState(
   workflowId: string,
@@ -137,5 +144,62 @@ describe('bulk purge helpers', () => {
     expect(await storage.get(KEYS.fleetEvent(1))).not.toBeNull();
     expect(await storage.get(KEYS.fleetEventByWorkflow('other-workflow', 1))).not.toBeNull();
     expect(await storage.get(KEYS.fleetEvent(2))).not.toBeNull();
+  });
+
+  it('collects deadline, terminal-cleanup, and update-response delete keys', async () => {
+    const storage = new MemoryStorage();
+    const internals = createInternals(storage);
+    const state = createWorkflowState('purge-delete-keys', 2_000, {
+      executionDeadline: 2_500,
+      status: 'cancelled',
+      terminalCleanupToken: 'cleanup-token',
+    });
+
+    await storage.put(KEYS.update(state.id, 'update-a'), encode({ updateId: 'update-a' }));
+    await storage.put(KEYS.update(state.id, ''), encode({ updateId: '' }));
+
+    const operations = await collectWorkflowPurgeDeleteOperations(internals, state);
+    const deleteKeys = new Set(
+      operations
+        .filter((operation) => operation.type === 'delete')
+        .map((operation) => operation.key),
+    );
+    const terminalCleanupKey = KEYS.terminalCleanup(
+      state.updatedAt + 60_000,
+      createTerminalCleanupTimerId(true, state.terminalCleanupToken!),
+    );
+
+    expect(deleteKeys.has(KEYS.deadline(state.executionDeadline!, state.id))).toBe(true);
+    expect(deleteKeys.has(`timer-idx:deadline:${state.id}`)).toBe(true);
+    expect(deleteKeys.has(terminalCleanupKey)).toBe(true);
+    expect(deleteKeys.has(KEYS.update(state.id, 'update-a'))).toBe(true);
+    expect(deleteKeys.has(KEYS.updateResponse('update-a'))).toBe(true);
+    expect(deleteKeys.has(KEYS.updateResponse(''))).toBe(false);
+  });
+
+  it('surfaces lost lease preconditions while purging a workflow', async () => {
+    const storage = new MemoryStorage();
+    const epochBytes = encodeEpoch(1);
+    const state = createWorkflowState('purge-precondition-loss', 2_000);
+    await storage.put(KEYS.leaseEpoch(), epochBytes);
+    storage.conditionalBatch = async () => false;
+    const internals = createInternals(storage) as {
+      deposed: boolean;
+      leaseManager?: { currentEpochBytes: () => Uint8Array } | null;
+      options: { getNow: () => number; ownershipMode: 'none' | 'lease'; retention?: undefined };
+      storage: MemoryStorage;
+      tearDownAfterDeposition?: null;
+    };
+    internals.leaseManager = { currentEpochBytes: () => epochBytes };
+    internals.options = {
+      getNow: () => 10_000,
+      ownershipMode: 'lease',
+      retention: undefined,
+    };
+    internals.tearDownAfterDeposition = null;
+
+    await expect(purgeWorkflow(internals as never, state, () => {})).rejects.toThrow(
+      `Purge commit for workflow "${state.id}" lost its precondition.`,
+    );
   });
 });

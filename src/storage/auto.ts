@@ -26,6 +26,18 @@
 
 import type { Storage as WeftStorage } from './interface.ts';
 
+type RuntimeGlobalsLike = {
+  Bun?: unknown;
+  browser?: { storage?: unknown };
+  chrome?: { storage?: unknown };
+  indexedDB?: unknown;
+  process?: {
+    cwd?: () => string;
+    env?: Record<string, string | undefined>;
+    versions?: { node?: unknown };
+  };
+};
+
 interface DetectionGlobals {
   hasBun: boolean;
   hasIndexedDB: boolean;
@@ -33,60 +45,53 @@ interface DetectionGlobals {
   hasWebExtensionStorage: boolean;
 }
 
-function detectGlobals(): DetectionGlobals {
-  const webExtensionGlobal = globalThis as typeof globalThis & {
-    browser?: { storage?: unknown };
-    chrome?: { storage?: unknown };
-  };
+function detectGlobals(runtimeGlobals: RuntimeGlobalsLike): DetectionGlobals {
   return {
-    hasBun: typeof (globalThis as { Bun?: unknown }).Bun !== 'undefined',
-    hasIndexedDB: typeof globalThis.indexedDB !== 'undefined',
+    hasBun: typeof runtimeGlobals.Bun !== 'undefined',
+    hasIndexedDB: typeof runtimeGlobals.indexedDB !== 'undefined',
     hasNode:
-      typeof process !== 'undefined' &&
-      typeof (process as { versions?: { node?: unknown } }).versions?.node === 'string',
+      runtimeGlobals.process !== undefined &&
+      typeof runtimeGlobals.process.versions?.node === 'string',
     hasWebExtensionStorage:
-      webExtensionGlobal.browser?.storage !== undefined ||
-      webExtensionGlobal.chrome?.storage !== undefined,
+      runtimeGlobals.browser?.storage !== undefined || runtimeGlobals.chrome?.storage !== undefined,
   };
 }
 
-async function projectStorageHash(): Promise<string> {
+async function projectStorageHash(runtimeGlobals: RuntimeGlobalsLike): Promise<string> {
   const { createHash } = await import('node:crypto');
-  const cwd = typeof process !== 'undefined' ? process.cwd() : 'weft-default';
+  const cwd = runtimeGlobals.process?.cwd?.() ?? 'weft-default';
   return createHash('sha256').update(cwd).digest('hex').slice(0, 16);
 }
 
-async function defaultSqlitePath(): Promise<string> {
+async function defaultSqlitePath(runtimeGlobals: RuntimeGlobalsLike): Promise<string> {
   const [{ mkdirSync }, { tmpdir }, pathModule] = await Promise.all([
     import('node:fs'),
     import('node:os'),
     import('node:path'),
   ]);
-  const override =
-    typeof process !== 'undefined' ? process.env['WEFT_DEFAULT_STORAGE_PATH'] : undefined;
+  const override = runtimeGlobals.process?.env?.['WEFT_DEFAULT_STORAGE_PATH'];
   const storagePath =
     override !== undefined && override.length > 0
       ? override
-      : pathModule.join(tmpdir(), 'weft-default', `${await projectStorageHash()}.db`);
+      : pathModule.join(tmpdir(), 'weft-default', `${await projectStorageHash(runtimeGlobals)}.db`);
   mkdirSync(pathModule.dirname(storagePath), { recursive: true });
   return storagePath;
 }
 
-function describeGlobal(name: 'Bun' | 'process' | 'browser.storage' | 'indexedDB'): string {
+function describeGlobal(
+  runtimeGlobals: RuntimeGlobalsLike,
+  name: 'Bun' | 'process' | 'browser.storage' | 'indexedDB',
+): string {
   if (name === 'Bun') {
-    return typeof (globalThis as { Bun?: unknown }).Bun;
+    return typeof runtimeGlobals.Bun;
   }
   if (name === 'indexedDB') {
-    return typeof globalThis.indexedDB;
+    return typeof runtimeGlobals.indexedDB;
   }
   if (name === 'browser.storage') {
-    const webExtensionGlobal = globalThis as typeof globalThis & {
-      browser?: { storage?: unknown };
-      chrome?: { storage?: unknown };
-    };
-    return typeof (webExtensionGlobal.browser?.storage ?? webExtensionGlobal.chrome?.storage);
+    return typeof (runtimeGlobals.browser?.storage ?? runtimeGlobals.chrome?.storage);
   }
-  return typeof process;
+  return typeof runtimeGlobals.process;
 }
 
 function storageModuleSpecifier(sourceSpecifier: string, buildSpecifier: string): string {
@@ -122,20 +127,22 @@ const WEB_EXTENSION_STORAGE_MODULE = storageModuleSpecifier(
  * void engine;
  * ```
  */
-export async function resolveDefaultStorage(): Promise<WeftStorage> {
-  const detected = detectGlobals();
+export async function resolveDefaultStorage(
+  runtimeGlobals: RuntimeGlobalsLike = globalThis as RuntimeGlobalsLike,
+): Promise<WeftStorage> {
+  const detected = detectGlobals(runtimeGlobals);
 
   if (detected.hasBun) {
     const { BunSQLiteStorage } =
       await importStorageModule<typeof import('./bun-sql.ts')>(BUN_SQLITE_STORAGE_MODULE);
-    return new BunSQLiteStorage(await defaultSqlitePath());
+    return new BunSQLiteStorage(await defaultSqlitePath(runtimeGlobals));
   }
 
   if (detected.hasNode) {
     const { NodeSQLiteStorage } = await importStorageModule<typeof import('./node-sqlite.ts')>(
       NODE_SQLITE_STORAGE_MODULE,
     );
-    return new NodeSQLiteStorage(await defaultSqlitePath());
+    return new NodeSQLiteStorage(await defaultSqlitePath(runtimeGlobals));
   }
 
   if (detected.hasWebExtensionStorage) {
@@ -153,9 +160,9 @@ export async function resolveDefaultStorage(): Promise<WeftStorage> {
 
   throw new Error(
     'resolveDefaultStorage: requires Bun, Node, WebExtension storage, or IndexedDB. ' +
-      `Detected: typeof Bun=${describeGlobal('Bun')}, ` +
-      `typeof process=${describeGlobal('process')}, ` +
-      `typeof browser.storage=${describeGlobal('browser.storage')}, ` +
-      `typeof indexedDB=${describeGlobal('indexedDB')}.`,
+      `Detected: typeof Bun=${describeGlobal(runtimeGlobals, 'Bun')}, ` +
+      `typeof process=${describeGlobal(runtimeGlobals, 'process')}, ` +
+      `typeof browser.storage=${describeGlobal(runtimeGlobals, 'browser.storage')}, ` +
+      `typeof indexedDB=${describeGlobal(runtimeGlobals, 'indexedDB')}.`,
   );
 }

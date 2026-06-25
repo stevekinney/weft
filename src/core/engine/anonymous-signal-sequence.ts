@@ -191,11 +191,7 @@ function extractAnonymousSignalSequence(key: string): number | null {
   return Number.isSafeInteger(sequence) && sequence >= 0 ? sequence : null;
 }
 
-function decodeSignalSequence(bytes: Uint8Array | null): number {
-  if (bytes === null) {
-    return 0;
-  }
-
+function decodeSignalSequence(bytes: Uint8Array): number {
   const value = decode(bytes);
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new Error('Stored anonymous signal sequence must be a non-negative safe integer');
