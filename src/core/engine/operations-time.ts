@@ -70,32 +70,33 @@ export function createDelayedStartTimerEntry(
 }
 
 /**
- * Returns true when the scheduler tick fired a sleep timer in the window
- * between `schedule()` completing and `registerSleepResolver()` running.
- *
- * Window A (pre-deletion): `resolveSleepTimer` ran with no resolver and set
- *   an in-memory marker. Timer index may still be in storage.
- * Window B (post-deletion): tick completed its cleanup batch first; the
- *   storage index is gone but no marker was set (or was consumed on a prior
- *   replay). `storageHas()` catches this case.
+ * Returns true when the scheduler tick fired this run's sleep timer in the
+ * window between `schedule()` completing and `registerSleepResolver()` running.
+ * The signal is the in-memory marker `resolveSleepTimer` records whenever it
+ * fires a timer with no resolver yet registered, carrying the fired `fireAt`. A
+ * timer index lookup is NOT a safe fallback: the deterministic
+ * `sleep:${operationId}` key is shared across a `start-new` restart, so a
+ * terminated run's stale timer can delete the shared `timer-idx:sleep:` entry
+ * and make a storage-absence check self-resolve this run's sleep early. Rely
+ * solely on the fireAt-aware marker, and only self-resolve for a marker whose
+ * `fireAt` reaches this run's deadline — a marker left by an earlier run's
+ * stale timer must not cut this run's sleep short. Consume it either way so it
+ * cannot leak into a later replay.
  */
-async function sleepTimerFiredEarly(
+function sleepTimerFiredEarly(
   internals: EngineInternals,
   workflowId: string,
   operation: Pick<SleepOperation, 'operationId' | 'scheduledFireAt'>,
-): Promise<boolean> {
+): boolean {
   const workflowMarkers = internals.sleepTimersFiredWithoutResolver.get(workflowId);
-  const markedFireAt = workflowMarkers?.get(operation.operationId);
-  if (markedFireAt !== undefined) {
-    workflowMarkers!.delete(operation.operationId);
-    if (workflowMarkers!.size === 0) {
-      internals.sleepTimersFiredWithoutResolver.delete(workflowId);
-    }
-    // Only self-resolve for a timer whose deadline reaches this run's; a marker
-    // left by an earlier run's stale timer must not cut this run's sleep short.
-    if (markedFireAt >= operation.scheduledFireAt) return true;
+  if (!workflowMarkers) return false;
+  const markedFireAt = workflowMarkers.get(operation.operationId);
+  if (markedFireAt === undefined) return false;
+  workflowMarkers.delete(operation.operationId);
+  if (workflowMarkers.size === 0) {
+    internals.sleepTimersFiredWithoutResolver.delete(workflowId);
   }
-  return !(await storageHas(internals.storage, `timer-idx:sleep:${operation.operationId}`));
+  return markedFireAt >= operation.scheduledFireAt;
 }
 
 export async function processSleepOperation(
@@ -130,7 +131,7 @@ export async function processSleepOperation(
   // already settled the resolver via the normal post-registration path.
   const resolverKey = `${workflowId}:${operation.operationId}`;
   if (
-    (await sleepTimerFiredEarly(internals, workflowId, operation)) &&
+    sleepTimerFiredEarly(internals, workflowId, operation) &&
     internals.sleepResolvers.has(resolverKey)
   ) {
     resolveSleepTimer(internals, {
